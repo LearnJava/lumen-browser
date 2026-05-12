@@ -551,6 +551,7 @@ fn parse_length_px(s: &str) -> Option<f32> {
 
 fn parse_color(s: &str) -> Option<Color> {
     let s = s.trim();
+    // Named-цвета — компактный набор, для практики хватает.
     match s.to_ascii_lowercase().as_str() {
         "black" => return Some(Color::BLACK),
         "white" => return Some(Color::WHITE),
@@ -564,6 +565,13 @@ fn parse_color(s: &str) -> Option<Color> {
         "purple" => return Some(Color { r: 128, g: 0, b: 128, a: 255 }),
         _ => {}
     }
+    if let Some(c) = parse_hex_color(s) {
+        return Some(c);
+    }
+    parse_function_color(s)
+}
+
+fn parse_hex_color(s: &str) -> Option<Color> {
     let hex = s.strip_prefix('#')?;
     match hex.len() {
         3 => {
@@ -571,12 +579,15 @@ fn parse_color(s: &str) -> Option<Color> {
             let g = u8::from_str_radix(&hex[1..2], 16).ok()?;
             let b = u8::from_str_radix(&hex[2..3], 16).ok()?;
             // #RGB → #RRGGBB: каждый ниббл дублируется.
-            Some(Color {
-                r: r * 17,
-                g: g * 17,
-                b: b * 17,
-                a: 255,
-            })
+            Some(Color { r: r * 17, g: g * 17, b: b * 17, a: 255 })
+        }
+        4 => {
+            // #RGBA — CSS4: каждый ниббл дублируется.
+            let r = u8::from_str_radix(&hex[0..1], 16).ok()?;
+            let g = u8::from_str_radix(&hex[1..2], 16).ok()?;
+            let b = u8::from_str_radix(&hex[2..3], 16).ok()?;
+            let a = u8::from_str_radix(&hex[3..4], 16).ok()?;
+            Some(Color { r: r * 17, g: g * 17, b: b * 17, a: a * 17 })
         }
         6 => {
             let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
@@ -584,6 +595,298 @@ fn parse_color(s: &str) -> Option<Color> {
             let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
             Some(Color { r, g, b, a: 255 })
         }
+        8 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            let a = u8::from_str_radix(&hex[6..8], 16).ok()?;
+            Some(Color { r, g, b, a })
+        }
         _ => None,
+    }
+}
+
+/// Парсит `rgb(…)`, `rgba(…)`, `hsl(…)`, `hsla(…)`. Поддерживает запятые
+/// и whitespace как разделители, как `rgb`/`rgba` синонимы, так и `hsl`/`hsla`.
+/// Компоненты:
+///   - rgb: целое 0–255 или процент 0–100% (для каждого канала);
+///   - hsl: hue в градусах (число или `<n>deg`), saturation и lightness в %;
+///   - alpha (4-й компонент): float 0..1 или процент 0–100%. По умолчанию 1.
+fn parse_function_color(s: &str) -> Option<Color> {
+    let lower = s.to_ascii_lowercase();
+    let (kind, body) = if let Some(b) = lower.strip_prefix("rgba(").and_then(|t| t.strip_suffix(')')) {
+        (ColorFn::Rgb, b)
+    } else if let Some(b) = lower.strip_prefix("rgb(").and_then(|t| t.strip_suffix(')')) {
+        (ColorFn::Rgb, b)
+    } else if let Some(b) = lower.strip_prefix("hsla(").and_then(|t| t.strip_suffix(')')) {
+        (ColorFn::Hsl, b)
+    } else if let Some(b) = lower.strip_prefix("hsl(").and_then(|t| t.strip_suffix(')')) {
+        (ColorFn::Hsl, b)
+    } else {
+        return None;
+    };
+    let parts = split_color_args(body);
+    if !(parts.len() == 3 || parts.len() == 4) {
+        return None;
+    }
+    let alpha = if parts.len() == 4 {
+        parse_alpha_component(&parts[3])?
+    } else {
+        255
+    };
+    match kind {
+        ColorFn::Rgb => {
+            let r = parse_rgb_component(&parts[0])?;
+            let g = parse_rgb_component(&parts[1])?;
+            let b = parse_rgb_component(&parts[2])?;
+            Some(Color { r, g, b, a: alpha })
+        }
+        ColorFn::Hsl => {
+            let h = parse_hue_component(&parts[0])?;
+            let s = parse_percent_component(&parts[1])?;
+            let l = parse_percent_component(&parts[2])?;
+            let (r, g, b) = hsl_to_rgb(h, s, l);
+            Some(Color { r, g, b, a: alpha })
+        }
+    }
+}
+
+enum ColorFn {
+    Rgb,
+    Hsl,
+    // CSS4 расширения (lab / lch / oklab / oklch / color()) — не реализуем.
+}
+
+/// Разбивает тело функции по запятой или whitespace (CSS4 разрешает оба),
+/// плюс по `/` для отделения alpha в новом синтаксисе `rgb(255 0 0 / 0.5)`.
+fn split_color_args(body: &str) -> Vec<String> {
+    // Если есть запятые — режем по ним (legacy CSS3).
+    if body.contains(',') {
+        return body.split(',').map(|s| s.trim().to_string()).collect();
+    }
+    // Modern CSS4: `r g b` или `r g b / a`. Слэш отделяет alpha.
+    let normalized = body.replace('/', " / ");
+    let tokens: Vec<&str> = normalized.split_whitespace().collect();
+    // Ищем `/` — разделитель alpha.
+    if let Some(slash) = tokens.iter().position(|&t| t == "/") {
+        let mut head: Vec<String> = tokens[..slash].iter().map(|t| t.to_string()).collect();
+        if let Some(alpha) = tokens.get(slash + 1) {
+            head.push((*alpha).to_string());
+        }
+        head
+    } else {
+        tokens.iter().map(|t| t.to_string()).collect()
+    }
+}
+
+fn parse_rgb_component(s: &str) -> Option<u8> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        let p = pct.trim().parse::<f32>().ok()?;
+        return Some(clamp_byte((p / 100.0) * 255.0));
+    }
+    let n = s.parse::<f32>().ok()?;
+    Some(clamp_byte(n))
+}
+
+fn parse_alpha_component(s: &str) -> Option<u8> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        let p = pct.trim().parse::<f32>().ok()?;
+        return Some(clamp_byte((p / 100.0) * 255.0));
+    }
+    let n = s.parse::<f32>().ok()?;
+    Some(clamp_byte(n * 255.0))
+}
+
+fn parse_hue_component(s: &str) -> Option<f32> {
+    let s = s.trim();
+    let s = s.strip_suffix("deg").unwrap_or(s);
+    // turn / rad / grad — пока не поддерживаем (на практике редко).
+    s.trim().parse::<f32>().ok()
+}
+
+fn parse_percent_component(s: &str) -> Option<f32> {
+    let s = s.trim();
+    let pct = s.strip_suffix('%')?;
+    let p = pct.trim().parse::<f32>().ok()?;
+    Some((p / 100.0).clamp(0.0, 1.0))
+}
+
+fn clamp_byte(v: f32) -> u8 {
+    v.clamp(0.0, 255.0).round() as u8
+}
+
+/// Преобразование HSL → RGB по CSS Color Module Level 3 (как у whatwg).
+/// `h` — в градусах (любое значение, нормализуется по mod 360),
+/// `s` и `l` — нормированные 0..1.
+fn hsl_to_rgb(h: f32, s: f32, l: f32) -> (u8, u8, u8) {
+    let h = h.rem_euclid(360.0) / 360.0;
+    if s == 0.0 {
+        let v = clamp_byte(l * 255.0);
+        return (v, v, v);
+    }
+    let q = if l < 0.5 { l * (1.0 + s) } else { l + s - l * s };
+    let p = 2.0 * l - q;
+    let r = hue_to_rgb(p, q, h + 1.0 / 3.0);
+    let g = hue_to_rgb(p, q, h);
+    let b = hue_to_rgb(p, q, h - 1.0 / 3.0);
+    (clamp_byte(r * 255.0), clamp_byte(g * 255.0), clamp_byte(b * 255.0))
+}
+
+fn hue_to_rgb(p: f32, q: f32, t: f32) -> f32 {
+    let t = t.rem_euclid(1.0);
+    if t < 1.0 / 6.0 {
+        p + (q - p) * 6.0 * t
+    } else if t < 0.5 {
+        q
+    } else if t < 2.0 / 3.0 {
+        p + (q - p) * (2.0 / 3.0 - t) * 6.0
+    } else {
+        p
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rgba(r: u8, g: u8, b: u8, a: u8) -> Color {
+        Color { r, g, b, a }
+    }
+
+    #[test]
+    fn rgb_legacy_commas() {
+        assert_eq!(parse_color("rgb(255, 0, 0)"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_color("rgb(0, 128, 0)"), Some(rgba(0, 128, 0, 255)));
+    }
+
+    #[test]
+    fn rgb_modern_whitespace() {
+        assert_eq!(parse_color("rgb(255 0 0)"), Some(rgba(255, 0, 0, 255)));
+    }
+
+    #[test]
+    fn rgb_percent_components() {
+        // 100% = 255, 50% = 128 (округление).
+        assert_eq!(parse_color("rgb(100%, 0%, 0%)"), Some(rgba(255, 0, 0, 255)));
+        let half = parse_color("rgb(50%, 50%, 50%)").unwrap();
+        assert!((half.r as i32 - 128).abs() <= 1);
+    }
+
+    #[test]
+    fn rgba_with_alpha_float() {
+        // alpha 0.5 → 128 (округление 127.5).
+        let c = parse_color("rgba(255, 0, 0, 0.5)").unwrap();
+        assert_eq!(c.r, 255);
+        assert!((c.a as i32 - 128).abs() <= 1, "a={}", c.a);
+    }
+
+    #[test]
+    fn rgba_with_alpha_percent() {
+        let c = parse_color("rgba(255, 0, 0, 50%)").unwrap();
+        assert!((c.a as i32 - 128).abs() <= 1);
+    }
+
+    #[test]
+    fn rgb_modern_slash_alpha() {
+        // Modern syntax: rgb(r g b / a) — без `rgba` префикса.
+        let c = parse_color("rgb(255 0 0 / 0.5)").unwrap();
+        assert_eq!(c.r, 255);
+        assert!((c.a as i32 - 128).abs() <= 1);
+    }
+
+    #[test]
+    fn rgb_out_of_range_clamps() {
+        // 300 должно зажаться до 255, -10 до 0.
+        assert_eq!(parse_color("rgb(300, -10, 0)"), Some(rgba(255, 0, 0, 255)));
+    }
+
+    #[test]
+    fn rgb_invalid_components() {
+        assert_eq!(parse_color("rgb(abc, def, ghi)"), None);
+        assert_eq!(parse_color("rgb(255, 0)"), None);
+        assert_eq!(parse_color("rgb()"), None);
+    }
+
+    #[test]
+    fn hsl_primary_colors() {
+        assert_eq!(parse_color("hsl(0, 100%, 50%)"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(
+            parse_color("hsl(120, 100%, 50%)"),
+            Some(rgba(0, 255, 0, 255))
+        );
+        assert_eq!(
+            parse_color("hsl(240, 100%, 50%)"),
+            Some(rgba(0, 0, 255, 255))
+        );
+    }
+
+    #[test]
+    fn hsl_with_deg_unit() {
+        assert_eq!(
+            parse_color("hsl(0deg, 100%, 50%)"),
+            Some(rgba(255, 0, 0, 255))
+        );
+    }
+
+    #[test]
+    fn hsl_grayscale_when_saturation_zero() {
+        // s=0 → lightness как оттенок серого.
+        let c = parse_color("hsl(0, 0%, 50%)").unwrap();
+        assert!((c.r as i32 - 128).abs() <= 1);
+        assert_eq!(c.r, c.g);
+        assert_eq!(c.g, c.b);
+    }
+
+    #[test]
+    fn hsla_with_alpha() {
+        let c = parse_color("hsla(0, 100%, 50%, 0.5)").unwrap();
+        assert_eq!(c.r, 255);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+        assert!((c.a as i32 - 128).abs() <= 1);
+    }
+
+    #[test]
+    fn hsl_hue_wraps() {
+        // 360° = 0°, должен дать тот же красный.
+        assert_eq!(
+            parse_color("hsl(360, 100%, 50%)"),
+            parse_color("hsl(0, 100%, 50%)")
+        );
+    }
+
+    #[test]
+    fn hex_with_alpha_8_digits() {
+        // #ff000080 → red, alpha 128.
+        let c = parse_color("#ff000080").unwrap();
+        assert_eq!(c.r, 255);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+        assert_eq!(c.a, 128);
+    }
+
+    #[test]
+    fn hex_short_with_alpha() {
+        // #f008 → ff 00 00 88.
+        let c = parse_color("#f008").unwrap();
+        assert_eq!(c.r, 255);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+        assert_eq!(c.a, 0x88);
+    }
+
+    #[test]
+    fn named_and_hex_still_work() {
+        assert_eq!(parse_color("red"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_color("#ff0000"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_color("#f00"), Some(rgba(255, 0, 0, 255)));
+    }
+
+    #[test]
+    fn case_insensitive_function_names() {
+        assert_eq!(parse_color("RGB(255, 0, 0)"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_color("Rgba(0, 0, 0, 1)"), Some(rgba(0, 0, 0, 255)));
     }
 }
