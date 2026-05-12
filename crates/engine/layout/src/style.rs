@@ -37,6 +37,21 @@ pub enum TextAlign {
     Right,
 }
 
+/// CSS Fonts Module L4: `font-style: normal | italic | oblique`. Inherited.
+///
+/// Phase 0: layout различает свойство, рендерер пока использует один
+/// шрифтовой файл (Inter Regular) и не отрисовывает italic-вариант. Поле
+/// нужно, чтобы `text_rendering_eq` правильно разделял inline-фрагменты
+/// — это корректно подготавливает структуру под подключение Italic-fontfile
+/// или affine-skew transform позже.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FontStyle {
+    #[default]
+    Normal,
+    Italic,
+    Oblique,
+}
+
 /// Набор активных линий `text-decoration` для элемента.
 ///
 /// CSS3 разделяет shorthand `text-decoration` на `-line`, `-style`, `-color`;
@@ -126,6 +141,7 @@ pub struct ComputedStyle {
     pub background_color: Option<Color>,
     pub font_size: f32,
     pub line_height: f32,
+    pub font_style: FontStyle,
     pub text_decoration_line: TextDecorationLine,
     /// Явная ширина (CSS `width: Npx`). None = auto (растягивается на контейнер).
     pub width: Option<f32>,
@@ -156,12 +172,13 @@ pub struct ComputedStyle {
 }
 
 impl ComputedStyle {
-    /// Два стиля рендерят текст одинаково (цвет, размер, интерлиньяж, декорация).
-    /// Используется для слияния inline-фрагментов в wrap_inline_run.
+    /// Два стиля рендерят текст одинаково (цвет, размер, интерлиньяж, начертание,
+    /// декорация). Используется для слияния inline-фрагментов в wrap_inline_run.
     pub fn text_rendering_eq(&self, other: &Self) -> bool {
         self.color == other.color
             && (self.font_size - other.font_size).abs() < f32::EPSILON
             && (self.line_height - other.line_height).abs() < f32::EPSILON
+            && self.font_style == other.font_style
             && self.text_decoration_line == other.text_decoration_line
     }
 
@@ -174,6 +191,7 @@ impl ComputedStyle {
             background_color: None,
             font_size: 16.0,
             line_height: 1.2,
+            font_style: FontStyle::Normal,
             text_decoration_line: TextDecorationLine::default(),
             width: None,
             height: None,
@@ -216,6 +234,7 @@ pub fn compute_style(
         text_align: inherited.text_align,
         font_size: inherited.font_size,
         line_height: inherited.line_height,
+        font_style: inherited.font_style,
         text_decoration_line: inherited.text_decoration_line,
         // Ненаследуемые — сброс.
         background_color: None,
@@ -246,6 +265,12 @@ pub fn compute_style(
 
     if !matches!(doc.get(node).data, NodeData::Element { .. }) {
         return style;
+    }
+
+    // UA stylesheet: семантические элементы получают italic по умолчанию,
+    // CSS-декларации ниже могут это переопределить.
+    if let Some(fs) = ua_font_style(doc, node) {
+        style.font_style = fs;
     }
 
     // Собираем все matched declarations с их sort key:
@@ -654,6 +679,19 @@ fn default_display(doc: &Document, node: NodeId) -> Display {
     }
 }
 
+/// Эмулирует UA stylesheet для font-style: HTML §15.3.3 рекомендует italic
+/// для `<em>` / `<i>` / `<cite>` / `<dfn>` / `<address>` / `<var>`. Возвращает
+/// `Some(Italic)` для них, `None` для остальных (= наследовать как обычно).
+fn ua_font_style(doc: &Document, node: NodeId) -> Option<FontStyle> {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return None;
+    };
+    match name.local.as_str() {
+        "em" | "i" | "cite" | "dfn" | "address" | "var" => Some(FontStyle::Italic),
+        _ => None,
+    }
+}
+
 /// Корневой font-size в CSS — 16px на момент Phase 0 (без `<html>`-стилей и
 /// настроек пользователя). Используется как базис для `rem`.
 pub const ROOT_FONT_SIZE: f32 = 16.0;
@@ -776,6 +814,16 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, em_basis: f3
         }
         "font-size" => {
             // Обрабатывается в pre-pass; в этой ветке пропускаем.
+        }
+        "font-style" => {
+            // CSS Fonts L4 — normal | italic | oblique. Прочее (`oblique 10deg`,
+            // `oblique -5deg`) пока не поддерживаем — берём как oblique.
+            style.font_style = match val.split_whitespace().next() {
+                Some("italic") => FontStyle::Italic,
+                Some("oblique") => FontStyle::Oblique,
+                Some("normal") => FontStyle::Normal,
+                _ => style.font_style,
+            };
         }
         "line-height" => {
             // `1.5` (unitless) — коэффициент. `1.5em` — то же самое.
