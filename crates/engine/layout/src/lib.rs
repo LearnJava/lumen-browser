@@ -1399,4 +1399,66 @@ mod tests {
             "ASCII case-fold не должен ронять cyrillic case"
         );
     }
+
+    // ── Тесты !important в каскаде (CSS Cascade L4 §8.1) ───────────────────
+
+    /// !important побеждает normal даже при меньшей specificity.
+    /// `p { color: red !important }` (0,0,1) должен победить `#x { color: blue }` (1,0,0).
+    #[test]
+    fn important_beats_higher_specificity() {
+        let root = lay(
+            r#"<p id="x">v</p>"#,
+            "p { color: red !important; } #x { color: blue; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.r, 255, "important должен победить #x");
+        assert_eq!(p.style.color.b, 0);
+    }
+
+    /// Между двумя !important выигрывает большая specificity.
+    #[test]
+    fn important_among_two_resolves_by_specificity() {
+        let root = lay(
+            r#"<p id="x" class="c">v</p>"#,
+            "p { color: red !important; } #x { color: blue !important; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.b, 255, "#x !important должен победить p !important");
+    }
+
+    /// Между двумя !important равной specificity — позже объявленное.
+    #[test]
+    fn important_with_equal_specificity_later_wins() {
+        let root = lay(
+            "<p>v</p>",
+            "p { color: red !important; } p { color: blue !important; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.b, 255);
+        assert_eq!(p.style.color.r, 0);
+    }
+
+    /// !important работает поверх inheritance: ребёнок получает важный цвет.
+    #[test]
+    fn important_inherits_to_child() {
+        let root = lay(
+            "<div><p>v</p></div>",
+            "div { color: red !important; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(p.style.color.r, 255);
+    }
+
+    /// Без !important specificity решает обычным образом.
+    #[test]
+    fn normal_cascade_unchanged_without_important() {
+        let root = lay(
+            r#"<p id="x">v</p>"#,
+            "p { color: red; } #x { color: blue; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.b, 255);
+        assert_eq!(p.style.color.r, 0);
+    }
 }
