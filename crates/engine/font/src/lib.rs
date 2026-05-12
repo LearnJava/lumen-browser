@@ -14,11 +14,19 @@
 pub mod binary;
 pub mod cmap;
 pub mod face;
+pub mod glyf;
 pub mod head;
+pub mod hhea;
+pub mod hmtx;
+pub mod loca;
 pub mod maxp;
 
 pub use binary::BinaryReader;
 pub use cmap::Cmap;
 pub use face::{Font, FontError, OffsetTable, TableRecord};
+pub use glyf::{BoundingBox, Contour, Glyf, Glyph, Outline, OutlinePoint};
 pub use head::{Head, IndexToLocFormat};
+pub use hhea::Hhea;
+pub use hmtx::Hmtx;
+pub use loca::Loca;
 pub use maxp::Maxp;

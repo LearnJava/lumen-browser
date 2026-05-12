@@ -143,6 +143,41 @@ impl<'a> Font<'a> {
         let data = self.table(b"cmap").ok_or(FontError::TableNotFound(*b"cmap"))?;
         crate::cmap::Cmap::parse(data)
     }
+
+    pub fn hhea(&self) -> Result<crate::hhea::Hhea, FontError> {
+        let data = self.table(b"hhea").ok_or(FontError::TableNotFound(*b"hhea"))?;
+        crate::hhea::Hhea::parse(data)
+    }
+
+    pub fn hmtx(&self) -> Result<crate::hmtx::Hmtx<'a>, FontError> {
+        let hhea = self.hhea()?;
+        let maxp = self.maxp()?;
+        let data = self.table(b"hmtx").ok_or(FontError::TableNotFound(*b"hmtx"))?;
+        crate::hmtx::Hmtx::parse(data, hhea.number_of_h_metrics, maxp.num_glyphs)
+    }
+
+    pub fn loca(&self) -> Result<crate::loca::Loca<'a>, FontError> {
+        let head = self.head()?;
+        let maxp = self.maxp()?;
+        let data = self.table(b"loca").ok_or(FontError::TableNotFound(*b"loca"))?;
+        crate::loca::Loca::parse(data, head.index_to_loc_format, maxp.num_glyphs)
+    }
+
+    pub fn glyf(&self) -> Result<crate::glyf::Glyf<'a>, FontError> {
+        let data = self.table(b"glyf").ok_or(FontError::TableNotFound(*b"glyf"))?;
+        Ok(crate::glyf::Glyf::new(data))
+    }
+
+    /// Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
+    /// (например, space).
+    pub fn glyph(&self, glyph_id: u16) -> Result<Option<crate::glyf::Glyph>, FontError> {
+        let loca = self.loca()?;
+        let glyf = self.glyf()?;
+        match loca.glyph_range(glyph_id) {
+            None => Ok(None),
+            Some((offset, length)) => Ok(Some(glyf.glyph_at(offset, length)?)),
+        }
+    }
 }
 
 #[cfg(test)]
