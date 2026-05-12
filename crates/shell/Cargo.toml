@@ -18,3 +18,5 @@ lumen-css-parser.workspace = true
 lumen-dom.workspace = true
 lumen-layout.workspace = true
 lumen-paint.workspace = true
+
+winit = "0.30"
