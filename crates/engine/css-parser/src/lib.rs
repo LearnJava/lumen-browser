@@ -1,14 +1,17 @@
 //! CSS-парсер для Lumen.
 //!
-//! Phase 0 — минимальный парсер правил `selector_list { decl_list }`.
-//! Селекторы: type / class / id / universal. Декларации хранятся как пары
-//! строк (property/value). At-rules (`@media`, `@import`) и неизвестные
-//! комбинаторы пропускаются.
+//! Поддерживается `selector_list { decl_list }`, селекторы type / class / id /
+//! universal / attribute / pseudo-class, compound и complex selectors с
+//! combinator-ами (` `, `>`, `+`, `~`), specificity по CSS3. Декларации
+//! хранятся как пары строк (property / value) — типизация значений (length /
+//! color / calc / `--var`) появится позже.
 //!
-//! Не поддерживается (отложено): pseudo-classes / pseudo-elements,
-//! descendant / child / sibling combinators, attribute selectors,
-//! типизированные значения, calc(), переменные `--foo`, специфичность.
+//! Не поддерживается (отложено): функциональные pseudo (`:nth-child`, `:not`),
+//! case-insensitive `[attr=val i]`, namespace prefix в селекторах.
 
 pub mod parser;
 
-pub use parser::{Declaration, Rule, Selector, Stylesheet, parse};
+pub use parser::{
+    AttrOp, AttrSelector, Combinator, CompoundSelector, ComplexSelector, Declaration, PseudoClass,
+    Rule, SimpleSelector, Specificity, Stylesheet, parse,
+};

@@ -1,8 +1,24 @@
-//! Минимальный style cascade: для каждого элемента собираем подходящие правила,
-//! применяем декларации. Без specificity — last-rule-wins. Без `!important`-разделения.
+//! Style cascade с поддержкой compound и complex selectors, attribute и
+//! pseudo-class matching, specificity по CSS Selectors Level 3.
+//!
+//! Алгоритм каскада: для каждого правила в stylesheet проверяем, матчит ли оно
+//! целевой элемент. Если матчит — для каждой декларации записываем «применять с
+//! приоритетом (specificity, source_order)». В конце сортируем все
+//! применимые декларации по этому ключу (по возрастанию) и применяем — так
+//! правило с большей specificity перекрывает меньшую, а при равенстве выигрывает
+//! более позднее.
+//!
+//! Matching complex selector-а — справа налево, жадно: для каждого combinator-а
+//! берём первого подходящего предка/sibling-а без back-tracking. Для большинства
+//! реальных страниц этого достаточно; патологические случаи `a b c` с
+//! вложенными `a`-предками могут промахнуться — это известное упрощение, до
+//! фазы со «честным» Selectors-движком.
 
-use lumen_css_parser::{Declaration, Selector, Stylesheet};
-use lumen_dom::{Document, NodeData, NodeId};
+use lumen_css_parser::{
+    AttrOp, AttrSelector, Combinator, CompoundSelector, ComplexSelector, Declaration, PseudoClass,
+    SimpleSelector, Specificity, Stylesheet,
+};
+use lumen_dom::{Attribute, Document, NodeData, NodeId};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Display {
@@ -111,41 +127,252 @@ pub fn compute_style(
         padding_left: 0.0,
     };
 
-    let NodeData::Element { name, attrs } = &doc.get(node).data else {
+    if !matches!(doc.get(node).data, NodeData::Element { .. }) {
         return style;
-    };
+    }
 
-    let id_attr = attrs.iter().find(|a| a.name.local == "id").map(|a| a.value.as_str());
-    let class_attr = attrs
-        .iter()
-        .find(|a| a.name.local == "class")
-        .map(|a| a.value.as_str())
-        .unwrap_or("");
-    let classes: Vec<&str> = class_attr.split_whitespace().collect();
-
-    for rule in &sheet.rules {
-        let matched = rule
-            .selectors
-            .iter()
-            .any(|s| matches_selector(s, &name.local, &classes, id_attr));
-        if matched {
-            for decl in &rule.declarations {
-                apply_declaration(&mut style, decl);
+    // Собираем все matched declarations с их sort key:
+    // (specificity, rule_order, decl_index). Затем применяем в этом порядке —
+    // более поздние/более специфичные перекрывают предыдущие.
+    let mut matched: Vec<(Specificity, usize, usize, &Declaration)> = Vec::new();
+    for (rule_idx, rule) in sheet.rules.iter().enumerate() {
+        let mut best: Option<Specificity> = None;
+        for complex in &rule.selectors {
+            if matches_complex(complex, doc, node) {
+                let spec = complex.specificity();
+                best = Some(match best {
+                    Some(prev) if prev >= spec => prev,
+                    _ => spec,
+                });
             }
         }
+        if let Some(spec) = best {
+            for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                matched.push((spec, rule_idx, decl_idx, decl));
+            }
+        }
+    }
+    matched.sort_by_key(|&(spec, rule_idx, decl_idx, _)| (spec, rule_idx, decl_idx));
+    for (_, _, _, decl) in &matched {
+        apply_declaration(&mut style, decl);
     }
 
     style
 }
 
-fn matches_selector(sel: &Selector, tag: &str, classes: &[&str], id: Option<&str>) -> bool {
+// ──────────────── selector matching ────────────────
+
+fn matches_complex(complex: &ComplexSelector, doc: &Document, node: NodeId) -> bool {
+    // Справа налево: последний compound матчит `node`, дальше идём
+    // по combinator-ам в обратную сторону, прыгая по предкам/sibling-ам.
+    let mut compounds: Vec<&CompoundSelector> = Vec::with_capacity(1 + complex.tail.len());
+    let mut combinators: Vec<Combinator> = Vec::with_capacity(complex.tail.len());
+    compounds.push(&complex.head);
+    for (comb, comp) in &complex.tail {
+        combinators.push(*comb);
+        compounds.push(comp);
+    }
+
+    let n = compounds.len();
+    if !matches_compound(compounds[n - 1], doc, node) {
+        return false;
+    }
+    let mut current = node;
+    for i in (0..n - 1).rev() {
+        let comb = combinators[i];
+        let target = compounds[i];
+        match comb {
+            Combinator::Descendant => {
+                let Some(found) = find_ancestor(doc, current, |n| matches_compound(target, doc, n))
+                else {
+                    return false;
+                };
+                current = found;
+            }
+            Combinator::Child => {
+                let Some(parent) = doc.get(current).parent else {
+                    return false;
+                };
+                if !is_element(doc, parent) || !matches_compound(target, doc, parent) {
+                    return false;
+                }
+                current = parent;
+            }
+            Combinator::NextSibling => {
+                let Some(prev) = previous_element_sibling(doc, current) else {
+                    return false;
+                };
+                if !matches_compound(target, doc, prev) {
+                    return false;
+                }
+                current = prev;
+            }
+            Combinator::LaterSibling => {
+                let mut sib = previous_element_sibling(doc, current);
+                let mut found = None;
+                while let Some(s) = sib {
+                    if matches_compound(target, doc, s) {
+                        found = Some(s);
+                        break;
+                    }
+                    sib = previous_element_sibling(doc, s);
+                }
+                let Some(f) = found else {
+                    return false;
+                };
+                current = f;
+            }
+        }
+    }
+    true
+}
+
+fn matches_compound(compound: &CompoundSelector, doc: &Document, node: NodeId) -> bool {
+    let NodeData::Element { name, attrs } = &doc.get(node).data else {
+        return false;
+    };
+    for part in &compound.parts {
+        if !matches_simple(part, doc, node, &name.local, attrs) {
+            return false;
+        }
+    }
+    true
+}
+
+fn matches_simple(
+    sel: &SimpleSelector,
+    doc: &Document,
+    node: NodeId,
+    tag: &str,
+    attrs: &[Attribute],
+) -> bool {
     match sel {
-        Selector::Type(name) => name == tag,
-        Selector::Class(name) => classes.contains(&name.as_str()),
-        Selector::Id(name) => id == Some(name.as_str()),
-        Selector::Universal => true,
+        SimpleSelector::Type(t) => t == tag,
+        SimpleSelector::Class(c) => attrs
+            .iter()
+            .find(|a| a.name.local == "class")
+            .map(|a| a.value.split_whitespace().any(|w| w == c))
+            .unwrap_or(false),
+        SimpleSelector::Id(i) => attrs
+            .iter()
+            .find(|a| a.name.local == "id")
+            .map(|a| a.value == *i)
+            .unwrap_or(false),
+        SimpleSelector::Universal => true,
+        SimpleSelector::Attribute(a) => matches_attribute(a, attrs),
+        SimpleSelector::PseudoClass(p) => matches_pseudo_class(p, doc, node),
+        SimpleSelector::PseudoElement(_) => false,
     }
 }
+
+fn matches_attribute(sel: &AttrSelector, attrs: &[Attribute]) -> bool {
+    let Some(attr) = attrs.iter().find(|a| a.name.local == sel.name) else {
+        return false;
+    };
+    match (sel.op, sel.value.as_deref()) {
+        (None, _) => true,
+        (Some(AttrOp::Equals), Some(v)) => attr.value == v,
+        (Some(AttrOp::Includes), Some(v)) => {
+            !v.is_empty() && attr.value.split_whitespace().any(|w| w == v)
+        }
+        (Some(AttrOp::DashMatch), Some(v)) => {
+            attr.value == v || attr.value.starts_with(&format!("{v}-"))
+        }
+        (Some(AttrOp::Prefix), Some(v)) => !v.is_empty() && attr.value.starts_with(v),
+        (Some(AttrOp::Suffix), Some(v)) => !v.is_empty() && attr.value.ends_with(v),
+        (Some(AttrOp::Substring), Some(v)) => !v.is_empty() && attr.value.contains(v),
+        _ => false,
+    }
+}
+
+fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
+    match p {
+        PseudoClass::FirstChild => is_first_element_child(doc, node),
+        PseudoClass::LastChild => is_last_element_child(doc, node),
+        PseudoClass::OnlyChild => {
+            is_first_element_child(doc, node) && is_last_element_child(doc, node)
+        }
+        PseudoClass::Empty => is_empty_element(doc, node),
+        PseudoClass::Root => is_root_element(doc, node),
+        PseudoClass::Unsupported(_) => false,
+    }
+}
+
+// ──────────────── DOM-traversal хелперы ────────────────
+
+fn is_element(doc: &Document, node: NodeId) -> bool {
+    matches!(doc.get(node).data, NodeData::Element { .. })
+}
+
+fn find_ancestor<F: Fn(NodeId) -> bool>(
+    doc: &Document,
+    node: NodeId,
+    pred: F,
+) -> Option<NodeId> {
+    let mut p = doc.get(node).parent;
+    while let Some(pid) = p {
+        if is_element(doc, pid) && pred(pid) {
+            return Some(pid);
+        }
+        p = doc.get(pid).parent;
+    }
+    None
+}
+
+fn previous_element_sibling(doc: &Document, node: NodeId) -> Option<NodeId> {
+    let parent = doc.get(node).parent?;
+    let siblings = &doc.get(parent).children;
+    let idx = siblings.iter().position(|&id| id == node)?;
+    siblings[..idx]
+        .iter()
+        .rev()
+        .copied()
+        .find(|&id| is_element(doc, id))
+}
+
+fn is_first_element_child(doc: &Document, node: NodeId) -> bool {
+    let Some(parent) = doc.get(node).parent else {
+        return false;
+    };
+    let siblings = &doc.get(parent).children;
+    siblings
+        .iter()
+        .copied()
+        .find(|&id| is_element(doc, id))
+        == Some(node)
+}
+
+fn is_last_element_child(doc: &Document, node: NodeId) -> bool {
+    let Some(parent) = doc.get(node).parent else {
+        return false;
+    };
+    let siblings = &doc.get(parent).children;
+    siblings
+        .iter()
+        .rev()
+        .copied()
+        .find(|&id| is_element(doc, id))
+        == Some(node)
+}
+
+fn is_empty_element(doc: &Document, node: NodeId) -> bool {
+    // `:empty` — нет ни элементов-детей, ни текстовых узлов с непустым контентом.
+    doc.get(node).children.iter().all(|&cid| {
+        matches!(
+            doc.get(cid).data,
+            NodeData::Comment(_) | NodeData::Doctype { .. }
+        ) || matches!(&doc.get(cid).data, NodeData::Text(t) if t.is_empty())
+    })
+}
+
+fn is_root_element(doc: &Document, node: NodeId) -> bool {
+    let Some(parent) = doc.get(node).parent else {
+        return false;
+    };
+    matches!(doc.get(parent).data, NodeData::Document)
+}
+
+// ──────────────── default display / declarations ────────────────
 
 fn default_display(doc: &Document, node: NodeId) -> Display {
     let NodeData::Element { name, .. } = &doc.get(node).data else {
@@ -153,15 +380,11 @@ fn default_display(doc: &Document, node: NodeId) -> Display {
     };
     match name.local.as_str() {
         // <head> и его метаданные никогда не рендерятся как видимый контент.
-        // В реальных браузерах это поведение через user-agent stylesheet
-        // (`head { display: none; }` и т.д.). У нас встроено в layout-default-ы
-        // до появления полноценного UA stylesheet.
         "head" | "title" | "style" | "script" | "meta" | "link" | "base" | "noscript" => {
             Display::None
         }
-        // Inline-уровневые элементы. Phase 0: пока трактуем как block до
-        // появления inline-flow с line boxes — текст внутри `<a>`/`<span>`
-        // будет на своей строке. Это известное ограничение.
+        // Inline-уровневые элементы. Phase 0: пока трактуем как block — текст
+        // внутри `<a>`/`<span>` будет на своей строке. Это известное ограничение.
         "a" | "span" | "b" | "i" | "em" | "strong" | "code" | "small" | "sub" | "sup"
         | "label" | "abbr" | "cite" | "q" | "mark" | "u" => Display::Inline,
         _ => Display::Block,
@@ -199,7 +422,6 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration) {
             if let Ok(v) = val.parse::<f32>() {
                 style.line_height = v;
             } else if let Some(v) = parse_length_px(val) {
-                // Если задано в px — переведём в коэффициент относительно font-size.
                 style.line_height = v / style.font_size;
             }
         }
