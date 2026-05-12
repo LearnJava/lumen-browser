@@ -17,10 +17,39 @@ pub trait NetworkTransport: Send + Sync {
 }
 
 /// Хранилище ключ/значение для cookies, истории, кэша.
+///
+/// Все операции принимают `origin` и `top_level_site` для партиционирования
+/// данных по источнику (cookie isolation, storage partitioning). `None` означает
+/// глобальный профильный namespace (история, настройки).
 pub trait StorageBackend: Send + Sync {
-    fn get(&self, key: &str) -> Result<Option<Vec<u8>>>;
-    fn put(&mut self, key: &str, value: &[u8]) -> Result<()>;
-    fn delete(&mut self, key: &str) -> Result<()>;
+    fn get(
+        &self,
+        origin: Option<&str>,
+        top_level_site: Option<&str>,
+        key: &str,
+    ) -> Result<Option<Vec<u8>>>;
+
+    fn put(
+        &mut self,
+        origin: Option<&str>,
+        top_level_site: Option<&str>,
+        key: &str,
+        value: &[u8],
+    ) -> Result<()>;
+
+    fn delete(
+        &mut self,
+        origin: Option<&str>,
+        top_level_site: Option<&str>,
+        key: &str,
+    ) -> Result<()>;
+
+    /// Перечислить все ключи в данном (origin, top_level_site) partition.
+    fn list_keys(
+        &self,
+        origin: Option<&str>,
+        top_level_site: Option<&str>,
+    ) -> Result<Vec<String>>;
 }
 
 /// Поисковая система для omnibox.
