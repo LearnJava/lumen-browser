@@ -1,0 +1,8 @@
+Block rect=(0.00, 0.00, 60.00, 38.40)
+  Block rect=(0.00, 0.00, 60.00, 38.40)
+    InlineRun rect=(0.00, 0.00, 60.00, 38.40)
+      seg[0] "hello world"
+      line[0]:
+        frag[0] x=0.00 "hello"
+      line[1]:
+        frag[0] x=0.00 "world"

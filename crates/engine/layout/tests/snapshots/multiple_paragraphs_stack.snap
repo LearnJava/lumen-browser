@@ -1,0 +1,16 @@
+Block rect=(0.00, 0.00, 800.00, 57.60)
+  Block rect=(0.00, 0.00, 800.00, 19.20)
+    InlineRun rect=(0.00, 0.00, 800.00, 19.20)
+      seg[0] "a"
+      line[0]:
+        frag[0] x=0.00 "a"
+  Block rect=(0.00, 19.20, 800.00, 19.20)
+    InlineRun rect=(0.00, 19.20, 800.00, 19.20)
+      seg[0] "b"
+      line[0]:
+        frag[0] x=0.00 "b"
+  Block rect=(0.00, 38.40, 800.00, 19.20)
+    InlineRun rect=(0.00, 38.40, 800.00, 19.20)
+      seg[0] "c"
+      line[0]:
+        frag[0] x=0.00 "c"

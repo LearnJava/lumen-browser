@@ -325,8 +325,9 @@ git branch -d text-rendering
 ### `lumen-layout` 🟡 (block + inline-flow + word-wrap + cascade)
 
 - **Готово:** `LayoutBox` дерево, **specificity-based style cascade**: для каждого правила берётся максимальная specificity среди его complex-селекторов, все matched declarations сортируются по `(specificity, rule_order, decl_index)` и применяются по возрастанию — выигрывает декларация с максимальной specificity, при равенстве — позже объявленная. Matching complex selector-а — справа налево, жадно (без back-tracking; патологические `a b c` с вложенными `a` могут промахнуться — известное упрощение). Combinator-ы: descendant / child / next-sibling / later-sibling. **Pseudo-classes:** все CSS3 structural и functional — `:first-child`, `:last-child`, `:only-child`, `:empty`, `:root`, `:first-of-type`, `:last-of-type`, `:only-of-type`, `:nth-child(an+b)`, `:nth-last-child`, `:nth-of-type`, `:nth-last-of-type`, `:not(compound)`. Helpers `element_index` (1-based, среди element-sibling-ов) и `element_index_of_type` (среди sibling-ов с тем же тегом) с `from_end` опцией. Attribute selectors: все операторы. Наследуемые свойства: `color`, `font-size`, `line-height`. Свойства с парсингом: `display` (block/inline/none), `color` (named 10 цветов + `#RRGGBB` + `#RGB`), `background-color`, `font-size`, `line-height`, `margin` (+ 4 стороны), `padding` (+ 4 стороны). Whitespace-only текстовые узлы и комментарии пропускаются. **Line wrapping:** `TextMeasurer` trait + `layout_measured()` разбивают текст по словам на строки с реальными шрифтовыми метриками. **Inline-flow:** `BoxKind::InlineRun { segments, lines }` — текстовые узлы и inline-элементы (`<a>`, `<span>`, `<em>`, `<strong>`, и т.д.) группируются в один поток; каждый сегмент хранит свой стиль (цвет ссылки); слова с одинаковым rendering-стилем сливаются в один `InlineFrag` на строке. `ComputedStyle::text_rendering_eq` сравнивает только color/font_size/line_height.
+- **Готово (тестовая инфра):** `serialize_layout_tree(&LayoutBox) → String` — детерминированный текстовый формат всего layout-дерева (kind / rect / non-default style / segments / lines), плюс 12 golden-тестов в `tests/snapshot_tests.rs` (empty / paragraph / styles / nested / inline + link / line wrap / cyrillic / stacked / display:none / nth-child(odd) / :not(.x) / descendant). Механизм `UPDATE_SNAPSHOTS=1` для регенерации (как в lumen-paint).
 - **Отложено:** flex, grid, float, абсолютное позиционирование, units кроме px, функции color (rgb/hsl/rgba), `box-sizing`, borders, text-decoration, font-weight/style как separate inline-property, селектор-matching с back-tracking.
-- 50 тестов (включая кириллицу, wrapping edge-cases, nested inheritance, inline-flow, combinators, attribute, structural и functional pseudo, `:not`, specificity).
+- 50 unit + 4 snapshot-unit + 12 snapshot-integration = 66 тестов.
 
 ### `lumen-paint` 🟡 (fill rects + textured text + FontMeasurer)
 
@@ -378,7 +379,7 @@ git branch -d text-rendering
 
 ### Численно
 
-- **Всего тестов в workspace:** 316 (на момент последнего обновления).
+- **Всего тестов в workspace:** 332 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -426,7 +427,6 @@ git branch -d text-rendering
 - GSUB/GPOS shaping (для арабского, индийского, тайского). Текущая позиция — добавим как exception #5 (rustybuzz) или сами для базовых случаев. См. анализ qwen.ai и обсуждение в плане.
 - ADR-инфраструктура (`docs/decisions/`) — формализация decisions log.
 - StorageBackend trait: добавить origin partitioning параметр (`(origin, top_level_site)`) ДО первой реализации, чтобы не переделывать.
-- Snapshot-тесты для layout (insta crate или собственный diff).
 - Composite glyphs с ARGS_ARE_XY_VALUES=0 (point alignment) — для битых старых шрифтов.
 - Полноценный selector-matching с back-tracking для complex-селекторов (текущий — right-to-left greedy, может промахиваться на патологических `a b c` с вложенными предками).
 - CSS4 pseudo-classes `:is(...)`, `:where(...)`, `:has(...)` — сейчас парсятся как `Unsupported`. `:nth-*` и `:not(compound)` уже работают.

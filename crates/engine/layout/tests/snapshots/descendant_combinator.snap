@@ -1,0 +1,12 @@
+Block rect=(0.00, 0.00, 800.00, 38.40)
+  Block rect=(0.00, 0.00, 800.00, 19.20)
+    Block rect=(0.00, 0.00, 800.00, 19.20) bg=#ffff00ff
+      InlineRun rect=(0.00, 0.00, 800.00, 19.20)
+        seg[0] "x"
+        line[0]:
+          frag[0] x=0.00 "x"
+  Block rect=(0.00, 19.20, 800.00, 19.20)
+    InlineRun rect=(0.00, 19.20, 800.00, 19.20)
+      seg[0] "y"
+      line[0]:
+        frag[0] x=0.00 "y"

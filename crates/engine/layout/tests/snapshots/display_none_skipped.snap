@@ -1,0 +1,7 @@
+Block rect=(0.00, 0.00, 800.00, 19.20)
+  Block rect=(0.00, 0.00, 800.00, 19.20)
+    InlineRun rect=(0.00, 0.00, 800.00, 19.20)
+      seg[0] "visible"
+      line[0]:
+        frag[0] x=0.00 "visible"
+  Skip rect=(0.00, 19.20, 0.00, 0.00) display=none

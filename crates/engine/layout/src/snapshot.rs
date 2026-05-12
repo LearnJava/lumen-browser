@@ -1,0 +1,168 @@
+//! Сериализация `LayoutBox` в детерминированный текст для snapshot-тестов.
+//!
+//! Аналог `lumen_paint::serialize_display_list`, но на уровне выше — фиксирует
+//! всю структуру layout-дерева (тип бокса, rect, ключевые стилевые свойства,
+//! сегменты и строки InlineRun-а).
+//!
+//! Из стиля выводятся только поля, отличающиеся от значений root-а (черный
+//! текст, 16px, line-height 1.2, нулевые margin/padding, без фона). Это
+//! даёт компактный читаемый снапшот: всё, что напечатано — отличается от
+//! «дефолта».
+
+use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
+use crate::style::{Color, ComputedStyle, Display};
+use std::fmt::Write;
+
+/// Корневой entry-point: рекурсивно сериализует всё дерево.
+pub fn serialize_layout_tree(root: &LayoutBox) -> String {
+    let mut out = String::new();
+    write_box(&mut out, root, 0);
+    out
+}
+
+fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
+    let indent = "  ".repeat(depth);
+    let kind = match &b.kind {
+        BoxKind::Block => "Block",
+        BoxKind::InlineRun { .. } => "InlineRun",
+        BoxKind::Skip => "Skip",
+    };
+    let _ = write!(
+        out,
+        "{indent}{kind} rect=({:.2}, {:.2}, {:.2}, {:.2})",
+        b.rect.x, b.rect.y, b.rect.width, b.rect.height
+    );
+    write_style_attrs(out, &b.style);
+    out.push('\n');
+
+    if let BoxKind::InlineRun { segments, lines } = &b.kind {
+        let inner = "  ".repeat(depth + 1);
+        for (i, seg) in segments.iter().enumerate() {
+            write_segment(out, &inner, i, seg);
+        }
+        for (li, line) in lines.iter().enumerate() {
+            let _ = writeln!(out, "{inner}line[{li}]:");
+            let frag_indent = "  ".repeat(depth + 2);
+            for (fi, frag) in line.iter().enumerate() {
+                write_frag(out, &frag_indent, fi, frag);
+            }
+        }
+    }
+
+    for child in &b.children {
+        write_box(out, child, depth + 1);
+    }
+}
+
+fn write_segment(out: &mut String, indent: &str, i: usize, seg: &InlineSegment) {
+    let _ = write!(out, "{indent}seg[{i}] {:?}", seg.text);
+    write_text_style_attrs(out, &seg.style);
+    out.push('\n');
+}
+
+fn write_frag(out: &mut String, indent: &str, i: usize, frag: &InlineFrag) {
+    let _ = writeln!(out, "{indent}frag[{i}] x={:.2} {:?}", frag.x, frag.text);
+}
+
+/// Полный набор отличий стиля от root (включая display / margin / padding).
+fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
+    if let Some(bg) = s.background_color
+        && bg.a > 0
+    {
+        let _ = write!(out, " bg={}", color_hex(bg));
+    }
+    match s.display {
+        Display::Block => {}
+        Display::Inline => out.push_str(" display=inline"),
+        Display::None => out.push_str(" display=none"),
+    }
+    write_text_style_attrs(out, s);
+    if s.margin_top != 0.0
+        || s.margin_right != 0.0
+        || s.margin_bottom != 0.0
+        || s.margin_left != 0.0
+    {
+        let _ = write!(
+            out,
+            " m=({:.2}, {:.2}, {:.2}, {:.2})",
+            s.margin_top, s.margin_right, s.margin_bottom, s.margin_left
+        );
+    }
+    if s.padding_top != 0.0
+        || s.padding_right != 0.0
+        || s.padding_bottom != 0.0
+        || s.padding_left != 0.0
+    {
+        let _ = write!(
+            out,
+            " p=({:.2}, {:.2}, {:.2}, {:.2})",
+            s.padding_top, s.padding_right, s.padding_bottom, s.padding_left
+        );
+    }
+}
+
+/// Подмножество, влияющее на рендеринг текста (color / font-size / line-height).
+/// Используется и для боксов, и для inline-сегментов.
+fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
+    if s.color != Color::BLACK {
+        let _ = write!(out, " color={}", color_hex(s.color));
+    }
+    if (s.font_size - 16.0).abs() > 0.01 {
+        let _ = write!(out, " fs={:.2}", s.font_size);
+    }
+    if (s.line_height - 1.2).abs() > 0.01 {
+        let _ = write!(out, " lh={:.2}", s.line_height);
+    }
+}
+
+fn color_hex(c: Color) -> String {
+    format!("#{:02x}{:02x}{:02x}{:02x}", c.r, c.g, c.b, c.a)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::layout;
+    use lumen_core::geom::Size;
+
+    fn lay(html: &str, css: &str) -> LayoutBox {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        layout(&doc, &sheet, Size::new(800.0, 600.0))
+    }
+
+    #[test]
+    fn empty_tree_serializes_to_single_root() {
+        let root = lay("", "");
+        let s = serialize_layout_tree(&root);
+        assert_eq!(s, "Block rect=(0.00, 0.00, 800.00, 0.00)\n");
+    }
+
+    #[test]
+    fn paragraph_renders_inline_run() {
+        let root = lay("<p>hi</p>", "");
+        let s = serialize_layout_tree(&root);
+        assert!(s.contains("Block "), "{s}");
+        assert!(s.contains("InlineRun "), "{s}");
+        assert!(s.contains("\"hi\""), "{s}");
+    }
+
+    #[test]
+    fn background_color_shows_as_bg() {
+        let root = lay("<p>x</p>", "p { background: red; }");
+        let s = serialize_layout_tree(&root);
+        assert!(s.contains("bg=#ff0000ff"), "{s}");
+    }
+
+    #[test]
+    fn default_style_fields_are_omitted() {
+        let root = lay("<p>x</p>", "");
+        let s = serialize_layout_tree(&root);
+        // color, fs, lh, margin, padding не должны попасть — все дефолтные.
+        assert!(!s.contains("color="), "{s}");
+        assert!(!s.contains("fs="), "{s}");
+        assert!(!s.contains("lh="), "{s}");
+        assert!(!s.contains("m=("), "{s}");
+        assert!(!s.contains("p=("), "{s}");
+    }
+}

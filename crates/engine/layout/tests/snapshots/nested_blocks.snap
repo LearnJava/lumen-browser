@@ -1,0 +1,7 @@
+Block rect=(0.00, 0.00, 800.00, 19.20)
+  Block rect=(0.00, 0.00, 800.00, 19.20) bg=#ff0000ff
+    Block rect=(0.00, 0.00, 800.00, 19.20) bg=#0000ffff
+      InlineRun rect=(0.00, 0.00, 800.00, 19.20)
+        seg[0] "nested"
+        line[0]:
+          frag[0] x=0.00 "nested"
