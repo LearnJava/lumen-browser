@@ -741,6 +741,86 @@ mod tests {
         assert_eq!(divs[0].style.color.r, 255, "div.hl — не исключается");
     }
 
+    // ── Relative units: em / rem / % ────────────────────────────────────────
+
+    #[test]
+    fn font_size_em_relative_to_parent() {
+        // root fs 16 → div fs 20 → p fs 2em = 40.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-size: 20px; } p { font-size: 2em; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((p.style.font_size - 40.0).abs() < 0.01, "got {}", p.style.font_size);
+    }
+
+    #[test]
+    fn font_size_rem_relative_to_root() {
+        // rem всегда от 16 (ROOT_FONT_SIZE), независимо от parent.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-size: 100px; } p { font-size: 1.5rem; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((p.style.font_size - 24.0).abs() < 0.01, "got {}", p.style.font_size);
+    }
+
+    #[test]
+    fn font_size_percent_relative_to_parent() {
+        // 150% от 16 = 24.
+        let root = lay("<p>x</p>", "p { font-size: 150%; }");
+        let p = first_element_child(&root);
+        assert!((p.style.font_size - 24.0).abs() < 0.01, "got {}", p.style.font_size);
+    }
+
+    #[test]
+    fn padding_em_uses_current_font_size() {
+        // padding: 2em должен использовать computed font-size самого элемента,
+        // даже если font-size в правиле объявлен после padding.
+        let root = lay("<p>x</p>", "p { padding: 2em; font-size: 20px; }");
+        let p = first_element_child(&root);
+        assert!((p.style.padding_top - 40.0).abs() < 0.01, "got {}", p.style.padding_top);
+    }
+
+    #[test]
+    fn margin_rem_independent_of_inherit() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-size: 99px; } p { margin: 1rem; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((p.style.margin_top - 16.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn line_height_percent_becomes_coefficient() {
+        // 150% = 1.5.
+        let root = lay("<p>x</p>", "p { line-height: 150%; }");
+        let p = first_element_child(&root);
+        assert!((p.style.line_height - 1.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn line_height_em_is_coefficient() {
+        // 1.5em — то же, что unitless 1.5 (CSS определяет line-height: <number>
+        // как «коэффициент * font-size»; em делает то же численно).
+        let root = lay("<p>x</p>", "p { line-height: 1.5em; }");
+        let p = first_element_child(&root);
+        assert!((p.style.line_height - 1.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn percent_in_margin_is_ignored() {
+        // % в margin требует containing-block-width — пока не реализовано,
+        // должно молча игнорироваться (margin остаётся 0).
+        let root = lay("<p>x</p>", "p { margin: 50%; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.margin_top, 0.0);
+    }
+
     // ── Тесты text-align ───────────────────────────────────────────────────
 
     fn first_inline_run(b: &LayoutBox) -> &LayoutBox {
