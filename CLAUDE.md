@@ -372,7 +372,7 @@ git branch -d text-rendering
 
 ### Численно
 
-- **Всего тестов в workspace:** 264 (на момент последнего обновления).
+- **Всего тестов в workspace:** 281 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.

@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/shell",
     "crates/core",
+    "crates/storage",
     "crates/engine/html-parser",
     "crates/engine/css-parser",
     "crates/engine/dom",
@@ -21,6 +22,7 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 lumen-core = { path = "crates/core" }
+lumen-storage = { path = "crates/storage" }
 lumen-html-parser = { path = "crates/engine/html-parser" }
 lumen-css-parser = { path = "crates/engine/css-parser" }
 lumen-dom = { path = "crates/engine/dom" }
