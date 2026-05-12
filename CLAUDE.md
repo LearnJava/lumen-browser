@@ -64,7 +64,7 @@ export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
 
 ### Текущее число тестов и crates
 
-На момент написания: 155 тестов, 8 крейтов (`shell`, `core`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`). При прохождении следующих фаз появятся `lumen-knowledge`, `lumen-ai`, `lumen-network` и др.
+На момент написания: 201 тест, 9 крейтов (`shell`, `core`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`). При прохождении следующих фаз появятся `lumen-knowledge`, `lumen-ai`, `lumen-network` и др.
 
 ---
 
@@ -82,7 +82,8 @@ crates/
     ├── dom/              — arena-based DOM (NodeId, Document)
     ├── layout/           — block flow + style cascade
     ├── paint/            — display list + wgpu-rasterizer + glyph atlas
-    └── font/             — TrueType parser + scanline rasterizer
+    ├── font/             — TrueType parser + scanline rasterizer
+    └── encoding/         — детектор и однобайтовые декодеры (cp1251/koi8-r/cp866)
 ```
 
 ### Направление зависимостей
@@ -325,26 +326,32 @@ git branch -d text-rendering
 - **Отложено:** cmap format 12 (Unicode SMP/SIP — эмодзи), hinting (TT-инструкции), GSUB/GPOS (advanced shaping для лигатур, kerning, Arabic/Indic), CFF outlines (для PostScript-OpenType `.otf` без TT-таблиц), variable fonts (fvar/gvar/avar/HVAR), color glyphs (COLR/CPAL, sbix), bitmap strikes (EBDT/EBLC), composite с ARGS_ARE_XY_VALUES=0 (point alignment, рудимент — сейчас offset = (0,0)).
 - 60 unit-тестов + 9 интеграционных на bundled Inter. Включает тест на composite кириллической `А`.
 
+### `lumen-encoding` 🟡 (детектор + однобайтовые декодеры)
+
+- **Готово:** таблицы декодирования `Windows-1251`, `KOI8-R`, `CP866` (по WHATWG Encoding Standard). Декодер `decode(encoding, bytes) → String` для всех четырёх (включая UTF-8) с lossy-обработкой нелегальных байт и автоматическим срезом UTF-8 BOM. Детектор `detect(bytes, content_type_hint) → Encoding` с приоритетами: BOM → `<meta charset>`/`<meta http-equiv>` в первом килобайте → HTTP content-type hint → валидный UTF-8 → частотная эвристика по русским буквам (взвешенный score из 32 частот). Реализует `lumen_core::ext::EncodingDetector` через `HeuristicDetector`. `Encoding::from_label` парсит WHATWG-алиасы (`cp1251`, `koi8r`, `ibm866`, …).
+- **Отложено:** UTF-16 как отдельная кодировка (BOM сейчас падает в эвристику и в большинстве случаев работает), ISO-8859-5 и MacCyrillic (не встречаются в природе), полный HTML5 prescan algorithm §12.2.3.2 (наш sniff проще, чем spec, но для практики хватает).
+- 35 unit-тестов (декодер + таблицы + детектор + trait) + 6 интеграционных round-trip (encode → detect → decode по «Бородино»).
+
 ### `lumen-shell` 🟡 (окно + рендер)
 
-- **Готово:** winit 0.30 с `ApplicationHandler` API. Два режима: `lumen` (пустое окно 1024×720) и `lumen <path.html>` (парсит HTML, извлекает `<style>` через walk DOM, парсит CSS, layout, paint, рисует фоны + текст в окне через `Renderer::render`). Inter-Regular.ttf bundled через `include_bytes!` (~411 КБ к binary). Обработчики Resized + RedrawRequested.
+- **Готово:** winit 0.30 с `ApplicationHandler` API. Два режима: `lumen` (пустое окно 1024×720) и `lumen <path.html>` (читает файл, определяет кодировку через `lumen_encoding::detect`, декодирует в `String`, парсит HTML, извлекает `<style>` через walk DOM, парсит CSS, layout, paint, рисует фоны + текст в окне через `Renderer::render`). Inter-Regular.ttf bundled через `include_bytes!` (~411 КБ к binary). Обработчики Resized + RedrawRequested.
 - **Отложено:** вкладки, омнибокс, навигация, истории сессий, бэка для CSS-загрузки внешних файлов через `<link>`, scroll, обработка input-событий.
 - Авто-тестов нет (визуальная проверка через `cargo run`). Snapshot-тесты для рендера — TODO.
 
 ### Инфраструктура
 
 - Cargo workspace, edition 2024, resolver 3, MSRV 1.95.
-- 8 крейтов в `crates/`: shell, core, engine/{html-parser, css-parser, dom, layout, paint, font}.
+- 9 крейтов в `crates/`: shell, core, engine/{html-parser, css-parser, dom, layout, paint, font, encoding}.
 - Bundled assets: `assets/fonts/Inter-Regular.ttf` (+ OFL.txt лицензия).
 - Тестовая страница: `samples/page.html` со встроенным `<style>`.
 - 4 разрешённых внешних зависимости: `winit = "0.30"`, `wgpu = "26"`, `rustls` (зарезервирована, не подключена), JS engine (зарезервирована).
-- Внутренние deps: workspace.dependencies на 8 крейтов.
+- Внутренние deps: workspace.dependencies на 9 крейтов.
 - `.gitattributes` форсит LF для всех текстовых файлов; binary-метка для `.ttf / .png / .woff2`.
 - `.gitignore` игнорирует `/target`, `/*.zip`, `/*.tar*`, `.idea/`, `.vscode/`, swap-файлы.
 
 ### Численно
 
-- **Всего тестов в workspace:** 159 (на момент последнего обновления).
+- **Всего тестов в workspace:** 201 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -358,10 +365,9 @@ git branch -d text-rendering
 ### Ближайшее (закрывает Phase 0)
 
 1. **Inline-flow / line wrapping** — текст переносится по словам, не обрезается на краю rect-а. Layout получает line boxes; paint обрабатывает несколько строк per text node.
-2. **Encoding detection** (§10.1) — cp1251 / KOI8-R / CP866. Сейчас shell принимает только UTF-8 файл (panic при не-UTF-8).
-3. **HTTP/1.1 + TLS client через rustls** — загрузка внешних страниц. Активация exception #3. Новый крейт `lumen-network`.
-4. **Snapshot-тесты для paint** — гарантия от регрессии визуального вывода. Сериализация display list + diff. Можно сделать сейчас, не дожидаясь больших фич.
-5. **Inline elements в layout** (`<a>`, `<span>`, `<em>`, `<strong>`) — сейчас трактуются как block. Нужны line boxes как часть inline-flow.
+2. **HTTP/1.1 + TLS client через rustls** — загрузка внешних страниц. Активация exception #3. Новый крейт `lumen-network`.
+3. **Snapshot-тесты для paint** — гарантия от регрессии визуального вывода. Сериализация display list + diff. Можно сделать сейчас, не дожидаясь больших фич.
+4. **Inline elements в layout** (`<a>`, `<span>`, `<em>`, `<strong>`) — сейчас трактуются как block. Нужны line boxes как часть inline-flow.
 
 ### Средний приоритет (Phase 1+)
 
@@ -419,6 +425,7 @@ git branch -d text-rendering
 - **Feature-branch + `--no-ff` merge** workflow. Видимая структура «коммит-серия = задача» в git log --graph.
 - **`opt-level = 1` в dev профиле** — компромисс: debug-сборка чуть медленнее, но layout/paint работают в 5-10 раз быстрее. Стандарт в графических Rust-проектах.
 - **Cargo features пока не используются**, но запланированы для `ai`, `webgl`, `tor`, `ru-hyphenation` опциональных модулей.
+- **Encoding detection — частотная эвристика по русским буквам**, не bi-gram / n-gram модель. Соотношение «вес = доля буквы в обычных русских текстах» по таблице из 32 строчных. Этого достаточно, чтобы уверенно различать cp1251 / KOI8-R / CP866 на тексте длиннее ~30 байт: фонетическая раскладка KOI8-R и DOS-блоки CP866 дают резко разный результат при ошибочной декодировке. Более сложные модели (CharsetDetect / chardet) — overkill для Phase 0. Если упрёмся в edge case — пересмотрим.
 
 ### Открытые вопросы (решим, когда упрёмся)
 
@@ -439,6 +446,7 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*   (HEAD)   encoding-detection     — крейт lumen-encoding: BOM + meta + heuristic, cp1251/koi8-r/cp866
 *   061c2c7  hide-head-elements     — <title>, <style>, <script> и др. метаданные больше не рендерятся
 *   061c2c7  claude-md-self-update-rule — правило обновлять CLAUDE.md вместе с планом
 *   586f8ba  claude-md-state        — детальное состояние подсистем + roadmap + decisions log

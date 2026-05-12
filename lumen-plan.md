@@ -7,7 +7,7 @@
 **Текущая фаза:** Phase 0 (прототип). Этот блок обновляется при каждом коммите, реализующем пункт плана. Условные обозначения: ✅ готово · 🟡 в работе · ⬜ запланировано.
 
 ### Инфраструктура
-- ✅ Cargo workspace, 7 крейтов
+- ✅ Cargo workspace, 9 крейтов
 - ✅ `rust-toolchain.toml` (stable + rustfmt + clippy)
 - ✅ `.gitattributes` (LF в репо, кросс-платформенные line endings)
 - ✅ Ветка `main`, локальные коммиты, без remote
@@ -21,6 +21,7 @@
 - 🟡 `lumen-layout` — block-flow с style cascade: type/class/id/universal-селекторы, наследование (color, font-size, line-height), color (named + hex), display (block/inline/none), margin/padding (включая shorthand). 17 тестов (включая кириллический класс и nested inheritance). Отложено: inline-флоу с line boxes, flex/grid, float, абсолютное позиционирование, specificity
 - 🟡 `lumen-paint` — display list (FillRect, DrawText) + wgpu-растеризатор с двумя pipeline-ами (fill + text), glyph atlas 512×512, текстурированные квады из atlas-а. 17 тестов (display list + atlas). Внешние зависимости: `wgpu` (exception #2), `winit` (exception #1)
 - 🟡 `lumen-font` — собственный TrueType-парсер (head/maxp/cmap/hhea/hmtx/loca/glyf) + scanline-растеризатор (квадратичные Безье, 4×4 AA, even-odd fill). 60 тестов (включая интеграционный на bundled Inter). Отложено: composite glyphs, cmap format 12 (эмодзи), hinting, GSUB/GPOS shaping
+- 🟡 `lumen-encoding` — детектор кодировок и однобайтовые декодеры (Windows-1251, KOI8-R, CP866). Пайплайн: BOM → `<meta charset>`-sniff (1 КБ) → HTTP content-type hint → UTF-8 валидность → частотная эвристика по русским буквам. Реализует `EncodingDetector` из `lumen-core::ext`. 41 тест (35 unit + 6 integration round-trip). Отложено: UTF-16 как отдельная кодировка, ISO-8859-5, MacCyrillic, prescan по HTML5 spec §12.2.3.2 (точные правила парсинга атрибутов)
 - ⬜ `lumen-knowledge` (§12) — FTS-индекс над историей и заметками, read-later каталог. Phase 2
 - ⬜ `lumen-ai` (§12.5) — опциональный, embedding + RAG поверх локального LLM. Phase 3+, feature-flag
 
@@ -32,7 +33,8 @@
 - ✅ Exception #4: JS engine (`rquickjs` → `rusty_v8`) — за `JsRuntime` — пока не подключён
 
 ### Точки расширения (trait-ы из `lumen-core::ext`)
-- 🟡 Интерфейсы: `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector` — определены, реализаций нет
+- 🟡 Интерфейсы: `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource` — определены, реализаций нет
+- ✅ `EncodingDetector` — реализован в `lumen-encoding::HeuristicDetector` (BOM + meta + content-type + UTF-8 + частотная эвристика)
 - ⬜ Trait-ы для 4 exceptions: `WindowingBackend`, `RenderBackend`, `TlsBackend`, `JsRuntime` — задокументированы как future в `lumen-core::ext`, code-уровень добавим при первом использовании
 - ⬜ `KnowledgeStore` (§12) — FTS / read-later / notes. Phase 2
 - ⬜ `AiBackend` (§12.5) — embed / generate, опционально. Phase 3+
@@ -53,7 +55,7 @@
 ### Локализация / RU (§10)
 - ✅ DOM держит кириллицу (UTF-8) — зафиксировано тестами
 - ✅ `Url::parse` принимает кириллические домены (тест на `президент.рф`)
-- ⬜ Encoding detection (cp1251, KOI8-R)
+- ✅ Encoding detection (cp1251, KOI8-R, CP866) — крейт `lumen-encoding`, подключён в shell
 - ⬜ Cyrillic font fallback в paint
 - ⬜ Punycode/IDN
 - ⬜ Локаль ru-RU (дата/время/числа)
