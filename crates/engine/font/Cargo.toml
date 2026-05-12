@@ -1,0 +1,11 @@
+[package]
+name = "lumen-font"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: TrueType / OpenType парсер и растеризатор глифов"
+
+[dependencies]
+lumen-core.workspace = true

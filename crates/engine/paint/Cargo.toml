@@ -10,6 +10,7 @@ description = "Lumen: display list and rasterization"
 [dependencies]
 lumen-core.workspace = true
 lumen-layout.workspace = true
+lumen-font.workspace = true
 
 # Exception #1 + #2 из §5: paint держит wgpu-surface, привязанный к winit-окну.
 winit.workspace = true

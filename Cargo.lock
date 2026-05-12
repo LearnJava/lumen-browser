@@ -786,6 +786,13 @@ name = "lumen-dom"
 version = "0.0.1"
 
 [[package]]
+name = "lumen-font"
+version = "0.0.1"
+dependencies = [
+ "lumen-core",
+]
+
+[[package]]
 name = "lumen-html-parser"
 version = "0.0.1"
 dependencies = [
@@ -809,6 +816,7 @@ version = "0.0.1"
 dependencies = [
  "lumen-core",
  "lumen-css-parser",
+ "lumen-font",
  "lumen-html-parser",
  "lumen-layout",
  "wgpu",

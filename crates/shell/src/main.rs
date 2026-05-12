@@ -14,6 +14,10 @@ use lumen_core::geom::Size;
 use lumen_dom::{Document, NodeData, NodeId};
 use lumen_paint::{DisplayList, Renderer};
 use winit::application::ApplicationHandler;
+
+/// Bundled-шрифт: статический Inter v4.1 Regular (~411 КБ),
+/// SIL OFL 1.1, см. assets/fonts/OFL.txt.
+const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -121,7 +125,7 @@ impl ApplicationHandler for Lumen {
             }
         };
 
-        let renderer = match Renderer::new(window.clone()) {
+        let renderer = match Renderer::new(window.clone(), INTER_FONT.to_vec()) {
             Ok(r) => r,
             Err(err) => {
                 eprintln!("Не удалось инициализировать рендер: {err}");
