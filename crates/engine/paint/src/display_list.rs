@@ -47,13 +47,16 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 walk(child, out);
             }
         }
-        BoxKind::Text(s) => {
-            out.push(DisplayCommand::DrawText {
-                rect: b.rect,
-                text: s.clone(),
-                font_size: b.style.font_size,
-                color: b.style.color,
-            });
+        BoxKind::Text(lines) => {
+            let line_h = b.style.font_size * b.style.line_height;
+            for (i, line) in lines.iter().enumerate() {
+                out.push(DisplayCommand::DrawText {
+                    rect: Rect::new(b.rect.x, b.rect.y + i as f32 * line_h, b.rect.width, line_h),
+                    text: line.clone(),
+                    font_size: b.style.font_size,
+                    color: b.style.color,
+                });
+            }
         }
     }
 }
@@ -67,6 +70,20 @@ mod tests {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        build_display_list(&tree)
+    }
+
+    struct Fixed8;
+    impl lumen_layout::TextMeasurer for Fixed8 {
+        fn char_width(&self, _: char, _: f32) -> f32 {
+            8.0
+        }
+    }
+
+    fn build_wrapped(html: &str, css: &str, width: f32) -> DisplayList {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let tree = lumen_layout::layout_measured(&doc, &sheet, Size::new(width, 600.0), &Fixed8);
         build_display_list(&tree)
     }
 
@@ -153,5 +170,39 @@ mod tests {
             ".x { display: none; }",
         );
         assert_eq!(texts(&dl), vec!["visible"]);
+    }
+
+    // ── Тесты line wrapping ─────────────────────────────────────────────────
+
+    /// При переносе текста на 2 строки должны быть эмитированы 2 DrawText.
+    #[test]
+    fn wrapped_text_emits_multiple_draw_text() {
+        // "hello world" = 11×8 = 88px. Viewport 60px → перенос на 2 строки.
+        let dl = build_wrapped("<p>hello world</p>", "", 60.0);
+        assert_eq!(texts(&dl), vec!["hello", "world"]);
+    }
+
+    /// Вторая строка у `DrawText` должна быть смещена по Y на line_height.
+    #[test]
+    fn wrapped_lines_have_correct_y_offset() {
+        let dl = build_wrapped("<p>hello world</p>", "", 60.0);
+        let draw_texts: Vec<_> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawText { rect, .. } => Some(rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(draw_texts.len(), 2);
+        let line_h = 16.0_f32 * 1.2; // font_size=16, line_height=1.2
+        assert!((draw_texts[0].y - 0.0).abs() < 0.01);
+        assert!((draw_texts[1].y - line_h).abs() < 0.1, "y1={}", draw_texts[1].y);
+    }
+
+    /// Текст без переноса всё равно рисуется одной командой.
+    #[test]
+    fn no_wrap_single_draw_text() {
+        let dl = build_wrapped("<p>hi</p>", "", 800.0);
+        assert_eq!(texts(&dl), vec!["hi"]);
     }
 }

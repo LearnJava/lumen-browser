@@ -1,21 +1,29 @@
 //! Layout-движок для Lumen.
 //!
-//! Phase 0 — минимальный block-flow. Каждый DOM-элемент даёт один LayoutBox,
-//! текст — одну строку высоты `font_size * line_height`, всё стэкается
-//! вертикально на полную ширину родителя. Inline-элементы временно ведут
-//! себя как block (текст будет в собственной строке). Whitespace-only
-//! текстовые узлы и комментарии не участвуют в layout.
+//! Block-flow с word-wrapping. Каждый DOM-элемент → один LayoutBox, текст
+//! разбивается по словам на строки через `TextMeasurer`, всё стэкается
+//! вертикально. Inline-элементы временно ведут себя как block (до появления
+//! полноценных inline-boxes). Whitespace-only узлы и комментарии пропускаются.
 //!
-//! Не поддерживается (Phase 1+): inline-флоу с line boxes, флексбокс,
-//! grid, плавающие элементы, абсолютное позиционирование, specificity
-//! каскада, единицы кроме px, color-функции (rgb/hsl/rgba), значения
-//! width/height в самом стиле (контейнер всегда занимает доступную ширину).
+//! Не поддерживается (Phase 2+): true inline-flow (элементы в одной строке),
+//! flex, grid, float, absolute positioning, specificity каскада, единицы кроме
+//! px, color-функции (rgb/hsl/rgba), width/height в CSS.
 
 pub mod box_tree;
 pub mod style;
 
-pub use box_tree::{layout, BoxKind, LayoutBox};
+pub use box_tree::{layout, layout_measured, BoxKind, LayoutBox};
 pub use style::{Color, ComputedStyle, Display};
+
+/// Интерфейс измерения ширины символов для line wrapping.
+///
+/// Реализуется на стороне вызывающего кода (paint/shell), где есть доступ
+/// к шрифтовым данным. Layout использует его только в `layout_measured()`.
+pub trait TextMeasurer {
+    /// Ширина символа `ch` при размере шрифта `font_size_px` пикселей.
+    /// Возвращает 0.0 для неизвестных символов.
+    fn char_width(&self, ch: char, font_size_px: f32) -> f32;
+}
 
 #[cfg(test)]
 mod tests {
@@ -26,6 +34,20 @@ mod tests {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         layout(&doc, &sheet, Size::new(800.0, 600.0))
+    }
+
+    /// Измеритель с фиксированной шириной 8px на символ.
+    struct Fixed8;
+    impl TextMeasurer for Fixed8 {
+        fn char_width(&self, _: char, _: f32) -> f32 {
+            8.0
+        }
+    }
+
+    fn lay_measured(html: &str, css: &str, width: f32) -> LayoutBox {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        layout_measured(&doc, &sheet, Size::new(width, 600.0), &Fixed8)
     }
 
     fn first_element_child(b: &LayoutBox) -> &LayoutBox {
@@ -216,5 +238,54 @@ mod tests {
         assert_eq!(p.style.font_size, 24.0);
         // color тоже
         assert_eq!(p.style.color.b, 255);
+    }
+
+    // ── Тесты line wrapping ─────────────────────────────────────────────────
+
+    /// Fixed8: "hello world" = 11 символов × 8px = 88px.
+    /// При viewport 60px ("hello" = 40px влезает, "world" = 40px → перенос).
+    #[test]
+    fn wrap_two_words_into_two_lines() {
+        let root = lay_measured("<p>hello world</p>", "", 60.0);
+        // root → <p> → text (2 строки). 2 × (16 * 1.2) = 38.4
+        assert!(
+            (root.rect.height - 38.4).abs() < 0.1,
+            "height={}",
+            root.rect.height
+        );
+    }
+
+    /// При достаточно широком viewport слова не переносятся.
+    #[test]
+    fn no_wrap_when_text_fits() {
+        // "hello" = 5×8 = 40px, viewport 100px — переноса нет.
+        let root = lay_measured("<p>hello</p>", "", 100.0);
+        assert!((root.rect.height - 19.2).abs() < 0.1, "height={}", root.rect.height);
+    }
+
+    /// Перенос работает корректно для кириллического текста.
+    #[test]
+    fn wrap_cyrillic_text() {
+        // "Привет мир" = 10 × 8 = 80px при Fixed8.
+        // Viewport 50px: "Привет" = 6×8=48px ≤ 50, " " + "мир" = 8+24=32 → 48+8+24=80 > 50.
+        let root = lay_measured("<p>Привет мир</p>", "", 50.0);
+        // 2 строки
+        assert!((root.rect.height - 38.4).abs() < 0.1, "height={}", root.rect.height);
+    }
+
+    /// Одно слово, которое само по себе шире viewport, остаётся в одной строке.
+    #[test]
+    fn single_wide_word_stays_on_one_line() {
+        // "superlongword" = 13×8 = 104px > 80px viewport — всё равно одна строка.
+        let root = lay_measured("<p>superlongword</p>", "", 80.0);
+        assert!((root.rect.height - 19.2).abs() < 0.1, "height={}", root.rect.height);
+    }
+
+    /// layout() без измеритея = одна строка независимо от ширины.
+    #[test]
+    fn layout_without_measurer_no_wrap() {
+        let root = lay("<p>a b c d e f g h i j</p>", "");
+        // layout() без measurer — всегда одна строка
+        assert!((root.rect.height - 19.2).abs() < 0.1);
     }
 }

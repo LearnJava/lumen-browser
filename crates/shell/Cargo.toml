@@ -18,6 +18,7 @@ lumen-css-parser.workspace = true
 lumen-dom.workspace = true
 lumen-layout.workspace = true
 lumen-paint.workspace = true
+lumen-font.workspace = true
 
 # Exception #1 из §5: OS event loop + окна.
 winit.workspace = true

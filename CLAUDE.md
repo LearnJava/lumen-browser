@@ -307,17 +307,17 @@ git branch -d text-rendering
 - **Отложено:** pseudo-classes / pseudo-elements, combinators (`>`, ` `, `+`, `~`), attribute selectors `[name=val]`, типизированные значения (color/length/calc/gradient), специфичность, `!important` как отдельное поле декларации.
 - 20 тестов, включая cyrillic class `.привет`.
 
-### `lumen-layout` 🟡 (block-only)
+### `lumen-layout` 🟡 (block + word-wrap)
 
-- **Готово:** `LayoutBox` дерево, style cascade (last-rule-wins без specificity), селекторы type/class/id/universal с matchom через классов через split_whitespace. Наследуемые свойства: `color`, `font-size`, `line-height`. Свойства с парсингом: `display` (block/inline/none), `color` (named 10 цветов + `#RRGGBB` + `#RGB`), `background-color`, `font-size`, `line-height`, `margin` (+ 4 стороны), `padding` (+ 4 стороны). Whitespace-only текстовые узлы и комментарии пропускаются.
-- **Отложено:** inline-флоу с line boxes (сейчас inline-элементы трактуются как block — текст внутри `<a>` получает свою строку), flex, grid, float, абсолютное позиционирование, units кроме px (em / rem / % не поддерживаются), функции color (rgb/hsl/rgba), `box-sizing`, borders.
-- 17 тестов, включая nested inheritance и кириллический class selector.
+- **Готово:** `LayoutBox` дерево, style cascade (last-rule-wins без specificity), селекторы type/class/id/universal. Наследуемые свойства: `color`, `font-size`, `line-height`. Свойства с парсингом: `display` (block/inline/none), `color` (named 10 цветов + `#RRGGBB` + `#RGB`), `background-color`, `font-size`, `line-height`, `margin` (+ 4 стороны), `padding` (+ 4 стороны). Whitespace-only текстовые узлы и комментарии пропускаются. **Line wrapping:** `TextMeasurer` trait + `layout_measured()` разбивают текст по словам на строки с реальными шрифтовыми метриками. `BoxKind::Text(Vec<String>)` хранит строки после переноса.
+- **Отложено:** true inline-flow (inline-элементы вроде `<a>` пока трактуются как block — появятся в одной строке с текстом позже), flex, grid, float, абсолютное позиционирование, units кроме px, функции color (rgb/hsl/rgba), `box-sizing`, borders.
+- 23 теста, включая кириллику, wrapping edge-cases, nested inheritance.
 
-### `lumen-paint` 🟡 (fill rects + textured text)
+### `lumen-paint` 🟡 (fill rects + textured text + FontMeasurer)
 
-- **Готово:** `DisplayCommand` enum (FillRect, DrawText), `build_display_list` обход LayoutBox с painter's order. wgpu Renderer с двумя pipeline-ами: fill (vertex pos + color) и text (vertex pos + uv + color). Два WGSL-шейдера, общий uniform (viewport), bind group для атласа (R8 texture + linear sampler). `GlyphAtlas` 512×512 со shelf packer-ом. Per-glyph metadata кеш (atlas position + left/top offset + advance_native). При frame: парсинг font, walk DrawText → cmap → ensure atlas → emit textured quad. Atlas заливается на GPU только при dirty.
+- **Готово:** `DisplayCommand` enum (FillRect, DrawText), `build_display_list` обход LayoutBox с painter's order — для `BoxKind::Text(lines)` эмитирует по одному `DrawText` на строку с правильным y-смещением. wgpu Renderer с двумя pipeline-ами: fill (vertex pos + color) и text (vertex pos + uv + color). Два WGSL-шейдера, общий uniform (viewport), bind group для атласа (R8 texture + linear sampler). `GlyphAtlas` 512×512 со shelf packer-ом. `FontMeasurer<'a>` — реализация `TextMeasurer` на основе TTF hmtx/cmap для shell. Per-glyph metadata кеш (atlas position + left/top offset + advance_native). Atlas заливается на GPU только при dirty.
 - **Отложено:** snapshot-тесты на display list / pixel buffer, multi-size atlas (сейчас один размер растеризации — 24px, display масштабируется linear sampler-ом), GPU-pipeline для скруглений/градиентов/теней, layer-tree compositor.
-- 17 тестов (9 display_list + 8 atlas).
+- 20 тестов (display_list + atlas + wrapping).
 
 ### `lumen-font` 🟡 (TTF read + raster)
 
@@ -344,7 +344,7 @@ git branch -d text-rendering
 
 ### Численно
 
-- **Всего тестов в workspace:** 159 (на момент последнего обновления).
+- **Всего тестов в workspace:** 168 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -357,11 +357,10 @@ git branch -d text-rendering
 
 ### Ближайшее (закрывает Phase 0)
 
-1. **Inline-flow / line wrapping** — текст переносится по словам, не обрезается на краю rect-а. Layout получает line boxes; paint обрабатывает несколько строк per text node.
-2. **Encoding detection** (§10.1) — cp1251 / KOI8-R / CP866. Сейчас shell принимает только UTF-8 файл (panic при не-UTF-8).
-3. **HTTP/1.1 + TLS client через rustls** — загрузка внешних страниц. Активация exception #3. Новый крейт `lumen-network`.
-4. **Snapshot-тесты для paint** — гарантия от регрессии визуального вывода. Сериализация display list + diff. Можно сделать сейчас, не дожидаясь больших фич.
-5. **Inline elements в layout** (`<a>`, `<span>`, `<em>`, `<strong>`) — сейчас трактуются как block. Нужны line boxes как часть inline-flow.
+1. **Encoding detection** (§10.1) — cp1251 / KOI8-R / CP866. Сейчас shell принимает только UTF-8 файл (panic при не-UTF-8).
+2. **HTTP/1.1 + TLS client через rustls** — загрузка внешних страниц. Активация exception #3. Новый крейт `lumen-network`.
+3. **Snapshot-тесты для paint** — гарантия от регрессии визуального вывода. Сериализация display list + diff. Можно сделать сейчас, не дожидаясь больших фич.
+4. **Inline elements в layout** (`<a>`, `<span>`, `<em>`, `<strong>`) — сейчас трактуются как block. Нужны line boxes для размещения inline-элементов в одной строке с текстом.
 
 ### Средний приоритет (Phase 1+)
 
@@ -419,6 +418,7 @@ git branch -d text-rendering
 - **Feature-branch + `--no-ff` merge** workflow. Видимая структура «коммит-серия = задача» в git log --graph.
 - **`opt-level = 1` в dev профиле** — компромисс: debug-сборка чуть медленнее, но layout/paint работают в 5-10 раз быстрее. Стандарт в графических Rust-проектах.
 - **Cargo features пока не используются**, но запланированы для `ai`, `webgl`, `tor`, `ru-hyphenation` опциональных модулей.
+- **`TextMeasurer` trait в `lumen-layout`, `FontMeasurer<'a>` в `lumen-paint`**: layout не зависит от font напрямую; shell создаёт `FontMeasurer<'static>` из `INTER_FONT` и передаёт через `layout_measured()`. `BoxKind::Text(Vec<String>)` хранит строки post-wrap. `layout()` без измеритея — backward compat, без переноса.
 
 ### Открытые вопросы (решим, когда упрёмся)
 
@@ -439,7 +439,8 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
-*   061c2c7  hide-head-elements     — <title>, <style>, <script> и др. метаданные больше не рендерятся
+*   (soon)   inline-flow            — TextMeasurer + FontMeasurer + line wrapping: текст переносится по словам
+*   e2864ac  hide-head-elements     — <title>, <style>, <script> и др. метаданные больше не рендерятся
 *   061c2c7  claude-md-self-update-rule — правило обновлять CLAUDE.md вместе с планом
 *   586f8ba  claude-md-state        — детальное состояние подсистем + roadmap + decisions log
 *   7811eee  composite-glyphs       — TTF composite + Font::glyph_resolved → кириллица 'А' рисуется
