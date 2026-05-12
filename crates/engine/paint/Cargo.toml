@@ -11,6 +11,10 @@ description = "Lumen: display list and rasterization"
 lumen-core.workspace = true
 lumen-layout.workspace = true
 
+# Exception #1 + #2 из §5: paint держит wgpu-surface, привязанный к winit-окну.
+winit.workspace = true
+wgpu.workspace = true
+
 [dev-dependencies]
 lumen-html-parser.workspace = true
 lumen-css-parser.workspace = true

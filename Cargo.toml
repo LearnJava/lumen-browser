@@ -25,6 +25,11 @@ lumen-dom = { path = "crates/engine/dom" }
 lumen-layout = { path = "crates/engine/layout" }
 lumen-paint = { path = "crates/engine/paint" }
 
+# Exception #1 (§5): OS event loop + окна. Свой = годы Win32/X11/Wayland/AppKit.
+winit = "0.30"
+# Exception #2 (§5): GPU API. Свой = ад driver-bugs под Vulkan/Metal/DX12.
+wgpu = "26"
+
 [profile.dev]
 opt-level = 1
 

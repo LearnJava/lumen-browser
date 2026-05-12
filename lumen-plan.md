@@ -15,11 +15,11 @@
 ### Крейты
 - ✅ `lumen-core` — типы и trait-ы: `Error`, `Url`, `Event`, `Capability`, `Module`, геометрия (`Rect`, `Point`, `Size`), `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`
 - ✅ `lumen-dom` — арена + `NodeId` + `Document/Node/NodeData`, API: create/append/detach/Display, 7 тестов (включая кириллицу)
-- ✅ `lumen-shell` — точка входа: `lumen` — окно 1024×720 через winit; `lumen <path.html>` — парсит файл и печатает DOM в stdout
+- 🟡 `lumen-shell` — точка входа: `lumen` — пустое окно через winit; `lumen <path.html>` — парсит HTML, собирает CSS из `<style>`-блоков, делает layout, paint и рисует фоновые прямоугольники в окне через wgpu. Текст пока не рендерится (придёт с font shaping)
 - 🟡 `lumen-html-parser` — минимальный токенизатор (Data/Tag/Attribute/Comment, named + numeric entities) + lenient tree builder. 31 тест (включая кириллицу). Отложено: DOCTYPE-разбор, CDATA, raw-text script/style, полный набор named entities, insertion modes
 - 🟡 `lumen-css-parser` — минимальный парсер: `selector_list { decl_list }`, селекторы type/class/id/universal, декларации как пары строк, lenient recovery, пропуск `@`-правил и комментариев. 20 тестов (включая кириллический класс `.привет`). Отложено: pseudo-classes/elements, комбинаторы, attribute selectors, типизированные значения, специфичность
 - 🟡 `lumen-layout` — block-flow с style cascade: type/class/id/universal-селекторы, наследование (color, font-size, line-height), color (named + hex), display (block/inline/none), margin/padding (включая shorthand). 17 тестов (включая кириллический класс и nested inheritance). Отложено: inline-флоу с line boxes, flex/grid, float, абсолютное позиционирование, specificity
-- ⬜ `lumen-paint` — стаб
+- 🟡 `lumen-paint` — display list (FillRect, DrawText) + wgpu-растеризатор. Рисует фоновые прямоугольники с альфа-блендингом. 9 тестов для display list. DrawText игнорируется до появления глифового рендера. Внешние зависимости: `wgpu` (exception #2), `winit` (exception #1)
 
 ### Политика зависимостей (§5)
 - ✅ Зафиксирована: «default — своё». 4 разрешённых exceptions, всё остальное — свой код.
@@ -45,7 +45,7 @@
 - 🟡 HTML parser — минимум готов; полный набор insertion modes / named entities / DOCTYPE-разбор — позже, по запросу
 - 🟡 CSS parser — минимум готов (type/class/id/universal, declarations как пары строк); pseudo-классы, комбинаторы, типизированные значения — позже
 - 🟡 Layout — block-flow + style cascade готов; inline-флоу с line boxes, flex/grid — позже
-- ⬜ Paint: 2D-растеризация (CPU → GPU через wgpu)
+- 🟡 Paint — display list + wgpu-rasterizer для фоновых rect-ов готов; глифовый text rendering — следующий шаг
 - 🟡 Связка движка с UI: shell принимает путь к `.html`, парсит, печатает DOM (готово). Рисовать в окне — после layout + paint.
 - ⬜ Свой HTTP/1.1 + TLS через `rustls` — для загрузки внешней страницы
 
@@ -890,7 +890,7 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 - 🟡 CSS parser — минимум готов (см. выше).
 - ✅ DOM (арена + базовые типы).
 - 🟡 Layout: block готов; inline — позже.
-- ⬜ Paint: 2D-растеризация.
+- 🟡 Paint: FillRect через wgpu готов; глифы — позже.
 - 🟡 UI: одно окно (готово), вкладки и адресная строка — нет.
 - ⬜ HTTP/1.1 + HTTPS.
 - **Цель:** открыть простую текстовую статью без стилей. Доказательство концепции.

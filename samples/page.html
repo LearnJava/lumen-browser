@@ -3,18 +3,25 @@
 <head>
   <meta charset="utf-8">
   <title>Тест Lumen</title>
+  <style>
+    body { background: #fafafa; padding: 20px; }
+    h1 { background: #ff8800; color: white; padding: 12px; margin-bottom: 12px; }
+    p { background: #e0e0e0; padding: 8px; margin-bottom: 8px; }
+    .link { color: blue; }
+    ul { background: #eef5ff; padding: 12px; margin-bottom: 8px; }
+    li { background: white; padding: 4px; margin: 4px; }
+    .highlight { background: #ffe066; padding: 16px; }
+  </style>
 </head>
 <body>
-  <!-- демо-страница для проверки парсера -->
   <h1>Привет, мир!</h1>
   <p>Это <a href="https://example.com" class="link">ссылка</a> внутри абзаца.</p>
-  <p>Спецсимволы: &amp; &lt; &gt; &quot;quoted&quot; &#1055;ривет</p>
+  <p class="highlight">Это выделенный абзац с другим фоном.</p>
   <ul>
     <li>Пункт первый</li>
     <li>Пункт второй</li>
     <li>Пункт третий</li>
   </ul>
-  <img src="logo.png" alt="логотип"/>
   <p>Конец страницы.</p>
 </body>
 </html>
