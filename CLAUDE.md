@@ -317,8 +317,9 @@ git branch -d text-rendering
 ### `lumen-paint` 🟡 (fill rects + textured text + FontMeasurer)
 
 - **Готово:** `DisplayCommand` enum (FillRect, DrawText), `build_display_list` обход LayoutBox с painter's order — для `BoxKind::Text(lines)` эмитирует по одному `DrawText` на строку с правильным y-смещением. wgpu Renderer с двумя pipeline-ами: fill (vertex pos + color) и text (vertex pos + uv + color). Два WGSL-шейдера, общий uniform (viewport), bind group для атласа (R8 texture + linear sampler). `GlyphAtlas` 512×512 со shelf packer-ом. `FontMeasurer<'a>` — реализация `TextMeasurer` на основе TTF hmtx/cmap для shell. Per-glyph metadata кеш (atlas position + left/top offset + advance_native). Atlas заливается на GPU только при dirty.
-- **Отложено:** snapshot-тесты на display list / pixel buffer, multi-size atlas (сейчас один размер растеризации — 24px, display масштабируется linear sampler-ом), GPU-pipeline для скруглений/градиентов/теней, layer-tree compositor.
-- 20 тестов (display_list + atlas + wrapping).
+- **Готово:** `serialize_display_list(&[DisplayCommand]) → String` — детерминированный текстовый формат для snapshot-тестов. 6 интеграционных golden-тестов в `tests/snapshot_tests.rs` (пустая страница, параграф, фон, вложенный paint-порядок, кириллица, line wrap). Механизм `UPDATE_SNAPSHOTS=1` для регенерации golden-файлов.
+- **Отложено:** pixel snapshot tests, multi-size atlas (сейчас один размер растеризации — 24px, display масштабируется linear sampler-ом), GPU-pipeline для скруглений/градиентов/теней, layer-tree compositor.
+- 20 unit-тестов (display_list + atlas + wrapping) + 6 snapshot-тестов = 26 тестов.
 
 ### `lumen-font` 🟡 (TTF read + raster)
 
@@ -351,7 +352,7 @@ git branch -d text-rendering
 
 ### Численно
 
-- **Всего тестов в workspace:** 209 (на момент последнего обновления).
+- **Всего тестов в workspace:** 215 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -365,8 +366,7 @@ git branch -d text-rendering
 ### Ближайшее (закрывает Phase 0)
 
 1. **HTTP/1.1 + TLS client через rustls** — загрузка внешних страниц. Активация exception #3. Новый крейт `lumen-network`.
-2. **Snapshot-тесты для paint** — гарантия от регрессии визуального вывода. Сериализация display list + diff. Можно сделать сейчас, не дожидаясь больших фич.
-3. **Inline elements в layout** (`<a>`, `<span>`, `<em>`, `<strong>`) — сейчас трактуются как block. Line wrapping для текста уже работает (inline-flow первой ступени), но inline-элементы внутри блоков всё ещё ломают строку.
+2. **Inline elements в layout** (`<a>`, `<span>`, `<em>`, `<strong>`) — сейчас трактуются как block. Line wrapping для текста уже работает (inline-flow первой ступени), но inline-элементы внутри блоков всё ещё ломают строку.
 
 ### Средний приоритет (Phase 1+)
 
@@ -446,6 +446,7 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*   a4e5249  snapshot-tests         — serialize_display_list + 6 golden-тестов (пустая страница, параграф, фон, кириллица, line wrap)
 *   8e6bdeb  encoding-detection     — крейт lumen-encoding: BOM + meta + heuristic, cp1251/koi8-r/cp866
 *   90b849a  inline-flow            — TextMeasurer + FontMeasurer + line wrapping: текст переносится по словам
 *   bcd79bb  hide-head-elements     — <title>, <style>, <script> и др. метаданные больше не рендерятся
@@ -504,7 +505,7 @@ git branch -d text-rendering
 - **Line endings:** `.gitattributes` форсит LF в репо. Если Git ругается на CRLF→LF — это норма, не паникуй.
 - **Архивы в корне репо игнорируются** (`/*.zip`, `/*.tar*`). Если пользователь скачал что-то — оно не попадёт в коммит случайно.
 - **Composite glyphs теперь поддерживаются** через `Font::glyph_resolved` (с max recursion depth 8). Кириллические заглавные `А / В / Е / К / М / Н / О / Р / С / Т / Х` (которые в Inter composite через Latin-эквиваленты) и их строчные — рендерятся. Renderer вызывает `glyph_resolved`, не `glyph` напрямую.
-- **Тесты в `lumen-paint::display_list` и `lumen-paint::atlas`** — это unit-тесты. Renderer (`renderer.rs`) визуальный, без автотестов; проверяй через `cargo run`. Snapshot-тесты для display list — TODO.
+- **Тесты в `lumen-paint::display_list` и `lumen-paint::atlas`** — это unit-тесты. Renderer (`renderer.rs`) визуальный, без автотестов; проверяй через `cargo run`. Display list snapshot-тесты реализованы в `tests/snapshot_tests.rs`.
 - **`font_size` влияет на масштаб quad-а, но не на разрешение растеризации.** Глифы всегда рисуются на 24 px и масштабируются. Это компромисс Phase 0 — multi-size atlas позже.
 
 ---

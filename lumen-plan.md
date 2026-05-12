@@ -1086,7 +1086,7 @@ Capability-модель плагинов (§11.4) расширяется:
 2. **Парсер-тесты:**
    - `html5lib-tests` для HTML parser.
    - WPT-style тесты для CSS parser.
-3. **Render snapshot tests** — рендерим страницу, сравниваем display list (не пиксели, так стабильнее).
+3. ✅ **Render snapshot tests** — рендерим страницу, сравниваем display list (не пиксели, так стабильнее). Реализовано: `serialize_display_list` + 6 golden-файлов в `lumen-paint/tests/snapshots/`. `UPDATE_SNAPSHOTS=1` для регенерации.
 4. **Pixel snapshot tests** — для финальной картинки, с допуском.
 5. **Web Platform Tests** — берём подмножество (DOM, CSS, fetch). Цель: 60% pass к v1.0.
 6. **Integration tests** — запуск браузера, тест UI через `egui`-test-harness или внешний driver.
