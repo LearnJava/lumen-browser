@@ -8,3 +8,9 @@ rust-version.workspace = true
 description = "Lumen: layout engine (block + inline for Phase 0)"
 
 [dependencies]
+lumen-core.workspace = true
+lumen-dom.workspace = true
+lumen-css-parser.workspace = true
+
+[dev-dependencies]
+lumen-html-parser.workspace = true

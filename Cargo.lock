@@ -525,10 +525,20 @@ version = "0.0.1"
 [[package]]
 name = "lumen-html-parser"
 version = "0.0.1"
+dependencies = [
+ "lumen-core",
+ "lumen-dom",
+]
 
 [[package]]
 name = "lumen-layout"
 version = "0.0.1"
+dependencies = [
+ "lumen-core",
+ "lumen-css-parser",
+ "lumen-dom",
+ "lumen-html-parser",
+]
 
 [[package]]
 name = "lumen-paint"

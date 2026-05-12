@@ -13,12 +13,12 @@
 - ✅ Ветка `main`, локальные коммиты, без remote
 
 ### Крейты
-- ✅ `lumen-core` — типы и trait-ы: `Error`, `Url`, `Event`, `Capability`, `Module`, `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`
+- ✅ `lumen-core` — типы и trait-ы: `Error`, `Url`, `Event`, `Capability`, `Module`, геометрия (`Rect`, `Point`, `Size`), `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`
 - ✅ `lumen-dom` — арена + `NodeId` + `Document/Node/NodeData`, API: create/append/detach/Display, 7 тестов (включая кириллицу)
 - ✅ `lumen-shell` — точка входа: `lumen` — окно 1024×720 через winit; `lumen <path.html>` — парсит файл и печатает DOM в stdout
 - 🟡 `lumen-html-parser` — минимальный токенизатор (Data/Tag/Attribute/Comment, named + numeric entities) + lenient tree builder. 31 тест (включая кириллицу). Отложено: DOCTYPE-разбор, CDATA, raw-text script/style, полный набор named entities, insertion modes
 - 🟡 `lumen-css-parser` — минимальный парсер: `selector_list { decl_list }`, селекторы type/class/id/universal, декларации как пары строк, lenient recovery, пропуск `@`-правил и комментариев. 20 тестов (включая кириллический класс `.привет`). Отложено: pseudo-classes/elements, комбинаторы, attribute selectors, типизированные значения, специфичность
-- ⬜ `lumen-layout` — стаб
+- 🟡 `lumen-layout` — block-flow с style cascade: type/class/id/universal-селекторы, наследование (color, font-size, line-height), color (named + hex), display (block/inline/none), margin/padding (включая shorthand). 17 тестов (включая кириллический класс и nested inheritance). Отложено: inline-флоу с line boxes, flex/grid, float, абсолютное позиционирование, specificity
 - ⬜ `lumen-paint` — стаб
 
 ### Политика зависимостей (§5)
@@ -44,7 +44,7 @@
 ### Следующие шаги
 - 🟡 HTML parser — минимум готов; полный набор insertion modes / named entities / DOCTYPE-разбор — позже, по запросу
 - 🟡 CSS parser — минимум готов (type/class/id/universal, declarations как пары строк); pseudo-классы, комбинаторы, типизированные значения — позже
-- ⬜ Layout: block + inline
+- 🟡 Layout — block-flow + style cascade готов; inline-флоу с line boxes, flex/grid — позже
 - ⬜ Paint: 2D-растеризация (CPU → GPU через wgpu)
 - 🟡 Связка движка с UI: shell принимает путь к `.html`, парсит, печатает DOM (готово). Рисовать в окне — после layout + paint.
 - ⬜ Свой HTTP/1.1 + TLS через `rustls` — для загрузки внешней страницы
@@ -889,7 +889,7 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 - 🟡 HTML parser — минимум готов (см. выше).
 - 🟡 CSS parser — минимум готов (см. выше).
 - ✅ DOM (арена + базовые типы).
-- ⬜ Layout: только block + inline.
+- 🟡 Layout: block готов; inline — позже.
 - ⬜ Paint: 2D-растеризация.
 - 🟡 UI: одно окно (готово), вкладки и адресная строка — нет.
 - ⬜ HTTP/1.1 + HTTPS.
