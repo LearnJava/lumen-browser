@@ -8,19 +8,25 @@
 //!     next-sibling `+`, later-sibling `~`;
 //!   - attribute selectors `[name]`, `[name=val]`, `[name~=val]`, `[name|=val]`,
 //!     `[name^=val]`, `[name$=val]`, `[name*=val]`;
-//!   - базовые pseudo-classes (`:first-child`, `:last-child`, `:only-child`,
-//!     `:empty`, `:root`); неизвестные / interactive (`:hover`, `:focus`, …)
-//!     сохраняются как `PseudoClass::Unsupported(name)` и при матчинге всегда
-//!     возвращают `false`;
+//!   - structural pseudo-classes:
+//!       - `:first-child`, `:last-child`, `:only-child`, `:empty`, `:root`;
+//!       - `:first-of-type`, `:last-of-type`, `:only-of-type`;
+//!       - `:nth-child(an+b)`, `:nth-last-child(an+b)`,
+//!         `:nth-of-type(an+b)`, `:nth-last-of-type(an+b)` — формулы
+//!         `an+b`, целые числа, ключевые слова `odd` / `even`;
+//!       - `:not(compound)` — отрицание; внутри — compound selector
+//!         без combinator-ов;
+//!   - interactive pseudo-classes (`:hover`, `:focus`, …) сохраняются как
+//!     `PseudoClass::Unsupported(name)` и при матчинге всегда возвращают `false`;
 //!   - pseudo-elements `::name` парсятся отдельным узлом, никогда не матчат
 //!     (т.к. в DOM им ничего не соответствует);
 //!   - комментарии `/* */`, перечисление селекторов через `,`, опциональный
 //!     trailing `;`. At-rules (`@media`, `@import`) пропускаются.
 //!
-//! Не поддерживается (отложено): функциональные pseudo (`:nth-child(2n+1)`,
-//! `:not(...)`), `case-insensitive` модификатор `[attr=val i]`, namespace
-//! prefix в селекторах, значения деклараций типизированно (length / color /
-//! calc) — значения хранятся как сырые строки.
+//! Не поддерживается (отложено): `:is(...)`, `:where(...)`, `:has(...)`,
+//! `:not(complex)` со списком селекторов или combinator-ами,
+//! case-insensitive модификатор `[attr=val i]`, namespace prefix в селекторах,
+//! типизированные значения деклараций (length / color / calc).
 
 use std::cmp::Ordering;
 
@@ -66,9 +72,60 @@ pub enum PseudoClass {
     OnlyChild,
     Empty,
     Root,
+    FirstOfType,
+    LastOfType,
+    OnlyOfType,
+    /// `:nth-child(an+b)` — индекс среди всех element-sibling-ов (1-based).
+    NthChild(NthSpec),
+    /// `:nth-last-child(an+b)` — индекс с конца.
+    NthLastChild(NthSpec),
+    /// `:nth-of-type(an+b)` — индекс среди sibling-ов того же тега.
+    NthOfType(NthSpec),
+    /// `:nth-last-of-type(an+b)` — индекс с конца среди sibling-ов того же тега.
+    NthLastOfType(NthSpec),
+    /// `:not(compound)` — отрицание compound-селектора. Внутри запрещены
+    /// combinator-ы (CSS3 §6.6.7); `:not(:not(...))` тоже нельзя — поэтому
+    /// аргумент хранится как `CompoundSelector`, не как полный селектор.
+    Not(Box<CompoundSelector>),
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
+}
+
+/// Формула `an+b` из CSS Selectors §6.6.5.1. Элемент с 1-based индексом `i`
+/// матчит, если существует целое `n >= 0` такое, что `i = a*n + b`.
+///
+/// Преобразование ключевых слов:
+///   - `odd` → `2n+1`;
+///   - `even` → `2n+0`;
+///   - просто число `5` → `0n+5` (точное совпадение).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct NthSpec {
+    pub a: i32,
+    pub b: i32,
+}
+
+impl NthSpec {
+    pub const ODD: Self = Self { a: 2, b: 1 };
+    pub const EVEN: Self = Self { a: 2, b: 0 };
+
+    /// Возвращает true, если элемент с 1-based индексом `index` матчит формулу.
+    pub fn matches(&self, index: i32) -> bool {
+        if self.a == 0 {
+            return index == self.b;
+        }
+        // Нужно: index = a*n + b, n >= 0 (целое).
+        // Значит (index - b) делится на a, и (index - b) / a >= 0.
+        let diff = index - self.b;
+        if diff == 0 {
+            return true; // n = 0
+        }
+        if diff % self.a != 0 {
+            return false;
+        }
+        let n = diff / self.a;
+        n >= 0
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,9 +174,17 @@ fn accumulate_specificity(comp: &CompoundSelector, spec: &mut Specificity) {
     for part in &comp.parts {
         match part {
             SimpleSelector::Id(_) => spec.a = spec.a.saturating_add(1),
-            SimpleSelector::Class(_)
-            | SimpleSelector::Attribute(_)
-            | SimpleSelector::PseudoClass(_) => spec.b = spec.b.saturating_add(1),
+            SimpleSelector::Class(_) | SimpleSelector::Attribute(_) => {
+                spec.b = spec.b.saturating_add(1);
+            }
+            SimpleSelector::PseudoClass(pc) => {
+                // `:not(inner)` сам не считается, но содержимое — да (CSS3 §16).
+                if let PseudoClass::Not(inner) = pc {
+                    accumulate_specificity(inner, spec);
+                } else {
+                    spec.b = spec.b.saturating_add(1);
+                }
+            }
             SimpleSelector::Type(_) | SimpleSelector::PseudoElement(_) => {
                 spec.c = spec.c.saturating_add(1);
             }
@@ -540,39 +605,96 @@ impl<'a> Parser<'a> {
             false
         };
         let name = self.parse_ident()?;
-        // Функциональные pseudo (например `:nth-child(2n+1)`) — не поддерживаем,
-        // но грамматику не ломаем: проглатываем скобки.
+        let lower = name.to_ascii_lowercase();
         if self.peek() == Some('(') {
             self.consume();
-            let mut depth = 1;
-            while let Some(c) = self.peek() {
-                self.consume();
-                match c {
-                    '(' => depth += 1,
-                    ')' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            // Функциональные pseudo всегда не матчат в Phase 0.
-            return Some(SimpleSelector::PseudoClass(PseudoClass::Unsupported(name)));
+            let pc = self.parse_functional_pseudo_body(&lower);
+            // Сожрать остаток до ')' если парсер вернул раньше времени или None.
+            self.skip_to_paren_close();
+            return Some(SimpleSelector::PseudoClass(pc.unwrap_or_else(|| {
+                PseudoClass::Unsupported(name.clone())
+            })));
         }
         if is_element {
             return Some(SimpleSelector::PseudoElement(name));
         }
-        let pc = match name.as_str() {
+        let pc = match lower.as_str() {
             "first-child" => PseudoClass::FirstChild,
             "last-child" => PseudoClass::LastChild,
             "only-child" => PseudoClass::OnlyChild,
             "empty" => PseudoClass::Empty,
             "root" => PseudoClass::Root,
+            "first-of-type" => PseudoClass::FirstOfType,
+            "last-of-type" => PseudoClass::LastOfType,
+            "only-of-type" => PseudoClass::OnlyOfType,
             _ => PseudoClass::Unsupported(name),
         };
         Some(SimpleSelector::PseudoClass(pc))
+    }
+
+    /// Парсит тело `:foo(...)` для известных функциональных pseudo. Возвращает
+    /// `None` для неизвестных или невалидных тел — caller обернёт в Unsupported
+    /// и проглотит остаток до `)`.
+    fn parse_functional_pseudo_body(&mut self, name_lower: &str) -> Option<PseudoClass> {
+        match name_lower {
+            "nth-child" => Some(PseudoClass::NthChild(self.parse_nth_spec()?)),
+            "nth-last-child" => Some(PseudoClass::NthLastChild(self.parse_nth_spec()?)),
+            "nth-of-type" => Some(PseudoClass::NthOfType(self.parse_nth_spec()?)),
+            "nth-last-of-type" => Some(PseudoClass::NthLastOfType(self.parse_nth_spec()?)),
+            "not" => {
+                self.skip_ws_and_comments();
+                let inner = self.parse_compound_selector()?;
+                self.skip_ws_and_comments();
+                // `:not(a b)` (с combinator-ом) в CSS3 запрещено — если после
+                // compound есть что-то кроме `)`, считаем форму не поддерживаемой.
+                if self.peek() != Some(')') {
+                    return None;
+                }
+                // `:not(:not(...))` тоже запрещено в CSS3.
+                if inner
+                    .parts
+                    .iter()
+                    .any(|p| matches!(p, SimpleSelector::PseudoClass(PseudoClass::Not(_))))
+                {
+                    return None;
+                }
+                Some(PseudoClass::Not(Box::new(inner)))
+            }
+            _ => None,
+        }
+    }
+
+    /// Парсит `an+b`, число или ключевые слова `odd`/`even`. Останавливается на
+    /// `)` или конце ввода — caller съест `)` через `skip_to_paren_close`.
+    fn parse_nth_spec(&mut self) -> Option<NthSpec> {
+        self.skip_ws_and_comments();
+        // Соберём «токен» формулы — всё до `)` или конца.
+        let mut raw = String::new();
+        while let Some(c) = self.peek() {
+            if c == ')' {
+                break;
+            }
+            raw.push(c);
+            self.consume();
+        }
+        parse_nth_spec_str(raw.trim())
+    }
+
+    fn skip_to_paren_close(&mut self) {
+        let mut depth = 1;
+        while let Some(c) = self.peek() {
+            self.consume();
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return;
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 
     fn parse_ident(&mut self) -> Option<String> {
@@ -677,6 +799,43 @@ fn is_ident_start(c: char) -> bool {
 
 fn is_ident_continue(c: char) -> bool {
     is_ident_start(c) || c.is_ascii_digit()
+}
+
+/// Парсит формулу `an+b` из строки. Поддерживает `odd`, `even`, целые числа,
+/// и любые комбинации `<int>?n<sign><int>?`. Пробелы внутри допустимы и
+/// игнорируются (CSS spec).
+fn parse_nth_spec_str(s: &str) -> Option<NthSpec> {
+    let s: String = s
+        .chars()
+        .filter(|c| !c.is_whitespace())
+        .flat_map(char::to_lowercase)
+        .collect();
+    if s == "odd" {
+        return Some(NthSpec::ODD);
+    }
+    if s == "even" {
+        return Some(NthSpec::EVEN);
+    }
+    if let Some(n_pos) = s.find('n') {
+        let a_part = &s[..n_pos];
+        let b_part = &s[n_pos + 1..];
+        let a: i32 = match a_part {
+            "" | "+" => 1,
+            "-" => -1,
+            _ => a_part.parse().ok()?,
+        };
+        let b: i32 = if b_part.is_empty() {
+            0
+        } else {
+            if !b_part.starts_with('+') && !b_part.starts_with('-') {
+                return None;
+            }
+            b_part.parse().ok()?
+        };
+        Some(NthSpec { a, b })
+    } else {
+        Some(NthSpec { a: 0, b: s.parse().ok()? })
+    }
 }
 
 #[cfg(test)]
@@ -1022,6 +1181,9 @@ mod tests {
             ("only-child", PseudoClass::OnlyChild),
             ("empty", PseudoClass::Empty),
             ("root", PseudoClass::Root),
+            ("first-of-type", PseudoClass::FirstOfType),
+            ("last-of-type", PseudoClass::LastOfType),
+            ("only-of-type", PseudoClass::OnlyOfType),
         ];
         for (name, expected) in cases {
             let s = parse(&format!(":{name} {{}}"));
@@ -1044,15 +1206,14 @@ mod tests {
     }
 
     #[test]
-    fn pseudo_functional_swallowed() {
+    fn pseudo_nth_child_parsed() {
         let s = parse(":nth-child(2n+1) { color: red; }");
         let p = &s.rules[0].selectors[0].head.parts[0];
-        // Функциональные pseudo всегда Unsupported.
         match p {
-            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) => {
-                assert_eq!(n, "nth-child");
+            SimpleSelector::PseudoClass(PseudoClass::NthChild(spec)) => {
+                assert_eq!(*spec, NthSpec { a: 2, b: 1 });
             }
-            _ => panic!("expected unsupported functional pseudo"),
+            _ => panic!("expected NthChild(2n+1), got {p:?}"),
         }
     }
 
@@ -1137,6 +1298,190 @@ mod tests {
         assert_eq!(
             s.rules[0].selectors[0].head.parts,
             vec![SimpleSelector::Type("p".into())]
+        );
+    }
+
+    // ──────────────── functional pseudo: :nth-* ────────────────
+
+    #[test]
+    fn nth_spec_str_keywords() {
+        assert_eq!(parse_nth_spec_str("odd"), Some(NthSpec { a: 2, b: 1 }));
+        assert_eq!(parse_nth_spec_str("even"), Some(NthSpec { a: 2, b: 0 }));
+        assert_eq!(parse_nth_spec_str("ODD"), Some(NthSpec { a: 2, b: 1 }));
+    }
+
+    #[test]
+    fn nth_spec_str_formulas() {
+        let cases = [
+            ("n", (1, 0)),
+            ("+n", (1, 0)),
+            ("-n", (-1, 0)),
+            ("2n", (2, 0)),
+            ("2n+1", (2, 1)),
+            ("2n-1", (2, -1)),
+            ("-2n+3", (-2, 3)),
+            ("3n+0", (3, 0)),
+            ("5", (0, 5)),
+            ("-5", (0, -5)),
+            ("2n + 1", (2, 1)), // пробелы допустимы
+            ("  2n  ", (2, 0)),
+        ];
+        for (s, (a, b)) in cases {
+            assert_eq!(
+                parse_nth_spec_str(s),
+                Some(NthSpec { a, b }),
+                "input={s}"
+            );
+        }
+    }
+
+    #[test]
+    fn nth_spec_str_invalid() {
+        assert_eq!(parse_nth_spec_str(""), None);
+        assert_eq!(parse_nth_spec_str("abc"), None);
+        assert_eq!(parse_nth_spec_str("2x+1"), None);
+        assert_eq!(parse_nth_spec_str("n+"), None); // нет числа после знака
+    }
+
+    #[test]
+    fn nth_spec_matches_arithmetic() {
+        let odd = NthSpec::ODD; // 2n+1: 1, 3, 5, ...
+        for i in [1, 3, 5, 7, 999] {
+            assert!(odd.matches(i), "i={i}");
+        }
+        for i in [0, 2, 4, -1] {
+            assert!(!odd.matches(i), "i={i}");
+        }
+    }
+
+    #[test]
+    fn nth_spec_matches_first_three() {
+        // -n+3 → элементы 1, 2, 3 (n=2, 1, 0). Индексы в CSS — 1-based,
+        // нулевой случай в реальном matching-е не возникает.
+        let spec = NthSpec { a: -1, b: 3 };
+        assert!(spec.matches(1));
+        assert!(spec.matches(2));
+        assert!(spec.matches(3));
+        assert!(!spec.matches(4));
+        assert!(!spec.matches(5));
+    }
+
+    #[test]
+    fn nth_spec_matches_constant() {
+        // 5 → ровно пятый.
+        let spec = NthSpec { a: 0, b: 5 };
+        assert!(spec.matches(5));
+        assert!(!spec.matches(4));
+        assert!(!spec.matches(10));
+    }
+
+    #[test]
+    fn pseudo_nth_variants_parsed() {
+        let cases = [
+            ("nth-child", "(2n+1)"),
+            ("nth-last-child", "(odd)"),
+            ("nth-of-type", "(3)"),
+            ("nth-last-of-type", "(-n+2)"),
+        ];
+        for (name, arg) in cases {
+            let s = parse(&format!(":{name}{arg} {{}}"));
+            let p = &s.rules[0].selectors[0].head.parts[0];
+            let pc = match p {
+                SimpleSelector::PseudoClass(pc) => pc,
+                _ => panic!("expected pseudo-class for :{name}{arg}"),
+            };
+            let is_nth = matches!(
+                pc,
+                PseudoClass::NthChild(_)
+                    | PseudoClass::NthLastChild(_)
+                    | PseudoClass::NthOfType(_)
+                    | PseudoClass::NthLastOfType(_)
+            );
+            assert!(is_nth, "name={name} got {pc:?}");
+        }
+    }
+
+    #[test]
+    fn pseudo_nth_invalid_arg_falls_back_to_unsupported() {
+        let s = parse(":nth-child(abc) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) => {
+                assert_eq!(n, "nth-child");
+            }
+            _ => panic!("expected Unsupported(nth-child), got {p:?}"),
+        }
+        // Парсер должен дойти до конца правила и не оставить мусора.
+        assert_eq!(s.rules[0].declarations[0].value, "red");
+    }
+
+    // ──────────────── functional pseudo: :not ────────────────
+
+    #[test]
+    fn pseudo_not_simple() {
+        let s = parse(":not(.foo) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::Not(inner)) => {
+                assert_eq!(inner.parts, vec![SimpleSelector::Class("foo".into())]);
+            }
+            _ => panic!("expected :not(.foo), got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_not_compound() {
+        let s = parse(":not(p.hl) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::Not(inner)) => {
+                assert_eq!(inner.parts.len(), 2);
+                assert!(matches!(&inner.parts[0], SimpleSelector::Type(t) if t == "p"));
+                assert!(matches!(&inner.parts[1], SimpleSelector::Class(c) if c == "hl"));
+            }
+            _ => panic!("expected :not(p.hl)"),
+        }
+    }
+
+    #[test]
+    fn pseudo_not_with_combinator_falls_back() {
+        // `:not(a b)` запрещено в CSS3 (combinator внутри) → Unsupported.
+        let s = parse(":not(a b) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(
+            matches!(p, SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "not"),
+            "got {p:?}"
+        );
+    }
+
+    #[test]
+    fn pseudo_not_nested_forbidden() {
+        // `:not(:not(...))` запрещено в CSS3.
+        let s = parse(":not(:not(.x)) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(
+            matches!(p, SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "not"),
+            "got {p:?}"
+        );
+    }
+
+    #[test]
+    fn specificity_not_uses_inner() {
+        // :not(.foo) → внутренний .foo даёт b=1; сам :not — ноль.
+        let s = parse(":not(.foo) { color: red; }");
+        assert_eq!(
+            s.rules[0].selectors[0].specificity(),
+            Specificity { a: 0, b: 1, c: 0 }
+        );
+    }
+
+    #[test]
+    fn specificity_not_with_id() {
+        // :not(#x) → a=1, b=0, c=0.
+        let s = parse(":not(#x) { color: red; }");
+        assert_eq!(
+            s.rules[0].selectors[0].specificity(),
+            Specificity { a: 1, b: 0, c: 0 }
         );
     }
 }

@@ -316,17 +316,17 @@ git branch -d text-rendering
 - **Отложено:** DOCTYPE-разбор (пропускаем содержимое), CDATA, raw-text mode для `<script>` / `<style>` (сейчас они парсятся «как текст» — это работает потому что внутри них нет угловых скобок, но не по spec), полный набор named character references (~2000 в HTML5 spec), insertion modes (in_table, in_select, in_caption, и т.д.).
 - 31 тест.
 
-### `lumen-css-parser` 🟡 (расширенные селекторы)
+### `lumen-css-parser` 🟡 (полный набор CSS3-селекторов)
 
-- **Готово:** `selector_list { decl_list }` парсинг. Selectors Level 3: simple selectors (`Type`, `Class`, `Id`, `Universal`, `Attribute`, `PseudoClass`, `PseudoElement`), compound (`p.foo#bar:first-child`), complex с combinator-ами (descendant ` `, child `>`, next-sibling `+`, later-sibling `~`). Attribute-операторы: `=`, `~=`, `|=` (для `lang`), `^=`, `$=`, `*=`. Pseudo-classes: `:first-child`, `:last-child`, `:only-child`, `:empty`, `:root`; interactive (`:hover`, `:focus`, …) сохраняются как `Unsupported(name)` и при матчинге всегда возвращают false. Pseudo-elements `::name` парсятся отдельным узлом, никогда не матчат. **Specificity** считается на `ComplexSelector::specificity() -> Specificity { a, b, c }`. Декларации — как пары строк (property, value). Lenient recovery (битая декларация / битый attr-селектор не валят остальное), комментарии `/* */`, пропуск `@`-правил.
-- **Отложено:** функциональные pseudo (`:nth-child(2n+1)`, `:not(...)`) — парсятся как `Unsupported`, скобки проглатываются; case-insensitive модификатор `[a=v i]`; namespace prefix в селекторах; типизированные значения деклараций (length / color / calc / `--var`); `!important` как отдельное поле.
-- 47 тестов.
+- **Готово:** `selector_list { decl_list }` парсинг. Selectors Level 3: simple selectors (`Type`, `Class`, `Id`, `Universal`, `Attribute`, `PseudoClass`, `PseudoElement`), compound (`p.foo#bar:first-child`), complex с combinator-ами (descendant ` `, child `>`, next-sibling `+`, later-sibling `~`). Attribute-операторы: `=`, `~=`, `|=` (для `lang`), `^=`, `$=`, `*=`. **Structural pseudo:** `:first-child`, `:last-child`, `:only-child`, `:empty`, `:root`, `:first-of-type`, `:last-of-type`, `:only-of-type`. **Функциональные pseudo:** `:nth-child(an+b)`, `:nth-last-child(an+b)`, `:nth-of-type(an+b)`, `:nth-last-of-type(an+b)` с ключевыми словами `odd` / `even` (хранятся как `NthSpec { a, b }`, `.matches(index)` решает уравнение `i = a*n + b` при `n ≥ 0`). `:not(compound)` — отрицание; запрещены combinator-ы внутри и nested `:not(:not(...))`, такие формы дают `Unsupported`. Interactive (`:hover`, `:focus`, …) сохраняются как `Unsupported(name)` и при матчинге всегда возвращают false. Pseudo-elements `::name` парсятся отдельным узлом, никогда не матчат. **Specificity** по CSS3 §16: `:not` сам не считается, но содержимое contributes; pseudo-classes считаются как class. Декларации — как пары строк. Lenient recovery, комментарии `/* */`, пропуск `@`-правил.
+- **Отложено:** `:is(...)`, `:where(...)`, `:has(...)`, `:not(complex)` со списком селекторов или combinator-ами, case-insensitive `[attr=val i]`, namespace prefix в селекторах, типизированные значения деклараций (length / color / calc / `--var`), `!important` как отдельное поле.
+- 61 тест.
 
 ### `lumen-layout` 🟡 (block + inline-flow + word-wrap + cascade)
 
-- **Готово:** `LayoutBox` дерево, **specificity-based style cascade**: для каждого правила берётся максимальная specificity среди его complex-селекторов, все matched declarations сортируются по `(specificity, rule_order, decl_index)` и применяются по возрастанию — выигрывает декларация с максимальной specificity, при равенстве — позже объявленная. Matching complex selector-а — справа налево, жадно (без back-tracking; патологические `a b c` с вложенными `a` могут промахнуться — известное упрощение). Combinator-ы: descendant / child / next-sibling / later-sibling. Pseudo-classes: `:first-child`, `:last-child`, `:only-child`, `:empty`, `:root`. Attribute selectors: все операторы. Наследуемые свойства: `color`, `font-size`, `line-height`. Свойства с парсингом: `display` (block/inline/none), `color` (named 10 цветов + `#RRGGBB` + `#RGB`), `background-color`, `font-size`, `line-height`, `margin` (+ 4 стороны), `padding` (+ 4 стороны). Whitespace-only текстовые узлы и комментарии пропускаются. **Line wrapping:** `TextMeasurer` trait + `layout_measured()` разбивают текст по словам на строки с реальными шрифтовыми метриками. **Inline-flow:** `BoxKind::InlineRun { segments, lines }` — текстовые узлы и inline-элементы (`<a>`, `<span>`, `<em>`, `<strong>`, и т.д.) группируются в один поток; каждый сегмент хранит свой стиль (цвет ссылки); слова с одинаковым rendering-стилем сливаются в один `InlineFrag` на строке. `ComputedStyle::text_rendering_eq` сравнивает только color/font_size/line_height.
+- **Готово:** `LayoutBox` дерево, **specificity-based style cascade**: для каждого правила берётся максимальная specificity среди его complex-селекторов, все matched declarations сортируются по `(specificity, rule_order, decl_index)` и применяются по возрастанию — выигрывает декларация с максимальной specificity, при равенстве — позже объявленная. Matching complex selector-а — справа налево, жадно (без back-tracking; патологические `a b c` с вложенными `a` могут промахнуться — известное упрощение). Combinator-ы: descendant / child / next-sibling / later-sibling. **Pseudo-classes:** все CSS3 structural и functional — `:first-child`, `:last-child`, `:only-child`, `:empty`, `:root`, `:first-of-type`, `:last-of-type`, `:only-of-type`, `:nth-child(an+b)`, `:nth-last-child`, `:nth-of-type`, `:nth-last-of-type`, `:not(compound)`. Helpers `element_index` (1-based, среди element-sibling-ов) и `element_index_of_type` (среди sibling-ов с тем же тегом) с `from_end` опцией. Attribute selectors: все операторы. Наследуемые свойства: `color`, `font-size`, `line-height`. Свойства с парсингом: `display` (block/inline/none), `color` (named 10 цветов + `#RRGGBB` + `#RGB`), `background-color`, `font-size`, `line-height`, `margin` (+ 4 стороны), `padding` (+ 4 стороны). Whitespace-only текстовые узлы и комментарии пропускаются. **Line wrapping:** `TextMeasurer` trait + `layout_measured()` разбивают текст по словам на строки с реальными шрифтовыми метриками. **Inline-flow:** `BoxKind::InlineRun { segments, lines }` — текстовые узлы и inline-элементы (`<a>`, `<span>`, `<em>`, `<strong>`, и т.д.) группируются в один поток; каждый сегмент хранит свой стиль (цвет ссылки); слова с одинаковым rendering-стилем сливаются в один `InlineFrag` на строке. `ComputedStyle::text_rendering_eq` сравнивает только color/font_size/line_height.
 - **Отложено:** flex, grid, float, абсолютное позиционирование, units кроме px, функции color (rgb/hsl/rgba), `box-sizing`, borders, text-decoration, font-weight/style как separate inline-property, селектор-matching с back-tracking.
-- Тесты: кириллица, wrapping edge-cases, nested inheritance, inline-flow (span/em/a с разными стилями, wrap через inline-границу), combinators, attribute, pseudo, specificity.
+- 50 тестов (включая кириллицу, wrapping edge-cases, nested inheritance, inline-flow, combinators, attribute, structural и functional pseudo, `:not`, specificity).
 
 ### `lumen-paint` 🟡 (fill rects + textured text + FontMeasurer)
 
@@ -372,7 +372,7 @@ git branch -d text-rendering
 
 ### Численно
 
-- **Всего тестов в workspace:** 281 (на момент последнего обновления).
+- **Всего тестов в workspace:** 287 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -389,7 +389,7 @@ git branch -d text-rendering
 
 ### Средний приоритет (Phase 1+)
 
-6. **CSS — функциональные pseudo (`:nth-child`, `:not`) и типизированные значения деклараций** — после расширенных селекторов остаются functional pseudo (`:nth-child(2n+1)`, `:not(.foo)`) и типизация значений (length / color / calc / `--var`).
+6. **CSS — типизированные значения деклараций** — length / color / calc / `--var`. Селекторы Level 3 готовы полностью (compound, combinators, attribute, structural+functional pseudo, `:not`, specificity).
 7. **Cmap format 12** — Unicode SMP/SIP (эмодзи, math symbols, исторические письменности).
 8. **Tab session export / import** (§12.7) — сериализация в snapshot-формат lumen-storage. Простое, экономит много боли.
 9. **Картинки на страницах** — `<img>` рендеринг. Нужны PNG/JPEG декодеры (свои, по §5).
@@ -423,7 +423,7 @@ git branch -d text-rendering
 - Snapshot-тесты для layout (insta crate или собственный diff).
 - Composite glyphs с ARGS_ARE_XY_VALUES=0 (point alignment) — для битых старых шрифтов.
 - Полноценный selector-matching с back-tracking для complex-селекторов (текущий — right-to-left greedy, может промахиваться на патологических `a b c` с вложенными предками).
-- Функциональные pseudo-classes `:nth-child(an+b)`, `:not(...)`, `:is(...)`, `:where(...)` — сейчас парсятся как `Unsupported`.
+- CSS4 pseudo-classes `:is(...)`, `:where(...)`, `:has(...)` — сейчас парсятся как `Unsupported`. `:nth-*` и `:not(compound)` уже работают.
 
 ---
 
@@ -451,6 +451,8 @@ git branch -d text-rendering
 - **Specificity-based style cascade.** Каскад собирает все matched declarations с ключом `(specificity, rule_order, decl_index)`, сортирует по возрастанию и применяет по порядку — выигрывает максимальная specificity, при равенстве — позже объявленная (CSS spec). Specificity считается tuple `(a=ids, b=classes+attrs+pseudo, c=types+pseudoelements)`, universal и combinator не учитываются. Альтернативой был «last-rule-wins без подсчёта» — отказались, потому что для реальных CSS-стилей нужно правильное поведение `#main` против `.section`.
 - **Right-to-left greedy matching без back-tracking** для complex-селекторов. Для `a b c`: проверяем `c` на текущем элементе, для `b` — ищем первого подходящего предка/sibling и фиксируем его, для `a` — то же относительно зафиксированного. Это упрощение: для патологического `div p span` с несколькими `div`-предками, где только дальний обёрнут вокруг `p`, мы можем промахнуться. Сознательное упрощение Phase 0 — реальные стили редко полагаются на back-tracking, а правильный matcher с back-tracking требует Selectors-движка как у Servo/Stylo. До этого — известное ограничение.
 - **Interactive pseudo-classes (`:hover`, `:focus`, `:active`, …) парсятся, но всегда не матчат** в Phase 0. Хранятся как `PseudoClass::Unsupported(name)` — это не data loss, а honest «нет интерактивного состояния». Когда появится input/hover state — там и заработают. До этого правило `a:hover { color: red }` корректно парсится и просто не применяется ни к чему.
+- **`NthSpec { a, b }` хранит формулу `:nth-*` как пару чисел, а не как parsed AST.** Матчинг `spec.matches(i)` решает уравнение `i = a*n + b` при `n ≥ 0` напрямую, без виртуальных «итераторов». Это даёт O(1) на проверку одного элемента и единственный путь для `odd` / `even` / целых констант / любых линейных форм. Альтернатива (хранить `Vec<i32>` индексов или callable) — overengineering для линейной формулы.
+- **`:not(compound)` хранится как `Box<CompoundSelector>`**, а не как полный selector. CSS3 запрещает combinator-ы и nested `:not(:not(...))` внутри, а CSS4-расширения (`:not(complex)`, `:not(list)`) добавим позже отдельной задачей. Сейчас неподдерживаемые формы (`:not(a b)`, `:not(:not(x))`) парсер откатывает на `Unsupported("not")` — content не сохраняется, но и не теряется грамматика правила.
 
 ### Открытые вопросы (решим, когда упрёмся)
 
