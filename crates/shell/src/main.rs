@@ -2,8 +2,8 @@
 //!
 //! Режимы запуска:
 //! - `lumen` — открыть пустое окно.
-//! - `lumen <path.html>` — распарсить файл, собрать стили из `<style>`-блоков,
-//!   layout, paint и нарисовать в окне через wgpu.
+//! - `lumen <path.html>` — распарсить файл, layout, paint.
+//! - `lumen <http(s)://...>` — загрузить страницу по сети, layout, paint.
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -26,15 +26,27 @@ use winit::window::{Window, WindowId};
 fn main() -> ExitCode {
     println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
 
-    let html_path = std::env::args().nth(1).map(PathBuf::from);
-    let initial_list = match html_path {
-        Some(path) => match load_page(&path) {
-            Ok(list) => list,
-            Err(err) => {
-                eprintln!("Ошибка загрузки {}: {err}", path.display());
-                return ExitCode::FAILURE;
+    let arg = std::env::args().nth(1);
+    let initial_list = match arg {
+        Some(ref s) if s.starts_with("http://") || s.starts_with("https://") => {
+            match load_url(s) {
+                Ok(list) => list,
+                Err(err) => {
+                    eprintln!("Ошибка загрузки {s}: {err}");
+                    return ExitCode::FAILURE;
+                }
             }
-        },
+        }
+        Some(ref s) => {
+            let path = PathBuf::from(s);
+            match load_page(&path) {
+                Ok(list) => list,
+                Err(err) => {
+                    eprintln!("Ошибка загрузки {}: {err}", path.display());
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
         None => DisplayList::new(),
     };
 
@@ -57,14 +69,30 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn load_url(url: &str) -> Result<DisplayList, Box<dyn Error>> {
+    use lumen_core::ext::NetworkTransport;
+    use lumen_core::url::Url;
+    use lumen_network::HttpClient;
+
+    println!("Загрузка: {url}");
+    let lumen_url = Url::parse(url)?;
+    let bytes = HttpClient::new().fetch(&lumen_url)?;
+    println!("Получено {} байт", bytes.len());
+    render_bytes(&bytes, Some("text/html"))
+}
+
 fn load_page(path: &PathBuf) -> Result<DisplayList, Box<dyn Error>> {
     let bytes = std::fs::read(path)?;
+    render_bytes(&bytes, None)
+}
+
+fn render_bytes(bytes: &[u8], content_type: Option<&str>) -> Result<DisplayList, Box<dyn Error>> {
     // Кодировку определяем по BOM → <meta charset> → эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы, которые
     // встречаются в архивах и исторической переписке.
-    let encoding = lumen_encoding::detect(&bytes, None);
-    let source = lumen_encoding::decode(encoding, &bytes);
-    println!("Кодировка файла: {}", encoding.name());
+    let encoding = lumen_encoding::detect(bytes, content_type);
+    let source = lumen_encoding::decode(encoding, bytes);
+    println!("Кодировка: {}", encoding.name());
 
     let doc = lumen_html_parser::parse(&source);
     let css = extract_style_blocks(&doc);

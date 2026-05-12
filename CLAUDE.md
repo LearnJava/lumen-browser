@@ -64,7 +64,7 @@ export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
 
 ### Текущее число тестов и crates
 
-На момент написания: 201 тест, 9 крейтов (`shell`, `core`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`). При прохождении следующих фаз появятся `lumen-knowledge`, `lumen-ai`, `lumen-network` и др.
+На момент написания: 300 тестов, 11 крейтов (`shell`, `core`, `network`, `storage`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`). При прохождении следующих фаз появятся `lumen-knowledge`, `lumen-ai` и др.
 
 ---
 
@@ -353,26 +353,32 @@ git branch -d text-rendering
 - **Отложено:** B-tree persistent backend (сейчас вся структура в RAM), TTL для cookies, namespace helpers (`cookies::`, `history::`, `profile::`), `clear_origin(origin)` для быстрой чистки всех данных источника.
 - 17 тестов: CRUD, origin-изоляция, top_level_site-партиционирование, list_keys, snapshot round-trip (включая binary и кириллицу), ошибки десериализации.
 
-### `lumen-shell` 🟡 (окно + рендер)
+### `lumen-network` ✅ (HTTP/1.1 + HTTPS)
 
-- **Готово:** winit 0.30 с `ApplicationHandler` API. Два режима: `lumen` (пустое окно 1024×720) и `lumen <path.html>` (читает файл, определяет кодировку через `lumen_encoding::detect`, декодирует в `String`, парсит HTML, извлекает `<style>` через walk DOM, парсит CSS, layout, paint, рисует фоны + текст в окне через `Renderer::render`). Inter-Regular.ttf bundled через `include_bytes!` (~411 КБ к binary). Обработчики Resized + RedrawRequested.
-- **Отложено:** вкладки, омнибокс, навигация, истории сессий, бэка для CSS-загрузки внешних файлов через `<link>`, scroll, обработка input-событий.
+- **Готово:** `HttpClient` реализует `NetworkTransport` из `lumen-core::ext`. Поддержка HTTP и HTTPS (rustls + webpki-roots, exception #3). Redirect-следование до 5 хопов (абсолютные + относительные `Location`). `chunked` Transfer-Encoding decoder. URL-парсинг (scheme/host/port/path), case-insensitive заголовки. Box-обёртка вокруг TLS stream (clippy large-enum-variant).
+- **Отложено:** HTTP/2, keep-alive соединения, кэш (Cache-Control), аутентификация, cookie jar, проксирование.
+- 12 тестов: URL-парсинг, status line, header lookup, chunked decoder (несколько chunk-ов, пустое тело).
+
+### `lumen-shell` 🟡 (окно + рендер + сеть)
+
+- **Готово:** winit 0.30 с `ApplicationHandler` API. Три режима: `lumen` (пустое окно 1024×720), `lumen <path.html>` (файл → кодировка → HTML → layout → paint), `lumen <http(s)://...>` (сеть через `HttpClient` → те же этапы). Inter-Regular.ttf bundled через `include_bytes!`. Обработчики Resized + RedrawRequested.
+- **Отложено:** вкладки, омнибокс, навигация, истории сессий, CSS-загрузка внешних файлов через `<link>`, scroll, обработка input-событий.
 - Авто-тестов нет (визуальная проверка через `cargo run`). Snapshot-тесты для рендера — TODO.
 
 ### Инфраструктура
 
 - Cargo workspace, edition 2024, resolver 3, MSRV 1.95.
-- 10 крейтов в `crates/`: shell, core, storage, engine/{html-parser, css-parser, dom, layout, paint, font, encoding}.
+- 11 крейтов в `crates/`: shell, core, network, storage, engine/{html-parser, css-parser, dom, layout, paint, font, encoding}.
 - Bundled assets: `assets/fonts/Inter-Regular.ttf` (+ OFL.txt лицензия).
 - Тестовая страница: `samples/page.html` со встроенным `<style>`.
-- 4 разрешённых внешних зависимости: `winit = "0.30"`, `wgpu = "26"`, `rustls` (зарезервирована, не подключена), JS engine (зарезервирована).
-- Внутренние deps: workspace.dependencies на 10 крейтов.
+- 4 разрешённых внешних зависимости: `winit = "0.30"`, `wgpu = "26"`, `rustls = "0.23"` + `webpki-roots = "0.26"` (активированы в lumen-network), JS engine (зарезервирована).
+- Внутренние deps: workspace.dependencies на 11 крейтов.
 - `.gitattributes` форсит LF для всех текстовых файлов; binary-метка для `.ttf / .png / .woff2`.
 - `.gitignore` игнорирует `/target`, `/*.zip`, `/*.tar*`, `.idea/`, `.vscode/`, swap-файлы.
 
 ### Численно
 
-- **Всего тестов в workspace:** 287 (на момент последнего обновления).
+- **Всего тестов в workspace:** 316 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -385,7 +391,7 @@ git branch -d text-rendering
 
 ### Ближайшее (закрывает Phase 0)
 
-1. **HTTP/1.1 + TLS client через rustls** — загрузка внешних страниц. Активация exception #3. Новый крейт `lumen-network`.
+1. **Inline `<link rel=stylesheet>` + внешний CSS** — shell умеет загружать страницы по сети, но `<link href="style.css">` ещё не обрабатывается.
 
 ### Средний приоритет (Phase 1+)
 
@@ -472,8 +478,10 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            lumen-network          — крейт lumen-network: HTTP/1.1 + HTTPS через rustls; shell открывает URL
+*            css-selectors          — расширенные CSS-селекторы: combinators, pseudo-classes, attribute selectors, specificity
 *            lumen-storage          — крейт lumen-storage: InMemoryStorage + origin-партиционирование + snapshot LUMEN_KV_V1
-*   (HEAD)   inline-elements        — InlineRun: <a>/<span>/<em>/<strong> в одной строке с текстом, per-segment стили
+*            inline-elements        — InlineRun: <a>/<span>/<em>/<strong> в одной строке с текстом, per-segment стили
 *   358c05f  task-coordination      — протокол резервации задач между параллельными сессиями (Git workflow + блок в шапке плана)
 *   a4e5249  snapshot-tests         — serialize_display_list + 6 golden-тестов (пустая страница, параграф, фон, кириллица, line wrap)
 *   8e6bdeb  encoding-detection     — крейт lumen-encoding: BOM + meta + heuristic, cp1251/koi8-r/cp866
