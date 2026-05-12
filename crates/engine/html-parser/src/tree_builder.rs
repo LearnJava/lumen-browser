@@ -183,4 +183,42 @@ mod tests {
         let s = doc.to_string();
         assert!(s.contains("\"a & b < c\""));
     }
+
+    #[test]
+    fn script_body_is_single_text_node() {
+        // RAWTEXT: тело <script> попадает в DOM одним текстовым узлом
+        // с исходными байтами — без интерпретации <b>, <, &amp;.
+        let doc = parse("<script>var x = '<b>&amp;</b>'; if (a<b) {}</script>");
+        let root = doc.root();
+        let script = doc.get(root).children[0];
+        match &doc.get(script).data {
+            NodeData::Element { name, .. } => assert_eq!(name.local, "script"),
+            other => panic!("expected script element, got {other:?}"),
+        }
+        let kids = &doc.get(script).children;
+        assert_eq!(kids.len(), 1, "script must have a single text child, got {kids:?}");
+        match &doc.get(kids[0]).data {
+            NodeData::Text(s) => {
+                assert_eq!(s, "var x = '<b>&amp;</b>'; if (a<b) {}");
+            }
+            other => panic!("expected text node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn style_body_is_single_text_node() {
+        let doc = parse("<style>p::before { content: '&'; } /* < */</style>");
+        let s = doc.to_string();
+        assert!(s.contains("\"p::before { content: '&'; } /* < */\""));
+    }
+
+    #[test]
+    fn script_then_normal_content() {
+        // После </script> токенизатор возвращается в нормальный режим.
+        let doc = parse("<script>x<1</script><p>after</p>");
+        let s = doc.to_string();
+        assert!(s.contains("\"x<1\""));
+        assert!(s.contains("<p>"));
+        assert!(s.contains("\"after\""));
+    }
 }

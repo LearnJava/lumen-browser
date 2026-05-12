@@ -312,9 +312,10 @@ git branch -d text-rendering
 
 ### `lumen-html-parser` 🟡 (минимум)
 
-- **Готово:** iterator-based FSM (Tokenizer); состояния Data, TagOpen, TagName, EndTag, BeforeAttributeName, AttributeName, AfterAttributeName, BeforeAttributeValue, AttributeValue (quoted/unquoted), SelfClosingStartTag, MarkupDeclarationOpen, Comment, CommentEnd. Character references: `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`, `&nbsp;`, numeric `&#NNN;` / `&#xHHHH;`. Lenient tree builder с void-элементами и self-closing.
-- **Отложено:** DOCTYPE-разбор (пропускаем содержимое), CDATA, raw-text mode для `<script>` / `<style>` (сейчас они парсятся «как текст» — это работает потому что внутри них нет угловых скобок, но не по spec), полный набор named character references (~2000 в HTML5 spec), insertion modes (in_table, in_select, in_caption, и т.д.).
-- 31 тест.
+- **Готово:** iterator-based FSM (Tokenizer); состояния Data, TagOpen, TagName, EndTag, BeforeAttributeName, AttributeName, AfterAttributeName, BeforeAttributeValue, AttributeValue (quoted/unquoted), SelfClosingStartTag, MarkupDeclarationOpen, Comment, CommentEnd, **RAWTEXT** (для `<script>` и `<style>`). Character references: `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`, `&nbsp;`, numeric `&#NNN;` / `&#xHHHH;`. Lenient tree builder с void-элементами и self-closing.
+- **RAWTEXT детали:** после `<script>` / `<style>` (не self-closing) тело читается литерально до `</tag` + терминатор (whitespace / `/` / `>` / EOF), case-insensitive. `<` без `/` или `</scripto>` остаются текстом. Character references (`&amp;`) внутри **не декодируются** — это spec-compliant поведение HTML5. После `</script>` токенизатор возвращается в data state. `is_raw_text_element(name)` определяет список (сейчас только script/style).
+- **Отложено:** DOCTYPE-разбор (пропускаем содержимое), CDATA, RCDATA для `<title>` / `<textarea>` (как RAWTEXT, но с декодированием entities), полный набор named character references (~2000 в HTML5 spec), insertion modes (in_table, in_select, in_caption, и т.д.).
+- 48 тестов (13 tokenizer + 3 tree_builder для RAWTEXT).
 
 ### `lumen-css-parser` 🟡 (полный набор CSS3-селекторов)
 
@@ -382,7 +383,7 @@ git branch -d text-rendering
 
 ### Численно
 
-- **Всего тестов в workspace:** 464 (на момент последнего обновления).
+- **Всего тестов в workspace:** 481 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -462,6 +463,7 @@ git branch -d text-rendering
 - **`text-decoration` наследуется через каскад в Phase 0** (CSS3 формально не наследует `text-decoration-line` — вместо этого «декорация распространяется на потомков» через box tree, что требует двух проходов layout-а). Прямое наследование даёт интуитивный результат для `a { text-decoration: underline }` и оставляет возможность сбросить декорацию у потомка через `text-decoration: none`. Подрисовка линий — приблизительной геометрией (baseline = line_y + font_size * 0.80, толщина ~7% fs, цвет = currentColor): без `post`/`OS_2` метрик шрифта точные позиции underline_position / underline_thickness нам недоступны, ratio 0.80 совпадает с ascent ratio Inter, которым рендерер позиционирует глифы.
 - **`InlineFrag.width` хранится в самом фрагменте, не вычисляется заново по тексту**. Альтернатива (recompute по chars + char_width в paint) потребовала бы прокидывать `TextMeasurer` в `build_display_list`, что нарушает текущую границу «paint не зависит от font». Хранение width-а — одно поле на фрагмент, заполняется в wrap_inline_run.
 - **`box-sizing` хранится в `ComputedStyle` как enum, ветвление — только в `lay_out`.** Альтернативой было передавать `BoxSizing` отдельным параметром или хранить уже посчитанные `rect.width = w` как «семантику», но смешивание моделей в одной точке (`if let Some(w) = s.width { match s.box_sizing { ... } }`) — единственный шаг, где модели расходятся, и держать его на месте чтения проще и читабельнее. `box-sizing` явно не наследуется в `compute_style` (сброс на ContentBox в каждом элементе), даже несмотря на отсутствие лишнего шага: иначе все потомки `div { box-sizing: border-box }` тихо ломали бы свой `width: 100%`. Анонимный `InlineRun` тоже сбрасывает box-sizing — у него `width` и `height` уже None, но иначе snapshot пачкается лишним полем.
+- **RAWTEXT state хранится как `Option<String>` в самом токенизаторе, а не как отдельное «состояние» в стиле full FSM.** Iterator-based архитектура у нас уже опирается только на `pos: usize` — добавлять явный `enum State` ради одного режима — overengineering. Поле `raw_text: Option<String>` ставится в `consume_start_tag` сразу после распознавания `<script>` / `<style>`, и проверяется в `next()` первой же веткой. `.take()` гарантирует, что режим всегда сбрасывается за один проход — даже если в теле не было `</tag` (тогда читаем до EOF и возвращаемся в обычное русло). `is_raw_text_element(name)` — отдельная функция: её удобно расширять для будущих RCDATA-тегов и не приходится править `next()`. Self-closing `<script/>` — режим **не включается**: симметрично с tree_builder, который для self-closing не пушит элемент в стек. RAWTEXT — это RAWTEXT в смысле HTML5 §13.2.5.2 (entities не декодируются и угловые скобки литеральны); RCDATA для `<title>`/`<textarea>` (где entities декодируются) — отдельная задача.
 - **`:is(list)` и `:where(list)` хранятся как `Vec<ComplexSelector>`** (в отличие от `:not(compound)` — там запрещены combinator-ы по CSS3, поэтому достаточно `Box<CompoundSelector>`). CSS4 явно разрешает combinator-ы внутри `:is`/`:where`, поэтому хранилище — полный selector list. Matcher — `list.iter().any(...)` рекурсивно через `matches_complex`; это естественно корректно из коробки. Specificity: `:is` contributes максимальную specificity по списку (CSS4 §17 «specificity of an :is/:not/:has is the specificity of the most specific selector in its arg»), `:where` — всегда 0. Для max-вычисления добавлена функция `max_list_specificity(&[ComplexSelector]) -> Option<Specificity>` рядом с `accumulate_specificity`. Парсер: внутри тела `:is(...)` зовём существующий `parse_selector_list`; чтобы он корректно останавливался на `)`, в `parse_complex_selector` добавлено `)` в список break-токенов tail-цикла. Пустые `:is()` / `:where()` возвращают `Unsupported(name)` — это даёт ту же fallback-семантику, что у `:not(a b)`.
 
 ### Открытые вопросы (решим, когда упрёмся)
@@ -482,6 +484,7 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            html-raw-text          — RAWTEXT для <script> и <style>: содержимое — литеральный текст до </tag + терминатор, entities не декодируются; 13 tokenizer + 3 tree_builder теста
 *            css-is-where           — CSS4 :is() / :where(): PseudoClass::Is/Where + matcher (any-match) + specificity (max-of-list / 0); 11 css-parser + 7 layout тестов
 *            css-box-sizing         — CSS box-sizing (content-box / border-box): BoxSizing enum, парсер, корректировка width/height в lay_out; 14 unit + 1 snapshot тест
 *            text-decoration        — CSS text-decoration (underline / overline / line-through): TextDecorationLine + InlineFrag.width + FillRect-ы у baseline
