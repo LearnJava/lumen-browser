@@ -19,7 +19,7 @@ pub mod style;
 
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
-pub use style::{Color, ComputedStyle, Display};
+pub use style::{Color, ComputedStyle, Display, TextAlign};
 
 /// Интерфейс измерения ширины символов для line wrapping.
 ///
@@ -739,5 +739,95 @@ mod tests {
         assert_eq!(ps[0].style.color.r, 255, "p без класса — матчит");
         assert_eq!(ps[1].style.color.r, 0, "p.hl — исключается");
         assert_eq!(divs[0].style.color.r, 255, "div.hl — не исключается");
+    }
+
+    // ── Тесты text-align ───────────────────────────────────────────────────
+
+    fn first_inline_run(b: &LayoutBox) -> &LayoutBox {
+        for c in &b.children {
+            if matches!(c.kind, BoxKind::InlineRun { .. }) {
+                return c;
+            }
+            let found = first_inline_run(c);
+            if matches!(found.kind, BoxKind::InlineRun { .. }) {
+                return found;
+            }
+        }
+        b
+    }
+
+    /// text-align: center сдвигает фрагменты к середине строки.
+    /// "ab" = 2×8=16px в контейнере 100px: offset = (100-16)/2 = 42px.
+    #[test]
+    fn text_align_center_shifts_frags() {
+        let root = lay_measured("<p>ab</p>", "p { text-align: center; }", 100.0);
+        let p = first_element_child(&root);
+        let run = first_inline_run(p);
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(!lines.is_empty(), "expected at least one line");
+            let x = lines[0][0].x;
+            // (100 - 16) / 2 = 42; p имеет нулевой padding, так что content_width = 100
+            assert!((x - 42.0).abs() < 0.5, "expected x≈42, got {x}");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    /// text-align: right сдвигает фрагменты к правому краю.
+    /// "ab" = 16px в контейнере 100px: offset = 100-16 = 84px.
+    #[test]
+    fn text_align_right_shifts_frags() {
+        let root = lay_measured("<p>ab</p>", "p { text-align: right; }", 100.0);
+        let p = first_element_child(&root);
+        let run = first_inline_run(p);
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(!lines.is_empty());
+            let x = lines[0][0].x;
+            assert!((x - 84.0).abs() < 0.5, "expected x≈84, got {x}");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    /// text-align: left — фрагменты начинаются с x=0.
+    #[test]
+    fn text_align_left_frags_start_at_zero() {
+        let root = lay_measured("<p>ab</p>", "p { text-align: left; }", 100.0);
+        let p = first_element_child(&root);
+        let run = first_inline_run(p);
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(!lines.is_empty());
+            assert!((lines[0][0].x - 0.0).abs() < 0.01, "expected x=0, got {}", lines[0][0].x);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    /// text-align наследуется дочерними элементами.
+    #[test]
+    fn text_align_is_inherited() {
+        let root = lay("<div><p>x</p></div>", "div { text-align: right; }");
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(p.style.text_align, TextAlign::Right);
+    }
+
+    /// text-align: center — последняя строка тоже выравнивается.
+    #[test]
+    fn text_align_center_applies_to_each_line() {
+        // "aa bb" при viewport 30px (3×8=24 < 30; "aa bb" = 40 > 30) → 2 строки.
+        // "aa" = 16px, offset = (30-16)/2 = 7; "bb" тоже 16px, offset = 7.
+        let root = lay_measured("<p>aa bb</p>", "p { text-align: center; }", 30.0);
+        let p = first_element_child(&root);
+        let run = first_inline_run(p);
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert_eq!(lines.len(), 2, "expected 2 lines");
+            for (i, line) in lines.iter().enumerate() {
+                let x = line[0].x;
+                assert!((x - 7.0).abs() < 0.5, "line[{i}] expected x≈7, got {x}");
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
     }
 }

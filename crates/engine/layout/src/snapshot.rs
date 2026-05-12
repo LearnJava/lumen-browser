@@ -10,7 +10,7 @@
 //! «дефолта».
 
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
-use crate::style::{Color, ComputedStyle, Display};
+use crate::style::{Color, ComputedStyle, Display, TextAlign};
 use std::fmt::Write;
 
 /// Корневой entry-point: рекурсивно сериализует всё дерево.
@@ -98,6 +98,11 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
             " p=({:.2}, {:.2}, {:.2}, {:.2})",
             s.padding_top, s.padding_right, s.padding_bottom, s.padding_left
         );
+    }
+    match s.text_align {
+        TextAlign::Left => {}
+        TextAlign::Center => out.push_str(" text-align=center"),
+        TextAlign::Right => out.push_str(" text-align=right"),
     }
 }
 
