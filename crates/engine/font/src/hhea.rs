@@ -23,12 +23,12 @@ impl Hhea {
         let descent = r.read_i16().ok_or(FontError::UnexpectedEof)?;
         let line_gap = r.read_i16().ok_or(FontError::UnexpectedEof)?;
         let advance_width_max = r.read_u16().ok_or(FontError::UnexpectedEof)?;
-        // min_lsb, min_rsb, x_max_extent (i16×3)
-        // caret_slope_rise, caret_slope_run, caret_offset (i16×3)
-        // 4 зарезервированных i16
-        // metric_data_format i16
-        // Всего: 6 + 8 + 2 = 16 байт skip.
-        r.skip(16).ok_or(FontError::UnexpectedEof)?;
+        // min_lsb, min_rsb, x_max_extent (i16 × 3) = 6 байт
+        // caret_slope_rise, caret_slope_run, caret_offset (i16 × 3) = 6 байт
+        // 4 reserved (i16 × 4) = 8 байт
+        // metric_data_format (i16) = 2 байта
+        // Итого 22 байта skip между advance_width_max и number_of_h_metrics.
+        r.skip(22).ok_or(FontError::UnexpectedEof)?;
         let number_of_h_metrics = r.read_u16().ok_or(FontError::UnexpectedEof)?;
         Ok(Self {
             ascent,
@@ -51,7 +51,7 @@ mod tests {
         out.extend_from_slice(&descent.to_be_bytes());
         out.extend_from_slice(&0i16.to_be_bytes()); // line_gap
         out.extend_from_slice(&1500u16.to_be_bytes()); // advance_width_max
-        out.extend_from_slice(&[0u8; 16]); // 16 байт skip-зоны
+        out.extend_from_slice(&[0u8; 22]); // 22 байта skip-зоны до number_of_h_metrics
         out.extend_from_slice(&num_h_metrics.to_be_bytes());
         out
     }
