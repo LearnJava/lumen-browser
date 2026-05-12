@@ -19,3 +19,5 @@ wgpu.workspace = true
 [dev-dependencies]
 lumen-html-parser.workspace = true
 lumen-css-parser.workspace = true
+lumen-layout.workspace = true
+lumen-core.workspace = true
