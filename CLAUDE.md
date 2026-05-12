@@ -459,6 +459,7 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*   358c05f  task-coordination      — протокол резервации задач между параллельными сессиями (Git workflow + блок в шапке плана)
 *   a4e5249  snapshot-tests         — serialize_display_list + 6 golden-тестов (пустая страница, параграф, фон, кириллица, line wrap)
 *   8e6bdeb  encoding-detection     — крейт lumen-encoding: BOM + meta + heuristic, cp1251/koi8-r/cp866
 *   90b849a  inline-flow            — TextMeasurer + FontMeasurer + line wrapping: текст переносится по словам
