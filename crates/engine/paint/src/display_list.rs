@@ -15,6 +15,13 @@ pub enum DisplayCommand {
         rect: Rect,
         color: Color,
     },
+    DrawBorder {
+        rect: Rect,
+        /// Ширины сторон: [top, right, bottom, left].
+        widths: [f32; 4],
+        /// Цвета сторон: [top, right, bottom, left].
+        colors: [Color; 4],
+    },
     DrawText {
         rect: Rect,
         text: String,
@@ -29,6 +36,7 @@ pub type DisplayList = Vec<DisplayCommand>;
 ///
 /// Формат (одна команда — одна строка):
 /// - `FillRect (x.xx, y.xx, w.xx, h.xx) #rrggbbaa`
+/// - `DrawBorder (x.xx, y.xx, w.xx, h.xx) w=[t,r,b,l] c=[#top,#right,#bottom,#left]`
 /// - `DrawText (x.xx, y.xx, w.xx, h.xx) "text" fs.xx #rrggbbaa`
 pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
     let mut out = String::new();
@@ -39,6 +47,20 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     "FillRect ({:.2}, {:.2}, {:.2}, {:.2}) #{:02x}{:02x}{:02x}{:02x}\n",
                     rect.x, rect.y, rect.width, rect.height,
                     color.r, color.g, color.b, color.a,
+                ));
+            }
+            DisplayCommand::DrawBorder { rect, widths: [wt, wr, wb, wl], colors: [ct, cr, cb, cl] } => {
+                out.push_str(&format!(
+                    "DrawBorder ({:.2}, {:.2}, {:.2}, {:.2}) \
+                     w=[{:.2},{:.2},{:.2},{:.2}] \
+                     c=[#{:02x}{:02x}{:02x}{:02x},#{:02x}{:02x}{:02x}{:02x},\
+                        #{:02x}{:02x}{:02x}{:02x},#{:02x}{:02x}{:02x}{:02x}]\n",
+                    rect.x, rect.y, rect.width, rect.height,
+                    wt, wr, wb, wl,
+                    ct.r, ct.g, ct.b, ct.a,
+                    cr.r, cr.g, cr.b, cr.a,
+                    cb.r, cb.g, cb.b, cb.a,
+                    cl.r, cl.g, cl.b, cl.a,
                 ));
             }
             DisplayCommand::DrawText { rect, text, font_size, color } => {
@@ -71,6 +93,27 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 out.push(DisplayCommand::FillRect {
                     rect: b.rect,
                     color: bg,
+                });
+            }
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width, s.border_right_width,
+                        s.border_bottom_width, s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.unwrap_or(cur),
+                        s.border_right_color.unwrap_or(cur),
+                        s.border_bottom_color.unwrap_or(cur),
+                        s.border_left_color.unwrap_or(cur),
+                    ],
                 });
             }
             for child in &b.children {
@@ -304,5 +347,75 @@ mod tests {
         assert!((rects[0].y - 0.0).abs() < 0.01);
         let line_h = 16.0_f32 * 1.2;
         assert!((rects[1].y - line_h).abs() < 0.1, "y1={}", rects[1].y);
+    }
+
+    // ── Тесты border рендеринга ─────────────────────────────────────────────
+
+    fn borders(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn border_solid_emits_draw_border() {
+        let dl = build("<p>x</p>", "p { border: 2px solid red; }");
+        let b = borders(&dl);
+        assert_eq!(b.len(), 1, "должна быть одна DrawBorder команда");
+        if let DisplayCommand::DrawBorder { widths, colors, .. } = b[0] {
+            assert!((widths[0] - 2.0).abs() < 0.01, "top width");
+            assert!((widths[1] - 2.0).abs() < 0.01, "right width");
+            assert_eq!(colors[0].r, 255, "top color — red");
+        }
+    }
+
+    #[test]
+    fn border_none_style_no_draw_border() {
+        // border-width без border-style (default None) → DrawBorder не эмитируется.
+        let dl = build("<p>x</p>", "p { border-width: 2px; }");
+        assert!(borders(&dl).is_empty());
+    }
+
+    #[test]
+    fn border_increases_height() {
+        // Без border: высота = font_size * line_height = 16 * 1.2 = 19.2
+        let no_border = build("<p>x</p>", "");
+        let with_border = build("<p>x</p>", "p { border: 5px solid black; }");
+
+        let height_of = |dl: &DisplayList| -> f32 {
+            dl.iter()
+                .find_map(|c| match c {
+                    DisplayCommand::DrawText { rect, .. } => Some(rect.y),
+                    _ => None,
+                })
+                .unwrap_or(0.0)
+        };
+        // Текст должен быть смещён на 5px вниз из-за border-top.
+        let y_no = height_of(&no_border);
+        let y_with = height_of(&with_border);
+        assert!(
+            (y_with - y_no - 5.0).abs() < 0.1,
+            "y_no={y_no}, y_with={y_with}"
+        );
+    }
+
+    #[test]
+    fn border_color_none_uses_current_color() {
+        // border без color → currentColor (наследуется из color: blue).
+        let dl = build("<p>x</p>", "p { color: blue; border: 2px solid; }");
+        let b = borders(&dl);
+        assert_eq!(b.len(), 1);
+        if let DisplayCommand::DrawBorder { colors, .. } = b[0] {
+            assert_eq!(colors[0].b, 255, "border color should be blue (currentColor)");
+        }
+    }
+
+    #[test]
+    fn border_shorthand_in_serialize() {
+        // serialize_display_list корректно форматирует DrawBorder.
+        let dl = build("<p>x</p>", "p { border: 3px solid red; }");
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("DrawBorder"), "должна быть строка DrawBorder");
+        assert!(s.contains("3.00"), "ширина 3px");
     }
 }

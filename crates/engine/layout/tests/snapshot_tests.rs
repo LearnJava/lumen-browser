@@ -170,3 +170,23 @@ fn descendant_combinator() {
     );
     assert_snapshot("descendant_combinator", &actual);
 }
+
+#[test]
+fn border_solid_all_sides() {
+    let actual = build(
+        "<p>x</p>",
+        "p { border: 4px solid blue; }",
+        800.0,
+    );
+    assert_snapshot("border_solid_all_sides", &actual);
+}
+
+#[test]
+fn border_top_only() {
+    let actual = build(
+        "<p>x</p>",
+        "p { border-top: 2px solid red; }",
+        800.0,
+    );
+    assert_snapshot("border_top_only", &actual);
+}

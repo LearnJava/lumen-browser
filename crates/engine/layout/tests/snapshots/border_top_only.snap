@@ -1,0 +1,6 @@
+Block rect=(0.00, 0.00, 800.00, 21.20)
+  Block rect=(0.00, 0.00, 800.00, 21.20) bw=(2.00,0.00,0.00,0.00) bs=(solid,none,none,none) bc=(#ff0000ff,currentColor,currentColor,currentColor)
+    InlineRun rect=(0.00, 2.00, 800.00, 19.20)
+      seg[0] "x"
+      line[0]:
+        frag[0] x=0.00 "x"

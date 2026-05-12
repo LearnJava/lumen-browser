@@ -450,6 +450,21 @@ impl Renderer {
                 DisplayCommand::FillRect { rect, color } => {
                     push_fill_quad(&mut fill_vertices, *rect, color_to_array(color));
                 }
+                DisplayCommand::DrawBorder { rect, widths: [wt, wr, wb, wl], colors: [ct, cr, cb, cl] } => {
+                    let r = *rect;
+                    if *wt > 0.0 {
+                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, r.width, *wt), color_to_array(ct));
+                    }
+                    if *wr > 0.0 {
+                        push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - wr, r.y, *wr, r.height), color_to_array(cr));
+                    }
+                    if *wb > 0.0 {
+                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y + r.height - wb, r.width, *wb), color_to_array(cb));
+                    }
+                    if *wl > 0.0 {
+                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, *wl, r.height), color_to_array(cl));
+                    }
+                }
                 DisplayCommand::DrawText {
                     rect,
                     text,
