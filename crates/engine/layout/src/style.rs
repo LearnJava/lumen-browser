@@ -15,7 +15,7 @@
 //! фазы со «честным» Selectors-движком.
 
 use lumen_css_parser::{
-    AttrOp, AttrSelector, Combinator, CompoundSelector, ComplexSelector, Declaration, PseudoClass,
+    AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, Declaration, PseudoClass,
     SimpleSelector, Specificity, Stylesheet,
 };
 use lumen_dom::{Attribute, Document, NodeData, NodeId};
@@ -440,6 +440,12 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
             None => false,
         },
         PseudoClass::Not(inner) => !matches_compound(inner, doc, node),
+        PseudoClass::Is(list) | PseudoClass::Where(list) => {
+            // CSS4 §17: матчит, если матчит хоть один селектор из списка.
+            // `:where(...)` отличается только тем, что contributes 0 specificity —
+            // matching identical с `:is`.
+            list.iter().any(|s| matches_complex(s, doc, node))
+        }
         PseudoClass::Unsupported(_) => false,
     }
 }

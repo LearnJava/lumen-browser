@@ -16,6 +16,10 @@
 //!         `an+b`, целые числа, ключевые слова `odd` / `even`;
 //!       - `:not(compound)` — отрицание; внутри — compound selector
 //!         без combinator-ов;
+//!       - `:is(selector-list)` / `:where(selector-list)` — CSS4; матчит,
+//!         если матчит любой из селекторов списка. Внутри разрешены любые
+//!         complex-селекторы. Specificity для `:is` = максимум по списку,
+//!         для `:where` = 0.
 //!   - interactive pseudo-classes (`:hover`, `:focus`, …) сохраняются как
 //!     `PseudoClass::Unsupported(name)` и при матчинге всегда возвращают `false`;
 //!   - pseudo-elements `::name` парсятся отдельным узлом, никогда не матчат
@@ -23,10 +27,10 @@
 //!   - комментарии `/* */`, перечисление селекторов через `,`, опциональный
 //!     trailing `;`. At-rules (`@media`, `@import`) пропускаются.
 //!
-//! Не поддерживается (отложено): `:is(...)`, `:where(...)`, `:has(...)`,
-//! `:not(complex)` со списком селекторов или combinator-ами,
-//! case-insensitive модификатор `[attr=val i]`, namespace prefix в селекторах,
-//! типизированные значения деклараций (length / color / calc).
+//! Не поддерживается (отложено): `:has(...)`, `:not(complex)` со списком
+//! селекторов или combinator-ами, case-insensitive модификатор `[attr=val i]`,
+//! namespace prefix в селекторах, типизированные значения деклараций
+//! (length / color / calc).
 
 use std::cmp::Ordering;
 
@@ -87,6 +91,13 @@ pub enum PseudoClass {
     /// combinator-ы (CSS3 §6.6.7); `:not(:not(...))` тоже нельзя — поэтому
     /// аргумент хранится как `CompoundSelector`, не как полный селектор.
     Not(Box<CompoundSelector>),
+    /// `:is(s1, s2, …)` — матчит, если матчит хоть один из селекторов.
+    /// CSS4 Selectors §17. Specificity вычисляется как максимум по списку
+    /// (наследуется в родителя), независимо от того, какой именно матчит.
+    Is(Vec<ComplexSelector>),
+    /// `:where(s1, s2, …)` — то же, что `:is`, но specificity = 0 (всегда).
+    /// Полезно для default-стилей, которые легко перебить любым правилом.
+    Where(Vec<ComplexSelector>),
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
@@ -170,6 +181,13 @@ impl ComplexSelector {
     }
 }
 
+/// Максимум specificity среди списка ComplexSelector-ов. Используется для
+/// `:is(...)` (CSS4 §17): pseudo-class contributes specificity of the most
+/// specific item in its argument list.
+fn max_list_specificity(list: &[ComplexSelector]) -> Option<Specificity> {
+    list.iter().map(ComplexSelector::specificity).max()
+}
+
 fn accumulate_specificity(comp: &CompoundSelector, spec: &mut Specificity) {
     for part in &comp.parts {
         match part {
@@ -179,10 +197,19 @@ fn accumulate_specificity(comp: &CompoundSelector, spec: &mut Specificity) {
             }
             SimpleSelector::PseudoClass(pc) => {
                 // `:not(inner)` сам не считается, но содержимое — да (CSS3 §16).
-                if let PseudoClass::Not(inner) = pc {
-                    accumulate_specificity(inner, spec);
-                } else {
-                    spec.b = spec.b.saturating_add(1);
+                // `:is(...)` сам не считается, contributes max specificity по
+                // списку (CSS4 §17). `:where(...)` — всегда 0.
+                match pc {
+                    PseudoClass::Not(inner) => accumulate_specificity(inner, spec),
+                    PseudoClass::Is(list) => {
+                        if let Some(max) = max_list_specificity(list) {
+                            spec.a = spec.a.saturating_add(max.a);
+                            spec.b = spec.b.saturating_add(max.b);
+                            spec.c = spec.c.saturating_add(max.c);
+                        }
+                    }
+                    PseudoClass::Where(_) => {} // contributes 0
+                    _ => spec.b = spec.b.saturating_add(1),
                 }
             }
             SimpleSelector::Type(_) | SimpleSelector::PseudoElement(_) => {
@@ -417,7 +444,9 @@ impl<'a> Parser<'a> {
             // либо просто whitespace (descendant), либо ничего (значит конец).
             let had_ws = self.skip_ws_and_comments_track();
             match self.peek() {
-                None | Some(',') | Some('{') | Some('}') => break,
+                // `)` — конец списка внутри функционального pseudo (`:is(...)` /
+                // `:where(...)`); вне его `)` не появляется в правильном CSS.
+                None | Some(',') | Some('{') | Some('}') | Some(')') => break,
                 Some('>') => {
                     self.consume();
                     self.skip_ws_and_comments();
@@ -659,6 +688,23 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 Some(PseudoClass::Not(Box::new(inner)))
+            }
+            "is" => {
+                let list = self.parse_selector_list();
+                self.skip_ws_and_comments();
+                // Должны быть на `)`; иначе argument невалиден.
+                if self.peek() != Some(')') || list.is_empty() {
+                    return None;
+                }
+                Some(PseudoClass::Is(list))
+            }
+            "where" => {
+                let list = self.parse_selector_list();
+                self.skip_ws_and_comments();
+                if self.peek() != Some(')') || list.is_empty() {
+                    return None;
+                }
+                Some(PseudoClass::Where(list))
             }
             _ => None,
         }
@@ -1483,5 +1529,132 @@ mod tests {
             s.rules[0].selectors[0].specificity(),
             Specificity { a: 1, b: 0, c: 0 }
         );
+    }
+
+    // ──────────────── functional pseudo: :is, :where ────────────────
+
+    fn pseudo_at(s: &Stylesheet, rule: usize, sel: usize, part: usize) -> &PseudoClass {
+        match &s.rules[rule].selectors[sel].head.parts[part] {
+            SimpleSelector::PseudoClass(pc) => pc,
+            other => panic!("expected pseudo-class, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_is_class_list() {
+        let s = parse(":is(.foo, .bar) { color: red; }");
+        let pc = pseudo_at(&s, 0, 0, 0);
+        match pc {
+            PseudoClass::Is(list) => {
+                assert_eq!(list.len(), 2);
+                assert_eq!(list[0].head.parts, vec![SimpleSelector::Class("foo".into())]);
+                assert_eq!(list[1].head.parts, vec![SimpleSelector::Class("bar".into())]);
+            }
+            _ => panic!("expected :is(...), got {pc:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_where_class_list() {
+        let s = parse(":where(.foo, #bar) { color: red; }");
+        let pc = pseudo_at(&s, 0, 0, 0);
+        assert!(matches!(pc, PseudoClass::Where(list) if list.len() == 2), "got {pc:?}");
+    }
+
+    #[test]
+    fn pseudo_is_with_combinator_inside() {
+        // CSS4 разрешает combinator-ы внутри :is — в отличие от :not.
+        let s = parse(":is(a > b, c d) { color: red; }");
+        let pc = pseudo_at(&s, 0, 0, 0);
+        match pc {
+            PseudoClass::Is(list) => {
+                assert_eq!(list.len(), 2);
+                // a > b: head 'a', tail [(Child, 'b')]
+                assert_eq!(list[0].tail.len(), 1);
+                assert_eq!(list[0].tail[0].0, Combinator::Child);
+                // c d: head 'c', tail [(Descendant, 'd')]
+                assert_eq!(list[1].tail.len(), 1);
+                assert_eq!(list[1].tail[0].0, Combinator::Descendant);
+            }
+            _ => panic!("expected :is, got {pc:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_is_with_type_selector() {
+        let s = parse("article :is(h1, h2) { color: red; }");
+        let sel = &s.rules[0].selectors[0];
+        // head = 'article', tail = [(Descendant, compound{:is(h1, h2)})]
+        assert_eq!(sel.head.parts, vec![SimpleSelector::Type("article".into())]);
+        assert_eq!(sel.tail.len(), 1);
+        assert_eq!(sel.tail[0].0, Combinator::Descendant);
+        assert!(matches!(
+            &sel.tail[0].1.parts[0],
+            SimpleSelector::PseudoClass(PseudoClass::Is(list)) if list.len() == 2
+        ));
+    }
+
+    #[test]
+    fn pseudo_is_empty_falls_back() {
+        // `:is()` без аргументов — невалидно, должен дать Unsupported.
+        let s = parse(":is() { color: red; }");
+        let pc = pseudo_at(&s, 0, 0, 0);
+        assert!(matches!(pc, PseudoClass::Unsupported(n) if n == "is"), "got {pc:?}");
+    }
+
+    #[test]
+    fn pseudo_where_empty_falls_back() {
+        let s = parse(":where() { color: red; }");
+        let pc = pseudo_at(&s, 0, 0, 0);
+        assert!(matches!(pc, PseudoClass::Unsupported(n) if n == "where"), "got {pc:?}");
+    }
+
+    #[test]
+    fn specificity_is_takes_max_of_list() {
+        // :is(.foo, #bar) → max = (#bar) = (1,0,0).
+        let s = parse(":is(.foo, #bar) { color: red; }");
+        assert_eq!(
+            s.rules[0].selectors[0].specificity(),
+            Specificity { a: 1, b: 0, c: 0 }
+        );
+    }
+
+    #[test]
+    fn specificity_is_only_classes() {
+        // :is(.foo, .bar) → max = (0,1,0).
+        let s = parse(":is(.foo, .bar) { color: red; }");
+        assert_eq!(
+            s.rules[0].selectors[0].specificity(),
+            Specificity { a: 0, b: 1, c: 0 }
+        );
+    }
+
+    #[test]
+    fn specificity_where_always_zero() {
+        // :where(#x) → 0,0,0 даже при id внутри.
+        let s = parse(":where(#x) { color: red; }");
+        assert_eq!(
+            s.rules[0].selectors[0].specificity(),
+            Specificity { a: 0, b: 0, c: 0 }
+        );
+    }
+
+    #[test]
+    fn specificity_where_combined_with_outer() {
+        // `p:where(#x)` → p (c=1), :where contributes 0 → (0,0,1).
+        let s = parse("p:where(#x) { color: red; }");
+        assert_eq!(
+            s.rules[0].selectors[0].specificity(),
+            Specificity { a: 0, b: 0, c: 1 }
+        );
+    }
+
+    #[test]
+    fn pseudo_is_with_whitespace_around_list() {
+        // Внутри `:is( .foo , .bar )` бывают пробелы — парсер не должен терять
+        // последний селектор из-за trailing whitespace перед `)`.
+        let s = parse(":is( .foo , .bar ) { color: red; }");
+        let pc = pseudo_at(&s, 0, 0, 0);
+        assert!(matches!(pc, PseudoClass::Is(list) if list.len() == 2), "got {pc:?}");
     }
 }
