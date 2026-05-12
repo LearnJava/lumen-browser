@@ -144,6 +144,16 @@ fn default_display(doc: &Document, node: NodeId) -> Display {
         return Display::Block;
     };
     match name.local.as_str() {
+        // <head> и его метаданные никогда не рендерятся как видимый контент.
+        // В реальных браузерах это поведение через user-agent stylesheet
+        // (`head { display: none; }` и т.д.). У нас встроено в layout-default-ы
+        // до появления полноценного UA stylesheet.
+        "head" | "title" | "style" | "script" | "meta" | "link" | "base" | "noscript" => {
+            Display::None
+        }
+        // Inline-уровневые элементы. Phase 0: пока трактуем как block до
+        // появления inline-flow с line boxes — текст внутри `<a>`/`<span>`
+        // будет на своей строке. Это известное ограничение.
         "a" | "span" | "b" | "i" | "em" | "strong" | "code" | "small" | "sub" | "sup"
         | "label" | "abbr" | "cite" | "q" | "mark" | "u" => Display::Inline,
         _ => Display::Block,
