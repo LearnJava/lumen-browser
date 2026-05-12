@@ -245,15 +245,200 @@ git branch -d text-rendering
 
 ## Статус реализации — поддерживай актуальным
 
-В шапке [`lumen-plan.md`](lumen-plan.md) — блок **«Статус реализации»**. Условные обозначения:
+В шапке [`lumen-plan.md`](lumen-plan.md) — блок **«Статус реализации»**. Условные обозначения: ✅ готово · 🟡 в работе / частично · ⬜ запланировано.
 
-- ✅ готово
-- 🟡 в работе / частично
-- ⬜ запланировано
+**Правило:** когда коммит реализует пункт плана, маркер в этом блоке обновляется в **том же коммите**, что и сама реализация. Не отдельным коммитом. Аналогично в **§16 Фазы** — маркеры рядом с конкретными задачами фазы.
 
-**Правило:** когда коммит реализует пункт плана, маркер в этом блоке обновляется в **том же коммите**, что и сама реализация. Не отдельным коммитом.
+Ниже — детальный срез состояния каждой подсистемы (на момент последнего обновления CLAUDE.md). Чтобы знать точное «сейчас» — смотри `git log --oneline | head -10` и упомянутый блок статуса в плане.
 
-Аналогично в **§16 Фазы** — маркеры рядом с конкретными задачами фазы.
+---
+
+## Состояние подсистем (детально)
+
+### `lumen-core` ✅ (фундамент стабилен)
+
+- Типы: `Error`, `Result<T>`, `Url`, `Event` (TabCreated/Closed, Navigation, PageLoaded, RequestStarted/Completed/Blocked), `TabId`, `Capability`, `CapabilityToken`, `Module` trait.
+- Геометрия: `Rect`, `Point`, `Size`.
+- `lumen-core::ext` — определённые trait-точки расширения: `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`.
+- В комментариях задокументированы будущие trait-точки: `WindowingBackend`, `RenderBackend`, `TlsBackend`, `JsRuntime`, `FontProvider`, `HyphenationEngine`, `DnsResolver`, `Hasher`. Тело trait-а добавим при первой реализации.
+- 3 теста (url parsing).
+
+### `lumen-dom` ✅ (полный API на текущий scope)
+
+- Arena-based: `Vec<Node>` + `NodeId(u32)`. Нет `Rc/RefCell`, нет циклов.
+- Типы: `Document`, `Node` (parent + children + data), `NodeData` (Document / Doctype / Element / Text / Comment), `QualName`, `Namespace` (HTML/SVG/MathML/Xml/XmlNs/XLink), `Attribute`.
+- API: `create_element / create_text / create_comment / create_doctype`, `append_child`, `detach`, `get / get_mut`, `root`, `len`.
+- `Display` impl печатает дерево с отступами — для отладки.
+- 7 тестов, включая cyrillic-инварианты.
+
+### `lumen-html-parser` 🟡 (минимум)
+
+- **Готово:** iterator-based FSM (Tokenizer); состояния Data, TagOpen, TagName, EndTag, BeforeAttributeName, AttributeName, AfterAttributeName, BeforeAttributeValue, AttributeValue (quoted/unquoted), SelfClosingStartTag, MarkupDeclarationOpen, Comment, CommentEnd. Character references: `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`, `&nbsp;`, numeric `&#NNN;` / `&#xHHHH;`. Lenient tree builder с void-элементами и self-closing.
+- **Отложено:** DOCTYPE-разбор (пропускаем содержимое), CDATA, raw-text mode для `<script>` / `<style>` (сейчас они парсятся «как текст» — это работает потому что внутри них нет угловых скобок, но не по spec), полный набор named character references (~2000 в HTML5 spec), insertion modes (in_table, in_select, in_caption, и т.д.).
+- 31 тест.
+
+### `lumen-css-parser` 🟡 (минимум)
+
+- **Готово:** `selector_list { decl_list }` парсинг, селекторы Type / Class / Id / Universal, декларации как пары строк (property, value), lenient recovery (битая декларация не валит правило), комментарии `/* */`, пропуск `@`-правил (`@import`, `@media`) включая вложенные блоки.
+- **Отложено:** pseudo-classes / pseudo-elements, combinators (`>`, ` `, `+`, `~`), attribute selectors `[name=val]`, типизированные значения (color/length/calc/gradient), специфичность, `!important` как отдельное поле декларации.
+- 20 тестов, включая cyrillic class `.привет`.
+
+### `lumen-layout` 🟡 (block-only)
+
+- **Готово:** `LayoutBox` дерево, style cascade (last-rule-wins без specificity), селекторы type/class/id/universal с matchom через классов через split_whitespace. Наследуемые свойства: `color`, `font-size`, `line-height`. Свойства с парсингом: `display` (block/inline/none), `color` (named 10 цветов + `#RRGGBB` + `#RGB`), `background-color`, `font-size`, `line-height`, `margin` (+ 4 стороны), `padding` (+ 4 стороны). Whitespace-only текстовые узлы и комментарии пропускаются.
+- **Отложено:** inline-флоу с line boxes (сейчас inline-элементы трактуются как block — текст внутри `<a>` получает свою строку), flex, grid, float, абсолютное позиционирование, units кроме px (em / rem / % не поддерживаются), функции color (rgb/hsl/rgba), `box-sizing`, borders.
+- 17 тестов, включая nested inheritance и кириллический class selector.
+
+### `lumen-paint` 🟡 (fill rects + textured text)
+
+- **Готово:** `DisplayCommand` enum (FillRect, DrawText), `build_display_list` обход LayoutBox с painter's order. wgpu Renderer с двумя pipeline-ами: fill (vertex pos + color) и text (vertex pos + uv + color). Два WGSL-шейдера, общий uniform (viewport), bind group для атласа (R8 texture + linear sampler). `GlyphAtlas` 512×512 со shelf packer-ом. Per-glyph metadata кеш (atlas position + left/top offset + advance_native). При frame: парсинг font, walk DrawText → cmap → ensure atlas → emit textured quad. Atlas заливается на GPU только при dirty.
+- **Отложено:** snapshot-тесты на display list / pixel buffer, multi-size atlas (сейчас один размер растеризации — 24px, display масштабируется linear sampler-ом), GPU-pipeline для скруглений/градиентов/теней, layer-tree compositor.
+- 17 тестов (9 display_list + 8 atlas).
+
+### `lumen-font` 🟡 (TTF read + raster)
+
+- **Готово:** парсеры таблиц head, maxp, cmap (format 4), hhea, hmtx, loca, glyf. Glyf обрабатывает simple-глифы (контуры с on-curve / off-curve, квадратичные Безье) и **composite-глифы** (ссылки на другие глифы с 2×2 transform + offset). `Font::glyph_resolved` рекурсивно разворачивает composite в Simple с max-depth 8. Scanline-растеризатор с 4×4 supersampling, even-odd fill, 1px padding. `Bitmap` с метриками left/top для placement. Bundled Inter v4.1 Regular.
+- **Отложено:** cmap format 12 (Unicode SMP/SIP — эмодзи), hinting (TT-инструкции), GSUB/GPOS (advanced shaping для лигатур, kerning, Arabic/Indic), CFF outlines (для PostScript-OpenType `.otf` без TT-таблиц), variable fonts (fvar/gvar/avar/HVAR), color glyphs (COLR/CPAL, sbix), bitmap strikes (EBDT/EBLC), composite с ARGS_ARE_XY_VALUES=0 (point alignment, рудимент — сейчас offset = (0,0)).
+- 60 unit-тестов + 9 интеграционных на bundled Inter. Включает тест на composite кириллической `А`.
+
+### `lumen-shell` 🟡 (окно + рендер)
+
+- **Готово:** winit 0.30 с `ApplicationHandler` API. Два режима: `lumen` (пустое окно 1024×720) и `lumen <path.html>` (парсит HTML, извлекает `<style>` через walk DOM, парсит CSS, layout, paint, рисует фоны + текст в окне через `Renderer::render`). Inter-Regular.ttf bundled через `include_bytes!` (~411 КБ к binary). Обработчики Resized + RedrawRequested.
+- **Отложено:** вкладки, омнибокс, навигация, истории сессий, бэка для CSS-загрузки внешних файлов через `<link>`, scroll, обработка input-событий.
+- Авто-тестов нет (визуальная проверка через `cargo run`). Snapshot-тесты для рендера — TODO.
+
+### Инфраструктура
+
+- Cargo workspace, edition 2024, resolver 3, MSRV 1.95.
+- 8 крейтов в `crates/`: shell, core, engine/{html-parser, css-parser, dom, layout, paint, font}.
+- Bundled assets: `assets/fonts/Inter-Regular.ttf` (+ OFL.txt лицензия).
+- Тестовая страница: `samples/page.html` со встроенным `<style>`.
+- 4 разрешённых внешних зависимости: `winit = "0.30"`, `wgpu = "26"`, `rustls` (зарезервирована, не подключена), JS engine (зарезервирована).
+- Внутренние deps: workspace.dependencies на 8 крейтов.
+- `.gitattributes` форсит LF для всех текстовых файлов; binary-метка для `.ttf / .png / .woff2`.
+- `.gitignore` игнорирует `/target`, `/*.zip`, `/*.tar*`, `.idea/`, `.vscode/`, swap-файлы.
+
+### Численно
+
+- **Всего тестов в workspace:** 159 (на момент последнего обновления).
+- **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
+- **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
+- **Транзитивно через wgpu/winit:** ~200 crates.
+
+---
+
+## Roadmap — что предстоит реализовать
+
+Приоритизированный список. Порядок может меняться, ориентируйся на план §16 «Фазы».
+
+### Ближайшее (закрывает Phase 0)
+
+1. **Inline-flow / line wrapping** — текст переносится по словам, не обрезается на краю rect-а. Layout получает line boxes; paint обрабатывает несколько строк per text node.
+2. **Encoding detection** (§10.1) — cp1251 / KOI8-R / CP866. Сейчас shell принимает только UTF-8 файл (panic при не-UTF-8).
+3. **HTTP/1.1 + TLS client через rustls** — загрузка внешних страниц. Активация exception #3. Новый крейт `lumen-network`.
+4. **Snapshot-тесты для paint** — гарантия от регрессии визуального вывода. Сериализация display list + diff. Можно сделать сейчас, не дожидаясь больших фич.
+5. **Inline elements в layout** (`<a>`, `<span>`, `<em>`, `<strong>`) — сейчас трактуются как block. Нужны line boxes как часть inline-flow.
+
+### Средний приоритет (Phase 1+)
+
+6. **CSS combinators / pseudo-classes** — `descendant`, `>`, `:hover`, `:first-child`, `[attr=val]`.
+7. **Cmap format 12** — Unicode SMP/SIP (эмодзи, math symbols, исторические письменности).
+8. **`lumen-storage` крейт** — KV-store для cookies, history, profile data. Свой минимальный B-tree или in-memory + JSON snapshot для Phase 0-1.
+9. **Tab session export / import** (§12.7) — JSON serialize. Простое, экономит много боли.
+10. **Картинки на страницах** — `<img>` рендеринг. Нужны PNG/JPEG декодеры (свои, по §5).
+
+### Большое (Phase 2+)
+
+11. **QuickJS интеграция через `rquickjs`** — exception #4. Базовое исполнение JS. `lumen-core::ext::JsRuntime` trait.
+12. **`lumen-knowledge` крейт** (§12.1-12.4) — FTS-индекс над историей и заметками, omnibox-префиксы `@history` / `@notes` / `@tabs` / `@read-later`.
+13. **CSS Grid + полный Flexbox** в layout.
+14. **HTTP/2** поверх свои rustls-based транспорта.
+15. **DoH / DoT resolver** в network-слое.
+16. **Site isolation** (process per origin) — `lumen-renderer` процесс отдельно от shell.
+17. **Profiles + шифрование** (§9.3) — XChaCha20-Poly1305, Argon2id KDF.
+18. **Focus mode** (§12.6) — UI feature, не требует новых крейтов.
+19. **Кастомизация UI** (§12.10) — drag&drop панелей, темы.
+
+### Очень большое (Phase 3+)
+
+20. **V8 переход** с `rusty_v8`. Реализуем `JsRuntime` для V8, не ломая QuickJS path.
+21. **`lumen-ai` крейт** (§12.5) — embedding + RAG + опциональный LLM-backend через Ollama HTTP или встроенный llama.cpp.
+22. **Семантические закладки** (§12.8) — требует §12.5.
+23. **Service Workers**, Canvas 2D, IndexedDB.
+24. **WebFonts через WOFF2** в `lumen-font`.
+
+### Не приоритет, держим в голове
+
+- Variable fonts (fvar/gvar/avar/HVAR) в `lumen-font`.
+- GSUB/GPOS shaping (для арабского, индийского, тайского). Текущая позиция — добавим как exception #5 (rustybuzz) или сами для базовых случаев. См. анализ qwen.ai и обсуждение в плане.
+- ADR-инфраструктура (`docs/decisions/`) — формализация decisions log.
+- StorageBackend trait: добавить origin partitioning параметр (`(origin, top_level_site)`) ДО первой реализации, чтобы не переделывать.
+- Snapshot-тесты для layout (insta crate или собственный diff).
+- Composite glyphs с ARGS_ARE_XY_VALUES=0 (point alignment) — для битых старых шрифтов.
+
+---
+
+## Decisions log
+
+Это короткие записи решений и их обоснования. Полные обсуждения — в commit-сообщениях и плане.
+
+### Зафиксированные
+
+- **Свой rendering engine** (не обёртка над Chromium/WebKit/Servo). Главное идеологическое решение, без него проект теряет смысл. Закреплено в §1 принципах.
+- **4 разрешённых external dependencies:** winit, wgpu, rustls, JS engine. Подробное обоснование каждого — в §5 плана. Любой пятый — только через коммит с пунктом «Why this dependency» в теле + обновление CLAUDE.md и плана.
+- **Composite glyphs разворачиваются** через `Font::glyph_resolved` с max recursion depth = 8. Renderer вызывает `glyph_resolved`, не `glyph` напрямую.
+- **Atlas размер растеризации фиксирован на 24px**, display масштабируется через quad scale + linear sampler. Multi-size atlas — позже, когда увидим, что качество критично.
+- **Inter Regular bundled** через `include_bytes!` в lumen-shell (~411 КБ к binary). Не runtime-loading, чтоб не было path-проблем.
+- **WASM плагины через wasmtime** — выбор сделан в §11.2 vs native dylib / WebExtensions. Решает проблему prompt-injection-class уязвимостей через capability tokens.
+- **Capability-модель** для плагинов вместо статических permissions (§11.4).
+- **Memory-safe Rust, `unsafe` только на FFI-границах** с обязательным `// SAFETY:` комментарием. Текущие `unsafe` блоки: `as_bytes` в renderer.rs, FFI к wgpu внутри wgpu crate (не наш код).
+- **Feature-branch + `--no-ff` merge** workflow. Видимая структура «коммит-серия = задача» в git log --graph.
+- **`opt-level = 1` в dev профиле** — компромисс: debug-сборка чуть медленнее, но layout/paint работают в 5-10 раз быстрее. Стандарт в графических Rust-проектах.
+- **Cargo features пока не используются**, но запланированы для `ai`, `webgl`, `tor`, `ru-hyphenation` опциональных модулей.
+
+### Открытые вопросы (решим, когда упрёмся)
+
+- **AI backend:** Ollama HTTP API (нулевая интеграция, требует, чтобы у пользователя был Ollama) ИЛИ встроенный llama.cpp через FFI (5-е exception, нет внешних зависимостей у пользователя). Откладываем до Phase 3.
+- **Shaping для сложных скриптов** (Arabic/Indic/Thai): свой shaper за месяцы или rustybuzz как 5-е exception. Откладываем до Phase 2-3.
+- **iOS:** Apple-policy требует WebKit на iPhone/iPad. Это противоречит принципу собственного движка. Возможный путь — тонкий shell поверх WKWebView только для iOS, остальные ОС — наш движок. Откладываем до Phase 4.
+- **Storage partitioning в StorageBackend trait:** текущая сигнатура `get/put(key)` не принимает origin. Нужно обновить ДО первой реализации (`get/put(origin, top_level_site, key)`), иначе ретрофит будет болезненным.
+
+### Намеренно отвергнутые альтернативы
+
+- **WebView2 / wry / CEF обёртка** — это другой проект, не Lumen. Отказались.
+- **html5ever / cssparser / taffy / image / encoding_rs / ttf-parser / rustybuzz / tokio / rayon / redb / egui** — все эти crates рассмотрены и **не взяты**: для них пишется свой код по принципу «default — своё». См. зачёркнутый список в §5.
+
+---
+
+## История последних merge-ов
+
+Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
+
+```
+*   7811eee  composite-glyphs       — TTF composite + Font::glyph_resolved → кириллица 'А' рисуется
+*   a9a9278  claude-md              — этот файл, первая версия
+*   be0bdee  knowledge-layer-plan   — §12 «Уникальные фичи Lumen» в плане (11 фич)
+*   60c617d  text-rendering         — TTF parser + scanline raster + glyph atlas + text в окне
+*   0bd59b1                          wgpu растеризатор окна (на main до ветки text-rendering)
+*   5c81bf7                          Display list в lumen-paint
+*   ceddb9d                          Block-flow layout + style cascade
+*   a38d940                          Минимальный CSS-парсер
+*   58782ce                          shell + html-parser связка (dump mode)
+*   60b05bf                          Чистка нежелательного слова из всех артефактов
+*   c8bbcbb                          Минимальный HTML-парсер
+*   29d74c3                          Политика «default — своё» зафиксирована
+*   74b73b4                          Блок «Статус реализации» добавлен в план
+*   173cdbb                          Замена lumen-common на lumen-core
+*   d014809                          §11 Модульность и плагины в план
+*   45e419e                          Окно через winit (первая версия)
+*   c7e4ce9                          Тесты с кириллицей в DOM
+*   6f93f57                          Russian language first-class (§10)
+*   36fd7e0                          Arena-based DOM
+*   83ddaf0                          .gitattributes
+*   fbb4875                          Initial workspace setup
+```
+
+`git log --oneline --graph -20` всегда даст самую свежую картинку. Этот список обновляй, когда мерджишь крупное.
 
 ---
 
@@ -282,7 +467,7 @@ git branch -d text-rendering
 - **Cargo.lock коммитится** (workspace включает binary).
 - **Line endings:** `.gitattributes` форсит LF в репо. Если Git ругается на CRLF→LF — это норма, не паникуй.
 - **Архивы в корне репо игнорируются** (`/*.zip`, `/*.tar*`). Если пользователь скачал что-то — оно не попадёт в коммит случайно.
-- **Composite glyphs в TTF пока пропускаются.** Cyrillic `'А'` (заглавная) в Inter — composite, переиспользует Latin `'A'`. Уникальные кириллические буквы (`Я`, `ж`, `п`) — Simple, рисуются. Composite-парсер — TODO в `lumen-font/glyf.rs`.
+- **Composite glyphs теперь поддерживаются** через `Font::glyph_resolved` (с max recursion depth 8). Кириллические заглавные `А / В / Е / К / М / Н / О / Р / С / Т / Х` (которые в Inter composite через Latin-эквиваленты) и их строчные — рендерятся. Renderer вызывает `glyph_resolved`, не `glyph` напрямую.
 - **Тесты в `lumen-paint::display_list` и `lumen-paint::atlas`** — это unit-тесты. Renderer (`renderer.rs`) визуальный, без автотестов; проверяй через `cargo run`. Snapshot-тесты для display list — TODO.
 - **`font_size` влияет на масштаб quad-а, но не на разрешение растеризации.** Глифы всегда рисуются на 24 px и масштабируются. Это компромисс Phase 0 — multi-size atlas позже.
 
