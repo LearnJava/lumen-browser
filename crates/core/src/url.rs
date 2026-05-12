@@ -35,7 +35,7 @@ mod tests {
 
     #[test]
     fn parse_simple() {
-        assert!(Url::parse("https://wikipedia.org").is_ok());
+        assert!(Url::parse("https://example.com").is_ok());
     }
 
     #[test]
