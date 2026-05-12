@@ -247,6 +247,9 @@ impl PartialOrd for Specificity {
 pub struct Declaration {
     pub property: String,
     pub value: String,
+    /// `!important` флаг (CSS Cascade L4 §8.1). При равной specificity
+    /// `important = true` побеждает `important = false`.
+    pub important: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -830,9 +833,11 @@ impl<'a> Parser<'a> {
         }
         self.consume();
         let value = self.parse_value_until_terminator();
+        let (value, important) = extract_important(value.trim());
         Some(Declaration {
             property,
-            value: value.trim().to_string(),
+            value,
+            important,
         })
     }
 
@@ -860,6 +865,30 @@ impl<'a> Parser<'a> {
         }
         s
     }
+}
+
+/// CSS Cascade L4 §8.1: если значение оканчивается на `!important` (с
+/// опциональным whitespace между `!` и словом, ASCII case-insensitive),
+/// отделяет его и возвращает `(clean_value, true)`. Иначе — `(value, false)`.
+///
+/// Безопасно для строковых литералов: `content: "!important"` даёт
+/// (value=`"!important"`, false), потому что после строки идёт `"`, а не
+/// `important`. Не пытается обрабатывать комментарии внутри `!important`
+/// (`!/* x */important`) и multiple `!important` — оба слишком экзотичны.
+fn extract_important(value: &str) -> (String, bool) {
+    let v = value.trim_end();
+    let imp = b"important";
+    if v.len() < imp.len() {
+        return (value.to_string(), false);
+    }
+    if !v.as_bytes()[v.len() - imp.len()..].eq_ignore_ascii_case(imp) {
+        return (value.to_string(), false);
+    }
+    let before_imp = v[..v.len() - imp.len()].trim_end();
+    let Some(before_bang) = before_imp.strip_suffix('!') else {
+        return (value.to_string(), false);
+    };
+    (before_bang.trim_end().to_string(), true)
 }
 
 fn is_ident_start(c: char) -> bool {
@@ -979,6 +1008,79 @@ mod tests {
         assert_eq!(s.rules[0].declarations[1].value, "14px");
     }
 
+    // ──────────────── !important (CSS Cascade L4 §8.1) ────────────────
+
+    #[test]
+    fn declaration_default_not_important() {
+        let s = parse("p { color: red; }");
+        assert!(!s.rules[0].declarations[0].important);
+        assert_eq!(s.rules[0].declarations[0].value, "red");
+    }
+
+    #[test]
+    fn declaration_important_basic() {
+        let s = parse("p { color: red !important; }");
+        let d = &s.rules[0].declarations[0];
+        assert!(d.important);
+        assert_eq!(d.value, "red");
+    }
+
+    #[test]
+    fn declaration_important_no_space_before_bang() {
+        let s = parse("p { color: red!important; }");
+        let d = &s.rules[0].declarations[0];
+        assert!(d.important);
+        assert_eq!(d.value, "red");
+    }
+
+    #[test]
+    fn declaration_important_case_insensitive() {
+        let s = parse("p { color: red !IMPORTANT; }");
+        assert!(s.rules[0].declarations[0].important);
+    }
+
+    #[test]
+    fn declaration_important_with_whitespace_between_bang_and_word() {
+        // CSS Syntax §5.5.4 разрешает whitespace внутри `!important`.
+        let s = parse("p { color: red !  important; }");
+        assert!(s.rules[0].declarations[0].important);
+        assert_eq!(s.rules[0].declarations[0].value, "red");
+    }
+
+    #[test]
+    fn declaration_important_inside_quotes_not_stripped() {
+        // `content: "!important"` — литерал, не модификатор.
+        let s = parse(r#"p { content: "!important"; }"#);
+        let d = &s.rules[0].declarations[0];
+        assert!(!d.important);
+        assert_eq!(d.value, r#""!important""#);
+    }
+
+    #[test]
+    fn declaration_important_after_quoted_value() {
+        // `font-family: "Arial" !important;` — флаг есть, value сохраняется.
+        let s = parse(r#"p { font-family: "Arial" !important; }"#);
+        let d = &s.rules[0].declarations[0];
+        assert!(d.important);
+        assert_eq!(d.value, r#""Arial""#);
+    }
+
+    #[test]
+    fn declaration_important_works_for_multiple() {
+        let s = parse("p { color: red !important; font-size: 14px; }");
+        assert!(s.rules[0].declarations[0].important);
+        assert!(!s.rules[0].declarations[1].important);
+    }
+
+    #[test]
+    fn declaration_value_ending_with_important_word_alone_not_flag() {
+        // `value: important;` — без `!`, не флаг.
+        let s = parse("p { font-weight: important; }");
+        let d = &s.rules[0].declarations[0];
+        assert!(!d.important);
+        assert_eq!(d.value, "important");
+    }
+
     #[test]
     fn trailing_semicolon_optional() {
         let with = parse("p { color: red; }");
@@ -1052,12 +1154,6 @@ mod tests {
         let s = parse("p { margin: -10px; background: url(\"a.png\"); }");
         assert_eq!(s.rules[0].declarations[0].value, "-10px");
         assert_eq!(s.rules[0].declarations[1].value, "url(\"a.png\")");
-    }
-
-    #[test]
-    fn important_kept_in_value() {
-        let s = parse("p { color: red !important; }");
-        assert_eq!(s.rules[0].declarations[0].value, "red !important");
     }
 
     #[test]

@@ -247,9 +247,12 @@ pub fn compute_style(
     }
 
     // Собираем все matched declarations с их sort key:
-    // (specificity, rule_order, decl_index). Затем применяем в этом порядке —
-    // более поздние/более специфичные перекрывают предыдущие.
-    let mut matched: Vec<(Specificity, usize, usize, &Declaration)> = Vec::new();
+    // (important, specificity, rule_order, decl_index). `important` идёт
+    // первым: после ascending sort `true > false`, поэтому !important идёт в
+    // конец и побеждает normal даже при меньшей specificity (CSS Cascade L4
+    // §8.1). Внутри одного origin `important = false` сначала разрешается
+    // обычный каскад, потом тот же каскад применяется поверх с !important.
+    let mut matched: Vec<(bool, Specificity, usize, usize, &Declaration)> = Vec::new();
     for (rule_idx, rule) in sheet.rules.iter().enumerate() {
         let mut best: Option<Specificity> = None;
         for complex in &rule.selectors {
@@ -263,23 +266,23 @@ pub fn compute_style(
         }
         if let Some(spec) = best {
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                matched.push((spec, rule_idx, decl_idx, decl));
+                matched.push((decl.important, spec, rule_idx, decl_idx, decl));
             }
         }
     }
-    matched.sort_by_key(|&(spec, rule_idx, decl_idx, _)| (spec, rule_idx, decl_idx));
+    matched.sort_by_key(|&(imp, spec, rule_idx, decl_idx, _)| (imp, spec, rule_idx, decl_idx));
 
     // Pre-pass: применяем font-size раньше, потому что em/% других свойств
     // считаются относительно computed font-size этого же элемента, а em для
     // самого font-size — относительно inherited (родительского) font-size.
     let parent_fs = inherited.font_size;
-    for (_, _, _, decl) in &matched {
+    for (_, _, _, _, decl) in &matched {
         apply_font_size(&mut style, decl, parent_fs);
     }
 
     // Main-pass: остальные декларации; em-basis теперь = current font_size.
     let em_basis = style.font_size;
-    for (_, _, _, decl) in &matched {
+    for (_, _, _, _, decl) in &matched {
         apply_declaration(&mut style, decl, em_basis);
     }
 
