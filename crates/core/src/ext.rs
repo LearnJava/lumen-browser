@@ -43,9 +43,25 @@ pub trait EncodingDetector: Send + Sync {
     fn detect(&self, bytes: &[u8], content_type_hint: Option<&str>) -> Option<&'static str>;
 }
 
-// Точки расширения, спроектированные, но без интерфейса до Phase 1+:
+// Точки расширения, спроектированные, но без интерфейса до Phase 1+.
 //
-// - JsRuntime         — мост к JS-движку (QuickJS / V8). Phase 1.
-// - RenderBackend     — растеризация (tiny-skia / wgpu). Phase 0–1.
+// Trait-ы для четырёх «разрешённых exceptions» из §5 (внешние зависимости,
+// которые мы используем): каждая зависимость прячется за свой trait,
+// чтобы при желании можно было swap-нуть на свою реализацию.
+//
+// - WindowingBackend  — OS event loop + окна. Первая реализация: winit.
+// - RenderBackend     — GPU-абстракция. Первая реализация: wgpu.
+// - TlsBackend        — TLS / X.509 / симметричная криптография. Первая
+//                       реализация: rustls. Своя — security antipattern;
+//                       абстракция нужна только для swap на системный TLS
+//                       (SChannel / Network.framework).
+// - JsRuntime         — исполнение JavaScript. Реализации: QuickJS (v0.5),
+//                       V8 (v1.0+).
+//
+// Остальные точки расширения без выбранной зависимости — пишем свои
+// реализации сразу:
+//
 // - FontProvider      — поиск шрифтов с поддержкой кириллицы. Phase 1.
 // - HyphenationEngine — переносы слов для CSS hyphens. Phase 2.
+// - DnsResolver       — DNS, включая DoH/DoT. Phase 1.
+// - Hasher            — единый интерфейс хэшей (для CSP, SRI). Phase 1.
