@@ -4,6 +4,9 @@
 //! - `lumen` — открыть пустое окно.
 //! - `lumen <path.html>` — распарсить файл, layout, paint.
 //! - `lumen <http(s)://...>` — загрузить страницу по сети, layout, paint.
+//!
+//! Внешние CSS: `<link rel="stylesheet" href="...">` загружается с диска или
+//! по сети — в зависимости от того, каким способом загружена страница.
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -78,29 +81,154 @@ fn load_url(url: &str) -> Result<DisplayList, Box<dyn Error>> {
     let lumen_url = Url::parse(url)?;
     let bytes = HttpClient::new().fetch(&lumen_url)?;
     println!("Получено {} байт", bytes.len());
-    render_bytes(&bytes, Some("text/html"))
+    render_bytes(&bytes, Some("text/html"), &ResourceBase::Url(url.to_owned()))
 }
 
 fn load_page(path: &PathBuf) -> Result<DisplayList, Box<dyn Error>> {
     let bytes = std::fs::read(path)?;
-    render_bytes(&bytes, None)
+    render_bytes(&bytes, None, &ResourceBase::File(path.clone()))
 }
 
-fn render_bytes(bytes: &[u8], content_type: Option<&str>) -> Result<DisplayList, Box<dyn Error>> {
-    // Кодировку определяем по BOM → <meta charset> → эвристике. Это покрывает
-    // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы, которые
-    // встречаются в архивах и исторической переписке.
+// ── Разрешение внешних ресурсов ──────────────────────────────────────────────
+
+/// Откуда загружена страница — нужно для разрешения относительных URL в `<link>`.
+enum ResourceBase {
+    /// Страница загружена из файла. `href` разрешается относительно директории файла.
+    File(PathBuf),
+    /// Страница загружена по URL. `href` разрешается относительно этого URL.
+    Url(String),
+}
+
+impl ResourceBase {
+    fn resolve(&self, href: &str) -> ResolvedResource {
+        if href.starts_with("http://") || href.starts_with("https://") {
+            return ResolvedResource::Url(href.to_owned());
+        }
+        match self {
+            ResourceBase::File(base_path) => {
+                let dir = base_path.parent().unwrap_or(std::path::Path::new("."));
+                ResolvedResource::File(dir.join(href))
+            }
+            ResourceBase::Url(base_url) => {
+                ResolvedResource::Url(resolve_url(base_url, href))
+            }
+        }
+    }
+}
+
+enum ResolvedResource {
+    File(PathBuf),
+    Url(String),
+}
+
+/// Разрешить относительный `href` относительно `base_url`.
+///
+/// "/style.css" -> "https://host/style.css"
+/// "css/a.css"  -> "https://host/path/css/a.css"
+fn resolve_url(base_url: &str, href: &str) -> String {
+    let (scheme, rest) = if let Some(r) = base_url.strip_prefix("https://") {
+        ("https://", r)
+    } else if let Some(r) = base_url.strip_prefix("http://") {
+        ("http://", r)
+    } else {
+        return href.to_owned();
+    };
+    let authority = rest.find('/').map(|i| &rest[..i]).unwrap_or(rest);
+    if href.starts_with('/') {
+        format!("{scheme}{authority}{href}")
+    } else {
+        let path = rest.find('/').map(|i| &rest[i..]).unwrap_or("/");
+        let dir = path.rfind('/').map(|i| &path[..=i]).unwrap_or("/");
+        format!("{scheme}{authority}{dir}{href}")
+    }
+}
+
+// ── Загрузка внешних CSS ─────────────────────────────────────────────────────
+
+fn load_linked_stylesheets(doc: &Document, base: &ResourceBase) -> String {
+    let mut hrefs = Vec::new();
+    collect_link_hrefs(doc, doc.root(), &mut hrefs);
+
+    let mut css = String::new();
+    for href in hrefs {
+        match base.resolve(&href) {
+            ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
+                Ok(content) => {
+                    println!("Загружен CSS: {}", path.display());
+                    css.push_str(&content);
+                    css.push('\n');
+                }
+                Err(e) => eprintln!("Пропуск CSS {}: {e}", path.display()),
+            },
+            ResolvedResource::Url(url) => {
+                use lumen_core::ext::NetworkTransport;
+                use lumen_core::url::Url;
+                use lumen_network::HttpClient;
+
+                match Url::parse(&url).and_then(|u| HttpClient::new().fetch(&u)) {
+                    Ok(bytes) => {
+                        let content = String::from_utf8_lossy(&bytes);
+                        println!("Загружен CSS: {url}");
+                        css.push_str(&content);
+                        css.push('\n');
+                    }
+                    Err(e) => eprintln!("Пропуск CSS {url}: {e}"),
+                }
+            }
+        }
+    }
+    css
+}
+
+fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>) {
+    let node = doc.get(id);
+    if let NodeData::Element { name, attrs } = &node.data
+        && name.local == "link"
+    {
+        let rel = attrs
+            .iter()
+            .find(|a| a.name.local == "rel")
+            .map(|a| a.value.as_str())
+            .unwrap_or("");
+        let href = attrs
+            .iter()
+            .find(|a| a.name.local == "href")
+            .map(|a| a.value.as_str())
+            .unwrap_or("");
+        if rel.split_ascii_whitespace().any(|r| r.eq_ignore_ascii_case("stylesheet"))
+            && !href.is_empty()
+        {
+            out.push(href.to_owned());
+        }
+        return;
+    }
+    for &child in &node.children {
+        collect_link_hrefs(doc, child, out);
+    }
+}
+
+// ── Рендер ───────────────────────────────────────────────────────────────────
+
+fn render_bytes(
+    bytes: &[u8],
+    content_type: Option<&str>,
+    base: &ResourceBase,
+) -> Result<DisplayList, Box<dyn Error>> {
+    // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
+    // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
     let encoding = lumen_encoding::detect(bytes, content_type);
     let source = lumen_encoding::decode(encoding, bytes);
     println!("Кодировка: {}", encoding.name());
 
     let doc = lumen_html_parser::parse(&source);
-    let css = extract_style_blocks(&doc);
+
+    // Встроенные <style> + внешние <link rel=stylesheet>.
+    let mut css = extract_style_blocks(&doc);
+    css.push_str(&load_linked_stylesheets(&doc, base));
+
     let sheet = lumen_css_parser::parse(&css);
     let viewport = Size::new(1024.0, 720.0);
 
-    // Создаём измеритель ширины символов для корректного line wrapping.
-    // INTER_FONT — 'static, поэтому Font<'static> → FontMeasurer<'static>.
     let font = lumen_font::Font::parse(INTER_FONT)
         .map_err(|e| format!("ошибка разбора шрифта: {e}"))?;
     let measurer = lumen_paint::FontMeasurer::new(&font)
@@ -141,6 +269,8 @@ fn walk_style_blocks(doc: &Document, id: NodeId, out: &mut String) {
         walk_style_blocks(doc, child, out);
     }
 }
+
+// ── Window + Renderer ────────────────────────────────────────────────────────
 
 struct Lumen {
     display_list: DisplayList,
@@ -201,5 +331,106 @@ impl ApplicationHandler for Lumen {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_url_absolute_path() {
+        let r = resolve_url("https://example.com/path/page.html", "/style.css");
+        assert_eq!(r, "https://example.com/style.css");
+    }
+
+    #[test]
+    fn resolve_url_relative_same_dir() {
+        let r = resolve_url("https://example.com/path/page.html", "style.css");
+        assert_eq!(r, "https://example.com/path/style.css");
+    }
+
+    #[test]
+    fn resolve_url_relative_subdirectory() {
+        let r = resolve_url("https://example.com/path/page.html", "css/main.css");
+        assert_eq!(r, "https://example.com/path/css/main.css");
+    }
+
+    #[test]
+    fn resolve_url_root_base() {
+        let r = resolve_url("https://example.com/", "style.css");
+        assert_eq!(r, "https://example.com/style.css");
+    }
+
+    #[test]
+    fn resolve_url_http_scheme() {
+        let r = resolve_url("http://localhost:8080/index.html", "/css/app.css");
+        assert_eq!(r, "http://localhost:8080/css/app.css");
+    }
+
+    #[test]
+    fn resource_base_url_absolute_href_passthrough() {
+        // Абсолютный href перехватывается в ResourceBase::resolve до вызова resolve_url.
+        let base = ResourceBase::Url("https://example.com/".to_owned());
+        let res = base.resolve("https://cdn.example.com/style.css");
+        match res {
+            ResolvedResource::Url(u) => assert_eq!(u, "https://cdn.example.com/style.css"),
+            ResolvedResource::File(_) => panic!("expected Url"),
+        }
+    }
+
+    #[test]
+    fn resource_base_file_resolves_relative() {
+        let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+        let res = base.resolve("style.css");
+        match res {
+            ResolvedResource::File(p) => {
+                assert_eq!(p, PathBuf::from("samples/style.css"));
+            }
+            ResolvedResource::Url(_) => panic!("expected File"),
+        }
+    }
+
+    #[test]
+    fn resource_base_file_absolute_url_passthrough() {
+        let base = ResourceBase::File(PathBuf::from("samples/page.html"));
+        let res = base.resolve("https://cdn.example.com/style.css");
+        match res {
+            ResolvedResource::Url(u) => assert_eq!(u, "https://cdn.example.com/style.css"),
+            ResolvedResource::File(_) => panic!("expected Url"),
+        }
+    }
+
+    #[test]
+    fn collect_link_hrefs_finds_stylesheet() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><head><link rel="stylesheet" href="style.css"></head><body></body></html>"#,
+        );
+        let mut hrefs = Vec::new();
+        collect_link_hrefs(&doc, doc.root(), &mut hrefs);
+        assert_eq!(hrefs, vec!["style.css"]);
+    }
+
+    #[test]
+    fn collect_link_hrefs_ignores_non_stylesheet() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><head><link rel="icon" href="favicon.ico"></head><body></body></html>"#,
+        );
+        let mut hrefs = Vec::new();
+        collect_link_hrefs(&doc, doc.root(), &mut hrefs);
+        assert!(hrefs.is_empty());
+    }
+
+    #[test]
+    fn collect_link_hrefs_multiple() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><head>
+                <link rel="stylesheet" href="a.css">
+                <link rel="stylesheet" href="b.css">
+            </head><body></body></html>"#,
+        );
+        let mut hrefs = Vec::new();
+        collect_link_hrefs(&doc, doc.root(), &mut hrefs);
+        assert_eq!(hrefs, vec!["a.css", "b.css"]);
     }
 }
