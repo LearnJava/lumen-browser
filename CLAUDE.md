@@ -319,9 +319,9 @@ git branch -d text-rendering
 
 ### `lumen-css-parser` 🟡 (полный набор CSS3-селекторов)
 
-- **Готово:** `selector_list { decl_list }` парсинг. Selectors Level 3: simple selectors (`Type`, `Class`, `Id`, `Universal`, `Attribute`, `PseudoClass`, `PseudoElement`), compound (`p.foo#bar:first-child`), complex с combinator-ами (descendant ` `, child `>`, next-sibling `+`, later-sibling `~`). Attribute-операторы: `=`, `~=`, `|=` (для `lang`), `^=`, `$=`, `*=`. **Structural pseudo:** `:first-child`, `:last-child`, `:only-child`, `:empty`, `:root`, `:first-of-type`, `:last-of-type`, `:only-of-type`. **Функциональные pseudo:** `:nth-child(an+b)`, `:nth-last-child(an+b)`, `:nth-of-type(an+b)`, `:nth-last-of-type(an+b)` с ключевыми словами `odd` / `even` (хранятся как `NthSpec { a, b }`, `.matches(index)` решает уравнение `i = a*n + b` при `n ≥ 0`). `:not(compound)` — отрицание; запрещены combinator-ы внутри и nested `:not(:not(...))`, такие формы дают `Unsupported`. Interactive (`:hover`, `:focus`, …) сохраняются как `Unsupported(name)` и при матчинге всегда возвращают false. Pseudo-elements `::name` парсятся отдельным узлом, никогда не матчат. **Specificity** по CSS3 §16: `:not` сам не считается, но содержимое contributes; pseudo-classes считаются как class. Декларации — как пары строк. Lenient recovery, комментарии `/* */`, пропуск `@`-правил.
-- **Отложено:** `:is(...)`, `:where(...)`, `:has(...)`, `:not(complex)` со списком селекторов или combinator-ами, case-insensitive `[attr=val i]`, namespace prefix в селекторах, типизированные значения деклараций (length / color / calc / `--var`), `!important` как отдельное поле.
-- 61 тест.
+- **Готово:** `selector_list { decl_list }` парсинг. Selectors Level 3: simple selectors (`Type`, `Class`, `Id`, `Universal`, `Attribute`, `PseudoClass`, `PseudoElement`), compound (`p.foo#bar:first-child`), complex с combinator-ами (descendant ` `, child `>`, next-sibling `+`, later-sibling `~`). Attribute-операторы: `=`, `~=`, `|=` (для `lang`), `^=`, `$=`, `*=`. **Structural pseudo:** `:first-child`, `:last-child`, `:only-child`, `:empty`, `:root`, `:first-of-type`, `:last-of-type`, `:only-of-type`. **Функциональные pseudo:** `:nth-child(an+b)`, `:nth-last-child(an+b)`, `:nth-of-type(an+b)`, `:nth-last-of-type(an+b)` с ключевыми словами `odd` / `even` (хранятся как `NthSpec { a, b }`, `.matches(index)` решает уравнение `i = a*n + b` при `n ≥ 0`). `:not(compound)` — отрицание; запрещены combinator-ы внутри и nested `:not(:not(...))`, такие формы дают `Unsupported`. **CSS4 `:is(selector-list)` и `:where(selector-list)`** — матчат, если матчит хоть один из селекторов; внутри разрешены любые complex-селекторы (combinator-ы, attribute, structural pseudo). Пустой список `:is()` / `:where()` → `Unsupported(name)`. Interactive (`:hover`, `:focus`, …) сохраняются как `Unsupported(name)` и при матчинге всегда возвращают false. Pseudo-elements `::name` парсятся отдельным узлом, никогда не матчат. **Specificity** по CSS3 §16 / CSS4 §17: `:not` сам не считается, contributes specificity внутреннего compound. `:is(...)` сам не считается, contributes максимум specificity по списку. `:where(...)` всегда 0. Прочие pseudo-classes считаются как class. Декларации — как пары строк. Lenient recovery, комментарии `/* */`, пропуск `@`-правил. Парсер `parse_complex_selector` прерывается также на `)`, чтобы корректно работать внутри функциональных pseudo.
+- **Отложено:** `:has(...)`, `:not(complex)` со списком селекторов или combinator-ами, case-insensitive `[attr=val i]`, namespace prefix в селекторах, типизированные значения деклараций (length / color / calc / `--var`), `!important` как отдельное поле.
+- 72 теста.
 
 ### `lumen-layout` 🟡 (block + inline-flow + word-wrap + cascade)
 
@@ -383,7 +383,7 @@ git branch -d text-rendering
 
 ### Численно
 
-- **Всего тестов в workspace:** 463 (на момент последнего обновления).
+- **Всего тестов в workspace:** 481 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -430,7 +430,7 @@ git branch -d text-rendering
 - StorageBackend trait: добавить origin partitioning параметр (`(origin, top_level_site)`) ДО первой реализации, чтобы не переделывать.
 - Composite glyphs с ARGS_ARE_XY_VALUES=0 (point alignment) — для битых старых шрифтов.
 - Полноценный selector-matching с back-tracking для complex-селекторов (текущий — right-to-left greedy, может промахиваться на патологических `a b c` с вложенными предками).
-- CSS4 pseudo-classes `:is(...)`, `:where(...)`, `:has(...)` — сейчас парсятся как `Unsupported`. `:nth-*` и `:not(compound)` уже работают.
+- CSS4 pseudo-class `:has(...)` — единственный из CSS4 functional pseudo, что остался; `:is(...)`, `:where(...)`, `:nth-*`, `:not(compound)` уже работают.
 
 ---
 
@@ -464,6 +464,7 @@ git branch -d text-rendering
 - **`InlineFrag.width` хранится в самом фрагменте, не вычисляется заново по тексту**. Альтернатива (recompute по chars + char_width в paint) потребовала бы прокидывать `TextMeasurer` в `build_display_list`, что нарушает текущую границу «paint не зависит от font». Хранение width-а — одно поле на фрагмент, заполняется в wrap_inline_run.
 - **`box-sizing` хранится в `ComputedStyle` как enum, ветвление — только в `lay_out`.** Альтернативой было передавать `BoxSizing` отдельным параметром или хранить уже посчитанные `rect.width = w` как «семантику», но смешивание моделей в одной точке (`if let Some(w) = s.width { match s.box_sizing { ... } }`) — единственный шаг, где модели расходятся, и держать его на месте чтения проще и читабельнее. `box-sizing` явно не наследуется в `compute_style` (сброс на ContentBox в каждом элементе), даже несмотря на отсутствие лишнего шага: иначе все потомки `div { box-sizing: border-box }` тихо ломали бы свой `width: 100%`. Анонимный `InlineRun` тоже сбрасывает box-sizing — у него `width` и `height` уже None, но иначе snapshot пачкается лишним полем.
 - **RAWTEXT state хранится как `Option<String>` в самом токенизаторе, а не как отдельное «состояние» в стиле full FSM.** Iterator-based архитектура у нас уже опирается только на `pos: usize` — добавлять явный `enum State` ради одного режима — overengineering. Поле `raw_text: Option<String>` ставится в `consume_start_tag` сразу после распознавания `<script>` / `<style>`, и проверяется в `next()` первой же веткой. `.take()` гарантирует, что режим всегда сбрасывается за один проход — даже если в теле не было `</tag` (тогда читаем до EOF и возвращаемся в обычное русло). `is_raw_text_element(name)` — отдельная функция: её удобно расширять для будущих RCDATA-тегов и не приходится править `next()`. Self-closing `<script/>` — режим **не включается**: симметрично с tree_builder, который для self-closing не пушит элемент в стек. RAWTEXT — это RAWTEXT в смысле HTML5 §13.2.5.2 (entities не декодируются и угловые скобки литеральны); RCDATA для `<title>`/`<textarea>` (где entities декодируются) — отдельная задача.
+- **`:is(list)` и `:where(list)` хранятся как `Vec<ComplexSelector>`** (в отличие от `:not(compound)` — там запрещены combinator-ы по CSS3, поэтому достаточно `Box<CompoundSelector>`). CSS4 явно разрешает combinator-ы внутри `:is`/`:where`, поэтому хранилище — полный selector list. Matcher — `list.iter().any(...)` рекурсивно через `matches_complex`; это естественно корректно из коробки. Specificity: `:is` contributes максимальную specificity по списку (CSS4 §17 «specificity of an :is/:not/:has is the specificity of the most specific selector in its arg»), `:where` — всегда 0. Для max-вычисления добавлена функция `max_list_specificity(&[ComplexSelector]) -> Option<Specificity>` рядом с `accumulate_specificity`. Парсер: внутри тела `:is(...)` зовём существующий `parse_selector_list`; чтобы он корректно останавливался на `)`, в `parse_complex_selector` добавлено `)` в список break-токенов tail-цикла. Пустые `:is()` / `:where()` возвращают `Unsupported(name)` — это даёт ту же fallback-семантику, что у `:not(a b)`.
 
 ### Открытые вопросы (решим, когда упрёмся)
 
@@ -484,6 +485,7 @@ git branch -d text-rendering
 
 ```
 *            html-raw-text          — RAWTEXT для <script> и <style>: содержимое — литеральный текст до </tag + терминатор, entities не декодируются; 13 tokenizer + 3 tree_builder теста
+*            css-is-where           — CSS4 :is() / :where(): PseudoClass::Is/Where + matcher (any-match) + specificity (max-of-list / 0); 11 css-parser + 7 layout тестов
 *            css-box-sizing         — CSS box-sizing (content-box / border-box): BoxSizing enum, парсер, корректировка width/height в lay_out; 14 unit + 1 snapshot тест
 *            text-decoration        — CSS text-decoration (underline / overline / line-through): TextDecorationLine + InlineFrag.width + FillRect-ы у baseline
 *            css-borders            — CSS border: BorderStyle, 12 полей border_*_{width,style,color}, DrawBorder renderer, 8 новых тестов

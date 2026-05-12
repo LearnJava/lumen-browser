@@ -1188,4 +1188,108 @@ mod tests {
             p.rect.width
         );
     }
+
+    // ── Тесты :is() и :where() ─────────────────────────────────────────────
+
+    /// `:is(.a, .b)` матчит любой элемент с одним из классов.
+    #[test]
+    fn pseudo_is_matches_any_of_list() {
+        let (root, doc) = lay_with_doc(
+            r#"<p class="a">a</p><p class="b">b</p><p class="c">c</p>"#,
+            ":is(.a, .b) { color: red; }",
+        );
+        let mut ps = Vec::new();
+        for c in &root.children {
+            if matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p") {
+                ps.push(c);
+            }
+        }
+        assert_eq!(ps[0].style.color.r, 255, "a should match");
+        assert_eq!(ps[1].style.color.r, 255, "b should match");
+        assert_eq!(ps[2].style.color.r, 0, "c should not match");
+    }
+
+    /// `:is(h1, h2)` с типами.
+    #[test]
+    fn pseudo_is_matches_type_selectors() {
+        let (root, doc) = lay_with_doc(
+            "<h1>x</h1><h2>y</h2><h3>z</h3>",
+            ":is(h1, h2) { color: red; }",
+        );
+        let h1 = find_by_tag(&root, "h1", &doc).unwrap();
+        let h2 = find_by_tag(&root, "h2", &doc).unwrap();
+        let h3 = find_by_tag(&root, "h3", &doc).unwrap();
+        assert_eq!(h1.style.color.r, 255);
+        assert_eq!(h2.style.color.r, 255);
+        assert_eq!(h3.style.color.r, 0);
+    }
+
+    /// `:is(...)` корректно работает в составе complex-селектора.
+    #[test]
+    fn pseudo_is_inside_descendant_complex() {
+        let (root, doc) = lay_with_doc(
+            "<article><h1>a</h1><h2>b</h2></article><h1>top</h1>",
+            "article :is(h1, h2) { color: red; }",
+        );
+        let article = find_by_tag(&root, "article", &doc).unwrap();
+        let h1_in = find_by_tag(article, "h1", &doc).unwrap();
+        let h2_in = find_by_tag(article, "h2", &doc).unwrap();
+        assert_eq!(h1_in.style.color.r, 255);
+        assert_eq!(h2_in.style.color.r, 255);
+        // h1 на верхнем уровне не внутри article — не матчит.
+        let top_h1 = root
+            .children
+            .iter()
+            .find(|c| matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "h1"))
+            .unwrap();
+        assert_eq!(top_h1.style.color.r, 0);
+    }
+
+    /// `:where(...)` матчит так же, как `:is`, но specificity = 0 — любое более
+    /// специфичное правило (например, type-селектор) победит.
+    #[test]
+    fn pseudo_where_specificity_is_zero() {
+        // :where(#x) даёт 0; p имеет specificity (0,0,1). p должен победить.
+        let root = lay(
+            r#"<p id="x">v</p>"#,
+            ":where(#x) { color: red; } p { color: blue; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.b, 255, "p должен выиграть у :where(#x)");
+        assert_eq!(p.style.color.r, 0);
+    }
+
+    /// `:is(#x)` сохраняет specificity id — побеждает type-селектор.
+    #[test]
+    fn pseudo_is_keeps_inner_id_specificity() {
+        let root = lay(
+            r#"<p id="x">v</p>"#,
+            ":is(#x) { color: red; } p { color: blue; }",
+        );
+        let p = first_element_child(&root);
+        // :is(#x) даёт (1,0,0); p даёт (0,0,1). Должен выиграть :is.
+        assert_eq!(p.style.color.r, 255);
+        assert_eq!(p.style.color.b, 0);
+    }
+
+    /// `:is` берёт максимальную specificity из списка.
+    #[test]
+    fn pseudo_is_uses_max_specificity_in_list() {
+        // :is(.foo, #x) — даже если матчит .foo, specificity = (1,0,0) от #x.
+        // Конкурирующее правило `.foo` с (0,1,0) проигрывает.
+        let root = lay(
+            r#"<p class="foo">v</p>"#,
+            ":is(.foo, #x) { color: red; } .foo { color: blue; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.r, 255, ":is(.foo, #x) должен победить .foo");
+    }
+
+    /// Пустые `:is()` / `:where()` — Unsupported, не матчат.
+    #[test]
+    fn pseudo_is_empty_does_not_match() {
+        let root = lay("<p>x</p>", ":is() { color: red; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.r, 0);
+    }
 }
