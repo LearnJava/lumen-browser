@@ -446,7 +446,7 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
-*   (HEAD)   encoding-detection     — крейт lumen-encoding: BOM + meta + heuristic, cp1251/koi8-r/cp866
+*   8e6bdeb  encoding-detection     — крейт lumen-encoding: BOM + meta + heuristic, cp1251/koi8-r/cp866
 *   90b849a  inline-flow            — TextMeasurer + FontMeasurer + line wrapping: текст переносится по словам
 *   bcd79bb  hide-head-elements     — <title>, <style>, <script> и др. метаданные больше не рендерятся
 *   061c2c7  claude-md-self-update-rule — правило обновлять CLAUDE.md вместе с планом

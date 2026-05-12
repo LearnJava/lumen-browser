@@ -25,6 +25,36 @@ pub enum DisplayCommand {
 
 pub type DisplayList = Vec<DisplayCommand>;
 
+/// Сериализует display list в детерминированный текст для snapshot-тестов.
+///
+/// Формат (одна команда — одна строка):
+/// - `FillRect (x.xx, y.xx, w.xx, h.xx) #rrggbbaa`
+/// - `DrawText (x.xx, y.xx, w.xx, h.xx) "text" fs.xx #rrggbbaa`
+pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
+    let mut out = String::new();
+    for cmd in dl {
+        match cmd {
+            DisplayCommand::FillRect { rect, color } => {
+                out.push_str(&format!(
+                    "FillRect ({:.2}, {:.2}, {:.2}, {:.2}) #{:02x}{:02x}{:02x}{:02x}\n",
+                    rect.x, rect.y, rect.width, rect.height,
+                    color.r, color.g, color.b, color.a,
+                ));
+            }
+            DisplayCommand::DrawText { rect, text, font_size, color } => {
+                out.push_str(&format!(
+                    "DrawText ({:.2}, {:.2}, {:.2}, {:.2}) {:?} {:.2} #{:02x}{:02x}{:02x}{:02x}\n",
+                    rect.x, rect.y, rect.width, rect.height,
+                    text,
+                    font_size,
+                    color.r, color.g, color.b, color.a,
+                ));
+            }
+        }
+    }
+    out
+}
+
 pub fn build_display_list(root: &LayoutBox) -> DisplayList {
     let mut list = Vec::new();
     walk(root, &mut list);
