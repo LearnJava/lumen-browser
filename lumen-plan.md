@@ -7,14 +7,14 @@
 Задачи, взятые в работу параллельными сессиями. **Не дублировать.** Подробнее о протоколе — в `CLAUDE.md`, раздел «Координация параллельных сессий».
 
 - 🔄 css-selectors — css-selectors — 2026-05-12
-- 🔄 lumen-storage — lumen-storage — 2026-05-12
+- 🔄 lumen-network — lumen-network — 2026-05-12
 
 ## Статус реализации
 
 **Текущая фаза:** Phase 0 (прототип). Этот блок обновляется при каждом коммите, реализующем пункт плана. Условные обозначения: ✅ готово · 🟡 в работе · ⬜ запланировано.
 
 ### Инфраструктура
-- ✅ Cargo workspace, 9 крейтов
+- ✅ Cargo workspace, 10 крейтов
 - ✅ `rust-toolchain.toml` (stable + rustfmt + clippy)
 - ✅ `.gitattributes` (LF в репо, кросс-платформенные line endings)
 - ✅ Ветка `main`, локальные коммиты, без remote
@@ -29,6 +29,7 @@
 - 🟡 `lumen-paint` — display list (FillRect, DrawText) + wgpu-растеризатор с двумя pipeline-ами (fill + text), glyph atlas 512×512, текстурированные квады из atlas-а. `FontMeasurer` для TextMeasurer. 24 теста (display list + atlas + wrap + inline-flow). Внешние зависимости: `wgpu` (exception #2), `winit` (exception #1)
 - 🟡 `lumen-font` — собственный TrueType-парсер (head/maxp/cmap/hhea/hmtx/loca/glyf) + scanline-растеризатор (квадратичные Безье, 4×4 AA, even-odd fill). 60 тестов (включая интеграционный на bundled Inter). Отложено: composite glyphs, cmap format 12 (эмодзи), hinting, GSUB/GPOS shaping
 - 🟡 `lumen-encoding` — детектор кодировок и однобайтовые декодеры (Windows-1251, KOI8-R, CP866). Пайплайн: BOM → `<meta charset>`-sniff (1 КБ) → HTTP content-type hint → UTF-8 валидность → частотная эвристика по русским буквам. Реализует `EncodingDetector` из `lumen-core::ext`. 41 тест (35 unit + 6 integration round-trip). Отложено: UTF-16 как отдельная кодировка, ISO-8859-5, MacCyrillic, prescan по HTML5 spec §12.2.3.2 (точные правила парсинга атрибутов)
+- ✅ `lumen-storage` — in-memory KV + origin-партиционирование + snapshot LUMEN_KV_V1. 17 тестов.
 - ⬜ `lumen-knowledge` (§12) — FTS-индекс над историей и заметками, read-later каталог. Phase 2
 - ⬜ `lumen-ai` (§12.5) — опциональный, embedding + RAG поверх локального LLM. Phase 3+, feature-flag
 
@@ -40,7 +41,8 @@
 - ✅ Exception #4: JS engine (`rquickjs` → `rusty_v8`) — за `JsRuntime` — пока не подключён
 
 ### Точки расширения (trait-ы из `lumen-core::ext`)
-- 🟡 Интерфейсы: `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource` — определены, реализаций нет
+- ✅ `StorageBackend` — реализован в `lumen-storage::InMemoryStorage` (origin-партиционирование, snapshot LUMEN_KV_V1, 17 тестов)
+- 🟡 Интерфейсы: `NetworkTransport`, `SearchProvider`, `FilterListSource` — определены, реализаций нет
 - ✅ `EncodingDetector` — реализован в `lumen-encoding::HeuristicDetector` (BOM + meta + content-type + UTF-8 + частотная эвристика)
 - ⬜ Trait-ы для 4 exceptions: `WindowingBackend`, `RenderBackend`, `TlsBackend`, `JsRuntime` — задокументированы как future в `lumen-core::ext`, code-уровень добавим при первом использовании
 - ⬜ `KnowledgeStore` (§12) — FTS / read-later / notes. Phase 2
