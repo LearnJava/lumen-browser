@@ -59,12 +59,14 @@ fn main() -> ExitCode {
 
 fn load_page(path: &PathBuf) -> Result<DisplayList, Box<dyn Error>> {
     let bytes = std::fs::read(path)?;
-    // Phase 0: входной файл считаем UTF-8. Encoding detection (cp1251, KOI8-R)
-    // подключим в §10.1.
-    let source = std::str::from_utf8(&bytes)
-        .map_err(|e| format!("не UTF-8: {e}"))?;
+    // Кодировку определяем по BOM → <meta charset> → эвристике. Это покрывает
+    // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы, которые
+    // встречаются в архивах и исторической переписке.
+    let encoding = lumen_encoding::detect(&bytes, None);
+    let source = lumen_encoding::decode(encoding, &bytes);
+    println!("Кодировка файла: {}", encoding.name());
 
-    let doc = lumen_html_parser::parse(source);
+    let doc = lumen_html_parser::parse(&source);
     let css = extract_style_blocks(&doc);
     let sheet = lumen_css_parser::parse(&css);
     let viewport = Size::new(1024.0, 720.0);

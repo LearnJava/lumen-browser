@@ -1,0 +1,11 @@
+[package]
+name = "lumen-encoding"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: детектор и декодеры однобайтовых кодировок (cp1251, KOI8-R, CP866)"
+
+[dependencies]
+lumen-core.workspace = true
