@@ -7,7 +7,6 @@
 Задачи, взятые в работу параллельными сессиями. **Не дублировать.** Подробнее о протоколе — в `CLAUDE.md`, раздел «Координация параллельных сессий».
 
 - 🔄 css-selectors — css-selectors — 2026-05-12
-- 🔄 lumen-network — lumen-network — 2026-05-12
 
 ## Статус реализации
 
@@ -22,13 +21,14 @@
 ### Крейты
 - ✅ `lumen-core` — типы и trait-ы: `Error`, `Url`, `Event`, `Capability`, `Module`, геометрия (`Rect`, `Point`, `Size`), `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`
 - ✅ `lumen-dom` — арена + `NodeId` + `Document/Node/NodeData`, API: create/append/detach/Display, 7 тестов (включая кириллицу)
-- 🟡 `lumen-shell` — точка входа: `lumen` — пустое окно через winit; `lumen <path.html>` — парсит HTML, собирает CSS из `<style>`-блоков, делает layout, paint и рисует **фоны + текст** через wgpu. Bundled Inter-Regular.ttf загружается через `include_bytes!`
+- 🟡 `lumen-shell` — точка входа: `lumen` — пустое окно; `lumen <path.html>` — рендер файла; `lumen <https://...>` — загрузка по сети через `lumen-network`. Bundled Inter-Regular.ttf через `include_bytes!`
 - 🟡 `lumen-html-parser` — минимальный токенизатор (Data/Tag/Attribute/Comment, named + numeric entities) + lenient tree builder. 31 тест (включая кириллицу). Отложено: DOCTYPE-разбор, CDATA, raw-text script/style, полный набор named entities, insertion modes
 - 🟡 `lumen-css-parser` — минимальный парсер: `selector_list { decl_list }`, селекторы type/class/id/universal, декларации как пары строк, lenient recovery, пропуск `@`-правил и комментариев. 20 тестов (включая кириллический класс `.привет`). Отложено: pseudo-classes/elements, комбинаторы, attribute selectors, типизированные значения, специфичность
 - 🟡 `lumen-layout` — block-flow + **inline-flow** с style cascade + line wrapping: type/class/id/universal-селекторы, наследование (color, font-size, line-height), color (named + hex), display (block/inline/none), margin/padding (включая shorthand). `TextMeasurer` trait + `layout_measured()` для word-wrap по реальным шрифтовым метрикам. `InlineRun` объединяет текстовые узлы и inline-элементы (`<a>`, `<span>`, `<em>`, `<strong>`, и т.д.) в один поток строк с per-сегментными стилями. 27 тестов (включая кириллику, wrapping, inline-flow, edge-cases). Отложено: flex/grid, float, абсолютное позиционирование, specificity, text-decoration, font-weight/style на inline-уровне
 - 🟡 `lumen-paint` — display list (FillRect, DrawText) + wgpu-растеризатор с двумя pipeline-ами (fill + text), glyph atlas 512×512, текстурированные квады из atlas-а. `FontMeasurer` для TextMeasurer. 24 теста (display list + atlas + wrap + inline-flow). Внешние зависимости: `wgpu` (exception #2), `winit` (exception #1)
 - 🟡 `lumen-font` — собственный TrueType-парсер (head/maxp/cmap/hhea/hmtx/loca/glyf) + scanline-растеризатор (квадратичные Безье, 4×4 AA, even-odd fill). 60 тестов (включая интеграционный на bundled Inter). Отложено: composite glyphs, cmap format 12 (эмодзи), hinting, GSUB/GPOS shaping
 - 🟡 `lumen-encoding` — детектор кодировок и однобайтовые декодеры (Windows-1251, KOI8-R, CP866). Пайплайн: BOM → `<meta charset>`-sniff (1 КБ) → HTTP content-type hint → UTF-8 валидность → частотная эвристика по русским буквам. Реализует `EncodingDetector` из `lumen-core::ext`. 41 тест (35 unit + 6 integration round-trip). Отложено: UTF-16 как отдельная кодировка, ISO-8859-5, MacCyrillic, prescan по HTML5 spec §12.2.3.2 (точные правила парсинга атрибутов)
+- ✅ `lumen-network` — HTTP/1.1 + HTTPS клиент (rustls, exception #3). Redirect, chunked TE. `HttpClient` реализует `NetworkTransport`. 12 тестов.
 - ✅ `lumen-storage` — in-memory KV + origin-партиционирование + snapshot LUMEN_KV_V1. 17 тестов.
 - ⬜ `lumen-knowledge` (§12) — FTS-индекс над историей и заметками, read-later каталог. Phase 2
 - ⬜ `lumen-ai` (§12.5) — опциональный, embedding + RAG поверх локального LLM. Phase 3+, feature-flag
@@ -37,12 +37,13 @@
 - ✅ Зафиксирована: «default — своё». 4 разрешённых exceptions, всё остальное — свой код.
 - ✅ Exception #1: `winit` (OS event loop) — за `WindowingBackend`
 - ✅ Exception #2: `wgpu` (GPU API) — за `RenderBackend` — пока не подключён
-- ✅ Exception #3: `rustls` (TLS / crypto) — за `TlsBackend` — пока не подключён
+- ✅ Exception #3: `rustls` (TLS / crypto) — за `TlsBackend` — активирован в `lumen-network`
 - ✅ Exception #4: JS engine (`rquickjs` → `rusty_v8`) — за `JsRuntime` — пока не подключён
 
 ### Точки расширения (trait-ы из `lumen-core::ext`)
 - ✅ `StorageBackend` — реализован в `lumen-storage::InMemoryStorage` (origin-партиционирование, snapshot LUMEN_KV_V1, 17 тестов)
-- 🟡 Интерфейсы: `NetworkTransport`, `SearchProvider`, `FilterListSource` — определены, реализаций нет
+- ✅ `NetworkTransport` — реализован в `lumen-network::HttpClient` (HTTP/1.1 + HTTPS через rustls, redirect, chunked, 12 тестов)
+- 🟡 Интерфейсы: `SearchProvider`, `FilterListSource` — определены, реализаций нет
 - ✅ `EncodingDetector` — реализован в `lumen-encoding::HeuristicDetector` (BOM + meta + content-type + UTF-8 + частотная эвристика)
 - ⬜ Trait-ы для 4 exceptions: `WindowingBackend`, `RenderBackend`, `TlsBackend`, `JsRuntime` — задокументированы как future в `lumen-core::ext`, code-уровень добавим при первом использовании
 - ⬜ `KnowledgeStore` (§12) — FTS / read-later / notes. Phase 2
