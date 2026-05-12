@@ -17,7 +17,7 @@
 - ✅ `lumen-dom` — арена + `NodeId` + `Document/Node/NodeData`, API: create/append/detach/Display, 7 тестов (включая кириллицу)
 - ✅ `lumen-shell` — точка входа: `lumen` — окно 1024×720 через winit; `lumen <path.html>` — парсит файл и печатает DOM в stdout
 - 🟡 `lumen-html-parser` — минимальный токенизатор (Data/Tag/Attribute/Comment, named + numeric entities) + lenient tree builder. 31 тест (включая кириллицу). Отложено: DOCTYPE-разбор, CDATA, raw-text script/style, полный набор named entities, insertion modes
-- ⬜ `lumen-css-parser` — стаб
+- 🟡 `lumen-css-parser` — минимальный парсер: `selector_list { decl_list }`, селекторы type/class/id/universal, декларации как пары строк, lenient recovery, пропуск `@`-правил и комментариев. 20 тестов (включая кириллический класс `.привет`). Отложено: pseudo-classes/elements, комбинаторы, attribute selectors, типизированные значения, специфичность
 - ⬜ `lumen-layout` — стаб
 - ⬜ `lumen-paint` — стаб
 
@@ -43,7 +43,7 @@
 
 ### Следующие шаги
 - 🟡 HTML parser — минимум готов; полный набор insertion modes / named entities / DOCTYPE-разбор — позже, по запросу
-- ⬜ CSS parser (свой)
+- 🟡 CSS parser — минимум готов (type/class/id/universal, declarations как пары строк); pseudo-классы, комбинаторы, типизированные значения — позже
 - ⬜ Layout: block + inline
 - ⬜ Paint: 2D-растеризация (CPU → GPU через wgpu)
 - 🟡 Связка движка с UI: shell принимает путь к `.html`, парсит, печатает DOM (готово). Рисовать в окне — после layout + paint.
@@ -887,7 +887,7 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 ### Фаза 0 — Прототип (3 месяца)
 - ✅ Workspace, base crates.
 - 🟡 HTML parser — минимум готов (см. выше).
-- ⬜ CSS parser.
+- 🟡 CSS parser — минимум готов (см. выше).
 - ✅ DOM (арена + базовые типы).
 - ⬜ Layout: только block + inline.
 - ⬜ Paint: 2D-растеризация.
