@@ -178,6 +178,33 @@ mod tests {
     }
 
     #[test]
+    fn head_and_its_metadata_are_hidden() {
+        // <title> и <style> содержимое не должно рендериться как видимый
+        // текст. Высота итогового layout-а должна совпадать с высотой только
+        // одного <p>visible</p> внутри <body>.
+        let just_body = lay("<html><body><p>visible</p></body></html>", "");
+        let with_head = lay(
+            r#"<html>
+                <head>
+                    <title>Не должно рендериться</title>
+                    <style>p { color: red; }</style>
+                    <meta charset="utf-8">
+                </head>
+                <body><p>visible</p></body>
+            </html>"#,
+            "",
+        );
+        // Высоты должны совпадать с точностью до окружающих whitespace text-node-ов
+        // (которые сами по себе skip-аются как пустые).
+        assert!(
+            (with_head.rect.height - just_body.rect.height).abs() < 0.1,
+            "head content leaked: just_body={}, with_head={}",
+            just_body.rect.height,
+            with_head.rect.height,
+        );
+    }
+
+    #[test]
     fn nested_inheritance() {
         let root = lay(
             "<div><p>nested</p></div>",
