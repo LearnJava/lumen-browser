@@ -44,8 +44,21 @@ pub struct Contour {
 #[derive(Debug, Clone)]
 pub enum Outline {
     Simple(Vec<Contour>),
-    /// Composite glyph — не поддерживается в Phase 0.
-    Composite,
+    /// Composite glyph — собран из нескольких других глифов с трансформацией.
+    /// Используется для оптимизации: например, кириллическая `А` ссылается на
+    /// латинскую `A` без копирования контуров.
+    Composite(Vec<CompositeComponent>),
+}
+
+/// Один компонент composite-глифа: ссылка на другой глиф + 2×2 матрица + offset.
+///
+/// Применение к точке: `(x', y') = (a·x + c·y + dx, b·x + d·y + dy)`,
+/// где `transform = [a, b, c, d]`, `offset = (dx, dy)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct CompositeComponent {
+    pub glyph_id: u16,
+    pub transform: [f32; 4],
+    pub offset: (f32, f32),
 }
 
 #[derive(Debug, Clone)]
@@ -66,13 +79,83 @@ impl Glyph {
         };
 
         let outline = if n_contours < 0 {
-            Outline::Composite
+            Outline::Composite(parse_composite(&mut r)?)
         } else {
             Outline::Simple(parse_simple_outline(&mut r, n_contours as usize)?)
         };
 
         Ok(Self { bbox, outline })
     }
+}
+
+// Флаги composite-глифа.
+const COMPOSITE_ARG_1_AND_2_ARE_WORDS: u16 = 0x0001;
+const COMPOSITE_ARGS_ARE_XY_VALUES: u16 = 0x0002;
+const COMPOSITE_WE_HAVE_A_SCALE: u16 = 0x0008;
+const COMPOSITE_MORE_COMPONENTS: u16 = 0x0020;
+const COMPOSITE_WE_HAVE_X_AND_Y_SCALE: u16 = 0x0040;
+const COMPOSITE_WE_HAVE_A_TWO_BY_TWO: u16 = 0x0080;
+
+fn parse_composite(r: &mut BinaryReader) -> Result<Vec<CompositeComponent>, FontError> {
+    let mut components = Vec::new();
+    loop {
+        let flags = r.read_u16().ok_or(FontError::UnexpectedEof)?;
+        let glyph_id = r.read_u16().ok_or(FontError::UnexpectedEof)?;
+
+        let (arg1, arg2) = if flags & COMPOSITE_ARG_1_AND_2_ARE_WORDS != 0 {
+            let a = r.read_i16().ok_or(FontError::UnexpectedEof)? as f32;
+            let b = r.read_i16().ok_or(FontError::UnexpectedEof)? as f32;
+            (a, b)
+        } else {
+            // i8: один байт со знаком.
+            let a = r.read_u8().ok_or(FontError::UnexpectedEof)? as i8 as f32;
+            let b = r.read_u8().ok_or(FontError::UnexpectedEof)? as i8 as f32;
+            (a, b)
+        };
+
+        // Если флаг ARGS_ARE_XY_VALUES — это (dx, dy) в font units.
+        // Иначе — индексы точек для выравнивания (рудимент, в современных шрифтах
+        // практически не встречается; считаем offset = (0, 0)).
+        let offset = if flags & COMPOSITE_ARGS_ARE_XY_VALUES != 0 {
+            (arg1, arg2)
+        } else {
+            (0.0, 0.0)
+        };
+
+        let transform = if flags & COMPOSITE_WE_HAVE_A_SCALE != 0 {
+            let s = read_f2dot14(r)?;
+            [s, 0.0, 0.0, s]
+        } else if flags & COMPOSITE_WE_HAVE_X_AND_Y_SCALE != 0 {
+            let xs = read_f2dot14(r)?;
+            let ys = read_f2dot14(r)?;
+            [xs, 0.0, 0.0, ys]
+        } else if flags & COMPOSITE_WE_HAVE_A_TWO_BY_TWO != 0 {
+            let a = read_f2dot14(r)?;
+            let b = read_f2dot14(r)?;
+            let c = read_f2dot14(r)?;
+            let d = read_f2dot14(r)?;
+            [a, b, c, d]
+        } else {
+            [1.0, 0.0, 0.0, 1.0]
+        };
+
+        components.push(CompositeComponent {
+            glyph_id,
+            transform,
+            offset,
+        });
+
+        if flags & COMPOSITE_MORE_COMPONENTS == 0 {
+            break;
+        }
+    }
+    Ok(components)
+}
+
+/// F2DOT14: 16-битный fixed-point с 14 битами на дробную часть.
+fn read_f2dot14(r: &mut BinaryReader) -> Result<f32, FontError> {
+    let raw = r.read_i16().ok_or(FontError::UnexpectedEof)?;
+    Ok(raw as f32 / 16384.0)
 }
 
 fn parse_simple_outline(
@@ -270,13 +353,108 @@ mod tests {
     }
 
     #[test]
-    fn composite_glyph_detected_and_skipped() {
+    fn composite_glyph_single_component_with_offset() {
+        // Composite-глиф с одной ссылкой на другой glyph_id=5, offset (10, 20),
+        // identity transform, без MORE_COMPONENTS.
         let mut bytes = Vec::new();
         bytes.extend_from_slice(&(-1i16).to_be_bytes()); // numberOfContours = -1
         bytes.extend_from_slice(&[0u8; 8]); // bbox
-        // дальше — composite-данные, мы их не парсим
+        // flags = ARGS_ARE_XY_VALUES (без words, без scale, без more)
+        bytes.extend_from_slice(&0x0002u16.to_be_bytes());
+        bytes.extend_from_slice(&5u16.to_be_bytes()); // glyph_id
+        bytes.push(10u8); // arg1 (i8)
+        bytes.push(20u8); // arg2 (i8)
+
         let glyph = Glyph::parse(&bytes).unwrap();
-        assert!(matches!(glyph.outline, Outline::Composite));
+        let Outline::Composite(components) = &glyph.outline else {
+            panic!("expected Composite, got {:?}", glyph.outline);
+        };
+        assert_eq!(components.len(), 1);
+        assert_eq!(components[0].glyph_id, 5);
+        assert_eq!(components[0].offset, (10.0, 20.0));
+        assert_eq!(components[0].transform, [1.0, 0.0, 0.0, 1.0]);
+    }
+
+    #[test]
+    fn composite_glyph_with_words_and_scale() {
+        // Composite: glyph_id=42, offset = i16 значения (300, -150),
+        // uniform scale 0.5, нет MORE_COMPONENTS.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(-1i16).to_be_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+        // flags = ARG_1_AND_2_ARE_WORDS | ARGS_ARE_XY_VALUES | WE_HAVE_A_SCALE
+        bytes.extend_from_slice(&0x000Bu16.to_be_bytes());
+        bytes.extend_from_slice(&42u16.to_be_bytes());
+        bytes.extend_from_slice(&300i16.to_be_bytes());
+        bytes.extend_from_slice(&(-150i16).to_be_bytes());
+        // scale = 0.5 → F2DOT14: 0.5 × 16384 = 8192
+        bytes.extend_from_slice(&8192i16.to_be_bytes());
+
+        let glyph = Glyph::parse(&bytes).unwrap();
+        let Outline::Composite(components) = &glyph.outline else {
+            panic!();
+        };
+        assert_eq!(components[0].glyph_id, 42);
+        assert_eq!(components[0].offset, (300.0, -150.0));
+        assert_eq!(components[0].transform, [0.5, 0.0, 0.0, 0.5]);
+    }
+
+    #[test]
+    fn composite_glyph_two_components() {
+        // Два компонента: glyph_id=1 со scale 1.0, glyph_id=2 без scale.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(-1i16).to_be_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+
+        // Component 1: ARGS_XY | MORE_COMPONENTS
+        bytes.extend_from_slice(&0x0022u16.to_be_bytes());
+        bytes.extend_from_slice(&1u16.to_be_bytes());
+        bytes.push(0u8);
+        bytes.push(0u8);
+
+        // Component 2: ARGS_XY (без MORE_COMPONENTS — последний)
+        bytes.extend_from_slice(&0x0002u16.to_be_bytes());
+        bytes.extend_from_slice(&2u16.to_be_bytes());
+        bytes.push(5u8);
+        bytes.push(10u8);
+
+        let glyph = Glyph::parse(&bytes).unwrap();
+        let Outline::Composite(components) = &glyph.outline else {
+            panic!();
+        };
+        assert_eq!(components.len(), 2);
+        assert_eq!(components[0].glyph_id, 1);
+        assert_eq!(components[1].glyph_id, 2);
+        assert_eq!(components[1].offset, (5.0, 10.0));
+    }
+
+    #[test]
+    fn composite_glyph_with_2x2_matrix() {
+        // Полная 2×2 матрица: масштаб + поворот.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(-1i16).to_be_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+        // flags = ARGS_XY | WE_HAVE_A_TWO_BY_TWO
+        bytes.extend_from_slice(&0x0082u16.to_be_bytes());
+        bytes.extend_from_slice(&3u16.to_be_bytes());
+        bytes.push(0u8);
+        bytes.push(0u8);
+        // Matrix: 0.707, 0.707, -0.707, 0.707 (45° rotation, ish).
+        // 0.707 × 16384 ≈ 11585
+        bytes.extend_from_slice(&11585i16.to_be_bytes());
+        bytes.extend_from_slice(&11585i16.to_be_bytes());
+        bytes.extend_from_slice(&(-11585i16).to_be_bytes());
+        bytes.extend_from_slice(&11585i16.to_be_bytes());
+
+        let glyph = Glyph::parse(&bytes).unwrap();
+        let Outline::Composite(components) = &glyph.outline else {
+            panic!();
+        };
+        let t = components[0].transform;
+        assert!((t[0] - 0.707).abs() < 0.001);
+        assert!((t[1] - 0.707).abs() < 0.001);
+        assert!((t[2] + 0.707).abs() < 0.001);
+        assert!((t[3] - 0.707).abs() < 0.001);
     }
 
     #[test]

@@ -7,9 +7,9 @@
 //!
 //! TTF/OTF — формат с большим количеством обязательных и опциональных
 //! таблиц; реализуем по мере необходимости. Не поддерживается (отложено):
-//! composite glyphs, hinting (TT instructions), GPOS/GSUB (advanced shaping),
-//! CFF outlines (для PostScript-OpenType), variable fonts, color glyphs
-//! (COLR/CPAL, sbix), bitmap strikes (EBDT/EBLC).
+//! hinting (TT instructions), GPOS/GSUB (advanced shaping), CFF outlines
+//! (для PostScript-OpenType), variable fonts, color glyphs (COLR/CPAL,
+//! sbix), bitmap strikes (EBDT/EBLC).
 
 pub mod binary;
 pub mod cmap;
@@ -25,7 +25,7 @@ pub mod rasterizer;
 pub use binary::BinaryReader;
 pub use cmap::Cmap;
 pub use face::{Font, FontError, OffsetTable, TableRecord};
-pub use glyf::{BoundingBox, Contour, Glyf, Glyph, Outline, OutlinePoint};
+pub use glyf::{BoundingBox, CompositeComponent, Contour, Glyf, Glyph, Outline, OutlinePoint};
 pub use head::{Head, IndexToLocFormat};
 pub use hhea::Hhea;
 pub use hmtx::Hmtx;
