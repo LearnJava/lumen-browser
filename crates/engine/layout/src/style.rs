@@ -592,10 +592,10 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, em_basis: f3
             }
         }
         "width" if val != "auto" => {
-            style.width = parse_length_px(val);
+            style.width = parse_length(val).and_then(|l| l.resolve(em_basis, None));
         }
         "height" if val != "auto" => {
-            style.height = parse_length_px(val);
+            style.height = parse_length(val).and_then(|l| l.resolve(em_basis, None));
         }
         "font-size" => {
             // Обрабатывается в pre-pass; в этой ветке пропускаем.
