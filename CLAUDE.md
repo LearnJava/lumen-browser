@@ -195,6 +195,8 @@ crates/
 
 ### Ветки
 
+**Главное правило: вся работа выполняется в feature-ветках. Прямые коммиты на `main` запрещены.**
+
 Каждая задача — отдельная feature-ветка от свежего `main`:
 
 ```bash
@@ -223,6 +225,7 @@ git branch -d text-rendering
 
 ### Запрещено
 
+- **Любые коммиты прямо на `main`** — включая правки документации, «мелкие фиксы» и координационные пометки.
 - Force-push на `main`.
 - Rewrite опубликованной истории.
 - `git config` изменения (никогда).
@@ -231,16 +234,14 @@ git branch -d text-rendering
 
 ### Координация параллельных сессий
 
-Над репозиторием могут одновременно работать несколько сессий Claude Code (в разных worktree-ах). Чтобы они не брали из roadmap одну и ту же задачу, действует следующий протокол:
+Над репозиторием могут одновременно работать несколько сессий Claude Code (в разных worktree-ах). Чтобы они не брали из roadmap одну и ту же задачу:
 
-1. **Перед стартом работы** — прочитать блок **«🔄 В работе сейчас»** в шапке `lumen-plan.md`. Если задача уже в списке — выбрать другую или подождать. **Зарезервированную задачу нельзя брать, даже если соответствующая feature-ветка пустая** — ветка без коммитов не означает, что работа ещё не началась.
-2. **Зарезервировать задачу** отдельным мини-коммитом **прямо на `main`** (не на feature-ветке), который добавляет строку: `- 🔄 <короткое имя задачи> — <имя ветки> — <YYYY-MM-DD>`. Только после этого создавать feature-ветку и писать код.
-3. **При merge feature-ветки в `main`** — в том же merge-коммите (или соседним cleanup-коммите) убрать строку из «В работе сейчас».
-4. **Если работа отменена** — отдельный мини-коммит на `main`, удаляющий строку.
+1. **Перед стартом** — прочитать `git branch` и блок **«🔄 В работе сейчас»** в шапке `lumen-plan.md`. Если ветка с нужным именем уже существует или задача в списке — выбрать другую.
+2. **Зарезервировать задачу**: создать feature-ветку (`git checkout -b <имя>`) и в **первом же коммите на этой ветке** добавить строку в «В работе сейчас»: `- 🔄 <имя задачи> — <имя ветки> — <YYYY-MM-DD>`. Резервация видна другим сессиям через `git branch`.
+3. **При merge в `main`** — в merge-коммите убрать строку из «В работе сейчас» и обновить статусы в плане/CLAUDE.md как обычно.
+4. **Если работа отменена** — удалить ветку; строку из «В работе сейчас» убрать в отдельной ветке `cleanup-<имя>`, слить в main.
 
-**Почему мини-коммит на `main`, а не на feature-ветке:** параллельная сессия читает свежий `main` для координации. Если пометка лежит на feature-ветке — её никто не видит, и две сессии случайно дублируют работу (так уже произошло 2026-05-12 с inline-flow и encoding-detection).
-
-Минусы протокола: каждое начало задачи стоит лишнего коммита на `main`, и есть гонка между чтением списка и записью резервации (в худшем случае две сессии всё равно столкнутся в merge). Это компромисс, в котором мы согласны иногда платить лишним merge-конфликтом вместо постоянной координации через внешний канал.
+**Почему ветка — достаточная резервация:** `git branch` виден всем сессиям в том же репозитории без fetch. Имя ветки = имя задачи = резервация. Предыдущий протокол с мини-коммитами на `main` нарушал правило «no commits to main» и создавал лишний шум в истории.
 
 ---
 
@@ -297,7 +298,7 @@ git branch -d text-rendering
 
 - Типы: `Error`, `Result<T>`, `Url`, `Event` (TabCreated/Closed, Navigation, PageLoaded, RequestStarted/Completed/Blocked), `TabId`, `Capability`, `CapabilityToken`, `Module` trait.
 - Геометрия: `Rect`, `Point`, `Size`.
-- `lumen-core::ext` — определённые trait-точки расширения: `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`.
+- `lumen-core::ext` — trait-точки расширения: `NetworkTransport`, `StorageBackend` (с origin-партиционированием + `list_keys`), `SearchProvider`, `FilterListSource`, `EncodingDetector`.
 - В комментариях задокументированы будущие trait-точки: `WindowingBackend`, `RenderBackend`, `TlsBackend`, `JsRuntime`, `FontProvider`, `HyphenationEngine`, `DnsResolver`, `Hasher`. Тело trait-а добавим при первой реализации.
 - 3 теста (url parsing).
 
@@ -346,6 +347,12 @@ git branch -d text-rendering
 - **Отложено:** UTF-16 как отдельная кодировка (BOM сейчас падает в эвристику и в большинстве случаев работает), ISO-8859-5 и MacCyrillic (не встречаются в природе), полный HTML5 prescan algorithm §12.2.3.2 (наш sniff проще, чем spec, но для практики хватает).
 - 35 unit-тестов (декодер + таблицы + детектор + trait) + 6 интеграционных round-trip (encode → detect → decode по «Бородино»).
 
+### `lumen-storage` ✅ (in-memory KV + snapshot)
+
+- **Готово:** `InMemoryStorage` — `HashMap<PartitionedKey, Vec<u8>>` с полным origin-партиционированием: каждый вызов принимает `origin: Option<&str>` и `top_level_site: Option<&str>`. `None` и `""` — один namespace (глобальный профиль). Реализует `lumen_core::ext::StorageBackend` (get/put/delete/list_keys). Snapshot-формат `LUMEN_KV_V1` — текстовый, hex-encoded composite key + hex-encoded value, без внешних зависимостей. `serialize()` / `deserialize()` для in-memory round-trip; `save(path)` / `load(path)` для диска.
+- **Отложено:** B-tree persistent backend (сейчас вся структура в RAM), TTL для cookies, namespace helpers (`cookies::`, `history::`, `profile::`), `clear_origin(origin)` для быстрой чистки всех данных источника.
+- 17 тестов: CRUD, origin-изоляция, top_level_site-партиционирование, list_keys, snapshot round-trip (включая binary и кириллицу), ошибки десериализации.
+
 ### `lumen-shell` 🟡 (окно + рендер)
 
 - **Готово:** winit 0.30 с `ApplicationHandler` API. Два режима: `lumen` (пустое окно 1024×720) и `lumen <path.html>` (читает файл, определяет кодировку через `lumen_encoding::detect`, декодирует в `String`, парсит HTML, извлекает `<style>` через walk DOM, парсит CSS, layout, paint, рисует фоны + текст в окне через `Renderer::render`). Inter-Regular.ttf bundled через `include_bytes!` (~411 КБ к binary). Обработчики Resized + RedrawRequested.
@@ -355,11 +362,11 @@ git branch -d text-rendering
 ### Инфраструктура
 
 - Cargo workspace, edition 2024, resolver 3, MSRV 1.95.
-- 9 крейтов в `crates/`: shell, core, engine/{html-parser, css-parser, dom, layout, paint, font, encoding}.
+- 10 крейтов в `crates/`: shell, core, storage, engine/{html-parser, css-parser, dom, layout, paint, font, encoding}.
 - Bundled assets: `assets/fonts/Inter-Regular.ttf` (+ OFL.txt лицензия).
 - Тестовая страница: `samples/page.html` со встроенным `<style>`.
 - 4 разрешённых внешних зависимости: `winit = "0.30"`, `wgpu = "26"`, `rustls` (зарезервирована, не подключена), JS engine (зарезервирована).
-- Внутренние deps: workspace.dependencies на 9 крейтов.
+- Внутренние deps: workspace.dependencies на 10 крейтов.
 - `.gitattributes` форсит LF для всех текстовых файлов; binary-метка для `.ttf / .png / .woff2`.
 - `.gitignore` игнорирует `/target`, `/*.zip`, `/*.tar*`, `.idea/`, `.vscode/`, swap-файлы.
 
@@ -384,9 +391,8 @@ git branch -d text-rendering
 
 6. **CSS — функциональные pseudo (`:nth-child`, `:not`) и типизированные значения деклараций** — после расширенных селекторов остаются functional pseudo (`:nth-child(2n+1)`, `:not(.foo)`) и типизация значений (length / color / calc / `--var`).
 7. **Cmap format 12** — Unicode SMP/SIP (эмодзи, math symbols, исторические письменности).
-8. **`lumen-storage` крейт** — KV-store для cookies, history, profile data. Свой минимальный B-tree или in-memory + JSON snapshot для Phase 0-1.
-9. **Tab session export / import** (§12.7) — JSON serialize. Простое, экономит много боли.
-10. **Картинки на страницах** — `<img>` рендеринг. Нужны PNG/JPEG декодеры (свои, по §5).
+8. **Tab session export / import** (§12.7) — сериализация в snapshot-формат lumen-storage. Простое, экономит много боли.
+9. **Картинки на страницах** — `<img>` рендеринг. Нужны PNG/JPEG декодеры (свои, по §5).
 
 ### Большое (Phase 2+)
 
@@ -440,6 +446,7 @@ git branch -d text-rendering
 - **Cargo features пока не используются**, но запланированы для `ai`, `webgl`, `tor`, `ru-hyphenation` опциональных модулей.
 - **`TextMeasurer` trait в `lumen-layout`, `FontMeasurer<'a>` в `lumen-paint`**: layout не зависит от font напрямую; shell создаёт `FontMeasurer<'static>` из `INTER_FONT` и передаёт через `layout_measured()`. `BoxKind::InlineRun { segments, lines }` хранит строки post-wrap и per-segment стили. `layout()` без измерителя — backward compat, без переноса.
 - **`InlineRun` вместо `Text`**: `BoxKind::Text` упразднён. Текстовые узлы и inline-элементы теперь всегда объединяются в `InlineRun`. Слияние фрагментов — через `ComputedStyle::text_rendering_eq` (только color/font_size/line_height), а не `PartialEq`: это нужно, чтобы `<span>` (display:inline) и соседний текстовый узел (display:block inherited) не расщеплялись в отдельные DrawText при одинаковом цвете/размере.
+- **`StorageBackend` trait с origin-партиционированием:** сигнатура `get/put/delete(origin, top_level_site, key)` + `list_keys(origin, top_level_site)`. `None` и `""` — один namespace. Решение принято при первой реализации (`lumen-storage`), чтобы не переделывать сигнатуру позже.
 - **Encoding detection — частотная эвристика по русским буквам**, не bi-gram / n-gram модель. Соотношение «вес = доля буквы в обычных русских текстах» по таблице из 32 строчных. Этого достаточно, чтобы уверенно различать cp1251 / KOI8-R / CP866 на тексте длиннее ~30 байт: фонетическая раскладка KOI8-R и DOS-блоки CP866 дают резко разный результат при ошибочной декодировке. Более сложные модели (CharsetDetect / chardet) — overkill для Phase 0. Если упрёмся в edge case — пересмотрим.
 - **Specificity-based style cascade.** Каскад собирает все matched declarations с ключом `(specificity, rule_order, decl_index)`, сортирует по возрастанию и применяет по порядку — выигрывает максимальная specificity, при равенстве — позже объявленная (CSS spec). Specificity считается tuple `(a=ids, b=classes+attrs+pseudo, c=types+pseudoelements)`, universal и combinator не учитываются. Альтернативой был «last-rule-wins без подсчёта» — отказались, потому что для реальных CSS-стилей нужно правильное поведение `#main` против `.section`.
 - **Right-to-left greedy matching без back-tracking** для complex-селекторов. Для `a b c`: проверяем `c` на текущем элементе, для `b` — ищем первого подходящего предка/sibling и фиксируем его, для `a` — то же относительно зафиксированного. Это упрощение: для патологического `div p span` с несколькими `div`-предками, где только дальний обёрнут вокруг `p`, мы можем промахнуться. Сознательное упрощение Phase 0 — реальные стили редко полагаются на back-tracking, а правильный matcher с back-tracking требует Selectors-движка как у Servo/Stylo. До этого — известное ограничение.
@@ -450,7 +457,6 @@ git branch -d text-rendering
 - **AI backend:** Ollama HTTP API (нулевая интеграция, требует, чтобы у пользователя был Ollama) ИЛИ встроенный llama.cpp через FFI (5-е exception, нет внешних зависимостей у пользователя). Откладываем до Phase 3.
 - **Shaping для сложных скриптов** (Arabic/Indic/Thai): свой shaper за месяцы или rustybuzz как 5-е exception. Откладываем до Phase 2-3.
 - **iOS:** Apple-policy требует WebKit на iPhone/iPad. Это противоречит принципу собственного движка. Возможный путь — тонкий shell поверх WKWebView только для iOS, остальные ОС — наш движок. Откладываем до Phase 4.
-- **Storage partitioning в StorageBackend trait:** текущая сигнатура `get/put(key)` не принимает origin. Нужно обновить ДО первой реализации (`get/put(origin, top_level_site, key)`), иначе ретрофит будет болезненным.
 
 ### Намеренно отвергнутые альтернативы
 
@@ -464,6 +470,7 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            lumen-storage          — крейт lumen-storage: InMemoryStorage + origin-партиционирование + snapshot LUMEN_KV_V1
 *   (HEAD)   inline-elements        — InlineRun: <a>/<span>/<em>/<strong> в одной строке с текстом, per-segment стили
 *   358c05f  task-coordination      — протокол резервации задач между параллельными сессиями (Git workflow + блок в шапке плана)
 *   a4e5249  snapshot-tests         — serialize_display_list + 6 golden-тестов (пустая страница, параграф, фон, кириллица, line wrap)
