@@ -12,7 +12,13 @@
 //! (COLR/CPAL, sbix), bitmap strikes (EBDT/EBLC).
 
 pub mod binary;
+pub mod cmap;
 pub mod face;
+pub mod head;
+pub mod maxp;
 
 pub use binary::BinaryReader;
+pub use cmap::Cmap;
 pub use face::{Font, FontError, OffsetTable, TableRecord};
+pub use head::{Head, IndexToLocFormat};
+pub use maxp::Maxp;

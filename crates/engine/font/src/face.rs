@@ -61,6 +61,7 @@ pub enum FontError {
     InvalidSfntVersion(u32),
     TableOutOfBounds([u8; 4]),
     TableNotFound([u8; 4]),
+    InvalidTable([u8; 4]),
 }
 
 impl fmt::Display for FontError {
@@ -70,6 +71,7 @@ impl fmt::Display for FontError {
             Self::InvalidSfntVersion(v) => write!(f, "invalid sfnt version: {v:#010x}"),
             Self::TableOutOfBounds(tag) => write!(f, "table {} out of bounds", tag_str(tag)),
             Self::TableNotFound(tag) => write!(f, "table {} not found", tag_str(tag)),
+            Self::InvalidTable(tag) => write!(f, "table {} malformed", tag_str(tag)),
         }
     }
 }
@@ -125,6 +127,21 @@ impl<'a> Font<'a> {
         let start = rec.offset as usize;
         let end = start.checked_add(rec.length as usize)?;
         self.data.get(start..end)
+    }
+
+    pub fn head(&self) -> Result<crate::head::Head, FontError> {
+        let data = self.table(b"head").ok_or(FontError::TableNotFound(*b"head"))?;
+        crate::head::Head::parse(data)
+    }
+
+    pub fn maxp(&self) -> Result<crate::maxp::Maxp, FontError> {
+        let data = self.table(b"maxp").ok_or(FontError::TableNotFound(*b"maxp"))?;
+        crate::maxp::Maxp::parse(data)
+    }
+
+    pub fn cmap(&self) -> Result<crate::cmap::Cmap<'a>, FontError> {
+        let data = self.table(b"cmap").ok_or(FontError::TableNotFound(*b"cmap"))?;
+        crate::cmap::Cmap::parse(data)
     }
 }
 
