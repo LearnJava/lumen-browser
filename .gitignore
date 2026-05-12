@@ -12,3 +12,8 @@ Thumbs.db
 # Editor swap files
 *.swp
 *.swo
+
+# Архивы в корне — обычно исходники шрифтов / выгрузок, не для репо.
+/*.zip
+/*.tar
+/*.tar.gz
