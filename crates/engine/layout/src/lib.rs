@@ -1292,4 +1292,111 @@ mod tests {
         let p = first_element_child(&root);
         assert_eq!(p.style.color.r, 0);
     }
+
+    // ── Тесты case-insensitive [attr=val i] ────────────────────────────────
+
+    /// Без флага `i` сравнение значения case-sensitive — `[type=Submit]` не
+    /// матчит `type="submit"`.
+    #[test]
+    fn attr_equals_default_case_sensitive() {
+        let root = lay(
+            r#"<input type="submit">"#,
+            "[type=Submit] { color: red; }",
+        );
+        let input = first_element_child(&root);
+        assert_eq!(input.style.color.r, 0);
+    }
+
+    /// Флаг `i` делает `[type=Submit i]` совпадающим с `type="submit"`.
+    #[test]
+    fn attr_equals_case_insensitive_matches() {
+        let root = lay(
+            r#"<input type="submit">"#,
+            "[type=Submit i] { color: red; }",
+        );
+        let input = first_element_child(&root);
+        assert_eq!(input.style.color.r, 255);
+    }
+
+    /// Флаг `s` явно ставит case-sensitive (тождественно отсутствию флага).
+    #[test]
+    fn attr_equals_case_sensitive_explicit_does_not_match() {
+        let root = lay(
+            r#"<input type="submit">"#,
+            "[type=Submit s] { color: red; }",
+        );
+        let input = first_element_child(&root);
+        assert_eq!(input.style.color.r, 0);
+    }
+
+    /// `i` работает с `^=` (префикс). Используем `<p>` — атрибутный селектор
+    /// без type-части матчит любой элемент.
+    #[test]
+    fn attr_prefix_case_insensitive() {
+        let root = lay(
+            r#"<p data-url="HTTPS://example.com">x</p>"#,
+            r#"[data-url^="https" i] { color: red; }"#,
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.r, 255);
+    }
+
+    /// `i` работает с `$=` (суффикс).
+    #[test]
+    fn attr_suffix_case_insensitive() {
+        let root = lay(
+            r#"<p data-file="page.PDF">x</p>"#,
+            r#"[data-file$=".pdf" i] { color: red; }"#,
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.r, 255);
+    }
+
+    /// `i` работает с `*=` (подстрока).
+    #[test]
+    fn attr_substring_case_insensitive() {
+        let root = lay(
+            r#"<p data-url="https://EXAMPLE.com/path">x</p>"#,
+            r#"[data-url*="example" i] { color: red; }"#,
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.r, 255);
+    }
+
+    /// `i` работает с `~=` (whitespace-разделённое слово).
+    #[test]
+    fn attr_includes_case_insensitive() {
+        let root = lay(
+            r#"<p class="foo BAR baz">x</p>"#,
+            r#"[class~="bar" i] { color: red; }"#,
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.r, 255);
+    }
+
+    /// `i` работает с `|=` (lang-style dash-match).
+    #[test]
+    fn attr_dashmatch_case_insensitive() {
+        let root = lay(
+            r#"<p lang="EN-US">x</p>"#,
+            r#"[lang|="en" i] { color: red; }"#,
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.r, 255);
+    }
+
+    /// `i` — это **ASCII** case-insensitive: cyrillic case различается.
+    /// `[lang=РУ i]` не матчит `lang="ру"`.
+    #[test]
+    fn attr_case_insensitive_does_not_fold_cyrillic() {
+        let root = lay(
+            r#"<p lang="ру">x</p>"#,
+            "[lang=РУ i] { color: red; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(
+            p.style.color.r, 0,
+            "ASCII case-fold не должен ронять cyrillic case"
+        );
+    }
 }

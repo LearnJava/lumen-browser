@@ -395,20 +395,62 @@ fn matches_attribute(sel: &AttrSelector, attrs: &[Attribute]) -> bool {
     let Some(attr) = attrs.iter().find(|a| a.name.local == sel.name) else {
         return false;
     };
+    let ci = sel.case_insensitive;
     match (sel.op, sel.value.as_deref()) {
         (None, _) => true,
-        (Some(AttrOp::Equals), Some(v)) => attr.value == v,
+        (Some(AttrOp::Equals), Some(v)) => str_eq(&attr.value, v, ci),
         (Some(AttrOp::Includes), Some(v)) => {
-            !v.is_empty() && attr.value.split_whitespace().any(|w| w == v)
+            !v.is_empty() && attr.value.split_whitespace().any(|w| str_eq(w, v, ci))
         }
         (Some(AttrOp::DashMatch), Some(v)) => {
-            attr.value == v || attr.value.starts_with(&format!("{v}-"))
+            // Точное совпадение или префикс с разделителем `-`. `i` применяется
+            // к обеим частям сравнения (CSS L4 §6.3.6).
+            str_eq(&attr.value, v, ci) || str_starts_with(&attr.value, &format!("{v}-"), ci)
         }
-        (Some(AttrOp::Prefix), Some(v)) => !v.is_empty() && attr.value.starts_with(v),
-        (Some(AttrOp::Suffix), Some(v)) => !v.is_empty() && attr.value.ends_with(v),
-        (Some(AttrOp::Substring), Some(v)) => !v.is_empty() && attr.value.contains(v),
+        (Some(AttrOp::Prefix), Some(v)) => !v.is_empty() && str_starts_with(&attr.value, v, ci),
+        (Some(AttrOp::Suffix), Some(v)) => !v.is_empty() && str_ends_with(&attr.value, v, ci),
+        (Some(AttrOp::Substring), Some(v)) => !v.is_empty() && str_contains(&attr.value, v, ci),
         _ => false,
     }
+}
+
+/// ASCII case-insensitive (если `ci`) сравнение, иначе побайтовое. Cyrillic и
+/// другой не-ASCII всегда сравнивается побайтово (`eq_ignore_ascii_case` не
+/// трогает байты со старшим битом). Работа через `as_bytes()` нужна, чтобы
+/// `starts_with`/`ends_with`/`contains` не упирались в char-boundary в
+/// многобайтовых UTF-8 строках.
+fn str_eq(a: &str, b: &str, ci: bool) -> bool {
+    if ci { a.eq_ignore_ascii_case(b) } else { a == b }
+}
+
+fn str_starts_with(haystack: &str, needle: &str, ci: bool) -> bool {
+    if !ci {
+        return haystack.starts_with(needle);
+    }
+    let (h, n) = (haystack.as_bytes(), needle.as_bytes());
+    h.len() >= n.len() && h[..n.len()].eq_ignore_ascii_case(n)
+}
+
+fn str_ends_with(haystack: &str, needle: &str, ci: bool) -> bool {
+    if !ci {
+        return haystack.ends_with(needle);
+    }
+    let (h, n) = (haystack.as_bytes(), needle.as_bytes());
+    h.len() >= n.len() && h[h.len() - n.len()..].eq_ignore_ascii_case(n)
+}
+
+fn str_contains(haystack: &str, needle: &str, ci: bool) -> bool {
+    if !ci {
+        return haystack.contains(needle);
+    }
+    let (h, n) = (haystack.as_bytes(), needle.as_bytes());
+    if n.is_empty() {
+        return true;
+    }
+    if h.len() < n.len() {
+        return false;
+    }
+    (0..=h.len() - n.len()).any(|i| h[i..i + n.len()].eq_ignore_ascii_case(n))
 }
 
 fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
