@@ -170,3 +170,15 @@ fn descendant_combinator() {
     );
     assert_snapshot("descendant_combinator", &actual);
 }
+
+#[test]
+fn text_decoration_underline_on_link() {
+    // Underline на `<a>` — фрагмент "link" должен получить decoration=underline,
+    // соседний текст в `<p>` — без декорации (не наследуется через дочерний).
+    let actual = build(
+        "<p>before <a>link</a> after</p>",
+        "a { text-decoration: underline; }",
+        800.0,
+    );
+    assert_snapshot("text_decoration_underline_on_link", &actual);
+}
