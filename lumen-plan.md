@@ -2,6 +2,47 @@
 
 > **Lumen** (лат. *свет*, единица светового потока) — приватный, лёгкий, прозрачный браузер. Имя отражает философию проекта: показывать пользователю всё, что происходит, и не быть тяжелее, чем нужно.
 
+## Статус реализации
+
+**Текущая фаза:** Phase 0 (прототип). Этот блок обновляется при каждом коммите, реализующем пункт плана. Условные обозначения: ✅ готово · 🟡 в работе · ⬜ запланировано.
+
+### Инфраструктура
+- ✅ Cargo workspace, 7 крейтов
+- ✅ `rust-toolchain.toml` (stable + rustfmt + clippy)
+- ✅ `.gitattributes` (LF в репо, кросс-платформенные line endings)
+- ✅ Ветка `main`, локальные коммиты, без remote
+
+### Крейты
+- ✅ `lumen-core` — типы и trait-ы: `Error`, `Url`, `Event`, `Capability`, `Module`, `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`
+- ✅ `lumen-dom` — арена + `NodeId` + `Document/Node/NodeData`, API: create/append/detach/Display, 7 тестов (включая кириллицу)
+- ✅ `lumen-shell` — точка входа, пустое окно 1024×720 через winit (ApplicationHandler API)
+- ⬜ `lumen-html-parser` — стаб
+- ⬜ `lumen-css-parser` — стаб
+- ⬜ `lumen-layout` — стаб
+- ⬜ `lumen-paint` — стаб
+
+### Точки расширения (trait-ы из `lumen-core::ext`)
+- ⬜ Реализации `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector` — пока только интерфейсы
+
+### Локализация / RU (§10)
+- ✅ DOM держит кириллицу (UTF-8) — зафиксировано тестами
+- ✅ `Url::parse` принимает кириллические домены (тест на `президент.рф`)
+- ⬜ Encoding detection (cp1251, KOI8-R)
+- ⬜ Cyrillic font fallback в paint
+- ⬜ Punycode/IDN
+- ⬜ Локаль ru-RU (дата/время/числа)
+- ⬜ UI-переводы (Fluent)
+
+### Следующие шаги
+- ⬜ HTML parser (свой токенизатор по HTML5 spec)
+- ⬜ CSS parser (свой)
+- ⬜ Layout: block + inline
+- ⬜ Paint: 2D-растеризация (CPU → GPU через wgpu)
+- ⬜ Связка движка: открыть локальный `test.html` в окне
+- ⬜ HTTP/1.1 + TLS — для загрузки Wikipedia
+
+---
+
 ## 0. Терминология
 
 - **Lumen** — кодовое и публичное имя проекта. Бинарь: `lumen`, конфиг: `~/.config/lumen/`, репозиторий: `lumen`.
@@ -789,14 +830,14 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 ## 15. Фазы разработки (реалистично)
 
 ### Фаза 0 — Прототип (3 месяца)
-- Workspace, base crates.
-- HTML parser (форк html5ever или с нуля).
-- CSS parser (форк cssparser).
-- DOM (арена + базовые типы).
-- Layout: только block + inline.
-- Paint: `tiny-skia` CPU.
-- UI: одно окно, одна вкладка, адресная строка.
-- HTTP/1.1 (через `hyper`), HTTPS.
+- ✅ Workspace, base crates.
+- ⬜ HTML parser.
+- ⬜ CSS parser.
+- ✅ DOM (арена + базовые типы).
+- ⬜ Layout: только block + inline.
+- ⬜ Paint: 2D-растеризация.
+- 🟡 UI: одно окно (готово), вкладки и адресная строка — нет.
+- ⬜ HTTP/1.1 + HTTPS.
 - **Цель:** открыть Wikipedia без стилей. Доказательство концепции.
 
 ### Фаза 1 — v0.1 «Reader» (9 месяцев от старта)
