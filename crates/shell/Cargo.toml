@@ -1,0 +1,20 @@
+[package]
+name = "lumen-shell"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen browser shell: UI process and entry point"
+
+[[bin]]
+name = "lumen"
+path = "src/main.rs"
+
+[dependencies]
+lumen-common.workspace = true
+lumen-html-parser.workspace = true
+lumen-css-parser.workspace = true
+lumen-dom.workspace = true
+lumen-layout.workspace = true
+lumen-paint.workspace = true

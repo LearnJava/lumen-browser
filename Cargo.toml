@@ -1,0 +1,34 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/shell",
+    "crates/common",
+    "crates/engine/html-parser",
+    "crates/engine/css-parser",
+    "crates/engine/dom",
+    "crates/engine/layout",
+    "crates/engine/paint",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2024"
+authors = ["Lumen contributors"]
+license = "MPL-2.0"
+rust-version = "1.95"
+
+[workspace.dependencies]
+lumen-common = { path = "crates/common" }
+lumen-html-parser = { path = "crates/engine/html-parser" }
+lumen-css-parser = { path = "crates/engine/css-parser" }
+lumen-dom = { path = "crates/engine/dom" }
+lumen-layout = { path = "crates/engine/layout" }
+lumen-paint = { path = "crates/engine/paint" }
+
+[profile.dev]
+opt-level = 1
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true

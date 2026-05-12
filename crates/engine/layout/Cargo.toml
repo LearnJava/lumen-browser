@@ -1,0 +1,10 @@
+[package]
+name = "lumen-layout"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: layout engine (block + inline for Phase 0)"
+
+[dependencies]
