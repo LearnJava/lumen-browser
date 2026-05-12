@@ -288,4 +288,244 @@ mod tests {
         // layout() без measurer — всегда одна строка
         assert!((root.rect.height - 19.2).abs() < 0.1);
     }
+
+    // ── Тесты расширенных селекторов ───────────────────────────────────────
+
+    /// Находит первого потомка-блока с заданным тегом, рекурсивно.
+    fn find_by_tag<'a>(b: &'a LayoutBox, tag: &str, doc: &lumen_dom::Document) -> Option<&'a LayoutBox> {
+        if let lumen_dom::NodeData::Element { name, .. } = &doc.get(b.node).data
+            && name.local == tag
+        {
+            return Some(b);
+        }
+        for c in &b.children {
+            if let Some(f) = find_by_tag(c, tag, doc) {
+                return Some(f);
+            }
+        }
+        None
+    }
+
+    /// Утилита: layout + Document, чтобы можно было искать элемент по тегу.
+    fn lay_with_doc(html: &str, css: &str) -> (LayoutBox, lumen_dom::Document) {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        (root, doc)
+    }
+
+    #[test]
+    fn compound_type_and_class_matches() {
+        let (root, doc) = lay_with_doc(
+            r#"<p class="hl">x</p><p>y</p>"#,
+            "p.hl { color: red; }",
+        );
+        let mut paragraphs = Vec::new();
+        for c in &root.children {
+            if matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p")
+            {
+                paragraphs.push(c);
+            }
+        }
+        assert_eq!(paragraphs.len(), 2);
+        // Первый <p class="hl"> — красный, второй <p> — наследует чёрный.
+        assert_eq!(paragraphs[0].style.color.r, 255);
+        assert_eq!(paragraphs[1].style.color.r, 0);
+    }
+
+    #[test]
+    fn descendant_combinator_matches() {
+        let (root, doc) = lay_with_doc(
+            "<div><p>nested</p></div><p>top</p>",
+            "div p { color: red; }",
+        );
+        // Найдём <p> внутри <div> и <p> прямо в root.
+        let div_box = root
+            .children
+            .iter()
+            .find(|c| matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "div"))
+            .unwrap();
+        let nested_p = find_by_tag(div_box, "p", &doc).unwrap();
+        assert_eq!(nested_p.style.color.r, 255, "nested <p> should be red");
+
+        let top_p = root
+            .children
+            .iter()
+            .find(|c| matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p"))
+            .unwrap();
+        assert_eq!(top_p.style.color.r, 0, "top-level <p> should NOT match");
+    }
+
+    #[test]
+    fn child_combinator_only_direct() {
+        let (root, doc) = lay_with_doc(
+            "<ul><li>a</li><div><li>b</li></div></ul>",
+            "ul > li { color: red; }",
+        );
+        let ul = find_by_tag(&root, "ul", &doc).unwrap();
+        // Прямой <li> — красный.
+        let direct_li = ul
+            .children
+            .iter()
+            .find(|c| matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "li"))
+            .unwrap();
+        assert_eq!(direct_li.style.color.r, 255);
+        // Вложенный <li> — не должен матчить, наследует чёрный.
+        let div = find_by_tag(ul, "div", &doc).unwrap();
+        let nested_li = find_by_tag(div, "li", &doc).unwrap();
+        assert_eq!(nested_li.style.color.r, 0);
+    }
+
+    #[test]
+    fn next_sibling_combinator_matches() {
+        let (root, doc) = lay_with_doc(
+            "<h1>t</h1><p>a</p><p>b</p>",
+            "h1 + p { color: red; }",
+        );
+        let mut ps = Vec::new();
+        for c in &root.children {
+            if matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p")
+            {
+                ps.push(c);
+            }
+        }
+        // Только первый <p> сразу после <h1> матчит.
+        assert_eq!(ps[0].style.color.r, 255);
+        assert_eq!(ps[1].style.color.r, 0);
+    }
+
+    #[test]
+    fn later_sibling_combinator_matches() {
+        let (root, doc) = lay_with_doc(
+            "<h1>t</h1><p>a</p><p>b</p>",
+            "h1 ~ p { color: red; }",
+        );
+        let mut ps = Vec::new();
+        for c in &root.children {
+            if matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p")
+            {
+                ps.push(c);
+            }
+        }
+        // Оба <p> после <h1> матчат.
+        assert_eq!(ps[0].style.color.r, 255);
+        assert_eq!(ps[1].style.color.r, 255);
+    }
+
+    #[test]
+    fn attribute_equals_matches() {
+        let (root, doc) = lay_with_doc(
+            r#"<p lang="ru">x</p><p lang="en">y</p>"#,
+            r#"[lang="ru"] { color: red; }"#,
+        );
+        let mut ps = Vec::new();
+        for c in &root.children {
+            if matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p")
+            {
+                ps.push(c);
+            }
+        }
+        assert_eq!(ps[0].style.color.r, 255);
+        assert_eq!(ps[1].style.color.r, 0);
+    }
+
+    #[test]
+    fn attribute_presence_matches() {
+        let (root, doc) = lay_with_doc(
+            r#"<a href="x">link</a><a>not-link</a>"#,
+            "[href] { color: red; }",
+        );
+        let mut anchors = Vec::new();
+        for c in &root.children {
+            if matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "a")
+            {
+                anchors.push(c);
+            }
+        }
+        assert_eq!(anchors[0].style.color.r, 255);
+        assert_eq!(anchors[1].style.color.r, 0);
+    }
+
+    #[test]
+    fn attribute_dash_match_for_lang() {
+        let (root, doc) = lay_with_doc(
+            r#"<p lang="ru-RU">x</p><p lang="ruler">y</p>"#,
+            r#"[lang|="ru"] { color: red; }"#,
+        );
+        let mut ps = Vec::new();
+        for c in &root.children {
+            if matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p")
+            {
+                ps.push(c);
+            }
+        }
+        // "ru-RU" матчит (`ru` или `ru-…`), "ruler" — нет.
+        assert_eq!(ps[0].style.color.r, 255);
+        assert_eq!(ps[1].style.color.r, 0);
+    }
+
+    #[test]
+    fn pseudo_first_child_matches() {
+        let (root, doc) = lay_with_doc("<p>a</p><p>b</p><p>c</p>", "p:first-child { color: red; }");
+        let mut ps = Vec::new();
+        for c in &root.children {
+            if matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p")
+            {
+                ps.push(c);
+            }
+        }
+        assert_eq!(ps[0].style.color.r, 255);
+        assert_eq!(ps[1].style.color.r, 0);
+        assert_eq!(ps[2].style.color.r, 0);
+    }
+
+    #[test]
+    fn pseudo_last_child_matches() {
+        let (root, doc) = lay_with_doc("<p>a</p><p>b</p><p>c</p>", "p:last-child { color: red; }");
+        let mut ps = Vec::new();
+        for c in &root.children {
+            if matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "p")
+            {
+                ps.push(c);
+            }
+        }
+        assert_eq!(ps[2].style.color.r, 255);
+        assert_eq!(ps[0].style.color.r, 0);
+    }
+
+    #[test]
+    fn pseudo_hover_never_matches() {
+        let root = lay("<p>x</p>", "p:hover { color: red; }");
+        let p = first_element_child(&root);
+        // :hover в Phase 0 никогда не матчит.
+        assert_eq!(p.style.color.r, 0);
+    }
+
+    #[test]
+    fn id_wins_over_class() {
+        // id specificity (1,0,0) > class (0,1,0). Порядок правил в CSS — class
+        // после id — не должен пересилить.
+        let root = lay(
+            r#"<p id="x" class="c">v</p>"#,
+            "#x { color: red; } .c { color: blue; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.r, 255, "id should win over class");
+        assert_eq!(p.style.color.b, 0);
+    }
+
+    #[test]
+    fn class_wins_over_type() {
+        // class (0,1,0) > type (0,0,1). Type идёт после в порядке — но проиграет.
+        let root = lay(r#"<p class="c">v</p>"#, ".c { color: red; } p { color: blue; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.r, 255);
+    }
+
+    #[test]
+    fn equal_specificity_last_wins() {
+        let root = lay("<p>v</p>", "p { color: red; } p { color: blue; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.b, 255);
+    }
 }
