@@ -439,7 +439,7 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
-*   (soon)   inline-flow            — TextMeasurer + FontMeasurer + line wrapping: текст переносится по словам
+*   90b849a  inline-flow            — TextMeasurer + FontMeasurer + line wrapping: текст переносится по словам
 *   e2864ac  hide-head-elements     — <title>, <style>, <script> и др. метаданные больше не рендерятся
 *   061c2c7  claude-md-self-update-rule — правило обновлять CLAUDE.md вместе с планом
 *   586f8ba  claude-md-state        — детальное состояние подсистем + roadmap + decisions log
