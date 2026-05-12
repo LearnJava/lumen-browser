@@ -1,0 +1,25 @@
+# Normalize all text files to LF in the repo across platforms.
+# Working copy keeps native line endings unless overridden below.
+* text=auto eol=lf
+
+# Rust / config files always LF, even in working copy
+*.rs text eol=lf
+*.toml text eol=lf
+*.lock text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+
+# Shell / build scripts
+*.sh text eol=lf
+
+# Explicit binary types (do not touch)
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.ico binary
+*.icns binary
+*.woff binary
+*.woff2 binary
+*.ttf binary
+*.otf binary
