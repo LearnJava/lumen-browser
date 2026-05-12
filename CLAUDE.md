@@ -312,10 +312,11 @@ git branch -d text-rendering
 
 ### `lumen-html-parser` 🟡 (минимум)
 
-- **Готово:** iterator-based FSM (Tokenizer); состояния Data, TagOpen, TagName, EndTag, BeforeAttributeName, AttributeName, AfterAttributeName, BeforeAttributeValue, AttributeValue (quoted/unquoted), SelfClosingStartTag, MarkupDeclarationOpen, Comment, CommentEnd, **RAWTEXT** (для `<script>` и `<style>`). Character references: `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`, `&nbsp;`, numeric `&#NNN;` / `&#xHHHH;`. Lenient tree builder с void-элементами и self-closing.
+- **Готово:** iterator-based FSM (Tokenizer); состояния Data, TagOpen, TagName, EndTag, BeforeAttributeName, AttributeName, AfterAttributeName, BeforeAttributeValue, AttributeValue (quoted/unquoted), SelfClosingStartTag, MarkupDeclarationOpen, Comment, CommentEnd, **RAWTEXT** (для `<script>` и `<style>`), **DOCTYPE**. Character references: `&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`, `&nbsp;`, numeric `&#NNN;` / `&#xHHHH;`. Lenient tree builder с void-элементами и self-closing.
 - **RAWTEXT детали:** после `<script>` / `<style>` (не self-closing) тело читается литерально до `</tag` + терминатор (whitespace / `/` / `>` / EOF), case-insensitive. `<` без `/` или `</scripto>` остаются текстом. Character references (`&amp;`) внутри **не декодируются** — это spec-compliant поведение HTML5. После `</script>` токенизатор возвращается в data state. `is_raw_text_element(name)` определяет список (сейчас только script/style).
-- **Отложено:** DOCTYPE-разбор (пропускаем содержимое), CDATA, RCDATA для `<title>` / `<textarea>` (как RAWTEXT, но с декодированием entities), полный набор named character references (~2000 в HTML5 spec), insertion modes (in_table, in_select, in_caption, и т.д.).
-- 48 тестов (13 tokenizer + 3 tree_builder для RAWTEXT).
+- **DOCTYPE детали:** `Token::Doctype { name, public_id, system_id }` (HTML5 §13.2.5.53–72). После `<!DOCTYPE` keyword (case-insensitive `doctype`/`DOCTYPE`) парсятся: name (lower-case, до whitespace или `>`), опционально `PUBLIC "id" "id"` или `SYSTEM "id"` с поддержкой одинарных и двойных кавычек. Lenient: `<!DOCTYPE>` без имени даёт пустой name, неполные DOCTYPE-ы не валятся. Tree builder создаёт `NodeData::Doctype` узел (раньше токен пропускался). Прочие markup declarations типа `<![CDATA[...]]>` или `<!ENTITY ...>` по-прежнему молча skip-аются до `>`.
+- **Отложено:** CDATA, RCDATA для `<title>` / `<textarea>` (как RAWTEXT, но с декодированием entities), полный набор named character references (~2000 в HTML5 spec), insertion modes (in_table, in_select, in_caption, и т.д.).
+- 57 тестов (Tokenizer + tree_builder).
 
 ### `lumen-css-parser` 🟡 (полный набор CSS3-селекторов)
 
@@ -384,7 +385,7 @@ git branch -d text-rendering
 
 ### Численно
 
-- **Всего тестов в workspace:** 536 (на момент последнего обновления).
+- **Всего тестов в workspace:** 545 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -486,6 +487,7 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            html-doctype-parsing   — DOCTYPE parsing (HTML5 §13.2.5.53-72): Token::Doctype с name/public_id/system_id, NodeData::Doctype узел; 9 новых тестов
 *            css-hue-units          — HSL hue в turn/rad/grad (CSS Color L4 §9): parse_hue_component распознаёт суффиксы, конвертирует в degrees; 4 новых теста
 *            css-viewport-units     — vh/vw/vmin/vmax (CSS Values L3 §6.1.2): Length варианты, parse_length распознаёт суффиксы, viewport прокинут через compute_style; 5 unit + 7 layout тестов
 *            css-named-colors       — полный CSS3 набор named colors (147) + rebeccapurple (CSS4): сортированная таблица NAMED_COLORS + binary_search_by_key; 10 новых тестов

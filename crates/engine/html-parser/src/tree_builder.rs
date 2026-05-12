@@ -62,6 +62,18 @@ pub fn parse(input: &str) -> Document {
                 let parent = *stack.last().expect("stack always non-empty");
                 doc.append_child(parent, comment);
             }
+            Token::Doctype {
+                name,
+                public_id,
+                system_id,
+            } => {
+                // По HTML5 spec DOCTYPE до <html> идёт прямо в Document.
+                // Без insertion modes мы кладём его туда, где сейчас стек —
+                // обычно тоже Document. Этого достаточно для рендеринга.
+                let dt = doc.create_doctype(name, public_id, system_id);
+                let parent = *stack.last().expect("stack always non-empty");
+                doc.append_child(parent, dt);
+            }
         }
     }
 
@@ -152,11 +164,30 @@ mod tests {
     }
 
     #[test]
-    fn doctype_ignored_content_kept() {
+    fn doctype_creates_node_and_keeps_content() {
         let doc = parse("<!DOCTYPE html><p>x</p>");
         let s = doc.to_string();
+        // Doctype node теперь создаётся (раньше токен пропускался).
+        assert!(s.contains("<!DOCTYPE html>"), "doctype line missing: {s}");
         assert!(s.contains("<p>"));
         assert!(s.contains("\"x\""));
+    }
+
+    #[test]
+    fn doctype_node_data_preserved() {
+        // Прямая проверка NodeData::Doctype с public/system_id.
+        let doc = parse(r#"<!DOCTYPE html PUBLIC "pid" "sid"><p>x</p>"#);
+        let root = doc.get(doc.root());
+        let dt_id = root.children[0];
+        let dt_node = doc.get(dt_id);
+        match &dt_node.data {
+            NodeData::Doctype { name, public_id, system_id } => {
+                assert_eq!(name, "html");
+                assert_eq!(public_id, "pid");
+                assert_eq!(system_id, "sid");
+            }
+            other => panic!("expected Doctype, got {other:?}"),
+        }
     }
 
     #[test]
