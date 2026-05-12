@@ -51,6 +51,10 @@ pub struct AttrSelector {
     pub name: String,
     pub op: Option<AttrOp>,
     pub value: Option<String>,
+    /// Модификатор `i` из CSS Selectors L4 §6.3.6 — ASCII case-insensitive
+    /// сравнение значения. `s` явно ставит false (как default). Применим только
+    /// при `op = Some(_)`; без оператора (`[attr]`) флаг игнорируется парсером.
+    pub case_insensitive: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -520,6 +524,7 @@ impl<'a> Parser<'a> {
                     name,
                     op: None,
                     value: None,
+                    case_insensitive: false,
                 }));
             }
             '=' => {
@@ -579,6 +584,23 @@ impl<'a> Parser<'a> {
         self.skip_ws_and_comments();
         let value = self.parse_attr_value()?;
         self.skip_ws_and_comments();
+        // CSS Selectors L4 §6.3.6: `i` или `s` после value — модификатор
+        // сравнения. `i` — ASCII case-insensitive, `s` — explicit case-sensitive
+        // (default). Парсятся case-insensitively сами по себе (`I` / `S` тоже
+        // валидны).
+        let case_insensitive = match self.peek() {
+            Some('i' | 'I') => {
+                self.consume();
+                self.skip_ws_and_comments();
+                true
+            }
+            Some('s' | 'S') => {
+                self.consume();
+                self.skip_ws_and_comments();
+                false
+            }
+            _ => false,
+        };
         if self.peek() != Some(']') {
             self.recover_to_attr_end();
             return None;
@@ -588,6 +610,7 @@ impl<'a> Parser<'a> {
             name,
             op: Some(op),
             value: Some(value),
+            case_insensitive,
         }))
     }
 
@@ -1205,6 +1228,73 @@ mod tests {
         assert_eq!(head.parts.len(), 2);
         assert!(matches!(head.parts[0], SimpleSelector::Type(ref t) if t == "a"));
         assert!(matches!(&head.parts[1], SimpleSelector::Attribute(a) if a.name == "href"));
+    }
+
+    // ──────────────── case-insensitive attribute (CSS L4 §6.3.6) ────────────
+
+    fn attr_at(s: &Stylesheet, rule: usize) -> &AttrSelector {
+        match &s.rules[rule].selectors[0].head.parts[0] {
+            SimpleSelector::Attribute(a) => a,
+            other => panic!("expected attribute selector, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn attribute_case_insensitive_flag_lowercase() {
+        let s = parse("[type=submit i] { color: red; }");
+        let a = attr_at(&s, 0);
+        assert!(a.case_insensitive);
+        assert_eq!(a.value.as_deref(), Some("submit"));
+    }
+
+    #[test]
+    fn attribute_case_insensitive_flag_uppercase() {
+        // `I` тоже должен работать (флаги ASCII case-insensitive).
+        let s = parse("[type=submit I] { color: red; }");
+        assert!(attr_at(&s, 0).case_insensitive);
+    }
+
+    #[test]
+    fn attribute_case_sensitive_explicit() {
+        // `s` явно ставит case-sensitive (default).
+        let s = parse("[type=submit s] { color: red; }");
+        assert!(!attr_at(&s, 0).case_insensitive);
+    }
+
+    #[test]
+    fn attribute_case_insensitive_with_quoted_value() {
+        let s = parse(r#"[lang="EN-us" i] { color: red; }"#);
+        let a = attr_at(&s, 0);
+        assert!(a.case_insensitive);
+        assert_eq!(a.value.as_deref(), Some("EN-us"));
+    }
+
+    #[test]
+    fn attribute_case_insensitive_works_for_all_ops() {
+        // Флаг `i` совместим со всеми операторами.
+        for src in [
+            "[a~=v i]",
+            "[a|=v i]",
+            "[a^=v i]",
+            "[a$=v i]",
+            "[a*=v i]",
+        ] {
+            let s = parse(&format!("{src} {{}}"));
+            assert!(attr_at(&s, 0).case_insensitive, "ci flag lost in {src}");
+        }
+    }
+
+    #[test]
+    fn attribute_no_flag_default_case_sensitive() {
+        let s = parse("[type=submit] { color: red; }");
+        assert!(!attr_at(&s, 0).case_insensitive);
+    }
+
+    #[test]
+    fn attribute_case_insensitive_with_extra_whitespace() {
+        // Между value и `i` — любое количество пробелов.
+        let s = parse("[type=submit   i ] { color: red; }");
+        assert!(attr_at(&s, 0).case_insensitive);
     }
 
     // ──────────────── pseudo-classes / pseudo-elements ────────────────
