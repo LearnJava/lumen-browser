@@ -273,7 +273,7 @@ mod tests {
                 x_max: 10,
                 y_max: 10,
             },
-            outline: Outline::Composite,
+            outline: Outline::Composite(Vec::new()),
         };
         assert!(Rasterizer::new(16.0, 1000).rasterize(&glyph).is_none());
     }

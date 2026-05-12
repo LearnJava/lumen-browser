@@ -689,8 +689,9 @@ fn rasterize_and_insert(
     hmtx: &Hmtx,
     glyph_id: u16,
 ) -> Option<CachedGlyph> {
-    let glyph = font.glyph(glyph_id).ok().flatten()?;
-    // Composite пока не растеризуем.
+    // glyph_resolved разворачивает composite в Simple рекурсивно, подставляя
+    // компоненты с их transform/offset. Для уже simple-глифа возвращает как есть.
+    let glyph = font.glyph_resolved(glyph_id).ok().flatten()?;
     if !matches!(glyph.outline, Outline::Simple(_)) {
         return None;
     }
