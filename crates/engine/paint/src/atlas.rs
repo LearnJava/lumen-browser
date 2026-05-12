@@ -136,6 +136,8 @@ mod tests {
             width: w,
             height: h,
             pixels: vec![fill; (w * h) as usize],
+            left: 0.0,
+            top: 0.0,
         }
     }
 

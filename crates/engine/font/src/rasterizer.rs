@@ -22,6 +22,13 @@ pub struct Bitmap {
     pub height: u32,
     /// `width × height` байт, row-major, по 1 байту на пиксель (coverage 0..255).
     pub pixels: Vec<u8>,
+    /// Где левый край bitmap-а относительно origin'а глифа (cursor X),
+    /// в пикселях. Обычно совпадает с `floor(bbox.x_min × scale) − padding`.
+    pub left: f32,
+    /// Сколько пикселей верхний край bitmap-а находится НАД baseline-ом.
+    /// Положительное число = bitmap above baseline. Обычно совпадает с
+    /// `ceil(bbox.y_max × scale) + padding`.
+    pub top: f32,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -77,6 +84,8 @@ impl Rasterizer {
             width,
             height,
             pixels,
+            left: x_min as f32,
+            top: y_max as f32,
         })
     }
 }
