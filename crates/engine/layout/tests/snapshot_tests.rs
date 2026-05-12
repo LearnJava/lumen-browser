@@ -202,3 +202,15 @@ fn border_top_only() {
     );
     assert_snapshot("border_top_only", &actual);
 }
+
+#[test]
+fn box_sizing_border_box_with_padding_border() {
+    // border-box: width=100 включает padding 10 и border 2 — rect.width = 100,
+    // дочерний контент сжимается до 100 - 10*2 - 2*2 = 76px.
+    let actual = build(
+        "<p>x</p>",
+        "p { width: 100px; padding: 10px; border: 2px solid black; box-sizing: border-box; }",
+        800.0,
+    );
+    assert_snapshot("box_sizing_border_box_with_padding_border", &actual);
+}

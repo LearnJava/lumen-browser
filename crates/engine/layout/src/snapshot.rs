@@ -10,7 +10,7 @@
 //! «дефолта».
 
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
-use crate::style::{BorderStyle, Color, ComputedStyle, Display, TextAlign};
+use crate::style::{BorderStyle, BoxSizing, Color, ComputedStyle, Display, TextAlign};
 use std::fmt::Write;
 
 /// Корневой entry-point: рекурсивно сериализует всё дерево.
@@ -81,6 +81,9 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
     }
     if let Some(h) = s.height {
         let _ = write!(out, " h={h:.2}");
+    }
+    if matches!(s.box_sizing, BoxSizing::BorderBox) {
+        out.push_str(" box-sizing=border-box");
     }
     write_text_style_attrs(out, s);
     if s.margin_top != 0.0

@@ -18,7 +18,7 @@ pub mod style;
 
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
-pub use style::{BorderStyle, Color, ComputedStyle, Display, TextAlign, TextDecorationLine};
+pub use style::{BorderStyle, BoxSizing, Color, ComputedStyle, Display, TextAlign, TextDecorationLine};
 
 /// Интерфейс измерения ширины символов для line wrapping.
 ///
@@ -1077,5 +1077,115 @@ mod tests {
         let root = lay("<p>x</p>", "p { border: 5px solid red; border: none; }");
         let p = first_element_child(&root);
         assert_eq!(p.style.border_top_style, BorderStyle::None);
+    }
+
+    // ── Тесты CSS box-sizing ───────────────────────────────────────────────
+
+    /// content-box (default): rect.width = width + padding + border.
+    #[test]
+    fn content_box_width_adds_padding_and_border() {
+        let root = lay(
+            "<p>x</p>",
+            "p { width: 100px; padding: 10px; border: 2px solid black; box-sizing: content-box; }",
+        );
+        let p = first_element_child(&root);
+        // 100 (content) + 10*2 (padding) + 2*2 (border) = 124
+        assert!(
+            (p.rect.width - 124.0).abs() < 0.01,
+            "rect.width={}",
+            p.rect.width
+        );
+    }
+
+    /// border-box: rect.width = width (включая padding и border).
+    #[test]
+    fn border_box_width_includes_padding_and_border() {
+        let root = lay(
+            "<p>x</p>",
+            "p { width: 100px; padding: 10px; border: 2px solid black; box-sizing: border-box; }",
+        );
+        let p = first_element_child(&root);
+        // border-box: rect.width = width = 100
+        assert!(
+            (p.rect.width - 100.0).abs() < 0.01,
+            "rect.width={}",
+            p.rect.width
+        );
+    }
+
+    /// border-box: контент-зона сжимается, чтобы width влез вместе с padding+border.
+    #[test]
+    fn border_box_children_use_shrunken_content_width() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { width: 200px; padding: 10px; border: 5px solid black; box-sizing: border-box; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // div rect.width = 200. content_width = 200 - 10*2 - 5*2 = 170.
+        assert!((div.rect.width - 200.0).abs() < 0.01, "div={}", div.rect.width);
+        assert!(
+            (p.rect.width - 170.0).abs() < 0.01,
+            "p={}",
+            p.rect.width
+        );
+    }
+
+    /// border-box: height тоже включает padding и border.
+    #[test]
+    fn border_box_height_includes_padding_and_border() {
+        let root = lay(
+            "<p>x</p>",
+            "p { height: 100px; padding: 10px; border: 5px solid black; box-sizing: border-box; }",
+        );
+        let p = first_element_child(&root);
+        assert!(
+            (p.rect.height - 100.0).abs() < 0.01,
+            "rect.height={}",
+            p.rect.height
+        );
+    }
+
+    /// content-box (default): height = h + padding + border.
+    #[test]
+    fn content_box_height_adds_padding_and_border() {
+        let root = lay(
+            "<p>x</p>",
+            "p { height: 100px; padding: 10px; border: 5px solid black; }",
+        );
+        let p = first_element_child(&root);
+        // 100 + 10*2 + 5*2 = 130
+        assert!(
+            (p.rect.height - 130.0).abs() < 0.01,
+            "rect.height={}",
+            p.rect.height
+        );
+    }
+
+    /// border-box не меняет поведение, если нет ни padding, ни border.
+    #[test]
+    fn border_box_equivalent_to_content_box_without_padding_border() {
+        let root_cb = lay("<p>x</p>", "p { width: 200px; box-sizing: content-box; }");
+        let root_bb = lay("<p>x</p>", "p { width: 200px; box-sizing: border-box; }");
+        let p_cb = first_element_child(&root_cb);
+        let p_bb = first_element_child(&root_bb);
+        assert!((p_cb.rect.width - p_bb.rect.width).abs() < 0.01);
+    }
+
+    /// box-sizing не наследуется на уровне layout — у вложенного <p> остаётся content-box.
+    #[test]
+    fn box_sizing_does_not_inherit_into_child_layout() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { box-sizing: border-box; } p { width: 100px; padding: 5px; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // p использует content-box (default) → 100 + 5*2 = 110.
+        assert!(
+            (p.rect.width - 110.0).abs() < 0.01,
+            "p.rect.width={}",
+            p.rect.width
+        );
     }
 }
