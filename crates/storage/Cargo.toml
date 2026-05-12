@@ -1,0 +1,11 @@
+[package]
+name = "lumen-storage"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: KV-хранилище с origin-партиционированием (cookies, history, profile)"
+
+[dependencies]
+lumen-core.workspace = true
