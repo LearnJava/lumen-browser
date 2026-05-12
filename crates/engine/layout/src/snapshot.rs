@@ -10,7 +10,7 @@
 //! «дефолта».
 
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
-use crate::style::{BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, TextAlign};
+use crate::style::{BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, FontWeight, TextAlign};
 use std::fmt::Write;
 
 /// Корневой entry-point: рекурсивно сериализует всё дерево.
@@ -181,6 +181,9 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
         FontStyle::Oblique => {
             let _ = write!(out, " font-style=oblique");
         }
+    }
+    if s.font_weight != FontWeight::NORMAL {
+        let _ = write!(out, " font-weight={}", s.font_weight.0);
     }
 }
 
