@@ -1461,4 +1461,75 @@ mod tests {
         assert_eq!(p.style.color.b, 255);
         assert_eq!(p.style.color.r, 0);
     }
+
+    // ── viewport units (vh/vw/vmin/vmax) ───────────────────────────────────
+
+    /// `width: 50vw` — половина ширины viewport. Default lay() — 800x600.
+    #[test]
+    fn width_vw_uses_viewport() {
+        let root = lay("<p>x</p>", "p { width: 50vw; }");
+        let p = first_element_child(&root);
+        assert!((p.rect.width - 400.0).abs() < 0.01, "width = {}", p.rect.width);
+    }
+
+    /// `height: 25vh` — четверть высоты viewport.
+    #[test]
+    fn height_vh_uses_viewport() {
+        // 25vh от 600 = 150.
+        let root = lay("<p>x</p>", "p { height: 25vh; }");
+        let p = first_element_child(&root);
+        assert!((p.rect.height - 150.0).abs() < 0.01, "height = {}", p.rect.height);
+    }
+
+    /// `padding` через vw.
+    #[test]
+    fn padding_vw_uses_viewport() {
+        // 10vw от 800 = 80.
+        let root = lay("<p>x</p>", "p { padding: 10vw; }");
+        let p = first_element_child(&root);
+        assert!((p.style.padding_top - 80.0).abs() < 0.01);
+        assert!((p.style.padding_left - 80.0).abs() < 0.01);
+    }
+
+    /// `font-size` через vh влияет на размер шрифта (наследуется в InlineRun).
+    #[test]
+    fn font_size_vh_uses_viewport() {
+        // 5vh от 600 = 30.
+        let root = lay("<p>x</p>", "p { font-size: 5vh; }");
+        let p = first_element_child(&root);
+        let inline = p
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }))
+            .unwrap();
+        assert!((inline.style.font_size - 30.0).abs() < 0.01, "fs = {}", inline.style.font_size);
+    }
+
+    /// `vmin` — меньшая сторона viewport (800 vs 600 → 600).
+    #[test]
+    fn width_vmin_uses_smaller_side() {
+        // 50vmin от min(800, 600) = 600 → 300.
+        let root = lay("<p>x</p>", "p { width: 50vmin; }");
+        let p = first_element_child(&root);
+        assert!((p.rect.width - 300.0).abs() < 0.01, "width = {}", p.rect.width);
+    }
+
+    /// `vmax` — большая сторона viewport (800 vs 600 → 800).
+    #[test]
+    fn width_vmax_uses_larger_side() {
+        // 50vmax от max(800, 600) = 800 → 400.
+        let root = lay("<p>x</p>", "p { width: 50vmax; }");
+        let p = first_element_child(&root);
+        assert!((p.rect.width - 400.0).abs() < 0.01, "width = {}", p.rect.width);
+    }
+
+    /// `border-width` через vh.
+    #[test]
+    fn border_width_vh_uses_viewport() {
+        // 1vh от 600 = 6.
+        let root = lay("<p>x</p>", "p { border: 1vh solid red; }");
+        let p = first_element_child(&root);
+        assert!((p.style.border_top_width - 6.0).abs() < 0.01);
+        assert!((p.style.border_right_width - 6.0).abs() < 0.01);
+    }
 }

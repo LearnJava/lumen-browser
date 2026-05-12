@@ -14,6 +14,7 @@
 //! вложенными `a`-предками могут промахнуться — это известное упрощение, до
 //! фазы со «честным» Selectors-движком.
 
+use lumen_core::geom::Size;
 use lumen_css_parser::{
     AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, Declaration, PseudoClass,
     SimpleSelector, Specificity, Stylesheet,
@@ -206,6 +207,7 @@ pub fn compute_style(
     node: NodeId,
     sheet: &Stylesheet,
     inherited: &ComputedStyle,
+    viewport: Size,
 ) -> ComputedStyle {
     let mut style = ComputedStyle {
         display: default_display(doc, node),
@@ -277,13 +279,13 @@ pub fn compute_style(
     // самого font-size — относительно inherited (родительского) font-size.
     let parent_fs = inherited.font_size;
     for (_, _, _, _, decl) in &matched {
-        apply_font_size(&mut style, decl, parent_fs);
+        apply_font_size(&mut style, decl, parent_fs, viewport);
     }
 
     // Main-pass: остальные декларации; em-basis теперь = current font_size.
     let em_basis = style.font_size;
     for (_, _, _, _, decl) in &matched {
-        apply_declaration(&mut style, decl, em_basis);
+        apply_declaration(&mut style, decl, em_basis, viewport);
     }
 
     style
@@ -671,6 +673,14 @@ pub enum Length {
     /// нужны honest contain blocks; до тех пор `%` в margin/padding
     /// игнорируется).
     Percent(f32),
+    /// `vh` — 1% от высоты viewport (CSS Values L3 §6.1.2).
+    Vh(f32),
+    /// `vw` — 1% от ширины viewport.
+    Vw(f32),
+    /// `vmin` — 1% от меньшей из двух сторон viewport.
+    Vmin(f32),
+    /// `vmax` — 1% от большей из двух сторон viewport.
+    Vmax(f32),
 }
 
 impl Length {
@@ -678,19 +688,27 @@ impl Length {
     /// считать `em` (родителя для font-size; текущего элемента для остального).
     /// `percent_basis` — длина, относительно которой считать `%` (None если
     /// контекст ещё не определён — тогда `%` даёт None).
-    pub fn resolve(&self, em_basis: f32, percent_basis: Option<f32>) -> Option<f32> {
+    /// `viewport` — размер viewport-а для `vh`/`vw`/`vmin`/`vmax`.
+    pub fn resolve(&self, em_basis: f32, percent_basis: Option<f32>, viewport: Size) -> Option<f32> {
         match *self {
             Length::Px(v) => Some(v),
             Length::Em(v) => Some(v * em_basis),
             Length::Rem(v) => Some(v * ROOT_FONT_SIZE),
             Length::Percent(v) => percent_basis.map(|b| v / 100.0 * b),
+            Length::Vh(v) => Some(v / 100.0 * viewport.height),
+            Length::Vw(v) => Some(v / 100.0 * viewport.width),
+            Length::Vmin(v) => Some(v / 100.0 * viewport.width.min(viewport.height)),
+            Length::Vmax(v) => Some(v / 100.0 * viewport.width.max(viewport.height)),
         }
     }
 }
 
-/// Парсит CSS-длину: число + опциональная единица (`px`, `em`, `rem`, `%`).
-/// Голое число (`0`) считаем `Px(0)` — CSS позволяет опускать единицу только
-/// для нуля, но мы прощаем и для других чисел (как делают все парсеры на практике).
+/// Парсит CSS-длину: число + опциональная единица (`px`, `em`, `rem`, `%`,
+/// `vh`/`vw`/`vmin`/`vmax`). Голое число (`0`) считаем `Px(0)` — CSS позволяет
+/// опускать единицу только для нуля, но мы прощаем и для других чисел.
+///
+/// Порядок проверки суффиксов важен: более длинные сначала (`vmin`/`vmax`
+/// перед `vw`/`vh`, `rem` перед `em`).
 pub fn parse_length(s: &str) -> Option<Length> {
     let s = s.trim();
     if let Some(num) = s.strip_suffix("px") {
@@ -702,13 +720,25 @@ pub fn parse_length(s: &str) -> Option<Length> {
     if let Some(num) = s.strip_suffix("em") {
         return num.trim().parse::<f32>().ok().map(Length::Em);
     }
+    if let Some(num) = s.strip_suffix("vmin") {
+        return num.trim().parse::<f32>().ok().map(Length::Vmin);
+    }
+    if let Some(num) = s.strip_suffix("vmax") {
+        return num.trim().parse::<f32>().ok().map(Length::Vmax);
+    }
+    if let Some(num) = s.strip_suffix("vh") {
+        return num.trim().parse::<f32>().ok().map(Length::Vh);
+    }
+    if let Some(num) = s.strip_suffix("vw") {
+        return num.trim().parse::<f32>().ok().map(Length::Vw);
+    }
     if let Some(num) = s.strip_suffix('%') {
         return num.trim().parse::<f32>().ok().map(Length::Percent);
     }
     s.parse::<f32>().ok().map(Length::Px)
 }
 
-fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, em_basis: f32) {
+fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, em_basis: f32, viewport: Size) {
     let prop = decl.property.as_str();
     let val = decl.value.as_str();
     match prop {
@@ -739,18 +769,18 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, em_basis: f3
             }
         }
         "width" if val != "auto" => {
-            style.width = parse_length(val).and_then(|l| l.resolve(em_basis, None));
+            style.width = parse_length(val).and_then(|l| l.resolve(em_basis, None, viewport));
         }
         "height" if val != "auto" => {
-            style.height = parse_length(val).and_then(|l| l.resolve(em_basis, None));
+            style.height = parse_length(val).and_then(|l| l.resolve(em_basis, None, viewport));
         }
         "font-size" => {
             // Обрабатывается в pre-pass; в этой ветке пропускаем.
         }
         "line-height" => {
             // `1.5` (unitless) — коэффициент. `1.5em` — то же самое.
-            // `150%` — то же самое.
-            // `24px` — конкретная высота, переводим в коэффициент / font_size.
+            // `150%` — то же самое. `24px` / `5vh` — конкретная высота,
+            // переводим в коэффициент / font_size.
             if let Ok(v) = val.parse::<f32>() {
                 style.line_height = v;
             } else if let Some(len) = parse_length(val) {
@@ -759,58 +789,63 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, em_basis: f3
                     Length::Em(v) => style.line_height = v,
                     Length::Rem(v) => style.line_height = v * ROOT_FONT_SIZE / style.font_size,
                     Length::Percent(v) => style.line_height = v / 100.0,
+                    Length::Vh(_) | Length::Vw(_) | Length::Vmin(_) | Length::Vmax(_) => {
+                        if let Some(px) = len.resolve(em_basis, None, viewport) {
+                            style.line_height = px / style.font_size;
+                        }
+                    }
                 }
             }
         }
         "margin" => {
-            if let Some(v) = resolve_box_length(val, em_basis) {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
                 style.margin_top = v;
                 style.margin_right = v;
                 style.margin_bottom = v;
                 style.margin_left = v;
             }
         }
-        "margin-top" => set_box_length(&mut style.margin_top, val, em_basis),
-        "margin-right" => set_box_length(&mut style.margin_right, val, em_basis),
-        "margin-bottom" => set_box_length(&mut style.margin_bottom, val, em_basis),
-        "margin-left" => set_box_length(&mut style.margin_left, val, em_basis),
+        "margin-top" => set_box_length(&mut style.margin_top, val, em_basis, viewport),
+        "margin-right" => set_box_length(&mut style.margin_right, val, em_basis, viewport),
+        "margin-bottom" => set_box_length(&mut style.margin_bottom, val, em_basis, viewport),
+        "margin-left" => set_box_length(&mut style.margin_left, val, em_basis, viewport),
         "padding" => {
-            if let Some(v) = resolve_box_length(val, em_basis) {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
                 style.padding_top = v;
                 style.padding_right = v;
                 style.padding_bottom = v;
                 style.padding_left = v;
             }
         }
-        "padding-top" => set_box_length(&mut style.padding_top, val, em_basis),
-        "padding-right" => set_box_length(&mut style.padding_right, val, em_basis),
-        "padding-bottom" => set_box_length(&mut style.padding_bottom, val, em_basis),
-        "padding-left" => set_box_length(&mut style.padding_left, val, em_basis),
+        "padding-top" => set_box_length(&mut style.padding_top, val, em_basis, viewport),
+        "padding-right" => set_box_length(&mut style.padding_right, val, em_basis, viewport),
+        "padding-bottom" => set_box_length(&mut style.padding_bottom, val, em_basis, viewport),
+        "padding-left" => set_box_length(&mut style.padding_left, val, em_basis, viewport),
         "text-decoration" | "text-decoration-line" => {
             if let Some(d) = parse_text_decoration(val) {
                 style.text_decoration_line = d;
             }
         }
         // ── Borders ───────────────────────────────────────────────────────────
-        "border" => apply_border_shorthand(style, val, em_basis),
+        "border" => apply_border_shorthand(style, val, em_basis, viewport),
         "border-top" => apply_border_side_shorthand(
             &mut style.border_top_width, &mut style.border_top_style,
-            &mut style.border_top_color, val, em_basis),
+            &mut style.border_top_color, val, em_basis, viewport),
         "border-right" => apply_border_side_shorthand(
             &mut style.border_right_width, &mut style.border_right_style,
-            &mut style.border_right_color, val, em_basis),
+            &mut style.border_right_color, val, em_basis, viewport),
         "border-bottom" => apply_border_side_shorthand(
             &mut style.border_bottom_width, &mut style.border_bottom_style,
-            &mut style.border_bottom_color, val, em_basis),
+            &mut style.border_bottom_color, val, em_basis, viewport),
         "border-left" => apply_border_side_shorthand(
             &mut style.border_left_width, &mut style.border_left_style,
-            &mut style.border_left_color, val, em_basis),
+            &mut style.border_left_color, val, em_basis, viewport),
         "border-width" => {
             let sides = expand_border_4(val);
-            if let Some(v) = resolve_box_length(sides[0], em_basis) { style.border_top_width = v; }
-            if let Some(v) = resolve_box_length(sides[1], em_basis) { style.border_right_width = v; }
-            if let Some(v) = resolve_box_length(sides[2], em_basis) { style.border_bottom_width = v; }
-            if let Some(v) = resolve_box_length(sides[3], em_basis) { style.border_left_width = v; }
+            if let Some(v) = resolve_box_length(sides[0], em_basis, viewport) { style.border_top_width = v; }
+            if let Some(v) = resolve_box_length(sides[1], em_basis, viewport) { style.border_right_width = v; }
+            if let Some(v) = resolve_box_length(sides[2], em_basis, viewport) { style.border_bottom_width = v; }
+            if let Some(v) = resolve_box_length(sides[3], em_basis, viewport) { style.border_left_width = v; }
         }
         "border-style" => {
             let sides = expand_border_4(val);
@@ -826,10 +861,10 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, em_basis: f3
             if let Some(c) = parse_color(sides[2]) { style.border_bottom_color = Some(c); }
             if let Some(c) = parse_color(sides[3]) { style.border_left_color = Some(c); }
         }
-        "border-top-width" => set_box_length(&mut style.border_top_width, val, em_basis),
-        "border-right-width" => set_box_length(&mut style.border_right_width, val, em_basis),
-        "border-bottom-width" => set_box_length(&mut style.border_bottom_width, val, em_basis),
-        "border-left-width" => set_box_length(&mut style.border_left_width, val, em_basis),
+        "border-top-width" => set_box_length(&mut style.border_top_width, val, em_basis, viewport),
+        "border-right-width" => set_box_length(&mut style.border_right_width, val, em_basis, viewport),
+        "border-bottom-width" => set_box_length(&mut style.border_bottom_width, val, em_basis, viewport),
+        "border-left-width" => set_box_length(&mut style.border_left_width, val, em_basis, viewport),
         "border-top-style" => style.border_top_style = parse_border_style_kw(val),
         "border-right-style" => style.border_right_style = parse_border_style_kw(val),
         "border-bottom-style" => style.border_bottom_style = parse_border_style_kw(val),
@@ -893,7 +928,12 @@ fn parse_text_decoration(val: &str) -> Option<TextDecorationLine> {
 /// Применяет `font-size`-декларацию, если она задана. Размер `em` берётся
 /// относительно `parent_fs` (родительский font-size), `rem` — относительно
 /// ROOT_FONT_SIZE, `%` — относительно `parent_fs`.
-fn apply_font_size(style: &mut ComputedStyle, decl: &Declaration, parent_fs: f32) {
+fn apply_font_size(
+    style: &mut ComputedStyle,
+    decl: &Declaration,
+    parent_fs: f32,
+    viewport: Size,
+) {
     if decl.property != "font-size" {
         return;
     }
@@ -901,27 +941,31 @@ fn apply_font_size(style: &mut ComputedStyle, decl: &Declaration, parent_fs: f32
     let Some(len) = parse_length(val) else {
         return;
     };
-    // Для font-size: em и % считаются от parent_fs.
+    // Для font-size: em и % считаются от parent_fs; vh/vw/vmin/vmax — от viewport.
     style.font_size = match len {
         Length::Px(v) => v,
         Length::Em(v) => v * parent_fs,
         Length::Rem(v) => v * ROOT_FONT_SIZE,
         Length::Percent(v) => v / 100.0 * parent_fs,
+        Length::Vh(v) => v / 100.0 * viewport.height,
+        Length::Vw(v) => v / 100.0 * viewport.width,
+        Length::Vmin(v) => v / 100.0 * viewport.width.min(viewport.height),
+        Length::Vmax(v) => v / 100.0 * viewport.width.max(viewport.height),
     };
 }
 
 /// Резолвит длину для margin / padding / border. `%` в Phase 0 не поддержан
 /// (нужна containing-block-width), возвращает None.
-fn resolve_box_length(val: &str, em_basis: f32) -> Option<f32> {
+fn resolve_box_length(val: &str, em_basis: f32, viewport: Size) -> Option<f32> {
     let len = parse_length(val)?;
     match len {
         Length::Percent(_) => None,
-        other => other.resolve(em_basis, None),
+        other => other.resolve(em_basis, None, viewport),
     }
 }
 
-fn set_box_length(target: &mut f32, val: &str, em_basis: f32) {
-    if let Some(v) = resolve_box_length(val, em_basis) {
+fn set_box_length(target: &mut f32, val: &str, em_basis: f32, viewport: Size) {
+    if let Some(v) = resolve_box_length(val, em_basis, viewport) {
         *target = v;
     }
 }
@@ -941,10 +985,10 @@ fn parse_border_style_kw(s: &str) -> BorderStyle {
 
 /// Разбирает `border: <width> <style> <color>` (порядок произвольный, каждая
 /// часть опциональна). Применяет найденные значения ко всем четырём сторонам.
-fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32) {
+fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32, viewport: Size) {
     let tokens: Vec<&str> = val.split_whitespace().collect();
     for tok in &tokens {
-        if let Some(v) = resolve_box_length(tok, em_basis) {
+        if let Some(v) = resolve_box_length(tok, em_basis, viewport) {
             style.border_top_width = v;
             style.border_right_width = v;
             style.border_bottom_width = v;
@@ -971,9 +1015,10 @@ fn apply_border_side_shorthand(
     color: &mut Option<Color>,
     val: &str,
     em_basis: f32,
+    viewport: Size,
 ) {
     for tok in val.split_whitespace() {
-        if let Some(v) = resolve_box_length(tok, em_basis) {
+        if let Some(v) = resolve_box_length(tok, em_basis, viewport) {
             *width = v;
         } else if is_border_style_kw(tok) {
             *bstyle = parse_border_style_kw(tok);
@@ -1602,27 +1647,70 @@ mod tests {
         assert_eq!(parse_length("px"), None);
     }
 
+    /// Тестовый viewport: квадратный, чтобы vh == vw, vmin == vmax.
+    fn vp() -> Size { Size::new(1000.0, 1000.0) }
+
     #[test]
     fn length_resolve_px_is_identity() {
-        assert_eq!(Length::Px(12.0).resolve(16.0, Some(100.0)), Some(12.0));
+        assert_eq!(Length::Px(12.0).resolve(16.0, Some(100.0), vp()), Some(12.0));
     }
 
     #[test]
     fn length_resolve_em_uses_basis() {
         // 1.5em при basis 20 = 30.
-        assert_eq!(Length::Em(1.5).resolve(20.0, None), Some(30.0));
+        assert_eq!(Length::Em(1.5).resolve(20.0, None, vp()), Some(30.0));
     }
 
     #[test]
     fn length_resolve_rem_ignores_basis() {
         // rem всегда от ROOT_FONT_SIZE = 16.
-        assert_eq!(Length::Rem(2.0).resolve(999.0, None), Some(32.0));
+        assert_eq!(Length::Rem(2.0).resolve(999.0, None, vp()), Some(32.0));
     }
 
     #[test]
     fn length_resolve_percent_needs_basis() {
-        assert_eq!(Length::Percent(50.0).resolve(16.0, Some(200.0)), Some(100.0));
-        assert_eq!(Length::Percent(50.0).resolve(16.0, None), None);
+        assert_eq!(Length::Percent(50.0).resolve(16.0, Some(200.0), vp()), Some(100.0));
+        assert_eq!(Length::Percent(50.0).resolve(16.0, None, vp()), None);
+    }
+
+    // ── viewport units ────────────────────────────────────────────────────
+
+    #[test]
+    fn parse_length_recognizes_viewport_units() {
+        assert_eq!(parse_length("50vh"), Some(Length::Vh(50.0)));
+        assert_eq!(parse_length("50vw"), Some(Length::Vw(50.0)));
+        assert_eq!(parse_length("10vmin"), Some(Length::Vmin(10.0)));
+        assert_eq!(parse_length("10vmax"), Some(Length::Vmax(10.0)));
+        // Дробные значения тоже.
+        assert_eq!(parse_length("1.5vh"), Some(Length::Vh(1.5)));
+    }
+
+    #[test]
+    fn length_resolve_vh_uses_viewport_height() {
+        // 50vh от viewport (1024 x 768) = 384.
+        let v = Size::new(1024.0, 768.0);
+        assert_eq!(Length::Vh(50.0).resolve(16.0, None, v), Some(384.0));
+    }
+
+    #[test]
+    fn length_resolve_vw_uses_viewport_width() {
+        // 25vw от viewport (1024 x 768) = 256.
+        let v = Size::new(1024.0, 768.0);
+        assert_eq!(Length::Vw(25.0).resolve(16.0, None, v), Some(256.0));
+    }
+
+    #[test]
+    fn length_resolve_vmin_uses_smaller_dimension() {
+        // 50vmin от viewport (1024 x 768) — min = 768; 50% = 384.
+        let v = Size::new(1024.0, 768.0);
+        assert_eq!(Length::Vmin(50.0).resolve(16.0, None, v), Some(384.0));
+    }
+
+    #[test]
+    fn length_resolve_vmax_uses_larger_dimension() {
+        // 50vmax от viewport (1024 x 768) — max = 1024; 50% = 512.
+        let v = Size::new(1024.0, 768.0);
+        assert_eq!(Length::Vmax(50.0).resolve(16.0, None, v), Some(512.0));
     }
 
     // ── text-decoration parsing ────────────────────────────────────────────
@@ -1691,7 +1779,7 @@ mod tests {
         let sheet = lumen_css_parser::parse(&format!("p {{ {css} }}"));
         let root_style = ComputedStyle::root();
         let p = doc.get(doc.root()).children[0];
-        compute_style(&doc, p, &sheet, &root_style)
+        compute_style(&doc, p, &sheet, &root_style, Size::new(800.0, 600.0))
     }
 
     #[test]
@@ -1811,8 +1899,8 @@ mod tests {
         let root_style = ComputedStyle::root();
         let div = doc.get(doc.root()).children[0];
         let p = doc.get(div).children[0];
-        let div_style = compute_style(&doc, div, &sheet, &root_style);
-        let p_style = compute_style(&doc, p, &sheet, &div_style);
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
         assert_eq!(div_style.box_sizing, BoxSizing::BorderBox);
         assert_eq!(p_style.box_sizing, BoxSizing::ContentBox);
     }
