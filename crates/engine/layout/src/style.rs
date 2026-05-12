@@ -28,6 +28,14 @@ pub enum Display {
     None,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextAlign {
+    #[default]
+    Left,
+    Center,
+    Right,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
     pub r: u8,
@@ -60,6 +68,7 @@ impl Color {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
+    pub text_align: TextAlign,
     pub color: Color,
     pub background_color: Option<Color>,
     pub font_size: f32,
@@ -87,6 +96,7 @@ impl ComputedStyle {
     pub fn root() -> Self {
         Self {
             display: Display::Block,
+            text_align: TextAlign::Left,
             color: Color::BLACK,
             background_color: None,
             font_size: 16.0,
@@ -113,6 +123,7 @@ pub fn compute_style(
         display: default_display(doc, node),
         // Наследуемые свойства (CSS inherited properties).
         color: inherited.color,
+        text_align: inherited.text_align,
         font_size: inherited.font_size,
         line_height: inherited.line_height,
         // Ненаследуемые — сброс.
@@ -552,6 +563,14 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, em_basis: f3
                 "inline" => Display::Inline,
                 "none" => Display::None,
                 _ => style.display,
+            };
+        }
+        "text-align" => {
+            style.text_align = match val {
+                "left" => TextAlign::Left,
+                "center" => TextAlign::Center,
+                "right" => TextAlign::Right,
+                _ => style.text_align,
             };
         }
         "color" => {
