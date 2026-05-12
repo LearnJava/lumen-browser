@@ -1364,10 +1364,26 @@ fn parse_alpha_component(s: &str) -> Option<u8> {
     Some(clamp_byte(n * 255.0))
 }
 
+/// Парсит hue в градусах. Поддерживает четыре единицы CSS Color L4 §9:
+///   - `deg` или без единицы — градусы (default);
+///   - `turn` — оборот (1turn = 360deg, как `<a href>` в Кубе Рубика);
+///   - `rad` — радианы (1rad = 180/π deg ≈ 57.296deg);
+///   - `grad` — гоны (1grad = 0.9deg, full turn = 400grad).
+///
+/// Порядок проверки суффиксов важен: более длинные сначала, иначе
+/// `grad` будет ошибочно ловиться как `rad`.
 fn parse_hue_component(s: &str) -> Option<f32> {
     let s = s.trim();
+    if let Some(num) = s.strip_suffix("turn") {
+        return num.trim().parse::<f32>().ok().map(|v| v * 360.0);
+    }
+    if let Some(num) = s.strip_suffix("grad") {
+        return num.trim().parse::<f32>().ok().map(|v| v * 0.9);
+    }
+    if let Some(num) = s.strip_suffix("rad") {
+        return num.trim().parse::<f32>().ok().map(|v| v * (180.0 / std::f32::consts::PI));
+    }
     let s = s.strip_suffix("deg").unwrap_or(s);
-    // turn / rad / grad — пока не поддерживаем (на практике редко).
     s.trim().parse::<f32>().ok()
 }
 
@@ -1493,6 +1509,53 @@ mod tests {
             parse_color("hsl(0deg, 100%, 50%)"),
             Some(rgba(255, 0, 0, 255))
         );
+    }
+
+    #[test]
+    fn hsl_hue_in_turn() {
+        // 0.5turn = 180deg → cyan.
+        assert_eq!(
+            parse_color("hsl(0.5turn, 100%, 50%)"),
+            Some(rgba(0, 255, 255, 255))
+        );
+        // 1turn = 360deg = 0deg → red.
+        assert_eq!(
+            parse_color("hsl(1turn, 100%, 50%)"),
+            Some(rgba(255, 0, 0, 255))
+        );
+    }
+
+    #[test]
+    fn hsl_hue_in_rad() {
+        // π rad = 180deg → cyan. f32 округление допустимо.
+        let c = parse_color("hsl(3.14159265rad, 100%, 50%)").unwrap();
+        assert_eq!(c.r, 0);
+        assert!(c.g >= 254);
+        assert!(c.b >= 254);
+    }
+
+    #[test]
+    fn hsl_hue_in_grad() {
+        // 200grad = 180deg → cyan.
+        assert_eq!(
+            parse_color("hsl(200grad, 100%, 50%)"),
+            Some(rgba(0, 255, 255, 255))
+        );
+        // 400grad = 360deg = 0 → red.
+        assert_eq!(
+            parse_color("hsl(400grad, 100%, 50%)"),
+            Some(rgba(255, 0, 0, 255))
+        );
+    }
+
+    #[test]
+    fn hsl_hue_units_dont_collide() {
+        // `grad` не должен ловиться как `rad`. 100grad = 90deg → жёлто-зелёный.
+        // А 100rad = 5729.58deg, mod 360 ≈ 329.58 — пурпурно-розовый. Цвета
+        // должны отличаться, иначе суффикс ловится не тот.
+        let g = parse_color("hsl(100grad, 100%, 50%)").unwrap();
+        let r = parse_color("hsl(100rad, 100%, 50%)").unwrap();
+        assert_ne!(g, r, "grad и rad дают разные цвета");
     }
 
     #[test]
