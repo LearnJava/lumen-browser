@@ -909,4 +909,89 @@ mod tests {
             panic!("expected InlineRun");
         }
     }
+
+    // ── Тесты CSS width / height ───────────────────────────────────────────
+
+    /// width: 200px задаёт rect.width = 200 (без padding).
+    #[test]
+    fn explicit_width_sets_rect_width() {
+        // viewport 800px; p без padding → rect.width должен быть 200.
+        let root = lay("<p>x</p>", "p { width: 200px; }");
+        let p = first_element_child(&root);
+        assert!(
+            (p.rect.width - 200.0).abs() < 0.01,
+            "rect.width={}", p.rect.width
+        );
+    }
+
+    /// width учитывает padding: rect.width = width + padding_left + padding_right.
+    #[test]
+    fn explicit_width_plus_padding() {
+        let root = lay("<p>x</p>", "p { width: 200px; padding: 10px; }");
+        let p = first_element_child(&root);
+        // content_box 200 + padding 10+10 = 220.
+        assert!(
+            (p.rect.width - 220.0).abs() < 0.01,
+            "rect.width={}", p.rect.width
+        );
+    }
+
+    /// height: 100px задаёт rect.height = 100.
+    #[test]
+    fn explicit_height_overrides_content_height() {
+        let root = lay("<p>x</p>", "p { height: 100px; }");
+        let p = first_element_child(&root);
+        assert!(
+            (p.rect.height - 100.0).abs() < 0.01,
+            "rect.height={}", p.rect.height
+        );
+    }
+
+    /// height учитывает padding: rect.height = height + padding_top + padding_bottom.
+    #[test]
+    fn explicit_height_plus_padding() {
+        let root = lay("<p>x</p>", "p { height: 80px; padding: 5px; }");
+        let p = first_element_child(&root);
+        assert!(
+            (p.rect.height - 90.0).abs() < 0.01,
+            "rect.height={}", p.rect.height
+        );
+    }
+
+    /// Дочерние элементы используют content_width от явно заданного width.
+    #[test]
+    fn children_constrained_by_explicit_width() {
+        // div { width: 300px } → content_width = 300.
+        // Вложенный <p> без width → rect.width = content_width = 300.
+        let root = lay("<div><p>x</p></div>", "div { width: 300px; }");
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(
+            (p.rect.width - 300.0).abs() < 0.01,
+            "p.rect.width={}", p.rect.width
+        );
+    }
+
+    /// width: auto не устанавливает явную ширину.
+    #[test]
+    fn width_auto_keeps_auto_layout() {
+        let root = lay("<p>x</p>", "p { width: auto; }");
+        let p = first_element_child(&root);
+        // auto → заполняет viewport 800px.
+        assert!(
+            (p.rect.width - 800.0).abs() < 0.01,
+            "rect.width={}", p.rect.width
+        );
+    }
+
+    /// width / height не наследуются.
+    #[test]
+    fn width_height_not_inherited() {
+        let root = lay("<div><p>x</p></div>", "div { width: 400px; height: 200px; }");
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // <p> наследует только inherited properties — width/height нет.
+        assert!(p.style.width.is_none(), "width should not be inherited");
+        assert!(p.style.height.is_none(), "height should not be inherited");
+    }
 }

@@ -64,7 +64,7 @@ fn write_frag(out: &mut String, indent: &str, i: usize, frag: &InlineFrag) {
     let _ = writeln!(out, "{indent}frag[{i}] x={:.2} {:?}", frag.x, frag.text);
 }
 
-/// Полный набор отличий стиля от root (включая display / margin / padding).
+/// Полный набор отличий стиля от root (включая display / width / height / margin / padding).
 fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
     if let Some(bg) = s.background_color
         && bg.a > 0
@@ -75,6 +75,12 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
         Display::Block => {}
         Display::Inline => out.push_str(" display=inline"),
         Display::None => out.push_str(" display=none"),
+    }
+    if let Some(w) = s.width {
+        let _ = write!(out, " w={w:.2}");
+    }
+    if let Some(h) = s.height {
+        let _ = write!(out, " h={h:.2}");
     }
     write_text_style_attrs(out, s);
     if s.margin_top != 0.0

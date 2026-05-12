@@ -97,6 +97,10 @@ pub struct ComputedStyle {
     pub font_size: f32,
     pub line_height: f32,
     pub text_decoration_line: TextDecorationLine,
+    /// Явная ширина (CSS `width: Npx`). None = auto (растягивается на контейнер).
+    pub width: Option<f32>,
+    /// Явная высота (CSS `height: Npx`). None = auto (по содержимому).
+    pub height: Option<f32>,
     pub margin_top: f32,
     pub margin_right: f32,
     pub margin_bottom: f32,
@@ -127,6 +131,8 @@ impl ComputedStyle {
             font_size: 16.0,
             line_height: 1.2,
             text_decoration_line: TextDecorationLine::default(),
+            width: None,
+            height: None,
             margin_top: 0.0,
             margin_right: 0.0,
             margin_bottom: 0.0,
@@ -155,6 +161,8 @@ pub fn compute_style(
         text_decoration_line: inherited.text_decoration_line,
         // Ненаследуемые — сброс.
         background_color: None,
+        width: None,
+        height: None,
         margin_top: 0.0,
         margin_right: 0.0,
         margin_bottom: 0.0,
@@ -609,6 +617,12 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, em_basis: f3
             if let Some(c) = parse_color(val) {
                 style.background_color = Some(c);
             }
+        }
+        "width" if val != "auto" => {
+            style.width = parse_length(val).and_then(|l| l.resolve(em_basis, None));
+        }
+        "height" if val != "auto" => {
+            style.height = parse_length(val).and_then(|l| l.resolve(em_basis, None));
         }
         "font-size" => {
             // Обрабатывается в pre-pass; в этой ветке пропускаем.

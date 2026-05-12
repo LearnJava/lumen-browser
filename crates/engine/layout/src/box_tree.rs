@@ -165,6 +165,8 @@ fn build_box(
                     inline_style.padding_bottom = 0.0;
                     inline_style.padding_left = 0.0;
                     inline_style.background_color = None;
+                    inline_style.width = None;
+                    inline_style.height = None;
                     children.push(LayoutBox {
                         node: id,
                         rect: Rect::ZERO,
@@ -205,6 +207,10 @@ fn lay_out(
     b.rect.x = start_x + s.margin_left;
     b.rect.y = start_y + s.margin_top;
     b.rect.width = (available_width - s.margin_left - s.margin_right).max(0.0);
+    // Явная ширина (CSS width: Npx) перекрывает auto-ширину по контейнеру.
+    if let Some(w) = s.width {
+        b.rect.width = (w + s.padding_left + s.padding_right).max(0.0);
+    }
 
     let content_x = b.rect.x + s.padding_left;
     let content_y = b.rect.y + s.padding_top;
@@ -236,7 +242,12 @@ fn lay_out(
                 child_y = child.rect.y + child.rect.height + child.style.margin_bottom;
             }
             let content_height = (child_y - content_y).max(0.0);
-            b.rect.height = content_height + s.padding_top + s.padding_bottom;
+            // Явная высота (CSS height: Npx) перекрывает auto-высоту по содержимому.
+            b.rect.height = if let Some(h) = s.height {
+                h + s.padding_top + s.padding_bottom
+            } else {
+                content_height + s.padding_top + s.padding_bottom
+            };
         }
         BoxKind::InlineRun { .. } => unreachable!(),
         BoxKind::Skip => unreachable!(),
