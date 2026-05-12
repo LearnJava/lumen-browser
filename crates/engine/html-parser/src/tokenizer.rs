@@ -24,6 +24,15 @@ pub enum Token {
     },
     Text(String),
     Comment(String),
+    /// `<!DOCTYPE name PUBLIC "public_id" "system_id">` или
+    /// `<!DOCTYPE name SYSTEM "system_id">`. Все три поля могут быть пусты,
+    /// если в исходнике их нет (например, типичный `<!DOCTYPE html>`).
+    /// `name` хранится в lower-case (HTML5 §13.2.5.53 нормализует).
+    Doctype {
+        name: String,
+        public_id: String,
+        system_id: String,
+    },
 }
 
 pub struct Tokenizer<'a> {
@@ -132,13 +141,16 @@ impl<'a> Iterator for Tokenizer<'a> {
                 self.consume_end_tag()
             }
             Some('!') => {
-                // Comment <!-- ... --> или DOCTYPE (пропускаем).
+                // Comment <!-- ... -->, DOCTYPE, или прочее markup declaration.
                 self.consume();
                 if self.rest().starts_with("--") {
                     self.pos += 2;
                     self.consume_comment()
+                } else if self.rest_starts_with_ascii_ci("doctype") {
+                    self.pos += "doctype".len();
+                    self.consume_doctype()
                 } else {
-                    // DOCTYPE / прочее объявление — съесть до '>'.
+                    // Неизвестное `<!...` — съесть до '>' и продолжить.
                     while let Some(c) = self.consume() {
                         if c == '>' {
                             break;
@@ -323,6 +335,96 @@ impl<'a> Tokenizer<'a> {
                 None => return Some(Token::Comment(content)),
             }
         }
+    }
+
+    /// HTML5 §13.2.5.53–72: после `<!DOCTYPE` парсим имя, опционально
+    /// PUBLIC / SYSTEM identifiers (cases-insensitive), завершаем на '>' или
+    /// EOF. Имя нормализуется в lower-case.
+    ///
+    /// Поддерживаются формы:
+    ///   - `<!DOCTYPE html>` — самый частый, всё что нужно для HTML5;
+    ///   - `<!DOCTYPE html PUBLIC "id" "url">` — XHTML-like;
+    ///   - `<!DOCTYPE html SYSTEM "url">`.
+    ///
+    /// Невалидные / неполные DOCTYPE-ы парсятся «как есть» и не дают ошибки —
+    /// tokenizer lenient.
+    fn consume_doctype(&mut self) -> Option<Token> {
+        // Согласно spec, после `DOCTYPE` ожидается whitespace; lenient режим
+        // тоже принимает '>' сразу (даст пустой name).
+        self.skip_whitespace();
+        let mut name = String::new();
+        while let Some(c) = self.peek() {
+            if c == '>' || c.is_whitespace() {
+                break;
+            }
+            self.consume();
+            name.push(c.to_ascii_lowercase());
+        }
+        self.skip_whitespace();
+
+        let mut public_id = String::new();
+        let mut system_id = String::new();
+        if self.rest_starts_with_ascii_ci("public") {
+            self.pos += "public".len();
+            self.skip_whitespace();
+            public_id = self.consume_quoted_string().unwrap_or_default();
+            self.skip_whitespace();
+            // После public_id может идти system_id (тоже quoted), а может и
+            // ничего (lenient).
+            if matches!(self.peek(), Some('"' | '\'')) {
+                system_id = self.consume_quoted_string().unwrap_or_default();
+            }
+        } else if self.rest_starts_with_ascii_ci("system") {
+            self.pos += "system".len();
+            self.skip_whitespace();
+            system_id = self.consume_quoted_string().unwrap_or_default();
+        }
+
+        // Съесть всё до '>' (на случай мусора / несколько идентификаторов).
+        while let Some(c) = self.consume() {
+            if c == '>' {
+                break;
+            }
+        }
+
+        Some(Token::Doctype {
+            name,
+            public_id,
+            system_id,
+        })
+    }
+
+    /// Проверяет, начинается ли `rest()` с указанной строки в ASCII
+    /// case-insensitive манере. Используется для keyword-ов в DOCTYPE.
+    fn rest_starts_with_ascii_ci(&self, needle: &str) -> bool {
+        let r = self.rest().as_bytes();
+        let n = needle.as_bytes();
+        r.len() >= n.len() && r[..n.len()].eq_ignore_ascii_case(n)
+    }
+
+    /// Читает строку в кавычках (`"..."` или `'...'`). Возвращает содержимое
+    /// без кавычек. Если стартовая кавычка не найдена — None.
+    fn consume_quoted_string(&mut self) -> Option<String> {
+        let q = match self.peek() {
+            Some('"') => '"',
+            Some('\'') => '\'',
+            _ => return None,
+        };
+        self.consume();
+        let mut s = String::new();
+        while let Some(c) = self.peek() {
+            if c == q {
+                self.consume();
+                return Some(s);
+            }
+            // EOF внутри строки — отдаём что собрали (lenient).
+            if c == '>' {
+                return Some(s);
+            }
+            self.consume();
+            s.push(c);
+        }
+        Some(s)
     }
 
     /// Пробует распарсить character reference после уже потреблённого `&`.
@@ -513,9 +615,100 @@ mod tests {
     }
 
     #[test]
-    fn doctype_skipped() {
+    fn doctype_html5_basic() {
+        let t = tok("<!DOCTYPE html>");
+        assert_eq!(
+            t[0],
+            Token::Doctype {
+                name: "html".into(),
+                public_id: String::new(),
+                system_id: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn doctype_followed_by_content() {
         let t = tok("<!DOCTYPE html><p>x</p>");
-        assert!(matches!(t[0], Token::StartTag { .. }));
+        assert!(matches!(&t[0], Token::Doctype { name, .. } if name == "html"));
+        assert!(matches!(&t[1], Token::StartTag { name, .. } if name == "p"));
+    }
+
+    #[test]
+    fn doctype_case_insensitive_keyword() {
+        // `<!doctype html>` (lowercase keyword) тоже валиден.
+        let t = tok("<!doctype HTML>");
+        assert!(matches!(&t[0], Token::Doctype { name, .. } if name == "html"));
+    }
+
+    #[test]
+    fn doctype_html4_strict_with_public() {
+        let t = tok(
+            r#"<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">"#,
+        );
+        assert_eq!(
+            t[0],
+            Token::Doctype {
+                name: "html".into(),
+                public_id: "-//W3C//DTD HTML 4.01//EN".into(),
+                system_id: "http://www.w3.org/TR/html4/strict.dtd".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn doctype_with_system_only() {
+        let t = tok(r#"<!DOCTYPE html SYSTEM "about:legacy-compat">"#);
+        assert_eq!(
+            t[0],
+            Token::Doctype {
+                name: "html".into(),
+                public_id: String::new(),
+                system_id: "about:legacy-compat".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn doctype_single_quoted_strings() {
+        let t = tok("<!DOCTYPE html PUBLIC 'pid' 'sid'>");
+        assert_eq!(
+            t[0],
+            Token::Doctype {
+                name: "html".into(),
+                public_id: "pid".into(),
+                system_id: "sid".into(),
+            }
+        );
+    }
+
+    #[test]
+    fn doctype_extra_whitespace_tolerated() {
+        let t = tok("<!DOCTYPE   html   >");
+        assert!(matches!(&t[0], Token::Doctype { name, .. } if name == "html"));
+    }
+
+    #[test]
+    fn doctype_empty_name_lenient() {
+        // `<!DOCTYPE>` без имени — не валиден по spec, но lenient: пустой name.
+        let t = tok("<!DOCTYPE>");
+        assert_eq!(
+            t[0],
+            Token::Doctype {
+                name: String::new(),
+                public_id: String::new(),
+                system_id: String::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn doctype_unknown_markup_declaration_still_skipped() {
+        // `<![CDATA[...]]>` или `<!ENTITY ...>` — не наш случай, должно
+        // молча скушать до '>' и не дать DOCTYPE-токен.
+        let t = tok("<![CDATA[ignore this]]><p>x</p>");
+        // Первый токен должен быть от `<p>`, CDATA пропущена.
+        assert!(matches!(&t[0], Token::StartTag { name, .. } if name == "p"));
     }
 
     #[test]
