@@ -294,8 +294,92 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         }
         PseudoClass::Empty => is_empty_element(doc, node),
         PseudoClass::Root => is_root_element(doc, node),
+        PseudoClass::FirstOfType => is_first_of_type(doc, node),
+        PseudoClass::LastOfType => is_last_of_type(doc, node),
+        PseudoClass::OnlyOfType => is_first_of_type(doc, node) && is_last_of_type(doc, node),
+        PseudoClass::NthChild(spec) => match element_index(doc, node, false) {
+            Some(i) => spec.matches(i),
+            None => false,
+        },
+        PseudoClass::NthLastChild(spec) => match element_index(doc, node, true) {
+            Some(i) => spec.matches(i),
+            None => false,
+        },
+        PseudoClass::NthOfType(spec) => match element_index_of_type(doc, node, false) {
+            Some(i) => spec.matches(i),
+            None => false,
+        },
+        PseudoClass::NthLastOfType(spec) => match element_index_of_type(doc, node, true) {
+            Some(i) => spec.matches(i),
+            None => false,
+        },
+        PseudoClass::Not(inner) => !matches_compound(inner, doc, node),
         PseudoClass::Unsupported(_) => false,
     }
+}
+
+/// 1-based индекс элемента среди element-sibling-ов. Если `from_end` —
+/// считаем с конца. None — если узел не элемент или нет родителя.
+fn element_index(doc: &Document, node: NodeId, from_end: bool) -> Option<i32> {
+    if !is_element(doc, node) {
+        return None;
+    }
+    let parent = doc.get(node).parent?;
+    let siblings = &doc.get(parent).children;
+    let mut index: i32 = 0;
+    let iter: Box<dyn Iterator<Item = &NodeId>> = if from_end {
+        Box::new(siblings.iter().rev())
+    } else {
+        Box::new(siblings.iter())
+    };
+    for &id in iter {
+        if !is_element(doc, id) {
+            continue;
+        }
+        index += 1;
+        if id == node {
+            return Some(index);
+        }
+    }
+    None
+}
+
+/// 1-based индекс элемента среди sibling-ов **того же тега**.
+fn element_index_of_type(doc: &Document, node: NodeId, from_end: bool) -> Option<i32> {
+    let self_name = match &doc.get(node).data {
+        NodeData::Element { name, .. } => name,
+        _ => return None,
+    };
+    let parent = doc.get(node).parent?;
+    let siblings = &doc.get(parent).children;
+    let mut index: i32 = 0;
+    let iter: Box<dyn Iterator<Item = &NodeId>> = if from_end {
+        Box::new(siblings.iter().rev())
+    } else {
+        Box::new(siblings.iter())
+    };
+    for &id in iter {
+        let same_type = matches!(
+            &doc.get(id).data,
+            NodeData::Element { name, .. } if name == self_name
+        );
+        if !same_type {
+            continue;
+        }
+        index += 1;
+        if id == node {
+            return Some(index);
+        }
+    }
+    None
+}
+
+fn is_first_of_type(doc: &Document, node: NodeId) -> bool {
+    element_index_of_type(doc, node, false) == Some(1)
+}
+
+fn is_last_of_type(doc: &Document, node: NodeId) -> bool {
+    element_index_of_type(doc, node, true) == Some(1)
 }
 
 // ──────────────── DOM-traversal хелперы ────────────────

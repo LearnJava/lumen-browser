@@ -595,4 +595,143 @@ mod tests {
             root.rect.height
         );
     }
+
+    // ── Функциональные pseudo: :nth-*, :*-of-type, :not ───────────────────
+
+    /// Собирает все элементы с тегом `tag` из children корневого LayoutBox.
+    fn block_children_by_tag<'a>(
+        root: &'a LayoutBox,
+        doc: &lumen_dom::Document,
+        tag: &str,
+    ) -> Vec<&'a LayoutBox> {
+        root.children
+            .iter()
+            .filter(|c| {
+                matches!(
+                    &doc.get(c.node).data,
+                    lumen_dom::NodeData::Element { name, .. } if name.local == tag
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn nth_child_odd_matches_1_3_5() {
+        let (root, doc) = lay_with_doc(
+            "<p>a</p><p>b</p><p>c</p><p>d</p><p>e</p>",
+            "p:nth-child(odd) { color: red; }",
+        );
+        let ps = block_children_by_tag(&root, &doc, "p");
+        assert_eq!(ps.len(), 5);
+        for (i, p) in ps.iter().enumerate() {
+            let one_based = (i + 1) as i32;
+            let expected_red = one_based % 2 == 1;
+            assert_eq!(
+                p.style.color.r == 255,
+                expected_red,
+                "index={one_based}"
+            );
+        }
+    }
+
+    #[test]
+    fn nth_child_specific_index() {
+        let (root, doc) = lay_with_doc(
+            "<p>a</p><p>b</p><p>c</p>",
+            "p:nth-child(2) { color: red; }",
+        );
+        let ps = block_children_by_tag(&root, &doc, "p");
+        assert_eq!(ps[0].style.color.r, 0);
+        assert_eq!(ps[1].style.color.r, 255);
+        assert_eq!(ps[2].style.color.r, 0);
+    }
+
+    #[test]
+    fn nth_child_formula_2n() {
+        let (root, doc) = lay_with_doc(
+            "<p>a</p><p>b</p><p>c</p><p>d</p>",
+            "p:nth-child(2n) { color: red; }",
+        );
+        let ps = block_children_by_tag(&root, &doc, "p");
+        // 2n: 2, 4, ...
+        assert_eq!(ps[0].style.color.r, 0);
+        assert_eq!(ps[1].style.color.r, 255);
+        assert_eq!(ps[2].style.color.r, 0);
+        assert_eq!(ps[3].style.color.r, 255);
+    }
+
+    #[test]
+    fn nth_last_child_matches_from_end() {
+        let (root, doc) = lay_with_doc(
+            "<p>a</p><p>b</p><p>c</p>",
+            "p:nth-last-child(1) { color: red; }",
+        );
+        let ps = block_children_by_tag(&root, &doc, "p");
+        // Последний матчит.
+        assert_eq!(ps[2].style.color.r, 255);
+        assert_eq!(ps[0].style.color.r, 0);
+    }
+
+    #[test]
+    fn nth_of_type_counts_only_matching_tag() {
+        // <h1><p1><h2><p2><p3> — :nth-of-type(2) для p должен попасть в p2.
+        let (root, doc) = lay_with_doc(
+            "<h1>x</h1><p>p1</p><h2>x</h2><p>p2</p><p>p3</p>",
+            "p:nth-of-type(2) { color: red; }",
+        );
+        let ps = block_children_by_tag(&root, &doc, "p");
+        // p1 — это of-type index 1 → 0, p2 → 2 → 255, p3 → 3 → 0.
+        assert_eq!(ps[0].style.color.r, 0);
+        assert_eq!(ps[1].style.color.r, 255);
+        assert_eq!(ps[2].style.color.r, 0);
+    }
+
+    #[test]
+    fn first_of_type_matches() {
+        let (root, doc) = lay_with_doc(
+            "<h1>x</h1><p>p1</p><p>p2</p>",
+            "p:first-of-type { color: red; }",
+        );
+        let ps = block_children_by_tag(&root, &doc, "p");
+        assert_eq!(ps[0].style.color.r, 255);
+        assert_eq!(ps[1].style.color.r, 0);
+    }
+
+    #[test]
+    fn last_of_type_matches() {
+        let (root, doc) = lay_with_doc(
+            "<p>p1</p><p>p2</p><h1>x</h1>",
+            "p:last-of-type { color: red; }",
+        );
+        let ps = block_children_by_tag(&root, &doc, "p");
+        assert_eq!(ps[0].style.color.r, 0);
+        // p2 — последний `<p>` (h1 после него — другой тип), значит матчит.
+        assert_eq!(ps[1].style.color.r, 255);
+    }
+
+    #[test]
+    fn not_class_excludes() {
+        let (root, doc) = lay_with_doc(
+            r#"<p>a</p><p class="hl">b</p><p>c</p>"#,
+            "p:not(.hl) { color: red; }",
+        );
+        let ps = block_children_by_tag(&root, &doc, "p");
+        assert_eq!(ps[0].style.color.r, 255, "a should match");
+        assert_eq!(ps[1].style.color.r, 0, "b.hl should NOT match");
+        assert_eq!(ps[2].style.color.r, 255, "c should match");
+    }
+
+    #[test]
+    fn not_with_compound_excludes_full() {
+        // :not(p.hl) — исключает только p с классом hl, не любой <p> и не любой `.hl`.
+        let (root, doc) = lay_with_doc(
+            r#"<p>x</p><p class="hl">y</p><div class="hl">z</div>"#,
+            "*:not(p.hl) { color: red; }",
+        );
+        let ps = block_children_by_tag(&root, &doc, "p");
+        let divs = block_children_by_tag(&root, &doc, "div");
+        assert_eq!(ps[0].style.color.r, 255, "p без класса — матчит");
+        assert_eq!(ps[1].style.color.r, 0, "p.hl — исключается");
+        assert_eq!(divs[0].style.color.r, 255, "div.hl — не исключается");
+    }
 }
