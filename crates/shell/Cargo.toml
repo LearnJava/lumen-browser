@@ -19,4 +19,5 @@ lumen-dom.workspace = true
 lumen-layout.workspace = true
 lumen-paint.workspace = true
 
+# Exception #1 из §5: OS event loop + окна.
 winit = "0.30"

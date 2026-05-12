@@ -1,15 +1,62 @@
 //! Lumen shell — точка входа браузера.
 //!
-//! Phase 0: открываем пустое окно через winit. Рендеринг (wgpu + display list
-//! из lumen-paint) подключим, когда DOM/layout/paint будут готовы.
+//! Режимы запуска:
+//! - `lumen` — открывает пустое окно через winit.
+//! - `lumen <path.html>` — парсит локальный HTML-файл через
+//!   `lumen-html-parser` и печатает дерево в stdout. Окно не открывается —
+//!   это режим dogfooding для парсера, до того как появится paint.
 
 use std::error::Error;
+use std::path::PathBuf;
+use std::process::ExitCode;
 
 use winit::application::ApplicationHandler;
 use winit::dpi::LogicalSize;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
+
+fn main() -> ExitCode {
+    println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
+
+    let mut args = std::env::args().skip(1);
+    match args.next() {
+        Some(arg) => match dump_html(PathBuf::from(arg)) {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("Ошибка: {err}");
+                ExitCode::FAILURE
+            }
+        },
+        None => match run_window() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(err) => {
+                eprintln!("Ошибка: {err}");
+                ExitCode::FAILURE
+            }
+        },
+    }
+}
+
+fn dump_html(path: PathBuf) -> Result<(), Box<dyn Error>> {
+    let bytes = std::fs::read(&path)?;
+    // Phase 0: считаем, что файл в UTF-8. Encoding detection — задача §10.1.
+    let source = std::str::from_utf8(&bytes)
+        .map_err(|e| format!("файл {} не UTF-8: {e}", path.display()))?;
+
+    let doc = lumen_html_parser::parse(source);
+    println!("Распарсено: {} узлов из {}", doc.len(), path.display());
+    println!("---");
+    print!("{doc}");
+    Ok(())
+}
+
+fn run_window() -> Result<(), Box<dyn Error>> {
+    let event_loop = EventLoop::new()?;
+    let mut app = Lumen::default();
+    event_loop.run_app(&mut app)?;
+    Ok(())
+}
 
 #[derive(Default)]
 struct Lumen {
@@ -45,13 +92,4 @@ impl ApplicationHandler for Lumen {
             _ => {}
         }
     }
-}
-
-fn main() -> Result<(), Box<dyn Error>> {
-    println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
-
-    let event_loop = EventLoop::new()?;
-    let mut app = Lumen::default();
-    event_loop.run_app(&mut app)?;
-    Ok(())
 }

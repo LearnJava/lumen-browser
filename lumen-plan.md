@@ -15,7 +15,7 @@
 ### Крейты
 - ✅ `lumen-core` — типы и trait-ы: `Error`, `Url`, `Event`, `Capability`, `Module`, `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`
 - ✅ `lumen-dom` — арена + `NodeId` + `Document/Node/NodeData`, API: create/append/detach/Display, 7 тестов (включая кириллицу)
-- ✅ `lumen-shell` — точка входа, пустое окно 1024×720 через winit (ApplicationHandler API)
+- ✅ `lumen-shell` — точка входа: `lumen` — окно 1024×720 через winit; `lumen <path.html>` — парсит файл и печатает DOM в stdout
 - 🟡 `lumen-html-parser` — минимальный токенизатор (Data/Tag/Attribute/Comment, named + numeric entities) + lenient tree builder. 31 тест (включая кириллицу). Отложено: DOCTYPE-разбор, CDATA, raw-text script/style, полный набор named entities, insertion modes
 - ⬜ `lumen-css-parser` — стаб
 - ⬜ `lumen-layout` — стаб
@@ -46,7 +46,7 @@
 - ⬜ CSS parser (свой)
 - ⬜ Layout: block + inline
 - ⬜ Paint: 2D-растеризация (CPU → GPU через wgpu)
-- ⬜ Связка движка: открыть локальный `test.html` в окне
+- 🟡 Связка движка с UI: shell принимает путь к `.html`, парсит, печатает DOM (готово). Рисовать в окне — после layout + paint.
 - ⬜ Свой HTTP/1.1 + TLS через `rustls` — для загрузки внешней страницы
 
 ---

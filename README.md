@@ -13,9 +13,11 @@
 Требуется Rust 1.95+ stable (см. `rust-toolchain.toml`) и MSVC Build Tools на Windows.
 
 ```bash
-cargo check         # быстрая проверка
-cargo build         # debug-сборка
-cargo run -p lumen-shell  # запустить браузер
+cargo check                                       # быстрая проверка
+cargo build                                       # debug-сборка
+cargo run -p lumen-shell                          # открыть пустое окно
+cargo run -p lumen-shell -- samples/page.html     # распарсить HTML, напечатать DOM
+cargo test --workspace                            # все тесты
 ```
 
 ## Структура
