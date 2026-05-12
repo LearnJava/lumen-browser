@@ -104,7 +104,10 @@ fn collect_inline_segments(
 ) {
     match &doc.get(id).data {
         NodeData::Text(s) if !s.chars().all(char::is_whitespace) => {
-            out.push(InlineSegment { text: s.clone(), style: inherited.clone() });
+            // text-transform применяется здесь, до wrapping и paint —
+            // measurer считает ширину уже после преобразования.
+            let text = inherited.text_transform.apply(s);
+            out.push(InlineSegment { text, style: inherited.clone() });
         }
         NodeData::Text(_) => {}
         NodeData::Element { .. } => {
