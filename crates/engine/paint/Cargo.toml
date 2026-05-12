@@ -8,3 +8,9 @@ rust-version.workspace = true
 description = "Lumen: display list and rasterization"
 
 [dependencies]
+lumen-core.workspace = true
+lumen-layout.workspace = true
+
+[dev-dependencies]
+lumen-html-parser.workspace = true
+lumen-css-parser.workspace = true

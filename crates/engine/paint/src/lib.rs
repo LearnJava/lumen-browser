@@ -1,3 +1,11 @@
-//! Display list construction and rasterization. Phase 0: CPU via tiny-skia.
+//! Paint-слой: layout tree → display list → пиксели.
 //!
-//! Stub for Phase 0.
+//! Phase 0 — две стадии:
+//! - [`display_list`] чистая логика: обход дерева layout, генерация
+//!   независимых от backend команд.
+//! - Растеризатор (renderer) появится в следующем шаге — будет рисовать
+//!   через wgpu (exception #2 из §5 плана).
+
+pub mod display_list;
+
+pub use display_list::{build_display_list, DisplayCommand, DisplayList};
