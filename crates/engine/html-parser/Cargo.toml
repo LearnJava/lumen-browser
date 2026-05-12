@@ -8,3 +8,5 @@ rust-version.workspace = true
 description = "Lumen: HTML5 tokenizer and tree construction"
 
 [dependencies]
+lumen-core.workspace = true
+lumen-dom.workspace = true

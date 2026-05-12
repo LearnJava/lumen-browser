@@ -16,7 +16,7 @@
 - ✅ `lumen-core` — типы и trait-ы: `Error`, `Url`, `Event`, `Capability`, `Module`, `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`
 - ✅ `lumen-dom` — арена + `NodeId` + `Document/Node/NodeData`, API: create/append/detach/Display, 7 тестов (включая кириллицу)
 - ✅ `lumen-shell` — точка входа, пустое окно 1024×720 через winit (ApplicationHandler API)
-- ⬜ `lumen-html-parser` — стаб
+- 🟡 `lumen-html-parser` — минимальный токенизатор (Data/Tag/Attribute/Comment, named + numeric entities) + lenient tree builder. 31 тест (включая кириллицу). Отложено: DOCTYPE-разбор, CDATA, raw-text script/style, полный набор named entities, insertion modes
 - ⬜ `lumen-css-parser` — стаб
 - ⬜ `lumen-layout` — стаб
 - ⬜ `lumen-paint` — стаб
@@ -42,7 +42,7 @@
 - ⬜ UI-переводы (Fluent)
 
 ### Следующие шаги
-- ⬜ HTML parser (свой токенизатор по HTML5 spec)
+- 🟡 HTML parser — минимум готов; полный набор insertion modes / named entities / DOCTYPE-разбор — позже, по запросу
 - ⬜ CSS parser (свой)
 - ⬜ Layout: block + inline
 - ⬜ Paint: 2D-растеризация (CPU → GPU через wgpu)
@@ -886,7 +886,7 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 
 ### Фаза 0 — Прототип (3 месяца)
 - ✅ Workspace, base crates.
-- ⬜ HTML parser.
+- 🟡 HTML parser — минимум готов (см. выше).
 - ⬜ CSS parser.
 - ✅ DOM (арена + базовые типы).
 - ⬜ Layout: только block + inline.
