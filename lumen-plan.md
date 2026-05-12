@@ -18,8 +18,8 @@
 - 🟡 `lumen-shell` — точка входа: `lumen` — пустое окно через winit; `lumen <path.html>` — парсит HTML, собирает CSS из `<style>`-блоков, делает layout, paint и рисует **фоны + текст** через wgpu. Bundled Inter-Regular.ttf загружается через `include_bytes!`
 - 🟡 `lumen-html-parser` — минимальный токенизатор (Data/Tag/Attribute/Comment, named + numeric entities) + lenient tree builder. 31 тест (включая кириллицу). Отложено: DOCTYPE-разбор, CDATA, raw-text script/style, полный набор named entities, insertion modes
 - 🟡 `lumen-css-parser` — минимальный парсер: `selector_list { decl_list }`, селекторы type/class/id/universal, декларации как пары строк, lenient recovery, пропуск `@`-правил и комментариев. 20 тестов (включая кириллический класс `.привет`). Отложено: pseudo-classes/elements, комбинаторы, attribute selectors, типизированные значения, специфичность
-- 🟡 `lumen-layout` — block-flow с style cascade: type/class/id/universal-селекторы, наследование (color, font-size, line-height), color (named + hex), display (block/inline/none), margin/padding (включая shorthand). 17 тестов (включая кириллический класс и nested inheritance). Отложено: inline-флоу с line boxes, flex/grid, float, абсолютное позиционирование, specificity
-- 🟡 `lumen-paint` — display list (FillRect, DrawText) + wgpu-растеризатор с двумя pipeline-ами (fill + text), glyph atlas 512×512, текстурированные квады из atlas-а. 17 тестов (display list + atlas). Внешние зависимости: `wgpu` (exception #2), `winit` (exception #1)
+- 🟡 `lumen-layout` — block-flow с style cascade + **line wrapping**: type/class/id/universal-селекторы, наследование (color, font-size, line-height), color (named + hex), display (block/inline/none), margin/padding (включая shorthand). `TextMeasurer` trait + `layout_measured()` для word-wrap по реальным шрифтовым метрикам. 23 теста (включая кириллику, wrapping, edge-cases). Отложено: true inline-флоу (элементы в одной строке), flex/grid, float, абсолютное позиционирование, specificity
+- 🟡 `lumen-paint` — display list (FillRect, DrawText) + wgpu-растеризатор с двумя pipeline-ами (fill + text), glyph atlas 512×512, текстурированные квады из atlas-а. `FontMeasurer` для TextMeasurer. 20 тестов (display list + atlas + wrap). Внешние зависимости: `wgpu` (exception #2), `winit` (exception #1)
 - 🟡 `lumen-font` — собственный TrueType-парсер (head/maxp/cmap/hhea/hmtx/loca/glyf) + scanline-растеризатор (квадратичные Безье, 4×4 AA, even-odd fill). 60 тестов (включая интеграционный на bundled Inter). Отложено: composite glyphs, cmap format 12 (эмодзи), hinting, GSUB/GPOS shaping
 - ⬜ `lumen-knowledge` (§12) — FTS-индекс над историей и заметками, read-later каталог. Phase 2
 - ⬜ `lumen-ai` (§12.5) — опциональный, embedding + RAG поверх локального LLM. Phase 3+, feature-flag
@@ -62,7 +62,7 @@
 ### Следующие шаги
 - 🟡 HTML parser — минимум готов; полный набор insertion modes / named entities / DOCTYPE-разбор — позже, по запросу
 - 🟡 CSS parser — минимум готов (type/class/id/universal, declarations как пары строк); pseudo-классы, комбинаторы, типизированные значения — позже
-- 🟡 Layout — block-flow + style cascade готов; inline-флоу с line boxes, flex/grid — позже
+- 🟡 Layout — block-flow + style cascade + word-wrap готовы; true inline-flow (элементы в одной строке), flex/grid — позже
 - ✅ Paint — display list + wgpu-rasterizer + glyph atlas + text rendering
 - ✅ Связка движка с UI: shell открывает `samples/page.html` с фонами и текстом
 - ⬜ Composite glyphs в lumen-font (Cyrillic 'А' и другие)
@@ -1104,7 +1104,7 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 - 🟡 HTML parser — минимум готов (см. выше).
 - 🟡 CSS parser — минимум готов (см. выше).
 - ✅ DOM (арена + базовые типы).
-- 🟡 Layout: block готов; inline — позже.
+- ✅ Layout: block-flow + word-wrapping (TextMeasurer + FontMeasurer).
 - 🟡 Paint: FillRect через wgpu готов; глифы — позже.
 - 🟡 UI: одно окно (готово), вкладки и адресная строка — нет.
 - ⬜ HTTP/1.1 + HTTPS.

@@ -830,6 +830,7 @@ dependencies = [
  "lumen-core",
  "lumen-css-parser",
  "lumen-dom",
+ "lumen-font",
  "lumen-html-parser",
  "lumen-layout",
  "lumen-paint",

@@ -68,7 +68,15 @@ fn load_page(path: &PathBuf) -> Result<DisplayList, Box<dyn Error>> {
     let css = extract_style_blocks(&doc);
     let sheet = lumen_css_parser::parse(&css);
     let viewport = Size::new(1024.0, 720.0);
-    let layout = lumen_layout::layout(&doc, &sheet, viewport);
+
+    // Создаём измеритель ширины символов для корректного line wrapping.
+    // INTER_FONT — 'static, поэтому Font<'static> → FontMeasurer<'static>.
+    let font = lumen_font::Font::parse(INTER_FONT)
+        .map_err(|e| format!("ошибка разбора шрифта: {e}"))?;
+    let measurer = lumen_paint::FontMeasurer::new(&font)
+        .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
+
+    let layout = lumen_layout::layout_measured(&doc, &sheet, viewport, &measurer);
     let list = lumen_paint::build_display_list(&layout);
 
     println!(
