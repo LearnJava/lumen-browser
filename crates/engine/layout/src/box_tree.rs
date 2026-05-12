@@ -59,7 +59,7 @@ pub enum BoxKind {
 
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let root_style = ComputedStyle::root();
-    let mut root = build_box(doc, sheet, doc.root(), &root_style);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
     lay_out(&mut root, 0.0, 0.0, viewport.width, None);
     root
 }
@@ -71,7 +71,7 @@ pub fn layout_measured(
     measurer: &dyn TextMeasurer,
 ) -> LayoutBox {
     let root_style = ComputedStyle::root();
-    let mut root = build_box(doc, sheet, doc.root(), &root_style);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
     lay_out(&mut root, 0.0, 0.0, viewport.width, Some(measurer));
     root
 }
@@ -82,11 +82,12 @@ fn is_inline_content(
     sheet: &Stylesheet,
     id: NodeId,
     inherited: &ComputedStyle,
+    viewport: Size,
 ) -> bool {
     match &doc.get(id).data {
         NodeData::Text(s) => !s.chars().all(char::is_whitespace),
         NodeData::Element { .. } => {
-            compute_style(doc, id, sheet, inherited).display == Display::Inline
+            compute_style(doc, id, sheet, inherited, viewport).display == Display::Inline
         }
         _ => false,
     }
@@ -98,6 +99,7 @@ fn collect_inline_segments(
     sheet: &Stylesheet,
     id: NodeId,
     inherited: &ComputedStyle,
+    viewport: Size,
     out: &mut Vec<InlineSegment>,
 ) {
     match &doc.get(id).data {
@@ -106,13 +108,13 @@ fn collect_inline_segments(
         }
         NodeData::Text(_) => {}
         NodeData::Element { .. } => {
-            let s = compute_style(doc, id, sheet, inherited);
+            let s = compute_style(doc, id, sheet, inherited, viewport);
             if s.display == Display::None {
                 return;
             }
             let children: Vec<NodeId> = doc.get(id).children.clone();
             for child_id in children {
-                collect_inline_segments(doc, sheet, child_id, &s, out);
+                collect_inline_segments(doc, sheet, child_id, &s, viewport, out);
             }
         }
         _ => {}
@@ -124,8 +126,9 @@ fn build_box(
     sheet: &Stylesheet,
     id: NodeId,
     inherited: &ComputedStyle,
+    viewport: Size,
 ) -> LayoutBox {
-    let style = compute_style(doc, id, sheet, inherited);
+    let style = compute_style(doc, id, sheet, inherited, viewport);
 
     let kind = match &doc.get(id).data {
         NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. } => BoxKind::Skip,
@@ -144,13 +147,13 @@ fn build_box(
         let mut i = 0;
         while i < dom_children.len() {
             let child_id = dom_children[i];
-            if is_inline_content(doc, sheet, child_id, &style) {
+            if is_inline_content(doc, sheet, child_id, &style, viewport) {
                 // Собираем последовательный run inline-контента в один InlineRun.
                 let mut segs: Vec<InlineSegment> = Vec::new();
                 while i < dom_children.len()
-                    && is_inline_content(doc, sheet, dom_children[i], &style)
+                    && is_inline_content(doc, sheet, dom_children[i], &style, viewport)
                 {
-                    collect_inline_segments(doc, sheet, dom_children[i], &style, &mut segs);
+                    collect_inline_segments(doc, sheet, dom_children[i], &style, viewport, &mut segs);
                     i += 1;
                 }
                 if !segs.is_empty() {
@@ -181,7 +184,7 @@ fn build_box(
                     });
                 }
             } else {
-                children.push(build_box(doc, sheet, child_id, &style));
+                children.push(build_box(doc, sheet, child_id, &style, viewport));
                 i += 1;
             }
         }
