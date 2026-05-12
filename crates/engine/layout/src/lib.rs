@@ -18,7 +18,10 @@ pub mod style;
 
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
-pub use style::{BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, FontWeight, TextAlign, TextDecorationLine};
+pub use style::{
+    BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, FontWeight, TextAlign,
+    TextDecorationLine, TextTransform,
+};
 
 /// Интерфейс измерения ширины символов для line wrapping.
 ///
@@ -1713,5 +1716,75 @@ mod tests {
         );
         let p = first_element_child(&root);
         assert_eq!(p.style.font_weight, FontWeight::NORMAL);
+    }
+
+    // ── text-transform: uppercase / lowercase / capitalize ─────────────────
+
+    /// Достаёт первый текстовый сегмент из InlineRun первого block-child.
+    fn first_inline_text(root: &LayoutBox) -> String {
+        let p = first_element_child(root);
+        for c in &p.children {
+            if let BoxKind::InlineRun { segments, .. } = &c.kind
+                && let Some(s) = segments.first()
+            {
+                return s.text.clone();
+            }
+        }
+        panic!("no inline segments found");
+    }
+
+    #[test]
+    fn text_transform_uppercase_ascii() {
+        let root = lay("<p>hello world</p>", "p { text-transform: uppercase; }");
+        assert_eq!(first_inline_text(&root), "HELLO WORLD");
+    }
+
+    #[test]
+    fn text_transform_lowercase_ascii() {
+        let root = lay("<p>HELLO World</p>", "p { text-transform: lowercase; }");
+        assert_eq!(first_inline_text(&root), "hello world");
+    }
+
+    #[test]
+    fn text_transform_capitalize_ascii() {
+        let root = lay("<p>hello world</p>", "p { text-transform: capitalize; }");
+        assert_eq!(first_inline_text(&root), "Hello World");
+    }
+
+    #[test]
+    fn text_transform_uppercase_cyrillic() {
+        // Русские буквы должны нормально case-folиться.
+        let root = lay("<p>привет мир</p>", "p { text-transform: uppercase; }");
+        assert_eq!(first_inline_text(&root), "ПРИВЕТ МИР");
+    }
+
+    #[test]
+    fn text_transform_lowercase_cyrillic() {
+        let root = lay("<p>ПРИВЕТ Мир</p>", "p { text-transform: lowercase; }");
+        assert_eq!(first_inline_text(&root), "привет мир");
+    }
+
+    #[test]
+    fn text_transform_capitalize_cyrillic() {
+        let root = lay("<p>привет мир</p>", "p { text-transform: capitalize; }");
+        assert_eq!(first_inline_text(&root), "Привет Мир");
+    }
+
+    #[test]
+    fn text_transform_none_default() {
+        let root = lay("<p>Hello WORLD</p>", "");
+        assert_eq!(first_inline_text(&root), "Hello WORLD");
+    }
+
+    #[test]
+    fn text_transform_inherited() {
+        let root = lay(
+            "<div><p>hi</p></div>",
+            "div { text-transform: uppercase; }",
+        );
+        let div = first_element_child(&root);
+        assert_eq!(div.style.text_transform, TextTransform::Uppercase);
+        let p = first_element_child(div);
+        assert_eq!(p.style.text_transform, TextTransform::Uppercase);
     }
 }

@@ -37,6 +37,52 @@ pub enum TextAlign {
     Right,
 }
 
+/// CSS Text Module L3 §3.4 — `text-transform`. Inherited.
+///
+/// Применяется к текстовому содержимому при сборке inline-сегментов, до
+/// word-wrapping и measurer-а. Cyrillic case-folding делается через
+/// `char::to_uppercase` / `to_lowercase` стандартной библиотеки, что даёт
+/// правильную обработку русских букв (А↔а, Я↔я и т.д.) без сюрпризов
+/// типа турецкого `i`/`I`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextTransform {
+    #[default]
+    None,
+    Uppercase,
+    Lowercase,
+    /// `capitalize`: первая буква каждого «слова» (по spec — character с
+    /// Unicode property Letter) в верхний регистр. Phase 0: упрощённо —
+    /// первая буква каждого whitespace-разделённого токена.
+    Capitalize,
+}
+
+impl TextTransform {
+    /// Применяет преобразование к строке. Не аллоцирует, если transform = None.
+    pub fn apply(self, s: &str) -> String {
+        match self {
+            TextTransform::None => s.to_string(),
+            TextTransform::Uppercase => s.to_uppercase(),
+            TextTransform::Lowercase => s.to_lowercase(),
+            TextTransform::Capitalize => {
+                let mut out = String::with_capacity(s.len());
+                let mut at_word_start = true;
+                for ch in s.chars() {
+                    if ch.is_whitespace() {
+                        out.push(ch);
+                        at_word_start = true;
+                    } else if at_word_start {
+                        out.extend(ch.to_uppercase());
+                        at_word_start = false;
+                    } else {
+                        out.push(ch);
+                    }
+                }
+                out
+            }
+        }
+    }
+}
+
 /// CSS Fonts Module L4: `font-style: normal | italic | oblique`. Inherited.
 ///
 /// Phase 0: layout различает свойство, рендерер пока использует один
@@ -169,6 +215,7 @@ pub struct ComputedStyle {
     pub line_height: f32,
     pub font_style: FontStyle,
     pub font_weight: FontWeight,
+    pub text_transform: TextTransform,
     pub text_decoration_line: TextDecorationLine,
     /// Явная ширина (CSS `width: Npx`). None = auto (растягивается на контейнер).
     pub width: Option<f32>,
@@ -222,6 +269,7 @@ impl ComputedStyle {
             line_height: 1.2,
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
+            text_transform: TextTransform::None,
             text_decoration_line: TextDecorationLine::default(),
             width: None,
             height: None,
@@ -266,6 +314,7 @@ pub fn compute_style(
         line_height: inherited.line_height,
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
+        text_transform: inherited.text_transform,
         text_decoration_line: inherited.text_decoration_line,
         // Ненаследуемые — сброс.
         background_color: None,
@@ -922,6 +971,17 @@ fn apply_declaration(
             if let Some(w) = parse_font_weight(val, parent_font_weight) {
                 style.font_weight = w;
             }
+        }
+        "text-transform" => {
+            // CSS Text L3: none | uppercase | lowercase | capitalize.
+            // `full-width` / `full-size-kana` отложены (CJK-специфика).
+            style.text_transform = match val.split_whitespace().next() {
+                Some("none") => TextTransform::None,
+                Some("uppercase") => TextTransform::Uppercase,
+                Some("lowercase") => TextTransform::Lowercase,
+                Some("capitalize") => TextTransform::Capitalize,
+                _ => style.text_transform,
+            };
         }
         "line-height" => {
             // `1.5` (unitless) — коэффициент. `1.5em` — то же самое.
