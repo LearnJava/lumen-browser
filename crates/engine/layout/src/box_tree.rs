@@ -12,7 +12,7 @@ use lumen_core::geom::{Rect, Size};
 use lumen_css_parser::Stylesheet;
 use lumen_dom::{Document, NodeData, NodeId};
 
-use crate::style::{compute_style, ComputedStyle, Display};
+use crate::style::{compute_style, ComputedStyle, Display, TextAlign};
 use crate::TextMeasurer;
 
 #[derive(Debug, Clone)]
@@ -212,6 +212,9 @@ fn lay_out(
     if let BoxKind::InlineRun { segments, lines } = &mut b.kind {
         if let Some(m) = measurer {
             *lines = wrap_inline_run(segments, content_width, s.font_size, m);
+            if s.text_align != TextAlign::Left {
+                align_lines(lines, content_width, s.text_align, m);
+            }
         } else {
             *lines = one_line_fallback(segments);
         }
@@ -306,6 +309,35 @@ fn wrap_inline_run(
     }
 
     result
+}
+
+/// Сдвигает фрагменты каждой строки вправо для center/right выравнивания.
+/// Для Left — no-op. Вызывается только когда есть измеритель.
+fn align_lines(
+    lines: &mut [Vec<InlineFrag>],
+    content_width: f32,
+    text_align: TextAlign,
+    m: &dyn TextMeasurer,
+) {
+    for line in lines.iter_mut() {
+        let Some(last) = line.last() else { continue };
+        let last_w: f32 = last
+            .text
+            .chars()
+            .map(|c| m.char_width(c, last.style.font_size))
+            .sum();
+        let line_width = last.x + last_w;
+        let offset = match text_align {
+            TextAlign::Center => ((content_width - line_width) / 2.0).max(0.0),
+            TextAlign::Right => (content_width - line_width).max(0.0),
+            TextAlign::Left => 0.0,
+        };
+        if offset > 0.0 {
+            for frag in line.iter_mut() {
+                frag.x += offset;
+            }
+        }
+    }
 }
 
 /// Без измеритея: помещаем всё в одну строку (x-позиции приблизительны).
