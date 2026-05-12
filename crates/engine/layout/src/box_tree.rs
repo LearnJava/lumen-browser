@@ -32,10 +32,12 @@ pub struct InlineSegment {
 }
 
 /// Позиционированный текстовый фрагмент в строке (после layout).
-/// `x` — смещение от левого края inline-контейнера.
+/// `x` — смещение от левого края inline-контейнера, `width` — ширина текста
+/// фрагмента в пикселях (нужна для text-align и подрисовки text-decoration).
 #[derive(Debug, Clone)]
 pub struct InlineFrag {
     pub x: f32,
+    pub width: f32,
     pub text: String,
     pub style: ComputedStyle,
 }
@@ -226,7 +228,7 @@ fn lay_out(
         if let Some(m) = measurer {
             *lines = wrap_inline_run(segments, content_width, s.font_size, m);
             if s.text_align != TextAlign::Left {
-                align_lines(lines, content_width, s.text_align, m);
+                align_lines(lines, content_width, s.text_align);
             }
         } else {
             *lines = one_line_fallback(segments);
@@ -304,6 +306,7 @@ fn wrap_inline_run(
             if last.style.text_rendering_eq(style) {
                 last.text.push(' ');
                 last.text.push_str(word);
+                last.width += space_w + word_w;
                 true
             } else {
                 false
@@ -315,6 +318,7 @@ fn wrap_inline_run(
         if !merged {
             current_line.push(InlineFrag {
                 x: frag_x,
+                width: word_w,
                 text: word.clone(),
                 style: (*style).clone(),
             });
@@ -331,21 +335,15 @@ fn wrap_inline_run(
 }
 
 /// Сдвигает фрагменты каждой строки вправо для center/right выравнивания.
-/// Для Left — no-op. Вызывается только когда есть измеритель.
+/// Для Left — no-op.
 fn align_lines(
     lines: &mut [Vec<InlineFrag>],
     content_width: f32,
     text_align: TextAlign,
-    m: &dyn TextMeasurer,
 ) {
     for line in lines.iter_mut() {
         let Some(last) = line.last() else { continue };
-        let last_w: f32 = last
-            .text
-            .chars()
-            .map(|c| m.char_width(c, last.style.font_size))
-            .sum();
-        let line_width = last.x + last_w;
+        let line_width = last.x + last.width;
         let offset = match text_align {
             TextAlign::Center => ((content_width - line_width) / 2.0).max(0.0),
             TextAlign::Right => (content_width - line_width).max(0.0),
@@ -359,7 +357,10 @@ fn align_lines(
     }
 }
 
-/// Без измеритея: помещаем всё в одну строку (x-позиции приблизительны).
+/// Без измерителя: помещаем всё в одну строку. Ширина каждого фрагмента
+/// без шрифтовых метрик неизвестна — оставляем 0.0; text-decoration в этом
+/// режиме не рисуется. layout() для финального рендеринга всё равно ходит
+/// через layout_measured().
 fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
     let mut frags: Vec<InlineFrag> = Vec::new();
     for seg in segments {
@@ -379,7 +380,12 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
             false
         };
         if !merged {
-            frags.push(InlineFrag { x: 0.0, text, style: seg.style.clone() });
+            frags.push(InlineFrag {
+                x: 0.0,
+                width: 0.0,
+                text,
+                style: seg.style.clone(),
+            });
         }
     }
     if frags.is_empty() { vec![] } else { vec![frags] }

@@ -10,8 +10,7 @@
 //! текст layout-дерева для golden-сравнений (см. `tests/snapshot_tests.rs`).
 //!
 //! Не поддерживается (Phase 2+): flex, grid, float, absolute positioning,
-//! единицы кроме px, color-функции (rgb/hsl/rgba), width/height в CSS,
-//! text-decoration, font-weight/style на уровне inline.
+//! font-weight/style на уровне inline.
 
 pub mod box_tree;
 pub mod snapshot;
@@ -19,7 +18,7 @@ pub mod style;
 
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
-pub use style::{BorderStyle, Color, ComputedStyle, Display, TextAlign};
+pub use style::{BorderStyle, Color, ComputedStyle, Display, TextAlign, TextDecorationLine};
 
 /// Интерфейс измерения ширины символов для line wrapping.
 ///

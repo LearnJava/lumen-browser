@@ -145,8 +145,8 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
     }
 }
 
-/// Подмножество, влияющее на рендеринг текста (color / font-size / line-height).
-/// Используется и для боксов, и для inline-сегментов.
+/// Подмножество, влияющее на рендеринг текста (color / font-size / line-height /
+/// text-decoration). Используется и для боксов, и для inline-сегментов.
 fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     if s.color != Color::BLACK {
         let _ = write!(out, " color={}", color_hex(s.color));
@@ -156,6 +156,19 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     }
     if (s.line_height - 1.2).abs() > 0.01 {
         let _ = write!(out, " lh={:.2}", s.line_height);
+    }
+    if !s.text_decoration_line.is_empty() {
+        let mut parts: Vec<&str> = Vec::new();
+        if s.text_decoration_line.underline {
+            parts.push("underline");
+        }
+        if s.text_decoration_line.overline {
+            parts.push("overline");
+        }
+        if s.text_decoration_line.line_through {
+            parts.push("line-through");
+        }
+        let _ = write!(out, " decoration={}", parts.join("+"));
     }
 }
 

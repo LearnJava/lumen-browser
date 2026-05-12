@@ -36,6 +36,29 @@ pub enum TextAlign {
     Right,
 }
 
+/// Набор активных линий `text-decoration` для элемента.
+///
+/// CSS3 разделяет shorthand `text-decoration` на `-line`, `-style`, `-color`;
+/// Phase 0 умеет только line (без двойных линий и кастомных цветов). Спецификация
+/// CSS3 не наследует text-decoration-line, но визуально декорация всё равно
+/// распространяется на потомков. Мы делаем явное наследование — это эквивалентно
+/// поведению, ожидаемому от `a { text-decoration: underline }`, и при этом
+/// позволяет дочернему элементу явно сбросить декорацию через
+/// `text-decoration: none` (CSS3 для этого требует пересоздать stacking context,
+/// но в нашей упрощённой модели достаточно перезаписать поле).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TextDecorationLine {
+    pub underline: bool,
+    pub overline: bool,
+    pub line_through: bool,
+}
+
+impl TextDecorationLine {
+    pub const fn is_empty(self) -> bool {
+        !self.underline && !self.overline && !self.line_through
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
     pub r: u8,
@@ -89,6 +112,7 @@ pub struct ComputedStyle {
     pub background_color: Option<Color>,
     pub font_size: f32,
     pub line_height: f32,
+    pub text_decoration_line: TextDecorationLine,
     /// Явная ширина (CSS `width: Npx`). None = auto (растягивается на контейнер).
     pub width: Option<f32>,
     /// Явная высота (CSS `height: Npx`). None = auto (по содержимому).
@@ -117,12 +141,13 @@ pub struct ComputedStyle {
 }
 
 impl ComputedStyle {
-    /// Два стиля рендерят текст одинаково (цвет, размер и интерлиньяж).
+    /// Два стиля рендерят текст одинаково (цвет, размер, интерлиньяж, декорация).
     /// Используется для слияния inline-фрагментов в wrap_inline_run.
     pub fn text_rendering_eq(&self, other: &Self) -> bool {
         self.color == other.color
             && (self.font_size - other.font_size).abs() < f32::EPSILON
             && (self.line_height - other.line_height).abs() < f32::EPSILON
+            && self.text_decoration_line == other.text_decoration_line
     }
 
     /// Стартовые значения для корня документа.
@@ -134,6 +159,7 @@ impl ComputedStyle {
             background_color: None,
             font_size: 16.0,
             line_height: 1.2,
+            text_decoration_line: TextDecorationLine::default(),
             width: None,
             height: None,
             margin_top: 0.0,
@@ -173,6 +199,7 @@ pub fn compute_style(
         text_align: inherited.text_align,
         font_size: inherited.font_size,
         line_height: inherited.line_height,
+        text_decoration_line: inherited.text_decoration_line,
         // Ненаследуемые — сброс.
         background_color: None,
         width: None,
@@ -692,6 +719,11 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, em_basis: f3
         "padding-right" => set_box_length(&mut style.padding_right, val, em_basis),
         "padding-bottom" => set_box_length(&mut style.padding_bottom, val, em_basis),
         "padding-left" => set_box_length(&mut style.padding_left, val, em_basis),
+        "text-decoration" | "text-decoration-line" => {
+            if let Some(d) = parse_text_decoration(val) {
+                style.text_decoration_line = d;
+            }
+        }
         // ── Borders ───────────────────────────────────────────────────────────
         "border" => apply_border_shorthand(style, val, em_basis),
         "border-top" => apply_border_side_shorthand(
@@ -741,6 +773,47 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, em_basis: f3
         "border-left-color" => { if let Some(c) = parse_color(val) { style.border_left_color = Some(c); } }
         _ => {}
     }
+}
+
+/// Разбирает `text-decoration` / `text-decoration-line`. Phase 0: только
+/// набор keyword-ов `underline`, `overline`, `line-through`, `none`. Цвет,
+/// стиль (`solid`/`wavy`/…) и `blink` (CSS2 deprecated) тихо игнорируем.
+/// `none` сбрасывает все линии, даже если вместе с ним встречены другие
+/// keyword-ы (CSS3 описывает это как «none — initial value», но интуитивно
+/// побеждает явный сброс).
+fn parse_text_decoration(val: &str) -> Option<TextDecorationLine> {
+    let mut out = TextDecorationLine::default();
+    let mut any_known = false;
+    let mut none_seen = false;
+    for token in val.split_whitespace() {
+        match token.to_ascii_lowercase().as_str() {
+            "none" => {
+                none_seen = true;
+                any_known = true;
+            }
+            "underline" => {
+                out.underline = true;
+                any_known = true;
+            }
+            "overline" => {
+                out.overline = true;
+                any_known = true;
+            }
+            "line-through" => {
+                out.line_through = true;
+                any_known = true;
+            }
+            // Цвета, `solid`/`wavy`/`dashed`/…, `blink` — игнорируем молча.
+            _ => {}
+        }
+    }
+    if !any_known {
+        return None;
+    }
+    if none_seen {
+        return Some(TextDecorationLine::default());
+    }
+    Some(out)
 }
 
 /// Применяет `font-size`-декларацию, если она задана. Размер `em` берётся
@@ -1235,6 +1308,65 @@ mod tests {
     fn length_resolve_percent_needs_basis() {
         assert_eq!(Length::Percent(50.0).resolve(16.0, Some(200.0)), Some(100.0));
         assert_eq!(Length::Percent(50.0).resolve(16.0, None), None);
+    }
+
+    // ── text-decoration parsing ────────────────────────────────────────────
+
+    #[test]
+    fn text_decoration_underline_sets_only_underline() {
+        let d = parse_text_decoration("underline").unwrap();
+        assert!(d.underline);
+        assert!(!d.overline);
+        assert!(!d.line_through);
+    }
+
+    #[test]
+    fn text_decoration_none_returns_empty() {
+        let d = parse_text_decoration("none").unwrap();
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn text_decoration_multiple_keywords_combine() {
+        let d = parse_text_decoration("overline underline").unwrap();
+        assert!(d.underline);
+        assert!(d.overline);
+        assert!(!d.line_through);
+    }
+
+    #[test]
+    fn text_decoration_line_through_with_hyphen() {
+        let d = parse_text_decoration("line-through").unwrap();
+        assert!(d.line_through);
+    }
+
+    #[test]
+    fn text_decoration_none_with_other_clears_all() {
+        // `none` всегда побеждает: интуитивный сброс.
+        let d = parse_text_decoration("underline none").unwrap();
+        assert!(d.is_empty());
+    }
+
+    #[test]
+    fn text_decoration_ignores_unknown_tokens() {
+        // `blink` (CSS2 deprecated), цвета и `solid`/`wavy` — игнорируем.
+        let d = parse_text_decoration("underline blink red solid").unwrap();
+        assert!(d.underline);
+        assert!(!d.overline);
+        assert!(!d.line_through);
+    }
+
+    #[test]
+    fn text_decoration_unrecognized_only_returns_none() {
+        assert!(parse_text_decoration("blink").is_none());
+        assert!(parse_text_decoration("").is_none());
+    }
+
+    #[test]
+    fn text_decoration_is_case_insensitive() {
+        let d = parse_text_decoration("UNDERLINE Line-Through").unwrap();
+        assert!(d.underline);
+        assert!(d.line_through);
     }
 
     // ── Border parsing ────────────────────────────────────────────────────────

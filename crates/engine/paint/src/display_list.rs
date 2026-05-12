@@ -7,7 +7,7 @@
 //! верхнего левого угла окна.
 
 use lumen_core::geom::Rect;
-use lumen_layout::{BoxKind, Color, LayoutBox};
+use lumen_layout::{BoxKind, Color, InlineFrag, LayoutBox};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DisplayCommand {
@@ -131,9 +131,52 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         font_size: frag.style.font_size,
                         color: frag.style.color,
                     });
+                    push_text_decoration(out, b.rect.x, line_y, frag);
                 }
             }
         }
+    }
+}
+
+/// Эмитит FillRect-ы для активных линий text-decoration. Геометрия —
+/// приблизительная: baseline ≈ line_y + font_size * 0.80 (соответствует
+/// ascent ratio Inter, на котором рендерер позиционирует глифы). Толщина —
+/// около 7% от font_size, минимум 1px. Цвет — цвет самого фрагмента
+/// (упрощение Phase 0 — CSS3 говорит использовать text-decoration-color,
+/// который у нас не реализован, поэтому falls back на currentColor).
+fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, frag: &InlineFrag) {
+    let decoration = frag.style.text_decoration_line;
+    if decoration.is_empty() || frag.width <= 0.0 {
+        return;
+    }
+    let fs = frag.style.font_size;
+    let baseline_y = line_y + fs * 0.80;
+    let thickness = (fs * 0.07).max(1.0);
+    let x = container_x + frag.x;
+
+    if decoration.underline {
+        // Под baseline, ниже на ~10% от размера шрифта.
+        let y = baseline_y + fs * 0.10;
+        out.push(DisplayCommand::FillRect {
+            rect: Rect::new(x, y, frag.width, thickness),
+            color: frag.style.color,
+        });
+    }
+    if decoration.line_through {
+        // Примерно по середине строчных букв (mid x-height): ~30% выше baseline.
+        let y = baseline_y - fs * 0.30;
+        out.push(DisplayCommand::FillRect {
+            rect: Rect::new(x, y, frag.width, thickness),
+            color: frag.style.color,
+        });
+    }
+    if decoration.overline {
+        // Чуть выше верха capital-line (≈ font_size * 0.75 над baseline).
+        let y = baseline_y - fs * 0.78;
+        out.push(DisplayCommand::FillRect {
+            rect: Rect::new(x, y, frag.width, thickness),
+            color: frag.style.color,
+        });
     }
 }
 
@@ -329,6 +372,157 @@ mod tests {
             rects[0].x,
             rects[1].x
         );
+    }
+
+    // ── Тесты text-decoration ───────────────────────────────────────────────
+
+    fn fill_rects(dl: &DisplayList) -> Vec<&Rect> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillRect { rect, .. } => Some(rect),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// `<a>` с `text-decoration: underline` эмитирует и DrawText, и FillRect.
+    #[test]
+    fn underline_emits_draw_text_and_fill_rect() {
+        let dl = build_wrapped(
+            "<p><a>link</a></p>",
+            "a { text-decoration: underline; }",
+            800.0,
+        );
+        assert_eq!(texts(&dl), vec!["link"]);
+        let rects = fill_rects(&dl);
+        assert_eq!(rects.len(), 1, "expected one underline FillRect");
+        // "link" = 4×8 = 32px.
+        assert!((rects[0].width - 32.0).abs() < 0.01, "width={}", rects[0].width);
+    }
+
+    /// Underline должен идти ниже baseline (под глифами).
+    #[test]
+    fn underline_positioned_below_baseline() {
+        let dl = build_wrapped(
+            "<p><a>x</a></p>",
+            "a { text-decoration: underline; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        assert_eq!(rects.len(), 1);
+        // line_y = 0, baseline ≈ 0 + 16*0.80 = 12.8, underline y ≈ 12.8 + 16*0.10 = 14.4.
+        assert!(
+            (rects[0].y - 14.4).abs() < 0.5,
+            "underline y should be near 14.4, got {}",
+            rects[0].y
+        );
+    }
+
+    /// line-through лежит выше baseline, не ниже.
+    #[test]
+    fn line_through_positioned_above_baseline() {
+        let dl = build_wrapped(
+            "<p><span>x</span></p>",
+            "span { text-decoration: line-through; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        assert_eq!(rects.len(), 1);
+        // baseline ≈ 12.8, line-through y ≈ 12.8 - 16*0.30 = 8.0.
+        assert!(
+            (rects[0].y - 8.0).abs() < 0.5,
+            "line-through y should be near 8.0, got {}",
+            rects[0].y
+        );
+    }
+
+    /// overline лежит над текстом.
+    #[test]
+    fn overline_positioned_above_text() {
+        let dl = build_wrapped(
+            "<p><span>x</span></p>",
+            "span { text-decoration: overline; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        assert_eq!(rects.len(), 1);
+        // baseline ≈ 12.8, overline y ≈ 12.8 - 16*0.78 ≈ 0.32.
+        assert!(
+            rects[0].y < 1.0,
+            "overline y should be near top, got {}",
+            rects[0].y
+        );
+    }
+
+    /// `text-decoration: underline line-through` эмитирует две линии.
+    #[test]
+    fn multiple_decorations_emit_multiple_rects() {
+        let dl = build_wrapped(
+            "<p><a>link</a></p>",
+            "a { text-decoration: underline line-through; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        assert_eq!(rects.len(), 2, "expected underline + line-through rects");
+    }
+
+    /// Цвет линии совпадает с цветом текста (currentColor).
+    #[test]
+    fn decoration_uses_text_color() {
+        let dl = build_wrapped(
+            "<p><a>link</a></p>",
+            "a { color: red; text-decoration: underline; }",
+            800.0,
+        );
+        let colors: Vec<&Color> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillRect { color, .. } => Some(color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors.len(), 1);
+        assert_eq!(colors[0].r, 255);
+        assert_eq!(colors[0].g, 0);
+    }
+
+    /// Соседние фрагменты разной декорации не сливаются.
+    #[test]
+    fn fragments_with_different_decoration_dont_merge() {
+        let dl = build_wrapped(
+            "<p>plain <a>underlined</a> tail</p>",
+            "a { text-decoration: underline; }",
+            800.0,
+        );
+        let t = texts(&dl);
+        // 3 фрагмента: "plain", "underlined", "tail".
+        assert_eq!(t, vec!["plain", "underlined", "tail"]);
+        // Underline только под средним.
+        assert_eq!(fill_rects(&dl).len(), 1);
+    }
+
+    /// Унаследованная декорация продолжает работать у потомков.
+    #[test]
+    fn decoration_inherits_into_descendants() {
+        let dl = build_wrapped(
+            "<p><span>x</span></p>",
+            "p { text-decoration: underline; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        // Span наследует underline → FillRect эмитится.
+        assert!(!rects.is_empty(), "underline should propagate to span");
+    }
+
+    /// `text-decoration: none` на потомке отменяет наследуемую декорацию.
+    #[test]
+    fn none_on_descendant_overrides_inherited_underline() {
+        let dl = build_wrapped(
+            "<p><a>off</a></p>",
+            "p { text-decoration: underline; } a { text-decoration: none; }",
+            800.0,
+        );
+        assert!(fill_rects(&dl).is_empty(), "a should override underline");
     }
 
     /// Inline-ран переносится: второй DrawText смещён по Y.
