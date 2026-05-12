@@ -18,7 +18,7 @@ pub mod style;
 
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
-pub use style::{BorderStyle, BoxSizing, Color, ComputedStyle, Display, TextAlign, TextDecorationLine};
+pub use style::{BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, TextAlign, TextDecorationLine};
 
 /// Интерфейс измерения ширины символов для line wrapping.
 ///
@@ -1531,5 +1531,90 @@ mod tests {
         let p = first_element_child(&root);
         assert!((p.style.border_top_width - 6.0).abs() < 0.01);
         assert!((p.style.border_right_width - 6.0).abs() < 0.01);
+    }
+
+    // ── font-style: italic / oblique / normal ───────────────────────────────
+
+    /// `<em>` получает italic через UA stylesheet.
+    #[test]
+    fn em_element_is_italic_by_default() {
+        // <em> внутри <p> — inline; UA stylesheet делает его italic.
+        let root = lay("<p>hi <em>there</em></p>", "");
+        let p = first_element_child(&root);
+        // <p> сам Normal; внутренний фрагмент <em> в InlineRun должен быть Italic.
+        assert_eq!(p.style.font_style, FontStyle::Normal);
+        let inline = p.children.iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }))
+            .unwrap();
+        if let BoxKind::InlineRun { segments, .. } = &inline.kind {
+            // Должно быть два сегмента: "hi " (Normal) и "there" (Italic).
+            let italic = segments.iter().find(|s| s.style.font_style == FontStyle::Italic);
+            assert!(italic.is_some(), "ожидался italic сегмент");
+            assert_eq!(italic.unwrap().text, "there");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    /// `<i>`, `<cite>`, `<dfn>`, `<address>`, `<var>` тоже italic по UA.
+    /// Проверяем напрямую через compute_style — обходить дерево не нужно,
+    /// тег элемента всегда первый child корня.
+    #[test]
+    fn i_cite_dfn_address_var_are_italic() {
+        for tag in ["i", "cite", "dfn", "address", "var"] {
+            let html = format!("<{tag}>x</{tag}>");
+            let doc = lumen_html_parser::parse(&html);
+            let id = doc.get(doc.root()).children[0];
+            let style = crate::style::compute_style(
+                &doc,
+                id,
+                &lumen_css_parser::Stylesheet::default(),
+                &ComputedStyle::root(),
+                Size::new(800.0, 600.0),
+            );
+            assert_eq!(style.font_style, FontStyle::Italic, "tag = {tag}");
+        }
+    }
+
+    /// CSS `font-style: italic` на `<p>`.
+    #[test]
+    fn font_style_italic_via_css() {
+        let root = lay("<p>x</p>", "p { font-style: italic; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_style, FontStyle::Italic);
+    }
+
+    /// CSS `font-style: oblique`.
+    #[test]
+    fn font_style_oblique_via_css() {
+        let root = lay("<p>x</p>", "p { font-style: oblique; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_style, FontStyle::Oblique);
+    }
+
+    /// CSS `font-style: normal` на `<em>` сбрасывает UA-italic.
+    #[test]
+    fn font_style_normal_overrides_ua_italic() {
+        // Но в InlineRun сегменте — нужно проверить, что override применился.
+        // Проще: сделать <em> блочным через display:block + font-style:normal.
+        let root = lay(
+            "<em>x</em>",
+            "em { display: block; font-style: normal; }",
+        );
+        let em = first_element_child(&root);
+        assert_eq!(em.style.font_style, FontStyle::Normal);
+    }
+
+    /// font-style наследуется: ребёнок берёт italic от родителя.
+    #[test]
+    fn font_style_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-style: italic; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.font_style, FontStyle::Italic);
+        assert_eq!(p.style.font_style, FontStyle::Italic);
     }
 }

@@ -10,7 +10,7 @@
 //! «дефолта».
 
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
-use crate::style::{BorderStyle, BoxSizing, Color, ComputedStyle, Display, TextAlign};
+use crate::style::{BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, TextAlign};
 use std::fmt::Write;
 
 /// Корневой entry-point: рекурсивно сериализует всё дерево.
@@ -172,6 +172,15 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
             parts.push("line-through");
         }
         let _ = write!(out, " decoration={}", parts.join("+"));
+    }
+    match s.font_style {
+        FontStyle::Normal => {}
+        FontStyle::Italic => {
+            let _ = write!(out, " font-style=italic");
+        }
+        FontStyle::Oblique => {
+            let _ = write!(out, " font-style=oblique");
+        }
     }
 }
 
