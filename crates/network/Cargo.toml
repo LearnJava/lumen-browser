@@ -1,0 +1,13 @@
+[package]
+name = "lumen-network"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+lumen-core = { workspace = true }
+# Exception #3 (§5): TLS / X.509 / crypto. Своя реализация — security antipattern.
+rustls = { version = "0.23", features = ["std"] }
+webpki-roots = "0.26"
