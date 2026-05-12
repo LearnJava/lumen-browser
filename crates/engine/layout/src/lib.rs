@@ -18,7 +18,7 @@ pub mod style;
 
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
-pub use style::{Color, ComputedStyle, Display, TextAlign, TextDecorationLine};
+pub use style::{BorderStyle, Color, ComputedStyle, Display, TextAlign, TextDecorationLine};
 
 /// Интерфейс измерения ширины символов для line wrapping.
 ///
@@ -993,5 +993,89 @@ mod tests {
         // <p> наследует только inherited properties — width/height нет.
         assert!(p.style.width.is_none(), "width should not be inherited");
         assert!(p.style.height.is_none(), "height should not be inherited");
+    }
+
+    // ── Тесты CSS borders ──────────────────────────────────────────────────
+
+    /// `border: 2px solid red` — shorthand устанавливает ширину, стиль, цвет.
+    #[test]
+    fn border_shorthand_sets_all_sides() {
+        let root = lay("<p>x</p>", "p { border: 2px solid red; }");
+        let p = first_element_child(&root);
+        assert!((p.style.border_top_width - 2.0).abs() < 0.01);
+        assert!((p.style.border_right_width - 2.0).abs() < 0.01);
+        assert!((p.style.border_bottom_width - 2.0).abs() < 0.01);
+        assert!((p.style.border_left_width - 2.0).abs() < 0.01);
+        assert_eq!(p.style.border_top_style, BorderStyle::Solid);
+        assert_eq!(p.style.border_bottom_style, BorderStyle::Solid);
+        let top_color = p.style.border_top_color.expect("border-color should be set");
+        assert_eq!(top_color.r, 255);
+        assert_eq!(top_color.g, 0);
+        assert_eq!(top_color.b, 0);
+    }
+
+    /// Border увеличивает высоту бокса (border-box sizing).
+    #[test]
+    fn border_increases_box_height() {
+        let root = lay("<p>x</p>", "p { border: 5px solid black; }");
+        let p = first_element_child(&root);
+        // 19.2 (text) + 5 + 5 = 29.2
+        assert!(
+            (p.rect.height - 29.2).abs() < 0.1,
+            "rect.height={}", p.rect.height
+        );
+    }
+
+    /// Border увеличивает ширину при явно заданном `width`.
+    #[test]
+    fn border_plus_explicit_width_adds_to_rect() {
+        let root = lay("<p>x</p>", "p { width: 100px; border: 3px solid black; }");
+        let p = first_element_child(&root);
+        // rect.width = width + border_left + border_right = 100 + 3 + 3 = 106
+        assert!(
+            (p.rect.width - 106.0).abs() < 0.01,
+            "rect.width={}", p.rect.width
+        );
+    }
+
+    /// Без border-color поле равно None (currentColor).
+    #[test]
+    fn border_color_defaults_to_none() {
+        let root = lay("<p>x</p>", "p { border: 1px solid; }");
+        let p = first_element_child(&root);
+        assert!(p.style.border_top_color.is_none(), "should be None = currentColor");
+    }
+
+    /// `border-top: 3px dashed blue` — только верхняя сторона.
+    #[test]
+    fn border_side_shorthand_sets_one_side() {
+        let root = lay("<p>x</p>", "p { border-top: 3px dashed blue; }");
+        let p = first_element_child(&root);
+        assert!((p.style.border_top_width - 3.0).abs() < 0.01);
+        assert_eq!(p.style.border_top_style, BorderStyle::Dashed);
+        let c = p.style.border_top_color.expect("top color set");
+        assert_eq!(c.b, 255);
+        // Остальные стороны без изменений.
+        assert_eq!(p.style.border_right_width, 0.0);
+        assert_eq!(p.style.border_right_style, BorderStyle::None);
+    }
+
+    /// `border-style: solid dashed dotted solid` — 4 значения по CSS.
+    #[test]
+    fn border_style_four_values() {
+        let root = lay("<p>x</p>", "p { border-style: solid dashed dotted solid; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.border_top_style, BorderStyle::Solid);
+        assert_eq!(p.style.border_right_style, BorderStyle::Dashed);
+        assert_eq!(p.style.border_bottom_style, BorderStyle::Dotted);
+        assert_eq!(p.style.border_left_style, BorderStyle::Solid);
+    }
+
+    /// `border: none` — стиль None, ширина 0.
+    #[test]
+    fn border_none_clears_border() {
+        let root = lay("<p>x</p>", "p { border: 5px solid red; border: none; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.border_top_style, BorderStyle::None);
     }
 }

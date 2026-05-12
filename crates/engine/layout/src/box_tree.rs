@@ -167,6 +167,10 @@ fn build_box(
                     inline_style.background_color = None;
                     inline_style.width = None;
                     inline_style.height = None;
+                    inline_style.border_top_width = 0.0;
+                    inline_style.border_right_width = 0.0;
+                    inline_style.border_bottom_width = 0.0;
+                    inline_style.border_left_width = 0.0;
                     children.push(LayoutBox {
                         node: id,
                         rect: Rect::ZERO,
@@ -209,12 +213,15 @@ fn lay_out(
     b.rect.width = (available_width - s.margin_left - s.margin_right).max(0.0);
     // Явная ширина (CSS width: Npx) перекрывает auto-ширину по контейнеру.
     if let Some(w) = s.width {
-        b.rect.width = (w + s.padding_left + s.padding_right).max(0.0);
+        b.rect.width = (w + s.padding_left + s.padding_right
+            + s.border_left_width + s.border_right_width).max(0.0);
     }
 
-    let content_x = b.rect.x + s.padding_left;
-    let content_y = b.rect.y + s.padding_top;
-    let content_width = (b.rect.width - s.padding_left - s.padding_right).max(0.0);
+    let content_x = b.rect.x + s.padding_left + s.border_left_width;
+    let content_y = b.rect.y + s.padding_top + s.border_top_width;
+    let content_width = (b.rect.width
+        - s.padding_left - s.padding_right
+        - s.border_left_width - s.border_right_width).max(0.0);
 
     // InlineRun обрабатывается до основного match.
     if let BoxKind::InlineRun { segments, lines } = &mut b.kind {
@@ -244,9 +251,10 @@ fn lay_out(
             let content_height = (child_y - content_y).max(0.0);
             // Явная высота (CSS height: Npx) перекрывает auto-высоту по содержимому.
             b.rect.height = if let Some(h) = s.height {
-                h + s.padding_top + s.padding_bottom
+                h + s.padding_top + s.padding_bottom + s.border_top_width + s.border_bottom_width
             } else {
                 content_height + s.padding_top + s.padding_bottom
+                    + s.border_top_width + s.border_bottom_width
             };
         }
         BoxKind::InlineRun { .. } => unreachable!(),

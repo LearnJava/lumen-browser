@@ -88,6 +88,22 @@ impl Color {
     };
 }
 
+/// Стиль линии CSS border. None = рамка не отображается (как `display: none`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BorderStyle {
+    #[default]
+    None,
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+impl BorderStyle {
+    pub fn is_visible(self) -> bool {
+        !matches!(self, BorderStyle::None)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
@@ -109,6 +125,19 @@ pub struct ComputedStyle {
     pub padding_right: f32,
     pub padding_bottom: f32,
     pub padding_left: f32,
+    pub border_top_width: f32,
+    pub border_right_width: f32,
+    pub border_bottom_width: f32,
+    pub border_left_width: f32,
+    pub border_top_style: BorderStyle,
+    pub border_right_style: BorderStyle,
+    pub border_bottom_style: BorderStyle,
+    pub border_left_style: BorderStyle,
+    /// None = currentColor (используется style.color при рендеринге).
+    pub border_top_color: Option<Color>,
+    pub border_right_color: Option<Color>,
+    pub border_bottom_color: Option<Color>,
+    pub border_left_color: Option<Color>,
 }
 
 impl ComputedStyle {
@@ -141,6 +170,18 @@ impl ComputedStyle {
             padding_right: 0.0,
             padding_bottom: 0.0,
             padding_left: 0.0,
+            border_top_width: 0.0,
+            border_right_width: 0.0,
+            border_bottom_width: 0.0,
+            border_left_width: 0.0,
+            border_top_style: BorderStyle::None,
+            border_right_style: BorderStyle::None,
+            border_bottom_style: BorderStyle::None,
+            border_left_style: BorderStyle::None,
+            border_top_color: None,
+            border_right_color: None,
+            border_bottom_color: None,
+            border_left_color: None,
         }
     }
 }
@@ -171,6 +212,18 @@ pub fn compute_style(
         padding_right: 0.0,
         padding_bottom: 0.0,
         padding_left: 0.0,
+        border_top_width: 0.0,
+        border_right_width: 0.0,
+        border_bottom_width: 0.0,
+        border_left_width: 0.0,
+        border_top_style: BorderStyle::None,
+        border_right_style: BorderStyle::None,
+        border_bottom_style: BorderStyle::None,
+        border_left_style: BorderStyle::None,
+        border_top_color: None,
+        border_right_color: None,
+        border_bottom_color: None,
+        border_left_color: None,
     };
 
     if !matches!(doc.get(node).data, NodeData::Element { .. }) {
@@ -671,6 +724,53 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, em_basis: f3
                 style.text_decoration_line = d;
             }
         }
+        // ── Borders ───────────────────────────────────────────────────────────
+        "border" => apply_border_shorthand(style, val, em_basis),
+        "border-top" => apply_border_side_shorthand(
+            &mut style.border_top_width, &mut style.border_top_style,
+            &mut style.border_top_color, val, em_basis),
+        "border-right" => apply_border_side_shorthand(
+            &mut style.border_right_width, &mut style.border_right_style,
+            &mut style.border_right_color, val, em_basis),
+        "border-bottom" => apply_border_side_shorthand(
+            &mut style.border_bottom_width, &mut style.border_bottom_style,
+            &mut style.border_bottom_color, val, em_basis),
+        "border-left" => apply_border_side_shorthand(
+            &mut style.border_left_width, &mut style.border_left_style,
+            &mut style.border_left_color, val, em_basis),
+        "border-width" => {
+            let sides = expand_border_4(val);
+            if let Some(v) = resolve_box_length(sides[0], em_basis) { style.border_top_width = v; }
+            if let Some(v) = resolve_box_length(sides[1], em_basis) { style.border_right_width = v; }
+            if let Some(v) = resolve_box_length(sides[2], em_basis) { style.border_bottom_width = v; }
+            if let Some(v) = resolve_box_length(sides[3], em_basis) { style.border_left_width = v; }
+        }
+        "border-style" => {
+            let sides = expand_border_4(val);
+            style.border_top_style = parse_border_style_kw(sides[0]);
+            style.border_right_style = parse_border_style_kw(sides[1]);
+            style.border_bottom_style = parse_border_style_kw(sides[2]);
+            style.border_left_style = parse_border_style_kw(sides[3]);
+        }
+        "border-color" => {
+            let sides = expand_border_4(val);
+            if let Some(c) = parse_color(sides[0]) { style.border_top_color = Some(c); }
+            if let Some(c) = parse_color(sides[1]) { style.border_right_color = Some(c); }
+            if let Some(c) = parse_color(sides[2]) { style.border_bottom_color = Some(c); }
+            if let Some(c) = parse_color(sides[3]) { style.border_left_color = Some(c); }
+        }
+        "border-top-width" => set_box_length(&mut style.border_top_width, val, em_basis),
+        "border-right-width" => set_box_length(&mut style.border_right_width, val, em_basis),
+        "border-bottom-width" => set_box_length(&mut style.border_bottom_width, val, em_basis),
+        "border-left-width" => set_box_length(&mut style.border_left_width, val, em_basis),
+        "border-top-style" => style.border_top_style = parse_border_style_kw(val),
+        "border-right-style" => style.border_right_style = parse_border_style_kw(val),
+        "border-bottom-style" => style.border_bottom_style = parse_border_style_kw(val),
+        "border-left-style" => style.border_left_style = parse_border_style_kw(val),
+        "border-top-color" => { if let Some(c) = parse_color(val) { style.border_top_color = Some(c); } }
+        "border-right-color" => { if let Some(c) = parse_color(val) { style.border_right_color = Some(c); } }
+        "border-bottom-color" => { if let Some(c) = parse_color(val) { style.border_bottom_color = Some(c); } }
+        "border-left-color" => { if let Some(c) = parse_color(val) { style.border_left_color = Some(c); } }
         _ => {}
     }
 }
@@ -749,6 +849,84 @@ fn resolve_box_length(val: &str, em_basis: f32) -> Option<f32> {
 fn set_box_length(target: &mut f32, val: &str, em_basis: f32) {
     if let Some(v) = resolve_box_length(val, em_basis) {
         *target = v;
+    }
+}
+
+fn is_border_style_kw(s: &str) -> bool {
+    matches!(s.trim(), "none" | "solid" | "dashed" | "dotted")
+}
+
+fn parse_border_style_kw(s: &str) -> BorderStyle {
+    match s.trim() {
+        "solid" => BorderStyle::Solid,
+        "dashed" => BorderStyle::Dashed,
+        "dotted" => BorderStyle::Dotted,
+        _ => BorderStyle::None,
+    }
+}
+
+/// Разбирает `border: <width> <style> <color>` (порядок произвольный, каждая
+/// часть опциональна). Применяет найденные значения ко всем четырём сторонам.
+fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32) {
+    let tokens: Vec<&str> = val.split_whitespace().collect();
+    for tok in &tokens {
+        if let Some(v) = resolve_box_length(tok, em_basis) {
+            style.border_top_width = v;
+            style.border_right_width = v;
+            style.border_bottom_width = v;
+            style.border_left_width = v;
+        } else if is_border_style_kw(tok) {
+            let bs = parse_border_style_kw(tok);
+            style.border_top_style = bs;
+            style.border_right_style = bs;
+            style.border_bottom_style = bs;
+            style.border_left_style = bs;
+        } else if let Some(c) = parse_color(tok) {
+            style.border_top_color = Some(c);
+            style.border_right_color = Some(c);
+            style.border_bottom_color = Some(c);
+            style.border_left_color = Some(c);
+        }
+    }
+}
+
+/// Разбирает `border-{top,right,bottom,left}: <width> <style> <color>` в одну сторону.
+fn apply_border_side_shorthand(
+    width: &mut f32,
+    bstyle: &mut BorderStyle,
+    color: &mut Option<Color>,
+    val: &str,
+    em_basis: f32,
+) {
+    for tok in val.split_whitespace() {
+        if let Some(v) = resolve_box_length(tok, em_basis) {
+            *width = v;
+        } else if is_border_style_kw(tok) {
+            *bstyle = parse_border_style_kw(tok);
+        } else if let Some(c) = parse_color(tok) {
+            *color = Some(c);
+        }
+    }
+}
+
+/// Разворачивает 1–4 токена в 4-элементный массив по CSS-правилу:
+/// 1 → (T, R, B, L) = all same
+/// 2 → (T=B, R=L)
+/// 3 → (T, R=L, B)
+/// 4 → (T, R, B, L)
+fn expand_border_4(val: &str) -> [&str; 4] {
+    let parts: Vec<&str> = val.split_whitespace().collect();
+    match parts.len() {
+        1 => [parts[0], parts[0], parts[0], parts[0]],
+        2 => [parts[0], parts[1], parts[0], parts[1]],
+        3 => [parts[0], parts[1], parts[2], parts[1]],
+        _ => {
+            let t = parts[0];
+            let r = parts.get(1).copied().unwrap_or(t);
+            let b = parts.get(2).copied().unwrap_or(t);
+            let l = parts.get(3).copied().unwrap_or(r);
+            [t, r, b, l]
+        }
     }
 }
 
@@ -1189,5 +1367,89 @@ mod tests {
         let d = parse_text_decoration("UNDERLINE Line-Through").unwrap();
         assert!(d.underline);
         assert!(d.line_through);
+    }
+
+    // ── Border parsing ────────────────────────────────────────────────────────
+
+    fn style_for(css: &str) -> ComputedStyle {
+        let doc = lumen_html_parser::parse("<p>x</p>");
+        let sheet = lumen_css_parser::parse(&format!("p {{ {css} }}"));
+        let root_style = ComputedStyle::root();
+        let p = doc.get(doc.root()).children[0];
+        compute_style(&doc, p, &sheet, &root_style)
+    }
+
+    #[test]
+    fn border_shorthand_sets_all_sides() {
+        let s = style_for("border: 2px solid red");
+        assert!((s.border_top_width - 2.0).abs() < 0.01);
+        assert!((s.border_right_width - 2.0).abs() < 0.01);
+        assert!((s.border_bottom_width - 2.0).abs() < 0.01);
+        assert!((s.border_left_width - 2.0).abs() < 0.01);
+        assert_eq!(s.border_top_style, BorderStyle::Solid);
+        assert_eq!(s.border_right_style, BorderStyle::Solid);
+        assert_eq!(s.border_bottom_style, BorderStyle::Solid);
+        assert_eq!(s.border_left_style, BorderStyle::Solid);
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        assert_eq!(s.border_top_color, Some(red));
+        assert_eq!(s.border_right_color, Some(red));
+    }
+
+    #[test]
+    fn border_width_shorthand_1_value() {
+        let s = style_for("border-width: 5px");
+        assert!((s.border_top_width - 5.0).abs() < 0.01);
+        assert!((s.border_right_width - 5.0).abs() < 0.01);
+        assert!((s.border_bottom_width - 5.0).abs() < 0.01);
+        assert!((s.border_left_width - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn border_style_sets_all_sides() {
+        let s = style_for("border-style: dashed");
+        assert_eq!(s.border_top_style, BorderStyle::Dashed);
+        assert_eq!(s.border_bottom_style, BorderStyle::Dashed);
+    }
+
+    #[test]
+    fn border_color_shorthand() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let s = style_for("border-color: blue");
+        assert_eq!(s.border_top_color, Some(blue));
+        assert_eq!(s.border_left_color, Some(blue));
+    }
+
+    #[test]
+    fn border_top_side_shorthand() {
+        let s = style_for("border-top: 3px dotted green");
+        assert!((s.border_top_width - 3.0).abs() < 0.01);
+        assert_eq!(s.border_top_style, BorderStyle::Dotted);
+        let green = Color { r: 0, g: 128, b: 0, a: 255 };
+        assert_eq!(s.border_top_color, Some(green));
+        // Остальные стороны — не изменены.
+        assert!((s.border_right_width - 0.0).abs() < 0.01);
+        assert_eq!(s.border_right_style, BorderStyle::None);
+    }
+
+    #[test]
+    fn border_per_side_width_properties() {
+        let s = style_for("border-left-width: 4px; border-right-width: 6px");
+        assert!((s.border_left_width - 4.0).abs() < 0.01);
+        assert!((s.border_right_width - 6.0).abs() < 0.01);
+        assert!((s.border_top_width - 0.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn border_no_color_means_none() {
+        let s = style_for("border: 2px solid");
+        assert!(s.border_top_color.is_none());
+    }
+
+    #[test]
+    fn border_style_kw_none_is_invisible() {
+        assert!(!BorderStyle::None.is_visible());
+        assert!(BorderStyle::Solid.is_visible());
+        assert!(BorderStyle::Dashed.is_visible());
+        assert!(BorderStyle::Dotted.is_visible());
     }
 }

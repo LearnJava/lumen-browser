@@ -10,7 +10,7 @@
 //! «дефолта».
 
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
-use crate::style::{Color, ComputedStyle, Display, TextAlign};
+use crate::style::{BorderStyle, Color, ComputedStyle, Display, TextAlign};
 use std::fmt::Write;
 
 /// Корневой entry-point: рекурсивно сериализует всё дерево.
@@ -109,6 +109,39 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
         TextAlign::Left => {}
         TextAlign::Center => out.push_str(" text-align=center"),
         TextAlign::Right => out.push_str(" text-align=right"),
+    }
+    let has_border = s.border_top_width > 0.0 || s.border_right_width > 0.0
+        || s.border_bottom_width > 0.0 || s.border_left_width > 0.0;
+    if has_border {
+        let _ = write!(
+            out,
+            " bw=({:.2},{:.2},{:.2},{:.2})",
+            s.border_top_width, s.border_right_width,
+            s.border_bottom_width, s.border_left_width
+        );
+        let bs_str = |bs: BorderStyle| match bs {
+            BorderStyle::None => "none",
+            BorderStyle::Solid => "solid",
+            BorderStyle::Dashed => "dashed",
+            BorderStyle::Dotted => "dotted",
+        };
+        let _ = write!(
+            out,
+            " bs=({},{},{},{})",
+            bs_str(s.border_top_style), bs_str(s.border_right_style),
+            bs_str(s.border_bottom_style), bs_str(s.border_left_style)
+        );
+        let any_color = s.border_top_color.is_some() || s.border_right_color.is_some()
+            || s.border_bottom_color.is_some() || s.border_left_color.is_some();
+        if any_color {
+            let c = |opt: Option<Color>| opt.map(color_hex).unwrap_or_else(|| "currentColor".into());
+            let _ = write!(
+                out,
+                " bc=({},{},{},{})",
+                c(s.border_top_color), c(s.border_right_color),
+                c(s.border_bottom_color), c(s.border_left_color)
+            );
+        }
     }
 }
 
