@@ -271,6 +271,52 @@ mod tests {
     }
 
     #[test]
+    fn cyrillic_text_node() {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let body = doc.create_element(QualName::html("body"));
+        let h1 = doc.create_element(QualName::html("h1"));
+        let text = doc.create_text("Привет, мир! Ёжик");
+
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        doc.append_child(body, h1);
+        doc.append_child(h1, text);
+
+        match &doc.get(text).data {
+            NodeData::Text(s) => {
+                assert_eq!(s, "Привет, мир! Ёжик");
+                // Cyrillic is 2 bytes per char in UTF-8, so byte length must exceed char count.
+                assert!(s.len() > s.chars().count());
+            }
+            _ => panic!("expected text node"),
+        }
+
+        let printed = doc.to_string();
+        assert!(printed.contains("Привет"));
+        assert!(printed.contains("Ёжик"));
+    }
+
+    #[test]
+    fn cyrillic_attribute_value() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+
+        let NodeData::Element { attrs, .. } = &mut doc.get_mut(div).data else {
+            unreachable!();
+        };
+        attrs.push(Attribute {
+            name: QualName::html("title"),
+            value: "Привет, кириллица".to_string(),
+        });
+
+        doc.append_child(doc.root(), div);
+
+        let s = doc.to_string();
+        assert!(s.contains("title=\"Привет, кириллица\""));
+    }
+
+    #[test]
     fn display_format() {
         let mut doc = Document::new();
         let html = doc.create_element(QualName::html("html"));
