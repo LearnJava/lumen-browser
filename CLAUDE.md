@@ -439,6 +439,9 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*   061c2c7  hide-head-elements     — <title>, <style>, <script> и др. метаданные больше не рендерятся
+*   061c2c7  claude-md-self-update-rule — правило обновлять CLAUDE.md вместе с планом
+*   586f8ba  claude-md-state        — детальное состояние подсистем + roadmap + decisions log
 *   7811eee  composite-glyphs       — TTF composite + Font::glyph_resolved → кириллица 'А' рисуется
 *   a9a9278  claude-md              — этот файл, первая версия
 *   be0bdee  knowledge-layer-plan   — §12 «Уникальные фичи Lumen» в плане (11 фич)
