@@ -12,7 +12,7 @@ use lumen_core::geom::{Rect, Size};
 use lumen_css_parser::Stylesheet;
 use lumen_dom::{Document, NodeData, NodeId};
 
-use crate::style::{compute_style, ComputedStyle, Display, TextAlign};
+use crate::style::{compute_style, BoxSizing, ComputedStyle, Display, TextAlign};
 use crate::TextMeasurer;
 
 #[derive(Debug, Clone)]
@@ -171,6 +171,7 @@ fn build_box(
                     inline_style.border_right_width = 0.0;
                     inline_style.border_bottom_width = 0.0;
                     inline_style.border_left_width = 0.0;
+                    inline_style.box_sizing = BoxSizing::ContentBox;
                     children.push(LayoutBox {
                         node: id,
                         rect: Rect::ZERO,
@@ -212,9 +213,15 @@ fn lay_out(
     b.rect.y = start_y + s.margin_top;
     b.rect.width = (available_width - s.margin_left - s.margin_right).max(0.0);
     // Явная ширина (CSS width: Npx) перекрывает auto-ширину по контейнеру.
+    // box-sizing определяет, к какой части бокса относится `width`:
+    //   - content-box: width — это размер контента, padding+border прибавляются;
+    //   - border-box: width — общий размер вместе с padding+border.
     if let Some(w) = s.width {
-        b.rect.width = (w + s.padding_left + s.padding_right
-            + s.border_left_width + s.border_right_width).max(0.0);
+        b.rect.width = match s.box_sizing {
+            BoxSizing::ContentBox => (w + s.padding_left + s.padding_right
+                + s.border_left_width + s.border_right_width).max(0.0),
+            BoxSizing::BorderBox => w.max(0.0),
+        };
     }
 
     let content_x = b.rect.x + s.padding_left + s.border_left_width;
@@ -250,8 +257,15 @@ fn lay_out(
             }
             let content_height = (child_y - content_y).max(0.0);
             // Явная высота (CSS height: Npx) перекрывает auto-высоту по содержимому.
+            // box-sizing работает симметрично width: content-box прибавляет
+            // padding+border, border-box оставляет h как итоговую высоту.
             b.rect.height = if let Some(h) = s.height {
-                h + s.padding_top + s.padding_bottom + s.border_top_width + s.border_bottom_width
+                match s.box_sizing {
+                    BoxSizing::ContentBox => h
+                        + s.padding_top + s.padding_bottom
+                        + s.border_top_width + s.border_bottom_width,
+                    BoxSizing::BorderBox => h.max(0.0),
+                }
             } else {
                 content_height + s.padding_top + s.padding_bottom
                     + s.border_top_width + s.border_bottom_width

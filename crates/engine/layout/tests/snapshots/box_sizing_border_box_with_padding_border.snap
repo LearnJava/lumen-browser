@@ -1,0 +1,6 @@
+Block rect=(0.00, 0.00, 800.00, 43.20)
+  Block rect=(0.00, 0.00, 100.00, 43.20) w=100.00 box-sizing=border-box p=(10.00, 10.00, 10.00, 10.00) bw=(2.00,2.00,2.00,2.00) bs=(solid,solid,solid,solid) bc=(#000000ff,#000000ff,#000000ff,#000000ff)
+    InlineRun rect=(12.00, 12.00, 76.00, 19.20)
+      seg[0] "x"
+      line[0]:
+        frag[0] x=0.00 "x"

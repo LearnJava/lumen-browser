@@ -104,6 +104,19 @@ impl BorderStyle {
     }
 }
 
+/// CSS `box-sizing`. Определяет, что именно задаёт `width` / `height`:
+///   - `ContentBox` (CSS default): размер контента; padding и border прибавляются сверху.
+///   - `BorderBox`: размер вместе с padding и border; контент сжимается, чтобы влезть.
+///
+/// Свойство НЕ наследуется (CSS Basic UI 3 §4.1) — сбрасывается на default в каждом
+/// `compute_style`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BoxSizing {
+    #[default]
+    ContentBox,
+    BorderBox,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
@@ -138,6 +151,7 @@ pub struct ComputedStyle {
     pub border_right_color: Option<Color>,
     pub border_bottom_color: Option<Color>,
     pub border_left_color: Option<Color>,
+    pub box_sizing: BoxSizing,
 }
 
 impl ComputedStyle {
@@ -182,6 +196,7 @@ impl ComputedStyle {
             border_right_color: None,
             border_bottom_color: None,
             border_left_color: None,
+            box_sizing: BoxSizing::ContentBox,
         }
     }
 }
@@ -224,6 +239,7 @@ pub fn compute_style(
         border_right_color: None,
         border_bottom_color: None,
         border_left_color: None,
+        box_sizing: BoxSizing::ContentBox,
     };
 
     if !matches!(doc.get(node).data, NodeData::Element { .. }) {
@@ -771,6 +787,13 @@ fn apply_declaration(style: &mut ComputedStyle, decl: &Declaration, em_basis: f3
         "border-right-color" => { if let Some(c) = parse_color(val) { style.border_right_color = Some(c); } }
         "border-bottom-color" => { if let Some(c) = parse_color(val) { style.border_bottom_color = Some(c); } }
         "border-left-color" => { if let Some(c) = parse_color(val) { style.border_left_color = Some(c); } }
+        "box-sizing" => {
+            style.box_sizing = match val.trim().to_ascii_lowercase().as_str() {
+                "border-box" => BoxSizing::BorderBox,
+                "content-box" => BoxSizing::ContentBox,
+                _ => style.box_sizing,
+            };
+        }
         _ => {}
     }
 }
@@ -1451,5 +1474,54 @@ mod tests {
         assert!(BorderStyle::Solid.is_visible());
         assert!(BorderStyle::Dashed.is_visible());
         assert!(BorderStyle::Dotted.is_visible());
+    }
+
+    // ── box-sizing parsing ─────────────────────────────────────────────────
+
+    #[test]
+    fn box_sizing_default_is_content_box() {
+        let s = style_for("color: red");
+        assert_eq!(s.box_sizing, BoxSizing::ContentBox);
+    }
+
+    #[test]
+    fn box_sizing_border_box_parses() {
+        let s = style_for("box-sizing: border-box");
+        assert_eq!(s.box_sizing, BoxSizing::BorderBox);
+    }
+
+    #[test]
+    fn box_sizing_content_box_parses_back_to_default() {
+        // Явное content-box после border-box возвращает к default.
+        let s = style_for("box-sizing: border-box; box-sizing: content-box");
+        assert_eq!(s.box_sizing, BoxSizing::ContentBox);
+    }
+
+    #[test]
+    fn box_sizing_case_insensitive() {
+        let s = style_for("box-sizing: BORDER-BOX");
+        assert_eq!(s.box_sizing, BoxSizing::BorderBox);
+    }
+
+    #[test]
+    fn box_sizing_unknown_value_keeps_default() {
+        // CSS-парсер не должен падать на мусоре — оставляет предыдущее значение.
+        let s = style_for("box-sizing: padding-box");
+        assert_eq!(s.box_sizing, BoxSizing::ContentBox);
+    }
+
+    #[test]
+    fn box_sizing_not_inherited() {
+        // box-sizing — non-inherited (CSS Basic UI 3 §4.1).
+        // Дочерний <p> не получает border-box от родительского <div>.
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("div { box-sizing: border-box; }");
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style);
+        let p_style = compute_style(&doc, p, &sheet, &div_style);
+        assert_eq!(div_style.box_sizing, BoxSizing::BorderBox);
+        assert_eq!(p_style.box_sizing, BoxSizing::ContentBox);
     }
 }
