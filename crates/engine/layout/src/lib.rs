@@ -1,18 +1,18 @@
 //! Layout-движок для Lumen.
 //!
-//! Block-flow с word-wrapping. Каждый DOM-элемент → один LayoutBox, текст
-//! разбивается по словам на строки через `TextMeasurer`, всё стэкается
-//! вертикально. Inline-элементы временно ведут себя как block (до появления
-//! полноценных inline-boxes). Whitespace-only узлы и комментарии пропускаются.
+//! Block-flow + inline-flow с word-wrapping. Блочные элементы стэкаются
+//! вертикально. Текстовые узлы и inline-элементы (`<a>`, `<span>`, `<em>`,
+//! `<strong>`, и т.д.) объединяются в `InlineRun` — анонимный бокс, где
+//! слова переносятся как единый поток.
 //!
-//! Не поддерживается (Phase 2+): true inline-flow (элементы в одной строке),
-//! flex, grid, float, absolute positioning, specificity каскада, единицы кроме
-//! px, color-функции (rgb/hsl/rgba), width/height в CSS.
+//! Не поддерживается (Phase 2+): flex, grid, float, absolute positioning,
+//! specificity каскада, единицы кроме px, color-функции (rgb/hsl/rgba),
+//! width/height в CSS, text-decoration, font-weight/style на уровне inline.
 
 pub mod box_tree;
 pub mod style;
 
-pub use box_tree::{layout, layout_measured, BoxKind, LayoutBox};
+pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use style::{Color, ComputedStyle, Display};
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -50,11 +50,15 @@ mod tests {
         layout_measured(&doc, &sheet, Size::new(width, 600.0), &Fixed8)
     }
 
-    fn first_element_child(b: &LayoutBox) -> &LayoutBox {
+    fn first_block_child(b: &LayoutBox) -> &LayoutBox {
         b.children
             .iter()
             .find(|c| matches!(c.kind, BoxKind::Block))
             .expect("expected at least one block child")
+    }
+
+    fn first_element_child(b: &LayoutBox) -> &LayoutBox {
+        first_block_child(b)
     }
 
     #[test]
@@ -137,14 +141,15 @@ mod tests {
     fn font_size_inherited_to_text() {
         let root = lay("<p>x</p>", "p { font-size: 32px; }");
         let p = first_element_child(&root);
-        let text = p
+        // Текст живёт в InlineRun; стиль контейнера наследует font-size от <p>.
+        let inline = p
             .children
             .iter()
-            .find(|c| matches!(c.kind, BoxKind::Text(_)))
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }))
             .unwrap();
-        assert_eq!(text.style.font_size, 32.0);
+        assert_eq!(inline.style.font_size, 32.0);
         // 32 * 1.2 = 38.4
-        assert!((text.rect.height - 38.4).abs() < 0.1);
+        assert!((inline.rect.height - 38.4).abs() < 0.1);
     }
 
     #[test]
@@ -431,19 +436,21 @@ mod tests {
 
     #[test]
     fn attribute_presence_matches() {
+        // <a> — inline-элемент, поэтому собирается в InlineRun. Чтобы получить
+        // независимые блочные children для проверки style, используем <div>.
         let (root, doc) = lay_with_doc(
-            r#"<a href="x">link</a><a>not-link</a>"#,
-            "[href] { color: red; }",
+            r#"<div data-x="1">a</div><div>b</div>"#,
+            "[data-x] { color: red; }",
         );
-        let mut anchors = Vec::new();
+        let mut divs = Vec::new();
         for c in &root.children {
-            if matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "a")
+            if matches!(&doc.get(c.node).data, lumen_dom::NodeData::Element { name, .. } if name.local == "div")
             {
-                anchors.push(c);
+                divs.push(c);
             }
         }
-        assert_eq!(anchors[0].style.color.r, 255);
-        assert_eq!(anchors[1].style.color.r, 0);
+        assert_eq!(divs[0].style.color.r, 255);
+        assert_eq!(divs[1].style.color.r, 0);
     }
 
     #[test]
@@ -527,5 +534,65 @@ mod tests {
         let root = lay("<p>v</p>", "p { color: red; } p { color: blue; }");
         let p = first_element_child(&root);
         assert_eq!(p.style.color.b, 255);
+    }
+
+    // ── Тесты inline-flow ───────────────────────────────────────────────────
+
+    /// <span> внутри <p> не разрывает строку: высота = одна линия.
+    #[test]
+    fn inline_span_does_not_break_line() {
+        let root = lay_measured("<p>hello <span>world</span></p>", "", 800.0);
+        // "hello world" = 11 слов × 8px = 88px; при 800px — одна строка.
+        assert!(
+            (root.rect.height - 19.2).abs() < 0.1,
+            "height={}",
+            root.rect.height
+        );
+    }
+
+    /// <a> получает цвет из CSS, текст соседнего текстового узла — родительский.
+    #[test]
+    fn inline_link_inherits_own_color() {
+        let root = lay("<p>text <a>link</a></p>", "a { color: blue; }");
+        let p = first_element_child(&root);
+        let inline = p
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }))
+            .unwrap();
+        if let BoxKind::InlineRun { segments, .. } = &inline.kind {
+            // Первый сегмент — текстовый узел "text " (наследует цвет <p>)
+            assert_eq!(segments[0].style.color.b, 0, "text node must not be blue");
+            // Второй сегмент — текст внутри <a> (синий)
+            assert_eq!(segments[1].style.color.b, 255, "link must be blue");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    /// Inline-ран переносится так же, как обычный текст.
+    #[test]
+    fn inline_run_wraps_across_viewport() {
+        // "aa bb" = 5 × 8 = 40px при Fixed8. Viewport 30px → перенос после "aa".
+        let root = lay_measured("<p>aa <em>bb</em></p>", "", 30.0);
+        // 2 строки × 19.2 = 38.4
+        assert!(
+            (root.rect.height - 38.4).abs() < 0.1,
+            "height={}",
+            root.rect.height
+        );
+    }
+
+    /// Блочные элементы между inline-контентом не смешиваются в один InlineRun.
+    #[test]
+    fn block_between_inline_creates_separate_run() {
+        // <div> — блочный элемент; текст до и после — разные InlineRun-ы.
+        let root = lay("<p>before</p><div>mid</div><p>after</p>", "");
+        // 3 блока по 19.2 = 57.6
+        assert!(
+            (root.rect.height - 57.6).abs() < 0.1,
+            "height={}",
+            root.rect.height
+        );
     }
 }

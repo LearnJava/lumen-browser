@@ -1,10 +1,10 @@
-//! Box tree и block-флоу.
+//! Box tree: block-флоу + inline-флоу.
 //!
-//! Каждый DOM-узел даёт один LayoutBox; блочные элементы стэкаются
-//! вертикально. Текстовые узлы разбиваются по словам на строки (line
-//! wrapping), если передан `TextMeasurer`. Inline-элементы вроде `<a>`
-//! пока трактуются как block (каждый получает собственную строку) — до
-//! появления полноценных inline-boxes с line-box-ами.
+//! Каждый DOM-элемент даёт один LayoutBox. Блочные элементы стэкаются
+//! вертикально. Текстовые узлы и inline-элементы (`<a>`, `<span>`, `<em>`,
+//! `<strong>`, и т.д.) объединяются в `InlineRun` — анонимный бокс, в
+//! котором слова переносятся как единый поток. Слова с одинаковым стилем
+//! на одной строке объединяются в один фрагмент (→ один DrawText).
 //!
 //! Whitespace-only текст и комментарии пропускаются.
 
@@ -24,13 +24,33 @@ pub struct LayoutBox {
     pub children: Vec<LayoutBox>,
 }
 
+/// Отрезок inline-контента с собственным стилем (до layout).
+#[derive(Debug, Clone)]
+pub struct InlineSegment {
+    pub text: String,
+    pub style: ComputedStyle,
+}
+
+/// Позиционированный текстовый фрагмент в строке (после layout).
+/// `x` — смещение от левого края inline-контейнера.
+#[derive(Debug, Clone)]
+pub struct InlineFrag {
+    pub x: f32,
+    pub text: String,
+    pub style: ComputedStyle,
+}
+
 #[derive(Debug, Clone)]
 pub enum BoxKind {
     /// Block-уровневый бокс (элемент или корень документа).
     Block,
-    /// Текстовый узел. Каждый элемент Vec — одна строка после line wrapping.
-    /// Всегда содержит хотя бы один элемент (оригинальный текст или разбитые строки).
-    Text(Vec<String>),
+    /// Анонимный контейнер для потока inline-контента (текст + inline-элементы).
+    /// `segments` — сырые отрезки до lay_out; `lines` — позиционированные строки
+    /// после lay_out. Каждая строка — `Vec<InlineFrag>`.
+    InlineRun {
+        segments: Vec<InlineSegment>,
+        lines: Vec<Vec<InlineFrag>>,
+    },
     /// Не участвует в layout (whitespace, комментарий, doctype, display:none).
     Skip,
 }
@@ -54,6 +74,49 @@ pub fn layout_measured(
     root
 }
 
+/// Является ли DOM-узел inline-контентом (non-whitespace текст или inline-элемент).
+fn is_inline_content(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+) -> bool {
+    match &doc.get(id).data {
+        NodeData::Text(s) => !s.chars().all(char::is_whitespace),
+        NodeData::Element { .. } => {
+            compute_style(doc, id, sheet, inherited).display == Display::Inline
+        }
+        _ => false,
+    }
+}
+
+/// Рекурсивно собирает `InlineSegment`-ы из поддерева inline-контента.
+fn collect_inline_segments(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    out: &mut Vec<InlineSegment>,
+) {
+    match &doc.get(id).data {
+        NodeData::Text(s) if !s.chars().all(char::is_whitespace) => {
+            out.push(InlineSegment { text: s.clone(), style: inherited.clone() });
+        }
+        NodeData::Text(_) => {}
+        NodeData::Element { .. } => {
+            let s = compute_style(doc, id, sheet, inherited);
+            if s.display == Display::None {
+                return;
+            }
+            let children: Vec<NodeId> = doc.get(id).children.clone();
+            for child_id in children {
+                collect_inline_segments(doc, sheet, child_id, &s, out);
+            }
+        }
+        _ => {}
+    }
+}
+
 fn build_box(
     doc: &Document,
     sheet: &Stylesheet,
@@ -63,14 +126,7 @@ fn build_box(
     let style = compute_style(doc, id, sheet, inherited);
 
     let kind = match &doc.get(id).data {
-        NodeData::Text(s) => {
-            if s.chars().all(char::is_whitespace) {
-                BoxKind::Skip
-            } else {
-                BoxKind::Text(vec![s.clone()])
-            }
-        }
-        NodeData::Comment(_) | NodeData::Doctype { .. } => BoxKind::Skip,
+        NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. } => BoxKind::Skip,
         NodeData::Document | NodeData::Element { .. } => {
             if style.display == Display::None {
                 BoxKind::Skip
@@ -82,8 +138,43 @@ fn build_box(
 
     let mut children = Vec::new();
     if matches!(kind, BoxKind::Block) {
-        for &child in &doc.get(id).children {
-            children.push(build_box(doc, sheet, child, &style));
+        let dom_children: Vec<NodeId> = doc.get(id).children.clone();
+        let mut i = 0;
+        while i < dom_children.len() {
+            let child_id = dom_children[i];
+            if is_inline_content(doc, sheet, child_id, &style) {
+                // Собираем последовательный run inline-контента в один InlineRun.
+                let mut segs: Vec<InlineSegment> = Vec::new();
+                while i < dom_children.len()
+                    && is_inline_content(doc, sheet, dom_children[i], &style)
+                {
+                    collect_inline_segments(doc, sheet, dom_children[i], &style, &mut segs);
+                    i += 1;
+                }
+                if !segs.is_empty() {
+                    // Анонимный контейнер не имеет собственного box-model spacing.
+                    let mut inline_style = style.clone();
+                    inline_style.margin_top = 0.0;
+                    inline_style.margin_right = 0.0;
+                    inline_style.margin_bottom = 0.0;
+                    inline_style.margin_left = 0.0;
+                    inline_style.padding_top = 0.0;
+                    inline_style.padding_right = 0.0;
+                    inline_style.padding_bottom = 0.0;
+                    inline_style.padding_left = 0.0;
+                    inline_style.background_color = None;
+                    children.push(LayoutBox {
+                        node: id,
+                        rect: Rect::ZERO,
+                        style: inline_style,
+                        kind: BoxKind::InlineRun { segments: segs, lines: vec![] },
+                        children: vec![],
+                    });
+                }
+            } else {
+                children.push(build_box(doc, sheet, child_id, &style));
+                i += 1;
+            }
         }
     }
 
@@ -117,21 +208,19 @@ fn lay_out(
     let content_y = b.rect.y + s.padding_top;
     let content_width = (b.rect.width - s.padding_left - s.padding_right).max(0.0);
 
-    // Применяем line wrapping к текстовым боксам до основного match.
-    if let (BoxKind::Text(lines), Some(m)) = (&mut b.kind, measurer) {
-        let original = lines[0].clone();
-        *lines = wrap_text(&original, content_width, s.font_size, m);
+    // InlineRun обрабатывается до основного match.
+    if let BoxKind::InlineRun { segments, lines } = &mut b.kind {
+        if let Some(m) = measurer {
+            *lines = wrap_inline_run(segments, content_width, s.font_size, m);
+        } else {
+            *lines = one_line_fallback(segments);
+        }
+        let line_count = lines.len().max(1);
+        b.rect.height = line_count as f32 * (s.font_size * s.line_height);
+        return;
     }
 
-    let line_count = match &b.kind {
-        BoxKind::Text(lines) => lines.len().max(1),
-        _ => 0,
-    };
-
     match &mut b.kind {
-        BoxKind::Text(_) => {
-            b.rect.height = line_count as f32 * (s.font_size * s.line_height);
-        }
         BoxKind::Block => {
             let mut child_y = content_y;
             for child in &mut b.children {
@@ -144,45 +233,103 @@ fn lay_out(
             let content_height = (child_y - content_y).max(0.0);
             b.rect.height = content_height + s.padding_top + s.padding_bottom;
         }
+        BoxKind::InlineRun { .. } => unreachable!(),
         BoxKind::Skip => unreachable!(),
     }
 }
 
-/// Разбивает `text` на строки так, чтобы каждая умещалась в `max_width` px.
-/// Перенос только по пробелам (word wrap). Одно слово, широкое само по себе,
-/// остаётся на одной строке (нет посимвольного разрыва).
-fn wrap_text(text: &str, max_width: f32, font_size: f32, m: &dyn TextMeasurer) -> Vec<String> {
-    let space_w = m.char_width(' ', font_size);
+/// Разбивает потоковые сегменты на строки, объединяя слова с одинаковым стилем.
+///
+/// Алгоритм: жадный word-wrap (как в CSS normal flow). Слова одного стиля
+/// на одной строке сливаются в один `InlineFrag` — это даёт один DrawText
+/// на стилевой пробег, как ожидает рендерер.
+fn wrap_inline_run(
+    segments: &[InlineSegment],
+    max_width: f32,
+    container_font_size: f32,
+    m: &dyn TextMeasurer,
+) -> Vec<Vec<InlineFrag>> {
+    let space_w = m.char_width(' ', container_font_size);
 
-    let mut lines: Vec<String> = Vec::new();
-    let mut current = String::new();
-    let mut current_width = 0.0_f32;
+    // Токенизируем все сегменты в пары (слово, стиль).
+    let tagged: Vec<(String, &ComputedStyle)> = segments
+        .iter()
+        .flat_map(|seg| seg.text.split_whitespace().map(move |w| (w.to_string(), &seg.style)))
+        .collect();
 
-    for word in text.split_whitespace() {
-        let word_width: f32 = word.chars().map(|c| m.char_width(c, font_size)).sum();
+    if tagged.is_empty() {
+        return vec![];
+    }
 
-        if current.is_empty() {
-            // Первое слово строки — добавляем всегда, даже если шире max_width.
-            current.push_str(word);
-            current_width = word_width;
-        } else if current_width + space_w + word_width <= max_width {
-            current.push(' ');
-            current.push_str(word);
-            current_width += space_w + word_width;
+    let mut result: Vec<Vec<InlineFrag>> = Vec::new();
+    let mut current_line: Vec<InlineFrag> = Vec::new();
+    let mut current_x = 0.0_f32;
+
+    for (word, style) in &tagged {
+        let word_w: f32 = word.chars().map(|c| m.char_width(c, style.font_size)).sum();
+
+        // Перенос: слово не влезает (но первое слово строки добавляем всегда).
+        if !current_line.is_empty() && current_x + space_w + word_w > max_width {
+            result.push(std::mem::take(&mut current_line));
+            current_x = 0.0;
+        }
+
+        let gap = if current_line.is_empty() { 0.0 } else { space_w };
+        let frag_x = current_x + gap;
+
+        // Если стиль визуально эквивалентен предыдущему фрагменту — сливаем.
+        let merged = if let Some(last) = current_line.last_mut() {
+            if last.style.text_rendering_eq(style) {
+                last.text.push(' ');
+                last.text.push_str(word);
+                true
+            } else {
+                false
+            }
         } else {
-            lines.push(current.clone());
-            current = word.to_string();
-            current_width = word_width;
+            false
+        };
+
+        if !merged {
+            current_line.push(InlineFrag {
+                x: frag_x,
+                text: word.clone(),
+                style: (*style).clone(),
+            });
+        }
+
+        current_x = frag_x + word_w;
+    }
+
+    if !current_line.is_empty() {
+        result.push(current_line);
+    }
+
+    result
+}
+
+/// Без измеритея: помещаем всё в одну строку (x-позиции приблизительны).
+fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
+    let mut frags: Vec<InlineFrag> = Vec::new();
+    for seg in segments {
+        let text: String = seg.text.split_whitespace().collect::<Vec<_>>().join(" ");
+        if text.is_empty() {
+            continue;
+        }
+        let merged = if let Some(last) = frags.last_mut() {
+            if last.style.text_rendering_eq(&seg.style) {
+                last.text.push(' ');
+                last.text.push_str(&text);
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if !merged {
+            frags.push(InlineFrag { x: 0.0, text, style: seg.style.clone() });
         }
     }
-
-    if !current.is_empty() {
-        lines.push(current);
-    }
-
-    if lines.is_empty() {
-        lines.push(String::new());
-    }
-
-    lines
+    if frags.is_empty() { vec![] } else { vec![frags] }
 }

@@ -233,7 +233,7 @@ git branch -d text-rendering
 
 Над репозиторием могут одновременно работать несколько сессий Claude Code (в разных worktree-ах). Чтобы они не брали из roadmap одну и ту же задачу, действует следующий протокол:
 
-1. **Перед стартом работы** — прочитать блок **«🔄 В работе сейчас»** в шапке `lumen-plan.md`. Если задача уже в списке — выбрать другую или подождать.
+1. **Перед стартом работы** — прочитать блок **«🔄 В работе сейчас»** в шапке `lumen-plan.md`. Если задача уже в списке — выбрать другую или подождать. **Зарезервированную задачу нельзя брать, даже если соответствующая feature-ветка пустая** — ветка без коммитов не означает, что работа ещё не началась.
 2. **Зарезервировать задачу** отдельным мини-коммитом **прямо на `main`** (не на feature-ветке), который добавляет строку: `- 🔄 <короткое имя задачи> — <имя ветки> — <YYYY-MM-DD>`. Только после этого создавать feature-ветку и писать код.
 3. **При merge feature-ветки в `main`** — в том же merge-коммите (или соседним cleanup-коммите) убрать строку из «В работе сейчас».
 4. **Если работа отменена** — отдельный мини-коммит на `main`, удаляющий строку.
@@ -321,18 +321,18 @@ git branch -d text-rendering
 - **Отложено:** функциональные pseudo (`:nth-child(2n+1)`, `:not(...)`) — парсятся как `Unsupported`, скобки проглатываются; case-insensitive модификатор `[a=v i]`; namespace prefix в селекторах; типизированные значения деклараций (length / color / calc / `--var`); `!important` как отдельное поле.
 - 47 тестов.
 
-### `lumen-layout` 🟡 (block + word-wrap + cascade)
+### `lumen-layout` 🟡 (block + inline-flow + word-wrap + cascade)
 
-- **Готово:** `LayoutBox` дерево, **specificity-based style cascade**: для каждого правила берётся максимальная specificity среди его complex-селекторов, все matched declarations сортируются по `(specificity, rule_order, decl_index)` и применяются по возрастанию — выигрывает декларация с максимальной specificity, при равенстве — позже объявленная. Matching complex selector-а — справа налево, жадно (без back-tracking; патологические `a b c` с вложенными `a` могут промахнуться — известное упрощение). Combinator-ы: descendant / child / next-sibling / later-sibling. Pseudo-classes: `:first-child`, `:last-child`, `:only-child`, `:empty`, `:root`. Attribute selectors: все операторы. Наследуемые свойства: `color`, `font-size`, `line-height`. Свойства с парсингом: `display` (block/inline/none), `color` (named 10 цветов + `#RRGGBB` + `#RGB`), `background-color`, `font-size`, `line-height`, `margin` (+ 4 стороны), `padding` (+ 4 стороны). Whitespace-only текстовые узлы и комментарии пропускаются. **Line wrapping:** `TextMeasurer` trait + `layout_measured()` разбивают текст по словам на строки с реальными шрифтовыми метриками. `BoxKind::Text(Vec<String>)` хранит строки после переноса.
-- **Отложено:** true inline-flow (inline-элементы вроде `<a>` пока трактуются как block), flex, grid, float, абсолютное позиционирование, units кроме px, функции color (rgb/hsl/rgba), `box-sizing`, borders, селектор-matching с back-tracking.
-- 37 тестов (включая кириллику, wrapping edge-cases, nested inheritance, combinators, attribute, pseudo, specificity).
+- **Готово:** `LayoutBox` дерево, **specificity-based style cascade**: для каждого правила берётся максимальная specificity среди его complex-селекторов, все matched declarations сортируются по `(specificity, rule_order, decl_index)` и применяются по возрастанию — выигрывает декларация с максимальной specificity, при равенстве — позже объявленная. Matching complex selector-а — справа налево, жадно (без back-tracking; патологические `a b c` с вложенными `a` могут промахнуться — известное упрощение). Combinator-ы: descendant / child / next-sibling / later-sibling. Pseudo-classes: `:first-child`, `:last-child`, `:only-child`, `:empty`, `:root`. Attribute selectors: все операторы. Наследуемые свойства: `color`, `font-size`, `line-height`. Свойства с парсингом: `display` (block/inline/none), `color` (named 10 цветов + `#RRGGBB` + `#RGB`), `background-color`, `font-size`, `line-height`, `margin` (+ 4 стороны), `padding` (+ 4 стороны). Whitespace-only текстовые узлы и комментарии пропускаются. **Line wrapping:** `TextMeasurer` trait + `layout_measured()` разбивают текст по словам на строки с реальными шрифтовыми метриками. **Inline-flow:** `BoxKind::InlineRun { segments, lines }` — текстовые узлы и inline-элементы (`<a>`, `<span>`, `<em>`, `<strong>`, и т.д.) группируются в один поток; каждый сегмент хранит свой стиль (цвет ссылки); слова с одинаковым rendering-стилем сливаются в один `InlineFrag` на строке. `ComputedStyle::text_rendering_eq` сравнивает только color/font_size/line_height.
+- **Отложено:** flex, grid, float, абсолютное позиционирование, units кроме px, функции color (rgb/hsl/rgba), `box-sizing`, borders, text-decoration, font-weight/style как separate inline-property, селектор-matching с back-tracking.
+- Тесты: кириллица, wrapping edge-cases, nested inheritance, inline-flow (span/em/a с разными стилями, wrap через inline-границу), combinators, attribute, pseudo, specificity.
 
 ### `lumen-paint` 🟡 (fill rects + textured text + FontMeasurer)
 
-- **Готово:** `DisplayCommand` enum (FillRect, DrawText), `build_display_list` обход LayoutBox с painter's order — для `BoxKind::Text(lines)` эмитирует по одному `DrawText` на строку с правильным y-смещением. wgpu Renderer с двумя pipeline-ами: fill (vertex pos + color) и text (vertex pos + uv + color). Два WGSL-шейдера, общий uniform (viewport), bind group для атласа (R8 texture + linear sampler). `GlyphAtlas` 512×512 со shelf packer-ом. `FontMeasurer<'a>` — реализация `TextMeasurer` на основе TTF hmtx/cmap для shell. Per-glyph metadata кеш (atlas position + left/top offset + advance_native). Atlas заливается на GPU только при dirty.
+- **Готово:** `DisplayCommand` enum (FillRect, DrawText), `build_display_list` обход LayoutBox с painter's order — для `BoxKind::InlineRun` эмитирует по одному `DrawText` на фрагмент с правильными X/Y-смещениями. wgpu Renderer с двумя pipeline-ами: fill (vertex pos + color) и text (vertex pos + uv + color). Два WGSL-шейдера, общий uniform (viewport), bind group для атласа (R8 texture + linear sampler). `GlyphAtlas` 512×512 со shelf packer-ом. `FontMeasurer<'a>` — реализация `TextMeasurer` на основе TTF hmtx/cmap для shell. Per-glyph metadata кеш (atlas position + left/top offset + advance_native). Atlas заливается на GPU только при dirty.
 - **Готово:** `serialize_display_list(&[DisplayCommand]) → String` — детерминированный текстовый формат для snapshot-тестов. 6 интеграционных golden-тестов в `tests/snapshot_tests.rs` (пустая страница, параграф, фон, вложенный paint-порядок, кириллица, line wrap). Механизм `UPDATE_SNAPSHOTS=1` для регенерации golden-файлов.
 - **Отложено:** pixel snapshot tests, multi-size atlas (сейчас один размер растеризации — 24px, display масштабируется linear sampler-ом), GPU-pipeline для скруглений/градиентов/теней, layer-tree compositor.
-- 20 unit-тестов (display_list + atlas + wrapping) + 6 snapshot-тестов = 26 тестов.
+- 24 unit-тестов (display_list + atlas + wrapping + inline-flow) + 6 snapshot-тестов = 30 тестов.
 
 ### `lumen-font` 🟡 (TTF read + raster)
 
@@ -365,7 +365,7 @@ git branch -d text-rendering
 
 ### Численно
 
-- **Всего тестов в workspace:** 256 (на момент последнего обновления).
+- **Всего тестов в workspace:** 264 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -379,7 +379,6 @@ git branch -d text-rendering
 ### Ближайшее (закрывает Phase 0)
 
 1. **HTTP/1.1 + TLS client через rustls** — загрузка внешних страниц. Активация exception #3. Новый крейт `lumen-network`.
-2. **Inline elements в layout** (`<a>`, `<span>`, `<em>`, `<strong>`) — сейчас трактуются как block. Line wrapping для текста уже работает (inline-flow первой ступени), но inline-элементы внутри блоков всё ещё ломают строку.
 
 ### Средний приоритет (Phase 1+)
 
@@ -439,7 +438,8 @@ git branch -d text-rendering
 - **Feature-branch + `--no-ff` merge** workflow. Видимая структура «коммит-серия = задача» в git log --graph.
 - **`opt-level = 1` в dev профиле** — компромисс: debug-сборка чуть медленнее, но layout/paint работают в 5-10 раз быстрее. Стандарт в графических Rust-проектах.
 - **Cargo features пока не используются**, но запланированы для `ai`, `webgl`, `tor`, `ru-hyphenation` опциональных модулей.
-- **`TextMeasurer` trait в `lumen-layout`, `FontMeasurer<'a>` в `lumen-paint`**: layout не зависит от font напрямую; shell создаёт `FontMeasurer<'static>` из `INTER_FONT` и передаёт через `layout_measured()`. `BoxKind::Text(Vec<String>)` хранит строки post-wrap. `layout()` без измерителя — backward compat, без переноса.
+- **`TextMeasurer` trait в `lumen-layout`, `FontMeasurer<'a>` в `lumen-paint`**: layout не зависит от font напрямую; shell создаёт `FontMeasurer<'static>` из `INTER_FONT` и передаёт через `layout_measured()`. `BoxKind::InlineRun { segments, lines }` хранит строки post-wrap и per-segment стили. `layout()` без измерителя — backward compat, без переноса.
+- **`InlineRun` вместо `Text`**: `BoxKind::Text` упразднён. Текстовые узлы и inline-элементы теперь всегда объединяются в `InlineRun`. Слияние фрагментов — через `ComputedStyle::text_rendering_eq` (только color/font_size/line_height), а не `PartialEq`: это нужно, чтобы `<span>` (display:inline) и соседний текстовый узел (display:block inherited) не расщеплялись в отдельные DrawText при одинаковом цвете/размере.
 - **Encoding detection — частотная эвристика по русским буквам**, не bi-gram / n-gram модель. Соотношение «вес = доля буквы в обычных русских текстах» по таблице из 32 строчных. Этого достаточно, чтобы уверенно различать cp1251 / KOI8-R / CP866 на тексте длиннее ~30 байт: фонетическая раскладка KOI8-R и DOS-блоки CP866 дают резко разный результат при ошибочной декодировке. Более сложные модели (CharsetDetect / chardet) — overkill для Phase 0. Если упрёмся в edge case — пересмотрим.
 - **Specificity-based style cascade.** Каскад собирает все matched declarations с ключом `(specificity, rule_order, decl_index)`, сортирует по возрастанию и применяет по порядку — выигрывает максимальная specificity, при равенстве — позже объявленная (CSS spec). Specificity считается tuple `(a=ids, b=classes+attrs+pseudo, c=types+pseudoelements)`, universal и combinator не учитываются. Альтернативой был «last-rule-wins без подсчёта» — отказались, потому что для реальных CSS-стилей нужно правильное поведение `#main` против `.section`.
 - **Right-to-left greedy matching без back-tracking** для complex-селекторов. Для `a b c`: проверяем `c` на текущем элементе, для `b` — ищем первого подходящего предка/sibling и фиксируем его, для `a` — то же относительно зафиксированного. Это упрощение: для патологического `div p span` с несколькими `div`-предками, где только дальний обёрнут вокруг `p`, мы можем промахнуться. Сознательное упрощение Phase 0 — реальные стили редко полагаются на back-tracking, а правильный matcher с back-tracking требует Selectors-движка как у Servo/Stylo. До этого — известное ограничение.
@@ -464,6 +464,7 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*   (HEAD)   inline-elements        — InlineRun: <a>/<span>/<em>/<strong> в одной строке с текстом, per-segment стили
 *   358c05f  task-coordination      — протокол резервации задач между параллельными сессиями (Git workflow + блок в шапке плана)
 *   a4e5249  snapshot-tests         — serialize_display_list + 6 golden-тестов (пустая страница, параграф, фон, кириллица, line wrap)
 *   8e6bdeb  encoding-detection     — крейт lumen-encoding: BOM + meta + heuristic, cp1251/koi8-r/cp866

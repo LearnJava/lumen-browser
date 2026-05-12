@@ -77,15 +77,18 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 walk(child, out);
             }
         }
-        BoxKind::Text(lines) => {
+        BoxKind::InlineRun { lines, .. } => {
             let line_h = b.style.font_size * b.style.line_height;
-            for (i, line) in lines.iter().enumerate() {
-                out.push(DisplayCommand::DrawText {
-                    rect: Rect::new(b.rect.x, b.rect.y + i as f32 * line_h, b.rect.width, line_h),
-                    text: line.clone(),
-                    font_size: b.style.font_size,
-                    color: b.style.color,
-                });
+            for (line_idx, line) in lines.iter().enumerate() {
+                let line_y = b.rect.y + line_idx as f32 * line_h;
+                for frag in line {
+                    out.push(DisplayCommand::DrawText {
+                        rect: Rect::new(b.rect.x + frag.x, line_y, b.rect.width, line_h),
+                        text: frag.text.clone(),
+                        font_size: frag.style.font_size,
+                        color: frag.style.color,
+                    });
+                }
             }
         }
     }
@@ -234,5 +237,72 @@ mod tests {
     fn no_wrap_single_draw_text() {
         let dl = build_wrapped("<p>hi</p>", "", 800.0);
         assert_eq!(texts(&dl), vec!["hi"]);
+    }
+
+    // ── Тесты inline-flow ───────────────────────────────────────────────────
+
+    /// Текст с <span> внутри — один DrawText (одинаковый стиль → фрагменты сливаются).
+    #[test]
+    fn inline_same_style_merges_into_one_draw_text() {
+        let dl = build_wrapped("<p>hello <span>world</span></p>", "", 800.0);
+        assert_eq!(texts(&dl), vec!["hello world"]);
+    }
+
+    /// <a> с цветом → два DrawText: "Hello" и "link" с разными цветами.
+    #[test]
+    fn inline_different_style_emits_separate_draw_texts() {
+        let dl = build_wrapped("<p>Hello <a>link</a></p>", "a { color: blue; }", 800.0);
+        let t = texts(&dl);
+        assert_eq!(t, vec!["Hello", "link"]);
+        // Второй DrawText должен быть синим.
+        let blue_cmds: Vec<_> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawText { text, color, .. } if text == "link" => Some(color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(blue_cmds.len(), 1);
+        assert_eq!(blue_cmds[0].b, 255);
+    }
+
+    /// X-координата второго фрагмента должна быть правее первого.
+    #[test]
+    fn inline_fragments_have_increasing_x() {
+        // "Hello" (5*8=40) + space(8) + "link" → link начинается в x=48.
+        let dl = build_wrapped("<p>Hello <a>link</a></p>", "a { color: blue; }", 800.0);
+        let rects: Vec<_> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawText { rect, .. } => Some(rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rects.len(), 2);
+        assert!((rects[0].x - 0.0).abs() < 0.01, "Hello должно быть в x=0");
+        assert!(
+            rects[1].x > rects[0].x,
+            "link должно быть правее: Hello.x={}, link.x={}",
+            rects[0].x,
+            rects[1].x
+        );
+    }
+
+    /// Inline-ран переносится: второй DrawText смещён по Y.
+    #[test]
+    fn inline_run_wrap_y_offset() {
+        // "aa" (16px) + " " (8) + "bb" (16) = 40px > 30px viewport → перенос.
+        let dl = build_wrapped("<p>aa <span>bb</span></p>", "", 30.0);
+        let rects: Vec<_> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawText { rect, .. } => Some(rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(rects.len(), 2);
+        assert!((rects[0].y - 0.0).abs() < 0.01);
+        let line_h = 16.0_f32 * 1.2;
+        assert!((rects[1].y - line_h).abs() < 0.1, "y1={}", rects[1].y);
     }
 }
