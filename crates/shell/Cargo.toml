@@ -12,7 +12,7 @@ name = "lumen"
 path = "src/main.rs"
 
 [dependencies]
-lumen-common.workspace = true
+lumen-core.workspace = true
 lumen-html-parser.workspace = true
 lumen-css-parser.workspace = true
 lumen-dom.workspace = true

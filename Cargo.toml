@@ -2,7 +2,7 @@
 resolver = "3"
 members = [
     "crates/shell",
-    "crates/common",
+    "crates/core",
     "crates/engine/html-parser",
     "crates/engine/css-parser",
     "crates/engine/dom",
@@ -18,7 +18,7 @@ license = "MPL-2.0"
 rust-version = "1.95"
 
 [workspace.dependencies]
-lumen-common = { path = "crates/common" }
+lumen-core = { path = "crates/core" }
 lumen-html-parser = { path = "crates/engine/html-parser" }
 lumen-css-parser = { path = "crates/engine/css-parser" }
 lumen-dom = { path = "crates/engine/dom" }

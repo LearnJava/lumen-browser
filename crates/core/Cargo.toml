@@ -1,10 +1,10 @@
 [package]
-name = "lumen-common"
+name = "lumen-core"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Lumen: shared types (URL, errors, config)"
+description = "Lumen: foundational types and traits. Bottom of the dependency graph — every other Lumen crate depends on this one."
 
 [dependencies]
