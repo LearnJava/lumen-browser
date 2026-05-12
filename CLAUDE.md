@@ -64,7 +64,7 @@ export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
 
 ### Текущее число тестов и crates
 
-На момент написания: 300 тестов, 11 крейтов (`shell`, `core`, `network`, `storage`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`). При прохождении следующих фаз появятся `lumen-knowledge`, `lumen-ai` и др.
+На момент написания: 311 тестов, 11 крейтов (`shell`, `core`, `network`, `storage`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`). При прохождении следующих фаз появятся `lumen-knowledge`, `lumen-ai` и др.
 
 ---
 
@@ -361,9 +361,9 @@ git branch -d text-rendering
 
 ### `lumen-shell` 🟡 (окно + рендер + сеть)
 
-- **Готово:** winit 0.30 с `ApplicationHandler` API. Три режима: `lumen` (пустое окно 1024×720), `lumen <path.html>` (файл → кодировка → HTML → layout → paint), `lumen <http(s)://...>` (сеть через `HttpClient` → те же этапы). Inter-Regular.ttf bundled через `include_bytes!`. Обработчики Resized + RedrawRequested.
-- **Отложено:** вкладки, омнибокс, навигация, истории сессий, CSS-загрузка внешних файлов через `<link>`, scroll, обработка input-событий.
-- Авто-тестов нет (визуальная проверка через `cargo run`). Snapshot-тесты для рендера — TODO.
+- **Готово:** winit 0.30 с `ApplicationHandler` API. Три режима: `lumen` (пустое окно 1024×720), `lumen <path.html>` (файл → кодировка → HTML → layout → paint), `lumen <http(s)://...>` (сеть через `HttpClient` → те же этапы). Внешний CSS: `<link rel="stylesheet" href="...">` загружается с диска (относительно HTML-файла) или по сети (относительно базового URL). `ResourceBase` enum изолирует логику разрешения относительных URL. Inter-Regular.ttf bundled через `include_bytes!`. Обработчики Resized + RedrawRequested.
+- **Отложено:** вкладки, омнибокс, навигация, истории сессий, scroll, обработка input-событий.
+- 11 unit-тестов (resolve_url, ResourceBase::resolve, collect_link_hrefs).
 
 ### Инфраструктура
 
@@ -378,7 +378,7 @@ git branch -d text-rendering
 
 ### Численно
 
-- **Всего тестов в workspace:** 300 (на момент последнего обновления).
+- **Всего тестов в workspace:** 311 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -389,9 +389,7 @@ git branch -d text-rendering
 
 Приоритизированный список. Порядок может меняться, ориентируйся на план §16 «Фазы».
 
-### Ближайшее (закрывает Phase 0)
-
-1. **Inline `<link rel=stylesheet>` + внешний CSS** — shell умеет загружать страницы по сети, но `<link href="style.css">` ещё не обрабатывается.
+### Ближайшее (Phase 0 закрыта, Phase 1 начало)
 
 ### Средний приоритет (Phase 1+)
 
@@ -476,6 +474,7 @@ git branch -d text-rendering
 
 ```
 *            cmap12                 — cmap format 12: Sequential Groups, полный Unicode U+10FFFF, эмодзи/SMP, бинарный поиск
+*            link-stylesheet        — <link rel=stylesheet>: внешний CSS с диска и по сети; 11 тестов
 *            lumen-network          — крейт lumen-network: HTTP/1.1 + HTTPS через rustls; shell открывает URL
 *            css-selectors          — расширенные CSS-селекторы: combinators, pseudo-classes, attribute selectors, specificity
 *            lumen-storage          — крейт lumen-storage: InMemoryStorage + origin-партиционирование + snapshot LUMEN_KV_V1

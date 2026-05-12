@@ -6,7 +6,6 @@
 
 Задачи, взятые в работу параллельными сессиями. **Не дублировать.** Подробнее о протоколе — в `CLAUDE.md`, раздел «Координация параллельных сессий».
 
-- 🔄 link-stylesheet — link-stylesheet — 2026-05-12
 
 ## Статус реализации
 
@@ -21,7 +20,7 @@
 ### Крейты
 - ✅ `lumen-core` — типы и trait-ы: `Error`, `Url`, `Event`, `Capability`, `Module`, геометрия (`Rect`, `Point`, `Size`), `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`
 - ✅ `lumen-dom` — арена + `NodeId` + `Document/Node/NodeData`, API: create/append/detach/Display, 7 тестов (включая кириллицу)
-- 🟡 `lumen-shell` — точка входа: `lumen` — пустое окно; `lumen <path.html>` — рендер файла; `lumen <https://...>` — загрузка по сети через `lumen-network`. Bundled Inter-Regular.ttf через `include_bytes!`
+- 🟡 `lumen-shell` — точка входа: три режима (пустое окно / файл / URL). Внешний CSS через `<link rel=stylesheet>`: загружается с диска (относительно HTML-файла) или по сети (относительно базового URL). Bundled Inter-Regular.ttf через `include_bytes!`
 - 🟡 `lumen-html-parser` — минимальный токенизатор (Data/Tag/Attribute/Comment, named + numeric entities) + lenient tree builder. 31 тест (включая кириллицу). Отложено: DOCTYPE-разбор, CDATA, raw-text script/style, полный набор named entities, insertion modes
 - 🟡 `lumen-css-parser` — расширенные селекторы: simple (type/class/id/universal/attribute/pseudo), compound (`p.foo#bar`), complex с combinator-ами (` `, `>`, `+`, `~`); attribute-операторы `=`, `~=`, `|=`, `^=`, `$=`, `*=`; pseudo-classes `:first-child`, `:last-child`, `:only-child`, `:empty`, `:root` (interactive — `:hover` и т.д. — парсятся, но всегда не матчат); pseudo-elements `::name` (парсятся, не матчат). Specificity по CSS Selectors Level 3. 47 тестов. Отложено: функциональные pseudo (`:nth-child(2n+1)`, `:not()`), case-insensitive `[a=v i]`, namespace prefix, типизированные значения деклараций
 - 🟡 `lumen-layout` — block-flow + **inline-flow** с specificity-based style cascade и line wrapping: compound и complex selectors (combinators, attribute, pseudo), наследование (color, font-size, line-height), color (named + hex), display (block/inline/none), margin/padding (включая shorthand). `TextMeasurer` trait + `layout_measured()` для word-wrap по реальным шрифтовым метрикам. `InlineRun` объединяет текстовые узлы и inline-элементы (`<a>`, `<span>`, `<em>`, `<strong>`, и т.д.) в один поток строк с per-сегментными стилями. Включает кириллику, wrapping, inline-flow, edge-cases, combinators, specificity. Отложено: flex/grid, float, абсолютное позиционирование, text-decoration, font-weight/style на inline-уровне
