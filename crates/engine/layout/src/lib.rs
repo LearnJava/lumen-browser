@@ -18,7 +18,7 @@ pub mod style;
 
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
-pub use style::{BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, TextAlign, TextDecorationLine};
+pub use style::{BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, FontWeight, TextAlign, TextDecorationLine};
 
 /// Интерфейс измерения ширины символов для line wrapping.
 ///
@@ -1616,5 +1616,102 @@ mod tests {
         let p = first_element_child(div);
         assert_eq!(div.style.font_style, FontStyle::Italic);
         assert_eq!(p.style.font_style, FontStyle::Italic);
+    }
+
+    // ── font-weight: normal / bold / lighter / bolder / numeric ─────────────
+
+    /// `<strong>` / `<b>` / `<h1>`-`<h6>` / `<th>` получают bold через UA.
+    #[test]
+    fn semantic_tags_are_bold_by_default() {
+        for tag in ["b", "strong", "h1", "h2", "h3", "h4", "h5", "h6", "th"] {
+            let html = format!("<{tag}>x</{tag}>");
+            let doc = lumen_html_parser::parse(&html);
+            let id = doc.get(doc.root()).children[0];
+            let style = crate::style::compute_style(
+                &doc,
+                id,
+                &lumen_css_parser::Stylesheet::default(),
+                &ComputedStyle::root(),
+                Size::new(800.0, 600.0),
+            );
+            assert_eq!(style.font_weight, FontWeight::BOLD, "tag = {tag}");
+        }
+    }
+
+    /// CSS `font-weight: bold` → 700.
+    #[test]
+    fn font_weight_bold_keyword() {
+        let root = lay("<p>x</p>", "p { font-weight: bold; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_weight, FontWeight(700));
+    }
+
+    /// Численное значение.
+    #[test]
+    fn font_weight_numeric() {
+        let root = lay("<p>x</p>", "p { font-weight: 300; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_weight, FontWeight(300));
+    }
+
+    /// `lighter` от 700 = 400 (по таблице CSS Fonts L4).
+    #[test]
+    fn font_weight_lighter_relative_to_parent() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-weight: 700; } p { font-weight: lighter; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.font_weight, FontWeight(700));
+        assert_eq!(p.style.font_weight, FontWeight(400));
+    }
+
+    /// `bolder` от 400 = 700.
+    #[test]
+    fn font_weight_bolder_relative_to_parent() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "p { font-weight: bolder; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // div наследует normal=400; p получает bolder = 700.
+        assert_eq!(div.style.font_weight, FontWeight(400));
+        assert_eq!(p.style.font_weight, FontWeight(700));
+    }
+
+    /// `font-weight: normal` сбрасывает UA bold у `<strong>`.
+    #[test]
+    fn font_weight_normal_overrides_ua_bold() {
+        let root = lay(
+            "<strong>x</strong>",
+            "strong { display: block; font-weight: normal; }",
+        );
+        let strong = first_element_child(&root);
+        assert_eq!(strong.style.font_weight, FontWeight::NORMAL);
+    }
+
+    /// font-weight наследуется.
+    #[test]
+    fn font_weight_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-weight: 800; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(p.style.font_weight, FontWeight(800));
+    }
+
+    /// Невалидное значение игнорируется.
+    #[test]
+    fn font_weight_invalid_keeps_inherited() {
+        let root = lay(
+            "<p>x</p>",
+            "p { font-weight: nonsense; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_weight, FontWeight::NORMAL);
     }
 }
