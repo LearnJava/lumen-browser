@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/shell",
     "crates/core",
+    "crates/network",
     "crates/engine/html-parser",
     "crates/engine/css-parser",
     "crates/engine/dom",
@@ -21,6 +22,7 @@ rust-version = "1.95"
 
 [workspace.dependencies]
 lumen-core = { path = "crates/core" }
+lumen-network = { path = "crates/network" }
 lumen-html-parser = { path = "crates/engine/html-parser" }
 lumen-css-parser = { path = "crates/engine/css-parser" }
 lumen-dom = { path = "crates/engine/dom" }
@@ -33,6 +35,9 @@ lumen-encoding = { path = "crates/engine/encoding" }
 winit = "0.30"
 # Exception #2 (§5): GPU API. Свой = ад driver-bugs под Vulkan/Metal/DX12.
 wgpu = "26"
+# Exception #3 (§5): TLS / crypto. Своя реализация — security antipattern.
+rustls = { version = "0.23", features = ["std"] }
+webpki-roots = "0.26"
 
 [profile.dev]
 opt-level = 1
