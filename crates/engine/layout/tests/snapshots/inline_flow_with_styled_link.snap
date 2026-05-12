@@ -1,0 +1,10 @@
+Block rect=(0.00, 0.00, 800.00, 19.20)
+  Block rect=(0.00, 0.00, 800.00, 19.20)
+    InlineRun rect=(0.00, 0.00, 800.00, 19.20)
+      seg[0] "before "
+      seg[1] "link" color=#0000ffff
+      seg[2] " after"
+      line[0]:
+        frag[0] x=0.00 "before"
+        frag[1] x=0.00 "link"
+        frag[2] x=0.00 "after"

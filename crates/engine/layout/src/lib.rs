@@ -3,16 +3,22 @@
 //! Block-flow + inline-flow с word-wrapping. Блочные элементы стэкаются
 //! вертикально. Текстовые узлы и inline-элементы (`<a>`, `<span>`, `<em>`,
 //! `<strong>`, и т.д.) объединяются в `InlineRun` — анонимный бокс, где
-//! слова переносятся как единый поток.
+//! слова переносятся как единый поток. Style cascade — specificity-based
+//! (CSS3), полный набор Selectors-Level-3 включая `:nth-*` и `:not`.
+//!
+//! Snapshot-тестирование: `serialize_layout_tree` даёт детерминированный
+//! текст layout-дерева для golden-сравнений (см. `tests/snapshot_tests.rs`).
 //!
 //! Не поддерживается (Phase 2+): flex, grid, float, absolute positioning,
-//! specificity каскада, единицы кроме px, color-функции (rgb/hsl/rgba),
-//! width/height в CSS, text-decoration, font-weight/style на уровне inline.
+//! единицы кроме px, color-функции (rgb/hsl/rgba), width/height в CSS,
+//! text-decoration, font-weight/style на уровне inline.
 
 pub mod box_tree;
+pub mod snapshot;
 pub mod style;
 
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
+pub use snapshot::serialize_layout_tree;
 pub use style::{Color, ComputedStyle, Display};
 
 /// Интерфейс измерения ширины символов для line wrapping.
