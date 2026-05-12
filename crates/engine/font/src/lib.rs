@@ -20,6 +20,7 @@ pub mod hhea;
 pub mod hmtx;
 pub mod loca;
 pub mod maxp;
+pub mod rasterizer;
 
 pub use binary::BinaryReader;
 pub use cmap::Cmap;
@@ -30,3 +31,4 @@ pub use hhea::Hhea;
 pub use hmtx::Hmtx;
 pub use loca::Loca;
 pub use maxp::Maxp;
+pub use rasterizer::{Bitmap, Rasterizer};
