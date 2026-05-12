@@ -151,14 +151,41 @@ fn rasterize_cyrillic_ya() {
     let head = font.head().unwrap();
     let cmap = font.cmap().unwrap();
     let gid = cmap.glyph_index('Я' as u32).unwrap();
-    let glyph = font.glyph(gid).unwrap().unwrap();
-    // Если 'Я' окажется composite — пропускаем (composite пока не растеризуется).
-    if !matches!(glyph.outline, Outline::Simple(_)) {
-        eprintln!("'Я' is composite in this font version, rasterizer test skipped");
-        return;
-    }
+    let glyph = font.glyph_resolved(gid).unwrap().unwrap();
     let raster = Rasterizer::new(32.0, head.units_per_em);
     let bitmap = raster.rasterize(&glyph).expect("rasterize Я");
     let visible = bitmap.pixels.iter().filter(|&&p| p > 16).count();
     assert!(visible > 0, "Я rasterized as empty");
+}
+
+/// Кириллическая 'А' (U+0410) в Inter — composite glyph, ссылается на латинскую
+/// 'A' (U+0041). До поддержки composite этот тест бы провалился (glyph_resolved
+/// возвращал бы composite-форму, которую rasterize отказывается рисовать);
+/// теперь — должен пройти, потому что glyph_resolved разворачивает в Simple.
+#[test]
+fn rasterize_cyrillic_a_via_composite_resolution() {
+    let data = font_bytes();
+    let font = Font::parse(&data).unwrap();
+    let head = font.head().unwrap();
+    let cmap = font.cmap().unwrap();
+    let gid = cmap.glyph_index('А' as u32).unwrap();
+
+    // Сырой glyph должен быть composite — проверим это, чтобы убедиться,
+    // что тест действительно тестирует composite-путь.
+    let raw = font.glyph(gid).unwrap().unwrap();
+    assert!(
+        matches!(raw.outline, Outline::Composite(_)),
+        "expected Cyrillic 'А' to be composite in Inter (it reuses Latin 'A')"
+    );
+
+    let resolved = font.glyph_resolved(gid).unwrap().unwrap();
+    assert!(
+        matches!(resolved.outline, Outline::Simple(_)),
+        "glyph_resolved should produce Simple outline"
+    );
+
+    let raster = Rasterizer::new(32.0, head.units_per_em);
+    let bitmap = raster.rasterize(&resolved).expect("rasterize Cyrillic А");
+    let visible = bitmap.pixels.iter().filter(|&&p| p > 16).count();
+    assert!(visible > 50, "Cyrillic А rasterized as too few pixels: {visible}");
 }

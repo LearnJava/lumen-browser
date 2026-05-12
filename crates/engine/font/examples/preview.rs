@@ -31,7 +31,7 @@ fn main() {
             println!("(no mapping)");
             continue;
         };
-        let glyph = match font.glyph(gid) {
+        let glyph = match font.glyph_resolved(gid) {
             Ok(Some(g)) => g,
             Ok(None) => {
                 println!("(empty outline)");
@@ -43,7 +43,7 @@ fn main() {
             }
         };
         let Some(bitmap) = raster.rasterize(&glyph) else {
-            println!("(composite glyph — пока пропускаем)");
+            println!("(не удалось растеризовать)");
             continue;
         };
         print_ascii(&bitmap);

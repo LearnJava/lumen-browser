@@ -169,7 +169,9 @@ impl<'a> Font<'a> {
     }
 
     /// Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
-    /// (например, space).
+    /// (например, space). Composite-глифы возвращаются с `Outline::Composite`
+    /// (компонентами) — для разрешения в простые контуры используй
+    /// [`Font::glyph_resolved`].
     pub fn glyph(&self, glyph_id: u16) -> Result<Option<crate::glyf::Glyph>, FontError> {
         let loca = self.loca()?;
         let glyf = self.glyf()?;
@@ -177,6 +179,73 @@ impl<'a> Font<'a> {
             None => Ok(None),
             Some((offset, length)) => Ok(Some(glyf.glyph_at(offset, length)?)),
         }
+    }
+
+    /// Возвращает глиф с рекурсивно развёрнутыми composite-компонентами:
+    /// все ссылки на другие глифы заменены их трансформированными контурами,
+    /// результат всегда `Outline::Simple`.
+    ///
+    /// Ограничение глубины — 8 уровней (защита от циклических ссылок в битых
+    /// шрифтах). При превышении и при ссылке на отсутствующий глиф компонент
+    /// тихо пропускается.
+    pub fn glyph_resolved(
+        &self,
+        glyph_id: u16,
+    ) -> Result<Option<crate::glyf::Glyph>, FontError> {
+        self.glyph_resolved_depth(glyph_id, 0)
+    }
+
+    fn glyph_resolved_depth(
+        &self,
+        glyph_id: u16,
+        depth: u32,
+    ) -> Result<Option<crate::glyf::Glyph>, FontError> {
+        const MAX_DEPTH: u32 = 8;
+        if depth > MAX_DEPTH {
+            return Ok(None);
+        }
+
+        let Some(glyph) = self.glyph(glyph_id)? else {
+            return Ok(None);
+        };
+        let components = match glyph.outline {
+            crate::glyf::Outline::Simple(_) => return Ok(Some(glyph)),
+            crate::glyf::Outline::Composite(c) => c,
+        };
+
+        let mut merged: Vec<crate::glyf::Contour> = Vec::new();
+        for comp in components {
+            let Some(sub) = self.glyph_resolved_depth(comp.glyph_id, depth + 1)? else {
+                continue;
+            };
+            let crate::glyf::Outline::Simple(sub_contours) = sub.outline else {
+                continue; // не должно случаться после рекурсии, но защитимся
+            };
+            for contour in sub_contours {
+                let transformed = contour
+                    .points
+                    .into_iter()
+                    .map(|p| {
+                        let x = p.x as f32;
+                        let y = p.y as f32;
+                        // (x', y') = (a·x + c·y + dx, b·x + d·y + dy)
+                        let nx = comp.transform[0] * x + comp.transform[2] * y + comp.offset.0;
+                        let ny = comp.transform[1] * x + comp.transform[3] * y + comp.offset.1;
+                        crate::glyf::OutlinePoint {
+                            x: nx.round() as i16,
+                            y: ny.round() as i16,
+                            on_curve: p.on_curve,
+                        }
+                    })
+                    .collect();
+                merged.push(crate::glyf::Contour { points: transformed });
+            }
+        }
+
+        Ok(Some(crate::glyf::Glyph {
+            bbox: glyph.bbox,
+            outline: crate::glyf::Outline::Simple(merged),
+        }))
     }
 }
 
