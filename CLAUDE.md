@@ -64,7 +64,7 @@ export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
 
 ### Текущее число тестов и crates
 
-На момент написания: 300 тестов, 11 крейтов (`shell`, `core`, `network`, `storage`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`). При прохождении следующих фаз появятся `lumen-knowledge`, `lumen-ai` и др.
+На момент написания: 311 тестов, 11 крейтов (`shell`, `core`, `network`, `storage`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`). При прохождении следующих фаз появятся `lumen-knowledge`, `lumen-ai` и др.
 
 ---
 
@@ -338,9 +338,9 @@ git branch -d text-rendering
 
 ### `lumen-font` 🟡 (TTF read + raster)
 
-- **Готово:** парсеры таблиц head, maxp, cmap (format 4), hhea, hmtx, loca, glyf. Glyf обрабатывает simple-глифы (контуры с on-curve / off-curve, квадратичные Безье) и **composite-глифы** (ссылки на другие глифы с 2×2 transform + offset). `Font::glyph_resolved` рекурсивно разворачивает composite в Simple с max-depth 8. Scanline-растеризатор с 4×4 supersampling, even-odd fill, 1px padding. `Bitmap` с метриками left/top для placement. Bundled Inter v4.1 Regular.
-- **Отложено:** cmap format 12 (Unicode SMP/SIP — эмодзи), hinting (TT-инструкции), GSUB/GPOS (advanced shaping для лигатур, kerning, Arabic/Indic), CFF outlines (для PostScript-OpenType `.otf` без TT-таблиц), variable fonts (fvar/gvar/avar/HVAR), color glyphs (COLR/CPAL, sbix), bitmap strikes (EBDT/EBLC), composite с ARGS_ARE_XY_VALUES=0 (point alignment, рудимент — сейчас offset = (0,0)).
-- 60 unit-тестов + 9 интеграционных на bundled Inter. Включает тест на composite кириллической `А`.
+- **Готово:** парсеры таблиц head, maxp, cmap (format 4 + **format 12**), hhea, hmtx, loca, glyf. Glyf обрабатывает simple-глифы (контуры с on-curve / off-curve, квадратичные Безье) и **composite-глифы** (ссылки на другие глифы с 2×2 transform + offset). `Font::glyph_resolved` рекурсивно разворачивает composite в Simple с max-depth 8. Scanline-растеризатор с 4×4 supersampling, even-odd fill, 1px padding. `Bitmap` с метриками left/top для placement. Bundled Inter v4.1 Regular. **cmap format 12** — Sequential Groups, полный Unicode U+0000..U+10FFFF, включая SMP (эмодзи U+1F600+, математику U+1D400+, исторические письменности); `CmapSubtable` enum с rank-based выбором лучшей записи (platform 3/encoding 10 → rank 0, 3/1 → rank 2); бинарный поиск по группам O(log n).
+- **Отложено:** hinting (TT-инструкции), GSUB/GPOS (advanced shaping для лигатур, kerning, Arabic/Indic), CFF outlines (для PostScript-OpenType `.otf` без TT-таблиц), variable fonts (fvar/gvar/avar/HVAR), color glyphs (COLR/CPAL, sbix), bitmap strikes (EBDT/EBLC), composite с ARGS_ARE_XY_VALUES=0 (point alignment, рудимент — сейчас offset = (0,0)).
+- 62 unit-тестов + 9 интеграционных на bundled Inter. Включает тест на composite кириллической `А`.
 
 ### `lumen-encoding` 🟡 (детектор + однобайтовые декодеры)
 
@@ -362,9 +362,9 @@ git branch -d text-rendering
 
 ### `lumen-shell` 🟡 (окно + рендер + сеть)
 
-- **Готово:** winit 0.30 с `ApplicationHandler` API. Три режима: `lumen` (пустое окно 1024×720), `lumen <path.html>` (файл → кодировка → HTML → layout → paint), `lumen <http(s)://...>` (сеть через `HttpClient` → те же этапы). Inter-Regular.ttf bundled через `include_bytes!`. Обработчики Resized + RedrawRequested.
-- **Отложено:** вкладки, омнибокс, навигация, истории сессий, CSS-загрузка внешних файлов через `<link>`, scroll, обработка input-событий.
-- Авто-тестов нет (визуальная проверка через `cargo run`). Snapshot-тесты для рендера — TODO.
+- **Готово:** winit 0.30 с `ApplicationHandler` API. Три режима: `lumen` (пустое окно 1024×720), `lumen <path.html>` (файл → кодировка → HTML → layout → paint), `lumen <http(s)://...>` (сеть через `HttpClient` → те же этапы). Внешний CSS: `<link rel="stylesheet" href="...">` загружается с диска (относительно HTML-файла) или по сети (относительно базового URL). `ResourceBase` enum изолирует логику разрешения относительных URL. Inter-Regular.ttf bundled через `include_bytes!`. Обработчики Resized + RedrawRequested.
+- **Отложено:** вкладки, омнибокс, навигация, истории сессий, scroll, обработка input-событий.
+- 11 unit-тестов (resolve_url, ResourceBase::resolve, collect_link_hrefs).
 
 ### Инфраструктура
 
@@ -390,16 +390,13 @@ git branch -d text-rendering
 
 Приоритизированный список. Порядок может меняться, ориентируйся на план §16 «Фазы».
 
-### Ближайшее (закрывает Phase 0)
-
-1. **Inline `<link rel=stylesheet>` + внешний CSS** — shell умеет загружать страницы по сети, но `<link href="style.css">` ещё не обрабатывается.
+### Ближайшее (Phase 0 закрыта, Phase 1 начало)
 
 ### Средний приоритет (Phase 1+)
 
 6. **CSS — типизированные значения деклараций** — length / color / calc / `--var`. Селекторы Level 3 готовы полностью (compound, combinators, attribute, structural+functional pseudo, `:not`, specificity).
-7. **Cmap format 12** — Unicode SMP/SIP (эмодзи, math symbols, исторические письменности).
-8. **Tab session export / import** (§12.7) — сериализация в snapshot-формат lumen-storage. Простое, экономит много боли.
-9. **Картинки на страницах** — `<img>` рендеринг. Нужны PNG/JPEG декодеры (свои, по §5).
+7. **Tab session export / import** (§12.7) — сериализация в snapshot-формат lumen-storage. Простое, экономит много боли.
+8. **Картинки на страницах** — `<img>` рендеринг. Нужны PNG/JPEG декодеры (свои, по §5).
 
 ### Большое (Phase 2+)
 
@@ -478,6 +475,8 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            cmap12                 — cmap format 12: Sequential Groups, полный Unicode U+10FFFF, эмодзи/SMP, бинарный поиск
+*            link-stylesheet        — <link rel=stylesheet>: внешний CSS с диска и по сети; 11 тестов
 *            lumen-network          — крейт lumen-network: HTTP/1.1 + HTTPS через rustls; shell открывает URL
 *            css-selectors          — расширенные CSS-селекторы: combinators, pseudo-classes, attribute selectors, specificity
 *            lumen-storage          — крейт lumen-storage: InMemoryStorage + origin-партиционирование + snapshot LUMEN_KV_V1
