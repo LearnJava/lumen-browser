@@ -19,7 +19,7 @@ pub mod style;
 
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
-pub use style::{Color, ComputedStyle, Display};
+pub use style::{Color, ComputedStyle, Display, TextAlign};
 
 /// Интерфейс измерения ширины символов для line wrapping.
 ///
@@ -739,5 +739,260 @@ mod tests {
         assert_eq!(ps[0].style.color.r, 255, "p без класса — матчит");
         assert_eq!(ps[1].style.color.r, 0, "p.hl — исключается");
         assert_eq!(divs[0].style.color.r, 255, "div.hl — не исключается");
+    }
+
+    // ── Relative units: em / rem / % ────────────────────────────────────────
+
+    #[test]
+    fn font_size_em_relative_to_parent() {
+        // root fs 16 → div fs 20 → p fs 2em = 40.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-size: 20px; } p { font-size: 2em; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((p.style.font_size - 40.0).abs() < 0.01, "got {}", p.style.font_size);
+    }
+
+    #[test]
+    fn font_size_rem_relative_to_root() {
+        // rem всегда от 16 (ROOT_FONT_SIZE), независимо от parent.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-size: 100px; } p { font-size: 1.5rem; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((p.style.font_size - 24.0).abs() < 0.01, "got {}", p.style.font_size);
+    }
+
+    #[test]
+    fn font_size_percent_relative_to_parent() {
+        // 150% от 16 = 24.
+        let root = lay("<p>x</p>", "p { font-size: 150%; }");
+        let p = first_element_child(&root);
+        assert!((p.style.font_size - 24.0).abs() < 0.01, "got {}", p.style.font_size);
+    }
+
+    #[test]
+    fn padding_em_uses_current_font_size() {
+        // padding: 2em должен использовать computed font-size самого элемента,
+        // даже если font-size в правиле объявлен после padding.
+        let root = lay("<p>x</p>", "p { padding: 2em; font-size: 20px; }");
+        let p = first_element_child(&root);
+        assert!((p.style.padding_top - 40.0).abs() < 0.01, "got {}", p.style.padding_top);
+    }
+
+    #[test]
+    fn margin_rem_independent_of_inherit() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-size: 99px; } p { margin: 1rem; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((p.style.margin_top - 16.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn line_height_percent_becomes_coefficient() {
+        // 150% = 1.5.
+        let root = lay("<p>x</p>", "p { line-height: 150%; }");
+        let p = first_element_child(&root);
+        assert!((p.style.line_height - 1.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn line_height_em_is_coefficient() {
+        // 1.5em — то же, что unitless 1.5 (CSS определяет line-height: <number>
+        // как «коэффициент * font-size»; em делает то же численно).
+        let root = lay("<p>x</p>", "p { line-height: 1.5em; }");
+        let p = first_element_child(&root);
+        assert!((p.style.line_height - 1.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn percent_in_margin_is_ignored() {
+        // % в margin требует containing-block-width — пока не реализовано,
+        // должно молча игнорироваться (margin остаётся 0).
+        let root = lay("<p>x</p>", "p { margin: 50%; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.margin_top, 0.0);
+    }
+
+    // ── Тесты text-align ───────────────────────────────────────────────────
+
+    fn first_inline_run(b: &LayoutBox) -> &LayoutBox {
+        for c in &b.children {
+            if matches!(c.kind, BoxKind::InlineRun { .. }) {
+                return c;
+            }
+            let found = first_inline_run(c);
+            if matches!(found.kind, BoxKind::InlineRun { .. }) {
+                return found;
+            }
+        }
+        b
+    }
+
+    /// text-align: center сдвигает фрагменты к середине строки.
+    /// "ab" = 2×8=16px в контейнере 100px: offset = (100-16)/2 = 42px.
+    #[test]
+    fn text_align_center_shifts_frags() {
+        let root = lay_measured("<p>ab</p>", "p { text-align: center; }", 100.0);
+        let p = first_element_child(&root);
+        let run = first_inline_run(p);
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(!lines.is_empty(), "expected at least one line");
+            let x = lines[0][0].x;
+            // (100 - 16) / 2 = 42; p имеет нулевой padding, так что content_width = 100
+            assert!((x - 42.0).abs() < 0.5, "expected x≈42, got {x}");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    /// text-align: right сдвигает фрагменты к правому краю.
+    /// "ab" = 16px в контейнере 100px: offset = 100-16 = 84px.
+    #[test]
+    fn text_align_right_shifts_frags() {
+        let root = lay_measured("<p>ab</p>", "p { text-align: right; }", 100.0);
+        let p = first_element_child(&root);
+        let run = first_inline_run(p);
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(!lines.is_empty());
+            let x = lines[0][0].x;
+            assert!((x - 84.0).abs() < 0.5, "expected x≈84, got {x}");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    /// text-align: left — фрагменты начинаются с x=0.
+    #[test]
+    fn text_align_left_frags_start_at_zero() {
+        let root = lay_measured("<p>ab</p>", "p { text-align: left; }", 100.0);
+        let p = first_element_child(&root);
+        let run = first_inline_run(p);
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(!lines.is_empty());
+            assert!((lines[0][0].x - 0.0).abs() < 0.01, "expected x=0, got {}", lines[0][0].x);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    /// text-align наследуется дочерними элементами.
+    #[test]
+    fn text_align_is_inherited() {
+        let root = lay("<div><p>x</p></div>", "div { text-align: right; }");
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(p.style.text_align, TextAlign::Right);
+    }
+
+    /// text-align: center — последняя строка тоже выравнивается.
+    #[test]
+    fn text_align_center_applies_to_each_line() {
+        // "aa bb" при viewport 30px (3×8=24 < 30; "aa bb" = 40 > 30) → 2 строки.
+        // "aa" = 16px, offset = (30-16)/2 = 7; "bb" тоже 16px, offset = 7.
+        let root = lay_measured("<p>aa bb</p>", "p { text-align: center; }", 30.0);
+        let p = first_element_child(&root);
+        let run = first_inline_run(p);
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert_eq!(lines.len(), 2, "expected 2 lines");
+            for (i, line) in lines.iter().enumerate() {
+                let x = line[0].x;
+                assert!((x - 7.0).abs() < 0.5, "line[{i}] expected x≈7, got {x}");
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    // ── Тесты CSS width / height ───────────────────────────────────────────
+
+    /// width: 200px задаёт rect.width = 200 (без padding).
+    #[test]
+    fn explicit_width_sets_rect_width() {
+        // viewport 800px; p без padding → rect.width должен быть 200.
+        let root = lay("<p>x</p>", "p { width: 200px; }");
+        let p = first_element_child(&root);
+        assert!(
+            (p.rect.width - 200.0).abs() < 0.01,
+            "rect.width={}", p.rect.width
+        );
+    }
+
+    /// width учитывает padding: rect.width = width + padding_left + padding_right.
+    #[test]
+    fn explicit_width_plus_padding() {
+        let root = lay("<p>x</p>", "p { width: 200px; padding: 10px; }");
+        let p = first_element_child(&root);
+        // content_box 200 + padding 10+10 = 220.
+        assert!(
+            (p.rect.width - 220.0).abs() < 0.01,
+            "rect.width={}", p.rect.width
+        );
+    }
+
+    /// height: 100px задаёт rect.height = 100.
+    #[test]
+    fn explicit_height_overrides_content_height() {
+        let root = lay("<p>x</p>", "p { height: 100px; }");
+        let p = first_element_child(&root);
+        assert!(
+            (p.rect.height - 100.0).abs() < 0.01,
+            "rect.height={}", p.rect.height
+        );
+    }
+
+    /// height учитывает padding: rect.height = height + padding_top + padding_bottom.
+    #[test]
+    fn explicit_height_plus_padding() {
+        let root = lay("<p>x</p>", "p { height: 80px; padding: 5px; }");
+        let p = first_element_child(&root);
+        assert!(
+            (p.rect.height - 90.0).abs() < 0.01,
+            "rect.height={}", p.rect.height
+        );
+    }
+
+    /// Дочерние элементы используют content_width от явно заданного width.
+    #[test]
+    fn children_constrained_by_explicit_width() {
+        // div { width: 300px } → content_width = 300.
+        // Вложенный <p> без width → rect.width = content_width = 300.
+        let root = lay("<div><p>x</p></div>", "div { width: 300px; }");
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(
+            (p.rect.width - 300.0).abs() < 0.01,
+            "p.rect.width={}", p.rect.width
+        );
+    }
+
+    /// width: auto не устанавливает явную ширину.
+    #[test]
+    fn width_auto_keeps_auto_layout() {
+        let root = lay("<p>x</p>", "p { width: auto; }");
+        let p = first_element_child(&root);
+        // auto → заполняет viewport 800px.
+        assert!(
+            (p.rect.width - 800.0).abs() < 0.01,
+            "rect.width={}", p.rect.width
+        );
+    }
+
+    /// width / height не наследуются.
+    #[test]
+    fn width_height_not_inherited() {
+        let root = lay("<div><p>x</p></div>", "div { width: 400px; height: 200px; }");
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // <p> наследует только inherited properties — width/height нет.
+        assert!(p.style.width.is_none(), "width should not be inherited");
+        assert!(p.style.height.is_none(), "height should not be inherited");
     }
 }
