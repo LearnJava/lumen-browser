@@ -2,11 +2,15 @@
 //!
 //! Реализованы: Data, TagOpen, TagName, EndTag, Attribute (name/value
 //! quoted/unquoted), SelfClosing, Comment, базовые character references
-//! (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`, `&nbsp;`, `&#NNN;`, `&#xHH;`).
+//! (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`, `&nbsp;`, `&#NNN;`, `&#xHH;`),
+//! RAWTEXT для `<script>` и `<style>` (содержимое — литеральный текст,
+//! завершается только `</tag` + терминатор; character references не
+//! декодируются, угловые скобки трактуются как текст).
 //!
-//! Отложено: DOCTYPE (пропускаем), CDATA, raw-text script/style, полный
-//! набор named entities (есть ~2000+ в HTML5 spec; реализуем при первой
-//! реальной странице, где это потребуется).
+//! Отложено: DOCTYPE (пропускаем), CDATA, RCDATA для `<title>`/`<textarea>`
+//! (как RAWTEXT, но с декодированием entities), полный набор named entities
+//! (есть ~2000+ в HTML5 spec; реализуем при первой реальной странице, где
+//! это потребуется).
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
@@ -25,11 +29,18 @@ pub enum Token {
 pub struct Tokenizer<'a> {
     input: &'a str,
     pos: usize,
+    /// Если `Some(tag)` — следующий вызов `next()` парсит содержимое
+    /// как RAWTEXT до `</tag` (case-insensitive) + терминатор.
+    raw_text: Option<String>,
 }
 
 impl<'a> Tokenizer<'a> {
     pub fn new(input: &'a str) -> Self {
-        Self { input, pos: 0 }
+        Self {
+            input,
+            pos: 0,
+            raw_text: None,
+        }
     }
 
     fn peek(&self) -> Option<char> {
@@ -61,6 +72,26 @@ impl<'a> Iterator for Tokenizer<'a> {
     type Item = Token;
 
     fn next(&mut self) -> Option<Token> {
+        // RAWTEXT state: внутри <script>/<style>. Читаем литеральный текст,
+        // ни '<', ни '&' не имеют специального значения — кроме `</tag` с
+        // терминатором, который выводит нас из режима. Сам `</tag>` потом
+        // токенизируется обычным путём как EndTag.
+        if let Some(tag) = self.raw_text.take() {
+            let mut text = String::new();
+            while let Some(c) = self.peek() {
+                if c == '<' && self.starts_with_end_tag(&tag) {
+                    break;
+                }
+                self.consume();
+                text.push(c);
+            }
+            if !text.is_empty() {
+                return Some(Token::Text(text));
+            }
+            // Текста не было — провалимся в обычный data state, где
+            // следующий же символ '<' разберётся как закрывающий тег.
+        }
+
         if self.pos >= self.input.len() {
             return None;
         }
@@ -169,11 +200,39 @@ impl<'a> Tokenizer<'a> {
             }
         }
 
+        if !self_closing && is_raw_text_element(&name) {
+            self.raw_text = Some(name.clone());
+        }
+
         Some(Token::StartTag {
             name,
             attrs,
             self_closing,
         })
+    }
+
+    /// `rest` начинается с `</TAG` (case-insensitive), за которым идёт
+    /// один из терминаторов: пробел/таб/перевод строки/`/`/`>` или EOF?
+    fn starts_with_end_tag(&self, tag: &str) -> bool {
+        let rest = self.rest().as_bytes();
+        // `</`
+        if rest.len() < 2 || rest[0] != b'<' || rest[1] != b'/' {
+            return false;
+        }
+        let tag_bytes = tag.as_bytes();
+        let after_slash = &rest[2..];
+        if after_slash.len() < tag_bytes.len() {
+            return false;
+        }
+        for (i, &t) in tag_bytes.iter().enumerate() {
+            if after_slash[i].to_ascii_lowercase() != t {
+                return false;
+            }
+        }
+        match after_slash.get(tag_bytes.len()) {
+            None => true,
+            Some(&b) => matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0C | b'/' | b'>'),
+        }
     }
 
     fn consume_attribute(&mut self) -> Option<(String, String)> {
@@ -320,6 +379,13 @@ impl<'a> Tokenizer<'a> {
         }
         None
     }
+}
+
+/// Элементы, чьё содержимое в HTML5 — RAWTEXT (литеральный текст до
+/// `</tag` + терминатор; character references не декодируются).
+/// `<title>` и `<textarea>` относятся к RCDATA — пока не реализовано.
+fn is_raw_text_element(name: &str) -> bool {
+    matches!(name, "script" | "style")
 }
 
 #[cfg(test)]
@@ -511,5 +577,126 @@ mod tests {
             }
             _ => panic!(),
         }
+    }
+
+    // --- RAWTEXT mode для <script> и <style> ---
+
+    #[test]
+    fn script_with_html_content_is_text() {
+        let t = tok("<script>var x = '<b>hi</b>';</script>");
+        assert_eq!(t.len(), 3);
+        assert!(matches!(t[0], Token::StartTag { ref name, .. } if name == "script"));
+        assert_eq!(t[1], Token::Text("var x = '<b>hi</b>';".into()));
+        assert!(matches!(t[2], Token::EndTag { ref name } if name == "script"));
+    }
+
+    #[test]
+    fn script_with_less_than_operator() {
+        let t = tok("<script>if (a < b) f();</script>");
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[1], Token::Text("if (a < b) f();".into()));
+    }
+
+    #[test]
+    fn script_entity_kept_literal() {
+        // RAWTEXT: character references НЕ декодируются.
+        let t = tok("<script>x = '&amp;';</script>");
+        assert_eq!(t[1], Token::Text("x = '&amp;';".into()));
+    }
+
+    #[test]
+    fn script_end_tag_case_insensitive() {
+        let t = tok("<script>x = 1;</SCRIPT>");
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[1], Token::Text("x = 1;".into()));
+        assert!(matches!(t[2], Token::EndTag { ref name } if name == "script"));
+    }
+
+    #[test]
+    fn script_end_tag_with_whitespace() {
+        // </script  > — терминатор после имени допускает пробелы.
+        let t = tok("<script>x = 1;</script  >");
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[1], Token::Text("x = 1;".into()));
+    }
+
+    #[test]
+    fn script_fake_end_tag_not_matched() {
+        // </scripto> — 'o' после "script" не является терминатором (пробел/`/`/`>`).
+        let t = tok("<script>foo </scripto> bar</script>");
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[1], Token::Text("foo </scripto> bar".into()));
+    }
+
+    #[test]
+    fn script_lonely_open_angle_is_text() {
+        // '<' без '/' внутри script — текст.
+        let t = tok("<script>x = 5; y = '<';</script>");
+        assert_eq!(t[1], Token::Text("x = 5; y = '<';".into()));
+    }
+
+    #[test]
+    fn empty_script() {
+        let t = tok("<script></script>");
+        assert_eq!(t.len(), 2);
+        assert!(matches!(t[0], Token::StartTag { ref name, .. } if name == "script"));
+        assert!(matches!(t[1], Token::EndTag { ref name } if name == "script"));
+    }
+
+    #[test]
+    fn unclosed_script_at_eof() {
+        // </script отсутствует — текст до конца ввода.
+        let t = tok("<script>x = 1");
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[1], Token::Text("x = 1".into()));
+    }
+
+    #[test]
+    fn style_with_braces_and_lt() {
+        let t = tok("<style>p { color: red; } /* < */</style>");
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[1], Token::Text("p { color: red; } /* < */".into()));
+        assert!(matches!(t[2], Token::EndTag { ref name } if name == "style"));
+    }
+
+    #[test]
+    fn style_entity_kept_literal() {
+        let t = tok("<style>p::before { content: '&amp;'; }</style>");
+        assert_eq!(t[1], Token::Text("p::before { content: '&amp;'; }".into()));
+    }
+
+    #[test]
+    fn script_with_nested_close_tag_in_string() {
+        // Классическая ловушка: </script> внутри строки JS всё равно закрывает блок.
+        // Это поведение HTML5 spec — пользователь должен писать <\/script>.
+        let t = tok("<script>x = '</script>';</script>");
+        assert_eq!(t.len(), 5);
+        assert_eq!(t[1], Token::Text("x = '".into()));
+        assert!(matches!(t[2], Token::EndTag { ref name } if name == "script"));
+        assert_eq!(t[3], Token::Text("';".into()));
+        assert!(matches!(t[4], Token::EndTag { ref name } if name == "script"));
+    }
+
+    #[test]
+    fn script_with_attributes_still_enters_rawtext() {
+        let t = tok(r#"<script type="text/javascript">if (1 < 2) {}</script>"#);
+        match &t[0] {
+            Token::StartTag { name, attrs, .. } => {
+                assert_eq!(name, "script");
+                assert_eq!(attrs.len(), 1);
+            }
+            _ => panic!(),
+        }
+        assert_eq!(t[1], Token::Text("if (1 < 2) {}".into()));
+    }
+
+    #[test]
+    fn self_closing_script_does_not_enter_rawtext() {
+        // <script/> с self-closing → следующий текст НЕ внутри script-блока.
+        // Lenient: tree builder может всё равно открыть script, но токенизатор
+        // не должен переключаться в RAWTEXT при явно self-closing.
+        let t = tok("<script/><b>x</b>");
+        assert!(matches!(t[0], Token::StartTag { ref name, self_closing: true, .. } if name == "script"));
+        assert!(matches!(t[1], Token::StartTag { ref name, .. } if name == "b"));
     }
 }
