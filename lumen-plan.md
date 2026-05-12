@@ -6,7 +6,7 @@
 
 Задачи, взятые в работу параллельными сессиями. **Не дублировать.** Подробнее о протоколе — в `CLAUDE.md`, раздел «Координация параллельных сессий».
 
-- 🔄 cmap12 — cmap12 — 2026-05-12
+- 🔄 link-stylesheet — link-stylesheet — 2026-05-12
 
 ## Статус реализации
 
@@ -26,7 +26,7 @@
 - 🟡 `lumen-css-parser` — расширенные селекторы: simple (type/class/id/universal/attribute/pseudo), compound (`p.foo#bar`), complex с combinator-ами (` `, `>`, `+`, `~`); attribute-операторы `=`, `~=`, `|=`, `^=`, `$=`, `*=`; pseudo-classes `:first-child`, `:last-child`, `:only-child`, `:empty`, `:root` (interactive — `:hover` и т.д. — парсятся, но всегда не матчат); pseudo-elements `::name` (парсятся, не матчат). Specificity по CSS Selectors Level 3. 47 тестов. Отложено: функциональные pseudo (`:nth-child(2n+1)`, `:not()`), case-insensitive `[a=v i]`, namespace prefix, типизированные значения деклараций
 - 🟡 `lumen-layout` — block-flow + **inline-flow** с specificity-based style cascade и line wrapping: compound и complex selectors (combinators, attribute, pseudo), наследование (color, font-size, line-height), color (named + hex), display (block/inline/none), margin/padding (включая shorthand). `TextMeasurer` trait + `layout_measured()` для word-wrap по реальным шрифтовым метрикам. `InlineRun` объединяет текстовые узлы и inline-элементы (`<a>`, `<span>`, `<em>`, `<strong>`, и т.д.) в один поток строк с per-сегментными стилями. Включает кириллику, wrapping, inline-flow, edge-cases, combinators, specificity. Отложено: flex/grid, float, абсолютное позиционирование, text-decoration, font-weight/style на inline-уровне
 - 🟡 `lumen-paint` — display list (FillRect, DrawText) + wgpu-растеризатор с двумя pipeline-ами (fill + text), glyph atlas 512×512, текстурированные квады из atlas-а. `FontMeasurer` для TextMeasurer. 24 теста (display list + atlas + wrap + inline-flow). Внешние зависимости: `wgpu` (exception #2), `winit` (exception #1)
-- 🟡 `lumen-font` — собственный TrueType-парсер (head/maxp/cmap/hhea/hmtx/loca/glyf) + scanline-растеризатор (квадратичные Безье, 4×4 AA, even-odd fill). 60 тестов (включая интеграционный на bundled Inter). Отложено: composite glyphs, cmap format 12 (эмодзи), hinting, GSUB/GPOS shaping
+- 🟡 `lumen-font` — собственный TrueType-парсер (head/maxp/cmap format 4+12/hhea/hmtx/loca/glyf) + scanline-растеризатор (квадратичные Безье, 4×4 AA, even-odd fill). cmap format 12 — Sequential Groups, полный Unicode U+10FFFF (эмодзи U+1F600+, SMP). 62 unit + 9 integration тестов. Отложено: hinting, GSUB/GPOS shaping, CFF outlines, variable fonts, color glyphs
 - 🟡 `lumen-encoding` — детектор кодировок и однобайтовые декодеры (Windows-1251, KOI8-R, CP866). Пайплайн: BOM → `<meta charset>`-sniff (1 КБ) → HTTP content-type hint → UTF-8 валидность → частотная эвристика по русским буквам. Реализует `EncodingDetector` из `lumen-core::ext`. 41 тест (35 unit + 6 integration round-trip). Отложено: UTF-16 как отдельная кодировка, ISO-8859-5, MacCyrillic, prescan по HTML5 spec §12.2.3.2 (точные правила парсинга атрибутов)
 - ✅ `lumen-network` — HTTP/1.1 + HTTPS клиент (rustls, exception #3). Redirect, chunked TE. `HttpClient` реализует `NetworkTransport`. 12 тестов.
 - ✅ `lumen-storage` — in-memory KV + origin-партиционирование + snapshot LUMEN_KV_V1. 17 тестов.
