@@ -41,7 +41,7 @@ impl Color {
     };
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
     pub color: Color,
@@ -59,6 +59,14 @@ pub struct ComputedStyle {
 }
 
 impl ComputedStyle {
+    /// Два стиля рендерят текст одинаково (цвет, размер и интерлиньяж).
+    /// Используется для слияния inline-фрагментов в wrap_inline_run.
+    pub fn text_rendering_eq(&self, other: &Self) -> bool {
+        self.color == other.color
+            && (self.font_size - other.font_size).abs() < f32::EPSILON
+            && (self.line_height - other.line_height).abs() < f32::EPSILON
+    }
+
     /// Стартовые значения для корня документа.
     pub fn root() -> Self {
         Self {
