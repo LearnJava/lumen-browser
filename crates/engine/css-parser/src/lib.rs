@@ -18,5 +18,6 @@ pub mod parser;
 
 pub use parser::{
     AttrOp, AttrSelector, Combinator, CompoundSelector, ComplexSelector, Declaration, NthSpec,
-    PseudoClass, RelativeSelector, Rule, SimpleSelector, Specificity, Stylesheet, parse,
+    PropertyRule, PseudoClass, RelativeSelector, Rule, SimpleSelector, Specificity, Stylesheet,
+    parse,
 };

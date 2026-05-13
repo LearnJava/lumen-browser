@@ -18,8 +18,8 @@ use std::collections::HashMap;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
-    AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, Declaration, PseudoClass,
-    SimpleSelector, Specificity, Stylesheet,
+    AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, Declaration, PropertyRule,
+    PseudoClass, SimpleSelector, Specificity, Stylesheet,
 };
 use lumen_dom::{Attribute, Document, NodeData, NodeId};
 
@@ -718,7 +718,32 @@ pub fn compute_style(
         outline_offset: 0.0,
     };
 
+    // CSS Properties and Values L1 §1.1 — registry зарегистрированных
+    // custom-properties. Карта строится локально для каждого узла:
+    // на типичной странице 0..5 @property-правил, накладные расходы мизерны
+    // в сравнении со стоимостью каскада. При повторе имени (см. spec —
+    // last wins) `insert` корректно сохраняет последнее объявление.
+    let registry: HashMap<&str, &PropertyRule> = sheet
+        .properties
+        .iter()
+        .map(|p| (p.name.as_str(), p))
+        .collect();
+
+    // Откатываем у себя унаследованные значения тех зарегистрированных
+    // custom-properties, у которых `inherits: false` — для них потомок
+    // должен видеть либо локальную декларацию, либо initial-value, а не
+    // родительское значение.
+    if !registry.is_empty() {
+        style.custom_props.retain(|key, _| {
+            !registry.get(key.as_str()).is_some_and(|p| !p.inherits)
+        });
+    }
+
     if !matches!(doc.get(node).data, NodeData::Element { .. }) {
+        // Для не-элементов (Document, Text внутри anonymous-wrapping) тоже
+        // применяем initial-value: var(--registered) в наследуемом стиле
+        // должен резолвиться через initial-value, если декларации нет.
+        apply_property_initial_values(&mut style.custom_props, &registry);
         return style;
     }
 
@@ -777,6 +802,13 @@ pub fn compute_style(
         }
     }
 
+    // CSS Properties and Values L1 §1.1: для каждого зарегистрированного
+    // имени, у которого после custom-pass нет значения (ни унаследованного,
+    // ни локально объявленного), подставить `initial-value`. Делается между
+    // custom-pass и main-pass, чтобы `var(--registered)` в обычных
+    // декларациях видел initial-value-fallback.
+    apply_property_initial_values(&mut style.custom_props, &registry);
+
     // Main-pass: остальные декларации; em-basis теперь = current font_size.
     // Inherited font_weight нужен для разрешения `lighter`/`bolder`.
     let em_basis = style.font_size;
@@ -786,6 +818,26 @@ pub fn compute_style(
     }
 
     style
+}
+
+/// CSS Properties and Values L1 §1.1: для каждого зарегистрированного
+/// custom property, у которого нет значения в `custom_props`, подставляет
+/// `initial-value` (если он указан). Невызов для `inherits: true` имени
+/// с унаследованным значением — потому что `contains_key` уже возвращает
+/// true. Для `inherits: false` имени родительское значение было выпилено
+/// в `compute_style` через `retain`.
+fn apply_property_initial_values(
+    custom_props: &mut HashMap<String, String>,
+    registry: &HashMap<&str, &PropertyRule>,
+) {
+    for (name, p) in registry {
+        if custom_props.contains_key(*name) {
+            continue;
+        }
+        if let Some(iv) = &p.initial_value {
+            custom_props.insert((*name).to_string(), iv.clone());
+        }
+    }
 }
 
 // ──────────────── selector matching ────────────────
@@ -4492,6 +4544,133 @@ mod tests {
         let mut custom = HashMap::new();
         custom.insert("--x".to_string(), "red".to_string());
         assert_eq!(expand_vars("color: var(--x", &custom, 0), None);
+    }
+
+    // ──────────────── CSS Properties and Values L1 §1.1: @property ────────────────
+
+    /// Прогоняет каскад вдоль `path` от root до целевого узла,
+    /// возвращая ComputedStyle конкретного узла. Каждый шаг — реальный
+    /// `compute_style` с inherited от предыдущего шага. Это позволяет
+    /// проверить inherits-семантику @property на двухуровневом дереве.
+    fn cascade_at(html: &str, css: &str, path: &[usize]) -> ComputedStyle {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let viewport = Size::new(800.0, 600.0);
+        let mut id = doc.root();
+        let mut style =
+            compute_style(&doc, id, &sheet, &ComputedStyle::root(), viewport);
+        for &idx in path {
+            id = doc.get(id).children[idx];
+            style = compute_style(&doc, id, &sheet, &style, viewport);
+        }
+        style
+    }
+
+    #[test]
+    fn at_property_initial_value_used_when_no_declaration() {
+        // var(--c) без декларации, но --c зарегистрирована с initial-value.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: red; } \
+             p { color: var(--c); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_property_inherits_false_blocks_inheritance() {
+        // --c унаследовалось бы от :root, но `inherits: false` → потомок
+        // его не видит и берёт initial-value (blue).
+        let s = cascade_at(
+            "<div><p>x</p></div>",
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: blue; } \
+             div { --c: red; } \
+             p { color: var(--c); }",
+            &[0, 0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn at_property_inherits_true_passes_to_child() {
+        // С `inherits: true` — потомок видит родительское значение.
+        let s = cascade_at(
+            "<div><p>x</p></div>",
+            "@property --c { syntax: \"*\"; inherits: true; initial-value: blue; } \
+             div { --c: red; } \
+             p { color: var(--c); }",
+            &[0, 0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_property_local_declaration_overrides_initial() {
+        // Локальная декларация --c=green побеждает initial-value=red.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: red; } \
+             p { --c: green; color: var(--c); }",
+            &[0],
+        );
+        // CSS3 green = rgb(0, 128, 0).
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_property_without_initial_value_no_fallback() {
+        // syntax="*" без initial-value: имя зарегистрировано (inherits:false),
+        // но var(--c) не найдёт значения → declaration invalid, color остаётся
+        // inherited (root() = black).
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; inherits: false; } \
+             p { color: var(--c); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color::BLACK);
+    }
+
+    #[test]
+    fn at_property_initial_value_visible_to_child_inherits_true() {
+        // На корне нет декларации --c. Регистрация дала ему initial-value=red
+        // и inherits:true. Дочерний `p` должен унаследовать initial-value
+        // через стандартный наследование-каскад.
+        let s = cascade_at(
+            "<div><p>x</p></div>",
+            "@property --c { syntax: \"*\"; inherits: true; initial-value: red; } \
+             p { color: var(--c); }",
+            &[0, 0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_property_last_registration_wins() {
+        // Две регистрации одного имени: последняя побеждает (HashMap insert
+        // в `registry`-build перезапишет первую).
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: red; } \
+             @property --c { syntax: \"*\"; inherits: false; initial-value: green; } \
+             p { color: var(--c); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn invalid_at_property_does_not_register() {
+        // @property без `inherits` — невалидно: имя не регистрируется, var()
+        // без значения → declaration invalid → color остаётся inherited.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; initial-value: red; } \
+             p { color: var(--c); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color::BLACK);
     }
 
     // ──────────────── CSS Values L4 §10 — calc() ────────────────

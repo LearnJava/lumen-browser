@@ -291,9 +291,26 @@ pub struct Rule {
     pub declarations: Vec<Declaration>,
 }
 
+/// CSS Properties and Values L1 §1.1 — регистрация custom property через
+/// `@property --name { syntax: ...; inherits: ...; initial-value: ...; }`.
+/// Обязательные descriptors: `syntax`, `inherits`. `initial-value`
+/// обязателен, если syntax не universal (`*`). Имя хранится с ведущими
+/// `--` для прямого сравнения с `custom_props` в layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertyRule {
+    pub name: String,
+    pub syntax: String,
+    pub inherits: bool,
+    pub initial_value: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
+    /// Зарегистрированные `@property`-правила. Порядок соответствует
+    /// исходному CSS; повтор имени — последнее объявление побеждает (по
+    /// CSS Properties and Values L1 §1.1).
+    pub properties: Vec<PropertyRule>,
 }
 
 pub fn parse(input: &str) -> Stylesheet {
@@ -356,11 +373,16 @@ impl<'a> Parser<'a> {
 
     fn parse_stylesheet(&mut self) -> Stylesheet {
         let mut rules = Vec::new();
+        let mut properties = Vec::new();
         loop {
             self.skip_ws_and_comments();
             match self.peek() {
                 None => break,
-                Some('@') => self.skip_at_rule(),
+                Some('@') => {
+                    if let Some(p) = self.parse_at_rule() {
+                        properties.push(p);
+                    }
+                }
                 Some(_) => {
                     let before = self.pos;
                     if let Some(rule) = self.parse_rule() {
@@ -373,7 +395,113 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        Stylesheet { rules }
+        Stylesheet { rules, properties }
+    }
+
+    /// Распознаёт `@property --name { ... }` (CSS Properties and Values L1
+    /// §1.1); все прочие @-правила синтаксически пропускает (как раньше).
+    /// Сама съедает либо `;`, либо полный `{ ... }`-блок.
+    fn parse_at_rule(&mut self) -> Option<PropertyRule> {
+        let start = self.pos;
+        self.consume(); // '@'
+        let name = self.parse_ident().unwrap_or_default();
+        if name.eq_ignore_ascii_case("property") {
+            return self.parse_property_body();
+        }
+        // Прочее @-правило: откатимся к '@' и пропустим как раньше.
+        self.pos = start;
+        self.skip_at_rule();
+        None
+    }
+
+    /// Парсит тело `@property`: имя `--name`, блок `{ ... }`, обязательные
+    /// дескрипторы. Возвращает None если синтаксис нарушен или нет
+    /// обязательных полей. В любом исходе позиция остаётся после `}`
+    /// (или после `;` если блока не было, или EOF).
+    fn parse_property_body(&mut self) -> Option<PropertyRule> {
+        self.skip_ws_and_comments();
+        // Имя должно начинаться с `--`.
+        if !self.rest().starts_with("--") {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume();
+        self.consume();
+        let tail = self.parse_ident().unwrap_or_default();
+        if tail.is_empty() {
+            self.skip_until_block_end();
+            return None;
+        }
+        let name = format!("--{tail}");
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume();
+        let declarations = self.parse_declaration_block();
+
+        // Извлекаем три обязательных дескриптора. Любые другие имена в теле
+        // @property спецификацией не определены; их игнорируем (forward-compat).
+        let mut syntax: Option<String> = None;
+        let mut inherits: Option<bool> = None;
+        let mut initial_value: Option<String> = None;
+        for d in &declarations {
+            let prop = d.property.to_ascii_lowercase();
+            match prop.as_str() {
+                "syntax" => {
+                    // value — CSS-string в одиночных или двойных кавычках.
+                    if let Some(stripped) = strip_css_string(d.value.trim()) {
+                        syntax = Some(stripped.to_string());
+                    }
+                }
+                "inherits" => {
+                    let v = d.value.trim().to_ascii_lowercase();
+                    if v == "true" {
+                        inherits = Some(true);
+                    } else if v == "false" {
+                        inherits = Some(false);
+                    }
+                }
+                "initial-value" => {
+                    initial_value = Some(d.value.trim().to_string());
+                }
+                _ => {}
+            }
+        }
+
+        let syntax = syntax?;
+        let inherits = inherits?;
+        // CSS Properties and Values L1 §1.1: если syntax не universal,
+        // initial-value обязателен. В Phase 0 поддерживаем только syntax="*",
+        // но валидируем по спеке — чужой syntax без initial-value invalid.
+        if syntax != "*" && initial_value.is_none() {
+            return None;
+        }
+        Some(PropertyRule {
+            name,
+            syntax,
+            inherits,
+            initial_value,
+        })
+    }
+
+    /// Пропускает до конца `@-rule`-тела: либо `;`, либо `{ ... }` целиком.
+    /// Используется при синтаксической ошибке внутри @property — потребитель
+    /// не должен ловить declarations этого правила.
+    fn skip_until_block_end(&mut self) {
+        while let Some(c) = self.peek() {
+            if c == '{' {
+                self.consume();
+                self.skip_block();
+                return;
+            }
+            if c == ';' {
+                self.consume();
+                return;
+            }
+            self.consume();
+        }
     }
 
     fn skip_at_rule(&mut self) {
@@ -970,6 +1098,25 @@ fn extract_important(value: &str) -> (String, bool) {
         return (value.to_string(), false);
     };
     (before_bang.trim_end().to_string(), true)
+}
+
+/// Снимает с CSS-string значения (`"..."` или `'...'`) обрамляющие кавычки.
+/// Возвращает None если значение не строковый литерал. Используется для
+/// дескриптора `syntax` в `@property` (он обязан быть строкой по spec L1 §1.1).
+/// Внутренние escape-последовательности (`\xNN`, `\<newline>`) не
+/// поддерживаются — в Phase 0 syntax всегда `"*"`, и более сложные формы
+/// (`"<length>"`, `"<color>"`) будут идти через тот же путь без escape-ов.
+fn strip_css_string(v: &str) -> Option<&str> {
+    let bytes = v.as_bytes();
+    if bytes.len() < 2 {
+        return None;
+    }
+    let q = bytes[0];
+    if (q == b'"' || q == b'\'') && bytes[bytes.len() - 1] == q {
+        Some(&v[1..v.len() - 1])
+    } else {
+        None
+    }
 }
 
 fn is_ident_start(c: char) -> bool {
@@ -2064,5 +2211,109 @@ mod tests {
         assert_eq!(s.rules[0].declarations[0].property, "--c");
         assert_eq!(s.rules[0].declarations[0].value, "red");
         assert!(s.rules[0].declarations[0].important);
+    }
+
+    // CSS Properties and Values L1 §1.1 — @property
+
+    #[test]
+    fn at_property_basic() {
+        let s = parse(
+            "@property --main-color { syntax: \"*\"; inherits: false; initial-value: red; }",
+        );
+        assert_eq!(s.properties.len(), 1);
+        let p = &s.properties[0];
+        assert_eq!(p.name, "--main-color");
+        assert_eq!(p.syntax, "*");
+        assert!(!p.inherits);
+        assert_eq!(p.initial_value.as_deref(), Some("red"));
+        assert!(s.rules.is_empty());
+    }
+
+    #[test]
+    fn at_property_universal_no_initial_value_ok() {
+        // syntax="*" разрешает отсутствие initial-value.
+        let s = parse("@property --x { syntax: \"*\"; inherits: true; }");
+        assert_eq!(s.properties.len(), 1);
+        assert_eq!(s.properties[0].name, "--x");
+        assert!(s.properties[0].inherits);
+        assert!(s.properties[0].initial_value.is_none());
+    }
+
+    #[test]
+    fn at_property_non_universal_without_initial_invalid() {
+        // syntax="<length>" без initial-value → @property невалидно.
+        let s = parse("@property --w { syntax: \"<length>\"; inherits: false; }");
+        assert!(s.properties.is_empty());
+    }
+
+    #[test]
+    fn at_property_missing_inherits_invalid() {
+        let s = parse("@property --x { syntax: \"*\"; initial-value: 0; }");
+        assert!(s.properties.is_empty());
+    }
+
+    #[test]
+    fn at_property_missing_syntax_invalid() {
+        let s = parse("@property --x { inherits: true; initial-value: 0; }");
+        assert!(s.properties.is_empty());
+    }
+
+    #[test]
+    fn at_property_name_without_dash_invalid() {
+        // Имя без ведущих `--` — невалидно. Парсер съест блок и не зарегистрирует.
+        let s = parse("@property foo { syntax: \"*\"; inherits: false; }");
+        assert!(s.properties.is_empty());
+    }
+
+    #[test]
+    fn at_property_inherits_case_insensitive() {
+        // CSS Values L4 §2.4: keyword-ы ASCII case-insensitive.
+        let s = parse("@property --x { SYNTAX: \"*\"; Inherits: TRUE; Initial-Value: 5px; }");
+        assert_eq!(s.properties.len(), 1);
+        assert!(s.properties[0].inherits);
+        assert_eq!(s.properties[0].initial_value.as_deref(), Some("5px"));
+    }
+
+    #[test]
+    fn at_property_then_normal_rule() {
+        // После @property парсер продолжает разбирать обычные правила.
+        let s = parse(
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: red; }\
+             p { color: blue; }",
+        );
+        assert_eq!(s.properties.len(), 1);
+        assert_eq!(s.rules.len(), 1);
+        assert_eq!(s.rules[0].declarations[0].value, "blue");
+    }
+
+    #[test]
+    fn at_property_duplicate_keeps_order() {
+        // Две регистрации одного имени — сохраняем обе, последняя побеждает
+        // на потребительской стороне (по spec — last wins, реализуем в layout).
+        let s = parse(
+            "@property --x { syntax: \"*\"; inherits: false; initial-value: 1; }\
+             @property --x { syntax: \"*\"; inherits: true; initial-value: 2; }",
+        );
+        assert_eq!(s.properties.len(), 2);
+        assert_eq!(s.properties[0].initial_value.as_deref(), Some("1"));
+        assert_eq!(s.properties[1].initial_value.as_deref(), Some("2"));
+        assert!(s.properties[1].inherits);
+    }
+
+    #[test]
+    fn other_at_rule_still_skipped() {
+        // Прочие @-правила (media/import/...) синтаксически пропускаются.
+        let s = parse("@media (min-width: 100px) { p { color: red; } } p { color: blue; }");
+        assert!(s.properties.is_empty());
+        // @media тело пропущено целиком — остаётся только последнее `p`-правило.
+        assert_eq!(s.rules.len(), 1);
+        assert_eq!(s.rules[0].declarations[0].value, "blue");
+    }
+
+    #[test]
+    fn at_property_syntax_single_quotes() {
+        let s = parse("@property --c { syntax: '*'; inherits: false; initial-value: red; }");
+        assert_eq!(s.properties.len(), 1);
+        assert_eq!(s.properties[0].syntax, "*");
     }
 }
