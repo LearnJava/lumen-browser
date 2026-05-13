@@ -58,6 +58,10 @@ cargo run -p lumen-shell
 
 # ASCII-превью растеризации глифов из Inter.
 cargo run --example preview -p lumen-font
+
+# Baseline-замеры pipeline (decode → parse → layout → paint) на samples/page.html.
+# По умолчанию 100 итераций, переопределяется через LUMEN_BENCH_ITERS=...
+cargo run -p lumen-bench --release
 ```
 
 ### Важно про PATH (Windows + Git Bash)
@@ -72,7 +76,7 @@ export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
 
 ### Текущее число тестов и crates
 
-На момент написания: 311 тестов, 11 крейтов (`shell`, `core`, `network`, `storage`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`). При прохождении следующих фаз появятся `lumen-knowledge`, `lumen-ai` и др.
+На момент написания: 311 тестов, 12 крейтов (`shell`, `core`, `network`, `storage`, `bench`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`). При прохождении следующих фаз появятся `lumen-knowledge`, `lumen-ai` и др.
 
 ---
 
@@ -441,10 +445,17 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 - **Отложено:** вкладки, омнибокс, навигация, истории сессий, scroll, обработка input-событий.
 - 11 unit-тестов (resolve_url, ResourceBase::resolve, collect_link_hrefs).
 
+### `lumen-bench` ✅ (baseline pipeline measurements)
+
+- **Готово:** отдельный bin-крейт без сторонних зависимостей. Прогоняет `decode → parse_html → parse_css → layout → paint::build_display_list` на `samples/page.html` + `samples/page.css` + bundled Inter; печатает min / median / mean / p95 / max на фазу и TOTAL. `LUMEN_BENCH_ITERS` env var переопределяет число измерений (по умолчанию 100). 10 warm-up итераций перед измерениями. `std::hint::black_box` оборачивает результаты pipeline-а — защита от dead-code elimination в LTO-release-сборке. Запуск: `cargo run -p lumen-bench --release`.
+- **Зачем:** до этой задачи цели плана (cold start <300 мс, RAM <100 МБ на пустую вкладку) были лозунгами без точки отсчёта. Теперь регрессии при росте функциональности отслеживаются — каждая фаза должна оставаться в своём бюджете.
+- **Baseline (dev profile, samples/page.html 667 B HTML + 300 B CSS, 49 DOM-узлов, 7 CSS-правил, 18 paint-команд, на x86_64 CachyOS):** decode ~2 μs, parse_html ~19 μs, parse_css ~13 μs, layout ~48 μs (доминирует), paint ~1 μs, TOTAL ~85 μs. Release-сборка должна показать примерно те же цифры или быстрее (dev уже на opt-level=3 для deps).
+- **Отложено:** более крупные strona-test-cases (реальные статьи в десятки KB), per-phase profile breakdown (cascade vs measure внутри layout), measurement of font parse cost (сейчас амортизированный — один раз перед циклом), CI-trend tracking, тесты как proper #[bench] (требует nightly или criterion как exception #5).
+
 ### Инфраструктура
 
 - Cargo workspace, edition 2024, resolver 3, MSRV 1.95.
-- 11 крейтов в `crates/`: shell, core, network, storage, engine/{html-parser, css-parser, dom, layout, paint, font, encoding}.
+- 12 крейтов в `crates/`: shell, core, network, storage, bench, engine/{html-parser, css-parser, dom, layout, paint, font, encoding}.
 - Bundled assets: `assets/fonts/Inter-Regular.ttf` (+ OFL.txt лицензия).
 - Тестовая страница: `samples/page.html` со встроенным `<style>`.
 - 4 разрешённых внешних зависимости: `winit = "0.30"`, `wgpu = "26"`, `rustls = "0.23"` + `webpki-roots = "0.26"` (активированы в lumen-network), JS engine (зарезервирована).
@@ -472,8 +483,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 1. **Font fallback / matcher** — рендерер сейчас всегда Inter Regular. Любая реальная страница с эмодзи / CJK / явным `font-family: Roboto` отрисуется в `?`-глифы. Минимум: системный font-loader (Win32 GDI / fontconfig / CoreText напрямую, без сторонних crate-ов), cascade «Inter → системный по unicode-блоку». Парсер `font-family` в `lumen-css-parser` уже есть, в paint не используется. **Это блокер для Phase 1 как демонстрации.**
 2. **`Url` как структурированный тип** — `struct { scheme, host, port, path, query, fragment }`. Сейчас `lumen-core::Url` это `Url(String)`, network ad-hoc парсит то же самое в `parse_url`. Дедуплицировать до того, как появятся CSP / cookie jar / cross-origin checks. День работы.
 3. **Scroll + DPR-awareness в shell.** Вместе, потому что без `scale_factor` от winit scroll выглядит игрушечно на 4K. Открывает возможность работать с реальными статьями.
-4. **`cargo bench` baseline на `samples/page.html`** — parse + layout + paint. Без baseline-измерений целевые числа из плана (300ms cold start, <100MB RAM) — лозунги, не контракт.
-5. **`RequestBlocked` event + место для FilterListSource-чек** — Started/Completed уже emit-ятся, Blocked пока нет (нет источника блокировок). Добавить, как только появится первый фильтр (трекеры / ad-blocker), чтобы каждый «не-исходящий байт» тоже был виден.
+4. **`RequestBlocked` event + место для FilterListSource-чек** — Started/Completed уже emit-ятся, Blocked пока нет (нет источника блокировок). Добавить, как только появится первый фильтр (трекеры / ad-blocker), чтобы каждый «не-исходящий байт» тоже был виден.
 
 ### Средний приоритет (Phase 1+)
 
@@ -568,6 +578,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 ```
 *            network-event-sink     — EventSink trait в lumen-core + emit RequestStarted/Completed в HttpClient (по hop, до сокета / до анализа status), StdoutEventSink в shell. Принцип №4 «каждый исходящий байт виден» оживлён. Option<Arc<dyn EventSink>> вместо NoopEventSink — zero-cost когда никто не слушает. 5 новых тестов через mock-TcpListener
+*            bench-baseline         — крейт lumen-bench: baseline-замеры pipeline (decode→parse→layout→paint) на samples/page.html без сторонних deps; min/median/mean/p95/max, warm-up 10 iters, LUMEN_BENCH_ITERS env override; ~85 μs TOTAL на тестовой странице
 *            dev-deps-opt-level     — `[profile.dev.package."*"] opt-level = 3` в корневом Cargo.toml: deps собираются с full optimization, наш код остаётся на opt-level=1; wgpu в dev перестаёт быть невыносим, без влияния на release/clippy/test
 *            css-min-max-dimensions — min-width / max-width / min-height / max-height (CSS 2.1 §10.4): clamp в lay_out, min beats max, не наследуются, отрицательные отбрасываются; 10 новых тестов
 *            css-has-pseudo         — :has(rs-list) (CSS Selectors L4 §17.2): combinator?+complex, descendant/child/+/~, specificity max-of-list, descendants only (не сам E); 8 css-parser + 5 layout тестов

@@ -1,0 +1,22 @@
+[package]
+name = "lumen-bench"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[[bin]]
+name = "lumen-bench"
+path = "src/main.rs"
+
+[dependencies]
+lumen-core = { workspace = true }
+lumen-encoding = { workspace = true }
+lumen-html-parser = { workspace = true }
+lumen-css-parser = { workspace = true }
+lumen-dom = { workspace = true }
+lumen-layout = { workspace = true }
+lumen-paint = { workspace = true }
+lumen-font = { workspace = true }
