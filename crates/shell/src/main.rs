@@ -52,10 +52,10 @@ fn main() -> ExitCode {
     let event_sink: Arc<dyn EventSink> = Arc::new(StdoutEventSink);
 
     let arg = std::env::args().nth(1);
-    let initial_list = match arg {
+    let loaded = match arg {
         Some(ref s) if s.starts_with("http://") || s.starts_with("https://") => {
             match load_url(s, event_sink.clone()) {
-                Ok(list) => list,
+                Ok(p) => p,
                 Err(err) => {
                     eprintln!("Ошибка загрузки {s}: {err}");
                     return ExitCode::FAILURE;
@@ -65,14 +65,14 @@ fn main() -> ExitCode {
         Some(ref s) => {
             let path = PathBuf::from(s);
             match load_page(&path, event_sink.clone()) {
-                Ok(list) => list,
+                Ok(p) => p,
                 Err(err) => {
                     eprintln!("Ошибка загрузки {}: {err}", path.display());
                     return ExitCode::FAILURE;
                 }
             }
         }
-        None => DisplayList::new(),
+        None => LoadedPage::empty(),
     };
 
     let event_loop = match EventLoop::new() {
@@ -83,7 +83,8 @@ fn main() -> ExitCode {
         }
     };
     let mut app = Lumen {
-        display_list: initial_list,
+        display_list: loaded.display_list,
+        title: loaded.title,
         window: None,
         renderer: None,
     };
@@ -94,7 +95,25 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn load_url(url: &str, sink: Arc<dyn EventSink>) -> Result<DisplayList, Box<dyn Error>> {
+/// Результат загрузки страницы: display list для рендеринга + опциональный
+/// title для заголовка окна. Раньше возвращался только `DisplayList`, но
+/// заголовок окна тоже нужен на самом верхнем уровне (winit `set_title`),
+/// поэтому проще завернуть оба в один тип.
+struct LoadedPage {
+    display_list: DisplayList,
+    /// Текст из первого `<title>` элемента (с обрезанными whitespace-краями).
+    /// `None` если `<title>` нет, пуст, или содержит только whitespace.
+    title: Option<String>,
+}
+
+impl LoadedPage {
+    /// Пустая страница — для запуска `lumen` без аргумента.
+    fn empty() -> Self {
+        Self { display_list: DisplayList::new(), title: None }
+    }
+}
+
+fn load_url(url: &str, sink: Arc<dyn EventSink>) -> Result<LoadedPage, Box<dyn Error>> {
     use lumen_core::ext::NetworkTransport;
     use lumen_core::url::Url;
     use lumen_network::HttpClient;
@@ -106,7 +125,7 @@ fn load_url(url: &str, sink: Arc<dyn EventSink>) -> Result<DisplayList, Box<dyn 
     render_bytes(&bytes, Some("text/html"), &ResourceBase::Url(url.to_owned()), sink)
 }
 
-fn load_page(path: &PathBuf, sink: Arc<dyn EventSink>) -> Result<DisplayList, Box<dyn Error>> {
+fn load_page(path: &PathBuf, sink: Arc<dyn EventSink>) -> Result<LoadedPage, Box<dyn Error>> {
     let bytes = std::fs::read(path)?;
     render_bytes(&bytes, None, &ResourceBase::File(path.clone()), sink)
 }
@@ -236,7 +255,7 @@ fn render_bytes(
     content_type: Option<&str>,
     base: &ResourceBase,
     sink: Arc<dyn EventSink>,
-) -> Result<DisplayList, Box<dyn Error>> {
+) -> Result<LoadedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
     let encoding = lumen_encoding::detect(bytes, content_type);
@@ -244,6 +263,7 @@ fn render_bytes(
     println!("Кодировка: {}", encoding.name());
 
     let doc = lumen_html_parser::parse(&source);
+    let title = extract_title(&doc);
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let mut css = extract_style_blocks(&doc);
@@ -266,7 +286,47 @@ fn render_bytes(
         sheet.rules.len(),
         list.len()
     );
-    Ok(list)
+    Ok(LoadedPage { display_list: list, title })
+}
+
+/// Извлекает текст первого `<title>` элемента в DOM. Используется для
+/// заголовка окна — единственное место, где title попадает в UI.
+///
+/// Возвращает `None`, если `<title>` отсутствует или содержит только
+/// whitespace. Текст trim-ится с краёв (`<title>  Foo  </title>` → "Foo"),
+/// чтобы случайные пробелы из источника не попадали в title bar.
+fn extract_title(doc: &Document) -> Option<String> {
+    let mut found = None;
+    walk_title(doc, doc.root(), &mut found);
+    found
+}
+
+fn walk_title(doc: &Document, id: NodeId, found: &mut Option<String>) {
+    if found.is_some() {
+        return;
+    }
+    let node = doc.get(id);
+    if let NodeData::Element { name, .. } = &node.data
+        && name.local == "title"
+    {
+        let mut text = String::new();
+        for &child in &node.children {
+            if let NodeData::Text(s) = &doc.get(child).data {
+                text.push_str(s);
+            }
+        }
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            *found = Some(trimmed.to_owned());
+        }
+        return;
+    }
+    for &child in &node.children {
+        walk_title(doc, child, found);
+        if found.is_some() {
+            return;
+        }
+    }
 }
 
 fn extract_style_blocks(doc: &Document) -> String {
@@ -297,14 +357,30 @@ fn walk_style_blocks(doc: &Document, id: NodeId, out: &mut String) {
 
 struct Lumen {
     display_list: DisplayList,
+    /// Title загруженной страницы (из `<title>`). Используется для формирования
+    /// заголовка окна. `None` — пустое окно или страница без `<title>`.
+    title: Option<String>,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
+}
+
+impl Lumen {
+    /// Формирует строку для `Window::set_title`. С `<title>` —
+    /// `"Заголовок страницы — Lumen 0.0.1"` (em-dash, общеупотребительный
+    /// шаблон браузеров). Без `<title>` — fallback на голый `"Lumen <ver>"`,
+    /// как было до этой задачи.
+    fn window_title(&self) -> String {
+        match &self.title {
+            Some(t) => format!("{t} — Lumen {}", env!("CARGO_PKG_VERSION")),
+            None => format!("Lumen {}", env!("CARGO_PKG_VERSION")),
+        }
+    }
 }
 
 impl ApplicationHandler for Lumen {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attrs = Window::default_attributes()
-            .with_title(format!("Lumen {}", env!("CARGO_PKG_VERSION")))
+            .with_title(self.window_title())
             .with_inner_size(LogicalSize::new(1024.0, 720.0));
 
         let window = match event_loop.create_window(attrs) {
@@ -455,5 +531,92 @@ mod tests {
         let mut hrefs = Vec::new();
         collect_link_hrefs(&doc, doc.root(), &mut hrefs);
         assert_eq!(hrefs, vec!["a.css", "b.css"]);
+    }
+
+    // ── extract_title ────────────────────────────────────────────────────────
+
+    #[test]
+    fn extract_title_basic() {
+        let doc =
+            lumen_html_parser::parse("<html><head><title>Hello</title></head></html>");
+        assert_eq!(extract_title(&doc).as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn extract_title_cyrillic() {
+        // Кириллица — first-class, заголовок должен сохраняться без mojibake.
+        let doc = lumen_html_parser::parse(
+            "<html><head><title>Тест Lumen</title></head></html>",
+        );
+        assert_eq!(extract_title(&doc).as_deref(), Some("Тест Lumen"));
+    }
+
+    #[test]
+    fn extract_title_missing_returns_none() {
+        let doc = lumen_html_parser::parse("<html><head></head><body>x</body></html>");
+        assert_eq!(extract_title(&doc), None);
+    }
+
+    #[test]
+    fn extract_title_whitespace_only_returns_none() {
+        // Title только из пробелов / переводов строки — не имеет смысла в title bar,
+        // эквивалентен отсутствию title.
+        let doc = lumen_html_parser::parse(
+            "<html><head><title>   \n\t  </title></head></html>",
+        );
+        assert_eq!(extract_title(&doc), None);
+    }
+
+    #[test]
+    fn extract_title_trims_whitespace() {
+        let doc = lumen_html_parser::parse(
+            "<html><head><title>  Padded  </title></head></html>",
+        );
+        assert_eq!(extract_title(&doc).as_deref(), Some("Padded"));
+    }
+
+    #[test]
+    fn extract_title_first_wins() {
+        // Лишние <title>-элементы (валидный HTML обязывает иметь один, но
+        // tolerant-парсеры принимают несколько) — берём первый, как в Chromium.
+        let doc = lumen_html_parser::parse(
+            "<html><head><title>First</title><title>Second</title></head></html>",
+        );
+        assert_eq!(extract_title(&doc).as_deref(), Some("First"));
+    }
+
+    #[test]
+    fn extract_title_html_entities_decoded() {
+        // RCDATA внутри <title> декодирует character references
+        // (html-rcdata merge, см. CLAUDE.md). Проверяем что мы получаем
+        // декодированный текст, а не сырую строку.
+        let doc = lumen_html_parser::parse(
+            "<html><head><title>Foo &amp; Bar</title></head></html>",
+        );
+        assert_eq!(extract_title(&doc).as_deref(), Some("Foo & Bar"));
+    }
+
+    // ── window_title ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn window_title_with_page_title() {
+        let app = Lumen {
+            display_list: DisplayList::new(),
+            title: Some("Тест".to_owned()),
+            window: None,
+            renderer: None,
+        };
+        assert_eq!(app.window_title(), format!("Тест — Lumen {}", env!("CARGO_PKG_VERSION")));
+    }
+
+    #[test]
+    fn window_title_fallback_when_no_title() {
+        let app = Lumen {
+            display_list: DisplayList::new(),
+            title: None,
+            window: None,
+            renderer: None,
+        };
+        assert_eq!(app.window_title(), format!("Lumen {}", env!("CARGO_PKG_VERSION")));
     }
 }
