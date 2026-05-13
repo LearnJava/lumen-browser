@@ -20,7 +20,7 @@ pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, 
 pub use snapshot::serialize_layout_tree;
 pub use style::{
     BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, FontWeight, TextAlign,
-    TextDecorationLine, TextTransform, WhiteSpace,
+    TextDecorationLine, TextTransform, Visibility, WhiteSpace,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -2305,5 +2305,70 @@ mod tests {
         let p = first_element_child(div);
         assert!(div.style.outline_width > 0.0);
         assert_eq!(p.style.outline_width, 0.0);
+    }
+
+    // ── visibility (CSS Display L3 §4) ──────────────────────────────────────
+
+    #[test]
+    fn visibility_default_visible() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.visibility, Visibility::Visible);
+    }
+
+    #[test]
+    fn visibility_hidden_parsed() {
+        let root = lay("<p>x</p>", "p { visibility: hidden; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.visibility, Visibility::Hidden);
+    }
+
+    #[test]
+    fn visibility_collapse_parsed() {
+        let root = lay("<p>x</p>", "p { visibility: collapse; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.visibility, Visibility::Collapse);
+    }
+
+    #[test]
+    fn visibility_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { visibility: hidden; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.visibility, Visibility::Hidden);
+        assert_eq!(p.style.visibility, Visibility::Hidden);
+    }
+
+    #[test]
+    fn visibility_visible_overrides_inherited_hidden() {
+        // Дочерний может явно вернуть себя — это ключевая семантика CSS.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { visibility: hidden; } p { visibility: visible; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.visibility, Visibility::Hidden);
+        assert_eq!(p.style.visibility, Visibility::Visible);
+    }
+
+    #[test]
+    fn visibility_hidden_keeps_layout_height() {
+        // В отличие от display:none, visibility:hidden оставляет коробку
+        // в layout — она занимает место.
+        let visible = lay("<p>x</p>", "");
+        let hidden = lay("<p>x</p>", "p { visibility: hidden; }");
+        let none = lay("<p>x</p>", "p { display: none; }");
+
+        // Высота с hidden = высота visible.
+        assert!((visible.rect.height - hidden.rect.height).abs() < 0.01,
+            "visibility:hidden должен оставить высоту: visible={} hidden={}",
+            visible.rect.height, hidden.rect.height);
+        // Высота с display:none = 0 (бокс пропадает).
+        assert!(none.rect.height < 0.1,
+            "display:none должен убрать высоту: {}", none.rect.height);
     }
 }
