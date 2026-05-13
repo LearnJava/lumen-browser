@@ -18,6 +18,11 @@ const PALETTE_4X2: &[u8] = include_bytes!("fixtures/palette8_4x2.png");
 const PALETTE_TRNS_3X3: &[u8] = include_bytes!("fixtures/palette8_trns_3x3.png");
 const PALETTE_PARTIAL_TRNS_2X2: &[u8] = include_bytes!("fixtures/palette8_partial_trns_2x2.png");
 const GRAYSCALE_WITH_PLTE_2X1: &[u8] = include_bytes!("fixtures/grayscale_with_plte_2x1.png");
+const GRAY1BIT_8X2: &[u8] = include_bytes!("fixtures/gray1bit_8x2.png");
+const GRAY2BIT_4X2: &[u8] = include_bytes!("fixtures/gray2bit_4x2.png");
+const GRAY4BIT_3X2: &[u8] = include_bytes!("fixtures/gray4bit_3x2.png");
+const PALETTE1BIT_8X1: &[u8] = include_bytes!("fixtures/palette1bit_8x1.png");
+const PALETTE4BIT_TRNS_4X2: &[u8] = include_bytes!("fixtures/palette4bit_trns_4x2.png");
 
 #[test]
 fn decode_rgb8_3x2() {
@@ -207,6 +212,89 @@ fn decode_rejects_plte_on_grayscale() {
             lumen_image::PaletteError::UnexpectedForGrayscale
         )
     ));
+}
+
+#[test]
+fn decode_gray1bit_8x2() {
+    // 1-bit grayscale: 0→0, 1→255. Чередующиеся пиксели по строкам.
+    let img = decode_png(GRAY1BIT_8X2).unwrap();
+    assert_eq!(img.width, 8);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Gray8);
+    assert_eq!(
+        img.data,
+        vec![
+            255, 0, 255, 0, 255, 0, 255, 0, // row 0
+            0, 255, 0, 255, 0, 255, 0, 255, // row 1
+        ]
+    );
+}
+
+#[test]
+fn decode_gray2bit_4x2() {
+    // 2-bit grayscale: 0/1/2/3 → 0/85/170/255 (множитель 85).
+    let img = decode_png(GRAY2BIT_4X2).unwrap();
+    assert_eq!(img.width, 4);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Gray8);
+    assert_eq!(
+        img.data,
+        vec![
+            0, 85, 170, 255, // row 0: [0,1,2,3]
+            255, 170, 85, 0, // row 1: [3,2,1,0]
+        ]
+    );
+}
+
+#[test]
+fn decode_gray4bit_3x2_with_trailing_padding() {
+    // 4-bit grayscale: 0/8/15 → 0/136/255 (множитель 17). width=3 → trailing
+    // nibble в последнем байте каждой строки игнорируется.
+    let img = decode_png(GRAY4BIT_3X2).unwrap();
+    assert_eq!(img.width, 3);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Gray8);
+    assert_eq!(
+        img.data,
+        vec![
+            0, 136, 255, // row 0: [0,8,15]
+            255, 136, 0, // row 1: [15,8,0]
+        ]
+    );
+}
+
+#[test]
+fn decode_palette1bit_8x1() {
+    // 1-bit palette: 2-цветная (black/white). Индексы 1/0 чередуются.
+    let img = decode_png(PALETTE1BIT_8X1).unwrap();
+    assert_eq!(img.width, 8);
+    assert_eq!(img.height, 1);
+    assert_eq!(img.format, PixelFormat::Rgb8);
+    assert_eq!(
+        img.data,
+        vec![
+            255, 255, 255, // index 1 = white
+            0, 0, 0, // index 0 = black
+            255, 255, 255, 0, 0, 0, 255, 255, 255, 0, 0, 0, 255, 255, 255, 0, 0, 0,
+        ]
+    );
+}
+
+#[test]
+fn decode_palette4bit_with_trns_4x2() {
+    // 4-bit palette (4 entries из 16 возможных), tRNS = [255,255,255,0].
+    // Index 3 → grey прозрачный (alpha=0).
+    let img = decode_png(PALETTE4BIT_TRNS_4X2).unwrap();
+    assert_eq!(img.width, 4);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Rgba8);
+    assert_eq!(
+        img.data,
+        vec![
+            255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 128, 128, 128, 0, // row 0
+            128, 128, 128, 0, 0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, // row 1
+        ]
+    );
 }
 
 #[test]
