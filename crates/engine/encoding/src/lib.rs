@@ -1,8 +1,9 @@
-//! Детектор и декодеры однобайтовых кодировок.
+//! Детектор и декодеры кодировок.
 //!
-//! Phase 0 покрывает только то, что реально встречается в русскоязычном вебе
-//! и в локальных файлах с историей: UTF-8 (с BOM и без), Windows-1251,
-//! KOI8-R, CP866. Эти четыре закрывают подавляющее большинство кириллических
+//! Phase 0 покрывает то, что реально встречается в русскоязычном вебе и
+//! в локальных файлах: UTF-8 (с BOM и без), UTF-16 LE/BE (BOM-driven —
+//! файлы из «Сохранить как → Unicode» в блокноте Windows), Windows-1251,
+//! KOI8-R, CP866. Эти шесть закрывают подавляющее большинство кириллических
 //! документов; ISO-8859-5 и MacCyrillic настолько редки, что их добавим
 //! по факту встречи.
 //!
@@ -35,6 +36,8 @@ pub use ext_impl::HeuristicDetector;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Encoding {
     Utf8,
+    Utf16Le,
+    Utf16Be,
     Windows1251,
     Koi8R,
     Cp866,
@@ -46,6 +49,8 @@ impl Encoding {
     pub fn name(self) -> &'static str {
         match self {
             Self::Utf8 => "utf-8",
+            Self::Utf16Le => "utf-16le",
+            Self::Utf16Be => "utf-16be",
             Self::Windows1251 => "windows-1251",
             Self::Koi8R => "koi8-r",
             Self::Cp866 => "ibm866",
@@ -55,7 +60,9 @@ impl Encoding {
     /// Парсит label кодировки (case-insensitive, с алиасами).
     ///
     /// Алиасы взяты из WHATWG Encoding Standard, оставлены только нужные
-    /// для cyrillic-set.
+    /// для cyrillic-set + UTF-16. Заметим: WHATWG-совместимо `utf-16` без
+    /// суффикса мапится на **LE** (Microsoft-историческое значение), а не на
+    /// BE — это решение пользователей в реальном вебе, не наша инициатива.
     #[must_use]
     pub fn from_label(label: &str) -> Option<Self> {
         let normalized: String = label
@@ -66,6 +73,9 @@ impl Encoding {
             .collect();
         match normalized.as_str() {
             "utf-8" | "utf8" | "unicode-1-1-utf-8" => Some(Self::Utf8),
+            "utf-16" | "utf-16le" | "utf16" | "utf16le" | "unicode" | "csunicode"
+            | "iso-10646-ucs-2" | "ucs-2" => Some(Self::Utf16Le),
+            "utf-16be" | "utf16be" => Some(Self::Utf16Be),
             "windows-1251" | "cp1251" | "x-cp1251" | "windows1251" => Some(Self::Windows1251),
             "koi8-r" | "koi8r" | "koi8_r" | "koi" | "cskoi8r" => Some(Self::Koi8R),
             "ibm866" | "cp866" | "866" | "csibm866" => Some(Self::Cp866),

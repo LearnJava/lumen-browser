@@ -21,6 +21,8 @@ pub fn decode(encoding: Encoding, bytes: &[u8]) -> String {
 pub fn decode_to_string(encoding: Encoding, bytes: &[u8]) -> String {
     match encoding {
         Encoding::Utf8 => decode_utf8(bytes),
+        Encoding::Utf16Le => decode_utf16(bytes, /*little_endian=*/ true),
+        Encoding::Utf16Be => decode_utf16(bytes, /*little_endian=*/ false),
         Encoding::Windows1251 => decode_single_byte(bytes, &WIN1251),
         Encoding::Koi8R => decode_single_byte(bytes, &KOI8_R),
         Encoding::Cp866 => decode_single_byte(bytes, &CP866),
@@ -31,6 +33,74 @@ fn decode_utf8(bytes: &[u8]) -> String {
     // BOM EF BB BF: если есть в начале — режем, остальное декодируем lossy.
     let trimmed = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(bytes);
     String::from_utf8_lossy(trimmed).into_owned()
+}
+
+/// Декодирует UTF-16 в little-endian или big-endian порядке.
+///
+/// Гарантии: не паникует, никогда не возвращает invalid UTF-8.
+/// На ошибки (lone surrogate, нечётное число байт) подставляет U+FFFD.
+/// BOM в начале (FF FE для LE, FE FF для BE) — снимается; если BOM
+/// совпадает с указанным порядком, всё в порядке; если нет — снимается
+/// тоже (так удобнее для тестов), но в реальной жизни такой mismatch
+/// невозможен, потому что detector прислал бы Encoding под BOM.
+fn decode_utf16(bytes: &[u8], little_endian: bool) -> String {
+    // Снять BOM любого варианта (LE: FF FE, BE: FE FF) — детектор уже
+    // выбрал правильный Encoding по BOM-у, наша задача — пропустить байты.
+    let bytes = if bytes.starts_with(&[0xFF, 0xFE]) || bytes.starts_with(&[0xFE, 0xFF]) {
+        &bytes[2..]
+    } else {
+        bytes
+    };
+
+    let read_u16 = |hi_lo: [u8; 2]| -> u16 {
+        if little_endian {
+            u16::from_le_bytes(hi_lo)
+        } else {
+            u16::from_be_bytes(hi_lo)
+        }
+    };
+
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0;
+    while i + 2 <= bytes.len() {
+        let u = read_u16([bytes[i], bytes[i + 1]]);
+        i += 2;
+
+        // High surrogate — нужен второй u16 в диапазоне 0xDC00..=0xDFFF.
+        if (0xD800..=0xDBFF).contains(&u) {
+            if i + 2 <= bytes.len() {
+                let low = read_u16([bytes[i], bytes[i + 1]]);
+                if (0xDC00..=0xDFFF).contains(&low) {
+                    i += 2;
+                    let code = 0x10000
+                        + ((u32::from(u) - 0xD800) << 10)
+                        + (u32::from(low) - 0xDC00);
+                    // Surrogate-пара всегда даёт валидный code point.
+                    out.push(char::from_u32(code).unwrap_or('\u{FFFD}'));
+                    continue;
+                }
+            }
+            // Одиночный high surrogate (или EOF после него) — replacement.
+            out.push('\u{FFFD}');
+            continue;
+        }
+
+        // Low surrogate без предшествующего high — invalid.
+        if (0xDC00..=0xDFFF).contains(&u) {
+            out.push('\u{FFFD}');
+            continue;
+        }
+
+        // Обычный BMP code point.
+        out.push(char::from_u32(u32::from(u)).unwrap_or('\u{FFFD}'));
+    }
+
+    // Нечётное число байт — последний полубайт не декодируется.
+    if i < bytes.len() {
+        out.push('\u{FFFD}');
+    }
+
+    out
 }
 
 fn decode_single_byte(bytes: &[u8], table: &[char; 128]) -> String {
@@ -115,5 +185,103 @@ mod tests {
         // Ё и ё на «нестандартных» местах — отдельно проверяем.
         let bytes = &[0xA8, 0xB8];
         assert_eq!(decode(Encoding::Windows1251, bytes), "Ёё");
+    }
+
+    // --- UTF-16 ---
+
+    #[test]
+    fn utf16_le_ascii() {
+        // "ABC" в UTF-16 LE без BOM: 41 00 42 00 43 00.
+        let bytes = &[0x41, 0x00, 0x42, 0x00, 0x43, 0x00];
+        assert_eq!(decode(Encoding::Utf16Le, bytes), "ABC");
+    }
+
+    #[test]
+    fn utf16_be_ascii() {
+        let bytes = &[0x00, 0x41, 0x00, 0x42, 0x00, 0x43];
+        assert_eq!(decode(Encoding::Utf16Be, bytes), "ABC");
+    }
+
+    #[test]
+    fn utf16_le_bom_stripped() {
+        // FF FE = LE BOM. Затем "Hi".
+        let bytes = &[0xFF, 0xFE, 0x48, 0x00, 0x69, 0x00];
+        assert_eq!(decode(Encoding::Utf16Le, bytes), "Hi");
+    }
+
+    #[test]
+    fn utf16_be_bom_stripped() {
+        let bytes = &[0xFE, 0xFF, 0x00, 0x48, 0x00, 0x69];
+        assert_eq!(decode(Encoding::Utf16Be, bytes), "Hi");
+    }
+
+    #[test]
+    fn utf16_le_cyrillic() {
+        // «Привет»: П=041F р=0440 и=0438 в=0432 е=0435 т=0442.
+        let bytes = &[
+            0x1F, 0x04, 0x40, 0x04, 0x38, 0x04, 0x32, 0x04, 0x35, 0x04, 0x42, 0x04,
+        ];
+        assert_eq!(decode(Encoding::Utf16Le, bytes), "Привет");
+    }
+
+    #[test]
+    fn utf16_be_cyrillic() {
+        let bytes = &[
+            0x04, 0x1F, 0x04, 0x40, 0x04, 0x38, 0x04, 0x32, 0x04, 0x35, 0x04, 0x42,
+        ];
+        assert_eq!(decode(Encoding::Utf16Be, bytes), "Привет");
+    }
+
+    #[test]
+    fn utf16_le_supplementary_emoji() {
+        // U+1F600 (😀) = surrogate pair: D83D DE00.
+        // LE bytes: 3D D8 00 DE.
+        let bytes = &[0x3D, 0xD8, 0x00, 0xDE];
+        assert_eq!(decode(Encoding::Utf16Le, bytes), "\u{1F600}");
+    }
+
+    #[test]
+    fn utf16_be_supplementary_emoji() {
+        let bytes = &[0xD8, 0x3D, 0xDE, 0x00];
+        assert_eq!(decode(Encoding::Utf16Be, bytes), "\u{1F600}");
+    }
+
+    #[test]
+    fn utf16_lone_high_surrogate() {
+        // High surrogate без low → U+FFFD.
+        let bytes = &[0x3D, 0xD8, 0x41, 0x00]; // D83D, затем 0x0041 (A)
+        let s = decode(Encoding::Utf16Le, bytes);
+        assert!(s.contains('\u{FFFD}'));
+        assert!(s.contains('A'));
+    }
+
+    #[test]
+    fn utf16_lone_low_surrogate() {
+        // Low surrogate без предшествующего high → U+FFFD.
+        let bytes = &[0x00, 0xDE, 0x41, 0x00];
+        let s = decode(Encoding::Utf16Le, bytes);
+        assert!(s.contains('\u{FFFD}'));
+        assert!(s.contains('A'));
+    }
+
+    #[test]
+    fn utf16_odd_byte_count_emits_replacement() {
+        // 3 байта — нечётно. Последний — лишний полубайт.
+        let bytes = &[0x41, 0x00, 0x42];
+        let s = decode(Encoding::Utf16Le, bytes);
+        assert!(s.starts_with('A'));
+        assert!(s.ends_with('\u{FFFD}'));
+    }
+
+    #[test]
+    fn utf16_empty() {
+        assert_eq!(decode(Encoding::Utf16Le, &[]), "");
+        assert_eq!(decode(Encoding::Utf16Be, &[]), "");
+    }
+
+    #[test]
+    fn utf16_le_bom_only() {
+        // Только BOM, ничего после — пустая строка.
+        assert_eq!(decode(Encoding::Utf16Le, &[0xFF, 0xFE]), "");
     }
 }

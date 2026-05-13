@@ -46,12 +46,23 @@ pub fn detect(bytes: &[u8], content_type_hint: Option<&str>) -> Encoding {
 }
 
 /// Распознаёт BOM (Byte Order Mark) в начале потока.
-/// UTF-16 в Phase 0 не декодируется как отдельная кодировка — отдаём UTF-8
-/// и пусть `from_utf8_lossy` корректно справится. Поэтому здесь возвращаем
-/// только варианты, которые реально поддерживаем.
+///
+/// - `EF BB BF` → UTF-8;
+/// - `FF FE`     → UTF-16 LE (типичный «Save As → Unicode» в Windows);
+/// - `FE FF`     → UTF-16 BE (реже, обычно в Java/Mac).
+///
+/// Порядок проверок важен: UTF-8 BOM не пересекается с UTF-16 (3 байта
+/// против 2), но проверяем сначала более длинный, чтобы исключить
+/// случайное совпадение префиксов.
 fn sniff_bom(bytes: &[u8]) -> Option<Encoding> {
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         return Some(Encoding::Utf8);
+    }
+    if bytes.starts_with(&[0xFF, 0xFE]) {
+        return Some(Encoding::Utf16Le);
+    }
+    if bytes.starts_with(&[0xFE, 0xFF]) {
+        return Some(Encoding::Utf16Be);
     }
     None
 }
@@ -431,5 +442,42 @@ mod tests {
     fn detect_bom_overrides_meta() {
         let html = b"\xEF\xBB\xBF<head><meta charset=windows-1251></head>";
         assert_eq!(detect(html, None), Encoding::Utf8);
+    }
+
+    #[test]
+    fn bom_utf16_le() {
+        // FF FE — UTF-16 LE BOM. "AB" в UTF-16 LE = 41 00 42 00.
+        let bytes = &[0xFF, 0xFE, 0x41, 0x00, 0x42, 0x00];
+        assert_eq!(detect(bytes, None), Encoding::Utf16Le);
+    }
+
+    #[test]
+    fn bom_utf16_be() {
+        let bytes = &[0xFE, 0xFF, 0x00, 0x41, 0x00, 0x42];
+        assert_eq!(detect(bytes, None), Encoding::Utf16Be);
+    }
+
+    #[test]
+    fn bom_utf16_overrides_content_type() {
+        // BOM приоритетнее content-type hint.
+        let bytes = &[0xFF, 0xFE, 0x41, 0x00];
+        assert_eq!(
+            detect(bytes, Some("text/html; charset=windows-1251")),
+            Encoding::Utf16Le
+        );
+    }
+
+    #[test]
+    fn label_utf16_maps_to_le() {
+        // WHATWG-совместимо: голый "utf-16" — это LE.
+        assert_eq!(Encoding::from_label("utf-16"), Some(Encoding::Utf16Le));
+        assert_eq!(Encoding::from_label("UTF-16"), Some(Encoding::Utf16Le));
+        assert_eq!(Encoding::from_label("unicode"), Some(Encoding::Utf16Le));
+    }
+
+    #[test]
+    fn label_utf16be_distinct() {
+        assert_eq!(Encoding::from_label("utf-16be"), Some(Encoding::Utf16Be));
+        assert_eq!(Encoding::from_label("UTF-16BE"), Some(Encoding::Utf16Be));
     }
 }

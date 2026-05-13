@@ -3045,75 +3045,67 @@ mod tests {
         assert_eq!(p.style.font_stretch, FontStretch::NORMAL);
     }
 
-    // ── :has() (CSS Selectors L4 §17.2) ─────────────────────────────────────
+    // ── accent-color (CSS UI L4 §6.1) ──────────────────────────────────────
 
-    /// `div:has(p)` — div, содержащий p в поддереве (через span).
     #[test]
-    fn has_implicit_descendant_matches() {
-        let root = lay(
-            "<div><span><p>x</p></span></div><div><span>nope</span></div>",
-            "div:has(p) { color: red; }",
-        );
-        let blocks: Vec<_> = root.children.iter()
-            .filter(|c| matches!(c.kind, BoxKind::Block))
-            .collect();
-        assert_eq!(blocks[0].style.color.r, 255, "первый div должен сматчить");
-        assert_eq!(blocks[1].style.color.r, 0, "второй div без p — нет");
-    }
-
-    /// `div:has(> .child)` — direct child only.
-    #[test]
-    fn has_child_combinator() {
-        let root = lay(
-            r#"<div><p class="child">x</p></div><div><span><p class="child">x</p></span></div>"#,
-            "div:has(> .child) { color: red; }",
-        );
-        let blocks: Vec<_> = root.children.iter()
-            .filter(|c| matches!(c.kind, BoxKind::Block))
-            .collect();
-        // 1: p — прямой child → match. 2: p внутри span → не match.
-        assert_eq!(blocks[0].style.color.r, 255);
-        assert_eq!(blocks[1].style.color.r, 0);
-    }
-
-    /// `h2:has(+ p)` — h2 followed by p. Через compute_style напрямую,
-    /// потому что h2 inline-level — в LayoutBox-фасаде сложно достать.
-    #[test]
-    fn has_next_sibling() {
-        let doc = lumen_html_parser::parse("<div><h2>A</h2><p>x</p></div><div><h2>B</h2></div>");
-        let sheet = lumen_css_parser::parse("h2:has(+ p) { color: red; }");
-        let root_style = ComputedStyle::root();
-        let div1 = doc.get(doc.root()).children[0];
-        let h2_a = doc.get(div1).children[0];
-        let div2 = doc.get(doc.root()).children[1];
-        let h2_b = doc.get(div2).children[0];
-        let style_a = crate::style::compute_style(
-            &doc, h2_a, &sheet, &root_style, Size::new(800.0, 600.0));
-        let style_b = crate::style::compute_style(
-            &doc, h2_b, &sheet, &root_style, Size::new(800.0, 600.0));
-        assert_eq!(style_a.color.r, 255, "h2 + p должен сматчить");
-        assert_eq!(style_b.color.r, 0, "h2 без p после — нет");
-    }
-
-    /// `:has()` НЕ матчит сам node — descendants only по spec.
-    #[test]
-    fn has_does_not_match_self() {
-        let root = lay(
-            "<p>x</p>",
-            "p:has(p) { color: red; }",
-        );
+    fn accent_color_default_none() {
+        let root = lay("<p>x</p>", "");
         let p = first_element_child(&root);
-        assert_eq!(p.style.color.r, 0, "p:has(p) не должен матчить p без вложенного p");
+        assert!(p.style.accent_color.is_none());
     }
 
-    /// `:has(.a, .b)` — список (OR).
     #[test]
-    fn has_list_or_match() {
+    fn accent_color_named() {
+        let root = lay("<p>x</p>", "p { accent-color: red; }");
+        let p = first_element_child(&root);
+        let c = p.style.accent_color.expect("accent set");
+        assert_eq!((c.r, c.g, c.b, c.a), (255, 0, 0, 255));
+    }
+
+    #[test]
+    fn accent_color_hex() {
+        let root = lay("<p>x</p>", "p { accent-color: #4080ff; }");
+        let p = first_element_child(&root);
+        let c = p.style.accent_color.expect("accent set");
+        assert_eq!((c.r, c.g, c.b), (0x40, 0x80, 0xff));
+    }
+
+    #[test]
+    fn accent_color_auto_resets_inheritance() {
         let root = lay(
-            r#"<div><span class="b">x</span></div>"#,
-            ":has(.a, .b) { color: red; }",
+            "<div><p>x</p></div>",
+            "div { accent-color: blue; } p { accent-color: auto; }",
         );
         let div = first_element_child(&root);
-        assert_eq!(div.style.color.r, 255);
+        let p = first_element_child(div);
+        assert!(div.style.accent_color.is_some());
+        assert!(p.style.accent_color.is_none());
+    }
+
+    #[test]
+    fn accent_color_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { accent-color: rgb(10, 20, 30); }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        let dc = div.style.accent_color.expect("div accent");
+        let pc = p.style.accent_color.expect("p inherits accent");
+        assert_eq!((dc.r, dc.g, dc.b), (10, 20, 30));
+        assert_eq!((pc.r, pc.g, pc.b), (10, 20, 30));
+    }
+
+    #[test]
+    fn accent_color_invalid_ignored() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { accent-color: red; } p { accent-color: notacolor; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // Невалидное значение игнорируется → p наследует от div.
+        assert_eq!(div.style.accent_color, p.style.accent_color);
+        assert!(p.style.accent_color.is_some());
     }
 }

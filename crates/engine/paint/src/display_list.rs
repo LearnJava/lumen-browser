@@ -153,13 +153,16 @@ fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, fr
     let baseline_y = line_y + fs * 0.80;
     let thickness = (fs * 0.07).max(1.0);
     let x = container_x + frag.x;
+    // CSS Text Decoration L3 §3: text-decoration-color, fallback на
+    // currentColor (= frag.style.color).
+    let color = frag.style.text_decoration_color.unwrap_or(frag.style.color);
 
     if decoration.underline {
         // Под baseline, ниже на ~10% от размера шрифта.
         let y = baseline_y + fs * 0.10;
         out.push(DisplayCommand::FillRect {
             rect: Rect::new(x, y, frag.width, thickness),
-            color: frag.style.color,
+            color,
         });
     }
     if decoration.line_through {
@@ -167,7 +170,7 @@ fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, fr
         let y = baseline_y - fs * 0.30;
         out.push(DisplayCommand::FillRect {
             rect: Rect::new(x, y, frag.width, thickness),
-            color: frag.style.color,
+            color,
         });
     }
     if decoration.overline {
@@ -175,7 +178,7 @@ fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, fr
         let y = baseline_y - fs * 0.78;
         out.push(DisplayCommand::FillRect {
             rect: Rect::new(x, y, frag.width, thickness),
-            color: frag.style.color,
+            color,
         });
     }
 }
