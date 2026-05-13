@@ -431,6 +431,11 @@ pub struct ComputedStyle {
     /// отрицательным.
     pub word_spacing: f32,
     pub text_decoration_line: TextDecorationLine,
+    /// CSS Text Decoration L3 §3 — `text-decoration-color`. None означает
+    /// «использовать currentColor» (то есть `style.color` при рендеринге).
+    /// Inherited через каскад (как и `text-decoration-line` в Phase 0 — см.
+    /// decisions log).
+    pub text_decoration_color: Option<Color>,
     /// Явная ширина (CSS `width: Npx`). None = auto (растягивается на контейнер).
     pub width: Option<f32>,
     /// Явная высота (CSS `height: Npx`). None = auto (по содержимому).
@@ -515,6 +520,7 @@ impl ComputedStyle {
             && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
             && (self.word_spacing - other.word_spacing).abs() < f32::EPSILON
             && self.text_decoration_line == other.text_decoration_line
+            && self.text_decoration_color == other.text_decoration_color
     }
 
     /// Стартовые значения для корня документа.
@@ -537,6 +543,7 @@ impl ComputedStyle {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             text_decoration_line: TextDecorationLine::default(),
+            text_decoration_color: None,
             width: None,
             height: None,
             margin_top: 0.0,
@@ -606,6 +613,7 @@ pub fn compute_style(
         letter_spacing: inherited.letter_spacing,
         word_spacing: inherited.word_spacing,
         text_decoration_line: inherited.text_decoration_line,
+        text_decoration_color: inherited.text_decoration_color,
         accent_color: inherited.accent_color,
         // Ненаследуемые — сброс.
         background_color: None,
@@ -1808,9 +1816,33 @@ fn apply_declaration(
         "padding-right" => set_box_length(&mut style.padding_right, val, em_basis, viewport),
         "padding-bottom" => set_box_length(&mut style.padding_bottom, val, em_basis, viewport),
         "padding-left" => set_box_length(&mut style.padding_left, val, em_basis, viewport),
-        "text-decoration" | "text-decoration-line" => {
-            if let Some(d) = parse_text_decoration(val) {
+        "text-decoration" => {
+            // Shorthand: `<line> <style> <color>` в любом порядке (CSS Text
+            // Decoration L3 §2.1). Парсер собирает линии-keyword-ы и пытается
+            // отдельно интерпретировать остатки как цвет (rgb/hsl/oklch/hex
+            // /name). style (solid/wavy/…) и `blink` пока тихо игнорируем.
+            let (line, color) = parse_text_decoration_shorthand(val);
+            if let Some(d) = line {
                 style.text_decoration_line = d;
+            }
+            if let Some(c) = color {
+                style.text_decoration_color = Some(c);
+            }
+        }
+        "text-decoration-line" => {
+            let (line, _color) = parse_text_decoration_shorthand(val);
+            if let Some(d) = line {
+                style.text_decoration_line = d;
+            }
+        }
+        "text-decoration-color" => {
+            // `currentcolor` сбрасывает в None — даёт fallback на style.color
+            // при рендеринге. CSS3 не описывает явное «возврат к default»,
+            // но `currentColor` имеет ту же семантику.
+            if val.eq_ignore_ascii_case("currentcolor") {
+                style.text_decoration_color = None;
+            } else if let Some(c) = parse_color(val) {
+                style.text_decoration_color = Some(c);
             }
         }
         // ── Borders ───────────────────────────────────────────────────────────
@@ -1912,45 +1944,87 @@ fn apply_declaration(
     }
 }
 
-/// Разбирает `text-decoration` / `text-decoration-line`. Phase 0: только
-/// набор keyword-ов `underline`, `overline`, `line-through`, `none`. Цвет,
-/// стиль (`solid`/`wavy`/…) и `blink` (CSS2 deprecated) тихо игнорируем.
-/// `none` сбрасывает все линии, даже если вместе с ним встречены другие
-/// keyword-ы (CSS3 описывает это как «none — initial value», но интуитивно
-/// побеждает явный сброс).
-fn parse_text_decoration(val: &str) -> Option<TextDecorationLine> {
+/// Разбирает `text-decoration` shorthand или `text-decoration-line`.
+///
+/// Возвращает `(line, color)`. `color` извлекается только если в строке
+/// есть остаточный токен после keyword-ов линий и стилей — и он успешно
+/// парсится `parse_color`-ом.
+///
+/// Phase 0 keyword-ы линий: `underline`, `overline`, `line-through`, `none`.
+/// `none` сбрасывает все линии (CSS3 «none — initial value», интуитивно
+/// побеждает явный сброс). Стиль (`solid`/`wavy`/`dashed`/`dotted`/`double`)
+/// и `blink` (CSS2 deprecated) пока тихо игнорируем — нет реализации в
+/// paint, но токены распознаём, чтобы их остаток не попадал в color-парсер.
+///
+/// `currentcolor` keyword в shorthand сбрасывает text-decoration-color в
+/// None (= fallback на currentColor при рендеринге).
+fn parse_text_decoration_shorthand(val: &str) -> (Option<TextDecorationLine>, Option<Color>) {
     let mut out = TextDecorationLine::default();
-    let mut any_known = false;
+    let mut any_line = false;
     let mut none_seen = false;
+    let mut color: Option<Color> = None;
+    let mut color_currentcolor = false;
+    // Цвет может быть многословным: `rgb(0, 0, 0)`, `hsl(0 0% 0% / 1)`, …
+    // Соберём «не-линия / не-стиль» токены и попытаемся склеить.
+    let mut residue: Vec<&str> = Vec::new();
     for token in val.split_whitespace() {
-        match token.to_ascii_lowercase().as_str() {
+        let lower = token.to_ascii_lowercase();
+        match lower.as_str() {
             "none" => {
                 none_seen = true;
-                any_known = true;
+                any_line = true;
             }
             "underline" => {
                 out.underline = true;
-                any_known = true;
+                any_line = true;
             }
             "overline" => {
                 out.overline = true;
-                any_known = true;
+                any_line = true;
             }
             "line-through" => {
                 out.line_through = true;
-                any_known = true;
+                any_line = true;
             }
-            // Цвета, `solid`/`wavy`/`dashed`/…, `blink` — игнорируем молча.
-            _ => {}
+            "solid" | "wavy" | "dashed" | "dotted" | "double" | "blink" => {
+                // Стиль — пока не реализован, токен поглощается, чтобы не
+                // попасть в color-парсер.
+            }
+            "currentcolor" => {
+                color_currentcolor = true;
+            }
+            _ => residue.push(token),
         }
     }
-    if !any_known {
-        return None;
+    if !residue.is_empty() {
+        // Попробуем сначала весь residue (на случай color-функции с
+        // пробелами: `rgb(0 0 0)` → токены `rgb(0`, `0`, `0)`).
+        let joined = residue.join(" ");
+        if let Some(c) = parse_color(joined.trim()) {
+            color = Some(c);
+        } else {
+            // Иначе пробуем токен за токеном — для named-color / hex без
+            // пробелов внутри.
+            for tok in &residue {
+                if let Some(c) = parse_color(tok) {
+                    color = Some(c);
+                    break;
+                }
+            }
+        }
     }
-    if none_seen {
-        return Some(TextDecorationLine::default());
+    if color_currentcolor && color.is_none() {
+        // `currentcolor` явно встретился — но это не value «нет цвета»;
+        // у нас представление currentColor = None, поэтому не ставим color
+        // — кто-то снаружи решит, что это сброс. В shorthand `text-decoration`
+        // ничего не делаем (style.text_decoration_color остаётся как есть).
     }
-    Some(out)
+    let line = if any_line {
+        if none_seen { Some(TextDecorationLine::default()) } else { Some(out) }
+    } else {
+        None
+    };
+    (line, color)
 }
 
 /// Применяет `font-size`-декларацию, если она задана. Размер `em` берётся
@@ -2946,21 +3020,24 @@ mod tests {
 
     #[test]
     fn text_decoration_underline_sets_only_underline() {
-        let d = parse_text_decoration("underline").unwrap();
+        let (line, color) = parse_text_decoration_shorthand("underline");
+        let d = line.unwrap();
         assert!(d.underline);
         assert!(!d.overline);
         assert!(!d.line_through);
+        assert!(color.is_none());
     }
 
     #[test]
     fn text_decoration_none_returns_empty() {
-        let d = parse_text_decoration("none").unwrap();
-        assert!(d.is_empty());
+        let (line, _) = parse_text_decoration_shorthand("none");
+        assert!(line.unwrap().is_empty());
     }
 
     #[test]
     fn text_decoration_multiple_keywords_combine() {
-        let d = parse_text_decoration("overline underline").unwrap();
+        let (line, _) = parse_text_decoration_shorthand("overline underline");
+        let d = line.unwrap();
         assert!(d.underline);
         assert!(d.overline);
         assert!(!d.line_through);
@@ -2968,37 +3045,113 @@ mod tests {
 
     #[test]
     fn text_decoration_line_through_with_hyphen() {
-        let d = parse_text_decoration("line-through").unwrap();
-        assert!(d.line_through);
+        let (line, _) = parse_text_decoration_shorthand("line-through");
+        assert!(line.unwrap().line_through);
     }
 
     #[test]
     fn text_decoration_none_with_other_clears_all() {
         // `none` всегда побеждает: интуитивный сброс.
-        let d = parse_text_decoration("underline none").unwrap();
-        assert!(d.is_empty());
+        let (line, _) = parse_text_decoration_shorthand("underline none");
+        assert!(line.unwrap().is_empty());
     }
 
     #[test]
-    fn text_decoration_ignores_unknown_tokens() {
-        // `blink` (CSS2 deprecated), цвета и `solid`/`wavy` — игнорируем.
-        let d = parse_text_decoration("underline blink red solid").unwrap();
+    fn text_decoration_blink_and_style_tokens_ignored_for_line() {
+        // `blink` и `solid` — игнорируем для line; теперь `red` — color.
+        let (line, color) = parse_text_decoration_shorthand("underline blink solid");
+        let d = line.unwrap();
         assert!(d.underline);
         assert!(!d.overline);
         assert!(!d.line_through);
+        assert!(color.is_none(), "no color token → None");
     }
 
     #[test]
-    fn text_decoration_unrecognized_only_returns_none() {
-        assert!(parse_text_decoration("blink").is_none());
-        assert!(parse_text_decoration("").is_none());
+    fn text_decoration_unrecognized_only_returns_none_line() {
+        let (line, _) = parse_text_decoration_shorthand("blink");
+        assert!(line.is_none());
+        let (line, _) = parse_text_decoration_shorthand("");
+        assert!(line.is_none());
     }
 
     #[test]
     fn text_decoration_is_case_insensitive() {
-        let d = parse_text_decoration("UNDERLINE Line-Through").unwrap();
+        let (line, _) = parse_text_decoration_shorthand("UNDERLINE Line-Through");
+        let d = line.unwrap();
         assert!(d.underline);
         assert!(d.line_through);
+    }
+
+    // ── text-decoration-color ───────────────────────────────────────────────
+
+    #[test]
+    fn text_decoration_color_named_in_shorthand() {
+        // `text-decoration: underline red` — линия + цвет.
+        let (line, color) = parse_text_decoration_shorthand("underline red");
+        assert!(line.unwrap().underline);
+        assert_eq!(color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+    }
+
+    #[test]
+    fn text_decoration_color_hex_in_shorthand() {
+        let (line, color) = parse_text_decoration_shorthand("overline #00ff00");
+        assert!(line.unwrap().overline);
+        assert_eq!(color, Some(Color { r: 0, g: 255, b: 0, a: 255 }));
+    }
+
+    #[test]
+    fn text_decoration_color_rgb_function_in_shorthand() {
+        // Color-функция с пробелами (modern CSS syntax) — токены должны
+        // склеиваться обратно.
+        let (line, color) = parse_text_decoration_shorthand("line-through rgb(0 0 255)");
+        assert!(line.unwrap().line_through);
+        assert_eq!(color, Some(Color { r: 0, g: 0, b: 255, a: 255 }));
+    }
+
+    #[test]
+    fn text_decoration_color_property_named() {
+        // Отдельное свойство text-decoration-color.
+        let s = style_for("text-decoration-color: blue");
+        assert_eq!(s.text_decoration_color, Some(Color { r: 0, g: 0, b: 255, a: 255 }));
+    }
+
+    #[test]
+    fn text_decoration_color_currentcolor_resets() {
+        // `currentcolor` сбрасывает text-decoration-color в None.
+        let s = style_for("text-decoration-color: red; text-decoration-color: currentcolor");
+        assert_eq!(s.text_decoration_color, None);
+    }
+
+    #[test]
+    fn text_decoration_color_not_inherited_to_separate_branch() {
+        // Через каскад наследуется (как и text-decoration-line в Phase 0):
+        // дочерний `<p>` получает родительский text-decoration-color.
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-color: red; }");
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.text_decoration_color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+        let p = doc.get(div).children[0];
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(p_style.text_decoration_color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+    }
+
+    #[test]
+    fn text_decoration_shorthand_sets_color_via_apply() {
+        // Полный путь через apply_declaration.
+        let s = style_for("text-decoration: underline blue");
+        assert!(s.text_decoration_line.underline);
+        assert_eq!(s.text_decoration_color, Some(Color { r: 0, g: 0, b: 255, a: 255 }));
+    }
+
+    #[test]
+    fn text_decoration_color_default_is_none() {
+        // По умолчанию text-decoration-color = None → currentColor при
+        // рендеринге.
+        let s = ComputedStyle::root();
+        assert!(s.text_decoration_color.is_none());
     }
 
     // ── Border parsing ────────────────────────────────────────────────────────
