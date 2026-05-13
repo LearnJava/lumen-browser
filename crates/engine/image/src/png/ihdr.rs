@@ -114,16 +114,17 @@ impl Ihdr {
 
     /// Преобразовать `(color_type, bit_depth)` в публичный `PixelFormat`.
     /// Возвращает `Unsupported(...)`, если на текущем этапе формат
-    /// принципиально не реализован (palette, sub-byte, 16-bit).
+    /// принципиально не реализован (sub-byte, 16-bit, interlaced).
+    ///
+    /// **Не вызывайте для palette**: палитровый формат зависит ещё и от
+    /// наличия `tRNS`, что орхестратор знает только после сканирования
+    /// чанков. Эта функция для palette паникует через `unreachable!()`.
     pub(crate) fn pixel_format(&self) -> Result<PixelFormat, DecodeError> {
         if self.interlaced {
             return Err(DecodeError::Unsupported(UnsupportedReason::Interlaced));
         }
         if self.bit_depth == 16 {
             return Err(DecodeError::Unsupported(UnsupportedReason::SixteenBitDepth));
-        }
-        if matches!(self.color_type, ColorType::Palette) {
-            return Err(DecodeError::Unsupported(UnsupportedReason::Palette));
         }
         if self.bit_depth != 8 {
             return Err(DecodeError::Unsupported(UnsupportedReason::SubByteDepth(
@@ -135,7 +136,9 @@ impl Ihdr {
             ColorType::GrayscaleAlpha => PixelFormat::GrayAlpha8,
             ColorType::Rgb => PixelFormat::Rgb8,
             ColorType::Rgba => PixelFormat::Rgba8,
-            ColorType::Palette => unreachable!("palette уже отвергнут выше"),
+            ColorType::Palette => unreachable!(
+                "palette должен обрабатываться орхестратором отдельно"
+            ),
         })
     }
 }
@@ -289,16 +292,6 @@ mod tests {
         assert!(matches!(
             h.pixel_format(),
             Err(DecodeError::Unsupported(UnsupportedReason::Interlaced))
-        ));
-    }
-
-    #[test]
-    fn pixel_format_rejects_palette() {
-        let data = build_ihdr(1, 1, 8, 3, 0, 0, 0);
-        let h = Ihdr::parse(&data).unwrap();
-        assert!(matches!(
-            h.pixel_format(),
-            Err(DecodeError::Unsupported(UnsupportedReason::Palette))
         ));
     }
 
