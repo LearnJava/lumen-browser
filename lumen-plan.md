@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-_(никто ничего не зарезервировал)_
+- 🔄 @property registered custom properties [P1] — css-property-at-rule — 2026-05-13
 
 
 ## Статус реализации
