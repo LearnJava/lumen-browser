@@ -19,7 +19,7 @@ pub mod style;
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
 pub use style::{
-    BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, FontWeight, Overflow,
+    BorderStyle, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStyle, FontWeight, Overflow,
     TextAlign, TextDecorationLine, TextTransform, Visibility, WhiteSpace,
 };
 
@@ -2435,5 +2435,65 @@ mod tests {
         let p = first_element_child(div);
         assert_eq!(div.style.overflow_x, Overflow::Hidden);
         assert_eq!(p.style.overflow_x, Overflow::Visible);
+    }
+
+    // ── cursor (CSS UI L4 §8.1) ─────────────────────────────────────────────
+
+    #[test]
+    fn cursor_default_auto() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.cursor, Cursor::Auto);
+    }
+
+    #[test]
+    fn cursor_keywords_parsed() {
+        for (kw, expected) in [
+            ("default", Cursor::Default),
+            ("pointer", Cursor::Pointer),
+            ("text", Cursor::Text),
+            ("wait", Cursor::Wait),
+            ("move", Cursor::Move),
+            ("not-allowed", Cursor::NotAllowed),
+            ("grab", Cursor::Grab),
+            ("zoom-in", Cursor::ZoomIn),
+            ("nesw-resize", Cursor::NeswResize),
+        ] {
+            let css = format!("p {{ cursor: {kw}; }}");
+            let root = lay("<p>x</p>", &css);
+            let p = first_element_child(&root);
+            assert_eq!(p.style.cursor, expected, "kw = {kw}");
+        }
+    }
+
+    #[test]
+    fn cursor_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { cursor: pointer; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.cursor, Cursor::Pointer);
+        assert_eq!(p.style.cursor, Cursor::Pointer);
+    }
+
+    #[test]
+    fn cursor_url_fallback_uses_keyword() {
+        // CSS UI: `cursor: url(...) default` — берём последний keyword.
+        // Phase 0 url() игнорируется.
+        let root = lay(
+            "<p>x</p>",
+            "p { cursor: url(custom.png), pointer; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.cursor, Cursor::Pointer);
+    }
+
+    #[test]
+    fn cursor_unknown_keeps_inherited() {
+        let root = lay("<p>x</p>", "p { cursor: nonsense; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.cursor, Cursor::Auto);
     }
 }
