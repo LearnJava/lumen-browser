@@ -14,6 +14,8 @@
 //! вложенными `a`-предками могут промахнуться — это известное упрощение, до
 //! фазы со «честным» Selectors-движком.
 
+use std::collections::HashMap;
+
 use lumen_core::geom::Size;
 use lumen_css_parser::{
     AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, Declaration, PseudoClass,
@@ -537,6 +539,12 @@ pub struct ComputedStyle {
     /// Inherited. В Phase 0 layout только хранит — real применение появится
     /// вместе с form-widget рендерингом.
     pub accent_color: Option<Color>,
+    /// CSS Variables L1 — custom properties (`--name`). Все custom properties
+    /// inherited (спека: `all custom properties are inherited by default`).
+    /// Ключ — полное имя с ведущими `--`, значение — сырой текст из source.
+    /// Substitution `var(--name [, fallback])` делается lazy при применении
+    /// обычных деклараций (см. `apply_declaration`).
+    pub custom_props: HashMap<String, String>,
 }
 
 impl ComputedStyle {
@@ -623,6 +631,7 @@ impl ComputedStyle {
             outline_color: None,
             outline_offset: 0.0,
             accent_color: None,
+            custom_props: HashMap::new(),
         }
     }
 }
@@ -655,6 +664,8 @@ pub fn compute_style(
         text_decoration_line: inherited.text_decoration_line,
         text_decoration_color: inherited.text_decoration_color,
         accent_color: inherited.accent_color,
+        // CSS Variables L1: все custom properties inherited.
+        custom_props: inherited.custom_props.clone(),
         // Ненаследуемые — сброс.
         background_color: None,
         width: None,
@@ -752,6 +763,18 @@ pub fn compute_style(
     let parent_fs = inherited.font_size;
     for (_, _, _, _, decl) in &matched {
         apply_font_size(&mut style, decl, parent_fs, viewport);
+    }
+
+    // Custom-properties pass: все `--name: value` декларации применяются
+    // отдельно и ДО main-pass, чтобы любая обычная декларация в main-pass
+    // могла видеть финальное значение custom property независимо от порядка
+    // объявления в source. Каскад уже соблюдён через sort `matched`:
+    // последующая запись с тем же ключом перебивает раннюю.
+    for (_, _, _, _, decl) in &matched {
+        if let Some(name) = decl.property.strip_prefix("--") {
+            let key = format!("--{name}");
+            style.custom_props.insert(key, decl.value.clone());
+        }
     }
 
     // Main-pass: остальные декларации; em-basis теперь = current font_size.
@@ -1583,6 +1606,119 @@ pub fn parse_length(s: &str) -> Option<Length> {
     s.parse::<f32>().ok().map(Length::Px)
 }
 
+/// Глубина рекурсии при разворачивании `var()` — защита от циклов вида
+/// `--a: var(--b); --b: var(--a)`. CSS spec не задаёт точного предела;
+/// 32 уровня хватает для любого реалистичного nesting, а зацикленные
+/// определения отсекутся быстро.
+const VAR_EXPAND_MAX_DEPTH: u32 = 32;
+
+/// CSS Variables L1 §3: рекурсивно разворачивает все `var(--name [, fallback])`
+/// в `value`. Возвращает None, если:
+///   - встретилась `var()` с именем, которого нет в `custom`, и нет fallback;
+///   - превышена глубина рекурсии (cycle / слишком глубокий nest);
+///   - синтаксис `var(...)` сломан (нет закрывающей скобки).
+///
+/// При успехе — возвращает строку с подставленными значениями. Все
+/// substitution-ы делаются как plain string replacement; типы значений
+/// проверит уже сам `apply_declaration` после expand.
+fn expand_vars(value: &str, custom: &HashMap<String, String>, depth: u32) -> Option<String> {
+    if depth > VAR_EXPAND_MAX_DEPTH {
+        return None;
+    }
+    let Some(start) = find_var_open(value) else {
+        return Some(value.to_string());
+    };
+    let prefix = &value[..start];
+    let after_open = &value[start + 4..]; // skip "var("
+    let (args, after_close) = parse_balanced_to_close(after_open)?;
+    let (name, fallback) = split_var_args(args);
+    if !name.starts_with("--") {
+        return None;
+    }
+    let resolved = if let Some(v) = custom.get(name) {
+        expand_vars(v.trim(), custom, depth + 1)?
+    } else if let Some(fb) = fallback {
+        expand_vars(fb.trim(), custom, depth + 1)?
+    } else {
+        return None;
+    };
+    let combined = format!("{prefix}{resolved}{after_close}");
+    expand_vars(&combined, custom, depth + 1)
+}
+
+/// Находит позицию первого `var(` в `s` вне строковых литералов. Возвращает
+/// индекс символа `v`. Учитывает одинарные и двойные кавычки, чтобы
+/// `content: "var(x)"` не давал ложного матча.
+fn find_var_open(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut in_string: Option<u8> = None;
+    while i + 4 <= bytes.len() {
+        let b = bytes[i];
+        match (in_string, b) {
+            (Some(q), c) if c == q => {
+                in_string = None;
+                i += 1;
+            }
+            (None, b'"') | (None, b'\'') => {
+                in_string = Some(b);
+                i += 1;
+            }
+            (None, b'v') if &bytes[i..i + 4] == b"var(" => return Some(i),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// Принимает строку, начинающуюся **сразу после** `var(`, и читает её до
+/// парной закрывающей скобки с учётом вложенных `(...)` и строковых литералов.
+/// Возвращает (содержимое внутри `var(...)`, остаток после `)`).
+fn parse_balanced_to_close(s: &str) -> Option<(&str, &str)> {
+    let bytes = s.as_bytes();
+    let mut depth = 1u32;
+    let mut in_string: Option<u8> = None;
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match (in_string, b) {
+            (Some(q), c) if c == q => in_string = None,
+            (None, b'"') | (None, b'\'') => in_string = Some(b),
+            (None, b'(') => depth += 1,
+            (None, b')') => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((&s[..i], &s[i + 1..]));
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Разбивает аргументы `var(...)` на (имя, опциональный fallback) по первой
+/// top-level запятой. Запятые внутри вложенных скобок или строк — не граница.
+fn split_var_args(s: &str) -> (&str, Option<&str>) {
+    let bytes = s.as_bytes();
+    let mut depth = 0u32;
+    let mut in_string: Option<u8> = None;
+    for (i, &b) in bytes.iter().enumerate() {
+        match (in_string, b) {
+            (Some(q), c) if c == q => in_string = None,
+            (None, b'"') | (None, b'\'') => in_string = Some(b),
+            (None, b'(') => depth += 1,
+            (None, b')') => depth = depth.saturating_sub(1),
+            (None, b',') if depth == 0 => {
+                return (s[..i].trim(), Some(s[i + 1..].trim()));
+            }
+            _ => {}
+        }
+    }
+    (s.trim(), None)
+}
+
 fn apply_declaration(
     style: &mut ComputedStyle,
     decl: &Declaration,
@@ -1591,7 +1727,32 @@ fn apply_declaration(
     parent_font_weight: FontWeight,
 ) {
     let prop = decl.property.as_str();
-    let val = decl.value.as_str();
+
+    // Custom properties обрабатываются в отдельном pass до этого момента
+    // (см. compute_style). Здесь — игнорируем.
+    if prop.starts_with("--") {
+        return;
+    }
+
+    // CSS Variables L1 §3: подстановка `var(--name [, fallback])` на этапе
+    // применения. Если value содержит `var(` — пробуем expand с текущей
+    // картой custom_props. При неудаче (имя не найдено и нет fallback,
+    // глубина рекурсии превышена, синтаксическая ошибка) декларация
+    // считается отсутствующей (CSS Variables L1 §3.3 «invalid at computed
+    // value time»). `expanded` живёт до конца функции, чтобы `val` остался
+    // валидным `&str`.
+    let expanded;
+    let val: &str = if decl.value.contains("var(") {
+        match expand_vars(&decl.value, &style.custom_props, 0) {
+            Some(v) => {
+                expanded = v;
+                expanded.as_str()
+            }
+            None => return,
+        }
+    } else {
+        decl.value.as_str()
+    };
     match prop {
         "display" => {
             style.display = match val {
@@ -3435,5 +3596,175 @@ mod tests {
         let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
         assert_eq!(div_style.box_sizing, BoxSizing::BorderBox);
         assert_eq!(p_style.box_sizing, BoxSizing::ContentBox);
+    }
+
+    // ──────────────── CSS Variables L1: custom properties + var() ────────────────
+
+    #[test]
+    fn custom_prop_stored_in_computed_style() {
+        let s = style_for("--main-color: red");
+        assert_eq!(
+            s.custom_props.get("--main-color").map(String::as_str),
+            Some("red")
+        );
+    }
+
+    #[test]
+    fn custom_prop_does_not_match_known_property() {
+        // `--display: block` НЕ должно повлиять на свойство display.
+        // Должно только лечь в custom_props.
+        let s = style_for("--display: block");
+        assert_eq!(s.display, Display::Block); // default для <p>
+        assert_eq!(s.custom_props.get("--display").map(String::as_str), Some("block"));
+    }
+
+    #[test]
+    fn var_substitutes_simple_value() {
+        let s = style_for("--c: red; color: var(--c)");
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn var_substitutes_length_value() {
+        let s = style_for("--w: 50px; width: var(--w)");
+        assert!((s.width.unwrap() - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn var_uses_fallback_when_name_unknown() {
+        // --c не задан — берём fallback (blue).
+        let s = style_for("color: var(--unknown, blue)");
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn var_without_fallback_and_unknown_is_dropped() {
+        // var() не разрешается и нет fallback → декларация игнорится,
+        // color остаётся inherited (root() = black).
+        let s = style_for("color: var(--unknown)");
+        assert_eq!(s.color, Color::BLACK);
+    }
+
+    #[test]
+    fn var_resolved_value_overrides_default() {
+        // --c определён, fallback есть, но не используется (имя найдено).
+        let s = style_for("--c: red; color: var(--c, blue)");
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn var_cascade_later_wins() {
+        // Последняя декларация --x с той же specificity побеждает.
+        let s = style_for("--x: red; --x: blue; color: var(--x)");
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn var_resolved_after_main_pass_regardless_of_source_order() {
+        // --c объявлен ПОСЛЕ color: var(--c) — всё равно подставляется,
+        // потому что custom-pass идёт до main-pass.
+        let s = style_for("color: var(--c); --c: red");
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn var_nested_substitution() {
+        // var() resolves to another var() — должен раскрываться рекурсивно.
+        let s = style_for("--a: var(--b); --b: red; color: var(--a)");
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn var_cycle_dropped_safely() {
+        // --a -> --b -> --a — рекурсия превышает лимит → declaration ignored
+        // → color остаётся default (black).
+        let s = style_for("--a: var(--b); --b: var(--a); color: var(--a)");
+        assert_eq!(s.color, Color::BLACK);
+    }
+
+    #[test]
+    fn var_inherits_from_parent() {
+        // Custom properties inherit (CSS Variables L1 §2). Объявленное на
+        // <div> --main должно быть видно у потомка <p>.
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet =
+            lumen_css_parser::parse("div { --main: green; } p { color: var(--main); }");
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
+        // Inherited custom prop виден у потомка.
+        assert_eq!(p_style.custom_props.get("--main").map(String::as_str), Some("green"));
+        assert_eq!(p_style.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn var_fallback_with_inner_comma_and_parens() {
+        // Fallback содержит rgba(...) с запятыми — не должен порваться по
+        // первой `,`. Top-level запятая отделяет имя от fallback, остальные —
+        // часть fallback.
+        let s = style_for("color: var(--c, rgba(255, 0, 0, 0.5))");
+        let c = s.color;
+        assert_eq!(c.r, 255);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+        assert!((c.a as i32 - 128).abs() <= 1);
+    }
+
+    #[test]
+    fn var_within_string_literal_not_expanded() {
+        // `"var(--x)"` внутри строкового литерала — это литерал, не
+        // substitution. Свойство `content` мы не applay-им в Phase 0, поэтому
+        // проверка идёт от обратного: find_var_open видит `var(` ВНЕ строки.
+        // Берём color: чтобы content-like ситуация не помешала, проверяем
+        // напрямую expand_vars.
+        let mut custom = HashMap::new();
+        custom.insert("--x".to_string(), "red".to_string());
+        // Только литерал — никакого реального var() — должен остаться как есть.
+        assert_eq!(
+            expand_vars("\"var(--x)\"", &custom, 0).as_deref(),
+            Some("\"var(--x)\"")
+        );
+    }
+
+    #[test]
+    fn var_specificity_more_important() {
+        // !important на --x перебивает обычный --x с большей specificity?
+        // Нет — !important побеждает (CSS Cascade L4 §8.1).
+        let doc = lumen_html_parser::parse("<p class=\"a\">x</p>");
+        let sheet = lumen_css_parser::parse(
+            "p { --c: red !important; } .a { --c: blue; } p { color: var(--c); }",
+        );
+        let root_style = ComputedStyle::root();
+        let p = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, p, &sheet, &root_style, Size::new(800.0, 600.0));
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn var_multiple_in_one_value_via_border_shorthand() {
+        // border shorthand принимает `<width> <style> <color>` — три токена.
+        // Все три могут прийти из var(). Проверяем, что expand_vars
+        // корректно разворачивает несколько var() в одной строке.
+        let s = style_for("--w: 2px; --s: solid; --c: red; border: var(--w) var(--s) var(--c)");
+        assert!((s.border_top_width - 2.0).abs() < 0.01);
+        assert_eq!(s.border_top_style, BorderStyle::Solid);
+        assert_eq!(s.border_top_color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+    }
+
+    #[test]
+    fn expand_vars_pure_passthrough() {
+        // Нет var() — должен вернуть точно такую же строку.
+        let custom = HashMap::new();
+        assert_eq!(expand_vars("10px solid red", &custom, 0).as_deref(), Some("10px solid red"));
+    }
+
+    #[test]
+    fn expand_vars_unclosed_paren_is_none() {
+        // Сломанный синтаксис — declaration treated as invalid.
+        let mut custom = HashMap::new();
+        custom.insert("--x".to_string(), "red".to_string());
+        assert_eq!(expand_vars("color: var(--x", &custom, 0), None);
     }
 }
