@@ -43,6 +43,12 @@ wgpu = "26"
 # Exception #3 (§5): TLS / crypto. Своя реализация — security antipattern.
 rustls = { version = "0.23", features = ["std"] }
 webpki-roots = "0.26"
+# Exception #5 (§5): SQLite — persistent storage для history, bookmarks, notes,
+# read-later, cookies (TTL), профилей и knowledge layer (FTS5). 25 лет audit-а
+# и TH3-тестирование; стандарт в индустрии браузеров (Firefox places.sqlite,
+# Chromium History, Safari). Feature `bundled` компилирует SQLite в бинарь —
+# нулевая runtime-зависимость от системного libsqlite3.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [profile.dev]
 opt-level = 1
