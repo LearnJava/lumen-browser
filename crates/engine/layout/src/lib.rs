@@ -19,9 +19,9 @@ pub mod style;
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
 pub use style::{
-    BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStyle,
-    FontVariant, FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
-    TextTransform, Visibility, WhiteSpace,
+    BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStretch,
+    FontStyle, FontVariant, FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow,
+    TextShadow, TextTransform, Visibility, WhiteSpace,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -2975,5 +2975,73 @@ mod tests {
         let div = first_element_child(&root);
         let p = first_element_child(div);
         assert_eq!(p.style.font_variant, FontVariant::SmallCaps);
+    }
+
+    // ── font-stretch (CSS Fonts L4 §2.5) ────────────────────────────────────
+
+    #[test]
+    fn font_stretch_default_normal() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_stretch, FontStretch::NORMAL);
+    }
+
+    #[test]
+    fn font_stretch_keyword_condensed() {
+        let root = lay("<p>x</p>", "p { font-stretch: condensed; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_stretch.0, 750);
+    }
+
+    #[test]
+    fn font_stretch_keyword_semi_expanded_fractional() {
+        // 112.5% — дробный keyword проверяет, что хранение в десятых не теряет точность.
+        let root = lay("<p>x</p>", "p { font-stretch: semi-expanded; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_stretch.0, 1125);
+    }
+
+    #[test]
+    fn font_stretch_percentage_value() {
+        let root = lay("<p>x</p>", "p { font-stretch: 80%; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_stretch.0, 800);
+    }
+
+    #[test]
+    fn font_stretch_percentage_clamped() {
+        // Spec разрешает значения вне [50%, 200%], но Phase 0 их клампит —
+        // экстремальные значения бесполезны и могут переполнить u16.
+        let root = lay("<p>x</p>", "p { font-stretch: 10%; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_stretch.0, 500);
+
+        let root = lay("<p>x</p>", "p { font-stretch: 300%; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_stretch.0, 2000);
+    }
+
+    #[test]
+    fn font_stretch_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-stretch: expanded; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(p.style.font_stretch.0, 1250);
+        assert_eq!(div.style.font_stretch.0, 1250);
+    }
+
+    #[test]
+    fn font_stretch_normal_resets_inheritance() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-stretch: condensed; } p { font-stretch: normal; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.font_stretch.0, 750);
+        assert_eq!(p.style.font_stretch, FontStretch::NORMAL);
     }
 }
