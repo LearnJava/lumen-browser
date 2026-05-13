@@ -1924,4 +1924,106 @@ mod tests {
         let pc = pseudo_at(&s, 0, 0, 0);
         assert!(matches!(pc, PseudoClass::Is(list) if list.len() == 2), "got {pc:?}");
     }
+
+    // ──────────────── :has() (CSS Selectors L4 §17.2) ────────────────
+
+    #[test]
+    fn pseudo_has_descendant_implicit() {
+        // `article:has(img)` — implicit descendant.
+        let s = parse("article:has(img) { color: red; }");
+        let head = &s.rules[0].selectors[0].head;
+        assert_eq!(head.parts.len(), 2);
+        assert!(matches!(&head.parts[0], SimpleSelector::Type(t) if t == "article"));
+        match &head.parts[1] {
+            SimpleSelector::PseudoClass(PseudoClass::Has(list)) => {
+                assert_eq!(list.len(), 1);
+                assert!(list[0].combinator.is_none());
+                assert_eq!(list[0].selector.head.parts, vec![SimpleSelector::Type("img".into())]);
+            }
+            other => panic!("expected :has, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_has_with_child_combinator() {
+        // `:has(> .featured)` — прямой child.
+        let s = parse(":has(> .featured) { color: red; }");
+        let pc = pseudo_at(&s, 0, 0, 0);
+        match pc {
+            PseudoClass::Has(list) => {
+                assert_eq!(list.len(), 1);
+                assert_eq!(list[0].combinator, Some(Combinator::Child));
+                assert_eq!(list[0].selector.head.parts, vec![SimpleSelector::Class("featured".into())]);
+            }
+            _ => panic!("expected :has, got {pc:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_has_with_next_sibling() {
+        // `h1:has(+ p)` — h1 followed by p.
+        let s = parse("h1:has(+ p) { color: red; }");
+        let head = &s.rules[0].selectors[0].head;
+        match &head.parts[1] {
+            SimpleSelector::PseudoClass(PseudoClass::Has(list)) => {
+                assert_eq!(list[0].combinator, Some(Combinator::NextSibling));
+            }
+            other => panic!("expected :has, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_has_with_later_sibling() {
+        let s = parse("h1:has(~ p) { color: red; }");
+        let head = &s.rules[0].selectors[0].head;
+        match &head.parts[1] {
+            SimpleSelector::PseudoClass(PseudoClass::Has(list)) => {
+                assert_eq!(list[0].combinator, Some(Combinator::LaterSibling));
+            }
+            other => panic!("expected :has, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_has_multiple_relative_selectors() {
+        // Список через запятую.
+        let s = parse(":has(.a, > .b, + p) { color: red; }");
+        let pc = pseudo_at(&s, 0, 0, 0);
+        match pc {
+            PseudoClass::Has(list) => {
+                assert_eq!(list.len(), 3);
+                assert!(list[0].combinator.is_none());
+                assert_eq!(list[1].combinator, Some(Combinator::Child));
+                assert_eq!(list[2].combinator, Some(Combinator::NextSibling));
+            }
+            _ => panic!("expected :has, got {pc:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_has_empty_falls_back() {
+        let s = parse(":has() { color: red; }");
+        let pc = pseudo_at(&s, 0, 0, 0);
+        assert!(matches!(pc, PseudoClass::Unsupported(n) if n == "has"), "got {pc:?}");
+    }
+
+    #[test]
+    fn specificity_has_takes_max_of_inner() {
+        // :has(.foo, #bar) → max = (1,0,0) от #bar.
+        let s = parse(":has(.foo, #bar) { color: red; }");
+        assert_eq!(
+            s.rules[0].selectors[0].specificity(),
+            Specificity { a: 1, b: 0, c: 0 }
+        );
+    }
+
+    #[test]
+    fn specificity_has_combinator_does_not_count() {
+        // `:has(> .x)` — combinator не contributes specificity, только .x = (0,1,0).
+        let s = parse(":has(> .x) { color: red; }");
+        assert_eq!(
+            s.rules[0].selectors[0].specificity(),
+            Specificity { a: 0, b: 1, c: 0 }
+        );
+    }
 }
