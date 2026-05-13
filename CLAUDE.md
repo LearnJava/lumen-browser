@@ -491,9 +491,10 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 - **Готово:** winit 0.30 с `ApplicationHandler` API. Три режима: `lumen` (пустое окно 1024×720), `lumen <path.html>` (файл → кодировка → HTML → layout → paint), `lumen <http(s)://...>` (сеть через `HttpClient` → те же этапы). Внешний CSS: `<link rel="stylesheet" href="...">` загружается с диска (относительно HTML-файла) или по сети (относительно базового URL). `ResourceBase` enum изолирует логику разрешения относительных URL. Inter-Regular.ttf bundled через `include_bytes!`. Обработчики Resized + RedrawRequested.
 - **Готово (network log):** `StdoutEventSink` — простейший наблюдатель сетевых событий, печатает в stdout: `→ GET <url>`, `← <status> <url>`, `✗ <url> (<reason>)`. Подключается к `HttpClient` в shell, чтобы каждый исходящий байт был виден пользователю — это и есть Phase 0 версия network log из принципа №4. Позже заменится на структурированный UI-логгер (отдельная панель в окне).
-- **Готово (window title):** `extract_title(&Document)` находит первый `<title>` в дереве, склеивает текстовые дети и сжимает whitespace через `split_whitespace().join(" ")` (отрабатывает `\n\t`, длинные пробелы). Энтити уже декодированы tokenizer-ом (RCDATA). `LoadedPage { display_list, title }` возвращается из `load_url` / `load_page` / `render_bytes` — единая точка для будущих расширений (favicon, current URL, scroll state). `window_title(Option<&str>)` форматирует заголовок: с title — `"<title> — Lumen"`, без — fallback на `Lumen <version>`.
-- **Отложено:** вкладки, омнибокс, навигация, истории сессий, scroll, обработка input-событий, динамическое обновление title при навигации (сейчас title подставляется один раз в `resumed`).
-- 19 unit-тестов (resolve_url, ResourceBase::resolve, collect_link_hrefs, extract_title, window_title).
+- **Готово (window title):** `extract_title(&Document)` находит первый `<title>` в дереве, склеивает текстовые дети и сжимает whitespace через `split_whitespace().join(" ")` (отрабатывает `\n\t`, длинные пробелы). Энтити уже декодированы tokenizer-ом (RCDATA). `LoadedPage { display_list, title }` возвращается из `PageSource::load` / `render_bytes` — единая точка для будущих расширений (favicon, current URL, scroll state). `window_title(Option<&str>)` форматирует заголовок: с title — `"<title> — Lumen"`, без — fallback на `Lumen <version>`. `Lumen::reload` обновляет title окна (`window.set_title(...)`) при reload.
+- **Готово (keybindings):** `PageSource` enum (`Empty` / `File(PathBuf)` / `Url(String)`) хранится в `Lumen` вместе с `Arc<dyn EventSink>` — `PageSource::load(sink)` детерминированно перезапускает fetch/parse/layout/paint. `KeyCommand` enum (`Reload` / `Exit`) и `keybinding_for(KeyCode, ModifiersState) -> Option<KeyCommand>` — изолированный от winit маппер shortcuts (F5 / Ctrl+R → Reload, Esc / Ctrl+W → Exit), тестируется юнитами. В `window_event` обрабатывается `WindowEvent::ModifiersChanged` (обновляет `Lumen.modifiers`) и `WindowEvent::KeyboardInput` (по physical_key + state на pressed, без `repeat`-эхо, маппинг через `keybinding_for`). Force-reload (`Ctrl+Shift+R`) намеренно не привязан — нет cache, чтобы было что обходить; зарезервировано на будущее. `Lumen::reload` на `PageSource::Empty` — no-op, на ошибке оставляет предыдущий display_list и логирует stderr.
+- **Отложено:** вкладки, омнибокс, навигация по URL из омнибокса, история сессий, scroll, mouse input, дополнительные shortcuts (Ctrl+L для омнибокса, Ctrl+T для new tab, …).
+- 31 unit-тест (resolve_url, ResourceBase::resolve, collect_link_hrefs, extract_title, window_title, keybinding_for, PageSource::from_arg/describe).
 
 ### `lumen-bench` ✅ (baseline pipeline measurements)
 
@@ -515,7 +516,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 ### Численно
 
-- **Всего тестов в workspace:** 941 (на момент последнего обновления).
+- **Всего тестов в workspace:** 953 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -630,6 +631,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            shell-keybinds         — базовые shortcuts: F5/Ctrl+R = reload, Esc/Ctrl+W = exit. `PageSource` enum в `Lumen` запоминает источник (File/Url/Empty) + Arc<dyn EventSink>, чтобы reload детерминированно повторял fetch/parse/layout/paint и обновлял title окна. `keybinding_for(KeyCode, ModifiersState)` изолирует маппинг от winit и юнит-тестируется. Force-reload (Ctrl+Shift+R) зарезервирован. 12 новых тестов
 *            window-title           — `<title>` из загруженного документа в `window.set_title(...)`. `extract_title` находит первый <title> в DOM и схлопывает whitespace; `LoadedPage { display_list, title }` — единая точка возврата из `load_url` / `load_page` для будущих UX-данных (favicon, scroll и т.д.). Без динамического обновления при навигации — один раз в `resumed`. 8 новых тестов
 *            css-minmax              — CSS min()/max()/clamp() (CSS Values L4 §10.6): расширение CalcNode на Min/Max/Clamp, лексер с Ident-токеном для function names, parse_function_call поверх arg-list (через `,`); nested calc/min/max/clamp в любых комбинациях; clamp(min, val, max) ≡ max(min, min(val, max)). 22 layout теста
 *            png-palette            — PNG color_type 3 (palette) + опц. tRNS: PLTE parser (1..=256 RGB-triples, проверка делимости длины на 3), tRNS parser в палитровом контексте (alpha-таблица, padded до len(PLTE) с 255), expansion индексов в Rgb8 / Rgba8, валидация ordering (PLTE до IDAT, tRNS после PLTE), отказ от PLTE на grayscale color_type 0/4, PaletteError с 8 вариантами. Ограничение Phase 0 — bit_depth=8. 12 unit + 5 integration новых тестов на palette-фикстурах (Python-zlib скрипт)
