@@ -2026,4 +2026,85 @@ mod tests {
         let p = first_element_child(&root);
         assert_eq!(p.style.word_spacing, 0.0);
     }
+
+    // ── font-family ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn font_family_single_name() {
+        let root = lay("<p>x</p>", "p { font-family: Arial; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_family, vec!["Arial".to_string()]);
+    }
+
+    #[test]
+    fn font_family_priority_list() {
+        let root = lay(
+            "<p>x</p>",
+            "p { font-family: Arial, Helvetica, sans-serif; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(
+            p.style.font_family,
+            vec!["Arial".to_string(), "Helvetica".to_string(), "sans-serif".to_string()]
+        );
+    }
+
+    #[test]
+    fn font_family_quoted_with_spaces() {
+        let root = lay(
+            "<p>x</p>",
+            r#"p { font-family: "Times New Roman", serif; }"#,
+        );
+        let p = first_element_child(&root);
+        assert_eq!(
+            p.style.font_family,
+            vec!["Times New Roman".to_string(), "serif".to_string()]
+        );
+    }
+
+    #[test]
+    fn font_family_unquoted_multiword() {
+        // Без кавычек тоже валидно для имён без запятых, whitespace схлопывается.
+        let root = lay(
+            "<p>x</p>",
+            "p { font-family: Times New Roman, serif; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(
+            p.style.font_family,
+            vec!["Times New Roman".to_string(), "serif".to_string()]
+        );
+    }
+
+    #[test]
+    fn font_family_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-family: Verdana, sans-serif; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(p.style.font_family, div.style.font_family);
+        assert_eq!(p.style.font_family[0], "Verdana");
+    }
+
+    #[test]
+    fn font_family_default_empty() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert!(p.style.font_family.is_empty());
+    }
+
+    #[test]
+    fn font_family_single_quotes_also_work() {
+        let root = lay(
+            "<p>x</p>",
+            "p { font-family: 'Open Sans', sans-serif; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(
+            p.style.font_family,
+            vec!["Open Sans".to_string(), "sans-serif".to_string()]
+        );
+    }
 }
