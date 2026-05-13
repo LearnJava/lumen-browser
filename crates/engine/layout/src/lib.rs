@@ -3636,4 +3636,159 @@ mod tests {
         );
         assert_eq!(c, Color { r: 255, g: 0, b: 0, a: 255 });
     }
+
+    // ──────── @property syntax-валидация (CSS Properties and Values L1 §2) ────────
+
+    fn lay_get_custom_prop(html: &str, css: &str, key: &str) -> Option<String> {
+        let root = lay(html, css);
+        let p = root
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("first block");
+        p.style.custom_props.get(key).cloned()
+    }
+
+    #[test]
+    fn property_syntax_universal_accepts_anything() {
+        // syntax: '*' — любое значение проходит, в т.ч. бессмысленное.
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --foo { syntax: '*'; inherits: false; initial-value: 0; } p { --foo: garbage; }",
+            "--foo",
+        );
+        assert_eq!(v, Some("garbage".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_length_accepts_px() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --gap { syntax: '<length>'; inherits: false; initial-value: 0px; } p { --gap: 10px; }",
+            "--gap",
+        );
+        assert_eq!(v, Some("10px".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_length_rejects_color() {
+        // syntax: '<length>' + value=red → invalid; declaration пропускается,
+        // остаётся initial-value '0px'.
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --gap { syntax: '<length>'; inherits: false; initial-value: 0px; } p { --gap: red; }",
+            "--gap",
+        );
+        assert_eq!(v, Some("0px".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_length_rejects_percentage() {
+        // <length> НЕ принимает `%` — это <percentage>.
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --gap { syntax: '<length>'; inherits: false; initial-value: 0px; } p { --gap: 50%; }",
+            "--gap",
+        );
+        assert_eq!(v, Some("0px".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_color_accepts_named_and_hex() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --bg { syntax: '<color>'; inherits: false; initial-value: black; } p { --bg: red; }",
+            "--bg",
+        );
+        assert_eq!(v, Some("red".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_color_rejects_length() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --bg { syntax: '<color>'; inherits: false; initial-value: black; } p { --bg: 10px; }",
+            "--bg",
+        );
+        assert_eq!(v, Some("black".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_union_length_or_percentage() {
+        // `<length-percentage>` принимает оба.
+        let v1 = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --w { syntax: '<length-percentage>'; inherits: false; initial-value: 0px; } p { --w: 50%; }",
+            "--w",
+        );
+        assert_eq!(v1, Some("50%".to_string()));
+        let v2 = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --w { syntax: '<length-percentage>'; inherits: false; initial-value: 0px; } p { --w: 10rem; }",
+            "--w",
+        );
+        assert_eq!(v2, Some("10rem".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_or_alternative() {
+        // syntax с `|`: '<length> | <color>'. Оба подходят.
+        let v_len = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --x { syntax: '<length> | <color>'; inherits: false; initial-value: 0px; } p { --x: 5px; }",
+            "--x",
+        );
+        assert_eq!(v_len, Some("5px".to_string()));
+        let v_color = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --x { syntax: '<length> | <color>'; inherits: false; initial-value: 0px; } p { --x: blue; }",
+            "--x",
+        );
+        assert_eq!(v_color, Some("blue".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_skips_value_with_var() {
+        // value содержит `var(` — пропускается без валидации, потому что
+        // expand var() происходит позже.
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --gap { syntax: '<length>'; inherits: false; initial-value: 0px; } p { --base: 7px; --gap: var(--base); }",
+            "--gap",
+        );
+        // var(--base) сохранён как есть; resolve будет при apply_declaration.
+        assert_eq!(v, Some("var(--base)".to_string()));
+    }
+
+    #[test]
+    fn property_invalid_initial_value_skipped() {
+        // initial-value не подходит под syntax → не подставляется. Без
+        // декларации потомка свойство остаётся вне custom_props.
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --gap { syntax: '<length>'; inherits: false; initial-value: red; }",
+            "--gap",
+        );
+        assert_eq!(v, None);
+    }
+
+    #[test]
+    fn property_validate_integer_accepts_signed() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --n { syntax: '<integer>'; inherits: false; initial-value: 0; } p { --n: -42; }",
+            "--n",
+        );
+        assert_eq!(v, Some("-42".to_string()));
+    }
+
+    #[test]
+    fn property_validate_integer_rejects_float() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --n { syntax: '<integer>'; inherits: false; initial-value: 0; } p { --n: 3.14; }",
+            "--n",
+        );
+        assert_eq!(v, Some("0".to_string()));
+    }
 }
