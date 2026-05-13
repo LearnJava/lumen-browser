@@ -83,6 +83,10 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
         Display::Block => {}
         Display::Inline => out.push_str(" display=inline"),
         Display::None => out.push_str(" display=none"),
+        Display::Flex => out.push_str(" display=flex"),
+        Display::InlineFlex => out.push_str(" display=inline-flex"),
+        Display::Grid => out.push_str(" display=grid"),
+        Display::InlineGrid => out.push_str(" display=inline-grid"),
     }
     if let Some(w) = s.width {
         let _ = write!(out, " w={w:.2}");
