@@ -3108,4 +3108,74 @@ mod tests {
         assert_eq!(div.style.accent_color, p.style.accent_color);
         assert!(p.style.accent_color.is_some());
     }
+
+    // ── :has() (CSS Selectors L4 §17.2) ─────────────────────────────────────
+
+    /// `div:has(p)` — div, содержащий p в поддереве (через span).
+    #[test]
+    fn has_implicit_descendant_matches() {
+        let root = lay(
+            "<div><span><p>x</p></span></div><div><span>nope</span></div>",
+            "div:has(p) { color: red; }",
+        );
+        let blocks: Vec<_> = root.children.iter()
+            .filter(|c| matches!(c.kind, BoxKind::Block))
+            .collect();
+        assert_eq!(blocks[0].style.color.r, 255, "первый div должен сматчить");
+        assert_eq!(blocks[1].style.color.r, 0, "второй div без p — нет");
+    }
+
+    /// `div:has(> .child)` — direct child only.
+    #[test]
+    fn has_child_combinator() {
+        let root = lay(
+            r#"<div><p class="child">x</p></div><div><span><p class="child">x</p></span></div>"#,
+            "div:has(> .child) { color: red; }",
+        );
+        let blocks: Vec<_> = root.children.iter()
+            .filter(|c| matches!(c.kind, BoxKind::Block))
+            .collect();
+        assert_eq!(blocks[0].style.color.r, 255);
+        assert_eq!(blocks[1].style.color.r, 0);
+    }
+
+    /// `h2:has(+ p)` — h2 followed by p. Через compute_style напрямую.
+    #[test]
+    fn has_next_sibling() {
+        let doc = lumen_html_parser::parse("<div><h2>A</h2><p>x</p></div><div><h2>B</h2></div>");
+        let sheet = lumen_css_parser::parse("h2:has(+ p) { color: red; }");
+        let root_style = ComputedStyle::root();
+        let div1 = doc.get(doc.root()).children[0];
+        let h2_a = doc.get(div1).children[0];
+        let div2 = doc.get(doc.root()).children[1];
+        let h2_b = doc.get(div2).children[0];
+        let style_a = crate::style::compute_style(
+            &doc, h2_a, &sheet, &root_style, Size::new(800.0, 600.0));
+        let style_b = crate::style::compute_style(
+            &doc, h2_b, &sheet, &root_style, Size::new(800.0, 600.0));
+        assert_eq!(style_a.color.r, 255, "h2 + p должен сматчить");
+        assert_eq!(style_b.color.r, 0, "h2 без p после — нет");
+    }
+
+    /// `:has()` НЕ матчит сам node — descendants only.
+    #[test]
+    fn has_does_not_match_self() {
+        let root = lay(
+            "<p>x</p>",
+            "p:has(p) { color: red; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.color.r, 0);
+    }
+
+    /// `:has(.a, .b)` — список (OR).
+    #[test]
+    fn has_list_or_match() {
+        let root = lay(
+            r#"<div><span class="b">x</span></div>"#,
+            ":has(.a, .b) { color: red; }",
+        );
+        let div = first_element_child(&root);
+        assert_eq!(div.style.color.r, 255);
+    }
 }
