@@ -20,8 +20,8 @@ pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, 
 pub use snapshot::serialize_layout_tree;
 pub use style::{
     BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStyle,
-    FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow, TextShadow, TextTransform,
-    Visibility, WhiteSpace,
+    FontVariant, FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
+    TextTransform, Visibility, WhiteSpace,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -2927,5 +2927,53 @@ mod tests {
             }
         }
         None
+    }
+
+    // ── font-variant (CSS Fonts L4 §6, упрощённый) ──────────────────────────
+
+    #[test]
+    fn font_variant_default_normal() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_variant, FontVariant::Normal);
+    }
+
+    #[test]
+    fn font_variant_small_caps_parsed() {
+        let root = lay("<p>x</p>", "p { font-variant: small-caps; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_variant, FontVariant::SmallCaps);
+    }
+
+    #[test]
+    fn font_variant_caps_alias() {
+        // CSS Fonts L4 §6.4: font-variant-caps — отдельное property,
+        // парсится тем же кодом для small-caps значения.
+        let root = lay("<p>x</p>", "p { font-variant-caps: small-caps; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_variant, FontVariant::SmallCaps);
+    }
+
+    #[test]
+    fn font_variant_normal_keyword_resets() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-variant: small-caps; } p { font-variant: normal; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.font_variant, FontVariant::SmallCaps);
+        assert_eq!(p.style.font_variant, FontVariant::Normal);
+    }
+
+    #[test]
+    fn font_variant_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-variant: small-caps; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(p.style.font_variant, FontVariant::SmallCaps);
     }
 }
