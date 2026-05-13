@@ -12,7 +12,7 @@
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
 use crate::style::{
     BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, FontWeight, TextAlign,
-    TextTransform, WhiteSpace,
+    TextTransform, Visibility, WhiteSpace,
 };
 use std::fmt::Write;
 
@@ -225,6 +225,15 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     }
     if s.outline_offset.abs() > 0.01 {
         let _ = write!(out, " outline-offset={:.2}", s.outline_offset);
+    }
+    match s.visibility {
+        Visibility::Visible => {}
+        Visibility::Hidden => {
+            let _ = write!(out, " visibility=hidden");
+        }
+        Visibility::Collapse => {
+            let _ = write!(out, " visibility=collapse");
+        }
     }
 }
 

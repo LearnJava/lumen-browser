@@ -37,6 +37,21 @@ pub enum TextAlign {
     Right,
 }
 
+/// CSS Display L3 §4 — `visibility`. Inherited.
+///
+/// В отличие от `display: none`, элемент с `visibility: hidden` участвует
+/// в layout (занимает место), но не рисуется. `Collapse` для table-row
+/// эквивалентен `display: none` (CSS spec); вне таблиц ведёт себя как
+/// `Hidden`. Inheritance — ключевое отличие от display, поэтому дочерний
+/// элемент может явно вернуть себя через `visibility: visible`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Visibility {
+    #[default]
+    Visible,
+    Hidden,
+    Collapse,
+}
+
 /// CSS Text Module L3 §3.1 — `white-space`. Inherited.
 ///
 /// Управляет collapse-ом whitespace и переносами строк. Phase 0:
@@ -278,6 +293,8 @@ pub struct ComputedStyle {
     pub border_bottom_color: Option<Color>,
     pub border_left_color: Option<Color>,
     pub box_sizing: BoxSizing,
+    /// CSS Display L3 §4 — visibility. Inherited.
+    pub visibility: Visibility,
     /// CSS Color L3 §3.2 — opacity (0.0..=1.0). Не наследуется. Работает
     /// как alpha всего слоя (включая фон, бордер, текст и потомков). В
     /// Phase 0 layout только хранит — paint пока не применяет alpha
@@ -351,6 +368,7 @@ impl ComputedStyle {
             border_bottom_color: None,
             border_left_color: None,
             box_sizing: BoxSizing::ContentBox,
+            visibility: Visibility::Visible,
             opacity: 1.0,
             outline_width: 0.0,
             outline_style: BorderStyle::None,
@@ -408,6 +426,8 @@ pub fn compute_style(
         border_bottom_color: None,
         border_left_color: None,
         box_sizing: BoxSizing::ContentBox,
+        // Inherited (CSS Display L3 §4).
+        visibility: inherited.visibility,
         opacity: 1.0,
         outline_width: 0.0,
         outline_style: BorderStyle::None,
@@ -1171,6 +1191,14 @@ fn apply_declaration(
                 "normal" => WhiteSpace::Normal,
                 "nowrap" => WhiteSpace::Nowrap,
                 _ => style.white_space,
+            };
+        }
+        "visibility" => {
+            style.visibility = match val.trim() {
+                "visible" => Visibility::Visible,
+                "hidden" => Visibility::Hidden,
+                "collapse" => Visibility::Collapse,
+                _ => style.visibility,
             };
         }
         "outline" => {
