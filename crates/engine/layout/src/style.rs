@@ -461,6 +461,7 @@ impl ComputedStyle {
             && (self.line_height - other.line_height).abs() < f32::EPSILON
             && self.font_style == other.font_style
             && self.font_weight == other.font_weight
+            && self.font_variant == other.font_variant
             && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
             && (self.word_spacing - other.word_spacing).abs() < f32::EPSILON
             && self.text_decoration_line == other.text_decoration_line
@@ -2235,6 +2236,8 @@ fn parse_function_color(s: &str) -> Option<Color> {
         (ColorFn::Hsl, b)
     } else if let Some(b) = lower.strip_prefix("hsl(").and_then(|t| t.strip_suffix(')')) {
         (ColorFn::Hsl, b)
+    } else if let Some(b) = lower.strip_prefix("oklch(").and_then(|t| t.strip_suffix(')')) {
+        (ColorFn::Oklch, b)
     } else {
         return None;
     };
@@ -2261,13 +2264,75 @@ fn parse_function_color(s: &str) -> Option<Color> {
             let (r, g, b) = hsl_to_rgb(h, s, l);
             Some(Color { r, g, b, a: alpha })
         }
+        ColorFn::Oklch => {
+            // L: 0..1 как число или 0..100% (в spec L=0%..100% соответствует 0..1).
+            let l = parse_oklch_lightness(&parts[0])?;
+            // C: число или процент (100% = 0.4 по spec L4 §10.3 reference range).
+            let c = parse_oklch_chroma(&parts[1])?;
+            let h = parse_hue_component(&parts[2])?;
+            let (r, g, b) = oklch_to_srgb(l, c, h);
+            Some(Color { r, g, b, a: alpha })
+        }
     }
 }
 
 enum ColorFn {
     Rgb,
     Hsl,
-    // CSS4 расширения (lab / lch / oklab / oklch / color()) — не реализуем.
+    Oklch,
+    // Прочие CSS4 расширения (lab / lch / oklab / color()) — позже.
+}
+
+/// Парсит lightness для oklch: число 0..1 или процент 0..100% → 0..1.
+fn parse_oklch_lightness(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        return pct.trim().parse::<f32>().ok().map(|p| (p / 100.0).clamp(0.0, 1.0));
+    }
+    s.parse::<f32>().ok().map(|v| v.clamp(0.0, 1.0))
+}
+
+/// Парсит chroma для oklch: число (0..~0.4 типично) или процент (100% = 0.4).
+fn parse_oklch_chroma(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        // CSS Color L4 §10.3: 100% = 0.4.
+        return pct.trim().parse::<f32>().ok().map(|p| (p / 100.0 * 0.4).max(0.0));
+    }
+    s.parse::<f32>().ok().map(|v| v.max(0.0))
+}
+
+/// CSS Color L4 §10.3: OKLCH → OKLab → linear sRGB → sRGB (gamma-encoded).
+/// `l` ∈ [0,1], `c` ≥ 0, `h_deg` в градусах.
+fn oklch_to_srgb(l: f32, c: f32, h_deg: f32) -> (u8, u8, u8) {
+    // OKLCH → OKLab.
+    let h_rad = h_deg.to_radians();
+    let a = c * h_rad.cos();
+    let b = c * h_rad.sin();
+
+    // OKLab → linear LMS → linear sRGB. Константы из CSS Color L4 §10.3,
+    // округлены до f32-precision.
+    let l_ = l + 0.396_337_77 * a + 0.215_803_76 * b;
+    let m_ = l - 0.105_561_35 * a - 0.063_854_17 * b;
+    let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
+    let l3 = l_ * l_ * l_;
+    let m3 = m_ * m_ * m_;
+    let s3 = s_ * s_ * s_;
+    let lr = 4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3;
+    let lg = -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3;
+    let lb = -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3;
+
+    // Linear sRGB → gamma sRGB (per IEC 61966-2-1).
+    fn encode(c: f32) -> u8 {
+        let c = c.clamp(0.0, 1.0);
+        let v = if c <= 0.003_130_8 {
+            12.92 * c
+        } else {
+            1.055 * c.powf(1.0 / 2.4) - 0.055
+        };
+        clamp_byte(v * 255.0)
+    }
+    (encode(lr), encode(lg), encode(lb))
 }
 
 /// Разбивает тело функции по запятой или whitespace (CSS4 разрешает оба),
@@ -2522,6 +2587,80 @@ mod tests {
         assert_eq!(c.g, 0);
         assert_eq!(c.b, 0);
         assert!((c.a as i32 - 128).abs() <= 1);
+    }
+
+    // ── oklch() (CSS Color L4 §10.3) ───────────────────────────────────────
+
+    /// Помощник: проверка близости каналов с допуском (округление 8-bit
+    /// + конверсии в float дают ~±2).
+    fn near(a: u8, b: u8, tol: i32) -> bool {
+        (a as i32 - b as i32).abs() <= tol
+    }
+
+    #[test]
+    fn oklch_white() {
+        // L=1, C=0 — белый. Округление через linear→gamma.
+        let c = parse_color("oklch(1 0 0)").unwrap();
+        assert!(near(c.r, 255, 2), "r = {}", c.r);
+        assert!(near(c.g, 255, 2));
+        assert!(near(c.b, 255, 2));
+        assert_eq!(c.a, 255);
+    }
+
+    #[test]
+    fn oklch_black() {
+        let c = parse_color("oklch(0 0 0)").unwrap();
+        assert!(near(c.r, 0, 2));
+        assert!(near(c.g, 0, 2));
+        assert!(near(c.b, 0, 2));
+    }
+
+    #[test]
+    fn oklch_red_approx() {
+        // sRGB красный в oklch ≈ oklch(0.628 0.258 29.23deg). Округление f32
+        // конверсий — даём допуск ±5.
+        let c = parse_color("oklch(0.628 0.258 29.23)").unwrap();
+        assert!(near(c.r, 255, 5), "r = {}", c.r);
+        assert!(near(c.g, 0, 10), "g = {}", c.g);
+        assert!(near(c.b, 0, 10), "b = {}", c.b);
+    }
+
+    #[test]
+    fn oklch_lightness_as_percent() {
+        // 100% = L=1 → белый.
+        let pct = parse_color("oklch(100% 0 0)").unwrap();
+        let num = parse_color("oklch(1 0 0)").unwrap();
+        assert_eq!(pct, num);
+    }
+
+    #[test]
+    fn oklch_with_alpha_slash() {
+        let c = parse_color("oklch(0.5 0 0 / 0.5)").unwrap();
+        assert!((c.a as i32 - 128).abs() <= 1, "a = {}", c.a);
+    }
+
+    #[test]
+    fn oklch_with_hue_in_turn() {
+        // Hue в turn — должен работать как у hsl().
+        // 0.5turn = 180deg.
+        let by_turn = parse_color("oklch(0.6 0.15 0.5turn)").unwrap();
+        let by_deg = parse_color("oklch(0.6 0.15 180)").unwrap();
+        assert_eq!(by_turn, by_deg);
+    }
+
+    #[test]
+    fn oklch_chroma_clamp_negative_to_zero() {
+        // Отрицательная chroma не имеет смысла — clamp на 0.
+        let c = parse_color("oklch(0.5 -0.1 0)").unwrap();
+        // Должен быть серый (chroma=0).
+        assert_eq!(c.r, c.g);
+        assert_eq!(c.g, c.b);
+    }
+
+    #[test]
+    fn oklch_invalid_returns_none() {
+        assert_eq!(parse_color("oklch(0.5)"), None);
+        assert_eq!(parse_color("oklch(abc def ghi)"), None);
     }
 
     #[test]
