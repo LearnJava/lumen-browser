@@ -12,11 +12,13 @@
 //! Оба бэкенда соблюдают одинаковую семантику origin-партиционирования
 //! (`None` и `Some("")` — один namespace) и реализуют тот же trait.
 
+pub mod bookmarks;
 pub mod cookies;
 pub mod history;
 pub mod sqlite_store;
 pub mod store;
 
+pub use bookmarks::{Bookmark, Bookmarks};
 pub use cookies::{parse_set_cookie, Cookie, CookieJar, SameSite};
 pub use history::{History, HistoryEntry};
 pub use sqlite_store::SqliteStorage;
