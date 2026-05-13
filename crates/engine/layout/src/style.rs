@@ -110,6 +110,19 @@ pub enum Cursor {
     ZoomOut,
 }
 
+/// CSS UI L4 §10.1 — `text-overflow`. Не наследуется.
+///
+/// Применяется к содержимому, которое не помещается в коробку — то есть
+/// требует overflow != Visible (обычно `hidden`/`clip`) И отсутствие
+/// переноса (white-space: nowrap или overflow на oneline). Без этих
+/// условий не имеет эффекта.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextOverflow {
+    #[default]
+    Clip,
+    Ellipsis,
+}
+
 /// CSS Overflow L3 — `overflow`. Не наследуется.
 ///
 /// `Visible` — содержимое выходит за пределы коробки и видно. `Hidden` —
@@ -403,6 +416,8 @@ pub struct ComputedStyle {
     /// CSS Overflow L3 — отдельные поля для X и Y. Не наследуются.
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
+    /// CSS UI L4 §10.1 — text-overflow. Не наследуется.
+    pub text_overflow: TextOverflow,
     /// CSS Color L3 §3.2 — opacity (0.0..=1.0). Не наследуется. Работает
     /// как alpha всего слоя (включая фон, бордер, текст и потомков). В
     /// Phase 0 layout только хранит — paint пока не применяет alpha
@@ -486,6 +501,7 @@ impl ComputedStyle {
             text_shadow: Vec::new(),
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
+            text_overflow: TextOverflow::Clip,
             opacity: 1.0,
             outline_width: 0.0,
             outline_style: BorderStyle::None,
@@ -558,6 +574,7 @@ pub fn compute_style(
         box_shadow: Vec::new(),
         overflow_x: Overflow::Visible,
         overflow_y: Overflow::Visible,
+        text_overflow: TextOverflow::Clip,
         opacity: 1.0,
         outline_width: 0.0,
         outline_style: BorderStyle::None,
@@ -1532,6 +1549,15 @@ fn apply_declaration(
             if let Some(o) = parse_overflow_kw(val.trim()) {
                 style.overflow_y = o;
             }
+        }
+        "text-overflow" => {
+            // CSS UI L4: clip | ellipsis. <string> (custom marker) и
+            // two-value формы не поддерживаем в Phase 0.
+            style.text_overflow = match val.split_whitespace().next() {
+                Some("clip") => TextOverflow::Clip,
+                Some("ellipsis") => TextOverflow::Ellipsis,
+                _ => style.text_overflow,
+            };
         }
         "cursor" => {
             // CSS UI L4 §8.1: список url(), затем обязательный keyword.

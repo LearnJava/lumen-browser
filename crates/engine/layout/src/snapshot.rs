@@ -12,7 +12,7 @@
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
 use crate::style::{
     BorderStyle, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStyle, FontWeight, Overflow,
-    TextAlign, TextTransform, Visibility, WhiteSpace,
+    TextAlign, TextOverflow, TextTransform, Visibility, WhiteSpace,
 };
 use std::fmt::Write;
 
@@ -242,6 +242,9 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
             overflow_str(s.overflow_x),
             overflow_str(s.overflow_y)
         );
+    }
+    if s.text_overflow == TextOverflow::Ellipsis {
+        let _ = write!(out, " text-overflow=ellipsis");
     }
     if s.cursor != Cursor::Auto {
         let _ = write!(out, " cursor={:?}", s.cursor);

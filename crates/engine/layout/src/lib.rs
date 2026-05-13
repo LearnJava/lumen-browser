@@ -20,8 +20,8 @@ pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, 
 pub use snapshot::serialize_layout_tree;
 pub use style::{
     BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStyle,
-    FontWeight, Overflow, TextAlign, TextDecorationLine, TextShadow, TextTransform, Visibility,
-    WhiteSpace,
+    FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow, TextShadow, TextTransform,
+    Visibility, WhiteSpace,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -2790,5 +2790,47 @@ mod tests {
         let p = first_element_child(div);
         assert_eq!(div.style.border_top_left_radius, 5.0);
         assert_eq!(p.style.border_top_left_radius, 0.0);
+    }
+
+    // ── text-overflow (CSS UI L4 §10.1) ─────────────────────────────────────
+
+    #[test]
+    fn text_overflow_default_clip() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.text_overflow, TextOverflow::Clip);
+    }
+
+    #[test]
+    fn text_overflow_ellipsis_parsed() {
+        let root = lay("<p>x</p>", "p { text-overflow: ellipsis; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.text_overflow, TextOverflow::Ellipsis);
+    }
+
+    #[test]
+    fn text_overflow_clip_explicit() {
+        let root = lay("<p>x</p>", "p { text-overflow: clip; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.text_overflow, TextOverflow::Clip);
+    }
+
+    #[test]
+    fn text_overflow_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { text-overflow: ellipsis; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.text_overflow, TextOverflow::Ellipsis);
+        assert_eq!(p.style.text_overflow, TextOverflow::Clip);
+    }
+
+    #[test]
+    fn text_overflow_unknown_keeps_default() {
+        let root = lay("<p>x</p>", "p { text-overflow: nonsense; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.text_overflow, TextOverflow::Clip);
     }
 }
