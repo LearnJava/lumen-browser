@@ -317,6 +317,24 @@ pub struct Stylesheet {
     /// в каскаде сохраняется через position в `Vec` (но фактическая
     /// специфика media rules в Phase 0 layout-у мерджится «как обычные»).
     pub media_rules: Vec<MediaRule>,
+    /// `@import url("...");` декларации. Парсер собирает URL и опц.
+    /// media-query (`@import url("a") screen and (min-width: 600px);`).
+    /// Сам fetch и инкорпорация в каскад — задача потребителя (shell),
+    /// потому что это требует сетевой/файловой загрузки. Phase 0:
+    /// парсер только извлекает список, fetch отложен.
+    pub imports: Vec<ImportRule>,
+}
+
+/// `@import` декларация. Per CSS Cascade L4 §6.5 + Media Queries L4:
+/// `@import url("path");` или `@import url("path") <media-query>;`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportRule {
+    /// URL для загрузки. Хранится как есть (без resolve относительно base).
+    pub url: String,
+    /// Опциональный media query — стиль применим только если query
+    /// matches. Пустой Vec в `clauses` (=default) трактуется как
+    /// «всегда применять» (= `@import url("...")` без media-фильтра).
+    pub media: MediaQuery,
 }
 
 /// Группа CSS-правил, вложенных в `@media`-блок.
@@ -448,6 +466,7 @@ pub fn parse(input: &str) -> Stylesheet {
 enum AtRuleOutcome {
     Property(PropertyRule),
     Media(MediaRule),
+    Import(ImportRule),
     None,
 }
 
@@ -611,6 +630,7 @@ impl<'a> Parser<'a> {
         let mut rules = Vec::new();
         let mut properties = Vec::new();
         let mut media_rules = Vec::new();
+        let mut imports = Vec::new();
         loop {
             self.skip_ws_and_comments();
             match self.peek() {
@@ -618,6 +638,7 @@ impl<'a> Parser<'a> {
                 Some('@') => match self.parse_at_rule() {
                     AtRuleOutcome::Property(p) => properties.push(p),
                     AtRuleOutcome::Media(m) => media_rules.push(m),
+                    AtRuleOutcome::Import(i) => imports.push(i),
                     AtRuleOutcome::None => {}
                 },
                 Some(_) => {
@@ -636,6 +657,7 @@ impl<'a> Parser<'a> {
             rules,
             properties,
             media_rules,
+            imports,
         }
     }
 
@@ -653,10 +675,73 @@ impl<'a> Parser<'a> {
         if name.eq_ignore_ascii_case("media") {
             return self.parse_media_rule().map_or(AtRuleOutcome::None, AtRuleOutcome::Media);
         }
+        if name.eq_ignore_ascii_case("import") {
+            return self.parse_import_body().map_or(AtRuleOutcome::None, AtRuleOutcome::Import);
+        }
         // Прочее @-правило: откатимся к '@' и пропустим как раньше.
         self.pos = start;
         self.skip_at_rule();
         AtRuleOutcome::None
+    }
+
+    /// Парсит тело `@import url("...") [<media-query>];` или
+    /// `@import "..." [<media-query>];`. Заканчивается на `;` (имеет
+    /// statement-form, не блочную). Возвращает None если синтаксис
+    /// нарушен; в любом случае съедает до `;` (или EOF).
+    fn parse_import_body(&mut self) -> Option<ImportRule> {
+        self.skip_ws_and_comments();
+        // URL: либо `url("...")` / `url('...')` / `url(...)`, либо просто `"..."` / `'...'`.
+        let url = self.parse_import_url()?;
+        self.skip_ws_and_comments();
+        // Опциональный media-query до `;`.
+        let media_start = self.pos;
+        while let Some(c) = self.peek() {
+            if c == ';' || c == '}' || c == '{' {
+                break;
+            }
+            self.consume();
+        }
+        let media_str = self.input[media_start..self.pos].trim();
+        let media = parse_media_query(media_str);
+        // Сжираем `;` если есть.
+        if self.peek() == Some(';') {
+            self.consume();
+        }
+        Some(ImportRule { url, media })
+    }
+
+    /// Парсит URL для `@import` — `url("...")`, `url(...)`, или `"..."`/`'...'`.
+    /// Позиция после успешного парсинга стоит ПОСЛЕ закрывающей кавычки/скобки.
+    fn parse_import_url(&mut self) -> Option<String> {
+        let rest = self.rest();
+        if let Some(after) = rest.strip_prefix("url(") {
+            // Внутри parentheses: опц. quoted-string или unquoted-URL.
+            let close_idx = after.find(')')?;
+            let inner = &after[..close_idx];
+            let url = inner.trim().trim_matches(['"', '\''].as_ref()).to_string();
+            self.pos += 4 + close_idx + 1;
+            return Some(url);
+        }
+        // Plain string без url().
+        match self.peek()? {
+            '"' | '\'' => {
+                let quote = self.consume()?;
+                let start = self.pos;
+                while let Some(c) = self.peek() {
+                    if c == quote {
+                        break;
+                    }
+                    self.consume();
+                }
+                if self.peek() != Some(quote) {
+                    return None;
+                }
+                let url = self.input[start..self.pos].to_string();
+                self.consume();
+                Some(url)
+            }
+            _ => None,
+        }
     }
 
     /// Парсит тело `@media <query> { <rules> }`. Грамматика query
@@ -2609,5 +2694,87 @@ mod tests {
         let s = parse("@property --c { syntax: '*'; inherits: false; initial-value: red; }");
         assert_eq!(s.properties.len(), 1);
         assert_eq!(s.properties[0].syntax, "*");
+    }
+
+    // ── @import ──
+
+    #[test]
+    fn at_import_url_double_quoted() {
+        let s = parse("@import url(\"theme.css\");");
+        assert_eq!(s.imports.len(), 1);
+        assert_eq!(s.imports[0].url, "theme.css");
+        assert!(s.imports[0].media.clauses.is_empty());
+    }
+
+    #[test]
+    fn at_import_url_single_quoted() {
+        let s = parse("@import url('theme.css');");
+        assert_eq!(s.imports[0].url, "theme.css");
+    }
+
+    #[test]
+    fn at_import_url_unquoted() {
+        let s = parse("@import url(theme.css);");
+        assert_eq!(s.imports[0].url, "theme.css");
+    }
+
+    #[test]
+    fn at_import_bare_string() {
+        let s = parse(r#"@import "theme.css";"#);
+        assert_eq!(s.imports[0].url, "theme.css");
+    }
+
+    #[test]
+    fn at_import_with_media_query() {
+        let s = parse(r#"@import url("print.css") print;"#);
+        assert_eq!(s.imports.len(), 1);
+        assert_eq!(s.imports[0].url, "print.css");
+        assert_eq!(s.imports[0].media.clauses.len(), 1);
+        assert_eq!(s.imports[0].media.clauses[0].len(), 1);
+        if let MediaCondition::MediaType(t) = &s.imports[0].media.clauses[0][0] {
+            assert_eq!(t, "print");
+        } else {
+            panic!("expected MediaType");
+        }
+    }
+
+    #[test]
+    fn at_import_with_complex_media() {
+        let s = parse(r#"@import url("mobile.css") screen and (max-width: 600px);"#);
+        assert_eq!(s.imports[0].url, "mobile.css");
+        assert_eq!(s.imports[0].media.clauses.len(), 1);
+        // Должны быть MediaType("screen") и Feature(MaxWidth(600)).
+        let clause = &s.imports[0].media.clauses[0];
+        assert_eq!(clause.len(), 2);
+    }
+
+    #[test]
+    fn at_import_multiple_in_stylesheet() {
+        let s = parse(r#"
+            @import url("a.css");
+            @import "b.css";
+            @import url("c.css") screen;
+            p { color: red; }
+        "#);
+        assert_eq!(s.imports.len(), 3);
+        assert_eq!(s.imports[0].url, "a.css");
+        assert_eq!(s.imports[1].url, "b.css");
+        assert_eq!(s.imports[2].url, "c.css");
+        // Обычное правило тоже должно распарситься.
+        assert_eq!(s.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_import_invalid_syntax_skipped() {
+        // Без URL — должна пропуститься, не сломать остаток.
+        let s = parse("@import garbage; p { color: red; }");
+        assert!(s.imports.is_empty());
+        assert_eq!(s.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_import_cyrillic_url() {
+        let s = parse(r#"@import url("стили.css");"#);
+        assert_eq!(s.imports[0].url, "стили.css");
     }
 }
