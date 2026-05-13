@@ -2235,4 +2235,75 @@ mod tests {
         let p = first_element_child(&root);
         assert!((p.style.opacity - 1.0).abs() < f32::EPSILON);
     }
+
+    // ── outline (CSS UI L4 §3) ──────────────────────────────────────────────
+
+    #[test]
+    fn outline_shorthand() {
+        let root = lay("<p>x</p>", "p { outline: 3px dashed red; }");
+        let p = first_element_child(&root);
+        assert!((p.style.outline_width - 3.0).abs() < 0.01);
+        assert_eq!(p.style.outline_style, BorderStyle::Dashed);
+        assert_eq!(p.style.outline_color.unwrap().r, 255);
+    }
+
+    #[test]
+    fn outline_individual_props() {
+        let root = lay(
+            "<p>x</p>",
+            "p { outline-width: 5px; outline-style: solid; outline-color: blue; }",
+        );
+        let p = first_element_child(&root);
+        assert!((p.style.outline_width - 5.0).abs() < 0.01);
+        assert_eq!(p.style.outline_style, BorderStyle::Solid);
+        assert_eq!(p.style.outline_color.unwrap().b, 255);
+    }
+
+    #[test]
+    fn outline_offset_positive_and_negative() {
+        let p_root = lay("<p>x</p>", "p { outline-offset: 10px; }");
+        let p = first_element_child(&p_root);
+        assert!((p.style.outline_offset - 10.0).abs() < 0.01);
+
+        let n_root = lay("<p>x</p>", "p { outline-offset: -3px; }");
+        let n = first_element_child(&n_root);
+        assert!((n.style.outline_offset - (-3.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn outline_does_not_affect_box_width() {
+        // Ключевое отличие от border: outline не занимает места в коробке.
+        // Бокс с outline должен иметь ту же ширину/высоту, что без него.
+        let with = lay("<p>x</p>", "p { outline: 10px solid red; }");
+        let without = lay("<p>x</p>", "");
+
+        let p_with = first_element_child(&with);
+        let p_without = first_element_child(&without);
+        assert!((p_with.rect.width - p_without.rect.width).abs() < 0.01,
+            "outline не должен менять width: {} vs {}",
+            p_with.rect.width, p_without.rect.width);
+        assert!((p_with.rect.height - p_without.rect.height).abs() < 0.01);
+    }
+
+    #[test]
+    fn outline_default_invisible() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.outline_width, 0.0);
+        assert_eq!(p.style.outline_style, BorderStyle::None);
+        assert!(p.style.outline_color.is_none());
+        assert_eq!(p.style.outline_offset, 0.0);
+    }
+
+    #[test]
+    fn outline_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { outline: 2px solid red; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(div.style.outline_width > 0.0);
+        assert_eq!(p.style.outline_width, 0.0);
+    }
 }
