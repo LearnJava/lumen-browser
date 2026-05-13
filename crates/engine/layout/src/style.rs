@@ -580,6 +580,15 @@ pub struct ComputedStyle {
     /// Substitution `var(--name [, fallback])` делается lazy при применении
     /// обычных деклараций (см. `apply_declaration`).
     pub custom_props: HashMap<String, String>,
+    /// CSS Lists L3 §3 — `counter-reset: name [N]?`. Каждый element задаёт
+    /// (имя-счётчика, начальное-значение). Не наследуется. Пустой `Vec`
+    /// при отсутствии декларации или `counter-reset: none`. Реальное
+    /// разрешение counter() в `content` pseudo-elements — отдельная задача
+    /// (требует layout-time counter scoping walker).
+    pub counter_reset: Vec<(String, i32)>,
+    /// CSS Lists L3 §3 — `counter-increment: name [N]?`. Каждый element
+    /// инкрементирует названный counter на N (default +1). Не наследуется.
+    pub counter_increment: Vec<(String, i32)>,
 }
 
 impl ComputedStyle {
@@ -667,6 +676,8 @@ impl ComputedStyle {
             outline_offset: 0.0,
             accent_color: None,
             custom_props: HashMap::new(),
+            counter_reset: Vec::new(),
+            counter_increment: Vec::new(),
         }
     }
 }
@@ -751,6 +762,9 @@ pub fn compute_style(
         outline_style: BorderStyle::None,
         outline_color: None,
         outline_offset: 0.0,
+        // CSS Lists L3 §3 — не наследуются.
+        counter_reset: Vec::new(),
+        counter_increment: Vec::new(),
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -3081,6 +3095,17 @@ fn apply_declaration(
                 style.outline_offset = px;
             }
         }
+        "counter-reset" => {
+            // CSS Lists L3 §3 — `none | (<custom-ident> <integer>?)+`.
+            // Default value на счётчик при отсутствии числа = 0 (по spec).
+            // `none` сбрасывает всё.
+            style.counter_reset = parse_counter_list(val, 0);
+        }
+        "counter-increment" => {
+            // CSS Lists L3 §3 — `none | (<custom-ident> <integer>?)+`.
+            // Default value = 1 (по spec).
+            style.counter_increment = parse_counter_list(val, 1);
+        }
         "opacity" => {
             // CSS Color L3 §3.2: <number 0..1> или <percentage>. Out-of-range
             // clamp-ается. Невалидные значения игнорируются.
@@ -3717,9 +3742,72 @@ fn apply_css_wide_keyword(
             style.border_bottom_right_radius = v.2;
             style.border_bottom_left_radius = v.3;
         }
+        // CSS Lists L3 §3 — не наследуются; Inherit пуллит из inherited,
+        // прочие — initial (пустой Vec).
+        "counter-reset" => {
+            style.counter_reset = if inh_only_inherit {
+                inherited.counter_reset.clone()
+            } else {
+                init.counter_reset.clone()
+            };
+        }
+        "counter-increment" => {
+            style.counter_increment = if inh_only_inherit {
+                inherited.counter_increment.clone()
+            } else {
+                init.counter_increment.clone()
+            };
+        }
         // Прочие / неизвестные — silent no-op.
         _ => {}
     }
+}
+
+/// Парсер CSS Lists L3 §3 `counter-reset` / `counter-increment` value.
+/// Формат: `none | (<custom-ident> <integer>?)+`. Возвращает `Vec` пар
+/// (имя, число); `default` подставляется когда integer не указан.
+///
+/// `none` (case-insensitive) → пустой `Vec`. Невалидные ident-ы и числа
+/// — пропускаем без ошибки, как best-effort lenient parser.
+fn parse_counter_list(value: &str, default: i32) -> Vec<(String, i32)> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") || v.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut tokens = v.split_whitespace().peekable();
+    while let Some(tok) = tokens.next() {
+        // Имя счётчика — CSS ident: ASCII alphabetic / `_` / `-` начало,
+        // дальше alphanumeric / `-` / `_`. Простой strict check; пропускаем
+        // токены, не похожие на ident.
+        if !is_css_ident(tok) {
+            continue;
+        }
+        // Следующий токен — опц. integer.
+        let n = if let Some(&peeked) = tokens.peek() {
+            if let Ok(parsed) = peeked.parse::<i32>() {
+                tokens.next();
+                parsed
+            } else {
+                default
+            }
+        } else {
+            default
+        };
+        out.push((tok.to_string(), n));
+    }
+    out
+}
+
+fn is_css_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_' || first == '-') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 /// Применяет `font-size`-декларацию, если она задана. Размер `em` берётся

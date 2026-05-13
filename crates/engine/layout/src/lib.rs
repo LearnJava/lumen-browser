@@ -3845,4 +3845,137 @@ mod tests {
         );
         assert_eq!(v, Some("1dppx".to_string()));
     }
+
+    // ──────── CSS counters (CSS Lists L3 §3) ────────
+
+    fn first_block_style(root: &LayoutBox) -> &ComputedStyle {
+        let p = root
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("p block");
+        &p.style
+    }
+
+    #[test]
+    fn counter_reset_single_default_zero() {
+        let root = lay("<p>x</p>", "p { counter-reset: section; }");
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_reset, vec![("section".to_string(), 0)]);
+    }
+
+    #[test]
+    fn counter_reset_with_explicit_value() {
+        let root = lay("<p>x</p>", "p { counter-reset: section 5; }");
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_reset, vec![("section".to_string(), 5)]);
+    }
+
+    #[test]
+    fn counter_reset_multiple() {
+        let root = lay(
+            "<p>x</p>",
+            "p { counter-reset: section 1 subsection 0 figure; }",
+        );
+        let s = first_block_style(&root);
+        assert_eq!(
+            s.counter_reset,
+            vec![
+                ("section".to_string(), 1),
+                ("subsection".to_string(), 0),
+                ("figure".to_string(), 0),  // default = 0
+            ]
+        );
+    }
+
+    #[test]
+    fn counter_reset_none_yields_empty() {
+        let root = lay("<p>x</p>", "p { counter-reset: none; }");
+        let s = first_block_style(&root);
+        assert!(s.counter_reset.is_empty());
+    }
+
+    #[test]
+    fn counter_reset_case_insensitive_none() {
+        let root = lay("<p>x</p>", "p { counter-reset: NONE; }");
+        let s = first_block_style(&root);
+        assert!(s.counter_reset.is_empty());
+    }
+
+    #[test]
+    fn counter_increment_default_one() {
+        let root = lay("<p>x</p>", "p { counter-increment: section; }");
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_increment, vec![("section".to_string(), 1)]);
+    }
+
+    #[test]
+    fn counter_increment_with_explicit_value() {
+        let root = lay("<p>x</p>", "p { counter-increment: section 2; }");
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_increment, vec![("section".to_string(), 2)]);
+    }
+
+    #[test]
+    fn counter_increment_multiple_with_mixed_defaults() {
+        let root = lay(
+            "<p>x</p>",
+            "p { counter-increment: a 3 b c 5; }",
+        );
+        let s = first_block_style(&root);
+        assert_eq!(
+            s.counter_increment,
+            vec![
+                ("a".to_string(), 3),
+                ("b".to_string(), 1),  // default = 1
+                ("c".to_string(), 5),
+            ]
+        );
+    }
+
+    #[test]
+    fn counter_not_inherited_by_default() {
+        // counter-reset / -increment не наследуются (CSS Lists L3 §3).
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { counter-reset: section; }",
+        );
+        // У <p> не должно быть счётчиков.
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!(p.style.counter_reset.is_empty());
+        assert!(!div.style.counter_reset.is_empty());  // у div есть
+    }
+
+    #[test]
+    fn counter_inherit_keyword_pulls_from_parent() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { counter-reset: section 7; } p { counter-reset: inherit; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.counter_reset, vec![("section".to_string(), 7)]);
+    }
+
+    #[test]
+    fn counter_initial_keyword_resets_to_empty() {
+        let root = lay(
+            "<p>x</p>",
+            "p { counter-reset: section 5; counter-reset: initial; }",
+        );
+        let s = first_block_style(&root);
+        assert!(s.counter_reset.is_empty());
+    }
+
+    #[test]
+    fn invalid_ident_in_counter_list_skipped() {
+        // Имя с цифрой первым символом — невалидный CSS-ident, должен пропуститься.
+        let root = lay(
+            "<p>x</p>",
+            "p { counter-reset: 1invalid valid 2; }",
+        );
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_reset, vec![("valid".to_string(), 2)]);
+    }
 }
