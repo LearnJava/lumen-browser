@@ -5,7 +5,6 @@ members = [
     "crates/core",
     "crates/network",
     "crates/storage",
-    "crates/bench",
     "crates/engine/html-parser",
     "crates/engine/css-parser",
     "crates/engine/dom",
