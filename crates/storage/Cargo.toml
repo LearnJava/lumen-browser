@@ -9,3 +9,4 @@ description = "Lumen: KV-хранилище с origin-партициониров
 
 [dependencies]
 lumen-core.workspace = true
+rusqlite.workspace = true
