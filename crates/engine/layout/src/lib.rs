@@ -20,7 +20,8 @@ pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, 
 pub use snapshot::serialize_layout_tree;
 pub use style::{
     BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStyle,
-    FontWeight, Overflow, TextAlign, TextDecorationLine, TextTransform, Visibility, WhiteSpace,
+    FontWeight, Overflow, TextAlign, TextDecorationLine, TextShadow, TextTransform, Visibility,
+    WhiteSpace,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -2608,5 +2609,86 @@ mod tests {
         let p = first_element_child(div);
         assert_eq!(div.style.box_shadow.len(), 1);
         assert!(p.style.box_shadow.is_empty());
+    }
+
+    // ── text-shadow (CSS Text Decoration L3 §4) ─────────────────────────────
+
+    #[test]
+    fn text_shadow_default_empty() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert!(p.style.text_shadow.is_empty());
+    }
+
+    #[test]
+    fn text_shadow_two_lengths() {
+        let root = lay("<p>x</p>", "p { text-shadow: 2px 3px; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.text_shadow.len(), 1);
+        let s = &p.style.text_shadow[0];
+        assert!((s.offset_x - 2.0).abs() < 0.01);
+        assert!((s.offset_y - 3.0).abs() < 0.01);
+        assert_eq!(s.blur, 0.0);
+        assert!(s.color.is_none());
+    }
+
+    #[test]
+    fn text_shadow_with_blur_and_color() {
+        let root = lay(
+            "<p>x</p>",
+            "p { text-shadow: 1px 2px 3px red; }",
+        );
+        let p = first_element_child(&root);
+        let s = &p.style.text_shadow[0];
+        assert_eq!(s.blur, 3.0);
+        assert_eq!(s.color.unwrap().r, 255);
+    }
+
+    #[test]
+    fn text_shadow_multiple() {
+        let root = lay(
+            "<p>x</p>",
+            "p { text-shadow: 1px 1px red, 2px 2px blue; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.text_shadow.len(), 2);
+        assert_eq!(p.style.text_shadow[0].color.unwrap().r, 255);
+        assert_eq!(p.style.text_shadow[1].color.unwrap().b, 255);
+    }
+
+    #[test]
+    fn text_shadow_inherited() {
+        // В отличие от box-shadow, text-shadow ДОЛЖЕН наследоваться.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { text-shadow: 1px 1px black; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.text_shadow.len(), 1);
+        assert_eq!(p.style.text_shadow.len(), 1, "text-shadow должен наследоваться");
+    }
+
+    #[test]
+    fn text_shadow_none_overrides_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { text-shadow: 1px 1px black; } p { text-shadow: none; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.text_shadow.len(), 1);
+        assert!(p.style.text_shadow.is_empty(), "p должен сбросить inherited");
+    }
+
+    #[test]
+    fn text_shadow_color_with_internal_commas() {
+        let root = lay(
+            "<p>x</p>",
+            "p { text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5); }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.text_shadow.len(), 1);
+        assert_eq!(p.style.text_shadow[0].color.unwrap().a, 128);
     }
 }
