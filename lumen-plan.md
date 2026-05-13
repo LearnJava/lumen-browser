@@ -1130,7 +1130,7 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
   - **Scroll + базовый input в shell.** Без scroll длинные страницы недоступны.
 - **`Url` как структурированный тип** — `struct { scheme, host, port, path, query, fragment }`. Сейчас `Url` это тонкая обёртка над String, network ad-hoc парсит то же самое. Дедуплицировать парсинг до того, как появятся CSP / cookie jar / cross-origin checks. Несколько часов работы пока потребителей мало.
 - **EventSink в network (network log).** События `RequestStarted/Completed/Blocked` объявлены в `lumen-core::event`, никем не emit-ятся. Без этого принцип №4 («каждый исходящий байт виден») — мёртвый код. Каждая новая сетевая операция (favicon, prefetch, redirect) добавляется без логирования → к Phase 2 ретрофитить дороже.
-- **`cargo bench` baseline.** Цели плана (300ms cold start, <100MB RAM) сейчас лозунги, не контракт. Один benchmark на `samples/page.html` (parse → layout → paint) даст линию отсчёта.
+- ✅ **`cargo bench` baseline (lumen-bench).** Бинарь, прогоняющий `decode → parse → layout → paint` на `samples/page.html` нужное число итераций и печатающий min/median/mean/p95/max на фазу + TOTAL; без сторонних deps, `LUMEN_BENCH_ITERS` env override. Регрессии при росте функциональности теперь отслеживаются (300ms cold start, <100MB RAM — точки отсчёта зафиксированы).
 - ✅ **`[profile.dev.package."*"] opt-level=3`** — full optimization для зависимостей (wgpu, winit, rustls) в dev профиле, наш код остаётся на opt-level=1. wgpu в чистом debug режиме невыносим.
 - CSS 2.1 + flexbox.
 - Картинки.
