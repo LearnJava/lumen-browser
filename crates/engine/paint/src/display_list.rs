@@ -28,6 +28,20 @@ pub enum DisplayCommand {
         font_size: f32,
         color: Color,
     },
+    /// Растровое изображение из `<img>`. `rect` — итоговая коробка после
+    /// расчёта по CSS (width/height + HTML presentational hints), `src` —
+    /// строка ссылки на ресурс из исходного атрибута (декодирование и
+    /// загрузка пикселей — отдельная задача, см. roadmap). `alt` — alternate
+    /// text для случаев, когда renderer не может отобразить картинку.
+    ///
+    /// Renderer Phase 0 рисует placeholder rect (светло-серый прямоугольник),
+    /// чтобы место картинки было видно пользователю до подключения GPU
+    /// pipeline-а для текстур.
+    DrawImage {
+        rect: Rect,
+        src: String,
+        alt: String,
+    },
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
@@ -70,6 +84,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     text,
                     font_size,
                     color.r, color.g, color.b, color.a,
+                ));
+            }
+            DisplayCommand::DrawImage { rect, src, alt } => {
+                out.push_str(&format!(
+                    "DrawImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?} alt={alt:?}\n",
+                    rect.x, rect.y, rect.width, rect.height,
                 ));
             }
         }
@@ -134,6 +154,52 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                     push_text_decoration(out, b.rect.x, line_y, frag);
                 }
             }
+        }
+        BoxKind::Image { src, alt } => {
+            // Painter's order для replaced element: фон → border → image.
+            // background/border у `<img>` валидны по CSS — например, для
+            // подложки на время загрузки или рамки вокруг картинки.
+            if let Some(bg) = b.style.background_color
+                && bg.a > 0
+            {
+                out.push(DisplayCommand::FillRect {
+                    rect: b.rect,
+                    color: bg,
+                });
+            }
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width, s.border_right_width,
+                        s.border_bottom_width, s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.unwrap_or(cur),
+                        s.border_right_color.unwrap_or(cur),
+                        s.border_bottom_color.unwrap_or(cur),
+                        s.border_left_color.unwrap_or(cur),
+                    ],
+                });
+            }
+            // Image content внутри padding/border-области; в Phase 0
+            // padding/border ещё не сжимают content-area Image (только
+            // расширяют коробку), но геометрия rect-а уже верная — это
+            // полная коробка вместе с border. Renderer будет рисовать
+            // placeholder поверх всей коробки; точное content-box
+            // позиционирование оставлю на следующий коммит, когда будут
+            // реальные пиксели и понадобится object-fit / object-position.
+            out.push(DisplayCommand::DrawImage {
+                rect: b.rect,
+                src: src.clone(),
+                alt: alt.clone(),
+            });
         }
     }
 }
@@ -614,5 +680,82 @@ mod tests {
         let s = serialize_display_list(&dl);
         assert!(s.contains("DrawBorder"), "должна быть строка DrawBorder");
         assert!(s.contains("3.00"), "ширина 3px");
+    }
+
+    // ── Тесты <img> / DrawImage ─────────────────────────────────────────────
+
+    fn images(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawImage { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn img_emits_draw_image() {
+        let dl = build(r#"<img src="logo.png" alt="Logo" width="100" height="50">"#, "");
+        let imgs = images(&dl);
+        assert_eq!(imgs.len(), 1);
+        if let DisplayCommand::DrawImage { rect, src, alt } = imgs[0] {
+            assert_eq!(src, "logo.png");
+            assert_eq!(alt, "Logo");
+            assert!((rect.width - 100.0).abs() < 0.1);
+            assert!((rect.height - 50.0).abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn img_with_background_and_border_paints_in_order() {
+        // Painter's order для replaced element: FillRect (bg) → DrawBorder →
+        // DrawImage. Image идёт последним, чтобы быть над фоном.
+        let dl = build(
+            r#"<img src="x" width="50" height="50">"#,
+            "img { background: blue; border: 2px solid red; }",
+        );
+        // Должны присутствовать все три команды.
+        let kinds: Vec<&str> = dl
+            .iter()
+            .map(|c| match c {
+                DisplayCommand::FillRect { .. } => "FillRect",
+                DisplayCommand::DrawBorder { .. } => "DrawBorder",
+                DisplayCommand::DrawImage { .. } => "DrawImage",
+                DisplayCommand::DrawText { .. } => "DrawText",
+            })
+            .collect();
+        assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);
+    }
+
+    #[test]
+    fn img_serialize_includes_src_and_alt() {
+        let dl = build(
+            r#"<img src="photo.jpg" alt="A photo" width="80" height="40">"#,
+            "",
+        );
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("DrawImage"), "must contain DrawImage line");
+        assert!(s.contains(r#"src="photo.jpg""#), "must contain src");
+        assert!(s.contains(r#"alt="A photo""#), "must contain alt");
+    }
+
+    #[test]
+    fn img_without_dimensions_emits_zero_rect() {
+        // Без размеров — placeholder 0×0; команда всё равно эмитится,
+        // потому что DOM-узел существует. Renderer просто не нарисует ничего.
+        let dl = build(r#"<img src="x">"#, "");
+        let imgs = images(&dl);
+        assert_eq!(imgs.len(), 1);
+        if let DisplayCommand::DrawImage { rect, .. } = imgs[0] {
+            assert!(rect.width.abs() < 0.1);
+            assert!(rect.height.abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn multiple_imgs_emit_multiple_draw_image() {
+        let dl = build(
+            r#"<img src="a.png" width="10" height="10"><img src="b.png" width="20" height="20">"#,
+            "",
+        );
+        let imgs = images(&dl);
+        assert_eq!(imgs.len(), 2);
     }
 }

@@ -72,6 +72,18 @@ impl Node {
             _ => None,
         }
     }
+
+    /// Возвращает значение атрибута по имени (ASCII case-insensitive). На
+    /// текстовых узлах и комментариях — `None`.
+    pub fn get_attr(&self, name: &str) -> Option<&str> {
+        match &self.data {
+            NodeData::Element { attrs, .. } => attrs
+                .iter()
+                .find(|a| a.name.local.eq_ignore_ascii_case(name))
+                .map(|a| a.value.as_str()),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug)]
