@@ -911,19 +911,20 @@ fn apply_property_initial_values(
 /// Поддерживаются:
 /// - `*` — универсал (любое значение проходит);
 /// - `<length>` — px, em, rem, vh, vw, vmin, vmax (но не `%`);
-/// - `<percentage>` — `Npx` форма с суффиксом `%`;
+/// - `<percentage>` — число с суффиксом `%`;
 /// - `<length-percentage>` — union;
 /// - `<color>` — любая форма, которую парсит `parse_color`;
 /// - `<integer>` — целое со знаком;
 /// - `<number>` — число с плавающей точкой;
 /// - `<angle>` — `deg` / `rad` / `turn` / `grad`;
+/// - `<time>` — `s` / `ms` (CSS Values L4 §8);
+/// - `<resolution>` — `dpi` / `dpcm` / `dppx` / `x` (CSS Values L4 §9.1);
 /// - `<custom-ident>` — идентификатор, не совпадающий с CSS-wide keyword.
 ///
 /// Union через `|` — match если хоть одна альтернатива принимает. Прочие
-/// типы (`<image>`, `<url>`, `<transform-function>`, `<resolution>`,
-/// `<time>`, и т.д.) и multipliers (`+`, `#`) в Phase 0 трактуются как
-/// universal — возвращают `true`, чтобы не отбраковывать корректные
-/// value у потребителей, использующих эти типы.
+/// типы (`<image>`, `<url>`, `<transform-function>`, и т.д.) и multipliers
+/// (`+`, `#`) в Phase 0 трактуются как universal — возвращают `true`,
+/// чтобы не отбраковывать корректные value у потребителей этих типов.
 pub fn validate_against_syntax(value: &str, syntax: &str) -> bool {
     let syntax = syntax.trim();
     if syntax == "*" {
@@ -943,6 +944,8 @@ pub fn validate_against_syntax(value: &str, syntax: &str) -> bool {
             "<integer>" => matches_syntax_integer(value),
             "<number>" => matches_syntax_number(value),
             "<angle>" => matches_syntax_angle(value),
+            "<time>" => matches_syntax_time(value),
+            "<resolution>" => matches_syntax_resolution(value),
             "<custom-ident>" => matches_syntax_custom_ident(value),
             // Неизвестный тип — permissive, чтобы не блокировать корректные
             // declarations с пока-неподдержанными syntax-формами.
@@ -979,6 +982,34 @@ fn matches_syntax_number(value: &str) -> bool {
 fn matches_syntax_angle(value: &str) -> bool {
     // Number + один из суффиксов: deg, rad, turn, grad.
     for suffix in ["deg", "rad", "turn", "grad"] {
+        if let Some(num) = value.strip_suffix(suffix)
+            && num.trim().parse::<f64>().is_ok()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn matches_syntax_time(value: &str) -> bool {
+    // CSS Values L4 §8 — <time> с суффиксами `s` или `ms`.
+    // Порядок важен: `ms` проверяем раньше `s`, иначе `200ms` распарсится
+    // как 200m + остаток `s` (а `200m` не валидный number → false).
+    for suffix in ["ms", "s"] {
+        if let Some(num) = value.strip_suffix(suffix)
+            && num.trim().parse::<f64>().is_ok()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn matches_syntax_resolution(value: &str) -> bool {
+    // CSS Values L4 §9.1 — <resolution> с суффиксами `dppx`/`dpcm`/`dpi`/`x`.
+    // `dppx` проверяем раньше `dpi`/`dpcm` (длинный суффикс), `x` — последним
+    // (резервный alias dppx; HTML5 media queries).
+    for suffix in ["dppx", "dpcm", "dpi", "x"] {
         if let Some(num) = value.strip_suffix(suffix)
             && num.trim().parse::<f64>().is_ok()
         {
