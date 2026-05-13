@@ -22,6 +22,8 @@ pub mod profiles;
 pub mod search_providers;
 pub mod sqlite_store;
 pub mod store;
+pub mod tab_sessions;
+pub mod workspaces;
 
 pub use bookmarks::{Bookmark, Bookmarks};
 pub use cookies::{parse_set_cookie, Cookie, CookieJar, SameSite};
@@ -33,3 +35,5 @@ pub use profiles::{Profile, ProfileRegistry};
 pub use search_providers::{SearchProviderEntry, SearchProviders};
 pub use sqlite_store::SqliteStorage;
 pub use store::InMemoryStorage;
+pub use tab_sessions::{SessionSnapshot, TabSession, TabSessions};
+pub use workspaces::{Workspace, Workspaces};
