@@ -216,6 +216,10 @@ pub struct ComputedStyle {
     pub font_style: FontStyle,
     pub font_weight: FontWeight,
     pub text_transform: TextTransform,
+    /// CSS Text L3 §7.1: отступ перед первой строкой inline-content
+    /// текущего блока (resolved px). Inherited; применяется к каждому
+    /// потомку, который порождает первую строку.
+    pub text_indent: f32,
     pub text_decoration_line: TextDecorationLine,
     /// Явная ширина (CSS `width: Npx`). None = auto (растягивается на контейнер).
     pub width: Option<f32>,
@@ -270,6 +274,7 @@ impl ComputedStyle {
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
             text_transform: TextTransform::None,
+            text_indent: 0.0,
             text_decoration_line: TextDecorationLine::default(),
             width: None,
             height: None,
@@ -315,6 +320,7 @@ pub fn compute_style(
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
         text_transform: inherited.text_transform,
+        text_indent: inherited.text_indent,
         text_decoration_line: inherited.text_decoration_line,
         // Ненаследуемые — сброс.
         background_color: None,
@@ -970,6 +976,19 @@ fn apply_declaration(
         "font-weight" => {
             if let Some(w) = parse_font_weight(val, parent_font_weight) {
                 style.font_weight = w;
+            }
+        }
+        "text-indent" => {
+            // CSS Text L3 §7.1: <length> | <percentage>. % требует
+            // containing-block-width — Phase 0 пока игнорирует, как и в
+            // margin/padding. Поддерживаем px/em/rem/vh/vw.
+            if let Some(len) = parse_length(val)
+                && let Some(px) = match len {
+                    Length::Percent(_) => None,
+                    other => other.resolve(em_basis, None, viewport),
+                }
+            {
+                style.text_indent = px;
             }
         }
         "text-transform" => {

@@ -200,6 +200,9 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
             let _ = write!(out, " text-transform=capitalize");
         }
     }
+    if s.text_indent.abs() > 0.01 {
+        let _ = write!(out, " text-indent={:.2}", s.text_indent);
+    }
 }
 
 fn color_hex(c: Color) -> String {

@@ -239,7 +239,7 @@ fn lay_out(
     // InlineRun обрабатывается до основного match.
     if let BoxKind::InlineRun { segments, lines } = &mut b.kind {
         if let Some(m) = measurer {
-            *lines = wrap_inline_run(segments, content_width, s.font_size, m);
+            *lines = wrap_inline_run(segments, content_width, s.font_size, s.text_indent, m);
             if s.text_align != TextAlign::Left {
                 align_lines(lines, content_width, s.text_align);
             }
@@ -291,6 +291,7 @@ fn wrap_inline_run(
     segments: &[InlineSegment],
     max_width: f32,
     container_font_size: f32,
+    text_indent: f32,
     m: &dyn TextMeasurer,
 ) -> Vec<Vec<InlineFrag>> {
     let space_w = m.char_width(' ', container_font_size);
@@ -307,7 +308,9 @@ fn wrap_inline_run(
 
     let mut result: Vec<Vec<InlineFrag>> = Vec::new();
     let mut current_line: Vec<InlineFrag> = Vec::new();
-    let mut current_x = 0.0_f32;
+    // CSS Text L3 §7.1: text-indent добавляется только к первой строке.
+    // На последующих строках начинаем с 0.
+    let mut current_x = text_indent;
 
     for (word, style) in &tagged {
         let word_w: f32 = word.chars().map(|c| m.char_width(c, style.font_size)).sum();
