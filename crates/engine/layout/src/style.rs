@@ -939,8 +939,78 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
             // matching identical с `:is`.
             list.iter().any(|s| matches_complex(s, doc, node))
         }
+        PseudoClass::Has(list) => {
+            // CSS Selectors L4 §17.2: матчит элемент E, если хоть один из
+            // relative selectors удовлетворён каким-то элементом в его
+            // поддереве (для combinator None или Child) или sibling-цепочке
+            // (для NextSibling / LaterSibling). Внутри matches_complex —
+            // тот же recursive matcher с back-tracking, относительно
+            // кандидата (а не E); кандидаты ищутся согласно combinator-у.
+            list.iter().any(|rs| matches_relative(rs, doc, node))
+        }
         PseudoClass::Unsupported(_) => false,
     }
+}
+
+/// Проверяет, что хоть один кандидат относительно `scope` (в зависимости от
+/// combinator-а) удовлетворяет внутреннему selector-у.
+fn matches_relative(rs: &lumen_css_parser::RelativeSelector, doc: &Document, scope: NodeId) -> bool {
+    match rs.combinator {
+        // Implicit descendant — обходим всё поддерево scope.
+        None => any_descendant(doc, scope, |n| matches_complex(&rs.selector, doc, n)),
+        Some(Combinator::Child) => {
+            // Прямые element-children scope.
+            doc.get(scope).children.iter().any(|&c| {
+                is_element(doc, c) && matches_complex(&rs.selector, doc, c)
+            })
+        }
+        Some(Combinator::NextSibling) => {
+            // Прямой следующий element-sibling.
+            next_element_sibling(doc, scope)
+                .map(|n| matches_complex(&rs.selector, doc, n))
+                .unwrap_or(false)
+        }
+        Some(Combinator::LaterSibling) => {
+            // Любой последующий element-sibling.
+            let mut cur = next_element_sibling(doc, scope);
+            while let Some(n) = cur {
+                if matches_complex(&rs.selector, doc, n) {
+                    return true;
+                }
+                cur = next_element_sibling(doc, n);
+            }
+            false
+        }
+        // Descendant как explicit combinator — то же что None.
+        Some(Combinator::Descendant) => {
+            any_descendant(doc, scope, |n| matches_complex(&rs.selector, doc, n))
+        }
+    }
+}
+
+/// True если хоть один element-descendant `root` удовлетворяет `pred`. Сам
+/// `root` не проверяется — только потомки (по spec :has() ищет среди
+/// descendants, не включая E).
+fn any_descendant<F: Fn(NodeId) -> bool>(doc: &Document, root: NodeId, pred: F) -> bool {
+    fn walk<F: Fn(NodeId) -> bool>(doc: &Document, n: NodeId, pred: &F) -> bool {
+        for &c in &doc.get(n).children {
+            if is_element(doc, c) && pred(c) {
+                return true;
+            }
+            if walk(doc, c, pred) {
+                return true;
+            }
+        }
+        false
+    }
+    walk(doc, root, &pred)
+}
+
+fn next_element_sibling(doc: &Document, node: NodeId) -> Option<NodeId> {
+    let parent = doc.get(node).parent?;
+    let siblings = &doc.get(parent).children;
+    let idx = siblings.iter().position(|&id| id == node)?;
+    siblings[idx + 1..].iter().copied().find(|&id| is_element(doc, id))
 }
 
 /// 1-based индекс элемента среди element-sibling-ов. Если `from_end` —
