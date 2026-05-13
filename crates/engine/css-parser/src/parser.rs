@@ -102,9 +102,27 @@ pub enum PseudoClass {
     /// `:where(s1, s2, …)` — то же, что `:is`, но specificity = 0 (всегда).
     /// Полезно для default-стилей, которые легко перебить любым правилом.
     Where(Vec<ComplexSelector>),
+    /// `:has(rs1, rs2, …)` — relational pseudo-class (CSS Selectors L4
+    /// §17.2). Матчит элемент E, в поддереве/sibling-цепочке которого есть
+    /// элемент, удовлетворяющий хоть одному из relative-селекторов. Каждый
+    /// `RelativeSelector` опционально начинается с combinator-а; если
+    /// combinator опущен — implicit descendant. Specificity contributes
+    /// максимум по списку (как :is).
+    Has(Vec<RelativeSelector>),
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
+}
+
+/// Один элемент relative-selector-list-а из `:has()`. `combinator` — если
+/// `Some(c)`, проверяемые элементы выбираются относительно scope (E) через
+/// `c`: Child → прямые дети E; NextSibling → следующий sibling; LaterSibling
+/// → последующие siblings. Если `None`, implicit Descendant — любой
+/// элемент в поддереве E.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RelativeSelector {
+    pub combinator: Option<Combinator>,
+    pub selector: ComplexSelector,
 }
 
 /// Формула `an+b` из CSS Selectors §6.6.5.1. Элемент с 1-based индексом `i`
@@ -213,6 +231,21 @@ fn accumulate_specificity(comp: &CompoundSelector, spec: &mut Specificity) {
                         }
                     }
                     PseudoClass::Where(_) => {} // contributes 0
+                    PseudoClass::Has(list) => {
+                        // CSS Selectors L4 §17.2: то же что :is — максимум
+                        // по содержимому. Берём specificity внутреннего
+                        // ComplexSelector каждого RelativeSelector (без учёта
+                        // ведущего combinator-а — он не имеет specificity).
+                        let max = list
+                            .iter()
+                            .map(|rs| rs.selector.specificity())
+                            .max();
+                        if let Some(max) = max {
+                            spec.a = spec.a.saturating_add(max.a);
+                            spec.b = spec.b.saturating_add(max.b);
+                            spec.c = spec.c.saturating_add(max.c);
+                        }
+                    }
                     _ => spec.b = spec.b.saturating_add(1),
                 }
             }
@@ -732,8 +765,56 @@ impl<'a> Parser<'a> {
                 }
                 Some(PseudoClass::Where(list))
             }
+            "has" => {
+                // CSS Selectors L4 §17.2: relative-selector-list. Каждый
+                // элемент — combinator + selector, или просто selector
+                // (implicit descendant).
+                let list = self.parse_relative_selector_list();
+                self.skip_ws_and_comments();
+                if self.peek() != Some(')') || list.is_empty() {
+                    return None;
+                }
+                Some(PseudoClass::Has(list))
+            }
             _ => None,
         }
+    }
+
+    /// Парсит relative-selector-list для `:has()`. Каждый элемент — опциональный
+    /// ведущий combinator (`>`, `+`, `~`) + сам complex selector.
+    fn parse_relative_selector_list(&mut self) -> Vec<RelativeSelector> {
+        let mut out = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None | Some(')') => break,
+                _ => {}
+            }
+            let combinator = match self.peek() {
+                Some('>') => { self.consume(); Some(Combinator::Child) }
+                Some('+') => { self.consume(); Some(Combinator::NextSibling) }
+                Some('~') => { self.consume(); Some(Combinator::LaterSibling) }
+                _ => None,
+            };
+            self.skip_ws_and_comments();
+            let Some(selector) = self.parse_complex_selector() else {
+                // Невалидный selector — пропускаем до запятой/конца.
+                while let Some(c) = self.peek() {
+                    if c == ',' || c == ')' { break; }
+                    self.consume();
+                }
+                if self.peek() == Some(',') { self.consume(); }
+                continue;
+            };
+            out.push(RelativeSelector { combinator, selector });
+            self.skip_ws_and_comments();
+            if self.peek() == Some(',') {
+                self.consume();
+            } else {
+                break;
+            }
+        }
+        out
     }
 
     /// Парсит `an+b`, число или ключевые слова `odd`/`even`. Останавливается на
