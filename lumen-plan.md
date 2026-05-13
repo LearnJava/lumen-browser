@@ -6,7 +6,7 @@
 
 Задачи, взятые в работу параллельными сессиями. **Не дублировать.** Подробнее о протоколе — в `CLAUDE.md`, раздел «Координация параллельных сессий».
 
-- 🔄 EventSink + RequestStarted/Completed emit в lumen-network — network-event-sink — 2026-05-13
+_(никто ничего не зарезервировал)_
 
 
 ## Статус реализации
@@ -20,7 +20,7 @@
 - ✅ Ветка `main`, локальные коммиты, без remote
 
 ### Крейты
-- ✅ `lumen-core` — типы и trait-ы: `Error`, `Url`, `Event`, `Capability`, `Module`, геометрия (`Rect`, `Point`, `Size`), `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`; модули **`punycode`** (RFC 3492 encode) + **`idn`** (`domain_to_ascii`) для IDN-доменов
+- ✅ `lumen-core` — типы и trait-ы: `Error`, `Url`, `Event`, `Capability`, `Module`, геометрия (`Rect`, `Point`, `Size`), `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`, **`EventSink`** (`emit(&Event)`, приёмник `Event::Request*` из подсистем); модули **`punycode`** (RFC 3492 encode) + **`idn`** (`domain_to_ascii`) для IDN-доменов
 - ✅ `lumen-dom` — арена + `NodeId` + `Document/Node/NodeData`, API: create/append/detach/Display, 7 тестов (включая кириллицу)
 - 🟡 `lumen-shell` — точка входа: три режима (пустое окно / файл / URL). Внешний CSS через `<link rel=stylesheet>`: загружается с диска (относительно HTML-файла) или по сети (относительно базового URL). Bundled Inter-Regular.ttf через `include_bytes!`
 - 🟡 `lumen-html-parser` — минимальный токенизатор (Data/Tag/Attribute/Comment, named + numeric entities, **RAWTEXT для `<script>`/`<style>`**, **RCDATA для `<title>`/`<textarea>`**, **DOCTYPE с PUBLIC/SYSTEM**) + lenient tree builder. 74 теста (включая кириллицу). Отложено: CDATA, полный набор named entities, insertion modes
@@ -29,7 +29,7 @@
 - 🟡 `lumen-paint` — display list (FillRect, **DrawBorder**, DrawText) + wgpu-растеризатор с двумя pipeline-ами (fill + text), glyph atlas 512×512, текстурированные квады из atlas-а. `DrawBorder` рендерится 4 fill-quad-ами (top/right/bottom/left edges), цвет с currentColor fallback. Под/над/перечёркивающие линии text-decoration эмитятся как FillRect-ы у baseline каждого фрагмента. `FontMeasurer` для TextMeasurer. Внешние зависимости: `wgpu` (exception #2), `winit` (exception #1)
 - 🟡 `lumen-font` — собственный TrueType-парсер (head/maxp/cmap format 4+12/hhea/hmtx/loca/glyf) + scanline-растеризатор (квадратичные Безье, 4×4 AA, even-odd fill). cmap format 12 — Sequential Groups, полный Unicode U+10FFFF (эмодзи U+1F600+, SMP). 62 unit + 9 integration тестов. Отложено: hinting, GSUB/GPOS shaping, CFF outlines, variable fonts, color glyphs
 - 🟡 `lumen-encoding` — детектор кодировок и декодеры: **UTF-8, UTF-16 LE/BE, Windows-1251, KOI8-R, CP866**. Пайплайн: BOM (UTF-8/UTF-16 LE/UTF-16 BE) → `<meta charset>`-sniff (1 КБ) → HTTP content-type hint → UTF-8 валидность → частотная эвристика по русским буквам. UTF-16 декодер обрабатывает surrogate-пары (BMP + supplementary через U+10000+), lone surrogates и нечётное число байт → U+FFFD. Реализует `EncodingDetector` из `lumen-core::ext`. 59 тестов (включая UTF-16 surrogate-пары, emoji, ASCII/cyrillic в обоих endian). Отложено: ISO-8859-5, MacCyrillic, prescan по HTML5 spec §12.2.3.2 (точные правила парсинга атрибутов)
-- ✅ `lumen-network` — HTTP/1.1 + HTTPS клиент (rustls, exception #3). Redirect, chunked TE. **IDN-домены** в URL конвертятся в Punycode на этапе parse (`https://президент.рф/` → DNS/TLS получают `xn--d1abbgf6aiiy.xn--p1ai`). `HttpClient` реализует `NetworkTransport`. 15 тестов.
+- ✅ `lumen-network` — HTTP/1.1 + HTTPS клиент (rustls, exception #3). Redirect, chunked TE. **IDN-домены** в URL конвертятся в Punycode на этапе parse (`https://президент.рф/` → DNS/TLS получают `xn--d1abbgf6aiiy.xn--p1ai`). `HttpClient` реализует `NetworkTransport`. **EventSink-интеграция** (принцип №4 «каждый исходящий байт виден»): `HttpClient::with_sink/with_tab` builder, эмит `RequestStarted` перед сокетом и `RequestCompleted` после получения статуса — для каждого редирект-хопа отдельная пара событий. 20 тестов (включая 5 с mock HTTP-сервером).
 - ✅ `lumen-storage` — in-memory KV + origin-партиционирование + snapshot LUMEN_KV_V1. 17 тестов.
 - ⬜ `lumen-knowledge` (§12) — FTS-индекс над историей и заметками, read-later каталог. Phase 2
 - ⬜ `lumen-ai` (§12.5) — опциональный, embedding + RAG поверх локального LLM. Phase 3+, feature-flag
@@ -1129,7 +1129,7 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
   - **HiDPI / DPR-awareness.** `winit` отдаёт `scale_factor`, сейчас не прокинут в layout/paint. На 4K мониторе всё в 0.5×.
   - **Scroll + базовый input в shell.** Без scroll длинные страницы недоступны.
 - **`Url` как структурированный тип** — `struct { scheme, host, port, path, query, fragment }`. Сейчас `Url` это тонкая обёртка над String, network ad-hoc парсит то же самое. Дедуплицировать парсинг до того, как появятся CSP / cookie jar / cross-origin checks. Несколько часов работы пока потребителей мало.
-- **EventSink в network (network log).** События `RequestStarted/Completed/Blocked` объявлены в `lumen-core::event`, никем не emit-ятся. Без этого принцип №4 («каждый исходящий байт виден») — мёртвый код. Каждая новая сетевая операция (favicon, prefetch, redirect) добавляется без логирования → к Phase 2 ретрофитить дороже.
+- ✅ **EventSink в network (network log).** `HttpClient::with_sink/with_tab` builder, эмит `RequestStarted` (после `parse_url`, до сокета) и `RequestCompleted` (после статус-строки, до анализа кода) — отдельная пара на каждый редирект-хоп. `StdoutEventSink` в shell печатает `→ GET <url>` / `← <status> <url>`. `RequestBlocked` пока не emit-ится — нет источника блокировок (нужен `FilterListSource` или подобный).
 - **`cargo bench` baseline.** Цели плана (300ms cold start, <100MB RAM) сейчас лозунги, не контракт. Один benchmark на `samples/page.html` (parse → layout → paint) даст линию отсчёта.
 - **`[profile.dev.package."*"] opt-level=3`** — full optimization для зависимостей (wgpu, winit, rustls) в dev профиле, наш код остаётся на opt-level=1. wgpu в чистом debug режиме невыносим.
 - CSS 2.1 + flexbox.

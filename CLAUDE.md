@@ -24,6 +24,14 @@
 
 ---
 
+## Рабочая зона
+
+**Все изменения делаем только в папке браузера** (`/home/konstantin/RustroverProjects/lumen-browser/` и её worktree-копии в `.claude/worktrees/*`). Файлы вне этого корня — `~/.bashrc`, `~/.config/*`, системные dotfile-ы, соседние проекты — не трогаем даже «для удобства». Если задача требует правки чего-то вовне (например, шага установки в README) — описываем словами, что пользователю сделать, и ждём его согласия.
+
+Исключение: память Claude (`~/.claude/projects/.../memory/`) — она и так живёт вне репо by design; ей правила «только в папке» не касаются.
+
+---
+
 ## Команды для работы
 
 ```bash
@@ -354,7 +362,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 - Типы: `Error`, `Result<T>`, `Url`, `Event` (TabCreated/Closed, Navigation, PageLoaded, RequestStarted/Completed/Blocked), `TabId`, `Capability`, `CapabilityToken`, `Module` trait.
 - Геометрия: `Rect`, `Point`, `Size`.
-- `lumen-core::ext` — trait-точки расширения: `NetworkTransport`, `StorageBackend` (с origin-партиционированием + `list_keys`), `SearchProvider`, `FilterListSource`, `EncodingDetector`.
+- `lumen-core::ext` — trait-точки расширения: `NetworkTransport`, `StorageBackend` (с origin-партиционированием + `list_keys`), `SearchProvider`, `FilterListSource`, `EncodingDetector`, **`EventSink`** (`fn emit(&self, event: &Event)`, `Send + Sync`, sink принимает `&Event` без `clone`; «молчаливого дефолта» нет — потребители держат `Option<Arc<dyn EventSink>>` и `None` означает «события никому не нужны»).
 - В комментариях задокументированы будущие trait-точки: `WindowingBackend`, `RenderBackend`, `TlsBackend`, `JsRuntime`, `FontProvider`, `HyphenationEngine`, `DnsResolver`, `Hasher`. Тело trait-а добавим при первой реализации.
 - **`lumen_core::punycode::encode`** — RFC 3492 Punycode encode (bootstring base=36, tmin=1, tmax=26, skew=38, damp=700, initial_bias=72, initial_n=128). 8 unit-тестов на известных IDN-метках (пример → e1afmkfd, рф → p1ai, президент → d1abbgf6aiiy, тест → e1aybc, рус → p1acf, CJK 你好 → 6qq79v).
 - **`lumen_core::idn::domain_to_ascii`** — IDNA `ToASCII` (упрощённое подмножество): lowercase → split по `.` → label-by-label (ASCII passthrough, иначе `xn--<punycode>`). Не делает NFC normalization и UTS #46 mapping (для русских доменов уже в NFC — практически достаточно). 10 unit-тестов (включая идемпотентность для уже `xn--…`, mixed ASCII+IDN субдоменов, trailing dot для FQDN, case-нормализация).
@@ -422,12 +430,14 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 ### `lumen-network` ✅ (HTTP/1.1 + HTTPS)
 
 - **Готово:** `HttpClient` реализует `NetworkTransport` из `lumen-core::ext`. Поддержка HTTP и HTTPS (rustls + webpki-roots, exception #3). Redirect-следование до 5 хопов (абсолютные + относительные `Location`). `chunked` Transfer-Encoding decoder. URL-парсинг (scheme/host/port/path), case-insensitive заголовки. Box-обёртка вокруг TLS stream (clippy large-enum-variant). **IDN-домены** конвертятся в Punycode на этапе `parse_url` через `lumen_core::idn::domain_to_ascii` — DNS lookup, TLS SNI (`ServerName::try_from`) и `Host:` header (RFC 7230 §5.4) всегда получают ASCII-форму.
-- **Отложено:** HTTP/2, keep-alive соединения, кэш (Cache-Control), аутентификация, cookie jar, проксирование.
-- 15 тестов: URL-парсинг (включая IDN-кейсы — кириллический host, IDN+port, mixed ASCII subdomain), status line, header lookup, chunked decoder (несколько chunk-ов, пустое тело).
+- **Готово (EventSink — принцип №4):** `HttpClient::with_sink(Arc<dyn EventSink>)` + `with_tab(TabId)` — fluent builder. `fetch_with_redirect` эмит `Event::RequestStarted { tab_id, url }` **после** успешного `parse_url` (bad scheme → ни Started, ни Completed) и перед TCP-сокетом; `Event::RequestCompleted { tab_id, url, status }` — после чтения статус-строки, **до** анализа кода ответа (2xx / 3xx / 4xx — все эмитятся как completed). Каждый редирект-hop генерит свою пару (Started/Completed), не одну на цепочку. Инвариант «Started без Completed = network failure» (DNS / refused / TLS handshake error прерывают между ними); явный `RequestFailed` добавим, когда наблюдателям станет мало. `sink: Option<Arc<dyn EventSink>>` — по умолчанию None, sink не дёргается совсем (не нужен hot-path NoopEventSink для типичного случая «события никому не нужны»).
+- **Отложено:** HTTP/2, keep-alive соединения, кэш (Cache-Control), аутентификация, cookie jar, проксирование, `RequestFailed` событие (для DNS/connect/TLS-ошибок до `RequestCompleted`).
+- 20 тестов: URL-парсинг (включая IDN-кейсы — кириллический host, IDN+port, mixed ASCII subdomain), status line, header lookup, chunked decoder; **5 новых** интеграционных через mock-`TcpListener`: Started+Completed на 200, 4 события на 2-hop редирект, Completed-на-404, no-events при bad scheme, builder без sink.
 
 ### `lumen-shell` 🟡 (окно + рендер + сеть)
 
 - **Готово:** winit 0.30 с `ApplicationHandler` API. Три режима: `lumen` (пустое окно 1024×720), `lumen <path.html>` (файл → кодировка → HTML → layout → paint), `lumen <http(s)://...>` (сеть через `HttpClient` → те же этапы). Внешний CSS: `<link rel="stylesheet" href="...">` загружается с диска (относительно HTML-файла) или по сети (относительно базового URL). `ResourceBase` enum изолирует логику разрешения относительных URL. Inter-Regular.ttf bundled через `include_bytes!`. Обработчики Resized + RedrawRequested.
+- **Готово (network log):** `StdoutEventSink` — простейший наблюдатель сетевых событий, печатает в stdout: `→ GET <url>`, `← <status> <url>`, `✗ <url> (<reason>)`. Подключается к `HttpClient` в shell, чтобы каждый исходящий байт был виден пользователю — это и есть Phase 0 версия network log из принципа №4. Позже заменится на структурированный UI-логгер (отдельная панель в окне).
 - **Отложено:** вкладки, омнибокс, навигация, истории сессий, scroll, обработка input-событий.
 - 11 unit-тестов (resolve_url, ResourceBase::resolve, collect_link_hrefs).
 
@@ -444,7 +454,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 ### Численно
 
-- **Всего тестов в workspace:** 764 (на момент последнего обновления).
+- **Всего тестов в workspace:** 779 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -462,9 +472,9 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 1. **`[profile.dev.package."*"] opt-level=3`** в `Cargo.toml` — full optimization для зависимостей (wgpu, winit, rustls), наш код остаётся на `opt-level=1`. 5 минут работы, debug-сборка перестаёт быть невыносимой.
 2. **Font fallback / matcher** — рендерер сейчас всегда Inter Regular. Любая реальная страница с эмодзи / CJK / явным `font-family: Roboto` отрисуется в `?`-глифы. Минимум: системный font-loader (Win32 GDI / fontconfig / CoreText напрямую, без сторонних crate-ов), cascade «Inter → системный по unicode-блоку». Парсер `font-family` в `lumen-css-parser` уже есть, в paint не используется. **Это блокер для Phase 1 как демонстрации.**
 3. **`Url` как структурированный тип** — `struct { scheme, host, port, path, query, fragment }`. Сейчас `lumen-core::Url` это `Url(String)`, network ad-hoc парсит то же самое в `parse_url`. Дедуплицировать до того, как появятся CSP / cookie jar / cross-origin checks. День работы.
-4. **EventSink в `lumen-network` — emit `RequestStarted/Completed/Blocked`.** События уже объявлены в `lumen-core::event`, никем не emit-ятся. Принцип №4 «каждый исходящий байт виден» сейчас — мёртвый код. Каждая новая сетевая операция (favicon, prefetch, redirect) добавляется без логирования → к Phase 2 ретрофитить дороже. Один trait `EventSink` в `lumen-core` + параметр в `HttpClient::fetch`.
-5. **Scroll + DPR-awareness в shell.** Вместе, потому что без `scale_factor` от winit scroll выглядит игрушечно на 4K. Открывает возможность работать с реальными статьями.
-6. **`cargo bench` baseline на `samples/page.html`** — parse + layout + paint. Без baseline-измерений целевые числа из плана (300ms cold start, <100MB RAM) — лозунги, не контракт.
+4. **Scroll + DPR-awareness в shell.** Вместе, потому что без `scale_factor` от winit scroll выглядит игрушечно на 4K. Открывает возможность работать с реальными статьями.
+5. **`cargo bench` baseline на `samples/page.html`** — parse + layout + paint. Без baseline-измерений целевые числа из плана (300ms cold start, <100MB RAM) — лозунги, не контракт.
+6. **`RequestBlocked` event + место для FilterListSource-чек** — Started/Completed уже emit-ятся, Blocked пока нет (нет источника блокировок). Добавить, как только появится первый фильтр (трекеры / ad-blocker), чтобы каждый «не-исходящий байт» тоже был виден.
 
 ### Средний приоритет (Phase 1+)
 
@@ -539,6 +549,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 - **Persistent storage пишем сами, `redb` / `sled` / SQLite не берём как exception #5.** Storage — engine-adjacent: своё crypto = security antipattern (поэтому `rustls` оправдан), а свой log-structured KV (append-only log + atomic rename + периодическая компакция) — несколько недель работы, в духе принципа «default — своё». Промежуточный шаг до v0.5 — бинарный `LUMEN_KV_V2` snapshot + atomic write (write-temp + rename). Текущий текстовый `LUMEN_KV_V1` достаточен пока история <10 МБ. Каждый принятый exception дешевит обоснование четырёх уже существующих — это не та граница, где стоит уступать.
 - **Punycode применяется на этапе `parse_url` в `lumen-network`, не в `Url::parse`.** Url остаётся тонкой обёрткой над String (как было задумано в комментарии url.rs: «правильная Punycode-конвертация реализуется в network-слое»). Альтернатива (превращать host в ASCII прямо в `Url::parse`) ломала бы две вещи: (1) `Url` должен уметь хранить и отдавать оригинальную Unicode-форму для отображения пользователю в адресной строке; (2) для file:// и других схем Punycode не применим. Network-слой — единственный потребитель, которому нужна ASCII-форма (DNS lookup, TLS SNI, Host header). Поэтому `idn::domain_to_ascii` зовётся внутри `parse_url`, после того как host извлечён из authority. Без NFC normalization и UTS #46: для русских доменов (NFC-стабильная кириллица) практически достаточно `str::to_lowercase`. Если упрёмся в edge case (например, ß или ZWJ) — добавим mapping table.
 - **UTF-16: голый label `utf-16` мапится на LE, не на BE.** Это WHATWG Encoding Standard §4.2: алиасы `utf-16`, `unicode`, `ucs-2` — все на UTF-16 LE, потому что подавляющее большинство «UTF-16»-файлов в природе — это `Save As → Unicode` из Windows Notepad, который пишет LE. UTF-16 BE достижим только через явный `utf-16be`. Это противоречит здравому смыслу (BE — natural byte order для big-endian network), но менять — значит ломать существующий веб. Декодер же спокойно снимает BOM любого endian-а в начале потока: если detect отдал Utf16Le, а реальный BOM `FE FF` — мы корректно его обрезаем (детектор бы выбрал Utf16Be, но defensive coding). Lone surrogates и нечётное число байт превращаются в U+FFFD — invalid-on-input, никаких panic-ов. Surrogate-пары обрабатываются вручную: `0x10000 + ((high - 0xD800) << 10) + (low - 0xDC00)`; не используем `char::decode_utf16` из std, потому что нам нужна полная управляемость над non-strict обработкой (std возвращает Result-итератор, лень обёртывать ради того же результата).
+- **`EventSink::emit(&self, &Event)` — `&self`, не `&mut self`, и `&Event`, не `Event` по значению.** `&self` потому, что типичная реализация хранит state под `Mutex` / atomic / channel-sender и должна быть shared между потоками (фоновая загрузка favicon + main thread, network-log UI thread); `&mut self` навязал бы один обладатель и потребовал бы `Arc<Mutex<dyn EventSink>>` у каждого вызывающего, что превратило бы emit в hot-path с двойной indirection. `&Event` потому, что caller (network) обычно не нуждается в событии после emit (он отбрасывает значение), а sink сам решает: счётчик может извлечь нужное поле без clone, collector — клонировать. Платить `event.clone()` на стороне caller-а при том, что половина sink-ов его выкинет — антипаттерн. Альтернатива (`emit_owned(Event)`) — добавим параллельно, если найдётся sink, которому zero-copy ownership критичен; пока такого случая нет. **`Option<Arc<dyn EventSink>>` в `HttpClient`, не `Arc<NoopEventSink>` по умолчанию.** Дефолтный путь «события никому не нужны» — самый горячий (тесты, batch-fetch без UI); каждое лишнее `noop.emit(&...)` это виртуальный вызов через trait object и lock-acquire в типичной реализации. `if let Some(s) = sink` обходится в одну ветку без indirection. Hot-path remains zero-cost. **Sink дёргается ПОСЛЕ валидации, но ДО I/O.** `RequestStarted` эмитим после `parse_url` (bad scheme не эмитит — байт даже не подумал улетать), но до `TcpStream::connect` (иначе observer не узнает о попытке соединения, если DNS упал). `RequestCompleted` — после status line, до анализа кода: 4xx — это всё ещё «outgoing byte получил response», observer должен это видеть, а fetch вернёт Err. Каждый redirect-hop генерит свою пару — `fetch_with_redirect` рекурсивно зовёт сам себя с уменьшенным `hops_left`, и каждый виток эмитит на своём URL.
 
 ### Открытые вопросы (решим, когда упрёмся)
 
@@ -557,6 +568,8 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            network-event-sink     — EventSink trait в lumen-core + emit RequestStarted/Completed в HttpClient (по hop, до сокета / до анализа status), StdoutEventSink в shell. Принцип №4 «каждый исходящий байт виден» оживлён. Option<Arc<dyn EventSink>> вместо NoopEventSink — zero-cost когда никто не слушает. 5 новых тестов через mock-TcpListener
+*            claude-md-only-in-folder — CLAUDE.md «Рабочая зона»: все правки только в корне lumen-browser; файлы вне (dotfile-ы, соседние проекты) — только с явного согласия. Бесплатное напоминание для будущих сессий.
 *            css-min-max-dimensions — min-width / max-width / min-height / max-height (CSS 2.1 §10.4): clamp в lay_out, min beats max, не наследуются, отрицательные отбрасываются; 10 новых тестов
 *            css-has-pseudo         — :has(rs-list) (CSS Selectors L4 §17.2): combinator?+complex, descendant/child/+/~, specificity max-of-list, descendants only (не сам E); 8 css-parser + 5 layout тестов
 *            claude-md-worktree-rule — обязательные git worktree для параллельных сессий + WIP-коммиты + запреты в shared dir + новая запись в «Известные ловушки»
@@ -669,9 +682,9 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 - **Тесты в `lumen-paint::display_list` и `lumen-paint::atlas`** — это unit-тесты. Renderer (`renderer.rs`) визуальный, без автотестов; проверяй через `cargo run`. Display list snapshot-тесты реализованы в `tests/snapshot_tests.rs`.
 - **`font_size` влияет на масштаб quad-а, но не на разрешение растеризации.** Глифы всегда рисуются на 24 px и масштабируются. Это компромисс Phase 0 — multi-size atlas позже.
 - **Font fallback отсутствует — рендерер всегда `Inter Regular`.** `font-family` в CSS парсится, в paint игнорируется. Реальная страница с эмодзи / CJK / `font-family: Roboto` отрисуется в `?`-глифы (для не-Latin / не-кириллицы) или fallback на Inter (для имён, которых Inter не содержит). Блокер для любой Phase 1 демонстрации. См. roadmap «Ближайшее» п.2.
-- **HiDPI / DPR не учитывается.** `winit` отдаёт `scale_factor`, в layout/paint не прокинут. На 4K мониторе всё отрисуется в реальный 0.5× от ожидаемого. См. roadmap «Ближайшее» п.5.
+- **HiDPI / DPR не учитывается.** `winit` отдаёт `scale_factor`, в layout/paint не прокинут. На 4K мониторе всё отрисуется в реальный 0.5× от ожидаемого. См. roadmap «Ближайшее» п.4.
 - **`lumen-core::Url` это `Url(String)` без декомпозиции.** `parse_url` в `lumen-network` ad-hoc парсит scheme/host/port/path заново. Дублирование. См. roadmap «Ближайшее» п.3.
-- **`Request*` события в `lumen-core::event` объявлены, никем не emit-ятся.** Принцип «каждый исходящий байт виден» сейчас — мёртвый код. См. roadmap «Ближайшее» п.4.
+- **`RequestBlocked` пока не emit-ится.** `RequestStarted` / `RequestCompleted` уже выходят из `HttpClient`, а `Blocked` нужен только когда появится `FilterListSource` или другой источник причин блокировки. До того момента — событие объявлено, но никогда не вылетает (это не баг, а отложенная функциональность).
 - **Параллельные сессии в одном working tree = катастрофа.** Если две Claude-сессии в одной папке делают `git checkout` разных веток — git стэшит работу одной из них и переключает обе на новую ветку. Восстановление через `git stash list` / `git stash pop` хрупкое: легко получить файлы от чужой задачи, потерять часть собственной работы при `git restore`, попасть в конфликты. **Решение — обязательные `git worktree`-ы** для каждой сессии (см. раздел «Изоляция через `git worktree`» в Git workflow). Если попался на чужой ветке — `git stash list` покажет, что было утеряно; не делай `git restore .` пока не восстановил.
 
 ---
