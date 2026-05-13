@@ -32,6 +32,11 @@ const GRAY8_TRNS_3X2: &[u8] = include_bytes!("fixtures/gray8_trns_3x2.png");
 const RGB8_TRNS_2X2: &[u8] = include_bytes!("fixtures/rgb8_trns_2x2.png");
 const GRAY16_TRNS_2X2: &[u8] = include_bytes!("fixtures/gray16_trns_2x2.png");
 const RGB16_TRNS_2X2: &[u8] = include_bytes!("fixtures/rgb16_trns_2x2.png");
+const ADAM7_RGB_8X8: &[u8] = include_bytes!("fixtures/adam7_rgb_8x8.png");
+const ADAM7_GRAY_5X5: &[u8] = include_bytes!("fixtures/adam7_gray_5x5.png");
+const ADAM7_RGBA_4X4: &[u8] = include_bytes!("fixtures/adam7_rgba_4x4.png");
+const ADAM7_RGB_1X1: &[u8] = include_bytes!("fixtures/adam7_rgb_1x1.png");
+const ADAM7_RGB_2X2: &[u8] = include_bytes!("fixtures/adam7_rgb_2x2.png");
 
 #[test]
 fn decode_rgb8_3x2() {
@@ -439,6 +444,90 @@ fn decode_rgb16_with_trns_yields_rgba8() {
         vec![
             255, 255, 255, 0, 255, 0, 0, 255, // row 0: white transparent, red opaque
             255, 255, 255, 0, 0, 255, 0, 255, // row 1: white transparent, green opaque
+        ]
+    );
+}
+
+#[test]
+fn decode_adam7_rgb_8x8() {
+    // 8x8 RGB, pixel(col,row) = (col*32, row*32, 128).
+    // Все 7 passes должны корректно собраться в исходное изображение.
+    let img = decode_png(ADAM7_RGB_8X8).unwrap();
+    assert_eq!(img.width, 8);
+    assert_eq!(img.height, 8);
+    assert_eq!(img.format, PixelFormat::Rgb8);
+    for row in 0..8u32 {
+        for col in 0..8u32 {
+            let off = ((row * 8 + col) * 3) as usize;
+            assert_eq!(img.data[off], (col * 32) as u8, "row {row} col {col} R");
+            assert_eq!(img.data[off + 1], (row * 32) as u8, "row {row} col {col} G");
+            assert_eq!(img.data[off + 2], 128, "row {row} col {col} B");
+        }
+    }
+}
+
+#[test]
+fn decode_adam7_gray_5x5() {
+    // 5x5 grayscale, pixel(col,row) = col*40 + row*8.
+    // Нечётный размер: некоторые passes имеют ph=0.
+    let img = decode_png(ADAM7_GRAY_5X5).unwrap();
+    assert_eq!(img.width, 5);
+    assert_eq!(img.height, 5);
+    assert_eq!(img.format, PixelFormat::Gray8);
+    for row in 0..5u32 {
+        for col in 0..5u32 {
+            let expected = (col * 40 + row * 8) as u8;
+            assert_eq!(
+                img.data[(row * 5 + col) as usize],
+                expected,
+                "row {row} col {col}"
+            );
+        }
+    }
+}
+
+#[test]
+fn decode_adam7_rgba_4x4() {
+    // 4x4 RGBA — проверяет 4-байтовый bpp в Adam7-сборке.
+    let img = decode_png(ADAM7_RGBA_4X4).unwrap();
+    assert_eq!(img.width, 4);
+    assert_eq!(img.height, 4);
+    assert_eq!(img.format, PixelFormat::Rgba8);
+    for row in 0..4u32 {
+        for col in 0..4u32 {
+            let off = ((row * 4 + col) * 4) as usize;
+            assert_eq!(img.data[off], (col * 64) as u8);
+            assert_eq!(img.data[off + 1], (row * 64) as u8);
+            assert_eq!(img.data[off + 2], 128);
+            assert_eq!(img.data[off + 3], (64 + col * 48) as u8);
+        }
+    }
+}
+
+#[test]
+fn decode_adam7_rgb_1x1_only_pass1() {
+    // Минимальный кейс: 1x1 RGB. Только pass 1 имеет 1 пиксель;
+    // остальные 6 passes пустые → skip-логика проверяется.
+    let img = decode_png(ADAM7_RGB_1X1).unwrap();
+    assert_eq!(img.width, 1);
+    assert_eq!(img.height, 1);
+    assert_eq!(img.format, PixelFormat::Rgb8);
+    assert_eq!(img.data, vec![255, 127, 0]);
+}
+
+#[test]
+fn decode_adam7_rgb_2x2() {
+    // 2x2 RGB. Passes:
+    //   1 (0,0)=(10,20,30), 6 (1,0)=(40,50,60), 7 (0,1) (1,1)=(70,80,90)(100,110,120)
+    let img = decode_png(ADAM7_RGB_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Rgb8);
+    assert_eq!(
+        img.data,
+        vec![
+            10, 20, 30, 40, 50, 60, // row 0
+            70, 80, 90, 100, 110, 120, // row 1
         ]
     );
 }
