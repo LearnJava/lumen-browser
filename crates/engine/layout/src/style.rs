@@ -37,6 +37,24 @@ pub enum TextAlign {
     Right,
 }
 
+/// CSS Overflow L3 — `overflow`. Не наследуется.
+///
+/// `Visible` — содержимое выходит за пределы коробки и видно. `Hidden` —
+/// клипуется (без скроллбара). `Clip` — то же, но без формирования
+/// scroll container и без поддержки `overflow-anchor`. `Scroll` — всегда
+/// показать scrollbar, `Auto` — показать только если контент не влезает.
+/// Phase 0 layout только хранит — реальный clipping / scroll в paint
+/// pipeline ещё нет.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Overflow {
+    #[default]
+    Visible,
+    Hidden,
+    Clip,
+    Scroll,
+    Auto,
+}
+
 /// CSS Display L3 §4 — `visibility`. Inherited.
 ///
 /// В отличие от `display: none`, элемент с `visibility: hidden` участвует
@@ -295,6 +313,9 @@ pub struct ComputedStyle {
     pub box_sizing: BoxSizing,
     /// CSS Display L3 §4 — visibility. Inherited.
     pub visibility: Visibility,
+    /// CSS Overflow L3 — отдельные поля для X и Y. Не наследуются.
+    pub overflow_x: Overflow,
+    pub overflow_y: Overflow,
     /// CSS Color L3 §3.2 — opacity (0.0..=1.0). Не наследуется. Работает
     /// как alpha всего слоя (включая фон, бордер, текст и потомков). В
     /// Phase 0 layout только хранит — paint пока не применяет alpha
@@ -369,6 +390,8 @@ impl ComputedStyle {
             border_left_color: None,
             box_sizing: BoxSizing::ContentBox,
             visibility: Visibility::Visible,
+            overflow_x: Overflow::Visible,
+            overflow_y: Overflow::Visible,
             opacity: 1.0,
             outline_width: 0.0,
             outline_style: BorderStyle::None,
@@ -428,6 +451,9 @@ pub fn compute_style(
         box_sizing: BoxSizing::ContentBox,
         // Inherited (CSS Display L3 §4).
         visibility: inherited.visibility,
+        // Не наследуется.
+        overflow_x: Overflow::Visible,
+        overflow_y: Overflow::Visible,
         opacity: 1.0,
         outline_width: 0.0,
         outline_style: BorderStyle::None,
@@ -856,6 +882,18 @@ fn default_display(doc: &Document, node: NodeId) -> Display {
     }
 }
 
+/// CSS Overflow L3: парсит keyword в `Overflow`. None = неизвестное.
+fn parse_overflow_kw(s: &str) -> Option<Overflow> {
+    match s {
+        "visible" => Some(Overflow::Visible),
+        "hidden" => Some(Overflow::Hidden),
+        "clip" => Some(Overflow::Clip),
+        "scroll" => Some(Overflow::Scroll),
+        "auto" => Some(Overflow::Auto),
+        _ => None,
+    }
+}
+
 /// Эмулирует UA stylesheet для font-style: HTML §15.3.3 рекомендует italic
 /// для `<em>` / `<i>` / `<cite>` / `<dfn>` / `<address>` / `<var>`. Возвращает
 /// `Some(Italic)` для них, `None` для остальных (= наследовать как обычно).
@@ -1200,6 +1238,33 @@ fn apply_declaration(
                 "collapse" => Visibility::Collapse,
                 _ => style.visibility,
             };
+        }
+        "overflow" => {
+            // CSS Overflow L3: shorthand. Один токен — оба axis; два — x y.
+            let toks: Vec<&str> = val.split_whitespace().collect();
+            match toks.as_slice() {
+                [a] => {
+                    if let Some(o) = parse_overflow_kw(a) {
+                        style.overflow_x = o;
+                        style.overflow_y = o;
+                    }
+                }
+                [a, b] => {
+                    if let Some(o) = parse_overflow_kw(a) { style.overflow_x = o; }
+                    if let Some(o) = parse_overflow_kw(b) { style.overflow_y = o; }
+                }
+                _ => {}
+            }
+        }
+        "overflow-x" => {
+            if let Some(o) = parse_overflow_kw(val.trim()) {
+                style.overflow_x = o;
+            }
+        }
+        "overflow-y" => {
+            if let Some(o) = parse_overflow_kw(val.trim()) {
+                style.overflow_y = o;
+            }
         }
         "outline" => {
             // outline shorthand — аналог border-shorthand, но применяется к

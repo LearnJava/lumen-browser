@@ -11,8 +11,8 @@
 
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
 use crate::style::{
-    BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, FontWeight, TextAlign,
-    TextTransform, Visibility, WhiteSpace,
+    BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, FontWeight, Overflow,
+    TextAlign, TextTransform, Visibility, WhiteSpace,
 };
 use std::fmt::Write;
 
@@ -234,6 +234,24 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
         Visibility::Collapse => {
             let _ = write!(out, " visibility=collapse");
         }
+    }
+    if s.overflow_x != Overflow::Visible || s.overflow_y != Overflow::Visible {
+        let _ = write!(
+            out,
+            " overflow={}/{}",
+            overflow_str(s.overflow_x),
+            overflow_str(s.overflow_y)
+        );
+    }
+}
+
+fn overflow_str(o: Overflow) -> &'static str {
+    match o {
+        Overflow::Visible => "visible",
+        Overflow::Hidden => "hidden",
+        Overflow::Clip => "clip",
+        Overflow::Scroll => "scroll",
+        Overflow::Auto => "auto",
     }
 }
 

@@ -19,8 +19,8 @@ pub mod style;
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
 pub use style::{
-    BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, FontWeight, TextAlign,
-    TextDecorationLine, TextTransform, Visibility, WhiteSpace,
+    BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, FontWeight, Overflow,
+    TextAlign, TextDecorationLine, TextTransform, Visibility, WhiteSpace,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -2370,5 +2370,70 @@ mod tests {
         // Высота с display:none = 0 (бокс пропадает).
         assert!(none.rect.height < 0.1,
             "display:none должен убрать высоту: {}", none.rect.height);
+    }
+
+    // ── overflow (CSS Overflow L3) ──────────────────────────────────────────
+
+    #[test]
+    fn overflow_default_visible() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.overflow_x, Overflow::Visible);
+        assert_eq!(p.style.overflow_y, Overflow::Visible);
+    }
+
+    #[test]
+    fn overflow_shorthand_one_value() {
+        let root = lay("<p>x</p>", "p { overflow: hidden; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.overflow_x, Overflow::Hidden);
+        assert_eq!(p.style.overflow_y, Overflow::Hidden);
+    }
+
+    #[test]
+    fn overflow_shorthand_two_values() {
+        let root = lay("<p>x</p>", "p { overflow: scroll auto; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.overflow_x, Overflow::Scroll);
+        assert_eq!(p.style.overflow_y, Overflow::Auto);
+    }
+
+    #[test]
+    fn overflow_individual_x_y() {
+        let root = lay(
+            "<p>x</p>",
+            "p { overflow-x: clip; overflow-y: scroll; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.overflow_x, Overflow::Clip);
+        assert_eq!(p.style.overflow_y, Overflow::Scroll);
+    }
+
+    #[test]
+    fn overflow_all_keywords() {
+        for (kw, expected) in [
+            ("visible", Overflow::Visible),
+            ("hidden", Overflow::Hidden),
+            ("clip", Overflow::Clip),
+            ("scroll", Overflow::Scroll),
+            ("auto", Overflow::Auto),
+        ] {
+            let css = format!("p {{ overflow: {kw}; }}");
+            let root = lay("<p>x</p>", &css);
+            let p = first_element_child(&root);
+            assert_eq!(p.style.overflow_x, expected, "kw = {kw}");
+        }
+    }
+
+    #[test]
+    fn overflow_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { overflow: hidden; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.overflow_x, Overflow::Hidden);
+        assert_eq!(p.style.overflow_x, Overflow::Visible);
     }
 }
