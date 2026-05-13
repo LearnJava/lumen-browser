@@ -12,7 +12,8 @@ use rustls::ClientConnection;
 use rustls::pki_types::ServerName;
 
 use lumen_core::error::{Error, Result};
-use lumen_core::ext::NetworkTransport;
+use lumen_core::event::{Event, TabId};
+use lumen_core::ext::{EventSink, NetworkTransport};
 use lumen_core::idn;
 use lumen_core::url::Url;
 
@@ -243,15 +244,47 @@ fn read_chunked<R: BufRead>(mut reader: R) -> Result<Vec<u8>> {
 
 // ── Редиректы ────────────────────────────────────────────────────────────────
 
-fn fetch_with_redirect(url: &str, hops_left: u8) -> Result<Vec<u8>> {
+fn fetch_with_redirect(
+    url: &str,
+    hops_left: u8,
+    sink: Option<&dyn EventSink>,
+    tab_id: TabId,
+) -> Result<Vec<u8>> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
     }
 
+    // parse_url валидирует scheme/host/port раньше, чем мы откроем сокет.
+    // События эмитим только если форма запроса прошла валидацию: на bad scheme
+    // (`ftp://...`) ни RequestStarted, ни RequestCompleted — байт даже не
+    // подумал улетать. Сетевые ошибки после parse (DNS, refused, TLS handshake)
+    // оставляют Started без Completed — это инвариант «started + missing
+    // completed = network failure»; явный RequestFailed добавим, когда увидим,
+    // что наблюдателям этого мало.
     let parsed = parse_url(url)?;
+
+    let event_url = Url::parse(url)
+        .expect("url validated by parse_url above (non-empty, http/https scheme)");
+    if let Some(s) = sink {
+        s.emit(&Event::RequestStarted {
+            tab_id,
+            url: event_url.clone(),
+        });
+    }
+
     let mut conn = connect(&parsed)?;
     write_request(&mut conn, &parsed.host, &parsed.path)?;
     let resp = read_response(conn)?;
+
+    // RequestCompleted эмитим всегда после получения статуса, до анализа кода:
+    // редирект-hop, 4xx, 5xx — всё это «outgoing byte был виден ответом».
+    if let Some(s) = sink {
+        s.emit(&Event::RequestCompleted {
+            tab_id,
+            url: event_url,
+            status: resp.status,
+        });
+    }
 
     match resp.status {
         200..=299 => Ok(resp.body),
@@ -273,7 +306,7 @@ fn fetch_with_redirect(url: &str, hops_left: u8) -> Result<Vec<u8>> {
                 }
             };
 
-            fetch_with_redirect(&next_url, hops_left - 1)
+            fetch_with_redirect(&next_url, hops_left - 1, sink, tab_id)
         }
         status => Err(Error::Network(format!("HTTP {status}"))),
     }
@@ -288,12 +321,37 @@ fn scheme_str(s: Scheme) -> &'static str {
 
 // ── Публичный API ────────────────────────────────────────────────────────────
 
-/// HTTP/1.1 + HTTPS клиент. Потокобезопасен — нет внутреннего состояния.
-pub struct HttpClient;
+/// HTTP/1.1 + HTTPS клиент.
+///
+/// По умолчанию события никуда не уходят (sink не подключён). Подключите свой
+/// `EventSink` через `with_sink`, чтобы наблюдать `RequestStarted` /
+/// `RequestCompleted` для каждого исходящего запроса (включая редирект-hops).
+pub struct HttpClient {
+    sink: Option<Arc<dyn EventSink>>,
+    tab_id: TabId,
+}
 
 impl HttpClient {
     pub fn new() -> Self {
-        Self
+        Self {
+            sink: None,
+            tab_id: TabId(0),
+        }
+    }
+
+    /// Подключить EventSink. По умолчанию sink-а нет (события не эмитятся).
+    #[must_use]
+    pub fn with_sink(mut self, sink: Arc<dyn EventSink>) -> Self {
+        self.sink = Some(sink);
+        self
+    }
+
+    /// Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
+    /// (без вкладок) shell оставляет дефолтный `TabId(0)`.
+    #[must_use]
+    pub fn with_tab(mut self, tab_id: TabId) -> Self {
+        self.tab_id = tab_id;
+        self
     }
 }
 
@@ -305,7 +363,12 @@ impl Default for HttpClient {
 
 impl NetworkTransport for HttpClient {
     fn fetch(&self, url: &Url) -> Result<Vec<u8>> {
-        fetch_with_redirect(url.as_str(), 5)
+        fetch_with_redirect(
+            url.as_str(),
+            5,
+            self.sink.as_deref(),
+            self.tab_id,
+        )
     }
 }
 
@@ -429,5 +492,179 @@ mod tests {
         };
         assert_eq!(resolved, "https://other.com/page");
         let _ = p;
+    }
+
+    // ── EventSink ────────────────────────────────────────────────────────────
+
+    use std::net::TcpListener;
+    use std::sync::Mutex;
+    use std::thread;
+
+    /// Тестовый sink, собирающий все события в порядке emit.
+    struct CollectingSink(Mutex<Vec<Event>>);
+
+    impl CollectingSink {
+        fn new() -> Self {
+            Self(Mutex::new(Vec::new()))
+        }
+
+        fn events(&self) -> Vec<Event> {
+            self.0.lock().unwrap().clone()
+        }
+    }
+
+    impl EventSink for CollectingSink {
+        fn emit(&self, event: &Event) {
+            self.0.lock().unwrap().push(event.clone());
+        }
+    }
+
+    #[test]
+    fn http_client_builder_default_no_sink() {
+        // HttpClient::new() работает без sink. Этот тест верифицирует, что
+        // builder типы выровнены (компилируется, не паникует на drop).
+        let _c = HttpClient::new();
+        let _c = HttpClient::default();
+        let _c = HttpClient::new().with_tab(TabId(42));
+    }
+
+    /// Запустить минимальный HTTP-сервер на 127.0.0.1:0, который ответит на
+    /// `accept_count` соединений согласно `responder`. Возвращает (port, join).
+    /// Responder вызывается с номером соединения (1..=accept_count) и возвращает
+    /// тело HTTP-ответа (включая статус-строку и заголовки).
+    fn mock_http_server<F>(accept_count: usize, responder: F) -> (u16, thread::JoinHandle<()>)
+    where
+        F: Fn(usize) -> Vec<u8> + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            for i in 1..=accept_count {
+                let (mut sock, _) = listener.accept().expect("accept");
+                // Прочитаем запрос до пустой строки, иначе клиент не дождётся ответа.
+                let mut reader = BufReader::new(sock.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    if line == "\r\n" || line == "\n" || line.is_empty() {
+                        break;
+                    }
+                }
+                let body = responder(i);
+                let _ = sock.write_all(&body);
+                let _ = sock.shutdown(std::net::Shutdown::Both);
+            }
+        });
+        (port, handle)
+    }
+
+    #[test]
+    fn fetch_emits_started_then_completed_200() {
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nhello".to_vec()
+        });
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new().with_sink(sink.clone()).with_tab(TabId(7));
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let body = client.fetch(&url).expect("fetch");
+        assert_eq!(body, b"hello");
+
+        let events = sink.events();
+        assert_eq!(events.len(), 2, "expected Started + Completed, got {events:?}");
+        match &events[0] {
+            Event::RequestStarted { tab_id, url } => {
+                assert_eq!(*tab_id, TabId(7));
+                assert_eq!(url.as_str(), &format!("http://127.0.0.1:{port}/"));
+            }
+            other => panic!("expected RequestStarted, got {other:?}"),
+        }
+        match &events[1] {
+            Event::RequestCompleted { tab_id, url, status } => {
+                assert_eq!(*tab_id, TabId(7));
+                assert_eq!(url.as_str(), &format!("http://127.0.0.1:{port}/"));
+                assert_eq!(*status, 200);
+            }
+            other => panic!("expected RequestCompleted, got {other:?}"),
+        }
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_emits_events_per_redirect_hop() {
+        // Два hop-а: 1-й → 302 Location: /next, 2-й → 200 OK. Ожидаем
+        // 4 события подряд: Started(/), Completed(302), Started(/next), Completed(200).
+        let (port, server) = mock_http_server(2, move |i| match i {
+            1 => b"HTTP/1.1 302 Found\r\nLocation: /next\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndone".to_vec(),
+            _ => unreachable!(),
+        });
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new().with_sink(sink.clone());
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let body = client.fetch(&url).expect("fetch");
+        assert_eq!(body, b"done");
+
+        let events = sink.events();
+        assert_eq!(events.len(), 4, "expected 4 events for 2 hops, got {events:?}");
+        assert!(matches!(events[0], Event::RequestStarted { .. }));
+        match &events[1] {
+            Event::RequestCompleted { status, url, .. } => {
+                assert_eq!(*status, 302);
+                assert_eq!(url.as_str(), &format!("http://127.0.0.1:{port}/"));
+            }
+            other => panic!("expected RequestCompleted(302), got {other:?}"),
+        }
+        match &events[2] {
+            Event::RequestStarted { url, .. } => {
+                assert_eq!(url.as_str(), &format!("http://127.0.0.1:{port}/next"));
+            }
+            other => panic!("expected RequestStarted for /next, got {other:?}"),
+        }
+        match &events[3] {
+            Event::RequestCompleted { status, .. } => assert_eq!(*status, 200),
+            other => panic!("expected RequestCompleted(200), got {other:?}"),
+        }
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_emits_completed_even_for_4xx() {
+        // 4xx — тоже completed-response, fetch вернёт Err, но событие должно
+        // быть видно: байт улетел, ответ получен.
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+        });
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new().with_sink(sink.clone());
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/missing")).unwrap();
+        assert!(client.fetch(&url).is_err());
+
+        let events = sink.events();
+        assert_eq!(events.len(), 2);
+        assert!(matches!(events[0], Event::RequestStarted { .. }));
+        match &events[1] {
+            Event::RequestCompleted { status, .. } => assert_eq!(*status, 404),
+            other => panic!("expected RequestCompleted(404), got {other:?}"),
+        }
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_bad_scheme_emits_no_events() {
+        // parse_url упадёт до emit — запрос даже не сформировался,
+        // sink остаётся пустым.
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new().with_sink(sink.clone());
+        let url = Url::parse("ftp://example.com/").unwrap();
+        assert!(client.fetch(&url).is_err());
+        assert!(sink.events().is_empty());
     }
 }

@@ -13,10 +13,30 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::Arc;
 
+use lumen_core::event::Event;
+use lumen_core::ext::EventSink;
 use lumen_core::geom::Size;
 use lumen_dom::{Document, NodeData, NodeId};
 use lumen_paint::{DisplayList, Renderer};
 use winit::application::ApplicationHandler;
+
+/// EventSink, который печатает сетевые события в stdout — это и есть
+/// «network log» Phase 0, реализующий принцип №4 «каждый исходящий байт
+/// виден». Позже заменится на структурированный UI-логгер.
+struct StdoutEventSink;
+
+impl EventSink for StdoutEventSink {
+    fn emit(&self, event: &Event) {
+        match event {
+            Event::RequestStarted { url, .. } => println!("→ GET {url}"),
+            Event::RequestCompleted { url, status, .. } => println!("← {status} {url}"),
+            Event::RequestBlocked { url, reason, .. } => println!("✗ {url} ({reason})"),
+            // Прочие события (TabCreated, Navigation, …) в Phase 0 не emit-ятся,
+            // print не нужен.
+            _ => {}
+        }
+    }
+}
 
 /// Bundled-шрифт: статический Inter v4.1 Regular (~411 КБ),
 /// SIL OFL 1.1, см. assets/fonts/OFL.txt.
@@ -29,10 +49,12 @@ use winit::window::{Window, WindowId};
 fn main() -> ExitCode {
     println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
 
+    let event_sink: Arc<dyn EventSink> = Arc::new(StdoutEventSink);
+
     let arg = std::env::args().nth(1);
     let initial_list = match arg {
         Some(ref s) if s.starts_with("http://") || s.starts_with("https://") => {
-            match load_url(s) {
+            match load_url(s, event_sink.clone()) {
                 Ok(list) => list,
                 Err(err) => {
                     eprintln!("Ошибка загрузки {s}: {err}");
@@ -42,7 +64,7 @@ fn main() -> ExitCode {
         }
         Some(ref s) => {
             let path = PathBuf::from(s);
-            match load_page(&path) {
+            match load_page(&path, event_sink.clone()) {
                 Ok(list) => list,
                 Err(err) => {
                     eprintln!("Ошибка загрузки {}: {err}", path.display());
@@ -72,21 +94,21 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn load_url(url: &str) -> Result<DisplayList, Box<dyn Error>> {
+fn load_url(url: &str, sink: Arc<dyn EventSink>) -> Result<DisplayList, Box<dyn Error>> {
     use lumen_core::ext::NetworkTransport;
     use lumen_core::url::Url;
     use lumen_network::HttpClient;
 
-    println!("Загрузка: {url}");
     let lumen_url = Url::parse(url)?;
-    let bytes = HttpClient::new().fetch(&lumen_url)?;
+    let client = HttpClient::new().with_sink(sink.clone());
+    let bytes = client.fetch(&lumen_url)?;
     println!("Получено {} байт", bytes.len());
-    render_bytes(&bytes, Some("text/html"), &ResourceBase::Url(url.to_owned()))
+    render_bytes(&bytes, Some("text/html"), &ResourceBase::Url(url.to_owned()), sink)
 }
 
-fn load_page(path: &PathBuf) -> Result<DisplayList, Box<dyn Error>> {
+fn load_page(path: &PathBuf, sink: Arc<dyn EventSink>) -> Result<DisplayList, Box<dyn Error>> {
     let bytes = std::fs::read(path)?;
-    render_bytes(&bytes, None, &ResourceBase::File(path.clone()))
+    render_bytes(&bytes, None, &ResourceBase::File(path.clone()), sink)
 }
 
 // ── Разрешение внешних ресурсов ──────────────────────────────────────────────
@@ -145,7 +167,7 @@ fn resolve_url(base_url: &str, href: &str) -> String {
 
 // ── Загрузка внешних CSS ─────────────────────────────────────────────────────
 
-fn load_linked_stylesheets(doc: &Document, base: &ResourceBase) -> String {
+fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn EventSink>) -> String {
     let mut hrefs = Vec::new();
     collect_link_hrefs(doc, doc.root(), &mut hrefs);
 
@@ -165,10 +187,10 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase) -> String {
                 use lumen_core::url::Url;
                 use lumen_network::HttpClient;
 
-                match Url::parse(&url).and_then(|u| HttpClient::new().fetch(&u)) {
+                let client = HttpClient::new().with_sink(sink.clone());
+                match Url::parse(&url).and_then(|u| client.fetch(&u)) {
                     Ok(bytes) => {
                         let content = String::from_utf8_lossy(&bytes);
-                        println!("Загружен CSS: {url}");
                         css.push_str(&content);
                         css.push('\n');
                     }
@@ -213,6 +235,7 @@ fn render_bytes(
     bytes: &[u8],
     content_type: Option<&str>,
     base: &ResourceBase,
+    sink: Arc<dyn EventSink>,
 ) -> Result<DisplayList, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -224,7 +247,7 @@ fn render_bytes(
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let mut css = extract_style_blocks(&doc);
-    css.push_str(&load_linked_stylesheets(&doc, base));
+    css.push_str(&load_linked_stylesheets(&doc, base, &sink));
 
     let sheet = lumen_css_parser::parse(&css);
     let viewport = Size::new(1024.0, 720.0);

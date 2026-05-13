@@ -17,6 +17,7 @@ pub mod url;
 pub use capability::{Capability, CapabilityToken};
 pub use error::{Error, Result};
 pub use event::{Event, TabId};
+pub use ext::{EventSink, NoopEventSink};
 pub use geom::{Point, Rect, Size};
 pub use module::Module;
 pub use url::Url;

@@ -9,11 +9,41 @@
 //! реализации, а не от всех альтернатив.
 
 use crate::error::Result;
+use crate::event::Event;
 use crate::url::Url;
 
 /// Сетевой транспорт. Подменяется на mock для тестов или на альтернативный стек.
 pub trait NetworkTransport: Send + Sync {
     fn fetch(&self, url: &Url) -> Result<Vec<u8>>;
+}
+
+/// Приёмник событий из подсистем (network, навигация, вкладки).
+///
+/// Реализует принцип №4 «каждый исходящий байт виден»: транспорты эмитят
+/// `Event::RequestStarted` / `RequestCompleted` / `RequestBlocked`, а
+/// наблюдатель (shell, network-log UI, тесты, плагины) получает их через
+/// единый интерфейс. Реализация шины (EventBus) появится позже, когда
+/// потребителей станет больше одного; пока — single sink, передаваемый явно
+/// в подсистему при конструировании.
+///
+/// `&self` без `&mut`: типичная реализация — `Mutex<Vec<Event>>` или channel,
+/// и каждый `emit` атомарен. `Send + Sync` — sink можно делить между потоками
+/// (фоновая загрузка favicon + main thread).
+///
+/// Принимаем `&Event` (а не `Event` по значению): caller обычно не нуждается
+/// в Event после emit, но и платить за clone там, где sink его не сохраняет
+/// (например, счётчик), не должен.
+pub trait EventSink: Send + Sync {
+    fn emit(&self, event: &Event);
+}
+
+/// EventSink, который молча игнорирует все события. Дефолт для подсистем,
+/// у которых наблюдатель не подключён (тесты, headless-режимы). Применять
+/// через `Arc::new(NoopEventSink)`, чтобы избавить hot-path от `Option`-веток.
+pub struct NoopEventSink;
+
+impl EventSink for NoopEventSink {
+    fn emit(&self, _event: &Event) {}
 }
 
 /// Хранилище ключ/значение для cookies, истории, кэша.
