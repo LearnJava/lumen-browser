@@ -13,6 +13,7 @@ use rustls::pki_types::ServerName;
 
 use lumen_core::error::{Error, Result};
 use lumen_core::ext::NetworkTransport;
+use lumen_core::idn;
 use lumen_core::url::Url;
 
 // ── URL-парсинг ──────────────────────────────────────────────────────────────
@@ -45,19 +46,24 @@ fn parse_url(url: &str) -> Result<ParsedUrl> {
         None => (rest, "/".to_owned()),
     };
 
-    let (host, port) = match authority.rfind(':') {
+    let (raw_host, port) = match authority.rfind(':') {
         Some(i) => {
             let h = &authority[..i];
             let p = authority[i + 1..]
                 .parse::<u16>()
                 .map_err(|_| Error::Network(format!("invalid port in: {authority}")))?;
-            (h.to_owned(), p)
+            (h, p)
         }
         None => (
-            authority.to_owned(),
+            authority,
             if scheme == Scheme::Https { 443 } else { 80 },
         ),
     };
+
+    // IDN → ASCII (Punycode). DNS, TLS SNI и Host: header требуют ASCII
+    // в hostname (RFC 7230 §5.4 для Host, RFC 6066 §3 для SNI).
+    let host = idn::domain_to_ascii(raw_host)
+        .map_err(|e| Error::Network(format!("idn conversion failed for '{raw_host}': {e}")))?;
 
     Ok(ParsedUrl { scheme, host, port, path })
 }
@@ -337,6 +343,30 @@ mod tests {
     #[test]
     fn parse_unsupported_scheme() {
         assert!(parse_url("ftp://example.com").is_err());
+    }
+
+    #[test]
+    fn parse_idn_cyrillic_host() {
+        // Кириллический host конвертируется в Punycode на этапе parse:
+        // DNS/TLS/Host: header получают ASCII-форму.
+        let p = parse_url("https://президент.рф/").unwrap();
+        assert_eq!(p.host, "xn--d1abbgf6aiiy.xn--p1ai");
+        assert_eq!(p.port, 443);
+        assert_eq!(p.path, "/");
+    }
+
+    #[test]
+    fn parse_idn_with_port() {
+        let p = parse_url("http://пример.рф:8080/test").unwrap();
+        assert_eq!(p.host, "xn--e1afmkfd.xn--p1ai");
+        assert_eq!(p.port, 8080);
+        assert_eq!(p.path, "/test");
+    }
+
+    #[test]
+    fn parse_idn_mixed_ascii_subdomain() {
+        let p = parse_url("https://api.пример.рф/v1").unwrap();
+        assert_eq!(p.host, "api.xn--e1afmkfd.xn--p1ai");
     }
 
     #[test]
