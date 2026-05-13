@@ -249,6 +249,9 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     if !s.box_shadow.is_empty() {
         let _ = write!(out, " box-shadow={}", s.box_shadow.len());
     }
+    if !s.text_shadow.is_empty() {
+        let _ = write!(out, " text-shadow={}", s.text_shadow.len());
+    }
 }
 
 fn overflow_str(o: Overflow) -> &'static str {

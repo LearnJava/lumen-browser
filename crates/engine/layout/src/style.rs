@@ -52,6 +52,18 @@ pub struct BoxShadow {
     pub inset: bool,
 }
 
+/// CSS Text Decoration L3 §4 — спецификация одной тени текста.
+///
+/// Отличается от BoxShadow: нет `inset`, нет `spread`. Color None =
+/// currentColor.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TextShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur: f32,
+    pub color: Option<Color>,
+}
+
 /// CSS UI L4 §8.1 — `cursor`. Inherited.
 ///
 /// Хранится как enum 17 стандартных keyword-ов. URL-fallback (`cursor:
@@ -379,6 +391,9 @@ pub struct ComputedStyle {
     /// CSS Backgrounds L3 §4.6 — список теней. Не наследуется. Пустой Vec
     /// = `none`.
     pub box_shadow: Vec<BoxShadow>,
+    /// CSS Text Decoration L3 §4 — список теней текста. Inherited
+    /// (отличается от box-shadow!). Пустой Vec = `none`.
+    pub text_shadow: Vec<TextShadow>,
     /// CSS Overflow L3 — отдельные поля для X и Y. Не наследуются.
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
@@ -458,6 +473,7 @@ impl ComputedStyle {
             visibility: Visibility::Visible,
             cursor: Cursor::Auto,
             box_shadow: Vec::new(),
+            text_shadow: Vec::new(),
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
             opacity: 1.0,
@@ -521,6 +537,8 @@ pub fn compute_style(
         visibility: inherited.visibility,
         // Inherited (CSS UI L4 §8.1).
         cursor: inherited.cursor,
+        // text-shadow inherited (CSS Text Decoration L3 §4).
+        text_shadow: inherited.text_shadow.clone(),
         // Не наследуется.
         box_shadow: Vec::new(),
         overflow_x: Overflow::Visible,
@@ -1026,6 +1044,53 @@ fn parse_box_shadow_one(s: &str, em_basis: f32, viewport: Size) -> Option<BoxSha
     Some(BoxShadow { offset_x, offset_y, blur, spread, color, inset })
 }
 
+/// Парсит одну text-shadow спецификацию. Формат:
+/// `<length>{2,3} <color>?` (без inset, без spread).
+fn parse_text_shadow_one(s: &str, em_basis: f32, viewport: Size) -> Option<TextShadow> {
+    // Тот же tokenization-трюк, что у box-shadow — балансируем `()`,
+    // чтобы цветовые функции не разрывались.
+    let mut tokens: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    let mut depth = 0i32;
+    for c in s.chars() {
+        match c {
+            '(' => { depth += 1; buf.push(c); }
+            ')' => { depth -= 1; buf.push(c); }
+            ws if ws.is_whitespace() && depth == 0 => {
+                if !buf.is_empty() {
+                    tokens.push(std::mem::take(&mut buf));
+                }
+            }
+            _ => buf.push(c),
+        }
+    }
+    if !buf.is_empty() { tokens.push(buf); }
+
+    let mut color: Option<Color> = None;
+    let mut lengths: Vec<f32> = Vec::new();
+
+    for tok in tokens {
+        if let Some(c) = parse_color(&tok) {
+            color = Some(c);
+        } else if let Some(len) = parse_length(&tok)
+            && let Some(px) = match len {
+                Length::Percent(_) => None,
+                other => other.resolve(em_basis, None, viewport),
+            }
+        {
+            lengths.push(px);
+        }
+    }
+
+    let (offset_x, offset_y, blur) = match lengths.as_slice() {
+        [x, y] => (*x, *y, 0.0),
+        [x, y, b] => (*x, *y, *b),
+        _ => return None,
+    };
+
+    Some(TextShadow { offset_x, offset_y, blur, color })
+}
+
 /// CSS UI L4 §8.1: парсит keyword в `Cursor`. None = неизвестное.
 fn parse_cursor_kw(s: &str) -> Option<Cursor> {
     Some(match s {
@@ -1475,6 +1540,24 @@ fn apply_declaration(
                 }
                 if !shadows.is_empty() {
                     style.box_shadow = shadows;
+                }
+            }
+        }
+        "text-shadow" => {
+            // CSS Text Decoration L3 §4: то же что box-shadow, но без inset
+            // и spread. `none` сбрасывает (важно: text-shadow inherited,
+            // явное `none` нужно чтобы откатить родительское).
+            if val.trim() == "none" {
+                style.text_shadow = Vec::new();
+            } else {
+                let mut shadows = Vec::new();
+                for piece in split_top_level_commas(val) {
+                    if let Some(s) = parse_text_shadow_one(piece.trim(), em_basis, viewport) {
+                        shadows.push(s);
+                    }
+                }
+                if !shadows.is_empty() {
+                    style.text_shadow = shadows;
                 }
             }
         }
