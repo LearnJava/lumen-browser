@@ -475,8 +475,9 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 - **Готово:** winit 0.30 с `ApplicationHandler` API. Три режима: `lumen` (пустое окно 1024×720), `lumen <path.html>` (файл → кодировка → HTML → layout → paint), `lumen <http(s)://...>` (сеть через `HttpClient` → те же этапы). Внешний CSS: `<link rel="stylesheet" href="...">` загружается с диска (относительно HTML-файла) или по сети (относительно базового URL). `ResourceBase` enum изолирует логику разрешения относительных URL. Inter-Regular.ttf bundled через `include_bytes!`. Обработчики Resized + RedrawRequested.
 - **Готово (network log):** `StdoutEventSink` — простейший наблюдатель сетевых событий, печатает в stdout: `→ GET <url>`, `← <status> <url>`, `✗ <url> (<reason>)`. Подключается к `HttpClient` в shell, чтобы каждый исходящий байт был виден пользователю — это и есть Phase 0 версия network log из принципа №4. Позже заменится на структурированный UI-логгер (отдельная панель в окне).
+- **Готово (window title):** `extract_title(&doc) → Option<String>` берёт текст первого `<title>` элемента DOM (trim-нутый, whitespace-only → None, RCDATA-entities декодируются благодаря html-rcdata merge). `LoadedPage { display_list, title }` прокидывается через `load_url` / `load_page` / `render_bytes`. `Lumen::window_title()` форматирует строку `"<title> — Lumen <ver>"` (em-dash, общеупотребительный шаблон браузеров), fallback на `"Lumen <ver>"` для пустого окна или страницы без `<title>`. Применяется один раз в `resumed` через `Window::default_attributes().with_title(...)`; динамическое обновление при навигации появится вместе с вкладками.
 - **Отложено:** вкладки, омнибокс, навигация, истории сессий, scroll, обработка input-событий.
-- 11 unit-тестов (resolve_url, ResourceBase::resolve, collect_link_hrefs).
+- 20 unit-тестов (resolve_url, ResourceBase::resolve, collect_link_hrefs, **+7 extract_title**, **+2 window_title**).
 
 ### `lumen-bench` ✅ (baseline pipeline measurements)
 
@@ -610,6 +611,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            shell-window-title     — [P4] заголовок окна = `<title>` страницы: extract_title(&doc) с trim/whitespace-skip/first-wins, LoadedPage{display_list,title}, Lumen::window_title формирует "<title> — Lumen <ver>" с em-dash; fallback на "Lumen <ver>" если title нет. 7 extract_title + 2 window_title теста
 *            css-direction          — direction: ltr | rtl (CSS Writing Modes L3 §2.1): Direction enum, inherited через каскад, case-insensitive парсер, snapshot печатает direction=rtl; реальный RTL line-flow / bidi (UAX #9) отложен — задел под будущий движок. 6 новых тестов
 *            network-event-sink     — EventSink trait в lumen-core + emit RequestStarted/Completed в HttpClient (по hop, до сокета / до анализа status), StdoutEventSink в shell. Принцип №4 «каждый исходящий байт виден» оживлён. Option<Arc<dyn EventSink>> вместо NoopEventSink — zero-cost когда никто не слушает. 5 новых тестов через mock-TcpListener
 *            bench-baseline         — крейт lumen-bench: baseline-замеры pipeline (decode→parse→layout→paint) на samples/page.html без сторонних deps; min/median/mean/p95/max, warm-up 10 iters, LUMEN_BENCH_ITERS env override; ~85 μs TOTAL на тестовой странице
