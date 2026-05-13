@@ -385,7 +385,7 @@ git branch -d text-rendering
 
 ### Численно
 
-- **Всего тестов в workspace:** 660 (на момент последнего обновления).
+- **Всего тестов в workspace:** 665 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -486,6 +486,7 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            css-font-variant       — font-variant: normal | small-caps (CSS Fonts L4 §6, упрощённый), inherited; font-variant-caps — алиас; real small-caps rendering отложен; 5 новых тестов
 *            css-selector-backtracking — selector matching с back-tracking: matches_chain рекурсивный, перебор всех ancestor/earlier-sibling кандидатов; фикс патологии .x+a~span; 2 новых теста, find_ancestor больше не нужен
 *            css-text-overflow      — text-overflow: clip | ellipsis (CSS UI L4 §10.1), не наследуется; real truncation в paint отложен; 5 новых тестов
 *            css-border-radius      — border-radius (CSS Backgrounds L3 §5): 4 угла, shorthand 1-4 токена, individual border-X-radius, elliptical берёт горизонтальный, clamp; 9 новых тестов
