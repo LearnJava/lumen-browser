@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-_(никто ничего не зарезервировал)_
+- 🔄 CSS scientific math funcs (sin/cos/tan/abs/pow/sqrt/log/exp/hypot/mod/rem/round) [P1] — css-math-funcs — 2026-05-13
 
 
 ## Статус реализации
