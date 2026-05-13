@@ -491,8 +491,9 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 - **Готово:** winit 0.30 с `ApplicationHandler` API. Три режима: `lumen` (пустое окно 1024×720), `lumen <path.html>` (файл → кодировка → HTML → layout → paint), `lumen <http(s)://...>` (сеть через `HttpClient` → те же этапы). Внешний CSS: `<link rel="stylesheet" href="...">` загружается с диска (относительно HTML-файла) или по сети (относительно базового URL). `ResourceBase` enum изолирует логику разрешения относительных URL. Inter-Regular.ttf bundled через `include_bytes!`. Обработчики Resized + RedrawRequested.
 - **Готово (network log):** `StdoutEventSink` — простейший наблюдатель сетевых событий, печатает в stdout: `→ GET <url>`, `← <status> <url>`, `✗ <url> (<reason>)`. Подключается к `HttpClient` в shell, чтобы каждый исходящий байт был виден пользователю — это и есть Phase 0 версия network log из принципа №4. Позже заменится на структурированный UI-логгер (отдельная панель в окне).
-- **Отложено:** вкладки, омнибокс, навигация, истории сессий, scroll, обработка input-событий.
-- 11 unit-тестов (resolve_url, ResourceBase::resolve, collect_link_hrefs).
+- **Готово (window title):** `extract_title(&Document)` находит первый `<title>` в дереве, склеивает текстовые дети и сжимает whitespace через `split_whitespace().join(" ")` (отрабатывает `\n\t`, длинные пробелы). Энтити уже декодированы tokenizer-ом (RCDATA). `LoadedPage { display_list, title }` возвращается из `load_url` / `load_page` / `render_bytes` — единая точка для будущих расширений (favicon, current URL, scroll state). `window_title(Option<&str>)` форматирует заголовок: с title — `"<title> — Lumen"`, без — fallback на `Lumen <version>`.
+- **Отложено:** вкладки, омнибокс, навигация, истории сессий, scroll, обработка input-событий, динамическое обновление title при навигации (сейчас title подставляется один раз в `resumed`).
+- 19 unit-тестов (resolve_url, ResourceBase::resolve, collect_link_hrefs, extract_title, window_title).
 
 ### `lumen-bench` ✅ (baseline pipeline measurements)
 
@@ -514,7 +515,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 ### Численно
 
-- **Всего тестов в workspace:** 933 (на момент последнего обновления).
+- **Всего тестов в workspace:** 941 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -629,6 +630,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            window-title           — `<title>` из загруженного документа в `window.set_title(...)`. `extract_title` находит первый <title> в DOM и схлопывает whitespace; `LoadedPage { display_list, title }` — единая точка возврата из `load_url` / `load_page` для будущих UX-данных (favicon, scroll и т.д.). Без динамического обновления при навигации — один раз в `resumed`. 8 новых тестов
 *            css-minmax              — CSS min()/max()/clamp() (CSS Values L4 §10.6): расширение CalcNode на Min/Max/Clamp, лексер с Ident-токеном для function names, parse_function_call поверх arg-list (через `,`); nested calc/min/max/clamp в любых комбинациях; clamp(min, val, max) ≡ max(min, min(val, max)). 22 layout теста
 *            png-palette            — PNG color_type 3 (palette) + опц. tRNS: PLTE parser (1..=256 RGB-triples, проверка делимости длины на 3), tRNS parser в палитровом контексте (alpha-таблица, padded до len(PLTE) с 255), expansion индексов в Rgb8 / Rgba8, валидация ordering (PLTE до IDAT, tRNS после PLTE), отказ от PLTE на grayscale color_type 0/4, PaletteError с 8 вариантами. Ограничение Phase 0 — bit_depth=8. 12 unit + 5 integration новых тестов на palette-фикстурах (Python-zlib скрипт)
 *            css-calc                — CSS calc() (CSS Values L4 §10): Length::Calc(Box<CalcNode>) + recursive-descent парсер с приоритетами +-*/ и скобками, унарный минус через `0 - factor`, поддержка всех length-единиц parse_length-а + unitless для умножения; интегрировано в width/height/padding/margin/font-size/line-height; работает поверх уже готового var()-substitution (`padding: calc(var(--gap) + 5px)`). 23 layout теста

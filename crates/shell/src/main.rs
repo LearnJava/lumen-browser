@@ -52,10 +52,10 @@ fn main() -> ExitCode {
     let event_sink: Arc<dyn EventSink> = Arc::new(StdoutEventSink);
 
     let arg = std::env::args().nth(1);
-    let initial_list = match arg {
+    let initial_page = match arg {
         Some(ref s) if s.starts_with("http://") || s.starts_with("https://") => {
             match load_url(s, event_sink.clone()) {
-                Ok(list) => list,
+                Ok(page) => page,
                 Err(err) => {
                     eprintln!("Ошибка загрузки {s}: {err}");
                     return ExitCode::FAILURE;
@@ -65,14 +65,14 @@ fn main() -> ExitCode {
         Some(ref s) => {
             let path = PathBuf::from(s);
             match load_page(&path, event_sink.clone()) {
-                Ok(list) => list,
+                Ok(page) => page,
                 Err(err) => {
                     eprintln!("Ошибка загрузки {}: {err}", path.display());
                     return ExitCode::FAILURE;
                 }
             }
         }
-        None => DisplayList::new(),
+        None => LoadedPage::empty(),
     };
 
     let event_loop = match EventLoop::new() {
@@ -83,7 +83,8 @@ fn main() -> ExitCode {
         }
     };
     let mut app = Lumen {
-        display_list: initial_list,
+        display_list: initial_page.display_list,
+        title: initial_page.title,
         window: None,
         renderer: None,
     };
@@ -94,7 +95,7 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn load_url(url: &str, sink: Arc<dyn EventSink>) -> Result<DisplayList, Box<dyn Error>> {
+fn load_url(url: &str, sink: Arc<dyn EventSink>) -> Result<LoadedPage, Box<dyn Error>> {
     use lumen_core::ext::NetworkTransport;
     use lumen_core::url::Url;
     use lumen_network::HttpClient;
@@ -106,9 +107,22 @@ fn load_url(url: &str, sink: Arc<dyn EventSink>) -> Result<DisplayList, Box<dyn 
     render_bytes(&bytes, Some("text/html"), &ResourceBase::Url(url.to_owned()), sink)
 }
 
-fn load_page(path: &PathBuf, sink: Arc<dyn EventSink>) -> Result<DisplayList, Box<dyn Error>> {
+fn load_page(path: &PathBuf, sink: Arc<dyn EventSink>) -> Result<LoadedPage, Box<dyn Error>> {
     let bytes = std::fs::read(path)?;
     render_bytes(&bytes, None, &ResourceBase::File(path.clone()), sink)
+}
+
+/// Результат загрузки страницы: что рисовать и как назвать окно.
+/// Расширяется: favicon, current URL, scroll state — позже.
+struct LoadedPage {
+    display_list: DisplayList,
+    title: Option<String>,
+}
+
+impl LoadedPage {
+    fn empty() -> Self {
+        Self { display_list: DisplayList::new(), title: None }
+    }
 }
 
 // ── Разрешение внешних ресурсов ──────────────────────────────────────────────
@@ -236,7 +250,7 @@ fn render_bytes(
     content_type: Option<&str>,
     base: &ResourceBase,
     sink: Arc<dyn EventSink>,
-) -> Result<DisplayList, Box<dyn Error>> {
+) -> Result<LoadedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
     let encoding = lumen_encoding::detect(bytes, content_type);
@@ -244,6 +258,7 @@ fn render_bytes(
     println!("Кодировка: {}", encoding.name());
 
     let doc = lumen_html_parser::parse(&source);
+    let title = extract_title(&doc);
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let mut css = extract_style_blocks(&doc);
@@ -258,15 +273,50 @@ fn render_bytes(
         .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
 
     let layout = lumen_layout::layout_measured(&doc, &sheet, viewport, &measurer);
-    let list = lumen_paint::build_display_list(&layout);
+    let display_list = lumen_paint::build_display_list(&layout);
 
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд",
         doc.len(),
         sheet.rules.len(),
-        list.len()
+        display_list.len()
     );
-    Ok(list)
+    Ok(LoadedPage { display_list, title })
+}
+
+/// Найти первый `<title>` в дереве и склеить его текстовые дети.
+///
+/// HTML5 разрешает только один `<title>` в `<head>`, но мы lenient-парсер —
+/// берём первый встречный. Энтити уже декодированы tokenizer-ом (RCDATA-режим).
+fn extract_title(doc: &Document) -> Option<String> {
+    let mut buf = String::new();
+    if walk_title(doc, doc.root(), &mut buf) {
+        let trimmed = buf.split_whitespace().collect::<Vec<_>>().join(" ");
+        if !trimmed.is_empty() {
+            return Some(trimmed);
+        }
+    }
+    None
+}
+
+fn walk_title(doc: &Document, id: NodeId, out: &mut String) -> bool {
+    let node = doc.get(id);
+    if let NodeData::Element { name, .. } = &node.data
+        && name.local == "title"
+    {
+        for &child in &node.children {
+            if let NodeData::Text(s) = &doc.get(child).data {
+                out.push_str(s);
+            }
+        }
+        return true;
+    }
+    for &child in &node.children {
+        if walk_title(doc, child, out) {
+            return true;
+        }
+    }
+    false
 }
 
 fn extract_style_blocks(doc: &Document) -> String {
@@ -293,10 +343,20 @@ fn walk_style_blocks(doc: &Document, id: NodeId, out: &mut String) {
     }
 }
 
+/// Формат заголовка окна. С title из страницы — `"<title> — Lumen"`,
+/// без — fallback на версию билда.
+fn window_title(page_title: Option<&str>) -> String {
+    match page_title {
+        Some(t) => format!("{t} — Lumen"),
+        None => format!("Lumen {}", env!("CARGO_PKG_VERSION")),
+    }
+}
+
 // ── Window + Renderer ────────────────────────────────────────────────────────
 
 struct Lumen {
     display_list: DisplayList,
+    title: Option<String>,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
 }
@@ -304,7 +364,7 @@ struct Lumen {
 impl ApplicationHandler for Lumen {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attrs = Window::default_attributes()
-            .with_title(format!("Lumen {}", env!("CARGO_PKG_VERSION")))
+            .with_title(window_title(self.title.as_deref()))
             .with_inner_size(LogicalSize::new(1024.0, 720.0));
 
         let window = match event_loop.create_window(attrs) {
@@ -442,6 +502,66 @@ mod tests {
         let mut hrefs = Vec::new();
         collect_link_hrefs(&doc, doc.root(), &mut hrefs);
         assert!(hrefs.is_empty());
+    }
+
+    #[test]
+    fn extract_title_basic() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><head><title>Hello</title></head><body></body></html>"#,
+        );
+        assert_eq!(extract_title(&doc).as_deref(), Some("Hello"));
+    }
+
+    #[test]
+    fn extract_title_cyrillic_and_entities() {
+        // RCDATA-режим декодирует &amp; → '&' прямо в tokenizer-е.
+        let doc = lumen_html_parser::parse(
+            r#"<html><head><title>Дом &amp; Сад</title></head><body></body></html>"#,
+        );
+        assert_eq!(extract_title(&doc).as_deref(), Some("Дом & Сад"));
+    }
+
+    #[test]
+    fn extract_title_collapses_whitespace() {
+        let doc = lumen_html_parser::parse(
+            "<html><head><title>  foo\n\t  bar  </title></head><body></body></html>",
+        );
+        assert_eq!(extract_title(&doc).as_deref(), Some("foo bar"));
+    }
+
+    #[test]
+    fn extract_title_missing_is_none() {
+        let doc = lumen_html_parser::parse("<html><body><p>x</p></body></html>");
+        assert!(extract_title(&doc).is_none());
+    }
+
+    #[test]
+    fn extract_title_empty_is_none() {
+        let doc = lumen_html_parser::parse(
+            "<html><head><title>   </title></head><body></body></html>",
+        );
+        assert!(extract_title(&doc).is_none());
+    }
+
+    #[test]
+    fn extract_title_first_wins() {
+        // Lenient: если страница объявила <title> дважды, берём первый.
+        let doc = lumen_html_parser::parse(
+            "<html><head><title>A</title><title>B</title></head><body></body></html>",
+        );
+        assert_eq!(extract_title(&doc).as_deref(), Some("A"));
+    }
+
+    #[test]
+    fn window_title_with_page() {
+        assert_eq!(window_title(Some("Foo")), "Foo — Lumen");
+    }
+
+    #[test]
+    fn window_title_fallback() {
+        // Fallback содержит версию пакета — проверяем префикс.
+        let t = window_title(None);
+        assert!(t.starts_with("Lumen "));
     }
 
     #[test]
