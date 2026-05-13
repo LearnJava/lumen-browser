@@ -370,7 +370,15 @@ impl ResourceBase {
                 ResolvedResource::File(dir.join(href))
             }
             ResourceBase::Url(base_url) => {
-                ResolvedResource::Url(resolve_url(base_url, href))
+                // Resolve через структурированный Url из lumen-core; при сбое
+                // base (не должно случаться — base сами и положили в загрузке
+                // страницы) откатываемся на raw href, чтобы из-за одного
+                // битого <link> не валить весь рендер.
+                let resolved = lumen_core::url::Url::parse(base_url)
+                    .and_then(|u| u.resolve(href))
+                    .map(|u| u.as_str().to_owned())
+                    .unwrap_or_else(|_| href.to_owned());
+                ResolvedResource::Url(resolved)
             }
         }
     }
@@ -379,28 +387,6 @@ impl ResourceBase {
 enum ResolvedResource {
     File(PathBuf),
     Url(String),
-}
-
-/// Разрешить относительный `href` относительно `base_url`.
-///
-/// "/style.css" -> "https://host/style.css"
-/// "css/a.css"  -> "https://host/path/css/a.css"
-fn resolve_url(base_url: &str, href: &str) -> String {
-    let (scheme, rest) = if let Some(r) = base_url.strip_prefix("https://") {
-        ("https://", r)
-    } else if let Some(r) = base_url.strip_prefix("http://") {
-        ("http://", r)
-    } else {
-        return href.to_owned();
-    };
-    let authority = rest.find('/').map(|i| &rest[..i]).unwrap_or(rest);
-    if href.starts_with('/') {
-        format!("{scheme}{authority}{href}")
-    } else {
-        let path = rest.find('/').map(|i| &rest[i..]).unwrap_or("/");
-        let dir = path.rfind('/').map(|i| &path[..=i]).unwrap_or("/");
-        format!("{scheme}{authority}{dir}{href}")
-    }
 }
 
 // ── Загрузка внешних CSS ─────────────────────────────────────────────────────
@@ -731,39 +717,58 @@ fn winit_modifiers_state(mods: &Modifiers) -> ModifiersState {
 mod tests {
     use super::*;
 
-    #[test]
-    fn resolve_url_absolute_path() {
-        let r = resolve_url("https://example.com/path/page.html", "/style.css");
-        assert_eq!(r, "https://example.com/style.css");
+    fn expect_resolved_url(base: &str, href: &str) -> String {
+        match ResourceBase::Url(base.to_owned()).resolve(href) {
+            ResolvedResource::Url(u) => u,
+            ResolvedResource::File(_) => panic!("expected Url"),
+        }
     }
 
     #[test]
-    fn resolve_url_relative_same_dir() {
-        let r = resolve_url("https://example.com/path/page.html", "style.css");
-        assert_eq!(r, "https://example.com/path/style.css");
+    fn resource_base_url_absolute_path() {
+        assert_eq!(
+            expect_resolved_url("https://example.com/path/page.html", "/style.css"),
+            "https://example.com/style.css",
+        );
     }
 
     #[test]
-    fn resolve_url_relative_subdirectory() {
-        let r = resolve_url("https://example.com/path/page.html", "css/main.css");
-        assert_eq!(r, "https://example.com/path/css/main.css");
+    fn resource_base_url_relative_same_dir() {
+        assert_eq!(
+            expect_resolved_url("https://example.com/path/page.html", "style.css"),
+            "https://example.com/path/style.css",
+        );
     }
 
     #[test]
-    fn resolve_url_root_base() {
-        let r = resolve_url("https://example.com/", "style.css");
-        assert_eq!(r, "https://example.com/style.css");
+    fn resource_base_url_relative_subdirectory() {
+        assert_eq!(
+            expect_resolved_url("https://example.com/path/page.html", "css/main.css"),
+            "https://example.com/path/css/main.css",
+        );
     }
 
     #[test]
-    fn resolve_url_http_scheme() {
-        let r = resolve_url("http://localhost:8080/index.html", "/css/app.css");
-        assert_eq!(r, "http://localhost:8080/css/app.css");
+    fn resource_base_url_root_base() {
+        assert_eq!(
+            expect_resolved_url("https://example.com/", "style.css"),
+            "https://example.com/style.css",
+        );
+    }
+
+    #[test]
+    fn resource_base_url_http_scheme_with_port() {
+        assert_eq!(
+            expect_resolved_url("http://localhost:8080/index.html", "/css/app.css"),
+            "http://localhost:8080/css/app.css",
+        );
     }
 
     #[test]
     fn resource_base_url_absolute_href_passthrough() {
-        // Абсолютный href перехватывается в ResourceBase::resolve до вызова resolve_url.
+        // Абсолютный href с http/https-схемой ловится в начале ResourceBase::resolve
+        // до Url::resolve — это позволяет href с другим scheme быть видимым как Url,
+        // даже если base — File.
         let base = ResourceBase::Url("https://example.com/".to_owned());
         let res = base.resolve("https://cdn.example.com/style.css");
         match res {

@@ -735,7 +735,7 @@ pub fn compute_style(
     // родительское значение.
     if !registry.is_empty() {
         style.custom_props.retain(|key, _| {
-            !registry.get(key.as_str()).is_some_and(|p| !p.inherits)
+            registry.get(key.as_str()).is_none_or(|p| p.inherits)
         });
     }
 
