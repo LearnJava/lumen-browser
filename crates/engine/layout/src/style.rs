@@ -215,6 +215,13 @@ pub struct ComputedStyle {
     pub line_height: f32,
     pub font_style: FontStyle,
     pub font_weight: FontWeight,
+    /// CSS Fonts L4 §3.1 — font-family как приоритизированный список имён.
+    /// Inherited. Phase 0: рендерер пока всегда использует Inter, но layout
+    /// уже хранит и распространяет список — задел под будущий font matcher.
+    /// Generic-family имена (`serif`, `sans-serif`, `monospace`, `cursive`,
+    /// `fantasy`, `system-ui`) сохраняются в этом же списке как обычные строки.
+    /// Пустой Vec = inherited / default.
+    pub font_family: Vec<String>,
     pub text_transform: TextTransform,
     /// CSS Text L3 §7.1: отступ перед первой строкой inline-content
     /// текущего блока (resolved px). Inherited; применяется к каждому
@@ -285,6 +292,7 @@ impl ComputedStyle {
             line_height: 1.2,
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
+            font_family: Vec::new(),
             text_transform: TextTransform::None,
             text_indent: 0.0,
             letter_spacing: 0.0,
@@ -333,6 +341,7 @@ pub fn compute_style(
         line_height: inherited.line_height,
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
+        font_family: inherited.font_family.clone(),
         text_transform: inherited.text_transform,
         text_indent: inherited.text_indent,
         letter_spacing: inherited.letter_spacing,
@@ -813,6 +822,67 @@ fn ua_font_weight(doc: &Document, node: NodeId) -> Option<FontWeight> {
     }
 }
 
+/// Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
+/// семейства; кавычки (одинарные или двойные) обрамляют имя с пробелами.
+/// Имена без кавычек: один или несколько whitespace-разделённых
+/// идентификаторов сливаются в одну строку с одним пробелом
+/// (`Times New Roman` → `"Times New Roman"`). Пустые имена пропускаются.
+pub fn parse_font_family(val: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut chars = val.chars().peekable();
+    while chars.peek().is_some() {
+        // Пропускаем ведущий whitespace и запятые.
+        while let Some(&c) = chars.peek() {
+            if c.is_whitespace() || c == ',' {
+                chars.next();
+            } else {
+                break;
+            }
+        }
+        let Some(&first) = chars.peek() else { break };
+        let name = if first == '"' || first == '\'' {
+            chars.next();
+            let mut s = String::new();
+            for c in chars.by_ref() {
+                if c == first { break; }
+                s.push(c);
+            }
+            // Пропускаем до следующей запятой / EOF.
+            while let Some(&c) = chars.peek() {
+                if c == ',' { break; }
+                chars.next();
+            }
+            s
+        } else {
+            // Unquoted: собираем до запятой, схлопывая whitespace в один пробел.
+            let mut s = String::new();
+            let mut prev_space = false;
+            while let Some(&c) = chars.peek() {
+                if c == ',' { break; }
+                chars.next();
+                if c.is_whitespace() {
+                    if !s.is_empty() && !prev_space {
+                        s.push(' ');
+                        prev_space = true;
+                    }
+                } else {
+                    s.push(c);
+                    prev_space = false;
+                }
+            }
+            // Trim trailing space.
+            while s.ends_with(' ') {
+                s.pop();
+            }
+            s
+        };
+        if !name.is_empty() {
+            out.push(name);
+        }
+    }
+    out
+}
+
 /// Парсит CSS `font-weight`. Поддерживает:
 ///   - `normal` → 400, `bold` → 700;
 ///   - численные `100`..`900` (или любое число 1..1000 — Variable Fonts);
@@ -992,6 +1062,12 @@ fn apply_declaration(
         "font-weight" => {
             if let Some(w) = parse_font_weight(val, parent_font_weight) {
                 style.font_weight = w;
+            }
+        }
+        "font-family" => {
+            let list = parse_font_family(val);
+            if !list.is_empty() {
+                style.font_family = list;
             }
         }
         "text-indent" => {
