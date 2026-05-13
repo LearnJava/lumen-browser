@@ -124,9 +124,6 @@ impl Ihdr {
     /// наличия `tRNS`, что орхестратор знает только после сканирования
     /// чанков. Эта функция для palette паникует через `unreachable!()`.
     pub(crate) fn pixel_format(&self) -> Result<PixelFormat, DecodeError> {
-        if self.interlaced {
-            return Err(DecodeError::Unsupported(UnsupportedReason::Interlaced));
-        }
         if !matches!(self.bit_depth, 8 | 16) {
             return Err(DecodeError::Unsupported(UnsupportedReason::SubByteDepth(
                 self.bit_depth,
@@ -286,14 +283,12 @@ mod tests {
     }
 
     #[test]
-    fn pixel_format_rejects_interlaced() {
+    fn pixel_format_allows_interlaced() {
+        // Adam7 поддерживается; pixel_format не отвергает interlaced.
         let data = build_ihdr(1, 1, 8, 6, 0, 0, 1);
         let h = Ihdr::parse(&data).unwrap();
         assert!(h.interlaced);
-        assert!(matches!(
-            h.pixel_format(),
-            Err(DecodeError::Unsupported(UnsupportedReason::Interlaced))
-        ));
+        assert_eq!(h.pixel_format().unwrap(), PixelFormat::Rgba8);
     }
 
     #[test]

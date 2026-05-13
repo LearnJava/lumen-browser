@@ -7,8 +7,8 @@
 //! palette (color_type 3) при `bit_depth ∈ {1, 2, 4, 8}` + опциональный
 //! `tRNS` для прозрачности. 16-битные сэмплы downsample-ятся в 8-битные
 //! отбрасыванием младшего байта (libpng `PNG_TRANSFORM_STRIP_16`). Фильтры
-//! 0–4 по спецификации, без interlacing. Adam7 и JPEG добавляются
-//! отдельными задачами.
+//! 0–4 по спецификации. **Adam7-interlacing поддерживается** для всех
+//! поддерживаемых color types / bit-depths. JPEG добавляется отдельной задачей.
 //!
 //! Декодер не паникует на повреждённом входе — каждая ошибка возвращается
 //! как `DecodeError` с конкретной причиной.
@@ -122,8 +122,6 @@ pub enum IhdrError {
 /// Что именно не поддерживается на текущем этапе.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnsupportedReason {
-    /// Adam7 interlacing (color_type 1).
-    Interlaced,
     /// 1/2/4-битная глубина — реализуема, но Phase 0 ограничен 8 (касается
     /// и grayscale, и palette).
     SubByteDepth(u8),
