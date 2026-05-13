@@ -924,6 +924,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-knowledge"
+version = "0.0.1"
+dependencies = [
+ "lumen-core",
+ "rusqlite",
+]
+
+[[package]]
 name = "lumen-layout"
 version = "0.0.1"
 dependencies = [

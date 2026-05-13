@@ -116,7 +116,7 @@ export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
 
 ### Текущее число тестов и crates
 
-На момент написания: 927 тестов, 13 крейтов (`shell`, `core`, `network`, `storage`, `bench`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`, `image`). При прохождении следующих фаз появятся `lumen-knowledge`, `lumen-ai` и др.
+На момент написания: 1207 тестов, 14 крейтов (`shell`, `core`, `network`, `storage`, `knowledge`, `bench`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`, `image`). При прохождении следующих фаз появится `lumen-ai` и др.
 
 ---
 
@@ -502,6 +502,12 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 - **Отложено:** Set-Cookie HTTP-парсер (атрибуты `Domain` / `Path` / `Max-Age` / `Expires` / `Secure` / `HttpOnly` / `SameSite`), namespace helpers (`profile::`), `clear_origin(origin)` для быстрой чистки всех данных источника, шифрование (`SQLCipher`-style — Phase 3 профили), миграции схемы (через `user_version` PRAGMA), FTS5-таблица над `history.title + extracted_text` для §12.1, интеграция CookieJar/History с shell и HttpClient.
 - 66 тестов: 17 InMemoryStorage + 13 SqliteStorage + 20 CookieJar + 16 History (record_visit creates/increments/MAX-date/empty-title-preserves/non-empty-overwrites, get missing, set_favicon, set_text_sha256, recent ordering+limit, most_visited ordering, delete, delete missing noop, delete_older_than, clear, cyrillic URLs+titles).
 
+### `lumen-knowledge` 🟡 (FTS5-индекс над историей)
+
+- **Готово (HistoryFts):** §12.1 «Полнотекстовый поиск по истории» — базовый FTS5-индекс. Виртуальная таблица `history_fts(url, title, text)` с tokenizer `unicode61 remove_diacritics 2` — встроенный SQLite Unicode word-boundary токенайзер с lowercase нормализацией и снятием комбинирующих диакритик. Ранжирование через встроенный `bm25(history_fts)` (меньше = релевантнее по spec FTS5). API: `index(rowid, url, title, text)` — upsert через transaction (DELETE+INSERT; FTS5 не поддерживает ON CONFLICT DO UPDATE), `unindex(rowid)`, `search(query, limit) -> Vec<SearchHit>` (rowid + url + title + snippet с markdown-подсветкой `**...**` + bm25-score), `clear()`. Запрос-синтаксис — нативный FTS5: `"phrase"`, implicit AND, `OR`, `^foo`, и т.д. `rowid` обычно совпадает с `lumen-storage::history::HistoryEntry.id` — при общей БД-файле два модуля работают вместе.
+- **Отложено:** §12.2 аннотации/заметки (своя FTS5-таблица + Range API), §12.3 read-later (snapshot HTML + текст в той же индексной таблице), §12.4 поиск по открытым вкладкам (live-индекс без disk-persistence), §12.5 локальный AI (HNSW vector index, опционально), §12.7 export/import session, **русский Porter-stemmer** через external FTS5 tokenizer (C-callback), ё↔е equivalence (custom tokenizer pre-pass), `KnowledgeStore` trait в `lumen-core::ext` для plug-able backends.
+- 11 unit-тестов: index+search basic, no-hits, implicit AND, OR query, BM25 ранжирование (more matches first), cyrillic text, index overwrites, unindex, search limit, clear, case-insensitive через unicode61.
+
 ### `lumen-network` ✅ (HTTP/1.1 + HTTPS)
 
 - **Готово:** `HttpClient` реализует `NetworkTransport` из `lumen-core::ext`. Поддержка HTTP и HTTPS (rustls + webpki-roots, exception #3). Redirect-следование до 5 хопов (абсолютные + относительные `Location`). `chunked` Transfer-Encoding decoder. URL-парсинг (scheme/host/port/path), case-insensitive заголовки. Box-обёртка вокруг TLS stream (clippy large-enum-variant). **IDN-домены** конвертятся в Punycode на этапе `parse_url` через `lumen_core::idn::domain_to_ascii` — DNS lookup, TLS SNI (`ServerName::try_from`) и `Host:` header (RFC 7230 §5.4) всегда получают ASCII-форму.
@@ -530,7 +536,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 ### Инфраструктура
 
 - Cargo workspace, edition 2024, resolver 3, MSRV 1.95.
-- 13 крейтов в `crates/`: shell, core, network, storage, bench, engine/{html-parser, css-parser, dom, layout, paint, font, encoding, image}.
+- 14 крейтов в `crates/`: shell, core, network, storage, **knowledge**, bench, engine/{html-parser, css-parser, dom, layout, paint, font, encoding, image}.
 - Bundled assets: `assets/fonts/Inter-Regular.ttf` (+ OFL.txt лицензия).
 - Тестовая страница: `samples/page.html` со встроенным `<style>`.
 - 5 разрешённых внешних зависимостей: `winit = "0.30"`, `wgpu = "26"`, `rustls = "0.23"` + `webpki-roots = "0.26"` (активированы в lumen-network), JS engine (зарезервирована), SQLite через `rusqlite` с feature `bundled` (зарезервирована — подключится при первом persistent backend-е).
@@ -540,7 +546,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 ### Численно
 
-- **Всего тестов в workspace:** 1196 (после merge history-store).
+- **Всего тестов в workspace:** 1207 (после merge lumen-knowledge-crate).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 3 активных (winit, wgpu, SQLite через rusqlite/bundled) + 2 зарезервированных (rustls активирован в lumen-network, JS engine).
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -567,7 +573,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 ### Большое (Phase 2+)
 
 11. **`[P4]` QuickJS интеграция через `rquickjs`** — exception #4. Базовое исполнение JS. `lumen-core::ext::JsRuntime` trait.
-12. **`[P3]` `lumen-knowledge` крейт** (§12.1-12.4) — FTS-индекс над историей и заметками, omnibox-префиксы `@history` / `@notes` / `@tabs` / `@read-later`.
+12. **`[P3]` `lumen-knowledge` крейт** (§12.1-12.4) — **§12.1 готов (FTS5 + bm25 ranking)**. Осталось: §12.2 аннотации/заметки (своя FTS5-таблица), §12.3 read-later (snapshot HTML + индексация текста), §12.4 поиск по открытым вкладкам (live-индекс без disk), omnibox-префиксы `@history` / `@notes` / `@tabs` / `@read-later` (интеграция с shell), Porter-stemmer для русского через external FTS5 tokenizer.
 13. **`[P1]` CSS Grid + полный Flexbox** в layout.
 14. **`[P3]` HTTP/2** поверх свои rustls-based транспорта.
 15. **`[P3]` DoH / DoT resolver** в network-слое.
@@ -655,6 +661,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            lumen-knowledge-crate  — новый крейт lumen-knowledge с базой §12.1 «Полнотекстовый поиск». Виртуальная FTS5-таблица history_fts(url, title, text) с tokenizer unicode61 remove_diacritics 2; ранжирование bm25(). API: index(rowid, url, title, text) — upsert через tx (DELETE+INSERT), unindex, search(query, limit) → Vec<SearchHit> (rowid + url + title + snippet с **bold**-подсветкой + bm25 score), clear. Запросы — FTS5 синтаксис (implicit AND, OR, ^foo). Поверх SQLite (exception #5). 11 unit-тестов. [P3]
 *            history-store          — History store поверх SQLite — основа под §12.1 «Полнотекстовый поиск». HistoryEntry (id/url/title/visit_date/visit_count/favicon_hash/text_sha256). Таблица history(id PK, url UNIQUE, ...) + индекс по visit_date DESC. API: record_visit (upsert: insert или update visit_count++/visit_date:=MAX/title-preserves-non-empty), set_favicon/set_text_sha256, get, recent(limit), most_visited(limit), delete, delete_older_than, clear. История глобальная per-profile (не партиционируется по origin). FTS5 — отдельный модуль. 16 unit-тестов. [P3]
 *            cookie-jar             — CookieJar поверх SQLite (RFC 6265 + RFC 6265bis SameSite). Cookie struct (domain/path/name/value/expires_at/secure/http_only/same_site); SameSite enum (Strict/Lax/None, default Lax). Таблица cookies с composite PK (top_level_site, domain, path, name) + индекс (domain, top_level_site). API: set/delete/clear_expired/clear_session/get_for_request. Domain-match (RFC §5.1.3: exact или suffix с leading-dot), path-match (§5.1.4: equal или prefix с разделителем `/`). Domain lowercase нормализация. Secure cookies только через HTTPS. Total cookie protection — top_level_site партиционирование. Только storage layer — Set-Cookie парсер и integration с HttpClient отдельные задачи. 20 unit-тестов. [P3]
 *            css-property-time-resolution — расширение @property syntax-валидации: <time> (s/ms — CSS Values L4 §8) и <resolution> (dpi/dpcm/dppx/x — §9.1). Порядок суффиксов: ms>s, dppx>dpcm>dpi>x — длинный раньше короткого, чтобы strip_suffix матчил правильно. 4 новых layout-теста: time accepts seconds/ms, time rejects non-time, resolution units (4 варианта), resolution rejects non-resolution. [P1]
