@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-_(никто ничего не зарезервировал)_
+- 🔄 RequestBlocked event + RequestFilter hook в HttpClient [P3] — request-blocked-event — 2026-05-13
 
 
 ## Статус реализации
