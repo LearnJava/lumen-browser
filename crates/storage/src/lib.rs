@@ -13,9 +13,11 @@
 //! (`None` и `Some("")` — один namespace) и реализуют тот же trait.
 
 pub mod cookies;
+pub mod history;
 pub mod sqlite_store;
 pub mod store;
 
 pub use cookies::{Cookie, CookieJar, SameSite};
+pub use history::{History, HistoryEntry};
 pub use sqlite_store::SqliteStorage;
 pub use store::InMemoryStorage;
