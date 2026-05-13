@@ -11,8 +11,9 @@
 
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
 use crate::style::{
-    BorderStyle, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStyle, FontVariant,
-    FontWeight, Overflow, TextAlign, TextOverflow, TextTransform, Visibility, WhiteSpace,
+    BorderStyle, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStretch, FontStyle,
+    FontVariant, FontWeight, Overflow, TextAlign, TextOverflow, TextTransform, Visibility,
+    WhiteSpace,
 };
 use std::fmt::Write;
 
@@ -190,6 +191,15 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     }
     if s.font_variant == FontVariant::SmallCaps {
         let _ = write!(out, " font-variant=small-caps");
+    }
+    if s.font_stretch != FontStretch::NORMAL {
+        let whole = s.font_stretch.0 / 10;
+        let frac = s.font_stretch.0 % 10;
+        if frac == 0 {
+            let _ = write!(out, " font-stretch={whole}%");
+        } else {
+            let _ = write!(out, " font-stretch={whole}.{frac}%");
+        }
     }
     match s.text_transform {
         TextTransform::None => {}
