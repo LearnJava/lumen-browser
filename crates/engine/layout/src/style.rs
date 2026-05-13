@@ -278,6 +278,12 @@ pub struct ComputedStyle {
     pub border_bottom_color: Option<Color>,
     pub border_left_color: Option<Color>,
     pub box_sizing: BoxSizing,
+    /// CSS Color L3 §3.2 — opacity (0.0..=1.0). Не наследуется. Работает
+    /// как alpha всего слоя (включая фон, бордер, текст и потомков). В
+    /// Phase 0 layout только хранит — paint пока не применяет alpha
+    /// blending этого уровня; индивидуальные альфы в `color`/`background`
+    /// продолжают работать.
+    pub opacity: f32,
 }
 
 impl ComputedStyle {
@@ -336,6 +342,7 @@ impl ComputedStyle {
             border_bottom_color: None,
             border_left_color: None,
             box_sizing: BoxSizing::ContentBox,
+            opacity: 1.0,
         }
     }
 }
@@ -388,6 +395,7 @@ pub fn compute_style(
         border_bottom_color: None,
         border_left_color: None,
         box_sizing: BoxSizing::ContentBox,
+        opacity: 1.0,
     };
 
     if !matches!(doc.get(node).data, NodeData::Element { .. }) {
@@ -1147,6 +1155,19 @@ fn apply_declaration(
                 "nowrap" => WhiteSpace::Nowrap,
                 _ => style.white_space,
             };
+        }
+        "opacity" => {
+            // CSS Color L3 §3.2: <number 0..1> или <percentage>. Out-of-range
+            // clamp-ается. Невалидные значения игнорируются.
+            let v = val.trim();
+            let parsed = if let Some(pct) = v.strip_suffix('%') {
+                pct.trim().parse::<f32>().ok().map(|n| n / 100.0)
+            } else {
+                v.parse::<f32>().ok()
+            };
+            if let Some(o) = parsed {
+                style.opacity = o.clamp(0.0, 1.0);
+            }
         }
         "line-height" => {
             // `1.5` (unitless) — коэффициент. `1.5em` — то же самое.

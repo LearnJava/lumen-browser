@@ -2176,4 +2176,63 @@ mod tests {
         assert_eq!(div.style.white_space, WhiteSpace::Nowrap);
         assert_eq!(p.style.white_space, WhiteSpace::Normal);
     }
+
+    // ── opacity ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn opacity_default_one() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert!((p.style.opacity - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn opacity_number_value() {
+        let root = lay("<p>x</p>", "p { opacity: 0.5; }");
+        let p = first_element_child(&root);
+        assert!((p.style.opacity - 0.5).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn opacity_percent_value() {
+        let root = lay("<p>x</p>", "p { opacity: 25%; }");
+        let p = first_element_child(&root);
+        assert!((p.style.opacity - 0.25).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn opacity_clamped_below_zero() {
+        let root = lay("<p>x</p>", "p { opacity: -0.5; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.opacity, 0.0);
+    }
+
+    #[test]
+    fn opacity_clamped_above_one() {
+        let root = lay("<p>x</p>", "p { opacity: 2.5; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.opacity, 1.0);
+    }
+
+    #[test]
+    fn opacity_not_inherited() {
+        // CSS opacity не наследуется в layout cascade (визуально она применяется
+        // ко всему layer-у, но в computed-style-каскаде каждый элемент имеет
+        // свой opacity = 1 по умолчанию).
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { opacity: 0.3; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((div.style.opacity - 0.3).abs() < f32::EPSILON);
+        assert!((p.style.opacity - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn opacity_invalid_keeps_default() {
+        let root = lay("<p>x</p>", "p { opacity: nonsense; }");
+        let p = first_element_child(&root);
+        assert!((p.style.opacity - 1.0).abs() < f32::EPSILON);
+    }
 }
