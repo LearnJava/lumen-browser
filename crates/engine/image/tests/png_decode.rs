@@ -28,6 +28,10 @@ const GRAYA16_2X2: &[u8] = include_bytes!("fixtures/graya16_2x2.png");
 const RGB16_2X2: &[u8] = include_bytes!("fixtures/rgb16_2x2.png");
 const RGBA16_2X2: &[u8] = include_bytes!("fixtures/rgba16_2x2.png");
 const GRAY16_FILTERS_2X3: &[u8] = include_bytes!("fixtures/gray16_filters_2x3.png");
+const GRAY8_TRNS_3X2: &[u8] = include_bytes!("fixtures/gray8_trns_3x2.png");
+const RGB8_TRNS_2X2: &[u8] = include_bytes!("fixtures/rgb8_trns_2x2.png");
+const GRAY16_TRNS_2X2: &[u8] = include_bytes!("fixtures/gray16_trns_2x2.png");
+const RGB16_TRNS_2X2: &[u8] = include_bytes!("fixtures/rgb16_trns_2x2.png");
 
 #[test]
 fn decode_rgb8_3x2() {
@@ -369,6 +373,74 @@ fn decode_gray16_with_filters_2x3() {
     assert_eq!(img.height, 3);
     assert_eq!(img.format, PixelFormat::Gray8);
     assert_eq!(img.data, vec![0, 255, 128, 64, 192, 64]);
+}
+
+#[test]
+fn decode_gray8_with_trns_yields_grayalpha8() {
+    // 8-bit grayscale + tRNS=0 (черный — прозрачный).
+    // row0: [0, 128, 255], row1: [0, 0, 255]
+    let img = decode_png(GRAY8_TRNS_3X2).unwrap();
+    assert_eq!(img.width, 3);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::GrayAlpha8);
+    assert_eq!(
+        img.data,
+        vec![
+            0, 0, 128, 255, 255, 255, // row 0: black transparent, mid opaque, white opaque
+            0, 0, 0, 0, 255, 255, // row 1: two black transparent, white opaque
+        ]
+    );
+}
+
+#[test]
+fn decode_rgb8_with_trns_yields_rgba8() {
+    // 8-bit RGB + tRNS=(255,0,255) — magenta прозрачный.
+    let img = decode_png(RGB8_TRNS_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Rgba8);
+    assert_eq!(
+        img.data,
+        vec![
+            255, 0, 0, 255, // red opaque
+            255, 0, 255, 0, // magenta transparent
+            255, 0, 255, 0, // magenta transparent
+            255, 255, 255, 255, // white opaque
+        ]
+    );
+}
+
+#[test]
+fn decode_gray16_with_trns_yields_grayalpha8() {
+    // 16-bit grayscale + tRNS=0xFFFF. После downsample: 0,255,128,255;
+    // tRNS normalized: 0xFFFF → 0xFF = 255.
+    let img = decode_png(GRAY16_TRNS_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::GrayAlpha8);
+    assert_eq!(
+        img.data,
+        vec![
+            0, 255, 255, 0, // black opaque, white transparent
+            128, 255, 255, 0, // mid opaque, white transparent
+        ]
+    );
+}
+
+#[test]
+fn decode_rgb16_with_trns_yields_rgba8() {
+    // 16-bit RGB + tRNS=(0xFFFF,0xFFFF,0xFFFF) = white transparent.
+    let img = decode_png(RGB16_TRNS_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Rgba8);
+    assert_eq!(
+        img.data,
+        vec![
+            255, 255, 255, 0, 255, 0, 0, 255, // row 0: white transparent, red opaque
+            255, 255, 255, 0, 0, 255, 0, 255, // row 1: white transparent, green opaque
+        ]
+    );
 }
 
 #[test]

@@ -150,6 +150,14 @@ pub enum PaletteError {
     DuplicateChunk { kind: [u8; 4] },
     /// Палитровый индекс за пределами `PLTE` — повреждённый PNG-файл.
     IndexOutOfRange { row: u32, col: u32, index: u8, plte_count: usize },
+    /// `tRNS` для color_type 0 (grayscale) должен содержать ровно 2 байта
+    /// (один u16 big-endian — gray sample считающийся прозрачным).
+    BadTrnsLengthForGrayscale(u32),
+    /// `tRNS` для color_type 2 (RGB) должен содержать ровно 6 байт
+    /// (три u16 big-endian — RGB-color считающийся прозрачным).
+    BadTrnsLengthForRgb(u32),
+    /// `tRNS` для color_type 4 / 6 запрещён PNG §11.3.2.1 — alpha уже есть в пикселе.
+    UnexpectedForAlphaType,
 }
 
 /// Ошибки парсера DEFLATE/zlib (RFC 1950, 1951).
