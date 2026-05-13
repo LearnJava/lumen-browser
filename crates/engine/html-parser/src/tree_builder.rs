@@ -252,4 +252,37 @@ mod tests {
         assert!(s.contains("<p>"));
         assert!(s.contains("\"after\""));
     }
+
+    #[test]
+    fn title_body_is_decoded_text_node() {
+        // RCDATA: <title> entities декодируются, угловые скобки буквальны.
+        let doc = parse("<title>Foo &amp; <b>Bar</b></title>");
+        let root = doc.root();
+        let title = doc.get(root).children[0];
+        match &doc.get(title).data {
+            NodeData::Element { name, .. } => assert_eq!(name.local, "title"),
+            other => panic!("expected title element, got {other:?}"),
+        }
+        let kids = &doc.get(title).children;
+        assert_eq!(kids.len(), 1, "title must have a single text child, got {kids:?}");
+        match &doc.get(kids[0]).data {
+            NodeData::Text(s) => assert_eq!(s, "Foo & <b>Bar</b>"),
+            other => panic!("expected text node, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn textarea_body_is_decoded_text_node() {
+        // RCDATA: <textarea> с XSS-подобным содержимым — entities
+        // декодируются, но тело не парсится как HTML.
+        let doc = parse("<textarea>&lt;script&gt;alert(1)&lt;/script&gt;</textarea>");
+        let root = doc.root();
+        let ta = doc.get(root).children[0];
+        let kids = &doc.get(ta).children;
+        assert_eq!(kids.len(), 1);
+        match &doc.get(kids[0]).data {
+            NodeData::Text(s) => assert_eq!(s, "<script>alert(1)</script>"),
+            other => panic!("expected text node, got {other:?}"),
+        }
+    }
 }

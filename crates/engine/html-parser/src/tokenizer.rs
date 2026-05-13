@@ -3,14 +3,19 @@
 //! Реализованы: Data, TagOpen, TagName, EndTag, Attribute (name/value
 //! quoted/unquoted), SelfClosing, Comment, базовые character references
 //! (`&amp;`, `&lt;`, `&gt;`, `&quot;`, `&apos;`, `&nbsp;`, `&#NNN;`, `&#xHH;`),
-//! RAWTEXT для `<script>` и `<style>` (содержимое — литеральный текст,
-//! завершается только `</tag` + терминатор; character references не
-//! декодируются, угловые скобки трактуются как текст).
+//! **text-only режимы** (HTML5 §13.2.5.2):
 //!
-//! Отложено: DOCTYPE (пропускаем), CDATA, RCDATA для `<title>`/`<textarea>`
-//! (как RAWTEXT, но с декодированием entities), полный набор named entities
-//! (есть ~2000+ в HTML5 spec; реализуем при первой реальной странице, где
-//! это потребуется).
+//! - RAWTEXT для `<script>` и `<style>` — `<` и `&` буквальны, entities
+//!   не декодируются;
+//! - RCDATA для `<title>` и `<textarea>` — `<` буквален, но `&entity;`
+//!   декодируются (это нужно, чтобы `<title>Foo &amp; Bar</title>`
+//!   дало текст `Foo & Bar`).
+//!
+//! Оба режима завершаются только `</tag` + терминатор (case-insensitive).
+//!
+//! Отложено: DOCTYPE (пропускаем), CDATA, полный набор named entities
+//! (есть ~2000+ в HTML5 spec; реализуем при первой реальной странице,
+//! где это потребуется).
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Token {
@@ -38,9 +43,11 @@ pub enum Token {
 pub struct Tokenizer<'a> {
     input: &'a str,
     pos: usize,
-    /// Если `Some(tag)` — следующий вызов `next()` парсит содержимое
-    /// как RAWTEXT до `</tag` (case-insensitive) + терминатор.
-    raw_text: Option<String>,
+    /// Если `Some((tag, decode_entities))` — токенизатор в text-only
+    /// режиме до `</tag` (case-insensitive) + терминатор. Угловые скобки
+    /// внутри всегда литеральны. `decode_entities = true` для RCDATA
+    /// (`<title>`, `<textarea>`), `false` для RAWTEXT (`<script>`, `<style>`).
+    text_only: Option<(String, bool)>,
 }
 
 impl<'a> Tokenizer<'a> {
@@ -48,7 +55,7 @@ impl<'a> Tokenizer<'a> {
         Self {
             input,
             pos: 0,
-            raw_text: None,
+            text_only: None,
         }
     }
 
@@ -81,18 +88,27 @@ impl<'a> Iterator for Tokenizer<'a> {
     type Item = Token;
 
     fn next(&mut self) -> Option<Token> {
-        // RAWTEXT state: внутри <script>/<style>. Читаем литеральный текст,
-        // ни '<', ни '&' не имеют специального значения — кроме `</tag` с
-        // терминатором, который выводит нас из режима. Сам `</tag>` потом
-        // токенизируется обычным путём как EndTag.
-        if let Some(tag) = self.raw_text.take() {
+        // Text-only state: внутри <script>/<style> (RAWTEXT) или
+        // <title>/<textarea> (RCDATA). `<` без `/tag` — текст; `&` —
+        // декодируется только в RCDATA. Завершает режим `</tag` +
+        // терминатор; сам `</tag>` потом токенизируется как обычный EndTag.
+        if let Some((tag, decode_entities)) = self.text_only.take() {
             let mut text = String::new();
             while let Some(c) = self.peek() {
                 if c == '<' && self.starts_with_end_tag(&tag) {
                     break;
                 }
-                self.consume();
-                text.push(c);
+                if decode_entities && c == '&' {
+                    self.consume();
+                    if let Some(decoded) = self.try_consume_entity() {
+                        text.push_str(&decoded);
+                    } else {
+                        text.push('&');
+                    }
+                } else {
+                    self.consume();
+                    text.push(c);
+                }
             }
             if !text.is_empty() {
                 return Some(Token::Text(text));
@@ -212,8 +228,12 @@ impl<'a> Tokenizer<'a> {
             }
         }
 
-        if !self_closing && is_raw_text_element(&name) {
-            self.raw_text = Some(name.clone());
+        if !self_closing {
+            if is_raw_text_element(&name) {
+                self.text_only = Some((name.clone(), false));
+            } else if is_rcdata_element(&name) {
+                self.text_only = Some((name.clone(), true));
+            }
         }
 
         Some(Token::StartTag {
@@ -484,10 +504,18 @@ impl<'a> Tokenizer<'a> {
 }
 
 /// Элементы, чьё содержимое в HTML5 — RAWTEXT (литеральный текст до
-/// `</tag` + терминатор; character references не декодируются).
-/// `<title>` и `<textarea>` относятся к RCDATA — пока не реализовано.
+/// `</tag` + терминатор; character references **не** декодируются).
 fn is_raw_text_element(name: &str) -> bool {
     matches!(name, "script" | "style")
+}
+
+/// Элементы, чьё содержимое — RCDATA (литеральный текст до `</tag` +
+/// терминатор; character references декодируются). Это нужно, чтобы
+/// `<title>Foo &amp; Bar</title>` стало текстом `Foo & Bar`, и чтобы
+/// внутри `<textarea>` HTML-like содержимое (например `<world>`)
+/// не превращалось в реальные теги.
+fn is_rcdata_element(name: &str) -> bool {
+    matches!(name, "title" | "textarea")
 }
 
 #[cfg(test)]
@@ -891,5 +919,131 @@ mod tests {
         let t = tok("<script/><b>x</b>");
         assert!(matches!(t[0], Token::StartTag { ref name, self_closing: true, .. } if name == "script"));
         assert!(matches!(t[1], Token::StartTag { ref name, .. } if name == "b"));
+    }
+
+    // --- RCDATA mode для <title> и <textarea> ---
+
+    #[test]
+    fn title_entity_decoded() {
+        // RCDATA отличается от RAWTEXT тем, что character references
+        // декодируются. &amp; → &.
+        let t = tok("<title>Foo &amp; Bar</title>");
+        assert_eq!(t.len(), 3);
+        assert!(matches!(t[0], Token::StartTag { ref name, .. } if name == "title"));
+        assert_eq!(t[1], Token::Text("Foo & Bar".into()));
+        assert!(matches!(t[2], Token::EndTag { ref name } if name == "title"));
+    }
+
+    #[test]
+    fn title_less_than_is_text() {
+        // `<` без `</title` — это литеральный текст в RCDATA.
+        let t = tok("<title>x < y</title>");
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[1], Token::Text("x < y".into()));
+    }
+
+    #[test]
+    fn title_numeric_entity_decoded() {
+        // &#x41; → 'A'.
+        let t = tok("<title>&#x41;&#1055;</title>");
+        assert_eq!(t[1], Token::Text("AП".into()));
+    }
+
+    #[test]
+    fn title_unknown_entity_left_literal() {
+        // Неизвестный entity сохраняется как '&foo;' буквально.
+        let t = tok("<title>&unknown;</title>");
+        assert_eq!(t[1], Token::Text("&unknown;".into()));
+    }
+
+    #[test]
+    fn title_inner_tag_is_text() {
+        // <b> внутри <title> — литеральный текст, не StartTag.
+        let t = tok("<title>Hello <b>world</b></title>");
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[1], Token::Text("Hello <b>world</b>".into()));
+        assert!(matches!(t[2], Token::EndTag { ref name } if name == "title"));
+    }
+
+    #[test]
+    fn title_case_insensitive_end_tag() {
+        let t = tok("<title>x</TITLE>");
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[1], Token::Text("x".into()));
+        assert!(matches!(t[2], Token::EndTag { ref name } if name == "title"));
+    }
+
+    #[test]
+    fn title_fake_end_tag_not_matched() {
+        // </titles> — `s` после `title` не является терминатором.
+        let t = tok("<title>foo</titles>bar</title>");
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[1], Token::Text("foo</titles>bar".into()));
+    }
+
+    #[test]
+    fn empty_title() {
+        let t = tok("<title></title>");
+        assert_eq!(t.len(), 2);
+        assert!(matches!(t[0], Token::StartTag { ref name, .. } if name == "title"));
+        assert!(matches!(t[1], Token::EndTag { ref name } if name == "title"));
+    }
+
+    #[test]
+    fn title_then_normal_content() {
+        // После </title> токенизатор возвращается в обычный режим.
+        let t = tok("<title>x &amp; y</title><p>z</p>");
+        assert_eq!(t[1], Token::Text("x & y".into()));
+        assert!(matches!(t[3], Token::StartTag { ref name, .. } if name == "p"));
+        assert_eq!(t[4], Token::Text("z".into()));
+    }
+
+    #[test]
+    fn textarea_entity_decoded() {
+        // <textarea> тоже RCDATA.
+        let t = tok("<textarea>Hello &amp; goodbye</textarea>");
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[1], Token::Text("Hello & goodbye".into()));
+    }
+
+    #[test]
+    fn textarea_inner_tag_is_text() {
+        // Классический случай: <textarea> с HTML-like содержимым.
+        let t = tok("<textarea>&lt;script&gt;alert(1)&lt;/script&gt;</textarea>");
+        // Entities декодируются → текст = "<script>alert(1)</script>", но
+        // это литеральный текст, не парсится как теги.
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[1], Token::Text("<script>alert(1)</script>".into()));
+    }
+
+    #[test]
+    fn textarea_raw_open_angle_is_text() {
+        // `<world>` внутри textarea — литерал, не тег.
+        let t = tok("<textarea>Hello <world></textarea>");
+        assert_eq!(t.len(), 3);
+        assert_eq!(t[1], Token::Text("Hello <world>".into()));
+    }
+
+    #[test]
+    fn textarea_cyrillic_entity() {
+        // &#1055; = 'П'. RCDATA декодирует numeric entities в кириллицу.
+        let t = tok("<textarea>Привет &#8212; &amp; мир</textarea>");
+        assert_eq!(t[1], Token::Text("Привет — & мир".into()));
+    }
+
+    #[test]
+    fn self_closing_title_does_not_enter_rcdata() {
+        // <title/> self-closing — RCDATA НЕ включается, как и у RAWTEXT.
+        let t = tok("<title/><b>x</b>");
+        assert!(matches!(t[0], Token::StartTag { ref name, self_closing: true, .. } if name == "title"));
+        assert!(matches!(t[1], Token::StartTag { ref name, .. } if name == "b"));
+    }
+
+    #[test]
+    fn title_unclosed_at_eof() {
+        // </title> отсутствует — текст до конца ввода с декодированием.
+        let t = tok("<title>x &amp; y");
+        assert_eq!(t.len(), 2);
+        assert_eq!(t[1], Token::Text("x & y".into()));
     }
 }
