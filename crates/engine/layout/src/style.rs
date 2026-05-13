@@ -37,6 +37,19 @@ pub enum TextAlign {
     Right,
 }
 
+/// CSS Text Module L3 §3.1 — `white-space`. Inherited.
+///
+/// Управляет collapse-ом whitespace и переносами строк. Phase 0:
+/// реализованы только `Normal` (default — collapse + wrap) и `Nowrap`
+/// (collapse, без переноса). `Pre`/`PreWrap`/`PreLine` требуют сохранения
+/// whitespace в input (сейчас split_whitespace его теряет) — отложены.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WhiteSpace {
+    #[default]
+    Normal,
+    Nowrap,
+}
+
 /// CSS Text Module L3 §3.4 — `text-transform`. Inherited.
 ///
 /// Применяется к текстовому содержимому при сборке inline-сегментов, до
@@ -223,6 +236,7 @@ pub struct ComputedStyle {
     /// Пустой Vec = inherited / default.
     pub font_family: Vec<String>,
     pub text_transform: TextTransform,
+    pub white_space: WhiteSpace,
     /// CSS Text L3 §7.1: отступ перед первой строкой inline-content
     /// текущего блока (resolved px). Inherited; применяется к каждому
     /// потомку, который порождает первую строку.
@@ -294,6 +308,7 @@ impl ComputedStyle {
             font_weight: FontWeight::NORMAL,
             font_family: Vec::new(),
             text_transform: TextTransform::None,
+            white_space: WhiteSpace::Normal,
             text_indent: 0.0,
             letter_spacing: 0.0,
             word_spacing: 0.0,
@@ -343,6 +358,7 @@ pub fn compute_style(
         font_weight: inherited.font_weight,
         font_family: inherited.font_family.clone(),
         text_transform: inherited.text_transform,
+        white_space: inherited.white_space,
         text_indent: inherited.text_indent,
         letter_spacing: inherited.letter_spacing,
         word_spacing: inherited.word_spacing,
@@ -1120,6 +1136,16 @@ fn apply_declaration(
                 Some("lowercase") => TextTransform::Lowercase,
                 Some("capitalize") => TextTransform::Capitalize,
                 _ => style.text_transform,
+            };
+        }
+        "white-space" => {
+            // CSS Text L3 §3.1: phase 0 — normal | nowrap. Pre-варианты
+            // требуют preserved whitespace в input и пока игнорируются
+            // (молча сохраняют текущее значение).
+            style.white_space = match val.trim() {
+                "normal" => WhiteSpace::Normal,
+                "nowrap" => WhiteSpace::Nowrap,
+                _ => style.white_space,
             };
         }
         "line-height" => {

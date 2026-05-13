@@ -12,7 +12,7 @@
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
 use crate::style::{
     BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, FontWeight, TextAlign,
-    TextTransform,
+    TextTransform, WhiteSpace,
 };
 use std::fmt::Write;
 
@@ -208,6 +208,9 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     }
     if s.word_spacing.abs() > 0.01 {
         let _ = write!(out, " word-spacing={:.2}", s.word_spacing);
+    }
+    if s.white_space == WhiteSpace::Nowrap {
+        let _ = write!(out, " white-space=nowrap");
     }
 }
 

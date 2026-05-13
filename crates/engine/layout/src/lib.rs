@@ -20,7 +20,7 @@ pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, 
 pub use snapshot::serialize_layout_tree;
 pub use style::{
     BorderStyle, BoxSizing, Color, ComputedStyle, Display, FontStyle, FontWeight, TextAlign,
-    TextDecorationLine, TextTransform,
+    TextDecorationLine, TextTransform, WhiteSpace,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -2106,5 +2106,74 @@ mod tests {
             p.style.font_family,
             vec!["Open Sans".to_string(), "sans-serif".to_string()]
         );
+    }
+
+    // ── white-space: nowrap ─────────────────────────────────────────────────
+
+    #[test]
+    fn white_space_default_normal() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.white_space, WhiteSpace::Normal);
+    }
+
+    #[test]
+    fn white_space_nowrap_parsed() {
+        let root = lay("<p>x</p>", "p { white-space: nowrap; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.white_space, WhiteSpace::Nowrap);
+    }
+
+    #[test]
+    fn white_space_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { white-space: nowrap; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(p.style.white_space, WhiteSpace::Nowrap);
+    }
+
+    #[test]
+    fn white_space_nowrap_disables_wrap() {
+        // Без nowrap: 4 слова по 2 char + space (8+8+8+8 + 3*8 = 56 px) на 30 px ширине
+        // → переносится на несколько строк.
+        // С nowrap: всё на одной строке.
+        let normal = lay_measured("<p>aa bb cc dd</p>", "", 30.0);
+        let nowrap = lay_measured(
+            "<p>aa bb cc dd</p>",
+            "p { white-space: nowrap; }",
+            30.0,
+        );
+
+        let n_p = first_element_child(&normal);
+        let nw_p = first_element_child(&nowrap);
+        let n_inline = n_p.children.iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. })).unwrap();
+        let nw_inline = nw_p.children.iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. })).unwrap();
+
+        let n_lines = if let BoxKind::InlineRun { lines, .. } = &n_inline.kind {
+            lines.len()
+        } else { panic!() };
+        let nw_lines = if let BoxKind::InlineRun { lines, .. } = &nw_inline.kind {
+            lines.len()
+        } else { panic!() };
+
+        assert!(n_lines > 1, "default ожидает перенос на несколько строк, got {n_lines}");
+        assert_eq!(nw_lines, 1, "nowrap должен дать одну строку");
+    }
+
+    #[test]
+    fn white_space_normal_keyword_resets_inherited_nowrap() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { white-space: nowrap; } p { white-space: normal; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.white_space, WhiteSpace::Nowrap);
+        assert_eq!(p.style.white_space, WhiteSpace::Normal);
     }
 }
