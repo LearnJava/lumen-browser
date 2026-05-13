@@ -309,6 +309,178 @@ fn path_matches(request_path: &str, cookie_path: &str) -> bool {
     )
 }
 
+/// Распарсить значение HTTP-заголовка `Set-Cookie` в `Cookie`.
+///
+/// RFC 6265 §5.2. Формат:
+///
+/// ```text
+/// name=value [; attr [; attr]...]
+/// ```
+///
+/// Атрибуты (case-insensitive имена):
+/// - `Expires=<rfc1123-date>` — Unix timestamp expires_at (только формат
+///   RFC 1123 «Wed, 21 Oct 2015 07:28:00 GMT» в Phase 0; прочие формы
+///   spec-а игнорируются — session cookie);
+/// - `Max-Age=<seconds>` — приоритетнее Expires; expires_at = now + N;
+///   отрицательное / 0 / нечисловое значение → session cookie;
+/// - `Domain=<domain>` — leading-dot strip (RFC 6265 §5.2.3);
+/// - `Path=<path>` — иначе default_path;
+/// - `Secure` (без значения);
+/// - `HttpOnly` (без значения);
+/// - `SameSite=Strict|Lax|None` — иначе default Lax.
+///
+/// Возвращает `None` если name/value не распарсилось (нет `=` в первом
+/// сегменте) или name пустое.
+///
+/// `now_unix` — текущий Unix timestamp (для расчёта Max-Age).
+pub fn parse_set_cookie(
+    header: &str,
+    default_domain: &str,
+    default_path: &str,
+    now_unix: i64,
+) -> Option<Cookie> {
+    let mut parts = header.split(';');
+    let first = parts.next()?.trim();
+    let eq = first.find('=')?;
+    let name = first[..eq].trim();
+    if name.is_empty() {
+        return None;
+    }
+    let value = first[eq + 1..].trim().to_string();
+
+    let mut domain = default_domain.to_string();
+    let mut path = default_path.to_string();
+    let mut expires_at: Option<i64> = None;
+    let mut max_age: Option<i64> = None;
+    let mut secure = false;
+    let mut http_only = false;
+    let mut same_site = SameSite::Lax;
+
+    for raw in parts {
+        let attr = raw.trim();
+        if attr.is_empty() {
+            continue;
+        }
+        let (key, val) = match attr.find('=') {
+            Some(i) => (attr[..i].trim(), attr[i + 1..].trim()),
+            None => (attr, ""),
+        };
+        if key.eq_ignore_ascii_case("expires") {
+            expires_at = parse_rfc1123_date(val);
+        } else if key.eq_ignore_ascii_case("max-age") {
+            // RFC 6265 §5.2.2: только цифры (опц. ведущий `-`); прочее — игнор.
+            if let Ok(n) = val.parse::<i64>() {
+                max_age = Some(n);
+            }
+        } else if key.eq_ignore_ascii_case("domain") {
+            // Leading dot — strip (RFC 6265 §5.2.3 — host-relative).
+            domain = val.strip_prefix('.').unwrap_or(val).to_lowercase();
+        } else if key.eq_ignore_ascii_case("path") {
+            // Пустой Path / не начинается с `/` — RFC 6265 §5.2.4 → default
+            // (мы берём `default_path` как fallback).
+            if val.starts_with('/') {
+                path = val.to_string();
+            }
+        } else if key.eq_ignore_ascii_case("secure") {
+            secure = true;
+        } else if key.eq_ignore_ascii_case("httponly") {
+            http_only = true;
+        } else if key.eq_ignore_ascii_case("samesite") {
+            if val.eq_ignore_ascii_case("strict") {
+                same_site = SameSite::Strict;
+            } else if val.eq_ignore_ascii_case("none") {
+                same_site = SameSite::None;
+            } else if val.eq_ignore_ascii_case("lax") {
+                same_site = SameSite::Lax;
+            }
+        }
+    }
+
+    // Max-Age priority над Expires (RFC 6265 §5.2.2). Max-Age <= 0 →
+    // expired cookie сразу (timestamp в прошлом).
+    let final_expires = if let Some(ma) = max_age {
+        Some(now_unix.saturating_add(ma))
+    } else {
+        expires_at
+    };
+
+    Some(Cookie {
+        domain,
+        path,
+        name: name.to_string(),
+        value,
+        expires_at: final_expires,
+        secure,
+        http_only,
+        same_site,
+    })
+}
+
+/// Парсер RFC 1123 даты вида «Wed, 21 Oct 2015 07:28:00 GMT». Возвращает
+/// Unix timestamp (секунды). Прочие формы (RFC 850, ANSI C asctime,
+/// нестандартные дроби) — None.
+fn parse_rfc1123_date(s: &str) -> Option<i64> {
+    let s = s.trim();
+    // Опц. day-of-week-prefix «Wed, ». Пропускаем до первой запятой+пробела
+    // или просто берём остаток если запятой нет (некоторые серверы
+    // присылают без day-of-week).
+    let rest = match s.find(", ") {
+        Some(i) => &s[i + 2..],
+        None => s,
+    };
+    let tokens: Vec<&str> = rest.split_whitespace().collect();
+    if tokens.len() < 5 {
+        return None;
+    }
+    let day: u32 = tokens[0].parse().ok()?;
+    let month = month_from_name(tokens[1])?;
+    let year: i32 = tokens[2].parse().ok()?;
+    // Год — 2-значный legacy form (RFC 850) → не валиден тут; берём 4-значный.
+    if year < 1000 {
+        return None;
+    }
+    let time = tokens[3];
+    let mut tparts = time.split(':');
+    let hh: u32 = tparts.next()?.parse().ok()?;
+    let mm: u32 = tparts.next()?.parse().ok()?;
+    let ss: u32 = tparts.next()?.parse().ok()?;
+    // tokens[4] — обычно «GMT», игнорируем (other timezones — за пределами
+    // Phase 0; RFC 6265 cookie attrs всегда GMT).
+    Some(civil_to_unix(year, month, day, hh, mm, ss))
+}
+
+fn month_from_name(name: &str) -> Option<u32> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "jan" => 1,
+        "feb" => 2,
+        "mar" => 3,
+        "apr" => 4,
+        "may" => 5,
+        "jun" => 6,
+        "jul" => 7,
+        "aug" => 8,
+        "sep" => 9,
+        "oct" => 10,
+        "nov" => 11,
+        "dec" => 12,
+        _ => return None,
+    })
+}
+
+/// Конверсия Gregorian-даты в Unix timestamp. Алгоритм Хинннанта
+/// (Howard Hinnant, «date_algorithms.html»): days_from_civil даёт
+/// число дней с 1970-01-01 (отрицательно для дат ранее).
+fn civil_to_unix(y: i32, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> i64 {
+    let yi = if m <= 2 { y - 1 } else { y };
+    let era = if yi >= 0 { yi } else { yi - 399 } / 400;
+    let yoe = (yi - era * 400) as i64; // 0..400
+    let m_adj = if m > 2 { m as i64 - 3 } else { m as i64 + 9 }; // 0..12
+    let doy = (153 * m_adj + 2) / 5 + d as i64 - 1; // 0..366
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    let days = era as i64 * 146097 + doe - 719468;
+    days * 86400 + hh as i64 * 3600 + mm as i64 * 60 + ss as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -561,6 +733,157 @@ mod tests {
         assert!(policies.contains(&SameSite::Strict));
         assert!(policies.contains(&SameSite::Lax));
         assert!(policies.contains(&SameSite::None));
+    }
+
+    // ── parse_set_cookie ──
+
+    #[test]
+    fn parse_basic_name_value() {
+        let c = parse_set_cookie("session=abc123", "example.com", "/", 0).unwrap();
+        assert_eq!(c.name, "session");
+        assert_eq!(c.value, "abc123");
+        assert_eq!(c.domain, "example.com");
+        assert_eq!(c.path, "/");
+        assert_eq!(c.expires_at, None);
+        assert!(!c.secure);
+        assert!(!c.http_only);
+        assert_eq!(c.same_site, SameSite::Lax);
+    }
+
+    #[test]
+    fn parse_with_attributes() {
+        let c = parse_set_cookie(
+            "tok=xyz; Domain=.example.com; Path=/admin; Secure; HttpOnly; SameSite=Strict",
+            "fallback.com",
+            "/",
+            0,
+        )
+        .unwrap();
+        assert_eq!(c.name, "tok");
+        assert_eq!(c.value, "xyz");
+        // Leading dot strip.
+        assert_eq!(c.domain, "example.com");
+        assert_eq!(c.path, "/admin");
+        assert!(c.secure);
+        assert!(c.http_only);
+        assert_eq!(c.same_site, SameSite::Strict);
+    }
+
+    #[test]
+    fn parse_max_age_overrides_expires() {
+        // Max-Age приоритетнее Expires.
+        let c = parse_set_cookie(
+            "k=v; Max-Age=3600; Expires=Wed, 21 Oct 2015 07:28:00 GMT",
+            "example.com",
+            "/",
+            1000,
+        )
+        .unwrap();
+        // Max-Age = 3600, now = 1000 → expires_at = 4600.
+        assert_eq!(c.expires_at, Some(4600));
+    }
+
+    #[test]
+    fn parse_expires_rfc1123() {
+        let c = parse_set_cookie(
+            "k=v; Expires=Wed, 21 Oct 2015 07:28:00 GMT",
+            "example.com",
+            "/",
+            0,
+        )
+        .unwrap();
+        // 2015-10-21T07:28:00Z = 1445412480 Unix.
+        assert_eq!(c.expires_at, Some(1_445_412_480));
+    }
+
+    #[test]
+    fn parse_expires_without_day_of_week() {
+        // Некоторые серверы пропускают «Wed, » префикс.
+        let c = parse_set_cookie(
+            "k=v; Expires=21 Oct 2015 07:28:00 GMT",
+            "example.com",
+            "/",
+            0,
+        )
+        .unwrap();
+        assert_eq!(c.expires_at, Some(1_445_412_480));
+    }
+
+    #[test]
+    fn parse_max_age_negative_means_expired() {
+        // Max-Age <= 0 → cookie уже expired (timestamp в прошлом / now).
+        let c = parse_set_cookie("k=v; Max-Age=-1", "example.com", "/", 100).unwrap();
+        assert_eq!(c.expires_at, Some(99));
+    }
+
+    #[test]
+    fn parse_samesite_variants() {
+        for (header, expected) in [
+            ("k=v; SameSite=Strict", SameSite::Strict),
+            ("k=v; SameSite=lax", SameSite::Lax),  // case-insensitive
+            ("k=v; SameSite=None", SameSite::None),
+            ("k=v; SameSite=garbage", SameSite::Lax),  // unknown → default
+            ("k=v", SameSite::Lax),  // missing → default
+        ] {
+            let c = parse_set_cookie(header, "example.com", "/", 0).unwrap();
+            assert_eq!(c.same_site, expected, "header: {header}");
+        }
+    }
+
+    #[test]
+    fn parse_invalid_returns_none() {
+        // Без `=` в первом сегменте.
+        assert!(parse_set_cookie("just-a-name", "example.com", "/", 0).is_none());
+        // Пустое имя (=value).
+        assert!(parse_set_cookie("=value", "example.com", "/", 0).is_none());
+    }
+
+    #[test]
+    fn parse_empty_value_ok() {
+        // Пустое value — валидно (имя=пусто).
+        let c = parse_set_cookie("k=", "example.com", "/", 0).unwrap();
+        assert_eq!(c.name, "k");
+        assert_eq!(c.value, "");
+    }
+
+    #[test]
+    fn parse_path_must_start_with_slash() {
+        // Path без `/` (RFC 6265 §5.2.4) → default_path.
+        let c = parse_set_cookie("k=v; Path=admin", "example.com", "/fallback", 0).unwrap();
+        assert_eq!(c.path, "/fallback");
+    }
+
+    #[test]
+    fn parse_case_insensitive_attribute_names() {
+        let c = parse_set_cookie(
+            "k=v; secure; HTTPONLY; max-age=100; PATH=/x",
+            "example.com",
+            "/",
+            0,
+        )
+        .unwrap();
+        assert!(c.secure);
+        assert!(c.http_only);
+        assert_eq!(c.expires_at, Some(100));
+        assert_eq!(c.path, "/x");
+    }
+
+    #[test]
+    fn civil_to_unix_epoch() {
+        assert_eq!(civil_to_unix(1970, 1, 1, 0, 0, 0), 0);
+    }
+
+    #[test]
+    fn civil_to_unix_y2k() {
+        // 2000-01-01T00:00:00Z = 946684800.
+        assert_eq!(civil_to_unix(2000, 1, 1, 0, 0, 0), 946_684_800);
+    }
+
+    #[test]
+    fn civil_to_unix_leap_year() {
+        // 2020-02-29 (leap year) — должно работать. 2020-03-01 = 1583020800.
+        // 2020-02-29 = 1582934400.
+        assert_eq!(civil_to_unix(2020, 2, 29, 0, 0, 0), 1_582_934_400);
     }
 
     #[test]

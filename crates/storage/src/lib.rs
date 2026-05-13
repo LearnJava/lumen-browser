@@ -17,7 +17,7 @@ pub mod history;
 pub mod sqlite_store;
 pub mod store;
 
-pub use cookies::{Cookie, CookieJar, SameSite};
+pub use cookies::{parse_set_cookie, Cookie, CookieJar, SameSite};
 pub use history::{History, HistoryEntry};
 pub use sqlite_store::SqliteStorage;
 pub use store::InMemoryStorage;
