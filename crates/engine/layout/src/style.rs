@@ -18,8 +18,8 @@ use std::collections::HashMap;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
-    AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, Declaration, PropertyRule,
-    PseudoClass, SimpleSelector, Specificity, Stylesheet,
+    AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, Declaration, MediaContext,
+    PropertyRule, PseudoClass, SimpleSelector, Specificity, Stylesheet,
 };
 use lumen_dom::{Attribute, Document, NodeData, NodeId};
 
@@ -835,6 +835,38 @@ pub fn compute_style(
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
                 matched.push((decl.important, spec, rule_idx, decl_idx, decl));
             }
+        }
+    }
+    // CSS Media Queries L4: rules внутри `@media`-блока, чей query
+    // совпадает с текущим MediaContext, добавляются в каскад. В Phase 0
+    // упрощённый MediaContext: media_type="screen", width/height из
+    // viewport, prefers_dark=false. Source-order между обычными и
+    // @media-rules не сохраняется идеально (все @media идут после
+    // обычных) — это известное ограничение.
+    let media_ctx = media_context_from_viewport(viewport);
+    let mut next_rule_idx = sheet.rules.len();
+    for media in &sheet.media_rules {
+        if !media.query.matches(&media_ctx) {
+            next_rule_idx += media.rules.len();
+            continue;
+        }
+        for rule in &media.rules {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if matches_complex(complex, doc, node) {
+                    let spec = complex.specificity();
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    matched.push((decl.important, spec, next_rule_idx, decl_idx, decl));
+                }
+            }
+            next_rule_idx += 1;
         }
     }
     matched.sort_by_key(|&(imp, spec, rule_idx, decl_idx, _)| (imp, spec, rule_idx, decl_idx));
@@ -3808,6 +3840,18 @@ fn is_css_ident(s: &str) -> bool {
         return false;
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Контекст для `@media`-запросов из viewport-а. Phase 0 упрощение:
+/// media_type всегда "screen", prefers_dark = false. Shell может в
+/// будущем переопределить через явный API.
+fn media_context_from_viewport(viewport: Size) -> MediaContext {
+    MediaContext {
+        media_type: "screen".into(),
+        width: viewport.width,
+        height: viewport.height,
+        prefers_dark: false,
+    }
 }
 
 /// Применяет `font-size`-декларацию, если она задана. Размер `em` берётся

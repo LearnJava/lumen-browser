@@ -304,17 +304,253 @@ pub struct PropertyRule {
     pub initial_value: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
     /// Зарегистрированные `@property`-правила. Порядок соответствует
     /// исходному CSS; повтор имени — последнее объявление побеждает (по
     /// CSS Properties and Values L1 §1.1).
     pub properties: Vec<PropertyRule>,
+    /// `@media`-правила. Каждое содержит query и список вложенных rules.
+    /// Применяются в каскаде только если `query.matches(ctx)` — см.
+    /// `MediaQuery::matches`. Порядок source-position для tie-breaking
+    /// в каскаде сохраняется через position в `Vec` (но фактическая
+    /// специфика media rules в Phase 0 layout-у мерджится «как обычные»).
+    pub media_rules: Vec<MediaRule>,
+}
+
+/// Группа CSS-правил, вложенных в `@media`-блок.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaRule {
+    pub query: MediaQuery,
+    pub rules: Vec<Rule>,
+}
+
+/// Media query — OR-список AND-clauses. Пустой `clauses` (нет условий)
+/// трактуется как «всегда true» (= `@media all`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MediaQuery {
+    /// Внешний `Vec` — OR (comma-separated); внутренний — AND
+    /// (whitespace+`and`-separated).
+    pub clauses: Vec<Vec<MediaCondition>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaCondition {
+    /// `screen`, `print`, `all`, `handheld`, etc. — media type.
+    /// Хранится lower-case. `all` всегда match. Прочие имена match
+    /// если совпадают с `MediaContext::media_type` (lower-case).
+    MediaType(String),
+    /// `(min-width: 600px)` и подобные. Phase 0 поддерживает:
+    /// min/max-width, min/max-height, orientation, prefers-color-scheme.
+    Feature(MediaFeature),
+    /// Любая `(unknown-feature: value)` — никогда не матчит (forward-compat).
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MediaFeature {
+    MinWidth(f32),
+    MaxWidth(f32),
+    MinHeight(f32),
+    MaxHeight(f32),
+    Orientation(MediaOrientation),
+    PrefersColorScheme(ColorScheme),
+}
+
+impl Eq for MediaFeature {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaOrientation {
+    Portrait,
+    Landscape,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorScheme {
+    Light,
+    Dark,
+}
+
+/// Контекст, против которого матчатся media queries. Заполняется
+/// shell-ом / layout-ом из текущего viewport-а и пользовательских
+/// настроек.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaContext {
+    /// «screen» / «print» / «all» / прочее.
+    pub media_type: String,
+    pub width: f32,
+    pub height: f32,
+    pub prefers_dark: bool,
+}
+
+impl Default for MediaContext {
+    fn default() -> Self {
+        Self {
+            media_type: "screen".into(),
+            width: 0.0,
+            height: 0.0,
+            prefers_dark: false,
+        }
+    }
+}
+
+impl MediaQuery {
+    /// Пустой query (= `@media all`) — true. Иначе хотя бы одна
+    /// OR-clause должна быть истиной; внутри clause — все AND-условия.
+    pub fn matches(&self, ctx: &MediaContext) -> bool {
+        if self.clauses.is_empty() {
+            return true;
+        }
+        self.clauses
+            .iter()
+            .any(|clause| clause.iter().all(|c| c.matches(ctx)))
+    }
+}
+
+impl MediaCondition {
+    pub fn matches(&self, ctx: &MediaContext) -> bool {
+        match self {
+            Self::MediaType(t) => t == "all" || t == &ctx.media_type,
+            Self::Feature(f) => f.matches(ctx),
+            Self::Unsupported => false,
+        }
+    }
+}
+
+impl MediaFeature {
+    pub fn matches(&self, ctx: &MediaContext) -> bool {
+        match self {
+            Self::MinWidth(px) => ctx.width >= *px,
+            Self::MaxWidth(px) => ctx.width <= *px,
+            Self::MinHeight(px) => ctx.height >= *px,
+            Self::MaxHeight(px) => ctx.height <= *px,
+            Self::Orientation(o) => {
+                let actual = if ctx.width >= ctx.height {
+                    MediaOrientation::Landscape
+                } else {
+                    MediaOrientation::Portrait
+                };
+                actual == *o
+            }
+            Self::PrefersColorScheme(scheme) => match scheme {
+                ColorScheme::Dark => ctx.prefers_dark,
+                ColorScheme::Light => !ctx.prefers_dark,
+            },
+        }
+    }
 }
 
 pub fn parse(input: &str) -> Stylesheet {
     Parser::new(input).parse_stylesheet()
+}
+
+enum AtRuleOutcome {
+    Property(PropertyRule),
+    Media(MediaRule),
+    None,
+}
+
+/// Распарсить media query из строки между `@media` и `{`. Принимает
+/// строку без обрамляющих whitespace. Грамматика (упрощённая):
+/// `clause [ , clause ]*` где `clause = primary [ "and" primary ]*` и
+/// `primary = ident | "(" feature ")"`.
+///
+/// Возвращает `MediaQuery` с `clauses.len() == 0` если строка пустая
+/// (= `@media all`). Неизвестные feature-имена дают `Unsupported` (не
+/// матчат) — это lenient parser для forward-compat.
+pub fn parse_media_query(s: &str) -> MediaQuery {
+    let s = s.trim();
+    if s.is_empty() {
+        return MediaQuery::default();
+    }
+    let mut clauses = Vec::new();
+    for clause_str in s.split(',') {
+        let clause = parse_media_clause(clause_str);
+        clauses.push(clause);
+    }
+    MediaQuery { clauses }
+}
+
+fn parse_media_clause(s: &str) -> Vec<MediaCondition> {
+    let mut out = Vec::new();
+    let mut input = s.trim();
+    // Token by token: либо `(feature)` либо ident, разделённые `and`/whitespace.
+    while !input.is_empty() {
+        input = input.trim_start();
+        if input.starts_with('(') {
+            // Найти match `)`.
+            if let Some(end) = input.find(')') {
+                let inner = &input[1..end];
+                out.push(parse_media_feature(inner.trim()));
+                input = &input[end + 1..];
+            } else {
+                // Невалидное — abort clause.
+                return vec![MediaCondition::Unsupported];
+            }
+        } else {
+            // Берём слово до whitespace.
+            let end = input
+                .find(|c: char| c.is_whitespace() || c == '(' || c == ',')
+                .unwrap_or(input.len());
+            let word = &input[..end];
+            input = &input[end..];
+            if word.eq_ignore_ascii_case("and") {
+                // Просто разделитель.
+                continue;
+            }
+            if word.eq_ignore_ascii_case("not") || word.eq_ignore_ascii_case("only") {
+                // `not` и `only` — модификаторы; Phase 0 их игнорирует
+                // (effectively allowing match).
+                continue;
+            }
+            out.push(MediaCondition::MediaType(word.to_ascii_lowercase()));
+        }
+    }
+    if out.is_empty() {
+        out.push(MediaCondition::Unsupported);
+    }
+    out
+}
+
+fn parse_media_feature(s: &str) -> MediaCondition {
+    // `feature: value` или просто `feature` (boolean feature, не поддерживаем).
+    let Some((key, val)) = s.split_once(':') else {
+        return MediaCondition::Unsupported;
+    };
+    let key = key.trim().to_ascii_lowercase();
+    let val = val.trim();
+    match key.as_str() {
+        "min-width" | "max-width" | "min-height" | "max-height" => {
+            // Парсим как `Npx`. Прочие единицы (em/rem) require viewport context —
+            // отложены.
+            let Some(num) = val.strip_suffix("px") else {
+                return MediaCondition::Unsupported;
+            };
+            let Ok(px) = num.trim().parse::<f32>() else {
+                return MediaCondition::Unsupported;
+            };
+            let feature = match key.as_str() {
+                "min-width" => MediaFeature::MinWidth(px),
+                "max-width" => MediaFeature::MaxWidth(px),
+                "min-height" => MediaFeature::MinHeight(px),
+                "max-height" => MediaFeature::MaxHeight(px),
+                _ => unreachable!(),
+            };
+            MediaCondition::Feature(feature)
+        }
+        "orientation" => match val.to_ascii_lowercase().as_str() {
+            "portrait" => MediaCondition::Feature(MediaFeature::Orientation(MediaOrientation::Portrait)),
+            "landscape" => MediaCondition::Feature(MediaFeature::Orientation(MediaOrientation::Landscape)),
+            _ => MediaCondition::Unsupported,
+        },
+        "prefers-color-scheme" => match val.to_ascii_lowercase().as_str() {
+            "light" => MediaCondition::Feature(MediaFeature::PrefersColorScheme(ColorScheme::Light)),
+            "dark" => MediaCondition::Feature(MediaFeature::PrefersColorScheme(ColorScheme::Dark)),
+            _ => MediaCondition::Unsupported,
+        },
+        _ => MediaCondition::Unsupported,
+    }
 }
 
 struct Parser<'a> {
@@ -374,15 +610,16 @@ impl<'a> Parser<'a> {
     fn parse_stylesheet(&mut self) -> Stylesheet {
         let mut rules = Vec::new();
         let mut properties = Vec::new();
+        let mut media_rules = Vec::new();
         loop {
             self.skip_ws_and_comments();
             match self.peek() {
                 None => break,
-                Some('@') => {
-                    if let Some(p) = self.parse_at_rule() {
-                        properties.push(p);
-                    }
-                }
+                Some('@') => match self.parse_at_rule() {
+                    AtRuleOutcome::Property(p) => properties.push(p),
+                    AtRuleOutcome::Media(m) => media_rules.push(m),
+                    AtRuleOutcome::None => {}
+                },
                 Some(_) => {
                     let before = self.pos;
                     if let Some(rule) = self.parse_rule() {
@@ -395,23 +632,80 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        Stylesheet { rules, properties }
+        Stylesheet {
+            rules,
+            properties,
+            media_rules,
+        }
     }
 
     /// Распознаёт `@property --name { ... }` (CSS Properties and Values L1
-    /// §1.1); все прочие @-правила синтаксически пропускает (как раньше).
-    /// Сама съедает либо `;`, либо полный `{ ... }`-блок.
-    fn parse_at_rule(&mut self) -> Option<PropertyRule> {
+    /// §1.1) и `@media <query> { <rules> }` (Media Queries L4).
+    /// Все прочие @-правила синтаксически пропускает. Сама съедает
+    /// либо `;`, либо полный `{ ... }`-блок.
+    fn parse_at_rule(&mut self) -> AtRuleOutcome {
         let start = self.pos;
         self.consume(); // '@'
         let name = self.parse_ident().unwrap_or_default();
         if name.eq_ignore_ascii_case("property") {
-            return self.parse_property_body();
+            return self.parse_property_body().map_or(AtRuleOutcome::None, AtRuleOutcome::Property);
+        }
+        if name.eq_ignore_ascii_case("media") {
+            return self.parse_media_rule().map_or(AtRuleOutcome::None, AtRuleOutcome::Media);
         }
         // Прочее @-правило: откатимся к '@' и пропустим как раньше.
         self.pos = start;
         self.skip_at_rule();
-        None
+        AtRuleOutcome::None
+    }
+
+    /// Парсит тело `@media <query> { <rules> }`. Грамматика query
+    /// упрощённая: type-or-feature [and type-or-feature]* [, ...].
+    /// Type-or-feature — ident (`screen`/`print`/...) или
+    /// `(feature: value)`. Возвращает None если синтаксис не позволяет
+    /// дойти до `{`; в этом случае откатывает позицию до конца блока
+    /// чтобы стабильно продолжить парсинг stylesheet.
+    fn parse_media_rule(&mut self) -> Option<MediaRule> {
+        self.skip_ws_and_comments();
+        // Собираем query-string до `{`.
+        let query_start = self.pos;
+        while let Some(c) = self.peek() {
+            if c == '{' {
+                break;
+            }
+            self.consume();
+        }
+        if self.peek() != Some('{') {
+            return None;
+        }
+        let query_str = self.input[query_start..self.pos].trim();
+        let query = parse_media_query(query_str);
+        // Тело: рекурсивно парсим как обычные rules.
+        self.consume(); // '{'
+        let mut rules = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some('@') => {
+                    // Nested @-правила в media пока не поддерживаем — skip.
+                    self.skip_at_rule();
+                }
+                Some(_) => {
+                    let before = self.pos;
+                    if let Some(rule) = self.parse_rule() {
+                        rules.push(rule);
+                    } else if self.pos == before {
+                        self.consume();
+                    }
+                }
+            }
+        }
+        Some(MediaRule { query, rules })
     }
 
     /// Парсит тело `@property`: имя `--name`, блок `{ ... }`, обязательные

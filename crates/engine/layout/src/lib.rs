@@ -3978,4 +3978,171 @@ mod tests {
         let s = first_block_style(&root);
         assert_eq!(s.counter_reset, vec![("valid".to_string(), 2)]);
     }
+
+    // ──────── @media queries (Media Queries L4) ────────
+
+    fn lay_with_viewport(html: &str, css: &str, vw: f32, vh: f32) -> LayoutBox {
+        use lumen_dom::Document;
+        use lumen_core::Size;
+        let document: Document = lumen_html_parser::parse(html);
+        let stylesheet = lumen_css_parser::parse(css);
+        let viewport = Size { width: vw, height: vh };
+        crate::layout(&document, &stylesheet, viewport)
+    }
+
+    #[test]
+    fn media_min_width_matches_wide_viewport() {
+        // @media (min-width: 600px) { p { color: red; } }
+        // viewport 800×600 → match.
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (min-width: 600px) { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn media_min_width_skips_narrow_viewport() {
+        // viewport 500×600 → НЕ match (500 < 600).
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (min-width: 600px) { p { color: red; } }",
+            500.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // default color = BLACK (initial).
+        assert_eq!(p.style.color, Color::BLACK);
+    }
+
+    #[test]
+    fn media_max_width_matches_narrow() {
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (max-width: 500px) { p { color: blue; } }",
+            400.0,
+            300.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn media_orientation_landscape() {
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (orientation: landscape) { p { color: green; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn media_orientation_portrait_does_not_match_landscape() {
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (orientation: portrait) { p { color: green; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color::BLACK);
+    }
+
+    #[test]
+    fn media_screen_type_always_matches() {
+        // Phase 0 MediaContext always media_type="screen".
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media screen { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn media_print_type_does_not_match() {
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media print { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color::BLACK);
+    }
+
+    #[test]
+    fn media_and_combination() {
+        // @media (min-width: 600px) and (orientation: landscape) → match
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (min-width: 600px) and (orientation: landscape) { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn media_or_via_comma() {
+        // @media (max-width: 400px), (min-width: 700px) → match при viewport=800
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (max-width: 400px), (min-width: 700px) { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn media_rule_overrides_regular() {
+        // Source order: p{color:red}, потом @media(match){p{color:blue}}.
+        // @media rules идут после regular в нашем cascade-ordering,
+        // поэтому blue побеждает.
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "p { color: red; } @media (min-width: 100px) { p { color: blue; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn media_unknown_feature_does_not_match() {
+        // (unknown-feature: value) → Unsupported → не match.
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (color-gamut: p3) { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color::BLACK);
+    }
+
+    #[test]
+    fn media_prefers_color_scheme_light_default() {
+        // Phase 0: prefers_dark=false → 'light' matches.
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (prefers-color-scheme: light) { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
 }
