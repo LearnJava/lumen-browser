@@ -2833,4 +2833,99 @@ mod tests {
         let p = first_element_child(&root);
         assert_eq!(p.style.text_overflow, TextOverflow::Clip);
     }
+
+    // ── selector matching: back-tracking edge cases ─────────────────────────
+
+    /// `div div p` — двойной descendant. Должен матчить, когда есть два
+    /// уровня div выше p. Без back-tracking тоже работает (greedy от p вверх
+    /// находит ближайший div, дальше выше — другой div) — sanity check.
+    #[test]
+    fn selector_double_descendant_works() {
+        let root = lay(
+            "<div><div><p>x</p></div></div>",
+            "div div p { color: red; }",
+        );
+        // Находим p глубоко.
+        fn find_p<'a>(b: &'a LayoutBox, doc: &lumen_dom::Document) -> Option<&'a LayoutBox> {
+            if let lumen_dom::NodeData::Element { name, .. } = &doc.get(b.node).data
+                && name.local == "p"
+            {
+                return Some(b);
+            }
+            for c in &b.children {
+                if let Some(f) = find_p(c, doc) {
+                    return Some(f);
+                }
+            }
+            None
+        }
+        let doc = lumen_html_parser::parse("<div><div><p>x</p></div></div>");
+        let p = find_p(&root, &doc).unwrap();
+        assert_eq!(p.style.color.r, 255);
+    }
+
+    /// `a a span` с двумя `<a>`-предками — должен матчить через compute_style
+    /// (LayoutBox-фасад не подходит, т.к. <a> inline и весь контент сплавлен
+    /// в InlineRun-ы; проверяем напрямую).
+    #[test]
+    fn selector_nested_same_tag_descendants() {
+        let doc = lumen_html_parser::parse(r#"<a><a><span>x</span></a></a>"#);
+        let span_id = find_first_by_tag(&doc, doc.root(), "span").expect("span");
+        let style = crate::style::compute_style(
+            &doc,
+            span_id,
+            &lumen_css_parser::parse("a a span { color: red; }"),
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(style.color.r, 255);
+    }
+
+    /// Чисто back-tracking-зависимый случай через compute_style. Дерево:
+    /// `<div><a class="x"></a><a></a><a></a><span>X</span></div>`. Селектор:
+    /// `.x + a ~ span`. Greedy от span: `~ span` находит span; `+ a` — это
+    /// его прямой предыдущий sibling = третий `<a>`. Затем `.x` — sibling до
+    /// него = второй `<a>`, который не имеет класс `.x` → fail. Backtracking
+    /// перебирает `~ span` кандидатов: span сам = node → нет; либо для
+    /// later-sibling combinator берёт КАЖДЫЙ earlier sibling. С back-tracking
+    /// найдётся: `~ span` candidate = span (нет), но потом для `+ a` мы
+    /// фиксируемся на втором `<a>` (через рекурсию), и первый `<a>` (`.x`)
+    /// удовлетворяет `.x`.
+    #[test]
+    fn selector_backtracking_pathological_sibling() {
+        let doc = lumen_html_parser::parse(
+            r#"<div><a class="x">A</a><a>B</a><a>C</a><span>SPAN</span></div>"#,
+        );
+        let span_id = find_first_by_tag(&doc, doc.root(), "span").expect("span");
+        let sheet = lumen_css_parser::parse(".x + a ~ span { color: red; }");
+        let style = crate::style::compute_style(
+            &doc,
+            span_id,
+            &sheet,
+            &ComputedStyle::root(),
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(
+            style.color.r, 255,
+            ".x + a ~ span должен сматчить span с back-tracking"
+        );
+    }
+
+    fn find_first_by_tag(
+        doc: &lumen_dom::Document,
+        id: lumen_dom::NodeId,
+        tag: &str,
+    ) -> Option<lumen_dom::NodeId> {
+        if let lumen_dom::NodeData::Element { name, .. } = &doc.get(id).data
+            && name.local == tag
+        {
+            return Some(id);
+        }
+        for c in &doc.get(id).children {
+            if let Some(f) = find_first_by_tag(doc, *c, tag) {
+                return Some(f);
+            }
+        }
+        None
+    }
 }

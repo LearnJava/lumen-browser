@@ -643,8 +643,13 @@ pub fn compute_style(
 // ──────────────── selector matching ────────────────
 
 fn matches_complex(complex: &ComplexSelector, doc: &Document, node: NodeId) -> bool {
-    // Справа налево: последний compound матчит `node`, дальше идём
-    // по combinator-ам в обратную сторону, прыгая по предкам/sibling-ам.
+    // Справа налево с back-tracking. Алгоритм:
+    //   1. Складываем (compounds, combinators) в массивы.
+    //   2. Рекурсивно: матчим последний compound на текущем `node`; если ОК
+    //      и осталось > 0 compound-ов левее, для combinator-а перед ним
+    //      перебираем ВСЕ возможные кандидаты (предки для descendant /
+    //      earlier-siblings для later-sibling) и рекурсивно матчим суффикс
+    //      в каждом. child / next-sibling имеют ровно одного кандидата.
     let mut compounds: Vec<&CompoundSelector> = Vec::with_capacity(1 + complex.tail.len());
     let mut combinators: Vec<Combinator> = Vec::with_capacity(complex.tail.len());
     compounds.push(&complex.head);
@@ -652,59 +657,70 @@ fn matches_complex(complex: &ComplexSelector, doc: &Document, node: NodeId) -> b
         combinators.push(*comb);
         compounds.push(comp);
     }
+    matches_chain(&compounds, &combinators, doc, node)
+}
 
+/// Рекурсивный matcher с back-tracking. `compounds[last]` матчится на `node`;
+/// для левее идущих compound-ов перебираем кандидатов согласно combinator-у.
+fn matches_chain(
+    compounds: &[&CompoundSelector],
+    combinators: &[Combinator],
+    doc: &Document,
+    node: NodeId,
+) -> bool {
     let n = compounds.len();
+    debug_assert_eq!(combinators.len(), n - 1);
+
     if !matches_compound(compounds[n - 1], doc, node) {
         return false;
     }
-    let mut current = node;
-    for i in (0..n - 1).rev() {
-        let comb = combinators[i];
-        let target = compounds[i];
-        match comb {
-            Combinator::Descendant => {
-                let Some(found) = find_ancestor(doc, current, |n| matches_compound(target, doc, n))
-                else {
-                    return false;
-                };
-                current = found;
-            }
-            Combinator::Child => {
-                let Some(parent) = doc.get(current).parent else {
-                    return false;
-                };
-                if !is_element(doc, parent) || !matches_compound(target, doc, parent) {
-                    return false;
+    if n == 1 {
+        return true;
+    }
+
+    let comb = combinators[n - 2];
+    let prev_compounds = &compounds[..n - 1];
+    let prev_combinators = &combinators[..n - 2];
+
+    match comb {
+        Combinator::Descendant => {
+            // Перебираем всех предков как кандидатов.
+            let mut cur = doc.get(node).parent;
+            while let Some(p) = cur {
+                if is_element(doc, p)
+                    && matches_chain(prev_compounds, prev_combinators, doc, p)
+                {
+                    return true;
                 }
-                current = parent;
+                cur = doc.get(p).parent;
             }
-            Combinator::NextSibling => {
-                let Some(prev) = previous_element_sibling(doc, current) else {
-                    return false;
-                };
-                if !matches_compound(target, doc, prev) {
-                    return false;
+            false
+        }
+        Combinator::Child => {
+            // Один кандидат: parent.
+            let Some(parent) = doc.get(node).parent else { return false; };
+            if !is_element(doc, parent) {
+                return false;
+            }
+            matches_chain(prev_compounds, prev_combinators, doc, parent)
+        }
+        Combinator::NextSibling => {
+            // Один кандидат: предыдущий element-sibling.
+            let Some(prev) = previous_element_sibling(doc, node) else { return false; };
+            matches_chain(prev_compounds, prev_combinators, doc, prev)
+        }
+        Combinator::LaterSibling => {
+            // Перебираем все earlier-siblings как кандидатов.
+            let mut sib = previous_element_sibling(doc, node);
+            while let Some(s) = sib {
+                if matches_chain(prev_compounds, prev_combinators, doc, s) {
+                    return true;
                 }
-                current = prev;
+                sib = previous_element_sibling(doc, s);
             }
-            Combinator::LaterSibling => {
-                let mut sib = previous_element_sibling(doc, current);
-                let mut found = None;
-                while let Some(s) = sib {
-                    if matches_compound(target, doc, s) {
-                        found = Some(s);
-                        break;
-                    }
-                    sib = previous_element_sibling(doc, s);
-                }
-                let Some(f) = found else {
-                    return false;
-                };
-                current = f;
-            }
+            false
         }
     }
-    true
 }
 
 fn matches_compound(compound: &CompoundSelector, doc: &Document, node: NodeId) -> bool {
@@ -914,21 +930,6 @@ fn is_last_of_type(doc: &Document, node: NodeId) -> bool {
 
 fn is_element(doc: &Document, node: NodeId) -> bool {
     matches!(doc.get(node).data, NodeData::Element { .. })
-}
-
-fn find_ancestor<F: Fn(NodeId) -> bool>(
-    doc: &Document,
-    node: NodeId,
-    pred: F,
-) -> Option<NodeId> {
-    let mut p = doc.get(node).parent;
-    while let Some(pid) = p {
-        if is_element(doc, pid) && pred(pid) {
-            return Some(pid);
-        }
-        p = doc.get(pid).parent;
-    }
-    None
 }
 
 fn previous_element_sibling(doc: &Document, node: NodeId) -> Option<NodeId> {
