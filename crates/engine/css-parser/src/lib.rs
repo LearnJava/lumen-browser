@@ -17,7 +17,8 @@
 pub mod parser;
 
 pub use parser::{
-    AttrOp, AttrSelector, Combinator, CompoundSelector, ComplexSelector, Declaration, NthSpec,
-    PropertyRule, PseudoClass, RelativeSelector, Rule, SimpleSelector, Specificity, Stylesheet,
-    parse,
+    parse, parse_media_query, AttrOp, AttrSelector, ColorScheme, Combinator, CompoundSelector,
+    ComplexSelector, Declaration, MediaCondition, MediaContext, MediaFeature, MediaOrientation,
+    MediaQuery, MediaRule, NthSpec, PropertyRule, PseudoClass, RelativeSelector, Rule,
+    SimpleSelector, Specificity, Stylesheet,
 };
