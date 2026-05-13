@@ -18,8 +18,8 @@ use std::collections::HashMap;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
-    AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, Declaration, PseudoClass,
-    SimpleSelector, Specificity, Stylesheet,
+    AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, Declaration, PropertyRule,
+    PseudoClass, SimpleSelector, Specificity, Stylesheet,
 };
 use lumen_dom::{Attribute, Document, NodeData, NodeId};
 
@@ -718,7 +718,32 @@ pub fn compute_style(
         outline_offset: 0.0,
     };
 
+    // CSS Properties and Values L1 §1.1 — registry зарегистрированных
+    // custom-properties. Карта строится локально для каждого узла:
+    // на типичной странице 0..5 @property-правил, накладные расходы мизерны
+    // в сравнении со стоимостью каскада. При повторе имени (см. spec —
+    // last wins) `insert` корректно сохраняет последнее объявление.
+    let registry: HashMap<&str, &PropertyRule> = sheet
+        .properties
+        .iter()
+        .map(|p| (p.name.as_str(), p))
+        .collect();
+
+    // Откатываем у себя унаследованные значения тех зарегистрированных
+    // custom-properties, у которых `inherits: false` — для них потомок
+    // должен видеть либо локальную декларацию, либо initial-value, а не
+    // родительское значение.
+    if !registry.is_empty() {
+        style.custom_props.retain(|key, _| {
+            registry.get(key.as_str()).is_none_or(|p| p.inherits)
+        });
+    }
+
     if !matches!(doc.get(node).data, NodeData::Element { .. }) {
+        // Для не-элементов (Document, Text внутри anonymous-wrapping) тоже
+        // применяем initial-value: var(--registered) в наследуемом стиле
+        // должен резолвиться через initial-value, если декларации нет.
+        apply_property_initial_values(&mut style.custom_props, &registry);
         return style;
     }
 
@@ -730,6 +755,14 @@ pub fn compute_style(
     if let Some(fw) = ua_font_weight(doc, node) {
         style.font_weight = fw;
     }
+
+    // HTML presentational hints (HTML5 §10): для `<img>` атрибуты
+    // `width`/`height` задают начальные значения соответствующих CSS-свойств.
+    // Применяются ДО CSS-каскада, поэтому любое author-CSS правило
+    // перекроет атрибут даже с specificity (0,0,1). Парсятся как unitless
+    // целые пиксели — это HTML5 правило для `<img>`, единицы и проценты
+    // в этих атрибутах игнорируются.
+    apply_image_presentational_hints(doc, node, &mut style);
 
     // Собираем все matched declarations с их sort key:
     // (important, specificity, rule_order, decl_index). `important` идёт
@@ -777,6 +810,13 @@ pub fn compute_style(
         }
     }
 
+    // CSS Properties and Values L1 §1.1: для каждого зарегистрированного
+    // имени, у которого после custom-pass нет значения (ни унаследованного,
+    // ни локально объявленного), подставить `initial-value`. Делается между
+    // custom-pass и main-pass, чтобы `var(--registered)` в обычных
+    // декларациях видел initial-value-fallback.
+    apply_property_initial_values(&mut style.custom_props, &registry);
+
     // Main-pass: остальные декларации; em-basis теперь = current font_size.
     // Inherited font_weight нужен для разрешения `lighter`/`bolder`.
     let em_basis = style.font_size;
@@ -786,6 +826,26 @@ pub fn compute_style(
     }
 
     style
+}
+
+/// CSS Properties and Values L1 §1.1: для каждого зарегистрированного
+/// custom property, у которого нет значения в `custom_props`, подставляет
+/// `initial-value` (если он указан). Невызов для `inherits: true` имени
+/// с унаследованным значением — потому что `contains_key` уже возвращает
+/// true. Для `inherits: false` имени родительское значение было выпилено
+/// в `compute_style` через `retain`.
+fn apply_property_initial_values(
+    custom_props: &mut HashMap<String, String>,
+    registry: &HashMap<&str, &PropertyRule>,
+) {
+    for (name, p) in registry {
+        if custom_props.contains_key(*name) {
+            continue;
+        }
+        if let Some(iv) = &p.initial_value {
+            custom_props.insert((*name).to_string(), iv.clone());
+        }
+    }
 }
 
 // ──────────────── selector matching ────────────────
@@ -1410,6 +1470,47 @@ fn ua_font_style(doc: &Document, node: NodeId) -> Option<FontStyle> {
     }
 }
 
+/// Применяет HTML presentational hints для `<img>`: атрибуты `width` и
+/// `height` парсятся как unitless целые пиксели и пишутся в `style.width` /
+/// `style.height`. Любое author-CSS правило в каскаде ниже перекроет
+/// атрибут — это и есть смысл «presentational hint»: атрибут эквивалентен
+/// UA-стилю с specificity 0, который проигрывает любой author-декларации
+/// (HTML5 §10 «Mapped attributes»). Невалидные значения (отрицательные,
+/// нечисловые, с единицами) HTML5 spec предписывает игнорировать.
+fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if name.local != "img" {
+        return;
+    }
+    let node_ref = doc.get(node);
+    if let Some(w) = node_ref.get_attr("width").and_then(parse_html_dimension) {
+        style.width = Some(w);
+    }
+    if let Some(h) = node_ref.get_attr("height").and_then(parse_html_dimension) {
+        style.height = Some(h);
+    }
+}
+
+/// HTML5 «rules for parsing dimension values»: unitless целое число
+/// пикселей, опциональный trailing `%` (Phase 0 пропускаем процентный
+/// случай — нужен containing-block-width). Отрицательные значения
+/// невалидны.
+fn parse_html_dimension(s: &str) -> Option<f32> {
+    let s = s.trim();
+    // Процентные размеры пока не поддерживаем — требуют containing block.
+    if s.ends_with('%') {
+        return None;
+    }
+    // Берём префикс из цифр (HTML5 принимает мусор после), парсим как u32.
+    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u32>().ok().map(|n| n as f32)
+}
+
 /// UA stylesheet для font-weight: `<b>`, `<strong>`, `<th>`, `<h1>`–`<h6>`
 /// получают bold по умолчанию (HTML §15.3.3).
 fn ua_font_weight(doc: &Document, node: NodeId) -> Option<FontWeight> {
@@ -1616,7 +1717,30 @@ pub enum MathFn {
     Sign,
     Mod,
     Rem,
-    Round,
+    /// CSS Values L4 §10.5.1 — `round( <rounding-strategy>?, A, B? )`.
+    /// Strategy keyword вычисляется парсером и зашит в variant; отсутствие
+    /// keyword-а ≡ `Nearest`.
+    Round(RoundStrategy),
+}
+
+/// CSS Values L4 §10.5.1 — стратегия округления для `round()`.
+/// Опускание keyword-а в `round(A[, B])` ≡ `Nearest`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoundStrategy {
+    /// Ближайшее кратное step; при равноудалённости — в сторону +∞
+    /// (`f32::round` round-half-away-from-zero, но spec в §10.5.1 говорит
+    /// «toward +∞»; различие незаметно для положительного step и нечастых
+    /// граничных случаев).
+    Nearest,
+    /// Меньшее или равное кратное step, всегда в сторону +∞
+    /// (`ceil(A/B) * B`).
+    Up,
+    /// Большее или равное кратное step, всегда в сторону −∞
+    /// (`floor(A/B) * B`).
+    Down,
+    /// Округление к нулю (`trunc(A/B) * B`). Для положительных A совпадает
+    /// с `Down`, для отрицательных — с `Up`.
+    ToZero,
 }
 
 impl CalcNode {
@@ -1784,21 +1908,31 @@ fn resolve_math_func(
             }
             a % b
         }
-        MathFn::Round => {
-            // round(val[, step]). Без step (один аргумент) — round до
-            // ближайшего целого. С step — round к ближайшему кратному step.
-            // Strategy keywords (`up`/`down`/`to-zero`/`nearest`) — в Phase 0
-            // не реализованы (парсер их не распознаёт, см. parse_function_call).
+        MathFn::Round(strategy) => {
+            // round([<strategy>,] val[, step]). Без step (нет 2-го arg) —
+            // step = 1, как в spec §10.5.1. step ≠ 0 (иначе ÷ 0 → None).
+            // Знак step сохраняется: spec не делает abs, и для nearest
+            // результат симметричен, а для up/down/to-zero — нет (это та же
+            // semantics, что у chrome/firefox). NaN ловится финальным
+            // `is_finite()`-чеком.
             let val = resolve(&args[0])?;
-            if args.len() == 2 {
-                let step = resolve(&args[1])?;
-                if step == 0.0 {
+            let step = if args.len() == 2 {
+                let s = resolve(&args[1])?;
+                if s == 0.0 {
                     return None;
                 }
-                (val / step).round() * step
+                s
             } else {
-                val.round()
-            }
+                1.0
+            };
+            let ratio = val / step;
+            let rounded = match strategy {
+                RoundStrategy::Nearest => ratio.round(),
+                RoundStrategy::Up => ratio.ceil(),
+                RoundStrategy::Down => ratio.floor(),
+                RoundStrategy::ToZero => ratio.trunc(),
+            };
+            rounded * step
         }
     };
     if result.is_finite() {
@@ -2100,6 +2234,27 @@ fn parse_function_call(
     tokens: &[CalcToken],
     pos: &mut usize,
 ) -> Option<CalcNode> {
+    // CSS Values L4 §10.5.1: `round( <rounding-strategy>?, A, B? )` —
+    // первый аргумент-keyword. Распознаём ДО общего parse_arg_list, чтобы
+    // ident-без-`(` не падал в `parse_calc_factor` как «функция без скобок».
+    // После keyword обязательна `,` — strategy без последующего expr невалиден.
+    let round_strategy = if name == "round" {
+        if let Some(CalcToken::Ident(kw)) = tokens.get(*pos)
+            && let Some(s) = parse_round_strategy(kw)
+        {
+            *pos += 1;
+            if !matches!(tokens.get(*pos), Some(CalcToken::Comma)) {
+                return None;
+            }
+            *pos += 1;
+            Some(s)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let args = parse_arg_list(tokens, pos)?;
     if !matches!(tokens.get(*pos), Some(CalcToken::RParen)) {
         return None;
@@ -2185,16 +2340,28 @@ fn parse_function_call(
             Some(CalcNode::Func(MathFn::Hypot, args))
         }
         "round" => {
-            // round(val) или round(val, step). Strategy keyword не реализован
-            // в Phase 0 — он бы стоял первым аргументом-ident, парсер
-            // не знает ident-arg, поэтому такие вызовы парсятся как обычные
-            // expr и упадут.
+            // round([<strategy>,] val[, step]). Strategy keyword уже снят
+            // вверху функции и зашит в `MathFn::Round(...)`; здесь остаётся
+            // классический args-чек 1..=2.
             if args.is_empty() || args.len() > 2 {
                 return None;
             }
-            Some(CalcNode::Func(MathFn::Round, args))
+            let s = round_strategy.unwrap_or(RoundStrategy::Nearest);
+            Some(CalcNode::Func(MathFn::Round(s), args))
         }
         _ => None, // незнакомая math-функция
+    }
+}
+
+/// CSS Values L4 §10.5.1: `<rounding-strategy>` = `nearest | up | down | to-zero`.
+/// Имя приходит уже в нижнем регистре из лексера; неподходящий ident → None.
+fn parse_round_strategy(name: &str) -> Option<RoundStrategy> {
+    match name {
+        "nearest" => Some(RoundStrategy::Nearest),
+        "up" => Some(RoundStrategy::Up),
+        "down" => Some(RoundStrategy::Down),
+        "to-zero" => Some(RoundStrategy::ToZero),
+        _ => None,
     }
 }
 
@@ -4428,6 +4595,133 @@ mod tests {
         assert_eq!(expand_vars("color: var(--x", &custom, 0), None);
     }
 
+    // ──────────────── CSS Properties and Values L1 §1.1: @property ────────────────
+
+    /// Прогоняет каскад вдоль `path` от root до целевого узла,
+    /// возвращая ComputedStyle конкретного узла. Каждый шаг — реальный
+    /// `compute_style` с inherited от предыдущего шага. Это позволяет
+    /// проверить inherits-семантику @property на двухуровневом дереве.
+    fn cascade_at(html: &str, css: &str, path: &[usize]) -> ComputedStyle {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let viewport = Size::new(800.0, 600.0);
+        let mut id = doc.root();
+        let mut style =
+            compute_style(&doc, id, &sheet, &ComputedStyle::root(), viewport);
+        for &idx in path {
+            id = doc.get(id).children[idx];
+            style = compute_style(&doc, id, &sheet, &style, viewport);
+        }
+        style
+    }
+
+    #[test]
+    fn at_property_initial_value_used_when_no_declaration() {
+        // var(--c) без декларации, но --c зарегистрирована с initial-value.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: red; } \
+             p { color: var(--c); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_property_inherits_false_blocks_inheritance() {
+        // --c унаследовалось бы от :root, но `inherits: false` → потомок
+        // его не видит и берёт initial-value (blue).
+        let s = cascade_at(
+            "<div><p>x</p></div>",
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: blue; } \
+             div { --c: red; } \
+             p { color: var(--c); }",
+            &[0, 0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn at_property_inherits_true_passes_to_child() {
+        // С `inherits: true` — потомок видит родительское значение.
+        let s = cascade_at(
+            "<div><p>x</p></div>",
+            "@property --c { syntax: \"*\"; inherits: true; initial-value: blue; } \
+             div { --c: red; } \
+             p { color: var(--c); }",
+            &[0, 0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_property_local_declaration_overrides_initial() {
+        // Локальная декларация --c=green побеждает initial-value=red.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: red; } \
+             p { --c: green; color: var(--c); }",
+            &[0],
+        );
+        // CSS3 green = rgb(0, 128, 0).
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_property_without_initial_value_no_fallback() {
+        // syntax="*" без initial-value: имя зарегистрировано (inherits:false),
+        // но var(--c) не найдёт значения → declaration invalid, color остаётся
+        // inherited (root() = black).
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; inherits: false; } \
+             p { color: var(--c); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color::BLACK);
+    }
+
+    #[test]
+    fn at_property_initial_value_visible_to_child_inherits_true() {
+        // На корне нет декларации --c. Регистрация дала ему initial-value=red
+        // и inherits:true. Дочерний `p` должен унаследовать initial-value
+        // через стандартный наследование-каскад.
+        let s = cascade_at(
+            "<div><p>x</p></div>",
+            "@property --c { syntax: \"*\"; inherits: true; initial-value: red; } \
+             p { color: var(--c); }",
+            &[0, 0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_property_last_registration_wins() {
+        // Две регистрации одного имени: последняя побеждает (HashMap insert
+        // в `registry`-build перезапишет первую).
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: red; } \
+             @property --c { syntax: \"*\"; inherits: false; initial-value: green; } \
+             p { color: var(--c); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn invalid_at_property_does_not_register() {
+        // @property без `inherits` — невалидно: имя не регистрируется, var()
+        // без значения → declaration invalid → color остаётся inherited.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; initial-value: red; } \
+             p { color: var(--c); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color::BLACK);
+    }
+
     // ──────────────── CSS Values L4 §10 — calc() ────────────────
 
     fn resolved_calc(s: &str, em: f32, pb: Option<f32>, vp: Size) -> Option<f32> {
@@ -5017,6 +5311,98 @@ mod tests {
     #[test]
     fn round_with_zero_step_invalid() {
         assert_eq!(rc_unitless("round(13, 0)"), None);
+    }
+
+    // CSS Values L4 §10.5.1 — strategy keyword (nearest/up/down/to-zero).
+
+    #[test]
+    fn round_up_to_integer() {
+        // round(up, 3.1) = 4 — ceil дробного.
+        assert!(approx(rc_unitless("round(up, 3.1)").unwrap(), 4.0));
+        // round(up, 3.0) = 3 — целое не двигается.
+        assert!(approx(rc_unitless("round(up, 3)").unwrap(), 3.0));
+    }
+
+    #[test]
+    fn round_down_to_integer() {
+        // round(down, 3.9) = 3 — floor дробного.
+        assert!(approx(rc_unitless("round(down, 3.9)").unwrap(), 3.0));
+    }
+
+    #[test]
+    fn round_to_zero_basic() {
+        // round(to-zero, 3.9) = 3 — trunc положительного.
+        assert!(approx(rc_unitless("round(to-zero, 3.9)").unwrap(), 3.0));
+        // round(to-zero, -3.9) = -3 — отличается от floor(-3.9) = -4.
+        assert!(approx(rc_unitless("round(to-zero, -3.9)").unwrap(), -3.0));
+    }
+
+    #[test]
+    fn round_up_negative() {
+        // round(up, -3.1) = -3 — ceil к +∞.
+        assert!(approx(rc_unitless("round(up, -3.1)").unwrap(), -3.0));
+    }
+
+    #[test]
+    fn round_down_negative() {
+        // round(down, -3.1) = -4 — floor к -∞.
+        assert!(approx(rc_unitless("round(down, -3.1)").unwrap(), -4.0));
+    }
+
+    #[test]
+    fn round_nearest_explicit() {
+        // Явный nearest эквивалентен без-strategy форме.
+        assert!(approx(rc_unitless("round(nearest, 3.7)").unwrap(), 4.0));
+        assert!(approx(rc_unitless("round(nearest, 3.4)").unwrap(), 3.0));
+    }
+
+    #[test]
+    fn round_strategy_with_step() {
+        // round(up, 13, 5) = 15 — ceil(13/5)*5 = 3*5.
+        assert!(approx(rc_unitless("round(up, 13, 5)").unwrap(), 15.0));
+        // round(down, 13, 5) = 10.
+        assert!(approx(rc_unitless("round(down, 13, 5)").unwrap(), 10.0));
+        // round(up, 11, 5) = 15.
+        assert!(approx(rc_unitless("round(up, 11, 5)").unwrap(), 15.0));
+        // round(to-zero, -11, 5) = -10 (vs down = -15).
+        assert!(approx(rc_unitless("round(to-zero, -11, 5)").unwrap(), -10.0));
+    }
+
+    #[test]
+    fn round_strategy_case_insensitive() {
+        // Keyword-ы CSS-стандарт case-insensitive (Values L4 §2.4).
+        assert!(approx(rc_unitless("round(UP, 3.1)").unwrap(), 4.0));
+        assert!(approx(rc_unitless("round(To-Zero, -3.9)").unwrap(), -3.0));
+    }
+
+    #[test]
+    fn round_strategy_in_width() {
+        // width: round(up, 13px, 5px) = 15px.
+        let s = style_for("width: round(up, 13px, 5px)");
+        assert_eq!(s.width, Some(15.0));
+    }
+
+    #[test]
+    fn round_strategy_zero_step_invalid() {
+        // step=0 → declaration invalid, как и для round без strategy.
+        assert_eq!(rc_unitless("round(up, 13, 0)"), None);
+    }
+
+    #[test]
+    fn round_unknown_strategy_invalid() {
+        // `floor` не keyword в strategy — declaration invalid.
+        // (lexer пропустит ident `floor`, но parse_function_call для round
+        // ждёт после ident либо `,` со strategy, либо expr; одинокий ident-без-`(`
+        // в parse_calc_factor возвращает None.)
+        assert_eq!(rc_unitless("round(floor, 3.7)"), None);
+    }
+
+    #[test]
+    fn round_strategy_without_value_invalid() {
+        // strategy + `,` + пусто → parse_arg_list падает.
+        assert_eq!(rc_unitless("round(up,)"), None);
+        // strategy без запятой → ident-arg в parse_calc_factor возвращает None.
+        assert_eq!(rc_unitless("round(up 3.1)"), None);
     }
 
     // Интеграция
