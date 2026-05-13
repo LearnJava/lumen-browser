@@ -220,6 +220,11 @@ pub struct ComputedStyle {
     /// текущего блока (resolved px). Inherited; применяется к каждому
     /// потомку, который порождает первую строку.
     pub text_indent: f32,
+    /// CSS Text L3 §11.2: дополнительное расстояние между каждой парой
+    /// символов и между словами (resolved px). Inherited. Может быть
+    /// отрицательным (сжимает текст). Применяется в wrap_inline_run при
+    /// расчёте ширин.
+    pub letter_spacing: f32,
     pub text_decoration_line: TextDecorationLine,
     /// Явная ширина (CSS `width: Npx`). None = auto (растягивается на контейнер).
     pub width: Option<f32>,
@@ -251,14 +256,15 @@ pub struct ComputedStyle {
 
 impl ComputedStyle {
     /// Два стиля рендерят текст одинаково (цвет, размер, интерлиньяж, начертание,
-    /// насыщенность, декорация). Используется для слияния inline-фрагментов
-    /// в wrap_inline_run.
+    /// насыщенность, letter-spacing, декорация). Используется для слияния
+    /// inline-фрагментов в wrap_inline_run.
     pub fn text_rendering_eq(&self, other: &Self) -> bool {
         self.color == other.color
             && (self.font_size - other.font_size).abs() < f32::EPSILON
             && (self.line_height - other.line_height).abs() < f32::EPSILON
             && self.font_style == other.font_style
             && self.font_weight == other.font_weight
+            && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
             && self.text_decoration_line == other.text_decoration_line
     }
 
@@ -275,6 +281,7 @@ impl ComputedStyle {
             font_weight: FontWeight::NORMAL,
             text_transform: TextTransform::None,
             text_indent: 0.0,
+            letter_spacing: 0.0,
             text_decoration_line: TextDecorationLine::default(),
             width: None,
             height: None,
@@ -321,6 +328,7 @@ pub fn compute_style(
         font_weight: inherited.font_weight,
         text_transform: inherited.text_transform,
         text_indent: inherited.text_indent,
+        letter_spacing: inherited.letter_spacing,
         text_decoration_line: inherited.text_decoration_line,
         // Ненаследуемые — сброс.
         background_color: None,
@@ -989,6 +997,20 @@ fn apply_declaration(
                 }
             {
                 style.text_indent = px;
+            }
+        }
+        "letter-spacing" => {
+            // CSS Text L3 §11.2: normal (= 0) | <length>. Может быть
+            // отрицательным.
+            if val.trim() == "normal" {
+                style.letter_spacing = 0.0;
+            } else if let Some(len) = parse_length(val)
+                && let Some(px) = match len {
+                    Length::Percent(_) => None,
+                    other => other.resolve(em_basis, None, viewport),
+                }
+            {
+                style.letter_spacing = px;
             }
         }
         "text-transform" => {

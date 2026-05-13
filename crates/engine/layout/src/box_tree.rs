@@ -313,15 +313,23 @@ fn wrap_inline_run(
     let mut current_x = text_indent;
 
     for (word, style) in &tagged {
-        let word_w: f32 = word.chars().map(|c| m.char_width(c, style.font_size)).sum();
+        // letter-spacing: добавляется между каждой парой символов в слове и
+        // между словом и предыдущим (через space_w на word boundary).
+        let ls = style.letter_spacing;
+        let word_w: f32 = word
+            .chars()
+            .map(|c| m.char_width(c, style.font_size) + ls)
+            .sum::<f32>()
+            - if word.is_empty() { 0.0 } else { ls }; // последний symbol не добавляет ls справа
+        let gap_with_ls = space_w + ls;
 
         // Перенос: слово не влезает (но первое слово строки добавляем всегда).
-        if !current_line.is_empty() && current_x + space_w + word_w > max_width {
+        if !current_line.is_empty() && current_x + gap_with_ls + word_w > max_width {
             result.push(std::mem::take(&mut current_line));
             current_x = 0.0;
         }
 
-        let gap = if current_line.is_empty() { 0.0 } else { space_w };
+        let gap = if current_line.is_empty() { 0.0 } else { gap_with_ls };
         let frag_x = current_x + gap;
 
         // Если стиль визуально эквивалентен предыдущему фрагменту — сливаем.
@@ -329,7 +337,7 @@ fn wrap_inline_run(
             if last.style.text_rendering_eq(style) {
                 last.text.push(' ');
                 last.text.push_str(word);
-                last.width += space_w + word_w;
+                last.width += gap_with_ls + word_w;
                 true
             } else {
                 false

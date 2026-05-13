@@ -1875,4 +1875,73 @@ mod tests {
         let p = first_element_child(&root);
         assert_eq!(p.style.text_indent, 0.0);
     }
+
+    // ── letter-spacing ──────────────────────────────────────────────────────
+
+    #[test]
+    fn letter_spacing_basic_parse() {
+        let root = lay("<p>x</p>", "p { letter-spacing: 4px; }");
+        let p = first_element_child(&root);
+        assert!((p.style.letter_spacing - 4.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn letter_spacing_normal_keyword() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { letter-spacing: 5px; } p { letter-spacing: normal; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((div.style.letter_spacing - 5.0).abs() < 0.01);
+        assert_eq!(p.style.letter_spacing, 0.0);
+    }
+
+    #[test]
+    fn letter_spacing_negative() {
+        // Отрицательные значения валидны (сжимают текст).
+        let root = lay("<p>x</p>", "p { letter-spacing: -2px; }");
+        let p = first_element_child(&root);
+        assert!((p.style.letter_spacing - (-2.0)).abs() < 0.01);
+    }
+
+    #[test]
+    fn letter_spacing_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { letter-spacing: 3px; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((p.style.letter_spacing - 3.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn letter_spacing_extends_word_width() {
+        // 4 char word "abcd" с letter-spacing 5: width = 4*8 + 3*5 = 47.
+        // Без letter-spacing было бы 32.
+        let root = lay_measured(
+            "<p>abcd</p>",
+            "p { letter-spacing: 5px; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let inline = p.children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }))
+            .unwrap();
+        if let BoxKind::InlineRun { lines, .. } = &inline.kind {
+            let frag = &lines[0][0];
+            assert!((frag.width - 47.0).abs() < 0.01, "frag.width = {}", frag.width);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn letter_spacing_default_zero() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.letter_spacing, 0.0);
+    }
 }
