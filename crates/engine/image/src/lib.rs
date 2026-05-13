@@ -3,10 +3,12 @@
 //! Реализуется самостоятельно, без `image` / `png` / `jpeg-decoder` (см. §5
 //! политики зависимостей в `CLAUDE.md`). Phase 0 покрывает PNG для случаев,
 //! которые реально встречаются на современных веб-страницах:
-//! 8-битные RGB / RGBA / grayscale / grayscale + alpha и **palette
-//! (color_type 3) c bit_depth = 8** + опциональный `tRNS` для прозрачности.
-//! Фильтры 0–4 по спецификации, без interlacing. 16-битная глубина,
-//! 1/2/4-битная palette, Adam7 и JPEG добавляются отдельными задачами.
+//! grayscale / grayscale + alpha / RGB / RGBA при `bit_depth ∈ {8, 16}` +
+//! palette (color_type 3) при `bit_depth ∈ {1, 2, 4, 8}` + опциональный
+//! `tRNS` для прозрачности. 16-битные сэмплы downsample-ятся в 8-битные
+//! отбрасыванием младшего байта (libpng `PNG_TRANSFORM_STRIP_16`). Фильтры
+//! 0–4 по спецификации, без interlacing. Adam7 и JPEG добавляются
+//! отдельными задачами.
 //!
 //! Декодер не паникует на повреждённом входе — каждая ошибка возвращается
 //! как `DecodeError` с конкретной причиной.
@@ -122,8 +124,6 @@ pub enum IhdrError {
 pub enum UnsupportedReason {
     /// Adam7 interlacing (color_type 1).
     Interlaced,
-    /// 16-битная глубина — реализуема, но Phase 0 ограничен 8 битами.
-    SixteenBitDepth,
     /// 1/2/4-битная глубина — реализуема, но Phase 0 ограничен 8 (касается
     /// и grayscale, и palette).
     SubByteDepth(u8),

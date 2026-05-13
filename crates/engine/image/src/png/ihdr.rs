@@ -114,7 +114,11 @@ impl Ihdr {
 
     /// Преобразовать `(color_type, bit_depth)` в публичный `PixelFormat`.
     /// Возвращает `Unsupported(...)`, если на текущем этапе формат
-    /// принципиально не реализован (sub-byte, 16-bit, interlaced).
+    /// принципиально не реализован (sub-byte для не-grayscale, interlaced).
+    ///
+    /// 16-битные сэмплы декодер downsample-ит до 8 бит на канал
+    /// отбрасыванием младшего байта (см. `decode_png`), поэтому формат
+    /// выхода одинаков для `bit_depth = 8` и `bit_depth = 16`.
     ///
     /// **Не вызывайте для palette**: палитровый формат зависит ещё и от
     /// наличия `tRNS`, что орхестратор знает только после сканирования
@@ -123,10 +127,7 @@ impl Ihdr {
         if self.interlaced {
             return Err(DecodeError::Unsupported(UnsupportedReason::Interlaced));
         }
-        if self.bit_depth == 16 {
-            return Err(DecodeError::Unsupported(UnsupportedReason::SixteenBitDepth));
-        }
-        if self.bit_depth != 8 {
+        if !matches!(self.bit_depth, 8 | 16) {
             return Err(DecodeError::Unsupported(UnsupportedReason::SubByteDepth(
                 self.bit_depth,
             )));
@@ -296,13 +297,18 @@ mod tests {
     }
 
     #[test]
-    fn pixel_format_rejects_16bit() {
+    fn pixel_format_accepts_16bit_as_8bit_output() {
         let data = build_ihdr(1, 1, 16, 2, 0, 0, 0);
         let h = Ihdr::parse(&data).unwrap();
-        assert!(matches!(
-            h.pixel_format(),
-            Err(DecodeError::Unsupported(UnsupportedReason::SixteenBitDepth))
-        ));
+        // 16-bit downsample-ится до Rgb8 на выходе.
+        assert_eq!(h.pixel_format().unwrap(), PixelFormat::Rgb8);
+    }
+
+    #[test]
+    fn pixel_format_accepts_16bit_rgba() {
+        let data = build_ihdr(1, 1, 16, 6, 0, 0, 0);
+        let h = Ihdr::parse(&data).unwrap();
+        assert_eq!(h.pixel_format().unwrap(), PixelFormat::Rgba8);
     }
 
     #[test]

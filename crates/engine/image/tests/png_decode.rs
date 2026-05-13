@@ -23,6 +23,11 @@ const GRAY2BIT_4X2: &[u8] = include_bytes!("fixtures/gray2bit_4x2.png");
 const GRAY4BIT_3X2: &[u8] = include_bytes!("fixtures/gray4bit_3x2.png");
 const PALETTE1BIT_8X1: &[u8] = include_bytes!("fixtures/palette1bit_8x1.png");
 const PALETTE4BIT_TRNS_4X2: &[u8] = include_bytes!("fixtures/palette4bit_trns_4x2.png");
+const GRAY16_2X2: &[u8] = include_bytes!("fixtures/gray16_2x2.png");
+const GRAYA16_2X2: &[u8] = include_bytes!("fixtures/graya16_2x2.png");
+const RGB16_2X2: &[u8] = include_bytes!("fixtures/rgb16_2x2.png");
+const RGBA16_2X2: &[u8] = include_bytes!("fixtures/rgba16_2x2.png");
+const GRAY16_FILTERS_2X3: &[u8] = include_bytes!("fixtures/gray16_filters_2x3.png");
 
 #[test]
 fn decode_rgb8_3x2() {
@@ -295,6 +300,75 @@ fn decode_palette4bit_with_trns_4x2() {
             128, 128, 128, 0, 0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, // row 1
         ]
     );
+}
+
+#[test]
+fn decode_gray16_2x2_downsamples_to_gray8() {
+    // 16-bit grayscale, big-endian u16. Сэмплы:
+    // row0: 0x0000, 0x8080 → high byte 0, 0x80
+    // row1: 0xFFFF, 0x4040 → high byte 0xFF, 0x40
+    let img = decode_png(GRAY16_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Gray8);
+    assert_eq!(img.data, vec![0, 0x80, 0xFF, 0x40]);
+}
+
+#[test]
+fn decode_graya16_2x2_downsamples_to_graya8() {
+    // 16-bit GrayAlpha. Пары (gray, alpha) big-endian.
+    // row0: (0xFFFF,0xFFFF), (0x8080,0x4040) → 255,255, 128,64
+    // row1: (0x0000,0x8080), (0xC0C0,0x0000) → 0,128, 192,0
+    let img = decode_png(GRAYA16_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::GrayAlpha8);
+    assert_eq!(img.data, vec![255, 255, 128, 64, 0, 128, 192, 0]);
+}
+
+#[test]
+fn decode_rgb16_2x2_downsamples_to_rgb8() {
+    // 16-bit RGB. row0: red, green; row1: mid grey, blue-purple
+    let img = decode_png(RGB16_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Rgb8);
+    assert_eq!(
+        img.data,
+        vec![
+            255, 0, 0, 0, 255, 0, // row 0: red, green
+            128, 128, 128, 64, 192, 255, // row 1: grey, purple-blue
+        ]
+    );
+}
+
+#[test]
+fn decode_rgba16_2x2_downsamples_to_rgba8() {
+    // 16-bit RGBA. row0: red opaque, green half; row1: blue transparent, purple
+    let img = decode_png(RGBA16_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Rgba8);
+    assert_eq!(
+        img.data,
+        vec![
+            255, 0, 0, 255, 0, 255, 0, 128, // row 0
+            0, 0, 255, 0, 192, 64, 128, 64, // row 1
+        ]
+    );
+}
+
+#[test]
+fn decode_gray16_with_filters_2x3() {
+    // 16-bit grayscale c фильтрами None / Sub / Up — проверяет, что
+    // filter_bpp=2 (channels=1, bit_depth=16 → 16/8=2) корректно
+    // обрабатывается развёрткой фильтров до downsample-а.
+    // Expected (после high-byte): row0 [0,255], row1 [128,64], row2 [192,64]
+    let img = decode_png(GRAY16_FILTERS_2X3).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 3);
+    assert_eq!(img.format, PixelFormat::Gray8);
+    assert_eq!(img.data, vec![0, 255, 128, 64, 192, 64]);
 }
 
 #[test]
