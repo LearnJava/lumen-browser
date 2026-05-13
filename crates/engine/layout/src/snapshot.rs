@@ -212,6 +212,9 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     if s.white_space == WhiteSpace::Nowrap {
         let _ = write!(out, " white-space=nowrap");
     }
+    if (s.opacity - 1.0).abs() > 0.001 {
+        let _ = write!(out, " opacity={:.3}", s.opacity);
+    }
 }
 
 fn color_hex(c: Color) -> String {
