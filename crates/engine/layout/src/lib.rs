@@ -3791,4 +3791,58 @@ mod tests {
         );
         assert_eq!(v, Some("0".to_string()));
     }
+
+    #[test]
+    fn property_validate_time_accepts_seconds_and_ms() {
+        let v_s = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --dur { syntax: '<time>'; inherits: false; initial-value: 0s; } p { --dur: 1.5s; }",
+            "--dur",
+        );
+        assert_eq!(v_s, Some("1.5s".to_string()));
+
+        let v_ms = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --dur { syntax: '<time>'; inherits: false; initial-value: 0s; } p { --dur: 200ms; }",
+            "--dur",
+        );
+        assert_eq!(v_ms, Some("200ms".to_string()));
+    }
+
+    #[test]
+    fn property_validate_time_rejects_non_time() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --dur { syntax: '<time>'; inherits: false; initial-value: 0s; } p { --dur: 100px; }",
+            "--dur",
+        );
+        assert_eq!(v, Some("0s".to_string()));
+    }
+
+    #[test]
+    fn property_validate_resolution_units() {
+        // <resolution> принимает dpi / dpcm / dppx / x (alias dppx).
+        for (val, expected) in [
+            ("96dpi", "96dpi"),
+            ("2dppx", "2dppx"),
+            ("38dpcm", "38dpcm"),
+            ("2x", "2x"),
+        ] {
+            let css = format!(
+                "@property --r {{ syntax: '<resolution>'; inherits: false; initial-value: 1dppx; }} p {{ --r: {val}; }}"
+            );
+            let v = lay_get_custom_prop("<p>x</p>", &css, "--r");
+            assert_eq!(v, Some(expected.to_string()), "value: {val}");
+        }
+    }
+
+    #[test]
+    fn property_validate_resolution_rejects_non_resolution() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --r { syntax: '<resolution>'; inherits: false; initial-value: 1dppx; } p { --r: 5s; }",
+            "--r",
+        );
+        assert_eq!(v, Some("1dppx".to_string()));
+    }
 }
