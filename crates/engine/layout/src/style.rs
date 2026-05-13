@@ -244,6 +244,47 @@ pub enum FontVariant {
     SmallCaps,
 }
 
+/// CSS Fonts Module L4 §2.5 — `font-stretch`. Inherited.
+///
+/// Хранится в десятых долях процента (u16): `normal` = 1000 (100%),
+/// `condensed` = 750 (75%), `expanded` = 1250 (125%). Десятые нужны
+/// из-за дробных keyword-ов: `semi-condensed` = 87.5% → 875,
+/// `semi-expanded` = 112.5% → 1125. Численные проценты парсятся в
+/// том же масштабе и клампятся в [50%, 200%] — Phase 0 не нужны
+/// экстремальные значения, и это удерживает значение в u16 без
+/// переполнения.
+///
+/// Phase 0: layout различает свойство, рендерер всегда Inter Regular
+/// (real stretch-варианты требуют variable-font wdth-axis или отдельные
+/// fontfiles). `text_rendering_eq` учитывает stretch, чтобы фрагменты
+/// с разным stretch не сливались.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FontStretch(pub u16);
+
+impl FontStretch {
+    /// 100% — нормальная ширина.
+    pub const NORMAL: Self = Self(1000);
+
+    fn from_keyword(kw: &str) -> Option<Self> {
+        Some(match kw {
+            "ultra-condensed" => Self(500),
+            "extra-condensed" => Self(625),
+            "condensed" => Self(750),
+            "semi-condensed" => Self(875),
+            "normal" => Self(1000),
+            "semi-expanded" => Self(1125),
+            "expanded" => Self(1250),
+            "extra-expanded" => Self(1500),
+            "ultra-expanded" => Self(2000),
+            _ => return None,
+        })
+    }
+}
+
+impl Default for FontStretch {
+    fn default() -> Self { Self::NORMAL }
+}
+
 /// CSS Fonts Module L4 §2.4 — `font-weight`. Inherited.
 ///
 /// Хранится численно (1..1000), как в spec: `normal` = 400, `bold` = 700.
@@ -363,6 +404,9 @@ pub struct ComputedStyle {
     pub font_weight: FontWeight,
     /// CSS Fonts L4 §6 — font-variant (Phase 0: normal | small-caps). Inherited.
     pub font_variant: FontVariant,
+    /// CSS Fonts L4 §2.5 — font-stretch (десятые доли процента; normal = 1000).
+    /// Inherited.
+    pub font_stretch: FontStretch,
     /// CSS Fonts L4 §3.1 — font-family как приоритизированный список имён.
     /// Inherited. Phase 0: рендерер пока всегда использует Inter, но layout
     /// уже хранит и распространяет список — задел под будущий font matcher.
@@ -462,6 +506,7 @@ impl ComputedStyle {
             && self.font_style == other.font_style
             && self.font_weight == other.font_weight
             && self.font_variant == other.font_variant
+            && self.font_stretch == other.font_stretch
             && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
             && (self.word_spacing - other.word_spacing).abs() < f32::EPSILON
             && self.text_decoration_line == other.text_decoration_line
@@ -479,6 +524,7 @@ impl ComputedStyle {
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
             font_variant: FontVariant::Normal,
+            font_stretch: FontStretch::NORMAL,
             font_family: Vec::new(),
             text_transform: TextTransform::None,
             white_space: WhiteSpace::Normal,
@@ -546,6 +592,7 @@ pub fn compute_style(
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
         font_variant: inherited.font_variant,
+        font_stretch: inherited.font_stretch,
         font_family: inherited.font_family.clone(),
         text_transform: inherited.text_transform,
         white_space: inherited.white_space,
@@ -1552,6 +1599,21 @@ fn apply_declaration(
                 Some("normal") => FontVariant::Normal,
                 _ => style.font_variant,
             };
+        }
+        "font-stretch" => {
+            let token = val.split_whitespace().next().unwrap_or("");
+            if let Some(fs) = FontStretch::from_keyword(token) {
+                style.font_stretch = fs;
+            } else if let Some(pct) = token.strip_suffix('%')
+                && let Ok(n) = pct.trim().parse::<f32>()
+            {
+                // CSS Fonts L4 §2.5: percentage >= 0%. Out-of-range
+                // значения формально валидны, но бесполезны для рендеринга
+                // и могут переполнить u16 (max ≈ 6553%). Клампим в
+                // привычные [50%, 200%].
+                let clamped = n.clamp(50.0, 200.0);
+                style.font_stretch = FontStretch((clamped * 10.0).round() as u16);
+            }
         }
         "text-indent" => {
             // CSS Text L3 §7.1: <length> | <percentage>. % требует

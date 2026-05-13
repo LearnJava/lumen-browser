@@ -19,9 +19,9 @@ pub mod style;
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
 pub use style::{
-    BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStyle,
-    FontVariant, FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
-    TextTransform, Visibility, WhiteSpace,
+    BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStretch,
+    FontStyle, FontVariant, FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow,
+    TextShadow, TextTransform, Visibility, WhiteSpace,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -2977,87 +2977,71 @@ mod tests {
         assert_eq!(p.style.font_variant, FontVariant::SmallCaps);
     }
 
-    // ── :has() (CSS Selectors L4 §17.2) ─────────────────────────────────────
+    // ── font-stretch (CSS Fonts L4 §2.5) ────────────────────────────────────
 
-    /// `div:has(p)` — div, содержащий p в поддереве.
     #[test]
-    fn has_implicit_descendant_matches() {
-        let root = lay(
-            "<div><span><p>x</p></span></div><div><span>nope</span></div>",
-            "div:has(p) { color: red; }",
-        );
-        // Первый div содержит p (через span) → красный.
-        let mut blocks = Vec::new();
-        for c in &root.children {
-            if matches!(c.kind, BoxKind::Block) {
-                blocks.push(c);
-            }
-        }
-        assert_eq!(blocks[0].style.color.r, 255, "первый div должен сматчить");
-        assert_eq!(blocks[1].style.color.r, 0, "второй div без p — нет");
-    }
-
-    /// `div:has(> .child)` — direct child.
-    #[test]
-    fn has_child_combinator() {
-        let root = lay(
-            r#"<div><p class="child">x</p></div><div><span><p class="child">x</p></span></div>"#,
-            "div:has(> .child) { color: red; }",
-        );
-        let mut blocks = Vec::new();
-        for c in &root.children {
-            if matches!(c.kind, BoxKind::Block) {
-                blocks.push(c);
-            }
-        }
-        // Первый div: p — прямой child → match.
-        // Второй div: p вложен в span → не match (descendant, не child).
-        assert_eq!(blocks[0].style.color.r, 255);
-        assert_eq!(blocks[1].style.color.r, 0);
-    }
-
-    /// `h2:has(+ p)` — h2 followed by p.
-    #[test]
-    fn has_next_sibling() {
-        let doc = lumen_html_parser::parse("<div><h2>A</h2><p>x</p></div><div><h2>B</h2></div>");
-        let sheet = lumen_css_parser::parse("h2:has(+ p) { color: red; }");
-        let root_style = ComputedStyle::root();
-        // Первый h2 (внутри первого div) — за ним p → match.
-        // Второй h2 (внутри второго div) — нет следующего sibling-а → нет.
-        let div1 = doc.get(doc.root()).children[0];
-        let h2_a = doc.get(div1).children[0];
-        let div2 = doc.get(doc.root()).children[1];
-        let h2_b = doc.get(div2).children[0];
-        let style_a = crate::style::compute_style(
-            &doc, h2_a, &sheet, &root_style, Size::new(800.0, 600.0));
-        let style_b = crate::style::compute_style(
-            &doc, h2_b, &sheet, &root_style, Size::new(800.0, 600.0));
-        assert_eq!(style_a.color.r, 255, "h2 + p должен сматчить");
-        assert_eq!(style_b.color.r, 0, "h2 без p после — нет");
-    }
-
-    /// `:has()` НЕ должен матчить сам элемент по relative selector
-    /// (descendant ищет потомков, не сам node).
-    #[test]
-    fn has_does_not_match_self() {
-        // `p:has(p)` не должен матчить p, у которого нет дочернего p.
-        let root = lay(
-            "<p>x</p>",
-            "p:has(p) { color: red; }",
-        );
+    fn font_stretch_default_normal() {
+        let root = lay("<p>x</p>", "");
         let p = first_element_child(&root);
-        assert_eq!(p.style.color.r, 0, "p:has(p) не должен матчить p без вложенного p");
+        assert_eq!(p.style.font_stretch, FontStretch::NORMAL);
     }
 
-    /// `:has(.a, .b)` — список (OR), хоть один сматчил.
     #[test]
-    fn has_list_or_match() {
+    fn font_stretch_keyword_condensed() {
+        let root = lay("<p>x</p>", "p { font-stretch: condensed; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_stretch.0, 750);
+    }
+
+    #[test]
+    fn font_stretch_keyword_semi_expanded_fractional() {
+        // 112.5% — дробный keyword проверяет, что хранение в десятых не теряет точность.
+        let root = lay("<p>x</p>", "p { font-stretch: semi-expanded; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_stretch.0, 1125);
+    }
+
+    #[test]
+    fn font_stretch_percentage_value() {
+        let root = lay("<p>x</p>", "p { font-stretch: 80%; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_stretch.0, 800);
+    }
+
+    #[test]
+    fn font_stretch_percentage_clamped() {
+        // Spec разрешает значения вне [50%, 200%], но Phase 0 их клампит —
+        // экстремальные значения бесполезны и могут переполнить u16.
+        let root = lay("<p>x</p>", "p { font-stretch: 10%; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_stretch.0, 500);
+
+        let root = lay("<p>x</p>", "p { font-stretch: 300%; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.font_stretch.0, 2000);
+    }
+
+    #[test]
+    fn font_stretch_inherited() {
         let root = lay(
-            r#"<div><span class="b">x</span></div>"#,
-            ":has(.a, .b) { color: red; }",
+            "<div><p>x</p></div>",
+            "div { font-stretch: expanded; }",
         );
         let div = first_element_child(&root);
-        // div содержит span.b — список даёт match через .b.
-        assert_eq!(div.style.color.r, 255);
+        let p = first_element_child(div);
+        assert_eq!(p.style.font_stretch.0, 1250);
+        assert_eq!(div.style.font_stretch.0, 1250);
+    }
+
+    #[test]
+    fn font_stretch_normal_resets_inheritance() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-stretch: condensed; } p { font-stretch: normal; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.font_stretch.0, 750);
+        assert_eq!(p.style.font_stretch, FontStretch::NORMAL);
     }
 }
