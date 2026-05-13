@@ -9,7 +9,9 @@ pub mod error;
 pub mod event;
 pub mod ext;
 pub mod geom;
+pub mod idn;
 pub mod module;
+pub mod punycode;
 pub mod url;
 
 pub use capability::{Capability, CapabilityToken};

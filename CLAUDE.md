@@ -300,7 +300,9 @@ git branch -d text-rendering
 - Геометрия: `Rect`, `Point`, `Size`.
 - `lumen-core::ext` — trait-точки расширения: `NetworkTransport`, `StorageBackend` (с origin-партиционированием + `list_keys`), `SearchProvider`, `FilterListSource`, `EncodingDetector`.
 - В комментариях задокументированы будущие trait-точки: `WindowingBackend`, `RenderBackend`, `TlsBackend`, `JsRuntime`, `FontProvider`, `HyphenationEngine`, `DnsResolver`, `Hasher`. Тело trait-а добавим при первой реализации.
-- 3 теста (url parsing).
+- **`lumen_core::punycode::encode`** — RFC 3492 Punycode encode (bootstring base=36, tmin=1, tmax=26, skew=38, damp=700, initial_bias=72, initial_n=128). 8 unit-тестов на известных IDN-метках (пример → e1afmkfd, рф → p1ai, президент → d1abbgf6aiiy, тест → e1aybc, рус → p1acf, CJK 你好 → 6qq79v).
+- **`lumen_core::idn::domain_to_ascii`** — IDNA `ToASCII` (упрощённое подмножество): lowercase → split по `.` → label-by-label (ASCII passthrough, иначе `xn--<punycode>`). Не делает NFC normalization и UTS #46 mapping (для русских доменов уже в NFC — практически достаточно). 10 unit-тестов (включая идемпотентность для уже `xn--…`, mixed ASCII+IDN субдоменов, trailing dot для FQDN, case-нормализация).
+- 22 теста (url parsing + Punycode + IDN).
 
 ### `lumen-dom` ✅ (полный API на текущий scope)
 
@@ -362,9 +364,9 @@ git branch -d text-rendering
 
 ### `lumen-network` ✅ (HTTP/1.1 + HTTPS)
 
-- **Готово:** `HttpClient` реализует `NetworkTransport` из `lumen-core::ext`. Поддержка HTTP и HTTPS (rustls + webpki-roots, exception #3). Redirect-следование до 5 хопов (абсолютные + относительные `Location`). `chunked` Transfer-Encoding decoder. URL-парсинг (scheme/host/port/path), case-insensitive заголовки. Box-обёртка вокруг TLS stream (clippy large-enum-variant).
+- **Готово:** `HttpClient` реализует `NetworkTransport` из `lumen-core::ext`. Поддержка HTTP и HTTPS (rustls + webpki-roots, exception #3). Redirect-следование до 5 хопов (абсолютные + относительные `Location`). `chunked` Transfer-Encoding decoder. URL-парсинг (scheme/host/port/path), case-insensitive заголовки. Box-обёртка вокруг TLS stream (clippy large-enum-variant). **IDN-домены** конвертятся в Punycode на этапе `parse_url` через `lumen_core::idn::domain_to_ascii` — DNS lookup, TLS SNI (`ServerName::try_from`) и `Host:` header (RFC 7230 §5.4) всегда получают ASCII-форму.
 - **Отложено:** HTTP/2, keep-alive соединения, кэш (Cache-Control), аутентификация, cookie jar, проксирование.
-- 12 тестов: URL-парсинг, status line, header lookup, chunked decoder (несколько chunk-ов, пустое тело).
+- 15 тестов: URL-парсинг (включая IDN-кейсы — кириллический host, IDN+port, mixed ASCII subdomain), status line, header lookup, chunked decoder (несколько chunk-ов, пустое тело).
 
 ### `lumen-shell` 🟡 (окно + рендер + сеть)
 
@@ -385,7 +387,7 @@ git branch -d text-rendering
 
 ### Численно
 
-- **Всего тестов в workspace:** 660 (на момент последнего обновления).
+- **Всего тестов в workspace:** 682 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -467,6 +469,7 @@ git branch -d text-rendering
 - **RAWTEXT state хранится как `Option<String>` в самом токенизаторе, а не как отдельное «состояние» в стиле full FSM.** Iterator-based архитектура у нас уже опирается только на `pos: usize` — добавлять явный `enum State` ради одного режима — overengineering. Поле `raw_text: Option<String>` ставится в `consume_start_tag` сразу после распознавания `<script>` / `<style>`, и проверяется в `next()` первой же веткой. `.take()` гарантирует, что режим всегда сбрасывается за один проход — даже если в теле не было `</tag` (тогда читаем до EOF и возвращаемся в обычное русло). `is_raw_text_element(name)` — отдельная функция: её удобно расширять для будущих RCDATA-тегов и не приходится править `next()`. Self-closing `<script/>` — режим **не включается**: симметрично с tree_builder, который для self-closing не пушит элемент в стек. RAWTEXT — это RAWTEXT в смысле HTML5 §13.2.5.2 (entities не декодируются и угловые скобки литеральны); RCDATA для `<title>`/`<textarea>` (где entities декодируются) — отдельная задача.
 - **`:is(list)` и `:where(list)` хранятся как `Vec<ComplexSelector>`** (в отличие от `:not(compound)` — там запрещены combinator-ы по CSS3, поэтому достаточно `Box<CompoundSelector>`). CSS4 явно разрешает combinator-ы внутри `:is`/`:where`, поэтому хранилище — полный selector list. Matcher — `list.iter().any(...)` рекурсивно через `matches_complex`; это естественно корректно из коробки. Specificity: `:is` contributes максимальную specificity по списку (CSS4 §17 «specificity of an :is/:not/:has is the specificity of the most specific selector in its arg»), `:where` — всегда 0. Для max-вычисления добавлена функция `max_list_specificity(&[ComplexSelector]) -> Option<Specificity>` рядом с `accumulate_specificity`. Парсер: внутри тела `:is(...)` зовём существующий `parse_selector_list`; чтобы он корректно останавливался на `)`, в `parse_complex_selector` добавлено `)` в список break-токенов tail-цикла. Пустые `:is()` / `:where()` возвращают `Unsupported(name)` — это даёт ту же fallback-семантику, что у `:not(a b)`.
 - **`!important` отделяется от value на уровне парсера, хранится булевым полем в `Declaration`.** Альтернатива (хранить `!important` как часть строки `value` и парсить заново при apply) была раньше — теперь убрана. Причина: `apply_declaration` имеет 30+ свойств, каждое со своим парсингом — добавлять везде стрипа `!important` дороже и легче пропустить. Извлечение делается функцией `extract_important(&str) -> (String, bool)`, которая работает с уже trim-нутой строкой и проверяет суффикс через `eq_ignore_ascii_case` на байтах. Cascade использует ключ `(important, specificity, rule_order, decl_index)` — `important` идёт первым, потому что в Rust `true > false`, и ascending sort ставит !important в конец, давая ему победу. Этот же ключ корректно обрабатывает все остальные правила каскада (between two !important winning by specificity, then later-wins-on-tie). UA / user origin не реализованы (только author), поэтому не требуется отдельная иерархия origin.
+- **Punycode применяется на этапе `parse_url` в `lumen-network`, не в `Url::parse`.** Url остаётся тонкой обёрткой над String (как было задумано в комментарии url.rs: «правильная Punycode-конвертация реализуется в network-слое»). Альтернатива (превращать host в ASCII прямо в `Url::parse`) ломала бы две вещи: (1) `Url` должен уметь хранить и отдавать оригинальную Unicode-форму для отображения пользователю в адресной строке; (2) для file:// и других схем Punycode не применим. Network-слой — единственный потребитель, которому нужна ASCII-форма (DNS lookup, TLS SNI, Host header). Поэтому `idn::domain_to_ascii` зовётся внутри `parse_url`, после того как host извлечён из authority. Без NFC normalization и UTS #46: для русских доменов (NFC-стабильная кириллица) практически достаточно `str::to_lowercase`. Если упрёмся в edge case (например, ß или ZWJ) — добавим mapping table.
 
 ### Открытые вопросы (решим, когда упрёмся)
 
@@ -486,6 +489,7 @@ git branch -d text-rendering
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            punycode-idn            — Punycode (RFC 3492) + idn::domain_to_ascii в lumen-core; network.parse_url конвертит host для DNS/TLS/Host header. 8 punycode + 10 idn + 3 network тестов
 *            css-selector-backtracking — selector matching с back-tracking: matches_chain рекурсивный, перебор всех ancestor/earlier-sibling кандидатов; фикс патологии .x+a~span; 2 новых теста, find_ancestor больше не нужен
 *            css-text-overflow      — text-overflow: clip | ellipsis (CSS UI L4 §10.1), не наследуется; real truncation в paint отложен; 5 новых тестов
 *            css-border-radius      — border-radius (CSS Backgrounds L3 §5): 4 угла, shorthand 1-4 токена, individual border-X-radius, elliptical берёт горизонтальный, clamp; 9 новых тестов

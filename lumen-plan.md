@@ -6,7 +6,7 @@
 
 Задачи, взятые в работу параллельными сессиями. **Не дублировать.** Подробнее о протоколе — в `CLAUDE.md`, раздел «Координация параллельных сессий».
 
-- 🔄 Punycode/IDN для доменов — `punycode-idn` — 2026-05-13
+*(пусто — все задачи свободны)*
 
 ## Статус реализации
 
@@ -19,7 +19,7 @@
 - ✅ Ветка `main`, локальные коммиты, без remote
 
 ### Крейты
-- ✅ `lumen-core` — типы и trait-ы: `Error`, `Url`, `Event`, `Capability`, `Module`, геометрия (`Rect`, `Point`, `Size`), `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`
+- ✅ `lumen-core` — типы и trait-ы: `Error`, `Url`, `Event`, `Capability`, `Module`, геометрия (`Rect`, `Point`, `Size`), `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `EncodingDetector`; модули **`punycode`** (RFC 3492 encode) + **`idn`** (`domain_to_ascii`) для IDN-доменов
 - ✅ `lumen-dom` — арена + `NodeId` + `Document/Node/NodeData`, API: create/append/detach/Display, 7 тестов (включая кириллицу)
 - 🟡 `lumen-shell` — точка входа: три режима (пустое окно / файл / URL). Внешний CSS через `<link rel=stylesheet>`: загружается с диска (относительно HTML-файла) или по сети (относительно базового URL). Bundled Inter-Regular.ttf через `include_bytes!`
 - 🟡 `lumen-html-parser` — минимальный токенизатор (Data/Tag/Attribute/Comment, named + numeric entities, **RAWTEXT для `<script>`/`<style>`**, **DOCTYPE с PUBLIC/SYSTEM**) + lenient tree builder. 57 тестов (включая кириллицу). Отложено: CDATA, RCDATA (`<title>`/`<textarea>`), полный набор named entities, insertion modes
@@ -28,7 +28,7 @@
 - 🟡 `lumen-paint` — display list (FillRect, **DrawBorder**, DrawText) + wgpu-растеризатор с двумя pipeline-ами (fill + text), glyph atlas 512×512, текстурированные квады из atlas-а. `DrawBorder` рендерится 4 fill-quad-ами (top/right/bottom/left edges), цвет с currentColor fallback. Под/над/перечёркивающие линии text-decoration эмитятся как FillRect-ы у baseline каждого фрагмента. `FontMeasurer` для TextMeasurer. Внешние зависимости: `wgpu` (exception #2), `winit` (exception #1)
 - 🟡 `lumen-font` — собственный TrueType-парсер (head/maxp/cmap format 4+12/hhea/hmtx/loca/glyf) + scanline-растеризатор (квадратичные Безье, 4×4 AA, even-odd fill). cmap format 12 — Sequential Groups, полный Unicode U+10FFFF (эмодзи U+1F600+, SMP). 62 unit + 9 integration тестов. Отложено: hinting, GSUB/GPOS shaping, CFF outlines, variable fonts, color glyphs
 - 🟡 `lumen-encoding` — детектор кодировок и однобайтовые декодеры (Windows-1251, KOI8-R, CP866). Пайплайн: BOM → `<meta charset>`-sniff (1 КБ) → HTTP content-type hint → UTF-8 валидность → частотная эвристика по русским буквам. Реализует `EncodingDetector` из `lumen-core::ext`. 41 тест (35 unit + 6 integration round-trip). Отложено: UTF-16 как отдельная кодировка, ISO-8859-5, MacCyrillic, prescan по HTML5 spec §12.2.3.2 (точные правила парсинга атрибутов)
-- ✅ `lumen-network` — HTTP/1.1 + HTTPS клиент (rustls, exception #3). Redirect, chunked TE. `HttpClient` реализует `NetworkTransport`. 12 тестов.
+- ✅ `lumen-network` — HTTP/1.1 + HTTPS клиент (rustls, exception #3). Redirect, chunked TE. **IDN-домены** в URL конвертятся в Punycode на этапе parse (`https://президент.рф/` → DNS/TLS получают `xn--d1abbgf6aiiy.xn--p1ai`). `HttpClient` реализует `NetworkTransport`. 15 тестов.
 - ✅ `lumen-storage` — in-memory KV + origin-партиционирование + snapshot LUMEN_KV_V1. 17 тестов.
 - ⬜ `lumen-knowledge` (§12) — FTS-индекс над историей и заметками, read-later каталог. Phase 2
 - ⬜ `lumen-ai` (§12.5) — опциональный, embedding + RAG поверх локального LLM. Phase 3+, feature-flag
@@ -67,7 +67,7 @@
 - ✅ `Url::parse` принимает кириллические домены (тест на `президент.рф`)
 - ✅ Encoding detection (cp1251, KOI8-R, CP866) — крейт `lumen-encoding`, подключён в shell
 - ⬜ Cyrillic font fallback в paint
-- ⬜ Punycode/IDN
+- ✅ Punycode/IDN — `lumen_core::punycode` (RFC 3492 encode) + `lumen_core::idn::domain_to_ascii`; `lumen-network::parse_url` конвертит host в ASCII для DNS/TLS/Host
 - ⬜ Локаль ru-RU (дата/время/числа)
 - ⬜ UI-переводы (Fluent)
 
