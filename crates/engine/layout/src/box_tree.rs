@@ -239,7 +239,15 @@ fn lay_out(
     // InlineRun обрабатывается до основного match.
     if let BoxKind::InlineRun { segments, lines } = &mut b.kind {
         if let Some(m) = measurer {
-            *lines = wrap_inline_run(segments, content_width, s.font_size, s.text_indent, m);
+            // white-space: nowrap → передаём «бесконечную» max_width в wrap,
+            // чтобы перенос не сработал; остальная логика (letter-spacing,
+            // word-spacing, объединение фрагментов) остаётся.
+            let wrap_width = if s.white_space == crate::style::WhiteSpace::Nowrap {
+                f32::INFINITY
+            } else {
+                content_width
+            };
+            *lines = wrap_inline_run(segments, wrap_width, s.font_size, s.text_indent, m);
             if s.text_align != TextAlign::Left {
                 align_lines(lines, content_width, s.text_align);
             }
