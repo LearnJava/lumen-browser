@@ -1787,4 +1787,92 @@ mod tests {
         let p = first_element_child(div);
         assert_eq!(p.style.text_transform, TextTransform::Uppercase);
     }
+
+    // ── text-indent ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn text_indent_basic() {
+        // Парсинг + применение к ComputedStyle.
+        let root = lay("<p>hello</p>", "p { text-indent: 30px; }");
+        let p = first_element_child(&root);
+        assert!((p.style.text_indent - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn text_indent_em_resolves_to_font_size() {
+        // 2em при default fs 16 = 32px.
+        let root = lay("<p>x</p>", "p { text-indent: 2em; }");
+        let p = first_element_child(&root);
+        assert!((p.style.text_indent - 32.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn text_indent_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { text-indent: 25px; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((div.style.text_indent - 25.0).abs() < 0.01);
+        assert!((p.style.text_indent - 25.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn text_indent_shifts_first_line() {
+        // С text-indent первое слово начинается со сдвигом.
+        // Используем lay_measured (Fixed8 = 8px на символ) на 800 ширину.
+        let root = lay_measured(
+            "<p>hi</p>",
+            "p { text-indent: 40px; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let inline = p
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }))
+            .unwrap();
+        if let BoxKind::InlineRun { lines, .. } = &inline.kind {
+            // Первая строка, первый фрагмент. x должен быть = 40.
+            let first_frag = &lines[0][0];
+            assert!((first_frag.x - 40.0).abs() < 0.01, "first.x = {}", first_frag.x);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn text_indent_only_first_line() {
+        // text-indent применяется только к первой строке. Если контент
+        // переносится на 2+ строк, последующие начинаются с x=0.
+        // Fixed8: 8px на символ. max_width = 80 → ~10 символов с indent 16.
+        let root = lay_measured(
+            "<p>aaaa bbbb cccc dddd</p>",
+            "p { text-indent: 16px; }",
+            80.0,
+        );
+        let p = first_element_child(&root);
+        let inline = p
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }))
+            .unwrap();
+        if let BoxKind::InlineRun { lines, .. } = &inline.kind {
+            // Первая строка должна стартовать с offset.
+            assert!((lines[0][0].x - 16.0).abs() < 0.01, "line[0][0].x = {}", lines[0][0].x);
+            // Вторая (и далее) строка стартует с 0.
+            assert!(lines.len() > 1, "expected multiple lines, got {}", lines.len());
+            assert!((lines[1][0].x - 0.0).abs() < 0.01, "line[1][0].x = {}", lines[1][0].x);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn text_indent_default_zero() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.text_indent, 0.0);
+    }
 }
