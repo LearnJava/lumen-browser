@@ -42,37 +42,22 @@ impl EventSink for StdoutEventSink {
 /// SIL OFL 1.1, см. assets/fonts/OFL.txt.
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 use winit::dpi::LogicalSize;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, KeyEvent, Modifiers, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 fn main() -> ExitCode {
     println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
 
     let event_sink: Arc<dyn EventSink> = Arc::new(StdoutEventSink);
-
-    let arg = std::env::args().nth(1);
-    let initial_page = match arg {
-        Some(ref s) if s.starts_with("http://") || s.starts_with("https://") => {
-            match load_url(s, event_sink.clone()) {
-                Ok(page) => page,
-                Err(err) => {
-                    eprintln!("Ошибка загрузки {s}: {err}");
-                    return ExitCode::FAILURE;
-                }
-            }
+    let source = PageSource::from_arg(std::env::args().nth(1).as_deref());
+    let initial_page = match source.load(event_sink.clone()) {
+        Ok(page) => page,
+        Err(err) => {
+            eprintln!("Ошибка загрузки {}: {err}", source.describe());
+            return ExitCode::FAILURE;
         }
-        Some(ref s) => {
-            let path = PathBuf::from(s);
-            match load_page(&path, event_sink.clone()) {
-                Ok(page) => page,
-                Err(err) => {
-                    eprintln!("Ошибка загрузки {}: {err}", path.display());
-                    return ExitCode::FAILURE;
-                }
-            }
-        }
-        None => LoadedPage::empty(),
     };
 
     let event_loop = match EventLoop::new() {
@@ -85,6 +70,9 @@ fn main() -> ExitCode {
     let mut app = Lumen {
         display_list: initial_page.display_list,
         title: initial_page.title,
+        source,
+        event_sink,
+        modifiers: ModifiersState::empty(),
         window: None,
         renderer: None,
     };
@@ -95,21 +83,60 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn load_url(url: &str, sink: Arc<dyn EventSink>) -> Result<LoadedPage, Box<dyn Error>> {
-    use lumen_core::ext::NetworkTransport;
-    use lumen_core::url::Url;
-    use lumen_network::HttpClient;
-
-    let lumen_url = Url::parse(url)?;
-    let client = HttpClient::new().with_sink(sink.clone());
-    let bytes = client.fetch(&lumen_url)?;
-    println!("Получено {} байт", bytes.len());
-    render_bytes(&bytes, Some("text/html"), &ResourceBase::Url(url.to_owned()), sink)
+/// Источник страницы. Запоминается в `Lumen`, чтобы reload (F5/Ctrl+R) мог
+/// заново выполнить fetch/parse/layout/paint без аргументов командной строки.
+#[derive(Clone)]
+enum PageSource {
+    /// Без аргументов — рисуем пустое окно. Reload no-op (грузить нечего).
+    Empty,
+    File(PathBuf),
+    Url(String),
 }
 
-fn load_page(path: &PathBuf, sink: Arc<dyn EventSink>) -> Result<LoadedPage, Box<dyn Error>> {
-    let bytes = std::fs::read(path)?;
-    render_bytes(&bytes, None, &ResourceBase::File(path.clone()), sink)
+impl PageSource {
+    fn from_arg(arg: Option<&str>) -> Self {
+        match arg {
+            Some(s) if s.starts_with("http://") || s.starts_with("https://") => {
+                PageSource::Url(s.to_owned())
+            }
+            Some(s) => PageSource::File(PathBuf::from(s)),
+            None => PageSource::Empty,
+        }
+    }
+
+    fn describe(&self) -> String {
+        match self {
+            PageSource::Empty => "(пустая вкладка)".to_owned(),
+            PageSource::File(p) => p.display().to_string(),
+            PageSource::Url(u) => u.clone(),
+        }
+    }
+
+    fn load(&self, sink: Arc<dyn EventSink>) -> Result<LoadedPage, Box<dyn Error>> {
+        match self {
+            PageSource::Empty => Ok(LoadedPage::empty()),
+            PageSource::File(path) => {
+                let bytes = std::fs::read(path)?;
+                render_bytes(&bytes, None, &ResourceBase::File(path.clone()), sink)
+            }
+            PageSource::Url(url) => {
+                use lumen_core::ext::NetworkTransport;
+                use lumen_core::url::Url;
+                use lumen_network::HttpClient;
+
+                let lumen_url = Url::parse(url)?;
+                let client = HttpClient::new().with_sink(sink.clone());
+                let bytes = client.fetch(&lumen_url)?;
+                println!("Получено {} байт", bytes.len());
+                render_bytes(
+                    &bytes,
+                    Some("text/html"),
+                    &ResourceBase::Url(url.clone()),
+                    sink,
+                )
+            }
+        }
+    }
 }
 
 /// Результат загрузки страницы: что рисовать и как назвать окно.
@@ -122,6 +149,36 @@ struct LoadedPage {
 impl LoadedPage {
     fn empty() -> Self {
         Self { display_list: DisplayList::new(), title: None }
+    }
+}
+
+/// Действия shell-а, на которые мапятся клавиши. Изолированы от winit, чтобы
+/// маппер был тестируем без event loop.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum KeyCommand {
+    Reload,
+    Exit,
+}
+
+/// Маппинг физической клавиши + модификаторов на shell-action.
+///
+/// F5 без модификаторов  → Reload.
+/// Ctrl+R                → Reload.
+/// Esc без модификаторов → Exit.
+/// Ctrl+W                → Exit.
+///
+/// Прочие комбинации (Ctrl+Shift+R, F5+Ctrl, и т.д.) — пока None: не хотим
+/// перехватывать привычные web-shortcuts (force-reload, etc.) до того, как
+/// решим, что они должны делать.
+fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
+    let ctrl_only = mods == ModifiersState::CONTROL;
+    let no_mods = mods.is_empty();
+    match code {
+        KeyCode::F5 if no_mods => Some(KeyCommand::Reload),
+        KeyCode::KeyR if ctrl_only => Some(KeyCommand::Reload),
+        KeyCode::Escape if no_mods => Some(KeyCommand::Exit),
+        KeyCode::KeyW if ctrl_only => Some(KeyCommand::Exit),
+        _ => None,
     }
 }
 
@@ -357,8 +414,36 @@ fn window_title(page_title: Option<&str>) -> String {
 struct Lumen {
     display_list: DisplayList,
     title: Option<String>,
+    source: PageSource,
+    event_sink: Arc<dyn EventSink>,
+    modifiers: ModifiersState,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
+}
+
+impl Lumen {
+    /// Перезагрузить текущий источник: fetch/parse/layout/paint снова. На
+    /// `PageSource::Empty` — no-op (грузить нечего). При ошибке — оставляем
+    /// предыдущий display_list, печатаем причину в stderr.
+    fn reload(&mut self) {
+        if matches!(self.source, PageSource::Empty) {
+            return;
+        }
+        println!("Reload: {}", self.source.describe());
+        match self.source.load(self.event_sink.clone()) {
+            Ok(page) => {
+                self.display_list = page.display_list;
+                self.title = page.title;
+                if let Some(w) = self.window.as_ref() {
+                    w.set_title(&window_title(self.title.as_deref()));
+                    w.request_redraw();
+                }
+            }
+            Err(err) => {
+                eprintln!("Ошибка reload {}: {err}", self.source.describe());
+            }
+        }
+    }
 }
 
 impl ApplicationHandler for Lumen {
@@ -405,6 +490,12 @@ impl ApplicationHandler for Lumen {
                     w.request_redraw();
                 }
             }
+            WindowEvent::ModifiersChanged(new_mods) => {
+                self.modifiers = winit_modifiers_state(&new_mods);
+            }
+            WindowEvent::KeyboardInput { event: ref key_event, .. } => {
+                self.handle_key(event_loop, key_event);
+            }
             WindowEvent::RedrawRequested => {
                 if let Some(r) = self.renderer.as_mut()
                     && let Err(err) = r.render(&self.display_list)
@@ -415,6 +506,31 @@ impl ApplicationHandler for Lumen {
             _ => {}
         }
     }
+}
+
+impl Lumen {
+    fn handle_key(&mut self, event_loop: &ActiveEventLoop, key_event: &KeyEvent) {
+        if key_event.state != ElementState::Pressed || key_event.repeat {
+            return;
+        }
+        let PhysicalKey::Code(code) = key_event.physical_key else {
+            return;
+        };
+        let Some(cmd) = keybinding_for(code, self.modifiers) else {
+            return;
+        };
+        match cmd {
+            KeyCommand::Reload => self.reload(),
+            KeyCommand::Exit => event_loop.exit(),
+        }
+    }
+}
+
+/// Достать чистый `ModifiersState` из обёртки `Modifiers` (winit 0.30 различает
+/// "physical state" — Ctrl как клавиша — и "lock state"; для shortcuts нам
+/// нужно физическое состояние).
+fn winit_modifiers_state(mods: &Modifiers) -> ModifiersState {
+    mods.state()
 }
 
 #[cfg(test)]
@@ -562,6 +678,109 @@ mod tests {
         // Fallback содержит версию пакета — проверяем префикс.
         let t = window_title(None);
         assert!(t.starts_with("Lumen "));
+    }
+
+    #[test]
+    fn keybinding_f5_reload() {
+        assert_eq!(
+            keybinding_for(KeyCode::F5, ModifiersState::empty()),
+            Some(KeyCommand::Reload),
+        );
+    }
+
+    #[test]
+    fn keybinding_ctrl_r_reload() {
+        assert_eq!(
+            keybinding_for(KeyCode::KeyR, ModifiersState::CONTROL),
+            Some(KeyCommand::Reload),
+        );
+    }
+
+    #[test]
+    fn keybinding_plain_r_is_none() {
+        // Без Ctrl — обычная буква, не команда. Защита от перехвата ввода
+        // в омнибокс (когда он появится).
+        assert_eq!(keybinding_for(KeyCode::KeyR, ModifiersState::empty()), None);
+    }
+
+    #[test]
+    fn keybinding_ctrl_shift_r_is_none() {
+        // Shift+Ctrl+R обычно «force-reload» в web-браузерах. Не делаем
+        // сейчас (нет cache), но и не путаем с обычным reload.
+        assert_eq!(
+            keybinding_for(KeyCode::KeyR, ModifiersState::CONTROL | ModifiersState::SHIFT),
+            None,
+        );
+    }
+
+    #[test]
+    fn keybinding_escape_exit() {
+        assert_eq!(
+            keybinding_for(KeyCode::Escape, ModifiersState::empty()),
+            Some(KeyCommand::Exit),
+        );
+    }
+
+    #[test]
+    fn keybinding_ctrl_w_exit() {
+        assert_eq!(
+            keybinding_for(KeyCode::KeyW, ModifiersState::CONTROL),
+            Some(KeyCommand::Exit),
+        );
+    }
+
+    #[test]
+    fn keybinding_ctrl_escape_is_none() {
+        // Esc + любые модификаторы — не наша команда (рамп для будущего).
+        assert_eq!(
+            keybinding_for(KeyCode::Escape, ModifiersState::CONTROL),
+            None,
+        );
+    }
+
+    #[test]
+    fn keybinding_unknown_key_is_none() {
+        assert_eq!(keybinding_for(KeyCode::KeyA, ModifiersState::empty()), None);
+        assert_eq!(keybinding_for(KeyCode::F1, ModifiersState::empty()), None);
+    }
+
+    #[test]
+    fn page_source_from_arg_url() {
+        assert!(matches!(
+            PageSource::from_arg(Some("https://example.com")),
+            PageSource::Url(ref u) if u == "https://example.com"
+        ));
+        assert!(matches!(
+            PageSource::from_arg(Some("http://localhost:8080")),
+            PageSource::Url(_)
+        ));
+    }
+
+    #[test]
+    fn page_source_from_arg_file() {
+        let s = PageSource::from_arg(Some("samples/page.html"));
+        match s {
+            PageSource::File(p) => assert_eq!(p, PathBuf::from("samples/page.html")),
+            _ => panic!("expected File"),
+        }
+    }
+
+    #[test]
+    fn page_source_from_arg_none_is_empty() {
+        assert!(matches!(PageSource::from_arg(None), PageSource::Empty));
+    }
+
+    #[test]
+    fn page_source_describe() {
+        assert_eq!(PageSource::Empty.describe(), "(пустая вкладка)");
+        assert_eq!(
+            PageSource::Url("https://x.test".to_owned()).describe(),
+            "https://x.test",
+        );
+        assert_eq!(
+            PageSource::File(PathBuf::from("a.html")).describe(),
+            "a.html",
+        );
     }
 
     #[test]
