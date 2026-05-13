@@ -313,15 +313,17 @@ fn wrap_inline_run(
     let mut current_x = text_indent;
 
     for (word, style) in &tagged {
-        // letter-spacing: добавляется между каждой парой символов в слове и
-        // между словом и предыдущим (через space_w на word boundary).
+        // letter-spacing: между каждой парой символов в слове + на word
+        // boundary. word-spacing: только на word boundary (CSS Text L3
+        // §11.2-3).
         let ls = style.letter_spacing;
+        let ws = style.word_spacing;
         let word_w: f32 = word
             .chars()
             .map(|c| m.char_width(c, style.font_size) + ls)
             .sum::<f32>()
             - if word.is_empty() { 0.0 } else { ls }; // последний symbol не добавляет ls справа
-        let gap_with_ls = space_w + ls;
+        let gap_with_ls = space_w + ls + ws;
 
         // Перенос: слово не влезает (но первое слово строки добавляем всегда).
         if !current_line.is_empty() && current_x + gap_with_ls + word_w > max_width {

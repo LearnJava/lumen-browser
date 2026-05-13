@@ -206,6 +206,9 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     if s.letter_spacing.abs() > 0.01 {
         let _ = write!(out, " letter-spacing={:.2}", s.letter_spacing);
     }
+    if s.word_spacing.abs() > 0.01 {
+        let _ = write!(out, " word-spacing={:.2}", s.word_spacing);
+    }
 }
 
 fn color_hex(c: Color) -> String {

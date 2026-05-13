@@ -1944,4 +1944,86 @@ mod tests {
         let p = first_element_child(&root);
         assert_eq!(p.style.letter_spacing, 0.0);
     }
+
+    // ── word-spacing ────────────────────────────────────────────────────────
+
+    #[test]
+    fn word_spacing_basic_parse() {
+        let root = lay("<p>x</p>", "p { word-spacing: 10px; }");
+        let p = first_element_child(&root);
+        assert!((p.style.word_spacing - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn word_spacing_normal_keyword() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { word-spacing: 6px; } p { word-spacing: normal; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((div.style.word_spacing - 6.0).abs() < 0.01);
+        assert_eq!(p.style.word_spacing, 0.0);
+    }
+
+    #[test]
+    fn word_spacing_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { word-spacing: 4px; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!((p.style.word_spacing - 4.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn word_spacing_only_at_word_boundary() {
+        // word-spacing влияет только на gap между словами, не на ширину
+        // отдельного слова. Сравниваем с/без word-spacing на одно слово.
+        // Fixed8: 8px per char. "abcd" один word — word-spacing не должен
+        // изменить width.
+        let with = lay_measured("<p>abcd</p>", "p { word-spacing: 100px; }", 800.0);
+        let without = lay_measured("<p>abcd</p>", "", 800.0);
+
+        let p_with = first_element_child(&with);
+        let p_without = first_element_child(&without);
+        let inline_w = p_with.children.iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. })).unwrap();
+        let inline_wo = p_without.children.iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. })).unwrap();
+
+        let w_width = if let BoxKind::InlineRun { lines, .. } = &inline_w.kind {
+            lines[0][0].width
+        } else { panic!() };
+        let wo_width = if let BoxKind::InlineRun { lines, .. } = &inline_wo.kind {
+            lines[0][0].width
+        } else { panic!() };
+        assert!((w_width - wo_width).abs() < 0.01,
+            "word-spacing не должен менять ширину одиночного слова: {w_width} vs {wo_width}");
+    }
+
+    #[test]
+    fn word_spacing_extends_two_word_run() {
+        // Два слова "ab cd": Fixed8, без word-spacing = 2*16+8 = 40.
+        // С word-spacing 12: 2*16 + (8+12) = 52.
+        let root = lay_measured("<p>ab cd</p>", "p { word-spacing: 12px; }", 800.0);
+        let p = first_element_child(&root);
+        let inline = p.children.iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. })).unwrap();
+        if let BoxKind::InlineRun { lines, .. } = &inline.kind {
+            // Слова сольются в один frag (одинаковый стиль).
+            let frag = &lines[0][0];
+            assert!((frag.width - 52.0).abs() < 0.01, "merged frag.width = {}", frag.width);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn word_spacing_default_zero() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.word_spacing, 0.0);
+    }
 }
