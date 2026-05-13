@@ -1616,7 +1616,30 @@ pub enum MathFn {
     Sign,
     Mod,
     Rem,
-    Round,
+    /// CSS Values L4 §10.5.1 — `round( <rounding-strategy>?, A, B? )`.
+    /// Strategy keyword вычисляется парсером и зашит в variant; отсутствие
+    /// keyword-а ≡ `Nearest`.
+    Round(RoundStrategy),
+}
+
+/// CSS Values L4 §10.5.1 — стратегия округления для `round()`.
+/// Опускание keyword-а в `round(A[, B])` ≡ `Nearest`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoundStrategy {
+    /// Ближайшее кратное step; при равноудалённости — в сторону +∞
+    /// (`f32::round` round-half-away-from-zero, но spec в §10.5.1 говорит
+    /// «toward +∞»; различие незаметно для положительного step и нечастых
+    /// граничных случаев).
+    Nearest,
+    /// Меньшее или равное кратное step, всегда в сторону +∞
+    /// (`ceil(A/B) * B`).
+    Up,
+    /// Большее или равное кратное step, всегда в сторону −∞
+    /// (`floor(A/B) * B`).
+    Down,
+    /// Округление к нулю (`trunc(A/B) * B`). Для положительных A совпадает
+    /// с `Down`, для отрицательных — с `Up`.
+    ToZero,
 }
 
 impl CalcNode {
@@ -1784,21 +1807,31 @@ fn resolve_math_func(
             }
             a % b
         }
-        MathFn::Round => {
-            // round(val[, step]). Без step (один аргумент) — round до
-            // ближайшего целого. С step — round к ближайшему кратному step.
-            // Strategy keywords (`up`/`down`/`to-zero`/`nearest`) — в Phase 0
-            // не реализованы (парсер их не распознаёт, см. parse_function_call).
+        MathFn::Round(strategy) => {
+            // round([<strategy>,] val[, step]). Без step (нет 2-го arg) —
+            // step = 1, как в spec §10.5.1. step ≠ 0 (иначе ÷ 0 → None).
+            // Знак step сохраняется: spec не делает abs, и для nearest
+            // результат симметричен, а для up/down/to-zero — нет (это та же
+            // semantics, что у chrome/firefox). NaN ловится финальным
+            // `is_finite()`-чеком.
             let val = resolve(&args[0])?;
-            if args.len() == 2 {
-                let step = resolve(&args[1])?;
-                if step == 0.0 {
+            let step = if args.len() == 2 {
+                let s = resolve(&args[1])?;
+                if s == 0.0 {
                     return None;
                 }
-                (val / step).round() * step
+                s
             } else {
-                val.round()
-            }
+                1.0
+            };
+            let ratio = val / step;
+            let rounded = match strategy {
+                RoundStrategy::Nearest => ratio.round(),
+                RoundStrategy::Up => ratio.ceil(),
+                RoundStrategy::Down => ratio.floor(),
+                RoundStrategy::ToZero => ratio.trunc(),
+            };
+            rounded * step
         }
     };
     if result.is_finite() {
@@ -2100,6 +2133,27 @@ fn parse_function_call(
     tokens: &[CalcToken],
     pos: &mut usize,
 ) -> Option<CalcNode> {
+    // CSS Values L4 §10.5.1: `round( <rounding-strategy>?, A, B? )` —
+    // первый аргумент-keyword. Распознаём ДО общего parse_arg_list, чтобы
+    // ident-без-`(` не падал в `parse_calc_factor` как «функция без скобок».
+    // После keyword обязательна `,` — strategy без последующего expr невалиден.
+    let round_strategy = if name == "round" {
+        if let Some(CalcToken::Ident(kw)) = tokens.get(*pos)
+            && let Some(s) = parse_round_strategy(kw)
+        {
+            *pos += 1;
+            if !matches!(tokens.get(*pos), Some(CalcToken::Comma)) {
+                return None;
+            }
+            *pos += 1;
+            Some(s)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let args = parse_arg_list(tokens, pos)?;
     if !matches!(tokens.get(*pos), Some(CalcToken::RParen)) {
         return None;
@@ -2185,16 +2239,28 @@ fn parse_function_call(
             Some(CalcNode::Func(MathFn::Hypot, args))
         }
         "round" => {
-            // round(val) или round(val, step). Strategy keyword не реализован
-            // в Phase 0 — он бы стоял первым аргументом-ident, парсер
-            // не знает ident-arg, поэтому такие вызовы парсятся как обычные
-            // expr и упадут.
+            // round([<strategy>,] val[, step]). Strategy keyword уже снят
+            // вверху функции и зашит в `MathFn::Round(...)`; здесь остаётся
+            // классический args-чек 1..=2.
             if args.is_empty() || args.len() > 2 {
                 return None;
             }
-            Some(CalcNode::Func(MathFn::Round, args))
+            let s = round_strategy.unwrap_or(RoundStrategy::Nearest);
+            Some(CalcNode::Func(MathFn::Round(s), args))
         }
         _ => None, // незнакомая math-функция
+    }
+}
+
+/// CSS Values L4 §10.5.1: `<rounding-strategy>` = `nearest | up | down | to-zero`.
+/// Имя приходит уже в нижнем регистре из лексера; неподходящий ident → None.
+fn parse_round_strategy(name: &str) -> Option<RoundStrategy> {
+    match name {
+        "nearest" => Some(RoundStrategy::Nearest),
+        "up" => Some(RoundStrategy::Up),
+        "down" => Some(RoundStrategy::Down),
+        "to-zero" => Some(RoundStrategy::ToZero),
+        _ => None,
     }
 }
 
@@ -5017,6 +5083,98 @@ mod tests {
     #[test]
     fn round_with_zero_step_invalid() {
         assert_eq!(rc_unitless("round(13, 0)"), None);
+    }
+
+    // CSS Values L4 §10.5.1 — strategy keyword (nearest/up/down/to-zero).
+
+    #[test]
+    fn round_up_to_integer() {
+        // round(up, 3.1) = 4 — ceil дробного.
+        assert!(approx(rc_unitless("round(up, 3.1)").unwrap(), 4.0));
+        // round(up, 3.0) = 3 — целое не двигается.
+        assert!(approx(rc_unitless("round(up, 3)").unwrap(), 3.0));
+    }
+
+    #[test]
+    fn round_down_to_integer() {
+        // round(down, 3.9) = 3 — floor дробного.
+        assert!(approx(rc_unitless("round(down, 3.9)").unwrap(), 3.0));
+    }
+
+    #[test]
+    fn round_to_zero_basic() {
+        // round(to-zero, 3.9) = 3 — trunc положительного.
+        assert!(approx(rc_unitless("round(to-zero, 3.9)").unwrap(), 3.0));
+        // round(to-zero, -3.9) = -3 — отличается от floor(-3.9) = -4.
+        assert!(approx(rc_unitless("round(to-zero, -3.9)").unwrap(), -3.0));
+    }
+
+    #[test]
+    fn round_up_negative() {
+        // round(up, -3.1) = -3 — ceil к +∞.
+        assert!(approx(rc_unitless("round(up, -3.1)").unwrap(), -3.0));
+    }
+
+    #[test]
+    fn round_down_negative() {
+        // round(down, -3.1) = -4 — floor к -∞.
+        assert!(approx(rc_unitless("round(down, -3.1)").unwrap(), -4.0));
+    }
+
+    #[test]
+    fn round_nearest_explicit() {
+        // Явный nearest эквивалентен без-strategy форме.
+        assert!(approx(rc_unitless("round(nearest, 3.7)").unwrap(), 4.0));
+        assert!(approx(rc_unitless("round(nearest, 3.4)").unwrap(), 3.0));
+    }
+
+    #[test]
+    fn round_strategy_with_step() {
+        // round(up, 13, 5) = 15 — ceil(13/5)*5 = 3*5.
+        assert!(approx(rc_unitless("round(up, 13, 5)").unwrap(), 15.0));
+        // round(down, 13, 5) = 10.
+        assert!(approx(rc_unitless("round(down, 13, 5)").unwrap(), 10.0));
+        // round(up, 11, 5) = 15.
+        assert!(approx(rc_unitless("round(up, 11, 5)").unwrap(), 15.0));
+        // round(to-zero, -11, 5) = -10 (vs down = -15).
+        assert!(approx(rc_unitless("round(to-zero, -11, 5)").unwrap(), -10.0));
+    }
+
+    #[test]
+    fn round_strategy_case_insensitive() {
+        // Keyword-ы CSS-стандарт case-insensitive (Values L4 §2.4).
+        assert!(approx(rc_unitless("round(UP, 3.1)").unwrap(), 4.0));
+        assert!(approx(rc_unitless("round(To-Zero, -3.9)").unwrap(), -3.0));
+    }
+
+    #[test]
+    fn round_strategy_in_width() {
+        // width: round(up, 13px, 5px) = 15px.
+        let s = style_for("width: round(up, 13px, 5px)");
+        assert_eq!(s.width, Some(15.0));
+    }
+
+    #[test]
+    fn round_strategy_zero_step_invalid() {
+        // step=0 → declaration invalid, как и для round без strategy.
+        assert_eq!(rc_unitless("round(up, 13, 0)"), None);
+    }
+
+    #[test]
+    fn round_unknown_strategy_invalid() {
+        // `floor` не keyword в strategy — declaration invalid.
+        // (lexer пропустит ident `floor`, но parse_function_call для round
+        // ждёт после ident либо `,` со strategy, либо expr; одинокий ident-без-`(`
+        // в parse_calc_factor возвращает None.)
+        assert_eq!(rc_unitless("round(floor, 3.7)"), None);
+    }
+
+    #[test]
+    fn round_strategy_without_value_invalid() {
+        // strategy + `,` + пусто → parse_arg_list падает.
+        assert_eq!(rc_unitless("round(up,)"), None);
+        // strategy без запятой → ident-arg в parse_calc_factor возвращает None.
+        assert_eq!(rc_unitless("round(up 3.1)"), None);
     }
 
     // Интеграция
