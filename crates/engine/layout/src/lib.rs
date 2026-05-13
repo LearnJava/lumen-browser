@@ -999,6 +999,115 @@ mod tests {
         assert!(p.style.height.is_none(), "height should not be inherited");
     }
 
+    // ── Тесты CSS min-/max- ширины и высоты (§10.4) ────────────────────────
+
+    /// max-width режет заданную width вниз.
+    #[test]
+    fn max_width_clamps_width_down() {
+        let root = lay("<p>x</p>", "p { width: 500px; max-width: 300px; }");
+        let p = first_element_child(&root);
+        assert!((p.rect.width - 300.0).abs() < 0.01, "rect.width={}", p.rect.width);
+    }
+
+    /// min-width поднимает заданную width вверх.
+    #[test]
+    fn min_width_clamps_width_up() {
+        let root = lay("<p>x</p>", "p { width: 100px; min-width: 250px; }");
+        let p = first_element_child(&root);
+        assert!((p.rect.width - 250.0).abs() < 0.01, "rect.width={}", p.rect.width);
+    }
+
+    /// min-width побеждает max-width при конфликте (CSS 2.1 §10.4).
+    #[test]
+    fn min_width_beats_max_width() {
+        let root = lay(
+            "<p>x</p>",
+            "p { width: 100px; min-width: 400px; max-width: 200px; }",
+        );
+        let p = first_element_child(&root);
+        assert!((p.rect.width - 400.0).abs() < 0.01, "rect.width={}", p.rect.width);
+    }
+
+    /// max-height режет height вниз.
+    #[test]
+    fn max_height_clamps_height_down() {
+        let root = lay("<p>x</p>", "p { height: 500px; max-height: 200px; }");
+        let p = first_element_child(&root);
+        assert!((p.rect.height - 200.0).abs() < 0.01, "rect.height={}", p.rect.height);
+    }
+
+    /// min-height поднимает high content-height до минимума.
+    #[test]
+    fn min_height_clamps_height_up() {
+        // <p> с одной строкой текста и без явной height → ~19px (16*1.2);
+        // min-height: 100 → 100.
+        let root = lay("<p>x</p>", "p { min-height: 100px; }");
+        let p = first_element_child(&root);
+        assert!((p.rect.height - 100.0).abs() < 0.01, "rect.height={}", p.rect.height);
+    }
+
+    /// max-width: none — ограничение снимается.
+    #[test]
+    fn max_width_none_means_no_constraint() {
+        let root = lay("<p>x</p>", "p { width: 500px; max-width: none; }");
+        let p = first_element_child(&root);
+        assert!((p.rect.width - 500.0).abs() < 0.01, "rect.width={}", p.rect.width);
+    }
+
+    /// Отрицательные значения отбрасываются (поле остаётся None).
+    #[test]
+    fn negative_min_max_ignored() {
+        let root = lay(
+            "<p>x</p>",
+            "p { width: 200px; min-width: -50px; max-width: -10px; }",
+        );
+        let p = first_element_child(&root);
+        assert!(p.style.min_width.is_none(), "negative min-width should be rejected");
+        assert!(p.style.max_width.is_none(), "negative max-width should be rejected");
+        assert!((p.rect.width - 200.0).abs() < 0.01, "rect.width={}", p.rect.width);
+    }
+
+    /// min-/max- не наследуются.
+    #[test]
+    fn min_max_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { min-width: 100px; max-height: 50px; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(p.style.min_width.is_none(), "min-width should not be inherited");
+        assert!(p.style.max_height.is_none(), "max-height should not be inherited");
+        // У div сам должен быть выставлен.
+        assert_eq!(div.style.min_width, Some(100.0));
+        assert_eq!(div.style.max_height, Some(50.0));
+    }
+
+    /// max-width в border-box работает как ограничение всей коробки.
+    #[test]
+    fn max_width_with_border_box_includes_padding() {
+        // border-box: max-width=200 — это вся коробка, padding внутри.
+        let root = lay(
+            "<p>x</p>",
+            "p { box-sizing: border-box; width: 500px; max-width: 200px; padding: 10px; }",
+        );
+        let p = first_element_child(&root);
+        assert!((p.rect.width - 200.0).abs() < 0.01, "rect.width={}", p.rect.width);
+    }
+
+    /// min-width в content-box: min относится к contentу, padding/border
+    /// прибавляются сверху. Подняли width=50 (= rect 70 с padding=10) до
+    /// min-width=200 (= rect 220 с padding=10).
+    #[test]
+    fn min_width_content_box_adds_padding() {
+        let root = lay(
+            "<p>x</p>",
+            "p { width: 50px; min-width: 200px; padding: 10px; }",
+        );
+        let p = first_element_child(&root);
+        assert!((p.rect.width - 220.0).abs() < 0.01, "rect.width={}", p.rect.width);
+    }
+
     // ── Тесты CSS borders ──────────────────────────────────────────────────
 
     /// `border: 2px solid red` — shorthand устанавливает ширину, стиль, цвет.

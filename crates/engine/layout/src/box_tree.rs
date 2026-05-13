@@ -173,6 +173,10 @@ fn build_box(
                     inline_style.background_color = None;
                     inline_style.width = None;
                     inline_style.height = None;
+                    inline_style.min_width = None;
+                    inline_style.max_width = None;
+                    inline_style.min_height = None;
+                    inline_style.max_height = None;
                     inline_style.border_top_width = 0.0;
                     inline_style.border_right_width = 0.0;
                     inline_style.border_bottom_width = 0.0;
@@ -229,6 +233,22 @@ fn lay_out(
             BoxSizing::BorderBox => w.max(0.0),
         };
     }
+    // CSS 2.1 §10.4: tentative width → clamp в [min-width, max-width].
+    // Порядок «max сначала, потом min» автоматически даёт правило
+    // «при min > max побеждает min». min-/max- интерпретируются в той же
+    // box-sizing модели, что и width: content-box добавляет padding+border,
+    // border-box оставляет как есть.
+    let outer_horiz = |v: f32| match s.box_sizing {
+        BoxSizing::ContentBox => v + s.padding_left + s.padding_right
+            + s.border_left_width + s.border_right_width,
+        BoxSizing::BorderBox => v,
+    };
+    if let Some(max_w) = s.max_width {
+        b.rect.width = b.rect.width.min(outer_horiz(max_w).max(0.0));
+    }
+    if let Some(min_w) = s.min_width {
+        b.rect.width = b.rect.width.max(outer_horiz(min_w).max(0.0));
+    }
 
     let content_x = b.rect.x + s.padding_left + s.border_left_width;
     let content_y = b.rect.y + s.padding_top + s.border_top_width;
@@ -284,6 +304,21 @@ fn lay_out(
                 content_height + s.padding_top + s.padding_bottom
                     + s.border_top_width + s.border_bottom_width
             };
+            // CSS 2.1 §10.4: clamp [min-height, max-height]. Симметрия с
+            // width: max сначала, потом min → «min побеждает max». Content
+            // оверфлоу-ит коробку если min режет ниже — это правильное
+            // поведение CSS.
+            let outer_vert = |v: f32| match s.box_sizing {
+                BoxSizing::ContentBox => v + s.padding_top + s.padding_bottom
+                    + s.border_top_width + s.border_bottom_width,
+                BoxSizing::BorderBox => v,
+            };
+            if let Some(max_h) = s.max_height {
+                b.rect.height = b.rect.height.min(outer_vert(max_h).max(0.0));
+            }
+            if let Some(min_h) = s.min_height {
+                b.rect.height = b.rect.height.max(outer_vert(min_h).max(0.0));
+            }
         }
         BoxKind::InlineRun { .. } => unreachable!(),
         BoxKind::Skip => unreachable!(),
