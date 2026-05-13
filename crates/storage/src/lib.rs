@@ -14,8 +14,10 @@
 
 pub mod bookmarks;
 pub mod cookies;
+pub mod downloads;
 pub mod history;
 pub mod http_cache;
+pub mod permissions;
 pub mod profiles;
 pub mod search_providers;
 pub mod sqlite_store;
@@ -23,8 +25,10 @@ pub mod store;
 
 pub use bookmarks::{Bookmark, Bookmarks};
 pub use cookies::{parse_set_cookie, Cookie, CookieJar, SameSite};
+pub use downloads::{DownloadEntry, DownloadStatus, Downloads};
 pub use history::{History, HistoryEntry};
 pub use http_cache::{CacheControl, CachedResponse, HttpCache};
+pub use permissions::{PermissionEntry, PermissionKind, PermissionState, Permissions};
 pub use profiles::{Profile, ProfileRegistry};
 pub use search_providers::{SearchProviderEntry, SearchProviders};
 pub use sqlite_store::SqliteStorage;
