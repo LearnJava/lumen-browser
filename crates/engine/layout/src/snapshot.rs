@@ -86,6 +86,18 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
     if let Some(h) = s.height {
         let _ = write!(out, " h={h:.2}");
     }
+    if let Some(v) = s.min_width {
+        let _ = write!(out, " min-w={v:.2}");
+    }
+    if let Some(v) = s.max_width {
+        let _ = write!(out, " max-w={v:.2}");
+    }
+    if let Some(v) = s.min_height {
+        let _ = write!(out, " min-h={v:.2}");
+    }
+    if let Some(v) = s.max_height {
+        let _ = write!(out, " max-h={v:.2}");
+    }
     if matches!(s.box_sizing, BoxSizing::BorderBox) {
         out.push_str(" box-sizing=border-box");
     }

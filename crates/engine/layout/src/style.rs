@@ -440,6 +440,16 @@ pub struct ComputedStyle {
     pub width: Option<f32>,
     /// Явная высота (CSS `height: Npx`). None = auto (по содержимому).
     pub height: Option<f32>,
+    /// CSS 2.1 §10.4: нижняя граница ширины коробки. None = 0 (default).
+    /// Применяется после `width`. Если min > max — побеждает min.
+    pub min_width: Option<f32>,
+    /// CSS 2.1 §10.4: верхняя граница ширины коробки. None = `none` (без
+    /// ограничения).
+    pub max_width: Option<f32>,
+    /// CSS 2.1 §10.4: нижняя граница высоты коробки. None = 0 (default).
+    pub min_height: Option<f32>,
+    /// CSS 2.1 §10.4: верхняя граница высоты коробки. None = `none`.
+    pub max_height: Option<f32>,
     pub margin_top: f32,
     pub margin_right: f32,
     pub margin_bottom: f32,
@@ -546,6 +556,10 @@ impl ComputedStyle {
             text_decoration_color: None,
             width: None,
             height: None,
+            min_width: None,
+            max_width: None,
+            min_height: None,
+            max_height: None,
             margin_top: 0.0,
             margin_right: 0.0,
             margin_bottom: 0.0,
@@ -619,6 +633,10 @@ pub fn compute_style(
         background_color: None,
         width: None,
         height: None,
+        min_width: None,
+        max_width: None,
+        min_height: None,
+        max_height: None,
         margin_top: 0.0,
         margin_right: 0.0,
         margin_bottom: 0.0,
@@ -1590,6 +1608,31 @@ fn apply_declaration(
         }
         "height" if val != "auto" => {
             style.height = parse_length(val).and_then(|l| l.resolve(em_basis, None, viewport));
+        }
+        // CSS 2.1 §10.4: min-/max- ширина и высота. Отрицательные значения
+        // запрещены спецификацией — отбрасываем. `none` для max-* = снять
+        // ограничение (None). `auto` для min-* (CSS3 Sizing default для
+        // flex/grid) трактуем как None — Phase 0 без flex/grid, это
+        // эквивалентно нулевому минимуму.
+        "min-width" if val != "auto" => {
+            style.min_width = parse_length(val)
+                .and_then(|l| l.resolve(em_basis, None, viewport))
+                .filter(|v| *v >= 0.0);
+        }
+        "max-width" if val != "none" => {
+            style.max_width = parse_length(val)
+                .and_then(|l| l.resolve(em_basis, None, viewport))
+                .filter(|v| *v >= 0.0);
+        }
+        "min-height" if val != "auto" => {
+            style.min_height = parse_length(val)
+                .and_then(|l| l.resolve(em_basis, None, viewport))
+                .filter(|v| *v >= 0.0);
+        }
+        "max-height" if val != "none" => {
+            style.max_height = parse_length(val)
+                .and_then(|l| l.resolve(em_basis, None, viewport))
+                .filter(|v| *v >= 0.0);
         }
         "font-size" => {
             // Обрабатывается в pre-pass; в этой ветке пропускаем.
