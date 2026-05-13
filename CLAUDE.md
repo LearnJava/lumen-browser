@@ -423,7 +423,8 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 - Типы: `Document`, `Node` (parent + children + data), `NodeData` (Document / Doctype / Element / Text / Comment), `QualName`, `Namespace` (HTML/SVG/MathML/Xml/XmlNs/XLink), `Attribute`.
 - API: `create_element / create_text / create_comment / create_doctype`, `append_child`, `detach`, `get / get_mut`, `root`, `len`, **`base_href()`** (HTML5 §4.2.3 — извлечение `<base href>` для resolve относительных URL), **`find_first_element(predicate)`** (pre-order поиск первого элемента, удовлетворяющего predicate).
 - `Display` impl печатает дерево с отступами — для отладки.
-- 13 тестов: 7 базовых + cyrillic-инварианты + **6 для base_href (extract, no base, base no href, first-in-document-order, case-insensitive HREF, find_first_element none).**
+- **InputType (HTML5 §4.10.5):** enum для парсинга `<input type="...">` атрибута. 22 стандартных типа: `Text` (default), `Password`, `Email`, `Tel`, `Url`, `Number`, `Search`, `Date`, `DateTimeLocal`, `Time`, `Month`, `Week`, `Color`, `Range`, `Checkbox`, `Radio`, `File`, `Submit`, `Reset`, `Button`, `Image`, `Hidden` + `Other(String)` для forward-compat. `InputType::parse(s)` case-insensitive, trim whitespace. Метод `Node::input_type() -> Option<InputType>` возвращает `None` для не-`input` элементов, `Some(Text)` для `<input>` без `type` (HTML5 default). Helpers: `is_textual()` (text/password/email/tel/url/number/search — поля с буквенным контентом), `is_button_like()` (submit/reset/button/image). `as_str()` + `parse()` — round-trip.
+- 25 тестов: 7 базовых + cyrillic-инварианты + 6 для base_href + **12 для InputType (default text, explicit text/password/email, all 19 standard types в одном тесте, case-insensitive, unknown→Other, empty=Text, none for non-input, round-trip parse↔as_str, is_textual classification, is_button_like).**
 
 ### `lumen-html-parser` 🟡 (минимум)
 
@@ -561,7 +562,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 ### Численно
 
-- **Всего тестов в workspace:** 1412 (после merge downloads+permissions).
+- **Всего тестов в workspace:** 1424 (после merge html-input-types).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 3 активных (winit, wgpu, SQLite через rusqlite/bundled) + 2 зарезервированных (rustls активирован в lumen-network, JS engine).
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -676,6 +677,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            html-input-types       — InputType enum (HTML5 §4.10.5) + Node::input_type() в lumen-dom. 22 стандартных типа (text/password/email/tel/url/number/search/date/datetime-local/time/month/week/color/range/checkbox/radio/file/submit/reset/button/image/hidden) + Other(String). is_textual / is_button_like классификаторы. Parser case-insensitive, default Text для отсутствующего/пустого type-атрибута. 12 unit-тестов. [P1]
 *            downloads-permissions  — два storage-модуля в lumen-storage. Downloads: DownloadEntry/DownloadStatus, API start/update_progress/complete/cancel/fail/get/list_all/list_by_status/delete/clear_completed/count. Permissions: PermissionKind enum (camera/mic/geolocation/notifications/clipboard/midi/persistent-storage + Other(String)), PermissionState (Prompt/Granted/Denied), таблица с composite PK (origin, kind) WITHOUT ROWID, expires_at для temporary grants. API: set/query/touch/revoke/list_for_origin/list_all/clear_expired/clear_origin. 12 + 15 unit-тестов. [P3]
 *            css-at-layer           — @layer parsing (CSS Cascade L5 §6.4). Stylesheet.layer_order (cascade-приоритет имён) + layers Vec<LayerRule {name, rules}>. Statement-form `@layer a, b;` + block-form `@layer name {rules}` + анонимный `@layer {rules}` (auto __anon_N__). is_layer_name CSS-ident с dotted sub-names. Phase 0: parse+store; cascade-интеграция отложена. 10 unit-тестов. [P1]
 *            css-font-face          — @font-face parsing (CSS Fonts L4 §4). Stylesheet.font_faces: Vec<FontFaceRule {family, sources, weight, style, display, unicode_range}>. FontFaceSource {kind (Url/Local), value, format}. parse_font_face_src делит src по top-level запятым (split_top_level_commas helper с уважением к скобкам и строкам); парсит url("...") format("...") и local("..."). 7 unit-тестов. [P1]
