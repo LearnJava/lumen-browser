@@ -284,6 +284,15 @@ pub struct ComputedStyle {
     /// blending этого уровня; индивидуальные альфы в `color`/`background`
     /// продолжают работать.
     pub opacity: f32,
+    /// CSS UI L4 §3: outline. В отличие от border не сдвигает соседей и
+    /// не учитывается в width/height (рисуется поверх / снаружи коробки).
+    /// Color = None → currentColor. Не наследуется.
+    pub outline_width: f32,
+    pub outline_style: BorderStyle,
+    pub outline_color: Option<Color>,
+    /// CSS UI L4 §3.4 — outline-offset (resolved px). Положительное —
+    /// outline отрисовывается дальше от боксa, отрицательное — внутрь.
+    pub outline_offset: f32,
 }
 
 impl ComputedStyle {
@@ -343,6 +352,10 @@ impl ComputedStyle {
             border_left_color: None,
             box_sizing: BoxSizing::ContentBox,
             opacity: 1.0,
+            outline_width: 0.0,
+            outline_style: BorderStyle::None,
+            outline_color: None,
+            outline_offset: 0.0,
         }
     }
 }
@@ -396,6 +409,10 @@ pub fn compute_style(
         border_left_color: None,
         box_sizing: BoxSizing::ContentBox,
         opacity: 1.0,
+        outline_width: 0.0,
+        outline_style: BorderStyle::None,
+        outline_color: None,
+        outline_offset: 0.0,
     };
 
     if !matches!(doc.get(node).data, NodeData::Element { .. }) {
@@ -1155,6 +1172,46 @@ fn apply_declaration(
                 "nowrap" => WhiteSpace::Nowrap,
                 _ => style.white_space,
             };
+        }
+        "outline" => {
+            // outline shorthand — аналог border-shorthand, но применяется к
+            // одному «слою» поверх коробки. Сбрасывает все три свойства.
+            style.outline_width = 0.0;
+            style.outline_style = BorderStyle::None;
+            style.outline_color = None;
+            for tok in val.split_whitespace() {
+                if let Some(v) = resolve_box_length(tok, em_basis, viewport) {
+                    style.outline_width = v;
+                } else if is_border_style_kw(tok) {
+                    style.outline_style = parse_border_style_kw(tok);
+                } else if let Some(c) = parse_color(tok) {
+                    style.outline_color = Some(c);
+                }
+            }
+        }
+        "outline-width" => {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
+                style.outline_width = v;
+            }
+        }
+        "outline-style" => {
+            style.outline_style = parse_border_style_kw(val);
+        }
+        "outline-color" => {
+            if let Some(c) = parse_color(val) {
+                style.outline_color = Some(c);
+            }
+        }
+        "outline-offset" => {
+            // <length>; отрицательные значения валидны (CSS UI L4 §3.4).
+            if let Some(len) = parse_length(val)
+                && let Some(px) = match len {
+                    Length::Percent(_) => None,
+                    other => other.resolve(em_basis, None, viewport),
+                }
+            {
+                style.outline_offset = px;
+            }
         }
         "opacity" => {
             // CSS Color L3 §3.2: <number 0..1> или <percentage>. Out-of-range

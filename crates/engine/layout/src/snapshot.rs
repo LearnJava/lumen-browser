@@ -215,6 +215,26 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     if (s.opacity - 1.0).abs() > 0.001 {
         let _ = write!(out, " opacity={:.3}", s.opacity);
     }
+    if s.outline_style.is_visible() && s.outline_width > 0.0 {
+        let _ = write!(
+            out,
+            " outline={}/{:.2}",
+            border_style_str(s.outline_style),
+            s.outline_width
+        );
+    }
+    if s.outline_offset.abs() > 0.01 {
+        let _ = write!(out, " outline-offset={:.2}", s.outline_offset);
+    }
+}
+
+fn border_style_str(b: BorderStyle) -> &'static str {
+    match b {
+        BorderStyle::None => "none",
+        BorderStyle::Solid => "solid",
+        BorderStyle::Dashed => "dashed",
+        BorderStyle::Dotted => "dotted",
+    }
 }
 
 fn color_hex(c: Color) -> String {
