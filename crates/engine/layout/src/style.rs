@@ -384,6 +384,12 @@ pub struct ComputedStyle {
     pub border_bottom_color: Option<Color>,
     pub border_left_color: Option<Color>,
     pub box_sizing: BoxSizing,
+    /// CSS Backgrounds L3 §5: радиус скругления углов (resolved px).
+    /// Один аспект (без elliptical x/y) — Phase 0 упрощение. Не наследуется.
+    pub border_top_left_radius: f32,
+    pub border_top_right_radius: f32,
+    pub border_bottom_right_radius: f32,
+    pub border_bottom_left_radius: f32,
     /// CSS Display L3 §4 — visibility. Inherited.
     pub visibility: Visibility,
     /// CSS UI L4 §8.1 — cursor. Inherited.
@@ -470,6 +476,10 @@ impl ComputedStyle {
             border_bottom_color: None,
             border_left_color: None,
             box_sizing: BoxSizing::ContentBox,
+            border_top_left_radius: 0.0,
+            border_top_right_radius: 0.0,
+            border_bottom_right_radius: 0.0,
+            border_bottom_left_radius: 0.0,
             visibility: Visibility::Visible,
             cursor: Cursor::Auto,
             box_shadow: Vec::new(),
@@ -533,6 +543,11 @@ pub fn compute_style(
         border_bottom_color: None,
         border_left_color: None,
         box_sizing: BoxSizing::ContentBox,
+        // border-radius не наследуется.
+        border_top_left_radius: 0.0,
+        border_top_right_radius: 0.0,
+        border_bottom_right_radius: 0.0,
+        border_bottom_left_radius: 0.0,
         // Inherited (CSS Display L3 §4).
         visibility: inherited.visibility,
         // Inherited (CSS UI L4 §8.1).
@@ -1697,6 +1712,47 @@ fn apply_declaration(
             if let Some(c) = parse_color(sides[1]) { style.border_right_color = Some(c); }
             if let Some(c) = parse_color(sides[2]) { style.border_bottom_color = Some(c); }
             if let Some(c) = parse_color(sides[3]) { style.border_left_color = Some(c); }
+        }
+        "border-radius" => {
+            // CSS Backgrounds L3 §5.5 shorthand. Поддерживаем только
+            // horizontal-radius (без `/`-formed elliptical часть). 1-4 токена
+            // по правилу expand_border_4 (TL TR BR BL).
+            // Формы вроде `5px / 10px` (elliptical) Phase 0 не поддерживает —
+            // берём первую часть до `/`.
+            let h_part = val.split('/').next().unwrap_or(val);
+            let sides = expand_border_4(h_part);
+            if let Some(v) = resolve_box_length(sides[0], em_basis, viewport) {
+                style.border_top_left_radius = v.max(0.0);
+            }
+            if let Some(v) = resolve_box_length(sides[1], em_basis, viewport) {
+                style.border_top_right_radius = v.max(0.0);
+            }
+            if let Some(v) = resolve_box_length(sides[2], em_basis, viewport) {
+                style.border_bottom_right_radius = v.max(0.0);
+            }
+            if let Some(v) = resolve_box_length(sides[3], em_basis, viewport) {
+                style.border_bottom_left_radius = v.max(0.0);
+            }
+        }
+        "border-top-left-radius" => {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
+                style.border_top_left_radius = v.max(0.0);
+            }
+        }
+        "border-top-right-radius" => {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
+                style.border_top_right_radius = v.max(0.0);
+            }
+        }
+        "border-bottom-right-radius" => {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
+                style.border_bottom_right_radius = v.max(0.0);
+            }
+        }
+        "border-bottom-left-radius" => {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
+                style.border_bottom_left_radius = v.max(0.0);
+            }
         }
         "border-top-width" => set_box_length(&mut style.border_top_width, val, em_basis, viewport),
         "border-right-width" => set_box_length(&mut style.border_right_width, val, em_basis, viewport),

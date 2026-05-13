@@ -252,6 +252,20 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     if !s.text_shadow.is_empty() {
         let _ = write!(out, " text-shadow={}", s.text_shadow.len());
     }
+    if s.border_top_left_radius > 0.0
+        || s.border_top_right_radius > 0.0
+        || s.border_bottom_right_radius > 0.0
+        || s.border_bottom_left_radius > 0.0
+    {
+        let _ = write!(
+            out,
+            " border-radius=({:.2},{:.2},{:.2},{:.2})",
+            s.border_top_left_radius,
+            s.border_top_right_radius,
+            s.border_bottom_right_radius,
+            s.border_bottom_left_radius,
+        );
+    }
 }
 
 fn overflow_str(o: Overflow) -> &'static str {
