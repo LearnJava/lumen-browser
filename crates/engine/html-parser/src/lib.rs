@@ -7,10 +7,11 @@
 //! атрибуты (quoted/unquoted), комментарии, базовые character references,
 //! void-элементы, lenient end-tag matching.
 //!
-//! Что не поддерживается (отложено до Phase 1+): DOCTYPE-разбор, CDATA,
-//! raw-text script/style states, insertion modes (in_table, in_select),
-//! полный набор named entities, foster parent reparenting.
+//! Что не поддерживается (отложено до Phase 1+): CDATA, insertion modes
+//! (in_table, in_select), полный набор named entities (~2125 имён —
+//! у нас 250+ самых частых), foster parent reparenting.
 
+mod entities;
 pub mod tokenizer;
 pub mod tree_builder;
 
