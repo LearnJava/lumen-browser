@@ -131,6 +131,42 @@ impl Document {
         self.nodes.len() <= 1
     }
 
+    /// HTML5 §4.2.3 — найти первый `<base href="...">` в документе и
+    /// вернуть значение атрибута `href`. Используется для resolve
+    /// относительных URL (`<a>`, `<img>`, `<link>`, `<script>`). Если
+    /// нет `<base>` или нет атрибута href — `None`.
+    ///
+    /// Поиск в pre-order обходе (depth-first, элементы по порядку
+    /// исходного HTML). Имена тегов и атрибутов в HTML lowercase'нуты
+    /// парсером.
+    pub fn base_href(&self) -> Option<&str> {
+        self.find_first_element(|node| {
+            node.element_name()
+                .map(|n| n.local == "base")
+                .unwrap_or(false)
+        })
+        .and_then(|n| n.get_attr("href"))
+    }
+
+    /// Найти первый элемент, удовлетворяющий предикату. Pre-order обход
+    /// от root. Используется для `base_href` и подобных «глобальных»
+    /// HTML-помощников.
+    pub fn find_first_element(&self, predicate: impl Fn(&Node) -> bool) -> Option<&Node> {
+        let mut stack: Vec<NodeId> = vec![self.root];
+        while let Some(id) = stack.pop() {
+            let node = self.get(id);
+            if matches!(node.data, NodeData::Element { .. }) && predicate(node) {
+                return Some(node);
+            }
+            // Push children в обратном порядке, чтобы pop возвращал в
+            // прямом source-order.
+            for &child in node.children.iter().rev() {
+                stack.push(child);
+            }
+        }
+        None
+    }
+
     fn alloc(&mut self, data: NodeData) -> NodeId {
         let id = NodeId(self.nodes.len() as u32);
         self.nodes.push(Node {
@@ -345,5 +381,106 @@ mod tests {
         assert!(s.contains("#document"));
         assert!(s.contains("<html>"));
         assert!(s.contains("\"Hello\""));
+    }
+
+    // ──────── base_href / find_first_element ────────
+
+    fn build_doc_with_base(href: &str) -> Document {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let head = doc.create_element(QualName::html("head"));
+        let base = doc.create_element(QualName::html("base"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(base).data {
+            attrs.push(Attribute {
+                name: QualName::html("href"),
+                value: href.to_string(),
+            });
+        }
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, head);
+        doc.append_child(head, base);
+        doc
+    }
+
+    #[test]
+    fn base_href_extracts_attribute() {
+        let doc = build_doc_with_base("https://example.com/path/");
+        assert_eq!(doc.base_href(), Some("https://example.com/path/"));
+    }
+
+    #[test]
+    fn base_href_returns_none_without_base() {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        doc.append_child(doc.root(), html);
+        assert_eq!(doc.base_href(), None);
+    }
+
+    #[test]
+    fn base_href_returns_none_when_base_has_no_href() {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let head = doc.create_element(QualName::html("head"));
+        let base = doc.create_element(QualName::html("base"));  // без href
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, head);
+        doc.append_child(head, base);
+        assert_eq!(doc.base_href(), None);
+    }
+
+    #[test]
+    fn base_href_finds_first_in_document_order() {
+        // Два <base> элемента — берём первый в pre-order.
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let head = doc.create_element(QualName::html("head"));
+        let base1 = doc.create_element(QualName::html("base"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(base1).data {
+            attrs.push(Attribute {
+                name: QualName::html("href"),
+                value: "first".to_string(),
+            });
+        }
+        let base2 = doc.create_element(QualName::html("base"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(base2).data {
+            attrs.push(Attribute {
+                name: QualName::html("href"),
+                value: "second".to_string(),
+            });
+        }
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, head);
+        doc.append_child(head, base1);
+        doc.append_child(head, base2);
+        assert_eq!(doc.base_href(), Some("first"));
+    }
+
+    #[test]
+    fn base_href_case_insensitive_attribute() {
+        // HTML парсер lower-case-ит, но если что-то попало в HREF — get_attr
+        // должен находить.
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let base = doc.create_element(QualName::html("base"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(base).data {
+            attrs.push(Attribute {
+                name: QualName::html("HREF"),
+                value: "x.com".to_string(),
+            });
+        }
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, base);
+        assert_eq!(doc.base_href(), Some("x.com"));
+    }
+
+    #[test]
+    fn find_first_element_returns_none_when_no_match() {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        doc.append_child(doc.root(), html);
+        let found = doc.find_first_element(|n| {
+            n.element_name().map(|q| q.local == "nonexistent").unwrap_or(false)
+        });
+        assert!(found.is_none());
     }
 }

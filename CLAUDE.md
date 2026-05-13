@@ -421,9 +421,9 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 - Arena-based: `Vec<Node>` + `NodeId(u32)`. Нет `Rc/RefCell`, нет циклов.
 - Типы: `Document`, `Node` (parent + children + data), `NodeData` (Document / Doctype / Element / Text / Comment), `QualName`, `Namespace` (HTML/SVG/MathML/Xml/XmlNs/XLink), `Attribute`.
-- API: `create_element / create_text / create_comment / create_doctype`, `append_child`, `detach`, `get / get_mut`, `root`, `len`.
+- API: `create_element / create_text / create_comment / create_doctype`, `append_child`, `detach`, `get / get_mut`, `root`, `len`, **`base_href()`** (HTML5 §4.2.3 — извлечение `<base href>` для resolve относительных URL), **`find_first_element(predicate)`** (pre-order поиск первого элемента, удовлетворяющего predicate).
 - `Display` impl печатает дерево с отступами — для отладки.
-- 7 тестов, включая cyrillic-инварианты.
+- 13 тестов: 7 базовых + cyrillic-инварианты + **6 для base_href (extract, no base, base no href, first-in-document-order, case-insensitive HREF, find_first_element none).**
 
 ### `lumen-html-parser` 🟡 (минимум)
 
@@ -556,7 +556,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 ### Численно
 
-- **Всего тестов в workspace:** 1346 (после merge css-import-parsing).
+- **Всего тестов в workspace:** 1352 (после merge html-base-href).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 3 активных (winit, wgpu, SQLite через rusqlite/bundled) + 2 зарезервированных (rustls активирован в lumen-network, JS engine).
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -671,6 +671,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            html-base-href         — Document::base_href() + find_first_element(predicate) в lumen-dom. HTML5 §4.2.3: первый <base href> в pre-order обходе используется для resolve относительных URL. get_attr ASCII case-insensitive, поэтому HREF тоже находится. 6 unit-тестов. [P1]
 *            css-import-parsing     — @import url(...) парсинг (CSS Cascade L4 §6.5). Stylesheet.imports: Vec<ImportRule {url, media: MediaQuery}>. Парсит url("..."), url('...'), url(...) без кавычек, bare "..." / '...'. Optional media-query после URL. Fetch и инкорпорация — задача потребителя (shell). 9 unit-тестов. [P1]
 *            css-flex-parsing       — Display enum расширен: Flex / InlineFlex / Grid / InlineGrid (CSS Display L3, Flexbox L1, Grid L1). Phase 0: только parsing + storage; real flex/grid алгоритмика отложена. Flex/Grid в layout трактуются как Block, InlineFlex/InlineGrid — как Inline (попадают в InlineRun). Snapshot пишет non-default display. 5 layout-тестов. [P1]
 *            css-media-queries      — Media Queries L4 базовая поддержка. MediaQuery (OR-list AND-clauses) + MediaCondition (MediaType / Feature / Unsupported) + MediaFeature (min/max-width, min/max-height, orientation Portrait/Landscape, prefers-color-scheme Light/Dark). parse_media_query lenient (and / not / only keywords; неизвестные features → Unsupported = no-match). MediaContext {media_type, width, height, prefers_dark}; media_context_from_viewport в layout. compute_style итерирует sheet.media_rules после sheet.rules с продолжающейся rule_idx нумерацией. Phase 0 упрощение: @media всегда после обычных в cascade-ordering. 12 layout-тестов. [P1]
