@@ -19,10 +19,10 @@ pub mod style;
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
 pub use style::{
-    parse_css_wide_keyword, BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle,
-    CssWideKeyword, Cursor, Direction, Display, FontStretch, FontStyle, FontVariant,
+    parse_css_wide_keyword, BorderStyle, BoxShadow, BoxSizing, ClipPath, Color, ComputedStyle,
+    CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle, FontVariant,
     FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
-    TextTransform, Visibility, WhiteSpace,
+    TextTransform, TransformFn, Visibility, WhiteSpace,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -4171,6 +4171,220 @@ mod tests {
         let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
         // Default для <p> от UA = Block.
         assert_eq!(p.style.display, Display::Block);
+    }
+
+    // ──────── clip-path / transform / filter ────────
+
+    fn first_p_style(root: &LayoutBox) -> &ComputedStyle {
+        let p = root
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("p block");
+        &p.style
+    }
+
+    #[test]
+    fn clip_path_inset_parses() {
+        let root = lay("<p>x</p>", "p { clip-path: inset(10px 20px 30px 40px); }");
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Inset(parts)) => {
+                assert_eq!(parts, vec![10.0, 20.0, 30.0, 40.0]);
+            }
+            _ => panic!("expected Inset, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_circle_with_center() {
+        let root = lay("<p>x</p>", "p { clip-path: circle(50px at 100px 200px); }");
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Circle { radius, center }) => {
+                assert!((radius - 50.0).abs() < 0.01);
+                assert_eq!(center, Some((100.0, 200.0)));
+            }
+            _ => panic!("expected Circle, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_ellipse() {
+        let root = lay("<p>x</p>", "p { clip-path: ellipse(30px 60px); }");
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Ellipse { rx, ry, center: None }) => {
+                assert!((rx - 30.0).abs() < 0.01);
+                assert!((ry - 60.0).abs() < 0.01);
+            }
+            _ => panic!("expected Ellipse, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_polygon() {
+        let root = lay(
+            "<p>x</p>",
+            "p { clip-path: polygon(0 0, 100px 0, 50px 100px); }",
+        );
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Polygon(verts)) => {
+                assert_eq!(verts.len(), 3);
+                assert_eq!(verts[0], (0.0, 0.0));
+                assert_eq!(verts[1], (100.0, 0.0));
+                assert_eq!(verts[2], (50.0, 100.0));
+            }
+            _ => panic!("expected Polygon, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_none_clears() {
+        let root = lay("<p>x</p>", "p { clip-path: circle(50px); clip-path: none; }");
+        assert_eq!(first_p_style(&root).clip_path, None);
+    }
+
+    #[test]
+    fn transform_translate() {
+        let root = lay("<p>x</p>", "p { transform: translate(10px, 20px); }");
+        let t = first_p_style(&root).transform.clone();
+        assert_eq!(t, vec![TransformFn::Translate(10.0, 20.0)]);
+    }
+
+    #[test]
+    fn transform_rotate_normalizes_to_radians() {
+        let root = lay("<p>x</p>", "p { transform: rotate(90deg); }");
+        let t = first_p_style(&root).transform.clone();
+        match &t[..] {
+            [TransformFn::Rotate(rad)] => {
+                assert!((rad - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+            }
+            _ => panic!("expected single Rotate, got {t:?}"),
+        }
+    }
+
+    #[test]
+    fn transform_scale_single_arg_uniform() {
+        let root = lay("<p>x</p>", "p { transform: scale(1.5); }");
+        let t = first_p_style(&root).transform.clone();
+        assert_eq!(t, vec![TransformFn::Scale(1.5, 1.5)]);
+    }
+
+    #[test]
+    fn transform_scale_two_args() {
+        let root = lay("<p>x</p>", "p { transform: scale(2, 0.5); }");
+        let t = first_p_style(&root).transform.clone();
+        assert_eq!(t, vec![TransformFn::Scale(2.0, 0.5)]);
+    }
+
+    #[test]
+    fn transform_matrix() {
+        let root = lay("<p>x</p>", "p { transform: matrix(1, 0, 0, 1, 50, 100); }");
+        let t = first_p_style(&root).transform.clone();
+        assert_eq!(
+            t,
+            vec![TransformFn::Matrix([1.0, 0.0, 0.0, 1.0, 50.0, 100.0])]
+        );
+    }
+
+    #[test]
+    fn transform_list_multiple() {
+        let root = lay(
+            "<p>x</p>",
+            "p { transform: translate(10px, 0) rotate(45deg) scale(2); }",
+        );
+        let t = first_p_style(&root).transform.clone();
+        assert_eq!(t.len(), 3);
+        assert!(matches!(t[0], TransformFn::Translate(_, _)));
+        assert!(matches!(t[1], TransformFn::Rotate(_)));
+        assert!(matches!(t[2], TransformFn::Scale(_, _)));
+    }
+
+    #[test]
+    fn transform_none_clears() {
+        let root = lay(
+            "<p>x</p>",
+            "p { transform: rotate(45deg); transform: none; }",
+        );
+        assert!(first_p_style(&root).transform.is_empty());
+    }
+
+    #[test]
+    fn filter_blur() {
+        let root = lay("<p>x</p>", "p { filter: blur(5px); }");
+        let f = first_p_style(&root).filter.clone();
+        assert_eq!(f, vec![FilterFn::Blur(5.0)]);
+    }
+
+    #[test]
+    fn filter_percentage_normalized() {
+        let root = lay("<p>x</p>", "p { filter: grayscale(50%); }");
+        let f = first_p_style(&root).filter.clone();
+        match &f[..] {
+            [FilterFn::Grayscale(v)] => assert!((v - 0.5).abs() < 1e-5),
+            _ => panic!("expected Grayscale, got {f:?}"),
+        }
+    }
+
+    #[test]
+    fn filter_chain() {
+        let root = lay(
+            "<p>x</p>",
+            "p { filter: blur(2px) brightness(1.2) saturate(0.8); }",
+        );
+        let f = first_p_style(&root).filter.clone();
+        assert_eq!(f.len(), 3);
+        assert!(matches!(f[0], FilterFn::Blur(_)));
+        assert!(matches!(f[1], FilterFn::Brightness(_)));
+        assert!(matches!(f[2], FilterFn::Saturate(_)));
+    }
+
+    #[test]
+    fn filter_hue_rotate_radians() {
+        let root = lay("<p>x</p>", "p { filter: hue-rotate(180deg); }");
+        let f = first_p_style(&root).filter.clone();
+        match &f[..] {
+            [FilterFn::HueRotate(rad)] => {
+                assert!((rad - std::f32::consts::PI).abs() < 1e-5);
+            }
+            _ => panic!("expected HueRotate, got {f:?}"),
+        }
+    }
+
+    #[test]
+    fn filter_none_clears() {
+        let root = lay("<p>x</p>", "p { filter: blur(5px); filter: none; }");
+        assert!(first_p_style(&root).filter.is_empty());
+    }
+
+    #[test]
+    fn filter_unknown_skipped() {
+        let root = lay("<p>x</p>", "p { filter: blur(5px) zomg(1); brightness(1); }");
+        // zomg() игнорируется, остальное парсится.
+        let f = first_p_style(&root).filter.clone();
+        // brightness вне filter declaration — отдельный selector? Нет,
+        // оно в той же декларации `filter: blur(5px) zomg(1)` — zomg
+        // skipped, blur остался.
+        assert!(matches!(f[0], FilterFn::Blur(_)));
+    }
+
+    #[test]
+    fn clip_transform_filter_not_inherited() {
+        // Эти свойства не наследуются.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { clip-path: circle(50px); transform: rotate(45deg); filter: blur(5px); }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!(p.style.clip_path.is_none());
+        assert!(p.style.transform.is_empty());
+        assert!(p.style.filter.is_empty());
+        assert!(div.style.clip_path.is_some());
+        assert!(!div.style.transform.is_empty());
+        assert!(!div.style.filter.is_empty());
     }
 
     #[test]

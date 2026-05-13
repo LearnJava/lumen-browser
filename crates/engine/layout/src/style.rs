@@ -599,6 +599,85 @@ pub struct ComputedStyle {
     /// CSS Lists L3 §3 — `counter-increment: name [N]?`. Каждый element
     /// инкрементирует названный counter на N (default +1). Не наследуется.
     pub counter_increment: Vec<(String, i32)>,
+    /// CSS Masking L1 §3 — `clip-path: <basic-shape> | none`. Не
+    /// наследуется. Phase 0: parsing only — real geometric clipping
+    /// в paint pipeline отложен.
+    pub clip_path: Option<ClipPath>,
+    /// CSS Transforms L1 §2 — `transform: <transform-list> | none`.
+    /// Список функций — каждая `TransformFn` хранит параметры. Не
+    /// наследуется. Phase 0: parsing only — apply matrix к paint —
+    /// отложено.
+    pub transform: Vec<TransformFn>,
+    /// CSS Filter Effects L1 §3 — `filter: <filter-function-list> | none`.
+    /// Список функций — blur/brightness/contrast/grayscale/etc. Не
+    /// наследуется. Phase 0: parsing only.
+    pub filter: Vec<FilterFn>,
+}
+
+/// CSS Masking L1 §3.5 — basic-shapes для `clip-path`. Phase 0
+/// поддерживает: `inset(...)`, `circle(...)`, `ellipse(...)`,
+/// `polygon(...)`. URL / `path()` / `none` отложены.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClipPath {
+    /// `inset(top right bottom left)` — 1..=4 length-значения.
+    Inset(Vec<f32>),
+    /// `circle(radius at cx cy)` — radius и center (опц.).
+    Circle {
+        radius: f32,
+        center: Option<(f32, f32)>,
+    },
+    /// `ellipse(rx ry at cx cy)`.
+    Ellipse {
+        rx: f32,
+        ry: f32,
+        center: Option<(f32, f32)>,
+    },
+    /// `polygon(x1 y1, x2 y2, ...)` — список вершин.
+    Polygon(Vec<(f32, f32)>),
+}
+
+/// CSS Transforms L1 §11 — функции `transform`. Phase 0 поддерживает
+/// translate/translateX/translateY, rotate, scale/scaleX/scaleY,
+/// skew/skewX/skewY, matrix. 3D-варианты (translate3d, rotate3d,
+/// и т.д.) отложены.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransformFn {
+    Translate(f32, f32),
+    TranslateX(f32),
+    TranslateY(f32),
+    /// Угол в радианах (нормализован парсером из deg/rad/turn/grad).
+    Rotate(f32),
+    Scale(f32, f32),
+    ScaleX(f32),
+    ScaleY(f32),
+    SkewX(f32),
+    SkewY(f32),
+    Matrix([f32; 6]),
+}
+
+/// CSS Filter Effects L1 §3 — функции `filter`. Phase 0 поддерживает
+/// все 9 стандартных функций кроме `drop-shadow` (требует rendering
+/// pass — отложено).
+#[derive(Debug, Clone, PartialEq)]
+pub enum FilterFn {
+    /// `blur(<length>)` — радиус gaussian blur.
+    Blur(f32),
+    /// `brightness(<number-percentage>)`. 1.0 = unchanged.
+    Brightness(f32),
+    /// `contrast(<number-percentage>)`. 1.0 = unchanged.
+    Contrast(f32),
+    /// `grayscale(<number-percentage>)`. 0.0 = unchanged, 1.0 = full grayscale.
+    Grayscale(f32),
+    /// `hue-rotate(<angle>)` — угол в радианах.
+    HueRotate(f32),
+    /// `invert(<number-percentage>)`. 0.0 = unchanged, 1.0 = inverted.
+    Invert(f32),
+    /// `opacity(<number-percentage>)`. 1.0 = unchanged.
+    Opacity(f32),
+    /// `saturate(<number-percentage>)`. 1.0 = unchanged.
+    Saturate(f32),
+    /// `sepia(<number-percentage>)`. 0.0 = unchanged, 1.0 = full sepia.
+    Sepia(f32),
 }
 
 impl ComputedStyle {
@@ -688,6 +767,9 @@ impl ComputedStyle {
             custom_props: HashMap::new(),
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
+            clip_path: None,
+            transform: Vec::new(),
+            filter: Vec::new(),
         }
     }
 }
@@ -775,6 +857,10 @@ pub fn compute_style(
         // CSS Lists L3 §3 — не наследуются.
         counter_reset: Vec::new(),
         counter_increment: Vec::new(),
+        // CSS Masking / Transforms / Filter — не наследуются.
+        clip_path: None,
+        transform: Vec::new(),
+        filter: Vec::new(),
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -3152,6 +3238,33 @@ fn apply_declaration(
             // Default value = 1 (по spec).
             style.counter_increment = parse_counter_list(val, 1);
         }
+        "clip-path" => {
+            // CSS Masking L1 §3 — basic-shape | none. `none` чистит.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.clip_path = None;
+            } else if let Some(cp) = parse_clip_path(trimmed) {
+                style.clip_path = Some(cp);
+            }
+        }
+        "transform" => {
+            // CSS Transforms L1 §2 — `none | <transform-list>`.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.transform = Vec::new();
+            } else {
+                style.transform = parse_transform_list(trimmed);
+            }
+        }
+        "filter" => {
+            // CSS Filter Effects L1 §3 — `none | <filter-function-list>`.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.filter = Vec::new();
+            } else {
+                style.filter = parse_filter_list(trimmed);
+            }
+        }
         "opacity" => {
             // CSS Color L3 §3.2: <number 0..1> или <percentage>. Out-of-range
             // clamp-ается. Невалидные значения игнорируются.
@@ -3804,6 +3917,16 @@ fn apply_css_wide_keyword(
                 init.counter_increment.clone()
             };
         }
+        // Masking / Transforms / Filter — все non-inherited.
+        "clip-path" => {
+            style.clip_path = if inh_only_inherit { inherited.clip_path.clone() } else { init.clip_path.clone() };
+        }
+        "transform" => {
+            style.transform = if inh_only_inherit { inherited.transform.clone() } else { init.transform.clone() };
+        }
+        "filter" => {
+            style.filter = if inh_only_inherit { inherited.filter.clone() } else { init.filter.clone() };
+        }
         // Прочие / неизвестные — silent no-op.
         _ => {}
     }
@@ -3854,6 +3977,284 @@ fn is_css_ident(s: &str) -> bool {
         return false;
     }
     chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Парсит угол в радианах из строки вида `45deg`, `1.5rad`, `0.25turn`,
+/// `100grad`. Без единицы — number-as-radians (для совместимости).
+fn parse_angle_to_radians(s: &str) -> Option<f32> {
+    let s = s.trim();
+    for (suffix, factor) in [
+        ("deg", std::f32::consts::PI / 180.0),
+        ("rad", 1.0),
+        ("turn", std::f32::consts::TAU),
+        ("grad", std::f32::consts::PI / 200.0),
+    ] {
+        if let Some(num) = s.strip_suffix(suffix)
+            && let Ok(v) = num.trim().parse::<f32>()
+        {
+            return Some(v * factor);
+        }
+    }
+    s.parse::<f32>().ok()
+}
+
+/// Парсит `<number>` или `<percentage>` для filter-функций.
+/// Number 0..=1.0 (или %  0..=100%) — типичная семантика.
+fn parse_number_or_percent(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix('%') {
+        num.trim().parse::<f32>().ok().map(|v| v / 100.0)
+    } else {
+        s.parse::<f32>().ok()
+    }
+}
+
+/// Распарсить `<length>` в px (без `%`). Поддерживает px/em/rem
+/// упрощённо — em/rem трактуем как 16px-base; viewport-units игнорируем
+/// (Phase 0 — clip-path/transform/filter не критичны к точному
+/// разрешению относительных длин на этапе parsing).
+fn parse_length_px(s: &str) -> Option<f32> {
+    let s = s.trim();
+    for (suffix, factor) in [("px", 1.0), ("em", 16.0), ("rem", 16.0)] {
+        if let Some(num) = s.strip_suffix(suffix)
+            && let Ok(v) = num.trim().parse::<f32>()
+        {
+            return Some(v * factor);
+        }
+    }
+    // Без единицы — допустимо для 0.
+    s.parse::<f32>().ok()
+}
+
+/// Парсит `<basic-shape>` для `clip-path` (CSS Masking L1 §3.5).
+/// Поддерживает: `inset(t r b l)`, `circle(r at cx cy)`,
+/// `ellipse(rx ry at cx cy)`, `polygon(x1 y1, x2 y2, ...)`.
+fn parse_clip_path(s: &str) -> Option<ClipPath> {
+    let s = s.trim();
+    let open = s.find('(')?;
+    let close = s.rfind(')')?;
+    if close <= open {
+        return None;
+    }
+    let func = s[..open].trim().to_ascii_lowercase();
+    let inner = s[open + 1..close].trim();
+    match func.as_str() {
+        "inset" => {
+            let parts: Vec<f32> = inner
+                .split_whitespace()
+                .filter_map(parse_length_px)
+                .collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(ClipPath::Inset(parts))
+            }
+        }
+        "circle" => {
+            // `radius` [`at cx cy`]
+            let (radius_part, at_part) = if let Some(idx) = inner.find(" at ") {
+                (&inner[..idx], Some(&inner[idx + 4..]))
+            } else {
+                (inner, None)
+            };
+            let radius = parse_length_px(radius_part.trim())?;
+            let center = at_part.and_then(parse_at_pair);
+            Some(ClipPath::Circle { radius, center })
+        }
+        "ellipse" => {
+            let (radii_part, at_part) = if let Some(idx) = inner.find(" at ") {
+                (&inner[..idx], Some(&inner[idx + 4..]))
+            } else {
+                (inner, None)
+            };
+            let radii: Vec<f32> = radii_part
+                .split_whitespace()
+                .filter_map(parse_length_px)
+                .collect();
+            if radii.len() < 2 {
+                return None;
+            }
+            let center = at_part.and_then(parse_at_pair);
+            Some(ClipPath::Ellipse {
+                rx: radii[0],
+                ry: radii[1],
+                center,
+            })
+        }
+        "polygon" => {
+            let mut vertices = Vec::new();
+            for pair in inner.split(',') {
+                let coords: Vec<f32> = pair
+                    .split_whitespace()
+                    .filter_map(parse_length_px)
+                    .collect();
+                if coords.len() >= 2 {
+                    vertices.push((coords[0], coords[1]));
+                }
+            }
+            if vertices.is_empty() {
+                None
+            } else {
+                Some(ClipPath::Polygon(vertices))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn parse_at_pair(s: &str) -> Option<(f32, f32)> {
+    let parts: Vec<f32> = s.split_whitespace().filter_map(parse_length_px).collect();
+    if parts.len() >= 2 {
+        Some((parts[0], parts[1]))
+    } else {
+        None
+    }
+}
+
+/// Парсит `<transform-list>` — последовательность `func(args)` через
+/// whitespace (без запятых). Каждая `func` распознаётся отдельно.
+fn parse_transform_list(s: &str) -> Vec<TransformFn> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        // Skip whitespace.
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        // Read ident до `(`.
+        let name_start = i;
+        while i < bytes.len() && bytes[i] != b'(' && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let name = s[name_start..i].trim().to_ascii_lowercase();
+        if name.is_empty() {
+            break;
+        }
+        // Expect `(`.
+        if i >= bytes.len() || bytes[i] != b'(' {
+            break;
+        }
+        i += 1;
+        // Find matching `)`.
+        let args_start = i;
+        let mut depth = 1usize;
+        while i < bytes.len() && depth > 0 {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        let args = &s[args_start..i.saturating_sub(1)];
+        if let Some(tf) = parse_transform_fn(&name, args) {
+            out.push(tf);
+        }
+    }
+    out
+}
+
+fn parse_transform_fn(name: &str, args: &str) -> Option<TransformFn> {
+    let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+    match name {
+        "translate" => {
+            let x = parse_length_px(parts.first()?)?;
+            let y = parts.get(1).and_then(|s| parse_length_px(s)).unwrap_or(0.0);
+            Some(TransformFn::Translate(x, y))
+        }
+        "translatex" => parse_length_px(parts.first()?).map(TransformFn::TranslateX),
+        "translatey" => parse_length_px(parts.first()?).map(TransformFn::TranslateY),
+        "rotate" => parse_angle_to_radians(parts.first()?).map(TransformFn::Rotate),
+        "scale" => {
+            let x = parts.first()?.parse::<f32>().ok()?;
+            let y = parts
+                .get(1)
+                .and_then(|s| s.parse::<f32>().ok())
+                .unwrap_or(x);
+            Some(TransformFn::Scale(x, y))
+        }
+        "scalex" => parts.first()?.parse::<f32>().ok().map(TransformFn::ScaleX),
+        "scaley" => parts.first()?.parse::<f32>().ok().map(TransformFn::ScaleY),
+        "skewx" => parse_angle_to_radians(parts.first()?).map(TransformFn::SkewX),
+        "skewy" => parse_angle_to_radians(parts.first()?).map(TransformFn::SkewY),
+        "skew" => {
+            // `skew(x, y)` — для совместимости. Phase 0: храним как X-only.
+            parse_angle_to_radians(parts.first()?).map(TransformFn::SkewX)
+        }
+        "matrix" => {
+            if parts.len() != 6 {
+                return None;
+            }
+            let mut m = [0.0f32; 6];
+            for (i, p) in parts.iter().enumerate() {
+                m[i] = p.parse::<f32>().ok()?;
+            }
+            Some(TransformFn::Matrix(m))
+        }
+        _ => None,
+    }
+}
+
+/// Парсит `<filter-function-list>` — последовательность функций
+/// через whitespace.
+fn parse_filter_list(s: &str) -> Vec<FilterFn> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let name_start = i;
+        while i < bytes.len() && bytes[i] != b'(' && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let name = s[name_start..i].trim().to_ascii_lowercase();
+        if name.is_empty() {
+            break;
+        }
+        if i >= bytes.len() || bytes[i] != b'(' {
+            break;
+        }
+        i += 1;
+        let args_start = i;
+        let mut depth = 1usize;
+        while i < bytes.len() && depth > 0 {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        let args = s[args_start..i.saturating_sub(1)].trim();
+        if let Some(f) = parse_filter_fn(&name, args) {
+            out.push(f);
+        }
+    }
+    out
+}
+
+fn parse_filter_fn(name: &str, args: &str) -> Option<FilterFn> {
+    match name {
+        "blur" => parse_length_px(args).map(FilterFn::Blur),
+        "brightness" => parse_number_or_percent(args).map(FilterFn::Brightness),
+        "contrast" => parse_number_or_percent(args).map(FilterFn::Contrast),
+        "grayscale" => parse_number_or_percent(args).map(FilterFn::Grayscale),
+        "hue-rotate" => parse_angle_to_radians(args).map(FilterFn::HueRotate),
+        "invert" => parse_number_or_percent(args).map(FilterFn::Invert),
+        "opacity" => parse_number_or_percent(args).map(FilterFn::Opacity),
+        "saturate" => parse_number_or_percent(args).map(FilterFn::Saturate),
+        "sepia" => parse_number_or_percent(args).map(FilterFn::Sepia),
+        _ => None,
+    }
 }
 
 /// Контекст для `@media`-запросов из viewport-а. Phase 0 упрощение:
