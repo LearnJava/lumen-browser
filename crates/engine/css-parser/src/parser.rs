@@ -327,6 +327,28 @@ pub struct Stylesheet {
     /// src, weight, style, display, unicode-range; реальная загрузка
     /// и регистрация в font-matcher — задача shell.
     pub font_faces: Vec<FontFaceRule>,
+    /// CSS Cascade L5 §6.4 — порядок объявления layer-имён через
+    /// statement-form `@layer base, components, utilities;`. В этом
+    /// списке имена в **обратном** cascade-приоритете: первый имя имеет
+    /// наименьший приоритет; unlayered rules выигрывают у всех layered.
+    /// Анонимные layer-блоки (без имени) попадают сюда же с
+    /// generated-именем `__anon_<n>__`.
+    pub layer_order: Vec<String>,
+    /// CSS Cascade L5 — block-form `@layer name { rules }`. Каждая
+    /// запись — отдельный блок (повторное упоминание одного имени —
+    /// отдельные записи; cascade-приоритет внутри layer-а — source-order).
+    /// Phase 0 интеграция в каскад отложена — текущий compute_style
+    /// итерирует только `rules`/`media_rules`. Здесь только parse+store.
+    pub layers: Vec<LayerRule>,
+}
+
+/// `@layer name { rules }` блок.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayerRule {
+    /// Имя layer-а. Анонимный блок (`@layer { ... }`) получает имя
+    /// `__anon_<n>__` где `n` — порядковый номер.
+    pub name: String,
+    pub rules: Vec<Rule>,
 }
 
 /// `@import` декларация. Per CSS Cascade L4 §6.5 + Media Queries L4:
@@ -510,7 +532,30 @@ enum AtRuleOutcome {
     Media(MediaRule),
     Import(ImportRule),
     FontFace(FontFaceRule),
+    LayerNames(Vec<String>),
+    LayerBlock {
+        name: Option<String>,
+        rules: Vec<Rule>,
+    },
     None,
+}
+
+/// Layer-имя — CSS-ident, опционально с точками (sub-layers через
+/// `base.text`, CSS Cascade L5 §6.4.1). Phase 0 поддерживает простые
+/// имена (без точек) и dotted-имена как одну строку, не разбивая иерархию.
+fn is_layer_name(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    s.split('.').all(|part| {
+        let mut chars = part.chars();
+        let Some(first) = chars.next() else { return false };
+        if !(first.is_ascii_alphabetic() || first == '_' || first == '-') {
+            return false;
+        }
+        chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    })
 }
 
 /// Парсит значение `src:` из `@font-face`: comma-separated список
@@ -748,6 +793,9 @@ impl<'a> Parser<'a> {
         let mut media_rules = Vec::new();
         let mut imports = Vec::new();
         let mut font_faces = Vec::new();
+        let mut layer_order: Vec<String> = Vec::new();
+        let mut layers: Vec<LayerRule> = Vec::new();
+        let mut anon_counter: usize = 0;
         loop {
             self.skip_ws_and_comments();
             match self.peek() {
@@ -757,6 +805,26 @@ impl<'a> Parser<'a> {
                     AtRuleOutcome::Media(m) => media_rules.push(m),
                     AtRuleOutcome::Import(i) => imports.push(i),
                     AtRuleOutcome::FontFace(f) => font_faces.push(f),
+                    AtRuleOutcome::LayerNames(names) => {
+                        for n in names {
+                            if !layer_order.iter().any(|e| e == &n) {
+                                layer_order.push(n);
+                            }
+                        }
+                    }
+                    AtRuleOutcome::LayerBlock { name, rules: lr } => {
+                        let resolved_name = name.unwrap_or_else(|| {
+                            anon_counter += 1;
+                            format!("__anon_{anon_counter}__")
+                        });
+                        if !layer_order.iter().any(|e| e == &resolved_name) {
+                            layer_order.push(resolved_name.clone());
+                        }
+                        layers.push(LayerRule {
+                            name: resolved_name,
+                            rules: lr,
+                        });
+                    }
                     AtRuleOutcome::None => {}
                 },
                 Some(_) => {
@@ -777,6 +845,8 @@ impl<'a> Parser<'a> {
             media_rules,
             imports,
             font_faces,
+            layer_order,
+            layers,
         }
     }
 
@@ -802,10 +872,85 @@ impl<'a> Parser<'a> {
                 .parse_font_face_body()
                 .map_or(AtRuleOutcome::None, AtRuleOutcome::FontFace);
         }
+        if name.eq_ignore_ascii_case("layer") {
+            return self.parse_layer_at_rule();
+        }
         // Прочее @-правило: откатимся к '@' и пропустим как раньше.
         self.pos = start;
         self.skip_at_rule();
         AtRuleOutcome::None
+    }
+
+    /// Парсит `@layer` — две формы:
+    /// - **Statement-form**: `@layer base, components;` — список имён,
+    ///   закрывается `;`. Регистрирует layer-имена без rules.
+    /// - **Block-form**: `@layer name { rules }` или `@layer { rules }`
+    ///   (анонимный). Содержит обычные rules внутри. Имя опционально.
+    ///
+    /// Различие — что встречается раньше: `;` (statement) или `{` (block).
+    fn parse_layer_at_rule(&mut self) -> AtRuleOutcome {
+        self.skip_ws_and_comments();
+        // Собираем токены имени до `;` или `{`.
+        let names_start = self.pos;
+        while let Some(c) = self.peek() {
+            if c == ';' || c == '{' || c == '}' {
+                break;
+            }
+            self.consume();
+        }
+        let prelude = self.input[names_start..self.pos].trim();
+        match self.peek() {
+            Some(';') => {
+                self.consume();
+                // Statement-form: список имён через запятую.
+                let names: Vec<String> = prelude
+                    .split(',')
+                    .map(|n| n.trim().to_string())
+                    .filter(|n| !n.is_empty() && is_layer_name(n))
+                    .collect();
+                AtRuleOutcome::LayerNames(names)
+            }
+            Some('{') => {
+                self.consume();
+                // Block-form: name опционально (может быть пустым для anon),
+                // парсим rules до `}`.
+                let name = if prelude.is_empty() {
+                    None
+                } else if is_layer_name(prelude) {
+                    Some(prelude.to_string())
+                } else {
+                    // Невалидное имя (например, со скобками или невалидными
+                    // символами) — пропустим как анонимный.
+                    None
+                };
+                let mut rules = Vec::new();
+                loop {
+                    self.skip_ws_and_comments();
+                    match self.peek() {
+                        None => break,
+                        Some('}') => {
+                            self.consume();
+                            break;
+                        }
+                        Some('@') => {
+                            // Nested @-правила внутри layer пока не
+                            // поддерживаем — skip.
+                            self.skip_at_rule();
+                        }
+                        Some(_) => {
+                            let before = self.pos;
+                            if let Some(rule) = self.parse_rule() {
+                                rules.push(rule);
+                            } else if self.pos == before {
+                                self.consume();
+                            }
+                        }
+                    }
+                }
+                AtRuleOutcome::LayerBlock { name, rules }
+            }
+            _ => AtRuleOutcome::None,
+        }
     }
 
     /// Парсит тело `@font-face { ... }` — обычный block declarations,
@@ -3049,5 +3194,128 @@ mod tests {
         assert_eq!(srcs[0].kind, FontFaceSourceKind::Local);
         assert_eq!(srcs[0].value, "Times New Roman");
         assert_eq!(srcs[0].format, None);
+    }
+
+    // ── @layer (CSS Cascade L5 §6.4) ──
+
+    #[test]
+    fn at_layer_statement_form_single_name() {
+        let s = parse("@layer base;");
+        assert_eq!(s.layer_order, vec!["base".to_string()]);
+        assert!(s.layers.is_empty());
+    }
+
+    #[test]
+    fn at_layer_statement_form_multiple_names() {
+        let s = parse("@layer base, components, utilities;");
+        assert_eq!(
+            s.layer_order,
+            vec!["base".to_string(), "components".to_string(), "utilities".to_string()]
+        );
+    }
+
+    #[test]
+    fn at_layer_block_form_with_name() {
+        let s = parse(r#"
+            @layer base {
+                p { color: red; }
+            }
+        "#);
+        assert_eq!(s.layer_order, vec!["base".to_string()]);
+        assert_eq!(s.layers.len(), 1);
+        assert_eq!(s.layers[0].name, "base");
+        assert_eq!(s.layers[0].rules.len(), 1);
+    }
+
+    #[test]
+    fn at_layer_block_form_anonymous() {
+        let s = parse(r#"
+            @layer {
+                p { color: red; }
+            }
+        "#);
+        assert_eq!(s.layers.len(), 1);
+        assert_eq!(s.layers[0].name, "__anon_1__");
+        assert_eq!(s.layer_order, vec!["__anon_1__".to_string()]);
+    }
+
+    #[test]
+    fn at_layer_block_does_not_duplicate_in_order() {
+        // Если статикой объявили `@layer base;`, а потом блок `@layer base { ... }`,
+        // имя в layer_order должно быть один раз (idempotent insert).
+        let s = parse(r#"
+            @layer base;
+            @layer base { p { color: red; } }
+        "#);
+        assert_eq!(s.layer_order, vec!["base".to_string()]);
+    }
+
+    #[test]
+    fn at_layer_multiple_anon_blocks_get_unique_names() {
+        let s = parse(r#"
+            @layer { p { color: red; } }
+            @layer { p { color: blue; } }
+        "#);
+        assert_eq!(s.layers.len(), 2);
+        assert_eq!(s.layers[0].name, "__anon_1__");
+        assert_eq!(s.layers[1].name, "__anon_2__");
+    }
+
+    #[test]
+    fn at_layer_mixed_form_order_preserved() {
+        let s = parse(r#"
+            @layer reset, base;
+            @layer components { p { color: blue; } }
+            @layer base { p { color: red; } }
+        "#);
+        // layer_order сохраняет порядок _первого_ упоминания.
+        assert_eq!(
+            s.layer_order,
+            vec![
+                "reset".to_string(),
+                "base".to_string(),
+                "components".to_string(),
+            ]
+        );
+        // А layers содержит block-form правил (2 шт).
+        assert_eq!(s.layers.len(), 2);
+        assert_eq!(s.layers[0].name, "components");
+        assert_eq!(s.layers[1].name, "base");
+    }
+
+    #[test]
+    fn at_layer_dotted_subname_ok() {
+        // sub-layer-имя `base.text` — валидно.
+        let s = parse("@layer base.text;");
+        assert_eq!(s.layer_order, vec!["base.text".to_string()]);
+    }
+
+    #[test]
+    fn at_layer_unlayered_rules_kept_separately() {
+        let s = parse(r#"
+            @layer base { p { color: red; } }
+            div { color: blue; }
+        "#);
+        // Layered: p in base.
+        assert_eq!(s.layers.len(), 1);
+        // Unlayered: top-level div.
+        assert_eq!(s.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_layer_invalid_name_skipped() {
+        // `1invalid` начинается с цифры → не CSS-ident → пропускается.
+        let s = parse("@layer 1invalid, valid;");
+        assert_eq!(s.layer_order, vec!["valid".to_string()]);
+    }
+
+    #[test]
+    fn is_layer_name_basic() {
+        assert!(is_layer_name("base"));
+        assert!(is_layer_name("base.text"));
+        assert!(is_layer_name("_priv"));
+        assert!(!is_layer_name("1invalid"));
+        assert!(!is_layer_name(""));
+        assert!(!is_layer_name("with space"));
     }
 }
