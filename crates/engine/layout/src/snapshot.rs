@@ -239,6 +239,9 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     if s.outline_offset.abs() > 0.01 {
         let _ = write!(out, " outline-offset={:.2}", s.outline_offset);
     }
+    if let Some(ac) = s.accent_color {
+        let _ = write!(out, " accent={}", color_hex(ac));
+    }
     match s.visibility {
         Visibility::Visible => {}
         Visibility::Hidden => {

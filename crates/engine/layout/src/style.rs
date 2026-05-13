@@ -493,6 +493,11 @@ pub struct ComputedStyle {
     /// CSS UI L4 §3.4 — outline-offset (resolved px). Положительное —
     /// outline отрисовывается дальше от боксa, отрицательное — внутрь.
     pub outline_offset: f32,
+    /// CSS UI L4 §6.1 — accent-color. Цвет встроенных form widgets
+    /// (checkbox, radio, range, progress). `None` = `auto` (UA default).
+    /// Inherited. В Phase 0 layout только хранит — real применение появится
+    /// вместе с form-widget рендерингом.
+    pub accent_color: Option<Color>,
 }
 
 impl ComputedStyle {
@@ -571,6 +576,7 @@ impl ComputedStyle {
             outline_style: BorderStyle::None,
             outline_color: None,
             outline_offset: 0.0,
+            accent_color: None,
         }
     }
 }
@@ -600,6 +606,7 @@ pub fn compute_style(
         letter_spacing: inherited.letter_spacing,
         word_spacing: inherited.word_spacing,
         text_decoration_line: inherited.text_decoration_line,
+        accent_color: inherited.accent_color,
         // Ненаследуемые — сброс.
         background_color: None,
         width: None,
@@ -1488,6 +1495,16 @@ fn apply_declaration(
         "background-color" | "background" => {
             if let Some(c) = parse_color(val) {
                 style.background_color = Some(c);
+            }
+        }
+        "accent-color" => {
+            // CSS UI L4 §6.1: <color> | auto.
+            // 'auto' = None — UA сама подберёт цвет (обычно системный акцент).
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.accent_color = None;
+            } else if let Some(c) = parse_color(trimmed) {
+                style.accent_color = Some(c);
             }
         }
         "width" if val != "auto" => {
