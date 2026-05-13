@@ -1576,6 +1576,13 @@ pub enum CalcNode {
     Sub(Box<CalcNode>, Box<CalcNode>),
     Mul(Box<CalcNode>, Box<CalcNode>),
     Div(Box<CalcNode>, Box<CalcNode>),
+    /// CSS Values L4 §10.6.1 — `min(a, b, ...)`. Минимум по списку.
+    Min(Vec<CalcNode>),
+    /// CSS Values L4 §10.6.2 — `max(a, b, ...)`. Максимум по списку.
+    Max(Vec<CalcNode>),
+    /// CSS Values L4 §10.6.3 — `clamp(min, val, max)`. Эквивалентно
+    /// `max(min, min(val, max))`. Если `min > max` — побеждает `min`.
+    Clamp(Box<CalcNode>, Box<CalcNode>, Box<CalcNode>),
 }
 
 impl CalcNode {
@@ -1583,7 +1590,8 @@ impl CalcNode {
     /// `Length::resolve`. Возвращает `None` если:
     ///   - хотя бы один листовой `Length::Percent` не имеет `percent_basis`
     ///     (контекст не задан);
-    ///   - деление на 0.
+    ///   - деление на 0;
+    ///   - пустой список аргументов в `min()` / `max()`.
     pub fn resolve(
         &self,
         em_basis: f32,
@@ -1611,6 +1619,41 @@ impl CalcNode {
                     return None;
                 }
                 Some(a.resolve(em_basis, percent_basis, viewport)? / denom)
+            }
+            CalcNode::Min(args) => {
+                if args.is_empty() {
+                    return None;
+                }
+                let mut acc = args[0].resolve(em_basis, percent_basis, viewport)?;
+                for n in &args[1..] {
+                    let v = n.resolve(em_basis, percent_basis, viewport)?;
+                    if v < acc {
+                        acc = v;
+                    }
+                }
+                Some(acc)
+            }
+            CalcNode::Max(args) => {
+                if args.is_empty() {
+                    return None;
+                }
+                let mut acc = args[0].resolve(em_basis, percent_basis, viewport)?;
+                for n in &args[1..] {
+                    let v = n.resolve(em_basis, percent_basis, viewport)?;
+                    if v > acc {
+                        acc = v;
+                    }
+                }
+                Some(acc)
+            }
+            CalcNode::Clamp(min, val, max) => {
+                let mn = min.resolve(em_basis, percent_basis, viewport)?;
+                let v = val.resolve(em_basis, percent_basis, viewport)?;
+                let mx = max.resolve(em_basis, percent_basis, viewport)?;
+                // CSS Values L4 §10.6.3: clamp(min, val, max) ≡
+                // max(min, min(val, max)). При min > max побеждает min.
+                let inner = if v < mx { v } else { mx };
+                Some(if mn > inner { mn } else { inner })
             }
         }
     }
@@ -1645,10 +1688,13 @@ impl Length {
 /// перед `vw`/`vh`, `rem` перед `em`).
 pub fn parse_length(s: &str) -> Option<Length> {
     let s = s.trim();
-    // CSS Values L4 §10: calc()-выражение. Распознаём ASCII case-insensitive
-    // префикс `calc(` и парсим содержимое до парной `)`.
-    if let Some(inner) = strip_calc_wrapper(s) {
-        return parse_calc(inner).map(|node| Length::Calc(Box::new(node)));
+    // CSS Values L4: math-функции calc() / min() / max() / clamp().
+    // Если значение начинается с буквы и содержит `(` — обрабатываем как
+    // функциональный вызов через общий tokenize_calc + parse_calc_expr;
+    // parse_calc_factor распознаёт ident+lparen как function call.
+    if looks_like_function_call(s)
+        && let Some(len) = parse_math_function_value(s) {
+        return Some(len);
     }
     if let Some(num) = s.strip_suffix("px") {
         return num.trim().parse::<f32>().ok().map(Length::Px);
@@ -1677,17 +1723,27 @@ pub fn parse_length(s: &str) -> Option<Length> {
     s.parse::<f32>().ok().map(Length::Px)
 }
 
-/// Возвращает `Some(inner)` если `s` имеет форму `calc(...)` (ASCII
-/// case-insensitive префикс + парная закрывающая скобка в конце).
-fn strip_calc_wrapper(s: &str) -> Option<&str> {
-    if s.len() < 6 || !s.ends_with(')') {
+/// Похоже ли значение на функциональный вызов CSS math-функции?
+/// Минимальный критерий: начинается с ASCII-буквы и содержит `(`.
+/// Точное соответствие именам функций (`calc`/`min`/`max`/`clamp`)
+/// проверяется в parse_calc_factor.
+fn looks_like_function_call(s: &str) -> bool {
+    matches!(s.as_bytes().first(), Some(b) if b.is_ascii_alphabetic())
+        && s.contains('(')
+}
+
+/// Парсит top-level math-функцию (`calc(...)` / `min(...)` / `max(...)` /
+/// `clamp(...)`) как обычный length-литерал, оборачивая результат в
+/// `Length::Calc`. Возвращает None, если разбор не удался — `parse_length`
+/// тогда падает в обычную strip_suffix-ветку.
+fn parse_math_function_value(s: &str) -> Option<Length> {
+    let tokens = tokenize_calc(s)?;
+    let mut pos = 0usize;
+    let node = parse_calc_expr(&tokens, &mut pos)?;
+    if pos != tokens.len() {
         return None;
     }
-    let prefix_lower = s.as_bytes()[..5].eq_ignore_ascii_case(b"calc(");
-    if !prefix_lower {
-        return None;
-    }
-    Some(&s[5..s.len() - 1])
+    Some(Length::Calc(Box::new(node)))
 }
 
 // ──────────────── calc() лексер + парсер ────────────────
@@ -1696,12 +1752,17 @@ fn strip_calc_wrapper(s: &str) -> Option<&str> {
 enum CalcToken {
     /// Числовой токен с (опциональным) unit-суффиксом.
     Num(f32, String),
+    /// Идентификатор функции (`calc`, `min`, `max`, `clamp`). Хранится в
+    /// нижнем регистре — CSS function names ASCII case-insensitive.
+    Ident(String),
     Plus,
     Minus,
     Star,
     Slash,
     LParen,
     RParen,
+    /// Разделитель аргументов функции.
+    Comma,
 }
 
 /// Лексер `calc()` тела. Возвращает None при синтаксической ошибке (например,
@@ -1728,11 +1789,24 @@ fn tokenize_calc(s: &str) -> Option<Vec<CalcToken>> {
             b'/' => CalcToken::Slash,
             b'(' => CalcToken::LParen,
             b')' => CalcToken::RParen,
+            b',' => CalcToken::Comma,
             // Число без ведущего знака (знак — отдельный токен).
             b'0'..=b'9' | b'.' => {
                 let (num, unit, end) = lex_number(bytes, i)?;
                 tokens.push(CalcToken::Num(num, unit));
                 i = end;
+                continue;
+            }
+            // Идентификатор функции — буквенная последовательность.
+            c if c.is_ascii_alphabetic() => {
+                let start = i;
+                while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+                    i += 1;
+                }
+                let name = std::str::from_utf8(&bytes[start..i])
+                    .ok()?
+                    .to_ascii_lowercase();
+                tokens.push(CalcToken::Ident(name));
                 continue;
             }
             _ => return None,
@@ -1777,18 +1851,6 @@ fn lex_number(bytes: &[u8], start: usize) -> Option<(f32, String, usize)> {
     Some((num, unit, i))
 }
 
-/// Парсит полное `calc()` тело в `CalcNode`. Это recursive-descent поверх
-/// уже лексированного потока токенов.
-fn parse_calc(s: &str) -> Option<CalcNode> {
-    let tokens = tokenize_calc(s)?;
-    let mut pos = 0usize;
-    let node = parse_calc_expr(&tokens, &mut pos)?;
-    if pos != tokens.len() {
-        return None; // лишние токены после выражения — синтаксическая ошибка
-    }
-    Some(node)
-}
-
 /// `expr := term (('+' | '-') term)*`
 fn parse_calc_expr(tokens: &[CalcToken], pos: &mut usize) -> Option<CalcNode> {
     let mut left = parse_calc_term(tokens, pos)?;
@@ -1829,9 +1891,11 @@ fn parse_calc_term(tokens: &[CalcToken], pos: &mut usize) -> Option<CalcNode> {
     }
 }
 
-/// `factor := ('-' | '+') factor | Num(value, unit) | '(' expr ')'`
+/// `factor := ('-' | '+') factor | function | Num(value, unit) | '(' expr ')'`
 ///
-/// Унарный `-` реализуется как `0 - factor`. Унарный `+` — no-op.
+/// `function := Ident '(' arg-list ')'` где `Ident` — одно из `calc` /
+/// `min` / `max` / `clamp` (CSS Values L4 §10 и §10.6). Унарный `-`
+/// реализуется как `0 - factor`. Унарный `+` — no-op.
 fn parse_calc_factor(tokens: &[CalcToken], pos: &mut usize) -> Option<CalcNode> {
     match tokens.get(*pos)? {
         CalcToken::Minus => {
@@ -1855,6 +1919,15 @@ fn parse_calc_factor(tokens: &[CalcToken], pos: &mut usize) -> Option<CalcNode> 
             *pos += 1;
             Some(inner)
         }
+        CalcToken::Ident(name) => {
+            let name = name.clone();
+            *pos += 1;
+            if !matches!(tokens.get(*pos), Some(CalcToken::LParen)) {
+                return None;
+            }
+            *pos += 1;
+            parse_function_call(&name, tokens, pos)
+        }
         CalcToken::Num(v, unit) => {
             let v = *v;
             let unit = unit.clone();
@@ -1863,6 +1936,65 @@ fn parse_calc_factor(tokens: &[CalcToken], pos: &mut usize) -> Option<CalcNode> 
         }
         _ => None,
     }
+}
+
+/// Парсит тело math-функции после `<name>(` (открывающая скобка уже
+/// съедена), ожидает `)` в конце. Поддерживает `calc` (один expr),
+/// `min` / `max` (1+ expr через `,`), `clamp` (ровно 3 expr через `,`).
+/// Неизвестное имя → None.
+fn parse_function_call(
+    name: &str,
+    tokens: &[CalcToken],
+    pos: &mut usize,
+) -> Option<CalcNode> {
+    let args = parse_arg_list(tokens, pos)?;
+    if !matches!(tokens.get(*pos), Some(CalcToken::RParen)) {
+        return None;
+    }
+    *pos += 1;
+    match name {
+        "calc" => {
+            if args.len() != 1 {
+                return None;
+            }
+            Some(args.into_iter().next().unwrap())
+        }
+        "min" => {
+            if args.is_empty() {
+                return None;
+            }
+            Some(CalcNode::Min(args))
+        }
+        "max" => {
+            if args.is_empty() {
+                return None;
+            }
+            Some(CalcNode::Max(args))
+        }
+        "clamp" => {
+            if args.len() != 3 {
+                return None;
+            }
+            let mut it = args.into_iter();
+            let a = it.next().unwrap();
+            let b = it.next().unwrap();
+            let c = it.next().unwrap();
+            Some(CalcNode::Clamp(Box::new(a), Box::new(b), Box::new(c)))
+        }
+        _ => None, // незнакомая math-функция
+    }
+}
+
+/// Парсит список аргументов функции — один или больше expr-ов через
+/// запятые. Останавливается перед `)`; не съедает его.
+fn parse_arg_list(tokens: &[CalcToken], pos: &mut usize) -> Option<Vec<CalcNode>> {
+    let mut args = Vec::new();
+    args.push(parse_calc_expr(tokens, pos)?);
+    while matches!(tokens.get(*pos), Some(CalcToken::Comma)) {
+        *pos += 1;
+        args.push(parse_calc_expr(tokens, pos)?);
+    }
+    Some(args)
 }
 
 /// Преобразует пару (число, unit) в `CalcNode`. Пустой unit → `Number`,
@@ -4237,5 +4369,212 @@ mod tests {
     #[test]
     fn calc_empty_invalid() {
         assert!(parse_length("calc()").is_none());
+    }
+
+    // ──────────────── CSS Values L4 §10.6: min() / max() / clamp() ────────────────
+
+    #[test]
+    fn min_two_lengths_picks_smaller() {
+        let v = resolved_calc("min(50px, 100px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(50.0));
+    }
+
+    #[test]
+    fn min_many_lengths() {
+        let v = resolved_calc("min(30px, 10px, 20px, 5px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(5.0));
+    }
+
+    #[test]
+    fn min_mixed_units_resolves_to_px() {
+        // 2em = 32, 50% от 100 = 50, 24px → min = 24px.
+        let v = resolved_calc(
+            "min(2em, 50%, 24px)",
+            16.0,
+            Some(100.0),
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(24.0));
+    }
+
+    #[test]
+    fn max_picks_larger() {
+        let v = resolved_calc("max(50px, 100px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(100.0));
+    }
+
+    #[test]
+    fn max_with_viewport_unit() {
+        // 100vw = 800; max(800, 200, 1000px) = 1000.
+        let v = resolved_calc(
+            "max(100vw, 200px, 1000px)",
+            16.0,
+            None,
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(1000.0));
+    }
+
+    #[test]
+    fn clamp_value_inside_range() {
+        // clamp(10, 50, 100) = 50.
+        let v = resolved_calc(
+            "clamp(10px, 50px, 100px)",
+            16.0,
+            None,
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(50.0));
+    }
+
+    #[test]
+    fn clamp_value_below_min() {
+        // clamp(20, 5, 100) = 20 (min wins).
+        let v = resolved_calc(
+            "clamp(20px, 5px, 100px)",
+            16.0,
+            None,
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(20.0));
+    }
+
+    #[test]
+    fn clamp_value_above_max() {
+        // clamp(10, 200, 100) = 100 (max wins).
+        let v = resolved_calc(
+            "clamp(10px, 200px, 100px)",
+            16.0,
+            None,
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(100.0));
+    }
+
+    #[test]
+    fn clamp_min_greater_than_max() {
+        // CSS spec: clamp(min, val, max) ≡ max(min, min(val, max)).
+        // При min=50, max=10: inner=min(val, 10), max(50, inner) = 50.
+        let v = resolved_calc(
+            "clamp(50px, 30px, 10px)",
+            16.0,
+            None,
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(50.0));
+    }
+
+    #[test]
+    fn min_max_nested_inside_calc() {
+        // calc(10px + min(20px, 30px)) = 10 + 20 = 30.
+        let v = resolved_calc(
+            "calc(10px + min(20px, 30px))",
+            16.0,
+            None,
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(30.0));
+    }
+
+    #[test]
+    fn calc_nested_inside_max() {
+        // max(calc(10px * 2), 15px) = max(20, 15) = 20.
+        let v = resolved_calc(
+            "max(calc(10px * 2), 15px)",
+            16.0,
+            None,
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(20.0));
+    }
+
+    #[test]
+    fn clamp_inside_min() {
+        // min(clamp(10, 50, 100), 80) = min(50, 80) = 50.
+        let v = resolved_calc(
+            "min(clamp(10px, 50px, 100px), 80px)",
+            16.0,
+            None,
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(50.0));
+    }
+
+    #[test]
+    fn min_with_calc_expression_inside() {
+        // min(2 * 10px, 30px) = min(20, 30) = 20.
+        // Здесь `2 * 10px` это обычное calc-expression внутри min,
+        // не требует обёртки calc(...).
+        let v = resolved_calc(
+            "min(2 * 10px, 30px)",
+            16.0,
+            None,
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(20.0));
+    }
+
+    #[test]
+    fn clamp_wrong_arg_count_invalid() {
+        // clamp требует ровно 3 аргумента.
+        assert!(parse_length("clamp(10px, 20px)").is_none());
+        assert!(parse_length("clamp(10px, 20px, 30px, 40px)").is_none());
+    }
+
+    #[test]
+    fn min_empty_invalid() {
+        assert!(parse_length("min()").is_none());
+    }
+
+    #[test]
+    fn max_empty_invalid() {
+        assert!(parse_length("max()").is_none());
+    }
+
+    #[test]
+    fn min_in_width_property_applies() {
+        // width: min(50px, 200px) = 50px.
+        let s = style_for("width: min(50px, 200px)");
+        assert_eq!(s.width, Some(50.0));
+    }
+
+    #[test]
+    fn clamp_in_width_property_applies() {
+        // width: clamp(50px, 100px, 200px) = 100px.
+        let s = style_for("width: clamp(50px, 100px, 200px)");
+        assert_eq!(s.width, Some(100.0));
+    }
+
+    #[test]
+    fn min_with_var_inside() {
+        // var() → строка → min() работает.
+        let s = style_for("--w: 80px; width: min(var(--w), 50px)");
+        assert_eq!(s.width, Some(50.0));
+    }
+
+    #[test]
+    fn min_case_insensitive() {
+        // CSS function names ASCII case-insensitive.
+        let v = resolved_calc("MIN(10px, 20px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(10.0));
+    }
+
+    #[test]
+    fn unknown_function_invalid() {
+        // sin/cos/abs ещё не реализованы → declaration invalid.
+        assert!(parse_length("sin(45deg)").is_none());
+    }
+
+    #[test]
+    fn nested_calc_inside_calc() {
+        // calc(calc(10px + 5px) * 2) = 30. Раньше nested calc был
+        // отложен — теперь работает через function-call в factor.
+        let v = resolved_calc(
+            "calc(calc(10px + 5px) * 2)",
+            16.0,
+            None,
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(30.0));
     }
 }
