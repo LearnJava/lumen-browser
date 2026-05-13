@@ -3,9 +3,10 @@
 //! Реализуется самостоятельно, без `image` / `png` / `jpeg-decoder` (см. §5
 //! политики зависимостей в `CLAUDE.md`). Phase 0 покрывает PNG для случаев,
 //! которые реально встречаются на современных веб-страницах:
-//! 8-битные RGB / RGBA / grayscale / grayscale + alpha, фильтры 0–4 по
-//! спецификации, без interlacing. 16-битная глубина, palette (color type 3),
-//! Adam7 и JPEG добавляются отдельными задачами.
+//! 8-битные RGB / RGBA / grayscale / grayscale + alpha и **palette
+//! (color_type 3) c bit_depth = 8** + опциональный `tRNS` для прозрачности.
+//! Фильтры 0–4 по спецификации, без interlacing. 16-битная глубина,
+//! 1/2/4-битная palette, Adam7 и JPEG добавляются отдельными задачами.
 //!
 //! Декодер не паникует на повреждённом входе — каждая ошибка возвращается
 //! как `DecodeError` с конкретной причиной.
@@ -93,6 +94,8 @@ pub enum DecodeError {
     /// IDAT расшифровался в неожиданное количество байтов (нарушает
     /// width × height × bpp + height фильтрующих байтов).
     BadImageDataSize { expected: usize, actual: usize },
+    /// Проблема с палитрой (PLTE / tRNS) — детали в `PaletteError`.
+    BadPalette(PaletteError),
 }
 
 /// Детализированные причины ошибки IHDR.
@@ -119,12 +122,34 @@ pub enum IhdrError {
 pub enum UnsupportedReason {
     /// Adam7 interlacing (color_type 1).
     Interlaced,
-    /// Палитра (color_type 3) — потребует чтения `PLTE` / `tRNS` чанков.
-    Palette,
     /// 16-битная глубина — реализуема, но Phase 0 ограничен 8 битами.
     SixteenBitDepth,
-    /// 1/2/4-битная глубина для grayscale — реализуема, но Phase 0 ограничен 8.
+    /// 1/2/4-битная глубина — реализуема, но Phase 0 ограничен 8 (касается
+    /// и grayscale, и palette).
     SubByteDepth(u8),
+}
+
+/// Детализированные причины ошибки палитры (`PLTE` / `tRNS`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaletteError {
+    /// `PLTE` отсутствует, а `color_type = 3` требует палитры (PNG §11.2.3).
+    MissingForIndexed,
+    /// `PLTE` присутствует у grayscale `color_type = 0 / 4`,
+    /// что запрещено (PNG §11.3.2).
+    UnexpectedForGrayscale,
+    /// Длина `PLTE` не делится на 3 (palette хранит triples R/G/B).
+    BadPlteLength(u32),
+    /// `PLTE` содержит более 256 entries или 0 entries
+    /// (PNG ограничивает 1..=256).
+    PlteOutOfRange(usize),
+    /// `tRNS` встретился раньше `PLTE` (нарушение ordering PNG §11.3.2).
+    TrnsBeforePlte,
+    /// `tRNS` содержит больше alpha-значений, чем entries в `PLTE`.
+    TrnsTooLong { plte_count: usize, trns_count: usize },
+    /// Дублирующийся `PLTE` или `tRNS` чанк.
+    DuplicateChunk { kind: [u8; 4] },
+    /// Палитровый индекс за пределами `PLTE` — повреждённый PNG-файл.
+    IndexOutOfRange { row: u32, col: u32, index: u8, plte_count: usize },
 }
 
 /// Ошибки парсера DEFLATE/zlib (RFC 1950, 1951).
@@ -177,6 +202,7 @@ impl core::fmt::Display for DecodeError {
             Self::BadImageDataSize { expected, actual } => {
                 write!(f, "ожидалось {expected} байтов IDAT, получено {actual}")
             }
+            Self::BadPalette(e) => write!(f, "PLTE/tRNS: {e:?}"),
         }
     }
 }
