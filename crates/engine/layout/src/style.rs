@@ -225,6 +225,11 @@ pub struct ComputedStyle {
     /// отрицательным (сжимает текст). Применяется в wrap_inline_run при
     /// расчёте ширин.
     pub letter_spacing: f32,
+    /// CSS Text L3 §11.3: дополнительное расстояние **между словами**
+    /// (resolved px). Inherited. В отличие от `letter-spacing`, добавляется
+    /// только на word-boundary, не между всеми символами. Может быть
+    /// отрицательным.
+    pub word_spacing: f32,
     pub text_decoration_line: TextDecorationLine,
     /// Явная ширина (CSS `width: Npx`). None = auto (растягивается на контейнер).
     pub width: Option<f32>,
@@ -256,7 +261,7 @@ pub struct ComputedStyle {
 
 impl ComputedStyle {
     /// Два стиля рендерят текст одинаково (цвет, размер, интерлиньяж, начертание,
-    /// насыщенность, letter-spacing, декорация). Используется для слияния
+    /// насыщенность, letter/word-spacing, декорация). Используется для слияния
     /// inline-фрагментов в wrap_inline_run.
     pub fn text_rendering_eq(&self, other: &Self) -> bool {
         self.color == other.color
@@ -265,6 +270,7 @@ impl ComputedStyle {
             && self.font_style == other.font_style
             && self.font_weight == other.font_weight
             && (self.letter_spacing - other.letter_spacing).abs() < f32::EPSILON
+            && (self.word_spacing - other.word_spacing).abs() < f32::EPSILON
             && self.text_decoration_line == other.text_decoration_line
     }
 
@@ -282,6 +288,7 @@ impl ComputedStyle {
             text_transform: TextTransform::None,
             text_indent: 0.0,
             letter_spacing: 0.0,
+            word_spacing: 0.0,
             text_decoration_line: TextDecorationLine::default(),
             width: None,
             height: None,
@@ -329,6 +336,7 @@ pub fn compute_style(
         text_transform: inherited.text_transform,
         text_indent: inherited.text_indent,
         letter_spacing: inherited.letter_spacing,
+        word_spacing: inherited.word_spacing,
         text_decoration_line: inherited.text_decoration_line,
         // Ненаследуемые — сброс.
         background_color: None,
@@ -1011,6 +1019,20 @@ fn apply_declaration(
                 }
             {
                 style.letter_spacing = px;
+            }
+        }
+        "word-spacing" => {
+            // CSS Text L3 §11.3: normal (= 0) | <length> | <percentage>.
+            // % требует ширину space-glyph и Phase 0 не считаем.
+            if val.trim() == "normal" {
+                style.word_spacing = 0.0;
+            } else if let Some(len) = parse_length(val)
+                && let Some(px) = match len {
+                    Length::Percent(_) => None,
+                    other => other.resolve(em_basis, None, viewport),
+                }
+            {
+                style.word_spacing = px;
             }
         }
         "text-transform" => {
