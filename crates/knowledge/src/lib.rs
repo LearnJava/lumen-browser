@@ -19,5 +19,7 @@
 //! общим.
 
 pub mod fts;
+pub mod notes;
 
 pub use fts::{HistoryFts, SearchHit};
+pub use notes::{Note, NoteSearchHit, Notes};
