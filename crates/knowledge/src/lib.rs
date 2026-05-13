@@ -20,6 +20,8 @@
 
 pub mod fts;
 pub mod notes;
+pub mod read_later;
 
 pub use fts::{HistoryFts, SearchHit};
 pub use notes::{Note, NoteSearchHit, Notes};
+pub use read_later::{ReadLater, ReadLaterEntry, ReadLaterSearchHit, ReadStatus};
