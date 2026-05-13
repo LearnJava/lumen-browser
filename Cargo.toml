@@ -44,6 +44,14 @@ webpki-roots = "0.26"
 [profile.dev]
 opt-level = 1
 
+# Сторонние зависимости (wgpu, winit, rustls, webpki-roots и их транзитивный
+# набор ~200 крейтов) собираются с opt-level = 3 даже в dev. Наш код остаётся
+# на opt-level = 1: умеренная скорость компиляции при сохранении читаемой
+# stack-trace. Wildcard `*` действует только на dependencies (не workspace
+# members), поэтому собственные крейты Lumen не затрагиваются.
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

@@ -166,7 +166,7 @@ crates/
 
 ### Стиль
 
-- Профиль `dev` использует `opt-level = 1` (компромисс: debug-сборка медленнее на 10%, но layout/paint работают в 5-10 раз быстрее).
+- Профиль `dev` использует `opt-level = 1` для своего кода (компромисс: debug-сборка медленнее на 10%, но layout/paint работают в 5-10 раз быстрее) и `opt-level = 3` для зависимостей через `[profile.dev.package."*"]` (wgpu / winit / rustls в чистом debug невыносимы; обоснование — в Decisions log).
 - `clippy::all` + `clippy::pedantic` пока **не включены** глобально, но `cargo clippy --workspace --all-targets -- -D warnings` обязан проходить перед коммитом.
 - Никаких лишних комментариев: только если объясняют *почему*, а не *что*. Doc-комментарии (`///`) на публичных API — приветствуются.
 - Имена — `snake_case` для функций/полей, `PascalCase` для типов, `SCREAMING_SNAKE` для констант (стандарт Rust).
@@ -459,12 +459,11 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 Порядок — по impact/effort. Внешний ревью указало, что текущий рендерер сломается на любой реальной странице из-за шрифтов и DPR; это перевешивает любые архитектурные рефакторинги.
 
-1. **`[profile.dev.package."*"] opt-level=3`** в `Cargo.toml` — full optimization для зависимостей (wgpu, winit, rustls), наш код остаётся на `opt-level=1`. 5 минут работы, debug-сборка перестаёт быть невыносимой.
-2. **Font fallback / matcher** — рендерер сейчас всегда Inter Regular. Любая реальная страница с эмодзи / CJK / явным `font-family: Roboto` отрисуется в `?`-глифы. Минимум: системный font-loader (Win32 GDI / fontconfig / CoreText напрямую, без сторонних crate-ов), cascade «Inter → системный по unicode-блоку». Парсер `font-family` в `lumen-css-parser` уже есть, в paint не используется. **Это блокер для Phase 1 как демонстрации.**
-3. **`Url` как структурированный тип** — `struct { scheme, host, port, path, query, fragment }`. Сейчас `lumen-core::Url` это `Url(String)`, network ad-hoc парсит то же самое в `parse_url`. Дедуплицировать до того, как появятся CSP / cookie jar / cross-origin checks. День работы.
-4. **EventSink в `lumen-network` — emit `RequestStarted/Completed/Blocked`.** События уже объявлены в `lumen-core::event`, никем не emit-ятся. Принцип №4 «каждый исходящий байт виден» сейчас — мёртвый код. Каждая новая сетевая операция (favicon, prefetch, redirect) добавляется без логирования → к Phase 2 ретрофитить дороже. Один trait `EventSink` в `lumen-core` + параметр в `HttpClient::fetch`.
-5. **Scroll + DPR-awareness в shell.** Вместе, потому что без `scale_factor` от winit scroll выглядит игрушечно на 4K. Открывает возможность работать с реальными статьями.
-6. **`cargo bench` baseline на `samples/page.html`** — parse + layout + paint. Без baseline-измерений целевые числа из плана (300ms cold start, <100MB RAM) — лозунги, не контракт.
+1. **Font fallback / matcher** — рендерер сейчас всегда Inter Regular. Любая реальная страница с эмодзи / CJK / явным `font-family: Roboto` отрисуется в `?`-глифы. Минимум: системный font-loader (Win32 GDI / fontconfig / CoreText напрямую, без сторонних crate-ов), cascade «Inter → системный по unicode-блоку». Парсер `font-family` в `lumen-css-parser` уже есть, в paint не используется. **Это блокер для Phase 1 как демонстрации.**
+2. **`Url` как структурированный тип** — `struct { scheme, host, port, path, query, fragment }`. Сейчас `lumen-core::Url` это `Url(String)`, network ad-hoc парсит то же самое в `parse_url`. Дедуплицировать до того, как появятся CSP / cookie jar / cross-origin checks. День работы.
+3. **EventSink в `lumen-network` — emit `RequestStarted/Completed/Blocked`.** События уже объявлены в `lumen-core::event`, никем не emit-ятся. Принцип №4 «каждый исходящий байт виден» сейчас — мёртвый код. Каждая новая сетевая операция (favicon, prefetch, redirect) добавляется без логирования → к Phase 2 ретрофитить дороже. Один trait `EventSink` в `lumen-core` + параметр в `HttpClient::fetch`.
+4. **Scroll + DPR-awareness в shell.** Вместе, потому что без `scale_factor` от winit scroll выглядит игрушечно на 4K. Открывает возможность работать с реальными статьями.
+5. **`cargo bench` baseline на `samples/page.html`** — parse + layout + paint. Без baseline-измерений целевые числа из плана (300ms cold start, <100MB RAM) — лозунги, не контракт.
 
 ### Средний приоритет (Phase 1+)
 
@@ -518,7 +517,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 - **Capability-модель** для плагинов вместо статических permissions (§11.4).
 - **Memory-safe Rust, `unsafe` только на FFI-границах** с обязательным `// SAFETY:` комментарием. Текущие `unsafe` блоки: `as_bytes` в renderer.rs, FFI к wgpu внутри wgpu crate (не наш код).
 - **Feature-branch + `--no-ff` merge** workflow. Видимая структура «коммит-серия = задача» в git log --graph.
-- **`opt-level = 1` в dev профиле** — компромисс: debug-сборка чуть медленнее, но layout/paint работают в 5-10 раз быстрее. Стандарт в графических Rust-проектах.
+- **`opt-level = 1` в dev профиле для своего кода + `opt-level = 3` для всех зависимостей** (`[profile.dev.package."*"]`). Wildcard `*` в Cargo.toml применяется только к dependencies, не к workspace members, поэтому наши крейты сохраняют быструю компиляцию и читаемые stack-trace на уровне 1, а ~200 транзитивных deps (wgpu, winit, rustls и прочее) собираются с full optimization. wgpu в чистом debug режиме невыносим: одна frame занимает секунды на трекинг wgpu-internal validation. opt-level=3 на deps — одноразовый удар по времени первой компиляции, компенсируется за счёт работоспособного dev-loop. Стандарт в графических Rust-проектах.
 - **Cargo features пока не используются**, но запланированы для `ai`, `webgl`, `tor`, `ru-hyphenation` опциональных модулей.
 - **`TextMeasurer` trait в `lumen-layout`, `FontMeasurer<'a>` в `lumen-paint`**: layout не зависит от font напрямую; shell создаёт `FontMeasurer<'static>` из `INTER_FONT` и передаёт через `layout_measured()`. `BoxKind::InlineRun { segments, lines }` хранит строки post-wrap и per-segment стили. `layout()` без измерителя — backward compat, без переноса.
 - **`InlineRun` вместо `Text`**: `BoxKind::Text` упразднён. Текстовые узлы и inline-элементы теперь всегда объединяются в `InlineRun`. Слияние фрагментов — через `ComputedStyle::text_rendering_eq` (только color/font_size/line_height), а не `PartialEq`: это нужно, чтобы `<span>` (display:inline) и соседний текстовый узел (display:block inherited) не расщеплялись в отдельные DrawText при одинаковом цвете/размере.
@@ -557,6 +556,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            dev-deps-opt-level     — `[profile.dev.package."*"] opt-level = 3` в корневом Cargo.toml: deps собираются с full optimization, наш код остаётся на opt-level=1; wgpu в dev перестаёт быть невыносим, без влияния на release/clippy/test
 *            css-min-max-dimensions — min-width / max-width / min-height / max-height (CSS 2.1 §10.4): clamp в lay_out, min beats max, не наследуются, отрицательные отбрасываются; 10 новых тестов
 *            css-has-pseudo         — :has(rs-list) (CSS Selectors L4 §17.2): combinator?+complex, descendant/child/+/~, specificity max-of-list, descendants only (не сам E); 8 css-parser + 5 layout тестов
 *            claude-md-worktree-rule — обязательные git worktree для параллельных сессий + WIP-коммиты + запреты в shared dir + новая запись в «Известные ловушки»
