@@ -203,6 +203,9 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     if s.text_indent.abs() > 0.01 {
         let _ = write!(out, " text-indent={:.2}", s.text_indent);
     }
+    if s.letter_spacing.abs() > 0.01 {
+        let _ = write!(out, " letter-spacing={:.2}", s.letter_spacing);
+    }
 }
 
 fn color_hex(c: Color) -> String {
