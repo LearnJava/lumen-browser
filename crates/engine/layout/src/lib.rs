@@ -3350,4 +3350,128 @@ mod tests {
         let p = first_element_child(first_element_child(&root));
         assert_eq!(p.style.direction, Direction::Rtl);
     }
+
+    // ── <img> replaced element ───────────────────────────────────────────
+
+    fn first_image_child(b: &LayoutBox) -> &LayoutBox {
+        b.children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::Image { .. }))
+            .expect("expected at least one image child")
+    }
+
+    #[test]
+    fn img_creates_image_box_with_src_and_alt() {
+        let root = lay(r#"<img src="logo.png" alt="logo">"#, "");
+        let img = first_image_child(&root);
+        match &img.kind {
+            BoxKind::Image { src, alt } => {
+                assert_eq!(src, "logo.png");
+                assert_eq!(alt, "logo");
+            }
+            other => panic!("expected BoxKind::Image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn img_without_src_or_alt_has_empty_strings() {
+        let root = lay("<img>", "");
+        let img = first_image_child(&root);
+        if let BoxKind::Image { src, alt } = &img.kind {
+            assert_eq!(src, "");
+            assert_eq!(alt, "");
+        }
+    }
+
+    #[test]
+    fn img_html_attributes_set_dimensions() {
+        // HTML5 presentational hints: width/height атрибуты → CSS свойства,
+        // без CSS-каскада победившего alternative.
+        let root = lay(r#"<img src="x.png" width="120" height="80">"#, "");
+        let img = first_image_child(&root);
+        assert!((img.rect.width - 120.0).abs() < 0.1);
+        assert!((img.rect.height - 80.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn img_css_overrides_html_attribute_dimensions() {
+        // Author CSS перекрывает presentational hints (HTML5 §10).
+        let root = lay(
+            r#"<img src="x.png" width="120" height="80">"#,
+            "img { width: 200px; height: 50px; }",
+        );
+        let img = first_image_child(&root);
+        assert!((img.rect.width - 200.0).abs() < 0.1, "width={}", img.rect.width);
+        assert!((img.rect.height - 50.0).abs() < 0.1, "height={}", img.rect.height);
+    }
+
+    #[test]
+    fn img_without_dimensions_is_zero_sized() {
+        // Без атрибутов и без CSS — image не загружено, intrinsic неизвестен,
+        // коробка 0×0. Это honest placeholder — будет ясно, что чего-то не
+        // хватает.
+        let root = lay(r#"<img src="x.png">"#, "");
+        let img = first_image_child(&root);
+        assert!(img.rect.width.abs() < 0.1);
+        assert!(img.rect.height.abs() < 0.1);
+    }
+
+    #[test]
+    fn img_invalid_width_attribute_ignored() {
+        // HTML5: nonsense → ignore.
+        let root = lay(r#"<img src="x" width="abc" height="-50">"#, "");
+        let img = first_image_child(&root);
+        assert!(img.rect.width.abs() < 0.1);
+        assert!(img.rect.height.abs() < 0.1);
+    }
+
+    #[test]
+    fn img_padding_and_border_extend_box() {
+        // CSS box для replaced element ведёт себя как block: padding + border
+        // расширяют rect (content-box). Размер картинки 100×60, padding 10,
+        // border 2 → rect 124×84.
+        let root = lay(
+            r#"<img src="x" width="100" height="60">"#,
+            "img { padding: 10px; border: 2px solid red; }",
+        );
+        let img = first_image_child(&root);
+        assert!((img.rect.width - 124.0).abs() < 0.1, "width={}", img.rect.width);
+        assert!((img.rect.height - 84.0).abs() < 0.1, "height={}", img.rect.height);
+    }
+
+    #[test]
+    fn img_not_treated_as_inline_content() {
+        // <img> в Phase 0 — block-level. Текст до и после не объединяется с
+        // ним в один InlineRun.
+        let root = lay(r#"<div>before<img src="x" width="10" height="10">after</div>"#, "");
+        let div = first_element_child(&root);
+        // div должен иметь 3 потомка: InlineRun("before") + Image + InlineRun("after").
+        assert_eq!(div.children.len(), 3, "got {}", div.children.len());
+        assert!(matches!(div.children[0].kind, BoxKind::InlineRun { .. }));
+        assert!(matches!(div.children[1].kind, BoxKind::Image { .. }));
+        assert!(matches!(div.children[2].kind, BoxKind::InlineRun { .. }));
+    }
+
+    #[test]
+    fn img_display_none_is_skipped() {
+        let root = lay(
+            r#"<img src="x.png" width="100" height="50">"#,
+            "img { display: none; }",
+        );
+        let has_image = root.children.iter().any(|c| matches!(c.kind, BoxKind::Image { .. }));
+        assert!(!has_image, "img with display:none should not produce Image box");
+    }
+
+    #[test]
+    fn img_attr_name_case_insensitive() {
+        // HTML-парсер lower-case-ит имена тегов, но атрибуты могут попасть в
+        // mixed-case. Наш get_attr — ASCII case-insensitive.
+        let root = lay(r#"<img SRC="x.png" Width="50" HEIGHT="30">"#, "");
+        let img = first_image_child(&root);
+        if let BoxKind::Image { src, .. } = &img.kind {
+            assert_eq!(src, "x.png");
+        }
+        assert!((img.rect.width - 50.0).abs() < 0.1);
+        assert!((img.rect.height - 30.0).abs() < 0.1);
+    }
 }

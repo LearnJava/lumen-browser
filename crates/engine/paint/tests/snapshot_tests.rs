@@ -110,3 +110,26 @@ fn line_wrap_two_lines() {
     let actual = build_measured("<p>hello world</p>", "", 60.0);
     assert_snapshot("line_wrap_two_lines", &actual);
 }
+
+#[test]
+fn img_replaced_element() {
+    // DrawImage с src/alt и размерами 100×40 из HTML атрибутов.
+    let actual = build(
+        r#"<img src="logo.png" alt="Lumen logo" width="100" height="40">"#,
+        "",
+        800.0,
+    );
+    assert_snapshot("img_replaced_element", &actual);
+}
+
+#[test]
+fn img_with_background_and_border() {
+    // Painter's order: FillRect (background) → DrawBorder → DrawImage.
+    // Размер коробки 50+2×2=54 в обе стороны из-за border-2px.
+    let actual = build(
+        r#"<img src="x.png" width="50" height="50">"#,
+        "img { background: navy; border: 2px solid red; }",
+        800.0,
+    );
+    assert_snapshot("img_with_background_and_border", &actual);
+}

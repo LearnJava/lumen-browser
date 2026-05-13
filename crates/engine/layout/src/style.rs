@@ -731,6 +731,14 @@ pub fn compute_style(
         style.font_weight = fw;
     }
 
+    // HTML presentational hints (HTML5 §10): для `<img>` атрибуты
+    // `width`/`height` задают начальные значения соответствующих CSS-свойств.
+    // Применяются ДО CSS-каскада, поэтому любое author-CSS правило
+    // перекроет атрибут даже с specificity (0,0,1). Парсятся как unitless
+    // целые пиксели — это HTML5 правило для `<img>`, единицы и проценты
+    // в этих атрибутах игнорируются.
+    apply_image_presentational_hints(doc, node, &mut style);
+
     // Собираем все matched declarations с их sort key:
     // (important, specificity, rule_order, decl_index). `important` идёт
     // первым: после ascending sort `true > false`, поэтому !important идёт в
@@ -1408,6 +1416,47 @@ fn ua_font_style(doc: &Document, node: NodeId) -> Option<FontStyle> {
         "em" | "i" | "cite" | "dfn" | "address" | "var" => Some(FontStyle::Italic),
         _ => None,
     }
+}
+
+/// Применяет HTML presentational hints для `<img>`: атрибуты `width` и
+/// `height` парсятся как unitless целые пиксели и пишутся в `style.width` /
+/// `style.height`. Любое author-CSS правило в каскаде ниже перекроет
+/// атрибут — это и есть смысл «presentational hint»: атрибут эквивалентен
+/// UA-стилю с specificity 0, который проигрывает любой author-декларации
+/// (HTML5 §10 «Mapped attributes»). Невалидные значения (отрицательные,
+/// нечисловые, с единицами) HTML5 spec предписывает игнорировать.
+fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if name.local != "img" {
+        return;
+    }
+    let node_ref = doc.get(node);
+    if let Some(w) = node_ref.get_attr("width").and_then(parse_html_dimension) {
+        style.width = Some(w);
+    }
+    if let Some(h) = node_ref.get_attr("height").and_then(parse_html_dimension) {
+        style.height = Some(h);
+    }
+}
+
+/// HTML5 «rules for parsing dimension values»: unitless целое число
+/// пикселей, опциональный trailing `%` (Phase 0 пропускаем процентный
+/// случай — нужен containing-block-width). Отрицательные значения
+/// невалидны.
+fn parse_html_dimension(s: &str) -> Option<f32> {
+    let s = s.trim();
+    // Процентные размеры пока не поддерживаем — требуют containing block.
+    if s.ends_with('%') {
+        return None;
+    }
+    // Берём префикс из цифр (HTML5 принимает мусор после), парсим как u32.
+    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u32>().ok().map(|n| n as f32)
 }
 
 /// UA stylesheet для font-weight: `<b>`, `<strong>`, `<th>`, `<h1>`–`<h6>`
