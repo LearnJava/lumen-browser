@@ -27,6 +27,7 @@ pub(crate) mod ihdr;
 pub(crate) mod inflate;
 pub(crate) mod palette;
 pub(crate) mod sub_byte;
+pub(crate) mod trns_nonpalette;
 
 use crate::{DecodeError, Image, IhdrError, PaletteError, PixelFormat};
 
@@ -78,6 +79,9 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
     let mut idat: Vec<u8> = Vec::new();
     let mut plte: Option<Vec<[u8; 3]>> = None;
     let mut trns_palette: Option<Vec<u8>> = None;
+    let mut trns_grayscale: Option<u16> = None;
+    let mut trns_rgb: Option<(u16, u16, u16)> = None;
+    let mut seen_trns = false;
     let mut seen_iend = false;
 
     while let Some(chunk_result) = reader.next_chunk() {
@@ -101,20 +105,40 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
                 }
                 plte = Some(palette::parse_plte(c.data)?);
             }
-            b"tRNS" if is_palette => {
-                // Палитровый tRNS: alpha-таблица. Должен идти после PLTE.
-                let plte_count = match &plte {
-                    Some(p) => p.len(),
-                    None => {
-                        return Err(DecodeError::BadPalette(PaletteError::TrnsBeforePlte));
-                    }
-                };
-                if trns_palette.is_some() {
+            b"tRNS" => {
+                if seen_trns {
                     return Err(DecodeError::BadPalette(PaletteError::DuplicateChunk {
                         kind: *b"tRNS",
                     }));
                 }
-                trns_palette = Some(palette::parse_trns_palette(c.data, plte_count)?);
+                seen_trns = true;
+                match header.color_type {
+                    ihdr::ColorType::Palette => {
+                        // Палитровый tRNS: alpha-таблица. Должен идти после PLTE.
+                        let plte_count = match &plte {
+                            Some(p) => p.len(),
+                            None => {
+                                return Err(DecodeError::BadPalette(
+                                    PaletteError::TrnsBeforePlte,
+                                ));
+                            }
+                        };
+                        trns_palette =
+                            Some(palette::parse_trns_palette(c.data, plte_count)?);
+                    }
+                    ihdr::ColorType::Grayscale => {
+                        trns_grayscale =
+                            Some(trns_nonpalette::parse_trns_grayscale(c.data)?);
+                    }
+                    ihdr::ColorType::Rgb => {
+                        trns_rgb = Some(trns_nonpalette::parse_trns_rgb(c.data)?);
+                    }
+                    ihdr::ColorType::GrayscaleAlpha | ihdr::ColorType::Rgba => {
+                        return Err(DecodeError::BadPalette(
+                            PaletteError::UnexpectedForAlphaType,
+                        ));
+                    }
+                }
             }
             b"IEND" => {
                 seen_iend = true;
@@ -122,10 +146,8 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
             }
             _ => {
                 // Прочие чанки безопасно игнорируем: ancillary-метаданные
-                // (sRGB / gAMA / pHYs / tEXt / iCCP / cHRM), tRNS для
-                // не-палитровых типов (single-color transparency для
-                // RGB/Gray — Phase 0 не реализована, файл рендерится
-                // как непрозрачный), suggested palette для RGB и пр.
+                // (sRGB / gAMA / pHYs / tEXt / iCCP / cHRM),
+                // suggested palette для RGB и пр.
             }
         }
     }
@@ -161,11 +183,21 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
             PixelFormat::Rgb8
         }
     } else if is_grayscale {
-        // grayscale при любом из 1/2/4/8 → Gray8 на выходе (sub-byte
-        // масштабируется до 8 бит ниже).
-        PixelFormat::Gray8
+        // grayscale при любом из 1/2/4/8/16 → Gray8 (или GrayAlpha8 если есть tRNS).
+        if trns_grayscale.is_some() {
+            PixelFormat::GrayAlpha8
+        } else {
+            PixelFormat::Gray8
+        }
+    } else if matches!(header.color_type, ihdr::ColorType::Rgb) {
+        // RGB при bit_depth ∈ {8, 16}.
+        if trns_rgb.is_some() {
+            PixelFormat::Rgba8
+        } else {
+            PixelFormat::Rgb8
+        }
     } else {
-        // RGB / GrayA / RGBA при bit_depth = 8.
+        // GrayA / RGBA при bit_depth ∈ {8, 16}.
         header.pixel_format()?
     };
 
@@ -222,6 +254,18 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
         } else {
             palette::expand_to_rgb(&samples, plte_ref, header.width)?
         }
+    } else if let Some(raw) = trns_grayscale {
+        // Non-palette grayscale + tRNS → GrayAlpha8.
+        let transparent = trns_nonpalette::normalize_trns_value_to_8bit(raw, header.bit_depth);
+        trns_nonpalette::expand_gray_with_trns(&samples, transparent)
+    } else if let Some((r, g, b)) = trns_rgb {
+        // Non-palette RGB + tRNS → Rgba8.
+        let transparent = (
+            trns_nonpalette::normalize_trns_value_to_8bit(r, header.bit_depth),
+            trns_nonpalette::normalize_trns_value_to_8bit(g, header.bit_depth),
+            trns_nonpalette::normalize_trns_value_to_8bit(b, header.bit_depth),
+        );
+        trns_nonpalette::expand_rgb_with_trns(&samples, transparent)
     } else {
         samples
     };
