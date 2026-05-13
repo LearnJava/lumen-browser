@@ -2691,4 +2691,104 @@ mod tests {
         assert_eq!(p.style.text_shadow.len(), 1);
         assert_eq!(p.style.text_shadow[0].color.unwrap().a, 128);
     }
+
+    // ── border-radius (CSS Backgrounds L3 §5) ───────────────────────────────
+
+    #[test]
+    fn border_radius_default_zero() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.border_top_left_radius, 0.0);
+        assert_eq!(p.style.border_top_right_radius, 0.0);
+        assert_eq!(p.style.border_bottom_right_radius, 0.0);
+        assert_eq!(p.style.border_bottom_left_radius, 0.0);
+    }
+
+    #[test]
+    fn border_radius_shorthand_one_value() {
+        let root = lay("<p>x</p>", "p { border-radius: 8px; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.border_top_left_radius, 8.0);
+        assert_eq!(p.style.border_top_right_radius, 8.0);
+        assert_eq!(p.style.border_bottom_right_radius, 8.0);
+        assert_eq!(p.style.border_bottom_left_radius, 8.0);
+    }
+
+    #[test]
+    fn border_radius_shorthand_two_values() {
+        // 2 значения: TL/BR одинаковы, TR/BL одинаковы.
+        let root = lay("<p>x</p>", "p { border-radius: 4px 12px; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.border_top_left_radius, 4.0);
+        assert_eq!(p.style.border_top_right_radius, 12.0);
+        assert_eq!(p.style.border_bottom_right_radius, 4.0);
+        assert_eq!(p.style.border_bottom_left_radius, 12.0);
+    }
+
+    #[test]
+    fn border_radius_shorthand_four_values() {
+        let root = lay(
+            "<p>x</p>",
+            "p { border-radius: 1px 2px 3px 4px; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.border_top_left_radius, 1.0);
+        assert_eq!(p.style.border_top_right_radius, 2.0);
+        assert_eq!(p.style.border_bottom_right_radius, 3.0);
+        assert_eq!(p.style.border_bottom_left_radius, 4.0);
+    }
+
+    #[test]
+    fn border_radius_individual_corners() {
+        let root = lay(
+            "<p>x</p>",
+            "p { border-top-left-radius: 5px; border-bottom-right-radius: 10px; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.border_top_left_radius, 5.0);
+        assert_eq!(p.style.border_top_right_radius, 0.0);
+        assert_eq!(p.style.border_bottom_right_radius, 10.0);
+        assert_eq!(p.style.border_bottom_left_radius, 0.0);
+    }
+
+    #[test]
+    fn border_radius_em_resolves() {
+        // 1em при default fs 16 = 16px.
+        let root = lay("<p>x</p>", "p { border-radius: 1em; }");
+        let p = first_element_child(&root);
+        assert!((p.style.border_top_left_radius - 16.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn border_radius_elliptical_takes_first_part() {
+        // `5px / 10px` (elliptical) — Phase 0 берёт только горизонтальный
+        // (первый токен до `/`).
+        let root = lay(
+            "<p>x</p>",
+            "p { border-radius: 5px / 10px; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.border_top_left_radius, 5.0);
+    }
+
+    #[test]
+    fn border_radius_negative_clamped_to_zero() {
+        let root = lay("<p>x</p>", "p { border-radius: -10px; }");
+        let p = first_element_child(&root);
+        // Невалидное (отрицательное) — clamp до 0 после resolve.
+        // Наш resolve_box_length вернёт -10, мы делаем max(0.0).
+        assert_eq!(p.style.border_top_left_radius, 0.0);
+    }
+
+    #[test]
+    fn border_radius_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { border-radius: 5px; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.border_top_left_radius, 5.0);
+        assert_eq!(p.style.border_top_left_radius, 0.0);
+    }
 }
