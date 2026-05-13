@@ -2026,4 +2026,43 @@ mod tests {
             Specificity { a: 0, b: 1, c: 0 }
         );
     }
+
+    // ──────────────── CSS Variables L1 ────────────────
+
+    #[test]
+    fn custom_property_declaration_parsed() {
+        // `--name: value` — обычная декларация, имя начинается с `--`.
+        let s = parse(":root { --main-color: red; }");
+        assert_eq!(s.rules[0].declarations.len(), 1);
+        assert_eq!(s.rules[0].declarations[0].property, "--main-color");
+        assert_eq!(s.rules[0].declarations[0].value, "red");
+    }
+
+    #[test]
+    fn var_in_value_preserved_verbatim() {
+        // Substitution делает layout, парсер должен сохранить var() в value
+        // как есть (вместе с whitespace внутри скобок и fallback после `,`).
+        let s = parse("p { color: var(--c, blue); }");
+        assert_eq!(s.rules[0].declarations[0].value, "var(--c, blue)");
+    }
+
+    #[test]
+    fn custom_property_with_complex_value() {
+        // Custom property value может содержать что угодно (включая запятые
+        // и скобки) — парсер читает до `;` или `}` с уважением к строкам.
+        let s = parse(":root { --shadow: 0 2px 4px rgba(0, 0, 0, 0.5); }");
+        assert_eq!(
+            s.rules[0].declarations[0].value,
+            "0 2px 4px rgba(0, 0, 0, 0.5)"
+        );
+    }
+
+    #[test]
+    fn custom_property_important_flag() {
+        // `!important` работает и для custom properties.
+        let s = parse(":root { --c: red !important; }");
+        assert_eq!(s.rules[0].declarations[0].property, "--c");
+        assert_eq!(s.rules[0].declarations[0].value, "red");
+        assert!(s.rules[0].declarations[0].important);
+    }
 }
