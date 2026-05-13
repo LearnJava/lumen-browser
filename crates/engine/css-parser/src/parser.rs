@@ -323,6 +323,10 @@ pub struct Stylesheet {
     /// потому что это требует сетевой/файловой загрузки. Phase 0:
     /// парсер только извлекает список, fetch отложен.
     pub imports: Vec<ImportRule>,
+    /// `@font-face` правила. CSS Fonts L4 §4. Parser извлекает family,
+    /// src, weight, style, display, unicode-range; реальная загрузка
+    /// и регистрация в font-matcher — задача shell.
+    pub font_faces: Vec<FontFaceRule>,
 }
 
 /// `@import` декларация. Per CSS Cascade L4 §6.5 + Media Queries L4:
@@ -335,6 +339,44 @@ pub struct ImportRule {
     /// matches. Пустой Vec в `clauses` (=default) трактуется как
     /// «всегда применять» (= `@import url("...")` без media-фильтра).
     pub media: MediaQuery,
+}
+
+/// `@font-face { font-family: ...; src: url(...) format(...); ... }`
+/// — CSS Fonts L4 §4. Регистрация webfont-ресурса для font-matcher-а.
+/// Phase 0: парсер собирает основные descriptors; реальный fetch и
+/// font-loading — задача font-matcher / shell.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FontFaceRule {
+    /// `font-family: "Roboto"` — имя без кавычек.
+    pub family: String,
+    /// `src: url("..."), url("..."), local("...")` — список источников.
+    pub sources: Vec<FontFaceSource>,
+    /// `font-weight: 400 | bold | 100 200 ...` — хранится сырой строкой
+    /// (font-matcher парсит keyword/число/диапазон по контексту). `None` = default (400).
+    pub weight: Option<String>,
+    /// `font-style: normal | italic | oblique`. `None` = default.
+    pub style: Option<String>,
+    /// `font-display: auto | block | swap | fallback | optional`. `None` = default (auto).
+    pub display: Option<String>,
+    /// `unicode-range: U+0000-FFFF, U+10000-1FFFF` — сырая строка.
+    pub unicode_range: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontFaceSource {
+    pub kind: FontFaceSourceKind,
+    /// Значение url или local — без кавычек.
+    pub value: String,
+    /// `format("woff2")` — hint о формате. None если не указан.
+    pub format: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontFaceSourceKind {
+    /// `src: url("...")` — внешний font-файл.
+    Url,
+    /// `src: local("...")` — системный шрифт по имени.
+    Local,
 }
 
 /// Группа CSS-правил, вложенных в `@media`-блок.
@@ -467,7 +509,81 @@ enum AtRuleOutcome {
     Property(PropertyRule),
     Media(MediaRule),
     Import(ImportRule),
+    FontFace(FontFaceRule),
     None,
+}
+
+/// Парсит значение `src:` из `@font-face`: comma-separated список
+/// `url("path") format("fmt")` или `local("name")`. Игнорирует
+/// невалидные элементы (best-effort).
+fn parse_font_face_src(src: &str) -> Vec<FontFaceSource> {
+    let mut out = Vec::new();
+    for item in split_top_level_commas(src) {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        // Найти `url(` или `local(`.
+        let (kind, after) = if let Some(rest) = item.strip_prefix("url(") {
+            (FontFaceSourceKind::Url, rest)
+        } else if let Some(rest) = item.strip_prefix("local(") {
+            (FontFaceSourceKind::Local, rest)
+        } else {
+            continue;
+        };
+        let Some(close) = after.find(')') else {
+            continue;
+        };
+        let inner = after[..close].trim().trim_matches(['"', '\''].as_ref());
+        let tail = after[close + 1..].trim();
+        // Опциональный `format("...")`.
+        let format = if let Some(fmt_rest) = tail.strip_prefix("format(") {
+            fmt_rest
+                .find(')')
+                .map(|end| fmt_rest[..end].trim().trim_matches(['"', '\''].as_ref()).to_string())
+        } else {
+            None
+        };
+        out.push(FontFaceSource {
+            kind,
+            value: inner.to_string(),
+            format,
+        });
+    }
+    out
+}
+
+/// Делит строку по top-level запятым (игнорирует запятые внутри `(...)`
+/// и строковых литералов). Используется для `src:` value
+/// (`url(a), url(b) format(c)`) и подобных list-значений.
+fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut depth = 0usize;
+    let mut in_string: Option<u8> = None;
+    let mut start = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        if let Some(q) = in_string {
+            if b == q {
+                in_string = None;
+            }
+            continue;
+        }
+        match b {
+            b'"' | b'\'' => in_string = Some(b),
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < bytes.len() {
+        out.push(&s[start..]);
+    }
+    out
 }
 
 /// Распарсить media query из строки между `@media` и `{`. Принимает
@@ -631,6 +747,7 @@ impl<'a> Parser<'a> {
         let mut properties = Vec::new();
         let mut media_rules = Vec::new();
         let mut imports = Vec::new();
+        let mut font_faces = Vec::new();
         loop {
             self.skip_ws_and_comments();
             match self.peek() {
@@ -639,6 +756,7 @@ impl<'a> Parser<'a> {
                     AtRuleOutcome::Property(p) => properties.push(p),
                     AtRuleOutcome::Media(m) => media_rules.push(m),
                     AtRuleOutcome::Import(i) => imports.push(i),
+                    AtRuleOutcome::FontFace(f) => font_faces.push(f),
                     AtRuleOutcome::None => {}
                 },
                 Some(_) => {
@@ -658,6 +776,7 @@ impl<'a> Parser<'a> {
             properties,
             media_rules,
             imports,
+            font_faces,
         }
     }
 
@@ -678,10 +797,63 @@ impl<'a> Parser<'a> {
         if name.eq_ignore_ascii_case("import") {
             return self.parse_import_body().map_or(AtRuleOutcome::None, AtRuleOutcome::Import);
         }
+        if name.eq_ignore_ascii_case("font-face") {
+            return self
+                .parse_font_face_body()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::FontFace);
+        }
         // Прочее @-правило: откатимся к '@' и пропустим как раньше.
         self.pos = start;
         self.skip_at_rule();
         AtRuleOutcome::None
+    }
+
+    /// Парсит тело `@font-face { ... }` — обычный block declarations,
+    /// но с font-face-specific descriptors (font-family / src / weight /
+    /// style / display / unicode-range). Прочие имена игнорируются.
+    fn parse_font_face_body(&mut self) -> Option<FontFaceRule> {
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume();
+        let declarations = self.parse_declaration_block();
+
+        let mut family: String = String::new();
+        let mut src_str: Option<String> = None;
+        let mut weight: Option<String> = None;
+        let mut style: Option<String> = None;
+        let mut display: Option<String> = None;
+        let mut unicode_range: Option<String> = None;
+
+        for d in &declarations {
+            let prop = d.property.to_ascii_lowercase();
+            match prop.as_str() {
+                "font-family" => {
+                    let v = d.value.trim();
+                    family = strip_css_string(v).map_or_else(|| v.to_string(), str::to_string);
+                }
+                "src" => src_str = Some(d.value.clone()),
+                "font-weight" => weight = Some(d.value.trim().to_string()),
+                "font-style" => style = Some(d.value.trim().to_string()),
+                "font-display" => display = Some(d.value.trim().to_string()),
+                "unicode-range" => unicode_range = Some(d.value.trim().to_string()),
+                _ => {}
+            }
+        }
+        if family.is_empty() {
+            return None;
+        }
+        let sources = src_str.as_deref().map(parse_font_face_src).unwrap_or_default();
+        Some(FontFaceRule {
+            family,
+            sources,
+            weight,
+            style,
+            display,
+            unicode_range,
+        })
     }
 
     /// Парсит тело `@import url("...") [<media-query>];` или
@@ -2776,5 +2948,106 @@ mod tests {
     fn at_import_cyrillic_url() {
         let s = parse(r#"@import url("стили.css");"#);
         assert_eq!(s.imports[0].url, "стили.css");
+    }
+
+    // ── @font-face ──
+
+    #[test]
+    fn at_font_face_basic() {
+        let s = parse(r#"
+            @font-face {
+                font-family: "Roboto";
+                src: url("roboto.woff2") format("woff2");
+            }
+        "#);
+        assert_eq!(s.font_faces.len(), 1);
+        assert_eq!(s.font_faces[0].family, "Roboto");
+        assert_eq!(s.font_faces[0].sources.len(), 1);
+        assert_eq!(s.font_faces[0].sources[0].kind, FontFaceSourceKind::Url);
+        assert_eq!(s.font_faces[0].sources[0].value, "roboto.woff2");
+        assert_eq!(s.font_faces[0].sources[0].format, Some("woff2".to_string()));
+    }
+
+    #[test]
+    fn at_font_face_multiple_sources() {
+        let s = parse(r#"
+            @font-face {
+                font-family: "Body";
+                src: local("Helvetica"), url("body.woff2") format("woff2"), url("body.ttf") format("truetype");
+            }
+        "#);
+        let srcs = &s.font_faces[0].sources;
+        assert_eq!(srcs.len(), 3);
+        assert_eq!(srcs[0].kind, FontFaceSourceKind::Local);
+        assert_eq!(srcs[0].value, "Helvetica");
+        assert_eq!(srcs[0].format, None);
+        assert_eq!(srcs[1].kind, FontFaceSourceKind::Url);
+        assert_eq!(srcs[1].format, Some("woff2".to_string()));
+        assert_eq!(srcs[2].format, Some("truetype".to_string()));
+    }
+
+    #[test]
+    fn at_font_face_all_descriptors() {
+        let s = parse(r#"
+            @font-face {
+                font-family: "Var";
+                src: url("var.woff2");
+                font-weight: 100 900;
+                font-style: italic;
+                font-display: swap;
+                unicode-range: U+0000-007F, U+0400-04FF;
+            }
+        "#);
+        let f = &s.font_faces[0];
+        assert_eq!(f.weight, Some("100 900".to_string()));
+        assert_eq!(f.style, Some("italic".to_string()));
+        assert_eq!(f.display, Some("swap".to_string()));
+        assert_eq!(f.unicode_range, Some("U+0000-007F, U+0400-04FF".to_string()));
+    }
+
+    #[test]
+    fn at_font_face_no_family_skipped() {
+        // Без font-family декларации правило невалидно.
+        let s = parse(r#"
+            @font-face { src: url("x.woff2"); }
+            p { color: red; }
+        "#);
+        assert!(s.font_faces.is_empty());
+        // Обычное правило за ним парсится.
+        assert_eq!(s.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_font_face_unquoted_family() {
+        // Допустимо: font-family без кавычек.
+        let s = parse("@font-face { font-family: Roboto; src: url(r.ttf); }");
+        assert_eq!(s.font_faces[0].family, "Roboto");
+        assert_eq!(s.font_faces[0].sources[0].value, "r.ttf");
+    }
+
+    #[test]
+    fn at_font_face_cyrillic_family() {
+        let s = parse(r#"
+            @font-face { font-family: "Гранит"; src: url("granit.woff2"); }
+        "#);
+        assert_eq!(s.font_faces[0].family, "Гранит");
+    }
+
+    #[test]
+    fn split_top_level_commas_respects_parens_and_strings() {
+        // Запятые внутри (...) и "..." не должны разделять.
+        assert_eq!(
+            split_top_level_commas("a, b(c, d), e \"f, g\", h"),
+            vec!["a", " b(c, d)", " e \"f, g\"", " h"]
+        );
+    }
+
+    #[test]
+    fn parse_font_face_src_local_only() {
+        let srcs = parse_font_face_src("local(\"Times New Roman\")");
+        assert_eq!(srcs.len(), 1);
+        assert_eq!(srcs[0].kind, FontFaceSourceKind::Local);
+        assert_eq!(srcs[0].value, "Times New Roman");
+        assert_eq!(srcs[0].format, None);
     }
 }
