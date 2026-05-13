@@ -89,9 +89,29 @@ pub trait SearchProvider: Send + Sync {
 }
 
 /// Источник списка фильтров рекламы / трекеров.
+///
+/// Отвечает за подгрузку текста правил (EasyList, uBlock-формат). Применение
+/// этих правил к конкретному URL — задача [`RequestFilter`]; разделение
+/// сделано намеренно, чтобы загрузчик и matcher жили в разных слоях
+/// (потребитель `HttpClient` зависит только от `RequestFilter`).
 pub trait FilterListSource: Send + Sync {
     fn name(&self) -> &str;
     fn fetch_rules(&self) -> Result<String>;
+}
+
+/// Решение «блокировать ли исходящий запрос». Реализация смотрит URL и
+/// возвращает `None` для разрешённых, `Some(reason)` для блокируемых.
+///
+/// `reason` попадает в [`Event::RequestBlocked`](crate::event::Event)
+/// и в текст возвращаемой ошибки — это пользовательская строка для UI
+/// (network log: «✗ <url> (tracker)»), не машинно-читаемый код.
+///
+/// Отделено от [`FilterListSource`] намеренно: типичная полная цепочка —
+/// `FilterListSource` (текст правил) → парсер/индекс правил → `RequestFilter`
+/// (per-URL решение). `HttpClient` зависит только от `RequestFilter` и
+/// ничего не знает о формате правил.
+pub trait RequestFilter: Send + Sync {
+    fn should_block(&self, url: &Url) -> Option<String>;
 }
 
 /// Определение кодировки HTML-документа. Для кириллицы критично уметь

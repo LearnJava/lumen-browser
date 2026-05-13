@@ -1527,7 +1527,11 @@ fn relative_bolder(parent: FontWeight) -> FontWeight {
 pub const ROOT_FONT_SIZE: f32 = 16.0;
 
 /// Типизированная длина CSS до резолва в пиксели.
-#[derive(Debug, Clone, Copy, PartialEq)]
+///
+/// Не `Copy`, потому что вариант `Calc` хранит `Box<CalcNode>` с поддеревом
+/// выражения. Использования полагались только на `Clone` / match-pattern-ы,
+/// где `v` копируется как `f32`, а не `len` как `Length`.
+#[derive(Debug, Clone, PartialEq)]
 pub enum Length {
     Px(f32),
     /// `em` — относительно font-size текущего/родительского элемента
@@ -1549,6 +1553,67 @@ pub enum Length {
     Vmin(f32),
     /// `vmax` — 1% от большей из двух сторон viewport.
     Vmax(f32),
+    /// CSS Values L4 §10 — `calc()` выражение. Резолвится через
+    /// `CalcNode::resolve`, который рекурсивно вычисляет поддерево
+    /// в `f32`-пикселях, используя те же `em_basis` / `percent_basis` /
+    /// `viewport`, что и обычный `Length`.
+    Calc(Box<CalcNode>),
+}
+
+/// CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
+/// (`Add`/`Sub`/`Mul`/`Div`) с листовыми `Length` и unitless `Number`.
+/// `Number` нужен для умножения / деления, где спецификация требует, чтобы
+/// один операнд был unitless. В Phase 0 мы не валидируем строго типы
+/// операндов (`px * px` математически считается, но семантически бессмысленно
+/// — реальный CSS такого не пишет, а наш resolve всё равно даёт `f32`).
+#[derive(Debug, Clone, PartialEq)]
+pub enum CalcNode {
+    /// Листовое length-значение (`10px`, `2em`, `50%`, …).
+    Length(Length),
+    /// Unitless число (например `2` в `calc(2 * 10px)`).
+    Number(f32),
+    Add(Box<CalcNode>, Box<CalcNode>),
+    Sub(Box<CalcNode>, Box<CalcNode>),
+    Mul(Box<CalcNode>, Box<CalcNode>),
+    Div(Box<CalcNode>, Box<CalcNode>),
+}
+
+impl CalcNode {
+    /// Резолвит выражение в `f32`-пиксели по тем же правилам, что
+    /// `Length::resolve`. Возвращает `None` если:
+    ///   - хотя бы один листовой `Length::Percent` не имеет `percent_basis`
+    ///     (контекст не задан);
+    ///   - деление на 0.
+    pub fn resolve(
+        &self,
+        em_basis: f32,
+        percent_basis: Option<f32>,
+        viewport: Size,
+    ) -> Option<f32> {
+        match self {
+            CalcNode::Length(l) => l.resolve(em_basis, percent_basis, viewport),
+            CalcNode::Number(n) => Some(*n),
+            CalcNode::Add(a, b) => Some(
+                a.resolve(em_basis, percent_basis, viewport)?
+                    + b.resolve(em_basis, percent_basis, viewport)?,
+            ),
+            CalcNode::Sub(a, b) => Some(
+                a.resolve(em_basis, percent_basis, viewport)?
+                    - b.resolve(em_basis, percent_basis, viewport)?,
+            ),
+            CalcNode::Mul(a, b) => Some(
+                a.resolve(em_basis, percent_basis, viewport)?
+                    * b.resolve(em_basis, percent_basis, viewport)?,
+            ),
+            CalcNode::Div(a, b) => {
+                let denom = b.resolve(em_basis, percent_basis, viewport)?;
+                if denom == 0.0 {
+                    return None;
+                }
+                Some(a.resolve(em_basis, percent_basis, viewport)? / denom)
+            }
+        }
+    }
 }
 
 impl Length {
@@ -1558,15 +1623,16 @@ impl Length {
     /// контекст ещё не определён — тогда `%` даёт None).
     /// `viewport` — размер viewport-а для `vh`/`vw`/`vmin`/`vmax`.
     pub fn resolve(&self, em_basis: f32, percent_basis: Option<f32>, viewport: Size) -> Option<f32> {
-        match *self {
-            Length::Px(v) => Some(v),
-            Length::Em(v) => Some(v * em_basis),
-            Length::Rem(v) => Some(v * ROOT_FONT_SIZE),
-            Length::Percent(v) => percent_basis.map(|b| v / 100.0 * b),
-            Length::Vh(v) => Some(v / 100.0 * viewport.height),
-            Length::Vw(v) => Some(v / 100.0 * viewport.width),
-            Length::Vmin(v) => Some(v / 100.0 * viewport.width.min(viewport.height)),
-            Length::Vmax(v) => Some(v / 100.0 * viewport.width.max(viewport.height)),
+        match self {
+            Length::Px(v) => Some(*v),
+            Length::Em(v) => Some(*v * em_basis),
+            Length::Rem(v) => Some(*v * ROOT_FONT_SIZE),
+            Length::Percent(v) => percent_basis.map(|b| *v / 100.0 * b),
+            Length::Vh(v) => Some(*v / 100.0 * viewport.height),
+            Length::Vw(v) => Some(*v / 100.0 * viewport.width),
+            Length::Vmin(v) => Some(*v / 100.0 * viewport.width.min(viewport.height)),
+            Length::Vmax(v) => Some(*v / 100.0 * viewport.width.max(viewport.height)),
+            Length::Calc(node) => node.resolve(em_basis, percent_basis, viewport),
         }
     }
 }
@@ -1579,6 +1645,11 @@ impl Length {
 /// перед `vw`/`vh`, `rem` перед `em`).
 pub fn parse_length(s: &str) -> Option<Length> {
     let s = s.trim();
+    // CSS Values L4 §10: calc()-выражение. Распознаём ASCII case-insensitive
+    // префикс `calc(` и парсим содержимое до парной `)`.
+    if let Some(inner) = strip_calc_wrapper(s) {
+        return parse_calc(inner).map(|node| Length::Calc(Box::new(node)));
+    }
     if let Some(num) = s.strip_suffix("px") {
         return num.trim().parse::<f32>().ok().map(Length::Px);
     }
@@ -1604,6 +1675,218 @@ pub fn parse_length(s: &str) -> Option<Length> {
         return num.trim().parse::<f32>().ok().map(Length::Percent);
     }
     s.parse::<f32>().ok().map(Length::Px)
+}
+
+/// Возвращает `Some(inner)` если `s` имеет форму `calc(...)` (ASCII
+/// case-insensitive префикс + парная закрывающая скобка в конце).
+fn strip_calc_wrapper(s: &str) -> Option<&str> {
+    if s.len() < 6 || !s.ends_with(')') {
+        return None;
+    }
+    let prefix_lower = s.as_bytes()[..5].eq_ignore_ascii_case(b"calc(");
+    if !prefix_lower {
+        return None;
+    }
+    Some(&s[5..s.len() - 1])
+}
+
+// ──────────────── calc() лексер + парсер ────────────────
+
+#[derive(Debug, Clone, PartialEq)]
+enum CalcToken {
+    /// Числовой токен с (опциональным) unit-суффиксом.
+    Num(f32, String),
+    Plus,
+    Minus,
+    Star,
+    Slash,
+    LParen,
+    RParen,
+}
+
+/// Лексер `calc()` тела. Возвращает None при синтаксической ошибке (например,
+/// неизвестный символ или сломанное число).
+///
+/// `-` всегда токенизируется как `Minus` (не как часть числа). Унарный
+/// минус (`calc(-10px + 5px)`) разрешается парсером через
+/// `factor := ('-' | '+') factor | …`. Это даёт корректное поведение и для
+/// `10px - 5px` (whitespace по спецификации), и для `10px-5px` (lenient).
+fn tokenize_calc(s: &str) -> Option<Vec<CalcToken>> {
+    let mut tokens = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        let b = bytes[i];
+        if b.is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        let tok = match b {
+            b'+' => CalcToken::Plus,
+            b'-' => CalcToken::Minus,
+            b'*' => CalcToken::Star,
+            b'/' => CalcToken::Slash,
+            b'(' => CalcToken::LParen,
+            b')' => CalcToken::RParen,
+            // Число без ведущего знака (знак — отдельный токен).
+            b'0'..=b'9' | b'.' => {
+                let (num, unit, end) = lex_number(bytes, i)?;
+                tokens.push(CalcToken::Num(num, unit));
+                i = end;
+                continue;
+            }
+            _ => return None,
+        };
+        tokens.push(tok);
+        i += 1;
+    }
+    Some(tokens)
+}
+
+/// Парсит число (без знака) + опциональный unit-суффикс начиная с `bytes[start]`.
+/// Возвращает (значение, unit, индекс после конца токена). Знак лежит
+/// отдельным `Minus`/`Plus`-токеном.
+fn lex_number(bytes: &[u8], start: usize) -> Option<(f32, String, usize)> {
+    let mut i = start;
+    let num_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if bytes.get(i) == Some(&b'.') {
+        i += 1;
+        while i < bytes.len() && bytes[i].is_ascii_digit() {
+            i += 1;
+        }
+    }
+    let num_end = i;
+    if num_end == num_start {
+        return None;
+    }
+    let num_str = std::str::from_utf8(&bytes[num_start..num_end]).ok()?;
+    let num = num_str.parse::<f32>().ok()?;
+    // Unit-суффикс: буквы (для px/em/rem/vh/vw/vmin/vmax) или `%`.
+    let unit_start = i;
+    while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+        i += 1;
+    }
+    if i == unit_start && matches!(bytes.get(i), Some(b'%')) {
+        i += 1;
+    }
+    let unit =
+        std::str::from_utf8(&bytes[unit_start..i]).ok()?.to_ascii_lowercase();
+    Some((num, unit, i))
+}
+
+/// Парсит полное `calc()` тело в `CalcNode`. Это recursive-descent поверх
+/// уже лексированного потока токенов.
+fn parse_calc(s: &str) -> Option<CalcNode> {
+    let tokens = tokenize_calc(s)?;
+    let mut pos = 0usize;
+    let node = parse_calc_expr(&tokens, &mut pos)?;
+    if pos != tokens.len() {
+        return None; // лишние токены после выражения — синтаксическая ошибка
+    }
+    Some(node)
+}
+
+/// `expr := term (('+' | '-') term)*`
+fn parse_calc_expr(tokens: &[CalcToken], pos: &mut usize) -> Option<CalcNode> {
+    let mut left = parse_calc_term(tokens, pos)?;
+    loop {
+        match tokens.get(*pos) {
+            Some(CalcToken::Plus) => {
+                *pos += 1;
+                let right = parse_calc_term(tokens, pos)?;
+                left = CalcNode::Add(Box::new(left), Box::new(right));
+            }
+            Some(CalcToken::Minus) => {
+                *pos += 1;
+                let right = parse_calc_term(tokens, pos)?;
+                left = CalcNode::Sub(Box::new(left), Box::new(right));
+            }
+            _ => return Some(left),
+        }
+    }
+}
+
+/// `term := factor (('*' | '/') factor)*`
+fn parse_calc_term(tokens: &[CalcToken], pos: &mut usize) -> Option<CalcNode> {
+    let mut left = parse_calc_factor(tokens, pos)?;
+    loop {
+        match tokens.get(*pos) {
+            Some(CalcToken::Star) => {
+                *pos += 1;
+                let right = parse_calc_factor(tokens, pos)?;
+                left = CalcNode::Mul(Box::new(left), Box::new(right));
+            }
+            Some(CalcToken::Slash) => {
+                *pos += 1;
+                let right = parse_calc_factor(tokens, pos)?;
+                left = CalcNode::Div(Box::new(left), Box::new(right));
+            }
+            _ => return Some(left),
+        }
+    }
+}
+
+/// `factor := ('-' | '+') factor | Num(value, unit) | '(' expr ')'`
+///
+/// Унарный `-` реализуется как `0 - factor`. Унарный `+` — no-op.
+fn parse_calc_factor(tokens: &[CalcToken], pos: &mut usize) -> Option<CalcNode> {
+    match tokens.get(*pos)? {
+        CalcToken::Minus => {
+            *pos += 1;
+            let inner = parse_calc_factor(tokens, pos)?;
+            Some(CalcNode::Sub(
+                Box::new(CalcNode::Number(0.0)),
+                Box::new(inner),
+            ))
+        }
+        CalcToken::Plus => {
+            *pos += 1;
+            parse_calc_factor(tokens, pos)
+        }
+        CalcToken::LParen => {
+            *pos += 1;
+            let inner = parse_calc_expr(tokens, pos)?;
+            if !matches!(tokens.get(*pos), Some(CalcToken::RParen)) {
+                return None;
+            }
+            *pos += 1;
+            Some(inner)
+        }
+        CalcToken::Num(v, unit) => {
+            let v = *v;
+            let unit = unit.clone();
+            *pos += 1;
+            calc_num_to_node(v, &unit)
+        }
+        _ => None,
+    }
+}
+
+/// Преобразует пару (число, unit) в `CalcNode`. Пустой unit → `Number`,
+/// иначе — `Length::*` соответствующего варианта. Неизвестный unit
+/// (`pt`, `mm`, …) даёт None — в Phase 0 поддерживаются те же единицы, что и
+/// `parse_length`. `calc()` внутри `calc()` (nested) спека разрешает, но мы
+/// пока не парсим — это требует распознать ident `calc` среди токенов; пока
+/// возвращаем None для не-числовых факторов помимо скобок.
+fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
+    if unit.is_empty() {
+        return Some(CalcNode::Number(value));
+    }
+    let length = match unit {
+        "px" => Length::Px(value),
+        "em" => Length::Em(value),
+        "rem" => Length::Rem(value),
+        "vh" => Length::Vh(value),
+        "vw" => Length::Vw(value),
+        "vmin" => Length::Vmin(value),
+        "vmax" => Length::Vmax(value),
+        "%" => Length::Percent(value),
+        _ => return None,
+    };
+    Some(CalcNode::Length(length))
 }
 
 /// Глубина рекурсии при разворачивании `var()` — защита от циклов вида
@@ -2090,12 +2373,26 @@ fn apply_declaration(
             if let Ok(v) = val.parse::<f32>() {
                 style.line_height = v;
             } else if let Some(len) = parse_length(val) {
-                match len {
+                match &len {
                     Length::Px(v) => style.line_height = v / style.font_size,
-                    Length::Em(v) => style.line_height = v,
-                    Length::Rem(v) => style.line_height = v * ROOT_FONT_SIZE / style.font_size,
+                    Length::Em(v) => style.line_height = *v,
+                    Length::Rem(v) => {
+                        style.line_height = v * ROOT_FONT_SIZE / style.font_size;
+                    }
                     Length::Percent(v) => style.line_height = v / 100.0,
-                    Length::Vh(_) | Length::Vw(_) | Length::Vmin(_) | Length::Vmax(_) => {
+                    Length::Vh(_)
+                    | Length::Vw(_)
+                    | Length::Vmin(_)
+                    | Length::Vmax(_)
+                    | Length::Calc(_) => {
+                        // Резолвим в px и переводим в коэффициент.
+                        // Для calc() — то же самое: если выражение содержит
+                        // только unitless (`calc(1 + 0.5)`) → результат уже
+                        // коэффициент, но мы не умеем сейчас отличить unitless
+                        // от px; делим всегда на font_size — это даёт верный
+                        // ответ для length-результатов и неверный для чистых
+                        // чисел внутри calc. Phase 0 ограничение: для чистых
+                        // чисел используйте bare-form `line-height: 1.5`.
                         if let Some(px) = len.resolve(em_basis, None, viewport) {
                             style.line_height = px / style.font_size;
                         }
@@ -2355,15 +2652,22 @@ fn apply_font_size(
         return;
     };
     // Для font-size: em и % считаются от parent_fs; vh/vw/vmin/vmax — от viewport.
-    style.font_size = match len {
-        Length::Px(v) => v,
-        Length::Em(v) => v * parent_fs,
-        Length::Rem(v) => v * ROOT_FONT_SIZE,
-        Length::Percent(v) => v / 100.0 * parent_fs,
-        Length::Vh(v) => v / 100.0 * viewport.height,
-        Length::Vw(v) => v / 100.0 * viewport.width,
-        Length::Vmin(v) => v / 100.0 * viewport.width.min(viewport.height),
-        Length::Vmax(v) => v / 100.0 * viewport.width.max(viewport.height),
+    style.font_size = match &len {
+        Length::Px(v) => *v,
+        Length::Em(v) => *v * parent_fs,
+        Length::Rem(v) => *v * ROOT_FONT_SIZE,
+        Length::Percent(v) => *v / 100.0 * parent_fs,
+        Length::Vh(v) => *v / 100.0 * viewport.height,
+        Length::Vw(v) => *v / 100.0 * viewport.width,
+        Length::Vmin(v) => *v / 100.0 * viewport.width.min(viewport.height),
+        Length::Vmax(v) => *v / 100.0 * viewport.width.max(viewport.height),
+        // `calc()` для font-size: резолвим с em_basis = parent_fs и
+        // percent_basis = parent_fs (для `%` внутри выражения). vh/vw
+        // используют viewport, что уже делает CalcNode::resolve.
+        Length::Calc(node) => match node.resolve(parent_fs, Some(parent_fs), viewport) {
+            Some(v) => v,
+            None => return,
+        },
     };
 }
 
@@ -3766,5 +4070,172 @@ mod tests {
         let mut custom = HashMap::new();
         custom.insert("--x".to_string(), "red".to_string());
         assert_eq!(expand_vars("color: var(--x", &custom, 0), None);
+    }
+
+    // ──────────────── CSS Values L4 §10 — calc() ────────────────
+
+    fn resolved_calc(s: &str, em: f32, pb: Option<f32>, vp: Size) -> Option<f32> {
+        let len = parse_length(s)?;
+        len.resolve(em, pb, vp)
+    }
+
+    #[test]
+    fn calc_simple_add_px() {
+        let v = resolved_calc("calc(10px + 20px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(30.0));
+    }
+
+    #[test]
+    fn calc_simple_sub_px() {
+        let v = resolved_calc("calc(50px - 8px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(42.0));
+    }
+
+    #[test]
+    fn calc_mul_unitless_left() {
+        let v = resolved_calc("calc(2 * 10px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(20.0));
+    }
+
+    #[test]
+    fn calc_mul_unitless_right() {
+        let v = resolved_calc("calc(10px * 3)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(30.0));
+    }
+
+    #[test]
+    fn calc_div_by_unitless() {
+        let v = resolved_calc("calc(20px / 4)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(5.0));
+    }
+
+    #[test]
+    fn calc_div_by_zero_is_none() {
+        let v = resolved_calc("calc(10px / 0)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, None);
+    }
+
+    #[test]
+    fn calc_precedence_mul_before_add() {
+        // 2 + 3 * 4 = 14 (не 20).
+        let v = resolved_calc("calc(2px + 3 * 4px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(14.0));
+    }
+
+    #[test]
+    fn calc_parens_override_precedence() {
+        let v = resolved_calc("calc((2 + 3) * 4px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(20.0));
+    }
+
+    #[test]
+    fn calc_em_uses_em_basis() {
+        // 2em = 2 * 24 = 48 при em_basis=24.
+        let v = resolved_calc("calc(2em + 10px)", 24.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(58.0));
+    }
+
+    #[test]
+    fn calc_rem_uses_root_fs() {
+        // 1rem = 16; 1rem + 4 = 20.
+        let v = resolved_calc("calc(1rem + 4px)", 24.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(20.0));
+    }
+
+    #[test]
+    fn calc_viewport_units() {
+        // 100vw = 800, 50vh = 300 при viewport (800,600). 800 + 300 = 1100.
+        let v = resolved_calc(
+            "calc(100vw - 50vh)",
+            16.0,
+            None,
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(500.0)); // 800 - 300
+    }
+
+    #[test]
+    fn calc_percent_uses_basis() {
+        // 50% от 200 = 100; 100 - 10 = 90.
+        let v = resolved_calc(
+            "calc(50% - 10px)",
+            16.0,
+            Some(200.0),
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(90.0));
+    }
+
+    #[test]
+    fn calc_percent_without_basis_is_none() {
+        // % без containing block — None (declaration ignored).
+        let v = resolved_calc("calc(50% + 10px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, None);
+    }
+
+    #[test]
+    fn calc_unary_negative() {
+        // -10px + 20px = 10.
+        let v = resolved_calc("calc(-10px + 20px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(10.0));
+    }
+
+    #[test]
+    fn calc_unary_negative_after_paren() {
+        let v = resolved_calc("calc(20px + (-5px))", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(15.0));
+    }
+
+    #[test]
+    fn calc_decimal_values() {
+        let v = resolved_calc("calc(0.5 * 20px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(10.0));
+    }
+
+    #[test]
+    fn calc_case_insensitive_prefix() {
+        // CSS keyword `calc` ASCII case-insensitive.
+        let v = resolved_calc("CALC(5px + 5px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(10.0));
+    }
+
+    #[test]
+    fn calc_unknown_unit_invalid() {
+        // pt не поддерживаем в Phase 0 → парсер вернёт None.
+        assert!(parse_length("calc(10pt + 5px)").is_none());
+    }
+
+    #[test]
+    fn calc_in_width_property_applies() {
+        // Интеграция: width: calc(10px * 2 + 20px) = 40px.
+        let s = style_for("width: calc(10px * 2 + 20px)");
+        assert_eq!(s.width, Some(40.0));
+    }
+
+    #[test]
+    fn calc_in_padding_property_applies() {
+        // padding shorthand берёт одно length — calc() даёт 5+3=8px.
+        let s = style_for("padding: calc(5px + 3px)");
+        assert!((s.padding_top - 8.0).abs() < 0.01);
+        assert!((s.padding_right - 8.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn calc_with_var_inside() {
+        // var() сначала разворачивается → строка `calc(10px + 5px)`,
+        // потом парсится calc() → 15.
+        let s = style_for("--gap: 10px; padding: calc(var(--gap) + 5px)");
+        assert!((s.padding_top - 15.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn calc_unbalanced_paren_invalid() {
+        assert!(parse_length("calc(10px + 5px").is_none());
+        assert!(parse_length("calc((10px + 5px)").is_none());
+    }
+
+    #[test]
+    fn calc_empty_invalid() {
+        assert!(parse_length("calc()").is_none());
     }
 }
