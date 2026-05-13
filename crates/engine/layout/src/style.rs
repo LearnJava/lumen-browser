@@ -37,6 +37,21 @@ pub enum TextAlign {
     Right,
 }
 
+/// CSS Backgrounds L3 §4.6 — спецификация одной тени бокса.
+///
+/// `inset` тени рисуются внутри коробки (имитация vignetting), не-inset —
+/// снаружи (drop-shadow). Color None = currentColor по spec. Blur и spread
+/// — длины в пикселях; spread увеличивает / уменьшает форму перед blur-ом.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoxShadow {
+    pub offset_x: f32,
+    pub offset_y: f32,
+    pub blur: f32,
+    pub spread: f32,
+    pub color: Option<Color>,
+    pub inset: bool,
+}
+
 /// CSS UI L4 §8.1 — `cursor`. Inherited.
 ///
 /// Хранится как enum 17 стандартных keyword-ов. URL-fallback (`cursor:
@@ -361,6 +376,9 @@ pub struct ComputedStyle {
     pub visibility: Visibility,
     /// CSS UI L4 §8.1 — cursor. Inherited.
     pub cursor: Cursor,
+    /// CSS Backgrounds L3 §4.6 — список теней. Не наследуется. Пустой Vec
+    /// = `none`.
+    pub box_shadow: Vec<BoxShadow>,
     /// CSS Overflow L3 — отдельные поля для X и Y. Не наследуются.
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
@@ -439,6 +457,7 @@ impl ComputedStyle {
             box_sizing: BoxSizing::ContentBox,
             visibility: Visibility::Visible,
             cursor: Cursor::Auto,
+            box_shadow: Vec::new(),
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
             opacity: 1.0,
@@ -503,6 +522,7 @@ pub fn compute_style(
         // Inherited (CSS UI L4 §8.1).
         cursor: inherited.cursor,
         // Не наследуется.
+        box_shadow: Vec::new(),
         overflow_x: Overflow::Visible,
         overflow_y: Overflow::Visible,
         opacity: 1.0,
@@ -931,6 +951,79 @@ fn default_display(doc: &Document, node: NodeId) -> Display {
         | "label" | "abbr" | "cite" | "q" | "mark" | "u" => Display::Inline,
         _ => Display::Block,
     }
+}
+
+/// Разбивает строку на куски по запятым, не пересекая `(...)` (для
+/// shadow-list, где цвет может быть `rgba(0, 0, 0, 0.5)` с запятыми).
+fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut depth = 0i32;
+    let mut start = 0;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    out.push(&s[start..]);
+    out
+}
+
+/// Парсит одну box-shadow спецификацию. Формат:
+/// `[inset]? <length>{2,4} <color>?` — токены произвольно перемешаны.
+fn parse_box_shadow_one(s: &str, em_basis: f32, viewport: Size) -> Option<BoxShadow> {
+    // Сложность: цветовые функции (`rgba(...)`) содержат пробелы — наивный
+    // split_whitespace их разорвёт. Восстанавливаем токены, балансируя `()`.
+    let mut tokens: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    let mut depth = 0i32;
+    for c in s.chars() {
+        match c {
+            '(' => { depth += 1; buf.push(c); }
+            ')' => { depth -= 1; buf.push(c); }
+            ws if ws.is_whitespace() && depth == 0 => {
+                if !buf.is_empty() {
+                    tokens.push(std::mem::take(&mut buf));
+                }
+            }
+            _ => buf.push(c),
+        }
+    }
+    if !buf.is_empty() { tokens.push(buf); }
+
+    let mut inset = false;
+    let mut color: Option<Color> = None;
+    let mut lengths: Vec<f32> = Vec::new();
+
+    for tok in tokens {
+        if tok.eq_ignore_ascii_case("inset") {
+            inset = true;
+        } else if let Some(c) = parse_color(&tok) {
+            color = Some(c);
+        } else if let Some(len) = parse_length(&tok)
+            && let Some(px) = match len {
+                Length::Percent(_) => None,
+                other => other.resolve(em_basis, None, viewport),
+            }
+        {
+            lengths.push(px);
+        }
+    }
+
+    // Должно быть 2-4 длины (offset-x, offset-y, blur?, spread?).
+    let (offset_x, offset_y, blur, spread) = match lengths.as_slice() {
+        [x, y] => (*x, *y, 0.0, 0.0),
+        [x, y, b] => (*x, *y, *b, 0.0),
+        [x, y, b, sp] => (*x, *y, *b, *sp),
+        _ => return None,
+    };
+
+    Some(BoxShadow { offset_x, offset_y, blur, spread, color, inset })
 }
 
 /// CSS UI L4 §8.1: парсит keyword в `Cursor`. None = неизвестное.
@@ -1367,6 +1460,22 @@ fn apply_declaration(
             let last = val.rsplit(',').next().unwrap_or("").trim();
             if let Some(c) = parse_cursor_kw(last) {
                 style.cursor = c;
+            }
+        }
+        "box-shadow" => {
+            // CSS Backgrounds L3 §4.6: comma-separated. `none` сбрасывает.
+            if val.trim() == "none" {
+                style.box_shadow = Vec::new();
+            } else {
+                let mut shadows = Vec::new();
+                for piece in split_top_level_commas(val) {
+                    if let Some(s) = parse_box_shadow_one(piece.trim(), em_basis, viewport) {
+                        shadows.push(s);
+                    }
+                }
+                if !shadows.is_empty() {
+                    style.box_shadow = shadows;
+                }
             }
         }
         "outline" => {

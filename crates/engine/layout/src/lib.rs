@@ -19,8 +19,8 @@ pub mod style;
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
 pub use style::{
-    BorderStyle, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStyle, FontWeight, Overflow,
-    TextAlign, TextDecorationLine, TextTransform, Visibility, WhiteSpace,
+    BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStyle,
+    FontWeight, Overflow, TextAlign, TextDecorationLine, TextTransform, Visibility, WhiteSpace,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -2495,5 +2495,118 @@ mod tests {
         let root = lay("<p>x</p>", "p { cursor: nonsense; }");
         let p = first_element_child(&root);
         assert_eq!(p.style.cursor, Cursor::Auto);
+    }
+
+    // ── box-shadow (CSS Backgrounds L3 §4.6) ────────────────────────────────
+
+    #[test]
+    fn box_shadow_default_empty() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert!(p.style.box_shadow.is_empty());
+    }
+
+    #[test]
+    fn box_shadow_two_lengths() {
+        // offset-x, offset-y без blur/spread/color.
+        let root = lay("<p>x</p>", "p { box-shadow: 5px 10px; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.box_shadow.len(), 1);
+        let s = &p.style.box_shadow[0];
+        assert!((s.offset_x - 5.0).abs() < 0.01);
+        assert!((s.offset_y - 10.0).abs() < 0.01);
+        assert_eq!(s.blur, 0.0);
+        assert_eq!(s.spread, 0.0);
+        assert!(!s.inset);
+        assert!(s.color.is_none());
+    }
+
+    #[test]
+    fn box_shadow_with_blur_and_color() {
+        let root = lay(
+            "<p>x</p>",
+            "p { box-shadow: 2px 3px 4px red; }",
+        );
+        let p = first_element_child(&root);
+        let s = &p.style.box_shadow[0];
+        assert_eq!(s.blur, 4.0);
+        assert_eq!(s.color.unwrap().r, 255);
+    }
+
+    #[test]
+    fn box_shadow_with_blur_spread_and_color() {
+        let root = lay(
+            "<p>x</p>",
+            "p { box-shadow: 1px 2px 3px 4px blue; }",
+        );
+        let p = first_element_child(&root);
+        let s = &p.style.box_shadow[0];
+        assert_eq!(s.spread, 4.0);
+        assert_eq!(s.color.unwrap().b, 255);
+    }
+
+    #[test]
+    fn box_shadow_inset() {
+        let root = lay(
+            "<p>x</p>",
+            "p { box-shadow: inset 2px 2px 5px black; }",
+        );
+        let p = first_element_child(&root);
+        let s = &p.style.box_shadow[0];
+        assert!(s.inset);
+        assert!((s.offset_x - 2.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn box_shadow_multiple_comma_separated() {
+        let root = lay(
+            "<p>x</p>",
+            "p { box-shadow: 1px 1px red, 2px 2px blue, inset 3px 3px black; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.box_shadow.len(), 3);
+        assert_eq!(p.style.box_shadow[0].color.unwrap().r, 255);
+        assert_eq!(p.style.box_shadow[1].color.unwrap().b, 255);
+        assert!(p.style.box_shadow[2].inset);
+    }
+
+    #[test]
+    fn box_shadow_color_with_internal_commas() {
+        // rgba(...) содержит запятые внутри — split_top_level_commas
+        // не должен порвать это на куски.
+        let root = lay(
+            "<p>x</p>",
+            "p { box-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5); }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.box_shadow.len(), 1);
+        let s = &p.style.box_shadow[0];
+        assert_eq!(s.color.unwrap().a, 128);
+    }
+
+    #[test]
+    fn box_shadow_none_clears() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { box-shadow: 1px 1px black; } p { box-shadow: none; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // box-shadow не наследуется в любом случае; но `none` должно
+        // явно сбросить.
+        assert_eq!(div.style.box_shadow.len(), 1);
+        assert!(p.style.box_shadow.is_empty());
+    }
+
+    #[test]
+    fn box_shadow_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { box-shadow: 2px 2px black; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.box_shadow.len(), 1);
+        assert!(p.style.box_shadow.is_empty());
     }
 }
