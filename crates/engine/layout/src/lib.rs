@@ -3044,4 +3044,68 @@ mod tests {
         assert_eq!(div.style.font_stretch.0, 750);
         assert_eq!(p.style.font_stretch, FontStretch::NORMAL);
     }
+
+    // ── accent-color (CSS UI L4 §6.1) ──────────────────────────────────────
+
+    #[test]
+    fn accent_color_default_none() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert!(p.style.accent_color.is_none());
+    }
+
+    #[test]
+    fn accent_color_named() {
+        let root = lay("<p>x</p>", "p { accent-color: red; }");
+        let p = first_element_child(&root);
+        let c = p.style.accent_color.expect("accent set");
+        assert_eq!((c.r, c.g, c.b, c.a), (255, 0, 0, 255));
+    }
+
+    #[test]
+    fn accent_color_hex() {
+        let root = lay("<p>x</p>", "p { accent-color: #4080ff; }");
+        let p = first_element_child(&root);
+        let c = p.style.accent_color.expect("accent set");
+        assert_eq!((c.r, c.g, c.b), (0x40, 0x80, 0xff));
+    }
+
+    #[test]
+    fn accent_color_auto_resets_inheritance() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { accent-color: blue; } p { accent-color: auto; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(div.style.accent_color.is_some());
+        assert!(p.style.accent_color.is_none());
+    }
+
+    #[test]
+    fn accent_color_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { accent-color: rgb(10, 20, 30); }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        let dc = div.style.accent_color.expect("div accent");
+        let pc = p.style.accent_color.expect("p inherits accent");
+        assert_eq!((dc.r, dc.g, dc.b), (10, 20, 30));
+        assert_eq!((pc.r, pc.g, pc.b), (10, 20, 30));
+    }
+
+    #[test]
+    fn accent_color_invalid_ignored() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { accent-color: red; } p { accent-color: notacolor; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        // Невалидное значение игнорируется → p наследует от div.
+        assert_eq!(div.style.accent_color, p.style.accent_color);
+        assert!(p.style.accent_color.is_some());
+    }
 }

@@ -419,7 +419,7 @@ git worktree remove ../lumen-<имя-задачи>
 
 ### Численно
 
-- **Всего тестов в workspace:** 737 (на момент последнего обновления).
+- **Всего тестов в workspace:** 743 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -522,6 +522,7 @@ git worktree remove ../lumen-<имя-задачи>
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            css-accent-color       — accent-color (CSS UI L4 §6.1): Option<Color>, inherited, `auto` → None; парсится через тот же parse_color, что и color/background; real применение к form widgets отложено; 6 новых тестов
 *            utf16-decoder           — UTF-16 LE/BE: Encoding::Utf16Le/Be, BOM-детектор (FF FE / FE FF), декодер с surrogate-парами (U+10000+) и lossy fallback для lone surrogates / odd byte count. WHATWG label `utf-16` → LE. 18 новых тестов
 *            html-rcdata             — RCDATA для <title>/<textarea>: тело — литеральный текст до </tag, но character references декодируются. Объединил с RAWTEXT в `text_only: Option<(String, bool)>`. 15 tokenizer + 2 tree_builder теста
 *            css-font-stretch       — font-stretch (CSS Fonts L4 §2.5): десятые доли процента (u16), 9 keyword-ов с дробными semi-condensed=87.5% / semi-expanded=112.5%, численные % клампятся в [50%, 200%], inherited; попутно font_variant добавлен в text_rendering_eq; 7 новых тестов
