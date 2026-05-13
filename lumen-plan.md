@@ -1124,6 +1124,14 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 - **Цель:** открыть простую текстовую статью без стилей. Доказательство концепции.
 
 ### Фаза 1 — v0.1 «Reader» (9 месяцев от старта)
+- **Базовая пригодность shell** — без этого «открыть Habr-статью» невозможно как демо:
+  - **Font fallback / matcher.** Рендерер сейчас всегда `Inter Regular` — любая страница с эмодзи / CJK / `font-family: Roboto` падает в `?`-глифы. Минимум: системный font-loader (Win32 GDI / fontconfig / CoreText — без сторонних crate-ов), cascade «Inter → системный по unicode-блоку». Парсер `font-family` уже есть, не используется в paint.
+  - **HiDPI / DPR-awareness.** `winit` отдаёт `scale_factor`, сейчас не прокинут в layout/paint. На 4K мониторе всё в 0.5×.
+  - **Scroll + базовый input в shell.** Без scroll длинные страницы недоступны.
+- **`Url` как структурированный тип** — `struct { scheme, host, port, path, query, fragment }`. Сейчас `Url` это тонкая обёртка над String, network ad-hoc парсит то же самое. Дедуплицировать парсинг до того, как появятся CSP / cookie jar / cross-origin checks. Несколько часов работы пока потребителей мало.
+- **EventSink в network (network log).** События `RequestStarted/Completed/Blocked` объявлены в `lumen-core::event`, никем не emit-ятся. Без этого принцип №4 («каждый исходящий байт виден») — мёртвый код. Каждая новая сетевая операция (favicon, prefetch, redirect) добавляется без логирования → к Phase 2 ретрофитить дороже.
+- **`cargo bench` baseline.** Цели плана (300ms cold start, <100MB RAM) сейчас лозунги, не контракт. Один benchmark на `samples/page.html` (parse → layout → paint) даст линию отсчёта.
+- **`[profile.dev.package."*"] opt-level=3`** — full optimization для зависимостей (wgpu, winit, rustls) в dev профиле, наш код остаётся на opt-level=1. wgpu в чистом debug режиме невыносим.
 - CSS 2.1 + flexbox.
 - Картинки.
 - Вкладки, история, закладки.
@@ -1150,6 +1158,7 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
   - Read-later / офлайн-чтение (§12.3).
   - Поиск по содержимому открытых вкладок (§12.4).
   - Focus mode (§12.6).
+- **`<meta viewport>` parsing + page zoom (Ctrl+/Ctrl-).** Без этого мобильная вёрстка всегда «как desktop», и нет ручного управления масштабом.
 - **Кастомизация UI** — drag&drop панелей, темы (§12.10).
 - **Цель:** публичная альфа, форумы и простые SPA, в Lumen начинают **жить** долго.
 
@@ -1200,6 +1209,10 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 | Apple запрещает свои движки на iOS | iOS откладываем; либо тонкая обёртка над WKWebView под iOS как исключение |
 | Выгорание | Жёсткий scope, чёткие версии, регулярные релизы |
 | Supply chain (crates.io) | `cargo-vet`, `cargo-deny`, минимизируем зависимости |
+| Accessibility tree (MSAA/UIA/AT-SPI/NSAccessibility) — сотни тысяч строк, без AX браузер не работает со screen reader-ами; в США/EU юридическое требование для коммерческого продукта | AX откладываем до Phase 4. До тех пор Lumen честно объявляется как не подходящий для слепых пользователей. Архитектурный задел в DOM (semantic tree уже есть) минимален — основная работа OS-bindings |
+| DRM (Widevine, FairPlay, PlayReady) — Widevine лицензируется только Google, не-Chromium форкам почти не выдаётся (Brave получил после многолетнего процесса; LibreWolf и Tor Browser живут без него) — значит Netflix / Spotify Web / большинство streaming сервисов недоступны | Принимаем как явный non-goal v1.0: «Lumen не воспроизводит DRM-контент». В Phase 4 можно попробовать процесс лицензирования, но не блокируем релиз. AV1 / H.264 декодеры — отдельная задача (FFmpeg как 6-й exception или dav1d / openh264) |
+| Печать (`@media print`, OS print spooler — CUPS / CoreGraphics / Windows spooler) — требует отдельного layout path и интеграции с тремя OS | Откладываем до Phase 3. Минимум — экспорт в PDF через свой layout-pipeline (свой PDF writer — реалистичнее, чем OS-биндинги). PDF-генерация — единый код-путь для всех OS |
+| Шрифты на реальных страницах — нет fallback, рендерер всегда Inter; CJK / эмодзи / явные `font-family` ломаются | Font matcher в Phase 1 (см. секцию «Базовая пригодность shell»). Без этого Phase 1 как демо невозможна |
 
 ---
 
