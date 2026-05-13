@@ -32,6 +32,38 @@
 
 ---
 
+## Распределение задач между программистами
+
+Над проектом параллельно работают **четыре программиста** (4 сессии Claude Code, каждая в своём `git worktree` — см. «Координация параллельных сессий»). Каждый закреплён за своей доменной зоной, чтобы конфликты merge-а были минимальными.
+
+**Если в начале сессии пользователь говорит «ты программист N» — найди свою колонку ниже, и бери задачи с маркером `[PN]` из раздела «Roadmap — что предстоит реализовать» этого файла. Если все задачи с твоим маркером взяты другими сессиями (видно через `git branch` + блок «🔄 В работе сейчас» в `lumen-plan.md`) — спроси пользователя, какую следующую брать.**
+
+| Программист | Доменная зона | Основные крейты |
+|---|---|---|
+| **P1** | Парсинг + каскад + layout | `lumen-html-parser`, `lumen-css-parser`, `lumen-layout` |
+| **P2** | Шрифты, растровая графика, изображения | `lumen-font`, `lumen-paint`, будущий `lumen-image` |
+| **P3** | Сеть, хранилище, knowledge layer, crypto | `lumen-network`, `lumen-storage`, будущий `lumen-knowledge`, `lumen-core::ext` |
+| **P4** | Shell, окно, JS-движок, AI, UI-фичи | `lumen-shell`, JS integration (`rquickjs`/`rusty_v8`), будущий `lumen-ai`, UI features |
+
+### Правила взаимодействия
+
+- **Crate ownership.** Если ты P1 — не лезешь в `lumen-paint` без согласования с P2; если P3 — не правишь layout без согласования с P1. Это снижает merge-конфликты, а не запрещает ревью.
+- **`lumen-core` — общая поверхность.** Trait-ы в `lumen-core::ext` правит обычно P3 (Network/Storage/EventSink/Url), но если P2 нужен новый `FontProvider` trait — добавляет сам, не блокируясь на P3. Coordination через коммит-сообщение.
+- **`lumen-shell` — у P4.** Каждая новая capability у других программистов завершается тем, что P4 интегрирует её в shell отдельной задачей. Не интегрируешь сам, если ты не P4 — описываешь интеграционную точку в commit-body, P4 поднимет.
+- **Точки расширения добавляет тот, кому нужно.** Не блокируй другую сессию на «P3 ещё не добавил trait» — добавь trait сам, P3 ревьюит post-factum.
+
+### Как зарезервировать задачу под себя
+
+Стандартный протокол из раздела «Координация параллельных сессий»: создаёшь feature-ветку (`git checkout -b <имя>`) → первым же коммитом добавляешь строку в блок «🔄 В работе сейчас» в `lumen-plan.md` в формате:
+
+```
+- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>
+```
+
+`[PN]` в строке — чтобы другие сессии видели, кто чем занят, и не дублировались.
+
+---
+
 ## Команды для работы
 
 ```bash
@@ -480,45 +512,45 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 Порядок — по impact/effort. Внешний ревью указало, что текущий рендерер сломается на любой реальной странице из-за шрифтов и DPR; это перевешивает любые архитектурные рефакторинги.
 
-1. **Font fallback / matcher** — рендерер сейчас всегда Inter Regular. Любая реальная страница с эмодзи / CJK / явным `font-family: Roboto` отрисуется в `?`-глифы. Минимум: системный font-loader (Win32 GDI / fontconfig / CoreText напрямую, без сторонних crate-ов), cascade «Inter → системный по unicode-блоку». Парсер `font-family` в `lumen-css-parser` уже есть, в paint не используется. **Это блокер для Phase 1 как демонстрации.**
-2. **`Url` как структурированный тип** — `struct { scheme, host, port, path, query, fragment }`. Сейчас `lumen-core::Url` это `Url(String)`, network ad-hoc парсит то же самое в `parse_url`. Дедуплицировать до того, как появятся CSP / cookie jar / cross-origin checks. День работы.
-3. **Scroll + DPR-awareness в shell.** Вместе, потому что без `scale_factor` от winit scroll выглядит игрушечно на 4K. Открывает возможность работать с реальными статьями.
-4. **`RequestBlocked` event + место для FilterListSource-чек** — Started/Completed уже emit-ятся, Blocked пока нет (нет источника блокировок). Добавить, как только появится первый фильтр (трекеры / ad-blocker), чтобы каждый «не-исходящий байт» тоже был виден.
+1. **`[P2]` Font fallback / matcher** — рендерер сейчас всегда Inter Regular. Любая реальная страница с эмодзи / CJK / явным `font-family: Roboto` отрисуется в `?`-глифы. Минимум: системный font-loader (Win32 GDI / fontconfig / CoreText напрямую, без сторонних crate-ов), cascade «Inter → системный по unicode-блоку». Парсер `font-family` в `lumen-css-parser` уже есть, в paint не используется. **Это блокер для Phase 1 как демонстрации.**
+2. **`[P3]` `Url` как структурированный тип** — `struct { scheme, host, port, path, query, fragment }`. Сейчас `lumen-core::Url` это `Url(String)`, network ad-hoc парсит то же самое в `parse_url`. Дедуплицировать до того, как появятся CSP / cookie jar / cross-origin checks. День работы.
+3. **`[P4]` Scroll + DPR-awareness в shell.** Вместе, потому что без `scale_factor` от winit scroll выглядит игрушечно на 4K. Открывает возможность работать с реальными статьями.
+4. **`[P3]` `RequestBlocked` event + место для FilterListSource-чек** — Started/Completed уже emit-ятся, Blocked пока нет (нет источника блокировок). Добавить, как только появится первый фильтр (трекеры / ad-blocker), чтобы каждый «не-исходящий байт» тоже был виден.
 
 ### Средний приоритет (Phase 1+)
 
-6. **CSS — типизированные значения деклараций** — length / color / calc / `--var`. Селекторы Level 3 готовы полностью (compound, combinators, attribute, structural+functional pseudo, `:not`, specificity).
-7. **Tab session export / import** (§12.7) — сериализация в snapshot-формат lumen-storage. Простое, экономит много боли.
-8. **Картинки на страницах** — `<img>` рендеринг. Нужны PNG/JPEG декодеры (свои, по §5).
+6. **`[P1]` CSS — типизированные значения деклараций** — length / color / calc / `--var`. Селекторы Level 3 готовы полностью (compound, combinators, attribute, structural+functional pseudo, `:not`, specificity).
+7. **`[P3]` Tab session export / import** (§12.7) — сериализация в snapshot-формат lumen-storage. Простое, экономит много боли.
+8. **`[P2]` Картинки на страницах** — `<img>` рендеринг. Нужны PNG/JPEG декодеры (свои, по §5). Новый крейт `lumen-image`.
 
 ### Большое (Phase 2+)
 
-11. **QuickJS интеграция через `rquickjs`** — exception #4. Базовое исполнение JS. `lumen-core::ext::JsRuntime` trait.
-12. **`lumen-knowledge` крейт** (§12.1-12.4) — FTS-индекс над историей и заметками, omnibox-префиксы `@history` / `@notes` / `@tabs` / `@read-later`.
-13. **CSS Grid + полный Flexbox** в layout.
-14. **HTTP/2** поверх свои rustls-based транспорта.
-15. **DoH / DoT resolver** в network-слое.
-16. **Site isolation** (process per origin) — `lumen-renderer` процесс отдельно от shell.
-17. **Profiles + шифрование** (§9.3) — XChaCha20-Poly1305, Argon2id KDF.
-18. **Focus mode** (§12.6) — UI feature, не требует новых крейтов.
-19. **Кастомизация UI** (§12.10) — drag&drop панелей, темы.
+11. **`[P4]` QuickJS интеграция через `rquickjs`** — exception #4. Базовое исполнение JS. `lumen-core::ext::JsRuntime` trait.
+12. **`[P3]` `lumen-knowledge` крейт** (§12.1-12.4) — FTS-индекс над историей и заметками, omnibox-префиксы `@history` / `@notes` / `@tabs` / `@read-later`.
+13. **`[P1]` CSS Grid + полный Flexbox** в layout.
+14. **`[P3]` HTTP/2** поверх свои rustls-based транспорта.
+15. **`[P3]` DoH / DoT resolver** в network-слое.
+16. **`[P4]` Site isolation** (process per origin) — `lumen-renderer` процесс отдельно от shell.
+17. **`[P3]` Profiles + шифрование** (§9.3) — XChaCha20-Poly1305, Argon2id KDF.
+18. **`[P4]` Focus mode** (§12.6) — UI feature, не требует новых крейтов.
+19. **`[P4]` Кастомизация UI** (§12.10) — drag&drop панелей, темы.
 
 ### Очень большое (Phase 3+)
 
-20. **V8 переход** с `rusty_v8`. Реализуем `JsRuntime` для V8, не ломая QuickJS path.
-21. **`lumen-ai` крейт** (§12.5) — embedding + RAG + LLM-backend через Ollama HTTP (без exception, используем существующий `lumen-network`). Встроенный llama.cpp как exception #5 — отвергнут (см. Decisions log).
-22. **Семантические закладки** (§12.8) — требует §12.5.
-23. **Service Workers**, Canvas 2D, IndexedDB.
-24. **WebFonts через WOFF2** в `lumen-font`.
+20. **`[P4]` V8 переход** с `rusty_v8`. Реализуем `JsRuntime` для V8, не ломая QuickJS path.
+21. **`[P4]` `lumen-ai` крейт** (§12.5) — embedding + RAG + LLM-backend через Ollama HTTP (без exception, используем существующий `lumen-network`). Встроенный llama.cpp как exception #5 — отвергнут (см. Decisions log).
+22. **`[P3]` Семантические закладки** (§12.8) — требует §12.5 (lumen-ai от P4).
+23. **`[P4]` Service Workers** · **`[P2]` Canvas 2D** · **`[P3]` IndexedDB**.
+24. **`[P2]` WebFonts через WOFF2** в `lumen-font`.
 
 ### Не приоритет, держим в голове
 
-- Variable fonts (fvar/gvar/avar/HVAR) в `lumen-font`.
-- GSUB/GPOS shaping (для арабского, индийского, тайского). Текущая позиция — добавим как exception #5 (rustybuzz) или сами для базовых случаев. См. анализ qwen.ai и обсуждение в плане.
-- ADR-инфраструктура (`docs/decisions/`) — формализация decisions log.
-- StorageBackend trait: добавить origin partitioning параметр (`(origin, top_level_site)`) ДО первой реализации, чтобы не переделывать.
-- Composite glyphs с ARGS_ARE_XY_VALUES=0 (point alignment) — для битых старых шрифтов.
-- CSS4 pseudo-class `:has(...)` — единственный из CSS4 functional pseudo, что остался; `:is(...)`, `:where(...)`, `:nth-*`, `:not(compound)` уже работают.
+- **`[P2]`** Variable fonts (fvar/gvar/avar/HVAR) в `lumen-font`.
+- **`[P2]`** GSUB/GPOS shaping (для арабского, индийского, тайского). Текущая позиция — добавим как exception #5 (rustybuzz) или сами для базовых случаев. См. анализ qwen.ai и обсуждение в плане.
+- **(любой)** ADR-инфраструктура (`docs/decisions/`) — формализация decisions log.
+- **`[P3]`** StorageBackend trait: добавить origin partitioning параметр (`(origin, top_level_site)`) ДО первой реализации, чтобы не переделывать.
+- **`[P2]`** Composite glyphs с ARGS_ARE_XY_VALUES=0 (point alignment) — для битых старых шрифтов.
+- CSS4 pseudo-class `:has(...)` — реализовано в `css-has-pseudo`, см. историю merge-ов.
 
 ---
 
