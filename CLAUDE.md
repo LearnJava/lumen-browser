@@ -275,6 +275,30 @@ git worktree remove ../lumen-<имя-задачи>
 
 Для cleanup перед merge: можно `git rebase -i HEAD~N` локально, склеив wip-коммиты — но **только** пока ветка ещё не публиковалась (т.е. пока её не подтянула другая сессия / merge не выполнен).
 
+#### Никогда не оставлять worktree на `main` с uncommitted / staged изменениями
+
+Worktree на `main` (с веткой `[main]` или detached HEAD на main HEAD) — это **временная конструкция для атомарного merge**. Сразу после merge / `update-ref` — `git worktree remove <path>`. Длительный worktree на main с любым грязным состоянием — **блокер для всех остальных сессий**:
+
+- Другая сессия не может сделать `git checkout main` (для `git merge --no-ff <task>`) — git откажет: `fatal: 'main' is already used by worktree at <твой path>`.
+- Атомарный merge через `update-ref refs/heads/main NEW OLD` с детачем не помогает — пока кто-то держит main checked out, никто другой не может встать на main в своём worktree.
+
+**Признак зомби-worktree:** имя пути не совпадает с веткой (например, `.claude/worktrees/css-foo/` где `[main]`) — это след давно мёртвой сессии. Если git status показывает large staged-diff, который выглядит как «откат недавно влитых задач» — это устаревший снимок, не намеренный revert.
+
+**Лечение зомби, не теряя WIP:**
+```bash
+# 1. Архивируем patch на всякий случай
+git -C <zombie-path> diff --cached > .claude/archive/zombie-staged-$(date +%Y%m%d).patch
+
+# 2. Переводим worktree со staged-state на отдельную ветку
+git -C <zombie-path> checkout -B zombie-stale-wip-<дата>
+git -C <zombie-path> commit -m "WIP from zombie session ..."
+
+# 3. main свободен. Ветка остаётся как карантин — удалить через
+#    git branch -D zombie-stale-wip-<дата>, если revert признан мусором.
+```
+
+**Для своих временных worktree** (например, при атомарном merge через `git worktree add --detach`): создал → выполнил `update-ref` → `git worktree remove <path>` в той же команде. Не оставляй на потом, не уходи спать с открытым worktree на main.
+
 ---
 
 ## Коммуникация (когда отвечаешь пользователю)
