@@ -15,10 +15,11 @@
 //!   последовательность фильтрованных скан-линий.
 //! - `IEND` — пустой, маркирует конец.
 //!
-//! Phase 0 покрывает 8-битные RGB / RGBA / grayscale / grayscale+alpha +
-//! palette (color_type 3) + tRNS, **плюс sub-byte depth (1/2/4) для
-//! grayscale и palette**, без interlacing. 16-битная глубина и Adam7 —
-//! отдельными задачами.
+//! Phase 0 покрывает grayscale / grayscale+alpha / RGB / RGBA при
+//! `bit_depth ∈ {8, 16}` (16-битные сэмплы downsample-ятся до 8 бит на
+//! канал отбрасыванием младшего байта), palette (color_type 3) при
+//! `bit_depth ∈ {1, 2, 4, 8}` с опциональным `tRNS`, sub-byte depth
+//! (1/2/4) для grayscale; всё без interlacing. Adam7 — отдельной задачей.
 
 pub(crate) mod chunk;
 pub(crate) mod filter;
@@ -37,7 +38,8 @@ pub(crate) const SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A,
 
 /// Декодировать PNG-поток в `Image`. Поддержаны цветовые типы grayscale /
 /// grayscale+alpha / RGB / RGBA / palette; для grayscale и palette — также
-/// bit_depth 1/2/4 (sub-byte unpack + scaling); прочие комбинации
+/// bit_depth 1/2/4 (sub-byte unpack + scaling); для всех не-палитровых
+/// типов — bit_depth 16 (downsample до 8 бит); прочие комбинации
 /// возвращаются как `Unsupported(...)` или `BadPalette(...)`.
 ///
 /// Алгоритм:
@@ -54,7 +56,8 @@ pub(crate) const SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A,
 /// 6. При sub-byte depth — распаковываем биты в один байт на сэмпл.
 /// 7. Для grayscale при sub-byte — масштабируем сэмплы до полного 8-битного
 ///    диапазона (PNG §13.12).
-/// 8. Для color_type 3 — расширяем индексы в Rgb8 (без tRNS) / Rgba8 (с tRNS).
+/// 8. При 16-bit — downsample до 8 бит на канал (отбрасываем младший байт).
+/// 9. Для color_type 3 — расширяем индексы в Rgb8 (без tRNS) / Rgba8 (с tRNS).
 pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
     let after_sig = chunk::read_signature(bytes)?;
     let mut reader = chunk::ChunkReader::new(after_sig);
@@ -134,22 +137,18 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
     }
 
     // Раннее отбраковывание неподдерживаемых вариантов, общих для всех
-    // color types. Interlaced и 16-bit ещё валидны по IHDR §11.2.2 table 11.1,
-    // но не реализованы в Phase 0.
+    // color types. Interlaced ещё валиден по IHDR §11.2.2 table 11.1,
+    // но не реализован в Phase 0.
     if header.interlaced {
         return Err(DecodeError::Unsupported(
             crate::UnsupportedReason::Interlaced,
         ));
     }
-    if header.bit_depth == 16 {
-        return Err(DecodeError::Unsupported(
-            crate::UnsupportedReason::SixteenBitDepth,
-        ));
-    }
     let is_sub_byte = matches!(header.bit_depth, 1 | 2 | 4);
+    let is_16bit = header.bit_depth == 16;
     // Sub-byte допустим только для grayscale (color_type 0) и palette (3),
-    // по IHDR §11.2.2 table 11.1 — это уже проверено в Ihdr::parse(); здесь
-    // bit_depth 1/2/4 не может встретиться для RGB / GrayA / RGBA.
+    // 16-bit — только для не-палитровых (0/2/4/6) — по IHDR §11.2.2 table 11.1
+    // (уже проверено в Ihdr::parse(); здесь невозможные комбинации не встречаются).
 
     // Определяем выходной формат и параметры фильтра.
     let format = if is_palette {
@@ -196,8 +195,12 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
     let raw = inflate::inflate_zlib(&idat).map_err(DecodeError::BadDeflate)?;
     let unfiltered = filter::unfilter(&raw, filter_width, header.height, filter_bpp)?;
 
-    // При sub-byte распаковываем биты в один байт на сэмпл; иначе скан-линии
-    // уже плотные.
+    // При sub-byte распаковываем биты в один байт на сэмпл; при 16-bit
+    // downsample-им до 8 бит на канал отбрасыванием младшего байта (PNG
+    // хранит сэмплы big-endian, поэтому high byte всегда первый из пары).
+    // Это эквивалент `PNG_TRANSFORM_STRIP_16` в libpng — небольшая потеря
+    // точности (0xFFFE → 0xFF, не 0xFE), но достаточно для веб-отображения.
+    // Иначе — скан-линии уже плотные.
     let samples = if is_sub_byte {
         let mut s =
             sub_byte::unpack_bits(&unfiltered, header.width, header.height, header.bit_depth);
@@ -205,6 +208,8 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
             sub_byte::scale_grayscale_to_8bit(&mut s, header.bit_depth);
         }
         s
+    } else if is_16bit {
+        downsample_16bit_to_8bit(&unfiltered)
     } else {
         unfiltered
     };
@@ -227,4 +232,42 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
         format,
         data: pixels,
     })
+}
+
+/// Понизить 16-битные сэмплы до 8-битных, оставив только high-byte каждой
+/// пары. PNG хранит u16 в big-endian — high byte идёт первым; результат имеет
+/// ровно половину исходной длины. Эквивалент `PNG_TRANSFORM_STRIP_16` в
+/// libpng. Альтернатива (`((s + 128) / 257) as u8`, точное округление) даёт
+/// чуть более правильное визуальное значение для интенсивностей вроде 0xFF80,
+/// но усложняет код без выигрыша для типичных веб-сценариев.
+fn downsample_16bit_to_8bit(samples_be16: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(samples_be16.len() / 2);
+    for pair in samples_be16.chunks_exact(2) {
+        out.push(pair[0]);
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::downsample_16bit_to_8bit;
+
+    #[test]
+    fn downsample_takes_high_byte_only() {
+        let input = vec![0xFF, 0x80, 0x00, 0x00, 0xC0, 0x40, 0x40, 0xC0];
+        assert_eq!(downsample_16bit_to_8bit(&input), vec![0xFF, 0x00, 0xC0, 0x40]);
+    }
+
+    #[test]
+    fn downsample_empty() {
+        assert_eq!(downsample_16bit_to_8bit(&[]), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn downsample_ignores_odd_tail() {
+        // chunks_exact игнорирует неполный последний кусок — для корректного
+        // потока PNG это никогда не происходит, но защита от panic полезна.
+        let input = vec![0xAB, 0xCD, 0xEF];
+        assert_eq!(downsample_16bit_to_8bit(&input), vec![0xAB]);
+    }
 }
