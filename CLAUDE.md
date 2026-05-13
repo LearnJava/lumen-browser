@@ -90,6 +90,12 @@ cargo run -p lumen-shell -- samples/page.html
 # Пустое окно.
 cargo run -p lumen-shell
 
+# Headless dump-режимы (без winit / wgpu). Pipeline до нужной фазы,
+# результат в stdout, диагностика в stderr — удобно для CI и сравнения.
+cargo run -p lumen-shell -- --dump-source samples/page.html
+cargo run -p lumen-shell -- --dump-layout samples/page.html
+cargo run -p lumen-shell -- --dump-display-list samples/page.html
+
 # ASCII-превью растеризации глифов из Inter.
 cargo run --example preview -p lumen-font
 
@@ -491,12 +497,13 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 ### `lumen-shell` 🟡 (окно + рендер + сеть)
 
-- **Готово:** winit 0.30 с `ApplicationHandler` API. Три режима: `lumen` (пустое окно 1024×720), `lumen <path.html>` (файл → кодировка → HTML → layout → paint), `lumen <http(s)://...>` (сеть через `HttpClient` → те же этапы). Внешний CSS: `<link rel="stylesheet" href="...">` загружается с диска (относительно HTML-файла) или по сети (относительно базового URL). `ResourceBase` enum изолирует логику разрешения относительных URL. Inter-Regular.ttf bundled через `include_bytes!`. Обработчики Resized + RedrawRequested.
-- **Готово (network log):** `StdoutEventSink` — простейший наблюдатель сетевых событий, печатает в stdout: `→ GET <url>`, `← <status> <url>`, `✗ <url> (<reason>)`. Подключается к `HttpClient` в shell, чтобы каждый исходящий байт был виден пользователю — это и есть Phase 0 версия network log из принципа №4. Позже заменится на структурированный UI-логгер (отдельная панель в окне).
+- **Готово:** winit 0.30 с `ApplicationHandler` API. Три режима окна: `lumen` (пустое окно 1024×720), `lumen <path.html>` (файл → кодировка → HTML → layout → paint), `lumen <http(s)://...>` (сеть через `HttpClient` → те же этапы). Внешний CSS: `<link rel="stylesheet" href="...">` загружается с диска (относительно HTML-файла) или по сети (относительно базового URL). `ResourceBase` enum изолирует логику разрешения относительных URL. Inter-Regular.ttf bundled через `include_bytes!`. Обработчики Resized + RedrawRequested.
+- **Готово (network log):** `StdoutEventSink` — простейший наблюдатель сетевых событий, печатает в **stderr** (а не stdout): `→ GET <url>`, `← <status> <url>`, `✗ <url> (<reason>)`. Подключается к `HttpClient` в shell, чтобы каждый исходящий байт был виден пользователю — это и есть Phase 0 версия network log из принципа №4. Stderr выбран, чтобы dump-режимы не пачкали свой stdout сетевыми событиями (в оконном режиме оба потока идут в терминал — видимо неотличимо). Позже заменится на структурированный UI-логгер (отдельная панель в окне).
 - **Готово (window title):** `extract_title(&Document)` находит первый `<title>` в дереве, склеивает текстовые дети и сжимает whitespace через `split_whitespace().join(" ")` (отрабатывает `\n\t`, длинные пробелы). Энтити уже декодированы tokenizer-ом (RCDATA). `LoadedPage { display_list, title }` возвращается из `PageSource::load` / `render_bytes` — единая точка для будущих расширений (favicon, current URL, scroll state). `window_title(Option<&str>)` форматирует заголовок: с title — `"<title> — Lumen"`, без — fallback на `Lumen <version>`. `Lumen::reload` обновляет title окна (`window.set_title(...)`) при reload.
 - **Готово (keybindings):** `PageSource` enum (`Empty` / `File(PathBuf)` / `Url(String)`) хранится в `Lumen` вместе с `Arc<dyn EventSink>` — `PageSource::load(sink)` детерминированно перезапускает fetch/parse/layout/paint. `KeyCommand` enum (`Reload` / `Exit`) и `keybinding_for(KeyCode, ModifiersState) -> Option<KeyCommand>` — изолированный от winit маппер shortcuts (F5 / Ctrl+R → Reload, Esc / Ctrl+W → Exit), тестируется юнитами. В `window_event` обрабатывается `WindowEvent::ModifiersChanged` (обновляет `Lumen.modifiers`) и `WindowEvent::KeyboardInput` (по physical_key + state на pressed, без `repeat`-эхо, маппинг через `keybinding_for`). Force-reload (`Ctrl+Shift+R`) намеренно не привязан — нет cache, чтобы было что обходить; зарезервировано на будущее. `Lumen::reload` на `PageSource::Empty` — no-op, на ошибке оставляет предыдущий display_list и логирует stderr.
-- **Отложено:** вкладки, омнибокс, навигация по URL из омнибокса, история сессий, scroll, mouse input, дополнительные shortcuts (Ctrl+L для омнибокса, Ctrl+T для new tab, …).
-- 31 unit-тест (resolve_url, ResourceBase::resolve, collect_link_hrefs, extract_title, window_title, keybinding_for, PageSource::from_arg/describe).
+- **Готово (headless dump-режимы):** три CLI-флага гоняют pipeline без winit и wgpu, печатают результат фазы в stdout, диагностика в stderr. `--dump-source <path-or-url>` → `lumen_encoding::decode` после `detect`. `--dump-layout <path-or-url>` → `lumen_layout::serialize_layout_tree`. `--dump-display-list <path-or-url>` → `lumen_paint::serialize_display_list` (тот же формат, что у paint snapshot-ов). Полезно для CI (рендеринг без GPU), отладки сложных страниц и сравнения между версиями. `parse_cli(args) -> Result<CliMode, String>` — изолированный CLI-парсер, юнит-тестируется. `CliMode::OpenWindow(PageSource) | Dump { source, kind }`, `DumpKind::{Source,Layout,DisplayList}`, `DumpKind::from_flag` распознаёт три флага в первой позиции; неизвестный флаг / dump-флаг без target / два non-flag args → ошибка с понятным русским сообщением + `print_usage()` в stderr. `parse_and_layout(bytes, ct, base, sink) -> ParsedPage` выделен из `render_bytes` — общая часть для оконного и dump-режимов; `ParsedPage { document, layout, title, rule_count }` — точка возврата до paint. `RawPage { bytes, base, content_type }` — возврат `PageSource::load_bytes` (вместо tuple — clippy::type-complexity).
+- **Отложено:** вкладки, омнибокс, навигация по URL из омнибокса, история сессий, scroll, mouse input, дополнительные shortcuts (Ctrl+L для омнибокса, Ctrl+T для new tab, …), pixel-dump (рендерим в headless wgpu и сохраняем PNG — нужен `lumen-image` encoder).
+- 44 unit-теста (resolve_url, ResourceBase::resolve, collect_link_hrefs, extract_title, window_title, keybinding_for, PageSource::from_arg/describe, **DumpKind::from_flag, parse_cli** — 13 новых).
 
 ### `lumen-bench` ✅ (baseline pipeline measurements)
 
@@ -518,7 +525,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 ### Численно
 
-- **Всего тестов в workspace:** 1006 (на момент последнего обновления — 969 в main + 37 в этой ветке).
+- **Всего тестов в workspace:** 1018 (на момент последнего обновления — 1005 в main + 13 в shell-dump-modes).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -634,6 +641,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            shell-dump-modes       — Headless dump-режимы: --dump-source/-layout/-display-list. Pipeline без winit/wgpu, результат фазы в stdout, диагностика на stderr (Кодировка, Загружен CSS, StdoutEventSink — все переехали в eprintln). parse_and_layout выделен из render_bytes как общая часть для оконного и dump-путей. ParsedPage { document, layout, title, rule_count } + RawPage { bytes, base, content_type } (вместо tuple — clippy::type-complexity). parse_cli юнит-тестируется. 13 новых тестов
 *            css-math-funcs          — CSS Values L4 §10.7-10.9: научные math-функции. CalcNode::Func(MathFn, args) для 17 функций — sin/cos/tan/asin/acos/atan/atan2/pow/sqrt/exp/log/hypot/abs/sign/mod/rem/round. Angle-units (deg/rad/turn/grad) лексер конвертирует в радианы→Number. Ident-токены допускают цифры/дефис после первой буквы (для atan2). f64-точность внутри resolve, проверка is_finite (NaN/∞→None). sign(0)=0 (отступаем от std::signum). mod знак-делителя vs rem знак-делимого. 37 layout-тестов
 *            shell-keybinds         — базовые shortcuts: F5/Ctrl+R = reload, Esc/Ctrl+W = exit. `PageSource` enum в `Lumen` запоминает источник (File/Url/Empty) + Arc<dyn EventSink>, чтобы reload детерминированно повторял fetch/parse/layout/paint и обновлял title окна. `keybinding_for(KeyCode, ModifiersState)` изолирует маппинг от winit и юнит-тестируется. Force-reload (Ctrl+Shift+R) зарезервирован. 12 новых тестов
 *            png-subbyte            — PNG sub-byte depths 1/2/4 для grayscale (color_type 0) и palette (color_type 3): новый модуль `png::sub_byte` с unpack_bits (MSB-first per PNG §7.2, trailing-биты в padding) и scale_grayscale_to_8bit (1-bit × 255, 2-bit × 85, 4-bit × 17 per PNG §13.12). Orchestrator: filter_bpp = max(8, channels × bit_depth)/8 → 1 для sub-byte, что соответствует PNG §9.2; bytes_per_scanline = ceil(W × channels × bit_depth / 8). 11 sub_byte unit + 5 integration новых тестов на реальных sub-byte фикстурах
