@@ -37,6 +37,52 @@ pub enum TextAlign {
     Right,
 }
 
+/// CSS UI L4 §8.1 — `cursor`. Inherited.
+///
+/// Хранится как enum 17 стандартных keyword-ов. URL-fallback (`cursor:
+/// url(custom.png), pointer`) отложен. `Auto` — пусть UA решает (для
+/// большинства это `Default`).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Cursor {
+    #[default]
+    Auto,
+    Default,
+    None,
+    ContextMenu,
+    Help,
+    Pointer,
+    Progress,
+    Wait,
+    Cell,
+    Crosshair,
+    Text,
+    VerticalText,
+    Alias,
+    Copy,
+    Move,
+    NoDrop,
+    NotAllowed,
+    Grab,
+    Grabbing,
+    AllScroll,
+    ColResize,
+    RowResize,
+    NResize,
+    EResize,
+    SResize,
+    WResize,
+    NeResize,
+    NwResize,
+    SeResize,
+    SwResize,
+    EwResize,
+    NsResize,
+    NeswResize,
+    NwseResize,
+    ZoomIn,
+    ZoomOut,
+}
+
 /// CSS Overflow L3 — `overflow`. Не наследуется.
 ///
 /// `Visible` — содержимое выходит за пределы коробки и видно. `Hidden` —
@@ -313,6 +359,8 @@ pub struct ComputedStyle {
     pub box_sizing: BoxSizing,
     /// CSS Display L3 §4 — visibility. Inherited.
     pub visibility: Visibility,
+    /// CSS UI L4 §8.1 — cursor. Inherited.
+    pub cursor: Cursor,
     /// CSS Overflow L3 — отдельные поля для X и Y. Не наследуются.
     pub overflow_x: Overflow,
     pub overflow_y: Overflow,
@@ -390,6 +438,7 @@ impl ComputedStyle {
             border_left_color: None,
             box_sizing: BoxSizing::ContentBox,
             visibility: Visibility::Visible,
+            cursor: Cursor::Auto,
             overflow_x: Overflow::Visible,
             overflow_y: Overflow::Visible,
             opacity: 1.0,
@@ -451,6 +500,8 @@ pub fn compute_style(
         box_sizing: BoxSizing::ContentBox,
         // Inherited (CSS Display L3 §4).
         visibility: inherited.visibility,
+        // Inherited (CSS UI L4 §8.1).
+        cursor: inherited.cursor,
         // Не наследуется.
         overflow_x: Overflow::Visible,
         overflow_y: Overflow::Visible,
@@ -882,6 +933,49 @@ fn default_display(doc: &Document, node: NodeId) -> Display {
     }
 }
 
+/// CSS UI L4 §8.1: парсит keyword в `Cursor`. None = неизвестное.
+fn parse_cursor_kw(s: &str) -> Option<Cursor> {
+    Some(match s {
+        "auto" => Cursor::Auto,
+        "default" => Cursor::Default,
+        "none" => Cursor::None,
+        "context-menu" => Cursor::ContextMenu,
+        "help" => Cursor::Help,
+        "pointer" => Cursor::Pointer,
+        "progress" => Cursor::Progress,
+        "wait" => Cursor::Wait,
+        "cell" => Cursor::Cell,
+        "crosshair" => Cursor::Crosshair,
+        "text" => Cursor::Text,
+        "vertical-text" => Cursor::VerticalText,
+        "alias" => Cursor::Alias,
+        "copy" => Cursor::Copy,
+        "move" => Cursor::Move,
+        "no-drop" => Cursor::NoDrop,
+        "not-allowed" => Cursor::NotAllowed,
+        "grab" => Cursor::Grab,
+        "grabbing" => Cursor::Grabbing,
+        "all-scroll" => Cursor::AllScroll,
+        "col-resize" => Cursor::ColResize,
+        "row-resize" => Cursor::RowResize,
+        "n-resize" => Cursor::NResize,
+        "e-resize" => Cursor::EResize,
+        "s-resize" => Cursor::SResize,
+        "w-resize" => Cursor::WResize,
+        "ne-resize" => Cursor::NeResize,
+        "nw-resize" => Cursor::NwResize,
+        "se-resize" => Cursor::SeResize,
+        "sw-resize" => Cursor::SwResize,
+        "ew-resize" => Cursor::EwResize,
+        "ns-resize" => Cursor::NsResize,
+        "nesw-resize" => Cursor::NeswResize,
+        "nwse-resize" => Cursor::NwseResize,
+        "zoom-in" => Cursor::ZoomIn,
+        "zoom-out" => Cursor::ZoomOut,
+        _ => return None,
+    })
+}
+
 /// CSS Overflow L3: парсит keyword в `Overflow`. None = неизвестное.
 fn parse_overflow_kw(s: &str) -> Option<Overflow> {
     match s {
@@ -1264,6 +1358,15 @@ fn apply_declaration(
         "overflow-y" => {
             if let Some(o) = parse_overflow_kw(val.trim()) {
                 style.overflow_y = o;
+            }
+        }
+        "cursor" => {
+            // CSS UI L4 §8.1: список url(), затем обязательный keyword.
+            // url(...) пока не поддерживаем — берём ПОСЛЕДНИЙ
+            // comma-separated токен (это и есть keyword fallback).
+            let last = val.rsplit(',').next().unwrap_or("").trim();
+            if let Some(c) = parse_cursor_kw(last) {
+                style.cursor = c;
             }
         }
         "outline" => {
