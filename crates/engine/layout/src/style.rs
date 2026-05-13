@@ -1570,7 +1570,9 @@ pub enum Length {
 pub enum CalcNode {
     /// Листовое length-значение (`10px`, `2em`, `50%`, …).
     Length(Length),
-    /// Unitless число (например `2` в `calc(2 * 10px)`).
+    /// Unitless число (например `2` в `calc(2 * 10px)`). Для углов
+    /// (`45deg`, `1turn`) лексер тоже даёт Number — конвертирует в радианы
+    /// сразу при чтении.
     Number(f32),
     Add(Box<CalcNode>, Box<CalcNode>),
     Sub(Box<CalcNode>, Box<CalcNode>),
@@ -1583,6 +1585,38 @@ pub enum CalcNode {
     /// CSS Values L4 §10.6.3 — `clamp(min, val, max)`. Эквивалентно
     /// `max(min, min(val, max))`. Если `min > max` — побеждает `min`.
     Clamp(Box<CalcNode>, Box<CalcNode>, Box<CalcNode>),
+    /// CSS Values L4 §10.7-10.9 — научные math-функции: тригонометрия
+    /// (`sin/cos/tan/asin/acos/atan/atan2`), экспоненциальные
+    /// (`pow/sqrt/exp/log/hypot`), signs/stepping (`abs/sign/mod/rem/round`).
+    /// Все 15 функций унифицированы под `Func(MathFn, args)`: арность
+    /// и формула — внутри `resolve` по match-у на MathFn.
+    Func(MathFn, Vec<CalcNode>),
+}
+
+/// CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
+/// (нормализованы в нижний регистр в лексере).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MathFn {
+    // §10.7 trig
+    Sin,
+    Cos,
+    Tan,
+    Asin,
+    Acos,
+    Atan,
+    Atan2,
+    // §10.8 exponential
+    Pow,
+    Sqrt,
+    Exp,
+    Log,
+    Hypot,
+    // §10.9 sign/stepping
+    Abs,
+    Sign,
+    Mod,
+    Rem,
+    Round,
 }
 
 impl CalcNode {
@@ -1655,7 +1689,122 @@ impl CalcNode {
                 let inner = if v < mx { v } else { mx };
                 Some(if mn > inner { mn } else { inner })
             }
+            CalcNode::Func(func, args) => {
+                resolve_math_func(*func, args, em_basis, percent_basis, viewport)
+            }
         }
+    }
+}
+
+/// Резолвит научную math-функцию. Валидация арности уже сделана парсером —
+/// здесь предполагаем правильное число аргументов. Все вычисления делаются
+/// в `f64` для точности (особенно для trig / log), результат сужается до
+/// `f32`. Возвращает None если резолв одного из аргументов даёт None
+/// (например, `%` без containing block) или результат не конечный
+/// (`sqrt(-1)`, `log(0)`, `1.0 / 0.0` и т.п.).
+fn resolve_math_func(
+    func: MathFn,
+    args: &[CalcNode],
+    em_basis: f32,
+    percent_basis: Option<f32>,
+    viewport: Size,
+) -> Option<f32> {
+    let resolve = |n: &CalcNode| -> Option<f64> {
+        n.resolve(em_basis, percent_basis, viewport).map(f64::from)
+    };
+    let result: f64 = match func {
+        MathFn::Sin => resolve(&args[0])?.sin(),
+        MathFn::Cos => resolve(&args[0])?.cos(),
+        MathFn::Tan => resolve(&args[0])?.tan(),
+        MathFn::Asin => resolve(&args[0])?.asin(),
+        MathFn::Acos => resolve(&args[0])?.acos(),
+        MathFn::Atan => resolve(&args[0])?.atan(),
+        MathFn::Atan2 => {
+            let y = resolve(&args[0])?;
+            let x = resolve(&args[1])?;
+            y.atan2(x)
+        }
+        MathFn::Pow => {
+            let base = resolve(&args[0])?;
+            let exp = resolve(&args[1])?;
+            base.powf(exp)
+        }
+        MathFn::Sqrt => resolve(&args[0])?.sqrt(),
+        MathFn::Exp => resolve(&args[0])?.exp(),
+        MathFn::Log => {
+            let v = resolve(&args[0])?;
+            if args.len() == 2 {
+                // log(value, base) — логарифм по основанию.
+                let base = resolve(&args[1])?;
+                v.log(base)
+            } else {
+                // Единственный аргумент: натуральный логарифм (CSS §10.8.5).
+                v.ln()
+            }
+        }
+        MathFn::Hypot => {
+            // hypot(a, b, ...) = sqrt(a² + b² + ...). spec.
+            let mut sum_sq = 0.0_f64;
+            for a in args {
+                let v = resolve(a)?;
+                sum_sq += v * v;
+            }
+            sum_sq.sqrt()
+        }
+        MathFn::Abs => resolve(&args[0])?.abs(),
+        MathFn::Sign => {
+            // CSS sign(0) = 0 (spec §10.9.2); std signum даёт +1 для 0.0
+            // и -1 для -0.0. Обрабатываем явно.
+            let v = resolve(&args[0])?;
+            if v == 0.0 {
+                0.0
+            } else if v > 0.0 {
+                1.0
+            } else {
+                -1.0
+            }
+        }
+        MathFn::Mod => {
+            // CSS mod (§10.9.3): результат имеет знак делителя.
+            // `((a % b) + b) % b` — стандартная формула positive-mod.
+            let a = resolve(&args[0])?;
+            let b = resolve(&args[1])?;
+            if b == 0.0 {
+                return None;
+            }
+            ((a % b) + b) % b
+        }
+        MathFn::Rem => {
+            // CSS rem (§10.9.4): truncated remainder, sign от делимого
+            // (тот же `%` в Rust для f64).
+            let a = resolve(&args[0])?;
+            let b = resolve(&args[1])?;
+            if b == 0.0 {
+                return None;
+            }
+            a % b
+        }
+        MathFn::Round => {
+            // round(val[, step]). Без step (один аргумент) — round до
+            // ближайшего целого. С step — round к ближайшему кратному step.
+            // Strategy keywords (`up`/`down`/`to-zero`/`nearest`) — в Phase 0
+            // не реализованы (парсер их не распознаёт, см. parse_function_call).
+            let val = resolve(&args[0])?;
+            if args.len() == 2 {
+                let step = resolve(&args[1])?;
+                if step == 0.0 {
+                    return None;
+                }
+                (val / step).round() * step
+            } else {
+                val.round()
+            }
+        }
+    };
+    if result.is_finite() {
+        Some(result as f32)
+    } else {
+        None
     }
 }
 
@@ -1797,10 +1946,14 @@ fn tokenize_calc(s: &str) -> Option<Vec<CalcToken>> {
                 i = end;
                 continue;
             }
-            // Идентификатор функции — буквенная последовательность.
+            // Идентификатор функции — буквенный старт + опц. цифры/дефис
+            // (так в имени `atan2` лексер не споткнётся на `2`).
             c if c.is_ascii_alphabetic() => {
                 let start = i;
-                while i < bytes.len() && bytes[i].is_ascii_alphabetic() {
+                i += 1;
+                while i < bytes.len()
+                    && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-')
+                {
                     i += 1;
                 }
                 let name = std::str::from_utf8(&bytes[start..i])
@@ -1981,6 +2134,66 @@ fn parse_function_call(
             let c = it.next().unwrap();
             Some(CalcNode::Clamp(Box::new(a), Box::new(b), Box::new(c)))
         }
+        // CSS Values L4 §10.7-10.9 — научные math-функции.
+        // Имя → (MathFn, валидное число аргументов). Проверяем арность тут,
+        // resolve_math_func предполагает корректность.
+        "sin" | "cos" | "tan" | "asin" | "acos" | "atan" | "sqrt" | "exp"
+        | "abs" | "sign" => {
+            if args.len() != 1 {
+                return None;
+            }
+            let func = match name {
+                "sin" => MathFn::Sin,
+                "cos" => MathFn::Cos,
+                "tan" => MathFn::Tan,
+                "asin" => MathFn::Asin,
+                "acos" => MathFn::Acos,
+                "atan" => MathFn::Atan,
+                "sqrt" => MathFn::Sqrt,
+                "exp" => MathFn::Exp,
+                "abs" => MathFn::Abs,
+                "sign" => MathFn::Sign,
+                _ => unreachable!(),
+            };
+            Some(CalcNode::Func(func, args))
+        }
+        "atan2" | "pow" | "mod" | "rem" => {
+            if args.len() != 2 {
+                return None;
+            }
+            let func = match name {
+                "atan2" => MathFn::Atan2,
+                "pow" => MathFn::Pow,
+                "mod" => MathFn::Mod,
+                "rem" => MathFn::Rem,
+                _ => unreachable!(),
+            };
+            Some(CalcNode::Func(func, args))
+        }
+        "log" => {
+            // 1 или 2 аргумента: log(x) = ln(x), log(x, base) = log_base(x).
+            if args.is_empty() || args.len() > 2 {
+                return None;
+            }
+            Some(CalcNode::Func(MathFn::Log, args))
+        }
+        "hypot" => {
+            // 1+ аргумента.
+            if args.is_empty() {
+                return None;
+            }
+            Some(CalcNode::Func(MathFn::Hypot, args))
+        }
+        "round" => {
+            // round(val) или round(val, step). Strategy keyword не реализован
+            // в Phase 0 — он бы стоял первым аргументом-ident, парсер
+            // не знает ident-arg, поэтому такие вызовы парсятся как обычные
+            // expr и упадут.
+            if args.is_empty() || args.len() > 2 {
+                return None;
+            }
+            Some(CalcNode::Func(MathFn::Round, args))
+        }
         _ => None, // незнакомая math-функция
     }
 }
@@ -1998,14 +2211,25 @@ fn parse_arg_list(tokens: &[CalcToken], pos: &mut usize) -> Option<Vec<CalcNode>
 }
 
 /// Преобразует пару (число, unit) в `CalcNode`. Пустой unit → `Number`,
-/// иначе — `Length::*` соответствующего варианта. Неизвестный unit
-/// (`pt`, `mm`, …) даёт None — в Phase 0 поддерживаются те же единицы, что и
-/// `parse_length`. `calc()` внутри `calc()` (nested) спека разрешает, но мы
-/// пока не парсим — это требует распознать ident `calc` среди токенов; пока
-/// возвращаем None для не-числовых факторов помимо скобок.
+/// length-units → `Length::*`, angle-units (deg/rad/turn/grad) →
+/// `Number(radians)` (по CSS Values L4 §10.7 — trig-функции принимают
+/// число или angle; unitless считается уже в радианах). Неизвестный unit
+/// (`pt`, `mm`, …) даёт None.
 fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
     if unit.is_empty() {
         return Some(CalcNode::Number(value));
+    }
+    // Angle-units: конвертируем в радианы и храним как Number.
+    // Это позволяет sin/cos/tan корректно работать с любой формой угла,
+    // и сохраняет результат asin/acos/atan/atan2 как plain number
+    // (по умолчанию интерпретируется как радианы при подаче обратно в trig).
+    let pi = std::f32::consts::PI;
+    match unit {
+        "deg" => return Some(CalcNode::Number(value * pi / 180.0)),
+        "rad" => return Some(CalcNode::Number(value)),
+        "turn" => return Some(CalcNode::Number(value * 2.0 * pi)),
+        "grad" => return Some(CalcNode::Number(value * pi / 200.0)),
+        _ => {}
     }
     let length = match unit {
         "px" => Length::Px(value),
@@ -4561,8 +4785,10 @@ mod tests {
 
     #[test]
     fn unknown_function_invalid() {
-        // sin/cos/abs ещё не реализованы → declaration invalid.
-        assert!(parse_length("sin(45deg)").is_none());
+        // Реально несуществующие функции → declaration invalid.
+        // (sin/cos/abs реализованы — см. секцию scientific math funcs ниже).
+        assert!(parse_length("xyzzy(45deg)").is_none());
+        assert!(parse_length("nonexistent(10px)").is_none());
     }
 
     #[test]
@@ -4576,5 +4802,267 @@ mod tests {
             Size::new(800.0, 600.0),
         );
         assert_eq!(v, Some(30.0));
+    }
+
+    // ──── CSS Values L4 §10.7-10.9: scientific math funcs ────
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-4
+    }
+
+    fn rc_unitless(s: &str) -> Option<f32> {
+        resolved_calc(s, 16.0, None, Size::new(800.0, 600.0))
+    }
+
+    // §10.7 trigonometry
+
+    #[test]
+    fn sin_radians_zero() {
+        assert!(approx(rc_unitless("sin(0)").unwrap(), 0.0));
+    }
+
+    #[test]
+    fn sin_45_degrees() {
+        // sin(45deg) = √2/2 ≈ 0.7071.
+        let v = rc_unitless("sin(45deg)").unwrap();
+        assert!(approx(v, std::f32::consts::FRAC_1_SQRT_2), "got {v}");
+    }
+
+    #[test]
+    fn cos_180_degrees() {
+        let v = rc_unitless("cos(180deg)").unwrap();
+        assert!(approx(v, -1.0), "got {v}");
+    }
+
+    #[test]
+    fn cos_half_turn() {
+        // 0.5turn = 180deg → cos = -1.
+        let v = rc_unitless("cos(0.5turn)").unwrap();
+        assert!(approx(v, -1.0), "got {v}");
+    }
+
+    #[test]
+    fn tan_45_degrees() {
+        let v = rc_unitless("tan(45deg)").unwrap();
+        assert!(approx(v, 1.0), "got {v}");
+    }
+
+    #[test]
+    fn asin_1_returns_radians() {
+        // asin(1) = π/2 rad.
+        let v = rc_unitless("asin(1)").unwrap();
+        assert!(approx(v, std::f32::consts::FRAC_PI_2), "got {v}");
+    }
+
+    #[test]
+    fn atan_one_returns_pi_quarter() {
+        let v = rc_unitless("atan(1)").unwrap();
+        assert!(approx(v, std::f32::consts::FRAC_PI_4), "got {v}");
+    }
+
+    #[test]
+    fn atan2_y_x() {
+        // atan2(1, 1) = π/4.
+        let v = rc_unitless("atan2(1, 1)").unwrap();
+        assert!(approx(v, std::f32::consts::FRAC_PI_4), "got {v}");
+    }
+
+    #[test]
+    fn sin_unitless_is_radians() {
+        // По CSS spec число без unit в sin — радианы.
+        // sin(π/2) = 1.
+        let v = rc_unitless("sin(1.5707963)").unwrap();
+        assert!(approx(v, 1.0), "got {v}");
+    }
+
+    #[test]
+    fn grad_unit_converts_to_radians() {
+        // 200grad = π (полукруг). sin(π) ≈ 0.
+        let v = rc_unitless("sin(200grad)").unwrap();
+        assert!(v.abs() < 1e-4, "got {v}");
+    }
+
+    // §10.8 exponential
+
+    #[test]
+    fn pow_2_10() {
+        assert!(approx(rc_unitless("pow(2, 10)").unwrap(), 1024.0));
+    }
+
+    #[test]
+    fn sqrt_16() {
+        assert!(approx(rc_unitless("sqrt(16)").unwrap(), 4.0));
+    }
+
+    #[test]
+    fn sqrt_negative_returns_none() {
+        // sqrt(-1) = NaN → None.
+        assert_eq!(rc_unitless("sqrt(-1)"), None);
+    }
+
+    #[test]
+    fn exp_zero_is_one() {
+        assert!(approx(rc_unitless("exp(0)").unwrap(), 1.0));
+    }
+
+    #[test]
+    fn log_e_is_one() {
+        // log(e) с одним аргументом = ln(e) = 1.
+        let v = rc_unitless(&format!("log({})", std::f32::consts::E)).unwrap();
+        assert!(approx(v, 1.0), "got {v}");
+    }
+
+    #[test]
+    fn log_base_2_of_8() {
+        // log(8, 2) = 3.
+        let v = rc_unitless("log(8, 2)").unwrap();
+        assert!(approx(v, 3.0), "got {v}");
+    }
+
+    #[test]
+    fn log_of_zero_returns_none() {
+        // ln(0) = -∞ → not finite → None.
+        assert_eq!(rc_unitless("log(0)"), None);
+    }
+
+    #[test]
+    fn hypot_two_args_3_4() {
+        // hypot(3, 4) = 5 (классический Pythagoras).
+        assert!(approx(rc_unitless("hypot(3, 4)").unwrap(), 5.0));
+    }
+
+    #[test]
+    fn hypot_variadic_three_args() {
+        // hypot(2, 3, 6) = sqrt(4+9+36) = sqrt(49) = 7.
+        assert!(approx(rc_unitless("hypot(2, 3, 6)").unwrap(), 7.0));
+    }
+
+    #[test]
+    fn hypot_single_arg_is_abs() {
+        // hypot(-5) = sqrt(25) = 5.
+        assert!(approx(rc_unitless("hypot(-5)").unwrap(), 5.0));
+    }
+
+    // §10.9 sign / stepping
+
+    #[test]
+    fn abs_negative_to_positive() {
+        let v = resolved_calc("abs(-10px)", 16.0, None, Size::new(800.0, 600.0));
+        assert_eq!(v, Some(10.0));
+    }
+
+    #[test]
+    fn abs_in_calc() {
+        // calc(100px - abs(-20px)) = 100 - 20 = 80.
+        let v = resolved_calc(
+            "calc(100px - abs(-20px))",
+            16.0,
+            None,
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(80.0));
+    }
+
+    #[test]
+    fn sign_positive_negative_zero() {
+        assert_eq!(rc_unitless("sign(5)"), Some(1.0));
+        assert_eq!(rc_unitless("sign(-3)"), Some(-1.0));
+        assert_eq!(rc_unitless("sign(0)"), Some(0.0));
+    }
+
+    #[test]
+    fn mod_basic() {
+        // 10 mod 3 = 1 (result имеет знак делителя).
+        assert!(approx(rc_unitless("mod(10, 3)").unwrap(), 1.0));
+    }
+
+    #[test]
+    fn mod_negative_dividend() {
+        // mod(-1, 3) = 2 (CSS mod: знак делителя; -1 % 3 = -1, +3 = 2, %3 = 2).
+        assert!(approx(rc_unitless("mod(-1, 3)").unwrap(), 2.0));
+    }
+
+    #[test]
+    fn rem_negative_dividend() {
+        // rem(-1, 3) = -1 (truncated remainder: знак делимого).
+        assert!(approx(rc_unitless("rem(-1, 3)").unwrap(), -1.0));
+    }
+
+    #[test]
+    fn mod_by_zero_invalid() {
+        assert_eq!(rc_unitless("mod(10, 0)"), None);
+    }
+
+    #[test]
+    fn round_to_integer() {
+        assert!(approx(rc_unitless("round(3.7)").unwrap(), 4.0));
+        assert!(approx(rc_unitless("round(3.4)").unwrap(), 3.0));
+    }
+
+    #[test]
+    fn round_to_step() {
+        // round(13, 5) = 15 (ближайшее кратное 5).
+        assert!(approx(rc_unitless("round(13, 5)").unwrap(), 15.0));
+        // round(12, 5) = 10.
+        assert!(approx(rc_unitless("round(12, 5)").unwrap(), 10.0));
+    }
+
+    #[test]
+    fn round_to_step_in_width() {
+        // width: round(13px, 5px) = 15px.
+        let s = style_for("width: round(13px, 5px)");
+        assert_eq!(s.width, Some(15.0));
+    }
+
+    #[test]
+    fn round_with_zero_step_invalid() {
+        assert_eq!(rc_unitless("round(13, 0)"), None);
+    }
+
+    // Интеграция
+
+    #[test]
+    fn math_func_nested_in_calc_and_min() {
+        // min(abs(-50px), sqrt(900) * 1px) = min(50, 30) = 30.
+        let v = resolved_calc(
+            "min(abs(-50px), sqrt(900) * 1px)",
+            16.0,
+            None,
+            Size::new(800.0, 600.0),
+        );
+        assert_eq!(v, Some(30.0));
+    }
+
+    #[test]
+    fn pow_in_width_property() {
+        // width: pow(2, 5) * 1px = 32px.
+        let s = style_for("width: calc(pow(2, 5) * 1px)");
+        assert_eq!(s.width, Some(32.0));
+    }
+
+    #[test]
+    fn sin_with_var_arg() {
+        // var() разворачивается до парсинга calc — sin принимает результат.
+        let s = style_for("--a: 90deg; width: calc(sin(var(--a)) * 100px)");
+        // sin(π/2) = 1, поэтому width = 100.
+        assert!((s.width.unwrap() - 100.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn wrong_arity_invalid() {
+        // sin требует ровно 1 аргумент.
+        assert!(parse_length("sin(1, 2)").is_none());
+        // pow требует ровно 2.
+        assert!(parse_length("pow(2)").is_none());
+        assert!(parse_length("pow(2, 3, 4)").is_none());
+        // hypot — 1+, поэтому 0 — invalid.
+        assert!(parse_length("hypot()").is_none());
+    }
+
+    #[test]
+    fn math_func_case_insensitive() {
+        // CSS function names ASCII case-insensitive.
+        assert_eq!(rc_unitless("ABS(-5)"), Some(5.0));
+        assert_eq!(rc_unitless("Sqrt(9)"), Some(3.0));
     }
 }
