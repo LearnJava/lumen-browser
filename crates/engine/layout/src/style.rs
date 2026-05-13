@@ -29,6 +29,16 @@ pub enum Display {
     Block,
     Inline,
     None,
+    /// CSS Flexbox L1 §3 — `display: flex`. Phase 0: парсится и хранится,
+    /// но в layout трактуется как `Block` (нет flex-алгоритма). Реальный
+    /// flex-pass — отдельная задача.
+    Flex,
+    /// `display: inline-flex` — аналогично, парсится но трактуется как Inline.
+    InlineFlex,
+    /// CSS Grid L1 — `display: grid`. Парсится, трактуется как Block.
+    Grid,
+    /// `display: inline-grid`.
+    InlineGrid,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -2816,6 +2826,10 @@ fn apply_declaration(
                 "block" => Display::Block,
                 "inline" => Display::Inline,
                 "none" => Display::None,
+                "flex" => Display::Flex,
+                "inline-flex" => Display::InlineFlex,
+                "grid" => Display::Grid,
+                "inline-grid" => Display::InlineGrid,
                 _ => style.display,
             };
         }

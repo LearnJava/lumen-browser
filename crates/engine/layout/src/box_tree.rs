@@ -115,7 +115,13 @@ fn is_inline_content(
             if is_image_element(doc, id) {
                 return false;
             }
-            compute_style(doc, id, sheet, inherited, viewport).display == Display::Inline
+            // Inline-семантика: чистый `inline` или его flex/grid-варианты.
+            // Phase 0 layout не делает реального flex/grid — флэт-семантика
+            // блока для outer-display, но inline-family остаётся inline.
+            matches!(
+                compute_style(doc, id, sheet, inherited, viewport).display,
+                Display::Inline | Display::InlineFlex | Display::InlineGrid
+            )
         }
         _ => false,
     }

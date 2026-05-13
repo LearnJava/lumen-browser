@@ -4134,6 +4134,46 @@ mod tests {
     }
 
     #[test]
+    fn display_flex_parses_and_stores() {
+        let root = lay("<p>x</p>", "p { display: flex; }");
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.display, Display::Flex);
+    }
+
+    #[test]
+    fn display_inline_flex_parses_and_stores() {
+        // inline-flex element внутри div — должен попасть в InlineRun
+        // (трактуется как inline-family).
+        let root = lay("<div><span>x</span></div>", "span { display: inline-flex; }");
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // div содержит InlineRun (inline-flex span внутри).
+        assert!(matches!(&div.children[0].kind, BoxKind::InlineRun { .. }));
+    }
+
+    #[test]
+    fn display_grid_parses_as_block_family() {
+        let root = lay("<p>x</p>", "p { display: grid; }");
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.display, Display::Grid);
+    }
+
+    #[test]
+    fn display_inline_grid_parses_as_inline_family() {
+        let root = lay("<div><span>x</span></div>", "span { display: inline-grid; }");
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!(matches!(&div.children[0].kind, BoxKind::InlineRun { .. }));
+    }
+
+    #[test]
+    fn display_unknown_value_keeps_previous() {
+        // unknown value игнорируется — лог по умолчанию остаётся.
+        let root = lay("<p>x</p>", "p { display: zomg-flexed; }");
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // Default для <p> от UA = Block.
+        assert_eq!(p.style.display, Display::Block);
+    }
+
+    #[test]
     fn media_prefers_color_scheme_light_default() {
         // Phase 0: prefers_dark=false → 'light' matches.
         let root = lay_with_viewport(
