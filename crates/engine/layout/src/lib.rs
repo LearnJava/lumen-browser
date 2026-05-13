@@ -19,9 +19,9 @@ pub mod style;
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
 pub use style::{
-    BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStretch,
-    FontStyle, FontVariant, FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow,
-    TextShadow, TextTransform, Visibility, WhiteSpace,
+    BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle, Cursor, Direction, Display,
+    FontStretch, FontStyle, FontVariant, FontWeight, Overflow, TextAlign, TextDecorationLine,
+    TextOverflow, TextShadow, TextTransform, Visibility, WhiteSpace,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -3286,5 +3286,68 @@ mod tests {
         );
         let div = first_element_child(&root);
         assert_eq!(div.style.color.r, 255);
+    }
+
+    // ── direction (CSS Writing Modes L3 §2.1) ──────────────────────────────
+
+    #[test]
+    fn direction_default_ltr() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.direction, Direction::Ltr);
+    }
+
+    #[test]
+    fn direction_rtl_applied() {
+        let root = lay("<p>x</p>", "p { direction: rtl; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn direction_case_insensitive() {
+        // Keyword-ы CSS property values — ASCII case-insensitive
+        // (Values L4 §2.4). Документ может прийти с `RTL` или `Rtl`.
+        let root = lay("<p>x</p>", "p { direction: RTL; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn direction_inherited() {
+        // direction распространяется от родителя — основа bidi-каскада.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { direction: rtl; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.direction, Direction::Rtl);
+        assert_eq!(p.style.direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn direction_child_overrides_inherited() {
+        // Inheritable, но потомок может явно переопределить — обратно на ltr.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { direction: rtl; } p { direction: ltr; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.direction, Direction::Rtl);
+        assert_eq!(p.style.direction, Direction::Ltr);
+    }
+
+    #[test]
+    fn direction_invalid_keeps_inherited() {
+        // Невалидное значение — сохраняем inherited (по CSS error recovery
+        // правилу: invalid declaration → ignore).
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { direction: rtl; } p { direction: vertical; }",
+        );
+        let p = first_element_child(first_element_child(&root));
+        assert_eq!(p.style.direction, Direction::Rtl);
     }
 }

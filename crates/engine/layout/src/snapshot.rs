@@ -11,9 +11,9 @@
 
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
 use crate::style::{
-    BorderStyle, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStretch, FontStyle,
-    FontVariant, FontWeight, Overflow, TextAlign, TextOverflow, TextTransform, Visibility,
-    WhiteSpace,
+    BorderStyle, BoxSizing, Color, ComputedStyle, Cursor, Direction, Display, FontStretch,
+    FontStyle, FontVariant, FontWeight, Overflow, TextAlign, TextOverflow, TextTransform,
+    Visibility, WhiteSpace,
 };
 use std::fmt::Write;
 
@@ -128,6 +128,9 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
         TextAlign::Left => {}
         TextAlign::Center => out.push_str(" text-align=center"),
         TextAlign::Right => out.push_str(" text-align=right"),
+    }
+    if matches!(s.direction, Direction::Rtl) {
+        out.push_str(" direction=rtl");
     }
     let has_border = s.border_top_width > 0.0 || s.border_right_width > 0.0
         || s.border_bottom_width > 0.0 || s.border_left_width > 0.0;

@@ -37,6 +37,26 @@ pub enum TextAlign {
     Right,
 }
 
+/// CSS Writing Modes L3 §2.1 — `direction: ltr | rtl`. Inherited.
+///
+/// Базовое направление потока inline-контента. В Phase 0 layout только
+/// хранит значение и распространяет через каскад — реальное применение
+/// (RTL line-flow, перенос pivot point, bidi reordering через Unicode
+/// Bidi Algorithm) требует Bidi-движка и переписанного wrap_inline_run.
+/// Однако зафиксировать direction в `ComputedStyle` сейчас полезно для
+/// двух будущих задач: (1) когда появится `dir="rtl"` HTML-атрибут или
+/// `<bdo>` — у нас уже есть точка хранения; (2) когда возьмёмся за bidi —
+/// каскад уже даёт нам базовое направление, не нужно его ретрофитить.
+///
+/// `rtl` пока не меняет рендеринг — это явный «отложено», документированный
+/// в roadmap.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Direction {
+    #[default]
+    Ltr,
+    Rtl,
+}
+
 /// CSS Backgrounds L3 §4.6 — спецификация одной тени бокса.
 ///
 /// `inset` тени рисуются внутри коробки (имитация vignetting), не-inset —
@@ -396,6 +416,10 @@ pub enum BoxSizing {
 pub struct ComputedStyle {
     pub display: Display,
     pub text_align: TextAlign,
+    /// CSS Writing Modes L3 §2.1 — направление inline-потока. Inherited.
+    /// В Phase 0 layout/paint его пока не применяют — задел под bidi и
+    /// HTML `dir`-атрибут. См. `Direction` для подробностей.
+    pub direction: Direction,
     pub color: Color,
     pub background_color: Option<Color>,
     pub font_size: f32,
@@ -538,6 +562,7 @@ impl ComputedStyle {
         Self {
             display: Display::Block,
             text_align: TextAlign::Left,
+            direction: Direction::Ltr,
             color: Color::BLACK,
             background_color: None,
             font_size: 16.0,
@@ -614,6 +639,7 @@ pub fn compute_style(
         // Наследуемые свойства (CSS inherited properties).
         color: inherited.color,
         text_align: inherited.text_align,
+        direction: inherited.direction,
         font_size: inherited.font_size,
         line_height: inherited.line_height,
         font_style: inherited.font_style,
@@ -1582,6 +1608,17 @@ fn apply_declaration(
                 "right" => TextAlign::Right,
                 _ => style.text_align,
             };
+        }
+        "direction" => {
+            // CSS Writing Modes L3 §2.1. Keyword-ы case-insensitive по
+            // правилам CSS («property keyword values are ASCII case-
+            // insensitive», CSS Values L4 §2.4). Невалидное значение
+            // оставляет inherited (или предыдущее) направление.
+            if val.eq_ignore_ascii_case("ltr") {
+                style.direction = Direction::Ltr;
+            } else if val.eq_ignore_ascii_case("rtl") {
+                style.direction = Direction::Rtl;
+            }
         }
         "color" => {
             if let Some(c) = parse_color(val) {
