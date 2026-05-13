@@ -230,6 +230,20 @@ pub enum FontStyle {
     Oblique,
 }
 
+/// CSS Fonts L4 §6 — `font-variant` (упрощённый Phase 0). Inherited.
+///
+/// Полный `font-variant` — это shorthand над font-variant-caps,
+/// -ligatures, -numeric и т.д. (CSS Fonts L4). Phase 0 поддерживаем
+/// только два самых частых значения: `normal` и `small-caps`. Real
+/// small-caps rendering требует OpenType feature `smcp` или fallback
+/// на uppercase + меньший font-size — отложено.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FontVariant {
+    #[default]
+    Normal,
+    SmallCaps,
+}
+
 /// CSS Fonts Module L4 §2.4 — `font-weight`. Inherited.
 ///
 /// Хранится численно (1..1000), как в spec: `normal` = 400, `bold` = 700.
@@ -347,6 +361,8 @@ pub struct ComputedStyle {
     pub line_height: f32,
     pub font_style: FontStyle,
     pub font_weight: FontWeight,
+    /// CSS Fonts L4 §6 — font-variant (Phase 0: normal | small-caps). Inherited.
+    pub font_variant: FontVariant,
     /// CSS Fonts L4 §3.1 — font-family как приоритизированный список имён.
     /// Inherited. Phase 0: рендерер пока всегда использует Inter, но layout
     /// уже хранит и распространяет список — задел под будущий font matcher.
@@ -461,6 +477,7 @@ impl ComputedStyle {
             line_height: 1.2,
             font_style: FontStyle::Normal,
             font_weight: FontWeight::NORMAL,
+            font_variant: FontVariant::Normal,
             font_family: Vec::new(),
             text_transform: TextTransform::None,
             white_space: WhiteSpace::Normal,
@@ -527,6 +544,7 @@ pub fn compute_style(
         line_height: inherited.line_height,
         font_style: inherited.font_style,
         font_weight: inherited.font_weight,
+        font_variant: inherited.font_variant,
         font_family: inherited.font_family.clone(),
         text_transform: inherited.text_transform,
         white_space: inherited.white_space,
@@ -1453,6 +1471,16 @@ fn apply_declaration(
             if !list.is_empty() {
                 style.font_family = list;
             }
+        }
+        "font-variant" | "font-variant-caps" => {
+            // Phase 0: только normal | small-caps. Прочие keyword-ы
+            // (all-small-caps, petite-caps, …) и связанные субсвойства
+            // (font-variant-ligatures, -numeric, и т.д.) — отложены.
+            style.font_variant = match val.split_whitespace().next() {
+                Some("small-caps") => FontVariant::SmallCaps,
+                Some("normal") => FontVariant::Normal,
+                _ => style.font_variant,
+            };
         }
         "text-indent" => {
             // CSS Text L3 §7.1: <length> | <percentage>. % требует
