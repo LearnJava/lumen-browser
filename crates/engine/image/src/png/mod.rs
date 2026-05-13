@@ -15,16 +15,17 @@
 //!   последовательность фильтрованных скан-линий.
 //! - `IEND` — пустой, маркирует конец.
 //!
-//! Phase 0 ограничивается реальными случаями современного веба: 8-битные
-//! RGB / RGBA / grayscale / grayscale+alpha **и palette (color_type 3)
-//! с bit_depth=8 + опц. tRNS**, фильтры 0–4, без interlacing. 16-битная
-//! глубина, 1/2/4-битная palette и Adam7 — отдельными задачами.
+//! Phase 0 покрывает 8-битные RGB / RGBA / grayscale / grayscale+alpha +
+//! palette (color_type 3) + tRNS, **плюс sub-byte depth (1/2/4) для
+//! grayscale и palette**, без interlacing. 16-битная глубина и Adam7 —
+//! отдельными задачами.
 
 pub(crate) mod chunk;
 pub(crate) mod filter;
 pub(crate) mod ihdr;
 pub(crate) mod inflate;
 pub(crate) mod palette;
+pub(crate) mod sub_byte;
 
 use crate::{DecodeError, Image, IhdrError, PaletteError, PixelFormat};
 
@@ -34,10 +35,10 @@ use crate::{DecodeError, Image, IhdrError, PaletteError, PixelFormat};
 /// останавливает DOS `type`; `\n` детектирует «обратную» CR-вырезку.
 pub(crate) const SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 
-/// Декодировать PNG-поток в `Image`. Поддержаны цветовые типы
-/// grayscale / grayscale+alpha / RGB / RGBA / palette при `bit_depth = 8`,
-/// без interlacing. Прочие комбинации возвращаются как `Unsupported(...)`
-/// или `BadPalette(...)`.
+/// Декодировать PNG-поток в `Image`. Поддержаны цветовые типы grayscale /
+/// grayscale+alpha / RGB / RGBA / palette; для grayscale и palette — также
+/// bit_depth 1/2/4 (sub-byte unpack + scaling); прочие комбинации
+/// возвращаются как `Unsupported(...)` или `BadPalette(...)`.
 ///
 /// Алгоритм:
 /// 1. Проверяем 8-байтовую сигнатуру.
@@ -50,7 +51,10 @@ pub(crate) const SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A,
 ///    safe-to-ignore). `IEND` маркирует конец.
 /// 4. Inflate-им конкатенированные IDAT через свой zlib decoder.
 /// 5. Развёртываем фильтры скан-линий → плотный row-major массив байтов.
-/// 6. Для color_type 3 — расширяем индексы в Rgb8 (без tRNS) / Rgba8 (с tRNS).
+/// 6. При sub-byte depth — распаковываем биты в один байт на сэмпл.
+/// 7. Для grayscale при sub-byte — масштабируем сэмплы до полного 8-битного
+///    диапазона (PNG §13.12).
+/// 8. Для color_type 3 — расширяем индексы в Rgb8 (без tRNS) / Rgba8 (с tRNS).
 pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
     let after_sig = chunk::read_signature(bytes)?;
     let mut reader = chunk::ChunkReader::new(after_sig);
@@ -66,6 +70,7 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
     }
     let header = ihdr::Ihdr::parse(first.data)?;
     let is_palette = matches!(header.color_type, ihdr::ColorType::Palette);
+    let is_grayscale = matches!(header.color_type, ihdr::ColorType::Grayscale);
 
     let mut idat: Vec<u8> = Vec::new();
     let mut plte: Option<Vec<[u8; 3]>> = None;
@@ -128,51 +133,92 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
         return Err(DecodeError::NoImageData);
     }
 
-    // Для палитры формат пиксельного выхода зависит от наличия tRNS.
-    // Прочие случаи делегируем существующему `Ihdr::pixel_format()`.
-    let (format, bpp_for_unfilter) = if is_palette {
-        // bit_depth = 8 проверяется здесь, потому что pixel_format() мы для
-        // палитры не зовём (он по-прежнему отвергает Palette как контракт
-        // «вызывать только для не-палитровых»).
-        if header.bit_depth != 8 {
-            return Err(DecodeError::Unsupported(
-                crate::UnsupportedReason::SubByteDepth(header.bit_depth),
-            ));
-        }
-        if header.interlaced {
-            return Err(DecodeError::Unsupported(
-                crate::UnsupportedReason::Interlaced,
-            ));
-        }
+    // Раннее отбраковывание неподдерживаемых вариантов, общих для всех
+    // color types. Interlaced и 16-bit ещё валидны по IHDR §11.2.2 table 11.1,
+    // но не реализованы в Phase 0.
+    if header.interlaced {
+        return Err(DecodeError::Unsupported(
+            crate::UnsupportedReason::Interlaced,
+        ));
+    }
+    if header.bit_depth == 16 {
+        return Err(DecodeError::Unsupported(
+            crate::UnsupportedReason::SixteenBitDepth,
+        ));
+    }
+    let is_sub_byte = matches!(header.bit_depth, 1 | 2 | 4);
+    // Sub-byte допустим только для grayscale (color_type 0) и palette (3),
+    // по IHDR §11.2.2 table 11.1 — это уже проверено в Ihdr::parse(); здесь
+    // bit_depth 1/2/4 не может встретиться для RGB / GrayA / RGBA.
+
+    // Определяем выходной формат и параметры фильтра.
+    let format = if is_palette {
         if plte.is_none() {
             return Err(DecodeError::BadPalette(PaletteError::MissingForIndexed));
         }
-        let fmt = if trns_palette.is_some() {
+        if trns_palette.is_some() {
             PixelFormat::Rgba8
         } else {
             PixelFormat::Rgb8
-        };
-        // Палитровый поток — 1 байт = 1 пиксель (палитровый индекс).
-        (fmt, 1usize)
+        }
+    } else if is_grayscale {
+        // grayscale при любом из 1/2/4/8 → Gray8 на выходе (sub-byte
+        // масштабируется до 8 бит ниже).
+        PixelFormat::Gray8
     } else {
-        let fmt = header.pixel_format()?;
-        (fmt, fmt.bytes_per_pixel())
+        // RGB / GrayA / RGBA при bit_depth = 8.
+        header.pixel_format()?
     };
 
+    // PNG §9.2: filter operates на байтовом уровне, с offset = bpp байт
+    // для Sub / Average / Paeth. Для sub-byte депт спецификация явно
+    // задаёт bpp = 1 байт; для 8+ бит — channels × ceil(bit_depth/8).
+    let channels = match header.color_type {
+        ihdr::ColorType::Grayscale | ihdr::ColorType::Palette => 1u32,
+        ihdr::ColorType::GrayscaleAlpha => 2,
+        ihdr::ColorType::Rgb => 3,
+        ihdr::ColorType::Rgba => 4,
+    };
+    let bits_per_scanline =
+        u64::from(header.width) * u64::from(channels) * u64::from(header.bit_depth);
+    let scanline_bytes = u32::try_from(bits_per_scanline.div_ceil(8))
+        .map_err(|_| DecodeError::BadImageDataSize {
+            expected: 0,
+            actual: idat.len(),
+        })?;
+    let filter_bpp =
+        (usize::from(header.bit_depth) * channels as usize).max(8) / 8;
+    // Для filter::unfilter передаём «ширину байт-блока» и bpp так, чтобы
+    // их произведение равнялось scanline_bytes. Для 8+ бит это совпадает
+    // с пиксельной шириной; для sub-byte — bpp=1 и filter_width = scanline_bytes.
+    let filter_width = scanline_bytes / filter_bpp as u32;
+
     let raw = inflate::inflate_zlib(&idat).map_err(DecodeError::BadDeflate)?;
-    let unfiltered =
-        filter::unfilter(&raw, header.width, header.height, bpp_for_unfilter)?;
+    let unfiltered = filter::unfilter(&raw, filter_width, header.height, filter_bpp)?;
+
+    // При sub-byte распаковываем биты в один байт на сэмпл; иначе скан-линии
+    // уже плотные.
+    let samples = if is_sub_byte {
+        let mut s =
+            sub_byte::unpack_bits(&unfiltered, header.width, header.height, header.bit_depth);
+        if is_grayscale {
+            sub_byte::scale_grayscale_to_8bit(&mut s, header.bit_depth);
+        }
+        s
+    } else {
+        unfiltered
+    };
 
     let pixels = if is_palette {
         // unwrap-ы безопасны: plte проверен выше, format определён через tRNS.
         let plte_ref = plte.as_ref().unwrap();
         if let Some(alpha) = trns_palette.as_deref() {
-            palette::expand_to_rgba(&unfiltered, plte_ref, alpha, header.width)?
+            palette::expand_to_rgba(&samples, plte_ref, alpha, header.width)?
         } else {
-            palette::expand_to_rgb(&unfiltered, plte_ref, header.width)?
+            palette::expand_to_rgb(&samples, plte_ref, header.width)?
         }
     } else {
-        unfiltered
+        samples
     };
 
     Ok(Image {
