@@ -1,0 +1,12 @@
+[package]
+name = "lumen-knowledge"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: knowledge layer — полнотекстовый поиск по истории, заметки, read-later (§12)"
+
+[dependencies]
+lumen-core.workspace = true
+rusqlite.workspace = true

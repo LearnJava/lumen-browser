@@ -5,6 +5,7 @@ members = [
     "crates/core",
     "crates/network",
     "crates/storage",
+    "crates/knowledge",
     "crates/bench",
     "crates/engine/html-parser",
     "crates/engine/css-parser",
@@ -27,6 +28,7 @@ rust-version = "1.95"
 lumen-core = { path = "crates/core" }
 lumen-network = { path = "crates/network" }
 lumen-storage = { path = "crates/storage" }
+lumen-knowledge = { path = "crates/knowledge" }
 lumen-html-parser = { path = "crates/engine/html-parser" }
 lumen-css-parser = { path = "crates/engine/css-parser" }
 lumen-dom = { path = "crates/engine/dom" }
