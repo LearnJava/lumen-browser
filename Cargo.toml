@@ -13,6 +13,7 @@ members = [
     "crates/engine/paint",
     "crates/engine/font",
     "crates/engine/encoding",
+    "crates/engine/image",
 ]
 
 [workspace.package]
@@ -33,6 +34,7 @@ lumen-layout = { path = "crates/engine/layout" }
 lumen-paint = { path = "crates/engine/paint" }
 lumen-font = { path = "crates/engine/font" }
 lumen-encoding = { path = "crates/engine/encoding" }
+lumen-image = { path = "crates/engine/image" }
 
 # Exception #1 (§5): OS event loop + окна. Свой = годы Win32/X11/Wayland/AppKit.
 winit = "0.30"

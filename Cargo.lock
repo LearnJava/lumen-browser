@@ -876,6 +876,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-image"
+version = "0.0.1"
+dependencies = [
+ "lumen-core",
+]
+
+[[package]]
 name = "lumen-layout"
 version = "0.0.1"
 dependencies = [

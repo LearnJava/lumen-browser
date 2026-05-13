@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-- 🔄 lumen-image-png [P2] — lumen-image-png — 2026-05-13
+_(никто ничего не зарезервировал)_
 
 
 ## Статус реализации
@@ -33,6 +33,7 @@
 - 🟡 `lumen-paint` — display list (FillRect, **DrawBorder**, DrawText) + wgpu-растеризатор с двумя pipeline-ами (fill + text), glyph atlas 512×512, текстурированные квады из atlas-а. `DrawBorder` рендерится 4 fill-quad-ами (top/right/bottom/left edges), цвет с currentColor fallback. Под/над/перечёркивающие линии text-decoration эмитятся как FillRect-ы у baseline каждого фрагмента. `FontMeasurer` для TextMeasurer. Внешние зависимости: `wgpu` (exception #2), `winit` (exception #1)
 - 🟡 `lumen-font` — собственный TrueType-парсер (head/maxp/cmap format 4+12/hhea/hmtx/loca/glyf) + scanline-растеризатор (квадратичные Безье, 4×4 AA, even-odd fill). cmap format 12 — Sequential Groups, полный Unicode U+10FFFF (эмодзи U+1F600+, SMP). 62 unit + 9 integration тестов. Отложено: hinting, GSUB/GPOS shaping, CFF outlines, variable fonts, color glyphs
 - 🟡 `lumen-encoding` — детектор кодировок и декодеры: **UTF-8, UTF-16 LE/BE, Windows-1251, KOI8-R, CP866**. Пайплайн: BOM (UTF-8/UTF-16 LE/UTF-16 BE) → `<meta charset>`-sniff (1 КБ) → HTTP content-type hint → UTF-8 валидность → частотная эвристика по русским буквам. UTF-16 декодер обрабатывает surrogate-пары (BMP + supplementary через U+10000+), lone surrogates и нечётное число байт → U+FFFD. Реализует `EncodingDetector` из `lumen-core::ext`. 59 тестов (включая UTF-16 surrogate-пары, emoji, ASCII/cyrillic в обоих endian). Отложено: ISO-8859-5, MacCyrillic, prescan по HTML5 spec §12.2.3.2 (точные правила парсинга атрибутов)
+- 🟡 `lumen-image` — собственный декодер растровой графики. PNG-декодер для 8-битных Gray / GrayAlpha / RGB / RGBA без interlacing: свой CRC32 (IEEE 802.3 reflected), chunk reader, IHDR parser, DEFLATE/inflate (RFC 1951: stored/fixed/dynamic Huffman, LZ77 окно 32 КБ), zlib-обёртка (RFC 1950 + adler-32), развёртка фильтров скан-линий (None/Sub/Up/Average/Paeth). Никаких сторонних crate-ов (см. §5). 50 unit + 9 integration тестов на реальных PNG-фикстурах. Отложено: 16-bit глубина, palette (color_type 3), Adam7 interlacing, JPEG, WebP, AVIF — отдельными задачами.
 - ✅ `lumen-network` — HTTP/1.1 + HTTPS клиент (rustls, exception #3). Redirect, chunked TE. **IDN-домены** в URL конвертятся в Punycode на этапе parse (`https://президент.рф/` → DNS/TLS получают `xn--d1abbgf6aiiy.xn--p1ai`). `HttpClient` реализует `NetworkTransport`. **EventSink-интеграция** (принцип №4 «каждый исходящий байт виден»): `HttpClient::with_sink/with_tab` builder, эмит `RequestStarted` перед сокетом и `RequestCompleted` после получения статуса — для каждого редирект-хопа отдельная пара событий. 20 тестов (включая 5 с mock HTTP-сервером).
 - ✅ `lumen-storage` — in-memory KV + origin-партиционирование + snapshot LUMEN_KV_V1. 17 тестов.
 - ⬜ `lumen-knowledge` (§12) — FTS-индекс над историей и заметками, read-later каталог. Phase 2
@@ -82,6 +83,7 @@
 - 🟡 Layout — block-flow + inline-flow + style cascade (specificity) + word-wrap готовы; flex/grid, float, абсолютное позиционирование — позже
 - ✅ Paint — display list + wgpu-rasterizer + glyph atlas + text rendering
 - ✅ Связка движка с UI: shell открывает `samples/page.html` с фонами и текстом
+- 🟡 lumen-image — PNG-декодер для 8-битных Gray/GrayA/RGB/RGBA готов; интеграция в layout/paint (`<img>` элемент) и JPEG — отдельными задачами
 - ⬜ Composite glyphs в lumen-font (Cyrillic 'А' и другие)
 - ⬜ Свой HTTP/1.1 + TLS через `rustls` — для загрузки внешней страницы
 

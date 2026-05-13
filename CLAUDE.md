@@ -110,7 +110,7 @@ export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
 
 ### Текущее число тестов и crates
 
-На момент написания: 311 тестов, 12 крейтов (`shell`, `core`, `network`, `storage`, `bench`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`). При прохождении следующих фаз появятся `lumen-knowledge`, `lumen-ai` и др.
+На момент написания: 838 тестов, 13 крейтов (`shell`, `core`, `network`, `storage`, `bench`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`, `image`). При прохождении следующих фаз появятся `lumen-knowledge`, `lumen-ai` и др.
 
 ---
 
@@ -129,7 +129,8 @@ crates/
     ├── layout/           — block flow + style cascade
     ├── paint/            — display list + wgpu-rasterizer + glyph atlas
     ├── font/             — TrueType parser + scanline rasterizer
-    └── encoding/         — детектор и однобайтовые декодеры (cp1251/koi8-r/cp866)
+    ├── encoding/         — детектор и однобайтовые декодеры (cp1251/koi8-r/cp866)
+    └── image/            — PNG-декодер: CRC32 + chunks + IHDR + inflate + filter undo
 ```
 
 ### Направление зависимостей
@@ -460,6 +461,15 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 - **Отложено:** ISO-8859-5 и MacCyrillic (не встречаются в природе), полный HTML5 prescan algorithm §12.2.3.2 (наш sniff проще, чем spec, но для практики хватает), UTF-32 (исчезающе редко в дикой природе).
 - 53 unit-теста + 6 интеграционных round-trip (включая 18 UTF-16: ASCII/cyrillic LE и BE, BOM-stripping, supplementary 😀 через surrogate pair в обоих endian, lone high/low surrogate, odd byte count, empty input, labels).
 
+### `lumen-image` 🟡 (PNG decode end-to-end, 8-битные форматы)
+
+- **Готово (PNG-pipeline):** свой CRC32 (IEEE 802.3 reflected, таблица предкомпилирована `const fn` — без runtime-инициализации, без `LazyLock`); chunk reader по PNG §11.2.2 (4 BE length + 4 type + data + 4 CRC, ограничение length < 2^31, ошибки `BadCrc { kind, expected, actual }`, `ChunkTooLong`); парсер IHDR (13 байтов: width/height u32 BE, bit_depth + color_type + compression/filter/interlace методы, валидация таблицы 11.1 — разрешённые комбинации bit_depth × color_type). `Image { width, height, format, data }` хранится плотно row-major без padding-а.
+- **Готово (DEFLATE/zlib):** свой inflate по RFC 1951 + zlib-обёртка по RFC 1950. Три типа DEFLATE-блоков: stored (00, копия после byte alignment), fixed Huffman (01, таблицы 7/8/9 бит из §3.2.6), dynamic Huffman (10, code-length-codes из §3.2.7 + re-run коды 16/17/18). LZ77 со sliding window до 32 КБ через побайтовое копирование (корректно работает на overlapping back-references вроде `distance=1`). zlib header: CMF.CM=8, проверка `(CMF<<8|FLG) % 31 == 0`, FDICT=0. Adler-32 в трейлере. `BitReader` LSB-first; канонический Huffman через ranges-of-codes (`first_code[L]`, `count[L]`, `offset[L]` + `sorted_symbols`) с Kraft-McMillan валидацией при build-е. Bounded allocations: 3 маленьких Huffman-декодера + output Vec.
+- **Готово (filter undo):** все 5 PNG-фильтров скан-линий (PNG §9.2): None / Sub / Up / Average / Paeth. Wraparound u8 арифметика; Paeth-предиктор в i16 для корректного сравнения abs. Для первой строки `b = c = 0`, для первых bpp байтов `a = c = 0`.
+- **Готово (orchestrator `decode_png`):** проверка 8-байтовой сигнатуры `89 50 4E 47 0D 0A 1A 0A`; первый чанк обязательно IHDR; auxiliary-чанки (sRGB / gAMA / pHYs / tEXt / iCCP / cHRM) игнорируются (PNG §11.3 — ancillary safe-to-ignore); IDAT-ы конкатенируются в один zlib-поток; IEND маркирует конец. Поддержаны `PixelFormat::{Gray8, GrayAlpha8, Rgb8, Rgba8}` при `bit_depth = 8` без interlacing. Прочие комбинации (palette, 16-bit, interlaced, sub-byte) явно возвращают `Unsupported(...)`.
+- **Отложено:** 16-битная глубина (умножение байт на пиксель × 2), palette (color_type 3, потребует чтения PLTE + опц. tRNS), Adam7 interlacing (7 sub-images с фиксированной геометрией), JPEG (свой DCT/Huffman/marker parser — отдельный крейт-объём работы), WebP / AVIF (Phase 2+).
+- 50 unit-теста (CRC32, signature, chunk reader, IHDR, BitReader, Huffman build/decode, fixed/dynamic/stored inflate, LZ77, adler32, фильтры 0–4) + 9 интеграционных на реальных PNG-фикстурах (RGB 3×2, RGBA 4×2, Gray 4×4, GrayAlpha 2×2, mixed filters 2×4, Paeth 2×2, rejects бракованных). Фикстуры сгенерированы Python-zlib скриптом (см. `tests/fixtures/`).
+
 ### `lumen-storage` ✅ (in-memory KV + snapshot)
 
 - **Готово:** `InMemoryStorage` — `HashMap<PartitionedKey, Vec<u8>>` с полным origin-партиционированием: каждый вызов принимает `origin: Option<&str>` и `top_level_site: Option<&str>`. `None` и `""` — один namespace (глобальный профиль). Реализует `lumen_core::ext::StorageBackend` (get/put/delete/list_keys). Snapshot-формат `LUMEN_KV_V1` — текстовый, hex-encoded composite key + hex-encoded value, без внешних зависимостей. `serialize()` / `deserialize()` для in-memory round-trip; `save(path)` / `load(path)` для диска.
@@ -490,7 +500,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 ### Инфраструктура
 
 - Cargo workspace, edition 2024, resolver 3, MSRV 1.95.
-- 12 крейтов в `crates/`: shell, core, network, storage, bench, engine/{html-parser, css-parser, dom, layout, paint, font, encoding}.
+- 13 крейтов в `crates/`: shell, core, network, storage, bench, engine/{html-parser, css-parser, dom, layout, paint, font, encoding, image}.
 - Bundled assets: `assets/fonts/Inter-Regular.ttf` (+ OFL.txt лицензия).
 - Тестовая страница: `samples/page.html` со встроенным `<style>`.
 - 4 разрешённых внешних зависимости: `winit = "0.30"`, `wgpu = "26"`, `rustls = "0.23"` + `webpki-roots = "0.26"` (активированы в lumen-network), JS engine (зарезервирована).
@@ -500,7 +510,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 ### Численно
 
-- **Всего тестов в workspace:** 779 (на момент последнего обновления).
+- **Всего тестов в workspace:** 838 (на момент последнего обновления).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 2 активных (winit, wgpu) + 2 зарезервированных.
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -524,7 +534,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 6. **`[P1]` CSS — типизированные значения деклараций** — length / color / calc / `--var`. Селекторы Level 3 готовы полностью (compound, combinators, attribute, structural+functional pseudo, `:not`, specificity).
 7. **`[P3]` Tab session export / import** (§12.7) — сериализация в snapshot-формат lumen-storage. Простое, экономит много боли.
-8. **`[P2]` Картинки на страницах** — `<img>` рендеринг. Нужны PNG/JPEG декодеры (свои, по §5). Новый крейт `lumen-image`.
+8. **`[P2]` Картинки на страницах — продолжение** — крейт `lumen-image` создан и декодирует PNG (8-битные Gray/GrayA/RGB/RGBA, фильтры 0–4, свой DEFLATE/inflate). Дальнейшие подзадачи: интеграция `<img>`-элемента в HTML/DOM/layout (с учётом intrinsic dimensions и `width`/`height` атрибутов), GPU-загрузка декодированных пикселей в paint (новый pipeline для RGBA-quad с per-image текстурой, не glyph atlas), сетевая подгрузка `<img src="http(s)://...">`, свой JPEG-декодер (отдельный объём — DCT, marker parsing, Huffman, color conversion), 16-bit/palette/Adam7 в PNG.
 
 ### Большое (Phase 2+)
 
@@ -604,6 +614,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 - **WebView2 / wry / CEF обёртка** — это другой проект, не Lumen. Отказались.
 - **html5ever / cssparser / taffy / image / encoding_rs / ttf-parser / rustybuzz / tokio / rayon / redb / egui** — все эти crates рассмотрены и **не взяты**: для них пишется свой код по принципу «default — своё». См. зачёркнутый список в §5.
+- **`image` / `png` / `flate2` / `miniz_oxide` для PNG-декодера — отвергнуты.** PNG это compression engine + image format parser — оба классически в зоне «default — своё», аналогично собственному TTF-parser-у в `lumen-font`. DEFLATE/inflate (RFC 1951) укладывается в ~500 LOC, zlib-обёртка + adler-32 — ещё ~100. Свой код даёт полный контроль над allocations (нет hidden buffer pools), детерминированный fail-mode (любая ошибка — `InflateError` с конкретной причиной), и снимает supply-chain риск (PNG-декодер — частая точка CVE; см. CVE-2015-8126 в libpng). Свой PNG также даёт честный baseline для сравнения с эталонными декодерами (нужно для §16 целей по cold start / memory). 5-е exception сейчас политически дорогое: каждый принятый удешевляет обоснование четырёх уже разрешённых.
 
 ---
 
@@ -612,6 +623,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            lumen-image-png        — крейт lumen-image: PNG-декодер для 8-битных Gray/GrayA/RGB/RGBA, без interlacing, без palette, без 16-bit. Свой CRC32 (IEEE 802.3 reflected, const-fn таблица), chunk reader (PNG §11.2.2), IHDR parser с валидацией §11.2.2 table 11.1, DEFLATE/inflate (RFC 1951: stored/fixed/dynamic Huffman + LZ77 + canonical codes + Kraft-McMillan), zlib wrapper (RFC 1950 + adler-32), фильтры скан-линий 0–4 (PNG §9.2). 50 unit + 9 integration на реальных PNG-фикстурах. Никаких сторонних crate-ов (image / png / flate2 / miniz_oxide отвергнуты — §5)
 *            css-direction          — direction: ltr | rtl (CSS Writing Modes L3 §2.1): Direction enum, inherited через каскад, case-insensitive парсер, snapshot печатает direction=rtl; реальный RTL line-flow / bidi (UAX #9) отложен — задел под будущий движок. 6 новых тестов
 *            network-event-sink     — EventSink trait в lumen-core + emit RequestStarted/Completed в HttpClient (по hop, до сокета / до анализа status), StdoutEventSink в shell. Принцип №4 «каждый исходящий байт виден» оживлён. Option<Arc<dyn EventSink>> вместо NoopEventSink — zero-cost когда никто не слушает. 5 новых тестов через mock-TcpListener
 *            bench-baseline         — крейт lumen-bench: baseline-замеры pipeline (decode→parse→layout→paint) на samples/page.html без сторонних deps; min/median/mean/p95/max, warm-up 10 iters, LUMEN_BENCH_ITERS env override; ~85 μs TOTAL на тестовой странице
