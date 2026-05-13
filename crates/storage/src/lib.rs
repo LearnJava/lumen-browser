@@ -17,6 +17,7 @@ pub mod cookies;
 pub mod history;
 pub mod http_cache;
 pub mod profiles;
+pub mod search_providers;
 pub mod sqlite_store;
 pub mod store;
 
@@ -25,5 +26,6 @@ pub use cookies::{parse_set_cookie, Cookie, CookieJar, SameSite};
 pub use history::{History, HistoryEntry};
 pub use http_cache::{CacheControl, CachedResponse, HttpCache};
 pub use profiles::{Profile, ProfileRegistry};
+pub use search_providers::{SearchProviderEntry, SearchProviders};
 pub use sqlite_store::SqliteStorage;
 pub use store::InMemoryStorage;
