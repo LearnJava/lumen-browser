@@ -19,9 +19,10 @@ pub mod style;
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
 pub use style::{
-    BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle, Cursor, Direction, Display,
-    FontStretch, FontStyle, FontVariant, FontWeight, Overflow, TextAlign, TextDecorationLine,
-    TextOverflow, TextShadow, TextTransform, Visibility, WhiteSpace,
+    parse_css_wide_keyword, BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle,
+    CssWideKeyword, Cursor, Direction, Display, FontStretch, FontStyle, FontVariant,
+    FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
+    TextTransform, Visibility, WhiteSpace,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -3473,5 +3474,166 @@ mod tests {
         }
         assert!((img.rect.width - 50.0).abs() < 0.1);
         assert!((img.rect.height - 30.0).abs() < 0.1);
+    }
+
+    // ──────── CSS-wide keywords (CSS Cascade L4 §7) ────────
+
+    #[test]
+    fn parse_css_wide_keyword_matches_all_four() {
+        use crate::CssWideKeyword;
+        assert_eq!(crate::parse_css_wide_keyword("inherit"), Some(CssWideKeyword::Inherit));
+        assert_eq!(crate::parse_css_wide_keyword("INITIAL"), Some(CssWideKeyword::Initial));
+        assert_eq!(crate::parse_css_wide_keyword("Unset"), Some(CssWideKeyword::Unset));
+        assert_eq!(crate::parse_css_wide_keyword("revert"), Some(CssWideKeyword::Revert));
+        assert_eq!(crate::parse_css_wide_keyword("  inherit  "), Some(CssWideKeyword::Inherit));
+        assert_eq!(crate::parse_css_wide_keyword("red"), None);
+        assert_eq!(crate::parse_css_wide_keyword("inheritance"), None);
+    }
+
+    /// Получить style вложенного `<p>` из `<div><p>x</p></div>`-тестового
+    /// дерева. root → first child (anonymous wrapper или div) → first child block.
+    /// Возвращает style p — там и применяется тестируемая декларация.
+    fn nested_p_style(root: &LayoutBox) -> &ComputedStyle {
+        let div = root
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("div block");
+        let p = div
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("p block");
+        &p.style
+    }
+
+    fn lay_get_p_color(html: &str, css: &str) -> Color {
+        let root = lay(html, css);
+        nested_p_style(&root).color
+    }
+
+    #[test]
+    fn css_inherit_forces_parent_color_on_non_inherited_default() {
+        // Для inherited-свойств (color) — `inherit` совпадает с дефолтом
+        // (если родитель сам не переопределяет). Подтверждает no-op в этом
+        // тривиальном случае.
+        let c = lay_get_p_color(
+            "<div><p>x</p></div>",
+            "div { color: red; } p { color: inherit; }",
+        );
+        // p наследует от div = red.
+        assert_eq!(c, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn css_initial_resets_color_to_initial() {
+        // Initial value for color — black (Color::BLACK).
+        let c = lay_get_p_color(
+            "<div><p>x</p></div>",
+            "div { color: red; } p { color: initial; }",
+        );
+        assert_eq!(c, Color::BLACK);
+    }
+
+    #[test]
+    fn css_unset_inherited_property_acts_as_inherit() {
+        // color — inherited; `unset` для inherited = inherit → parent's red.
+        let c = lay_get_p_color(
+            "<div><p>x</p></div>",
+            "div { color: red; } p { color: unset; }",
+        );
+        assert_eq!(c, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn css_unset_undoes_prior_declaration() {
+        // p { color: blue; color: unset; } → unset вступает позже,
+        // откатывает blue до inherited (red).
+        let c = lay_get_p_color(
+            "<div><p>x</p></div>",
+            "div { color: red; } p { color: blue; color: unset; }",
+        );
+        assert_eq!(c, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn css_inherit_on_non_inherited_pulls_from_parent() {
+        // background-color НЕ inherited. По умолчанию None у потомка.
+        // `inherit` форсит наследование → background.color родителя.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { background-color: rgb(0, 100, 200); } p { background-color: inherit; }",
+        );
+        // Найдём p — это child div, который сам root.children[0].
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(
+            p.style.background_color,
+            Some(Color { r: 0, g: 100, b: 200, a: 255 })
+        );
+    }
+
+    #[test]
+    fn css_initial_on_non_inherited_resets_to_default() {
+        // background-color: red → initial → None (default).
+        let root = lay(
+            "<p>x</p>",
+            "p { background-color: red; background-color: initial; }",
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.background_color, None);
+    }
+
+    #[test]
+    fn css_font_size_inherit_uses_parent() {
+        // font-size: inherit для p → parent font_size = 30px.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-size: 30px; } p { font-size: 40px; font-size: inherit; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!((p.style.font_size - 30.0).abs() < 0.1, "fs={}", p.style.font_size);
+    }
+
+    #[test]
+    fn css_font_size_initial_is_16() {
+        let root = lay(
+            "<p>x</p>",
+            "p { font-size: 40px; font-size: initial; }",
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!((p.style.font_size - 16.0).abs() < 0.1, "fs={}", p.style.font_size);
+    }
+
+    #[test]
+    fn css_unset_non_inherited_resets_to_initial() {
+        // background-color: red → unset → None (initial — non-inherited prop).
+        let root = lay(
+            "<p>x</p>",
+            "p { background-color: red; background-color: unset; }",
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.background_color, None);
+    }
+
+    #[test]
+    fn css_revert_treated_like_unset_in_phase0() {
+        // Phase 0: revert == unset. Тест дублирует css_unset_*.
+        let c1 = lay_get_p_color(
+            "<div><p>x</p></div>",
+            "div { color: red; } p { color: blue; color: revert; }",
+        );
+        assert_eq!(c1, Color { r: 255, g: 0, b: 0, a: 255 }); // inherited
+    }
+
+    #[test]
+    fn css_wide_keyword_case_insensitive_in_value() {
+        // CSS keyword values — ASCII case-insensitive по CSS Values L4 §2.4.
+        let c = lay_get_p_color(
+            "<div><p>x</p></div>",
+            "div { color: red; } p { color: INHERIT; }",
+        );
+        assert_eq!(c, Color { r: 255, g: 0, b: 0, a: 255 });
     }
 }

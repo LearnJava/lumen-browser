@@ -414,6 +414,41 @@ pub enum BoxSizing {
     BorderBox,
 }
 
+/// CSS-wide keywords (CSS Cascade L4 §7) — применимы к любому свойству.
+/// - `Inherit` — взять computed value родителя.
+/// - `Initial` — взять initial value свойства из спецификации.
+/// - `Unset` — для inherited-свойств = `Inherit`, для non-inherited = `Initial`.
+/// - `Revert` — откатиться к значению предыдущего origin (UA → User → Author).
+///   В Phase 0 UA / User origin отделены не полностью (только UA-hints для
+///   italic/bold семантических тегов), поэтому `Revert` трактуется как
+///   `Unset`. Это упрощение и редкие edge case-ы оно «не покажет правильно»,
+///   но для типичного CSS-кода работает идентично.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CssWideKeyword {
+    Inherit,
+    Initial,
+    Unset,
+    Revert,
+}
+
+/// ASCII case-insensitive проверка значения декларации на CSS-wide keyword.
+/// Любое из четырёх ключевых слов в любом регистре, с trim-ом whitespace,
+/// возвращает соответствующий `Some(...)`. Иначе — `None`.
+pub fn parse_css_wide_keyword(value: &str) -> Option<CssWideKeyword> {
+    let t = value.trim();
+    if t.eq_ignore_ascii_case("inherit") {
+        Some(CssWideKeyword::Inherit)
+    } else if t.eq_ignore_ascii_case("initial") {
+        Some(CssWideKeyword::Initial)
+    } else if t.eq_ignore_ascii_case("unset") {
+        Some(CssWideKeyword::Unset)
+    } else if t.eq_ignore_ascii_case("revert") {
+        Some(CssWideKeyword::Revert)
+    } else {
+        None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
     pub display: Display,
@@ -818,11 +853,12 @@ pub fn compute_style(
     apply_property_initial_values(&mut style.custom_props, &registry);
 
     // Main-pass: остальные декларации; em-basis теперь = current font_size.
-    // Inherited font_weight нужен для разрешения `lighter`/`bolder`.
+    // Inherited font_weight нужен для разрешения `lighter`/`bolder`;
+    // `inherited` целиком — для CSS-wide keywords (CSS Cascade L4 §7).
     let em_basis = style.font_size;
     let parent_weight = inherited.font_weight;
     for (_, _, _, _, decl) in &matched {
-        apply_declaration(&mut style, decl, em_basis, viewport, parent_weight);
+        apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, inherited);
     }
 
     style
@@ -2531,6 +2567,7 @@ fn apply_declaration(
     em_basis: f32,
     viewport: Size,
     parent_font_weight: FontWeight,
+    inherited: &ComputedStyle,
 ) {
     let prop = decl.property.as_str();
 
@@ -2559,6 +2596,17 @@ fn apply_declaration(
     } else {
         decl.value.as_str()
     };
+
+    // CSS Cascade L4 §7: CSS-wide keywords (inherit / initial / unset /
+    // revert) применимы к любому свойству. Делается ДО property-specific
+    // парсинга, чтобы не дублировать проверку в 30+ branch-ах. font-size
+    // обрабатывается в `apply_font_size` (pre-pass) — здесь повторно для
+    // случая, когда font-size попал в main-pass через невидимую генерик
+    // декларацию (no-op, font-size уже выставлен).
+    if let Some(kw) = parse_css_wide_keyword(val) {
+        apply_css_wide_keyword(style, prop, kw, inherited);
+        return;
+    }
     match prop {
         "display" => {
             style.display = match val {
@@ -3158,6 +3206,365 @@ fn parse_text_decoration_shorthand(val: &str) -> (Option<TextDecorationLine>, Op
     (line, color)
 }
 
+/// CSS Cascade L4 §7 — применить CSS-wide keyword к одному свойству.
+///
+/// Источник значения:
+/// - `Inherit` — всегда родительский computed value (для любого свойства).
+/// - `Initial` — всегда initial value свойства из спецификации
+///   (берётся из `ComputedStyle::root()`).
+/// - `Unset` / `Revert` — для inherited-свойств работает как `Inherit`,
+///   для non-inherited как `Initial`. `Revert` в Phase 0 ≡ `Unset`
+///   (UA / User origin не отделены чётко, только UA-hints для italic/bold).
+///
+/// Per-property список синхронизирован с `apply_declaration` и `compute_style`-init —
+/// неизвестные имена молча игнорируются.
+fn apply_css_wide_keyword(
+    style: &mut ComputedStyle,
+    prop: &str,
+    kw: CssWideKeyword,
+    inherited: &ComputedStyle,
+) {
+    use CssWideKeyword::{Inherit, Revert, Unset};
+    // Initial-значения как у root документа. ComputedStyle::root() выделяет
+    // несколько Vec/HashMap, но эта функция вызывается только при обнаружении
+    // CSS-wide-keyword в декларации — редкий путь, накладные расходы
+    // незаметны на типичной странице.
+    let init = ComputedStyle::root();
+
+    // Helper «inherited property»: Inherit/Unset/Revert → inherited, Initial → init.
+    let inh = matches!(kw, Inherit | Unset | Revert);
+    // Helper «non-inherited property»: Inherit → inherited, Initial/Unset/Revert → init.
+    let inh_only_inherit = matches!(kw, Inherit);
+
+    match prop {
+        // ──────── Inherited properties ────────
+        "color" => style.color = if inh { inherited.color } else { init.color },
+        "font-size" => {
+            // Font-size уже обработан в apply_font_size (pre-pass). Здесь
+            // повторно — если main-pass почему-то его коснётся, оставляем
+            // корректный итог.
+            style.font_size = if inh { inherited.font_size } else { init.font_size };
+        }
+        "line-height" => {
+            style.line_height = if inh { inherited.line_height } else { init.line_height };
+        }
+        "font-style" => {
+            style.font_style = if inh { inherited.font_style } else { init.font_style };
+        }
+        "font-weight" => {
+            style.font_weight = if inh { inherited.font_weight } else { init.font_weight };
+        }
+        "font-variant" | "font-variant-caps" => {
+            style.font_variant = if inh { inherited.font_variant } else { init.font_variant };
+        }
+        "font-stretch" => {
+            style.font_stretch = if inh { inherited.font_stretch } else { init.font_stretch };
+        }
+        "font-family" => {
+            style.font_family = if inh {
+                inherited.font_family.clone()
+            } else {
+                init.font_family.clone()
+            };
+        }
+        "text-align" => {
+            style.text_align = if inh { inherited.text_align } else { init.text_align };
+        }
+        "direction" => {
+            style.direction = if inh { inherited.direction } else { init.direction };
+        }
+        "text-transform" => {
+            style.text_transform = if inh { inherited.text_transform } else { init.text_transform };
+        }
+        "white-space" => {
+            style.white_space = if inh { inherited.white_space } else { init.white_space };
+        }
+        "text-indent" => {
+            style.text_indent = if inh { inherited.text_indent } else { init.text_indent };
+        }
+        "letter-spacing" => {
+            style.letter_spacing = if inh { inherited.letter_spacing } else { init.letter_spacing };
+        }
+        "word-spacing" => {
+            style.word_spacing = if inh { inherited.word_spacing } else { init.word_spacing };
+        }
+        "text-decoration-line" | "text-decoration" => {
+            style.text_decoration_line = if inh {
+                inherited.text_decoration_line
+            } else {
+                init.text_decoration_line
+            };
+            style.text_decoration_color = if inh {
+                inherited.text_decoration_color
+            } else {
+                init.text_decoration_color
+            };
+        }
+        "text-decoration-color" => {
+            style.text_decoration_color = if inh {
+                inherited.text_decoration_color
+            } else {
+                init.text_decoration_color
+            };
+        }
+        "text-shadow" => {
+            style.text_shadow = if inh {
+                inherited.text_shadow.clone()
+            } else {
+                init.text_shadow.clone()
+            };
+        }
+        "visibility" => {
+            style.visibility = if inh { inherited.visibility } else { init.visibility };
+        }
+        "cursor" => {
+            style.cursor = if inh { inherited.cursor } else { init.cursor };
+        }
+        "accent-color" => {
+            style.accent_color = if inh { inherited.accent_color } else { init.accent_color };
+        }
+
+        // ──────── Non-inherited properties ────────
+        "display" => {
+            style.display = if inh_only_inherit { inherited.display } else { init.display };
+        }
+        "background-color" | "background" => {
+            style.background_color = if inh_only_inherit {
+                inherited.background_color
+            } else {
+                init.background_color
+            };
+        }
+        "width" => style.width = if inh_only_inherit { inherited.width } else { init.width },
+        "height" => style.height = if inh_only_inherit { inherited.height } else { init.height },
+        "min-width" => {
+            style.min_width = if inh_only_inherit { inherited.min_width } else { init.min_width };
+        }
+        "max-width" => {
+            style.max_width = if inh_only_inherit { inherited.max_width } else { init.max_width };
+        }
+        "min-height" => {
+            style.min_height = if inh_only_inherit { inherited.min_height } else { init.min_height };
+        }
+        "max-height" => {
+            style.max_height = if inh_only_inherit { inherited.max_height } else { init.max_height };
+        }
+        "margin-top" => {
+            style.margin_top = if inh_only_inherit { inherited.margin_top } else { init.margin_top };
+        }
+        "margin-right" => {
+            style.margin_right = if inh_only_inherit { inherited.margin_right } else { init.margin_right };
+        }
+        "margin-bottom" => {
+            style.margin_bottom = if inh_only_inherit { inherited.margin_bottom } else { init.margin_bottom };
+        }
+        "margin-left" => {
+            style.margin_left = if inh_only_inherit { inherited.margin_left } else { init.margin_left };
+        }
+        "margin" => {
+            // shorthand → reset все 4 стороны
+            let (t, r, b, l) = if inh_only_inherit {
+                (inherited.margin_top, inherited.margin_right, inherited.margin_bottom, inherited.margin_left)
+            } else {
+                (init.margin_top, init.margin_right, init.margin_bottom, init.margin_left)
+            };
+            style.margin_top = t;
+            style.margin_right = r;
+            style.margin_bottom = b;
+            style.margin_left = l;
+        }
+        "padding-top" => {
+            style.padding_top = if inh_only_inherit { inherited.padding_top } else { init.padding_top };
+        }
+        "padding-right" => {
+            style.padding_right = if inh_only_inherit { inherited.padding_right } else { init.padding_right };
+        }
+        "padding-bottom" => {
+            style.padding_bottom = if inh_only_inherit { inherited.padding_bottom } else { init.padding_bottom };
+        }
+        "padding-left" => {
+            style.padding_left = if inh_only_inherit { inherited.padding_left } else { init.padding_left };
+        }
+        "padding" => {
+            let (t, r, b, l) = if inh_only_inherit {
+                (inherited.padding_top, inherited.padding_right, inherited.padding_bottom, inherited.padding_left)
+            } else {
+                (init.padding_top, init.padding_right, init.padding_bottom, init.padding_left)
+            };
+            style.padding_top = t;
+            style.padding_right = r;
+            style.padding_bottom = b;
+            style.padding_left = l;
+        }
+        "box-sizing" => {
+            style.box_sizing = if inh_only_inherit { inherited.box_sizing } else { init.box_sizing };
+        }
+        "opacity" => {
+            style.opacity = if inh_only_inherit { inherited.opacity } else { init.opacity };
+        }
+        "overflow" => {
+            let (x, y) = if inh_only_inherit {
+                (inherited.overflow_x, inherited.overflow_y)
+            } else {
+                (init.overflow_x, init.overflow_y)
+            };
+            style.overflow_x = x;
+            style.overflow_y = y;
+        }
+        "overflow-x" => {
+            style.overflow_x = if inh_only_inherit { inherited.overflow_x } else { init.overflow_x };
+        }
+        "overflow-y" => {
+            style.overflow_y = if inh_only_inherit { inherited.overflow_y } else { init.overflow_y };
+        }
+        "text-overflow" => {
+            style.text_overflow = if inh_only_inherit { inherited.text_overflow } else { init.text_overflow };
+        }
+        "box-shadow" => {
+            style.box_shadow = if inh_only_inherit {
+                inherited.box_shadow.clone()
+            } else {
+                init.box_shadow.clone()
+            };
+        }
+        "outline-width" => {
+            style.outline_width = if inh_only_inherit { inherited.outline_width } else { init.outline_width };
+        }
+        "outline-style" => {
+            style.outline_style = if inh_only_inherit { inherited.outline_style } else { init.outline_style };
+        }
+        "outline-color" => {
+            style.outline_color = if inh_only_inherit { inherited.outline_color } else { init.outline_color };
+        }
+        "outline-offset" => {
+            style.outline_offset = if inh_only_inherit { inherited.outline_offset } else { init.outline_offset };
+        }
+        "outline" => {
+            // shorthand: width + style + color (offset не входит per spec).
+            if inh_only_inherit {
+                style.outline_width = inherited.outline_width;
+                style.outline_style = inherited.outline_style;
+                style.outline_color = inherited.outline_color;
+            } else {
+                style.outline_width = init.outline_width;
+                style.outline_style = init.outline_style;
+                style.outline_color = init.outline_color;
+            }
+        }
+        // border-* per-side individual + shorthands
+        "border-top-width" => style.border_top_width = if inh_only_inherit { inherited.border_top_width } else { init.border_top_width },
+        "border-right-width" => style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init.border_right_width },
+        "border-bottom-width" => style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init.border_bottom_width },
+        "border-left-width" => style.border_left_width = if inh_only_inherit { inherited.border_left_width } else { init.border_left_width },
+        "border-top-style" => style.border_top_style = if inh_only_inherit { inherited.border_top_style } else { init.border_top_style },
+        "border-right-style" => style.border_right_style = if inh_only_inherit { inherited.border_right_style } else { init.border_right_style },
+        "border-bottom-style" => style.border_bottom_style = if inh_only_inherit { inherited.border_bottom_style } else { init.border_bottom_style },
+        "border-left-style" => style.border_left_style = if inh_only_inherit { inherited.border_left_style } else { init.border_left_style },
+        "border-top-color" => style.border_top_color = if inh_only_inherit { inherited.border_top_color } else { init.border_top_color },
+        "border-right-color" => style.border_right_color = if inh_only_inherit { inherited.border_right_color } else { init.border_right_color },
+        "border-bottom-color" => style.border_bottom_color = if inh_only_inherit { inherited.border_bottom_color } else { init.border_bottom_color },
+        "border-left-color" => style.border_left_color = if inh_only_inherit { inherited.border_left_color } else { init.border_left_color },
+        // border-width / -style / -color shorthand → 4 стороны
+        "border-width" => {
+            let v = if inh_only_inherit {
+                (inherited.border_top_width, inherited.border_right_width, inherited.border_bottom_width, inherited.border_left_width)
+            } else {
+                (init.border_top_width, init.border_right_width, init.border_bottom_width, init.border_left_width)
+            };
+            style.border_top_width = v.0;
+            style.border_right_width = v.1;
+            style.border_bottom_width = v.2;
+            style.border_left_width = v.3;
+        }
+        "border-style" => {
+            let v = if inh_only_inherit {
+                (inherited.border_top_style, inherited.border_right_style, inherited.border_bottom_style, inherited.border_left_style)
+            } else {
+                (init.border_top_style, init.border_right_style, init.border_bottom_style, init.border_left_style)
+            };
+            style.border_top_style = v.0;
+            style.border_right_style = v.1;
+            style.border_bottom_style = v.2;
+            style.border_left_style = v.3;
+        }
+        "border-color" => {
+            let v = if inh_only_inherit {
+                (inherited.border_top_color, inherited.border_right_color, inherited.border_bottom_color, inherited.border_left_color)
+            } else {
+                (init.border_top_color, init.border_right_color, init.border_bottom_color, init.border_left_color)
+            };
+            style.border_top_color = v.0;
+            style.border_right_color = v.1;
+            style.border_bottom_color = v.2;
+            style.border_left_color = v.3;
+        }
+        // border / border-top / -right / -bottom / -left shorthand: width + style + color на сторону.
+        "border" => {
+            let (w, s, c) = if inh_only_inherit {
+                (inherited.border_top_width, inherited.border_top_style, inherited.border_top_color)
+            } else {
+                (init.border_top_width, init.border_top_style, init.border_top_color)
+            };
+            for (sw, ss, sc) in [
+                (&mut style.border_top_width, &mut style.border_top_style, &mut style.border_top_color),
+                (&mut style.border_right_width, &mut style.border_right_style, &mut style.border_right_color),
+                (&mut style.border_bottom_width, &mut style.border_bottom_style, &mut style.border_bottom_color),
+                (&mut style.border_left_width, &mut style.border_left_style, &mut style.border_left_color),
+            ] {
+                *sw = w;
+                *ss = s;
+                *sc = c;
+            }
+        }
+        "border-top" => {
+            style.border_top_width = if inh_only_inherit { inherited.border_top_width } else { init.border_top_width };
+            style.border_top_style = if inh_only_inherit { inherited.border_top_style } else { init.border_top_style };
+            style.border_top_color = if inh_only_inherit { inherited.border_top_color } else { init.border_top_color };
+        }
+        "border-right" => {
+            style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init.border_right_width };
+            style.border_right_style = if inh_only_inherit { inherited.border_right_style } else { init.border_right_style };
+            style.border_right_color = if inh_only_inherit { inherited.border_right_color } else { init.border_right_color };
+        }
+        "border-bottom" => {
+            style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init.border_bottom_width };
+            style.border_bottom_style = if inh_only_inherit { inherited.border_bottom_style } else { init.border_bottom_style };
+            style.border_bottom_color = if inh_only_inherit { inherited.border_bottom_color } else { init.border_bottom_color };
+        }
+        "border-left" => {
+            style.border_left_width = if inh_only_inherit { inherited.border_left_width } else { init.border_left_width };
+            style.border_left_style = if inh_only_inherit { inherited.border_left_style } else { init.border_left_style };
+            style.border_left_color = if inh_only_inherit { inherited.border_left_color } else { init.border_left_color };
+        }
+        // border-radius (CSS Backgrounds L3 §5) — 4 угла.
+        "border-top-left-radius" => {
+            style.border_top_left_radius = if inh_only_inherit { inherited.border_top_left_radius } else { init.border_top_left_radius };
+        }
+        "border-top-right-radius" => {
+            style.border_top_right_radius = if inh_only_inherit { inherited.border_top_right_radius } else { init.border_top_right_radius };
+        }
+        "border-bottom-right-radius" => {
+            style.border_bottom_right_radius = if inh_only_inherit { inherited.border_bottom_right_radius } else { init.border_bottom_right_radius };
+        }
+        "border-bottom-left-radius" => {
+            style.border_bottom_left_radius = if inh_only_inherit { inherited.border_bottom_left_radius } else { init.border_bottom_left_radius };
+        }
+        "border-radius" => {
+            let v = if inh_only_inherit {
+                (inherited.border_top_left_radius, inherited.border_top_right_radius, inherited.border_bottom_right_radius, inherited.border_bottom_left_radius)
+            } else {
+                (init.border_top_left_radius, init.border_top_right_radius, init.border_bottom_right_radius, init.border_bottom_left_radius)
+            };
+            style.border_top_left_radius = v.0;
+            style.border_top_right_radius = v.1;
+            style.border_bottom_right_radius = v.2;
+            style.border_bottom_left_radius = v.3;
+        }
+        // Прочие / неизвестные — silent no-op.
+        _ => {}
+    }
+}
+
 /// Применяет `font-size`-декларацию, если она задана. Размер `em` берётся
 /// относительно `parent_fs` (родительский font-size), `rem` — относительно
 /// ROOT_FONT_SIZE, `%` — относительно `parent_fs`.
@@ -3171,6 +3578,17 @@ fn apply_font_size(
         return;
     }
     let val = decl.value.as_str();
+    // CSS Cascade L4 §7: CSS-wide keywords. font-size — inherited;
+    // unset == inherit; revert == unset (Phase 0 без чёткой UA-origin границы).
+    if let Some(kw) = parse_css_wide_keyword(val) {
+        style.font_size = match kw {
+            CssWideKeyword::Inherit
+            | CssWideKeyword::Unset
+            | CssWideKeyword::Revert => parent_fs,
+            CssWideKeyword::Initial => ROOT_FONT_SIZE,
+        };
+        return;
+    }
     let Some(len) = parse_length(val) else {
         return;
     };
