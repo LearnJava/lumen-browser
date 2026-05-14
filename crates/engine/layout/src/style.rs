@@ -693,6 +693,25 @@ pub struct ComputedStyle {
     pub user_select: UserSelect,
     /// CSS Overflow L3 — `scroll-behavior`. Inherited.
     pub scroll_behavior: ScrollBehavior,
+    /// CSS Scroll Snap L1 §3.1 — `scroll-snap-type`. Не наследуется.
+    pub scroll_snap_type: ScrollSnapType,
+    /// CSS Scroll Snap L1 §6.1 — `scroll-snap-align`. Не наследуется.
+    pub scroll_snap_align: ScrollSnapAlign,
+    /// CSS Scroll Snap L1 §6.2 — `scroll-snap-stop`. Не наследуется.
+    pub scroll_snap_stop: ScrollSnapStop,
+    /// CSS Scroll Snap L1 §4 — `scroll-margin-*` (resolved px).
+    pub scroll_margin_top: f32,
+    pub scroll_margin_right: f32,
+    pub scroll_margin_bottom: f32,
+    pub scroll_margin_left: f32,
+    /// CSS Scroll Snap L1 §4 — `scroll-padding-*` (resolved px).
+    pub scroll_padding_top: f32,
+    pub scroll_padding_right: f32,
+    pub scroll_padding_bottom: f32,
+    pub scroll_padding_left: f32,
+    /// CSS Overscroll Behavior L1 §2 — `overscroll-behavior-x`. Не наследуется.
+    pub overscroll_behavior_x: OverscrollBehavior,
+    pub overscroll_behavior_y: OverscrollBehavior,
     /// CSS Text L3 §10.1 — `tab-size: <integer> | <length>`. Inherited.
     /// В пикселях если length; для integer хранится как число × 8 (default
     /// 8 spaces — стандартный default). Default 8 spaces = 64px при 8px-space.
@@ -1049,6 +1068,63 @@ pub enum ScrollBehavior {
     Smooth,
 }
 
+/// CSS Scroll Snap L1 §3.1 — `scroll-snap-type: none | <axis> [mandatory | proximity]`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScrollSnapType {
+    pub axis: ScrollSnapAxis,
+    pub strictness: ScrollSnapStrictness,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollSnapAxis {
+    #[default]
+    None,
+    X,
+    Y,
+    Block,
+    Inline,
+    Both,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollSnapStrictness {
+    #[default]
+    Proximity,
+    Mandatory,
+}
+
+/// CSS Scroll Snap L1 §6.1 — `scroll-snap-align: none | <axis-keyword>{1,2}`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScrollSnapAlign {
+    pub block: ScrollSnapAlignKeyword,
+    pub inline: ScrollSnapAlignKeyword,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollSnapAlignKeyword {
+    #[default]
+    None,
+    Start,
+    End,
+    Center,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollSnapStop {
+    #[default]
+    Normal,
+    Always,
+}
+
+/// CSS Overscroll Behavior L1 §2 — `overscroll-behavior: auto | contain | none`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OverscrollBehavior {
+    #[default]
+    Auto,
+    Contain,
+    None,
+}
+
 impl ScrollBehavior {
     pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
@@ -1361,6 +1437,20 @@ impl ComputedStyle {
             pointer_events: PointerEvents::Auto,
             user_select: UserSelect::Auto,
             scroll_behavior: ScrollBehavior::Auto,
+            // CSS Scroll Snap / Overscroll defaults.
+            scroll_snap_type: ScrollSnapType::default(),
+            scroll_snap_align: ScrollSnapAlign::default(),
+            scroll_snap_stop: ScrollSnapStop::default(),
+            scroll_margin_top: 0.0,
+            scroll_margin_right: 0.0,
+            scroll_margin_bottom: 0.0,
+            scroll_margin_left: 0.0,
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
+            overscroll_behavior_x: OverscrollBehavior::Auto,
+            overscroll_behavior_y: OverscrollBehavior::Auto,
             // CSS Text typography defaults.
             tab_size: 64.0,  // 8 spaces × 8px-space-width default.
             caret_color: None,  // `auto`.
@@ -1506,6 +1596,20 @@ pub fn compute_style(
         // User Select / Scroll Behavior — наследуются.
         user_select: inherited.user_select,
         scroll_behavior: inherited.scroll_behavior,
+        // Scroll Snap / Overscroll — не наследуются, defaults.
+        scroll_snap_type: ScrollSnapType::default(),
+        scroll_snap_align: ScrollSnapAlign::default(),
+        scroll_snap_stop: ScrollSnapStop::default(),
+        scroll_margin_top: 0.0,
+        scroll_margin_right: 0.0,
+        scroll_margin_bottom: 0.0,
+        scroll_margin_left: 0.0,
+        scroll_padding_top: 0.0,
+        scroll_padding_right: 0.0,
+        scroll_padding_bottom: 0.0,
+        scroll_padding_left: 0.0,
+        overscroll_behavior_x: OverscrollBehavior::Auto,
+        overscroll_behavior_y: OverscrollBehavior::Auto,
         // CSS Text typography — все inherited.
         tab_size: inherited.tab_size,
         caret_color: inherited.caret_color,
@@ -4318,6 +4422,104 @@ fn apply_declaration(
                 style.scroll_behavior = v;
             }
         }
+        "scroll-snap-type" => {
+            if let Some(v) = parse_scroll_snap_type(val) {
+                style.scroll_snap_type = v;
+            }
+        }
+        "scroll-snap-align" => {
+            if let Some(v) = parse_scroll_snap_align(val) {
+                style.scroll_snap_align = v;
+            }
+        }
+        "scroll-snap-stop" => {
+            match val.trim().to_ascii_lowercase().as_str() {
+                "normal" => style.scroll_snap_stop = ScrollSnapStop::Normal,
+                "always" => style.scroll_snap_stop = ScrollSnapStop::Always,
+                _ => {}
+            }
+        }
+        "scroll-margin-top" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_margin_top = px;
+            }
+        }
+        "scroll-margin-right" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_margin_right = px;
+            }
+        }
+        "scroll-margin-bottom" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_margin_bottom = px;
+            }
+        }
+        "scroll-margin-left" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_margin_left = px;
+            }
+        }
+        "scroll-margin" => {
+            let parts: Vec<f32> = val
+                .split_whitespace()
+                .filter_map(|p| resolve_box_length(p, em_basis, viewport))
+                .collect();
+            let (t, r, b, l) = expand_4_sides(&parts);
+            style.scroll_margin_top = t;
+            style.scroll_margin_right = r;
+            style.scroll_margin_bottom = b;
+            style.scroll_margin_left = l;
+        }
+        "scroll-padding-top" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_padding_top = px;
+            }
+        }
+        "scroll-padding-right" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_padding_right = px;
+            }
+        }
+        "scroll-padding-bottom" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_padding_bottom = px;
+            }
+        }
+        "scroll-padding-left" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_padding_left = px;
+            }
+        }
+        "scroll-padding" => {
+            let parts: Vec<f32> = val
+                .split_whitespace()
+                .filter_map(|p| resolve_box_length(p, em_basis, viewport))
+                .collect();
+            let (t, r, b, l) = expand_4_sides(&parts);
+            style.scroll_padding_top = t;
+            style.scroll_padding_right = r;
+            style.scroll_padding_bottom = b;
+            style.scroll_padding_left = l;
+        }
+        "overscroll-behavior-x" => {
+            if let Some(v) = parse_overscroll_behavior(val) {
+                style.overscroll_behavior_x = v;
+            }
+        }
+        "overscroll-behavior-y" => {
+            if let Some(v) = parse_overscroll_behavior(val) {
+                style.overscroll_behavior_y = v;
+            }
+        }
+        "overscroll-behavior" => {
+            // Shorthand: 1 значение — оба, 2 значения — x и y.
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if let Some(x) = parts.first().and_then(|p| parse_overscroll_behavior(p)) {
+                style.overscroll_behavior_x = x;
+                let y = parts.get(1).and_then(|p| parse_overscroll_behavior(p)).unwrap_or(x);
+                style.overscroll_behavior_y = y;
+            }
+        }
         "tab-size" => {
             // CSS Text L3 §10.1: <integer> или <length>. Integer = ширина
             // в spaces; принимаем как 8px-per-space heuristic. Length —
@@ -5809,6 +6011,77 @@ fn parse_border_style_opt(s: &str) -> Option<BorderStyle> {
         "solid" => Some(BorderStyle::Solid),
         "dashed" => Some(BorderStyle::Dashed),
         "dotted" => Some(BorderStyle::Dotted),
+        _ => None,
+    }
+}
+
+/// Расширяет 1-4 значения `Vec<f32>` в (top, right, bottom, left) по
+/// стандартному CSS-правилу (1 значение → все четыре, 2 значения → v-h,
+/// 3 значения → top-h-bottom, 4 значения — TRBL).
+fn expand_4_sides(parts: &[f32]) -> (f32, f32, f32, f32) {
+    match parts.len() {
+        1 => (parts[0], parts[0], parts[0], parts[0]),
+        2 => (parts[0], parts[1], parts[0], parts[1]),
+        3 => (parts[0], parts[1], parts[2], parts[1]),
+        _ if parts.len() >= 4 => (parts[0], parts[1], parts[2], parts[3]),
+        _ => (0.0, 0.0, 0.0, 0.0),
+    }
+}
+
+fn parse_scroll_snap_type(s: &str) -> Option<ScrollSnapType> {
+    let s = s.trim().to_ascii_lowercase();
+    if s == "none" {
+        return Some(ScrollSnapType::default());
+    }
+    let mut axis = ScrollSnapAxis::None;
+    let mut strict = ScrollSnapStrictness::Proximity;
+    for tok in s.split_whitespace() {
+        match tok {
+            "x" => axis = ScrollSnapAxis::X,
+            "y" => axis = ScrollSnapAxis::Y,
+            "block" => axis = ScrollSnapAxis::Block,
+            "inline" => axis = ScrollSnapAxis::Inline,
+            "both" => axis = ScrollSnapAxis::Both,
+            "mandatory" => strict = ScrollSnapStrictness::Mandatory,
+            "proximity" => strict = ScrollSnapStrictness::Proximity,
+            _ => {}
+        }
+    }
+    Some(ScrollSnapType {
+        axis,
+        strictness: strict,
+    })
+}
+
+fn parse_scroll_snap_align(s: &str) -> Option<ScrollSnapAlign> {
+    let parts: Vec<ScrollSnapAlignKeyword> = s
+        .split_whitespace()
+        .map(|p| match p.to_ascii_lowercase().as_str() {
+            "none" => ScrollSnapAlignKeyword::None,
+            "start" => ScrollSnapAlignKeyword::Start,
+            "end" => ScrollSnapAlignKeyword::End,
+            "center" => ScrollSnapAlignKeyword::Center,
+            _ => ScrollSnapAlignKeyword::None,
+        })
+        .collect();
+    match parts.len() {
+        1 => Some(ScrollSnapAlign {
+            block: parts[0],
+            inline: parts[0],
+        }),
+        2 => Some(ScrollSnapAlign {
+            block: parts[0],
+            inline: parts[1],
+        }),
+        _ => None,
+    }
+}
+
+fn parse_overscroll_behavior(s: &str) -> Option<OverscrollBehavior> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(OverscrollBehavior::Auto),
+        "contain" => Some(OverscrollBehavior::Contain),
+        "none" => Some(OverscrollBehavior::None),
         _ => None,
     }
 }

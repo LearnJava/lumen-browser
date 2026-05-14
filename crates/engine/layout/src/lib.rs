@@ -23,9 +23,10 @@ pub use style::{
     BackgroundSize, BorderStyle, BoxShadow, BoxSizing, BreakValue, ClipPath, Color, ComputedStyle,
     Content, ContentItem, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch,
     FontStyle, FontVariant, FontWeight, Hyphens, ListStylePosition, ListStyleType, Overflow,
-    OverflowWrap, PointerEvents, ScrollBehavior, ScrollbarGutter, ScrollbarWidth, TextAlign,
-    TextDecorationLine, TextOverflow, TextShadow, TextTransform, TransformFn, UserSelect,
-    Visibility, WhiteSpace, WordBreak,
+    OverflowWrap, OverscrollBehavior, PointerEvents, ScrollBehavior, ScrollSnapAlign,
+    ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType,
+    ScrollbarGutter, ScrollbarWidth, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
+    TextTransform, TransformFn, UserSelect, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -4631,6 +4632,109 @@ mod tests {
             "p { padding: var(--missing, env(safe-area-inset-top, 8px)); }",
         );
         assert!((first_p_style(&root).padding_top - 8.0).abs() < 1e-6);
+    }
+
+    // ──────── CSS Scroll Snap L1 ────────
+
+    #[test]
+    fn scroll_snap_type_none() {
+        let root = lay("<p>x</p>", "p { scroll-snap-type: none; }");
+        assert_eq!(first_p_style(&root).scroll_snap_type.axis, ScrollSnapAxis::None);
+    }
+
+    #[test]
+    fn scroll_snap_type_x_mandatory() {
+        let root = lay("<p>x</p>", "p { scroll-snap-type: x mandatory; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.scroll_snap_type.axis, ScrollSnapAxis::X);
+        assert_eq!(s.scroll_snap_type.strictness, ScrollSnapStrictness::Mandatory);
+    }
+
+    #[test]
+    fn scroll_snap_align_single_keyword() {
+        let root = lay("<p>x</p>", "p { scroll-snap-align: center; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.scroll_snap_align.block, ScrollSnapAlignKeyword::Center);
+        assert_eq!(s.scroll_snap_align.inline, ScrollSnapAlignKeyword::Center);
+    }
+
+    #[test]
+    fn scroll_snap_align_two_keywords() {
+        let root = lay("<p>x</p>", "p { scroll-snap-align: start end; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.scroll_snap_align.block, ScrollSnapAlignKeyword::Start);
+        assert_eq!(s.scroll_snap_align.inline, ScrollSnapAlignKeyword::End);
+    }
+
+    #[test]
+    fn scroll_snap_stop_always() {
+        let root = lay("<p>x</p>", "p { scroll-snap-stop: always; }");
+        assert_eq!(first_p_style(&root).scroll_snap_stop, ScrollSnapStop::Always);
+    }
+
+    #[test]
+    fn scroll_margin_individual() {
+        let root = lay("<p>x</p>", "p { scroll-margin-top: 10px; scroll-margin-left: 5px; }");
+        let s = first_p_style(&root);
+        assert!((s.scroll_margin_top - 10.0).abs() < 1e-6);
+        assert!((s.scroll_margin_left - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scroll_margin_shorthand_4_values() {
+        let root = lay("<p>x</p>", "p { scroll-margin: 1px 2px 3px 4px; }");
+        let s = first_p_style(&root);
+        assert!((s.scroll_margin_top - 1.0).abs() < 1e-6);
+        assert!((s.scroll_margin_right - 2.0).abs() < 1e-6);
+        assert!((s.scroll_margin_bottom - 3.0).abs() < 1e-6);
+        assert!((s.scroll_margin_left - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scroll_padding_shorthand_1_value() {
+        let root = lay("<p>x</p>", "p { scroll-padding: 5px; }");
+        let s = first_p_style(&root);
+        assert!((s.scroll_padding_top - 5.0).abs() < 1e-6);
+        assert!((s.scroll_padding_right - 5.0).abs() < 1e-6);
+        assert!((s.scroll_padding_bottom - 5.0).abs() < 1e-6);
+        assert!((s.scroll_padding_left - 5.0).abs() < 1e-6);
+    }
+
+    // ──────── CSS Overscroll Behavior L1 ────────
+
+    #[test]
+    fn overscroll_behavior_contain() {
+        let root = lay("<p>x</p>", "p { overscroll-behavior: contain; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.overscroll_behavior_x, OverscrollBehavior::Contain);
+        assert_eq!(s.overscroll_behavior_y, OverscrollBehavior::Contain);
+    }
+
+    #[test]
+    fn overscroll_behavior_two_values() {
+        let root = lay("<p>x</p>", "p { overscroll-behavior: contain none; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.overscroll_behavior_x, OverscrollBehavior::Contain);
+        assert_eq!(s.overscroll_behavior_y, OverscrollBehavior::None);
+    }
+
+    #[test]
+    fn overscroll_behavior_individual_axis() {
+        let root = lay("<p>x</p>", "p { overscroll-behavior-x: none; overscroll-behavior-y: auto; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.overscroll_behavior_x, OverscrollBehavior::None);
+        assert_eq!(s.overscroll_behavior_y, OverscrollBehavior::Auto);
+    }
+
+    #[test]
+    fn scroll_snap_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { scroll-snap-type: x mandatory; }",
+        );
+        let p = nested_p_style(&root);
+        // Не наследуется.
+        assert_eq!(p.scroll_snap_type.axis, ScrollSnapAxis::None);
     }
 
     // ──────── mask-* + scrollbar-* ────────

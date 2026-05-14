@@ -8,8 +8,10 @@ pub mod capability;
 pub mod error;
 pub mod event;
 pub mod ext;
+pub mod form;
 pub mod geom;
 pub mod idn;
+pub mod json;
 pub mod module;
 pub mod punycode;
 pub mod sri;
@@ -19,6 +21,10 @@ pub use capability::{Capability, CapabilityToken};
 pub use error::{Error, Result};
 pub use event::{Event, TabId};
 pub use ext::{EventSink, JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime};
+pub use form::{
+    decode_form_value, encode_form_multipart, encode_form_urlencoded, FormEntry, FormValue,
+};
+pub use json::{parse as parse_json, JsonError, JsonResult, JsonValue};
 pub use geom::{Point, Rect, Size};
 pub use module::Module;
 pub use sri::{DigestProvider, IntegrityList, SriAlgorithm, SriError, SriHash, SriResult};
