@@ -146,6 +146,32 @@ impl MicrotaskQueue {
 /// rendering step его исполнит.
 pub type AnimationFrameHandle = u32;
 
+/// Тип наблюдателя — определяет, в какой стадии rendering steps его callback
+/// будет вызван (HTML §8.1.5.1, шаги 13–17). Phase 0 не различает реальный
+/// триггер «наблюдаемое изменилось»: `deliver_observer_records` дёргает все
+/// активные callback-и указанного типа.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ObserverKind {
+    Resize,
+    Intersection,
+    Mutation,
+}
+
+/// Уникальный handle наблюдателя. `disconnect_observer` снимает регистрацию.
+pub type ObserverHandle = u32;
+
+/// Регистрация наблюдателя. `Rc<dyn Fn()>` (не `FnOnce`), потому что один и
+/// тот же observer срабатывает многократно по мере изменений; `Rc` нужен,
+/// чтобы можно было сделать дешёвый snapshot активного списка перед delivery
+/// (callback внутри delivery может disconnect-ить себя или соседнего observer-а
+/// — snapshot защищает текущую итерацию).
+struct ObserverEntry {
+    handle: ObserverHandle,
+    kind: ObserverKind,
+    callback: Rc<dyn Fn()>,
+}
+
 /// rAF-callback с handle-ом. `FnOnce`, потому что rAF по спецификации
 /// одноразовый — для повторяющейся анимации callback сам перепланирует следующий.
 struct AnimationFrameCallback {
@@ -164,6 +190,8 @@ struct State {
     next_raf_handle: AnimationFrameHandle,
     /// Handle-ы rAF, отменённые до выполнения. Подчищаются после rendering step.
     cancelled_raf: HashSet<AnimationFrameHandle>,
+    observers: Vec<ObserverEntry>,
+    next_observer_handle: ObserverHandle,
 }
 
 /// Результат одной итерации `step()`: запустилась ли task.
@@ -278,6 +306,39 @@ impl EventLoop {
     pub fn pending_animation_frames(&self) -> usize {
         self.state.borrow().raf.len()
     }
+
+    /// Сколько активных наблюдателей указанного типа (для тестов / отладки).
+    pub fn active_observers(&self, kind: ObserverKind) -> usize {
+        self.state
+            .borrow()
+            .observers
+            .iter()
+            .filter(|e| e.kind == kind)
+            .count()
+    }
+
+    /// Доставить records всем активным наблюдателям указанного типа.
+    /// Phase 0: callback вызывается без аргумента-records, реальная агрегация
+    /// «что изменилось с прошлого delivery» подключится, когда DOM/layout
+    /// начнут эмитить mutation / resize / intersection events.
+    ///
+    /// Snapshot-pattern: список callback-ов копируется (через `Rc::clone`)
+    /// до начала итерации, чтобы callback, который disconnect-ит себя или
+    /// соседнего observer-а, не сломал текущий delivery. Изменения видны на
+    /// следующем delivery.
+    pub fn deliver_observer_records(&self, kind: ObserverKind) {
+        let callbacks: Vec<Rc<dyn Fn()>> = self
+            .state
+            .borrow()
+            .observers
+            .iter()
+            .filter(|e| e.kind == kind)
+            .map(|e| Rc::clone(&e.callback))
+            .collect();
+        for cb in callbacks {
+            cb();
+        }
+    }
 }
 
 /// Дёшево клонируемая ссылка на event loop. Closure-ы task-ов / microtask-ов
@@ -325,6 +386,32 @@ impl EventLoopHandle {
     /// no-op (CSS OM View §6 `cancelAnimationFrame` всегда non-throwing).
     pub fn cancel_animation_frame(&self, handle: AnimationFrameHandle) {
         self.state.borrow_mut().cancelled_raf.insert(handle);
+    }
+
+    /// Зарегистрировать observer выбранного типа. Callback-ы вызываются при
+    /// `deliver_observer_records(kind)`. Возвращает handle для disconnect.
+    pub fn register_observer<F: Fn() + 'static>(
+        &self,
+        kind: ObserverKind,
+        callback: F,
+    ) -> ObserverHandle {
+        let mut state = self.state.borrow_mut();
+        let handle = state.next_observer_handle.wrapping_add(1);
+        state.next_observer_handle = handle;
+        state.observers.push(ObserverEntry {
+            handle,
+            kind,
+            callback: Rc::new(callback),
+        });
+        handle
+    }
+
+    /// Снять регистрацию наблюдателя. Неизвестный handle — no-op.
+    pub fn disconnect_observer(&self, handle: ObserverHandle) {
+        self.state
+            .borrow_mut()
+            .observers
+            .retain(|e| e.handle != handle);
     }
 }
 
@@ -569,6 +656,106 @@ mod tests {
         // run на пустом rAF-списке — должно отработать без паники.
         el.run_rendering_step(42.0);
         assert_eq!(el.pending_animation_frames(), 0);
+    }
+
+    #[test]
+    fn observers_register_and_disconnect() {
+        let el = EventLoop::new();
+        let h = el.handle();
+        let h1 = h.register_observer(ObserverKind::Resize, || {});
+        let h2 = h.register_observer(ObserverKind::Resize, || {});
+        let h3 = h.register_observer(ObserverKind::Mutation, || {});
+        assert_eq!(el.active_observers(ObserverKind::Resize), 2);
+        assert_eq!(el.active_observers(ObserverKind::Mutation), 1);
+        assert_eq!(el.active_observers(ObserverKind::Intersection), 0);
+
+        h.disconnect_observer(h1);
+        assert_eq!(el.active_observers(ObserverKind::Resize), 1);
+        h.disconnect_observer(h2);
+        assert_eq!(el.active_observers(ObserverKind::Resize), 0);
+
+        // Disconnect неизвестного handle — no-op.
+        h.disconnect_observer(9999);
+        h.disconnect_observer(h3);
+        assert_eq!(el.active_observers(ObserverKind::Mutation), 0);
+    }
+
+    #[test]
+    fn deliver_observer_records_calls_only_matching_kind() {
+        let el = EventLoop::new();
+        let h = el.handle();
+        let log = shared_log();
+
+        let l_resize = Rc::clone(&log);
+        let l_intersect = Rc::clone(&log);
+        let l_mutation = Rc::clone(&log);
+        h.register_observer(ObserverKind::Resize, move || {
+            l_resize.borrow_mut().push("resize");
+        });
+        h.register_observer(ObserverKind::Intersection, move || {
+            l_intersect.borrow_mut().push("intersection");
+        });
+        h.register_observer(ObserverKind::Mutation, move || {
+            l_mutation.borrow_mut().push("mutation");
+        });
+
+        el.deliver_observer_records(ObserverKind::Resize);
+        assert_eq!(*log.borrow(), vec!["resize"]);
+
+        el.deliver_observer_records(ObserverKind::Mutation);
+        assert_eq!(*log.borrow(), vec!["resize", "mutation"]);
+    }
+
+    #[test]
+    fn observer_callback_called_each_delivery() {
+        // Observer ≠ rAF: один и тот же callback срабатывает многократно.
+        let el = EventLoop::new();
+        let h = el.handle();
+        let counter = Rc::new(RefCell::new(0_usize));
+        let c = Rc::clone(&counter);
+        h.register_observer(ObserverKind::Resize, move || {
+            *c.borrow_mut() += 1;
+        });
+
+        el.deliver_observer_records(ObserverKind::Resize);
+        el.deliver_observer_records(ObserverKind::Resize);
+        el.deliver_observer_records(ObserverKind::Resize);
+        assert_eq!(*counter.borrow(), 3);
+    }
+
+    #[test]
+    fn observer_can_disconnect_during_delivery() {
+        // Snapshot-pattern: callback дёргает disconnect — текущая итерация
+        // продолжается со старым списком, но следующий delivery видит
+        // обновлённый.
+        let el = EventLoop::new();
+        let h = el.handle();
+        let log = shared_log();
+
+        let suicide_handle = Rc::new(RefCell::new(None::<ObserverHandle>));
+        let sh_clone = Rc::clone(&suicide_handle);
+        let h_inner = h.clone();
+        let l1 = Rc::clone(&log);
+        let id = h.register_observer(ObserverKind::Resize, move || {
+            l1.borrow_mut().push("suicide");
+            if let Some(handle) = *sh_clone.borrow() {
+                h_inner.disconnect_observer(handle);
+            }
+        });
+        *suicide_handle.borrow_mut() = Some(id);
+
+        let l2 = Rc::clone(&log);
+        h.register_observer(ObserverKind::Resize, move || {
+            l2.borrow_mut().push("other");
+        });
+
+        // Первый delivery: оба сработали; "suicide" disconnect-ит сам себя.
+        el.deliver_observer_records(ObserverKind::Resize);
+        assert_eq!(*log.borrow(), vec!["suicide", "other"]);
+
+        // Второй delivery: только "other".
+        el.deliver_observer_records(ObserverKind::Resize);
+        assert_eq!(*log.borrow(), vec!["suicide", "other", "other"]);
     }
 
     #[test]
