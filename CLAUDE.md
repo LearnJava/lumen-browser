@@ -69,6 +69,22 @@
 
 ---
 
+## Project Skills (скиллы)
+
+Проект содержит 4 скилла в `.claude/skills/`. Используй их вместо ручного следования протоколам:
+
+| Скилл | Когда применять |
+|---|---|
+| `/lumen-add-css-property` | Добавляешь новое CSS-свойство в `lumen-layout` |
+| `/lumen-task-start <имя>` | Берёшь новую задачу из roadmap (создаёт worktree + резервирует в плане) |
+| `/lumen-task-finish <имя>` | Задача готова к merge (clippy → тесты → merge --no-ff → worktree remove) |
+| `/lumen-new-crate <имя>` | Создаёшь новый Cargo-крейт в workspace |
+
+`lumen-task-start` и `lumen-task-finish` — только по явному вызову (`/`).
+`lumen-add-css-property` и `lumen-new-crate` — Claude может вызвать сам по контексту.
+
+---
+
 ## Команды для работы
 
 ```bash
