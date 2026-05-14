@@ -4387,6 +4387,95 @@ mod tests {
         assert!(!div.style.filter.is_empty());
     }
 
+    // ──────── gap / aspect-ratio ────────
+
+    #[test]
+    fn gap_shorthand_single_value() {
+        let root = lay("<p>x</p>", "p { gap: 10px; }");
+        let s = first_p_style(&root);
+        assert!((s.row_gap - 10.0).abs() < 0.01);
+        assert!((s.column_gap - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn gap_shorthand_two_values() {
+        let root = lay("<p>x</p>", "p { gap: 10px 20px; }");
+        let s = first_p_style(&root);
+        assert!((s.row_gap - 10.0).abs() < 0.01);
+        assert!((s.column_gap - 20.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn row_gap_individual() {
+        let root = lay("<p>x</p>", "p { row-gap: 15px; }");
+        assert!((first_p_style(&root).row_gap - 15.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn column_gap_individual() {
+        let root = lay("<p>x</p>", "p { column-gap: 25px; }");
+        assert!((first_p_style(&root).column_gap - 25.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn gap_em_resolved() {
+        // em разрешается относительно font-size элемента.
+        let root = lay("<p>x</p>", "p { font-size: 20px; gap: 1.5em; }");
+        let s = first_p_style(&root);
+        assert!((s.row_gap - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn gap_negative_clamped_to_zero() {
+        // gap не может быть отрицательным.
+        let root = lay("<p>x</p>", "p { gap: -5px; }");
+        assert_eq!(first_p_style(&root).row_gap, 0.0);
+    }
+
+    #[test]
+    fn aspect_ratio_single_number() {
+        let root = lay("<p>x</p>", "p { aspect-ratio: 1.5; }");
+        assert_eq!(first_p_style(&root).aspect_ratio, Some((1.5, 1.0)));
+    }
+
+    #[test]
+    fn aspect_ratio_w_h_pair() {
+        let root = lay("<p>x</p>", "p { aspect-ratio: 16 / 9; }");
+        assert_eq!(first_p_style(&root).aspect_ratio, Some((16.0, 9.0)));
+    }
+
+    #[test]
+    fn aspect_ratio_auto() {
+        let root = lay("<p>x</p>", "p { aspect-ratio: auto; }");
+        assert_eq!(first_p_style(&root).aspect_ratio, None);
+    }
+
+    #[test]
+    fn aspect_ratio_negative_rejected() {
+        let root = lay("<p>x</p>", "p { aspect-ratio: -1 / 2; }");
+        assert_eq!(first_p_style(&root).aspect_ratio, None);
+    }
+
+    #[test]
+    fn aspect_ratio_invalid_kept_unchanged() {
+        let root = lay("<p>x</p>", "p { aspect-ratio: 16 / abc; }");
+        assert_eq!(first_p_style(&root).aspect_ratio, None);
+    }
+
+    #[test]
+    fn gap_and_aspect_ratio_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { gap: 20px; aspect-ratio: 2; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.row_gap, 0.0);
+        assert_eq!(p.style.aspect_ratio, None);
+        assert!((div.style.row_gap - 20.0).abs() < 0.01);
+        assert!(div.style.aspect_ratio.is_some());
+    }
+
     #[test]
     fn media_prefers_color_scheme_light_default() {
         // Phase 0: prefers_dark=false → 'light' matches.
