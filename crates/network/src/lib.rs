@@ -1,8 +1,11 @@
 //! HTTP/1.1 клиент с TLS через rustls (Exception #3).
 //!
 //! Реализует `lumen_core::ext::NetworkTransport`.
-//! Поддерживает: HTTP и HTTPS, редиректы (до 5), chunked transfer encoding.
-//! Не поддерживает: HTTP/2, keep-alive, кэширование, аутентификацию.
+//! Поддерживает: HTTP и HTTPS, редиректы (до 5), chunked transfer encoding,
+//! **HTTP/1.1 keep-alive + connection pool** (переиспользование TCP/TLS
+//! между запросами к одному origin-у), retry-on-stale при попытке писать
+//! в закрытое сервером idle-соединение.
+//! Не поддерживает: HTTP/2, кэширование, аутентификацию.
 //!
 //! URL парсится в `lumen_core::url::Url` — никакого собственного парсера здесь
 //! не держим. Из `Url` берём scheme, host (Punycode для DNS/TLS/Host header
@@ -19,6 +22,11 @@ use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, TabId};
 use lumen_core::ext::{EventSink, NetworkTransport, RequestFilter};
 use lumen_core::url::Url;
+
+mod pool;
+pub use pool::ConnectionPool;
+
+use pool::PoolKey;
 
 /// Проверяет, что схема URL поддерживается транспортом (http/https) и
 /// извлекает всё, что нужно для connect: ASCII-форму host (Punycode для
@@ -46,72 +54,79 @@ fn require_http_scheme(url: &Url) -> Result<(String, u16, bool)> {
     Ok((host, port, is_tls))
 }
 
-// ── TCP + TLS connection ─────────────────────────────────────────────────────
+// ── TCP + TLS stream ─────────────────────────────────────────────────────────
 
-enum Connection {
+/// Низкоуровневый stream — сырое TCP или TLS-обёртка над ним. Не содержит
+/// буферизации; буфера живут на уровень выше в `Connection`.
+pub(crate) enum RawStream {
     Plain(TcpStream),
     Tls(Box<rustls::StreamOwned<ClientConnection, TcpStream>>),
 }
 
-impl Read for Connection {
+impl Read for RawStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
-            Connection::Plain(s) => s.read(buf),
-            Connection::Tls(s) => s.read(buf),
+            RawStream::Plain(s) => s.read(buf),
+            RawStream::Tls(s) => s.read(buf),
         }
     }
 }
 
-impl Write for Connection {
+impl Write for RawStream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
-            Connection::Plain(s) => s.write(buf),
-            Connection::Tls(s) => s.write(buf),
+            RawStream::Plain(s) => s.write(buf),
+            RawStream::Tls(s) => s.write(buf),
         }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
-            Connection::Plain(s) => s.flush(),
-            Connection::Tls(s) => s.flush(),
+            RawStream::Plain(s) => s.flush(),
+            RawStream::Tls(s) => s.flush(),
         }
     }
 }
 
-fn connect(host: &str, port: u16, is_tls: bool) -> Result<Connection> {
-    let addr = format!("{host}:{port}");
-    let tcp = TcpStream::connect(&addr)
-        .map_err(|e| Error::Network(format!("connect {addr}: {e}")))?;
+/// Persistent HTTP-соединение, пригодное к переиспользованию между запросами.
+///
+/// Содержит `BufReader<RawStream>` (постоянный, не пересоздаётся на каждый
+/// запрос — иначе входной буфер с остатками предыдущего ответа уйдёт в drop)
+/// и флаг `closed`, который выставляется, если сервер прислал
+/// `Connection: close` или мы получили EOF до завершения ответа. `closed`
+/// соединение нельзя возвращать в пул.
+pub(crate) struct Connection {
+    reader: BufReader<RawStream>,
+    closed: bool,
+}
 
-    if !is_tls {
-        return Ok(Connection::Plain(tcp));
+impl Connection {
+    fn new(stream: RawStream) -> Self {
+        Self {
+            reader: BufReader::new(stream),
+            closed: false,
+        }
     }
 
-    let mut root_store = rustls::RootCertStore::empty();
-    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-    let config = rustls::ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
-
-    let server_name = ServerName::try_from(host.to_owned())
-        .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
-
-    let conn = ClientConnection::new(Arc::new(config), server_name)
-        .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
-
-    Ok(Connection::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))))
+    /// Записать HTTP-запрос в stream. Используется `Connection: keep-alive`
+    /// (HTTP/1.1 default, но явно для ясности и для совместимости с серверами,
+    /// которые криво интерпретируют отсутствие хедера).
+    fn write_request(&mut self, host: &str, path: &str) -> Result<()> {
+        let req = format!(
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\n\r\n"
+        );
+        let stream = self.reader.get_mut();
+        stream
+            .write_all(req.as_bytes())
+            .map_err(|e| Error::Network(format!("write request: {e}")))?;
+        stream
+            .flush()
+            .map_err(|e| Error::Network(format!("flush request: {e}")))?;
+        Ok(())
+    }
 }
 
-// ── HTTP/1.1 запрос / ответ ──────────────────────────────────────────────────
-
-fn write_request(conn: &mut Connection, host: &str, path: &str) -> Result<()> {
-    let req = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: close\r\n\r\n"
-    );
-    conn.write_all(req.as_bytes())
-        .map_err(|e| Error::Network(format!("write request: {e}")))
-}
+// ── HTTP/1.1 ответ ───────────────────────────────────────────────────────────
 
 struct Response {
     status: u16,
@@ -127,23 +142,43 @@ fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a s
         .map(|(_, v)| v.as_str())
 }
 
-fn read_response(conn: Connection) -> Result<Response> {
-    let mut reader = BufReader::new(conn);
-
+/// Прочитать один HTTP-ответ из persistent connection. Не consume-ит
+/// соединение — после возврата `Connection` пригоден к следующему
+/// `write_request` (если `closed` остался false).
+///
+/// Корректно дочитывает: status-line, headers до `\r\n\r\n`, body по
+/// `Content-Length` или `Transfer-Encoding: chunked` (включая trailer-секцию,
+/// которая раньше пропускалась — без этого второй запрос на том же сокете
+/// читал бы хвост от предыдущего chunked-ответа).
+///
+/// Если сервер прислал `Connection: close` или произошёл EOF до окончания
+/// тела — выставляет `conn.closed = true`, и caller не должен возвращать
+/// такое соединение в пул.
+fn read_response(conn: &mut Connection) -> Result<Response> {
     // Status line.
     let mut status_line = String::new();
-    reader
+    let n = conn
+        .reader
         .read_line(&mut status_line)
         .map_err(|e| Error::Network(format!("read status: {e}")))?;
+    if n == 0 {
+        conn.closed = true;
+        return Err(Error::Network("EOF before status line".to_owned()));
+    }
     let status = parse_status(&status_line)?;
 
-    // Headers.
+    // Headers до пустой строки.
     let mut headers: Vec<(String, String)> = Vec::new();
     loop {
         let mut line = String::new();
-        reader
+        let n = conn
+            .reader
             .read_line(&mut line)
             .map_err(|e| Error::Network(format!("read header: {e}")))?;
+        if n == 0 {
+            conn.closed = true;
+            return Err(Error::Network("EOF in headers".to_owned()));
+        }
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if trimmed.is_empty() {
             break;
@@ -153,29 +188,72 @@ fn read_response(conn: Connection) -> Result<Response> {
         }
     }
 
-    // Body.
-    let body = if header_value(&headers, "transfer-encoding")
+    // Решение о keep-alive: HTTP/1.1 default = keep-alive, отменяется явным
+    // `Connection: close` (case-insensitive, может содержаться в списке через
+    // запятую с другими токенами вроде `keep-alive`/`upgrade`).
+    let server_wants_close = header_value(&headers, "connection")
+        .map(|v| {
+            v.split(',')
+                .any(|t| t.trim().eq_ignore_ascii_case("close"))
+        })
+        .unwrap_or(false);
+
+    // Body: chunked > Content-Length > read-to-EOF (последнее — только если
+    // сервер обещал закрыть соединение; для keep-alive без Content-Length
+    // длина неизвестна, что нелегально по RFC 7230 §3.3.3).
+    let is_chunked = header_value(&headers, "transfer-encoding")
         .map(|v| v.to_ascii_lowercase().contains("chunked"))
-        .unwrap_or(false)
-    {
-        read_chunked(reader)?
-    } else if let Some(len) = header_value(&headers, "content-length")
-        .and_then(|v| v.trim().parse::<usize>().ok())
-    {
+        .unwrap_or(false);
+    let content_length =
+        header_value(&headers, "content-length").and_then(|v| v.trim().parse::<usize>().ok());
+
+    let body = if is_chunked {
+        match read_chunked(&mut conn.reader) {
+            Ok(b) => b,
+            Err(e) => {
+                conn.closed = true;
+                return Err(e);
+            }
+        }
+    } else if let Some(len) = content_length {
         let mut buf = vec![0u8; len];
-        reader
-            .read_exact(&mut buf)
-            .map_err(|e| Error::Network(format!("read body: {e}")))?;
+        if let Err(e) = conn.reader.read_exact(&mut buf) {
+            conn.closed = true;
+            return Err(Error::Network(format!("read body: {e}")));
+        }
         buf
+    } else if server_wants_close || status == 204 || status == 304 {
+        // 204 No Content / 304 Not Modified не имеют тела (RFC 7230 §3.3.3).
+        // Иначе при Connection: close без Content-Length — читаем до EOF.
+        if status == 204 || status == 304 {
+            Vec::new()
+        } else {
+            let mut buf = Vec::new();
+            if let Err(e) = conn.reader.read_to_end(&mut buf) {
+                conn.closed = true;
+                return Err(Error::Network(format!("read body: {e}")));
+            }
+            conn.closed = true;
+            buf
+        }
     } else {
-        let mut buf = Vec::new();
-        reader
-            .read_to_end(&mut buf)
-            .map_err(|e| Error::Network(format!("read body: {e}")))?;
-        buf
+        // RFC 7230: HTTP/1.1 без Content-Length и без chunked при keep-alive —
+        // протокольная ошибка. Закрываем соединение, чтобы не отравить пул.
+        conn.closed = true;
+        return Err(Error::Network(
+            "response without Content-Length or chunked".to_owned(),
+        ));
     };
 
-    Ok(Response { status, headers, body })
+    if server_wants_close {
+        conn.closed = true;
+    }
+
+    Ok(Response {
+        status,
+        headers,
+        body,
+    })
 }
 
 fn parse_status(line: &str) -> Result<u16> {
@@ -189,7 +267,12 @@ fn parse_status(line: &str) -> Result<u16> {
     Ok(code)
 }
 
-fn read_chunked<R: BufRead>(mut reader: R) -> Result<Vec<u8>> {
+/// Прочитать chunked-тело **полностью**, включая trailer-секцию и финальный
+/// CRLF. Без дочитывания trailer-а в BufReader остаётся хвост от прошлого
+/// ответа, который сломает следующий request на том же соединении — это и
+/// есть отличие от прежней реализации, которая работала только с
+/// `Connection: close`.
+fn read_chunked<R: BufRead>(reader: &mut R) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     loop {
         let mut size_line = String::new();
@@ -202,6 +285,24 @@ fn read_chunked<R: BufRead>(mut reader: R) -> Result<Vec<u8>> {
         let chunk_size = usize::from_str_radix(size_hex, 16)
             .map_err(|_| Error::Network(format!("invalid chunk size: {size_hex:?}")))?;
         if chunk_size == 0 {
+            // Last chunk: дочитать trailer-section (произвольно много
+            // trailer-header строк) до пустой строки.
+            loop {
+                let mut line = String::new();
+                let n = reader
+                    .read_line(&mut line)
+                    .map_err(|e| Error::Network(format!("chunked trailer: {e}")))?;
+                if n == 0 {
+                    // EOF — для chunked это допустимо после last-chunk
+                    // (трейлер опционален), но caller должен mark соединение
+                    // closed чтобы не положить мёртвый stream в пул.
+                    break;
+                }
+                if line == "\r\n" || line == "\n" {
+                    break;
+                }
+                // Не-пустые строки — это trailer-headers; в Phase 0 их игнорим.
+            }
             break;
         }
         let mut chunk = vec![0u8; chunk_size];
@@ -218,11 +319,110 @@ fn read_chunked<R: BufRead>(mut reader: R) -> Result<Vec<u8>> {
     Ok(body)
 }
 
+// ── Connect ─────────────────────────────────────────────────────────────────
+
+fn connect(host: &str, port: u16, is_tls: bool) -> Result<Connection> {
+    let addr = format!("{host}:{port}");
+    let tcp = TcpStream::connect(&addr)
+        .map_err(|e| Error::Network(format!("connect {addr}: {e}")))?;
+
+    if !is_tls {
+        return Ok(Connection::new(RawStream::Plain(tcp)));
+    }
+
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    let server_name = ServerName::try_from(host.to_owned())
+        .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
+
+    let conn = ClientConnection::new(Arc::new(config), server_name)
+        .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+
+    Ok(Connection::new(RawStream::Tls(Box::new(
+        rustls::StreamOwned::new(conn, tcp),
+    ))))
+}
+
+// ── Pool integration ─────────────────────────────────────────────────────────
+
+/// Решить, выглядит ли ошибка как «stale keep-alive»: сервер закрыл idle
+/// соединение, и наш write / первый read получил EOF или RST. Такие ошибки
+/// заслуживают однократного retry на свежем соединении.
+fn is_stale_error(err: &Error) -> bool {
+    let msg = format!("{err:?}");
+    msg.contains("BrokenPipe")
+        || msg.contains("ConnectionReset")
+        || msg.contains("ConnectionAborted")
+        || msg.contains("UnexpectedEof")
+        || msg.contains("EOF before status line")
+        || msg.contains("EOF in headers")
+}
+
+/// Один полный HTTP-запрос: acquire из пула (или connect), write_request,
+/// read_response, release. При попадании на stale pooled connection —
+/// однократный retry с свежим. Возвращает `Response` и в случае success
+/// (соединение не закрыто) возвращает его в пул.
+fn fetch_single(
+    pool: &ConnectionPool,
+    host: &str,
+    port: u16,
+    is_tls: bool,
+    request_host_header: &str,
+    request_path: &str,
+) -> Result<Response> {
+    let key = PoolKey {
+        host: host.to_owned(),
+        port,
+        is_tls,
+    };
+
+    // Попытка 1: используем pooled connection, если он есть.
+    if let Some(pooled) = pool.acquire(&key) {
+        match do_request(pooled, request_host_header, request_path) {
+            Ok((resp, conn)) => {
+                if !conn.closed {
+                    pool.release(key, conn);
+                }
+                return Ok(resp);
+            }
+            Err(e) if is_stale_error(&e) => {
+                // Сервер успел закрыть idle-соединение — pooled умер. Дальше
+                // упадём на ветку «новый connect»; pooled уже не возвращается.
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Попытка 2 (или 1, если пул был пуст): свежий connect.
+    let conn = connect(host, port, is_tls)?;
+    let (resp, conn) = do_request(conn, request_host_header, request_path)?;
+    if !conn.closed {
+        pool.release(key, conn);
+    }
+    Ok(resp)
+}
+
+fn do_request(
+    mut conn: Connection,
+    host: &str,
+    path: &str,
+) -> Result<(Response, Connection)> {
+    conn.write_request(host, path)?;
+    let resp = read_response(&mut conn)?;
+    Ok((resp, conn))
+}
+
 // ── Редиректы ────────────────────────────────────────────────────────────────
 
 fn fetch_with_redirect(
     url: &Url,
     hops_left: u8,
+    pool: &ConnectionPool,
     sink: Option<&dyn EventSink>,
     filter: Option<&dyn RequestFilter>,
     tab_id: TabId,
@@ -266,9 +466,14 @@ fn fetch_with_redirect(
         });
     }
 
-    let mut conn = connect(&host_ascii, port, is_tls)?;
-    write_request(&mut conn, &host_ascii, &url.path_and_query())?;
-    let resp = read_response(conn)?;
+    let resp = fetch_single(
+        pool,
+        &host_ascii,
+        port,
+        is_tls,
+        &host_ascii,
+        &url.path_and_query(),
+    )?;
 
     // RequestCompleted эмитим всегда после получения статуса, до анализа кода:
     // редирект-hop, 4xx, 5xx — всё это «outgoing byte был виден ответом».
@@ -288,7 +493,7 @@ fn fetch_with_redirect(
             let next = url
                 .resolve(location)
                 .map_err(|e| Error::Network(format!("resolve redirect '{location}': {e}")))?;
-            fetch_with_redirect(&next, hops_left - 1, sink, filter, tab_id)
+            fetch_with_redirect(&next, hops_left - 1, pool, sink, filter, tab_id)
         }
         status => Err(Error::Network(format!("HTTP {status}"))),
     }
@@ -298,15 +503,18 @@ fn fetch_with_redirect(
 
 /// HTTP/1.1 + HTTPS клиент.
 ///
-/// По умолчанию события никуда не уходят (sink не подключён) и блокировок нет
-/// (filter не подключён). Подключите свой `EventSink` через `with_sink`, чтобы
-/// наблюдать `RequestStarted` / `RequestCompleted` / `RequestBlocked` для
-/// каждого исходящего запроса (включая редирект-hops); подключите
-/// `RequestFilter` через `with_filter`, чтобы отсеивать запросы по URL
-/// (трекеры / ad-blocker).
+/// По умолчанию события никуда не уходят (sink не подключён), блокировок нет
+/// (filter не подключён) и используется собственный fresh `ConnectionPool`.
+/// Подключите свой `EventSink` через `with_sink`, чтобы наблюдать
+/// `RequestStarted` / `RequestCompleted` / `RequestBlocked` для каждого
+/// исходящего запроса (включая редирект-hops); подключите `RequestFilter`
+/// через `with_filter`, чтобы отсеивать запросы по URL (трекеры / ad-blocker);
+/// подключите общий `ConnectionPool` через `with_pool`, если хотите делить
+/// keep-alive соединения между несколькими `HttpClient`-ами.
 pub struct HttpClient {
     sink: Option<Arc<dyn EventSink>>,
     filter: Option<Arc<dyn RequestFilter>>,
+    pool: Arc<ConnectionPool>,
     tab_id: TabId,
 }
 
@@ -315,6 +523,7 @@ impl HttpClient {
         Self {
             sink: None,
             filter: None,
+            pool: Arc::new(ConnectionPool::new()),
             tab_id: TabId(0),
         }
     }
@@ -334,6 +543,15 @@ impl HttpClient {
     #[must_use]
     pub fn with_filter(mut self, filter: Arc<dyn RequestFilter>) -> Self {
         self.filter = Some(filter);
+        self
+    }
+
+    /// Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
+    /// свой собственный fresh-пул. Общий пул полезен, если несколько клиентов
+    /// делят одни и те же origin-ы (несколько вкладок одного браузера).
+    #[must_use]
+    pub fn with_pool(mut self, pool: Arc<ConnectionPool>) -> Self {
+        self.pool = pool;
         self
     }
 
@@ -357,6 +575,7 @@ impl NetworkTransport for HttpClient {
         fetch_with_redirect(
             url,
             5,
+            &self.pool,
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.tab_id,
@@ -446,24 +665,42 @@ mod tests {
 
     #[test]
     fn chunked_decode_simple() {
-        // "5\r\nHello\r\n6\r\n World\r\n0\r\n\r\n"
+        // "5\r\nHello\r\n6\r\n World\r\n0\r\n\r\n" — last-chunk + пустой trailer.
         let data = b"5\r\nHello\r\n6\r\n World\r\n0\r\n\r\n";
-        let result = read_chunked(BufReader::new(&data[..])).unwrap();
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_chunked(&mut reader).unwrap();
         assert_eq!(result, b"Hello World");
     }
 
     #[test]
     fn chunked_decode_single_chunk() {
         let data = b"4\r\ntest\r\n0\r\n\r\n";
-        let result = read_chunked(BufReader::new(&data[..])).unwrap();
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_chunked(&mut reader).unwrap();
         assert_eq!(result, b"test");
     }
 
     #[test]
     fn chunked_decode_empty() {
         let data = b"0\r\n\r\n";
-        let result = read_chunked(BufReader::new(&data[..])).unwrap();
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_chunked(&mut reader).unwrap();
         assert!(result.is_empty());
+    }
+
+    #[test]
+    fn chunked_consumes_trailer_section() {
+        // После last-chunk сервер может прислать trailer-headers перед финальным
+        // CRLF. Они должны быть прочитаны и выброшены — иначе следующий
+        // запрос на keep-alive соединении прочитает их как новый status-line.
+        let data = b"3\r\nabc\r\n0\r\nX-Trailer: foo\r\n\r\nNEXT-RESPONSE-START";
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_chunked(&mut reader).unwrap();
+        assert_eq!(result, b"abc");
+        // После read_chunked в reader-е должно остаться только "NEXT-RESPONSE-START".
+        let mut leftover = String::new();
+        reader.read_to_string(&mut leftover).unwrap();
+        assert_eq!(leftover, "NEXT-RESPONSE-START");
     }
 
     #[test]
@@ -478,10 +715,25 @@ mod tests {
         assert_eq!(rel.as_str(), "http://localhost:8080/dir/sibling.html");
     }
 
+    #[test]
+    fn is_stale_error_recognises_eof_and_resets() {
+        assert!(is_stale_error(&Error::Network("EOF before status line".to_owned())));
+        assert!(is_stale_error(&Error::Network("EOF in headers".to_owned())));
+        assert!(is_stale_error(&Error::Network(
+            "write request: BrokenPipe (os error 32)".to_owned()
+        )));
+        assert!(is_stale_error(&Error::Network(
+            "read body: ConnectionReset".to_owned()
+        )));
+        assert!(!is_stale_error(&Error::Network("HTTP 500".to_owned())));
+        assert!(!is_stale_error(&Error::Network("blocked: tracker".to_owned())));
+    }
+
     // ── EventSink ────────────────────────────────────────────────────────────
 
     use std::net::TcpListener;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
 
     /// Тестовый sink, собирающий все события в порядке emit.
@@ -512,10 +764,9 @@ mod tests {
         let _c = HttpClient::new().with_tab(TabId(42));
     }
 
-    /// Запустить минимальный HTTP-сервер на 127.0.0.1:0, который ответит на
-    /// `accept_count` соединений согласно `responder`. Возвращает (port, join).
-    /// Responder вызывается с номером соединения (1..=accept_count) и возвращает
-    /// тело HTTP-ответа (включая статус-строку и заголовки).
+    /// Однократный mock-сервер: каждое соединение обслуживается **отдельно**,
+    /// после одного ответа socket закрывается. Удобен для прежних тестов и
+    /// для проверки случая `Connection: close`.
     fn mock_http_server<F>(accept_count: usize, responder: F) -> (u16, thread::JoinHandle<()>)
     where
         F: Fn(usize) -> Vec<u8> + Send + 'static,
@@ -540,6 +791,52 @@ mod tests {
                 let _ = sock.write_all(&body);
                 let _ = sock.shutdown(std::net::Shutdown::Both);
             }
+        });
+        (port, handle)
+    }
+
+    /// Keep-alive mock-сервер: один accept обслуживает несколько запросов
+    /// подряд на одном сокете, отвечая `responder(i)` на i-й запрос. После
+    /// `requests_to_serve` запросов сокет закрывается. `accept_counter`
+    /// инкрементится на каждом accept-е, чтобы тест мог убедиться, что
+    /// клиент действительно переиспользовал соединение (accept_count == 1).
+    fn mock_keepalive_server<F>(
+        requests_to_serve: usize,
+        accept_counter: Arc<AtomicUsize>,
+        responder: F,
+    ) -> (u16, thread::JoinHandle<()>)
+    where
+        F: Fn(usize) -> Vec<u8> + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            accept_counter.fetch_add(1, Ordering::SeqCst);
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            for i in 1..=requests_to_serve {
+                // Читаем один request до пустой строки.
+                let mut got_any = false;
+                loop {
+                    let mut line = String::new();
+                    let n = reader.read_line(&mut line).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    got_any = true;
+                    if line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                }
+                if !got_any {
+                    break;
+                }
+                let body = responder(i);
+                if sock.write_all(&body).is_err() {
+                    break;
+                }
+            }
+            let _ = sock.shutdown(std::net::Shutdown::Both);
         });
         (port, handle)
     }
@@ -818,4 +1115,131 @@ mod tests {
         assert!(client.fetch(&url).is_err());
         assert!(sink.events().is_empty());
     }
+
+    // ── Keep-alive / Connection Pool ─────────────────────────────────────────
+
+    #[test]
+    fn two_fetches_reuse_one_tcp_connection() {
+        // Сервер обслуживает два запроса на одном accept-е (HTTP/1.1
+        // keep-alive). Если HttpClient правильно переиспользует соединение,
+        // accept_count останется == 1.
+        let accept_counter = Arc::new(AtomicUsize::new(0));
+        let (port, server) = mock_keepalive_server(2, accept_counter.clone(), |i| match i {
+            1 => b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nFIR".to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nSEC".to_vec(),
+            _ => unreachable!(),
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"FIR");
+        assert_eq!(client.fetch(&url).unwrap(), b"SEC");
+
+        server.join().unwrap();
+        assert_eq!(
+            accept_counter.load(Ordering::SeqCst),
+            1,
+            "expected exactly 1 TCP accept (keep-alive reuse)"
+        );
+    }
+
+    #[test]
+    fn server_says_connection_close_drops_pool_entry() {
+        // Сервер прислал `Connection: close` → соединение в пул не вернулось.
+        // Второй запрос требует свежий accept.
+        let accept_counter = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let counter = accept_counter.clone();
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut sock, _) = listener.accept().expect("accept");
+                counter.fetch_add(1, Ordering::SeqCst);
+                let mut reader = BufReader::new(sock.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    let n = reader.read_line(&mut line).unwrap_or(0);
+                    if n == 0 || line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                }
+                let _ = sock.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                );
+                let _ = sock.shutdown(std::net::Shutdown::Both);
+            }
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
+
+        server.join().unwrap();
+        assert_eq!(
+            accept_counter.load(Ordering::SeqCst),
+            2,
+            "Connection: close must force a fresh TCP connect on next request"
+        );
+    }
+
+    #[test]
+    fn stale_pooled_connection_triggers_retry() {
+        // Сервер сначала отдаёт ответ + закрывает сокет (без Connection: close
+        // — клиент думает «keep-alive»), потом на следующий accept отдаёт
+        // нормальный ответ. Клиент должен заметить stale-write/read и сделать
+        // retry на свежем connect-е. Ожидаем 2 accept-а, fetch проходит дважды.
+        let accept_counter = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let counter = accept_counter.clone();
+        let server = thread::spawn(move || {
+            // Соединение 1: ответ + сразу shutdown (не дожидаясь второго
+            // запроса) — это как «idle timeout у сервера».
+            let (mut sock1, _) = listener.accept().expect("accept1");
+            counter.fetch_add(1, Ordering::SeqCst);
+            let mut reader = BufReader::new(sock1.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line).unwrap_or(0);
+                if n == 0 || line == "\r\n" || line == "\n" {
+                    break;
+                }
+            }
+            let _ = sock1.write_all(
+                // Без Connection: close — сервер врёт про keep-alive,
+                // но всё равно закрывает.
+                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst",
+            );
+            let _ = sock1.shutdown(std::net::Shutdown::Both);
+            drop(sock1);
+
+            // Соединение 2: после того, как клиент попытается переиспользовать
+            // первое и упадёт со stale-error, он откроет новое.
+            let (mut sock2, _) = listener.accept().expect("accept2");
+            counter.fetch_add(1, Ordering::SeqCst);
+            let mut reader = BufReader::new(sock2.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line).unwrap_or(0);
+                if n == 0 || line == "\r\n" || line == "\n" {
+                    break;
+                }
+            }
+            let _ = sock2.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecond",
+            );
+            let _ = sock2.shutdown(std::net::Shutdown::Both);
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"first");
+        // Второй fetch должен сработать через retry-on-stale.
+        assert_eq!(client.fetch(&url).unwrap(), b"second");
+
+        server.join().unwrap();
+        assert_eq!(accept_counter.load(Ordering::SeqCst), 2);
+    }
 }
+
