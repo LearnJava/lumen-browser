@@ -15,6 +15,8 @@
 //! Внешние CSS: `<link rel="stylesheet" href="...">` загружается с диска или
 //! по сети — в зависимости от того, каким способом загружена страница.
 
+mod runtime;
+
 use std::error::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
