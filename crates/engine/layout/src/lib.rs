@@ -4581,6 +4581,58 @@ mod tests {
         assert_eq!(p_style.column_count, None);
     }
 
+    // ──────── CSS Environment Variables L1 — env() ────────
+
+    #[test]
+    fn env_fallback_used_when_unknown() {
+        // env() с unknown name + fallback → fallback применяется.
+        let root = lay(
+            "<p>x</p>",
+            "p { padding: env(safe-area-inset-top, 12px); }",
+        );
+        assert!((first_p_style(&root).padding_top - 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn env_without_fallback_invalidates_decl() {
+        // env() с unknown name и без fallback — декларация невалидна.
+        let root = lay(
+            "<p>x</p>",
+            "p { padding: env(safe-area-inset-top); }",
+        );
+        assert!((first_p_style(&root).padding_top - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn env_with_indices_ignored_phase0() {
+        // `env(name 0, fallback)` — индекс игнорируется, имя = name.
+        let root = lay(
+            "<p>x</p>",
+            "p { padding: env(viewport-segment-width 0 0, 25px); }",
+        );
+        assert!((first_p_style(&root).padding_top - 25.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn env_inside_calc() {
+        // calc(env(...) + 5px) — env разворачивается до calc().
+        let root = lay(
+            "<p>x</p>",
+            "p { padding: calc(env(safe-area-inset-top, 10px) + 5px); }",
+        );
+        assert!((first_p_style(&root).padding_top - 15.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn env_inside_var_fallback() {
+        // var(--foo, env(name, 8px)) — env как fallback внутри var().
+        let root = lay(
+            "<p>x</p>",
+            "p { padding: var(--missing, env(safe-area-inset-top, 8px)); }",
+        );
+        assert!((first_p_style(&root).padding_top - 8.0).abs() < 1e-6);
+    }
+
     // ──────── mask-* + scrollbar-* ────────
 
     #[test]

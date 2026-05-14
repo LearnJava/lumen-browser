@@ -122,6 +122,108 @@ pub trait EncodingDetector: Send + Sync {
     fn detect(&self, bytes: &[u8], content_type_hint: Option<&str>) -> Option<&'static str>;
 }
 
+/// JavaScript runtime — исполнение JS-кода (HTML inline scripts, `eval`,
+/// custom elements, и т.д.). Trait абстрагирует выбор движка: первая
+/// реализация — `rquickjs` поверх QuickJS (exception #4 в §5),
+/// v1.0+ — `rusty_v8` поверх V8. Свой JS-движок не пишем.
+///
+/// Phase 0: trait определён, NullJsRuntime (всегда возвращает ошибку)
+/// — placeholder. Реальный QuickJS-runtime появится в Phase 2-3.
+///
+/// Возвращаемые `JsValue`-ы — простые JSON-совместимые типы. Полный
+/// JS-объект (с прототипами, методами, замыканиями) не пробрасывается
+/// через границу trait-а — это намеренное ограничение, чтобы не привязать
+/// API к конкретному движку.
+pub trait JsRuntime: Send + Sync {
+    /// Выполнить script-text и вернуть результат последнего выражения.
+    fn eval(&self, script: &str) -> JsResult<JsValue>;
+
+    /// Записать глобальную переменную в текущий runtime context.
+    fn set_global(&self, name: &str, value: JsValue) -> JsResult<()>;
+
+    /// Прочитать значение глобальной переменной.
+    fn get_global(&self, name: &str) -> JsResult<JsValue>;
+
+    /// Вызвать функцию `name(args)` в global scope и вернуть результат.
+    /// Функция должна быть определена через `eval` или `set_global`.
+    fn call_function(&self, name: &str, args: &[JsValue]) -> JsResult<JsValue>;
+
+    /// Имя движка для debug-вывода. Реализация: `"quickjs"`, `"v8"`,
+    /// `"null"`.
+    fn engine_name(&self) -> &'static str;
+}
+
+/// Простые JSON-совместимые типы для передачи через trait-границу.
+#[derive(Debug, Clone, PartialEq)]
+pub enum JsValue {
+    Null,
+    Undefined,
+    Bool(bool),
+    Number(f64),
+    String(String),
+    Array(Vec<JsValue>),
+    /// Поля сортированы по ключу, чтобы сравнения детерминированы.
+    Object(Vec<(String, JsValue)>),
+}
+
+impl JsValue {
+    /// Хелпер: построить object из key-value пар.
+    pub fn object<I: IntoIterator<Item = (String, JsValue)>>(entries: I) -> Self {
+        let mut v: Vec<(String, JsValue)> = entries.into_iter().collect();
+        v.sort_by(|a, b| a.0.cmp(&b.0));
+        Self::Object(v)
+    }
+}
+
+/// Ошибка исполнения JavaScript: либо syntax error (parse), либо runtime
+/// exception (`throw`), либо неподдержанная операция (Null runtime).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum JsError {
+    /// Lexical / parser error в скрипте.
+    Parse(String),
+    /// Runtime error — uncaught exception в JS.
+    Runtime(String),
+    /// Операция не реализована в текущем runtime (например, Null).
+    NotImplemented,
+}
+
+impl std::fmt::Display for JsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Parse(m) => write!(f, "JS parse error: {m}"),
+            Self::Runtime(m) => write!(f, "JS runtime error: {m}"),
+            Self::NotImplemented => write!(f, "JS not implemented"),
+        }
+    }
+}
+
+impl std::error::Error for JsError {}
+
+pub type JsResult<T> = std::result::Result<T, JsError>;
+
+/// Null implementation — всегда возвращает `JsError::NotImplemented`.
+/// Используется как placeholder в shell, пока не подключён реальный движок.
+#[derive(Debug, Default)]
+pub struct NullJsRuntime;
+
+impl JsRuntime for NullJsRuntime {
+    fn eval(&self, _: &str) -> JsResult<JsValue> {
+        Err(JsError::NotImplemented)
+    }
+    fn set_global(&self, _: &str, _: JsValue) -> JsResult<()> {
+        Err(JsError::NotImplemented)
+    }
+    fn get_global(&self, _: &str) -> JsResult<JsValue> {
+        Err(JsError::NotImplemented)
+    }
+    fn call_function(&self, _: &str, _: &[JsValue]) -> JsResult<JsValue> {
+        Err(JsError::NotImplemented)
+    }
+    fn engine_name(&self) -> &'static str {
+        "null"
+    }
+}
+
 // Точки расширения, спроектированные, но без интерфейса до Phase 1+.
 //
 // Trait-ы для четырёх «разрешённых exceptions» из §5 (внешние зависимости,
@@ -134,7 +236,7 @@ pub trait EncodingDetector: Send + Sync {
 //                       реализация: rustls. Своя — security antipattern;
 //                       абстракция нужна только для swap на системный TLS
 //                       (SChannel / Network.framework).
-// - JsRuntime         — исполнение JavaScript. Реализации: QuickJS (v0.5),
+// - JsRuntime         — определён выше; реализации: QuickJS (v0.5),
 //                       V8 (v1.0+).
 //
 // Остальные точки расширения без выбранной зависимости — пишем свои
@@ -144,3 +246,74 @@ pub trait EncodingDetector: Send + Sync {
 // - HyphenationEngine — переносы слов для CSS hyphens. Phase 2.
 // - DnsResolver       — DNS, включая DoH/DoT. Phase 1.
 // - Hasher            — единый интерфейс хэшей (для CSP, SRI). Phase 1.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn null_runtime_returns_not_implemented_for_eval() {
+        let rt = NullJsRuntime;
+        assert!(matches!(rt.eval("1 + 2"), Err(JsError::NotImplemented)));
+    }
+
+    #[test]
+    fn null_runtime_returns_not_implemented_for_set_global() {
+        let rt = NullJsRuntime;
+        assert!(matches!(
+            rt.set_global("x", JsValue::Number(1.0)),
+            Err(JsError::NotImplemented)
+        ));
+    }
+
+    #[test]
+    fn null_runtime_engine_name() {
+        assert_eq!(NullJsRuntime.engine_name(), "null");
+    }
+
+    #[test]
+    fn js_value_object_sorted_by_key() {
+        let v = JsValue::object(vec![
+            ("b".into(), JsValue::Number(2.0)),
+            ("a".into(), JsValue::Number(1.0)),
+            ("c".into(), JsValue::Number(3.0)),
+        ]);
+        match v {
+            JsValue::Object(entries) => {
+                let keys: Vec<&str> = entries.iter().map(|(k, _)| k.as_str()).collect();
+                assert_eq!(keys, vec!["a", "b", "c"]);
+            }
+            _ => panic!("expected Object"),
+        }
+    }
+
+    #[test]
+    fn js_value_equality() {
+        assert_eq!(JsValue::Null, JsValue::Null);
+        assert_eq!(JsValue::Number(1.5), JsValue::Number(1.5));
+        assert_ne!(JsValue::Bool(true), JsValue::Bool(false));
+        assert_eq!(
+            JsValue::Array(vec![JsValue::Number(1.0), JsValue::String("a".into())]),
+            JsValue::Array(vec![JsValue::Number(1.0), JsValue::String("a".into())]),
+        );
+    }
+
+    #[test]
+    fn js_error_display() {
+        assert_eq!(
+            format!("{}", JsError::Parse("unexpected }".into())),
+            "JS parse error: unexpected }"
+        );
+        assert_eq!(format!("{}", JsError::NotImplemented), "JS not implemented");
+    }
+
+    #[test]
+    fn null_runtime_is_send_sync() {
+        fn is_send_sync<T: Send + Sync>() {}
+        is_send_sync::<NullJsRuntime>();
+        // dyn check.
+        fn check_dyn(_r: &dyn JsRuntime) {}
+        let rt = NullJsRuntime;
+        check_dyn(&rt);
+    }
+}

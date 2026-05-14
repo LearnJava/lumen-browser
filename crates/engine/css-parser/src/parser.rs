@@ -351,6 +351,61 @@ pub struct Stylesheet {
     /// parse+store; реальный animation runtime (interpolation, timing
     /// functions, animation-name связывание) отложен.
     pub keyframes: Vec<KeyframesRule>,
+    /// CSS Counter Styles L3 §2 — `@counter-style name { ... }`. Phase 0:
+    /// parse+store как `Vec<(name, declarations)>`. Реальное применение
+    /// (список как кастомные markers через list-style-type) отложено.
+    pub counter_styles: Vec<CounterStyleRule>,
+    /// CSS Paged Media L3 §3 — `@page <selector>? { ... }`. Phase 0:
+    /// parse+store. Реальная pagination — отдельная задача (Phase 2+).
+    pub page_rules: Vec<PageRule>,
+    /// CSS Cascade L6 — `@scope (<root>) [to (<limit>)] { rules }`. Phase 0:
+    /// parse+store; реальная scope-фильтрация в каскаде отложена.
+    pub scope_rules: Vec<ScopeRule>,
+    /// CSS Transitions L2 §3.4 — `@starting-style { rules }`. Phase 0:
+    /// parse+store. Применение при первом match (transition-from-display)
+    /// отложено вместе с реальным transition runtime.
+    pub starting_style_rules: Vec<StartingStyleRule>,
+}
+
+/// `@counter-style <name> { ... }` — CSS Counter Styles L3 §2.
+/// Phase 0: parse+store. Descriptors (`system`, `symbols`, `suffix`,
+/// `range`, `prefix`, `pad`, `negative`, ...) хранятся как declarations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CounterStyleRule {
+    pub name: String,
+    pub declarations: Vec<Declaration>,
+}
+
+/// `@page <selector>? { decls }` — CSS Paged Media L3 §3.
+/// Selector — пустой (любая страница), `:first`, `:left`, `:right`,
+/// `:blank`, named `page-name`. Phase 0: хранится сырая строка.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageRule {
+    /// Pseudo-classes и/или page-name. Пустая строка = любой page.
+    pub selector: String,
+    pub declarations: Vec<Declaration>,
+}
+
+/// `@scope (<root>) [to (<limit>)] { rules }` — CSS Cascade L6.
+/// `root` — селектор корня scope, `limit` — селектор upper boundary
+/// (рекурсивный обход вниз останавливается на нём). Phase 0: оба
+/// хранятся сырыми строками; реальный scope-matcher отложен.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeRule {
+    /// Селектор корня scope. Может быть пустым (`@scope { ... }`
+    /// без явного root — implicit `:scope` = stylesheet root).
+    pub root: String,
+    /// Опциональный limit (`to (<selector>)`). None — без верхней границы.
+    pub limit: Option<String>,
+    pub rules: Vec<Rule>,
+}
+
+/// `@starting-style { rules }` — CSS Transitions L2 §3.4. Контейнер
+/// rules, применяющихся как initial state при first match (для
+/// transition-on-display-changes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartingStyleRule {
+    pub rules: Vec<Rule>,
 }
 
 /// `@keyframes name { offset { decls } ... }` — CSS Animations L1 §3.
@@ -623,6 +678,10 @@ enum AtRuleOutcome {
     },
     Supports(SupportsRule),
     Keyframes(KeyframesRule),
+    CounterStyle(CounterStyleRule),
+    Page(PageRule),
+    Scope(ScopeRule),
+    StartingStyle(StartingStyleRule),
     None,
 }
 
@@ -1087,6 +1146,10 @@ impl<'a> Parser<'a> {
         let mut layers: Vec<LayerRule> = Vec::new();
         let mut supports_rules: Vec<SupportsRule> = Vec::new();
         let mut keyframes: Vec<KeyframesRule> = Vec::new();
+        let mut counter_styles: Vec<CounterStyleRule> = Vec::new();
+        let mut page_rules: Vec<PageRule> = Vec::new();
+        let mut scope_rules: Vec<ScopeRule> = Vec::new();
+        let mut starting_style_rules: Vec<StartingStyleRule> = Vec::new();
         let mut anon_counter: usize = 0;
         loop {
             self.skip_ws_and_comments();
@@ -1119,6 +1182,10 @@ impl<'a> Parser<'a> {
                     }
                     AtRuleOutcome::Supports(s) => supports_rules.push(s),
                     AtRuleOutcome::Keyframes(k) => keyframes.push(k),
+                    AtRuleOutcome::CounterStyle(c) => counter_styles.push(c),
+                    AtRuleOutcome::Page(p) => page_rules.push(p),
+                    AtRuleOutcome::Scope(s) => scope_rules.push(s),
+                    AtRuleOutcome::StartingStyle(s) => starting_style_rules.push(s),
                     AtRuleOutcome::None => {}
                 },
                 Some(_) => {
@@ -1143,6 +1210,10 @@ impl<'a> Parser<'a> {
             layers,
             supports_rules,
             keyframes,
+            counter_styles,
+            page_rules,
+            scope_rules,
+            starting_style_rules,
         }
     }
 
@@ -1182,6 +1253,26 @@ impl<'a> Parser<'a> {
             return self
                 .parse_keyframes_rule()
                 .map_or(AtRuleOutcome::None, AtRuleOutcome::Keyframes);
+        }
+        if name.eq_ignore_ascii_case("counter-style") {
+            return self
+                .parse_counter_style_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::CounterStyle);
+        }
+        if name.eq_ignore_ascii_case("page") {
+            return self
+                .parse_page_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::Page);
+        }
+        if name.eq_ignore_ascii_case("scope") {
+            return self
+                .parse_scope_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::Scope);
+        }
+        if name.eq_ignore_ascii_case("starting-style") {
+            return self
+                .parse_starting_style_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::StartingStyle);
         }
         // Прочее @-правило: откатимся к '@' и пропустим как раньше.
         self.pos = start;
@@ -1523,6 +1614,181 @@ impl<'a> Parser<'a> {
             }
         }
         Some(KeyframesRule { name, frames })
+    }
+
+    /// Парсит `@counter-style <name> { <descriptors> }` — CSS Counter Styles L3 §2.
+    /// Descriptors хранятся как обычные declarations.
+    fn parse_counter_style_rule(&mut self) -> Option<CounterStyleRule> {
+        self.skip_ws_and_comments();
+        let name = self.parse_ident()?;
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume();
+        let declarations = self.parse_declaration_block();
+        Some(CounterStyleRule { name, declarations })
+    }
+
+    /// Парсит `@page <selector>? { <decls> }` — CSS Paged Media L3 §3.
+    /// Selector сохраняется как сырая строка (`:first`, `:left`, имя
+    /// страницы, и т.д.). Пустой selector — любая страница.
+    fn parse_page_rule(&mut self) -> Option<PageRule> {
+        self.skip_ws_and_comments();
+        let sel_start = self.pos;
+        while let Some(c) = self.peek() {
+            if c == '{' || c == ';' {
+                break;
+            }
+            self.consume();
+        }
+        if self.peek() != Some('{') {
+            // `@page <prelude>;` без блока — не валидно для CSS Paged Media.
+            if self.peek() == Some(';') {
+                self.consume();
+            }
+            return None;
+        }
+        let selector = self.input[sel_start..self.pos].trim().to_string();
+        self.consume(); // '{'
+        let declarations = self.parse_declaration_block();
+        Some(PageRule {
+            selector,
+            declarations,
+        })
+    }
+
+    /// Парсит `@scope (<root>) [to (<limit>)] { rules }` — CSS Cascade L6.
+    /// Root и limit — сырые строки селекторов (без обрамляющих `(`/`)`).
+    /// Без `(<root>)` — implicit scope (root = пустая строка).
+    fn parse_scope_rule(&mut self) -> Option<ScopeRule> {
+        self.skip_ws_and_comments();
+        let mut root = String::new();
+        let mut limit: Option<String> = None;
+        // Опциональный `(<root>)`.
+        if self.peek() == Some('(') {
+            self.consume();
+            let start = self.pos;
+            let mut depth: i32 = 1;
+            while let Some(c) = self.peek() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                self.consume();
+            }
+            root = self.input[start..self.pos].trim().to_string();
+            if self.peek() == Some(')') {
+                self.consume();
+            }
+        }
+        self.skip_ws_and_comments();
+        // Опциональный `to (<limit>)`.
+        if self.rest().to_ascii_lowercase().starts_with("to") {
+            // Граница: следующий после `to` — не ident-char.
+            let after = self.pos + 2;
+            let ok = self.input.as_bytes().get(after).is_none_or(|&c| {
+                !(c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+            });
+            if ok {
+                self.pos = after;
+                self.skip_ws_and_comments();
+                if self.peek() == Some('(') {
+                    self.consume();
+                    let start = self.pos;
+                    let mut depth: i32 = 1;
+                    while let Some(c) = self.peek() {
+                        match c {
+                            '(' => depth += 1,
+                            ')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        self.consume();
+                    }
+                    limit = Some(self.input[start..self.pos].trim().to_string());
+                    if self.peek() == Some(')') {
+                        self.consume();
+                    }
+                }
+            }
+        }
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            return None;
+        }
+        self.consume();
+        let mut rules = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some('@') => {
+                    self.skip_at_rule();
+                }
+                Some(_) => {
+                    let before = self.pos;
+                    if let Some(rule) = self.parse_rule() {
+                        rules.push(rule);
+                    } else if self.pos == before {
+                        self.consume();
+                    }
+                }
+            }
+        }
+        Some(ScopeRule {
+            root,
+            limit,
+            rules,
+        })
+    }
+
+    /// Парсит `@starting-style { rules }` — CSS Transitions L2 §3.4.
+    fn parse_starting_style_rule(&mut self) -> Option<StartingStyleRule> {
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume();
+        let mut rules = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some('@') => {
+                    self.skip_at_rule();
+                }
+                Some(_) => {
+                    let before = self.pos;
+                    if let Some(rule) = self.parse_rule() {
+                        rules.push(rule);
+                    } else if self.pos == before {
+                        self.consume();
+                    }
+                }
+            }
+        }
+        Some(StartingStyleRule { rules })
     }
 
     /// Парсит тело `@property`: имя `--name`, блок `{ ... }`, обязательные
@@ -3924,5 +4190,96 @@ mod tests {
         assert_eq!(parse_keyframe_selectors("bogus"), Vec::<f32>::new());
         assert_eq!(parse_keyframe_selectors("-10%"), Vec::<f32>::new());
         assert_eq!(parse_keyframe_selectors("150%"), Vec::<f32>::new());
+    }
+
+    // ── CSS Counter Styles L3 §2 — @counter-style ──
+
+    #[test]
+    fn at_counter_style_basic() {
+        let s = parse(
+            "@counter-style thumbs { system: cyclic; symbols: \"\\1F44D\"; suffix: \" \"; }",
+        );
+        assert_eq!(s.counter_styles.len(), 1);
+        let cs = &s.counter_styles[0];
+        assert_eq!(cs.name, "thumbs");
+        assert_eq!(cs.declarations.len(), 3);
+        assert_eq!(cs.declarations[0].property, "system");
+    }
+
+    #[test]
+    fn at_counter_style_empty_block() {
+        let s = parse("@counter-style empty { }");
+        assert_eq!(s.counter_styles.len(), 1);
+        assert!(s.counter_styles[0].declarations.is_empty());
+    }
+
+    // ── CSS Paged Media L3 §3 — @page ──
+
+    #[test]
+    fn at_page_no_selector() {
+        let s = parse("@page { margin: 2cm; }");
+        assert_eq!(s.page_rules.len(), 1);
+        let p = &s.page_rules[0];
+        assert!(p.selector.is_empty());
+        assert_eq!(p.declarations[0].property, "margin");
+    }
+
+    #[test]
+    fn at_page_pseudo_selector() {
+        let s = parse("@page :first { margin-top: 4cm; }");
+        let p = &s.page_rules[0];
+        assert_eq!(p.selector, ":first");
+        assert_eq!(p.declarations.len(), 1);
+    }
+
+    #[test]
+    fn at_page_named_selector() {
+        let s = parse("@page cover :left { margin: 0; }");
+        assert_eq!(s.page_rules[0].selector, "cover :left");
+    }
+
+    // ── CSS Cascade L6 — @scope ──
+
+    #[test]
+    fn at_scope_root_only() {
+        let s = parse("@scope (.card) { h1 { color: red; } }");
+        assert_eq!(s.scope_rules.len(), 1);
+        let sc = &s.scope_rules[0];
+        assert_eq!(sc.root, ".card");
+        assert_eq!(sc.limit, None);
+        assert_eq!(sc.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_scope_root_and_limit() {
+        let s = parse("@scope (.card) to (.footer) { p { color: blue; } }");
+        let sc = &s.scope_rules[0];
+        assert_eq!(sc.root, ".card");
+        assert_eq!(sc.limit.as_deref(), Some(".footer"));
+    }
+
+    #[test]
+    fn at_scope_implicit() {
+        let s = parse("@scope { h1 { color: red; } }");
+        let sc = &s.scope_rules[0];
+        assert!(sc.root.is_empty());
+        assert_eq!(sc.limit, None);
+        assert_eq!(sc.rules.len(), 1);
+    }
+
+    // ── CSS Transitions L2 §3.4 — @starting-style ──
+
+    #[test]
+    fn at_starting_style_basic() {
+        let s = parse("@starting-style { dialog { opacity: 0; } }");
+        assert_eq!(s.starting_style_rules.len(), 1);
+        assert_eq!(s.starting_style_rules[0].rules.len(), 1);
+    }
+
+    #[test]
+    fn at_starting_style_empty() {
+        let s = parse("@starting-style { }");
+        assert_eq!(s.starting_style_rules.len(), 1);
+        assert!(s.starting_style_rules[0].rules.is_empty());
     }
 }

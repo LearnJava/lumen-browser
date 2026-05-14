@@ -3459,6 +3459,76 @@ fn expand_vars(value: &str, custom: &HashMap<String, String>, depth: u32) -> Opt
     expand_vars(&combined, custom, depth + 1)
 }
 
+/// Раскрывает все `env(name [<index>...]?, fallback?)` в value.
+/// CSS Environment Variables L1: `env()` — это var()-подобная подстановка
+/// из UA-supplied registry. Имена не имеют `--` префикса (env-имена —
+/// `safe-area-inset-top`, `viewport-segment-width` и т.д.).
+///
+/// Phase 0: registry — пустой `HashMap`, все env-вызовы попадают в
+/// fallback. Это даёт корректное `padding: env(safe-area-inset-top, 0px)`
+/// → `padding: 0px`. Indices (`env(name 0 1, fallback)`) парсятся, но
+/// игнорируются (используется только name до пробела).
+fn expand_env_vars(
+    value: &str,
+    env_registry: &HashMap<String, String>,
+    depth: u32,
+) -> Option<String> {
+    if depth > VAR_EXPAND_MAX_DEPTH {
+        return None;
+    }
+    let Some(start) = find_env_open(value) else {
+        return Some(value.to_string());
+    };
+    let prefix = &value[..start];
+    let after_open = &value[start + 4..]; // skip "env("
+    let (args, after_close) = parse_balanced_to_close(after_open)?;
+    let (name_part, fallback) = split_var_args(args);
+    // Indices в name-part: `safe-area-inset-top` или `viewport-segment-width 0 0`.
+    let env_name = name_part.split_whitespace().next().unwrap_or("");
+    if env_name.is_empty() {
+        return None;
+    }
+    let resolved = if let Some(v) = env_registry.get(env_name) {
+        expand_env_vars(v.trim(), env_registry, depth + 1)?
+    } else if let Some(fb) = fallback {
+        expand_env_vars(fb.trim(), env_registry, depth + 1)?
+    } else {
+        return None;
+    };
+    let combined = format!("{prefix}{resolved}{after_close}");
+    expand_env_vars(&combined, env_registry, depth + 1)
+}
+
+/// Аналог `find_var_open` для `env(`. Учитывает строковые литералы.
+fn find_env_open(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut in_string: Option<u8> = None;
+    while i + 4 <= bytes.len() {
+        let b = bytes[i];
+        match (in_string, b) {
+            (Some(q), c) if c == q => {
+                in_string = None;
+                i += 1;
+            }
+            (None, b'"') | (None, b'\'') => {
+                in_string = Some(b);
+                i += 1;
+            }
+            (None, b'e') if &bytes[i..i + 4] == b"env(" => return Some(i),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// UA env-registry. Phase 0: пустой; вызовы `env(name, fallback)`
+/// возвращают fallback. В Phase 2+ значения будут заполняться shell-ом
+/// из реального viewport state (safe-area, виртуальная клавиатура).
+fn empty_env_registry() -> HashMap<String, String> {
+    HashMap::new()
+}
+
 /// Находит позицию первого `var(` в `s` вне строковых литералов. Возвращает
 /// индекс символа `v`. Учитывает одинарные и двойные кавычки, чтобы
 /// `content: "var(x)"` не давал ложного матча.
@@ -3556,13 +3626,28 @@ fn apply_declaration(
     // value time»). `expanded` живёт до конца функции, чтобы `val` остался
     // валидным `&str`.
     let expanded;
-    let val: &str = if decl.value.contains("var(") {
-        match expand_vars(&decl.value, &style.custom_props, 0) {
-            Some(v) => {
-                expanded = v;
-                expanded.as_str()
+    let val: &str = if decl.value.contains("var(") || decl.value.contains("env(") {
+        let after_var = if decl.value.contains("var(") {
+            match expand_vars(&decl.value, &style.custom_props, 0) {
+                Some(v) => v,
+                None => return,
             }
-            None => return,
+        } else {
+            decl.value.clone()
+        };
+        // CSS Environment Variables L1: env() раскрывается ПОСЛЕ var(),
+        // потому что custom property может содержать `env(...)`.
+        if after_var.contains("env(") {
+            match expand_env_vars(&after_var, &empty_env_registry(), 0) {
+                Some(v) => {
+                    expanded = v;
+                    expanded.as_str()
+                }
+                None => return,
+            }
+        } else {
+            expanded = after_var;
+            expanded.as_str()
         }
     } else {
         decl.value.as_str()
