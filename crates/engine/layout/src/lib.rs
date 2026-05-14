@@ -19,9 +19,9 @@ pub mod style;
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
 pub use style::{
-    parse_css_wide_keyword, BorderStyle, BoxShadow, BoxSizing, ClipPath, Color, ComputedStyle,
-    CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle, FontVariant,
-    FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
+    parse_css_wide_keyword, AlignValue, BorderStyle, BoxShadow, BoxSizing, ClipPath, Color,
+    ComputedStyle, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle,
+    FontVariant, FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
     TextTransform, TransformFn, Visibility, WhiteSpace,
 };
 
@@ -4460,6 +4460,111 @@ mod tests {
     fn aspect_ratio_invalid_kept_unchanged() {
         let root = lay("<p>x</p>", "p { aspect-ratio: 16 / abc; }");
         assert_eq!(first_p_style(&root).aspect_ratio, None);
+    }
+
+    // ──────── place-items / align-* / justify-* (CSS Box Alignment L3) ────────
+
+    #[test]
+    fn align_items_center() {
+        let root = lay("<p>x</p>", "p { align-items: center; }");
+        assert_eq!(first_p_style(&root).align_items, AlignValue::Center);
+    }
+
+    #[test]
+    fn justify_content_space_between() {
+        let root = lay("<p>x</p>", "p { justify-content: space-between; }");
+        assert_eq!(first_p_style(&root).justify_content, AlignValue::SpaceBetween);
+    }
+
+    #[test]
+    fn flex_start_alias() {
+        // CSS spec: flex-start alias для start (вне flex-контекста).
+        let root = lay("<p>x</p>", "p { align-items: flex-start; }");
+        assert_eq!(first_p_style(&root).align_items, AlignValue::Start);
+    }
+
+    #[test]
+    fn place_items_single_value() {
+        let root = lay("<p>x</p>", "p { place-items: center; }");
+        let s = first_p_style(&root);
+        // Single value применяется к обоим осям.
+        assert_eq!(s.align_items, AlignValue::Center);
+        assert_eq!(s.justify_items, AlignValue::Center);
+    }
+
+    #[test]
+    fn place_items_two_values() {
+        let root = lay("<p>x</p>", "p { place-items: start end; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.align_items, AlignValue::Start);
+        assert_eq!(s.justify_items, AlignValue::End);
+    }
+
+    #[test]
+    fn place_self_shorthand() {
+        let root = lay("<p>x</p>", "p { place-self: center stretch; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.align_self, AlignValue::Center);
+        assert_eq!(s.justify_self, AlignValue::Stretch);
+    }
+
+    #[test]
+    fn place_content_shorthand() {
+        let root = lay("<p>x</p>", "p { place-content: space-around; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.align_content, AlignValue::SpaceAround);
+        assert_eq!(s.justify_content, AlignValue::SpaceAround);
+    }
+
+    #[test]
+    fn align_unknown_value_ignored() {
+        let root = lay("<p>x</p>", "p { align-items: garbage; }");
+        // default (Auto) сохраняется.
+        assert_eq!(first_p_style(&root).align_items, AlignValue::Auto);
+    }
+
+    #[test]
+    fn alignment_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { align-items: center; justify-content: space-between; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // У p должны быть defaults.
+        assert_eq!(p.style.align_items, AlignValue::Auto);
+        assert_eq!(p.style.justify_content, AlignValue::Auto);
+        // У div — заданные.
+        assert_eq!(div.style.align_items, AlignValue::Center);
+        assert_eq!(div.style.justify_content, AlignValue::SpaceBetween);
+    }
+
+    #[test]
+    fn align_value_parse_all_keywords() {
+        for (s, expected) in [
+            ("auto", AlignValue::Auto),
+            ("normal", AlignValue::Normal),
+            ("stretch", AlignValue::Stretch),
+            ("start", AlignValue::Start),
+            ("end", AlignValue::End),
+            ("center", AlignValue::Center),
+            ("baseline", AlignValue::Baseline),
+            ("space-between", AlignValue::SpaceBetween),
+            ("space-around", AlignValue::SpaceAround),
+            ("space-evenly", AlignValue::SpaceEvenly),
+            ("flex-start", AlignValue::Start),
+            ("flex-end", AlignValue::End),
+            ("self-start", AlignValue::Start),
+            ("CENTER", AlignValue::Center),  // case-insensitive
+        ] {
+            assert_eq!(AlignValue::parse(s), Some(expected), "input: {s}");
+        }
+    }
+
+    #[test]
+    fn align_value_parse_unknown_returns_none() {
+        assert_eq!(AlignValue::parse("garbage"), None);
+        assert_eq!(AlignValue::parse(""), None);
     }
 
     #[test]
