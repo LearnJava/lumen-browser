@@ -109,6 +109,12 @@ pub enum PseudoClass {
     /// combinator опущен — implicit descendant. Specificity contributes
     /// максимум по списку (как :is).
     Has(Vec<RelativeSelector>),
+    /// `:placeholder-shown` (CSS Selectors L4 §15.1) — матчит form-control
+    /// (`<input>` / `<textarea>`) с непустым `placeholder`-атрибутом, пока
+    /// пользователь не ввёл значение. В Phase 0 без form-state runtime
+    /// «не ввёл значение» сводится к «нет `value`-атрибута либо он пустой»
+    /// — matcher делает соответствующую проверку на DOM.
+    PlaceholderShown,
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
@@ -2400,6 +2406,7 @@ impl<'a> Parser<'a> {
             "first-of-type" => PseudoClass::FirstOfType,
             "last-of-type" => PseudoClass::LastOfType,
             "only-of-type" => PseudoClass::OnlyOfType,
+            "placeholder-shown" => PseudoClass::PlaceholderShown,
             _ => PseudoClass::Unsupported(name),
         };
         Some(SimpleSelector::PseudoClass(pc))
@@ -3201,6 +3208,7 @@ mod tests {
             ("first-of-type", PseudoClass::FirstOfType),
             ("last-of-type", PseudoClass::LastOfType),
             ("only-of-type", PseudoClass::OnlyOfType),
+            ("placeholder-shown", PseudoClass::PlaceholderShown),
         ];
         for (name, expected) in cases {
             let s = parse(&format!(":{name} {{}}"));
