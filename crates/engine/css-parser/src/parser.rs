@@ -365,6 +365,21 @@ pub struct Stylesheet {
     /// parse+store. Применение при первом match (transition-from-display)
     /// отложено вместе с реальным transition runtime.
     pub starting_style_rules: Vec<StartingStyleRule>,
+    /// CSS Containment L3 §3 — `@container <name>? (cond) { rules }`.
+    /// Условие хранится как сырая строка (типизация query — отложена,
+    /// нужна полная media-query-like grammar для container features).
+    pub container_rules: Vec<ContainerRule>,
+}
+
+/// `@container <name>? <condition> { rules }` — CSS Containment L3 §3.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerRule {
+    /// Имя container query (по умолчанию — None, match всех ancestor-ов
+    /// с container-name / container-type).
+    pub name: Option<String>,
+    /// Сырая condition-строка типа `(min-width: 200px)` или `style(...)`.
+    pub condition: String,
+    pub rules: Vec<Rule>,
 }
 
 /// `@counter-style <name> { ... }` — CSS Counter Styles L3 §2.
@@ -682,6 +697,7 @@ enum AtRuleOutcome {
     Page(PageRule),
     Scope(ScopeRule),
     StartingStyle(StartingStyleRule),
+    Container(ContainerRule),
     None,
 }
 
@@ -1150,6 +1166,7 @@ impl<'a> Parser<'a> {
         let mut page_rules: Vec<PageRule> = Vec::new();
         let mut scope_rules: Vec<ScopeRule> = Vec::new();
         let mut starting_style_rules: Vec<StartingStyleRule> = Vec::new();
+        let mut container_rules: Vec<ContainerRule> = Vec::new();
         let mut anon_counter: usize = 0;
         loop {
             self.skip_ws_and_comments();
@@ -1186,6 +1203,7 @@ impl<'a> Parser<'a> {
                     AtRuleOutcome::Page(p) => page_rules.push(p),
                     AtRuleOutcome::Scope(s) => scope_rules.push(s),
                     AtRuleOutcome::StartingStyle(s) => starting_style_rules.push(s),
+                    AtRuleOutcome::Container(c) => container_rules.push(c),
                     AtRuleOutcome::None => {}
                 },
                 Some(_) => {
@@ -1214,6 +1232,7 @@ impl<'a> Parser<'a> {
             page_rules,
             scope_rules,
             starting_style_rules,
+            container_rules,
         }
     }
 
@@ -1273,6 +1292,11 @@ impl<'a> Parser<'a> {
             return self
                 .parse_starting_style_rule()
                 .map_or(AtRuleOutcome::None, AtRuleOutcome::StartingStyle);
+        }
+        if name.eq_ignore_ascii_case("container") {
+            return self
+                .parse_container_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::Container);
         }
         // Прочее @-правило: откатимся к '@' и пропустим как раньше.
         self.pos = start;
@@ -1756,6 +1780,78 @@ impl<'a> Parser<'a> {
             limit,
             rules,
         })
+    }
+
+    /// Парсит `@container <name>? <condition> { rules }` — CSS Containment L3 §3.
+    /// Name — опциональный CSS-ident перед условием. Condition — балансированная
+    /// строка до `{` (хранится сырой). Rules — обычные правила внутри.
+    fn parse_container_rule(&mut self) -> Option<ContainerRule> {
+        self.skip_ws_and_comments();
+        // Опциональное имя: CSS-ident **только если** дальше не `(` —
+        // если сразу `(`, это начало condition без имени.
+        let name = if self.peek() != Some('(') && !self.starts_with_keyword("style") {
+            self.parse_ident()
+        } else {
+            None
+        };
+        self.skip_ws_and_comments();
+        // Condition: всё до `{` с учётом баланса `()`.
+        let cond_start = self.pos;
+        let mut depth: i32 = 0;
+        while let Some(c) = self.peek() {
+            if c == '(' {
+                depth += 1;
+            } else if c == ')' {
+                depth -= 1;
+            } else if c == '{' && depth == 0 {
+                break;
+            }
+            self.consume();
+        }
+        if self.peek() != Some('{') {
+            return None;
+        }
+        let condition = self.input[cond_start..self.pos].trim().to_string();
+        self.consume(); // '{'
+        let mut rules = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some('@') => {
+                    self.skip_at_rule();
+                }
+                Some(_) => {
+                    let before = self.pos;
+                    if let Some(rule) = self.parse_rule() {
+                        rules.push(rule);
+                    } else if self.pos == before {
+                        self.consume();
+                    }
+                }
+            }
+        }
+        Some(ContainerRule {
+            name,
+            condition,
+            rules,
+        })
+    }
+
+    /// Проверяет, начинается ли остаток с ключевого слова (case-insensitive)
+    /// + не-ident разделитель. Используется для container `style(...)`.
+    fn starts_with_keyword(&self, kw: &str) -> bool {
+        let rest = self.rest();
+        if !rest.to_ascii_lowercase().starts_with(kw) {
+            return false;
+        }
+        rest.as_bytes()
+            .get(kw.len())
+            .is_none_or(|&c| !(c.is_ascii_alphanumeric() || c == b'-' || c == b'_'))
     }
 
     /// Парсит `@starting-style { rules }` — CSS Transitions L2 §3.4.
@@ -4281,5 +4377,31 @@ mod tests {
         let s = parse("@starting-style { }");
         assert_eq!(s.starting_style_rules.len(), 1);
         assert!(s.starting_style_rules[0].rules.is_empty());
+    }
+
+    // ── CSS Containment L3 §3 — @container ──
+
+    #[test]
+    fn at_container_anonymous() {
+        let s = parse("@container (min-width: 300px) { p { color: red; } }");
+        assert_eq!(s.container_rules.len(), 1);
+        let c = &s.container_rules[0];
+        assert_eq!(c.name, None);
+        assert!(c.condition.contains("min-width"));
+        assert_eq!(c.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_container_named() {
+        let s = parse("@container sidebar (min-width: 200px) { h1 { color: blue; } }");
+        let c = &s.container_rules[0];
+        assert_eq!(c.name.as_deref(), Some("sidebar"));
+    }
+
+    #[test]
+    fn at_container_complex_condition() {
+        let s = parse("@container (min-width: 200px) and (max-width: 600px) { p { } }");
+        let c = &s.container_rules[0];
+        assert!(c.condition.contains("and"));
     }
 }
