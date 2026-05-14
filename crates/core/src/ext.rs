@@ -8,6 +8,8 @@
 //! раздувался: потребитель зависит только от lumen-core и выбранной
 //! реализации, а не от всех альтернатив.
 
+use std::net::SocketAddr;
+
 use crate::error::Result;
 use crate::event::Event;
 use crate::url::Url;
@@ -112,6 +114,32 @@ pub trait FilterListSource: Send + Sync {
 /// ничего не знает о формате правил.
 pub trait RequestFilter: Send + Sync {
     fn should_block(&self, url: &Url) -> Option<String>;
+}
+
+/// DNS-резолвер: hostname → список IP-адресов (с портом, готовых к connect).
+///
+/// Trait-точка вместо прямого `(host, port).to_socket_addrs()` нужна по двум
+/// причинам: (1) тестируемость — mock-resolver возвращает loopback-адреса
+/// без реального DNS-вызова; (2) подмена бэкенда — поверх системного
+/// resolver-а в Phase 2+ появятся `CachedDnsResolver` (использует
+/// `lumen-storage::DnsCache` для TTL-кеша), `DohResolver` (DNS-over-HTTPS
+/// через `lumen-network::HttpClient`), `DotResolver` (DNS-over-TLS) — все
+/// под одной trait-сигнатурой.
+///
+/// Принципы:
+/// - `port` пробрасывается в SocketAddr-ы (не отдельно), чтобы вызывающий
+///   слой (`HttpClient`) мог сразу `TcpStream::connect_timeout(&addr, ...)`
+///   без склейки;
+/// - возврат `Vec<SocketAddr>`, а не одиночный — DNS round-robin (`A` /
+///   `AAAA` могут отдать несколько записей) разрешается `HttpClient` сам
+///   (try-each до первого успешного connect);
+/// - пустой `Vec` = NXDOMAIN / ошибка resolve — реализация может либо
+///   вернуть `Err(...)`, либо пустой список; потребители трактуют оба
+///   варианта одинаково («не смогли получить адрес»).
+pub trait DnsResolver: Send + Sync {
+    /// Разрешить hostname в список SocketAddr с указанным port.
+    /// Hostname может быть Punycode-формой (`xn--…`) — резолверу всё равно.
+    fn resolve(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>>;
 }
 
 /// Определение кодировки HTML-документа. Для кириллицы критично уметь
@@ -244,7 +272,10 @@ impl JsRuntime for NullJsRuntime {
 //
 // - FontProvider      — поиск шрифтов с поддержкой кириллицы. Phase 1.
 // - HyphenationEngine — переносы слов для CSS hyphens. Phase 2.
-// - DnsResolver       — DNS, включая DoH/DoT. Phase 1.
+// - DnsResolver       — определён выше; реализации: SystemDnsResolver
+//                       (через `(host, port).to_socket_addrs()`),
+//                       CachedDnsResolver (обёртка с `lumen-storage::DnsCache`).
+//                       DoH/DoT-резолверы — Phase 2+.
 // - Hasher            — единый интерфейс хэшей (для CSP, SRI). Phase 1.
 
 #[cfg(test)]
