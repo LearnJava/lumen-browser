@@ -28,8 +28,10 @@ use lumen_core::url::Url;
 mod dns;
 mod hsts;
 mod pool;
+mod range;
 pub use dns::SystemDnsResolver;
 pub use pool::ConnectionPool;
+pub use range::{ContentRange, RangeResponse, RangeSpec, parse_content_range};
 
 use pool::PoolKey;
 
@@ -115,10 +117,22 @@ impl Connection {
 
     /// Записать HTTP-запрос в stream. Используется `Connection: keep-alive`
     /// (HTTP/1.1 default, но явно для ясности и для совместимости с серверами,
-    /// которые криво интерпретируют отсутствие хедера).
-    fn write_request(&mut self, host: &str, path: &str) -> Result<()> {
+    /// которые криво интерпретируют отсутствие хедера). Опциональный `range`
+    /// добавляет header `Range: bytes=START-END` (RFC 7233 §3.1); невалидный
+    /// RangeSpec (`end < start`) тихо опускает header — fetch получит full
+    /// response (200 OK), не упадёт.
+    fn write_request(
+        &mut self,
+        host: &str,
+        path: &str,
+        range: Option<&RangeSpec>,
+    ) -> Result<()> {
+        let range_header = match range.and_then(|r| r.header_value()) {
+            Some(value) => format!("Range: {value}\r\n"),
+            None => String::new(),
+        };
         let req = format!(
-            "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\n\r\n"
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\n{range_header}\r\n"
         );
         let stream = self.reader.get_mut();
         stream
@@ -402,6 +416,7 @@ fn is_stale_error(err: &Error) -> bool {
 /// read_response, release. При попадании на stale pooled connection —
 /// однократный retry с свежим. Возвращает `Response` и в случае success
 /// (соединение не закрыто) возвращает его в пул.
+#[allow(clippy::too_many_arguments)]
 fn fetch_single(
     pool: &ConnectionPool,
     resolver: &dyn DnsResolver,
@@ -410,6 +425,7 @@ fn fetch_single(
     is_tls: bool,
     request_host_header: &str,
     request_path: &str,
+    range: Option<&RangeSpec>,
 ) -> Result<Response> {
     let key = PoolKey {
         host: host.to_owned(),
@@ -419,7 +435,7 @@ fn fetch_single(
 
     // Попытка 1: используем pooled connection, если он есть.
     if let Some(pooled) = pool.acquire(&key) {
-        match do_request(pooled, request_host_header, request_path) {
+        match do_request(pooled, request_host_header, request_path, range) {
             Ok((resp, conn)) => {
                 if !conn.closed {
                     pool.release(key, conn);
@@ -436,7 +452,7 @@ fn fetch_single(
 
     // Попытка 2 (или 1, если пул был пуст): свежий connect.
     let conn = connect(host, port, is_tls, resolver)?;
-    let (resp, conn) = do_request(conn, request_host_header, request_path)?;
+    let (resp, conn) = do_request(conn, request_host_header, request_path, range)?;
     if !conn.closed {
         pool.release(key, conn);
     }
@@ -447,8 +463,9 @@ fn do_request(
     mut conn: Connection,
     host: &str,
     path: &str,
+    range: Option<&RangeSpec>,
 ) -> Result<(Response, Connection)> {
-    conn.write_request(host, path)?;
+    conn.write_request(host, path, range)?;
     let resp = read_response(&mut conn)?;
     Ok((resp, conn))
 }
@@ -464,8 +481,9 @@ fn fetch_with_redirect(
     sink: Option<&dyn EventSink>,
     filter: Option<&dyn RequestFilter>,
     hsts_store: Option<&dyn HstsEnforcement>,
+    range: Option<&RangeSpec>,
     tab_id: TabId,
-) -> Result<Vec<u8>> {
+) -> Result<Response> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
     }
@@ -526,6 +544,7 @@ fn fetch_with_redirect(
         is_tls,
         &host_ascii,
         &url.path_and_query(),
+        range,
     )?;
 
     // HSTS: сохранить policy из header-а, если ответ пришёл по HTTPS и
@@ -549,13 +568,16 @@ fn fetch_with_redirect(
     }
 
     match resp.status {
-        200..=299 => Ok(resp.body),
+        200..=299 => Ok(resp),
         301 | 302 | 303 | 307 | 308 => {
             let location = header_value(&resp.headers, "location")
                 .ok_or_else(|| Error::Network("redirect without Location".to_owned()))?;
             let next = url
                 .resolve(location)
                 .map_err(|e| Error::Network(format!("resolve redirect '{location}': {e}")))?;
+            // Range пробрасывается в redirect-target: пользователь
+            // запросил range на исходном URL, ожидает тот же range от
+            // final-resource (это и есть смысл redirect для range-GET).
             fetch_with_redirect(
                 &next,
                 hops_left - 1,
@@ -564,6 +586,7 @@ fn fetch_with_redirect(
                 sink,
                 filter,
                 hsts_store,
+                range,
                 tab_id,
             )
         }
@@ -672,6 +695,46 @@ impl Default for HttpClient {
     }
 }
 
+impl HttpClient {
+    /// Запросить только диапазон байт ресурса (RFC 7233). Если сервер
+    /// поддерживает Range, ответит `206 Partial Content` с заголовком
+    /// `Content-Range: bytes START-END/TOTAL` — поле `content_range`
+    /// будет заполнено. Если сервер игнорирует Range и отдаёт `200 OK`
+    /// с полным телом, `content_range` будет `None` (RFC 7233 §3.1
+    /// явно разрешает оба ответа — клиент должен принять любой).
+    ///
+    /// 4xx/5xx, в том числе `416 Range Not Satisfiable`, возвращаются
+    /// как `Err(Error::Network("HTTP 416"))` — caller отличает их от
+    /// network failure по тексту.
+    ///
+    /// Phase 0 ограничения: single range (start..end или start..),
+    /// suffix `bytes=-N` и multi-range — не поддерживаются. Range header
+    /// пересылается на redirect-target (3xx сохраняет тот же range).
+    pub fn fetch_range(&self, url: &Url, range: RangeSpec) -> Result<RangeResponse> {
+        let resp = fetch_with_redirect(
+            url,
+            5,
+            &self.pool,
+            self.resolver.as_ref(),
+            self.sink.as_deref(),
+            self.filter.as_deref(),
+            self.hsts.as_deref(),
+            Some(&range),
+            self.tab_id,
+        )?;
+        let content_range = if resp.status == 206 {
+            header_value(&resp.headers, "content-range").and_then(parse_content_range)
+        } else {
+            None
+        };
+        Ok(RangeResponse {
+            status: resp.status,
+            body: resp.body,
+            content_range,
+        })
+    }
+}
+
 impl NetworkTransport for HttpClient {
     fn fetch(&self, url: &Url) -> Result<Vec<u8>> {
         fetch_with_redirect(
@@ -682,8 +745,10 @@ impl NetworkTransport for HttpClient {
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
+            None,
             self.tab_id,
         )
+        .map(|resp| resp.body)
     }
 }
 
@@ -1683,6 +1748,183 @@ mod tests {
             Some(format!("https://secure.test:{port}/").as_str()),
             "https URL не должен трогаться upgrade-логикой: {events:?}"
         );
+    }
+
+    // ── HTTP Range requests ─────────────────────────────────────────────────
+
+    /// Mock-сервер, проверяющий Range header в запросе и отдающий
+    /// 206 Partial Content для honored range или 200 OK для full body.
+    /// `expected_range` — точное ожидаемое значение Range header (без префикса
+    /// `Range: `). Если None — Range header не должен присутствовать.
+    fn mock_range_server(
+        responder: impl Fn(Option<String>) -> Vec<u8> + Send + 'static,
+    ) -> (u16, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            let mut range_header: Option<String> = None;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let trimmed = line.trim_end_matches(['\r', '\n']);
+                if trimmed.is_empty() {
+                    break;
+                }
+                if let Some(v) = trimmed.strip_prefix("Range: ") {
+                    range_header = Some(v.to_owned());
+                }
+            }
+            let body = responder(range_header);
+            let _ = sock.write_all(&body);
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+        });
+        (port, handle)
+    }
+
+    #[test]
+    fn fetch_range_206_returns_partial_with_content_range() {
+        // Сервер видит Range: bytes=0-4, отвечает 206 с заголовком
+        // Content-Range и пятью байтами. RangeResponse.content_range
+        // должен быть распарсен; body — точно 5 байт; status = 206.
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range.as_deref(), Some("bytes=0-4"));
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 5\r\nContent-Range: bytes 0-4/100\r\nConnection: close\r\n\r\nhello"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::closed(0, 4)).unwrap();
+        assert_eq!(resp.status, 206);
+        assert_eq!(resp.body, b"hello");
+        assert_eq!(
+            resp.content_range,
+            Some(ContentRange { start: 0, end: 4, total: Some(100) })
+        );
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_open_ended_sends_correct_header() {
+        // bytes=500- (от 500 до конца) — сервер возвращает суффикс с
+        // unknown-total (`/*`), что валидно для chunked-source.
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range.as_deref(), Some("bytes=500-"));
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\nContent-Range: bytes 500-503/*\r\nConnection: close\r\n\r\ntail"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::from(500)).unwrap();
+        assert_eq!(resp.status, 206);
+        assert_eq!(resp.body, b"tail");
+        assert_eq!(
+            resp.content_range,
+            Some(ContentRange { start: 500, end: 503, total: None })
+        );
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_200_fallback_when_server_ignores_range() {
+        // RFC 7233 §3.1: сервер вправе ответить 200 с full body на Range-запрос.
+        // Клиент должен принять — body = full, content_range = None, status=200.
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range.as_deref(), Some("bytes=0-9"));
+            b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::closed(0, 9)).unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body, b"hello world");
+        assert!(resp.content_range.is_none());
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_416_not_satisfiable_returns_err() {
+        // Сервер ответил 416 — fetch_range возвращает Err. По текущему API
+        // мы не различаем 416 от других 4xx; caller проверяет текст ошибки
+        // или просто отбрасывает попытку.
+        let (port, server) = mock_range_server(|_| {
+            b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nContent-Range: bytes */100\r\nConnection: close\r\n\r\n"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let err = client.fetch_range(&url, RangeSpec::closed(1000, 2000)).unwrap_err();
+        assert!(format!("{err:?}").contains("416"), "expected HTTP 416, got: {err:?}");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_206_without_content_range_header() {
+        // Дефектный сервер отдал 206, но без Content-Range. Не падаем —
+        // body отдаём как есть, content_range = None. Caller сам решает,
+        // считать ли такой ответ валидным.
+        let (port, server) = mock_range_server(|_| {
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::closed(0, 2)).unwrap();
+        assert_eq!(resp.status, 206);
+        assert_eq!(resp.body, b"abc");
+        assert!(resp.content_range.is_none());
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_without_range_does_not_send_range_header() {
+        // Регрессия: обычный client.fetch() не должен слать Range header
+        // (он опциональный). Mock проверяет, что range_header остался None.
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range, None, "fetch() must not send Range header");
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_invalid_spec_silently_omits_header() {
+        // RangeSpec.closed(100, 50): end < start — header_value возвращает
+        // None, write_request не вставляет Range header. Сервер видит как
+        // обычный GET, отдаёт 200 OK — fetch_range вернёт full body c
+        // content_range = None (по сути fallback на полный fetch).
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range, None, "invalid range spec must omit header");
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nfull".to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::closed(100, 50)).unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body, b"full");
+        assert!(resp.content_range.is_none());
+
+        server.join().unwrap();
     }
 }
 
