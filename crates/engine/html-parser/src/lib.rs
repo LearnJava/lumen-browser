@@ -12,8 +12,10 @@
 //! у нас 250+ самых частых), foster parent reparenting.
 
 mod entities;
+pub mod quirks_mode;
 pub mod tokenizer;
 pub mod tree_builder;
 
+pub use quirks_mode::detect_document_mode;
 pub use tokenizer::{Token, Tokenizer};
 pub use tree_builder::parse;
