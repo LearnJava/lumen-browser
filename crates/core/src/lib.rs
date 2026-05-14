@@ -12,6 +12,7 @@ pub mod geom;
 pub mod idn;
 pub mod module;
 pub mod punycode;
+pub mod sri;
 pub mod url;
 
 pub use capability::{Capability, CapabilityToken};
@@ -20,6 +21,7 @@ pub use event::{Event, TabId};
 pub use ext::{EventSink, JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime};
 pub use geom::{Point, Rect, Size};
 pub use module::Module;
+pub use sri::{DigestProvider, IntegrityList, SriAlgorithm, SriError, SriHash, SriResult};
 pub use url::Url;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
