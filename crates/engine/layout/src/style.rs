@@ -767,6 +767,12 @@ pub struct ComputedStyle {
     /// parsing + storage; реальные pseudo-elements в layout — отдельная
     /// большая задача. Default `Normal` (use element's box-tree).
     pub content: Content,
+    /// CSS Images L3 §5.5 — `object-fit`. Применяется только к replaced
+    /// elements (`<img>` и пр.). Не наследуется. Default `Fill`.
+    pub object_fit: ObjectFit,
+    /// CSS Images L3 §5.5 — `object-position`. Не наследуется. Default
+    /// `50% 50%` (центр коробки).
+    pub object_position: ObjectPosition,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -1205,6 +1211,194 @@ impl BackgroundAttachment {
     }
 }
 
+/// CSS Images L3 §5.5 — `object-fit`. Применяется к replaced elements
+/// (`<img>`, `<video>`, `<canvas>` и т.д.) и определяет, как «коробка»
+/// заливается содержимым с учётом intrinsic-размеров. Не наследуется.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ObjectFit {
+    /// `fill` (default) — растянуть на размер коробки без сохранения
+    /// aspect ratio. Картинка может быть искажена.
+    #[default]
+    Fill,
+    /// `contain` — максимально большой размер с сохранением aspect ratio,
+    /// при котором изображение **умещается** целиком (letterbox / pillarbox).
+    Contain,
+    /// `cover` — минимально большой размер с сохранением aspect ratio,
+    /// при котором изображение **покрывает** коробку. Излишки клипятся
+    /// по `object-position`.
+    Cover,
+    /// `none` — без масштабирования (intrinsic-размер 1:1). Излишки
+    /// клипятся; недостаток заполняется по `object-position`.
+    None,
+    /// `scale-down` — `min(none, contain)`: если intrinsic-размер меньше
+    /// коробки, ведёт себя как `none`; иначе как `contain`.
+    ScaleDown,
+}
+
+impl ObjectFit {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "fill" => Some(Self::Fill),
+            "contain" => Some(Self::Contain),
+            "cover" => Some(Self::Cover),
+            "none" => Some(Self::None),
+            "scale-down" => Some(Self::ScaleDown),
+            _ => None,
+        }
+    }
+}
+
+/// Одна компонента `object-position`. Length-варианты резолвятся в px
+/// относительно края коробки (positive = от left/top); percentage —
+/// относительно **свободного места** `box_size - content_size` (может быть
+/// отрицательным, тогда излишек уходит за противоположный край). См.
+/// CSS Images L3 §5.5 «object-position».
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum PositionComponent {
+    /// Length в px (после resolve em/rem/vw/...).
+    Px(f32),
+    /// Percentage в долях 1.0 (`50%` → 0.5). Резолвится на paint-стадии
+    /// против свободного места: `offset = free_space * percent`.
+    Percent(f32),
+}
+
+impl PositionComponent {
+    /// Резолв в финальный px-offset относительно левого/верхнего края
+    /// коробки. `free_space = box_size - content_size`; может быть
+    /// отрицательным (content > box) — тогда offset тоже отрицательный,
+    /// и излишек уезжает за противоположный край.
+    pub fn resolve(self, free_space: f32) -> f32 {
+        match self {
+            Self::Px(px) => px,
+            Self::Percent(p) => free_space * p,
+        }
+    }
+}
+
+/// CSS Images L3 §5.5 — `object-position` (две компоненты, x + y).
+/// Default — `50% 50%` (центр).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ObjectPosition {
+    pub x: PositionComponent,
+    pub y: PositionComponent,
+}
+
+impl Default for ObjectPosition {
+    fn default() -> Self {
+        Self {
+            x: PositionComponent::Percent(0.5),
+            y: PositionComponent::Percent(0.5),
+        }
+    }
+}
+
+impl ObjectPosition {
+    /// CSS Values L4 §9.4 — `<position>` для object-position. Phase 0
+    /// поддерживает:
+    ///   - keyword `center` (= 50%),
+    ///   - axis-keywords `left|right|top|bottom`,
+    ///   - один token (`50%`, `10px`, keyword) — второй = `center`,
+    ///   - два token-а — первый x, второй y.
+    /// Tri- и quad-форма (`<keyword> <length> <keyword> <length>` для
+    /// сторон-якорей) — отложены: на современных страницах редкость.
+    pub fn parse(s: &str, em_basis: f32, viewport: Size) -> Option<Self> {
+        let trimmed = s.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+        if tokens.is_empty() || tokens.len() > 2 {
+            return None;
+        }
+        // Single-token: применяется к horizontal оси; вертикальная = center.
+        // Если token — vertical keyword (`top`/`bottom`), то horizontal = center.
+        if tokens.len() == 1 {
+            let t = tokens[0];
+            if t.eq_ignore_ascii_case("top") {
+                return Some(Self {
+                    x: PositionComponent::Percent(0.5),
+                    y: PositionComponent::Percent(0.0),
+                });
+            }
+            if t.eq_ignore_ascii_case("bottom") {
+                return Some(Self {
+                    x: PositionComponent::Percent(0.5),
+                    y: PositionComponent::Percent(1.0),
+                });
+            }
+            let x = parse_position_component(t, em_basis, viewport, /*vertical*/ false)?;
+            return Some(Self {
+                x,
+                y: PositionComponent::Percent(0.5),
+            });
+        }
+        // Two-token form: <x> <y>. Swap, если порядок инвертирован
+        // (`top left` ≡ `left top`).
+        let (t0, t1) = (tokens[0], tokens[1]);
+        let (xtok, ytok) = if is_vertical_keyword(t0) || is_horizontal_keyword(t1) {
+            (t1, t0)
+        } else {
+            (t0, t1)
+        };
+        let x = parse_position_component(xtok, em_basis, viewport, false)?;
+        let y = parse_position_component(ytok, em_basis, viewport, true)?;
+        Some(Self { x, y })
+    }
+}
+
+fn is_vertical_keyword(t: &str) -> bool {
+    t.eq_ignore_ascii_case("top") || t.eq_ignore_ascii_case("bottom")
+}
+
+fn is_horizontal_keyword(t: &str) -> bool {
+    t.eq_ignore_ascii_case("left") || t.eq_ignore_ascii_case("right")
+}
+
+fn parse_position_component(
+    t: &str,
+    em_basis: f32,
+    viewport: Size,
+    vertical: bool,
+) -> Option<PositionComponent> {
+    // Keyword-формы.
+    if t.eq_ignore_ascii_case("center") {
+        return Some(PositionComponent::Percent(0.5));
+    }
+    if !vertical {
+        if t.eq_ignore_ascii_case("left") {
+            return Some(PositionComponent::Percent(0.0));
+        }
+        if t.eq_ignore_ascii_case("right") {
+            return Some(PositionComponent::Percent(1.0));
+        }
+        // top/bottom в horizontal-позиции — недопустимо.
+        if is_vertical_keyword(t) {
+            return None;
+        }
+    } else {
+        if t.eq_ignore_ascii_case("top") {
+            return Some(PositionComponent::Percent(0.0));
+        }
+        if t.eq_ignore_ascii_case("bottom") {
+            return Some(PositionComponent::Percent(1.0));
+        }
+        if is_horizontal_keyword(t) {
+            return None;
+        }
+    }
+    // Length / percentage. Percent-форма `50%` сохраняется как доля 0..=1
+    // (без clamp — отрицательные и >100% валидны по спеке и используются
+    // художниками для художественных смещений).
+    if let Some(pct) = t.strip_suffix('%')
+        && let Ok(n) = pct.trim().parse::<f32>()
+    {
+        return Some(PositionComponent::Percent(n / 100.0));
+    }
+    let len = parse_length(t)?;
+    let px = len.resolve(em_basis, None, viewport)?;
+    Some(PositionComponent::Px(px))
+}
+
 /// CSS Box Alignment L3 §6.1 — значения для align-/justify- свойств.
 /// Phase 0: основной набор keyword-ов. `Auto` — default (resolve в
 /// `Normal` или specific behavior контекстом).
@@ -1472,6 +1666,8 @@ impl ComputedStyle {
             scrollbar_color: None,
             scrollbar_gutter: ScrollbarGutter::Auto,
             content: Content::Normal,
+            object_fit: ObjectFit::Fill,
+            object_position: ObjectPosition::default(),
         }
     }
 }
@@ -1637,6 +1833,9 @@ pub fn compute_style(
         scrollbar_color: inherited.scrollbar_color,
         scrollbar_gutter: ScrollbarGutter::Auto,
         content: Content::Normal,
+        // CSS Images L3 §5.5 — object-fit / object-position не наследуются.
+        object_fit: ObjectFit::Fill,
+        object_position: ObjectPosition::default(),
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -3819,6 +4018,16 @@ fn apply_declaration(
                 style.accent_color = Some(c);
             }
         }
+        "object-fit" => {
+            if let Some(of) = ObjectFit::parse(val) {
+                style.object_fit = of;
+            }
+        }
+        "object-position" => {
+            if let Some(op) = ObjectPosition::parse(val, em_basis, viewport) {
+                style.object_position = op;
+            }
+        }
         "width" if val != "auto" => {
             style.width = parse_length(val).and_then(|l| l.resolve(em_basis, None, viewport));
         }
@@ -5409,6 +5618,17 @@ fn apply_css_wide_keyword(
         }
         "filter" => {
             style.filter = if inh_only_inherit { inherited.filter.clone() } else { init.filter.clone() };
+        }
+        // CSS Images L3 §5.5 — object-fit / object-position non-inherited.
+        "object-fit" => {
+            style.object_fit = if inh_only_inherit { inherited.object_fit } else { init.object_fit };
+        }
+        "object-position" => {
+            style.object_position = if inh_only_inherit {
+                inherited.object_position
+            } else {
+                init.object_position
+            };
         }
         // Прочие / неизвестные — silent no-op.
         _ => {}
@@ -8565,5 +8785,204 @@ mod tests {
         // CSS function names ASCII case-insensitive.
         assert_eq!(rc_unitless("ABS(-5)"), Some(5.0));
         assert_eq!(rc_unitless("Sqrt(9)"), Some(3.0));
+    }
+
+    // ──────────────── CSS Images L3 §5.5: object-fit / object-position ────────────────
+
+    #[test]
+    fn object_fit_default_is_fill() {
+        let s = cascade_at("<img>", "", &[0]);
+        assert_eq!(s.object_fit, ObjectFit::Fill);
+    }
+
+    #[test]
+    fn object_fit_keywords_parse() {
+        for (val, expected) in [
+            ("fill", ObjectFit::Fill),
+            ("contain", ObjectFit::Contain),
+            ("cover", ObjectFit::Cover),
+            ("none", ObjectFit::None),
+            ("scale-down", ObjectFit::ScaleDown),
+        ] {
+            let s = cascade_at(
+                "<img>",
+                &format!("img {{ object-fit: {val}; }}"),
+                &[0],
+            );
+            assert_eq!(s.object_fit, expected, "for value {val}");
+        }
+    }
+
+    #[test]
+    fn object_fit_invalid_value_ignored() {
+        // CSS Cascade §8.1: невалидное значение → declaration invalid →
+        // используется предыдущее (initial = Fill).
+        let s = cascade_at("<img>", "img { object-fit: bogus; }", &[0]);
+        assert_eq!(s.object_fit, ObjectFit::Fill);
+    }
+
+    #[test]
+    fn object_fit_case_insensitive() {
+        // CSS Values L4 §2.4 — keywords ASCII case-insensitive.
+        let s = cascade_at("<img>", "img { object-fit: COVER; }", &[0]);
+        assert_eq!(s.object_fit, ObjectFit::Cover);
+    }
+
+    #[test]
+    fn object_fit_not_inherited() {
+        // object-fit non-inherited; <img> внутри <div> не подхватывает div { ... }
+        // (хотя div и не replaced, но пример демонстрирует отсутствие inheritance
+        // через initial-value у потомка-не-замены).
+        let s = cascade_at(
+            "<div><img></div>",
+            "div { object-fit: cover; }",
+            &[0, 0],
+        );
+        assert_eq!(s.object_fit, ObjectFit::Fill);
+    }
+
+    #[test]
+    fn object_fit_inherit_keyword_pulls_parent_value() {
+        // CSS Cascade L4 §7 — `inherit` всегда работает, даже для
+        // non-inherited свойства.
+        let s = cascade_at(
+            "<div><img></div>",
+            "div { object-fit: contain; } img { object-fit: inherit; }",
+            &[0, 0],
+        );
+        assert_eq!(s.object_fit, ObjectFit::Contain);
+    }
+
+    #[test]
+    fn object_position_default_is_center() {
+        let s = cascade_at("<img>", "", &[0]);
+        assert_eq!(
+            s.object_position,
+            ObjectPosition {
+                x: PositionComponent::Percent(0.5),
+                y: PositionComponent::Percent(0.5),
+            }
+        );
+    }
+
+    #[test]
+    fn object_position_two_percent_values() {
+        let s = cascade_at(
+            "<img>",
+            "img { object-position: 25% 75%; }",
+            &[0],
+        );
+        assert_eq!(s.object_position.x, PositionComponent::Percent(0.25));
+        assert_eq!(s.object_position.y, PositionComponent::Percent(0.75));
+    }
+
+    #[test]
+    fn object_position_two_lengths() {
+        let s = cascade_at(
+            "<img>",
+            "img { object-position: 10px 20px; }",
+            &[0],
+        );
+        assert_eq!(s.object_position.x, PositionComponent::Px(10.0));
+        assert_eq!(s.object_position.y, PositionComponent::Px(20.0));
+    }
+
+    #[test]
+    fn object_position_single_value_centers_y() {
+        // Один token → x = token, y = center (50%).
+        let s = cascade_at(
+            "<img>",
+            "img { object-position: 10px; }",
+            &[0],
+        );
+        assert_eq!(s.object_position.x, PositionComponent::Px(10.0));
+        assert_eq!(s.object_position.y, PositionComponent::Percent(0.5));
+    }
+
+    #[test]
+    fn object_position_keyword_left_top() {
+        let s = cascade_at(
+            "<img>",
+            "img { object-position: left top; }",
+            &[0],
+        );
+        assert_eq!(s.object_position.x, PositionComponent::Percent(0.0));
+        assert_eq!(s.object_position.y, PositionComponent::Percent(0.0));
+    }
+
+    #[test]
+    fn object_position_keyword_right_bottom() {
+        let s = cascade_at(
+            "<img>",
+            "img { object-position: right bottom; }",
+            &[0],
+        );
+        assert_eq!(s.object_position.x, PositionComponent::Percent(1.0));
+        assert_eq!(s.object_position.y, PositionComponent::Percent(1.0));
+    }
+
+    #[test]
+    fn object_position_keyword_swap_top_left_means_left_top() {
+        // CSS Values L4 §9.4: `top left` ≡ `left top`.
+        let s = cascade_at(
+            "<img>",
+            "img { object-position: top left; }",
+            &[0],
+        );
+        assert_eq!(s.object_position.x, PositionComponent::Percent(0.0));
+        assert_eq!(s.object_position.y, PositionComponent::Percent(0.0));
+    }
+
+    #[test]
+    fn object_position_single_top_centers_x() {
+        let s = cascade_at("<img>", "img { object-position: top; }", &[0]);
+        assert_eq!(s.object_position.x, PositionComponent::Percent(0.5));
+        assert_eq!(s.object_position.y, PositionComponent::Percent(0.0));
+    }
+
+    #[test]
+    fn object_position_single_center_is_50_50() {
+        let s = cascade_at("<img>", "img { object-position: center; }", &[0]);
+        assert_eq!(s.object_position.x, PositionComponent::Percent(0.5));
+        assert_eq!(s.object_position.y, PositionComponent::Percent(0.5));
+    }
+
+    #[test]
+    fn object_position_invalid_value_keeps_default() {
+        // 3 token-а — пока не поддерживаем; декларация ignored.
+        let s = cascade_at(
+            "<img>",
+            "img { object-position: left 10px top; }",
+            &[0],
+        );
+        // initial-value сохранён.
+        assert_eq!(s.object_position, ObjectPosition::default());
+    }
+
+    #[test]
+    fn object_position_negative_percent_allowed() {
+        // Художественное смещение `-25% 110%` валидно.
+        let s = cascade_at(
+            "<img>",
+            "img { object-position: -25% 110%; }",
+            &[0],
+        );
+        assert_eq!(s.object_position.x, PositionComponent::Percent(-0.25));
+        assert_eq!(s.object_position.y, PositionComponent::Percent(1.1));
+    }
+
+    #[test]
+    fn position_component_resolve_percent_against_free_space() {
+        let pc = PositionComponent::Percent(0.5);
+        assert!((pc.resolve(100.0) - 50.0).abs() < f32::EPSILON);
+        // Отрицательное free_space (content больше box) — offset отрицательный.
+        assert!((pc.resolve(-40.0) - (-20.0)).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn position_component_resolve_px_ignores_free_space() {
+        let pc = PositionComponent::Px(15.0);
+        assert!((pc.resolve(0.0) - 15.0).abs() < f32::EPSILON);
+        assert!((pc.resolve(1000.0) - 15.0).abs() < f32::EPSILON);
     }
 }
