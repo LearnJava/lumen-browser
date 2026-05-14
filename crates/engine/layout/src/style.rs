@@ -662,6 +662,93 @@ pub struct ComputedStyle {
     /// CSS Text L3 §6 — `hyphens: none | manual | auto`. Inherited.
     /// Default `Manual`.
     pub hyphens: Hyphens,
+    /// CSS Transforms L1 §6 — `transform-origin: <x> <y> <z>?` в px.
+    /// Default `(50%, 50%, 0)` — центр коробки. Phase 0 хранит как
+    /// пиксельные координаты после resolve (или None для процентных —
+    /// нужен размер box-а; пока разрешаем только px/em/rem).
+    pub transform_origin: (f32, f32, f32),
+    /// CSS Transforms L2 §4 — `perspective: <length> | none`.
+    /// `None` = no perspective; `Some(px)` = distance to camera.
+    pub perspective: Option<f32>,
+    /// CSS Lists L3 §2.1 — `list-style-type`.
+    pub list_style_type: ListStyleType,
+    /// CSS Lists L3 §2.3 — `list-style-position`.
+    pub list_style_position: ListStylePosition,
+    /// CSS Lists L3 §2.2 — `list-style-image: url(...) | none`.
+    pub list_style_image: Option<String>,
+    /// CSS Transitions L1 §3 — `transition-property: none | all | <ident>+`.
+    pub transition_properties: Vec<String>,
+    /// CSS Transitions L1 §3 — `transition-duration: <time>+` в секундах.
+    pub transition_durations: Vec<f32>,
+    /// CSS Transitions L1 §3 — `transition-delay: <time>+` в секундах.
+    pub transition_delays: Vec<f32>,
+}
+
+/// CSS Lists L3 §2.1 — markers для list items.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ListStyleType {
+    /// `none` — без marker.
+    None,
+    /// `disc` — закрашенный кружок (default для ul).
+    #[default]
+    Disc,
+    /// `circle` — пустой кружок.
+    Circle,
+    /// `square` — квадратик.
+    Square,
+    /// `decimal` — 1, 2, 3, ... (default для ol).
+    Decimal,
+    /// `decimal-leading-zero` — 01, 02, ..., 09, 10, ...
+    DecimalLeadingZero,
+    /// `lower-roman` — i, ii, iii, ...
+    LowerRoman,
+    /// `upper-roman` — I, II, III, ...
+    UpperRoman,
+    /// `lower-alpha` / `lower-latin` — a, b, c, ...
+    LowerAlpha,
+    /// `upper-alpha` / `upper-latin` — A, B, C, ...
+    UpperAlpha,
+    /// `lower-greek` — α, β, γ, ...
+    LowerGreek,
+}
+
+impl ListStyleType {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "disc" => Some(Self::Disc),
+            "circle" => Some(Self::Circle),
+            "square" => Some(Self::Square),
+            "decimal" => Some(Self::Decimal),
+            "decimal-leading-zero" => Some(Self::DecimalLeadingZero),
+            "lower-roman" => Some(Self::LowerRoman),
+            "upper-roman" => Some(Self::UpperRoman),
+            "lower-alpha" | "lower-latin" => Some(Self::LowerAlpha),
+            "upper-alpha" | "upper-latin" => Some(Self::UpperAlpha),
+            "lower-greek" => Some(Self::LowerGreek),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Lists L3 §2.3 — `list-style-position`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ListStylePosition {
+    /// `outside` (default) — marker вне content-area.
+    #[default]
+    Outside,
+    /// `inside` — marker внутри content-area.
+    Inside,
+}
+
+impl ListStylePosition {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "outside" => Some(Self::Outside),
+            "inside" => Some(Self::Inside),
+            _ => None,
+        }
+    }
 }
 
 /// CSS Text L3 §5.2 — `overflow-wrap`.
@@ -1109,6 +1196,14 @@ impl ComputedStyle {
             overflow_wrap: OverflowWrap::Normal,
             word_break: WordBreak::Normal,
             hyphens: Hyphens::Manual,
+            transform_origin: (0.0, 0.0, 0.0),
+            perspective: None,
+            list_style_type: ListStyleType::Disc,
+            list_style_position: ListStylePosition::Outside,
+            list_style_image: None,
+            transition_properties: Vec::new(),
+            transition_durations: Vec::new(),
+            transition_delays: Vec::new(),
         }
     }
 }
@@ -1228,6 +1323,17 @@ pub fn compute_style(
         overflow_wrap: inherited.overflow_wrap,
         word_break: inherited.word_break,
         hyphens: inherited.hyphens,
+        // CSS Transforms transform-origin + perspective — не наследуются.
+        transform_origin: (0.0, 0.0, 0.0),
+        perspective: None,
+        // CSS Lists — list-style-* наследуются.
+        list_style_type: inherited.list_style_type,
+        list_style_position: inherited.list_style_position,
+        list_style_image: inherited.list_style_image.clone(),
+        // CSS Transitions — не наследуются.
+        transition_properties: Vec::new(),
+        transition_durations: Vec::new(),
+        transition_delays: Vec::new(),
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -3834,6 +3940,85 @@ fn apply_declaration(
                 style.hyphens = v;
             }
         }
+        "transform-origin" => {
+            // CSS Transforms L1 §6: <position> [<length>]?
+            // Phase 0: парсим 1-3 значения как px. Keywords (center / top /
+            // bottom / left / right) пока не поддерживаем.
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            let x = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport)).unwrap_or(0.0);
+            let y = parts.get(1).and_then(|s| resolve_box_length(s, em_basis, viewport)).unwrap_or(0.0);
+            let z = parts.get(2).and_then(|s| resolve_box_length(s, em_basis, viewport)).unwrap_or(0.0);
+            style.transform_origin = (x, y, z);
+        }
+        "perspective" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.perspective = None;
+            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport) {
+                style.perspective = if px > 0.0 { Some(px) } else { None };
+            }
+        }
+        "list-style-type" => {
+            if let Some(v) = ListStyleType::parse(val) {
+                style.list_style_type = v;
+            }
+        }
+        "list-style-position" => {
+            if let Some(v) = ListStylePosition::parse(val) {
+                style.list_style_position = v;
+            }
+        }
+        "list-style-image" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.list_style_image = None;
+            } else if let Some(u) = parse_url_value(trimmed) {
+                style.list_style_image = Some(u);
+            }
+        }
+        "list-style" => {
+            // Shorthand: type | position | image, в любом порядке.
+            // Простой парсер: пытаемся каждое слово.
+            for token in val.split_whitespace() {
+                if let Some(t) = ListStyleType::parse(token) {
+                    style.list_style_type = t;
+                } else if let Some(p) = ListStylePosition::parse(token) {
+                    style.list_style_position = p;
+                } else if let Some(u) = parse_url_value(token) {
+                    style.list_style_image = Some(u);
+                } else if token.eq_ignore_ascii_case("none") {
+                    // `none` неоднозначен: type=None И image=None. Per spec,
+                    // `none` сначала применяется к type, потом к image (если
+                    // повторяется). Простая трактовка: первый none → type=None,
+                    // последующие → image=None.
+                    if !matches!(style.list_style_type, ListStyleType::None) {
+                        style.list_style_type = ListStyleType::None;
+                    } else {
+                        style.list_style_image = None;
+                    }
+                }
+            }
+        }
+        "transition-property" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.transition_properties = Vec::new();
+            } else if trimmed.eq_ignore_ascii_case("all") {
+                style.transition_properties = vec!["all".to_string()];
+            } else {
+                style.transition_properties = trimmed
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+        }
+        "transition-duration" => {
+            style.transition_durations = parse_time_list(val);
+        }
+        "transition-delay" => {
+            style.transition_delays = parse_time_list(val);
+        }
         "place-content" => {
             let parts: Vec<&str> = val.split_whitespace().collect();
             if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
@@ -4819,6 +5004,27 @@ fn parse_filter_list(s: &str) -> Vec<FilterFn> {
         }
     }
     out
+}
+
+/// CSS Values L4 §8 — список `<time>` значений через запятую.
+/// Возвращает Vec секунд (ms → /1000, s → as-is).
+fn parse_time_list(s: &str) -> Vec<f32> {
+    s.split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .filter_map(parse_time_seconds)
+        .collect()
+}
+
+fn parse_time_seconds(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix("ms") {
+        return num.trim().parse::<f32>().ok().map(|v| v / 1000.0);
+    }
+    if let Some(num) = s.strip_suffix('s') {
+        return num.trim().parse::<f32>().ok();
+    }
+    None
 }
 
 /// Извлечь URL из `url(...)`-функции. Поддерживает кавычки и без них.

@@ -22,9 +22,9 @@ pub use style::{
     parse_css_wide_keyword, AlignValue, BackgroundAttachment, BackgroundImage, BackgroundRepeat,
     BackgroundSize, BorderStyle, BoxShadow, BoxSizing, ClipPath, Color, ComputedStyle,
     CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle, FontVariant,
-    FontWeight, Hyphens, Overflow, OverflowWrap, PointerEvents, ScrollBehavior, TextAlign,
-    TextDecorationLine, TextOverflow, TextShadow, TextTransform, TransformFn, UserSelect,
-    Visibility, WhiteSpace, WordBreak,
+    FontWeight, Hyphens, ListStylePosition, ListStyleType, Overflow, OverflowWrap, PointerEvents,
+    ScrollBehavior, TextAlign, TextDecorationLine, TextOverflow, TextShadow, TextTransform,
+    TransformFn, UserSelect, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -4462,6 +4462,143 @@ mod tests {
     fn aspect_ratio_invalid_kept_unchanged() {
         let root = lay("<p>x</p>", "p { aspect-ratio: 16 / abc; }");
         assert_eq!(first_p_style(&root).aspect_ratio, None);
+    }
+
+    // ──────── transform-origin / perspective / list-style-* / transition-* ────────
+
+    #[test]
+    fn transform_origin_x_y_z() {
+        let root = lay("<p>x</p>", "p { transform-origin: 10px 20px 30px; }");
+        assert_eq!(first_p_style(&root).transform_origin, (10.0, 20.0, 30.0));
+    }
+
+    #[test]
+    fn transform_origin_partial_defaults_to_zero() {
+        let root = lay("<p>x</p>", "p { transform-origin: 50px; }");
+        assert_eq!(first_p_style(&root).transform_origin, (50.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn transform_origin_not_inherited() {
+        let root = lay("<div><p>x</p></div>", "div { transform-origin: 10px 20px; }");
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.transform_origin, (0.0, 0.0, 0.0));
+        assert_eq!(div.style.transform_origin, (10.0, 20.0, 0.0));
+    }
+
+    #[test]
+    fn perspective_length() {
+        let root = lay("<p>x</p>", "p { perspective: 800px; }");
+        assert_eq!(first_p_style(&root).perspective, Some(800.0));
+    }
+
+    #[test]
+    fn perspective_none() {
+        let root = lay("<p>x</p>", "p { perspective: 800px; perspective: none; }");
+        assert_eq!(first_p_style(&root).perspective, None);
+    }
+
+    #[test]
+    fn perspective_zero_treated_as_none() {
+        let root = lay("<p>x</p>", "p { perspective: 0px; }");
+        assert_eq!(first_p_style(&root).perspective, None);
+    }
+
+    #[test]
+    fn list_style_type_decimal() {
+        let root = lay("<p>x</p>", "p { list-style-type: decimal; }");
+        assert_eq!(first_p_style(&root).list_style_type, ListStyleType::Decimal);
+    }
+
+    #[test]
+    fn list_style_type_none() {
+        let root = lay("<p>x</p>", "p { list-style-type: none; }");
+        assert_eq!(first_p_style(&root).list_style_type, ListStyleType::None);
+    }
+
+    #[test]
+    fn list_style_type_lower_roman() {
+        let root = lay("<p>x</p>", "p { list-style-type: lower-roman; }");
+        assert_eq!(first_p_style(&root).list_style_type, ListStyleType::LowerRoman);
+    }
+
+    #[test]
+    fn list_style_position_inside() {
+        let root = lay("<p>x</p>", "p { list-style-position: inside; }");
+        assert_eq!(first_p_style(&root).list_style_position, ListStylePosition::Inside);
+    }
+
+    #[test]
+    fn list_style_image_url() {
+        let root = lay("<p>x</p>", "p { list-style-image: url(\"bullet.png\"); }");
+        assert_eq!(
+            first_p_style(&root).list_style_image,
+            Some("bullet.png".to_string())
+        );
+    }
+
+    #[test]
+    fn list_style_shorthand_combines() {
+        let root = lay("<p>x</p>", "p { list-style: square inside; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.list_style_type, ListStyleType::Square);
+        assert_eq!(s.list_style_position, ListStylePosition::Inside);
+    }
+
+    #[test]
+    fn list_style_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { list-style-type: square; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.list_style_type, ListStyleType::Square);
+    }
+
+    #[test]
+    fn transition_property_single() {
+        let root = lay("<p>x</p>", "p { transition-property: opacity; }");
+        assert_eq!(
+            first_p_style(&root).transition_properties,
+            vec!["opacity".to_string()]
+        );
+    }
+
+    #[test]
+    fn transition_property_list() {
+        let root = lay("<p>x</p>", "p { transition-property: opacity, transform, color; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.transition_properties.len(), 3);
+        assert_eq!(s.transition_properties[0], "opacity");
+        assert_eq!(s.transition_properties[2], "color");
+    }
+
+    #[test]
+    fn transition_property_none_clears() {
+        let root = lay(
+            "<p>x</p>",
+            "p { transition-property: opacity; transition-property: none; }",
+        );
+        assert!(first_p_style(&root).transition_properties.is_empty());
+    }
+
+    #[test]
+    fn transition_duration_seconds_and_ms() {
+        let root = lay("<p>x</p>", "p { transition-duration: 0.5s, 200ms, 1s; }");
+        let durations = &first_p_style(&root).transition_durations;
+        assert_eq!(durations.len(), 3);
+        assert!((durations[0] - 0.5).abs() < 1e-5);
+        assert!((durations[1] - 0.2).abs() < 1e-5);
+        assert!((durations[2] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn transition_delay_parses() {
+        let root = lay("<p>x</p>", "p { transition-delay: 100ms; }");
+        let s = first_p_style(&root);
+        assert!((s.transition_delays[0] - 0.1).abs() < 1e-5);
     }
 
     // ──────── CSS Text typography (tab-size, caret-color, overflow-wrap, word-break, hyphens) ────────
