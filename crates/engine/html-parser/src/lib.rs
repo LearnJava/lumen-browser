@@ -13,12 +13,14 @@
 
 mod entities;
 pub mod picture;
+pub mod preload_scanner;
 pub mod quirks_mode;
 pub mod srcset;
 pub mod tokenizer;
 pub mod tree_builder;
 
 pub use picture::{PickedSource, PictureParams, pick_img_source, pick_picture_source};
+pub use preload_scanner::{PreloadHint, scan_preload_hints};
 pub use quirks_mode::detect_document_mode;
 pub use srcset::{
     ColorScheme, MediaClause, MediaCondition, Orientation, SizeLength, SizesViewport, SourceSize,

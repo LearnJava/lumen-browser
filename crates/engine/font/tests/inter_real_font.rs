@@ -189,3 +189,18 @@ fn rasterize_cyrillic_a_via_composite_resolution() {
     let visible = bitmap.pixels.iter().filter(|&&p| p > 16).count();
     assert!(visible > 50, "Cyrillic А rasterized as too few pixels: {visible}");
 }
+
+#[test]
+fn reads_family_name_from_inter() {
+    let data = font_bytes();
+    let font = Font::parse(&data).expect("parse Inter-Regular");
+    let name = font.name().expect("parse name table");
+    // Inter записывает family как "Inter" (typographic) — оба поля должны
+    // быть прочитаны.
+    let family = name.best_family().expect("Inter must expose a family name");
+    assert_eq!(
+        family, "Inter",
+        "expected Inter to identify itself as 'Inter', got {family:?}"
+    );
+}
+

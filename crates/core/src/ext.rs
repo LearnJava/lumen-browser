@@ -9,6 +9,7 @@
 //! реализации, а не от всех альтернатив.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use crate::error::Result;
 use crate::event::Event;
@@ -181,12 +182,118 @@ pub trait HstsEnforcement: Send + Sync {
     );
 }
 
+/// HTTP authentication scheme, разрешённый `HttpClient` для re-request
+/// после 401 Unauthorized. `Digest` предпочитается над `Basic`, когда
+/// сервер предлагает оба (RFC 7235 §2.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HttpAuthScheme {
+    /// RFC 7617 `Basic` — base64(user:pass). По сети идёт в plain text
+    /// (на HTTPS — приемлемо, на HTTP — пароль виден active attacker).
+    Basic,
+    /// RFC 7616 `Digest` — challenge-response с MD5 или SHA-256, nonce-based.
+    /// Пароль по сети не уходит; для серверов, не поддерживающих TLS,
+    /// — единственный приемлемый вариант.
+    Digest,
+}
+
+impl HttpAuthScheme {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Basic => "Basic",
+            Self::Digest => "Digest",
+        }
+    }
+}
+
+/// Запрос учётных данных от credential-провайдера. Передаётся в
+/// [`HttpCredentialProvider::credentials`] после получения `401 Unauthorized`.
+///
+/// Провайдер видит origin (`scheme://host[:port]`), realm (свободная строка
+/// из header `WWW-Authenticate`, в UI обычно показывается как «область» —
+/// например, `"Admin Area"`) и scheme. Детали challenge (nonce, qop,
+/// algorithm) скрыты — провайдеру они не нужны, response-digest формирует
+/// сам HTTP-стек.
+///
+/// `realm` может быть пустой строкой: RFC 7616 §3.3 допускает realm-less
+/// challenge для одиночного приложения, и тогда провайдер ищет creds по
+/// origin-у целиком.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpAuthChallenge {
+    pub origin: String,
+    pub realm: String,
+    pub scheme: HttpAuthScheme,
+}
+
+/// Учётные данные для HTTP auth: username + plaintext password.
+///
+/// `password` хранится открыто, потому что и Basic, и Digest требуют
+/// именно plain-text для построения header-а (Digest хэширует на
+/// клиенте — pre-hashed значения серверу не сообщить). Реализация
+/// провайдера обязана сама позаботиться о zeroing-out (если важно).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpCredentials {
+    pub username: String,
+    pub password: String,
+}
+
+/// Поставщик учётных данных HTTP-auth.
+///
+/// Вызывается `HttpClient`-ом один раз на каждый `401 Unauthorized` —
+/// до retry. Возврат `None` означает «у меня нет creds для этого
+/// (origin, realm, scheme)»; клиент тогда пробрасывает 401 как ошибку
+/// наверх, без re-request.
+///
+/// Типичные реализации:
+/// - `StaticCredentialProvider` — фиксированная пара `user/pass` для
+///   тестов / CI / curl-style `-u user:pass`;
+/// - UI-popup (P4): показывает диалог «Enter credentials for <realm>
+///   on <origin>», ответ кэшируется в памяти на время сессии;
+/// - keyring/secret-service (платформенный): macOS Keychain, libsecret
+///   на Linux, Credential Manager на Windows.
+///
+/// Trait-точка вместо прямого `HttpClient::with_credentials(user, pass)`
+/// нужна потому, что credentials per-origin-per-realm: один HttpClient
+/// может ходить по разным сайтам, у каждого свой login.
+pub trait HttpCredentialProvider: Send + Sync {
+    fn credentials(&self, challenge: &HttpAuthChallenge) -> Option<HttpCredentials>;
+}
+
 /// Определение кодировки HTML-документа. Для кириллицы критично уметь
 /// детектировать Windows-1251 и KOI8-R (см. §10.1).
 pub trait EncodingDetector: Send + Sync {
     /// Возвращает имя кодировки (`"utf-8"`, `"windows-1251"`, …) или None,
     /// если уверенности недостаточно.
     fn detect(&self, bytes: &[u8], content_type_hint: Option<&str>) -> Option<&'static str>;
+}
+
+/// Источник системных шрифтов. Реализация — в `lumen-font::system_fonts`.
+///
+/// CSS-каскад даёт `font-family: ["Roboto", "Arial", sans-serif]` — приоритетный
+/// список; rasterizer должен решить, какой реальный файл `.ttf` загрузить.
+/// `FontProvider` отделяет «как найти шрифт на этой ОС» от «что с ним делать
+/// дальше» (распарсить, растеризовать, добавить в атлас).
+///
+/// Возвращает `Vec<PathBuf>`: для одного семейства часто есть несколько
+/// face-ов (Regular / Bold / Italic / Bold Italic / разные weight-ы). Конкретный
+/// выбор по `font-style` / `font-weight` — задача потребителя; провайдер только
+/// перечисляет кандидатов.
+///
+/// Имена сравниваются ASCII-case-insensitive: CSS `"Times New Roman"` должен
+/// найти файл, у которого family name записан как `"Times New Roman"` или
+/// `"TIMES NEW ROMAN"` — спецификация (CSS Fonts L4 §4.3) явно требует
+/// case-insensitive matching.
+///
+/// `&[&str]` — codepoint coverage lookup отложен (для эмодзи / CJK fallback);
+/// добавим, когда пойдёт реальная страница. Сейчас провайдер — только индекс
+/// по имени.
+pub trait FontProvider: Send + Sync {
+    /// Найти все пути к файлам шрифтов, объявленным под данным family name.
+    /// Пустой Vec — семейство не найдено.
+    fn lookup_family(&self, family: &str) -> Vec<PathBuf>;
+
+    /// Имена всех известных семейств. Для отладки и тестов; в production
+    /// потребители используют `lookup_family`.
+    fn list_families(&self) -> Vec<String>;
 }
 
 /// JavaScript runtime — исполнение JS-кода (HTML inline scripts, `eval`,
@@ -309,7 +416,6 @@ impl JsRuntime for NullJsRuntime {
 // Остальные точки расширения без выбранной зависимости — пишем свои
 // реализации сразу:
 //
-// - FontProvider      — поиск шрифтов с поддержкой кириллицы. Phase 1.
 // - HyphenationEngine — переносы слов для CSS hyphens. Phase 2.
 // - DnsResolver       — определён выше; реализации: SystemDnsResolver
 //                       (через `(host, port).to_socket_addrs()`),
@@ -385,5 +491,42 @@ mod tests {
         fn check_dyn(_r: &dyn JsRuntime) {}
         let rt = NullJsRuntime;
         check_dyn(&rt);
+    }
+
+    #[test]
+    fn http_auth_scheme_as_str() {
+        assert_eq!(HttpAuthScheme::Basic.as_str(), "Basic");
+        assert_eq!(HttpAuthScheme::Digest.as_str(), "Digest");
+    }
+
+    #[test]
+    fn http_auth_challenge_equality() {
+        let a = HttpAuthChallenge {
+            origin: "https://example.com".into(),
+            realm: "Admin".into(),
+            scheme: HttpAuthScheme::Digest,
+        };
+        let b = HttpAuthChallenge {
+            origin: "https://example.com".into(),
+            realm: "Admin".into(),
+            scheme: HttpAuthScheme::Digest,
+        };
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn http_credential_provider_is_object_safe() {
+        // dyn check (Send + Sync).
+        fn check_dyn(_p: &dyn HttpCredentialProvider) {}
+        struct Fixed;
+        impl HttpCredentialProvider for Fixed {
+            fn credentials(&self, _c: &HttpAuthChallenge) -> Option<HttpCredentials> {
+                Some(HttpCredentials {
+                    username: "u".into(),
+                    password: "p".into(),
+                })
+            }
+        }
+        check_dyn(&Fixed);
     }
 }

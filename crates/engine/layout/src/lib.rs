@@ -523,6 +523,111 @@ mod tests {
         assert_eq!(p.style.color.r, 0);
     }
 
+    // ── :placeholder-shown (CSS Selectors L4 §15.1) ──
+
+    fn first_named(doc: &lumen_dom::Document, root: &LayoutBox, local: &str) -> Color {
+        for c in walk_layout(root) {
+            if let lumen_dom::NodeData::Element { name, .. } = &doc.get(c.node).data
+                && name.local == local
+            {
+                return c.style.color;
+            }
+        }
+        panic!("element <{local}> not found");
+    }
+
+    fn walk_layout(root: &LayoutBox) -> Vec<&LayoutBox> {
+        let mut out = Vec::new();
+        let mut stack = vec![root];
+        while let Some(b) = stack.pop() {
+            out.push(b);
+            for c in b.children.iter().rev() {
+                stack.push(c);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn placeholder_shown_matches_input_with_placeholder() {
+        let (root, doc) = lay_with_doc(
+            r#"<input placeholder="Name">"#,
+            "input:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn placeholder_shown_no_placeholder_attr_no_match() {
+        let (root, doc) = lay_with_doc(
+            r#"<input>"#,
+            "input:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 0);
+    }
+
+    #[test]
+    fn placeholder_shown_whitespace_only_placeholder_no_match() {
+        // " " после trim — пустая строка → не матчит.
+        let (root, doc) = lay_with_doc(
+            r#"<input placeholder="   ">"#,
+            "input:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 0);
+    }
+
+    #[test]
+    fn placeholder_shown_filled_input_no_match() {
+        // value-атрибут с непустым контентом → placeholder скрыт.
+        let (root, doc) = lay_with_doc(
+            r#"<input placeholder="Name" value="John">"#,
+            "input:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 0);
+    }
+
+    #[test]
+    fn placeholder_shown_empty_value_still_matches() {
+        // value="" — пользователь ничего не ввёл, placeholder виден.
+        let (root, doc) = lay_with_doc(
+            r#"<input placeholder="Name" value="">"#,
+            "input:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn placeholder_shown_textarea_matches_when_empty() {
+        // <textarea> с placeholder и без текстового контента → матчит.
+        let (root, doc) = lay_with_doc(
+            r#"<textarea placeholder="Bio"></textarea>"#,
+            "textarea:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "textarea").r, 255);
+    }
+
+    #[test]
+    fn placeholder_shown_textarea_with_text_does_not_match() {
+        // <textarea> с текстом — значение задано через DOM children,
+        // placeholder скрыт.
+        let (root, doc) = lay_with_doc(
+            r#"<textarea placeholder="Bio">My biography</textarea>"#,
+            "textarea:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "textarea").r, 0);
+    }
+
+    #[test]
+    fn placeholder_shown_non_form_control_skipped() {
+        // <div placeholder="...">x</div> — placeholder не имеет смысла на
+        // не-form элементе; pseudo-class не матчит.
+        let (root, doc) = lay_with_doc(
+            r#"<div placeholder="hint">x</div>"#,
+            "div:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "div").r, 0);
+    }
+
     #[test]
     fn id_wins_over_class() {
         // id specificity (1,0,0) > class (0,1,0). Порядок правил в CSS — class

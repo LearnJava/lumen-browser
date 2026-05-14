@@ -27,6 +27,7 @@ use lumen_layout::Color;
 use winit::window::Window;
 
 use crate::atlas::{GlyphAtlas, GlyphEntry};
+use crate::display_list::fit_image_quad;
 use crate::{DisplayCommand, DisplayList};
 
 /// Размер атласа в пикселях (квадратный).
@@ -172,13 +173,17 @@ struct ImageVertex {
 /// GPU-ресурсы для одной зарегистрированной картинки. Texture хранит уже
 /// декодированные пиксели в формате `Rgba8Unorm` (Gray / GrayA / Rgb
 /// конвертируются в Rgba при upload-е); bind group привязан к
-/// `image_bind_group_layout` + общему sampler-у renderer-а.
+/// `image_bind_group_layout` + общему sampler-у renderer-а. Intrinsic
+/// dimensions (`width` / `height` в пикселях) хранятся для расчёта
+/// `object-fit` / `object-position` на стадии рендеринга.
 #[derive(Clone)]
 struct GpuImage {
     bind_group: wgpu::BindGroup,
     // texture держим как поле даже без явного использования — wgpu освобождает
     // GPU-память когда дропается последняя ссылка; bind_group её не держит.
     _texture: wgpu::Texture,
+    width: u32,
+    height: u32,
 }
 
 /// Ошибка `Renderer::register_image`.
@@ -688,6 +693,8 @@ impl Renderer {
             GpuImage {
                 bind_group,
                 _texture: texture,
+                width: image.width,
+                height: image.height,
             },
         );
         Ok(())
@@ -790,12 +797,30 @@ impl Renderer {
                         &mut self.cached_glyphs,
                     );
                 }
-                DisplayCommand::DrawImage { rect, src, alt: _ } => {
+                DisplayCommand::DrawImage {
+                    rect,
+                    src,
+                    alt: _,
+                    object_fit,
+                    object_position,
+                } => {
                     if let Some(gpu) = self.images.get(src) {
-                        let offset = image_vertices.len() as u32;
-                        push_image_quad(&mut image_vertices, *rect);
-                        let count = image_vertices.len() as u32 - offset;
-                        image_batches.push((gpu.bind_group.clone(), offset, count));
+                        // CSS Images L3 §5.5: размещаем intrinsic-картинку
+                        // согласно object-fit / object-position, обрезаем
+                        // по box через UV-crop (без отдельной scissor-стадии).
+                        // Пустое пересечение (полностью за пределами box) —
+                        // пропускаем quad, placeholder тоже не рисуем.
+                        if let Some((visible, uv_min, uv_max)) = fit_image_quad(
+                            *rect,
+                            (gpu.width, gpu.height),
+                            *object_fit,
+                            *object_position,
+                        ) {
+                            let offset = image_vertices.len() as u32;
+                            push_image_quad(&mut image_vertices, visible, uv_min, uv_max);
+                            let count = image_vertices.len() as u32 - offset;
+                            image_batches.push((gpu.bind_group.clone(), offset, count));
+                        }
                     } else {
                         // Картинку никто не зарегистрировал (fetch не сделан /
                         // декодер упал / неизвестный формат) — fallback на
@@ -948,19 +973,20 @@ fn push_fill_quad(out: &mut Vec<FillVertex>, rect: Rect, color: [f32; 4]) {
     ]);
 }
 
-fn push_image_quad(out: &mut Vec<ImageVertex>, rect: Rect) {
-    // UV — фиксированный 0..1 на весь rect (без object-fit / -position).
+fn push_image_quad(out: &mut Vec<ImageVertex>, rect: Rect, uv_min: [f32; 2], uv_max: [f32; 2]) {
     let x0 = rect.x;
     let y0 = rect.y;
     let x1 = rect.x + rect.width;
     let y1 = rect.y + rect.height;
+    let [u0, v0] = uv_min;
+    let [u1, v1] = uv_max;
     out.extend_from_slice(&[
-        ImageVertex { pos: [x0, y0], uv: [0.0, 0.0] },
-        ImageVertex { pos: [x1, y0], uv: [1.0, 0.0] },
-        ImageVertex { pos: [x1, y1], uv: [1.0, 1.0] },
-        ImageVertex { pos: [x0, y0], uv: [0.0, 0.0] },
-        ImageVertex { pos: [x1, y1], uv: [1.0, 1.0] },
-        ImageVertex { pos: [x0, y1], uv: [0.0, 1.0] },
+        ImageVertex { pos: [x0, y0], uv: [u0, v0] },
+        ImageVertex { pos: [x1, y0], uv: [u1, v0] },
+        ImageVertex { pos: [x1, y1], uv: [u1, v1] },
+        ImageVertex { pos: [x0, y0], uv: [u0, v0] },
+        ImageVertex { pos: [x1, y1], uv: [u1, v1] },
+        ImageVertex { pos: [x0, y1], uv: [u0, v1] },
     ]);
 }
 
