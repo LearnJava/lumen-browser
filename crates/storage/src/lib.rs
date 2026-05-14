@@ -31,6 +31,7 @@ pub mod plugins;
 pub mod profiles;
 pub mod push_subscriptions;
 pub mod referrer_policy;
+pub mod safe_browsing;
 pub mod search_history;
 pub mod search_providers;
 pub mod service_workers;
@@ -62,6 +63,10 @@ pub use plugins::{PluginManifest, Plugins};
 pub use profiles::{Profile, ProfileRegistry};
 pub use push_subscriptions::{PushSubscription, PushSubscriptions};
 pub use referrer_policy::{ReferrerPolicies, ReferrerPolicy};
+pub use safe_browsing::{
+    SafeBrowsingFilter, SafeBrowsingList, ThreatType, canonical_expression_variants,
+    hash_expression,
+};
 pub use search_history::{SearchHistory, SearchQuery};
 pub use search_providers::{SearchProviderEntry, SearchProviders};
 pub use service_workers::{ServiceWorkerRegistration, ServiceWorkers, UpdateViaCache};
