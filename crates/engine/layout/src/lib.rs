@@ -23,8 +23,8 @@ pub use style::{
     BackgroundSize, BorderStyle, BoxShadow, BoxSizing, ClipPath, Color, ComputedStyle,
     CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle, FontVariant,
     FontWeight, Hyphens, ListStylePosition, ListStyleType, Overflow, OverflowWrap, PointerEvents,
-    ScrollBehavior, TextAlign, TextDecorationLine, TextOverflow, TextShadow, TextTransform,
-    TransformFn, UserSelect, Visibility, WhiteSpace, WordBreak,
+    ScrollBehavior, ScrollbarGutter, ScrollbarWidth, TextAlign, TextDecorationLine, TextOverflow,
+    TextShadow, TextTransform, TransformFn, UserSelect, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -4462,6 +4462,97 @@ mod tests {
     fn aspect_ratio_invalid_kept_unchanged() {
         let root = lay("<p>x</p>", "p { aspect-ratio: 16 / abc; }");
         assert_eq!(first_p_style(&root).aspect_ratio, None);
+    }
+
+    // ──────── mask-* + scrollbar-* ────────
+
+    #[test]
+    fn mask_image_url() {
+        let root = lay("<p>x</p>", "p { mask-image: url(\"mask.png\"); }");
+        assert_eq!(
+            first_p_style(&root).mask_image,
+            BackgroundImage::Url("mask.png".into())
+        );
+    }
+
+    #[test]
+    fn mask_image_none_clears() {
+        let root = lay("<p>x</p>", "p { mask-image: url(m.png); mask-image: none; }");
+        assert_eq!(first_p_style(&root).mask_image, BackgroundImage::None);
+    }
+
+    #[test]
+    fn mask_repeat_no_repeat() {
+        let root = lay("<p>x</p>", "p { mask-repeat: no-repeat; }");
+        assert_eq!(first_p_style(&root).mask_repeat, BackgroundRepeat::NoRepeat);
+    }
+
+    #[test]
+    fn mask_size_cover() {
+        let root = lay("<p>x</p>", "p { mask-size: cover; }");
+        assert_eq!(first_p_style(&root).mask_size, BackgroundSize::Cover);
+    }
+
+    #[test]
+    fn scrollbar_width_thin() {
+        let root = lay("<p>x</p>", "p { scrollbar-width: thin; }");
+        assert_eq!(first_p_style(&root).scrollbar_width, ScrollbarWidth::Thin);
+    }
+
+    #[test]
+    fn scrollbar_width_none() {
+        let root = lay("<p>x</p>", "p { scrollbar-width: none; }");
+        assert_eq!(first_p_style(&root).scrollbar_width, ScrollbarWidth::None);
+    }
+
+    #[test]
+    fn scrollbar_width_inherited() {
+        let root = lay("<div><p>x</p></div>", "div { scrollbar-width: thin; }");
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.scrollbar_width, ScrollbarWidth::Thin);
+    }
+
+    #[test]
+    fn scrollbar_color_pair() {
+        let root = lay(
+            "<p>x</p>",
+            "p { scrollbar-color: red blue; }",
+        );
+        let (thumb, track) = first_p_style(&root).scrollbar_color.unwrap();
+        assert_eq!(thumb, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(track, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn scrollbar_color_with_rgb_functions() {
+        let root = lay(
+            "<p>x</p>",
+            "p { scrollbar-color: rgb(100, 100, 100) rgb(200, 200, 200); }",
+        );
+        let (thumb, _) = first_p_style(&root).scrollbar_color.unwrap();
+        assert_eq!(thumb, Color { r: 100, g: 100, b: 100, a: 255 });
+    }
+
+    #[test]
+    fn scrollbar_color_auto() {
+        let root = lay("<p>x</p>", "p { scrollbar-color: red blue; scrollbar-color: auto; }");
+        assert!(first_p_style(&root).scrollbar_color.is_none());
+    }
+
+    #[test]
+    fn scrollbar_gutter_stable() {
+        let root = lay("<p>x</p>", "p { scrollbar-gutter: stable; }");
+        assert_eq!(first_p_style(&root).scrollbar_gutter, ScrollbarGutter::Stable);
+    }
+
+    #[test]
+    fn scrollbar_gutter_stable_both_edges() {
+        let root = lay("<p>x</p>", "p { scrollbar-gutter: stable both-edges; }");
+        assert_eq!(
+            first_p_style(&root).scrollbar_gutter,
+            ScrollbarGutter::StableBothEdges
+        );
     }
 
     // ──────── transform-origin / perspective / list-style-* / transition-* ────────

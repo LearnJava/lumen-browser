@@ -12,12 +12,14 @@
 //! Оба бэкенда соблюдают одинаковую семантику origin-партиционирования
 //! (`None` и `Some("")` — один namespace) и реализуют тот же trait.
 
+pub mod autofill;
 pub mod bookmarks;
 pub mod cookies;
 pub mod dns_cache;
 pub mod downloads;
 pub mod history;
 pub mod http_cache;
+pub mod notifications;
 pub mod permissions;
 pub mod plugins;
 pub mod profiles;
@@ -30,12 +32,14 @@ pub mod store;
 pub mod tab_sessions;
 pub mod workspaces;
 
+pub use autofill::{Autofill, AutofillEntry};
 pub use bookmarks::{Bookmark, Bookmarks};
 pub use cookies::{parse_set_cookie, Cookie, CookieJar, SameSite};
 pub use dns_cache::{DnsCache, DnsEntry};
 pub use downloads::{DownloadEntry, DownloadStatus, Downloads};
 pub use history::{History, HistoryEntry};
 pub use http_cache::{CacheControl, CachedResponse, HttpCache};
+pub use notifications::{Notification, Notifications};
 pub use permissions::{PermissionEntry, PermissionKind, PermissionState, Permissions};
 pub use plugins::{PluginManifest, Plugins};
 pub use profiles::{Profile, ProfileRegistry};
