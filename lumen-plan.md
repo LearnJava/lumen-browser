@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-_(никто ничего не зарезервировал)_
+- 🔄 Перебалансировка задач между P1–P4 [любой] — rebalance-programmer-roles — 2026-05-14
 
 
 ## Статус реализации
@@ -1197,13 +1197,13 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 - Пакеты под Linux/macOS/Windows.
 - **Browser fundamentals — критичные подсистемы, обнаруженные при аудите против Chromium / Firefox / Servo / Ladybird** (полный список с обоснованиями — в [CLAUDE.md](CLAUDE.md) → roadmap «Browser fundamentals»):
   - **HTML event loop + microtasks + rendering steps + observers** (`[P4]`) — контракт shell-а, не JS-движка. Без него ни Promise.then, ни ResizeObserver/IntersectionObserver/MutationObserver/PerformanceObserver, ни rAF не работают.
-  - **Stacking contexts + правильный CSS Painting Order** (`[P1]`, CSS 2.1 Appendix E) — сейчас paint в порядке DOM-обхода, z-index работает случайно.
-  - **Compositor thread + property trees** (`[P4]`) — TransformTree/ScrollTree/EffectTree/ClipTree на отдельном thread, off-main-thread scroll. Расширяет существующий план `compositor` крейта архитектурой.
-  - **Stacking-aware hit testing** (`[P4]`) — отдельная структура с z-index/pointer-events awareness.
+  - **Stacking contexts + правильный CSS Painting Order** (`[P1+P2]`, CSS 2.1 Appendix E) — сейчас paint в порядке DOM-обхода, z-index работает случайно. P1 — модель stacking-ов в layout; P2 — paint-side traversal.
+  - **Compositor thread + property trees** (`[P2+P1]`) — TransformTree/ScrollTree/EffectTree/ClipTree на отдельном thread, off-main-thread scroll. Расширяет существующий план `compositor` крейта архитектурой. P2 — compositor pipeline + GPU; P1 — property trees от style/layout.
+  - **Stacking-aware hit testing** (`[P2]`) — отдельная структура с z-index/pointer-events awareness, привязана к compositor layer tree.
   - **Quirks mode vs standards mode** (`[P1]`) — без поддержки половина legacy-страниц сломается.
   - **Same-Origin Policy enforcement + CORS preflight** (`[P3]`) — SOP checks при fetch/postMessage/storage; OPTIONS preflight для non-simple requests.
   - **Mixed-content blocking + `<iframe sandbox>`** (`[P3]`) — HTTPS не грузит HTTP-script; sandbox flags.
-  - **Preload scanner** (`[P4]`) — отдельный pre-parser стартует fetch до DOM construction. Особенно важно над streaming pipeline.
+  - **Preload scanner** (`[P1+P4]`) — отдельный pre-parser стартует fetch до DOM construction. Особенно важно над streaming pipeline. P1 — отдельный mode tokenizer-а; P4 — shell оркестрация.
 - **Цель:** ежедневный браузер для чтения статей.
 
 ### Фаза 2 — v0.5 «Interactive» (18–24 месяца)
@@ -1225,15 +1225,15 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 - **`<meta viewport>` parsing + page zoom (Ctrl+/Ctrl-).** Без этого мобильная вёрстка всегда «как desktop», и нет ручного управления масштабом.
 - **Кастомизация UI** — drag&drop панелей, темы (§12.10).
 - **Browser fundamentals — Phase 2** (полный список — в [CLAUDE.md](CLAUDE.md) → roadmap «Browser fundamentals»):
-  - **Shadow DOM + custom elements + `<template>` + `<slot>`** (`[P1+P4]`) — Web Components. Без них половина современных сайтов сломается.
-  - **Accessibility tree + platform bridges** (`[P4]` — UIA / AT-SPI / NSAccessibility) — обязательно для NVDA / Orca / VoiceOver. «Русский first-class» требует.
-  - **Forms runtime** (`[P4]`) — Constraint Validation API, submission algorithm, file picker, autofill UI поверх существующего storage.
-  - **`<picture>` / `srcset` / `sizes` + `loading="lazy"`** (`[P2]`) — viewport+DPR-aware resource selection.
+  - **Shadow DOM + custom elements + `<template>` + `<slot>`** (`[P1+P4]`) — Web Components. Без них половина современных сайтов сломается. P1 — cascade + composed tree + template/slot tree-builder; P4 — JS bindings + lifecycle.
+  - **Accessibility tree + platform bridges** (`[P1+P4]`) — обязательно для NVDA / Orca / VoiceOver. «Русский first-class» требует. P1 — tree construction из DOM/layout + ARIA + focus model; P4 — platform bridges (UIA / AT-SPI / NSAccessibility) + focus dispatch.
+  - **Forms runtime** (`[P1+P4]`) — Constraint Validation API, submission algorithm, file picker, autofill UI поверх существующего storage. P1 — ValidityState + validation pseudo-classes + submission algorithm; P4 — native pickers + autofill popup + validation tooltip.
+  - **`<picture>` / `srcset` / `sizes` + `loading="lazy"`** (`[P1+P2]`) — viewport+DPR-aware resource selection. P1 — selection logic + IntersectionObserver event source; P2 — image GPU upload.
   - **IME composition events** (`[P4]`) — без них японский / китайский / корейский ввод сломан.
   - **Connection pooling + keep-alive + Brotli + Range requests** (`[P3]`) — без keep-alive реальный сайт = 50× TCP handshakes.
   - **Find in page (Ctrl+F)** (`[P4]`).
   - **DevTools / Inspector минимум через CDP** (`[P4]`) — DOM tree + computed styles + network log. Без этого debug собственного движка невозможен.
-  - **`mix-blend-mode` / `backdrop-filter` / `isolation`** (`[P1+P2]`) — нужны isolation groups в compositor pipeline.
+  - **`mix-blend-mode` / `backdrop-filter` / `isolation`** (`[P1+P2]`) — нужны isolation groups в compositor pipeline. P1 — parsing + stacking model; P2 — paint pipeline + isolation groups.
 - **Цель:** публичная альфа, форумы и простые SPA, в Lumen начинают **жить** долго.
 
 ### Фаза 3 — v1.0 (36–48 месяцев)
@@ -1254,14 +1254,14 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
   - **Safe Browsing equivalent** (`[P3]`) — локальный hash-prefix фильтр-список malware / phishing.
   - **Back/forward cache (bfcache)** (`[P4]`).
   - **Navigation API + History API runtime** (`[P4]`).
-  - **Web Animations API runtime** (`[P4]`) — compositor-driven для transform/opacity.
-  - **`<contenteditable>` + Input Events Level 2 + Selection / Range API** (`[P4]`).
-  - **Service Worker runtime** (`[P4]`) — fetch interception / push / background sync.
-  - **Spell check** (`[P4]`) через Hunspell-словари — русский словарь обязателен.
+  - **Web Animations API runtime** (`[P1+P2+P4]`) — compositor-driven для transform/opacity. P1 — value interpolation в момент t; P2 — compositor offload; P4 — animation timeline scheduling.
+  - **`<contenteditable>` + Input Events Level 2 + Selection / Range API** (`[P1+P4]`) — P1 — DOM mutations + Selection/Range типы + `beforeinput`/`input` event firing; P4 — input dispatch (keyboard / IME / drag-drop / paste) + undo stack.
+  - **Service Worker runtime** (`[P3+P4]`) — fetch interception / push / background sync. P3 — fetch interception API + push delivery + bg sync queue; P4 — отдельный JS worker context + lifecycle.
+  - **Spell check** (`[P3+P4]`) через Hunspell-словари — русский словарь обязателен. P3 — словарь loader / Hunspell-формат parser / storage; P4 — squiggly render + context menu + OS API integration.
   - **Variable fonts axes runtime** (`[P2]`) — `font-variation-settings`.
   - **Color management + Display P3 / Rec2020 / ICC** (`[P2]`).
-  - **Print pipeline runtime** (`[P1+P2+P4]`) — pagination algorithm над уже parsed `@page` и break-* properties, PDF generation.
-  - **GC integration JS ↔ DOM** (`[P4]`) — cycle collector между Rust DOM и JS engine. Архитектурная задача при интеграции QuickJS / V8.
+  - **Print pipeline runtime** (`[P1+P2+P4]`) — pagination algorithm над уже parsed `@page` и break-* properties, PDF generation. P1 — pagination algorithm; P2 — PDF rendering из display list; P4 — print preview UI.
+  - **GC integration JS ↔ DOM** (`[P1+P4]`) — cycle collector между Rust DOM и JS engine. Архитектурная задача при интеграции QuickJS / V8. P1 — DOM wrapper hooks; P4 — JS engine integration + cycle collector algorithm.
   - **Permission prompt UI + Download UI** (`[P4]`) поверх существующего permissions/downloads storage.
   - **GPU process / sandbox** (`[P4]`) — seccomp / AppContainer / App Sandbox, расширение site isolation.
 - **Цель:** стабильный релиз.
