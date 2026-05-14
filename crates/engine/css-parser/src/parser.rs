@@ -562,13 +562,32 @@ pub struct MediaRule {
     pub rules: Vec<Rule>,
 }
 
-/// Media query — OR-список AND-clauses. Пустой `clauses` (нет условий)
-/// трактуется как «всегда true» (= `@media all`).
+/// Media query — OR-список AND-clauses (Media Queries L4 §3). Пустой
+/// `clauses` (нет условий) трактуется как «всегда true» (= `@media all`).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MediaQuery {
-    /// Внешний `Vec` — OR (comma-separated); внутренний — AND
-    /// (whitespace+`and`-separated).
-    pub clauses: Vec<Vec<MediaCondition>>,
+    /// Comma-separated OR-список. При пустом `clauses` query всегда
+    /// матчит (`@media all`).
+    pub clauses: Vec<MediaQueryClause>,
+}
+
+/// Одна clause в media query — AND-список feature/media-type условий
+/// с опциональным `not`-модификатором.
+///
+/// Media Queries L4 §3.2: `not <media-query>` инвертирует результат
+/// _всей_ clause. `only <media-type>` — L3-совместимый no-op-модификатор
+/// (использовался для скрытия media-query от старых браузеров, для
+/// современных парсеров значимого эффекта не несёт).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MediaQueryClause {
+    /// Истина для `not screen and (min-width: 600px)` — инвертирует
+    /// итоговый результат clause целиком. Per §3.2 unknown-условия
+    /// внутри negated clause не дают `true`: clause с любым
+    /// `Unsupported` оценивается как unknown и не матчит.
+    pub negated: bool,
+    /// AND-list. Пустой — clause-error (например, `not` без feature),
+    /// `matches()` отдаст `false`.
+    pub conditions: Vec<MediaCondition>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -638,9 +657,30 @@ impl MediaQuery {
         if self.clauses.is_empty() {
             return true;
         }
-        self.clauses
+        self.clauses.iter().any(|clause| clause.matches(ctx))
+    }
+}
+
+impl MediaQueryClause {
+    /// Per Media Queries L4 §3.2: пустая `conditions` — clause invalid
+    /// (например, `@media not` без media-type / feature) → false.
+    /// `Unsupported` в любом условии делает clause «unknown» → false
+    /// даже под `not` (spec: «If the result is unknown, then the
+    /// negation also evaluates to unknown»). При known-результате
+    /// `negated` инвертирует исход AND-conjunction.
+    pub fn matches(&self, ctx: &MediaContext) -> bool {
+        if self.conditions.is_empty() {
+            return false;
+        }
+        if self
+            .conditions
             .iter()
-            .any(|clause| clause.iter().all(|c| c.matches(ctx)))
+            .any(|c| matches!(c, MediaCondition::Unsupported))
+        {
+            return false;
+        }
+        let all_match = self.conditions.iter().all(|c| c.matches(ctx));
+        if self.negated { !all_match } else { all_match }
     }
 }
 
@@ -997,9 +1037,13 @@ fn parse_supports_atom(b: &[u8], p: &mut usize) -> SupportsCondition {
 }
 
 /// Распарсить media query из строки между `@media` и `{`. Принимает
-/// строку без обрамляющих whitespace. Грамматика (упрощённая):
-/// `clause [ , clause ]*` где `clause = primary [ "and" primary ]*` и
-/// `primary = ident | "(" feature ")"`.
+/// строку без обрамляющих whitespace. Грамматика (упрощённая, Media
+/// Queries L4 §3):
+/// ```text
+/// query-list    = query [ "," query ]*
+/// query         = [ "not" | "only" ]? primary [ "and" primary ]*
+/// primary       = ident | "(" feature ")"
+/// ```
 ///
 /// Возвращает `MediaQuery` с `clauses.len() == 0` если строка пустая
 /// (= `@media all`). Неизвестные feature-имена дают `Unsupported` (не
@@ -1009,53 +1053,93 @@ pub fn parse_media_query(s: &str) -> MediaQuery {
     if s.is_empty() {
         return MediaQuery::default();
     }
-    let mut clauses = Vec::new();
-    for clause_str in s.split(',') {
-        let clause = parse_media_clause(clause_str);
-        clauses.push(clause);
-    }
+    let clauses = s.split(',').map(parse_media_clause).collect();
     MediaQuery { clauses }
 }
 
-fn parse_media_clause(s: &str) -> Vec<MediaCondition> {
-    let mut out = Vec::new();
+fn parse_media_clause(s: &str) -> MediaQueryClause {
     let mut input = s.trim();
-    // Token by token: либо `(feature)` либо ident, разделённые `and`/whitespace.
+
+    // Per L4 §3.2 ведущие `not`/`only` — модификаторы query. `only`
+    // используется для скрытия от L3-without-media-queries браузеров —
+    // для нас семантически no-op. `not` инвертирует clause.
+    let mut negated = false;
+    if let Some(rest) = strip_leading_keyword(input, "not") {
+        negated = true;
+        input = rest;
+    } else if let Some(rest) = strip_leading_keyword(input, "only") {
+        input = rest;
+    }
+
+    let mut conditions = Vec::new();
     while !input.is_empty() {
         input = input.trim_start();
         if input.starts_with('(') {
             // Найти match `)`.
             if let Some(end) = input.find(')') {
                 let inner = &input[1..end];
-                out.push(parse_media_feature(inner.trim()));
+                conditions.push(parse_media_feature(inner.trim()));
                 input = &input[end + 1..];
             } else {
-                // Невалидное — abort clause.
-                return vec![MediaCondition::Unsupported];
+                return MediaQueryClause {
+                    negated,
+                    conditions: vec![MediaCondition::Unsupported],
+                };
             }
         } else {
-            // Берём слово до whitespace.
             let end = input
                 .find(|c: char| c.is_whitespace() || c == '(' || c == ',')
                 .unwrap_or(input.len());
             let word = &input[..end];
             input = &input[end..];
             if word.eq_ignore_ascii_case("and") {
-                // Просто разделитель.
                 continue;
             }
+            // Дополнительные `not`/`only` внутри clause — синтаксически
+            // невалидны (L4 разрешает их только в позиции query-prefix
+            // или внутри `(not (...))`-conditions, которые мы пока не
+            // парсим). Считаем clause unknown, чтобы не сматчить случайно.
             if word.eq_ignore_ascii_case("not") || word.eq_ignore_ascii_case("only") {
-                // `not` и `only` — модификаторы; Phase 0 их игнорирует
-                // (effectively allowing match).
-                continue;
+                return MediaQueryClause {
+                    negated,
+                    conditions: vec![MediaCondition::Unsupported],
+                };
             }
-            out.push(MediaCondition::MediaType(word.to_ascii_lowercase()));
+            conditions.push(MediaCondition::MediaType(word.to_ascii_lowercase()));
         }
     }
-    if out.is_empty() {
-        out.push(MediaCondition::Unsupported);
+
+    if conditions.is_empty() {
+        // `@media not` без feature / media-type — invalid query
+        // (Media Queries L4 §3.2 «not <media-query>» требует body).
+        conditions.push(MediaCondition::Unsupported);
     }
-    out
+
+    MediaQueryClause { negated, conditions }
+}
+
+/// Если строка начинается с `keyword` (ASCII case-insensitive) и за ним
+/// следует whitespace или `(` — отрезает префикс и возвращает остаток.
+/// Иначе возвращает `None`. Нужно, чтобы `notebook` / `only-child` не
+/// принимались за keyword.
+fn strip_leading_keyword<'a>(input: &'a str, keyword: &str) -> Option<&'a str> {
+    let trimmed = input.trim_start();
+    let lower = trimmed.as_bytes();
+    let kw = keyword.as_bytes();
+    if lower.len() < kw.len() + 1 {
+        return None;
+    }
+    if !trimmed.is_char_boundary(kw.len()) {
+        return None;
+    }
+    if !trimmed[..kw.len()].eq_ignore_ascii_case(keyword) {
+        return None;
+    }
+    let next = trimmed.as_bytes()[kw.len()];
+    if !(next == b' ' || next == b'\t' || next == b'\n' || next == b'\r' || next == b'(') {
+        return None;
+    }
+    Some(&trimmed[kw.len()..])
 }
 
 fn parse_media_feature(s: &str) -> MediaCondition {
@@ -3824,8 +3908,8 @@ mod tests {
         assert_eq!(s.imports.len(), 1);
         assert_eq!(s.imports[0].url, "print.css");
         assert_eq!(s.imports[0].media.clauses.len(), 1);
-        assert_eq!(s.imports[0].media.clauses[0].len(), 1);
-        if let MediaCondition::MediaType(t) = &s.imports[0].media.clauses[0][0] {
+        assert_eq!(s.imports[0].media.clauses[0].conditions.len(), 1);
+        if let MediaCondition::MediaType(t) = &s.imports[0].media.clauses[0].conditions[0] {
             assert_eq!(t, "print");
         } else {
             panic!("expected MediaType");
@@ -3839,7 +3923,8 @@ mod tests {
         assert_eq!(s.imports[0].media.clauses.len(), 1);
         // Должны быть MediaType("screen") и Feature(MaxWidth(600)).
         let clause = &s.imports[0].media.clauses[0];
-        assert_eq!(clause.len(), 2);
+        assert!(!clause.negated);
+        assert_eq!(clause.conditions.len(), 2);
     }
 
     #[test]
@@ -4403,5 +4488,120 @@ mod tests {
         let s = parse("@container (min-width: 200px) and (max-width: 600px) { p { } }");
         let c = &s.container_rules[0];
         assert!(c.condition.contains("and"));
+    }
+
+    // ── Media Queries L4 §3.2: not / only / prefers-color-scheme ──
+
+    fn screen_ctx(width: f32) -> MediaContext {
+        MediaContext {
+            media_type: "screen".into(),
+            width,
+            height: 600.0,
+            prefers_dark: false,
+        }
+    }
+
+    #[test]
+    fn media_query_only_parses_as_no_op() {
+        let q = parse_media_query("only screen and (min-width: 300px)");
+        assert_eq!(q.clauses.len(), 1);
+        assert!(!q.clauses[0].negated);
+        // `only screen` + `and (min-width: 300px)` → 2 условия.
+        assert_eq!(q.clauses[0].conditions.len(), 2);
+        assert!(q.matches(&screen_ctx(500.0)));
+    }
+
+    #[test]
+    fn media_query_only_keyword_does_not_eat_media_type() {
+        // Forward-compat: `only` без следующего media-type / feature
+        // оставляет clause пустым → Unsupported.
+        let q = parse_media_query("only");
+        assert_eq!(q.clauses.len(), 1);
+        assert_eq!(q.clauses[0].conditions, vec![MediaCondition::Unsupported]);
+        assert!(!q.matches(&screen_ctx(500.0)));
+    }
+
+    #[test]
+    fn media_query_not_inverts_match() {
+        let q = parse_media_query("not screen");
+        assert_eq!(q.clauses.len(), 1);
+        assert!(q.clauses[0].negated);
+        // screen-context — не матчит `not screen`.
+        assert!(!q.matches(&screen_ctx(500.0)));
+    }
+
+    #[test]
+    fn media_query_not_matches_when_inner_false() {
+        // not (min-width: 1000px) → инвертит «не достаточно широкий».
+        let q = parse_media_query("not all and (min-width: 1000px)");
+        assert!(q.clauses[0].negated);
+        assert!(q.matches(&screen_ctx(500.0)));
+        assert!(!q.matches(&screen_ctx(1200.0)));
+    }
+
+    #[test]
+    fn media_query_not_with_unsupported_stays_unknown() {
+        // Per §3.2: `not (unknown-feature: x)` → unknown, не true.
+        let q = parse_media_query("not all and (gibberish: zzz)");
+        assert!(!q.matches(&screen_ctx(500.0)));
+    }
+
+    #[test]
+    fn media_query_not_only_first_keyword_consumed() {
+        // `not not` — второй not трактуется как невалидный токен → clause unknown.
+        let q = parse_media_query("not not screen");
+        assert!(q.clauses[0].negated);
+        assert_eq!(q.clauses[0].conditions, vec![MediaCondition::Unsupported]);
+        assert!(!q.matches(&screen_ctx(500.0)));
+    }
+
+    #[test]
+    fn media_query_or_with_not_clause() {
+        // `not screen, print` — на screen НЕ должно матчить (not screen → false на screen);
+        // на print должно матчить (print clause = MediaType(print)).
+        let q = parse_media_query("not screen, print");
+        assert_eq!(q.clauses.len(), 2);
+        assert!(q.clauses[0].negated);
+        assert!(!q.clauses[1].negated);
+        assert!(!q.matches(&screen_ctx(500.0)));
+        let mut print_ctx = screen_ctx(500.0);
+        print_ctx.media_type = "print".into();
+        assert!(q.matches(&print_ctx));
+    }
+
+    #[test]
+    fn media_query_not_keyword_must_be_separated() {
+        // `notepad` (или другой ident, начинающийся с `not`) — НЕ keyword.
+        let q = parse_media_query("notepad");
+        // Trim+lower → media-type "notepad". Не матчит на screen.
+        assert!(!q.clauses[0].negated);
+        assert_eq!(q.clauses[0].conditions.len(), 1);
+    }
+
+    #[test]
+    fn media_query_prefers_color_scheme_light_default() {
+        let q = parse_media_query("(prefers-color-scheme: light)");
+        assert!(q.matches(&screen_ctx(500.0)));
+    }
+
+    #[test]
+    fn media_query_prefers_color_scheme_dark_matches_when_dark() {
+        let q = parse_media_query("(prefers-color-scheme: dark)");
+        let mut ctx = screen_ctx(500.0);
+        ctx.prefers_dark = true;
+        assert!(q.matches(&ctx));
+        ctx.prefers_dark = false;
+        assert!(!q.matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_not_prefers_dark() {
+        // На светлой теме `not (prefers-color-scheme: dark)` должно матчить.
+        let q = parse_media_query("not all and (prefers-color-scheme: dark)");
+        assert!(q.clauses[0].negated);
+        assert!(q.matches(&screen_ctx(500.0)));
+        let mut dark = screen_ctx(500.0);
+        dark.prefers_dark = true;
+        assert!(!q.matches(&dark));
     }
 }
