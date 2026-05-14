@@ -1299,6 +1299,7 @@ impl ObjectPosition {
     ///   - axis-keywords `left|right|top|bottom`,
     ///   - один token (`50%`, `10px`, keyword) — второй = `center`,
     ///   - два token-а — первый x, второй y.
+    ///
     /// Tri- и quad-форма (`<keyword> <length> <keyword> <length>` для
     /// сторон-якорей) — отложены: на современных страницах редкость.
     pub fn parse(s: &str, em_basis: f32, viewport: Size) -> Option<Self> {
