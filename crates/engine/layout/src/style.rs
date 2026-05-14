@@ -682,6 +682,73 @@ pub struct ComputedStyle {
     pub transition_durations: Vec<f32>,
     /// CSS Transitions L1 §3 — `transition-delay: <time>+` в секундах.
     pub transition_delays: Vec<f32>,
+    /// CSS Masking L1 §4 — `mask-image: url(...) | linear-gradient(...) | none`.
+    /// `BackgroundImage` переиспользуется как тип (same structure: None/Url/Gradient).
+    pub mask_image: BackgroundImage,
+    /// CSS Masking L1 §4 — `mask-repeat`. Те же значения, что у background-repeat.
+    pub mask_repeat: BackgroundRepeat,
+    /// CSS Masking L1 §4 — `mask-size`.
+    pub mask_size: BackgroundSize,
+    /// CSS Scrollbars 1 — `scrollbar-width: auto | thin | none`.
+    pub scrollbar_width: ScrollbarWidth,
+    /// CSS Scrollbars 1 — `scrollbar-color: auto | <color> <color>`
+    /// (thumb-color + track-color).
+    pub scrollbar_color: Option<(Color, Color)>,
+    /// CSS Overflow L3 — `scrollbar-gutter: auto | stable | stable both-edges`.
+    pub scrollbar_gutter: ScrollbarGutter,
+}
+
+/// CSS Scrollbars 1 — `scrollbar-width`. Inherited.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollbarWidth {
+    #[default]
+    Auto,
+    /// `thin` — тонкий scrollbar.
+    Thin,
+    /// `none` — без visible scrollbar (контент всё ещё скроллится через
+    /// keyboard / touch / programmatic).
+    None,
+}
+
+impl ScrollbarWidth {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "thin" => Some(Self::Thin),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Overflow L3 — `scrollbar-gutter`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollbarGutter {
+    /// `auto` (default) — gutter появляется когда overflow:scroll.
+    #[default]
+    Auto,
+    /// `stable` — gutter всегда зарезервирован (не двигает контент при scroll).
+    Stable,
+    /// `stable both-edges` — gutter на обоих краях для симметрии.
+    StableBothEdges,
+}
+
+impl ScrollbarGutter {
+    pub fn parse(s: &str) -> Option<Self> {
+        let lc = s.trim().to_ascii_lowercase();
+        if lc == "auto" {
+            return Some(Self::Auto);
+        }
+        if lc == "stable" {
+            return Some(Self::Stable);
+        }
+        // `stable both-edges` — двухтокеновая форма.
+        let tokens: Vec<&str> = lc.split_whitespace().collect();
+        if tokens == ["stable", "both-edges"] {
+            return Some(Self::StableBothEdges);
+        }
+        None
+    }
 }
 
 /// CSS Lists L3 §2.1 — markers для list items.
@@ -1204,6 +1271,12 @@ impl ComputedStyle {
             transition_properties: Vec::new(),
             transition_durations: Vec::new(),
             transition_delays: Vec::new(),
+            mask_image: BackgroundImage::None,
+            mask_repeat: BackgroundRepeat::Repeat,
+            mask_size: BackgroundSize::Auto,
+            scrollbar_width: ScrollbarWidth::Auto,
+            scrollbar_color: None,
+            scrollbar_gutter: ScrollbarGutter::Auto,
         }
     }
 }
@@ -1334,6 +1407,15 @@ pub fn compute_style(
         transition_properties: Vec::new(),
         transition_durations: Vec::new(),
         transition_delays: Vec::new(),
+        // CSS Masking — не наследуется.
+        mask_image: BackgroundImage::None,
+        mask_repeat: BackgroundRepeat::Repeat,
+        mask_size: BackgroundSize::Auto,
+        // CSS Scrollbars — scrollbar-width/-color inherited;
+        // scrollbar-gutter не наследуется.
+        scrollbar_width: inherited.scrollbar_width,
+        scrollbar_color: inherited.scrollbar_color,
+        scrollbar_gutter: ScrollbarGutter::Auto,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -4018,6 +4100,96 @@ fn apply_declaration(
         }
         "transition-delay" => {
             style.transition_delays = parse_time_list(val);
+        }
+        "mask-image" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.mask_image = BackgroundImage::None;
+            } else if let Some(u) = parse_url_value(trimmed) {
+                style.mask_image = BackgroundImage::Url(u);
+            } else if is_gradient_function(trimmed) {
+                style.mask_image = BackgroundImage::Gradient(trimmed.to_string());
+            }
+        }
+        "mask-repeat" => {
+            if let Some(v) = BackgroundRepeat::parse(val) {
+                style.mask_repeat = v;
+            }
+        }
+        "mask-size" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.mask_size = BackgroundSize::Auto;
+            } else if trimmed.eq_ignore_ascii_case("cover") {
+                style.mask_size = BackgroundSize::Cover;
+            } else if trimmed.eq_ignore_ascii_case("contain") {
+                style.mask_size = BackgroundSize::Contain;
+            } else {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                let w = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport));
+                let h = parts.get(1).and_then(|s| {
+                    if s.eq_ignore_ascii_case("auto") {
+                        None
+                    } else {
+                        resolve_box_length(s, em_basis, viewport)
+                    }
+                });
+                if let Some(w) = w {
+                    style.mask_size = BackgroundSize::Length(w, h);
+                }
+            }
+        }
+        "scrollbar-width" => {
+            if let Some(v) = ScrollbarWidth::parse(val) {
+                style.scrollbar_width = v;
+            }
+        }
+        "scrollbar-color" => {
+            // `auto` или два цвета (thumb + track).
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.scrollbar_color = None;
+            } else {
+                // Парсим два color-значения, разделённые whitespace.
+                // Простая реализация: split по `)` чтобы разделить
+                // `rgb(...)` пары. Иначе — split_whitespace.
+                let mut pieces: Vec<String> = Vec::new();
+                let mut current = String::new();
+                let mut depth = 0i32;
+                for c in trimmed.chars() {
+                    current.push(c);
+                    if c == '(' {
+                        depth += 1;
+                    } else if c == ')' {
+                        depth -= 1;
+                        if depth == 0 {
+                            pieces.push(current.trim().to_string());
+                            current.clear();
+                        }
+                    } else if c.is_whitespace() && depth == 0 && !current.trim().is_empty() {
+                        let trimmed_piece = current.trim().to_string();
+                        if !trimmed_piece.is_empty() {
+                            pieces.push(trimmed_piece);
+                        }
+                        current.clear();
+                    }
+                }
+                if !current.trim().is_empty() {
+                    pieces.push(current.trim().to_string());
+                }
+                pieces.retain(|p| !p.is_empty());
+                if pieces.len() == 2
+                    && let (Some(thumb), Some(track)) =
+                        (parse_color(&pieces[0]), parse_color(&pieces[1]))
+                {
+                    style.scrollbar_color = Some((thumb, track));
+                }
+            }
+        }
+        "scrollbar-gutter" => {
+            if let Some(v) = ScrollbarGutter::parse(val) {
+                style.scrollbar_gutter = v;
+            }
         }
         "place-content" => {
             let parts: Vec<&str> = val.split_whitespace().collect();
