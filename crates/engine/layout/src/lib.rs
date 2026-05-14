@@ -20,11 +20,12 @@ pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, 
 pub use snapshot::serialize_layout_tree;
 pub use style::{
     parse_css_wide_keyword, AlignValue, BackgroundAttachment, BackgroundImage, BackgroundRepeat,
-    BackgroundSize, BorderStyle, BoxShadow, BoxSizing, ClipPath, Color, ComputedStyle,
-    CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle, FontVariant,
-    FontWeight, Hyphens, ListStylePosition, ListStyleType, Overflow, OverflowWrap, PointerEvents,
-    ScrollBehavior, ScrollbarGutter, ScrollbarWidth, TextAlign, TextDecorationLine, TextOverflow,
-    TextShadow, TextTransform, TransformFn, UserSelect, Visibility, WhiteSpace, WordBreak,
+    BackgroundSize, BorderStyle, BoxShadow, BoxSizing, ClipPath, Color, ComputedStyle, Content,
+    ContentItem, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle,
+    FontVariant, FontWeight, Hyphens, ListStylePosition, ListStyleType, Overflow, OverflowWrap,
+    PointerEvents, ScrollBehavior, ScrollbarGutter, ScrollbarWidth, TextAlign, TextDecorationLine,
+    TextOverflow, TextShadow, TextTransform, TransformFn, UserSelect, Visibility, WhiteSpace,
+    WordBreak,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.

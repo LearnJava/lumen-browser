@@ -696,6 +696,53 @@ pub struct ComputedStyle {
     pub scrollbar_color: Option<(Color, Color)>,
     /// CSS Overflow L3 — `scrollbar-gutter: auto | stable | stable both-edges`.
     pub scrollbar_gutter: ScrollbarGutter,
+    /// CSS Content L3 §2.1 — `content`. Используется в pseudo-elements
+    /// (`::before` / `::after`) и для counter()-разрешения. Phase 0:
+    /// parsing + storage; реальные pseudo-elements в layout — отдельная
+    /// большая задача. Default `Normal` (use element's box-tree).
+    pub content: Content,
+}
+
+/// CSS Content L3 — value свойства `content`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Content {
+    /// `normal` (default) — поведение по умолчанию для каждого element.
+    #[default]
+    Normal,
+    /// `none` — pseudo-element не генерируется.
+    None,
+    /// Список фрагментов: строки, counter()/counters(), attr(), url().
+    /// Phase 0 хранит список typed-фрагментов; конкатенация для render —
+    /// задача paint pipeline.
+    Items(Vec<ContentItem>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContentItem {
+    /// Литеральная строка из CSS-string-literal (без кавычек).
+    String(String),
+    /// `attr(name)` — значение HTML-атрибута текущего element.
+    Attr(String),
+    /// `url("path")` — изображение / external resource.
+    Url(String),
+    /// `counter(name [, style])` — значение counter-а. `style` — пока
+    /// сырая строка (Phase 0 разрешит только `decimal` etc.).
+    Counter {
+        name: String,
+        style: Option<String>,
+    },
+    /// `counters(name, separator [, style])` — вложенные counters
+    /// (`1.2.3` через `.`).
+    Counters {
+        name: String,
+        separator: String,
+        style: Option<String>,
+    },
+    /// `open-quote` / `close-quote` — quotation marks per `quotes` property.
+    OpenQuote,
+    CloseQuote,
+    NoOpenQuote,
+    NoCloseQuote,
 }
 
 /// CSS Scrollbars 1 — `scrollbar-width`. Inherited.
@@ -1277,6 +1324,7 @@ impl ComputedStyle {
             scrollbar_width: ScrollbarWidth::Auto,
             scrollbar_color: None,
             scrollbar_gutter: ScrollbarGutter::Auto,
+            content: Content::Normal,
         }
     }
 }
@@ -1416,6 +1464,7 @@ pub fn compute_style(
         scrollbar_width: inherited.scrollbar_width,
         scrollbar_color: inherited.scrollbar_color,
         scrollbar_gutter: ScrollbarGutter::Auto,
+        content: Content::Normal,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -4191,6 +4240,19 @@ fn apply_declaration(
                 style.scrollbar_gutter = v;
             }
         }
+        "content" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("normal") {
+                style.content = Content::Normal;
+            } else if trimmed.eq_ignore_ascii_case("none") {
+                style.content = Content::None;
+            } else {
+                let items = parse_content_items(trimmed);
+                if !items.is_empty() {
+                    style.content = Content::Items(items);
+                }
+            }
+        }
         "place-content" => {
             let parts: Vec<&str> = val.split_whitespace().collect();
             if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
@@ -5176,6 +5238,118 @@ fn parse_filter_list(s: &str) -> Vec<FilterFn> {
         }
     }
     out
+}
+
+/// CSS Content L3 — парсер `content` value на список `ContentItem`.
+/// Whitespace-separated; кавычки литералов и `()` функций соблюдаются.
+fn parse_content_items(s: &str) -> Vec<ContentItem> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Skip whitespace.
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let c = bytes[i];
+        if c == b'"' || c == b'\'' {
+            let quote = c;
+            i += 1;
+            let start = i;
+            while i < bytes.len() && bytes[i] != quote {
+                i += 1;
+            }
+            let literal = &s[start..i];
+            out.push(ContentItem::String(literal.to_string()));
+            if i < bytes.len() {
+                i += 1; // closing quote
+            }
+        } else if c.is_ascii_alphabetic() || c == b'-' {
+            // Ident, может быть keyword (open-quote/...) или function-call.
+            let name_start = i;
+            while i < bytes.len()
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-')
+            {
+                i += 1;
+            }
+            let name = s[name_start..i].to_ascii_lowercase();
+            if i < bytes.len() && bytes[i] == b'(' {
+                // Function call. Find matching `)`.
+                i += 1;
+                let args_start = i;
+                let mut depth = 1usize;
+                while i < bytes.len() && depth > 0 {
+                    match bytes[i] {
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                let args = &s[args_start..i.saturating_sub(1)];
+                if let Some(item) = parse_content_fn(&name, args) {
+                    out.push(item);
+                }
+            } else {
+                // Keyword.
+                match name.as_str() {
+                    "open-quote" => out.push(ContentItem::OpenQuote),
+                    "close-quote" => out.push(ContentItem::CloseQuote),
+                    "no-open-quote" => out.push(ContentItem::NoOpenQuote),
+                    "no-close-quote" => out.push(ContentItem::NoCloseQuote),
+                    _ => {}  // unknown ident — skip
+                }
+            }
+        } else {
+            i += 1;  // skip unknown character
+        }
+    }
+    out
+}
+
+fn parse_content_fn(name: &str, args: &str) -> Option<ContentItem> {
+    match name {
+        "url" => {
+            let inner = args.trim().trim_matches(['"', '\''].as_ref());
+            Some(ContentItem::Url(inner.to_string()))
+        }
+        "attr" => {
+            let attr_name = args.trim().trim_matches(['"', '\''].as_ref());
+            if attr_name.is_empty() {
+                None
+            } else {
+                Some(ContentItem::Attr(attr_name.to_string()))
+            }
+        }
+        "counter" => {
+            let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+            let counter_name = parts.first()?.to_string();
+            if counter_name.is_empty() {
+                return None;
+            }
+            let style = parts.get(1).map(|s| s.to_string());
+            Some(ContentItem::Counter {
+                name: counter_name,
+                style,
+            })
+        }
+        "counters" => {
+            let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+            let counter_name = parts.first()?.to_string();
+            let separator_raw = parts.get(1)?;
+            let separator = separator_raw.trim_matches(['"', '\''].as_ref()).to_string();
+            let style = parts.get(2).map(|s| s.to_string());
+            Some(ContentItem::Counters {
+                name: counter_name,
+                separator,
+                style,
+            })
+        }
+        _ => None,
+    }
 }
 
 /// CSS Values L4 §8 — список `<time>` значений через запятую.
