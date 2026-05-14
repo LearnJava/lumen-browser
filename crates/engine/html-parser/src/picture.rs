@@ -40,11 +40,23 @@ use crate::srcset::{
     parse_sizes, parse_srcset, pick_best_for_density, pick_best_for_width,
 };
 
-/// Финальный URL выбранного источника. Дополнительные поля (intrinsic
-/// dimensions, MIME) добавим, когда понадобятся paint-pipeline-у.
+/// Финальный URL выбранного источника плюс author-объявленные
+/// intrinsic-размеры в CSS-пикселях (HTML5 §10 «Mapped attributes»:
+/// `<source width|height>` и `<img width|height>` integer-атрибуты).
+///
+/// `intrinsic_width` / `intrinsic_height` существуют ДО загрузки
+/// картинки и нужны для CLS-protection (Cumulative Layout Shift) —
+/// layout резервирует место под коробку до декодирования. Если у
+/// выбранного источника соответствующего атрибута нет либо он невалиден
+/// (отрицательный, не-целое, `%`) — поле = `None`.
+///
+/// MIME-тип и реальные пиксельные размеры (после decode) — отдельная
+/// история, остаются работой image-pipeline-а.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PickedSource {
     pub url: String,
+    pub intrinsic_width: Option<u32>,
+    pub intrinsic_height: Option<u32>,
 }
 
 /// Параметры picker-а.
@@ -133,8 +145,9 @@ pub fn pick_img_source(
     }
 
     if let Some(srcset) = node.get_attr("srcset")
-        && let Some(picked) = pick_from_srcset(srcset, node.get_attr("sizes"), viewport, dpr)
+        && let Some(mut picked) = pick_from_srcset(srcset, node.get_attr("sizes"), viewport, dpr)
     {
+        fill_intrinsic_dims(node, &mut picked);
         return Some(picked);
     }
 
@@ -142,9 +155,13 @@ pub fn pick_img_source(
     if src.is_empty() {
         return None;
     }
-    Some(PickedSource {
+    let mut picked = PickedSource {
         url: src.to_string(),
-    })
+        intrinsic_width: None,
+        intrinsic_height: None,
+    };
+    fill_intrinsic_dims(node, &mut picked);
+    Some(picked)
 }
 
 /// Попытаться выбрать URL из одного `<source>` элемента.
@@ -170,7 +187,57 @@ fn try_pick_source(
         return None;
     }
 
-    pick_from_srcset(srcset, node.get_attr("sizes"), params.viewport, params.dpr)
+    let mut picked =
+        pick_from_srcset(srcset, node.get_attr("sizes"), params.viewport, params.dpr)?;
+    fill_intrinsic_dims(node, &mut picked);
+    Some(picked)
+}
+
+/// Прочитать author-объявленные `width` / `height` атрибуты у элемента
+/// и записать их в `picked` (HTML5 §10 «mapped attributes»).
+/// Невалидные значения (negative, non-integer, percentage) — оставляем
+/// `None` (= author не дал hint).
+fn fill_intrinsic_dims(node: &lumen_dom::Node, picked: &mut PickedSource) {
+    if picked.intrinsic_width.is_none()
+        && let Some(w) = node.get_attr("width").and_then(parse_dim_attr)
+    {
+        picked.intrinsic_width = Some(w);
+    }
+    if picked.intrinsic_height.is_none()
+        && let Some(h) = node.get_attr("height").and_then(parse_dim_attr)
+    {
+        picked.intrinsic_height = Some(h);
+    }
+}
+
+/// HTML5 «rules for parsing non-negative integers» (упрощённая для
+/// presentational `<img|source width|height>`): trim, optional `+` или
+/// digit-prefix, остаток после первой нецифры игнорируется. `-…` или
+/// `…%` или пустые цифры → `None`. Pure integer пикселей; `%`-форма не
+/// подходит для intrinsic-hint (нужен containing-block, которого здесь
+/// нет — мы работаем в preload-scanner-е до layout-а).
+fn parse_dim_attr(s: &str) -> Option<u32> {
+    let s = s.trim();
+    if s.is_empty() || s.ends_with('%') {
+        return None;
+    }
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    if bytes[0] == b'+' {
+        i = 1;
+    } else if bytes[0] == b'-' {
+        // Отрицательный intrinsic невалиден — даже если за минусом
+        // идут цифры.
+        return None;
+    }
+    let start = i;
+    while i < bytes.len() && bytes[i].is_ascii_digit() {
+        i += 1;
+    }
+    if i == start {
+        return None;
+    }
+    s[start..i].parse::<u32>().ok()
 }
 
 /// Picker для пары (srcset, sizes). Width-picker используется, если есть
@@ -201,6 +268,8 @@ fn pick_from_srcset(
     };
     picked.map(|c| PickedSource {
         url: c.url.clone(),
+        intrinsic_width: None,
+        intrinsic_height: None,
     })
 }
 
@@ -681,5 +750,133 @@ mod tests {
         assert!((p.viewport.width_px - 1024.0).abs() < f32::EPSILON);
         assert!((p.dpr - 1.0).abs() < f32::EPSILON);
         assert!(p.supported_types.is_none());
+    }
+
+    // ──────── intrinsic dimensions ────────
+
+    #[test]
+    fn img_width_height_attrs_become_intrinsic() {
+        let doc = parse(r#"<img src="cat.png" width="320" height="240">"#);
+        let id = first_element(&doc, "img").unwrap();
+        let p = pick_img_source(&doc, id, viewport_1024(), 1.0).unwrap();
+        assert_eq!(p.url, "cat.png");
+        assert_eq!(p.intrinsic_width, Some(320));
+        assert_eq!(p.intrinsic_height, Some(240));
+    }
+
+    #[test]
+    fn img_no_dim_attrs_yields_none_intrinsic() {
+        let doc = parse(r#"<img src="cat.png">"#);
+        let id = first_element(&doc, "img").unwrap();
+        let p = pick_img_source(&doc, id, viewport_1024(), 1.0).unwrap();
+        assert_eq!(p.intrinsic_width, None);
+        assert_eq!(p.intrinsic_height, None);
+    }
+
+    #[test]
+    fn img_partial_dims_only_present_one() {
+        let doc = parse(r#"<img src="cat.png" width="100">"#);
+        let id = first_element(&doc, "img").unwrap();
+        let p = pick_img_source(&doc, id, viewport_1024(), 1.0).unwrap();
+        assert_eq!(p.intrinsic_width, Some(100));
+        assert_eq!(p.intrinsic_height, None);
+    }
+
+    #[test]
+    fn img_invalid_dim_attrs_drop_to_none() {
+        // negative, percentage, нечисловое — все игнорируются.
+        let doc = parse(r#"<img src="cat.png" width="-50" height="50%">"#);
+        let id = first_element(&doc, "img").unwrap();
+        let p = pick_img_source(&doc, id, viewport_1024(), 1.0).unwrap();
+        assert_eq!(p.intrinsic_width, None);
+        assert_eq!(p.intrinsic_height, None);
+    }
+
+    #[test]
+    fn img_dim_attrs_via_srcset_pick() {
+        // srcset-выбор не теряет intrinsic-атрибуты у `<img>`.
+        let doc = parse(r#"<img srcset="lo.png 1x, hi.png 2x" width="500" height="250">"#);
+        let id = first_element(&doc, "img").unwrap();
+        let p = pick_img_source(&doc, id, viewport_1024(), 2.0).unwrap();
+        assert_eq!(p.url, "hi.png");
+        assert_eq!(p.intrinsic_width, Some(500));
+        assert_eq!(p.intrinsic_height, Some(250));
+    }
+
+    #[test]
+    fn picture_source_width_height_attrs() {
+        // Выбранный <source> диктует intrinsic — `<img>`-fallback не дёргается.
+        let html = r#"
+            <picture>
+              <source media="(min-width: 600px)" srcset="m.png" width="800" height="400">
+              <img src="x.png" width="100" height="50">
+            </picture>
+        "#;
+        let doc = parse(html);
+        let id = first_element(&doc, "picture").unwrap();
+        let p = params(viewport_1024(), 1.0);
+        let picked = pick_picture_source(&doc, id, &p).unwrap();
+        assert_eq!(picked.url, "m.png");
+        assert_eq!(picked.intrinsic_width, Some(800));
+        assert_eq!(picked.intrinsic_height, Some(400));
+    }
+
+    #[test]
+    fn picture_img_fallback_uses_img_dims() {
+        // Ни один <source> не подошёл — fallback на <img>, intrinsic от него.
+        let html = r#"
+            <picture>
+              <source media="(min-width: 2000px)" srcset="huge.png" width="1600" height="900">
+              <img src="small.png" width="320" height="180">
+            </picture>
+        "#;
+        let doc = parse(html);
+        let id = first_element(&doc, "picture").unwrap();
+        let p = params(viewport_1024(), 1.0);
+        let picked = pick_picture_source(&doc, id, &p).unwrap();
+        assert_eq!(picked.url, "small.png");
+        assert_eq!(picked.intrinsic_width, Some(320));
+        assert_eq!(picked.intrinsic_height, Some(180));
+    }
+
+    // ──────── parse_dim_attr ────────
+
+    #[test]
+    fn dim_attr_plain_integer() {
+        assert_eq!(parse_dim_attr("100"), Some(100));
+        assert_eq!(parse_dim_attr("  42  "), Some(42));
+        assert_eq!(parse_dim_attr("0"), Some(0));
+    }
+
+    #[test]
+    fn dim_attr_leading_plus_ok() {
+        assert_eq!(parse_dim_attr("+50"), Some(50));
+    }
+
+    #[test]
+    fn dim_attr_trailing_garbage_truncated() {
+        // HTML5 «rules for parsing dimensions» — берёт digit-префикс.
+        assert_eq!(parse_dim_attr("320px"), Some(320));
+        assert_eq!(parse_dim_attr("128abc"), Some(128));
+    }
+
+    #[test]
+    fn dim_attr_negative_rejected() {
+        assert_eq!(parse_dim_attr("-100"), None);
+        assert_eq!(parse_dim_attr("-0"), None);
+    }
+
+    #[test]
+    fn dim_attr_percentage_rejected() {
+        assert_eq!(parse_dim_attr("50%"), None);
+        assert_eq!(parse_dim_attr("100%"), None);
+    }
+
+    #[test]
+    fn dim_attr_empty_or_non_digit() {
+        assert_eq!(parse_dim_attr(""), None);
+        assert_eq!(parse_dim_attr("   "), None);
+        assert_eq!(parse_dim_attr("auto"), None);
+        assert_eq!(parse_dim_attr("+"), None);
     }
 }
