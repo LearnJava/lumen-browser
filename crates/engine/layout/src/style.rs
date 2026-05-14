@@ -637,6 +637,89 @@ pub struct ComputedStyle {
     pub background_repeat: BackgroundRepeat,
     pub background_size: BackgroundSize,
     pub background_attachment: BackgroundAttachment,
+    /// CSS Will Change L1. Список имён свойств для optimization hint.
+    /// Пустой Vec = `auto` (default). Не наследуется.
+    pub will_change: Vec<String>,
+    /// CSS Pointer Events L1. Default `auto`. Не наследуется.
+    pub pointer_events: PointerEvents,
+    /// CSS UI L4 §6.2 — `user-select`. Inherited (по спеке).
+    pub user_select: UserSelect,
+    /// CSS Overflow L3 — `scroll-behavior`. Inherited.
+    pub scroll_behavior: ScrollBehavior,
+}
+
+/// CSS Pointer Events L1. Default `auto`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PointerEvents {
+    #[default]
+    Auto,
+    None,
+    Visible,
+    /// `painted` / `fill` / `stroke` / `all` — для SVG. В non-SVG
+    /// контексте трактуются как `auto`.
+    Painted,
+    Fill,
+    Stroke,
+    All,
+}
+
+impl PointerEvents {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "none" => Some(Self::None),
+            "visible" | "visiblepainted" | "visiblefill" | "visiblestroke" => {
+                Some(Self::Visible)
+            }
+            "painted" => Some(Self::Painted),
+            "fill" => Some(Self::Fill),
+            "stroke" => Some(Self::Stroke),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
+/// CSS UI L4 §6.2 — `user-select`. Inherited.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UserSelect {
+    #[default]
+    Auto,
+    Text,
+    None,
+    Contain,
+    All,
+}
+
+impl UserSelect {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "text" => Some(Self::Text),
+            "none" => Some(Self::None),
+            "contain" => Some(Self::Contain),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Overflow L3 — `scroll-behavior`. Inherited.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollBehavior {
+    #[default]
+    Auto,
+    Smooth,
+}
+
+impl ScrollBehavior {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "smooth" => Some(Self::Smooth),
+            _ => None,
+        }
+    }
 }
 
 /// CSS Backgrounds L3 §3.1 — `background-image` value.
@@ -927,6 +1010,10 @@ impl ComputedStyle {
             background_repeat: BackgroundRepeat::Repeat,
             background_size: BackgroundSize::Auto,
             background_attachment: BackgroundAttachment::Scroll,
+            will_change: Vec::new(),
+            pointer_events: PointerEvents::Auto,
+            user_select: UserSelect::Auto,
+            scroll_behavior: ScrollBehavior::Auto,
         }
     }
 }
@@ -1034,6 +1121,12 @@ pub fn compute_style(
         background_repeat: BackgroundRepeat::Repeat,
         background_size: BackgroundSize::Auto,
         background_attachment: BackgroundAttachment::Scroll,
+        // Will Change / Pointer Events — не наследуются.
+        will_change: Vec::new(),
+        pointer_events: PointerEvents::Auto,
+        // User Select / Scroll Behavior — наследуются.
+        user_select: inherited.user_select,
+        scroll_behavior: inherited.scroll_behavior,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -3573,6 +3666,35 @@ fn apply_declaration(
         "background-attachment" => {
             if let Some(v) = BackgroundAttachment::parse(val) {
                 style.background_attachment = v;
+            }
+        }
+        "will-change" => {
+            // CSS Will Change L1: `auto | <ident-list>`. Lenient parser —
+            // comma-separated ident-имена.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.will_change = Vec::new();
+            } else {
+                style.will_change = trimmed
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty() && is_css_ident(s))
+                    .collect();
+            }
+        }
+        "pointer-events" => {
+            if let Some(v) = PointerEvents::parse(val) {
+                style.pointer_events = v;
+            }
+        }
+        "user-select" => {
+            if let Some(v) = UserSelect::parse(val) {
+                style.user_select = v;
+            }
+        }
+        "scroll-behavior" => {
+            if let Some(v) = ScrollBehavior::parse(val) {
+                style.scroll_behavior = v;
             }
         }
         "place-content" => {
