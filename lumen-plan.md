@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-_(никто ничего не зарезервировал)_
+- 🔄 claudemd-adr-migration — claudemd-adr-migration — 2026-05-14
 
 
 ## Статус реализации
@@ -122,7 +122,7 @@ _(никто ничего не зарезервировал)_
 ### Очень большое (Phase 3+)
 
 20. **`[P4]` V8 переход** с `rusty_v8`. Реализуем `JsRuntime` для V8, не ломая QuickJS path.
-21. **`[P4]` `lumen-ai` крейт** (§12.5) — embedding + RAG + LLM-backend через Ollama HTTP (без exception, используем существующий `lumen-network`). Встроенный llama.cpp как exception #5 — отвергнут (см. Decisions log).
+21. **`[P4]` `lumen-ai` крейт** (§12.5) — embedding + RAG + LLM-backend через Ollama HTTP (без exception, используем существующий `lumen-network`). Встроенный llama.cpp как exception #5 — отвергнут (см. [DECISIONS.md](DECISIONS.md)).
 22. **`[P3+P4]` Семантические закладки** (§12.8) — требует §12.5 (lumen-ai от P4). P3 — storage для эмбеддингов; P4 — AI integration.
 23. **`[P3+P4]` Service Workers** (P3 fetch interception backend + push delivery + bg sync queue; P4 worker JS context + lifecycle) · **`[P2]` Canvas 2D** · **`[P3+P4]` IndexedDB** (P3 storage backend поверх SQLite; P4 JS API surface).
 24. **`[P2]` WebFonts через WOFF2** в `lumen-font`.
