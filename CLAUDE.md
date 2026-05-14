@@ -585,7 +585,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 ### Численно
 
-- **Всего тестов в workspace:** 1647 (после merge css-mask-scrollbar-storage).
+- **Всего тестов в workspace:** 1673 (после merge css-content-web-platform).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 3 активных (winit, wgpu, SQLite через rusqlite/bundled) + 2 зарезервированных (rustls активирован в lumen-network, JS engine).
 - **Транзитивно через wgpu/winit:** ~200 crates.
@@ -700,6 +700,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 Чтобы быстро понять, что было сделано в недавних сессиях. Последние сверху.
 
 ```
+*            css-content-web-platform — CSS Generated Content L3 §3 `content` property (Content {Normal/None/Items}, ContentItem {String/Attr/Url/Counter/Counters/Open/CloseQuote/NoOpen/NoCloseQuote}; парсер принимает strings, url()/attr()/counter()/counters() function-calls и quote-keywords; реальная вставка ::before/::after отложена). Web Platform storage: WebManifests (per-origin PWA manifest JSON + installed-flag), ServiceWorkers (registrations per (origin,scope) с UpdateViaCache enum + find_for_url longest-prefix-match + touch), PushSubscriptions (VAPID p256dh/auth keys + user_visible_only). Все на Mutex<Connection> + WAL + ON CONFLICT DO UPDATE. 26 новых storage тестов (7+10+9). [P1+P3]
 *            css-mask-scrollbar-storage — CSS mask-* (CSS Masking L1 §4, переиспользует BackgroundImage/Repeat/Size типы), scrollbar-* (ScrollbarWidth/Color/Gutter, color с rgb() balanced parser), Autofill (per-origin field-values с frequency для autocomplete), Notifications (Web Notifications API persistence с tag-replace logic). 12 layout + 24 storage тестов. [P1+P3]
 *            css-transform-extras-list-style — CSS properties + ReferrerPolicies storage. CSS Transforms L1 §6: transform-origin (x y z в px), perspective (Option<px>). CSS Lists L3 §2: list-style-type enum (11 типов markers с aliases), list-style-position, list-style-image (Option<URL>), list-style shorthand. CSS Transitions L1 §3: transition-property/-duration/-delay с parse_time_seconds helper (s/ms). ReferrerPolicies (W3C spec, 8 значений + per-origin SQLite storage + get_or_default). 18 layout-тестов + 14 storage-тестов. [P1+P3]
 *            storage-helpers-batch  — три storage-модуля в lumen-storage. SearchHistory: omnibox queries с dedup (normalized lowercase), prefix-match с SQL LIKE-escape, recent/popular API, 15 тестов. SiteEngagement: per-origin metrics (visit_count + total_time_seconds + last_visit) + score(now, half_life_days) exponential decay для omnibox ranking, 12 тестов. DnsCache: hostname→addresses (comma-separated multi-A) с TTL, поддержка Punycode и NXDOMAIN negative cache, 11 тестов. [P3]
