@@ -161,7 +161,7 @@ fn select(records: &[NameRecord], storage: &[u8], name_id: u16) -> Option<String
 }
 
 fn decode_utf16_be(bytes: &[u8]) -> Option<String> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return None;
     }
     let code_units: Vec<u16> = bytes

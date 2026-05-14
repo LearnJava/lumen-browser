@@ -22,6 +22,7 @@ pub mod loca;
 pub mod maxp;
 pub mod name;
 pub mod rasterizer;
+pub mod system_fonts;
 
 pub use binary::BinaryReader;
 pub use cmap::Cmap;
@@ -34,3 +35,4 @@ pub use loca::Loca;
 pub use maxp::Maxp;
 pub use name::Name;
 pub use rasterizer::{Bitmap, Rasterizer};
+pub use system_fonts::SystemFontIndex;
