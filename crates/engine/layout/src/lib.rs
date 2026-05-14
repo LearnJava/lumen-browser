@@ -20,12 +20,12 @@ pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, 
 pub use snapshot::serialize_layout_tree;
 pub use style::{
     parse_css_wide_keyword, AlignValue, BackgroundAttachment, BackgroundImage, BackgroundRepeat,
-    BackgroundSize, BorderStyle, BoxShadow, BoxSizing, ClipPath, Color, ComputedStyle, Content,
-    ContentItem, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle,
-    FontVariant, FontWeight, Hyphens, ListStylePosition, ListStyleType, Overflow, OverflowWrap,
-    PointerEvents, ScrollBehavior, ScrollbarGutter, ScrollbarWidth, TextAlign, TextDecorationLine,
-    TextOverflow, TextShadow, TextTransform, TransformFn, UserSelect, Visibility, WhiteSpace,
-    WordBreak,
+    BackgroundSize, BorderStyle, BoxShadow, BoxSizing, BreakValue, ClipPath, Color, ComputedStyle,
+    Content, ContentItem, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch,
+    FontStyle, FontVariant, FontWeight, Hyphens, ListStylePosition, ListStyleType, Overflow,
+    OverflowWrap, PointerEvents, ScrollBehavior, ScrollbarGutter, ScrollbarWidth, TextAlign,
+    TextDecorationLine, TextOverflow, TextShadow, TextTransform, TransformFn, UserSelect,
+    Visibility, WhiteSpace, WordBreak,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -4463,6 +4463,122 @@ mod tests {
     fn aspect_ratio_invalid_kept_unchanged() {
         let root = lay("<p>x</p>", "p { aspect-ratio: 16 / abc; }");
         assert_eq!(first_p_style(&root).aspect_ratio, None);
+    }
+
+    // ──────── CSS Multi-column L1 ────────
+
+    #[test]
+    fn column_count_integer() {
+        let root = lay("<p>x</p>", "p { column-count: 3; }");
+        assert_eq!(first_p_style(&root).column_count, Some(3));
+    }
+
+    #[test]
+    fn column_count_auto() {
+        let root = lay("<p>x</p>", "p { column-count: auto; }");
+        assert_eq!(first_p_style(&root).column_count, None);
+    }
+
+    #[test]
+    fn column_count_zero_rejected() {
+        let root = lay("<p>x</p>", "p { column-count: 0; }");
+        assert_eq!(first_p_style(&root).column_count, None);
+    }
+
+    #[test]
+    fn column_width_length() {
+        let root = lay("<p>x</p>", "p { column-width: 200px; }");
+        assert_eq!(first_p_style(&root).column_width, Some(200.0));
+    }
+
+    #[test]
+    fn column_width_auto() {
+        let root = lay("<p>x</p>", "p { column-width: auto; }");
+        assert_eq!(first_p_style(&root).column_width, None);
+    }
+
+    #[test]
+    fn columns_shorthand_both() {
+        let root = lay("<p>x</p>", "p { columns: 200px 3; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.column_width, Some(200.0));
+        assert_eq!(s.column_count, Some(3));
+    }
+
+    #[test]
+    fn columns_shorthand_width_only() {
+        let root = lay("<p>x</p>", "p { columns: 250px; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.column_width, Some(250.0));
+        assert_eq!(s.column_count, None);
+    }
+
+    #[test]
+    fn columns_shorthand_count_only() {
+        let root = lay("<p>x</p>", "p { columns: 4; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.column_count, Some(4));
+        assert_eq!(s.column_width, None);
+    }
+
+    #[test]
+    fn column_rule_individual() {
+        let root = lay(
+            "<p>x</p>",
+            "p { column-rule-width: 2px; column-rule-style: solid; }",
+        );
+        let s = first_p_style(&root);
+        assert!((s.column_rule_width - 2.0).abs() < 1e-6);
+        assert_eq!(s.column_rule_style, BorderStyle::Solid);
+    }
+
+    #[test]
+    fn column_rule_shorthand() {
+        let root = lay("<p>x</p>", "p { column-rule: 3px dashed; }");
+        let s = first_p_style(&root);
+        assert!((s.column_rule_width - 3.0).abs() < 1e-6);
+        assert_eq!(s.column_rule_style, BorderStyle::Dashed);
+    }
+
+    #[test]
+    fn column_span_all() {
+        let root = lay("<p>x</p>", "p { column-span: all; }");
+        assert!(first_p_style(&root).column_span_all);
+    }
+
+    #[test]
+    fn column_fill_balance() {
+        let root = lay("<p>x</p>", "p { column-fill: balance; }");
+        assert!(first_p_style(&root).column_fill_balance);
+    }
+
+    #[test]
+    fn break_before_avoid() {
+        let root = lay("<p>x</p>", "p { break-before: avoid; }");
+        assert_eq!(first_p_style(&root).break_before, BreakValue::Avoid);
+    }
+
+    #[test]
+    fn break_after_page() {
+        let root = lay("<p>x</p>", "p { break-after: page; }");
+        assert_eq!(first_p_style(&root).break_after, BreakValue::Page);
+    }
+
+    #[test]
+    fn break_inside_avoid_column() {
+        let root = lay("<p>x</p>", "p { break-inside: avoid-column; }");
+        assert_eq!(first_p_style(&root).break_inside, BreakValue::Avoid);
+    }
+
+    #[test]
+    fn column_count_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { column-count: 3; }",
+        );
+        // Дочерний p не должен унаследовать column-count (CSS Multi-column L1 §3.2 — не наследуется).
+        let p_style = nested_p_style(&root);
+        assert_eq!(p_style.column_count, None);
     }
 
     // ──────── mask-* + scrollbar-* ────────
