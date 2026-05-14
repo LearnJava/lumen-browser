@@ -234,10 +234,35 @@ impl InputType {
     }
 }
 
+/// Парсинг-режим документа по HTML5 §13.2.6.2 «The insertion mode».
+///
+/// Решается tree builder-ом по DOCTYPE-токену (см. §13.2.5.1
+/// «The initial insertion mode»). На один Document приходится один режим
+/// — он фиксируется в момент обработки первого DOCTYPE и больше не
+/// меняется. Используется hot-path-ами layout/cascade для переключения
+/// десятков legacy CSS-поведений (table sizing, body-background
+/// propagation, font-size в `<table>`, и т.д.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum DocumentMode {
+    /// Standards / no-quirks mode — действуют современные правила.
+    /// Сюда попадают `<!DOCTYPE html>` и большинство XHTML DOCTYPE.
+    #[default]
+    NoQuirks,
+    /// Quirks mode — legacy-режим без DOCTYPE или с устаревшими
+    /// PUBLIC IDs (HTML 2.0/3.x, HTML 4.x не-Strict без system_id).
+    Quirks,
+    /// Limited-quirks mode — узкий промежуточный режим для HTML 4.0/4.01
+    /// Frameset / Transitional с правильным system_id и XHTML 1.0
+    /// Frameset / Transitional. Большинство правил совпадает с
+    /// no-quirks, но несколько (например, table cellpadding) — quirks.
+    LimitedQuirks,
+}
+
 #[derive(Debug)]
 pub struct Document {
     nodes: Vec<Node>,
     root: NodeId,
+    mode: DocumentMode,
 }
 
 impl Default for Document {
@@ -256,11 +281,26 @@ impl Document {
         Self {
             nodes: vec![root_node],
             root: NodeId(0),
+            mode: DocumentMode::default(),
         }
     }
 
     pub fn root(&self) -> NodeId {
         self.root
+    }
+
+    /// Текущий парсинг-режим. Tree builder выставляет его при
+    /// обработке DOCTYPE (или его отсутствии в конце потока) — для
+    /// программно созданных документов и Document::new()-результата по
+    /// умолчанию NoQuirks.
+    pub fn mode(&self) -> DocumentMode {
+        self.mode
+    }
+
+    /// Установить режим. Использует tree builder при инициализации
+    /// документа — пользовательский код вызывает редко.
+    pub fn set_mode(&mut self, mode: DocumentMode) {
+        self.mode = mode;
     }
 
     pub fn get(&self, id: NodeId) -> &Node {
@@ -792,5 +832,24 @@ mod tests {
         assert!(InputType::Image.is_button_like());
         assert!(!InputType::Text.is_button_like());
         assert!(!InputType::Checkbox.is_button_like());
+    }
+
+    // ──────── DocumentMode ────────
+
+    #[test]
+    fn document_default_mode_is_no_quirks() {
+        let doc = Document::new();
+        assert_eq!(doc.mode(), DocumentMode::NoQuirks);
+    }
+
+    #[test]
+    fn document_mode_can_be_set() {
+        let mut doc = Document::new();
+        doc.set_mode(DocumentMode::Quirks);
+        assert_eq!(doc.mode(), DocumentMode::Quirks);
+        doc.set_mode(DocumentMode::LimitedQuirks);
+        assert_eq!(doc.mode(), DocumentMode::LimitedQuirks);
+        doc.set_mode(DocumentMode::NoQuirks);
+        assert_eq!(doc.mode(), DocumentMode::NoQuirks);
     }
 }
