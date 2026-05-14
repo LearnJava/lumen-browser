@@ -846,6 +846,7 @@ impl NetworkTransport for HttpClient {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_core::ext::{HttpAuthChallenge, HttpCredentials};
 
     #[test]
     fn require_http_scheme_http_default_port() {
@@ -2012,6 +2013,386 @@ mod tests {
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body, b"full");
         assert!(resp.content_range.is_none());
+
+        server.join().unwrap();
+    }
+
+    // ── HTTP auth (Basic + Digest) ───────────────────────────────────────────
+
+    /// Mock-сервер для auth-сценариев: каждое соединение получает request
+    /// (полностью), сохраняет его в shared Vec и отвечает тем, что вернёт
+    /// `responder(request_index, request_text)`. Это и заменяет
+    /// «expectation matcher» из крупных testing-фреймворков — тест после
+    /// `client.fetch` читает captured requests и assert-ит на Authorization.
+    fn mock_auth_server<F>(
+        accept_count: usize,
+        captured: Arc<Mutex<Vec<String>>>,
+        responder: F,
+    ) -> (u16, thread::JoinHandle<()>)
+    where
+        F: Fn(usize, &str) -> Vec<u8> + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            for i in 1..=accept_count {
+                let (mut sock, _) = match listener.accept() {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let mut reader = BufReader::new(sock.try_clone().unwrap());
+                let mut req_text = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let is_terminator = line == "\r\n" || line == "\n";
+                    req_text.push_str(&line);
+                    if is_terminator {
+                        break;
+                    }
+                }
+                captured.lock().unwrap().push(req_text.clone());
+                let body = responder(i, &req_text);
+                let _ = sock.write_all(&body);
+                let _ = sock.shutdown(std::net::Shutdown::Both);
+            }
+        });
+        (port, handle)
+    }
+
+    fn extract_authorization(req: &str) -> Option<String> {
+        for line in req.lines() {
+            if let Some((k, v)) = line.split_once(':')
+                && k.trim().eq_ignore_ascii_case("authorization")
+            {
+                return Some(v.trim().to_string());
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn auth_basic_401_then_200_with_authorization_on_retry() {
+        // 1-й запрос — без Authorization → 401 + WWW-Authenticate Basic.
+        // 2-й запрос — с Authorization: Basic ... → 200 OK.
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_cl = captured.clone();
+        let (port, server) = mock_auth_server(2, captured_cl, |i, _req| match i {
+            1 => b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"WallyWorld\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\npayload".to_vec(),
+            _ => unreachable!(),
+        });
+
+        let provider = Arc::new(
+            StaticCredentialProvider::new().with(
+                &format!("http://127.0.0.1:{port}"),
+                "WallyWorld",
+                "Aladdin",
+                "open sesame",
+            ),
+        );
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_credentials(provider)
+            .with_sink(sink.clone());
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/secret")).unwrap();
+        let body = client.fetch(&url).expect("fetch should succeed after retry");
+        assert_eq!(body, b"payload");
+
+        let requests = captured.lock().unwrap().clone();
+        assert_eq!(requests.len(), 2);
+        assert!(
+            extract_authorization(&requests[0]).is_none(),
+            "first request must be sent without Authorization"
+        );
+        let auth_header = extract_authorization(&requests[1]).expect("second request needs Authorization");
+        assert_eq!(auth_header, "Basic QWxhZGRpbjpvcGVuIHNlc2FtZQ==");
+
+        // Events: Started, Completed(401), Started, Completed(200).
+        let events = sink.events();
+        assert_eq!(events.len(), 4, "expected 4 events for retry, got {events:?}");
+        assert!(matches!(events[1], Event::RequestCompleted { status: 401, .. }));
+        assert!(matches!(events[3], Event::RequestCompleted { status: 200, .. }));
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn auth_digest_md5_401_then_200_response_is_md5() {
+        // Сервер просит Digest MD5 — клиент должен вернуть Authorization:
+        // Digest username, realm, nonce, uri, response, qop, nc, cnonce.
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_cl = captured.clone();
+        let (port, server) = mock_auth_server(2, captured_cl, |i, _req| match i {
+            1 => b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Digest realm=\"r\", qop=\"auth\", nonce=\"N\", algorithm=MD5\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec(),
+            _ => unreachable!(),
+        });
+
+        let provider = Arc::new(
+            StaticCredentialProvider::new().with(
+                &format!("http://127.0.0.1:{port}"),
+                "r",
+                "u",
+                "p",
+            ),
+        );
+        let client = HttpClient::new().with_credentials(provider);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/path")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
+
+        let requests = captured.lock().unwrap().clone();
+        let auth = extract_authorization(&requests[1]).expect("Authorization on retry");
+        assert!(auth.starts_with("Digest "));
+        assert!(auth.contains("username=\"u\""));
+        assert!(auth.contains("realm=\"r\""));
+        assert!(auth.contains("nonce=\"N\""));
+        assert!(auth.contains("uri=\"/path\""));
+        assert!(auth.contains("qop=auth"));
+        assert!(auth.contains("algorithm=MD5"));
+        // response — 32 hex digits (MD5).
+        let resp_idx = auth.find("response=\"").unwrap() + "response=\"".len();
+        let resp_end = auth[resp_idx..].find('"').unwrap() + resp_idx;
+        assert_eq!(resp_end - resp_idx, 32);
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn auth_digest_sha256_response_is_64_hex() {
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_cl = captured.clone();
+        let (port, server) = mock_auth_server(2, captured_cl, |i, _req| match i {
+            1 => b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Digest realm=\"r\", qop=\"auth\", nonce=\"N\", algorithm=SHA-256\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec(),
+            _ => unreachable!(),
+        });
+
+        let provider = Arc::new(
+            StaticCredentialProvider::new().with(
+                &format!("http://127.0.0.1:{port}"),
+                "r",
+                "u",
+                "p",
+            ),
+        );
+        let client = HttpClient::new().with_credentials(provider);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
+
+        let requests = captured.lock().unwrap().clone();
+        let auth = extract_authorization(&requests[1]).expect("Authorization on retry");
+        assert!(auth.contains("algorithm=SHA-256"));
+        let resp_idx = auth.find("response=\"").unwrap() + "response=\"".len();
+        let resp_end = auth[resp_idx..].find('"').unwrap() + resp_idx;
+        assert_eq!(resp_end - resp_idx, 64, "SHA-256 hex = 64 chars");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn auth_digest_prefers_sha256_when_server_offers_both() {
+        // RFC 7235 §2.1: WWW-Authenticate может содержать список challenges.
+        // Сервер предлагает MD5 и SHA-256 — клиент берёт сильнейший (SHA-256).
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_cl = captured.clone();
+        let (port, server) = mock_auth_server(2, captured_cl, |i, _req| match i {
+            1 => b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Digest realm=\"r\", nonce=\"N1\", algorithm=MD5, Digest realm=\"r\", nonce=\"N2\", algorithm=SHA-256\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            _ => unreachable!(),
+        });
+
+        let provider = Arc::new(
+            StaticCredentialProvider::new().with(
+                &format!("http://127.0.0.1:{port}"),
+                "r",
+                "u",
+                "p",
+            ),
+        );
+        let client = HttpClient::new().with_credentials(provider);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        client.fetch(&url).unwrap();
+
+        let requests = captured.lock().unwrap().clone();
+        let auth = extract_authorization(&requests[1]).expect("Authorization on retry");
+        assert!(auth.contains("algorithm=SHA-256"));
+        // nonce должен быть от SHA-256 challenge (N2), не MD5 (N1).
+        assert!(auth.contains("nonce=\"N2\""));
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn auth_no_provider_passes_401_as_error() {
+        // Без with_credentials — 401 не вызывает retry, fetch возвращает Err.
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_cl = captured.clone();
+        let (port, server) = mock_auth_server(1, captured_cl, |_, _| {
+            b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"r\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let err = client.fetch(&url).expect_err("401 must be propagated");
+        assert!(format!("{err:?}").contains("401"));
+        assert_eq!(captured.lock().unwrap().len(), 1, "no retry without provider");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn auth_provider_returns_none_passes_401_as_error() {
+        // Провайдер не нашёл creds для (origin, realm) — клиент не делает retry.
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_cl = captured.clone();
+        let (port, server) = mock_auth_server(1, captured_cl, |_, _| {
+            b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"r\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+        });
+
+        // Provider с creds для *другого* origin — на запрашиваемый realm ответит None.
+        let provider = Arc::new(
+            StaticCredentialProvider::new().with("http://other.example", "r", "u", "p"),
+        );
+        let client = HttpClient::new().with_credentials(provider);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert!(client.fetch(&url).is_err());
+        assert_eq!(captured.lock().unwrap().len(), 1, "no retry on provider None");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn auth_unsupported_scheme_no_retry() {
+        // Bearer / Negotiate / NTLM — не поддерживаются, 401 пробрасывается.
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_cl = captured.clone();
+        let (port, server) = mock_auth_server(1, captured_cl, |_, _| {
+            b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer realm=\"api\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+        });
+
+        let provider = Arc::new(StaticCredentialProvider::new().with("", "", "u", "p"));
+        let client = HttpClient::new().with_credentials(provider);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert!(client.fetch(&url).is_err());
+        assert_eq!(captured.lock().unwrap().len(), 1);
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn auth_one_retry_only_on_consecutive_401() {
+        // Если retry-запрос тоже получил 401 (неверные creds) — клиент НЕ
+        // делает второй retry, сразу возвращает Err.
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_cl = captured.clone();
+        let (port, server) = mock_auth_server(2, captured_cl, |_, _| {
+            b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"r\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+        });
+
+        let provider = Arc::new(
+            StaticCredentialProvider::new().with(&format!("http://127.0.0.1:{port}"), "r", "u", "p"),
+        );
+        let client = HttpClient::new().with_credentials(provider);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert!(client.fetch(&url).is_err());
+        assert_eq!(
+            captured.lock().unwrap().len(),
+            2,
+            "exactly two requests: original + one retry"
+        );
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn auth_no_www_authenticate_header_no_retry() {
+        // 401 без WWW-Authenticate — невалидный server response, retry
+        // невозможен. Просто пробрасываем как Err.
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_cl = captured.clone();
+        let (port, server) = mock_auth_server(1, captured_cl, |_, _| {
+            b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+        });
+
+        let provider = Arc::new(StaticCredentialProvider::new().with("", "", "u", "p"));
+        let client = HttpClient::new().with_credentials(provider);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert!(client.fetch(&url).is_err());
+        assert_eq!(captured.lock().unwrap().len(), 1);
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn auth_provider_sees_correct_origin_and_realm() {
+        // Проверяем, что провайдер видит origin (scheme://host[:port], без
+        // default-порта 80/443) и realm из challenge.
+        struct CapturingProvider {
+            seen: Mutex<Vec<HttpAuthChallenge>>,
+        }
+        impl HttpCredentialProvider for CapturingProvider {
+            fn credentials(&self, c: &HttpAuthChallenge) -> Option<HttpCredentials> {
+                self.seen.lock().unwrap().push(c.clone());
+                Some(HttpCredentials {
+                    username: "u".into(),
+                    password: "p".into(),
+                })
+            }
+        }
+
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_cl = captured.clone();
+        let (port, server) = mock_auth_server(2, captured_cl, |i, _| match i {
+            1 => b"HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Basic realm=\"Admin Area\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec(),
+            _ => unreachable!(),
+        });
+
+        let provider = Arc::new(CapturingProvider {
+            seen: Mutex::new(Vec::new()),
+        });
+        let client = HttpClient::new().with_credentials(provider.clone());
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/secret")).unwrap();
+        client.fetch(&url).unwrap();
+
+        let seen = provider.seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        // Non-default port — должен быть в origin.
+        assert_eq!(seen[0].origin, format!("http://127.0.0.1:{port}"));
+        assert_eq!(seen[0].realm, "Admin Area");
+        assert_eq!(seen[0].scheme, HttpAuthScheme::Basic);
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn auth_credentials_not_sent_proactively_first_request() {
+        // Sanity: с подключённым provider'ом первый request всё равно идёт
+        // без Authorization — credentials эмитятся только в ответ на 401.
+        // (RFC 7235 §2.1: «server controls credential negotiation»; preemptive
+        // Basic auth — отдельная фича, у нас явно не включена.)
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let captured_cl = captured.clone();
+        let (port, server) = mock_auth_server(1, captured_cl, |_, _| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+
+        let provider = Arc::new(
+            StaticCredentialProvider::new().with(&format!("http://127.0.0.1:{port}"), "r", "u", "p"),
+        );
+        let client = HttpClient::new().with_credentials(provider);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
+
+        let requests = captured.lock().unwrap().clone();
+        assert_eq!(requests.len(), 1);
+        assert!(
+            extract_authorization(&requests[0]).is_none(),
+            "no proactive Authorization on first request"
+        );
 
         server.join().unwrap();
     }
