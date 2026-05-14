@@ -10,6 +10,7 @@ pub mod event;
 pub mod ext;
 pub mod form;
 pub mod geom;
+pub mod hash;
 pub mod idn;
 pub mod json;
 pub mod module;
