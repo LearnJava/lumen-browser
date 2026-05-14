@@ -23,6 +23,20 @@ const GRAY2BIT_4X2: &[u8] = include_bytes!("fixtures/gray2bit_4x2.png");
 const GRAY4BIT_3X2: &[u8] = include_bytes!("fixtures/gray4bit_3x2.png");
 const PALETTE1BIT_8X1: &[u8] = include_bytes!("fixtures/palette1bit_8x1.png");
 const PALETTE4BIT_TRNS_4X2: &[u8] = include_bytes!("fixtures/palette4bit_trns_4x2.png");
+const GRAY16_2X2: &[u8] = include_bytes!("fixtures/gray16_2x2.png");
+const GRAYA16_2X2: &[u8] = include_bytes!("fixtures/graya16_2x2.png");
+const RGB16_2X2: &[u8] = include_bytes!("fixtures/rgb16_2x2.png");
+const RGBA16_2X2: &[u8] = include_bytes!("fixtures/rgba16_2x2.png");
+const GRAY16_FILTERS_2X3: &[u8] = include_bytes!("fixtures/gray16_filters_2x3.png");
+const GRAY8_TRNS_3X2: &[u8] = include_bytes!("fixtures/gray8_trns_3x2.png");
+const RGB8_TRNS_2X2: &[u8] = include_bytes!("fixtures/rgb8_trns_2x2.png");
+const GRAY16_TRNS_2X2: &[u8] = include_bytes!("fixtures/gray16_trns_2x2.png");
+const RGB16_TRNS_2X2: &[u8] = include_bytes!("fixtures/rgb16_trns_2x2.png");
+const ADAM7_RGB_8X8: &[u8] = include_bytes!("fixtures/adam7_rgb_8x8.png");
+const ADAM7_GRAY_5X5: &[u8] = include_bytes!("fixtures/adam7_gray_5x5.png");
+const ADAM7_RGBA_4X4: &[u8] = include_bytes!("fixtures/adam7_rgba_4x4.png");
+const ADAM7_RGB_1X1: &[u8] = include_bytes!("fixtures/adam7_rgb_1x1.png");
+const ADAM7_RGB_2X2: &[u8] = include_bytes!("fixtures/adam7_rgb_2x2.png");
 
 #[test]
 fn decode_rgb8_3x2() {
@@ -293,6 +307,227 @@ fn decode_palette4bit_with_trns_4x2() {
         vec![
             255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 128, 128, 128, 0, // row 0
             128, 128, 128, 0, 0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255, // row 1
+        ]
+    );
+}
+
+#[test]
+fn decode_gray16_2x2_downsamples_to_gray8() {
+    // 16-bit grayscale, big-endian u16. Сэмплы:
+    // row0: 0x0000, 0x8080 → high byte 0, 0x80
+    // row1: 0xFFFF, 0x4040 → high byte 0xFF, 0x40
+    let img = decode_png(GRAY16_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Gray8);
+    assert_eq!(img.data, vec![0, 0x80, 0xFF, 0x40]);
+}
+
+#[test]
+fn decode_graya16_2x2_downsamples_to_graya8() {
+    // 16-bit GrayAlpha. Пары (gray, alpha) big-endian.
+    // row0: (0xFFFF,0xFFFF), (0x8080,0x4040) → 255,255, 128,64
+    // row1: (0x0000,0x8080), (0xC0C0,0x0000) → 0,128, 192,0
+    let img = decode_png(GRAYA16_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::GrayAlpha8);
+    assert_eq!(img.data, vec![255, 255, 128, 64, 0, 128, 192, 0]);
+}
+
+#[test]
+fn decode_rgb16_2x2_downsamples_to_rgb8() {
+    // 16-bit RGB. row0: red, green; row1: mid grey, blue-purple
+    let img = decode_png(RGB16_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Rgb8);
+    assert_eq!(
+        img.data,
+        vec![
+            255, 0, 0, 0, 255, 0, // row 0: red, green
+            128, 128, 128, 64, 192, 255, // row 1: grey, purple-blue
+        ]
+    );
+}
+
+#[test]
+fn decode_rgba16_2x2_downsamples_to_rgba8() {
+    // 16-bit RGBA. row0: red opaque, green half; row1: blue transparent, purple
+    let img = decode_png(RGBA16_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Rgba8);
+    assert_eq!(
+        img.data,
+        vec![
+            255, 0, 0, 255, 0, 255, 0, 128, // row 0
+            0, 0, 255, 0, 192, 64, 128, 64, // row 1
+        ]
+    );
+}
+
+#[test]
+fn decode_gray16_with_filters_2x3() {
+    // 16-bit grayscale c фильтрами None / Sub / Up — проверяет, что
+    // filter_bpp=2 (channels=1, bit_depth=16 → 16/8=2) корректно
+    // обрабатывается развёрткой фильтров до downsample-а.
+    // Expected (после high-byte): row0 [0,255], row1 [128,64], row2 [192,64]
+    let img = decode_png(GRAY16_FILTERS_2X3).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 3);
+    assert_eq!(img.format, PixelFormat::Gray8);
+    assert_eq!(img.data, vec![0, 255, 128, 64, 192, 64]);
+}
+
+#[test]
+fn decode_gray8_with_trns_yields_grayalpha8() {
+    // 8-bit grayscale + tRNS=0 (черный — прозрачный).
+    // row0: [0, 128, 255], row1: [0, 0, 255]
+    let img = decode_png(GRAY8_TRNS_3X2).unwrap();
+    assert_eq!(img.width, 3);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::GrayAlpha8);
+    assert_eq!(
+        img.data,
+        vec![
+            0, 0, 128, 255, 255, 255, // row 0: black transparent, mid opaque, white opaque
+            0, 0, 0, 0, 255, 255, // row 1: two black transparent, white opaque
+        ]
+    );
+}
+
+#[test]
+fn decode_rgb8_with_trns_yields_rgba8() {
+    // 8-bit RGB + tRNS=(255,0,255) — magenta прозрачный.
+    let img = decode_png(RGB8_TRNS_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Rgba8);
+    assert_eq!(
+        img.data,
+        vec![
+            255, 0, 0, 255, // red opaque
+            255, 0, 255, 0, // magenta transparent
+            255, 0, 255, 0, // magenta transparent
+            255, 255, 255, 255, // white opaque
+        ]
+    );
+}
+
+#[test]
+fn decode_gray16_with_trns_yields_grayalpha8() {
+    // 16-bit grayscale + tRNS=0xFFFF. После downsample: 0,255,128,255;
+    // tRNS normalized: 0xFFFF → 0xFF = 255.
+    let img = decode_png(GRAY16_TRNS_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::GrayAlpha8);
+    assert_eq!(
+        img.data,
+        vec![
+            0, 255, 255, 0, // black opaque, white transparent
+            128, 255, 255, 0, // mid opaque, white transparent
+        ]
+    );
+}
+
+#[test]
+fn decode_rgb16_with_trns_yields_rgba8() {
+    // 16-bit RGB + tRNS=(0xFFFF,0xFFFF,0xFFFF) = white transparent.
+    let img = decode_png(RGB16_TRNS_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Rgba8);
+    assert_eq!(
+        img.data,
+        vec![
+            255, 255, 255, 0, 255, 0, 0, 255, // row 0: white transparent, red opaque
+            255, 255, 255, 0, 0, 255, 0, 255, // row 1: white transparent, green opaque
+        ]
+    );
+}
+
+#[test]
+fn decode_adam7_rgb_8x8() {
+    // 8x8 RGB, pixel(col,row) = (col*32, row*32, 128).
+    // Все 7 passes должны корректно собраться в исходное изображение.
+    let img = decode_png(ADAM7_RGB_8X8).unwrap();
+    assert_eq!(img.width, 8);
+    assert_eq!(img.height, 8);
+    assert_eq!(img.format, PixelFormat::Rgb8);
+    for row in 0..8u32 {
+        for col in 0..8u32 {
+            let off = ((row * 8 + col) * 3) as usize;
+            assert_eq!(img.data[off], (col * 32) as u8, "row {row} col {col} R");
+            assert_eq!(img.data[off + 1], (row * 32) as u8, "row {row} col {col} G");
+            assert_eq!(img.data[off + 2], 128, "row {row} col {col} B");
+        }
+    }
+}
+
+#[test]
+fn decode_adam7_gray_5x5() {
+    // 5x5 grayscale, pixel(col,row) = col*40 + row*8.
+    // Нечётный размер: некоторые passes имеют ph=0.
+    let img = decode_png(ADAM7_GRAY_5X5).unwrap();
+    assert_eq!(img.width, 5);
+    assert_eq!(img.height, 5);
+    assert_eq!(img.format, PixelFormat::Gray8);
+    for row in 0..5u32 {
+        for col in 0..5u32 {
+            let expected = (col * 40 + row * 8) as u8;
+            assert_eq!(
+                img.data[(row * 5 + col) as usize],
+                expected,
+                "row {row} col {col}"
+            );
+        }
+    }
+}
+
+#[test]
+fn decode_adam7_rgba_4x4() {
+    // 4x4 RGBA — проверяет 4-байтовый bpp в Adam7-сборке.
+    let img = decode_png(ADAM7_RGBA_4X4).unwrap();
+    assert_eq!(img.width, 4);
+    assert_eq!(img.height, 4);
+    assert_eq!(img.format, PixelFormat::Rgba8);
+    for row in 0..4u32 {
+        for col in 0..4u32 {
+            let off = ((row * 4 + col) * 4) as usize;
+            assert_eq!(img.data[off], (col * 64) as u8);
+            assert_eq!(img.data[off + 1], (row * 64) as u8);
+            assert_eq!(img.data[off + 2], 128);
+            assert_eq!(img.data[off + 3], (64 + col * 48) as u8);
+        }
+    }
+}
+
+#[test]
+fn decode_adam7_rgb_1x1_only_pass1() {
+    // Минимальный кейс: 1x1 RGB. Только pass 1 имеет 1 пиксель;
+    // остальные 6 passes пустые → skip-логика проверяется.
+    let img = decode_png(ADAM7_RGB_1X1).unwrap();
+    assert_eq!(img.width, 1);
+    assert_eq!(img.height, 1);
+    assert_eq!(img.format, PixelFormat::Rgb8);
+    assert_eq!(img.data, vec![255, 127, 0]);
+}
+
+#[test]
+fn decode_adam7_rgb_2x2() {
+    // 2x2 RGB. Passes:
+    //   1 (0,0)=(10,20,30), 6 (1,0)=(40,50,60), 7 (0,1) (1,1)=(70,80,90)(100,110,120)
+    let img = decode_png(ADAM7_RGB_2X2).unwrap();
+    assert_eq!(img.width, 2);
+    assert_eq!(img.height, 2);
+    assert_eq!(img.format, PixelFormat::Rgb8);
+    assert_eq!(
+        img.data,
+        vec![
+            10, 20, 30, 40, 50, 60, // row 0
+            70, 80, 90, 100, 110, 120, // row 1
         ]
     );
 }

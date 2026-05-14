@@ -291,13 +291,811 @@ pub struct Rule {
     pub declarations: Vec<Declaration>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+/// CSS Properties and Values L1 §1.1 — регистрация custom property через
+/// `@property --name { syntax: ...; inherits: ...; initial-value: ...; }`.
+/// Обязательные descriptors: `syntax`, `inherits`. `initial-value`
+/// обязателен, если syntax не universal (`*`). Имя хранится с ведущими
+/// `--` для прямого сравнения с `custom_props` в layout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PropertyRule {
+    pub name: String,
+    pub syntax: String,
+    pub inherits: bool,
+    pub initial_value: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct Stylesheet {
     pub rules: Vec<Rule>,
+    /// Зарегистрированные `@property`-правила. Порядок соответствует
+    /// исходному CSS; повтор имени — последнее объявление побеждает (по
+    /// CSS Properties and Values L1 §1.1).
+    pub properties: Vec<PropertyRule>,
+    /// `@media`-правила. Каждое содержит query и список вложенных rules.
+    /// Применяются в каскаде только если `query.matches(ctx)` — см.
+    /// `MediaQuery::matches`. Порядок source-position для tie-breaking
+    /// в каскаде сохраняется через position в `Vec` (но фактическая
+    /// специфика media rules в Phase 0 layout-у мерджится «как обычные»).
+    pub media_rules: Vec<MediaRule>,
+    /// `@import url("...");` декларации. Парсер собирает URL и опц.
+    /// media-query (`@import url("a") screen and (min-width: 600px);`).
+    /// Сам fetch и инкорпорация в каскад — задача потребителя (shell),
+    /// потому что это требует сетевой/файловой загрузки. Phase 0:
+    /// парсер только извлекает список, fetch отложен.
+    pub imports: Vec<ImportRule>,
+    /// `@font-face` правила. CSS Fonts L4 §4. Parser извлекает family,
+    /// src, weight, style, display, unicode-range; реальная загрузка
+    /// и регистрация в font-matcher — задача shell.
+    pub font_faces: Vec<FontFaceRule>,
+    /// CSS Cascade L5 §6.4 — порядок объявления layer-имён через
+    /// statement-form `@layer base, components, utilities;`. В этом
+    /// списке имена в **обратном** cascade-приоритете: первый имя имеет
+    /// наименьший приоритет; unlayered rules выигрывают у всех layered.
+    /// Анонимные layer-блоки (без имени) попадают сюда же с
+    /// generated-именем `__anon_<n>__`.
+    pub layer_order: Vec<String>,
+    /// CSS Cascade L5 — block-form `@layer name { rules }`. Каждая
+    /// запись — отдельный блок (повторное упоминание одного имени —
+    /// отдельные записи; cascade-приоритет внутри layer-а — source-order).
+    /// Phase 0 интеграция в каскад отложена — текущий compute_style
+    /// итерирует только `rules`/`media_rules`. Здесь только parse+store.
+    pub layers: Vec<LayerRule>,
+    /// CSS Conditional Rules L3 §2 — `@supports (cond) { rules }`. Условие
+    /// типизировано как [`SupportsCondition`]; вложенные rules применяются
+    /// если `condition.evaluate(...)` истинно. Phase 0: parse+store +
+    /// evaluator на основе списка известных property-имён; реальная
+    /// интеграция в каскад — следующая задача (см. media_rules).
+    pub supports_rules: Vec<SupportsRule>,
+    /// CSS Animations L1 §3 — `@keyframes name { 0% {...} 50% {...} ... }`.
+    /// Frames хранятся как `(offset_percent, declarations)`. Phase 0:
+    /// parse+store; реальный animation runtime (interpolation, timing
+    /// functions, animation-name связывание) отложен.
+    pub keyframes: Vec<KeyframesRule>,
+    /// CSS Counter Styles L3 §2 — `@counter-style name { ... }`. Phase 0:
+    /// parse+store как `Vec<(name, declarations)>`. Реальное применение
+    /// (список как кастомные markers через list-style-type) отложено.
+    pub counter_styles: Vec<CounterStyleRule>,
+    /// CSS Paged Media L3 §3 — `@page <selector>? { ... }`. Phase 0:
+    /// parse+store. Реальная pagination — отдельная задача (Phase 2+).
+    pub page_rules: Vec<PageRule>,
+    /// CSS Cascade L6 — `@scope (<root>) [to (<limit>)] { rules }`. Phase 0:
+    /// parse+store; реальная scope-фильтрация в каскаде отложена.
+    pub scope_rules: Vec<ScopeRule>,
+    /// CSS Transitions L2 §3.4 — `@starting-style { rules }`. Phase 0:
+    /// parse+store. Применение при первом match (transition-from-display)
+    /// отложено вместе с реальным transition runtime.
+    pub starting_style_rules: Vec<StartingStyleRule>,
+    /// CSS Containment L3 §3 — `@container <name>? (cond) { rules }`.
+    /// Условие хранится как сырая строка (типизация query — отложена,
+    /// нужна полная media-query-like grammar для container features).
+    pub container_rules: Vec<ContainerRule>,
+}
+
+/// `@container <name>? <condition> { rules }` — CSS Containment L3 §3.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContainerRule {
+    /// Имя container query (по умолчанию — None, match всех ancestor-ов
+    /// с container-name / container-type).
+    pub name: Option<String>,
+    /// Сырая condition-строка типа `(min-width: 200px)` или `style(...)`.
+    pub condition: String,
+    pub rules: Vec<Rule>,
+}
+
+/// `@counter-style <name> { ... }` — CSS Counter Styles L3 §2.
+/// Phase 0: parse+store. Descriptors (`system`, `symbols`, `suffix`,
+/// `range`, `prefix`, `pad`, `negative`, ...) хранятся как declarations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CounterStyleRule {
+    pub name: String,
+    pub declarations: Vec<Declaration>,
+}
+
+/// `@page <selector>? { decls }` — CSS Paged Media L3 §3.
+/// Selector — пустой (любая страница), `:first`, `:left`, `:right`,
+/// `:blank`, named `page-name`. Phase 0: хранится сырая строка.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PageRule {
+    /// Pseudo-classes и/или page-name. Пустая строка = любой page.
+    pub selector: String,
+    pub declarations: Vec<Declaration>,
+}
+
+/// `@scope (<root>) [to (<limit>)] { rules }` — CSS Cascade L6.
+/// `root` — селектор корня scope, `limit` — селектор upper boundary
+/// (рекурсивный обход вниз останавливается на нём). Phase 0: оба
+/// хранятся сырыми строками; реальный scope-matcher отложен.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScopeRule {
+    /// Селектор корня scope. Может быть пустым (`@scope { ... }`
+    /// без явного root — implicit `:scope` = stylesheet root).
+    pub root: String,
+    /// Опциональный limit (`to (<selector>)`). None — без верхней границы.
+    pub limit: Option<String>,
+    pub rules: Vec<Rule>,
+}
+
+/// `@starting-style { rules }` — CSS Transitions L2 §3.4. Контейнер
+/// rules, применяющихся как initial state при first match (для
+/// transition-on-display-changes).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StartingStyleRule {
+    pub rules: Vec<Rule>,
+}
+
+/// `@keyframes name { offset { decls } ... }` — CSS Animations L1 §3.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyframesRule {
+    pub name: String,
+    /// Список frames в порядке появления в source. Один frame может
+    /// иметь несколько offset-ов (selector-list типа `0%, 50%`) —
+    /// разворачивается в отдельные записи.
+    pub frames: Vec<Keyframe>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Keyframe {
+    /// Offset в долях `[0, 1]`. `from` → 0.0, `to` → 1.0. Невалидные
+    /// (NaN или вне [0,1]) → пропускаются на этапе парсинга.
+    pub offset: f32,
+    pub declarations: Vec<Declaration>,
+}
+
+/// `@supports <condition> { rules }` блок — CSS Conditional Rules L3 §2.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupportsRule {
+    pub condition: SupportsCondition,
+    pub rules: Vec<Rule>,
+}
+
+/// Условие в `@supports (...)`. Грамматика:
+/// `<condition> = <negation> | <conjunction> | <disjunction> | <test>`
+/// `<negation>  = "not" <inside-parens>`
+/// `<conjunction> = <test> ("and" <test>)+`
+/// `<disjunction> = <test> ("or" <test>)+`
+/// `<test>       = "(" <property>: <value> ")" | "(" <condition> ")"`.
+///
+/// Phase 0: парсер также распознаёт `selector(<simple>)` (CSS Conditional
+/// L4) и сохраняет селектор как сырую строку — реальный матчинг отложен.
+/// Неизвестные функциональные тесты (`font-tech(...)`, `font-format(...)`)
+/// → `Unknown`, evaluator возвращает false.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SupportsCondition {
+    /// `(prop: value)` — declaration test. Текущий supports-evaluator
+    /// проверяет, что `property` есть в списке known-property-имён,
+    /// не валидируя value (для Phase 0 этого достаточно — мы поддерживаем
+    /// конкретный набор properties, и tests типа `(display: grid)`
+    /// возвращают true, потому что мы парсим `display`, даже если
+    /// реального grid layout-а нет).
+    Decl { property: String, value: String },
+    Not(Box<SupportsCondition>),
+    And(Vec<SupportsCondition>),
+    Or(Vec<SupportsCondition>),
+    /// `selector(<sel>)` — CSS Conditional L4. Phase 0 не оценивает.
+    Selector(String),
+    /// Невалидный или нераспознанный тест — evaluator возвращает false.
+    Unknown,
+}
+
+impl SupportsCondition {
+    /// Вычислить условие: вернуть `true`, если потребитель поддерживает
+    /// все объявления в условии. `known_properties` — список property-
+    /// имён, которые css-parser/layout распознают (например, `display`,
+    /// `color`, `grid-template-columns`). `Selector(...)` и `Unknown`
+    /// в Phase 0 возвращают false.
+    pub fn evaluate(&self, known_properties: &[&str]) -> bool {
+        match self {
+            Self::Decl { property, .. } => known_properties
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(property)),
+            Self::Not(c) => !c.evaluate(known_properties),
+            Self::And(cs) => cs.iter().all(|c| c.evaluate(known_properties)),
+            Self::Or(cs) => cs.iter().any(|c| c.evaluate(known_properties)),
+            Self::Selector(_) | Self::Unknown => false,
+        }
+    }
+}
+
+/// `@layer name { rules }` блок.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayerRule {
+    /// Имя layer-а. Анонимный блок (`@layer { ... }`) получает имя
+    /// `__anon_<n>__` где `n` — порядковый номер.
+    pub name: String,
+    pub rules: Vec<Rule>,
+}
+
+/// `@import` декларация. Per CSS Cascade L4 §6.5 + Media Queries L4:
+/// `@import url("path");` или `@import url("path") <media-query>;`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ImportRule {
+    /// URL для загрузки. Хранится как есть (без resolve относительно base).
+    pub url: String,
+    /// Опциональный media query — стиль применим только если query
+    /// matches. Пустой Vec в `clauses` (=default) трактуется как
+    /// «всегда применять» (= `@import url("...")` без media-фильтра).
+    pub media: MediaQuery,
+}
+
+/// `@font-face { font-family: ...; src: url(...) format(...); ... }`
+/// — CSS Fonts L4 §4. Регистрация webfont-ресурса для font-matcher-а.
+/// Phase 0: парсер собирает основные descriptors; реальный fetch и
+/// font-loading — задача font-matcher / shell.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FontFaceRule {
+    /// `font-family: "Roboto"` — имя без кавычек.
+    pub family: String,
+    /// `src: url("..."), url("..."), local("...")` — список источников.
+    pub sources: Vec<FontFaceSource>,
+    /// `font-weight: 400 | bold | 100 200 ...` — хранится сырой строкой
+    /// (font-matcher парсит keyword/число/диапазон по контексту). `None` = default (400).
+    pub weight: Option<String>,
+    /// `font-style: normal | italic | oblique`. `None` = default.
+    pub style: Option<String>,
+    /// `font-display: auto | block | swap | fallback | optional`. `None` = default (auto).
+    pub display: Option<String>,
+    /// `unicode-range: U+0000-FFFF, U+10000-1FFFF` — сырая строка.
+    pub unicode_range: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FontFaceSource {
+    pub kind: FontFaceSourceKind,
+    /// Значение url или local — без кавычек.
+    pub value: String,
+    /// `format("woff2")` — hint о формате. None если не указан.
+    pub format: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FontFaceSourceKind {
+    /// `src: url("...")` — внешний font-файл.
+    Url,
+    /// `src: local("...")` — системный шрифт по имени.
+    Local,
+}
+
+/// Группа CSS-правил, вложенных в `@media`-блок.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MediaRule {
+    pub query: MediaQuery,
+    pub rules: Vec<Rule>,
+}
+
+/// Media query — OR-список AND-clauses. Пустой `clauses` (нет условий)
+/// трактуется как «всегда true» (= `@media all`).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MediaQuery {
+    /// Внешний `Vec` — OR (comma-separated); внутренний — AND
+    /// (whitespace+`and`-separated).
+    pub clauses: Vec<Vec<MediaCondition>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MediaCondition {
+    /// `screen`, `print`, `all`, `handheld`, etc. — media type.
+    /// Хранится lower-case. `all` всегда match. Прочие имена match
+    /// если совпадают с `MediaContext::media_type` (lower-case).
+    MediaType(String),
+    /// `(min-width: 600px)` и подобные. Phase 0 поддерживает:
+    /// min/max-width, min/max-height, orientation, prefers-color-scheme.
+    Feature(MediaFeature),
+    /// Любая `(unknown-feature: value)` — никогда не матчит (forward-compat).
+    Unsupported,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum MediaFeature {
+    MinWidth(f32),
+    MaxWidth(f32),
+    MinHeight(f32),
+    MaxHeight(f32),
+    Orientation(MediaOrientation),
+    PrefersColorScheme(ColorScheme),
+}
+
+impl Eq for MediaFeature {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaOrientation {
+    Portrait,
+    Landscape,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorScheme {
+    Light,
+    Dark,
+}
+
+/// Контекст, против которого матчатся media queries. Заполняется
+/// shell-ом / layout-ом из текущего viewport-а и пользовательских
+/// настроек.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MediaContext {
+    /// «screen» / «print» / «all» / прочее.
+    pub media_type: String,
+    pub width: f32,
+    pub height: f32,
+    pub prefers_dark: bool,
+}
+
+impl Default for MediaContext {
+    fn default() -> Self {
+        Self {
+            media_type: "screen".into(),
+            width: 0.0,
+            height: 0.0,
+            prefers_dark: false,
+        }
+    }
+}
+
+impl MediaQuery {
+    /// Пустой query (= `@media all`) — true. Иначе хотя бы одна
+    /// OR-clause должна быть истиной; внутри clause — все AND-условия.
+    pub fn matches(&self, ctx: &MediaContext) -> bool {
+        if self.clauses.is_empty() {
+            return true;
+        }
+        self.clauses
+            .iter()
+            .any(|clause| clause.iter().all(|c| c.matches(ctx)))
+    }
+}
+
+impl MediaCondition {
+    pub fn matches(&self, ctx: &MediaContext) -> bool {
+        match self {
+            Self::MediaType(t) => t == "all" || t == &ctx.media_type,
+            Self::Feature(f) => f.matches(ctx),
+            Self::Unsupported => false,
+        }
+    }
+}
+
+impl MediaFeature {
+    pub fn matches(&self, ctx: &MediaContext) -> bool {
+        match self {
+            Self::MinWidth(px) => ctx.width >= *px,
+            Self::MaxWidth(px) => ctx.width <= *px,
+            Self::MinHeight(px) => ctx.height >= *px,
+            Self::MaxHeight(px) => ctx.height <= *px,
+            Self::Orientation(o) => {
+                let actual = if ctx.width >= ctx.height {
+                    MediaOrientation::Landscape
+                } else {
+                    MediaOrientation::Portrait
+                };
+                actual == *o
+            }
+            Self::PrefersColorScheme(scheme) => match scheme {
+                ColorScheme::Dark => ctx.prefers_dark,
+                ColorScheme::Light => !ctx.prefers_dark,
+            },
+        }
+    }
 }
 
 pub fn parse(input: &str) -> Stylesheet {
     Parser::new(input).parse_stylesheet()
+}
+
+enum AtRuleOutcome {
+    Property(PropertyRule),
+    Media(MediaRule),
+    Import(ImportRule),
+    FontFace(FontFaceRule),
+    LayerNames(Vec<String>),
+    LayerBlock {
+        name: Option<String>,
+        rules: Vec<Rule>,
+    },
+    Supports(SupportsRule),
+    Keyframes(KeyframesRule),
+    CounterStyle(CounterStyleRule),
+    Page(PageRule),
+    Scope(ScopeRule),
+    StartingStyle(StartingStyleRule),
+    Container(ContainerRule),
+    None,
+}
+
+/// Парсит keyframe-селектор: `from` / `to` / `<percentage>` / списки
+/// через запятую (`0%, 50%`). Возвращает offset-ы в [0, 1]; невалидные
+/// токены пропускаются.
+fn parse_keyframe_selectors(s: &str) -> Vec<f32> {
+    let mut out = Vec::new();
+    for tok in s.split(',') {
+        let t = tok.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.eq_ignore_ascii_case("from") {
+            out.push(0.0);
+            continue;
+        }
+        if t.eq_ignore_ascii_case("to") {
+            out.push(1.0);
+            continue;
+        }
+        if let Some(num_str) = t.strip_suffix('%')
+            && let Ok(n) = num_str.trim().parse::<f32>()
+            && n.is_finite()
+            && (0.0..=100.0).contains(&n)
+        {
+            out.push(n / 100.0);
+        }
+    }
+    out
+}
+
+/// Layer-имя — CSS-ident, опционально с точками (sub-layers через
+/// `base.text`, CSS Cascade L5 §6.4.1). Phase 0 поддерживает простые
+/// имена (без точек) и dotted-имена как одну строку, не разбивая иерархию.
+fn is_layer_name(s: &str) -> bool {
+    let s = s.trim();
+    if s.is_empty() {
+        return false;
+    }
+    s.split('.').all(|part| {
+        let mut chars = part.chars();
+        let Some(first) = chars.next() else { return false };
+        if !(first.is_ascii_alphabetic() || first == '_' || first == '-') {
+            return false;
+        }
+        chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    })
+}
+
+/// Парсит значение `src:` из `@font-face`: comma-separated список
+/// `url("path") format("fmt")` или `local("name")`. Игнорирует
+/// невалидные элементы (best-effort).
+fn parse_font_face_src(src: &str) -> Vec<FontFaceSource> {
+    let mut out = Vec::new();
+    for item in split_top_level_commas(src) {
+        let item = item.trim();
+        if item.is_empty() {
+            continue;
+        }
+        // Найти `url(` или `local(`.
+        let (kind, after) = if let Some(rest) = item.strip_prefix("url(") {
+            (FontFaceSourceKind::Url, rest)
+        } else if let Some(rest) = item.strip_prefix("local(") {
+            (FontFaceSourceKind::Local, rest)
+        } else {
+            continue;
+        };
+        let Some(close) = after.find(')') else {
+            continue;
+        };
+        let inner = after[..close].trim().trim_matches(['"', '\''].as_ref());
+        let tail = after[close + 1..].trim();
+        // Опциональный `format("...")`.
+        let format = if let Some(fmt_rest) = tail.strip_prefix("format(") {
+            fmt_rest
+                .find(')')
+                .map(|end| fmt_rest[..end].trim().trim_matches(['"', '\''].as_ref()).to_string())
+        } else {
+            None
+        };
+        out.push(FontFaceSource {
+            kind,
+            value: inner.to_string(),
+            format,
+        });
+    }
+    out
+}
+
+/// Делит строку по top-level запятым (игнорирует запятые внутри `(...)`
+/// и строковых литералов). Используется для `src:` value
+/// (`url(a), url(b) format(c)`) и подобных list-значений.
+fn split_top_level_commas(s: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut depth = 0usize;
+    let mut in_string: Option<u8> = None;
+    let mut start = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        if let Some(q) = in_string {
+            if b == q {
+                in_string = None;
+            }
+            continue;
+        }
+        match b {
+            b'"' | b'\'' => in_string = Some(b),
+            b'(' => depth += 1,
+            b')' => depth = depth.saturating_sub(1),
+            b',' if depth == 0 => {
+                out.push(&s[start..i]);
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    if start < bytes.len() {
+        out.push(&s[start..]);
+    }
+    out
+}
+
+/// Парсит `@supports`-условие из строки между `@supports` и `{`.
+///
+/// Грамматика (упрощённая): `<expr> = <term> (("and"|"or") <term>)*`,
+/// `<term> = "not"? <atom>`, `<atom> = "(" <inner> ")" | "selector(" sel ")"`,
+/// `<inner> = <expr> | <prop ":" value>`.
+///
+/// Phase 0 ограничения:
+/// - Mixing `and` и `or` на одном уровне не разрешено (per spec), но
+///   парсер lenient — берёт первый встретившийся combinator и применяет
+///   его ко всем term-ам этого уровня. Реалистичные tests этого не
+///   нарушают (`(a) and (b) and (c)` или `(a) or (b)`); смешанные — UB.
+/// - Нерекурсивный `selector(...)` хранит сырой селектор; реальный
+///   match — отложенная задача.
+pub fn parse_supports_condition(s: &str) -> SupportsCondition {
+    let s = s.trim();
+    if s.is_empty() {
+        return SupportsCondition::Unknown;
+    }
+    let bytes = s.as_bytes();
+    let mut pos = 0usize;
+    let result = parse_supports_expr(bytes, &mut pos);
+    skip_ws(bytes, &mut pos);
+    if pos < bytes.len() {
+        // Если что-то осталось — это синтаксическая ошибка; возвращаем
+        // частично разобранное (lenient).
+    }
+    result
+}
+
+fn skip_ws(b: &[u8], p: &mut usize) {
+    while *p < b.len() && b[*p].is_ascii_whitespace() {
+        *p += 1;
+    }
+}
+
+fn match_keyword_ci(b: &[u8], p: &mut usize, kw: &[u8]) -> bool {
+    skip_ws(b, p);
+    if *p + kw.len() > b.len() {
+        return false;
+    }
+    if !b[*p..*p + kw.len()].eq_ignore_ascii_case(kw) {
+        return false;
+    }
+    // Граница: следующий символ — не ident-char.
+    let after = *p + kw.len();
+    if after < b.len() {
+        let c = b[after];
+        if c.is_ascii_alphanumeric() || c == b'-' || c == b'_' {
+            return false;
+        }
+    }
+    *p = after;
+    true
+}
+
+fn parse_supports_expr(b: &[u8], p: &mut usize) -> SupportsCondition {
+    let first = parse_supports_term(b, p);
+    skip_ws(b, p);
+    // Определяем combinator (если есть).
+    let saved = *p;
+    if match_keyword_ci(b, p, b"and") {
+        let mut terms = vec![first];
+        loop {
+            terms.push(parse_supports_term(b, p));
+            skip_ws(b, p);
+            let save = *p;
+            if !match_keyword_ci(b, p, b"and") {
+                *p = save;
+                break;
+            }
+        }
+        return SupportsCondition::And(terms);
+    }
+    *p = saved;
+    if match_keyword_ci(b, p, b"or") {
+        let mut terms = vec![first];
+        loop {
+            terms.push(parse_supports_term(b, p));
+            skip_ws(b, p);
+            let save = *p;
+            if !match_keyword_ci(b, p, b"or") {
+                *p = save;
+                break;
+            }
+        }
+        return SupportsCondition::Or(terms);
+    }
+    first
+}
+
+fn parse_supports_term(b: &[u8], p: &mut usize) -> SupportsCondition {
+    skip_ws(b, p);
+    if match_keyword_ci(b, p, b"not") {
+        let inner = parse_supports_atom(b, p);
+        return SupportsCondition::Not(Box::new(inner));
+    }
+    parse_supports_atom(b, p)
+}
+
+fn parse_supports_atom(b: &[u8], p: &mut usize) -> SupportsCondition {
+    skip_ws(b, p);
+    // `selector( ... )`
+    let saved = *p;
+    if *p + 9 <= b.len() && b[*p..*p + 9].eq_ignore_ascii_case(b"selector(") {
+        *p += 9;
+        let start = *p;
+        let mut depth: i32 = 1;
+        while *p < b.len() && depth > 0 {
+            match b[*p] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 {
+                break;
+            }
+            *p += 1;
+        }
+        let sel_str = std::str::from_utf8(&b[start..*p]).unwrap_or("").trim().to_string();
+        if *p < b.len() && b[*p] == b')' {
+            *p += 1;
+        }
+        return SupportsCondition::Selector(sel_str);
+    }
+    *p = saved;
+    if *p < b.len() && b[*p] == b'(' {
+        *p += 1;
+        // Содержимое: может быть `<expr>` (nested condition) или
+        // `<prop>: <value>`. Различаем по наличию `:` на верхнем уровне.
+        let inner_start = *p;
+        let mut depth: i32 = 1;
+        while *p < b.len() && depth > 0 {
+            match b[*p] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 {
+                break;
+            }
+            *p += 1;
+        }
+        let inner = std::str::from_utf8(&b[inner_start..*p]).unwrap_or("");
+        if *p < b.len() && b[*p] == b')' {
+            *p += 1;
+        }
+        // Determine: declaration or nested condition. Top-level `:`?
+        let inner_t = inner.trim();
+        let mut colon_pos: Option<usize> = None;
+        let inner_bytes = inner_t.as_bytes();
+        let mut d: i32 = 0;
+        for (i, &c) in inner_bytes.iter().enumerate() {
+            match c {
+                b'(' => d += 1,
+                b')' => d -= 1,
+                b':' if d == 0 => {
+                    colon_pos = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if let Some(idx) = colon_pos {
+            let property = inner_t[..idx].trim().to_string();
+            let value = inner_t[idx + 1..].trim().to_string();
+            if property.is_empty() {
+                return SupportsCondition::Unknown;
+            }
+            return SupportsCondition::Decl { property, value };
+        }
+        return parse_supports_condition(inner_t);
+    }
+    SupportsCondition::Unknown
+}
+
+/// Распарсить media query из строки между `@media` и `{`. Принимает
+/// строку без обрамляющих whitespace. Грамматика (упрощённая):
+/// `clause [ , clause ]*` где `clause = primary [ "and" primary ]*` и
+/// `primary = ident | "(" feature ")"`.
+///
+/// Возвращает `MediaQuery` с `clauses.len() == 0` если строка пустая
+/// (= `@media all`). Неизвестные feature-имена дают `Unsupported` (не
+/// матчат) — это lenient parser для forward-compat.
+pub fn parse_media_query(s: &str) -> MediaQuery {
+    let s = s.trim();
+    if s.is_empty() {
+        return MediaQuery::default();
+    }
+    let mut clauses = Vec::new();
+    for clause_str in s.split(',') {
+        let clause = parse_media_clause(clause_str);
+        clauses.push(clause);
+    }
+    MediaQuery { clauses }
+}
+
+fn parse_media_clause(s: &str) -> Vec<MediaCondition> {
+    let mut out = Vec::new();
+    let mut input = s.trim();
+    // Token by token: либо `(feature)` либо ident, разделённые `and`/whitespace.
+    while !input.is_empty() {
+        input = input.trim_start();
+        if input.starts_with('(') {
+            // Найти match `)`.
+            if let Some(end) = input.find(')') {
+                let inner = &input[1..end];
+                out.push(parse_media_feature(inner.trim()));
+                input = &input[end + 1..];
+            } else {
+                // Невалидное — abort clause.
+                return vec![MediaCondition::Unsupported];
+            }
+        } else {
+            // Берём слово до whitespace.
+            let end = input
+                .find(|c: char| c.is_whitespace() || c == '(' || c == ',')
+                .unwrap_or(input.len());
+            let word = &input[..end];
+            input = &input[end..];
+            if word.eq_ignore_ascii_case("and") {
+                // Просто разделитель.
+                continue;
+            }
+            if word.eq_ignore_ascii_case("not") || word.eq_ignore_ascii_case("only") {
+                // `not` и `only` — модификаторы; Phase 0 их игнорирует
+                // (effectively allowing match).
+                continue;
+            }
+            out.push(MediaCondition::MediaType(word.to_ascii_lowercase()));
+        }
+    }
+    if out.is_empty() {
+        out.push(MediaCondition::Unsupported);
+    }
+    out
+}
+
+fn parse_media_feature(s: &str) -> MediaCondition {
+    // `feature: value` или просто `feature` (boolean feature, не поддерживаем).
+    let Some((key, val)) = s.split_once(':') else {
+        return MediaCondition::Unsupported;
+    };
+    let key = key.trim().to_ascii_lowercase();
+    let val = val.trim();
+    match key.as_str() {
+        "min-width" | "max-width" | "min-height" | "max-height" => {
+            // Парсим как `Npx`. Прочие единицы (em/rem) require viewport context —
+            // отложены.
+            let Some(num) = val.strip_suffix("px") else {
+                return MediaCondition::Unsupported;
+            };
+            let Ok(px) = num.trim().parse::<f32>() else {
+                return MediaCondition::Unsupported;
+            };
+            let feature = match key.as_str() {
+                "min-width" => MediaFeature::MinWidth(px),
+                "max-width" => MediaFeature::MaxWidth(px),
+                "min-height" => MediaFeature::MinHeight(px),
+                "max-height" => MediaFeature::MaxHeight(px),
+                _ => unreachable!(),
+            };
+            MediaCondition::Feature(feature)
+        }
+        "orientation" => match val.to_ascii_lowercase().as_str() {
+            "portrait" => MediaCondition::Feature(MediaFeature::Orientation(MediaOrientation::Portrait)),
+            "landscape" => MediaCondition::Feature(MediaFeature::Orientation(MediaOrientation::Landscape)),
+            _ => MediaCondition::Unsupported,
+        },
+        "prefers-color-scheme" => match val.to_ascii_lowercase().as_str() {
+            "light" => MediaCondition::Feature(MediaFeature::PrefersColorScheme(ColorScheme::Light)),
+            "dark" => MediaCondition::Feature(MediaFeature::PrefersColorScheme(ColorScheme::Dark)),
+            _ => MediaCondition::Unsupported,
+        },
+        _ => MediaCondition::Unsupported,
+    }
 }
 
 struct Parser<'a> {
@@ -356,11 +1154,58 @@ impl<'a> Parser<'a> {
 
     fn parse_stylesheet(&mut self) -> Stylesheet {
         let mut rules = Vec::new();
+        let mut properties = Vec::new();
+        let mut media_rules = Vec::new();
+        let mut imports = Vec::new();
+        let mut font_faces = Vec::new();
+        let mut layer_order: Vec<String> = Vec::new();
+        let mut layers: Vec<LayerRule> = Vec::new();
+        let mut supports_rules: Vec<SupportsRule> = Vec::new();
+        let mut keyframes: Vec<KeyframesRule> = Vec::new();
+        let mut counter_styles: Vec<CounterStyleRule> = Vec::new();
+        let mut page_rules: Vec<PageRule> = Vec::new();
+        let mut scope_rules: Vec<ScopeRule> = Vec::new();
+        let mut starting_style_rules: Vec<StartingStyleRule> = Vec::new();
+        let mut container_rules: Vec<ContainerRule> = Vec::new();
+        let mut anon_counter: usize = 0;
         loop {
             self.skip_ws_and_comments();
             match self.peek() {
                 None => break,
-                Some('@') => self.skip_at_rule(),
+                Some('@') => match self.parse_at_rule() {
+                    AtRuleOutcome::Property(p) => properties.push(p),
+                    AtRuleOutcome::Media(m) => media_rules.push(m),
+                    AtRuleOutcome::Import(i) => imports.push(i),
+                    AtRuleOutcome::FontFace(f) => font_faces.push(f),
+                    AtRuleOutcome::LayerNames(names) => {
+                        for n in names {
+                            if !layer_order.iter().any(|e| e == &n) {
+                                layer_order.push(n);
+                            }
+                        }
+                    }
+                    AtRuleOutcome::LayerBlock { name, rules: lr } => {
+                        let resolved_name = name.unwrap_or_else(|| {
+                            anon_counter += 1;
+                            format!("__anon_{anon_counter}__")
+                        });
+                        if !layer_order.iter().any(|e| e == &resolved_name) {
+                            layer_order.push(resolved_name.clone());
+                        }
+                        layers.push(LayerRule {
+                            name: resolved_name,
+                            rules: lr,
+                        });
+                    }
+                    AtRuleOutcome::Supports(s) => supports_rules.push(s),
+                    AtRuleOutcome::Keyframes(k) => keyframes.push(k),
+                    AtRuleOutcome::CounterStyle(c) => counter_styles.push(c),
+                    AtRuleOutcome::Page(p) => page_rules.push(p),
+                    AtRuleOutcome::Scope(s) => scope_rules.push(s),
+                    AtRuleOutcome::StartingStyle(s) => starting_style_rules.push(s),
+                    AtRuleOutcome::Container(c) => container_rules.push(c),
+                    AtRuleOutcome::None => {}
+                },
                 Some(_) => {
                     let before = self.pos;
                     if let Some(rule) = self.parse_rule() {
@@ -373,7 +1218,763 @@ impl<'a> Parser<'a> {
                 }
             }
         }
-        Stylesheet { rules }
+        Stylesheet {
+            rules,
+            properties,
+            media_rules,
+            imports,
+            font_faces,
+            layer_order,
+            layers,
+            supports_rules,
+            keyframes,
+            counter_styles,
+            page_rules,
+            scope_rules,
+            starting_style_rules,
+            container_rules,
+        }
+    }
+
+    /// Распознаёт `@property --name { ... }` (CSS Properties and Values L1
+    /// §1.1) и `@media <query> { <rules> }` (Media Queries L4).
+    /// Все прочие @-правила синтаксически пропускает. Сама съедает
+    /// либо `;`, либо полный `{ ... }`-блок.
+    fn parse_at_rule(&mut self) -> AtRuleOutcome {
+        let start = self.pos;
+        self.consume(); // '@'
+        let name = self.parse_ident().unwrap_or_default();
+        if name.eq_ignore_ascii_case("property") {
+            return self.parse_property_body().map_or(AtRuleOutcome::None, AtRuleOutcome::Property);
+        }
+        if name.eq_ignore_ascii_case("media") {
+            return self.parse_media_rule().map_or(AtRuleOutcome::None, AtRuleOutcome::Media);
+        }
+        if name.eq_ignore_ascii_case("import") {
+            return self.parse_import_body().map_or(AtRuleOutcome::None, AtRuleOutcome::Import);
+        }
+        if name.eq_ignore_ascii_case("font-face") {
+            return self
+                .parse_font_face_body()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::FontFace);
+        }
+        if name.eq_ignore_ascii_case("layer") {
+            return self.parse_layer_at_rule();
+        }
+        if name.eq_ignore_ascii_case("supports") {
+            return self
+                .parse_supports_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::Supports);
+        }
+        if name.eq_ignore_ascii_case("keyframes")
+            || name.eq_ignore_ascii_case("-webkit-keyframes")
+        {
+            return self
+                .parse_keyframes_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::Keyframes);
+        }
+        if name.eq_ignore_ascii_case("counter-style") {
+            return self
+                .parse_counter_style_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::CounterStyle);
+        }
+        if name.eq_ignore_ascii_case("page") {
+            return self
+                .parse_page_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::Page);
+        }
+        if name.eq_ignore_ascii_case("scope") {
+            return self
+                .parse_scope_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::Scope);
+        }
+        if name.eq_ignore_ascii_case("starting-style") {
+            return self
+                .parse_starting_style_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::StartingStyle);
+        }
+        if name.eq_ignore_ascii_case("container") {
+            return self
+                .parse_container_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::Container);
+        }
+        // Прочее @-правило: откатимся к '@' и пропустим как раньше.
+        self.pos = start;
+        self.skip_at_rule();
+        AtRuleOutcome::None
+    }
+
+    /// Парсит `@layer` — две формы:
+    /// - **Statement-form**: `@layer base, components;` — список имён,
+    ///   закрывается `;`. Регистрирует layer-имена без rules.
+    /// - **Block-form**: `@layer name { rules }` или `@layer { rules }`
+    ///   (анонимный). Содержит обычные rules внутри. Имя опционально.
+    ///
+    /// Различие — что встречается раньше: `;` (statement) или `{` (block).
+    fn parse_layer_at_rule(&mut self) -> AtRuleOutcome {
+        self.skip_ws_and_comments();
+        // Собираем токены имени до `;` или `{`.
+        let names_start = self.pos;
+        while let Some(c) = self.peek() {
+            if c == ';' || c == '{' || c == '}' {
+                break;
+            }
+            self.consume();
+        }
+        let prelude = self.input[names_start..self.pos].trim();
+        match self.peek() {
+            Some(';') => {
+                self.consume();
+                // Statement-form: список имён через запятую.
+                let names: Vec<String> = prelude
+                    .split(',')
+                    .map(|n| n.trim().to_string())
+                    .filter(|n| !n.is_empty() && is_layer_name(n))
+                    .collect();
+                AtRuleOutcome::LayerNames(names)
+            }
+            Some('{') => {
+                self.consume();
+                // Block-form: name опционально (может быть пустым для anon),
+                // парсим rules до `}`.
+                let name = if prelude.is_empty() {
+                    None
+                } else if is_layer_name(prelude) {
+                    Some(prelude.to_string())
+                } else {
+                    // Невалидное имя (например, со скобками или невалидными
+                    // символами) — пропустим как анонимный.
+                    None
+                };
+                let mut rules = Vec::new();
+                loop {
+                    self.skip_ws_and_comments();
+                    match self.peek() {
+                        None => break,
+                        Some('}') => {
+                            self.consume();
+                            break;
+                        }
+                        Some('@') => {
+                            // Nested @-правила внутри layer пока не
+                            // поддерживаем — skip.
+                            self.skip_at_rule();
+                        }
+                        Some(_) => {
+                            let before = self.pos;
+                            if let Some(rule) = self.parse_rule() {
+                                rules.push(rule);
+                            } else if self.pos == before {
+                                self.consume();
+                            }
+                        }
+                    }
+                }
+                AtRuleOutcome::LayerBlock { name, rules }
+            }
+            _ => AtRuleOutcome::None,
+        }
+    }
+
+    /// Парсит тело `@font-face { ... }` — обычный block declarations,
+    /// но с font-face-specific descriptors (font-family / src / weight /
+    /// style / display / unicode-range). Прочие имена игнорируются.
+    fn parse_font_face_body(&mut self) -> Option<FontFaceRule> {
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume();
+        let declarations = self.parse_declaration_block();
+
+        let mut family: String = String::new();
+        let mut src_str: Option<String> = None;
+        let mut weight: Option<String> = None;
+        let mut style: Option<String> = None;
+        let mut display: Option<String> = None;
+        let mut unicode_range: Option<String> = None;
+
+        for d in &declarations {
+            let prop = d.property.to_ascii_lowercase();
+            match prop.as_str() {
+                "font-family" => {
+                    let v = d.value.trim();
+                    family = strip_css_string(v).map_or_else(|| v.to_string(), str::to_string);
+                }
+                "src" => src_str = Some(d.value.clone()),
+                "font-weight" => weight = Some(d.value.trim().to_string()),
+                "font-style" => style = Some(d.value.trim().to_string()),
+                "font-display" => display = Some(d.value.trim().to_string()),
+                "unicode-range" => unicode_range = Some(d.value.trim().to_string()),
+                _ => {}
+            }
+        }
+        if family.is_empty() {
+            return None;
+        }
+        let sources = src_str.as_deref().map(parse_font_face_src).unwrap_or_default();
+        Some(FontFaceRule {
+            family,
+            sources,
+            weight,
+            style,
+            display,
+            unicode_range,
+        })
+    }
+
+    /// Парсит тело `@import url("...") [<media-query>];` или
+    /// `@import "..." [<media-query>];`. Заканчивается на `;` (имеет
+    /// statement-form, не блочную). Возвращает None если синтаксис
+    /// нарушен; в любом случае съедает до `;` (или EOF).
+    fn parse_import_body(&mut self) -> Option<ImportRule> {
+        self.skip_ws_and_comments();
+        // URL: либо `url("...")` / `url('...')` / `url(...)`, либо просто `"..."` / `'...'`.
+        let url = self.parse_import_url()?;
+        self.skip_ws_and_comments();
+        // Опциональный media-query до `;`.
+        let media_start = self.pos;
+        while let Some(c) = self.peek() {
+            if c == ';' || c == '}' || c == '{' {
+                break;
+            }
+            self.consume();
+        }
+        let media_str = self.input[media_start..self.pos].trim();
+        let media = parse_media_query(media_str);
+        // Сжираем `;` если есть.
+        if self.peek() == Some(';') {
+            self.consume();
+        }
+        Some(ImportRule { url, media })
+    }
+
+    /// Парсит URL для `@import` — `url("...")`, `url(...)`, или `"..."`/`'...'`.
+    /// Позиция после успешного парсинга стоит ПОСЛЕ закрывающей кавычки/скобки.
+    fn parse_import_url(&mut self) -> Option<String> {
+        let rest = self.rest();
+        if let Some(after) = rest.strip_prefix("url(") {
+            // Внутри parentheses: опц. quoted-string или unquoted-URL.
+            let close_idx = after.find(')')?;
+            let inner = &after[..close_idx];
+            let url = inner.trim().trim_matches(['"', '\''].as_ref()).to_string();
+            self.pos += 4 + close_idx + 1;
+            return Some(url);
+        }
+        // Plain string без url().
+        match self.peek()? {
+            '"' | '\'' => {
+                let quote = self.consume()?;
+                let start = self.pos;
+                while let Some(c) = self.peek() {
+                    if c == quote {
+                        break;
+                    }
+                    self.consume();
+                }
+                if self.peek() != Some(quote) {
+                    return None;
+                }
+                let url = self.input[start..self.pos].to_string();
+                self.consume();
+                Some(url)
+            }
+            _ => None,
+        }
+    }
+
+    /// Парсит тело `@media <query> { <rules> }`. Грамматика query
+    /// упрощённая: type-or-feature [and type-or-feature]* [, ...].
+    /// Type-or-feature — ident (`screen`/`print`/...) или
+    /// `(feature: value)`. Возвращает None если синтаксис не позволяет
+    /// дойти до `{`; в этом случае откатывает позицию до конца блока
+    /// чтобы стабильно продолжить парсинг stylesheet.
+    fn parse_media_rule(&mut self) -> Option<MediaRule> {
+        self.skip_ws_and_comments();
+        // Собираем query-string до `{`.
+        let query_start = self.pos;
+        while let Some(c) = self.peek() {
+            if c == '{' {
+                break;
+            }
+            self.consume();
+        }
+        if self.peek() != Some('{') {
+            return None;
+        }
+        let query_str = self.input[query_start..self.pos].trim();
+        let query = parse_media_query(query_str);
+        // Тело: рекурсивно парсим как обычные rules.
+        self.consume(); // '{'
+        let mut rules = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some('@') => {
+                    // Nested @-правила в media пока не поддерживаем — skip.
+                    self.skip_at_rule();
+                }
+                Some(_) => {
+                    let before = self.pos;
+                    if let Some(rule) = self.parse_rule() {
+                        rules.push(rule);
+                    } else if self.pos == before {
+                        self.consume();
+                    }
+                }
+            }
+        }
+        Some(MediaRule { query, rules })
+    }
+
+    /// Парсит тело `@supports <condition> { rules }` — CSS Conditional Rules L3 §2.
+    /// Берёт сырую condition-строку до `{` (с балансировкой `(`/`)`),
+    /// затем парсит её через [`parse_supports_condition`]. Тело — обычные
+    /// rules до `}`. Возвращает `None` если структура нарушена.
+    fn parse_supports_rule(&mut self) -> Option<SupportsRule> {
+        self.skip_ws_and_comments();
+        let cond_start = self.pos;
+        let mut depth: i32 = 0;
+        while let Some(c) = self.peek() {
+            if c == '(' {
+                depth += 1;
+            } else if c == ')' {
+                depth -= 1;
+            } else if c == '{' && depth == 0 {
+                break;
+            }
+            self.consume();
+        }
+        if self.peek() != Some('{') {
+            return None;
+        }
+        let cond_str = self.input[cond_start..self.pos].trim();
+        let condition = parse_supports_condition(cond_str);
+        self.consume(); // '{'
+        let mut rules = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some('@') => {
+                    // Nested @-правила внутри @supports пока skip.
+                    self.skip_at_rule();
+                }
+                Some(_) => {
+                    let before = self.pos;
+                    if let Some(rule) = self.parse_rule() {
+                        rules.push(rule);
+                    } else if self.pos == before {
+                        self.consume();
+                    }
+                }
+            }
+        }
+        Some(SupportsRule { condition, rules })
+    }
+
+    /// Парсит тело `@keyframes <name> { <frame>* }` — CSS Animations L1 §3.
+    /// Frame-selector: `from` / `to` / `<percentage>`. Поддерживается
+    /// `0%, 50% { ... }` (одна frame с несколькими offset-ами,
+    /// разворачивается в две записи). `name` — CSS-ident.
+    fn parse_keyframes_rule(&mut self) -> Option<KeyframesRule> {
+        self.skip_ws_and_comments();
+        let name = self.parse_ident()?;
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume(); // '{'
+        let mut frames: Vec<Keyframe> = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some('@') => {
+                    // Nested @-правила внутри @keyframes по spec не разрешены.
+                    self.skip_at_rule();
+                }
+                Some(_) => {
+                    let before = self.pos;
+                    let frame_selector_start = self.pos;
+                    while let Some(c) = self.peek() {
+                        if c == '{' || c == '}' {
+                            break;
+                        }
+                        self.consume();
+                    }
+                    if self.peek() != Some('{') {
+                        if self.pos == before {
+                            self.consume();
+                        }
+                        continue;
+                    }
+                    let selector_str = self.input[frame_selector_start..self.pos].trim();
+                    self.consume(); // '{'
+                    let declarations = self.parse_declaration_block();
+                    let offsets = parse_keyframe_selectors(selector_str);
+                    for offset in offsets {
+                        frames.push(Keyframe {
+                            offset,
+                            declarations: declarations.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        Some(KeyframesRule { name, frames })
+    }
+
+    /// Парсит `@counter-style <name> { <descriptors> }` — CSS Counter Styles L3 §2.
+    /// Descriptors хранятся как обычные declarations.
+    fn parse_counter_style_rule(&mut self) -> Option<CounterStyleRule> {
+        self.skip_ws_and_comments();
+        let name = self.parse_ident()?;
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume();
+        let declarations = self.parse_declaration_block();
+        Some(CounterStyleRule { name, declarations })
+    }
+
+    /// Парсит `@page <selector>? { <decls> }` — CSS Paged Media L3 §3.
+    /// Selector сохраняется как сырая строка (`:first`, `:left`, имя
+    /// страницы, и т.д.). Пустой selector — любая страница.
+    fn parse_page_rule(&mut self) -> Option<PageRule> {
+        self.skip_ws_and_comments();
+        let sel_start = self.pos;
+        while let Some(c) = self.peek() {
+            if c == '{' || c == ';' {
+                break;
+            }
+            self.consume();
+        }
+        if self.peek() != Some('{') {
+            // `@page <prelude>;` без блока — не валидно для CSS Paged Media.
+            if self.peek() == Some(';') {
+                self.consume();
+            }
+            return None;
+        }
+        let selector = self.input[sel_start..self.pos].trim().to_string();
+        self.consume(); // '{'
+        let declarations = self.parse_declaration_block();
+        Some(PageRule {
+            selector,
+            declarations,
+        })
+    }
+
+    /// Парсит `@scope (<root>) [to (<limit>)] { rules }` — CSS Cascade L6.
+    /// Root и limit — сырые строки селекторов (без обрамляющих `(`/`)`).
+    /// Без `(<root>)` — implicit scope (root = пустая строка).
+    fn parse_scope_rule(&mut self) -> Option<ScopeRule> {
+        self.skip_ws_and_comments();
+        let mut root = String::new();
+        let mut limit: Option<String> = None;
+        // Опциональный `(<root>)`.
+        if self.peek() == Some('(') {
+            self.consume();
+            let start = self.pos;
+            let mut depth: i32 = 1;
+            while let Some(c) = self.peek() {
+                match c {
+                    '(' => depth += 1,
+                    ')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+                self.consume();
+            }
+            root = self.input[start..self.pos].trim().to_string();
+            if self.peek() == Some(')') {
+                self.consume();
+            }
+        }
+        self.skip_ws_and_comments();
+        // Опциональный `to (<limit>)`.
+        if self.rest().to_ascii_lowercase().starts_with("to") {
+            // Граница: следующий после `to` — не ident-char.
+            let after = self.pos + 2;
+            let ok = self.input.as_bytes().get(after).is_none_or(|&c| {
+                !(c.is_ascii_alphanumeric() || c == b'-' || c == b'_')
+            });
+            if ok {
+                self.pos = after;
+                self.skip_ws_and_comments();
+                if self.peek() == Some('(') {
+                    self.consume();
+                    let start = self.pos;
+                    let mut depth: i32 = 1;
+                    while let Some(c) = self.peek() {
+                        match c {
+                            '(' => depth += 1,
+                            ')' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                        self.consume();
+                    }
+                    limit = Some(self.input[start..self.pos].trim().to_string());
+                    if self.peek() == Some(')') {
+                        self.consume();
+                    }
+                }
+            }
+        }
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            return None;
+        }
+        self.consume();
+        let mut rules = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some('@') => {
+                    self.skip_at_rule();
+                }
+                Some(_) => {
+                    let before = self.pos;
+                    if let Some(rule) = self.parse_rule() {
+                        rules.push(rule);
+                    } else if self.pos == before {
+                        self.consume();
+                    }
+                }
+            }
+        }
+        Some(ScopeRule {
+            root,
+            limit,
+            rules,
+        })
+    }
+
+    /// Парсит `@container <name>? <condition> { rules }` — CSS Containment L3 §3.
+    /// Name — опциональный CSS-ident перед условием. Condition — балансированная
+    /// строка до `{` (хранится сырой). Rules — обычные правила внутри.
+    fn parse_container_rule(&mut self) -> Option<ContainerRule> {
+        self.skip_ws_and_comments();
+        // Опциональное имя: CSS-ident **только если** дальше не `(` —
+        // если сразу `(`, это начало condition без имени.
+        let name = if self.peek() != Some('(') && !self.starts_with_keyword("style") {
+            self.parse_ident()
+        } else {
+            None
+        };
+        self.skip_ws_and_comments();
+        // Condition: всё до `{` с учётом баланса `()`.
+        let cond_start = self.pos;
+        let mut depth: i32 = 0;
+        while let Some(c) = self.peek() {
+            if c == '(' {
+                depth += 1;
+            } else if c == ')' {
+                depth -= 1;
+            } else if c == '{' && depth == 0 {
+                break;
+            }
+            self.consume();
+        }
+        if self.peek() != Some('{') {
+            return None;
+        }
+        let condition = self.input[cond_start..self.pos].trim().to_string();
+        self.consume(); // '{'
+        let mut rules = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some('@') => {
+                    self.skip_at_rule();
+                }
+                Some(_) => {
+                    let before = self.pos;
+                    if let Some(rule) = self.parse_rule() {
+                        rules.push(rule);
+                    } else if self.pos == before {
+                        self.consume();
+                    }
+                }
+            }
+        }
+        Some(ContainerRule {
+            name,
+            condition,
+            rules,
+        })
+    }
+
+    /// Проверяет, начинается ли остаток с ключевого слова (case-insensitive)
+    /// + не-ident разделитель. Используется для container `style(...)`.
+    fn starts_with_keyword(&self, kw: &str) -> bool {
+        let rest = self.rest();
+        if !rest.to_ascii_lowercase().starts_with(kw) {
+            return false;
+        }
+        rest.as_bytes()
+            .get(kw.len())
+            .is_none_or(|&c| !(c.is_ascii_alphanumeric() || c == b'-' || c == b'_'))
+    }
+
+    /// Парсит `@starting-style { rules }` — CSS Transitions L2 §3.4.
+    fn parse_starting_style_rule(&mut self) -> Option<StartingStyleRule> {
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume();
+        let mut rules = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some('@') => {
+                    self.skip_at_rule();
+                }
+                Some(_) => {
+                    let before = self.pos;
+                    if let Some(rule) = self.parse_rule() {
+                        rules.push(rule);
+                    } else if self.pos == before {
+                        self.consume();
+                    }
+                }
+            }
+        }
+        Some(StartingStyleRule { rules })
+    }
+
+    /// Парсит тело `@property`: имя `--name`, блок `{ ... }`, обязательные
+    /// дескрипторы. Возвращает None если синтаксис нарушен или нет
+    /// обязательных полей. В любом исходе позиция остаётся после `}`
+    /// (или после `;` если блока не было, или EOF).
+    fn parse_property_body(&mut self) -> Option<PropertyRule> {
+        self.skip_ws_and_comments();
+        // Имя должно начинаться с `--`.
+        if !self.rest().starts_with("--") {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume();
+        self.consume();
+        let tail = self.parse_ident().unwrap_or_default();
+        if tail.is_empty() {
+            self.skip_until_block_end();
+            return None;
+        }
+        let name = format!("--{tail}");
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume();
+        let declarations = self.parse_declaration_block();
+
+        // Извлекаем три обязательных дескриптора. Любые другие имена в теле
+        // @property спецификацией не определены; их игнорируем (forward-compat).
+        let mut syntax: Option<String> = None;
+        let mut inherits: Option<bool> = None;
+        let mut initial_value: Option<String> = None;
+        for d in &declarations {
+            let prop = d.property.to_ascii_lowercase();
+            match prop.as_str() {
+                "syntax" => {
+                    // value — CSS-string в одиночных или двойных кавычках.
+                    if let Some(stripped) = strip_css_string(d.value.trim()) {
+                        syntax = Some(stripped.to_string());
+                    }
+                }
+                "inherits" => {
+                    let v = d.value.trim().to_ascii_lowercase();
+                    if v == "true" {
+                        inherits = Some(true);
+                    } else if v == "false" {
+                        inherits = Some(false);
+                    }
+                }
+                "initial-value" => {
+                    initial_value = Some(d.value.trim().to_string());
+                }
+                _ => {}
+            }
+        }
+
+        let syntax = syntax?;
+        let inherits = inherits?;
+        // CSS Properties and Values L1 §1.1: если syntax не universal,
+        // initial-value обязателен. В Phase 0 поддерживаем только syntax="*",
+        // но валидируем по спеке — чужой syntax без initial-value invalid.
+        if syntax != "*" && initial_value.is_none() {
+            return None;
+        }
+        Some(PropertyRule {
+            name,
+            syntax,
+            inherits,
+            initial_value,
+        })
+    }
+
+    /// Пропускает до конца `@-rule`-тела: либо `;`, либо `{ ... }` целиком.
+    /// Используется при синтаксической ошибке внутри @property — потребитель
+    /// не должен ловить declarations этого правила.
+    fn skip_until_block_end(&mut self) {
+        while let Some(c) = self.peek() {
+            if c == '{' {
+                self.consume();
+                self.skip_block();
+                return;
+            }
+            if c == ';' {
+                self.consume();
+                return;
+            }
+            self.consume();
+        }
     }
 
     fn skip_at_rule(&mut self) {
@@ -970,6 +2571,25 @@ fn extract_important(value: &str) -> (String, bool) {
         return (value.to_string(), false);
     };
     (before_bang.trim_end().to_string(), true)
+}
+
+/// Снимает с CSS-string значения (`"..."` или `'...'`) обрамляющие кавычки.
+/// Возвращает None если значение не строковый литерал. Используется для
+/// дескриптора `syntax` в `@property` (он обязан быть строкой по spec L1 §1.1).
+/// Внутренние escape-последовательности (`\xNN`, `\<newline>`) не
+/// поддерживаются — в Phase 0 syntax всегда `"*"`, и более сложные формы
+/// (`"<length>"`, `"<color>"`) будут идти через тот же путь без escape-ов.
+fn strip_css_string(v: &str) -> Option<&str> {
+    let bytes = v.as_bytes();
+    if bytes.len() < 2 {
+        return None;
+    }
+    let q = bytes[0];
+    if (q == b'"' || q == b'\'') && bytes[bytes.len() - 1] == q {
+        Some(&v[1..v.len() - 1])
+    } else {
+        None
+    }
 }
 
 fn is_ident_start(c: char) -> bool {
@@ -2064,5 +3684,724 @@ mod tests {
         assert_eq!(s.rules[0].declarations[0].property, "--c");
         assert_eq!(s.rules[0].declarations[0].value, "red");
         assert!(s.rules[0].declarations[0].important);
+    }
+
+    // CSS Properties and Values L1 §1.1 — @property
+
+    #[test]
+    fn at_property_basic() {
+        let s = parse(
+            "@property --main-color { syntax: \"*\"; inherits: false; initial-value: red; }",
+        );
+        assert_eq!(s.properties.len(), 1);
+        let p = &s.properties[0];
+        assert_eq!(p.name, "--main-color");
+        assert_eq!(p.syntax, "*");
+        assert!(!p.inherits);
+        assert_eq!(p.initial_value.as_deref(), Some("red"));
+        assert!(s.rules.is_empty());
+    }
+
+    #[test]
+    fn at_property_universal_no_initial_value_ok() {
+        // syntax="*" разрешает отсутствие initial-value.
+        let s = parse("@property --x { syntax: \"*\"; inherits: true; }");
+        assert_eq!(s.properties.len(), 1);
+        assert_eq!(s.properties[0].name, "--x");
+        assert!(s.properties[0].inherits);
+        assert!(s.properties[0].initial_value.is_none());
+    }
+
+    #[test]
+    fn at_property_non_universal_without_initial_invalid() {
+        // syntax="<length>" без initial-value → @property невалидно.
+        let s = parse("@property --w { syntax: \"<length>\"; inherits: false; }");
+        assert!(s.properties.is_empty());
+    }
+
+    #[test]
+    fn at_property_missing_inherits_invalid() {
+        let s = parse("@property --x { syntax: \"*\"; initial-value: 0; }");
+        assert!(s.properties.is_empty());
+    }
+
+    #[test]
+    fn at_property_missing_syntax_invalid() {
+        let s = parse("@property --x { inherits: true; initial-value: 0; }");
+        assert!(s.properties.is_empty());
+    }
+
+    #[test]
+    fn at_property_name_without_dash_invalid() {
+        // Имя без ведущих `--` — невалидно. Парсер съест блок и не зарегистрирует.
+        let s = parse("@property foo { syntax: \"*\"; inherits: false; }");
+        assert!(s.properties.is_empty());
+    }
+
+    #[test]
+    fn at_property_inherits_case_insensitive() {
+        // CSS Values L4 §2.4: keyword-ы ASCII case-insensitive.
+        let s = parse("@property --x { SYNTAX: \"*\"; Inherits: TRUE; Initial-Value: 5px; }");
+        assert_eq!(s.properties.len(), 1);
+        assert!(s.properties[0].inherits);
+        assert_eq!(s.properties[0].initial_value.as_deref(), Some("5px"));
+    }
+
+    #[test]
+    fn at_property_then_normal_rule() {
+        // После @property парсер продолжает разбирать обычные правила.
+        let s = parse(
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: red; }\
+             p { color: blue; }",
+        );
+        assert_eq!(s.properties.len(), 1);
+        assert_eq!(s.rules.len(), 1);
+        assert_eq!(s.rules[0].declarations[0].value, "blue");
+    }
+
+    #[test]
+    fn at_property_duplicate_keeps_order() {
+        // Две регистрации одного имени — сохраняем обе, последняя побеждает
+        // на потребительской стороне (по spec — last wins, реализуем в layout).
+        let s = parse(
+            "@property --x { syntax: \"*\"; inherits: false; initial-value: 1; }\
+             @property --x { syntax: \"*\"; inherits: true; initial-value: 2; }",
+        );
+        assert_eq!(s.properties.len(), 2);
+        assert_eq!(s.properties[0].initial_value.as_deref(), Some("1"));
+        assert_eq!(s.properties[1].initial_value.as_deref(), Some("2"));
+        assert!(s.properties[1].inherits);
+    }
+
+    #[test]
+    fn other_at_rule_still_skipped() {
+        // Прочие @-правила (media/import/...) синтаксически пропускаются.
+        let s = parse("@media (min-width: 100px) { p { color: red; } } p { color: blue; }");
+        assert!(s.properties.is_empty());
+        // @media тело пропущено целиком — остаётся только последнее `p`-правило.
+        assert_eq!(s.rules.len(), 1);
+        assert_eq!(s.rules[0].declarations[0].value, "blue");
+    }
+
+    #[test]
+    fn at_property_syntax_single_quotes() {
+        let s = parse("@property --c { syntax: '*'; inherits: false; initial-value: red; }");
+        assert_eq!(s.properties.len(), 1);
+        assert_eq!(s.properties[0].syntax, "*");
+    }
+
+    // ── @import ──
+
+    #[test]
+    fn at_import_url_double_quoted() {
+        let s = parse("@import url(\"theme.css\");");
+        assert_eq!(s.imports.len(), 1);
+        assert_eq!(s.imports[0].url, "theme.css");
+        assert!(s.imports[0].media.clauses.is_empty());
+    }
+
+    #[test]
+    fn at_import_url_single_quoted() {
+        let s = parse("@import url('theme.css');");
+        assert_eq!(s.imports[0].url, "theme.css");
+    }
+
+    #[test]
+    fn at_import_url_unquoted() {
+        let s = parse("@import url(theme.css);");
+        assert_eq!(s.imports[0].url, "theme.css");
+    }
+
+    #[test]
+    fn at_import_bare_string() {
+        let s = parse(r#"@import "theme.css";"#);
+        assert_eq!(s.imports[0].url, "theme.css");
+    }
+
+    #[test]
+    fn at_import_with_media_query() {
+        let s = parse(r#"@import url("print.css") print;"#);
+        assert_eq!(s.imports.len(), 1);
+        assert_eq!(s.imports[0].url, "print.css");
+        assert_eq!(s.imports[0].media.clauses.len(), 1);
+        assert_eq!(s.imports[0].media.clauses[0].len(), 1);
+        if let MediaCondition::MediaType(t) = &s.imports[0].media.clauses[0][0] {
+            assert_eq!(t, "print");
+        } else {
+            panic!("expected MediaType");
+        }
+    }
+
+    #[test]
+    fn at_import_with_complex_media() {
+        let s = parse(r#"@import url("mobile.css") screen and (max-width: 600px);"#);
+        assert_eq!(s.imports[0].url, "mobile.css");
+        assert_eq!(s.imports[0].media.clauses.len(), 1);
+        // Должны быть MediaType("screen") и Feature(MaxWidth(600)).
+        let clause = &s.imports[0].media.clauses[0];
+        assert_eq!(clause.len(), 2);
+    }
+
+    #[test]
+    fn at_import_multiple_in_stylesheet() {
+        let s = parse(r#"
+            @import url("a.css");
+            @import "b.css";
+            @import url("c.css") screen;
+            p { color: red; }
+        "#);
+        assert_eq!(s.imports.len(), 3);
+        assert_eq!(s.imports[0].url, "a.css");
+        assert_eq!(s.imports[1].url, "b.css");
+        assert_eq!(s.imports[2].url, "c.css");
+        // Обычное правило тоже должно распарситься.
+        assert_eq!(s.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_import_invalid_syntax_skipped() {
+        // Без URL — должна пропуститься, не сломать остаток.
+        let s = parse("@import garbage; p { color: red; }");
+        assert!(s.imports.is_empty());
+        assert_eq!(s.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_import_cyrillic_url() {
+        let s = parse(r#"@import url("стили.css");"#);
+        assert_eq!(s.imports[0].url, "стили.css");
+    }
+
+    // ── @font-face ──
+
+    #[test]
+    fn at_font_face_basic() {
+        let s = parse(r#"
+            @font-face {
+                font-family: "Roboto";
+                src: url("roboto.woff2") format("woff2");
+            }
+        "#);
+        assert_eq!(s.font_faces.len(), 1);
+        assert_eq!(s.font_faces[0].family, "Roboto");
+        assert_eq!(s.font_faces[0].sources.len(), 1);
+        assert_eq!(s.font_faces[0].sources[0].kind, FontFaceSourceKind::Url);
+        assert_eq!(s.font_faces[0].sources[0].value, "roboto.woff2");
+        assert_eq!(s.font_faces[0].sources[0].format, Some("woff2".to_string()));
+    }
+
+    #[test]
+    fn at_font_face_multiple_sources() {
+        let s = parse(r#"
+            @font-face {
+                font-family: "Body";
+                src: local("Helvetica"), url("body.woff2") format("woff2"), url("body.ttf") format("truetype");
+            }
+        "#);
+        let srcs = &s.font_faces[0].sources;
+        assert_eq!(srcs.len(), 3);
+        assert_eq!(srcs[0].kind, FontFaceSourceKind::Local);
+        assert_eq!(srcs[0].value, "Helvetica");
+        assert_eq!(srcs[0].format, None);
+        assert_eq!(srcs[1].kind, FontFaceSourceKind::Url);
+        assert_eq!(srcs[1].format, Some("woff2".to_string()));
+        assert_eq!(srcs[2].format, Some("truetype".to_string()));
+    }
+
+    #[test]
+    fn at_font_face_all_descriptors() {
+        let s = parse(r#"
+            @font-face {
+                font-family: "Var";
+                src: url("var.woff2");
+                font-weight: 100 900;
+                font-style: italic;
+                font-display: swap;
+                unicode-range: U+0000-007F, U+0400-04FF;
+            }
+        "#);
+        let f = &s.font_faces[0];
+        assert_eq!(f.weight, Some("100 900".to_string()));
+        assert_eq!(f.style, Some("italic".to_string()));
+        assert_eq!(f.display, Some("swap".to_string()));
+        assert_eq!(f.unicode_range, Some("U+0000-007F, U+0400-04FF".to_string()));
+    }
+
+    #[test]
+    fn at_font_face_no_family_skipped() {
+        // Без font-family декларации правило невалидно.
+        let s = parse(r#"
+            @font-face { src: url("x.woff2"); }
+            p { color: red; }
+        "#);
+        assert!(s.font_faces.is_empty());
+        // Обычное правило за ним парсится.
+        assert_eq!(s.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_font_face_unquoted_family() {
+        // Допустимо: font-family без кавычек.
+        let s = parse("@font-face { font-family: Roboto; src: url(r.ttf); }");
+        assert_eq!(s.font_faces[0].family, "Roboto");
+        assert_eq!(s.font_faces[0].sources[0].value, "r.ttf");
+    }
+
+    #[test]
+    fn at_font_face_cyrillic_family() {
+        let s = parse(r#"
+            @font-face { font-family: "Гранит"; src: url("granit.woff2"); }
+        "#);
+        assert_eq!(s.font_faces[0].family, "Гранит");
+    }
+
+    #[test]
+    fn split_top_level_commas_respects_parens_and_strings() {
+        // Запятые внутри (...) и "..." не должны разделять.
+        assert_eq!(
+            split_top_level_commas("a, b(c, d), e \"f, g\", h"),
+            vec!["a", " b(c, d)", " e \"f, g\"", " h"]
+        );
+    }
+
+    #[test]
+    fn parse_font_face_src_local_only() {
+        let srcs = parse_font_face_src("local(\"Times New Roman\")");
+        assert_eq!(srcs.len(), 1);
+        assert_eq!(srcs[0].kind, FontFaceSourceKind::Local);
+        assert_eq!(srcs[0].value, "Times New Roman");
+        assert_eq!(srcs[0].format, None);
+    }
+
+    // ── @layer (CSS Cascade L5 §6.4) ──
+
+    #[test]
+    fn at_layer_statement_form_single_name() {
+        let s = parse("@layer base;");
+        assert_eq!(s.layer_order, vec!["base".to_string()]);
+        assert!(s.layers.is_empty());
+    }
+
+    #[test]
+    fn at_layer_statement_form_multiple_names() {
+        let s = parse("@layer base, components, utilities;");
+        assert_eq!(
+            s.layer_order,
+            vec!["base".to_string(), "components".to_string(), "utilities".to_string()]
+        );
+    }
+
+    #[test]
+    fn at_layer_block_form_with_name() {
+        let s = parse(r#"
+            @layer base {
+                p { color: red; }
+            }
+        "#);
+        assert_eq!(s.layer_order, vec!["base".to_string()]);
+        assert_eq!(s.layers.len(), 1);
+        assert_eq!(s.layers[0].name, "base");
+        assert_eq!(s.layers[0].rules.len(), 1);
+    }
+
+    #[test]
+    fn at_layer_block_form_anonymous() {
+        let s = parse(r#"
+            @layer {
+                p { color: red; }
+            }
+        "#);
+        assert_eq!(s.layers.len(), 1);
+        assert_eq!(s.layers[0].name, "__anon_1__");
+        assert_eq!(s.layer_order, vec!["__anon_1__".to_string()]);
+    }
+
+    #[test]
+    fn at_layer_block_does_not_duplicate_in_order() {
+        // Если статикой объявили `@layer base;`, а потом блок `@layer base { ... }`,
+        // имя в layer_order должно быть один раз (idempotent insert).
+        let s = parse(r#"
+            @layer base;
+            @layer base { p { color: red; } }
+        "#);
+        assert_eq!(s.layer_order, vec!["base".to_string()]);
+    }
+
+    #[test]
+    fn at_layer_multiple_anon_blocks_get_unique_names() {
+        let s = parse(r#"
+            @layer { p { color: red; } }
+            @layer { p { color: blue; } }
+        "#);
+        assert_eq!(s.layers.len(), 2);
+        assert_eq!(s.layers[0].name, "__anon_1__");
+        assert_eq!(s.layers[1].name, "__anon_2__");
+    }
+
+    #[test]
+    fn at_layer_mixed_form_order_preserved() {
+        let s = parse(r#"
+            @layer reset, base;
+            @layer components { p { color: blue; } }
+            @layer base { p { color: red; } }
+        "#);
+        // layer_order сохраняет порядок _первого_ упоминания.
+        assert_eq!(
+            s.layer_order,
+            vec![
+                "reset".to_string(),
+                "base".to_string(),
+                "components".to_string(),
+            ]
+        );
+        // А layers содержит block-form правил (2 шт).
+        assert_eq!(s.layers.len(), 2);
+        assert_eq!(s.layers[0].name, "components");
+        assert_eq!(s.layers[1].name, "base");
+    }
+
+    #[test]
+    fn at_layer_dotted_subname_ok() {
+        // sub-layer-имя `base.text` — валидно.
+        let s = parse("@layer base.text;");
+        assert_eq!(s.layer_order, vec!["base.text".to_string()]);
+    }
+
+    #[test]
+    fn at_layer_unlayered_rules_kept_separately() {
+        let s = parse(r#"
+            @layer base { p { color: red; } }
+            div { color: blue; }
+        "#);
+        // Layered: p in base.
+        assert_eq!(s.layers.len(), 1);
+        // Unlayered: top-level div.
+        assert_eq!(s.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_layer_invalid_name_skipped() {
+        // `1invalid` начинается с цифры → не CSS-ident → пропускается.
+        let s = parse("@layer 1invalid, valid;");
+        assert_eq!(s.layer_order, vec!["valid".to_string()]);
+    }
+
+    #[test]
+    fn is_layer_name_basic() {
+        assert!(is_layer_name("base"));
+        assert!(is_layer_name("base.text"));
+        assert!(is_layer_name("_priv"));
+        assert!(!is_layer_name("1invalid"));
+        assert!(!is_layer_name(""));
+        assert!(!is_layer_name("with space"));
+    }
+
+    // ── CSS Conditional Rules L3 §2 — @supports ──
+
+    #[test]
+    fn at_supports_simple_decl() {
+        let s = parse("@supports (display: grid) { p { color: red; } }");
+        assert_eq!(s.supports_rules.len(), 1);
+        let r = &s.supports_rules[0];
+        match &r.condition {
+            SupportsCondition::Decl { property, value } => {
+                assert_eq!(property, "display");
+                assert_eq!(value, "grid");
+            }
+            other => panic!("expected Decl, got {other:?}"),
+        }
+        assert_eq!(r.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_supports_and_combinator() {
+        let s = parse("@supports (display: grid) and (color: red) { p { color: red; } }");
+        let r = &s.supports_rules[0];
+        match &r.condition {
+            SupportsCondition::And(terms) => assert_eq!(terms.len(), 2),
+            other => panic!("expected And, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_or_combinator() {
+        let s = parse("@supports (display: flex) or (display: -webkit-flex) { p { color: red; } }");
+        match &s.supports_rules[0].condition {
+            SupportsCondition::Or(terms) => assert_eq!(terms.len(), 2),
+            other => panic!("expected Or, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_negation() {
+        let s = parse("@supports not (display: pancake) { p { color: red; } }");
+        match &s.supports_rules[0].condition {
+            SupportsCondition::Not(inner) => match inner.as_ref() {
+                SupportsCondition::Decl { property, .. } => assert_eq!(property, "display"),
+                other => panic!("expected Decl inside Not, got {other:?}"),
+            },
+            other => panic!("expected Not, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_selector_test() {
+        let s = parse("@supports selector(:has(a)) { p { color: red; } }");
+        match &s.supports_rules[0].condition {
+            SupportsCondition::Selector(sel) => assert!(sel.contains(":has(a)")),
+            other => panic!("expected Selector, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_evaluate_known_property() {
+        let cond = parse_supports_condition("(display: grid)");
+        assert!(cond.evaluate(&["display", "color"]));
+        assert!(!cond.evaluate(&["color"]));
+    }
+
+    #[test]
+    fn at_supports_evaluate_and() {
+        let cond = parse_supports_condition("(display: grid) and (color: red)");
+        assert!(cond.evaluate(&["display", "color"]));
+        assert!(!cond.evaluate(&["display"]));
+    }
+
+    #[test]
+    fn at_supports_evaluate_or() {
+        let cond = parse_supports_condition("(unknown: x) or (color: red)");
+        assert!(cond.evaluate(&["color"]));
+        assert!(!cond.evaluate(&["other"]));
+    }
+
+    #[test]
+    fn at_supports_evaluate_not() {
+        let cond = parse_supports_condition("not (unknown: x)");
+        assert!(cond.evaluate(&["color"]));
+        let cond2 = parse_supports_condition("not (color: red)");
+        assert!(!cond2.evaluate(&["color"]));
+    }
+
+    #[test]
+    fn at_supports_nested_grouping() {
+        // `((display: grid))` — внутренние скобки = nested condition.
+        let s = parse("@supports ((display: grid)) { p { color: red; } }");
+        match &s.supports_rules[0].condition {
+            SupportsCondition::Decl { property, .. } => assert_eq!(property, "display"),
+            other => panic!("expected Decl after unwrapping, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_value_with_parens_balanced() {
+        let s = parse("@supports (color: rgba(0, 0, 0, 0.5)) { p { color: red; } }");
+        match &s.supports_rules[0].condition {
+            SupportsCondition::Decl { property, value } => {
+                assert_eq!(property, "color");
+                assert!(value.contains("rgba"));
+            }
+            other => panic!("expected Decl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_evaluator_selector_returns_false() {
+        let cond = parse_supports_condition("selector(:has(a))");
+        // Phase 0 не оценивает selector() — всегда false.
+        assert!(!cond.evaluate(&["color"]));
+    }
+
+    #[test]
+    fn at_supports_empty_returns_unknown() {
+        let cond = parse_supports_condition("");
+        assert!(matches!(cond, SupportsCondition::Unknown));
+        assert!(!cond.evaluate(&["color"]));
+    }
+
+    // ── CSS Animations L1 §3 — @keyframes ──
+
+    #[test]
+    fn at_keyframes_from_to() {
+        let s = parse("@keyframes fade { from { opacity: 0; } to { opacity: 1; } }");
+        assert_eq!(s.keyframes.len(), 1);
+        let kf = &s.keyframes[0];
+        assert_eq!(kf.name, "fade");
+        assert_eq!(kf.frames.len(), 2);
+        assert!((kf.frames[0].offset - 0.0).abs() < 1e-6);
+        assert!((kf.frames[1].offset - 1.0).abs() < 1e-6);
+        assert_eq!(kf.frames[0].declarations[0].property, "opacity");
+    }
+
+    #[test]
+    fn at_keyframes_percentages() {
+        let s = parse("@keyframes pulse { 0% { color: red; } 50% { color: blue; } 100% { color: red; } }");
+        let kf = &s.keyframes[0];
+        assert_eq!(kf.frames.len(), 3);
+        assert!((kf.frames[0].offset - 0.0).abs() < 1e-6);
+        assert!((kf.frames[1].offset - 0.5).abs() < 1e-6);
+        assert!((kf.frames[2].offset - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn at_keyframes_multiple_offsets_per_frame() {
+        // `0%, 50%` — один блок с двумя offset-ами, разворачивается.
+        let s = parse("@keyframes z { 0%, 50% { color: red; } 100% { color: blue; } }");
+        let kf = &s.keyframes[0];
+        assert_eq!(kf.frames.len(), 3);
+        assert!((kf.frames[0].offset - 0.0).abs() < 1e-6);
+        assert!((kf.frames[1].offset - 0.5).abs() < 1e-6);
+        // Декларации одинаковые между развёрнутыми frame-ами.
+        assert_eq!(kf.frames[0].declarations[0].value, "red");
+        assert_eq!(kf.frames[1].declarations[0].value, "red");
+    }
+
+    #[test]
+    fn at_keyframes_webkit_prefix() {
+        let s = parse("@-webkit-keyframes fade { from { x: 0; } }");
+        assert_eq!(s.keyframes.len(), 1);
+        assert_eq!(s.keyframes[0].name, "fade");
+    }
+
+    #[test]
+    fn at_keyframes_invalid_offset_skipped() {
+        // 150% > 100% → пропускается.
+        let s = parse("@keyframes z { 0% { x: 1; } 150% { x: 2; } 100% { x: 3; } }");
+        let kf = &s.keyframes[0];
+        assert_eq!(kf.frames.len(), 2);
+    }
+
+    #[test]
+    fn at_keyframes_empty_block() {
+        let s = parse("@keyframes z { }");
+        assert_eq!(s.keyframes.len(), 1);
+        assert_eq!(s.keyframes[0].frames.len(), 0);
+    }
+
+    #[test]
+    fn parse_keyframe_selectors_handles_keywords_and_percents() {
+        assert_eq!(parse_keyframe_selectors("from"), vec![0.0]);
+        assert_eq!(parse_keyframe_selectors("to"), vec![1.0]);
+        assert_eq!(parse_keyframe_selectors("From"), vec![0.0]); // case-insensitive
+        assert_eq!(parse_keyframe_selectors("0%, 50%, 100%"), vec![0.0, 0.5, 1.0]);
+        assert_eq!(parse_keyframe_selectors("bogus"), Vec::<f32>::new());
+        assert_eq!(parse_keyframe_selectors("-10%"), Vec::<f32>::new());
+        assert_eq!(parse_keyframe_selectors("150%"), Vec::<f32>::new());
+    }
+
+    // ── CSS Counter Styles L3 §2 — @counter-style ──
+
+    #[test]
+    fn at_counter_style_basic() {
+        let s = parse(
+            "@counter-style thumbs { system: cyclic; symbols: \"\\1F44D\"; suffix: \" \"; }",
+        );
+        assert_eq!(s.counter_styles.len(), 1);
+        let cs = &s.counter_styles[0];
+        assert_eq!(cs.name, "thumbs");
+        assert_eq!(cs.declarations.len(), 3);
+        assert_eq!(cs.declarations[0].property, "system");
+    }
+
+    #[test]
+    fn at_counter_style_empty_block() {
+        let s = parse("@counter-style empty { }");
+        assert_eq!(s.counter_styles.len(), 1);
+        assert!(s.counter_styles[0].declarations.is_empty());
+    }
+
+    // ── CSS Paged Media L3 §3 — @page ──
+
+    #[test]
+    fn at_page_no_selector() {
+        let s = parse("@page { margin: 2cm; }");
+        assert_eq!(s.page_rules.len(), 1);
+        let p = &s.page_rules[0];
+        assert!(p.selector.is_empty());
+        assert_eq!(p.declarations[0].property, "margin");
+    }
+
+    #[test]
+    fn at_page_pseudo_selector() {
+        let s = parse("@page :first { margin-top: 4cm; }");
+        let p = &s.page_rules[0];
+        assert_eq!(p.selector, ":first");
+        assert_eq!(p.declarations.len(), 1);
+    }
+
+    #[test]
+    fn at_page_named_selector() {
+        let s = parse("@page cover :left { margin: 0; }");
+        assert_eq!(s.page_rules[0].selector, "cover :left");
+    }
+
+    // ── CSS Cascade L6 — @scope ──
+
+    #[test]
+    fn at_scope_root_only() {
+        let s = parse("@scope (.card) { h1 { color: red; } }");
+        assert_eq!(s.scope_rules.len(), 1);
+        let sc = &s.scope_rules[0];
+        assert_eq!(sc.root, ".card");
+        assert_eq!(sc.limit, None);
+        assert_eq!(sc.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_scope_root_and_limit() {
+        let s = parse("@scope (.card) to (.footer) { p { color: blue; } }");
+        let sc = &s.scope_rules[0];
+        assert_eq!(sc.root, ".card");
+        assert_eq!(sc.limit.as_deref(), Some(".footer"));
+    }
+
+    #[test]
+    fn at_scope_implicit() {
+        let s = parse("@scope { h1 { color: red; } }");
+        let sc = &s.scope_rules[0];
+        assert!(sc.root.is_empty());
+        assert_eq!(sc.limit, None);
+        assert_eq!(sc.rules.len(), 1);
+    }
+
+    // ── CSS Transitions L2 §3.4 — @starting-style ──
+
+    #[test]
+    fn at_starting_style_basic() {
+        let s = parse("@starting-style { dialog { opacity: 0; } }");
+        assert_eq!(s.starting_style_rules.len(), 1);
+        assert_eq!(s.starting_style_rules[0].rules.len(), 1);
+    }
+
+    #[test]
+    fn at_starting_style_empty() {
+        let s = parse("@starting-style { }");
+        assert_eq!(s.starting_style_rules.len(), 1);
+        assert!(s.starting_style_rules[0].rules.is_empty());
+    }
+
+    // ── CSS Containment L3 §3 — @container ──
+
+    #[test]
+    fn at_container_anonymous() {
+        let s = parse("@container (min-width: 300px) { p { color: red; } }");
+        assert_eq!(s.container_rules.len(), 1);
+        let c = &s.container_rules[0];
+        assert_eq!(c.name, None);
+        assert!(c.condition.contains("min-width"));
+        assert_eq!(c.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_container_named() {
+        let s = parse("@container sidebar (min-width: 200px) { h1 { color: blue; } }");
+        let c = &s.container_rules[0];
+        assert_eq!(c.name.as_deref(), Some("sidebar"));
+    }
+
+    #[test]
+    fn at_container_complex_condition() {
+        let s = parse("@container (min-width: 200px) and (max-width: 600px) { p { } }");
+        let c = &s.container_rules[0];
+        assert!(c.condition.contains("and"));
     }
 }

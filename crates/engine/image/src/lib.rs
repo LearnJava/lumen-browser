@@ -3,10 +3,12 @@
 //! Реализуется самостоятельно, без `image` / `png` / `jpeg-decoder` (см. §5
 //! политики зависимостей в `CLAUDE.md`). Phase 0 покрывает PNG для случаев,
 //! которые реально встречаются на современных веб-страницах:
-//! 8-битные RGB / RGBA / grayscale / grayscale + alpha и **palette
-//! (color_type 3) c bit_depth = 8** + опциональный `tRNS` для прозрачности.
-//! Фильтры 0–4 по спецификации, без interlacing. 16-битная глубина,
-//! 1/2/4-битная palette, Adam7 и JPEG добавляются отдельными задачами.
+//! grayscale / grayscale + alpha / RGB / RGBA при `bit_depth ∈ {8, 16}` +
+//! palette (color_type 3) при `bit_depth ∈ {1, 2, 4, 8}` + опциональный
+//! `tRNS` для прозрачности. 16-битные сэмплы downsample-ятся в 8-битные
+//! отбрасыванием младшего байта (libpng `PNG_TRANSFORM_STRIP_16`). Фильтры
+//! 0–4 по спецификации. **Adam7-interlacing поддерживается** для всех
+//! поддерживаемых color types / bit-depths. JPEG добавляется отдельной задачей.
 //!
 //! Декодер не паникует на повреждённом входе — каждая ошибка возвращается
 //! как `DecodeError` с конкретной причиной.
@@ -122,10 +124,6 @@ pub enum IhdrError {
 /// Что именно не поддерживается на текущем этапе.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UnsupportedReason {
-    /// Adam7 interlacing (color_type 1).
-    Interlaced,
-    /// 16-битная глубина — реализуема, но Phase 0 ограничен 8 битами.
-    SixteenBitDepth,
     /// 1/2/4-битная глубина — реализуема, но Phase 0 ограничен 8 (касается
     /// и grayscale, и palette).
     SubByteDepth(u8),
@@ -152,6 +150,14 @@ pub enum PaletteError {
     DuplicateChunk { kind: [u8; 4] },
     /// Палитровый индекс за пределами `PLTE` — повреждённый PNG-файл.
     IndexOutOfRange { row: u32, col: u32, index: u8, plte_count: usize },
+    /// `tRNS` для color_type 0 (grayscale) должен содержать ровно 2 байта
+    /// (один u16 big-endian — gray sample считающийся прозрачным).
+    BadTrnsLengthForGrayscale(u32),
+    /// `tRNS` для color_type 2 (RGB) должен содержать ровно 6 байт
+    /// (три u16 big-endian — RGB-color считающийся прозрачным).
+    BadTrnsLengthForRgb(u32),
+    /// `tRNS` для color_type 4 / 6 запрещён PNG §11.3.2.1 — alpha уже есть в пикселе.
+    UnexpectedForAlphaType,
 }
 
 /// Ошибки парсера DEFLATE/zlib (RFC 1950, 1951).

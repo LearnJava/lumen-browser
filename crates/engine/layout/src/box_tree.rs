@@ -15,6 +15,16 @@ use lumen_dom::{Document, NodeData, NodeId};
 use crate::style::{compute_style, BoxSizing, ComputedStyle, Display, TextAlign};
 use crate::TextMeasurer;
 
+/// HTML-имя элемента `<img>` для распознавания replaced-боксов в layout.
+/// Tag-name в DOM хранится lower-case (HTML5 tree-builder), поэтому
+/// сравнение точное, без `eq_ignore_ascii_case`.
+fn is_image_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "img"
+    )
+}
+
 #[derive(Debug, Clone)]
 pub struct LayoutBox {
     pub node: NodeId,
@@ -53,6 +63,16 @@ pub enum BoxKind {
         segments: Vec<InlineSegment>,
         lines: Vec<Vec<InlineFrag>>,
     },
+    /// Replaced element: изображение (`<img>`). В Phase 0 — block-level
+    /// (одна картинка занимает свою строку). `src` — путь / URL ресурса
+    /// (декодирование откладывается на следующий шаг), `alt` — alternate-текст
+    /// для отображения и AT, размеры берутся из `style.width`/`style.height`
+    /// (которые могут происходить из CSS или HTML-атрибутов как
+    /// presentational hints). Inline-replaced в InlineRun-е — отдельная задача.
+    Image {
+        src: String,
+        alt: String,
+    },
     /// Не участвует в layout (whitespace, комментарий, doctype, display:none).
     Skip,
 }
@@ -77,6 +97,11 @@ pub fn layout_measured(
 }
 
 /// Является ли DOM-узел inline-контентом (non-whitespace текст или inline-элемент).
+///
+/// `<img>` в Phase 0 — block-level replaced element, не inline-контент:
+/// он порождает собственный `BoxKind::Image`, а не вливается в `InlineRun`.
+/// Inline-replaced (картинка внутри строки текста) — отдельная задача;
+/// до неё `<img>` всегда занимает свою строку, как `<div>`.
 fn is_inline_content(
     doc: &Document,
     sheet: &Stylesheet,
@@ -87,7 +112,16 @@ fn is_inline_content(
     match &doc.get(id).data {
         NodeData::Text(s) => !s.chars().all(char::is_whitespace),
         NodeData::Element { .. } => {
-            compute_style(doc, id, sheet, inherited, viewport).display == Display::Inline
+            if is_image_element(doc, id) {
+                return false;
+            }
+            // Inline-семантика: чистый `inline` или его flex/grid-варианты.
+            // Phase 0 layout не делает реального flex/grid — флэт-семантика
+            // блока для outer-display, но inline-family остаётся inline.
+            matches!(
+                compute_style(doc, id, sheet, inherited, viewport).display,
+                Display::Inline | Display::InlineFlex | Display::InlineGrid
+            )
         }
         _ => false,
     }
@@ -138,6 +172,12 @@ fn build_box(
         NodeData::Document | NodeData::Element { .. } => {
             if style.display == Display::None {
                 BoxKind::Skip
+            } else if is_image_element(doc, id) {
+                let node = doc.get(id);
+                BoxKind::Image {
+                    src: node.get_attr("src").unwrap_or("").to_string(),
+                    alt: node.get_attr("alt").unwrap_or("").to_string(),
+                }
             } else {
                 BoxKind::Block
             }
@@ -221,8 +261,17 @@ fn lay_out(
     let s = b.style.clone();
     b.rect.x = start_x + s.margin_left;
     b.rect.y = start_y + s.margin_top;
-    b.rect.width = (available_width - s.margin_left - s.margin_right).max(0.0);
-    // Явная ширина (CSS width: Npx) перекрывает auto-ширину по контейнеру.
+    // Block: auto-ширина = весь доступный inline-размер контейнера.
+    // Replaced element (Image): auto-ширина = intrinsic (0 в Phase 0, без
+    // декодированных пикселей). Это CSS 2.1 §10.3.2 — replaced-боксы
+    // НЕ растягиваются на весь контейнер при отсутствии width.
+    let is_replaced = matches!(b.kind, BoxKind::Image { .. });
+    b.rect.width = if is_replaced {
+        0.0
+    } else {
+        (available_width - s.margin_left - s.margin_right).max(0.0)
+    };
+    // Явная ширина (CSS width: Npx) перекрывает auto-ширину.
     // box-sizing определяет, к какой части бокса относится `width`:
     //   - content-box: width — это размер контента, padding+border прибавляются;
     //   - border-box: width — общий размер вместе с padding+border.
@@ -280,7 +329,12 @@ fn lay_out(
     }
 
     match &mut b.kind {
-        BoxKind::Block => {
+        BoxKind::Block | BoxKind::Image { .. } => {
+            // Image не имеет flow-детей, поэтому child-цикл просто пуст —
+            // объединяем с Block, чтобы общий код width/height/min-max/borders
+            // не дублировался. content_height = 0 для Image без явной высоты
+            // даёт коробку только из padding+border (что для пустой картинки
+            // визуально корректно).
             let mut child_y = content_y;
             for child in &mut b.children {
                 lay_out(child, content_x, child_y, content_width, measurer);

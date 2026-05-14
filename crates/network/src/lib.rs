@@ -3,6 +3,10 @@
 //! Реализует `lumen_core::ext::NetworkTransport`.
 //! Поддерживает: HTTP и HTTPS, редиректы (до 5), chunked transfer encoding.
 //! Не поддерживает: HTTP/2, keep-alive, кэширование, аутентификацию.
+//!
+//! URL парсится в `lumen_core::url::Url` — никакого собственного парсера здесь
+//! не держим. Из `Url` берём scheme, host (Punycode для DNS/TLS/Host header
+//! через `host_ascii`), effective_port и `path_and_query` для request line.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -14,59 +18,32 @@ use rustls::pki_types::ServerName;
 use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, TabId};
 use lumen_core::ext::{EventSink, NetworkTransport, RequestFilter};
-use lumen_core::idn;
 use lumen_core::url::Url;
 
-// ── URL-парсинг ──────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-struct ParsedUrl {
-    scheme: Scheme,
-    host: String,
-    port: u16,
-    path: String,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scheme {
-    Http,
-    Https,
-}
-
-fn parse_url(url: &str) -> Result<ParsedUrl> {
-    let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
-        (Scheme::Https, r)
-    } else if let Some(r) = url.strip_prefix("http://") {
-        (Scheme::Http, r)
-    } else {
-        return Err(Error::Network(format!("unsupported scheme: {url}")));
+/// Проверяет, что схема URL поддерживается транспортом (http/https) и
+/// извлекает всё, что нужно для connect: ASCII-форму host (Punycode для
+/// IDN — RFC 7230 §5.4, RFC 6066 §3), effective port (80/443 по схеме) и
+/// флаг TLS. Bad scheme (`ftp://`, `data:`, `file://`) — ранний выход без
+/// каких-либо побочных эффектов.
+fn require_http_scheme(url: &Url) -> Result<(String, u16, bool)> {
+    let is_tls = match url.scheme() {
+        "http" => false,
+        "https" => true,
+        other => return Err(Error::Network(format!("unsupported scheme: {other}"))),
     };
-
-    let (authority, path) = match rest.find('/') {
-        Some(i) => (&rest[..i], rest[i..].to_owned()),
-        None => (rest, "/".to_owned()),
-    };
-
-    let (raw_host, port) = match authority.rfind(':') {
-        Some(i) => {
-            let h = &authority[..i];
-            let p = authority[i + 1..]
-                .parse::<u16>()
-                .map_err(|_| Error::Network(format!("invalid port in: {authority}")))?;
-            (h, p)
-        }
-        None => (
-            authority,
-            if scheme == Scheme::Https { 443 } else { 80 },
-        ),
-    };
-
-    // IDN → ASCII (Punycode). DNS, TLS SNI и Host: header требуют ASCII
-    // в hostname (RFC 7230 §5.4 для Host, RFC 6066 §3 для SNI).
-    let host = idn::domain_to_ascii(raw_host)
-        .map_err(|e| Error::Network(format!("idn conversion failed for '{raw_host}': {e}")))?;
-
-    Ok(ParsedUrl { scheme, host, port, path })
+    let host = url
+        .host_ascii()
+        .map_err(|e| Error::Network(e.to_string()))?;
+    if host.is_empty() {
+        return Err(Error::Network(format!(
+            "empty host in URL: {}",
+            url.as_str()
+        )));
+    }
+    let port = url
+        .effective_port()
+        .ok_or_else(|| Error::Network(format!("no port for URL: {}", url.as_str())))?;
+    Ok((host, port, is_tls))
 }
 
 // ── TCP + TLS connection ─────────────────────────────────────────────────────
@@ -101,30 +78,29 @@ impl Write for Connection {
     }
 }
 
-fn connect(parsed: &ParsedUrl) -> Result<Connection> {
-    let addr = format!("{}:{}", parsed.host, parsed.port);
+fn connect(host: &str, port: u16, is_tls: bool) -> Result<Connection> {
+    let addr = format!("{host}:{port}");
     let tcp = TcpStream::connect(&addr)
         .map_err(|e| Error::Network(format!("connect {addr}: {e}")))?;
 
-    match parsed.scheme {
-        Scheme::Http => Ok(Connection::Plain(tcp)),
-        Scheme::Https => {
-            let mut root_store = rustls::RootCertStore::empty();
-            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-            let config = rustls::ClientConfig::builder()
-                .with_root_certificates(root_store)
-                .with_no_client_auth();
-
-            let server_name = ServerName::try_from(parsed.host.clone())
-                .map_err(|e| Error::Network(format!("invalid hostname '{}': {e}", parsed.host)))?;
-
-            let conn = ClientConnection::new(Arc::new(config), server_name)
-                .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
-
-            Ok(Connection::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))))
-        }
+    if !is_tls {
+        return Ok(Connection::Plain(tcp));
     }
+
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    let server_name = ServerName::try_from(host.to_owned())
+        .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
+
+    let conn = ClientConnection::new(Arc::new(config), server_name)
+        .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+
+    Ok(Connection::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))))
 }
 
 // ── HTTP/1.1 запрос / ответ ──────────────────────────────────────────────────
@@ -245,7 +221,7 @@ fn read_chunked<R: BufRead>(mut reader: R) -> Result<Vec<u8>> {
 // ── Редиректы ────────────────────────────────────────────────────────────────
 
 fn fetch_with_redirect(
-    url: &str,
+    url: &Url,
     hops_left: u8,
     sink: Option<&dyn EventSink>,
     filter: Option<&dyn RequestFilter>,
@@ -255,30 +231,28 @@ fn fetch_with_redirect(
         return Err(Error::Network("too many redirects".to_owned()));
     }
 
-    // parse_url валидирует scheme/host/port раньше, чем мы откроем сокет.
-    // События эмитим только если форма запроса прошла валидацию: на bad scheme
-    // (`ftp://...`) ни RequestStarted, ни RequestCompleted, ни RequestBlocked —
-    // байт даже не подумал улетать, и сам URL невалиден для фильтра.
-    // Сетевые ошибки после parse (DNS, refused, TLS handshake) оставляют
-    // Started без Completed — это инвариант «started + missing completed =
-    // network failure»; явный RequestFailed добавим, когда увидим, что
-    // наблюдателям этого мало.
-    let parsed = parse_url(url)?;
+    // require_http_scheme валидирует scheme/host/port раньше, чем мы откроем
+    // сокет. События эмитим только если форма запроса прошла валидацию: на
+    // bad scheme (`ftp://...`) ни RequestStarted, ни RequestCompleted, ни
+    // RequestBlocked — байт даже не подумал улетать, и сам URL невалиден для
+    // фильтра. Сетевые ошибки после валидации (DNS, refused, TLS handshake)
+    // оставляют Started без Completed — это инвариант «started + missing
+    // completed = network failure»; явный RequestFailed добавим, когда
+    // увидим, что наблюдателям этого мало.
+    let (host_ascii, port, is_tls) = require_http_scheme(url)?;
 
-    let event_url = Url::parse(url)
-        .expect("url validated by parse_url above (non-empty, http/https scheme)");
-
-    // Фильтрация — после parse_url (нет смысла спрашивать про невалидный URL),
-    // но ДО RequestStarted: блокированный запрос НЕ ходит в сеть и НЕ генерит
-    // Started/Completed. Каждый redirect-hop проверяется независимо, поэтому
-    // переход с нейтрального адреса на трекер тоже ловится.
+    // Фильтрация — после валидации scheme/host (нет смысла спрашивать про
+    // невалидный URL), но ДО RequestStarted: блокированный запрос НЕ ходит
+    // в сеть и НЕ генерит Started/Completed. Каждый redirect-hop проверяется
+    // независимо, поэтому переход с нейтрального адреса на трекер тоже
+    // ловится.
     if let Some(f) = filter
-        && let Some(reason) = f.should_block(&event_url)
+        && let Some(reason) = f.should_block(url)
     {
         if let Some(s) = sink {
             s.emit(&Event::RequestBlocked {
                 tab_id,
-                url: event_url,
+                url: url.clone(),
                 reason: reason.clone(),
             });
         }
@@ -288,12 +262,12 @@ fn fetch_with_redirect(
     if let Some(s) = sink {
         s.emit(&Event::RequestStarted {
             tab_id,
-            url: event_url.clone(),
+            url: url.clone(),
         });
     }
 
-    let mut conn = connect(&parsed)?;
-    write_request(&mut conn, &parsed.host, &parsed.path)?;
+    let mut conn = connect(&host_ascii, port, is_tls)?;
+    write_request(&mut conn, &host_ascii, &url.path_and_query())?;
     let resp = read_response(conn)?;
 
     // RequestCompleted эмитим всегда после получения статуса, до анализа кода:
@@ -301,7 +275,7 @@ fn fetch_with_redirect(
     if let Some(s) = sink {
         s.emit(&Event::RequestCompleted {
             tab_id,
-            url: event_url,
+            url: url.clone(),
             status: resp.status,
         });
     }
@@ -311,31 +285,12 @@ fn fetch_with_redirect(
         301 | 302 | 303 | 307 | 308 => {
             let location = header_value(&resp.headers, "location")
                 .ok_or_else(|| Error::Network("redirect without Location".to_owned()))?;
-
-            // Resolve relative redirects.
-            let next_url = if location.starts_with("http://") || location.starts_with("https://") {
-                location.to_owned()
-            } else {
-                let base = format!("{}://{}:{}", scheme_str(parsed.scheme), parsed.host, parsed.port);
-                if location.starts_with('/') {
-                    format!("{base}{location}")
-                } else {
-                    // Relative to current path dir.
-                    let dir = parsed.path.rfind('/').map(|i| &parsed.path[..=i]).unwrap_or("/");
-                    format!("{base}{dir}{location}")
-                }
-            };
-
-            fetch_with_redirect(&next_url, hops_left - 1, sink, filter, tab_id)
+            let next = url
+                .resolve(location)
+                .map_err(|e| Error::Network(format!("resolve redirect '{location}': {e}")))?;
+            fetch_with_redirect(&next, hops_left - 1, sink, filter, tab_id)
         }
         status => Err(Error::Network(format!("HTTP {status}"))),
-    }
-}
-
-fn scheme_str(s: Scheme) -> &'static str {
-    match s {
-        Scheme::Http => "http",
-        Scheme::Https => "https",
     }
 }
 
@@ -400,7 +355,7 @@ impl Default for HttpClient {
 impl NetworkTransport for HttpClient {
     fn fetch(&self, url: &Url) -> Result<Vec<u8>> {
         fetch_with_redirect(
-            url.as_str(),
+            url,
             5,
             self.sink.as_deref(),
             self.filter.as_deref(),
@@ -416,57 +371,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_https_default_port() {
-        let p = parse_url("https://example.com/path").unwrap();
-        assert_eq!(p.scheme, Scheme::Https);
-        assert_eq!(p.host, "example.com");
-        assert_eq!(p.port, 443);
-        assert_eq!(p.path, "/path");
+    fn require_http_scheme_http_default_port() {
+        let url = Url::parse("http://example.com/").unwrap();
+        let (host, port, is_tls) = require_http_scheme(&url).unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 80);
+        assert!(!is_tls);
     }
 
     #[test]
-    fn parse_http_default_port() {
-        let p = parse_url("http://example.com").unwrap();
-        assert_eq!(p.scheme, Scheme::Http);
-        assert_eq!(p.port, 80);
-        assert_eq!(p.path, "/");
+    fn require_http_scheme_https_default_port() {
+        let url = Url::parse("https://example.com/").unwrap();
+        let (host, port, is_tls) = require_http_scheme(&url).unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 443);
+        assert!(is_tls);
     }
 
     #[test]
-    fn parse_explicit_port() {
-        let p = parse_url("http://localhost:8080/index.html").unwrap();
-        assert_eq!(p.host, "localhost");
-        assert_eq!(p.port, 8080);
-        assert_eq!(p.path, "/index.html");
+    fn require_http_scheme_explicit_port() {
+        let url = Url::parse("https://example.com:8443/").unwrap();
+        let (_, port, _) = require_http_scheme(&url).unwrap();
+        assert_eq!(port, 8443);
     }
 
     #[test]
-    fn parse_unsupported_scheme() {
-        assert!(parse_url("ftp://example.com").is_err());
+    fn require_http_scheme_rejects_ftp() {
+        let url = Url::parse("ftp://example.com/").unwrap();
+        let err = require_http_scheme(&url).unwrap_err();
+        assert!(format!("{err:?}").contains("unsupported scheme"));
     }
 
     #[test]
-    fn parse_idn_cyrillic_host() {
-        // Кириллический host конвертируется в Punycode на этапе parse:
-        // DNS/TLS/Host: header получают ASCII-форму.
-        let p = parse_url("https://президент.рф/").unwrap();
-        assert_eq!(p.host, "xn--d1abbgf6aiiy.xn--p1ai");
-        assert_eq!(p.port, 443);
-        assert_eq!(p.path, "/");
+    fn require_http_scheme_idn_host_returns_punycode() {
+        // DNS / TLS SNI / Host header требуют ASCII (RFC 7230 §5.4, RFC 6066 §3).
+        let url = Url::parse("https://президент.рф/").unwrap();
+        let (host, _, _) = require_http_scheme(&url).unwrap();
+        assert_eq!(host, "xn--d1abbgf6aiiy.xn--p1ai");
     }
 
     #[test]
-    fn parse_idn_with_port() {
-        let p = parse_url("http://пример.рф:8080/test").unwrap();
-        assert_eq!(p.host, "xn--e1afmkfd.xn--p1ai");
-        assert_eq!(p.port, 8080);
-        assert_eq!(p.path, "/test");
-    }
-
-    #[test]
-    fn parse_idn_mixed_ascii_subdomain() {
-        let p = parse_url("https://api.пример.рф/v1").unwrap();
-        assert_eq!(p.host, "api.xn--e1afmkfd.xn--p1ai");
+    fn require_http_scheme_idn_with_port() {
+        let url = Url::parse("http://пример.рф:8080/test").unwrap();
+        let (host, port, _) = require_http_scheme(&url).unwrap();
+        assert_eq!(host, "xn--e1afmkfd.xn--p1ai");
+        assert_eq!(port, 8080);
     }
 
     #[test]
@@ -518,17 +467,15 @@ mod tests {
     }
 
     #[test]
-    fn redirect_resolve_absolute() {
-        // Проверяем, что абсолютный Location не модифицируется.
-        let url = "https://other.com/page";
-        let p = parse_url(url).unwrap();
-        let resolved = if url.starts_with("http://") || url.starts_with("https://") {
-            url.to_owned()
-        } else {
-            format!("base{url}")
-        };
-        assert_eq!(resolved, "https://other.com/page");
-        let _ = p;
+    fn redirect_resolve_relative_uses_url_resolve() {
+        // Полный E2E проверяется через mock-сервер ниже
+        // (fetch_emits_events_per_redirect_hop); здесь — точечно, что
+        // используемый редиректами `Url::resolve` дружит с реальным base+ref.
+        let base = Url::parse("http://localhost:8080/dir/page").unwrap();
+        let abs = base.resolve("/next").unwrap();
+        assert_eq!(abs.as_str(), "http://localhost:8080/next");
+        let rel = base.resolve("sibling.html").unwrap();
+        assert_eq!(rel.as_str(), "http://localhost:8080/dir/sibling.html");
     }
 
     // ── EventSink ────────────────────────────────────────────────────────────

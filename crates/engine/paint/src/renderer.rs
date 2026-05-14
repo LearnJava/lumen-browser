@@ -492,6 +492,18 @@ impl Renderer {
                         &mut self.cached_glyphs,
                     );
                 }
+                DisplayCommand::DrawImage { rect, src: _, alt: _ } => {
+                    // Placeholder для Phase 0: real GPU upload PNG-пикселей
+                    // — отдельная задача (новый pipeline для RGBA-quad с
+                    // per-image текстурой). Сейчас рисуем светло-серый
+                    // прямоугольник через существующий fill pipeline,
+                    // чтобы место картинки было видно пользователю.
+                    push_fill_quad(
+                        &mut fill_vertices,
+                        *rect,
+                        [0.85, 0.85, 0.85, 1.0],
+                    );
+                }
             }
         }
 

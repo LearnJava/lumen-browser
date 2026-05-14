@@ -2,8 +2,15 @@
 //!
 //! Режимы запуска:
 //! - `lumen` — открыть пустое окно.
-//! - `lumen <path.html>` — распарсить файл, layout, paint.
+//! - `lumen <path.html>` — распарсить файл, layout, paint, нарисовать в окне.
 //! - `lumen <http(s)://...>` — загрузить страницу по сети, layout, paint.
+//! - `lumen --dump-source <path-or-url>` — печать декодированного HTML в stdout.
+//! - `lumen --dump-layout <path-or-url>` — печать layout-дерева в stdout.
+//! - `lumen --dump-display-list <path-or-url>` — печать display list в stdout.
+//!
+//! Dump-режимы не создают окна и не инициализируют wgpu — pipeline прогоняется
+//! до нужной фазы, результат сериализуется и пишется в stdout. Полезно для CI
+//! (без GPU), отладки сложных страниц и сравнения вывода между версиями.
 //!
 //! Внешние CSS: `<link rel="stylesheet" href="...">` загружается с диска или
 //! по сети — в зависимости от того, каким способом загружена страница.
@@ -17,6 +24,7 @@ use lumen_core::event::Event;
 use lumen_core::ext::EventSink;
 use lumen_core::geom::Size;
 use lumen_dom::{Document, NodeData, NodeId};
+use lumen_layout::LayoutBox;
 use lumen_paint::{DisplayList, Renderer};
 use winit::application::ApplicationHandler;
 
@@ -27,10 +35,13 @@ struct StdoutEventSink;
 
 impl EventSink for StdoutEventSink {
     fn emit(&self, event: &Event) {
+        // Сетевой лог идёт в stderr, чтобы stdout dump-режимов оставался чистым
+        // (на нём — только сериализованный результат pipeline-а). В оконном
+        // режиме разница невидима: оба потока попадают в терминал.
         match event {
-            Event::RequestStarted { url, .. } => println!("→ GET {url}"),
-            Event::RequestCompleted { url, status, .. } => println!("← {status} {url}"),
-            Event::RequestBlocked { url, reason, .. } => println!("✗ {url} ({reason})"),
+            Event::RequestStarted { url, .. } => eprintln!("→ GET {url}"),
+            Event::RequestCompleted { url, status, .. } => eprintln!("← {status} {url}"),
+            Event::RequestBlocked { url, reason, .. } => eprintln!("✗ {url} ({reason})"),
             // Прочие события (TabCreated, Navigation, …) в Phase 0 не emit-ятся,
             // print не нужен.
             _ => {}
@@ -48,10 +59,27 @@ use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
 
 fn main() -> ExitCode {
-    println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let cli = match parse_cli(&args) {
+        Ok(m) => m,
+        Err(err) => {
+            eprintln!("Ошибка аргументов: {err}");
+            print_usage();
+            return ExitCode::FAILURE;
+        }
+    };
 
     let event_sink: Arc<dyn EventSink> = Arc::new(StdoutEventSink);
-    let source = PageSource::from_arg(std::env::args().nth(1).as_deref());
+
+    match cli {
+        CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink),
+    }
+}
+
+fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCode {
+    println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
+
     let initial_page = match source.load(event_sink.clone()) {
         Ok(page) => page,
         Err(err) => {
@@ -83,9 +111,56 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
+fn run_dump_mode(source: &PageSource, kind: DumpKind, event_sink: Arc<dyn EventSink>) -> ExitCode {
+    match run_dump(source, kind, event_sink) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(err) => {
+            eprintln!("Ошибка dump {}: {err}", source.describe());
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn run_dump(
+    source: &PageSource,
+    kind: DumpKind,
+    event_sink: Arc<dyn EventSink>,
+) -> Result<(), Box<dyn Error>> {
+    let raw = source.load_bytes(event_sink.clone())?;
+    match kind {
+        DumpKind::Source => {
+            let encoding = lumen_encoding::detect(&raw.bytes, raw.content_type);
+            let decoded = lumen_encoding::decode(encoding, &raw.bytes);
+            eprintln!("Кодировка: {}", encoding.name());
+            print!("{decoded}");
+            Ok(())
+        }
+        DumpKind::Layout => {
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink)?;
+            print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
+            Ok(())
+        }
+        DumpKind::DisplayList => {
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink)?;
+            let dl = lumen_paint::build_display_list(&parsed.layout);
+            print!("{}", lumen_paint::serialize_display_list(&dl));
+            Ok(())
+        }
+    }
+}
+
+fn print_usage() {
+    eprintln!("Использование:");
+    eprintln!("  lumen                                    — пустое окно");
+    eprintln!("  lumen <path-or-url>                      — открыть страницу в окне");
+    eprintln!("  lumen --dump-source <path-or-url>        — декодированный HTML в stdout");
+    eprintln!("  lumen --dump-layout <path-or-url>        — layout-дерево в stdout");
+    eprintln!("  lumen --dump-display-list <path-or-url>  — display list в stdout");
+}
+
 /// Источник страницы. Запоминается в `Lumen`, чтобы reload (F5/Ctrl+R) мог
 /// заново выполнить fetch/parse/layout/paint без аргументов командной строки.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 enum PageSource {
     /// Без аргументов — рисуем пустое окно. Reload no-op (грузить нечего).
     Empty,
@@ -112,12 +187,19 @@ impl PageSource {
         }
     }
 
-    fn load(&self, sink: Arc<dyn EventSink>) -> Result<LoadedPage, Box<dyn Error>> {
+    /// Прочитать байты страницы с диска или из сети, плюс вернуть базу для
+    /// относительных URL и подсказку о content-type. Используется и обычным
+    /// `load`, и dump-режимами.
+    fn load_bytes(&self, sink: Arc<dyn EventSink>) -> Result<RawPage, Box<dyn Error>> {
         match self {
-            PageSource::Empty => Ok(LoadedPage::empty()),
+            PageSource::Empty => Err("источник пуст — нечего загружать".into()),
             PageSource::File(path) => {
                 let bytes = std::fs::read(path)?;
-                render_bytes(&bytes, None, &ResourceBase::File(path.clone()), sink)
+                Ok(RawPage {
+                    bytes,
+                    base: ResourceBase::File(path.clone()),
+                    content_type: None,
+                })
             }
             PageSource::Url(url) => {
                 use lumen_core::ext::NetworkTransport;
@@ -125,17 +207,102 @@ impl PageSource {
                 use lumen_network::HttpClient;
 
                 let lumen_url = Url::parse(url)?;
-                let client = HttpClient::new().with_sink(sink.clone());
+                let client = HttpClient::new().with_sink(sink);
                 let bytes = client.fetch(&lumen_url)?;
-                println!("Получено {} байт", bytes.len());
-                render_bytes(
-                    &bytes,
-                    Some("text/html"),
-                    &ResourceBase::Url(url.clone()),
-                    sink,
-                )
+                eprintln!("Получено {} байт", bytes.len());
+                Ok(RawPage {
+                    bytes,
+                    base: ResourceBase::Url(url.clone()),
+                    content_type: Some("text/html"),
+                })
             }
         }
+    }
+
+    fn load(&self, sink: Arc<dyn EventSink>) -> Result<LoadedPage, Box<dyn Error>> {
+        if matches!(self, PageSource::Empty) {
+            return Ok(LoadedPage::empty());
+        }
+        let raw = self.load_bytes(sink.clone())?;
+        render_bytes(&raw.bytes, raw.content_type, &raw.base, sink)
+    }
+}
+
+/// Сырые байты страницы + контекст, необходимый для последующего парсинга и
+/// разрешения относительных ссылок. Возвращается `PageSource::load_bytes`.
+struct RawPage {
+    bytes: Vec<u8>,
+    base: ResourceBase,
+    content_type: Option<&'static str>,
+}
+
+/// Режим запуска shell. Решается на основе CLI-аргументов в `parse_cli`.
+#[derive(Debug, Clone)]
+enum CliMode {
+    /// Обычное окно — текущий source открывается в winit-окне.
+    OpenWindow(PageSource),
+    /// Headless: pipeline прогоняется до нужной фазы, результат идёт в stdout.
+    Dump { source: PageSource, kind: DumpKind },
+}
+
+/// Что именно печатать в dump-режиме.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+enum DumpKind {
+    /// Декодированный HTML после `lumen_encoding::decode`.
+    Source,
+    /// `serialize_layout_tree` — детерминированный текстовый формат layout-дерева.
+    Layout,
+    /// `serialize_display_list` — текстовый формат paint-команд.
+    DisplayList,
+}
+
+impl DumpKind {
+    fn from_flag(s: &str) -> Option<Self> {
+        match s {
+            "--dump-source" => Some(DumpKind::Source),
+            "--dump-layout" => Some(DumpKind::Layout),
+            "--dump-display-list" => Some(DumpKind::DisplayList),
+            _ => None,
+        }
+    }
+}
+
+/// Разобрать аргументы (без `argv[0]`) в режим запуска.
+///
+/// Грамматика:
+/// - `[]`           → OpenWindow(Empty)
+/// - `[arg]`        → OpenWindow(from_arg(arg)) если arg не dump-флаг; иначе ошибка
+/// - `[flag, tgt]`  → Dump если flag — dump-флаг; иначе ошибка
+/// - `[…]` (>2)     → ошибка
+///
+/// Dump-флаги принимаются только в первой позиции — иначе пришлось бы парсить
+/// аргументы произвольным порядком, что не нужно для текущего скоупа.
+fn parse_cli(args: &[String]) -> Result<CliMode, String> {
+    match args {
+        [] => Ok(CliMode::OpenWindow(PageSource::Empty)),
+        [arg] => {
+            if DumpKind::from_flag(arg).is_some() {
+                Err(format!("флаг {arg} требует путь или URL"))
+            } else if arg.starts_with("--") {
+                Err(format!("неизвестный флаг: {arg}"))
+            } else {
+                Ok(CliMode::OpenWindow(PageSource::from_arg(Some(arg))))
+            }
+        }
+        [flag, target] => {
+            let kind = DumpKind::from_flag(flag)
+                .ok_or_else(|| format!("неизвестный флаг: {flag}"))?;
+            if target.starts_with("--") {
+                return Err(format!(
+                    "ожидался путь или URL после {flag}, получен флаг {target}"
+                ));
+            }
+            Ok(CliMode::Dump {
+                source: PageSource::from_arg(Some(target)),
+                kind,
+            })
+        }
+        _ => Err(format!("слишком много аргументов: {}", args.len())),
     }
 }
 
@@ -203,7 +370,15 @@ impl ResourceBase {
                 ResolvedResource::File(dir.join(href))
             }
             ResourceBase::Url(base_url) => {
-                ResolvedResource::Url(resolve_url(base_url, href))
+                // Resolve через структурированный Url из lumen-core; при сбое
+                // base (не должно случаться — base сами и положили в загрузке
+                // страницы) откатываемся на raw href, чтобы из-за одного
+                // битого <link> не валить весь рендер.
+                let resolved = lumen_core::url::Url::parse(base_url)
+                    .and_then(|u| u.resolve(href))
+                    .map(|u| u.as_str().to_owned())
+                    .unwrap_or_else(|_| href.to_owned());
+                ResolvedResource::Url(resolved)
             }
         }
     }
@@ -212,28 +387,6 @@ impl ResourceBase {
 enum ResolvedResource {
     File(PathBuf),
     Url(String),
-}
-
-/// Разрешить относительный `href` относительно `base_url`.
-///
-/// "/style.css" -> "https://host/style.css"
-/// "css/a.css"  -> "https://host/path/css/a.css"
-fn resolve_url(base_url: &str, href: &str) -> String {
-    let (scheme, rest) = if let Some(r) = base_url.strip_prefix("https://") {
-        ("https://", r)
-    } else if let Some(r) = base_url.strip_prefix("http://") {
-        ("http://", r)
-    } else {
-        return href.to_owned();
-    };
-    let authority = rest.find('/').map(|i| &rest[..i]).unwrap_or(rest);
-    if href.starts_with('/') {
-        format!("{scheme}{authority}{href}")
-    } else {
-        let path = rest.find('/').map(|i| &rest[i..]).unwrap_or("/");
-        let dir = path.rfind('/').map(|i| &path[..=i]).unwrap_or("/");
-        format!("{scheme}{authority}{dir}{href}")
-    }
 }
 
 // ── Загрузка внешних CSS ─────────────────────────────────────────────────────
@@ -247,7 +400,7 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
         match base.resolve(&href) {
             ResolvedResource::File(path) => match std::fs::read_to_string(&path) {
                 Ok(content) => {
-                    println!("Загружен CSS: {}", path.display());
+                    eprintln!("Загружен CSS: {}", path.display());
                     css.push_str(&content);
                     css.push('\n');
                 }
@@ -302,24 +455,33 @@ fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>) {
 
 // ── Рендер ───────────────────────────────────────────────────────────────────
 
-fn render_bytes(
+/// Результат фаз `decode → parse → layout` — общая часть для оконного и
+/// dump-режимов. Поля владеют своими данными — нет ссылок наружу.
+struct ParsedPage {
+    document: Document,
+    layout: LayoutBox,
+    title: Option<String>,
+    rule_count: usize,
+}
+
+fn parse_and_layout(
     bytes: &[u8],
     content_type: Option<&str>,
     base: &ResourceBase,
-    sink: Arc<dyn EventSink>,
-) -> Result<LoadedPage, Box<dyn Error>> {
+    sink: &Arc<dyn EventSink>,
+) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
     let encoding = lumen_encoding::detect(bytes, content_type);
     let source = lumen_encoding::decode(encoding, bytes);
-    println!("Кодировка: {}", encoding.name());
+    eprintln!("Кодировка: {}", encoding.name());
 
     let doc = lumen_html_parser::parse(&source);
     let title = extract_title(&doc);
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let mut css = extract_style_blocks(&doc);
-    css.push_str(&load_linked_stylesheets(&doc, base, &sink));
+    css.push_str(&load_linked_stylesheets(&doc, base, sink));
 
     let sheet = lumen_css_parser::parse(&css);
     let viewport = Size::new(1024.0, 720.0);
@@ -330,15 +492,33 @@ fn render_bytes(
         .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
 
     let layout = lumen_layout::layout_measured(&doc, &sheet, viewport, &measurer);
-    let display_list = lumen_paint::build_display_list(&layout);
+    let rule_count = sheet.rules.len();
+    Ok(ParsedPage {
+        document: doc,
+        layout,
+        title,
+        rule_count,
+    })
+}
 
+fn render_bytes(
+    bytes: &[u8],
+    content_type: Option<&str>,
+    base: &ResourceBase,
+    sink: Arc<dyn EventSink>,
+) -> Result<LoadedPage, Box<dyn Error>> {
+    let parsed = parse_and_layout(bytes, content_type, base, &sink)?;
+    let display_list = lumen_paint::build_display_list(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд",
-        doc.len(),
-        sheet.rules.len(),
+        parsed.document.len(),
+        parsed.rule_count,
         display_list.len()
     );
-    Ok(LoadedPage { display_list, title })
+    Ok(LoadedPage {
+        display_list,
+        title: parsed.title,
+    })
 }
 
 /// Найти первый `<title>` в дереве и склеить его текстовые дети.
@@ -537,39 +717,58 @@ fn winit_modifiers_state(mods: &Modifiers) -> ModifiersState {
 mod tests {
     use super::*;
 
-    #[test]
-    fn resolve_url_absolute_path() {
-        let r = resolve_url("https://example.com/path/page.html", "/style.css");
-        assert_eq!(r, "https://example.com/style.css");
+    fn expect_resolved_url(base: &str, href: &str) -> String {
+        match ResourceBase::Url(base.to_owned()).resolve(href) {
+            ResolvedResource::Url(u) => u,
+            ResolvedResource::File(_) => panic!("expected Url"),
+        }
     }
 
     #[test]
-    fn resolve_url_relative_same_dir() {
-        let r = resolve_url("https://example.com/path/page.html", "style.css");
-        assert_eq!(r, "https://example.com/path/style.css");
+    fn resource_base_url_absolute_path() {
+        assert_eq!(
+            expect_resolved_url("https://example.com/path/page.html", "/style.css"),
+            "https://example.com/style.css",
+        );
     }
 
     #[test]
-    fn resolve_url_relative_subdirectory() {
-        let r = resolve_url("https://example.com/path/page.html", "css/main.css");
-        assert_eq!(r, "https://example.com/path/css/main.css");
+    fn resource_base_url_relative_same_dir() {
+        assert_eq!(
+            expect_resolved_url("https://example.com/path/page.html", "style.css"),
+            "https://example.com/path/style.css",
+        );
     }
 
     #[test]
-    fn resolve_url_root_base() {
-        let r = resolve_url("https://example.com/", "style.css");
-        assert_eq!(r, "https://example.com/style.css");
+    fn resource_base_url_relative_subdirectory() {
+        assert_eq!(
+            expect_resolved_url("https://example.com/path/page.html", "css/main.css"),
+            "https://example.com/path/css/main.css",
+        );
     }
 
     #[test]
-    fn resolve_url_http_scheme() {
-        let r = resolve_url("http://localhost:8080/index.html", "/css/app.css");
-        assert_eq!(r, "http://localhost:8080/css/app.css");
+    fn resource_base_url_root_base() {
+        assert_eq!(
+            expect_resolved_url("https://example.com/", "style.css"),
+            "https://example.com/style.css",
+        );
+    }
+
+    #[test]
+    fn resource_base_url_http_scheme_with_port() {
+        assert_eq!(
+            expect_resolved_url("http://localhost:8080/index.html", "/css/app.css"),
+            "http://localhost:8080/css/app.css",
+        );
     }
 
     #[test]
     fn resource_base_url_absolute_href_passthrough() {
-        // Абсолютный href перехватывается в ResourceBase::resolve до вызова resolve_url.
+        // Абсолютный href с http/https-схемой ловится в начале ResourceBase::resolve
+        // до Url::resolve — это позволяет href с другим scheme быть видимым как Url,
+        // даже если base — File.
         let base = ResourceBase::Url("https://example.com/".to_owned());
         let res = base.resolve("https://cdn.example.com/style.css");
         match res {
@@ -794,5 +993,126 @@ mod tests {
         let mut hrefs = Vec::new();
         collect_link_hrefs(&doc, doc.root(), &mut hrefs);
         assert_eq!(hrefs, vec!["a.css", "b.css"]);
+    }
+
+    fn args(items: &[&str]) -> Vec<String> {
+        items.iter().map(|s| (*s).to_owned()).collect()
+    }
+
+    #[test]
+    fn dump_kind_from_flag_recognised() {
+        assert_eq!(DumpKind::from_flag("--dump-source"), Some(DumpKind::Source));
+        assert_eq!(DumpKind::from_flag("--dump-layout"), Some(DumpKind::Layout));
+        assert_eq!(
+            DumpKind::from_flag("--dump-display-list"),
+            Some(DumpKind::DisplayList),
+        );
+    }
+
+    #[test]
+    fn dump_kind_from_flag_unknown() {
+        assert_eq!(DumpKind::from_flag("--dump"), None);
+        assert_eq!(DumpKind::from_flag("--dump-html"), None);
+        assert_eq!(DumpKind::from_flag("samples/page.html"), None);
+        assert_eq!(DumpKind::from_flag(""), None);
+    }
+
+    #[test]
+    fn parse_cli_no_args_is_empty_window() {
+        assert!(matches!(
+            parse_cli(&args(&[])),
+            Ok(CliMode::OpenWindow(PageSource::Empty))
+        ));
+    }
+
+    #[test]
+    fn parse_cli_single_target_is_window() {
+        let cli = parse_cli(&args(&["samples/page.html"])).expect("ok");
+        match cli {
+            CliMode::OpenWindow(PageSource::File(p)) => {
+                assert_eq!(p, PathBuf::from("samples/page.html"));
+            }
+            _ => panic!("expected OpenWindow(File)"),
+        }
+    }
+
+    #[test]
+    fn parse_cli_single_url_is_window() {
+        let cli = parse_cli(&args(&["https://example.com"])).expect("ok");
+        assert!(matches!(
+            cli,
+            CliMode::OpenWindow(PageSource::Url(ref u)) if u == "https://example.com"
+        ));
+    }
+
+    #[test]
+    fn parse_cli_dump_layout() {
+        let cli = parse_cli(&args(&["--dump-layout", "samples/page.html"])).expect("ok");
+        match cli {
+            CliMode::Dump {
+                source: PageSource::File(p),
+                kind: DumpKind::Layout,
+            } => assert_eq!(p, PathBuf::from("samples/page.html")),
+            _ => panic!("expected Dump Layout File"),
+        }
+    }
+
+    #[test]
+    fn parse_cli_dump_source_with_url() {
+        let cli = parse_cli(&args(&["--dump-source", "https://example.com"])).expect("ok");
+        assert!(matches!(
+            cli,
+            CliMode::Dump {
+                source: PageSource::Url(ref u),
+                kind: DumpKind::Source,
+            } if u == "https://example.com"
+        ));
+    }
+
+    #[test]
+    fn parse_cli_dump_display_list() {
+        let cli = parse_cli(&args(&["--dump-display-list", "a.html"])).expect("ok");
+        assert!(matches!(
+            cli,
+            CliMode::Dump {
+                kind: DumpKind::DisplayList,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_cli_dump_flag_without_target_errors() {
+        // --dump-X в одиночку — нет цели для прогона pipeline-а.
+        let err = parse_cli(&args(&["--dump-layout"])).unwrap_err();
+        assert!(err.contains("требует"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_cli_unknown_flag_alone_errors() {
+        let err = parse_cli(&args(&["--unknown"])).unwrap_err();
+        assert!(err.contains("неизвестный"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_cli_two_args_first_is_target_errors() {
+        // `lumen a.html b.html` — мы не знаем что делать; явная ошибка лучше,
+        // чем «открыть первый, проигнорировать второй».
+        let err = parse_cli(&args(&["a.html", "b.html"])).unwrap_err();
+        assert!(err.contains("неизвестный"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_cli_dump_flag_then_flag_errors() {
+        // `lumen --dump-layout --dump-source` — оба флаг, target нет.
+        let err =
+            parse_cli(&args(&["--dump-layout", "--dump-source"])).unwrap_err();
+        assert!(err.contains("ожидался"), "got: {err}");
+    }
+
+    #[test]
+    fn parse_cli_too_many_args_errors() {
+        let err = parse_cli(&args(&["--dump-layout", "a.html", "b.html"])).unwrap_err();
+        assert!(err.contains("много"), "got: {err}");
     }
 }

@@ -18,8 +18,8 @@ use std::collections::HashMap;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
-    AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, Declaration, PseudoClass,
-    SimpleSelector, Specificity, Stylesheet,
+    AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, Declaration, MediaContext,
+    PropertyRule, PseudoClass, SimpleSelector, Specificity, Stylesheet,
 };
 use lumen_dom::{Attribute, Document, NodeData, NodeId};
 
@@ -29,6 +29,16 @@ pub enum Display {
     Block,
     Inline,
     None,
+    /// CSS Flexbox L1 §3 — `display: flex`. Phase 0: парсится и хранится,
+    /// но в layout трактуется как `Block` (нет flex-алгоритма). Реальный
+    /// flex-pass — отдельная задача.
+    Flex,
+    /// `display: inline-flex` — аналогично, парсится но трактуется как Inline.
+    InlineFlex,
+    /// CSS Grid L1 — `display: grid`. Парсится, трактуется как Block.
+    Grid,
+    /// `display: inline-grid`.
+    InlineGrid,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -401,6 +411,26 @@ impl BorderStyle {
     }
 }
 
+/// CSS Fragmentation L3 §3.1 — break-before / break-after / break-inside.
+/// Phase 0: parse+store; реальный break enforcement требует pagination /
+/// multi-column layout pipeline.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BreakValue {
+    #[default]
+    Auto,
+    /// `avoid` / `avoid-page` / `avoid-column` / `avoid-region` — все
+    /// нормализуются в `Avoid`. Phase 0 не различает page vs column vs region.
+    Avoid,
+    /// `always` / `page` (для break-before/after).
+    Always,
+    /// `column` — принудительный column break.
+    Column,
+    /// `page` — принудительный page break.
+    Page,
+    /// `region` — принудительный region break.
+    Region,
+}
+
 /// CSS `box-sizing`. Определяет, что именно задаёт `width` / `height`:
 ///   - `ContentBox` (CSS default): размер контента; padding и border прибавляются сверху.
 ///   - `BorderBox`: размер вместе с padding и border; контент сжимается, чтобы влезть.
@@ -412,6 +442,41 @@ pub enum BoxSizing {
     #[default]
     ContentBox,
     BorderBox,
+}
+
+/// CSS-wide keywords (CSS Cascade L4 §7) — применимы к любому свойству.
+/// - `Inherit` — взять computed value родителя.
+/// - `Initial` — взять initial value свойства из спецификации.
+/// - `Unset` — для inherited-свойств = `Inherit`, для non-inherited = `Initial`.
+/// - `Revert` — откатиться к значению предыдущего origin (UA → User → Author).
+///   В Phase 0 UA / User origin отделены не полностью (только UA-hints для
+///   italic/bold семантических тегов), поэтому `Revert` трактуется как
+///   `Unset`. Это упрощение и редкие edge case-ы оно «не покажет правильно»,
+///   но для типичного CSS-кода работает идентично.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CssWideKeyword {
+    Inherit,
+    Initial,
+    Unset,
+    Revert,
+}
+
+/// ASCII case-insensitive проверка значения декларации на CSS-wide keyword.
+/// Любое из четырёх ключевых слов в любом регистре, с trim-ом whitespace,
+/// возвращает соответствующий `Some(...)`. Иначе — `None`.
+pub fn parse_css_wide_keyword(value: &str) -> Option<CssWideKeyword> {
+    let t = value.trim();
+    if t.eq_ignore_ascii_case("inherit") {
+        Some(CssWideKeyword::Inherit)
+    } else if t.eq_ignore_ascii_case("initial") {
+        Some(CssWideKeyword::Initial)
+    } else if t.eq_ignore_ascii_case("unset") {
+        Some(CssWideKeyword::Unset)
+    } else if t.eq_ignore_ascii_case("revert") {
+        Some(CssWideKeyword::Revert)
+    } else {
+        None
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -545,6 +610,714 @@ pub struct ComputedStyle {
     /// Substitution `var(--name [, fallback])` делается lazy при применении
     /// обычных деклараций (см. `apply_declaration`).
     pub custom_props: HashMap<String, String>,
+    /// CSS Lists L3 §3 — `counter-reset: name [N]?`. Каждый element задаёт
+    /// (имя-счётчика, начальное-значение). Не наследуется. Пустой `Vec`
+    /// при отсутствии декларации или `counter-reset: none`. Реальное
+    /// разрешение counter() в `content` pseudo-elements — отдельная задача
+    /// (требует layout-time counter scoping walker).
+    pub counter_reset: Vec<(String, i32)>,
+    /// CSS Lists L3 §3 — `counter-increment: name [N]?`. Каждый element
+    /// инкрементирует названный counter на N (default +1). Не наследуется.
+    pub counter_increment: Vec<(String, i32)>,
+    /// CSS Masking L1 §3 — `clip-path: <basic-shape> | none`. Не
+    /// наследуется. Phase 0: parsing only — real geometric clipping
+    /// в paint pipeline отложен.
+    pub clip_path: Option<ClipPath>,
+    /// CSS Transforms L1 §2 — `transform: <transform-list> | none`.
+    /// Список функций — каждая `TransformFn` хранит параметры. Не
+    /// наследуется. Phase 0: parsing only — apply matrix к paint —
+    /// отложено.
+    pub transform: Vec<TransformFn>,
+    /// CSS Filter Effects L1 §3 — `filter: <filter-function-list> | none`.
+    /// Список функций — blur/brightness/contrast/grayscale/etc. Не
+    /// наследуется. Phase 0: parsing only.
+    pub filter: Vec<FilterFn>,
+    /// CSS Box Alignment L3 §8 — `row-gap` / `column-gap` для
+    /// flex/grid container-ов. В пикселях (resolved). Default 0.
+    /// Не наследуется. Phase 0: parsing only — real flex/grid algorithm
+    /// не реализован, гарантированно gap не применяется.
+    pub row_gap: f32,
+    pub column_gap: f32,
+    /// CSS Multi-column L1 §3.2 — `column-count: <integer> | auto`. `None`
+    /// = `auto` (UA выбирает на основе column-width). Не наследуется.
+    /// Phase 0: parsing only — реальный column layout pipeline отложен.
+    pub column_count: Option<u32>,
+    /// CSS Multi-column L1 §3.3 — `column-width: <length> | auto`. В px
+    /// (resolved). `None` = `auto`. Не наследуется.
+    pub column_width: Option<f32>,
+    /// CSS Multi-column L1 §4.1 — `column-rule-width` (px). Default 0.
+    pub column_rule_width: f32,
+    /// CSS Multi-column L1 §4.2 — `column-rule-style`. Default `None`
+    /// (без линии — линия рисуется только если style != None и width > 0).
+    pub column_rule_style: BorderStyle,
+    /// CSS Multi-column L1 §4.3 — `column-rule-color`. `None` = currentColor.
+    pub column_rule_color: Option<Color>,
+    /// CSS Multi-column L1 §6.1 — `column-span: none | all`. По умолчанию
+    /// `None` (False), `Some(true)` = `all` (элемент растягивается через
+    /// все колонки). Не наследуется. Phase 0: parse+store.
+    pub column_span_all: bool,
+    /// CSS Multi-column L1 §6.2 — `column-fill: auto | balance`. `false`
+    /// = auto (default — заполняет последовательно), `true` = balance.
+    /// Не наследуется.
+    pub column_fill_balance: bool,
+    /// CSS Fragmentation L3 §3.1 — `break-before`. Phase 0 — enum со
+    /// значениями auto/avoid/always/page/column/region. Не наследуется.
+    pub break_before: BreakValue,
+    pub break_after: BreakValue,
+    pub break_inside: BreakValue,
+    /// CSS Sizing L4 §6.1 — `aspect-ratio: auto | <ratio> | auto <ratio>`.
+    /// `None` = `auto` (UA выбирает). `Some((w, h))` = явное отношение
+    /// W:H (например, 16:9 → (16.0, 9.0)). Не наследуется.
+    /// Phase 0: parsing — real intrinsic-aspect-ratio enforcement
+    /// требует layout-time pass.
+    pub aspect_ratio: Option<(f32, f32)>,
+    /// CSS Box Alignment L3 — alignment свойства для flex/grid items.
+    /// Все не наследуются. Phase 0: parsing only.
+    pub align_items: AlignValue,
+    pub align_self: AlignValue,
+    pub align_content: AlignValue,
+    pub justify_items: AlignValue,
+    pub justify_self: AlignValue,
+    pub justify_content: AlignValue,
+    /// CSS Backgrounds L3 — `background-image`.
+    pub background_image: BackgroundImage,
+    pub background_repeat: BackgroundRepeat,
+    pub background_size: BackgroundSize,
+    pub background_attachment: BackgroundAttachment,
+    /// CSS Will Change L1. Список имён свойств для optimization hint.
+    /// Пустой Vec = `auto` (default). Не наследуется.
+    pub will_change: Vec<String>,
+    /// CSS Pointer Events L1. Default `auto`. Не наследуется.
+    pub pointer_events: PointerEvents,
+    /// CSS UI L4 §6.2 — `user-select`. Inherited (по спеке).
+    pub user_select: UserSelect,
+    /// CSS Overflow L3 — `scroll-behavior`. Inherited.
+    pub scroll_behavior: ScrollBehavior,
+    /// CSS Scroll Snap L1 §3.1 — `scroll-snap-type`. Не наследуется.
+    pub scroll_snap_type: ScrollSnapType,
+    /// CSS Scroll Snap L1 §6.1 — `scroll-snap-align`. Не наследуется.
+    pub scroll_snap_align: ScrollSnapAlign,
+    /// CSS Scroll Snap L1 §6.2 — `scroll-snap-stop`. Не наследуется.
+    pub scroll_snap_stop: ScrollSnapStop,
+    /// CSS Scroll Snap L1 §4 — `scroll-margin-*` (resolved px).
+    pub scroll_margin_top: f32,
+    pub scroll_margin_right: f32,
+    pub scroll_margin_bottom: f32,
+    pub scroll_margin_left: f32,
+    /// CSS Scroll Snap L1 §4 — `scroll-padding-*` (resolved px).
+    pub scroll_padding_top: f32,
+    pub scroll_padding_right: f32,
+    pub scroll_padding_bottom: f32,
+    pub scroll_padding_left: f32,
+    /// CSS Overscroll Behavior L1 §2 — `overscroll-behavior-x`. Не наследуется.
+    pub overscroll_behavior_x: OverscrollBehavior,
+    pub overscroll_behavior_y: OverscrollBehavior,
+    /// CSS Text L3 §10.1 — `tab-size: <integer> | <length>`. Inherited.
+    /// В пикселях если length; для integer хранится как число × 8 (default
+    /// 8 spaces — стандартный default). Default 8 spaces = 64px при 8px-space.
+    pub tab_size: f32,
+    /// CSS UI L4 §6.3 — `caret-color: auto | <color>`. Inherited.
+    /// `None` = auto (UA выбирает). `Some(color)` — явный цвет.
+    pub caret_color: Option<Color>,
+    /// CSS Text L3 §5.2 — `overflow-wrap: normal | break-word | anywhere`.
+    /// Inherited. Default `Normal`.
+    pub overflow_wrap: OverflowWrap,
+    /// CSS Text L3 §5.1 — `word-break: normal | keep-all | break-all |
+    /// break-word`. Inherited. Default `Normal`.
+    pub word_break: WordBreak,
+    /// CSS Text L3 §6 — `hyphens: none | manual | auto`. Inherited.
+    /// Default `Manual`.
+    pub hyphens: Hyphens,
+    /// CSS Transforms L1 §6 — `transform-origin: <x> <y> <z>?` в px.
+    /// Default `(50%, 50%, 0)` — центр коробки. Phase 0 хранит как
+    /// пиксельные координаты после resolve (или None для процентных —
+    /// нужен размер box-а; пока разрешаем только px/em/rem).
+    pub transform_origin: (f32, f32, f32),
+    /// CSS Transforms L2 §4 — `perspective: <length> | none`.
+    /// `None` = no perspective; `Some(px)` = distance to camera.
+    pub perspective: Option<f32>,
+    /// CSS Lists L3 §2.1 — `list-style-type`.
+    pub list_style_type: ListStyleType,
+    /// CSS Lists L3 §2.3 — `list-style-position`.
+    pub list_style_position: ListStylePosition,
+    /// CSS Lists L3 §2.2 — `list-style-image: url(...) | none`.
+    pub list_style_image: Option<String>,
+    /// CSS Transitions L1 §3 — `transition-property: none | all | <ident>+`.
+    pub transition_properties: Vec<String>,
+    /// CSS Transitions L1 §3 — `transition-duration: <time>+` в секундах.
+    pub transition_durations: Vec<f32>,
+    /// CSS Transitions L1 §3 — `transition-delay: <time>+` в секундах.
+    pub transition_delays: Vec<f32>,
+    /// CSS Masking L1 §4 — `mask-image: url(...) | linear-gradient(...) | none`.
+    /// `BackgroundImage` переиспользуется как тип (same structure: None/Url/Gradient).
+    pub mask_image: BackgroundImage,
+    /// CSS Masking L1 §4 — `mask-repeat`. Те же значения, что у background-repeat.
+    pub mask_repeat: BackgroundRepeat,
+    /// CSS Masking L1 §4 — `mask-size`.
+    pub mask_size: BackgroundSize,
+    /// CSS Scrollbars 1 — `scrollbar-width: auto | thin | none`.
+    pub scrollbar_width: ScrollbarWidth,
+    /// CSS Scrollbars 1 — `scrollbar-color: auto | <color> <color>`
+    /// (thumb-color + track-color).
+    pub scrollbar_color: Option<(Color, Color)>,
+    /// CSS Overflow L3 — `scrollbar-gutter: auto | stable | stable both-edges`.
+    pub scrollbar_gutter: ScrollbarGutter,
+    /// CSS Content L3 §2.1 — `content`. Используется в pseudo-elements
+    /// (`::before` / `::after`) и для counter()-разрешения. Phase 0:
+    /// parsing + storage; реальные pseudo-elements в layout — отдельная
+    /// большая задача. Default `Normal` (use element's box-tree).
+    pub content: Content,
+}
+
+/// CSS Content L3 — value свойства `content`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum Content {
+    /// `normal` (default) — поведение по умолчанию для каждого element.
+    #[default]
+    Normal,
+    /// `none` — pseudo-element не генерируется.
+    None,
+    /// Список фрагментов: строки, counter()/counters(), attr(), url().
+    /// Phase 0 хранит список typed-фрагментов; конкатенация для render —
+    /// задача paint pipeline.
+    Items(Vec<ContentItem>),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ContentItem {
+    /// Литеральная строка из CSS-string-literal (без кавычек).
+    String(String),
+    /// `attr(name)` — значение HTML-атрибута текущего element.
+    Attr(String),
+    /// `url("path")` — изображение / external resource.
+    Url(String),
+    /// `counter(name [, style])` — значение counter-а. `style` — пока
+    /// сырая строка (Phase 0 разрешит только `decimal` etc.).
+    Counter {
+        name: String,
+        style: Option<String>,
+    },
+    /// `counters(name, separator [, style])` — вложенные counters
+    /// (`1.2.3` через `.`).
+    Counters {
+        name: String,
+        separator: String,
+        style: Option<String>,
+    },
+    /// `open-quote` / `close-quote` — quotation marks per `quotes` property.
+    OpenQuote,
+    CloseQuote,
+    NoOpenQuote,
+    NoCloseQuote,
+}
+
+/// CSS Scrollbars 1 — `scrollbar-width`. Inherited.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollbarWidth {
+    #[default]
+    Auto,
+    /// `thin` — тонкий scrollbar.
+    Thin,
+    /// `none` — без visible scrollbar (контент всё ещё скроллится через
+    /// keyboard / touch / programmatic).
+    None,
+}
+
+impl ScrollbarWidth {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "thin" => Some(Self::Thin),
+            "none" => Some(Self::None),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Overflow L3 — `scrollbar-gutter`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollbarGutter {
+    /// `auto` (default) — gutter появляется когда overflow:scroll.
+    #[default]
+    Auto,
+    /// `stable` — gutter всегда зарезервирован (не двигает контент при scroll).
+    Stable,
+    /// `stable both-edges` — gutter на обоих краях для симметрии.
+    StableBothEdges,
+}
+
+impl ScrollbarGutter {
+    pub fn parse(s: &str) -> Option<Self> {
+        let lc = s.trim().to_ascii_lowercase();
+        if lc == "auto" {
+            return Some(Self::Auto);
+        }
+        if lc == "stable" {
+            return Some(Self::Stable);
+        }
+        // `stable both-edges` — двухтокеновая форма.
+        let tokens: Vec<&str> = lc.split_whitespace().collect();
+        if tokens == ["stable", "both-edges"] {
+            return Some(Self::StableBothEdges);
+        }
+        None
+    }
+}
+
+/// CSS Lists L3 §2.1 — markers для list items.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ListStyleType {
+    /// `none` — без marker.
+    None,
+    /// `disc` — закрашенный кружок (default для ul).
+    #[default]
+    Disc,
+    /// `circle` — пустой кружок.
+    Circle,
+    /// `square` — квадратик.
+    Square,
+    /// `decimal` — 1, 2, 3, ... (default для ol).
+    Decimal,
+    /// `decimal-leading-zero` — 01, 02, ..., 09, 10, ...
+    DecimalLeadingZero,
+    /// `lower-roman` — i, ii, iii, ...
+    LowerRoman,
+    /// `upper-roman` — I, II, III, ...
+    UpperRoman,
+    /// `lower-alpha` / `lower-latin` — a, b, c, ...
+    LowerAlpha,
+    /// `upper-alpha` / `upper-latin` — A, B, C, ...
+    UpperAlpha,
+    /// `lower-greek` — α, β, γ, ...
+    LowerGreek,
+}
+
+impl ListStyleType {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "disc" => Some(Self::Disc),
+            "circle" => Some(Self::Circle),
+            "square" => Some(Self::Square),
+            "decimal" => Some(Self::Decimal),
+            "decimal-leading-zero" => Some(Self::DecimalLeadingZero),
+            "lower-roman" => Some(Self::LowerRoman),
+            "upper-roman" => Some(Self::UpperRoman),
+            "lower-alpha" | "lower-latin" => Some(Self::LowerAlpha),
+            "upper-alpha" | "upper-latin" => Some(Self::UpperAlpha),
+            "lower-greek" => Some(Self::LowerGreek),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Lists L3 §2.3 — `list-style-position`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ListStylePosition {
+    /// `outside` (default) — marker вне content-area.
+    #[default]
+    Outside,
+    /// `inside` — marker внутри content-area.
+    Inside,
+}
+
+impl ListStylePosition {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "outside" => Some(Self::Outside),
+            "inside" => Some(Self::Inside),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Text L3 §5.2 — `overflow-wrap`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OverflowWrap {
+    #[default]
+    Normal,
+    /// `break-word` — разрешает перенос любого слова, чтобы не было overflow.
+    BreakWord,
+    /// `anywhere` — как `break-word`, но также влияет на intrinsic-width
+    /// computation (CSS Text L3).
+    Anywhere,
+}
+
+impl OverflowWrap {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(Self::Normal),
+            "break-word" => Some(Self::BreakWord),
+            "anywhere" => Some(Self::Anywhere),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Text L3 §5.1 — `word-break`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WordBreak {
+    #[default]
+    Normal,
+    /// `keep-all` — CJK не разбивается.
+    KeepAll,
+    /// `break-all` — разрыв в любом месте, кроме whitespace.
+    BreakAll,
+    /// `break-word` — legacy для `overflow-wrap: break-word`.
+    BreakWord,
+}
+
+impl WordBreak {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(Self::Normal),
+            "keep-all" => Some(Self::KeepAll),
+            "break-all" => Some(Self::BreakAll),
+            "break-word" => Some(Self::BreakWord),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Text L3 §6 — `hyphens`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Hyphens {
+    /// `none` — переносы запрещены.
+    None,
+    /// `manual` (default) — переносы только при явных hyphenation-точках
+    /// (`&shy;` / U+00AD).
+    #[default]
+    Manual,
+    /// `auto` — UA расставляет переносы по алгоритму (требует hyphenation
+    /// dictionary).
+    Auto,
+}
+
+impl Hyphens {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "manual" => Some(Self::Manual),
+            "auto" => Some(Self::Auto),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Pointer Events L1. Default `auto`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PointerEvents {
+    #[default]
+    Auto,
+    None,
+    Visible,
+    /// `painted` / `fill` / `stroke` / `all` — для SVG. В non-SVG
+    /// контексте трактуются как `auto`.
+    Painted,
+    Fill,
+    Stroke,
+    All,
+}
+
+impl PointerEvents {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "none" => Some(Self::None),
+            "visible" | "visiblepainted" | "visiblefill" | "visiblestroke" => {
+                Some(Self::Visible)
+            }
+            "painted" => Some(Self::Painted),
+            "fill" => Some(Self::Fill),
+            "stroke" => Some(Self::Stroke),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
+/// CSS UI L4 §6.2 — `user-select`. Inherited.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum UserSelect {
+    #[default]
+    Auto,
+    Text,
+    None,
+    Contain,
+    All,
+}
+
+impl UserSelect {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "text" => Some(Self::Text),
+            "none" => Some(Self::None),
+            "contain" => Some(Self::Contain),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Overflow L3 — `scroll-behavior`. Inherited.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollBehavior {
+    #[default]
+    Auto,
+    Smooth,
+}
+
+/// CSS Scroll Snap L1 §3.1 — `scroll-snap-type: none | <axis> [mandatory | proximity]`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScrollSnapType {
+    pub axis: ScrollSnapAxis,
+    pub strictness: ScrollSnapStrictness,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollSnapAxis {
+    #[default]
+    None,
+    X,
+    Y,
+    Block,
+    Inline,
+    Both,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollSnapStrictness {
+    #[default]
+    Proximity,
+    Mandatory,
+}
+
+/// CSS Scroll Snap L1 §6.1 — `scroll-snap-align: none | <axis-keyword>{1,2}`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ScrollSnapAlign {
+    pub block: ScrollSnapAlignKeyword,
+    pub inline: ScrollSnapAlignKeyword,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollSnapAlignKeyword {
+    #[default]
+    None,
+    Start,
+    End,
+    Center,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ScrollSnapStop {
+    #[default]
+    Normal,
+    Always,
+}
+
+/// CSS Overscroll Behavior L1 §2 — `overscroll-behavior: auto | contain | none`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OverscrollBehavior {
+    #[default]
+    Auto,
+    Contain,
+    None,
+}
+
+impl ScrollBehavior {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "smooth" => Some(Self::Smooth),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Backgrounds L3 §3.1 — `background-image` value.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum BackgroundImage {
+    #[default]
+    None,
+    /// `url("path")` — внешний image-ресурс. Хранится без resolve
+    /// относительно base-href.
+    Url(String),
+    /// `linear-gradient(...)`, `radial-gradient(...)`, `conic-gradient(...)`
+    /// и их `repeating-` варианты. Phase 0 хранится сырая строка.
+    Gradient(String),
+}
+
+/// CSS Backgrounds L3 §3.4 — `background-repeat`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BackgroundRepeat {
+    #[default]
+    Repeat,
+    NoRepeat,
+    RepeatX,
+    RepeatY,
+    Round,
+    Space,
+}
+
+impl BackgroundRepeat {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "repeat" => Some(Self::Repeat),
+            "no-repeat" => Some(Self::NoRepeat),
+            "repeat-x" => Some(Self::RepeatX),
+            "repeat-y" => Some(Self::RepeatY),
+            "round" => Some(Self::Round),
+            "space" => Some(Self::Space),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Backgrounds L3 §3.5 — `background-size`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum BackgroundSize {
+    #[default]
+    Auto,
+    Cover,
+    Contain,
+    /// Width / Height в px. None для height = auto.
+    Length(f32, Option<f32>),
+}
+
+/// CSS Backgrounds L3 §3.6 — `background-attachment`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BackgroundAttachment {
+    #[default]
+    Scroll,
+    Fixed,
+    Local,
+}
+
+impl BackgroundAttachment {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "scroll" => Some(Self::Scroll),
+            "fixed" => Some(Self::Fixed),
+            "local" => Some(Self::Local),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Box Alignment L3 §6.1 — значения для align-/justify- свойств.
+/// Phase 0: основной набор keyword-ов. `Auto` — default (resolve в
+/// `Normal` или specific behavior контекстом).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AlignValue {
+    /// CSS keyword `auto` — default. Behavior зависит от контекста
+    /// (parent layout type). Для absolute-positioned — `normal`.
+    #[default]
+    Auto,
+    /// `normal` — default-behavior для conteneur'а (stretch for grid,
+    /// start for flex).
+    Normal,
+    /// `stretch` — растянуть на доступное место (default для grid).
+    Stretch,
+    /// `start` / `flex-start` — выровнять к началу cross/main axis.
+    Start,
+    /// `end` / `flex-end` — выровнять к концу.
+    End,
+    /// `center` — выровнять по центру.
+    Center,
+    /// `baseline` — выровнять text-baseline (для align-items).
+    Baseline,
+    /// `space-between` — равные промежутки между items, по краям нет.
+    SpaceBetween,
+    /// `space-around` — промежутки между + половинные по краям.
+    SpaceAround,
+    /// `space-evenly` — все промежутки одинаковые, включая края.
+    SpaceEvenly,
+}
+
+impl AlignValue {
+    pub fn parse(s: &str) -> Option<Self> {
+        let lc = s.trim().to_ascii_lowercase();
+        match lc.as_str() {
+            "auto" => Some(Self::Auto),
+            "normal" => Some(Self::Normal),
+            "stretch" => Some(Self::Stretch),
+            "start" | "flex-start" | "self-start" => Some(Self::Start),
+            "end" | "flex-end" | "self-end" => Some(Self::End),
+            "center" => Some(Self::Center),
+            "baseline" | "first baseline" | "last baseline" => Some(Self::Baseline),
+            "space-between" => Some(Self::SpaceBetween),
+            "space-around" => Some(Self::SpaceAround),
+            "space-evenly" => Some(Self::SpaceEvenly),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Masking L1 §3.5 — basic-shapes для `clip-path`. Phase 0
+/// поддерживает: `inset(...)`, `circle(...)`, `ellipse(...)`,
+/// `polygon(...)`. URL / `path()` / `none` отложены.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ClipPath {
+    /// `inset(top right bottom left)` — 1..=4 length-значения.
+    Inset(Vec<f32>),
+    /// `circle(radius at cx cy)` — radius и center (опц.).
+    Circle {
+        radius: f32,
+        center: Option<(f32, f32)>,
+    },
+    /// `ellipse(rx ry at cx cy)`.
+    Ellipse {
+        rx: f32,
+        ry: f32,
+        center: Option<(f32, f32)>,
+    },
+    /// `polygon(x1 y1, x2 y2, ...)` — список вершин.
+    Polygon(Vec<(f32, f32)>),
+}
+
+/// CSS Transforms L1 §11 — функции `transform`. Phase 0 поддерживает
+/// translate/translateX/translateY, rotate, scale/scaleX/scaleY,
+/// skew/skewX/skewY, matrix. 3D-варианты (translate3d, rotate3d,
+/// и т.д.) отложены.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TransformFn {
+    Translate(f32, f32),
+    TranslateX(f32),
+    TranslateY(f32),
+    /// Угол в радианах (нормализован парсером из deg/rad/turn/grad).
+    Rotate(f32),
+    Scale(f32, f32),
+    ScaleX(f32),
+    ScaleY(f32),
+    SkewX(f32),
+    SkewY(f32),
+    Matrix([f32; 6]),
+}
+
+/// CSS Filter Effects L1 §3 — функции `filter`. Phase 0 поддерживает
+/// все 9 стандартных функций кроме `drop-shadow` (требует rendering
+/// pass — отложено).
+#[derive(Debug, Clone, PartialEq)]
+pub enum FilterFn {
+    /// `blur(<length>)` — радиус gaussian blur.
+    Blur(f32),
+    /// `brightness(<number-percentage>)`. 1.0 = unchanged.
+    Brightness(f32),
+    /// `contrast(<number-percentage>)`. 1.0 = unchanged.
+    Contrast(f32),
+    /// `grayscale(<number-percentage>)`. 0.0 = unchanged, 1.0 = full grayscale.
+    Grayscale(f32),
+    /// `hue-rotate(<angle>)` — угол в радианах.
+    HueRotate(f32),
+    /// `invert(<number-percentage>)`. 0.0 = unchanged, 1.0 = inverted.
+    Invert(f32),
+    /// `opacity(<number-percentage>)`. 1.0 = unchanged.
+    Opacity(f32),
+    /// `saturate(<number-percentage>)`. 1.0 = unchanged.
+    Saturate(f32),
+    /// `sepia(<number-percentage>)`. 0.0 = unchanged, 1.0 = full sepia.
+    Sepia(f32),
 }
 
 impl ComputedStyle {
@@ -632,6 +1405,73 @@ impl ComputedStyle {
             outline_offset: 0.0,
             accent_color: None,
             custom_props: HashMap::new(),
+            counter_reset: Vec::new(),
+            counter_increment: Vec::new(),
+            clip_path: None,
+            transform: Vec::new(),
+            filter: Vec::new(),
+            row_gap: 0.0,
+            column_gap: 0.0,
+            column_count: None,
+            column_width: None,
+            column_rule_width: 0.0,
+            column_rule_style: BorderStyle::None,
+            column_rule_color: None,
+            column_span_all: false,
+            column_fill_balance: false,
+            break_before: BreakValue::Auto,
+            break_after: BreakValue::Auto,
+            break_inside: BreakValue::Auto,
+            aspect_ratio: None,
+            align_items: AlignValue::Auto,
+            align_self: AlignValue::Auto,
+            align_content: AlignValue::Auto,
+            justify_items: AlignValue::Auto,
+            justify_self: AlignValue::Auto,
+            justify_content: AlignValue::Auto,
+            background_image: BackgroundImage::None,
+            background_repeat: BackgroundRepeat::Repeat,
+            background_size: BackgroundSize::Auto,
+            background_attachment: BackgroundAttachment::Scroll,
+            will_change: Vec::new(),
+            pointer_events: PointerEvents::Auto,
+            user_select: UserSelect::Auto,
+            scroll_behavior: ScrollBehavior::Auto,
+            // CSS Scroll Snap / Overscroll defaults.
+            scroll_snap_type: ScrollSnapType::default(),
+            scroll_snap_align: ScrollSnapAlign::default(),
+            scroll_snap_stop: ScrollSnapStop::default(),
+            scroll_margin_top: 0.0,
+            scroll_margin_right: 0.0,
+            scroll_margin_bottom: 0.0,
+            scroll_margin_left: 0.0,
+            scroll_padding_top: 0.0,
+            scroll_padding_right: 0.0,
+            scroll_padding_bottom: 0.0,
+            scroll_padding_left: 0.0,
+            overscroll_behavior_x: OverscrollBehavior::Auto,
+            overscroll_behavior_y: OverscrollBehavior::Auto,
+            // CSS Text typography defaults.
+            tab_size: 64.0,  // 8 spaces × 8px-space-width default.
+            caret_color: None,  // `auto`.
+            overflow_wrap: OverflowWrap::Normal,
+            word_break: WordBreak::Normal,
+            hyphens: Hyphens::Manual,
+            transform_origin: (0.0, 0.0, 0.0),
+            perspective: None,
+            list_style_type: ListStyleType::Disc,
+            list_style_position: ListStylePosition::Outside,
+            list_style_image: None,
+            transition_properties: Vec::new(),
+            transition_durations: Vec::new(),
+            transition_delays: Vec::new(),
+            mask_image: BackgroundImage::None,
+            mask_repeat: BackgroundRepeat::Repeat,
+            mask_size: BackgroundSize::Auto,
+            scrollbar_width: ScrollbarWidth::Auto,
+            scrollbar_color: None,
+            scrollbar_gutter: ScrollbarGutter::Auto,
+            content: Content::Normal,
         }
     }
 }
@@ -716,9 +1556,115 @@ pub fn compute_style(
         outline_style: BorderStyle::None,
         outline_color: None,
         outline_offset: 0.0,
+        // CSS Lists L3 §3 — не наследуются.
+        counter_reset: Vec::new(),
+        counter_increment: Vec::new(),
+        // CSS Masking / Transforms / Filter — не наследуются.
+        clip_path: None,
+        transform: Vec::new(),
+        filter: Vec::new(),
+        // Box Alignment gap / Sizing aspect-ratio — не наследуются.
+        row_gap: 0.0,
+        column_gap: 0.0,
+        // CSS Multi-column — не наследуются.
+        column_count: None,
+        column_width: None,
+        column_rule_width: 0.0,
+        column_rule_style: BorderStyle::None,
+        column_rule_color: None,
+        column_span_all: false,
+        column_fill_balance: false,
+        break_before: BreakValue::Auto,
+        break_after: BreakValue::Auto,
+        break_inside: BreakValue::Auto,
+        aspect_ratio: None,
+        // Box Alignment — все не наследуются, default = Auto.
+        align_items: AlignValue::Auto,
+        align_self: AlignValue::Auto,
+        align_content: AlignValue::Auto,
+        justify_items: AlignValue::Auto,
+        justify_self: AlignValue::Auto,
+        justify_content: AlignValue::Auto,
+        // Backgrounds — не наследуются, defaults.
+        background_image: BackgroundImage::None,
+        background_repeat: BackgroundRepeat::Repeat,
+        background_size: BackgroundSize::Auto,
+        background_attachment: BackgroundAttachment::Scroll,
+        // Will Change / Pointer Events — не наследуются.
+        will_change: Vec::new(),
+        pointer_events: PointerEvents::Auto,
+        // User Select / Scroll Behavior — наследуются.
+        user_select: inherited.user_select,
+        scroll_behavior: inherited.scroll_behavior,
+        // Scroll Snap / Overscroll — не наследуются, defaults.
+        scroll_snap_type: ScrollSnapType::default(),
+        scroll_snap_align: ScrollSnapAlign::default(),
+        scroll_snap_stop: ScrollSnapStop::default(),
+        scroll_margin_top: 0.0,
+        scroll_margin_right: 0.0,
+        scroll_margin_bottom: 0.0,
+        scroll_margin_left: 0.0,
+        scroll_padding_top: 0.0,
+        scroll_padding_right: 0.0,
+        scroll_padding_bottom: 0.0,
+        scroll_padding_left: 0.0,
+        overscroll_behavior_x: OverscrollBehavior::Auto,
+        overscroll_behavior_y: OverscrollBehavior::Auto,
+        // CSS Text typography — все inherited.
+        tab_size: inherited.tab_size,
+        caret_color: inherited.caret_color,
+        overflow_wrap: inherited.overflow_wrap,
+        word_break: inherited.word_break,
+        hyphens: inherited.hyphens,
+        // CSS Transforms transform-origin + perspective — не наследуются.
+        transform_origin: (0.0, 0.0, 0.0),
+        perspective: None,
+        // CSS Lists — list-style-* наследуются.
+        list_style_type: inherited.list_style_type,
+        list_style_position: inherited.list_style_position,
+        list_style_image: inherited.list_style_image.clone(),
+        // CSS Transitions — не наследуются.
+        transition_properties: Vec::new(),
+        transition_durations: Vec::new(),
+        transition_delays: Vec::new(),
+        // CSS Masking — не наследуется.
+        mask_image: BackgroundImage::None,
+        mask_repeat: BackgroundRepeat::Repeat,
+        mask_size: BackgroundSize::Auto,
+        // CSS Scrollbars — scrollbar-width/-color inherited;
+        // scrollbar-gutter не наследуется.
+        scrollbar_width: inherited.scrollbar_width,
+        scrollbar_color: inherited.scrollbar_color,
+        scrollbar_gutter: ScrollbarGutter::Auto,
+        content: Content::Normal,
     };
 
+    // CSS Properties and Values L1 §1.1 — registry зарегистрированных
+    // custom-properties. Карта строится локально для каждого узла:
+    // на типичной странице 0..5 @property-правил, накладные расходы мизерны
+    // в сравнении со стоимостью каскада. При повторе имени (см. spec —
+    // last wins) `insert` корректно сохраняет последнее объявление.
+    let registry: HashMap<&str, &PropertyRule> = sheet
+        .properties
+        .iter()
+        .map(|p| (p.name.as_str(), p))
+        .collect();
+
+    // Откатываем у себя унаследованные значения тех зарегистрированных
+    // custom-properties, у которых `inherits: false` — для них потомок
+    // должен видеть либо локальную декларацию, либо initial-value, а не
+    // родительское значение.
+    if !registry.is_empty() {
+        style.custom_props.retain(|key, _| {
+            registry.get(key.as_str()).is_none_or(|p| p.inherits)
+        });
+    }
+
     if !matches!(doc.get(node).data, NodeData::Element { .. }) {
+        // Для не-элементов (Document, Text внутри anonymous-wrapping) тоже
+        // применяем initial-value: var(--registered) в наследуемом стиле
+        // должен резолвиться через initial-value, если декларации нет.
+        apply_property_initial_values(&mut style.custom_props, &registry);
         return style;
     }
 
@@ -730,6 +1676,14 @@ pub fn compute_style(
     if let Some(fw) = ua_font_weight(doc, node) {
         style.font_weight = fw;
     }
+
+    // HTML presentational hints (HTML5 §10): для `<img>` атрибуты
+    // `width`/`height` задают начальные значения соответствующих CSS-свойств.
+    // Применяются ДО CSS-каскада, поэтому любое author-CSS правило
+    // перекроет атрибут даже с specificity (0,0,1). Парсятся как unitless
+    // целые пиксели — это HTML5 правило для `<img>`, единицы и проценты
+    // в этих атрибутах игнорируются.
+    apply_image_presentational_hints(doc, node, &mut style);
 
     // Собираем все matched declarations с их sort key:
     // (important, specificity, rule_order, decl_index). `important` идёт
@@ -755,6 +1709,38 @@ pub fn compute_style(
             }
         }
     }
+    // CSS Media Queries L4: rules внутри `@media`-блока, чей query
+    // совпадает с текущим MediaContext, добавляются в каскад. В Phase 0
+    // упрощённый MediaContext: media_type="screen", width/height из
+    // viewport, prefers_dark=false. Source-order между обычными и
+    // @media-rules не сохраняется идеально (все @media идут после
+    // обычных) — это известное ограничение.
+    let media_ctx = media_context_from_viewport(viewport);
+    let mut next_rule_idx = sheet.rules.len();
+    for media in &sheet.media_rules {
+        if !media.query.matches(&media_ctx) {
+            next_rule_idx += media.rules.len();
+            continue;
+        }
+        for rule in &media.rules {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if matches_complex(complex, doc, node) {
+                    let spec = complex.specificity();
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    matched.push((decl.important, spec, next_rule_idx, decl_idx, decl));
+                }
+            }
+            next_rule_idx += 1;
+        }
+    }
     matched.sort_by_key(|&(imp, spec, rule_idx, decl_idx, _)| (imp, spec, rule_idx, decl_idx));
 
     // Pre-pass: применяем font-size раньше, потому что em/% других свойств
@@ -770,22 +1756,207 @@ pub fn compute_style(
     // могла видеть финальное значение custom property независимо от порядка
     // объявления в source. Каскад уже соблюдён через sort `matched`:
     // последующая запись с тем же ключом перебивает раннюю.
+    //
+    // CSS Properties and Values L1 §1.1 «invalid at computed value time»:
+    // для зарегистрированных custom properties value валидируется против
+    // `syntax`-дескриптора. Невалидное значение игнорируется — старое
+    // значение (родительское inherited или initial-value) остаётся.
+    // value, содержащее `var(`, пропускается без валидации — резолв
+    // происходит позже, и итоговая строка может быть валидной.
     for (_, _, _, _, decl) in &matched {
         if let Some(name) = decl.property.strip_prefix("--") {
             let key = format!("--{name}");
+            if let Some(prop_rule) = registry.get(key.as_str())
+                && !decl.value.contains("var(")
+                && !validate_against_syntax(&decl.value, &prop_rule.syntax)
+            {
+                // Invalid at computed value time — skip declaration.
+                continue;
+            }
             style.custom_props.insert(key, decl.value.clone());
         }
     }
 
+    // CSS Properties and Values L1 §1.1: для каждого зарегистрированного
+    // имени, у которого после custom-pass нет значения (ни унаследованного,
+    // ни локально объявленного), подставить `initial-value`. Делается между
+    // custom-pass и main-pass, чтобы `var(--registered)` в обычных
+    // декларациях видел initial-value-fallback.
+    apply_property_initial_values(&mut style.custom_props, &registry);
+
     // Main-pass: остальные декларации; em-basis теперь = current font_size.
-    // Inherited font_weight нужен для разрешения `lighter`/`bolder`.
+    // Inherited font_weight нужен для разрешения `lighter`/`bolder`;
+    // `inherited` целиком — для CSS-wide keywords (CSS Cascade L4 §7).
     let em_basis = style.font_size;
     let parent_weight = inherited.font_weight;
     for (_, _, _, _, decl) in &matched {
-        apply_declaration(&mut style, decl, em_basis, viewport, parent_weight);
+        apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, inherited);
     }
 
     style
+}
+
+/// CSS Properties and Values L1 §1.1: для каждого зарегистрированного
+/// custom property, у которого нет значения в `custom_props`, подставляет
+/// `initial-value` (если он указан). Невызов для `inherits: true` имени
+/// с унаследованным значением — потому что `contains_key` уже возвращает
+/// true. Для `inherits: false` имени родительское значение было выпилено
+/// в `compute_style` через `retain`.
+fn apply_property_initial_values(
+    custom_props: &mut HashMap<String, String>,
+    registry: &HashMap<&str, &PropertyRule>,
+) {
+    for (name, p) in registry {
+        if custom_props.contains_key(*name) {
+            continue;
+        }
+        if let Some(iv) = &p.initial_value {
+            // CSS Properties and Values L1 §1.1: initial-value валидируется
+            // против syntax. Per spec — невалидный initial делает @property
+            // невалидным целиком; Phase 0 более снисходителен и просто
+            // не подставляет неподходящий initial (потомок без декларации
+            // получит inherited или ничего).
+            if validate_against_syntax(iv, &p.syntax) {
+                custom_props.insert((*name).to_string(), iv.clone());
+            }
+        }
+    }
+}
+
+/// CSS Properties and Values L1 §2 — упрощённая валидация значения
+/// custom property против `syntax`-дескриптора.
+///
+/// Поддерживаются:
+/// - `*` — универсал (любое значение проходит);
+/// - `<length>` — px, em, rem, vh, vw, vmin, vmax (но не `%`);
+/// - `<percentage>` — число с суффиксом `%`;
+/// - `<length-percentage>` — union;
+/// - `<color>` — любая форма, которую парсит `parse_color`;
+/// - `<integer>` — целое со знаком;
+/// - `<number>` — число с плавающей точкой;
+/// - `<angle>` — `deg` / `rad` / `turn` / `grad`;
+/// - `<time>` — `s` / `ms` (CSS Values L4 §8);
+/// - `<resolution>` — `dpi` / `dpcm` / `dppx` / `x` (CSS Values L4 §9.1);
+/// - `<custom-ident>` — идентификатор, не совпадающий с CSS-wide keyword.
+///
+/// Union через `|` — match если хоть одна альтернатива принимает. Прочие
+/// типы (`<image>`, `<url>`, `<transform-function>`, и т.д.) и multipliers
+/// (`+`, `#`) в Phase 0 трактуются как universal — возвращают `true`,
+/// чтобы не отбраковывать корректные value у потребителей этих типов.
+pub fn validate_against_syntax(value: &str, syntax: &str) -> bool {
+    let syntax = syntax.trim();
+    if syntax == "*" {
+        return true;
+    }
+    let value = value.trim();
+    // Union по `|`.
+    for alt in syntax.split('|') {
+        let alt = alt.trim();
+        let matched = match alt {
+            "<length>" => matches_syntax_length(value),
+            "<percentage>" => matches_syntax_percentage(value),
+            "<length-percentage>" => {
+                matches_syntax_length(value) || matches_syntax_percentage(value)
+            }
+            "<color>" => parse_color(value).is_some(),
+            "<integer>" => matches_syntax_integer(value),
+            "<number>" => matches_syntax_number(value),
+            "<angle>" => matches_syntax_angle(value),
+            "<time>" => matches_syntax_time(value),
+            "<resolution>" => matches_syntax_resolution(value),
+            "<custom-ident>" => matches_syntax_custom_ident(value),
+            // Неизвестный тип — permissive, чтобы не блокировать корректные
+            // declarations с пока-неподдержанными syntax-формами.
+            _ => true,
+        };
+        if matched {
+            return true;
+        }
+    }
+    false
+}
+
+fn matches_syntax_length(value: &str) -> bool {
+    // <length> = px/em/rem/vh/vw/vmin/vmax/calc(...) — без `%`.
+    match parse_length(value) {
+        Some(Length::Percent(_)) => false,
+        Some(_) => true,
+        None => false,
+    }
+}
+
+fn matches_syntax_percentage(value: &str) -> bool {
+    matches!(parse_length(value), Some(Length::Percent(_)))
+}
+
+fn matches_syntax_integer(value: &str) -> bool {
+    value.parse::<i64>().is_ok()
+}
+
+fn matches_syntax_number(value: &str) -> bool {
+    value.parse::<f64>().is_ok()
+}
+
+fn matches_syntax_angle(value: &str) -> bool {
+    // Number + один из суффиксов: deg, rad, turn, grad.
+    for suffix in ["deg", "rad", "turn", "grad"] {
+        if let Some(num) = value.strip_suffix(suffix)
+            && num.trim().parse::<f64>().is_ok()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn matches_syntax_time(value: &str) -> bool {
+    // CSS Values L4 §8 — <time> с суффиксами `s` или `ms`.
+    // Порядок важен: `ms` проверяем раньше `s`, иначе `200ms` распарсится
+    // как 200m + остаток `s` (а `200m` не валидный number → false).
+    for suffix in ["ms", "s"] {
+        if let Some(num) = value.strip_suffix(suffix)
+            && num.trim().parse::<f64>().is_ok()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn matches_syntax_resolution(value: &str) -> bool {
+    // CSS Values L4 §9.1 — <resolution> с суффиксами `dppx`/`dpcm`/`dpi`/`x`.
+    // `dppx` проверяем раньше `dpi`/`dpcm` (длинный суффикс), `x` — последним
+    // (резервный alias dppx; HTML5 media queries).
+    for suffix in ["dppx", "dpcm", "dpi", "x"] {
+        if let Some(num) = value.strip_suffix(suffix)
+            && num.trim().parse::<f64>().is_ok()
+        {
+            return true;
+        }
+    }
+    false
+}
+
+fn matches_syntax_custom_ident(value: &str) -> bool {
+    if value.is_empty() {
+        return false;
+    }
+    // CSS-wide keywords нельзя использовать как custom-ident.
+    if parse_css_wide_keyword(value).is_some() {
+        return false;
+    }
+    // Также запрещены `default` (CSS spec) и `none` в большинстве контекстов.
+    // Простая проверка: ident начинается с letter / `_` / `-`, дальше —
+    // alphanumeric / `-` / `_`. ASCII-only для простоты.
+    let mut chars = value.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return false,
+    };
+    if !(first.is_ascii_alphabetic() || first == '_' || first == '-') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 // ──────────────── selector matching ────────────────
@@ -1410,6 +2581,47 @@ fn ua_font_style(doc: &Document, node: NodeId) -> Option<FontStyle> {
     }
 }
 
+/// Применяет HTML presentational hints для `<img>`: атрибуты `width` и
+/// `height` парсятся как unitless целые пиксели и пишутся в `style.width` /
+/// `style.height`. Любое author-CSS правило в каскаде ниже перекроет
+/// атрибут — это и есть смысл «presentational hint»: атрибут эквивалентен
+/// UA-стилю с specificity 0, который проигрывает любой author-декларации
+/// (HTML5 §10 «Mapped attributes»). Невалидные значения (отрицательные,
+/// нечисловые, с единицами) HTML5 spec предписывает игнорировать.
+fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if name.local != "img" {
+        return;
+    }
+    let node_ref = doc.get(node);
+    if let Some(w) = node_ref.get_attr("width").and_then(parse_html_dimension) {
+        style.width = Some(w);
+    }
+    if let Some(h) = node_ref.get_attr("height").and_then(parse_html_dimension) {
+        style.height = Some(h);
+    }
+}
+
+/// HTML5 «rules for parsing dimension values»: unitless целое число
+/// пикселей, опциональный trailing `%` (Phase 0 пропускаем процентный
+/// случай — нужен containing-block-width). Отрицательные значения
+/// невалидны.
+fn parse_html_dimension(s: &str) -> Option<f32> {
+    let s = s.trim();
+    // Процентные размеры пока не поддерживаем — требуют containing block.
+    if s.ends_with('%') {
+        return None;
+    }
+    // Берём префикс из цифр (HTML5 принимает мусор после), парсим как u32.
+    let digits: String = s.chars().take_while(|c| c.is_ascii_digit()).collect();
+    if digits.is_empty() {
+        return None;
+    }
+    digits.parse::<u32>().ok().map(|n| n as f32)
+}
+
 /// UA stylesheet для font-weight: `<b>`, `<strong>`, `<th>`, `<h1>`–`<h6>`
 /// получают bold по умолчанию (HTML §15.3.3).
 fn ua_font_weight(doc: &Document, node: NodeId) -> Option<FontWeight> {
@@ -1616,7 +2828,30 @@ pub enum MathFn {
     Sign,
     Mod,
     Rem,
-    Round,
+    /// CSS Values L4 §10.5.1 — `round( <rounding-strategy>?, A, B? )`.
+    /// Strategy keyword вычисляется парсером и зашит в variant; отсутствие
+    /// keyword-а ≡ `Nearest`.
+    Round(RoundStrategy),
+}
+
+/// CSS Values L4 §10.5.1 — стратегия округления для `round()`.
+/// Опускание keyword-а в `round(A[, B])` ≡ `Nearest`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RoundStrategy {
+    /// Ближайшее кратное step; при равноудалённости — в сторону +∞
+    /// (`f32::round` round-half-away-from-zero, но spec в §10.5.1 говорит
+    /// «toward +∞»; различие незаметно для положительного step и нечастых
+    /// граничных случаев).
+    Nearest,
+    /// Меньшее или равное кратное step, всегда в сторону +∞
+    /// (`ceil(A/B) * B`).
+    Up,
+    /// Большее или равное кратное step, всегда в сторону −∞
+    /// (`floor(A/B) * B`).
+    Down,
+    /// Округление к нулю (`trunc(A/B) * B`). Для положительных A совпадает
+    /// с `Down`, для отрицательных — с `Up`.
+    ToZero,
 }
 
 impl CalcNode {
@@ -1784,21 +3019,31 @@ fn resolve_math_func(
             }
             a % b
         }
-        MathFn::Round => {
-            // round(val[, step]). Без step (один аргумент) — round до
-            // ближайшего целого. С step — round к ближайшему кратному step.
-            // Strategy keywords (`up`/`down`/`to-zero`/`nearest`) — в Phase 0
-            // не реализованы (парсер их не распознаёт, см. parse_function_call).
+        MathFn::Round(strategy) => {
+            // round([<strategy>,] val[, step]). Без step (нет 2-го arg) —
+            // step = 1, как в spec §10.5.1. step ≠ 0 (иначе ÷ 0 → None).
+            // Знак step сохраняется: spec не делает abs, и для nearest
+            // результат симметричен, а для up/down/to-zero — нет (это та же
+            // semantics, что у chrome/firefox). NaN ловится финальным
+            // `is_finite()`-чеком.
             let val = resolve(&args[0])?;
-            if args.len() == 2 {
-                let step = resolve(&args[1])?;
-                if step == 0.0 {
+            let step = if args.len() == 2 {
+                let s = resolve(&args[1])?;
+                if s == 0.0 {
                     return None;
                 }
-                (val / step).round() * step
+                s
             } else {
-                val.round()
-            }
+                1.0
+            };
+            let ratio = val / step;
+            let rounded = match strategy {
+                RoundStrategy::Nearest => ratio.round(),
+                RoundStrategy::Up => ratio.ceil(),
+                RoundStrategy::Down => ratio.floor(),
+                RoundStrategy::ToZero => ratio.trunc(),
+            };
+            rounded * step
         }
     };
     if result.is_finite() {
@@ -2100,6 +3345,27 @@ fn parse_function_call(
     tokens: &[CalcToken],
     pos: &mut usize,
 ) -> Option<CalcNode> {
+    // CSS Values L4 §10.5.1: `round( <rounding-strategy>?, A, B? )` —
+    // первый аргумент-keyword. Распознаём ДО общего parse_arg_list, чтобы
+    // ident-без-`(` не падал в `parse_calc_factor` как «функция без скобок».
+    // После keyword обязательна `,` — strategy без последующего expr невалиден.
+    let round_strategy = if name == "round" {
+        if let Some(CalcToken::Ident(kw)) = tokens.get(*pos)
+            && let Some(s) = parse_round_strategy(kw)
+        {
+            *pos += 1;
+            if !matches!(tokens.get(*pos), Some(CalcToken::Comma)) {
+                return None;
+            }
+            *pos += 1;
+            Some(s)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     let args = parse_arg_list(tokens, pos)?;
     if !matches!(tokens.get(*pos), Some(CalcToken::RParen)) {
         return None;
@@ -2185,16 +3451,28 @@ fn parse_function_call(
             Some(CalcNode::Func(MathFn::Hypot, args))
         }
         "round" => {
-            // round(val) или round(val, step). Strategy keyword не реализован
-            // в Phase 0 — он бы стоял первым аргументом-ident, парсер
-            // не знает ident-arg, поэтому такие вызовы парсятся как обычные
-            // expr и упадут.
+            // round([<strategy>,] val[, step]). Strategy keyword уже снят
+            // вверху функции и зашит в `MathFn::Round(...)`; здесь остаётся
+            // классический args-чек 1..=2.
             if args.is_empty() || args.len() > 2 {
                 return None;
             }
-            Some(CalcNode::Func(MathFn::Round, args))
+            let s = round_strategy.unwrap_or(RoundStrategy::Nearest);
+            Some(CalcNode::Func(MathFn::Round(s), args))
         }
         _ => None, // незнакомая math-функция
+    }
+}
+
+/// CSS Values L4 §10.5.1: `<rounding-strategy>` = `nearest | up | down | to-zero`.
+/// Имя приходит уже в нижнем регистре из лексера; неподходящий ident → None.
+fn parse_round_strategy(name: &str) -> Option<RoundStrategy> {
+    match name {
+        "nearest" => Some(RoundStrategy::Nearest),
+        "up" => Some(RoundStrategy::Up),
+        "down" => Some(RoundStrategy::Down),
+        "to-zero" => Some(RoundStrategy::ToZero),
+        _ => None,
     }
 }
 
@@ -2285,6 +3563,76 @@ fn expand_vars(value: &str, custom: &HashMap<String, String>, depth: u32) -> Opt
     expand_vars(&combined, custom, depth + 1)
 }
 
+/// Раскрывает все `env(name [<index>...]?, fallback?)` в value.
+/// CSS Environment Variables L1: `env()` — это var()-подобная подстановка
+/// из UA-supplied registry. Имена не имеют `--` префикса (env-имена —
+/// `safe-area-inset-top`, `viewport-segment-width` и т.д.).
+///
+/// Phase 0: registry — пустой `HashMap`, все env-вызовы попадают в
+/// fallback. Это даёт корректное `padding: env(safe-area-inset-top, 0px)`
+/// → `padding: 0px`. Indices (`env(name 0 1, fallback)`) парсятся, но
+/// игнорируются (используется только name до пробела).
+fn expand_env_vars(
+    value: &str,
+    env_registry: &HashMap<String, String>,
+    depth: u32,
+) -> Option<String> {
+    if depth > VAR_EXPAND_MAX_DEPTH {
+        return None;
+    }
+    let Some(start) = find_env_open(value) else {
+        return Some(value.to_string());
+    };
+    let prefix = &value[..start];
+    let after_open = &value[start + 4..]; // skip "env("
+    let (args, after_close) = parse_balanced_to_close(after_open)?;
+    let (name_part, fallback) = split_var_args(args);
+    // Indices в name-part: `safe-area-inset-top` или `viewport-segment-width 0 0`.
+    let env_name = name_part.split_whitespace().next().unwrap_or("");
+    if env_name.is_empty() {
+        return None;
+    }
+    let resolved = if let Some(v) = env_registry.get(env_name) {
+        expand_env_vars(v.trim(), env_registry, depth + 1)?
+    } else if let Some(fb) = fallback {
+        expand_env_vars(fb.trim(), env_registry, depth + 1)?
+    } else {
+        return None;
+    };
+    let combined = format!("{prefix}{resolved}{after_close}");
+    expand_env_vars(&combined, env_registry, depth + 1)
+}
+
+/// Аналог `find_var_open` для `env(`. Учитывает строковые литералы.
+fn find_env_open(s: &str) -> Option<usize> {
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    let mut in_string: Option<u8> = None;
+    while i + 4 <= bytes.len() {
+        let b = bytes[i];
+        match (in_string, b) {
+            (Some(q), c) if c == q => {
+                in_string = None;
+                i += 1;
+            }
+            (None, b'"') | (None, b'\'') => {
+                in_string = Some(b);
+                i += 1;
+            }
+            (None, b'e') if &bytes[i..i + 4] == b"env(" => return Some(i),
+            _ => i += 1,
+        }
+    }
+    None
+}
+
+/// UA env-registry. Phase 0: пустой; вызовы `env(name, fallback)`
+/// возвращают fallback. В Phase 2+ значения будут заполняться shell-ом
+/// из реального viewport state (safe-area, виртуальная клавиатура).
+fn empty_env_registry() -> HashMap<String, String> {
+    HashMap::new()
+}
+
 /// Находит позицию первого `var(` в `s` вне строковых литералов. Возвращает
 /// индекс символа `v`. Учитывает одинарные и двойные кавычки, чтобы
 /// `content: "var(x)"` не давал ложного матча.
@@ -2364,6 +3712,7 @@ fn apply_declaration(
     em_basis: f32,
     viewport: Size,
     parent_font_weight: FontWeight,
+    inherited: &ComputedStyle,
 ) {
     let prop = decl.property.as_str();
 
@@ -2381,23 +3730,53 @@ fn apply_declaration(
     // value time»). `expanded` живёт до конца функции, чтобы `val` остался
     // валидным `&str`.
     let expanded;
-    let val: &str = if decl.value.contains("var(") {
-        match expand_vars(&decl.value, &style.custom_props, 0) {
-            Some(v) => {
-                expanded = v;
-                expanded.as_str()
+    let val: &str = if decl.value.contains("var(") || decl.value.contains("env(") {
+        let after_var = if decl.value.contains("var(") {
+            match expand_vars(&decl.value, &style.custom_props, 0) {
+                Some(v) => v,
+                None => return,
             }
-            None => return,
+        } else {
+            decl.value.clone()
+        };
+        // CSS Environment Variables L1: env() раскрывается ПОСЛЕ var(),
+        // потому что custom property может содержать `env(...)`.
+        if after_var.contains("env(") {
+            match expand_env_vars(&after_var, &empty_env_registry(), 0) {
+                Some(v) => {
+                    expanded = v;
+                    expanded.as_str()
+                }
+                None => return,
+            }
+        } else {
+            expanded = after_var;
+            expanded.as_str()
         }
     } else {
         decl.value.as_str()
     };
+
+    // CSS Cascade L4 §7: CSS-wide keywords (inherit / initial / unset /
+    // revert) применимы к любому свойству. Делается ДО property-specific
+    // парсинга, чтобы не дублировать проверку в 30+ branch-ах. font-size
+    // обрабатывается в `apply_font_size` (pre-pass) — здесь повторно для
+    // случая, когда font-size попал в main-pass через невидимую генерик
+    // декларацию (no-op, font-size уже выставлен).
+    if let Some(kw) = parse_css_wide_keyword(val) {
+        apply_css_wide_keyword(style, prop, kw, inherited);
+        return;
+    }
     match prop {
         "display" => {
             style.display = match val {
                 "block" => Display::Block,
                 "inline" => Display::Inline,
                 "none" => Display::None,
+                "flex" => Display::Flex,
+                "inline-flex" => Display::InlineFlex,
+                "grid" => Display::Grid,
+                "inline-grid" => Display::InlineGrid,
                 _ => style.display,
             };
         }
@@ -2709,6 +4088,666 @@ fn apply_declaration(
                 style.outline_offset = px;
             }
         }
+        "counter-reset" => {
+            // CSS Lists L3 §3 — `none | (<custom-ident> <integer>?)+`.
+            // Default value на счётчик при отсутствии числа = 0 (по spec).
+            // `none` сбрасывает всё.
+            style.counter_reset = parse_counter_list(val, 0);
+        }
+        "counter-increment" => {
+            // CSS Lists L3 §3 — `none | (<custom-ident> <integer>?)+`.
+            // Default value = 1 (по spec).
+            style.counter_increment = parse_counter_list(val, 1);
+        }
+        "clip-path" => {
+            // CSS Masking L1 §3 — basic-shape | none. `none` чистит.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.clip_path = None;
+            } else if let Some(cp) = parse_clip_path(trimmed) {
+                style.clip_path = Some(cp);
+            }
+        }
+        "transform" => {
+            // CSS Transforms L1 §2 — `none | <transform-list>`.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.transform = Vec::new();
+            } else {
+                style.transform = parse_transform_list(trimmed);
+            }
+        }
+        "filter" => {
+            // CSS Filter Effects L1 §3 — `none | <filter-function-list>`.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.filter = Vec::new();
+            } else {
+                style.filter = parse_filter_list(trimmed);
+            }
+        }
+        "row-gap" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.row_gap = px.max(0.0);
+            }
+        }
+        "column-gap" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.column_gap = px.max(0.0);
+            }
+        }
+        "gap" => {
+            // Shorthand: `<row-gap> <column-gap>?` (если column отсутствует,
+            // = row).
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if !parts.is_empty() {
+                let row = resolve_box_length(parts[0], em_basis, viewport).map(|v| v.max(0.0));
+                let col = if parts.len() >= 2 {
+                    resolve_box_length(parts[1], em_basis, viewport).map(|v| v.max(0.0))
+                } else {
+                    row
+                };
+                if let (Some(r), Some(c)) = (row, col) {
+                    style.row_gap = r;
+                    style.column_gap = c;
+                }
+            }
+        }
+        "column-count" => {
+            // CSS Multi-column L1 §3.2: <integer> | auto.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.column_count = None;
+            } else if let Ok(n) = trimmed.parse::<u32>()
+                && n > 0
+            {
+                style.column_count = Some(n);
+            }
+        }
+        "column-width" => {
+            // CSS Multi-column L1 §3.3: <length> | auto.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.column_width = None;
+            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport)
+                && px >= 0.0
+            {
+                style.column_width = Some(px);
+            }
+        }
+        "columns" => {
+            // CSS Multi-column L1 §3.4 shorthand: <column-width> || <column-count>.
+            // Любой токен может быть `auto`. Length → width, integer → count.
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            let mut count: Option<u32> = None;
+            let mut width: Option<f32> = None;
+            let mut had_width = false;
+            let mut had_count = false;
+            for p in &parts {
+                if p.eq_ignore_ascii_case("auto") {
+                    // Один auto — не назначаем, оставляем None для обоих.
+                    continue;
+                }
+                if let Ok(n) = p.parse::<u32>()
+                    && n > 0
+                    && !had_count
+                {
+                    count = Some(n);
+                    had_count = true;
+                    continue;
+                }
+                if let Some(px) = resolve_box_length(p, em_basis, viewport)
+                    && px >= 0.0
+                    && !had_width
+                {
+                    width = Some(px);
+                    had_width = true;
+                }
+            }
+            // Если хотя бы один токен распознали — применяем.
+            if had_width || had_count {
+                style.column_width = width;
+                style.column_count = count;
+            }
+        }
+        "column-rule-width" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.column_rule_width = px.max(0.0);
+            }
+        }
+        "column-rule-style" => {
+            style.column_rule_style = parse_border_style_opt(val.trim()).unwrap_or(BorderStyle::None);
+        }
+        "column-rule-color" => {
+            style.column_rule_color = parse_color(val.trim());
+        }
+        "column-rule" => {
+            // Shorthand: <width> || <style> || <color>. Любой порядок.
+            let mut rest = val.trim().to_string();
+            // Color может содержать пробелы (rgba(...)), но в Phase 0 — простой
+            // word-by-word проход.
+            for tok in val.split_whitespace() {
+                if let Some(s) = parse_border_style_opt(tok) {
+                    style.column_rule_style = s;
+                    rest = rest.replacen(tok, "", 1);
+                    continue;
+                }
+                if let Some(px) = resolve_box_length(tok, em_basis, viewport)
+                    && px >= 0.0
+                {
+                    style.column_rule_width = px;
+                    rest = rest.replacen(tok, "", 1);
+                    continue;
+                }
+                if let Some(c) = parse_color(tok) {
+                    style.column_rule_color = Some(c);
+                    rest = rest.replacen(tok, "", 1);
+                }
+            }
+            // Если в rest осталось что-то с скобками (`rgba(...)`) — пытаемся
+            // парсить как цвет.
+            let rest = rest.trim();
+            if !rest.is_empty()
+                && style.column_rule_color.is_none()
+                && let Some(c) = parse_color(rest)
+            {
+                style.column_rule_color = Some(c);
+            }
+        }
+        "column-span" => {
+            match val.trim().to_ascii_lowercase().as_str() {
+                "all" => style.column_span_all = true,
+                "none" => style.column_span_all = false,
+                _ => {}
+            }
+        }
+        "column-fill" => {
+            match val.trim().to_ascii_lowercase().as_str() {
+                "balance" => style.column_fill_balance = true,
+                "auto" => style.column_fill_balance = false,
+                _ => {}
+            }
+        }
+        "break-before" => {
+            if let Some(v) = parse_break_value(val.trim()) {
+                style.break_before = v;
+            }
+        }
+        "break-after" => {
+            if let Some(v) = parse_break_value(val.trim()) {
+                style.break_after = v;
+            }
+        }
+        "break-inside" => {
+            if let Some(v) = parse_break_value(val.trim()) {
+                style.break_inside = v;
+            }
+        }
+        "aspect-ratio" => {
+            // CSS Sizing L4 §6.1: `auto | <ratio>`. <ratio> = number или
+            // `W / H`. Phase 0 игнорирует `auto <ratio>` форму
+            // (intrinsic + override).
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.aspect_ratio = None;
+            } else if let Some(r) = parse_aspect_ratio_value(trimmed) {
+                style.aspect_ratio = Some(r);
+            }
+        }
+        // CSS Box Alignment L3 — alignment свойства. Парсятся как одно
+        // значение (полная грамматика с baseline-fallback и safe/unsafe —
+        // отложена).
+        "align-items" => {
+            if let Some(v) = AlignValue::parse(val) {
+                style.align_items = v;
+            }
+        }
+        "align-self" => {
+            if let Some(v) = AlignValue::parse(val) {
+                style.align_self = v;
+            }
+        }
+        "align-content" => {
+            if let Some(v) = AlignValue::parse(val) {
+                style.align_content = v;
+            }
+        }
+        "justify-items" => {
+            if let Some(v) = AlignValue::parse(val) {
+                style.justify_items = v;
+            }
+        }
+        "justify-self" => {
+            if let Some(v) = AlignValue::parse(val) {
+                style.justify_self = v;
+            }
+        }
+        "justify-content" => {
+            if let Some(v) = AlignValue::parse(val) {
+                style.justify_content = v;
+            }
+        }
+        // Shorthand: `place-items: <align-items> [<justify-items>]?`
+        "place-items" => {
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
+                style.align_items = a;
+                style.justify_items = parts
+                    .get(1)
+                    .and_then(|s| AlignValue::parse(s))
+                    .unwrap_or(a);
+            }
+        }
+        "place-self" => {
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
+                style.align_self = a;
+                style.justify_self = parts
+                    .get(1)
+                    .and_then(|s| AlignValue::parse(s))
+                    .unwrap_or(a);
+            }
+        }
+        "background-image" => {
+            // CSS Backgrounds L3 §3.1. `none` сбрасывает.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.background_image = BackgroundImage::None;
+            } else if let Some(url) = parse_url_value(trimmed) {
+                style.background_image = BackgroundImage::Url(url);
+            } else if is_gradient_function(trimmed) {
+                // Gradients хранятся сырой строкой — типизация отложена.
+                style.background_image = BackgroundImage::Gradient(trimmed.to_string());
+            }
+        }
+        "background-repeat" => {
+            if let Some(v) = BackgroundRepeat::parse(val) {
+                style.background_repeat = v;
+            }
+        }
+        "background-size" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.background_size = BackgroundSize::Auto;
+            } else if trimmed.eq_ignore_ascii_case("cover") {
+                style.background_size = BackgroundSize::Cover;
+            } else if trimmed.eq_ignore_ascii_case("contain") {
+                style.background_size = BackgroundSize::Contain;
+            } else {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                let w = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport));
+                let h = parts.get(1).and_then(|s| {
+                    if s.eq_ignore_ascii_case("auto") {
+                        None
+                    } else {
+                        resolve_box_length(s, em_basis, viewport)
+                    }
+                });
+                if let Some(w) = w {
+                    style.background_size = BackgroundSize::Length(w, h);
+                }
+            }
+        }
+        "background-attachment" => {
+            if let Some(v) = BackgroundAttachment::parse(val) {
+                style.background_attachment = v;
+            }
+        }
+        "will-change" => {
+            // CSS Will Change L1: `auto | <ident-list>`. Lenient parser —
+            // comma-separated ident-имена.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.will_change = Vec::new();
+            } else {
+                style.will_change = trimmed
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty() && is_css_ident(s))
+                    .collect();
+            }
+        }
+        "pointer-events" => {
+            if let Some(v) = PointerEvents::parse(val) {
+                style.pointer_events = v;
+            }
+        }
+        "user-select" => {
+            if let Some(v) = UserSelect::parse(val) {
+                style.user_select = v;
+            }
+        }
+        "scroll-behavior" => {
+            if let Some(v) = ScrollBehavior::parse(val) {
+                style.scroll_behavior = v;
+            }
+        }
+        "scroll-snap-type" => {
+            if let Some(v) = parse_scroll_snap_type(val) {
+                style.scroll_snap_type = v;
+            }
+        }
+        "scroll-snap-align" => {
+            if let Some(v) = parse_scroll_snap_align(val) {
+                style.scroll_snap_align = v;
+            }
+        }
+        "scroll-snap-stop" => {
+            match val.trim().to_ascii_lowercase().as_str() {
+                "normal" => style.scroll_snap_stop = ScrollSnapStop::Normal,
+                "always" => style.scroll_snap_stop = ScrollSnapStop::Always,
+                _ => {}
+            }
+        }
+        "scroll-margin-top" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_margin_top = px;
+            }
+        }
+        "scroll-margin-right" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_margin_right = px;
+            }
+        }
+        "scroll-margin-bottom" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_margin_bottom = px;
+            }
+        }
+        "scroll-margin-left" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_margin_left = px;
+            }
+        }
+        "scroll-margin" => {
+            let parts: Vec<f32> = val
+                .split_whitespace()
+                .filter_map(|p| resolve_box_length(p, em_basis, viewport))
+                .collect();
+            let (t, r, b, l) = expand_4_sides(&parts);
+            style.scroll_margin_top = t;
+            style.scroll_margin_right = r;
+            style.scroll_margin_bottom = b;
+            style.scroll_margin_left = l;
+        }
+        "scroll-padding-top" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_padding_top = px;
+            }
+        }
+        "scroll-padding-right" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_padding_right = px;
+            }
+        }
+        "scroll-padding-bottom" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_padding_bottom = px;
+            }
+        }
+        "scroll-padding-left" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.scroll_padding_left = px;
+            }
+        }
+        "scroll-padding" => {
+            let parts: Vec<f32> = val
+                .split_whitespace()
+                .filter_map(|p| resolve_box_length(p, em_basis, viewport))
+                .collect();
+            let (t, r, b, l) = expand_4_sides(&parts);
+            style.scroll_padding_top = t;
+            style.scroll_padding_right = r;
+            style.scroll_padding_bottom = b;
+            style.scroll_padding_left = l;
+        }
+        "overscroll-behavior-x" => {
+            if let Some(v) = parse_overscroll_behavior(val) {
+                style.overscroll_behavior_x = v;
+            }
+        }
+        "overscroll-behavior-y" => {
+            if let Some(v) = parse_overscroll_behavior(val) {
+                style.overscroll_behavior_y = v;
+            }
+        }
+        "overscroll-behavior" => {
+            // Shorthand: 1 значение — оба, 2 значения — x и y.
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if let Some(x) = parts.first().and_then(|p| parse_overscroll_behavior(p)) {
+                style.overscroll_behavior_x = x;
+                let y = parts.get(1).and_then(|p| parse_overscroll_behavior(p)).unwrap_or(x);
+                style.overscroll_behavior_y = y;
+            }
+        }
+        "tab-size" => {
+            // CSS Text L3 §10.1: <integer> или <length>. Integer = ширина
+            // в spaces; принимаем как 8px-per-space heuristic. Length —
+            // resolved-px.
+            let trimmed = val.trim();
+            if let Ok(n) = trimmed.parse::<i32>() {
+                style.tab_size = (n.max(0) as f32) * 8.0;
+            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport) {
+                style.tab_size = px.max(0.0);
+            }
+        }
+        "caret-color" => {
+            // CSS UI L4 §6.3: auto | <color>.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.caret_color = None;
+            } else if let Some(c) = parse_color(trimmed) {
+                style.caret_color = Some(c);
+            }
+        }
+        "overflow-wrap" | "word-wrap" => {
+            // `word-wrap` — legacy alias для `overflow-wrap`.
+            if let Some(v) = OverflowWrap::parse(val) {
+                style.overflow_wrap = v;
+            }
+        }
+        "word-break" => {
+            if let Some(v) = WordBreak::parse(val) {
+                style.word_break = v;
+            }
+        }
+        "hyphens" => {
+            if let Some(v) = Hyphens::parse(val) {
+                style.hyphens = v;
+            }
+        }
+        "transform-origin" => {
+            // CSS Transforms L1 §6: <position> [<length>]?
+            // Phase 0: парсим 1-3 значения как px. Keywords (center / top /
+            // bottom / left / right) пока не поддерживаем.
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            let x = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport)).unwrap_or(0.0);
+            let y = parts.get(1).and_then(|s| resolve_box_length(s, em_basis, viewport)).unwrap_or(0.0);
+            let z = parts.get(2).and_then(|s| resolve_box_length(s, em_basis, viewport)).unwrap_or(0.0);
+            style.transform_origin = (x, y, z);
+        }
+        "perspective" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.perspective = None;
+            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport) {
+                style.perspective = if px > 0.0 { Some(px) } else { None };
+            }
+        }
+        "list-style-type" => {
+            if let Some(v) = ListStyleType::parse(val) {
+                style.list_style_type = v;
+            }
+        }
+        "list-style-position" => {
+            if let Some(v) = ListStylePosition::parse(val) {
+                style.list_style_position = v;
+            }
+        }
+        "list-style-image" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.list_style_image = None;
+            } else if let Some(u) = parse_url_value(trimmed) {
+                style.list_style_image = Some(u);
+            }
+        }
+        "list-style" => {
+            // Shorthand: type | position | image, в любом порядке.
+            // Простой парсер: пытаемся каждое слово.
+            for token in val.split_whitespace() {
+                if let Some(t) = ListStyleType::parse(token) {
+                    style.list_style_type = t;
+                } else if let Some(p) = ListStylePosition::parse(token) {
+                    style.list_style_position = p;
+                } else if let Some(u) = parse_url_value(token) {
+                    style.list_style_image = Some(u);
+                } else if token.eq_ignore_ascii_case("none") {
+                    // `none` неоднозначен: type=None И image=None. Per spec,
+                    // `none` сначала применяется к type, потом к image (если
+                    // повторяется). Простая трактовка: первый none → type=None,
+                    // последующие → image=None.
+                    if !matches!(style.list_style_type, ListStyleType::None) {
+                        style.list_style_type = ListStyleType::None;
+                    } else {
+                        style.list_style_image = None;
+                    }
+                }
+            }
+        }
+        "transition-property" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.transition_properties = Vec::new();
+            } else if trimmed.eq_ignore_ascii_case("all") {
+                style.transition_properties = vec!["all".to_string()];
+            } else {
+                style.transition_properties = trimmed
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+            }
+        }
+        "transition-duration" => {
+            style.transition_durations = parse_time_list(val);
+        }
+        "transition-delay" => {
+            style.transition_delays = parse_time_list(val);
+        }
+        "mask-image" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.mask_image = BackgroundImage::None;
+            } else if let Some(u) = parse_url_value(trimmed) {
+                style.mask_image = BackgroundImage::Url(u);
+            } else if is_gradient_function(trimmed) {
+                style.mask_image = BackgroundImage::Gradient(trimmed.to_string());
+            }
+        }
+        "mask-repeat" => {
+            if let Some(v) = BackgroundRepeat::parse(val) {
+                style.mask_repeat = v;
+            }
+        }
+        "mask-size" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.mask_size = BackgroundSize::Auto;
+            } else if trimmed.eq_ignore_ascii_case("cover") {
+                style.mask_size = BackgroundSize::Cover;
+            } else if trimmed.eq_ignore_ascii_case("contain") {
+                style.mask_size = BackgroundSize::Contain;
+            } else {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                let w = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport));
+                let h = parts.get(1).and_then(|s| {
+                    if s.eq_ignore_ascii_case("auto") {
+                        None
+                    } else {
+                        resolve_box_length(s, em_basis, viewport)
+                    }
+                });
+                if let Some(w) = w {
+                    style.mask_size = BackgroundSize::Length(w, h);
+                }
+            }
+        }
+        "scrollbar-width" => {
+            if let Some(v) = ScrollbarWidth::parse(val) {
+                style.scrollbar_width = v;
+            }
+        }
+        "scrollbar-color" => {
+            // `auto` или два цвета (thumb + track).
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.scrollbar_color = None;
+            } else {
+                // Парсим два color-значения, разделённые whitespace.
+                // Простая реализация: split по `)` чтобы разделить
+                // `rgb(...)` пары. Иначе — split_whitespace.
+                let mut pieces: Vec<String> = Vec::new();
+                let mut current = String::new();
+                let mut depth = 0i32;
+                for c in trimmed.chars() {
+                    current.push(c);
+                    if c == '(' {
+                        depth += 1;
+                    } else if c == ')' {
+                        depth -= 1;
+                        if depth == 0 {
+                            pieces.push(current.trim().to_string());
+                            current.clear();
+                        }
+                    } else if c.is_whitespace() && depth == 0 && !current.trim().is_empty() {
+                        let trimmed_piece = current.trim().to_string();
+                        if !trimmed_piece.is_empty() {
+                            pieces.push(trimmed_piece);
+                        }
+                        current.clear();
+                    }
+                }
+                if !current.trim().is_empty() {
+                    pieces.push(current.trim().to_string());
+                }
+                pieces.retain(|p| !p.is_empty());
+                if pieces.len() == 2
+                    && let (Some(thumb), Some(track)) =
+                        (parse_color(&pieces[0]), parse_color(&pieces[1]))
+                {
+                    style.scrollbar_color = Some((thumb, track));
+                }
+            }
+        }
+        "scrollbar-gutter" => {
+            if let Some(v) = ScrollbarGutter::parse(val) {
+                style.scrollbar_gutter = v;
+            }
+        }
+        "content" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("normal") {
+                style.content = Content::Normal;
+            } else if trimmed.eq_ignore_ascii_case("none") {
+                style.content = Content::None;
+            } else {
+                let items = parse_content_items(trimmed);
+                if !items.is_empty() {
+                    style.content = Content::Items(items);
+                }
+            }
+        }
+        "place-content" => {
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
+                style.align_content = a;
+                style.justify_content = parts
+                    .get(1)
+                    .and_then(|s| AlignValue::parse(s))
+                    .unwrap_or(a);
+            }
+        }
         "opacity" => {
             // CSS Color L3 §3.2: <number 0..1> или <percentage>. Out-of-range
             // clamp-ается. Невалидные значения игнорируются.
@@ -2991,6 +5030,905 @@ fn parse_text_decoration_shorthand(val: &str) -> (Option<TextDecorationLine>, Op
     (line, color)
 }
 
+/// CSS Cascade L4 §7 — применить CSS-wide keyword к одному свойству.
+///
+/// Источник значения:
+/// - `Inherit` — всегда родительский computed value (для любого свойства).
+/// - `Initial` — всегда initial value свойства из спецификации
+///   (берётся из `ComputedStyle::root()`).
+/// - `Unset` / `Revert` — для inherited-свойств работает как `Inherit`,
+///   для non-inherited как `Initial`. `Revert` в Phase 0 ≡ `Unset`
+///   (UA / User origin не отделены чётко, только UA-hints для italic/bold).
+///
+/// Per-property список синхронизирован с `apply_declaration` и `compute_style`-init —
+/// неизвестные имена молча игнорируются.
+fn apply_css_wide_keyword(
+    style: &mut ComputedStyle,
+    prop: &str,
+    kw: CssWideKeyword,
+    inherited: &ComputedStyle,
+) {
+    use CssWideKeyword::{Inherit, Revert, Unset};
+    // Initial-значения как у root документа. ComputedStyle::root() выделяет
+    // несколько Vec/HashMap, но эта функция вызывается только при обнаружении
+    // CSS-wide-keyword в декларации — редкий путь, накладные расходы
+    // незаметны на типичной странице.
+    let init = ComputedStyle::root();
+
+    // Helper «inherited property»: Inherit/Unset/Revert → inherited, Initial → init.
+    let inh = matches!(kw, Inherit | Unset | Revert);
+    // Helper «non-inherited property»: Inherit → inherited, Initial/Unset/Revert → init.
+    let inh_only_inherit = matches!(kw, Inherit);
+
+    match prop {
+        // ──────── Inherited properties ────────
+        "color" => style.color = if inh { inherited.color } else { init.color },
+        "font-size" => {
+            // Font-size уже обработан в apply_font_size (pre-pass). Здесь
+            // повторно — если main-pass почему-то его коснётся, оставляем
+            // корректный итог.
+            style.font_size = if inh { inherited.font_size } else { init.font_size };
+        }
+        "line-height" => {
+            style.line_height = if inh { inherited.line_height } else { init.line_height };
+        }
+        "font-style" => {
+            style.font_style = if inh { inherited.font_style } else { init.font_style };
+        }
+        "font-weight" => {
+            style.font_weight = if inh { inherited.font_weight } else { init.font_weight };
+        }
+        "font-variant" | "font-variant-caps" => {
+            style.font_variant = if inh { inherited.font_variant } else { init.font_variant };
+        }
+        "font-stretch" => {
+            style.font_stretch = if inh { inherited.font_stretch } else { init.font_stretch };
+        }
+        "font-family" => {
+            style.font_family = if inh {
+                inherited.font_family.clone()
+            } else {
+                init.font_family.clone()
+            };
+        }
+        "text-align" => {
+            style.text_align = if inh { inherited.text_align } else { init.text_align };
+        }
+        "direction" => {
+            style.direction = if inh { inherited.direction } else { init.direction };
+        }
+        "text-transform" => {
+            style.text_transform = if inh { inherited.text_transform } else { init.text_transform };
+        }
+        "white-space" => {
+            style.white_space = if inh { inherited.white_space } else { init.white_space };
+        }
+        "text-indent" => {
+            style.text_indent = if inh { inherited.text_indent } else { init.text_indent };
+        }
+        "letter-spacing" => {
+            style.letter_spacing = if inh { inherited.letter_spacing } else { init.letter_spacing };
+        }
+        "word-spacing" => {
+            style.word_spacing = if inh { inherited.word_spacing } else { init.word_spacing };
+        }
+        "text-decoration-line" | "text-decoration" => {
+            style.text_decoration_line = if inh {
+                inherited.text_decoration_line
+            } else {
+                init.text_decoration_line
+            };
+            style.text_decoration_color = if inh {
+                inherited.text_decoration_color
+            } else {
+                init.text_decoration_color
+            };
+        }
+        "text-decoration-color" => {
+            style.text_decoration_color = if inh {
+                inherited.text_decoration_color
+            } else {
+                init.text_decoration_color
+            };
+        }
+        "text-shadow" => {
+            style.text_shadow = if inh {
+                inherited.text_shadow.clone()
+            } else {
+                init.text_shadow.clone()
+            };
+        }
+        "visibility" => {
+            style.visibility = if inh { inherited.visibility } else { init.visibility };
+        }
+        "cursor" => {
+            style.cursor = if inh { inherited.cursor } else { init.cursor };
+        }
+        "accent-color" => {
+            style.accent_color = if inh { inherited.accent_color } else { init.accent_color };
+        }
+
+        // ──────── Non-inherited properties ────────
+        "display" => {
+            style.display = if inh_only_inherit { inherited.display } else { init.display };
+        }
+        "background-color" | "background" => {
+            style.background_color = if inh_only_inherit {
+                inherited.background_color
+            } else {
+                init.background_color
+            };
+        }
+        "width" => style.width = if inh_only_inherit { inherited.width } else { init.width },
+        "height" => style.height = if inh_only_inherit { inherited.height } else { init.height },
+        "min-width" => {
+            style.min_width = if inh_only_inherit { inherited.min_width } else { init.min_width };
+        }
+        "max-width" => {
+            style.max_width = if inh_only_inherit { inherited.max_width } else { init.max_width };
+        }
+        "min-height" => {
+            style.min_height = if inh_only_inherit { inherited.min_height } else { init.min_height };
+        }
+        "max-height" => {
+            style.max_height = if inh_only_inherit { inherited.max_height } else { init.max_height };
+        }
+        "margin-top" => {
+            style.margin_top = if inh_only_inherit { inherited.margin_top } else { init.margin_top };
+        }
+        "margin-right" => {
+            style.margin_right = if inh_only_inherit { inherited.margin_right } else { init.margin_right };
+        }
+        "margin-bottom" => {
+            style.margin_bottom = if inh_only_inherit { inherited.margin_bottom } else { init.margin_bottom };
+        }
+        "margin-left" => {
+            style.margin_left = if inh_only_inherit { inherited.margin_left } else { init.margin_left };
+        }
+        "margin" => {
+            // shorthand → reset все 4 стороны
+            let (t, r, b, l) = if inh_only_inherit {
+                (inherited.margin_top, inherited.margin_right, inherited.margin_bottom, inherited.margin_left)
+            } else {
+                (init.margin_top, init.margin_right, init.margin_bottom, init.margin_left)
+            };
+            style.margin_top = t;
+            style.margin_right = r;
+            style.margin_bottom = b;
+            style.margin_left = l;
+        }
+        "padding-top" => {
+            style.padding_top = if inh_only_inherit { inherited.padding_top } else { init.padding_top };
+        }
+        "padding-right" => {
+            style.padding_right = if inh_only_inherit { inherited.padding_right } else { init.padding_right };
+        }
+        "padding-bottom" => {
+            style.padding_bottom = if inh_only_inherit { inherited.padding_bottom } else { init.padding_bottom };
+        }
+        "padding-left" => {
+            style.padding_left = if inh_only_inherit { inherited.padding_left } else { init.padding_left };
+        }
+        "padding" => {
+            let (t, r, b, l) = if inh_only_inherit {
+                (inherited.padding_top, inherited.padding_right, inherited.padding_bottom, inherited.padding_left)
+            } else {
+                (init.padding_top, init.padding_right, init.padding_bottom, init.padding_left)
+            };
+            style.padding_top = t;
+            style.padding_right = r;
+            style.padding_bottom = b;
+            style.padding_left = l;
+        }
+        "box-sizing" => {
+            style.box_sizing = if inh_only_inherit { inherited.box_sizing } else { init.box_sizing };
+        }
+        "opacity" => {
+            style.opacity = if inh_only_inherit { inherited.opacity } else { init.opacity };
+        }
+        "overflow" => {
+            let (x, y) = if inh_only_inherit {
+                (inherited.overflow_x, inherited.overflow_y)
+            } else {
+                (init.overflow_x, init.overflow_y)
+            };
+            style.overflow_x = x;
+            style.overflow_y = y;
+        }
+        "overflow-x" => {
+            style.overflow_x = if inh_only_inherit { inherited.overflow_x } else { init.overflow_x };
+        }
+        "overflow-y" => {
+            style.overflow_y = if inh_only_inherit { inherited.overflow_y } else { init.overflow_y };
+        }
+        "text-overflow" => {
+            style.text_overflow = if inh_only_inherit { inherited.text_overflow } else { init.text_overflow };
+        }
+        "box-shadow" => {
+            style.box_shadow = if inh_only_inherit {
+                inherited.box_shadow.clone()
+            } else {
+                init.box_shadow.clone()
+            };
+        }
+        "outline-width" => {
+            style.outline_width = if inh_only_inherit { inherited.outline_width } else { init.outline_width };
+        }
+        "outline-style" => {
+            style.outline_style = if inh_only_inherit { inherited.outline_style } else { init.outline_style };
+        }
+        "outline-color" => {
+            style.outline_color = if inh_only_inherit { inherited.outline_color } else { init.outline_color };
+        }
+        "outline-offset" => {
+            style.outline_offset = if inh_only_inherit { inherited.outline_offset } else { init.outline_offset };
+        }
+        "outline" => {
+            // shorthand: width + style + color (offset не входит per spec).
+            if inh_only_inherit {
+                style.outline_width = inherited.outline_width;
+                style.outline_style = inherited.outline_style;
+                style.outline_color = inherited.outline_color;
+            } else {
+                style.outline_width = init.outline_width;
+                style.outline_style = init.outline_style;
+                style.outline_color = init.outline_color;
+            }
+        }
+        // border-* per-side individual + shorthands
+        "border-top-width" => style.border_top_width = if inh_only_inherit { inherited.border_top_width } else { init.border_top_width },
+        "border-right-width" => style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init.border_right_width },
+        "border-bottom-width" => style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init.border_bottom_width },
+        "border-left-width" => style.border_left_width = if inh_only_inherit { inherited.border_left_width } else { init.border_left_width },
+        "border-top-style" => style.border_top_style = if inh_only_inherit { inherited.border_top_style } else { init.border_top_style },
+        "border-right-style" => style.border_right_style = if inh_only_inherit { inherited.border_right_style } else { init.border_right_style },
+        "border-bottom-style" => style.border_bottom_style = if inh_only_inherit { inherited.border_bottom_style } else { init.border_bottom_style },
+        "border-left-style" => style.border_left_style = if inh_only_inherit { inherited.border_left_style } else { init.border_left_style },
+        "border-top-color" => style.border_top_color = if inh_only_inherit { inherited.border_top_color } else { init.border_top_color },
+        "border-right-color" => style.border_right_color = if inh_only_inherit { inherited.border_right_color } else { init.border_right_color },
+        "border-bottom-color" => style.border_bottom_color = if inh_only_inherit { inherited.border_bottom_color } else { init.border_bottom_color },
+        "border-left-color" => style.border_left_color = if inh_only_inherit { inherited.border_left_color } else { init.border_left_color },
+        // border-width / -style / -color shorthand → 4 стороны
+        "border-width" => {
+            let v = if inh_only_inherit {
+                (inherited.border_top_width, inherited.border_right_width, inherited.border_bottom_width, inherited.border_left_width)
+            } else {
+                (init.border_top_width, init.border_right_width, init.border_bottom_width, init.border_left_width)
+            };
+            style.border_top_width = v.0;
+            style.border_right_width = v.1;
+            style.border_bottom_width = v.2;
+            style.border_left_width = v.3;
+        }
+        "border-style" => {
+            let v = if inh_only_inherit {
+                (inherited.border_top_style, inherited.border_right_style, inherited.border_bottom_style, inherited.border_left_style)
+            } else {
+                (init.border_top_style, init.border_right_style, init.border_bottom_style, init.border_left_style)
+            };
+            style.border_top_style = v.0;
+            style.border_right_style = v.1;
+            style.border_bottom_style = v.2;
+            style.border_left_style = v.3;
+        }
+        "border-color" => {
+            let v = if inh_only_inherit {
+                (inherited.border_top_color, inherited.border_right_color, inherited.border_bottom_color, inherited.border_left_color)
+            } else {
+                (init.border_top_color, init.border_right_color, init.border_bottom_color, init.border_left_color)
+            };
+            style.border_top_color = v.0;
+            style.border_right_color = v.1;
+            style.border_bottom_color = v.2;
+            style.border_left_color = v.3;
+        }
+        // border / border-top / -right / -bottom / -left shorthand: width + style + color на сторону.
+        "border" => {
+            let (w, s, c) = if inh_only_inherit {
+                (inherited.border_top_width, inherited.border_top_style, inherited.border_top_color)
+            } else {
+                (init.border_top_width, init.border_top_style, init.border_top_color)
+            };
+            for (sw, ss, sc) in [
+                (&mut style.border_top_width, &mut style.border_top_style, &mut style.border_top_color),
+                (&mut style.border_right_width, &mut style.border_right_style, &mut style.border_right_color),
+                (&mut style.border_bottom_width, &mut style.border_bottom_style, &mut style.border_bottom_color),
+                (&mut style.border_left_width, &mut style.border_left_style, &mut style.border_left_color),
+            ] {
+                *sw = w;
+                *ss = s;
+                *sc = c;
+            }
+        }
+        "border-top" => {
+            style.border_top_width = if inh_only_inherit { inherited.border_top_width } else { init.border_top_width };
+            style.border_top_style = if inh_only_inherit { inherited.border_top_style } else { init.border_top_style };
+            style.border_top_color = if inh_only_inherit { inherited.border_top_color } else { init.border_top_color };
+        }
+        "border-right" => {
+            style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init.border_right_width };
+            style.border_right_style = if inh_only_inherit { inherited.border_right_style } else { init.border_right_style };
+            style.border_right_color = if inh_only_inherit { inherited.border_right_color } else { init.border_right_color };
+        }
+        "border-bottom" => {
+            style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init.border_bottom_width };
+            style.border_bottom_style = if inh_only_inherit { inherited.border_bottom_style } else { init.border_bottom_style };
+            style.border_bottom_color = if inh_only_inherit { inherited.border_bottom_color } else { init.border_bottom_color };
+        }
+        "border-left" => {
+            style.border_left_width = if inh_only_inherit { inherited.border_left_width } else { init.border_left_width };
+            style.border_left_style = if inh_only_inherit { inherited.border_left_style } else { init.border_left_style };
+            style.border_left_color = if inh_only_inherit { inherited.border_left_color } else { init.border_left_color };
+        }
+        // border-radius (CSS Backgrounds L3 §5) — 4 угла.
+        "border-top-left-radius" => {
+            style.border_top_left_radius = if inh_only_inherit { inherited.border_top_left_radius } else { init.border_top_left_radius };
+        }
+        "border-top-right-radius" => {
+            style.border_top_right_radius = if inh_only_inherit { inherited.border_top_right_radius } else { init.border_top_right_radius };
+        }
+        "border-bottom-right-radius" => {
+            style.border_bottom_right_radius = if inh_only_inherit { inherited.border_bottom_right_radius } else { init.border_bottom_right_radius };
+        }
+        "border-bottom-left-radius" => {
+            style.border_bottom_left_radius = if inh_only_inherit { inherited.border_bottom_left_radius } else { init.border_bottom_left_radius };
+        }
+        "border-radius" => {
+            let v = if inh_only_inherit {
+                (inherited.border_top_left_radius, inherited.border_top_right_radius, inherited.border_bottom_right_radius, inherited.border_bottom_left_radius)
+            } else {
+                (init.border_top_left_radius, init.border_top_right_radius, init.border_bottom_right_radius, init.border_bottom_left_radius)
+            };
+            style.border_top_left_radius = v.0;
+            style.border_top_right_radius = v.1;
+            style.border_bottom_right_radius = v.2;
+            style.border_bottom_left_radius = v.3;
+        }
+        // CSS Lists L3 §3 — не наследуются; Inherit пуллит из inherited,
+        // прочие — initial (пустой Vec).
+        "counter-reset" => {
+            style.counter_reset = if inh_only_inherit {
+                inherited.counter_reset.clone()
+            } else {
+                init.counter_reset.clone()
+            };
+        }
+        "counter-increment" => {
+            style.counter_increment = if inh_only_inherit {
+                inherited.counter_increment.clone()
+            } else {
+                init.counter_increment.clone()
+            };
+        }
+        // Masking / Transforms / Filter — все non-inherited.
+        "clip-path" => {
+            style.clip_path = if inh_only_inherit { inherited.clip_path.clone() } else { init.clip_path.clone() };
+        }
+        "transform" => {
+            style.transform = if inh_only_inherit { inherited.transform.clone() } else { init.transform.clone() };
+        }
+        "filter" => {
+            style.filter = if inh_only_inherit { inherited.filter.clone() } else { init.filter.clone() };
+        }
+        // Прочие / неизвестные — silent no-op.
+        _ => {}
+    }
+}
+
+/// Парсер CSS Lists L3 §3 `counter-reset` / `counter-increment` value.
+/// Формат: `none | (<custom-ident> <integer>?)+`. Возвращает `Vec` пар
+/// (имя, число); `default` подставляется когда integer не указан.
+///
+/// `none` (case-insensitive) → пустой `Vec`. Невалидные ident-ы и числа
+/// — пропускаем без ошибки, как best-effort lenient parser.
+fn parse_counter_list(value: &str, default: i32) -> Vec<(String, i32)> {
+    let v = value.trim();
+    if v.eq_ignore_ascii_case("none") || v.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut tokens = v.split_whitespace().peekable();
+    while let Some(tok) = tokens.next() {
+        // Имя счётчика — CSS ident: ASCII alphabetic / `_` / `-` начало,
+        // дальше alphanumeric / `-` / `_`. Простой strict check; пропускаем
+        // токены, не похожие на ident.
+        if !is_css_ident(tok) {
+            continue;
+        }
+        // Следующий токен — опц. integer.
+        let n = if let Some(&peeked) = tokens.peek() {
+            if let Ok(parsed) = peeked.parse::<i32>() {
+                tokens.next();
+                parsed
+            } else {
+                default
+            }
+        } else {
+            default
+        };
+        out.push((tok.to_string(), n));
+    }
+    out
+}
+
+fn is_css_ident(s: &str) -> bool {
+    let mut chars = s.chars();
+    let Some(first) = chars.next() else {
+        return false;
+    };
+    if !(first.is_ascii_alphabetic() || first == '_' || first == '-') {
+        return false;
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+/// Парсит угол в радианах из строки вида `45deg`, `1.5rad`, `0.25turn`,
+/// `100grad`. Без единицы — number-as-radians (для совместимости).
+fn parse_angle_to_radians(s: &str) -> Option<f32> {
+    let s = s.trim();
+    for (suffix, factor) in [
+        ("deg", std::f32::consts::PI / 180.0),
+        ("rad", 1.0),
+        ("turn", std::f32::consts::TAU),
+        ("grad", std::f32::consts::PI / 200.0),
+    ] {
+        if let Some(num) = s.strip_suffix(suffix)
+            && let Ok(v) = num.trim().parse::<f32>()
+        {
+            return Some(v * factor);
+        }
+    }
+    s.parse::<f32>().ok()
+}
+
+/// Парсит `<number>` или `<percentage>` для filter-функций.
+/// Number 0..=1.0 (или %  0..=100%) — типичная семантика.
+fn parse_number_or_percent(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix('%') {
+        num.trim().parse::<f32>().ok().map(|v| v / 100.0)
+    } else {
+        s.parse::<f32>().ok()
+    }
+}
+
+/// Распарсить `<length>` в px (без `%`). Поддерживает px/em/rem
+/// упрощённо — em/rem трактуем как 16px-base; viewport-units игнорируем
+/// (Phase 0 — clip-path/transform/filter не критичны к точному
+/// разрешению относительных длин на этапе parsing).
+fn parse_length_px(s: &str) -> Option<f32> {
+    let s = s.trim();
+    for (suffix, factor) in [("px", 1.0), ("em", 16.0), ("rem", 16.0)] {
+        if let Some(num) = s.strip_suffix(suffix)
+            && let Ok(v) = num.trim().parse::<f32>()
+        {
+            return Some(v * factor);
+        }
+    }
+    // Без единицы — допустимо для 0.
+    s.parse::<f32>().ok()
+}
+
+/// Парсит `<basic-shape>` для `clip-path` (CSS Masking L1 §3.5).
+/// Поддерживает: `inset(t r b l)`, `circle(r at cx cy)`,
+/// `ellipse(rx ry at cx cy)`, `polygon(x1 y1, x2 y2, ...)`.
+fn parse_clip_path(s: &str) -> Option<ClipPath> {
+    let s = s.trim();
+    let open = s.find('(')?;
+    let close = s.rfind(')')?;
+    if close <= open {
+        return None;
+    }
+    let func = s[..open].trim().to_ascii_lowercase();
+    let inner = s[open + 1..close].trim();
+    match func.as_str() {
+        "inset" => {
+            let parts: Vec<f32> = inner
+                .split_whitespace()
+                .filter_map(parse_length_px)
+                .collect();
+            if parts.is_empty() {
+                None
+            } else {
+                Some(ClipPath::Inset(parts))
+            }
+        }
+        "circle" => {
+            // `radius` [`at cx cy`]
+            let (radius_part, at_part) = if let Some(idx) = inner.find(" at ") {
+                (&inner[..idx], Some(&inner[idx + 4..]))
+            } else {
+                (inner, None)
+            };
+            let radius = parse_length_px(radius_part.trim())?;
+            let center = at_part.and_then(parse_at_pair);
+            Some(ClipPath::Circle { radius, center })
+        }
+        "ellipse" => {
+            let (radii_part, at_part) = if let Some(idx) = inner.find(" at ") {
+                (&inner[..idx], Some(&inner[idx + 4..]))
+            } else {
+                (inner, None)
+            };
+            let radii: Vec<f32> = radii_part
+                .split_whitespace()
+                .filter_map(parse_length_px)
+                .collect();
+            if radii.len() < 2 {
+                return None;
+            }
+            let center = at_part.and_then(parse_at_pair);
+            Some(ClipPath::Ellipse {
+                rx: radii[0],
+                ry: radii[1],
+                center,
+            })
+        }
+        "polygon" => {
+            let mut vertices = Vec::new();
+            for pair in inner.split(',') {
+                let coords: Vec<f32> = pair
+                    .split_whitespace()
+                    .filter_map(parse_length_px)
+                    .collect();
+                if coords.len() >= 2 {
+                    vertices.push((coords[0], coords[1]));
+                }
+            }
+            if vertices.is_empty() {
+                None
+            } else {
+                Some(ClipPath::Polygon(vertices))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn parse_at_pair(s: &str) -> Option<(f32, f32)> {
+    let parts: Vec<f32> = s.split_whitespace().filter_map(parse_length_px).collect();
+    if parts.len() >= 2 {
+        Some((parts[0], parts[1]))
+    } else {
+        None
+    }
+}
+
+/// Парсит `<transform-list>` — последовательность `func(args)` через
+/// whitespace (без запятых). Каждая `func` распознаётся отдельно.
+fn parse_transform_list(s: &str) -> Vec<TransformFn> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        // Skip whitespace.
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        // Read ident до `(`.
+        let name_start = i;
+        while i < bytes.len() && bytes[i] != b'(' && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let name = s[name_start..i].trim().to_ascii_lowercase();
+        if name.is_empty() {
+            break;
+        }
+        // Expect `(`.
+        if i >= bytes.len() || bytes[i] != b'(' {
+            break;
+        }
+        i += 1;
+        // Find matching `)`.
+        let args_start = i;
+        let mut depth = 1usize;
+        while i < bytes.len() && depth > 0 {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        let args = &s[args_start..i.saturating_sub(1)];
+        if let Some(tf) = parse_transform_fn(&name, args) {
+            out.push(tf);
+        }
+    }
+    out
+}
+
+fn parse_transform_fn(name: &str, args: &str) -> Option<TransformFn> {
+    let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+    match name {
+        "translate" => {
+            let x = parse_length_px(parts.first()?)?;
+            let y = parts.get(1).and_then(|s| parse_length_px(s)).unwrap_or(0.0);
+            Some(TransformFn::Translate(x, y))
+        }
+        "translatex" => parse_length_px(parts.first()?).map(TransformFn::TranslateX),
+        "translatey" => parse_length_px(parts.first()?).map(TransformFn::TranslateY),
+        "rotate" => parse_angle_to_radians(parts.first()?).map(TransformFn::Rotate),
+        "scale" => {
+            let x = parts.first()?.parse::<f32>().ok()?;
+            let y = parts
+                .get(1)
+                .and_then(|s| s.parse::<f32>().ok())
+                .unwrap_or(x);
+            Some(TransformFn::Scale(x, y))
+        }
+        "scalex" => parts.first()?.parse::<f32>().ok().map(TransformFn::ScaleX),
+        "scaley" => parts.first()?.parse::<f32>().ok().map(TransformFn::ScaleY),
+        "skewx" => parse_angle_to_radians(parts.first()?).map(TransformFn::SkewX),
+        "skewy" => parse_angle_to_radians(parts.first()?).map(TransformFn::SkewY),
+        "skew" => {
+            // `skew(x, y)` — для совместимости. Phase 0: храним как X-only.
+            parse_angle_to_radians(parts.first()?).map(TransformFn::SkewX)
+        }
+        "matrix" => {
+            if parts.len() != 6 {
+                return None;
+            }
+            let mut m = [0.0f32; 6];
+            for (i, p) in parts.iter().enumerate() {
+                m[i] = p.parse::<f32>().ok()?;
+            }
+            Some(TransformFn::Matrix(m))
+        }
+        _ => None,
+    }
+}
+
+/// Парсит `<filter-function-list>` — последовательность функций
+/// через whitespace.
+fn parse_filter_list(s: &str) -> Vec<FilterFn> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let name_start = i;
+        while i < bytes.len() && bytes[i] != b'(' && !bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        let name = s[name_start..i].trim().to_ascii_lowercase();
+        if name.is_empty() {
+            break;
+        }
+        if i >= bytes.len() || bytes[i] != b'(' {
+            break;
+        }
+        i += 1;
+        let args_start = i;
+        let mut depth = 1usize;
+        while i < bytes.len() && depth > 0 {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            i += 1;
+        }
+        let args = s[args_start..i.saturating_sub(1)].trim();
+        if let Some(f) = parse_filter_fn(&name, args) {
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// CSS Content L3 — парсер `content` value на список `ContentItem`.
+/// Whitespace-separated; кавычки литералов и `()` функций соблюдаются.
+fn parse_content_items(s: &str) -> Vec<ContentItem> {
+    let mut out = Vec::new();
+    let bytes = s.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Skip whitespace.
+        while i < bytes.len() && bytes[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        let c = bytes[i];
+        if c == b'"' || c == b'\'' {
+            let quote = c;
+            i += 1;
+            let start = i;
+            while i < bytes.len() && bytes[i] != quote {
+                i += 1;
+            }
+            let literal = &s[start..i];
+            out.push(ContentItem::String(literal.to_string()));
+            if i < bytes.len() {
+                i += 1; // closing quote
+            }
+        } else if c.is_ascii_alphabetic() || c == b'-' {
+            // Ident, может быть keyword (open-quote/...) или function-call.
+            let name_start = i;
+            while i < bytes.len()
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-')
+            {
+                i += 1;
+            }
+            let name = s[name_start..i].to_ascii_lowercase();
+            if i < bytes.len() && bytes[i] == b'(' {
+                // Function call. Find matching `)`.
+                i += 1;
+                let args_start = i;
+                let mut depth = 1usize;
+                while i < bytes.len() && depth > 0 {
+                    match bytes[i] {
+                        b'(' => depth += 1,
+                        b')' => depth -= 1,
+                        _ => {}
+                    }
+                    i += 1;
+                }
+                let args = &s[args_start..i.saturating_sub(1)];
+                if let Some(item) = parse_content_fn(&name, args) {
+                    out.push(item);
+                }
+            } else {
+                // Keyword.
+                match name.as_str() {
+                    "open-quote" => out.push(ContentItem::OpenQuote),
+                    "close-quote" => out.push(ContentItem::CloseQuote),
+                    "no-open-quote" => out.push(ContentItem::NoOpenQuote),
+                    "no-close-quote" => out.push(ContentItem::NoCloseQuote),
+                    _ => {}  // unknown ident — skip
+                }
+            }
+        } else {
+            i += 1;  // skip unknown character
+        }
+    }
+    out
+}
+
+fn parse_content_fn(name: &str, args: &str) -> Option<ContentItem> {
+    match name {
+        "url" => {
+            let inner = args.trim().trim_matches(['"', '\''].as_ref());
+            Some(ContentItem::Url(inner.to_string()))
+        }
+        "attr" => {
+            let attr_name = args.trim().trim_matches(['"', '\''].as_ref());
+            if attr_name.is_empty() {
+                None
+            } else {
+                Some(ContentItem::Attr(attr_name.to_string()))
+            }
+        }
+        "counter" => {
+            let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+            let counter_name = parts.first()?.to_string();
+            if counter_name.is_empty() {
+                return None;
+            }
+            let style = parts.get(1).map(|s| s.to_string());
+            Some(ContentItem::Counter {
+                name: counter_name,
+                style,
+            })
+        }
+        "counters" => {
+            let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+            let counter_name = parts.first()?.to_string();
+            let separator_raw = parts.get(1)?;
+            let separator = separator_raw.trim_matches(['"', '\''].as_ref()).to_string();
+            let style = parts.get(2).map(|s| s.to_string());
+            Some(ContentItem::Counters {
+                name: counter_name,
+                separator,
+                style,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// CSS Values L4 §8 — список `<time>` значений через запятую.
+/// Возвращает Vec секунд (ms → /1000, s → as-is).
+fn parse_time_list(s: &str) -> Vec<f32> {
+    s.split(',')
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .filter_map(parse_time_seconds)
+        .collect()
+}
+
+fn parse_time_seconds(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(num) = s.strip_suffix("ms") {
+        return num.trim().parse::<f32>().ok().map(|v| v / 1000.0);
+    }
+    if let Some(num) = s.strip_suffix('s') {
+        return num.trim().parse::<f32>().ok();
+    }
+    None
+}
+
+/// Извлечь URL из `url(...)`-функции. Поддерживает кавычки и без них.
+/// Возвращает None если строка не выглядит как url().
+fn parse_url_value(s: &str) -> Option<String> {
+    let s = s.trim();
+    let after = s.strip_prefix("url(")?;
+    let close = after.rfind(')')?;
+    let inner = after[..close].trim().trim_matches(['"', '\''].as_ref());
+    Some(inner.to_string())
+}
+
+/// Проверка, является ли value одной из gradient-функций.
+fn is_gradient_function(s: &str) -> bool {
+    let s = s.trim().to_ascii_lowercase();
+    s.starts_with("linear-gradient(")
+        || s.starts_with("radial-gradient(")
+        || s.starts_with("conic-gradient(")
+        || s.starts_with("repeating-linear-gradient(")
+        || s.starts_with("repeating-radial-gradient(")
+        || s.starts_with("repeating-conic-gradient(")
+}
+
+/// CSS Sizing L4 §6.1 — парсит `<ratio>`: либо одно положительное
+/// число (трактуется как W:1), либо `W / H` пара. Phase 0 не
+/// поддерживает `auto <ratio>` форму (она бы хранилась как fallback,
+/// но требует расширения структуры).
+fn parse_aspect_ratio_value(s: &str) -> Option<(f32, f32)> {
+    let s = s.trim();
+    if let Some((w_str, h_str)) = s.split_once('/') {
+        let w = w_str.trim().parse::<f32>().ok()?;
+        let h = h_str.trim().parse::<f32>().ok()?;
+        if w > 0.0 && h > 0.0 {
+            return Some((w, h));
+        }
+        return None;
+    }
+    // Single number — W:1.
+    let v = s.parse::<f32>().ok()?;
+    if v > 0.0 {
+        Some((v, 1.0))
+    } else {
+        None
+    }
+}
+
+fn parse_filter_fn(name: &str, args: &str) -> Option<FilterFn> {
+    match name {
+        "blur" => parse_length_px(args).map(FilterFn::Blur),
+        "brightness" => parse_number_or_percent(args).map(FilterFn::Brightness),
+        "contrast" => parse_number_or_percent(args).map(FilterFn::Contrast),
+        "grayscale" => parse_number_or_percent(args).map(FilterFn::Grayscale),
+        "hue-rotate" => parse_angle_to_radians(args).map(FilterFn::HueRotate),
+        "invert" => parse_number_or_percent(args).map(FilterFn::Invert),
+        "opacity" => parse_number_or_percent(args).map(FilterFn::Opacity),
+        "saturate" => parse_number_or_percent(args).map(FilterFn::Saturate),
+        "sepia" => parse_number_or_percent(args).map(FilterFn::Sepia),
+        _ => None,
+    }
+}
+
+/// Контекст для `@media`-запросов из viewport-а. Phase 0 упрощение:
+/// media_type всегда "screen", prefers_dark = false. Shell может в
+/// будущем переопределить через явный API.
+fn media_context_from_viewport(viewport: Size) -> MediaContext {
+    MediaContext {
+        media_type: "screen".into(),
+        width: viewport.width,
+        height: viewport.height,
+        prefers_dark: false,
+    }
+}
+
 /// Применяет `font-size`-декларацию, если она задана. Размер `em` берётся
 /// относительно `parent_fs` (родительский font-size), `rem` — относительно
 /// ROOT_FONT_SIZE, `%` — относительно `parent_fs`.
@@ -3004,6 +5942,17 @@ fn apply_font_size(
         return;
     }
     let val = decl.value.as_str();
+    // CSS Cascade L4 §7: CSS-wide keywords. font-size — inherited;
+    // unset == inherit; revert == unset (Phase 0 без чёткой UA-origin границы).
+    if let Some(kw) = parse_css_wide_keyword(val) {
+        style.font_size = match kw {
+            CssWideKeyword::Inherit
+            | CssWideKeyword::Unset
+            | CssWideKeyword::Revert => parent_fs,
+            CssWideKeyword::Initial => ROOT_FONT_SIZE,
+        };
+        return;
+    }
     let Some(len) = parse_length(val) else {
         return;
     };
@@ -3053,6 +6002,100 @@ fn parse_border_style_kw(s: &str) -> BorderStyle {
         "dashed" => BorderStyle::Dashed,
         "dotted" => BorderStyle::Dotted,
         _ => BorderStyle::None,
+    }
+}
+
+fn parse_border_style_opt(s: &str) -> Option<BorderStyle> {
+    match s.trim() {
+        "none" => Some(BorderStyle::None),
+        "solid" => Some(BorderStyle::Solid),
+        "dashed" => Some(BorderStyle::Dashed),
+        "dotted" => Some(BorderStyle::Dotted),
+        _ => None,
+    }
+}
+
+/// Расширяет 1-4 значения `Vec<f32>` в (top, right, bottom, left) по
+/// стандартному CSS-правилу (1 значение → все четыре, 2 значения → v-h,
+/// 3 значения → top-h-bottom, 4 значения — TRBL).
+fn expand_4_sides(parts: &[f32]) -> (f32, f32, f32, f32) {
+    match parts.len() {
+        1 => (parts[0], parts[0], parts[0], parts[0]),
+        2 => (parts[0], parts[1], parts[0], parts[1]),
+        3 => (parts[0], parts[1], parts[2], parts[1]),
+        _ if parts.len() >= 4 => (parts[0], parts[1], parts[2], parts[3]),
+        _ => (0.0, 0.0, 0.0, 0.0),
+    }
+}
+
+fn parse_scroll_snap_type(s: &str) -> Option<ScrollSnapType> {
+    let s = s.trim().to_ascii_lowercase();
+    if s == "none" {
+        return Some(ScrollSnapType::default());
+    }
+    let mut axis = ScrollSnapAxis::None;
+    let mut strict = ScrollSnapStrictness::Proximity;
+    for tok in s.split_whitespace() {
+        match tok {
+            "x" => axis = ScrollSnapAxis::X,
+            "y" => axis = ScrollSnapAxis::Y,
+            "block" => axis = ScrollSnapAxis::Block,
+            "inline" => axis = ScrollSnapAxis::Inline,
+            "both" => axis = ScrollSnapAxis::Both,
+            "mandatory" => strict = ScrollSnapStrictness::Mandatory,
+            "proximity" => strict = ScrollSnapStrictness::Proximity,
+            _ => {}
+        }
+    }
+    Some(ScrollSnapType {
+        axis,
+        strictness: strict,
+    })
+}
+
+fn parse_scroll_snap_align(s: &str) -> Option<ScrollSnapAlign> {
+    let parts: Vec<ScrollSnapAlignKeyword> = s
+        .split_whitespace()
+        .map(|p| match p.to_ascii_lowercase().as_str() {
+            "none" => ScrollSnapAlignKeyword::None,
+            "start" => ScrollSnapAlignKeyword::Start,
+            "end" => ScrollSnapAlignKeyword::End,
+            "center" => ScrollSnapAlignKeyword::Center,
+            _ => ScrollSnapAlignKeyword::None,
+        })
+        .collect();
+    match parts.len() {
+        1 => Some(ScrollSnapAlign {
+            block: parts[0],
+            inline: parts[0],
+        }),
+        2 => Some(ScrollSnapAlign {
+            block: parts[0],
+            inline: parts[1],
+        }),
+        _ => None,
+    }
+}
+
+fn parse_overscroll_behavior(s: &str) -> Option<OverscrollBehavior> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(OverscrollBehavior::Auto),
+        "contain" => Some(OverscrollBehavior::Contain),
+        "none" => Some(OverscrollBehavior::None),
+        _ => None,
+    }
+}
+
+/// Парсит CSS Fragmentation L3 §3.1 `break-*` keyword.
+fn parse_break_value(s: &str) -> Option<BreakValue> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(BreakValue::Auto),
+        "avoid" | "avoid-page" | "avoid-column" | "avoid-region" => Some(BreakValue::Avoid),
+        "always" => Some(BreakValue::Always),
+        "page" => Some(BreakValue::Page),
+        "column" => Some(BreakValue::Column),
+        "region" => Some(BreakValue::Region),
+        _ => None,
     }
 }
 
@@ -3362,6 +6405,12 @@ fn parse_function_color(s: &str) -> Option<Color> {
         (ColorFn::Hsl, b)
     } else if let Some(b) = lower.strip_prefix("oklch(").and_then(|t| t.strip_suffix(')')) {
         (ColorFn::Oklch, b)
+    } else if let Some(b) = lower.strip_prefix("oklab(").and_then(|t| t.strip_suffix(')')) {
+        (ColorFn::Oklab, b)
+    } else if let Some(b) = lower.strip_prefix("lab(").and_then(|t| t.strip_suffix(')')) {
+        (ColorFn::Lab, b)
+    } else if let Some(b) = lower.strip_prefix("lch(").and_then(|t| t.strip_suffix(')')) {
+        (ColorFn::Lch, b)
     } else {
         return None;
     };
@@ -3397,6 +6446,33 @@ fn parse_function_color(s: &str) -> Option<Color> {
             let (r, g, b) = oklch_to_srgb(l, c, h);
             Some(Color { r, g, b, a: alpha })
         }
+        ColorFn::Oklab => {
+            // OKLab: L=0..1, a/b — unitless (~±0.4). 100% для a/b = ±0.4.
+            let l = parse_oklch_lightness(&parts[0])?;
+            let a = parse_oklab_ab(&parts[1])?;
+            let b = parse_oklab_ab(&parts[2])?;
+            let (r, g, b) = oklab_to_srgb(l, a, b);
+            Some(Color { r, g, b, a: alpha })
+        }
+        ColorFn::Lab => {
+            // CIE Lab (D50): L=0..100, a/b — unitless (~±125). 100% = ±125.
+            let l = parse_lab_lightness(&parts[0])?;
+            let a = parse_lab_ab(&parts[1])?;
+            let b = parse_lab_ab(&parts[2])?;
+            let (r, g, b) = lab_to_srgb(l, a, b);
+            Some(Color { r, g, b, a: alpha })
+        }
+        ColorFn::Lch => {
+            // LCH: L=0..100, C≥0 (100% = 150), H в градусах.
+            let l = parse_lab_lightness(&parts[0])?;
+            let c = parse_lch_chroma(&parts[1])?;
+            let h = parse_hue_component(&parts[2])?;
+            let h_rad = h.to_radians();
+            let a = c * h_rad.cos();
+            let b_v = c * h_rad.sin();
+            let (r, g, b) = lab_to_srgb(l, a, b_v);
+            Some(Color { r, g, b, a: alpha })
+        }
     }
 }
 
@@ -3404,7 +6480,10 @@ enum ColorFn {
     Rgb,
     Hsl,
     Oklch,
-    // Прочие CSS4 расширения (lab / lch / oklab / color()) — позже.
+    Oklab,
+    Lab,
+    Lch,
+    // Прочие CSS4 расширения (color()) — позже.
 }
 
 /// Парсит lightness для oklch: число 0..1 или процент 0..100% → 0..1.
@@ -3424,6 +6503,114 @@ fn parse_oklch_chroma(s: &str) -> Option<f32> {
         return pct.trim().parse::<f32>().ok().map(|p| (p / 100.0 * 0.4).max(0.0));
     }
     s.parse::<f32>().ok().map(|v| v.max(0.0))
+}
+
+/// Парсит a/b для oklab: число (~±0.4) или процент (100% = 0.4).
+fn parse_oklab_ab(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        // CSS Color L4 §10.4: 100% = 0.4 для a/b.
+        return pct.trim().parse::<f32>().ok().map(|p| p / 100.0 * 0.4);
+    }
+    s.parse::<f32>().ok()
+}
+
+/// Парсит lightness для CIE Lab/LCH: число 0..100 или процент 0..100%.
+fn parse_lab_lightness(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        return pct.trim().parse::<f32>().ok().map(|p| p.clamp(0.0, 100.0));
+    }
+    s.parse::<f32>().ok().map(|v| v.clamp(0.0, 100.0))
+}
+
+/// Парсит a/b для CIE Lab: число (~±125) или процент (100% = 125).
+fn parse_lab_ab(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        // CSS Color L4 §10.5: 100% = 125.
+        return pct.trim().parse::<f32>().ok().map(|p| p / 100.0 * 125.0);
+    }
+    s.parse::<f32>().ok()
+}
+
+/// Парсит chroma для LCH: число (≥0, ~0..230) или процент (100% = 150).
+fn parse_lch_chroma(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        // CSS Color L4 §10.5: 100% = 150 для LCH.
+        return pct.trim().parse::<f32>().ok().map(|p| (p / 100.0 * 150.0).max(0.0));
+    }
+    s.parse::<f32>().ok().map(|v| v.max(0.0))
+}
+
+/// CSS Color L4 §10.4: OKLab напрямую → linear sRGB → gamma sRGB.
+/// `l` ∈ [0,1], `a`/`b` — unitless. Алгоритм — second half of oklch_to_srgb.
+fn oklab_to_srgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
+    let l_ = l + 0.396_337_77 * a + 0.215_803_76 * b;
+    let m_ = l - 0.105_561_35 * a - 0.063_854_17 * b;
+    let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
+    let l3 = l_ * l_ * l_;
+    let m3 = m_ * m_ * m_;
+    let s3 = s_ * s_ * s_;
+    let lr = 4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3;
+    let lg = -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3;
+    let lb = -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3;
+    (encode_srgb(lr), encode_srgb(lg), encode_srgb(lb))
+}
+
+/// CSS Color L4 §10.5: CIE Lab (D50) → XYZ → D65 (Bradford) → linear sRGB.
+/// `l` ∈ [0,100], `a`/`b` — unitless (CIE units, не процентные).
+fn lab_to_srgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
+    // Lab → XYZ (D50). Алгоритм CIE 15.3 §8.4.2.
+    let fy = (l + 16.0) / 116.0;
+    let fx = a / 500.0 + fy;
+    let fz = fy - b / 200.0;
+    let epsilon = 216.0 / 24389.0; // ≈ 0.008856
+    let kappa = 24389.0 / 27.0; // ≈ 903.3
+    let cube_or_linear = |f: f32, scaled: f32| -> f32 {
+        let cubed = f * f * f;
+        if cubed > epsilon {
+            cubed
+        } else {
+            scaled / kappa
+        }
+    };
+    let yr = if l > kappa * epsilon {
+        let v = (l + 16.0) / 116.0;
+        v * v * v
+    } else {
+        l / kappa
+    };
+    let xr = cube_or_linear(fx, 116.0 * fx - 16.0);
+    let zr = cube_or_linear(fz, 116.0 * fz - 16.0);
+    // D50 reference white (CIE 15.3 illuminant D50).
+    let xn = 0.964_22;
+    let yn = 1.0;
+    let zn = 0.825_21;
+    let x_d50 = xr * xn;
+    let y_d50 = yr * yn;
+    let z_d50 = zr * zn;
+    // Bradford D50→D65 adaptation (CSS Color L4 §11).
+    let x_d65 = 0.955_576_6 * x_d50 - 0.023_039_3 * y_d50 + 0.063_163_6 * z_d50;
+    let y_d65 = -0.028_289_5 * x_d50 + 1.009_941_6 * y_d50 + 0.021_007_7 * z_d50;
+    let z_d65 = 0.012_298_2 * x_d50 - 0.020_483_0 * y_d50 + 1.329_909_8 * z_d50;
+    // D65 XYZ → linear sRGB (sRGB primary matrix, CIE 1931).
+    let lr = 3.240_625_5 * x_d65 - 1.537_208 * y_d65 - 0.498_628_6 * z_d65;
+    let lg = -0.968_930_7 * x_d65 + 1.875_756_1 * y_d65 + 0.041_517_5 * z_d65;
+    let lb = 0.055_710_1 * x_d65 - 0.204_021_1 * y_d65 + 1.056_995_9 * z_d65;
+    (encode_srgb(lr), encode_srgb(lg), encode_srgb(lb))
+}
+
+/// Linear sRGB → gamma sRGB (IEC 61966-2-1).
+fn encode_srgb(c: f32) -> u8 {
+    let c = c.clamp(0.0, 1.0);
+    let v = if c <= 0.003_130_8 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (v * 255.0 + 0.5).clamp(0.0, 255.0) as u8
 }
 
 /// CSS Color L4 §10.3: OKLCH → OKLab → linear sRGB → sRGB (gamma-encoded).
@@ -3785,6 +6972,101 @@ mod tests {
     fn oklch_invalid_returns_none() {
         assert_eq!(parse_color("oklch(0.5)"), None);
         assert_eq!(parse_color("oklch(abc def ghi)"), None);
+    }
+
+    // ── CSS Color L4 §10.4 — oklab() ──
+
+    #[test]
+    fn oklab_white() {
+        // oklab(1 0 0) → белый (a=0, b=0, L=1).
+        let c = parse_color("oklab(1 0 0)").unwrap();
+        assert!(near(c.r, 255, 5));
+        assert!(near(c.g, 255, 5));
+        assert!(near(c.b, 255, 5));
+    }
+
+    #[test]
+    fn oklab_black() {
+        let c = parse_color("oklab(0 0 0)").unwrap();
+        assert_eq!(c.r, 0);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+    }
+
+    #[test]
+    fn oklab_neutral_gray() {
+        // a=b=0 → серый.
+        let c = parse_color("oklab(0.5 0 0)").unwrap();
+        assert_eq!(c.r, c.g);
+        assert_eq!(c.g, c.b);
+    }
+
+    #[test]
+    fn oklab_ab_percent() {
+        // 100% = 0.4.
+        let by_pct = parse_color("oklab(0.5 100% 0)").unwrap();
+        let by_num = parse_color("oklab(0.5 0.4 0)").unwrap();
+        assert_eq!(by_pct, by_num);
+    }
+
+    // ── CSS Color L4 §10.5 — lab() и lch() ──
+
+    #[test]
+    fn lab_white() {
+        // lab(100 0 0) → белый.
+        let c = parse_color("lab(100 0 0)").unwrap();
+        assert!(near(c.r, 255, 5));
+        assert!(near(c.g, 255, 5));
+        assert!(near(c.b, 255, 5));
+    }
+
+    #[test]
+    fn lab_black() {
+        let c = parse_color("lab(0 0 0)").unwrap();
+        assert_eq!(c.r, 0);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+    }
+
+    #[test]
+    fn lab_neutral_gray() {
+        let c = parse_color("lab(50 0 0)").unwrap();
+        assert_eq!(c.r, c.g);
+        assert_eq!(c.g, c.b);
+    }
+
+    #[test]
+    fn lab_lightness_percent() {
+        let by_pct = parse_color("lab(100% 0 0)").unwrap();
+        let by_num = parse_color("lab(100 0 0)").unwrap();
+        assert_eq!(by_pct, by_num);
+    }
+
+    #[test]
+    fn lch_white() {
+        let c = parse_color("lch(100 0 0)").unwrap();
+        assert!(near(c.r, 255, 5));
+        assert!(near(c.g, 255, 5));
+        assert!(near(c.b, 255, 5));
+    }
+
+    #[test]
+    fn lch_neutral_when_chroma_zero() {
+        let c = parse_color("lch(50 0 0)").unwrap();
+        assert_eq!(c.r, c.g);
+        assert_eq!(c.g, c.b);
+    }
+
+    #[test]
+    fn lch_with_alpha() {
+        let c = parse_color("lch(50 0 0 / 0.5)").unwrap();
+        assert!((c.a as i32 - 128).abs() <= 1);
+    }
+
+    #[test]
+    fn lab_invalid_returns_none() {
+        assert_eq!(parse_color("lab(50)"), None);
+        assert_eq!(parse_color("lab(abc def ghi)"), None);
     }
 
     #[test]
@@ -4428,6 +7710,133 @@ mod tests {
         assert_eq!(expand_vars("color: var(--x", &custom, 0), None);
     }
 
+    // ──────────────── CSS Properties and Values L1 §1.1: @property ────────────────
+
+    /// Прогоняет каскад вдоль `path` от root до целевого узла,
+    /// возвращая ComputedStyle конкретного узла. Каждый шаг — реальный
+    /// `compute_style` с inherited от предыдущего шага. Это позволяет
+    /// проверить inherits-семантику @property на двухуровневом дереве.
+    fn cascade_at(html: &str, css: &str, path: &[usize]) -> ComputedStyle {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let viewport = Size::new(800.0, 600.0);
+        let mut id = doc.root();
+        let mut style =
+            compute_style(&doc, id, &sheet, &ComputedStyle::root(), viewport);
+        for &idx in path {
+            id = doc.get(id).children[idx];
+            style = compute_style(&doc, id, &sheet, &style, viewport);
+        }
+        style
+    }
+
+    #[test]
+    fn at_property_initial_value_used_when_no_declaration() {
+        // var(--c) без декларации, но --c зарегистрирована с initial-value.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: red; } \
+             p { color: var(--c); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_property_inherits_false_blocks_inheritance() {
+        // --c унаследовалось бы от :root, но `inherits: false` → потомок
+        // его не видит и берёт initial-value (blue).
+        let s = cascade_at(
+            "<div><p>x</p></div>",
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: blue; } \
+             div { --c: red; } \
+             p { color: var(--c); }",
+            &[0, 0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn at_property_inherits_true_passes_to_child() {
+        // С `inherits: true` — потомок видит родительское значение.
+        let s = cascade_at(
+            "<div><p>x</p></div>",
+            "@property --c { syntax: \"*\"; inherits: true; initial-value: blue; } \
+             div { --c: red; } \
+             p { color: var(--c); }",
+            &[0, 0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_property_local_declaration_overrides_initial() {
+        // Локальная декларация --c=green побеждает initial-value=red.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: red; } \
+             p { --c: green; color: var(--c); }",
+            &[0],
+        );
+        // CSS3 green = rgb(0, 128, 0).
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_property_without_initial_value_no_fallback() {
+        // syntax="*" без initial-value: имя зарегистрировано (inherits:false),
+        // но var(--c) не найдёт значения → declaration invalid, color остаётся
+        // inherited (root() = black).
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; inherits: false; } \
+             p { color: var(--c); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color::BLACK);
+    }
+
+    #[test]
+    fn at_property_initial_value_visible_to_child_inherits_true() {
+        // На корне нет декларации --c. Регистрация дала ему initial-value=red
+        // и inherits:true. Дочерний `p` должен унаследовать initial-value
+        // через стандартный наследование-каскад.
+        let s = cascade_at(
+            "<div><p>x</p></div>",
+            "@property --c { syntax: \"*\"; inherits: true; initial-value: red; } \
+             p { color: var(--c); }",
+            &[0, 0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_property_last_registration_wins() {
+        // Две регистрации одного имени: последняя побеждает (HashMap insert
+        // в `registry`-build перезапишет первую).
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; inherits: false; initial-value: red; } \
+             @property --c { syntax: \"*\"; inherits: false; initial-value: green; } \
+             p { color: var(--c); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn invalid_at_property_does_not_register() {
+        // @property без `inherits` — невалидно: имя не регистрируется, var()
+        // без значения → declaration invalid → color остаётся inherited.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@property --c { syntax: \"*\"; initial-value: red; } \
+             p { color: var(--c); }",
+            &[0],
+        );
+        assert_eq!(s.color, Color::BLACK);
+    }
+
     // ──────────────── CSS Values L4 §10 — calc() ────────────────
 
     fn resolved_calc(s: &str, em: f32, pb: Option<f32>, vp: Size) -> Option<f32> {
@@ -5017,6 +8426,98 @@ mod tests {
     #[test]
     fn round_with_zero_step_invalid() {
         assert_eq!(rc_unitless("round(13, 0)"), None);
+    }
+
+    // CSS Values L4 §10.5.1 — strategy keyword (nearest/up/down/to-zero).
+
+    #[test]
+    fn round_up_to_integer() {
+        // round(up, 3.1) = 4 — ceil дробного.
+        assert!(approx(rc_unitless("round(up, 3.1)").unwrap(), 4.0));
+        // round(up, 3.0) = 3 — целое не двигается.
+        assert!(approx(rc_unitless("round(up, 3)").unwrap(), 3.0));
+    }
+
+    #[test]
+    fn round_down_to_integer() {
+        // round(down, 3.9) = 3 — floor дробного.
+        assert!(approx(rc_unitless("round(down, 3.9)").unwrap(), 3.0));
+    }
+
+    #[test]
+    fn round_to_zero_basic() {
+        // round(to-zero, 3.9) = 3 — trunc положительного.
+        assert!(approx(rc_unitless("round(to-zero, 3.9)").unwrap(), 3.0));
+        // round(to-zero, -3.9) = -3 — отличается от floor(-3.9) = -4.
+        assert!(approx(rc_unitless("round(to-zero, -3.9)").unwrap(), -3.0));
+    }
+
+    #[test]
+    fn round_up_negative() {
+        // round(up, -3.1) = -3 — ceil к +∞.
+        assert!(approx(rc_unitless("round(up, -3.1)").unwrap(), -3.0));
+    }
+
+    #[test]
+    fn round_down_negative() {
+        // round(down, -3.1) = -4 — floor к -∞.
+        assert!(approx(rc_unitless("round(down, -3.1)").unwrap(), -4.0));
+    }
+
+    #[test]
+    fn round_nearest_explicit() {
+        // Явный nearest эквивалентен без-strategy форме.
+        assert!(approx(rc_unitless("round(nearest, 3.7)").unwrap(), 4.0));
+        assert!(approx(rc_unitless("round(nearest, 3.4)").unwrap(), 3.0));
+    }
+
+    #[test]
+    fn round_strategy_with_step() {
+        // round(up, 13, 5) = 15 — ceil(13/5)*5 = 3*5.
+        assert!(approx(rc_unitless("round(up, 13, 5)").unwrap(), 15.0));
+        // round(down, 13, 5) = 10.
+        assert!(approx(rc_unitless("round(down, 13, 5)").unwrap(), 10.0));
+        // round(up, 11, 5) = 15.
+        assert!(approx(rc_unitless("round(up, 11, 5)").unwrap(), 15.0));
+        // round(to-zero, -11, 5) = -10 (vs down = -15).
+        assert!(approx(rc_unitless("round(to-zero, -11, 5)").unwrap(), -10.0));
+    }
+
+    #[test]
+    fn round_strategy_case_insensitive() {
+        // Keyword-ы CSS-стандарт case-insensitive (Values L4 §2.4).
+        assert!(approx(rc_unitless("round(UP, 3.1)").unwrap(), 4.0));
+        assert!(approx(rc_unitless("round(To-Zero, -3.9)").unwrap(), -3.0));
+    }
+
+    #[test]
+    fn round_strategy_in_width() {
+        // width: round(up, 13px, 5px) = 15px.
+        let s = style_for("width: round(up, 13px, 5px)");
+        assert_eq!(s.width, Some(15.0));
+    }
+
+    #[test]
+    fn round_strategy_zero_step_invalid() {
+        // step=0 → declaration invalid, как и для round без strategy.
+        assert_eq!(rc_unitless("round(up, 13, 0)"), None);
+    }
+
+    #[test]
+    fn round_unknown_strategy_invalid() {
+        // `floor` не keyword в strategy — declaration invalid.
+        // (lexer пропустит ident `floor`, но parse_function_call для round
+        // ждёт после ident либо `,` со strategy, либо expr; одинокий ident-без-`(`
+        // в parse_calc_factor возвращает None.)
+        assert_eq!(rc_unitless("round(floor, 3.7)"), None);
+    }
+
+    #[test]
+    fn round_strategy_without_value_invalid() {
+        // strategy + `,` + пусто → parse_arg_list падает.
+        assert_eq!(rc_unitless("round(up,)"), None);
+        // strategy без запятой → ident-arg в parse_calc_factor возвращает None.
+        assert_eq!(rc_unitless("round(up 3.1)"), None);
     }
 
     // Интеграция

@@ -485,18 +485,21 @@ impl<'a> Tokenizer<'a> {
             return Some(ch.to_string());
         }
 
-        const ENTITIES: &[(&str, &str)] = &[
-            ("amp;", "&"),
-            ("lt;", "<"),
-            ("gt;", ">"),
-            ("quot;", "\""),
-            ("apos;", "'"),
-            ("nbsp;", "\u{00A0}"),
-        ];
-        for (name, val) in ENTITIES {
-            if rest.starts_with(name) {
-                self.pos += name.len();
-                return Some((*val).to_string());
+        // Named character reference — берём имя до `;` (включительно),
+        // максимум 32 байта чтобы не зацикливаться на повреждённом входе.
+        // HTML5 spec требует, чтобы имя кончалось `;`; legacy form без
+        // `;` (~100 ссылок типа `&amp` для HTML 4 compat) пока не
+        // поддерживается.
+        let end = rest
+            .bytes()
+            .take(32)
+            .position(|b| b == b';')
+            .map(|p| p + 1);
+        if let Some(name_len) = end {
+            let name = &rest[..name_len];
+            if let Some(decoded) = crate::entities::lookup_named_entity(name) {
+                self.pos += name_len;
+                return Some(decoded.to_string());
             }
         }
         None
@@ -745,6 +748,33 @@ mod tests {
         assert_eq!(tok("&lt;&gt;"), vec![Token::Text("<>".into())]);
         assert_eq!(tok("&quot;"), vec![Token::Text("\"".into())]);
         assert_eq!(tok("&nbsp;"), vec![Token::Text("\u{00A0}".into())]);
+    }
+
+    #[test]
+    fn entity_extended_named() {
+        // Расширенный набор из 250+ имён.
+        assert_eq!(tok("&copy;"), vec![Token::Text("\u{00A9}".into())]);
+        assert_eq!(tok("&mdash;"), vec![Token::Text("\u{2014}".into())]);
+        assert_eq!(tok("&hellip;"), vec![Token::Text("\u{2026}".into())]);
+        assert_eq!(tok("&trade;"), vec![Token::Text("\u{2122}".into())]);
+        assert_eq!(tok("&euro;"), vec![Token::Text("\u{20AC}".into())]);
+        // Greek
+        assert_eq!(tok("&alpha;"), vec![Token::Text("\u{03B1}".into())]);
+        assert_eq!(tok("&Omega;"), vec![Token::Text("\u{03A9}".into())]);
+        // Arrows
+        assert_eq!(tok("&rarr;"), vec![Token::Text("\u{2192}".into())]);
+        // Quotes
+        assert_eq!(
+            tok("&ldquo;hello&rdquo;"),
+            vec![Token::Text("\u{201C}hello\u{201D}".into())]
+        );
+    }
+
+    #[test]
+    fn entity_case_sensitive_per_html5() {
+        // HTML5 имена case-sensitive: Beta != beta.
+        assert_eq!(tok("&Beta;"), vec![Token::Text("\u{0392}".into())]);
+        assert_eq!(tok("&beta;"), vec![Token::Text("\u{03B2}".into())]);
     }
 
     #[test]
