@@ -20,10 +20,13 @@ use rustls::pki_types::ServerName;
 
 use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, TabId};
-use lumen_core::ext::{DnsResolver, EventSink, NetworkTransport, RequestFilter};
+use lumen_core::ext::{
+    DnsResolver, EventSink, HstsEnforcement, NetworkTransport, RequestFilter,
+};
 use lumen_core::url::Url;
 
 mod dns;
+mod hsts;
 mod pool;
 pub use dns::SystemDnsResolver;
 pub use pool::ConnectionPool;
@@ -460,11 +463,25 @@ fn fetch_with_redirect(
     resolver: &dyn DnsResolver,
     sink: Option<&dyn EventSink>,
     filter: Option<&dyn RequestFilter>,
+    hsts_store: Option<&dyn HstsEnforcement>,
     tab_id: TabId,
 ) -> Result<Vec<u8>> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
     }
+
+    // HSTS upgrade: до require_http_scheme (RFC 6797 §8.3 — канонизация URI
+    // делается на этапе URI loading, не fetch), до RequestFilter и до Started.
+    // Это значит, что filter и observer видят уже-upgraded URL: блок-листы
+    // могут не пропустить https-вариант, а network log показывает реальный
+    // URL, по которому пошёл трафик. Применяется на каждом redirect-hop —
+    // симметрично с filter / sink / resolver.
+    let now_unix = hsts::current_unix_time();
+    let upgraded: Option<Url> = match hsts_store {
+        Some(h) => hsts::maybe_upgrade_url_to_https(h, url, now_unix)?,
+        None => None,
+    };
+    let url = upgraded.as_ref().unwrap_or(url);
 
     // require_http_scheme валидирует scheme/host/port раньше, чем мы откроем
     // сокет. События эмитим только если форма запроса прошла валидацию: на
@@ -511,6 +528,16 @@ fn fetch_with_redirect(
         &url.path_and_query(),
     )?;
 
+    // HSTS: сохранить policy из header-а, если ответ пришёл по HTTPS и
+    // server прислал Strict-Transport-Security. RFC 6797 §8.1 — STS на
+    // HTTP-ответе игнорируется (active attacker мог бы её подделать).
+    // Best-effort: ошибки storage не валят fetch (см. doc HstsEnforcement).
+    // Делается на каждом hop, не только финальном: 3xx-ответ тоже может
+    // нести STS-policy.
+    if let Some(h) = hsts_store {
+        hsts::process_sts_response(h, url.scheme(), &host_ascii, &resp.headers, now_unix);
+    }
+
     // RequestCompleted эмитим всегда после получения статуса, до анализа кода:
     // редирект-hop, 4xx, 5xx — всё это «outgoing byte был виден ответом».
     if let Some(s) = sink {
@@ -529,7 +556,16 @@ fn fetch_with_redirect(
             let next = url
                 .resolve(location)
                 .map_err(|e| Error::Network(format!("resolve redirect '{location}': {e}")))?;
-            fetch_with_redirect(&next, hops_left - 1, pool, resolver, sink, filter, tab_id)
+            fetch_with_redirect(
+                &next,
+                hops_left - 1,
+                pool,
+                resolver,
+                sink,
+                filter,
+                hsts_store,
+                tab_id,
+            )
         }
         status => Err(Error::Network(format!("HTTP {status}"))),
     }
@@ -552,6 +588,7 @@ pub struct HttpClient {
     filter: Option<Arc<dyn RequestFilter>>,
     pool: Arc<ConnectionPool>,
     resolver: Arc<dyn DnsResolver>,
+    hsts: Option<Arc<dyn HstsEnforcement>>,
     tab_id: TabId,
 }
 
@@ -562,6 +599,7 @@ impl HttpClient {
             filter: None,
             pool: Arc::new(ConnectionPool::new()),
             resolver: Arc::new(SystemDnsResolver),
+            hsts: None,
             tab_id: TabId(0),
         }
     }
@@ -602,6 +640,23 @@ impl HttpClient {
         self
     }
 
+    /// Подключить HSTS-store (RFC 6797). По умолчанию — нет:
+    /// http-запросы идут как есть, `Strict-Transport-Security` header
+    /// в ответах игнорируется. С подключённым store:
+    /// — pre-request: http→https upgrade для known-hosts (включая
+    ///   includeSubDomains-родителей);
+    /// — post-response: парсинг STS header из HTTPS-ответов, persist policy.
+    /// Каждый redirect-hop проверяется независимо.
+    ///
+    /// Реализация — `lumen-storage::hsts::HstsStore`. Trait-граница
+    /// `HstsEnforcement` (lumen-core::ext) позволяет lumen-network не
+    /// зависеть от lumen-storage напрямую.
+    #[must_use]
+    pub fn with_hsts(mut self, hsts: Arc<dyn HstsEnforcement>) -> Self {
+        self.hsts = Some(hsts);
+        self
+    }
+
     /// Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
     /// (без вкладок) shell оставляет дефолтный `TabId(0)`.
     #[must_use]
@@ -626,6 +681,7 @@ impl NetworkTransport for HttpClient {
             self.resolver.as_ref(),
             self.sink.as_deref(),
             self.filter.as_deref(),
+            self.hsts.as_deref(),
             self.tab_id,
         )
     }
@@ -1443,6 +1499,190 @@ mod tests {
         assert_eq!(resolver.call_count(), 2, "resolver вызван per hop");
 
         server.join().unwrap();
+    }
+
+    // ── HSTS integration ─────────────────────────────────────────────────────
+
+    use lumen_core::ext::HstsEnforcement;
+
+    /// In-memory HSTS-impl для integration-тестов — не требует SQLite.
+    /// Семантика exact-match (без includeSubDomains-логики) — достаточно
+    /// для проверки fetch-pathway; полное subdomain-поведение покрыто
+    /// unit-тестами в src/hsts.rs.
+    struct InMemHsts {
+        hosts: Mutex<Vec<String>>,
+    }
+
+    impl InMemHsts {
+        fn new() -> Self {
+            Self {
+                hosts: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn add(&self, host: &str) {
+            self.hosts.lock().unwrap().push(host.to_owned());
+        }
+    }
+
+    impl HstsEnforcement for InMemHsts {
+        fn is_https_only(&self, host: &str, _now_unix: i64) -> bool {
+            self.hosts.lock().unwrap().iter().any(|h| h == host)
+        }
+
+        fn record_sts(
+            &self,
+            host: &str,
+            _max_age: u64,
+            _include_subdomains: bool,
+            _preload: bool,
+            _now_unix: i64,
+        ) {
+            self.hosts.lock().unwrap().push(host.to_owned());
+        }
+    }
+
+    #[test]
+    fn without_hsts_http_stays_http() {
+        // Sanity-check: HttpClient без with_hsts ведёт себя как раньше —
+        // http URL не upgrade-ится, обычный fetch проходит. Регрессионный
+        // тест: интеграция HSTS не должна сломать дефолтный поток.
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn with_hsts_unknown_host_no_upgrade() {
+        // HSTS-store подключён, но в нём нет нашего host-а → upgrade
+        // не применяется, fetch идёт по http как обычно. Это инвариант:
+        // unknown hosts остаются http (HSTS — opt-in, не блок-лист).
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nplain".to_vec()
+        });
+
+        let hsts: Arc<dyn HstsEnforcement> = Arc::new(InMemHsts::new());
+        let client = HttpClient::new().with_hsts(hsts);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"plain");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn with_hsts_known_host_attempts_upgrade() {
+        // HSTS-known host → клиент upgrade-ит на https://. Mock-сервер
+        // слушает HTTP (без TLS), поэтому upgrade-attempt падает на TLS
+        // handshake — это доказывает, что upgrade действительно произошёл.
+        // Иначе на mock HTTP-сервере мы бы получили 200 OK, а не error.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        // Сервер просто принимает соединения и закрывает — нам важна сама
+        // попытка TLS handshake клиента в момент, когда он считает, что
+        // открыл TCP к HTTPS-серверу.
+        let _server = thread::spawn(move || {
+            for _ in 0..3 {
+                if let Ok((sock, _)) = listener.accept() {
+                    let _ = sock.shutdown(std::net::Shutdown::Both);
+                }
+            }
+        });
+
+        // Подменяем resolver, чтобы synthetic "upgrade.test" разрешался
+        // в loopback (system DNS не знает таких имён). Punycode для не-IDN
+        // host = сам host.
+        let resolver = Arc::new(MockResolver::with(
+            "upgrade.test",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        ));
+        let inmem = Arc::new(InMemHsts::new());
+        inmem.add("upgrade.test");
+        let hsts: Arc<dyn HstsEnforcement> = inmem;
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_dns_resolver(resolver)
+            .with_hsts(hsts)
+            .with_sink(sink.clone());
+
+        // Делаем fetch по http — HSTS должен переписать на https и упасть
+        // на TLS handshake против plain-HTTP сервера.
+        let url = Url::parse(&format!("http://upgrade.test:{port}/")).unwrap();
+        let err = client.fetch(&url).expect_err("upgrade-attempt must fail TLS");
+        let msg = format!("{err:?}");
+        // Конкретный текст ошибки rustls — не гарантия, но содержит TLS-связанные
+        // токены: "tls" / "handshake" / "InvalidContentType" / similar. Главное —
+        // запрос не дошёл до status-line на HTTP-сервере (иначе reason был бы 200).
+        assert!(
+            !msg.contains("HTTP 200"),
+            "upgrade must redirect to https → TLS error, not 200 OK on plain port; got: {msg}"
+        );
+
+        // RequestStarted должен эмититься с UPGRADED URL — это важно для
+        // network log: пользователь видит реальный URL, по которому пошёл трафик.
+        let events = sink.events();
+        let started_url = events.iter().find_map(|e| match e {
+            Event::RequestStarted { url, .. } => Some(url.as_str().to_owned()),
+            _ => None,
+        });
+        assert_eq!(
+            started_url.as_deref(),
+            Some(format!("https://upgrade.test:{port}/").as_str()),
+            "RequestStarted должен содержать upgraded URL: {events:?}"
+        );
+    }
+
+    #[test]
+    fn with_hsts_https_url_stays_https() {
+        // https URL не должен трогаться HSTS-интеграцией (нечего upgrade-ить).
+        // Здесь мы не делаем реальный HTTPS-fetch (нет TLS mock), а проверяем
+        // что builder/policy applied correctly через ту же async-resolver
+        // pathway: fetch к https://known-host даёт TLS-ошибку, и в Started
+        // URL должен остаться https (НЕ повторно upgrade-нутый или какой-то
+        // ещё).
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let _server = thread::spawn(move || {
+            for _ in 0..3 {
+                if let Ok((sock, _)) = listener.accept() {
+                    let _ = sock.shutdown(std::net::Shutdown::Both);
+                }
+            }
+        });
+
+        let resolver = Arc::new(MockResolver::with(
+            "secure.test",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        ));
+        let inmem = Arc::new(InMemHsts::new());
+        inmem.add("secure.test");
+        let hsts: Arc<dyn HstsEnforcement> = inmem;
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_dns_resolver(resolver)
+            .with_hsts(hsts)
+            .with_sink(sink.clone());
+
+        let url = Url::parse(&format!("https://secure.test:{port}/")).unwrap();
+        let _ = client.fetch(&url); // ожидаем TLS error — нам важен только Started URL.
+
+        let events = sink.events();
+        let started_url = events.iter().find_map(|e| match e {
+            Event::RequestStarted { url, .. } => Some(url.as_str().to_owned()),
+            _ => None,
+        });
+        assert_eq!(
+            started_url.as_deref(),
+            Some(format!("https://secure.test:{port}/").as_str()),
+            "https URL не должен трогаться upgrade-логикой: {events:?}"
+        );
     }
 }
 
