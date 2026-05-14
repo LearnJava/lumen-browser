@@ -13,9 +13,11 @@
 
 mod entities;
 pub mod quirks_mode;
+pub mod srcset;
 pub mod tokenizer;
 pub mod tree_builder;
 
 pub use quirks_mode::detect_document_mode;
+pub use srcset::{SrcsetCandidate, SrcsetDescriptor, parse_srcset, pick_best_for_density};
 pub use tokenizer::{Token, Tokenizer};
 pub use tree_builder::parse;
