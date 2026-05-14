@@ -27,11 +27,13 @@ use lumen_core::url::Url;
 
 mod dns;
 mod doh;
+mod dot;
 mod hsts;
 mod pool;
 mod range;
 pub use dns::SystemDnsResolver;
 pub use doh::DohResolver;
+pub use dot::{DotResolver, DOT_DEFAULT_PORT};
 pub use pool::ConnectionPool;
 pub use range::{ContentRange, RangeResponse, RangeSpec, parse_content_range};
 
