@@ -26,10 +26,12 @@ use lumen_core::ext::{
 use lumen_core::url::Url;
 
 mod dns;
+mod doh;
 mod hsts;
 mod pool;
 mod range;
 pub use dns::SystemDnsResolver;
+pub use doh::DohResolver;
 pub use pool::ConnectionPool;
 pub use range::{ContentRange, RangeResponse, RangeSpec, parse_content_range};
 
