@@ -1,3 +1,8 @@
+// Public API runtime-а пока используется только из тестов; реальная
+// интеграция в Lumen-app (winit-loop) — следующая задача. До неё все
+// handle-методы выглядят dead-code-ом для non-test сборки.
+#![allow(dead_code)]
+
 //! HTML event loop runtime: task queues, microtask checkpoint, requestAnimationFrame,
 //! observer registries.
 //!
