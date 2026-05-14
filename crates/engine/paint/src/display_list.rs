@@ -7,7 +7,9 @@
 //! верхнего левого угла окна.
 
 use lumen_core::geom::Rect;
-use lumen_layout::{BoxKind, Color, InlineFrag, LayoutBox};
+use lumen_layout::{
+    BoxKind, Color, InlineFrag, LayoutBox, ObjectFit, ObjectPosition, PositionComponent,
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum DisplayCommand {
@@ -33,18 +35,142 @@ pub enum DisplayCommand {
     /// строка ссылки на ресурс из исходного атрибута (декодирование и
     /// загрузка пикселей — отдельная задача, см. roadmap). `alt` — alternate
     /// text для случаев, когда renderer не может отобразить картинку.
+    /// `object_fit` / `object_position` (CSS Images L3 §5.5) определяют,
+    /// как intrinsic-размер изображения вписывается в `rect`; renderer
+    /// читает их вместе с известным intrinsic-размером (доступен на
+    /// GPU-cache стороне) для расчёта итогового quad.
     ///
     /// Renderer Phase 0 рисует placeholder rect (светло-серый прямоугольник),
-    /// чтобы место картинки было видно пользователю до подключения GPU
-    /// pipeline-а для текстур.
+    /// если картинка не зарегистрирована в GPU-cache.
     DrawImage {
         rect: Rect,
         src: String,
         alt: String,
+        object_fit: ObjectFit,
+        object_position: ObjectPosition,
     },
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
+
+fn object_fit_name(f: ObjectFit) -> &'static str {
+    match f {
+        ObjectFit::Fill => "fill",
+        ObjectFit::Contain => "contain",
+        ObjectFit::Cover => "cover",
+        ObjectFit::None => "none",
+        ObjectFit::ScaleDown => "scale-down",
+    }
+}
+
+fn position_component_name(p: PositionComponent) -> String {
+    match p {
+        PositionComponent::Px(px) => format!("{px:.2}px"),
+        PositionComponent::Percent(pc) => format!("{:.2}%", pc * 100.0),
+    }
+}
+
+/// CSS Images L3 §5.5 — `object-fit` placement: где располагается
+/// «полное» изображение внутри коробки (intrinsic-картинка после scale,
+/// без обрезки). Возвращённый прямоугольник может быть больше `box_rect`
+/// (cover / none на крупной картинке) — обрезку по box делает
+/// [`fit_image_quad`] на стадии вычисления GPU-quad-а.
+///
+/// `intrinsic_size = (w, h)` — натуральный пиксельный размер декодированного
+/// изображения; нулевые / отрицательные стороны коробки → возврат самой
+/// коробки без масштабирования (deg fallback, рисовать всё равно нечего).
+#[must_use]
+pub fn fit_image_rect(
+    box_rect: Rect,
+    intrinsic_size: (u32, u32),
+    fit: ObjectFit,
+    position: ObjectPosition,
+) -> Rect {
+    let (iw, ih) = intrinsic_size;
+    if iw == 0 || ih == 0 || box_rect.width <= 0.0 || box_rect.height <= 0.0 {
+        return box_rect;
+    }
+    let iw = iw as f32;
+    let ih = ih as f32;
+    let bw = box_rect.width;
+    let bh = box_rect.height;
+
+    let (cw, ch) = match fit {
+        ObjectFit::Fill => (bw, bh),
+        ObjectFit::None => (iw, ih),
+        ObjectFit::Contain => fit_with_ratio(iw, ih, bw, bh, /*cover*/ false),
+        ObjectFit::Cover => fit_with_ratio(iw, ih, bw, bh, /*cover*/ true),
+        ObjectFit::ScaleDown => {
+            // `min(none, contain)` — выбираем результат с меньшей площадью.
+            let (nw, nh) = (iw, ih);
+            let (kw, kh) = fit_with_ratio(iw, ih, bw, bh, false);
+            if nw * nh <= kw * kh { (nw, nh) } else { (kw, kh) }
+        }
+    };
+
+    let free_x = bw - cw;
+    let free_y = bh - ch;
+    let off_x = position.x.resolve(free_x);
+    let off_y = position.y.resolve(free_y);
+    Rect::new(box_rect.x + off_x, box_rect.y + off_y, cw, ch)
+}
+
+fn fit_with_ratio(iw: f32, ih: f32, bw: f32, bh: f32, cover: bool) -> (f32, f32) {
+    // contain = min(scale_w, scale_h); cover = max(...).
+    let sx = bw / iw;
+    let sy = bh / ih;
+    let s = if cover { sx.max(sy) } else { sx.min(sy) };
+    (iw * s, ih * s)
+}
+
+/// Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
+/// (см. [`fit_image_rect`]) с `box_rect` плюс соответствующие UV-bounds
+/// исходной текстуры. Спецификация CSS Images L3 §5.5 требует «clipped to
+/// the content box» — для cover / none, когда картинка выходит за коробку,
+/// мы делаем clip через UV (рисуем меньший quad с поджатыми UV), без
+/// scissor-state в GPU pipeline.
+///
+/// Возвращает `None`, если intrinsic-размер нулевой, коробка пуста или
+/// пересечение placement и box пусто (placement полностью снаружи box —
+/// в норме не случается, но возможны deg-edge с отрицательным
+/// `object-position`).
+#[must_use]
+pub fn fit_image_quad(
+    box_rect: Rect,
+    intrinsic_size: (u32, u32),
+    fit: ObjectFit,
+    position: ObjectPosition,
+) -> Option<(Rect, [f32; 2], [f32; 2])> {
+    let (iw, ih) = intrinsic_size;
+    if iw == 0 || ih == 0 || box_rect.width <= 0.0 || box_rect.height <= 0.0 {
+        return None;
+    }
+    let placed = fit_image_rect(box_rect, intrinsic_size, fit, position);
+    if placed.width <= 0.0 || placed.height <= 0.0 {
+        return None;
+    }
+    let bx0 = box_rect.x;
+    let by0 = box_rect.y;
+    let bx1 = box_rect.x + box_rect.width;
+    let by1 = box_rect.y + box_rect.height;
+    let px0 = placed.x;
+    let py0 = placed.y;
+    let px1 = placed.x + placed.width;
+    let py1 = placed.y + placed.height;
+    let vx0 = px0.max(bx0);
+    let vy0 = py0.max(by0);
+    let vx1 = px1.min(bx1);
+    let vy1 = py1.min(by1);
+    if vx1 <= vx0 || vy1 <= vy0 {
+        return None;
+    }
+    let visible = Rect::new(vx0, vy0, vx1 - vx0, vy1 - vy0);
+    let u0 = (vx0 - px0) / placed.width;
+    let v0 = (vy0 - py0) / placed.height;
+    let u1 = (vx1 - px0) / placed.width;
+    let v1 = (vy1 - py0) / placed.height;
+    Some((visible, [u0, v0], [u1, v1]))
+}
 
 /// Сериализует display list в детерминированный текст для snapshot-тестов.
 ///
@@ -86,11 +212,22 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     color.r, color.g, color.b, color.a,
                 ));
             }
-            DisplayCommand::DrawImage { rect, src, alt } => {
+            DisplayCommand::DrawImage { rect, src, alt, object_fit, object_position } => {
                 out.push_str(&format!(
-                    "DrawImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?} alt={alt:?}\n",
+                    "DrawImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?} alt={alt:?}",
                     rect.x, rect.y, rect.width, rect.height,
                 ));
+                if *object_fit != ObjectFit::Fill {
+                    out.push_str(&format!(" fit={}", object_fit_name(*object_fit)));
+                }
+                if *object_position != ObjectPosition::default() {
+                    out.push_str(&format!(
+                        " pos={} {}",
+                        position_component_name(object_position.x),
+                        position_component_name(object_position.y),
+                    ));
+                }
+                out.push('\n');
             }
         }
     }
@@ -190,15 +327,15 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             }
             // Image content внутри padding/border-области; в Phase 0
             // padding/border ещё не сжимают content-area Image (только
-            // расширяют коробку), но геометрия rect-а уже верная — это
-            // полная коробка вместе с border. Renderer будет рисовать
-            // placeholder поверх всей коробки; точное content-box
-            // позиционирование оставлю на следующий коммит, когда будут
-            // реальные пиксели и понадобится object-fit / object-position.
+            // расширяют коробку), `rect` — полная коробка вместе с border.
+            // object-fit / object-position читаются на render-стадии вместе
+            // с известным intrinsic-размером изображения.
             out.push(DisplayCommand::DrawImage {
                 rect: b.rect,
                 src: src.clone(),
                 alt: alt.clone(),
+                object_fit: b.style.object_fit,
+                object_position: b.style.object_position,
             });
         }
     }
@@ -695,7 +832,7 @@ mod tests {
         let dl = build(r#"<img src="logo.png" alt="Logo" width="100" height="50">"#, "");
         let imgs = images(&dl);
         assert_eq!(imgs.len(), 1);
-        if let DisplayCommand::DrawImage { rect, src, alt } = imgs[0] {
+        if let DisplayCommand::DrawImage { rect, src, alt, .. } = imgs[0] {
             assert_eq!(src, "logo.png");
             assert_eq!(alt, "Logo");
             assert!((rect.width - 100.0).abs() < 0.1);
@@ -757,5 +894,186 @@ mod tests {
         );
         let imgs = images(&dl);
         assert_eq!(imgs.len(), 2);
+    }
+
+    // ── Тесты fit_image_rect / fit_image_quad (CSS Images L3 §5.5) ──────────
+
+    fn box100() -> Rect {
+        Rect::new(0.0, 0.0, 100.0, 100.0)
+    }
+
+    fn approx_eq(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    fn approx_rect(r: Rect, x: f32, y: f32, w: f32, h: f32) -> bool {
+        approx_eq(r.x, x) && approx_eq(r.y, y) && approx_eq(r.width, w) && approx_eq(r.height, h)
+    }
+
+    #[test]
+    fn fit_fill_stretches_to_box() {
+        let placed = fit_image_rect(box100(), (50, 200), ObjectFit::Fill, ObjectPosition::default());
+        assert!(approx_rect(placed, 0.0, 0.0, 100.0, 100.0));
+    }
+
+    #[test]
+    fn fit_contain_letterboxes_wide_image() {
+        // 200×100 в 100×100: scale=0.5, placed=100×50, центрируется по y.
+        let placed = fit_image_rect(box100(), (200, 100), ObjectFit::Contain, ObjectPosition::default());
+        assert!(approx_rect(placed, 0.0, 25.0, 100.0, 50.0));
+    }
+
+    #[test]
+    fn fit_contain_pillarboxes_tall_image() {
+        // 100×200 в 100×100: scale=0.5, placed=50×100, центрируется по x.
+        let placed = fit_image_rect(box100(), (100, 200), ObjectFit::Contain, ObjectPosition::default());
+        assert!(approx_rect(placed, 25.0, 0.0, 50.0, 100.0));
+    }
+
+    #[test]
+    fn fit_cover_overflows_wide_image() {
+        // 200×100 в 100×100 при cover: scale=1.0, placed=200×100, центр →
+        // x=-50, y=0.
+        let placed = fit_image_rect(box100(), (200, 100), ObjectFit::Cover, ObjectPosition::default());
+        assert!(approx_rect(placed, -50.0, 0.0, 200.0, 100.0));
+    }
+
+    #[test]
+    fn fit_none_keeps_intrinsic_size() {
+        let placed = fit_image_rect(box100(), (50, 50), ObjectFit::None, ObjectPosition::default());
+        // 50×50 центрируется в 100×100.
+        assert!(approx_rect(placed, 25.0, 25.0, 50.0, 50.0));
+    }
+
+    #[test]
+    fn fit_scale_down_picks_none_when_smaller() {
+        // 50×50 меньше 100×100 — none даёт меньшую площадь, чем contain.
+        let placed = fit_image_rect(box100(), (50, 50), ObjectFit::ScaleDown, ObjectPosition::default());
+        assert!(approx_rect(placed, 25.0, 25.0, 50.0, 50.0));
+    }
+
+    #[test]
+    fn fit_scale_down_picks_contain_when_larger() {
+        // 200×200 больше 100×100 — contain даёт меньшую площадь.
+        let placed = fit_image_rect(box100(), (200, 200), ObjectFit::ScaleDown, ObjectPosition::default());
+        assert!(approx_rect(placed, 0.0, 0.0, 100.0, 100.0));
+    }
+
+    #[test]
+    fn fit_position_top_left_aligns_to_origin() {
+        let pos = ObjectPosition {
+            x: PositionComponent::Percent(0.0),
+            y: PositionComponent::Percent(0.0),
+        };
+        let placed = fit_image_rect(box100(), (50, 50), ObjectFit::None, pos);
+        assert!(approx_rect(placed, 0.0, 0.0, 50.0, 50.0));
+    }
+
+    #[test]
+    fn fit_position_bottom_right_aligns_to_corner() {
+        let pos = ObjectPosition {
+            x: PositionComponent::Percent(1.0),
+            y: PositionComponent::Percent(1.0),
+        };
+        let placed = fit_image_rect(box100(), (50, 50), ObjectFit::None, pos);
+        assert!(approx_rect(placed, 50.0, 50.0, 50.0, 50.0));
+    }
+
+    #[test]
+    fn fit_zero_intrinsic_size_returns_box() {
+        let placed = fit_image_rect(box100(), (0, 100), ObjectFit::Cover, ObjectPosition::default());
+        assert!(approx_rect(placed, 0.0, 0.0, 100.0, 100.0));
+    }
+
+    #[test]
+    fn quad_contain_returns_full_uvs() {
+        // contain не выходит за box → uv = [0,0]..[1,1].
+        let (visible, uv0, uv1) = fit_image_quad(
+            box100(),
+            (200, 100),
+            ObjectFit::Contain,
+            ObjectPosition::default(),
+        )
+        .expect("contain visible");
+        assert!(approx_rect(visible, 0.0, 25.0, 100.0, 50.0));
+        assert!(approx_eq(uv0[0], 0.0) && approx_eq(uv0[1], 0.0));
+        assert!(approx_eq(uv1[0], 1.0) && approx_eq(uv1[1], 1.0));
+    }
+
+    #[test]
+    fn quad_cover_crops_uvs_horizontally() {
+        // 200×100 cover в 100×100: placement=200×100 at x=-50; visible=
+        // box100; UV: u0=(0-(-50))/200=0.25, u1=(100-(-50))/200=0.75.
+        let (visible, uv0, uv1) = fit_image_quad(
+            box100(),
+            (200, 100),
+            ObjectFit::Cover,
+            ObjectPosition::default(),
+        )
+        .expect("cover visible");
+        assert!(approx_rect(visible, 0.0, 0.0, 100.0, 100.0));
+        assert!(approx_eq(uv0[0], 0.25) && approx_eq(uv0[1], 0.0));
+        assert!(approx_eq(uv1[0], 0.75) && approx_eq(uv1[1], 1.0));
+    }
+
+    #[test]
+    fn quad_none_with_oversized_image_crops_uvs() {
+        // none при 200×200 в 100×100 — placement=200×200 at (-50,-50);
+        // visible=box100; UV: 0.25..0.75 по обеим осям.
+        let (visible, uv0, uv1) = fit_image_quad(
+            box100(),
+            (200, 200),
+            ObjectFit::None,
+            ObjectPosition::default(),
+        )
+        .expect("none-larger visible");
+        assert!(approx_rect(visible, 0.0, 0.0, 100.0, 100.0));
+        assert!(approx_eq(uv0[0], 0.25) && approx_eq(uv0[1], 0.25));
+        assert!(approx_eq(uv1[0], 0.75) && approx_eq(uv1[1], 0.75));
+    }
+
+    #[test]
+    fn quad_zero_intrinsic_returns_none() {
+        assert!(fit_image_quad(
+            box100(),
+            (0, 0),
+            ObjectFit::Fill,
+            ObjectPosition::default()
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn quad_serialize_includes_fit_and_position() {
+        // Когда fit/position отличны от дефолтов — в snapshot-серилизатор
+        // попадают «fit=» и «pos=» поля. Проверяем через ручной DisplayList,
+        // чтобы не возиться с CSS-парсингом object-fit.
+        let dl = vec![DisplayCommand::DrawImage {
+            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            src: "x".into(),
+            alt: String::new(),
+            object_fit: ObjectFit::Cover,
+            object_position: ObjectPosition {
+                x: PositionComponent::Px(10.0),
+                y: PositionComponent::Percent(0.0),
+            },
+        }];
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("fit=cover"), "{s}");
+        assert!(s.contains("pos=10.00px 0.00%"), "{s}");
+    }
+
+    #[test]
+    fn quad_serialize_omits_defaults() {
+        let dl = vec![DisplayCommand::DrawImage {
+            rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            src: "x".into(),
+            alt: String::new(),
+            object_fit: ObjectFit::Fill,
+            object_position: ObjectPosition::default(),
+        }];
+        let s = serialize_display_list(&dl);
+        assert!(!s.contains("fit="), "{s}");
+        assert!(!s.contains("pos="), "{s}");
     }
 }

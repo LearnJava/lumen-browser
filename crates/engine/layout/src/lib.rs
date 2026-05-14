@@ -22,11 +22,12 @@ pub use style::{
     parse_css_wide_keyword, AlignValue, BackgroundAttachment, BackgroundImage, BackgroundRepeat,
     BackgroundSize, BorderStyle, BoxShadow, BoxSizing, BreakValue, ClipPath, Color, ComputedStyle,
     Content, ContentItem, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch,
-    FontStyle, FontVariant, FontWeight, Hyphens, ListStylePosition, ListStyleType, Overflow,
-    OverflowWrap, OverscrollBehavior, PointerEvents, ScrollBehavior, ScrollSnapAlign,
-    ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType,
-    ScrollbarGutter, ScrollbarWidth, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
-    TextTransform, TransformFn, UserSelect, Visibility, WhiteSpace, WordBreak,
+    FontStyle, FontVariant, FontWeight, Hyphens, ListStylePosition, ListStyleType, ObjectFit,
+    ObjectPosition, Overflow, OverflowWrap, OverscrollBehavior, PointerEvents, PositionComponent,
+    ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop,
+    ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter, ScrollbarWidth, TextAlign,
+    TextDecorationLine, TextOverflow, TextShadow, TextTransform, TransformFn, UserSelect,
+    Visibility, WhiteSpace, WordBreak,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
