@@ -19,9 +19,10 @@ pub mod style;
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
 pub use style::{
-    parse_css_wide_keyword, AlignValue, BorderStyle, BoxShadow, BoxSizing, ClipPath, Color,
-    ComputedStyle, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle,
-    FontVariant, FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
+    parse_css_wide_keyword, AlignValue, BackgroundAttachment, BackgroundImage, BackgroundRepeat,
+    BackgroundSize, BorderStyle, BoxShadow, BoxSizing, ClipPath, Color, ComputedStyle,
+    CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle, FontVariant,
+    FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
     TextTransform, TransformFn, Visibility, WhiteSpace,
 };
 
@@ -4460,6 +4461,123 @@ mod tests {
     fn aspect_ratio_invalid_kept_unchanged() {
         let root = lay("<p>x</p>", "p { aspect-ratio: 16 / abc; }");
         assert_eq!(first_p_style(&root).aspect_ratio, None);
+    }
+
+    // ──────── background-* (CSS Backgrounds L3) ────────
+
+    #[test]
+    fn background_image_url_parses() {
+        let root = lay("<p>x</p>", "p { background-image: url(\"bg.png\"); }");
+        let s = first_p_style(&root);
+        assert_eq!(s.background_image, BackgroundImage::Url("bg.png".into()));
+    }
+
+    #[test]
+    fn background_image_url_unquoted() {
+        let root = lay("<p>x</p>", "p { background-image: url(bg.png); }");
+        assert_eq!(
+            first_p_style(&root).background_image,
+            BackgroundImage::Url("bg.png".into())
+        );
+    }
+
+    #[test]
+    fn background_image_none() {
+        let root = lay(
+            "<p>x</p>",
+            "p { background-image: url(\"x.png\"); background-image: none; }",
+        );
+        assert_eq!(first_p_style(&root).background_image, BackgroundImage::None);
+    }
+
+    #[test]
+    fn background_image_gradient_kept_as_string() {
+        let root = lay(
+            "<p>x</p>",
+            "p { background-image: linear-gradient(to right, red, blue); }",
+        );
+        match &first_p_style(&root).background_image {
+            BackgroundImage::Gradient(s) => assert!(s.contains("linear-gradient")),
+            _ => panic!("expected Gradient"),
+        }
+    }
+
+    #[test]
+    fn background_repeat_values() {
+        for (s, expected) in [
+            ("repeat", BackgroundRepeat::Repeat),
+            ("no-repeat", BackgroundRepeat::NoRepeat),
+            ("repeat-x", BackgroundRepeat::RepeatX),
+            ("repeat-y", BackgroundRepeat::RepeatY),
+            ("round", BackgroundRepeat::Round),
+            ("space", BackgroundRepeat::Space),
+        ] {
+            let css = format!("p {{ background-repeat: {s}; }}");
+            let root = lay("<p>x</p>", &css);
+            assert_eq!(first_p_style(&root).background_repeat, expected);
+        }
+    }
+
+    #[test]
+    fn background_size_keywords() {
+        for (s, expected) in [
+            ("auto", BackgroundSize::Auto),
+            ("cover", BackgroundSize::Cover),
+            ("contain", BackgroundSize::Contain),
+        ] {
+            let css = format!("p {{ background-size: {s}; }}");
+            let root = lay("<p>x</p>", &css);
+            assert_eq!(first_p_style(&root).background_size, expected);
+        }
+    }
+
+    #[test]
+    fn background_size_length_single() {
+        let root = lay("<p>x</p>", "p { background-size: 200px; }");
+        match first_p_style(&root).background_size {
+            BackgroundSize::Length(w, h) => {
+                assert!((w - 200.0).abs() < 0.01);
+                assert_eq!(h, None);
+            }
+            _ => panic!("expected Length"),
+        }
+    }
+
+    #[test]
+    fn background_size_length_pair() {
+        let root = lay("<p>x</p>", "p { background-size: 200px 100px; }");
+        match first_p_style(&root).background_size {
+            BackgroundSize::Length(w, h) => {
+                assert!((w - 200.0).abs() < 0.01);
+                assert_eq!(h, Some(100.0));
+            }
+            _ => panic!("expected Length"),
+        }
+    }
+
+    #[test]
+    fn background_attachment_values() {
+        for (s, expected) in [
+            ("scroll", BackgroundAttachment::Scroll),
+            ("fixed", BackgroundAttachment::Fixed),
+            ("local", BackgroundAttachment::Local),
+        ] {
+            let css = format!("p {{ background-attachment: {s}; }}");
+            let root = lay("<p>x</p>", &css);
+            assert_eq!(first_p_style(&root).background_attachment, expected);
+        }
+    }
+
+    #[test]
+    fn background_properties_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { background-image: url(x.png); background-repeat: no-repeat; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.background_image, BackgroundImage::None);
+        assert_eq!(p.style.background_repeat, BackgroundRepeat::Repeat);
     }
 
     // ──────── place-items / align-* / justify-* (CSS Box Alignment L3) ────────
