@@ -27,9 +27,9 @@ use std::cell::RefCell;
 use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 
-/// Источник task-а — HTML §8.1.4.3 «Task sources». Phase 0: один FIFO для всех
-/// источников; per-source priority-queues — отдельная задача, когда возникнет
-/// нужда отдавать `UserInteraction` приоритет над `Networking`.
+/// Источник task-а — HTML §8.1.4.3 «Task sources». Каждому источнику —
+/// своя FIFO-очередь; `TaskQueue::pop` обходит очереди в порядке
+/// `PRIORITY_ORDER`, выбирая первую непустую.
 ///
 /// Варианты намеренно перечислены полностью — это поверхность для будущей
 /// классификации task-ов (network → networking, setTimeout → timer, и т. д.),
@@ -44,6 +44,45 @@ pub enum TaskSource {
     IdleTask,
     Rendering,
     Timer,
+}
+
+/// Сколько различных task source-ов в [`TaskSource`]. Используется как
+/// размер массива per-source очередей в [`TaskQueue`].
+const TASK_SOURCE_COUNT: usize = 7;
+
+impl TaskSource {
+    /// Стабильный индекс источника в массиве per-source очередей.
+    /// Значение не пересекается с приоритетом — приоритет задан отдельно
+    /// в `PRIORITY_ORDER`, чтобы можно было менять без правки storage layout.
+    const fn as_index(self) -> usize {
+        match self {
+            TaskSource::DomManipulation => 0,
+            TaskSource::UserInteraction => 1,
+            TaskSource::Networking => 2,
+            TaskSource::HistoryTraversal => 3,
+            TaskSource::IdleTask => 4,
+            TaskSource::Rendering => 5,
+            TaskSource::Timer => 6,
+        }
+    }
+
+    /// Порядок выбора task-а: первая запись — highest priority.
+    ///
+    /// HTML §8.1.4.2 оставляет точный порядок на усмотрение UA. Наш порядок:
+    /// `UserInteraction` > `DomManipulation` > `HistoryTraversal` >
+    /// `Networking` > `Timer` > `Rendering` > `IdleTask`. Соответствует
+    /// подходу Chromium scheduler — input важнее всего, idle — в самом конце.
+    /// `HistoryTraversal` выше `Networking` потому, что back/forward — это
+    /// прямое действие пользователя.
+    pub const PRIORITY_ORDER: [TaskSource; TASK_SOURCE_COUNT] = [
+        TaskSource::UserInteraction,
+        TaskSource::DomManipulation,
+        TaskSource::HistoryTraversal,
+        TaskSource::Networking,
+        TaskSource::Timer,
+        TaskSource::Rendering,
+        TaskSource::IdleTask,
+    ];
 }
 
 /// Task — отложенное действие, выполняемое за пределами текущего call-stack-а.
@@ -71,10 +110,31 @@ impl Task {
     }
 }
 
-/// FIFO-очередь Task-ов. Один список для всех TaskSource в Phase 0.
-#[derive(Default)]
+/// Per-source очереди task-ов. Каждый `TaskSource` — отдельная FIFO,
+/// внутри источника порядок strict «кто раньше пришёл, тот раньше идёт».
+/// `pop` обходит источники в `TaskSource::PRIORITY_ORDER` и возвращает
+/// первую найденную task — этим достигается приоритезация
+/// (UserInteraction опережает Networking, даже если был поставлен позже).
+///
+/// Хранение — массив фиксированной длины `TASK_SOURCE_COUNT`, индекс через
+/// `TaskSource::as_index`. Это даёт O(1) на queue и O(K) на pop, где
+/// K = число источников (7) — на практике не отличается от константы.
 pub struct TaskQueue {
-    tasks: VecDeque<Task>,
+    queues: [VecDeque<Task>; TASK_SOURCE_COUNT],
+    /// Суммарное число task-ов во всех очередях. Кэшируем, чтобы
+    /// `len` / `is_empty` оставались O(1) без пересчёта через массив.
+    total: usize,
+}
+
+impl Default for TaskQueue {
+    fn default() -> Self {
+        // `[VecDeque::new(); N]` нельзя — `VecDeque` не Copy. `from_fn`
+        // вызывает конструктор для каждого слота независимо.
+        Self {
+            queues: std::array::from_fn(|_| VecDeque::new()),
+            total: 0,
+        }
+    }
 }
 
 impl TaskQueue {
@@ -83,19 +143,36 @@ impl TaskQueue {
     }
 
     pub fn queue(&mut self, task: Task) {
-        self.tasks.push_back(task);
+        let idx = task.source.as_index();
+        self.queues[idx].push_back(task);
+        self.total += 1;
     }
 
+    /// Достать task с highest-priority непустой очереди (по
+    /// `TaskSource::PRIORITY_ORDER`). Внутри одного источника — FIFO.
     pub fn pop(&mut self) -> Option<Task> {
-        self.tasks.pop_front()
+        for src in TaskSource::PRIORITY_ORDER {
+            let q = &mut self.queues[src.as_index()];
+            if let Some(t) = q.pop_front() {
+                self.total -= 1;
+                return Some(t);
+            }
+        }
+        None
     }
 
     pub fn len(&self) -> usize {
-        self.tasks.len()
+        self.total
     }
 
     pub fn is_empty(&self) -> bool {
-        self.tasks.is_empty()
+        self.total == 0
+    }
+
+    /// Длина очереди конкретного источника — для тестов и метрик
+    /// (например, размер «idle backlog» на vsync).
+    pub fn len_of(&self, source: TaskSource) -> usize {
+        self.queues[source.as_index()].len()
     }
 }
 
@@ -761,6 +838,107 @@ mod tests {
         // Второй delivery: только "other".
         el.deliver_observer_records(ObserverKind::Resize);
         assert_eq!(*log.borrow(), vec!["suicide", "other", "other"]);
+    }
+
+    #[test]
+    fn user_interaction_beats_networking_even_if_queued_later() {
+        // Cross-source priority — главный контракт задачи.
+        let mut q = TaskQueue::new();
+        let log = shared_log();
+        let l_net = Rc::clone(&log);
+        let l_ui = Rc::clone(&log);
+        q.queue(Task::new(TaskSource::Networking, move || {
+            l_net.borrow_mut().push("net")
+        }));
+        q.queue(Task::new(TaskSource::UserInteraction, move || {
+            l_ui.borrow_mut().push("ui")
+        }));
+        q.pop().unwrap().run();
+        q.pop().unwrap().run();
+        // UI первой, хотя пришла позже сетевой.
+        assert_eq!(*log.borrow(), vec!["ui", "net"]);
+    }
+
+    #[test]
+    fn priority_order_consumes_every_source_exactly_once() {
+        // Закидываем по одной task в каждый source в обратном priority-порядке;
+        // pop должен выдать ровно PRIORITY_ORDER.
+        let mut q = TaskQueue::new();
+        let log: Rc<RefCell<Vec<TaskSource>>> = Rc::new(RefCell::new(Vec::new()));
+        let mut sources: Vec<TaskSource> = TaskSource::PRIORITY_ORDER.into();
+        sources.reverse();
+        for src in sources {
+            let l = Rc::clone(&log);
+            q.queue(Task::new(src, move || l.borrow_mut().push(src)));
+        }
+        while let Some(t) = q.pop() {
+            t.run();
+        }
+        assert_eq!(*log.borrow(), TaskSource::PRIORITY_ORDER.to_vec());
+        assert!(q.is_empty());
+    }
+
+    #[test]
+    fn intra_source_remains_fifo_under_priority() {
+        // Два task-а одного источника — порядок строго FIFO; третий из
+        // более приоритетного источника лезет вперёд них.
+        let mut q = TaskQueue::new();
+        let log = shared_log();
+        let l1 = Rc::clone(&log);
+        let l2 = Rc::clone(&log);
+        let l_ui = Rc::clone(&log);
+        q.queue(Task::new(TaskSource::Timer, move || l1.borrow_mut().push("t1")));
+        q.queue(Task::new(TaskSource::Timer, move || l2.borrow_mut().push("t2")));
+        q.queue(Task::new(TaskSource::UserInteraction, move || {
+            l_ui.borrow_mut().push("ui")
+        }));
+        q.pop().unwrap().run();
+        q.pop().unwrap().run();
+        q.pop().unwrap().run();
+        assert_eq!(*log.borrow(), vec!["ui", "t1", "t2"]);
+    }
+
+    #[test]
+    fn len_and_is_empty_track_total_across_sources() {
+        let mut q = TaskQueue::new();
+        assert!(q.is_empty());
+        q.queue(Task::new(TaskSource::Networking, || {}));
+        q.queue(Task::new(TaskSource::Timer, || {}));
+        q.queue(Task::new(TaskSource::Networking, || {}));
+        assert_eq!(q.len(), 3);
+        assert_eq!(q.len_of(TaskSource::Networking), 2);
+        assert_eq!(q.len_of(TaskSource::Timer), 1);
+        assert_eq!(q.len_of(TaskSource::UserInteraction), 0);
+        // PRIORITY_ORDER: Timer выше IdleTask — но не выше Networking.
+        // Pop отдаст Networking (раньше Timer в priority chain? — нет,
+        // Timer выше Networking? — нет, Networking приоритетнее Timer.
+        // Проверим: первая попа выдаст Networking, потом Networking,
+        // потом Timer.
+        assert!(q.pop().is_some());
+        assert_eq!(q.len(), 2);
+        assert_eq!(q.len_of(TaskSource::Networking), 1);
+        assert!(!q.is_empty());
+    }
+
+    #[test]
+    fn event_loop_step_honours_priority_across_sources() {
+        // Та же проверка, но через EventLoop::step — публичный API,
+        // который реально использует winit-loop.
+        let el = EventLoop::new();
+        let h = el.handle();
+        let log = shared_log();
+        let l_idle = Rc::clone(&log);
+        let l_net = Rc::clone(&log);
+        let l_ui = Rc::clone(&log);
+        h.queue_task(TaskSource::IdleTask, move || l_idle.borrow_mut().push("idle"));
+        h.queue_task(TaskSource::Networking, move || l_net.borrow_mut().push("net"));
+        h.queue_task(TaskSource::UserInteraction, move || {
+            l_ui.borrow_mut().push("ui")
+        });
+        el.step();
+        el.step();
+        el.step();
+        assert_eq!(*log.borrow(), vec!["ui", "net", "idle"]);
     }
 
     #[test]
