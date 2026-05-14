@@ -604,7 +604,7 @@ git -C <zombie-path> commit -m "WIP from zombie session ..."
 
 ### Численно
 
-- **Всего тестов в workspace:** ~2073 (после merge dns-resolver-trait: +7 в lumen-network, +11 в lumen-storage поверх 2055 после srcset-sizes-picker; уточнить через `cargo test --workspace`).
+- **Всего тестов в workspace:** 2089 (после merge dns-resolver-trait: +7 в lumen-network, +11 в lumen-storage поверх 2055 после srcset-sizes-picker).
 - **`cargo clippy --workspace --all-targets -- -D warnings`** проходит без warnings.
 - **Внешних зависимостей runtime:** 3 активных (winit, wgpu, SQLite через rusqlite/bundled) + 2 зарезервированных (rustls активирован в lumen-network, JS engine).
 - **Транзитивно через wgpu/winit:** ~200 crates.
