@@ -646,6 +646,95 @@ pub struct ComputedStyle {
     pub user_select: UserSelect,
     /// CSS Overflow L3 — `scroll-behavior`. Inherited.
     pub scroll_behavior: ScrollBehavior,
+    /// CSS Text L3 §10.1 — `tab-size: <integer> | <length>`. Inherited.
+    /// В пикселях если length; для integer хранится как число × 8 (default
+    /// 8 spaces — стандартный default). Default 8 spaces = 64px при 8px-space.
+    pub tab_size: f32,
+    /// CSS UI L4 §6.3 — `caret-color: auto | <color>`. Inherited.
+    /// `None` = auto (UA выбирает). `Some(color)` — явный цвет.
+    pub caret_color: Option<Color>,
+    /// CSS Text L3 §5.2 — `overflow-wrap: normal | break-word | anywhere`.
+    /// Inherited. Default `Normal`.
+    pub overflow_wrap: OverflowWrap,
+    /// CSS Text L3 §5.1 — `word-break: normal | keep-all | break-all |
+    /// break-word`. Inherited. Default `Normal`.
+    pub word_break: WordBreak,
+    /// CSS Text L3 §6 — `hyphens: none | manual | auto`. Inherited.
+    /// Default `Manual`.
+    pub hyphens: Hyphens,
+}
+
+/// CSS Text L3 §5.2 — `overflow-wrap`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OverflowWrap {
+    #[default]
+    Normal,
+    /// `break-word` — разрешает перенос любого слова, чтобы не было overflow.
+    BreakWord,
+    /// `anywhere` — как `break-word`, но также влияет на intrinsic-width
+    /// computation (CSS Text L3).
+    Anywhere,
+}
+
+impl OverflowWrap {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(Self::Normal),
+            "break-word" => Some(Self::BreakWord),
+            "anywhere" => Some(Self::Anywhere),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Text L3 §5.1 — `word-break`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WordBreak {
+    #[default]
+    Normal,
+    /// `keep-all` — CJK не разбивается.
+    KeepAll,
+    /// `break-all` — разрыв в любом месте, кроме whitespace.
+    BreakAll,
+    /// `break-word` — legacy для `overflow-wrap: break-word`.
+    BreakWord,
+}
+
+impl WordBreak {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(Self::Normal),
+            "keep-all" => Some(Self::KeepAll),
+            "break-all" => Some(Self::BreakAll),
+            "break-word" => Some(Self::BreakWord),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Text L3 §6 — `hyphens`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Hyphens {
+    /// `none` — переносы запрещены.
+    None,
+    /// `manual` (default) — переносы только при явных hyphenation-точках
+    /// (`&shy;` / U+00AD).
+    #[default]
+    Manual,
+    /// `auto` — UA расставляет переносы по алгоритму (требует hyphenation
+    /// dictionary).
+    Auto,
+}
+
+impl Hyphens {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "manual" => Some(Self::Manual),
+            "auto" => Some(Self::Auto),
+            _ => None,
+        }
+    }
 }
 
 /// CSS Pointer Events L1. Default `auto`.
@@ -1014,6 +1103,12 @@ impl ComputedStyle {
             pointer_events: PointerEvents::Auto,
             user_select: UserSelect::Auto,
             scroll_behavior: ScrollBehavior::Auto,
+            // CSS Text typography defaults.
+            tab_size: 64.0,  // 8 spaces × 8px-space-width default.
+            caret_color: None,  // `auto`.
+            overflow_wrap: OverflowWrap::Normal,
+            word_break: WordBreak::Normal,
+            hyphens: Hyphens::Manual,
         }
     }
 }
@@ -1127,6 +1222,12 @@ pub fn compute_style(
         // User Select / Scroll Behavior — наследуются.
         user_select: inherited.user_select,
         scroll_behavior: inherited.scroll_behavior,
+        // CSS Text typography — все inherited.
+        tab_size: inherited.tab_size,
+        caret_color: inherited.caret_color,
+        overflow_wrap: inherited.overflow_wrap,
+        word_break: inherited.word_break,
+        hyphens: inherited.hyphens,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -3695,6 +3796,42 @@ fn apply_declaration(
         "scroll-behavior" => {
             if let Some(v) = ScrollBehavior::parse(val) {
                 style.scroll_behavior = v;
+            }
+        }
+        "tab-size" => {
+            // CSS Text L3 §10.1: <integer> или <length>. Integer = ширина
+            // в spaces; принимаем как 8px-per-space heuristic. Length —
+            // resolved-px.
+            let trimmed = val.trim();
+            if let Ok(n) = trimmed.parse::<i32>() {
+                style.tab_size = (n.max(0) as f32) * 8.0;
+            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport) {
+                style.tab_size = px.max(0.0);
+            }
+        }
+        "caret-color" => {
+            // CSS UI L4 §6.3: auto | <color>.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.caret_color = None;
+            } else if let Some(c) = parse_color(trimmed) {
+                style.caret_color = Some(c);
+            }
+        }
+        "overflow-wrap" | "word-wrap" => {
+            // `word-wrap` — legacy alias для `overflow-wrap`.
+            if let Some(v) = OverflowWrap::parse(val) {
+                style.overflow_wrap = v;
+            }
+        }
+        "word-break" => {
+            if let Some(v) = WordBreak::parse(val) {
+                style.word_break = v;
+            }
+        }
+        "hyphens" => {
+            if let Some(v) = Hyphens::parse(val) {
+                style.hyphens = v;
             }
         }
         "place-content" => {

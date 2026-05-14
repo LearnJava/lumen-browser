@@ -22,8 +22,9 @@ pub use style::{
     parse_css_wide_keyword, AlignValue, BackgroundAttachment, BackgroundImage, BackgroundRepeat,
     BackgroundSize, BorderStyle, BoxShadow, BoxSizing, ClipPath, Color, ComputedStyle,
     CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle, FontVariant,
-    FontWeight, Overflow, PointerEvents, ScrollBehavior, TextAlign, TextDecorationLine,
-    TextOverflow, TextShadow, TextTransform, TransformFn, UserSelect, Visibility, WhiteSpace,
+    FontWeight, Hyphens, Overflow, OverflowWrap, PointerEvents, ScrollBehavior, TextAlign,
+    TextDecorationLine, TextOverflow, TextShadow, TextTransform, TransformFn, UserSelect,
+    Visibility, WhiteSpace, WordBreak,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -4461,6 +4462,123 @@ mod tests {
     fn aspect_ratio_invalid_kept_unchanged() {
         let root = lay("<p>x</p>", "p { aspect-ratio: 16 / abc; }");
         assert_eq!(first_p_style(&root).aspect_ratio, None);
+    }
+
+    // ──────── CSS Text typography (tab-size, caret-color, overflow-wrap, word-break, hyphens) ────────
+
+    #[test]
+    fn tab_size_integer_in_spaces() {
+        let root = lay("<p>x</p>", "p { tab-size: 4; }");
+        // integer 4 → 32px (8px-per-space).
+        assert!((first_p_style(&root).tab_size - 32.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn tab_size_length() {
+        let root = lay("<p>x</p>", "p { tab-size: 40px; }");
+        assert!((first_p_style(&root).tab_size - 40.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn tab_size_default_64() {
+        let root = lay("<p>x</p>", "p { color: red; }");
+        assert!((first_p_style(&root).tab_size - 64.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn tab_size_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { tab-size: 100px; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!((p.style.tab_size - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn caret_color_named() {
+        let root = lay("<p>x</p>", "p { caret-color: red; }");
+        assert_eq!(
+            first_p_style(&root).caret_color,
+            Some(Color { r: 255, g: 0, b: 0, a: 255 })
+        );
+    }
+
+    #[test]
+    fn caret_color_auto() {
+        let root = lay("<p>x</p>", "p { caret-color: red; caret-color: auto; }");
+        assert_eq!(first_p_style(&root).caret_color, None);
+    }
+
+    #[test]
+    fn caret_color_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { caret-color: blue; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.caret_color, Some(Color { r: 0, g: 0, b: 255, a: 255 }));
+    }
+
+    #[test]
+    fn overflow_wrap_break_word() {
+        let root = lay("<p>x</p>", "p { overflow-wrap: break-word; }");
+        assert_eq!(first_p_style(&root).overflow_wrap, OverflowWrap::BreakWord);
+    }
+
+    #[test]
+    fn word_wrap_alias_overflow_wrap() {
+        // `word-wrap` legacy alias.
+        let root = lay("<p>x</p>", "p { word-wrap: anywhere; }");
+        assert_eq!(first_p_style(&root).overflow_wrap, OverflowWrap::Anywhere);
+    }
+
+    #[test]
+    fn word_break_keep_all() {
+        let root = lay("<p>x</p>", "p { word-break: keep-all; }");
+        assert_eq!(first_p_style(&root).word_break, WordBreak::KeepAll);
+    }
+
+    #[test]
+    fn word_break_break_all() {
+        let root = lay("<p>x</p>", "p { word-break: break-all; }");
+        assert_eq!(first_p_style(&root).word_break, WordBreak::BreakAll);
+    }
+
+    #[test]
+    fn hyphens_auto() {
+        let root = lay("<p>x</p>", "p { hyphens: auto; }");
+        assert_eq!(first_p_style(&root).hyphens, Hyphens::Auto);
+    }
+
+    #[test]
+    fn hyphens_none() {
+        let root = lay("<p>x</p>", "p { hyphens: none; }");
+        assert_eq!(first_p_style(&root).hyphens, Hyphens::None);
+    }
+
+    #[test]
+    fn hyphens_default_manual() {
+        let root = lay("<p>x</p>", "p { color: red; }");
+        assert_eq!(first_p_style(&root).hyphens, Hyphens::Manual);
+    }
+
+    #[test]
+    fn text_typography_all_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { tab-size: 50px; overflow-wrap: break-word; word-break: keep-all; hyphens: auto; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!((p.style.tab_size - 50.0).abs() < 0.01);
+        assert_eq!(p.style.overflow_wrap, OverflowWrap::BreakWord);
+        assert_eq!(p.style.word_break, WordBreak::KeepAll);
+        assert_eq!(p.style.hyphens, Hyphens::Auto);
+        // А значения у div те же.
+        assert!((div.style.tab_size - 50.0).abs() < 0.01);
     }
 
     // ──────── will-change / pointer-events / user-select / scroll-behavior ────────
