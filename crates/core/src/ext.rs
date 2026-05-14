@@ -142,6 +142,45 @@ pub trait DnsResolver: Send + Sync {
     fn resolve(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>>;
 }
 
+/// HSTS-политика: должны ли HTTP-запросы к данному host принудительно
+/// upgrade-иться на HTTPS, и как сохранять policy из ответа.
+///
+/// RFC 6797 (HTTP Strict Transport Security). Trait-точка нужна, чтобы
+/// `HttpClient` (`lumen-network`) не зависел напрямую от `HstsStore`
+/// (`lumen-storage`) — реальный SQLite-backed store живёт в storage,
+/// а network знает только про этот контракт. Тесты могут подложить
+/// in-memory mock без SQLite. Аналогично DnsResolver / EncodingDetector.
+///
+/// **Семантика без `Result`** — fail-open: ошибка БД (поломанный диск,
+/// заблокированная mutex) не должна валить fetch. `is_https_only` возвращает
+/// `false` при любой проблеме (не upgrade-им сомнительный host), а
+/// `record_sts` тихо проглатывает ошибки persistence (best-effort —
+/// при повторе сервер всё равно пришлёт STS header). Это та же логика,
+/// что у браузеров: HSTS — soft policy, не блокирующая.
+///
+/// Реализация в `lumen-storage::hsts::HstsStore`. RFC-семантика
+/// `max-age=0` (снять HSTS) обрабатывается на стороне реализации —
+/// trait просто пробрасывает значение.
+pub trait HstsEnforcement: Send + Sync {
+    /// Должен ли HTTP-запрос к `host` (ASCII / Punycode) быть переписан в
+    /// HTTPS? Учитывает entries с `includeSubDomains` (longest-suffix-match
+    /// по родительским доменам). `now_unix` — текущее время для фильтрации
+    /// истёкших entries.
+    fn is_https_only(&self, host: &str, now_unix: i64) -> bool;
+
+    /// Записать HSTS policy из заголовка `Strict-Transport-Security`.
+    /// `host` — ASCII / Punycode. Реализация обязана трактовать
+    /// `max_age = 0` как «снять HSTS для этого host» (RFC 6797 §6.1.1).
+    fn record_sts(
+        &self,
+        host: &str,
+        max_age: u64,
+        include_subdomains: bool,
+        preload: bool,
+        now_unix: i64,
+    );
+}
+
 /// Определение кодировки HTML-документа. Для кириллицы критично уметь
 /// детектировать Windows-1251 и KOI8-R (см. §10.1).
 pub trait EncodingDetector: Send + Sync {
