@@ -15,6 +15,7 @@
 //! Внешние CSS: `<link rel="stylesheet" href="...">` загружается с диска или
 //! по сети — в зависимости от того, каким способом загружена страница.
 
+mod find;
 mod runtime;
 
 use std::error::Error;
@@ -108,6 +109,7 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
         renderer: None,
         runtime: runtime::EventLoop::new(),
         epoch: std::time::Instant::now(),
+        find: find::FindState::default(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -339,6 +341,7 @@ impl LoadedPage {
 enum KeyCommand {
     Reload,
     Exit,
+    FindOpen,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -347,6 +350,7 @@ enum KeyCommand {
 /// Ctrl+R                → Reload.
 /// Esc без модификаторов → Exit.
 /// Ctrl+W                → Exit.
+/// Ctrl+F                → FindOpen.
 ///
 /// Прочие комбинации (Ctrl+Shift+R, F5+Ctrl, и т.д.) — пока None: не хотим
 /// перехватывать привычные web-shortcuts (force-reload, etc.) до того, как
@@ -359,6 +363,7 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::KeyR if ctrl_only => Some(KeyCommand::Reload),
         KeyCode::Escape if no_mods => Some(KeyCommand::Exit),
         KeyCode::KeyW if ctrl_only => Some(KeyCommand::Exit),
+        KeyCode::KeyF if ctrl_only => Some(KeyCommand::FindOpen),
         _ => None,
     }
 }
@@ -761,6 +766,11 @@ struct Lumen {
     /// (DOMHighResTimeStamp — HTML §8.1.5.1: «timestamp passed to callback
     /// should be the current high resolution time»).
     epoch: std::time::Instant,
+    /// Состояние Ctrl+F. Открыт ли bar, текущий query и индекс активного
+    /// совпадения. Содержимое поиска не сохраняется между reload-ами
+    /// (close() полностью очищает state); это сознательно: после reload
+    /// display list другой, и старые позиции совпадений уже невалидны.
+    find: find::FindState,
 }
 
 impl Lumen {
@@ -776,6 +786,10 @@ impl Lumen {
             Ok(page) => {
                 self.display_list = page.display_list;
                 self.title = page.title;
+                // Display list другой → старые match-rect-ы невалидны.
+                // Closing полностью сбрасывает query/active — пользователю
+                // нужно открыть find заново после reload, что естественно.
+                self.find.close();
                 if let Some(r) = self.renderer.as_mut() {
                     // Старая GPU-cache картинок относится к предыдущей странице
                     // (даже если src совпадает, content мог измениться). Чистим
@@ -895,10 +909,31 @@ impl ApplicationHandler for Lumen {
                 let timestamp_ms =
                     self.epoch.elapsed().as_secs_f64() * 1000.0;
                 self.runtime.run_rendering_step(timestamp_ms);
-                if let Some(r) = self.renderer.as_mut()
-                    && let Err(err) = r.render(&self.display_list)
-                {
-                    eprintln!("Ошибка рендера: {err:?}");
+
+                // Когда find bar открыт — собираем composite display list:
+                // подсветки матчей перед своими DrawText + overlay-бар поверх.
+                // Иначе рисуем base display list напрямую, без аллокаций.
+                let composite = if self.find.is_open() {
+                    let win_size = self.window.as_ref().map_or((1024, 720), |w| {
+                        let s = w.inner_size();
+                        (s.width, s.height)
+                    });
+                    let matches = self.current_matches();
+                    Some(find::build_with_overlay(
+                        &self.display_list,
+                        &self.find,
+                        &matches,
+                        find::BarOverlay { window_size: win_size },
+                    ))
+                } else {
+                    None
+                };
+
+                if let Some(r) = self.renderer.as_mut() {
+                    let dl = composite.as_ref().unwrap_or(&self.display_list);
+                    if let Err(err) = r.render(dl) {
+                        eprintln!("Ошибка рендера: {err:?}");
+                    }
                 }
             }
             _ => {}
@@ -908,19 +943,99 @@ impl ApplicationHandler for Lumen {
 
 impl Lumen {
     fn handle_key(&mut self, event_loop: &ActiveEventLoop, key_event: &KeyEvent) {
-        if key_event.state != ElementState::Pressed || key_event.repeat {
+        if key_event.state != ElementState::Pressed {
             return;
         }
         let PhysicalKey::Code(code) = key_event.physical_key else {
             return;
         };
+
+        // Когда find bar открыт — все клавиши идут в него: ввод символов,
+        // Esc=close, Backspace=стирание, Enter/F3=next (Shift=prev). Это не
+        // даёт случайно сработать Esc=Exit или Ctrl+R=Reload в момент поиска.
+        if self.find.is_open() {
+            self.handle_find_key(code, key_event);
+            return;
+        }
+
+        if key_event.repeat {
+            return;
+        }
         let Some(cmd) = keybinding_for(code, self.modifiers) else {
             return;
         };
         match cmd {
             KeyCommand::Reload => self.reload(),
             KeyCommand::Exit => event_loop.exit(),
+            KeyCommand::FindOpen => {
+                self.find.open();
+                self.request_redraw();
+            }
         }
+    }
+
+    fn handle_find_key(&mut self, code: KeyCode, key_event: &KeyEvent) {
+        let shift = self.modifiers.shift_key();
+        let ctrl_or_super = self.modifiers.control_key() || self.modifiers.super_key();
+
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                self.find.close();
+                self.request_redraw();
+            }
+            KeyCode::Backspace => {
+                self.find.backspace();
+                self.request_redraw();
+            }
+            KeyCode::Enter | KeyCode::F3 => {
+                if !key_event.repeat {
+                    let total = self.current_matches().len();
+                    if shift {
+                        self.find.prev(total);
+                    } else {
+                        self.find.next(total);
+                    }
+                    self.request_redraw();
+                }
+            }
+            _ => {
+                // Текстовый ввод. При модификаторах Ctrl/Cmd не вставляем —
+                // это shortcut в адрес find-а (или будущих чего-то ещё), не
+                // символ для query. Без них text — это уже layout-aware
+                // символ от winit, с учётом IME / dead-keys.
+                if ctrl_or_super {
+                    return;
+                }
+                if let Some(text) = key_event.text.as_ref()
+                    && !text.is_empty()
+                {
+                    self.find.append_str(text);
+                    self.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn request_redraw(&self) {
+        if let Some(w) = self.window.as_ref() {
+            w.request_redraw();
+        }
+    }
+
+    /// Пересчитывает текущий список совпадений по `display_list` и `find.query`.
+    /// Возвращает пустой Vec, если bar закрыт или запрос пустой. Используется
+    /// и для рендера, и для счётчика `next`/`prev`.
+    fn current_matches(&self) -> Vec<find::FindMatch> {
+        if !self.find.is_open() || self.find.query().is_empty() {
+            return Vec::new();
+        }
+        let Ok(font) = lumen_font::Font::parse(INTER_FONT) else {
+            return Vec::new();
+        };
+        let Ok(measurer) = lumen_paint::FontMeasurer::new(&font) else {
+            return Vec::new();
+        };
+        find::find_matches(&self.display_list, self.find.query(), &measurer)
     }
 }
 
@@ -1159,6 +1274,21 @@ mod tests {
     fn keybinding_unknown_key_is_none() {
         assert_eq!(keybinding_for(KeyCode::KeyA, ModifiersState::empty()), None);
         assert_eq!(keybinding_for(KeyCode::F1, ModifiersState::empty()), None);
+    }
+
+    #[test]
+    fn keybinding_ctrl_f_opens_find() {
+        assert_eq!(
+            keybinding_for(KeyCode::KeyF, ModifiersState::CONTROL),
+            Some(KeyCommand::FindOpen),
+        );
+    }
+
+    #[test]
+    fn keybinding_plain_f_is_none() {
+        // Без Ctrl — обычная буква, не команда. Иначе посимвольный ввод
+        // не работал бы (например, в будущем omnibox).
+        assert_eq!(keybinding_for(KeyCode::KeyF, ModifiersState::empty()), None);
     }
 
     #[test]
