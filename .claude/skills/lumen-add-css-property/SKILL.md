@@ -9,6 +9,7 @@ when_to_use: >
   Фразы-триггеры: "добавь CSS свойство", "реализуй CSS X", "implement CSS property",
   "добавь поддержку X", "нет свойства X в layout". Также автоматически когда
   задача из roadmap [P1] касается нового CSS property.
+model: claude-sonnet-4-6
 allowed-tools: Read Grep Glob Bash(cargo check *) Bash(cargo test *) Bash(cargo clippy *) Bash(export PATH*)
 ---
 

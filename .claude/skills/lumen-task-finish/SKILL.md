@@ -9,6 +9,7 @@ when_to_use: >
   "задача готова", "ready to merge", "закончил задачу". Также когда все тесты
   проходят и реализация завершена.
 disable-model-invocation: true
+model: claude-sonnet-4-6
 allowed-tools: Bash(git *) Bash(cargo *) Bash(export PATH*) Read Edit
 ---
 

@@ -9,6 +9,7 @@ when_to_use: >
   из roadmap", "создай ветку для", "начнём работу над". Также когда пользователь
   говорит «ты программист N» и указывает следующий пункт roadmap.
 disable-model-invocation: true
+model: claude-sonnet-4-6
 allowed-tools: Bash(git *) Read Edit
 ---
 

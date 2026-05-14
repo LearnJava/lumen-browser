@@ -9,6 +9,7 @@ when_to_use: >
   "добавить lumen-X", "создать lumen-knowledge", "создать lumen-ai".
   Также когда задача из roadmap явно указывает на появление нового крейта.
 disable-model-invocation: true
+model: claude-opus-4-7
 allowed-tools: Bash(cargo *) Bash(export PATH*) Bash(git *) Read Edit Write Glob
 ---
 
