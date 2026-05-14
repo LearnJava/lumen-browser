@@ -19,7 +19,7 @@
 //! и т.п.), а не внутри runtime.
 
 use std::cell::RefCell;
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::rc::Rc;
 
 /// Источник task-а — HTML §8.1.4.3 «Task sources». Phase 0: один FIFO для всех
@@ -141,6 +141,18 @@ impl MicrotaskQueue {
     }
 }
 
+/// Уникальный идентификатор rAF-callback-а, возвращается `request_animation_frame`.
+/// Передаётся в `cancel_animation_frame`, чтобы отменить вызов до того, как
+/// rendering step его исполнит.
+pub type AnimationFrameHandle = u32;
+
+/// rAF-callback с handle-ом. `FnOnce`, потому что rAF по спецификации
+/// одноразовый — для повторяющейся анимации callback сам перепланирует следующий.
+struct AnimationFrameCallback {
+    handle: AnimationFrameHandle,
+    closure: Box<dyn FnOnce(f64)>,
+}
+
 /// Внутреннее состояние event-loop-а под `Rc<RefCell<…>>`. Доступ из
 /// closure-ов task-ов / microtask-ов идёт через `EventLoopHandle`, что снимает
 /// типовой конфликт «closure владеет EventLoop / EventLoop запускает closure».
@@ -148,6 +160,10 @@ impl MicrotaskQueue {
 struct State {
     tasks: TaskQueue,
     microtasks: MicrotaskQueue,
+    raf: Vec<AnimationFrameCallback>,
+    next_raf_handle: AnimationFrameHandle,
+    /// Handle-ы rAF, отменённые до выполнения. Подчищаются после rendering step.
+    cancelled_raf: HashSet<AnimationFrameHandle>,
 }
 
 /// Результат одной итерации `step()`: запустилась ли task.
@@ -219,6 +235,34 @@ impl EventLoop {
         }
     }
 
+    /// Rendering opportunity stage — HTML §8.1.5.1 «Run the animation frame
+    /// callbacks». Выполняет snapshot текущего списка rAF-callback-ов с
+    /// `timestamp_ms`, после чего гонит microtask checkpoint. Новые rAF,
+    /// зарегистрированные внутри callback-а, попадают в **следующий** frame —
+    /// snapshot берётся через `mem::take`, а новые регистрации копятся в чистом
+    /// `state.raf`.
+    ///
+    /// Cancelled handles (`cancel_animation_frame` до начала этого rendering
+    /// step) пропускаются и удаляются из `cancelled_raf`. Cancel внутри текущего
+    /// step-а (для callback-ов того же frame, ещё не выполненных) учитывается:
+    /// проверка `cancelled_raf.contains` происходит перед каждым вызовом
+    /// callback-а отдельно.
+    pub fn run_rendering_step(&self, timestamp_ms: f64) {
+        let frame: Vec<AnimationFrameCallback> = {
+            let mut state = self.state.borrow_mut();
+            std::mem::take(&mut state.raf)
+        };
+        for cb in frame {
+            let cancelled = self.state.borrow_mut().cancelled_raf.remove(&cb.handle);
+            if cancelled {
+                continue;
+            }
+            (cb.closure)(timestamp_ms);
+        }
+        // По спеке §8.1.5.1 после frame-callback-ов — microtask checkpoint.
+        self.perform_microtask_checkpoint();
+    }
+
     /// Сколько task-ов сейчас в очереди (для тестов / отладки).
     pub fn pending_tasks(&self) -> usize {
         self.state.borrow().tasks.len()
@@ -227,6 +271,12 @@ impl EventLoop {
     /// Сколько microtask-ов сейчас в очереди (для тестов / отладки).
     pub fn pending_microtasks(&self) -> usize {
         self.state.borrow().microtasks.len()
+    }
+
+    /// Сколько rAF-callback-ов сейчас ждёт следующего rendering step
+    /// (для тестов / отладки).
+    pub fn pending_animation_frames(&self) -> usize {
+        self.state.borrow().raf.len()
     }
 }
 
@@ -250,6 +300,31 @@ impl EventLoopHandle {
             .borrow_mut()
             .microtasks
             .queue(Microtask::new(closure));
+    }
+
+    /// Зарегистрировать rAF-callback. Будет вызван на ближайшем
+    /// `run_rendering_step` с `timestamp_ms` этого step-а.
+    pub fn request_animation_frame<F: FnOnce(f64) + 'static>(
+        &self,
+        closure: F,
+    ) -> AnimationFrameHandle {
+        let mut state = self.state.borrow_mut();
+        // Phase 0: u32 handle, монотонный счётчик. Wrap-around через >4B вызовов
+        // не учитываем — Phase 1 при необходимости заменим на (slot, gen)
+        // пару, как делают Chromium и Firefox для defense-in-depth от ABA.
+        let handle = state.next_raf_handle.wrapping_add(1);
+        state.next_raf_handle = handle;
+        state.raf.push(AnimationFrameCallback {
+            handle,
+            closure: Box::new(closure),
+        });
+        handle
+    }
+
+    /// Отменить rAF до выполнения. Если handle уже выполнен или неизвестен —
+    /// no-op (CSS OM View §6 `cancelAnimationFrame` всегда non-throwing).
+    pub fn cancel_animation_frame(&self, handle: AnimationFrameHandle) {
+        self.state.borrow_mut().cancelled_raf.insert(handle);
     }
 }
 
@@ -399,6 +474,101 @@ mod tests {
         q.queue(Microtask::new(|| {}));
         assert!(!q.is_empty());
         assert_eq!(q.len(), 2);
+    }
+
+    #[test]
+    fn raf_runs_in_registration_order_with_timestamp() {
+        let el = EventLoop::new();
+        let h = el.handle();
+        let log = Rc::new(RefCell::new(Vec::<(String, f64)>::new()));
+
+        let l1 = Rc::clone(&log);
+        let l2 = Rc::clone(&log);
+        h.request_animation_frame(move |t| l1.borrow_mut().push(("first".into(), t)));
+        h.request_animation_frame(move |t| l2.borrow_mut().push(("second".into(), t)));
+        assert_eq!(el.pending_animation_frames(), 2);
+
+        el.run_rendering_step(16.7);
+        let log_ = log.borrow();
+        assert_eq!(log_.len(), 2);
+        assert_eq!(log_[0].0, "first");
+        assert_eq!(log_[0].1, 16.7);
+        assert_eq!(log_[1].0, "second");
+        assert_eq!(log_[1].1, 16.7);
+        assert_eq!(el.pending_animation_frames(), 0);
+    }
+
+    #[test]
+    fn cancel_animation_frame_skips_callback() {
+        let el = EventLoop::new();
+        let h = el.handle();
+        let log = shared_log();
+        let l1 = Rc::clone(&log);
+        let l2 = Rc::clone(&log);
+
+        let h1 = h.request_animation_frame(move |_| l1.borrow_mut().push("kept"));
+        let h2 = h.request_animation_frame(move |_| l2.borrow_mut().push("cancelled"));
+        h.cancel_animation_frame(h2);
+
+        el.run_rendering_step(0.0);
+        assert_eq!(*log.borrow(), vec!["kept"]);
+
+        // Сам по себе cancel неизвестного handle не паникует и не делает ничего.
+        h.cancel_animation_frame(h1);
+        h.cancel_animation_frame(9999);
+    }
+
+    #[test]
+    fn raf_scheduled_inside_callback_goes_to_next_frame() {
+        let el = EventLoop::new();
+        let h = el.handle();
+        let log = shared_log();
+
+        let l_outer = Rc::clone(&log);
+        let l_inner = Rc::clone(&log);
+        let h_inner = h.clone();
+        h.request_animation_frame(move |_| {
+            l_outer.borrow_mut().push("outer");
+            h_inner.request_animation_frame(move |_| l_inner.borrow_mut().push("inner"));
+        });
+
+        // Frame 1: outer выполнен, inner запланирован но в следующий frame.
+        el.run_rendering_step(0.0);
+        assert_eq!(*log.borrow(), vec!["outer"]);
+        assert_eq!(el.pending_animation_frames(), 1);
+
+        // Frame 2: inner.
+        el.run_rendering_step(16.7);
+        assert_eq!(*log.borrow(), vec!["outer", "inner"]);
+        assert_eq!(el.pending_animation_frames(), 0);
+    }
+
+    #[test]
+    fn rendering_step_runs_microtask_checkpoint() {
+        // rAF callback планирует microtask — он должен выполниться
+        // в этом же rendering step, по спеке §8.1.5.1.
+        let el = EventLoop::new();
+        let h = el.handle();
+        let log = shared_log();
+
+        let l_raf = Rc::clone(&log);
+        let l_mt = Rc::clone(&log);
+        let h_inner = h.clone();
+        h.request_animation_frame(move |_| {
+            l_raf.borrow_mut().push("raf");
+            h_inner.queue_microtask(move || l_mt.borrow_mut().push("mt"));
+        });
+
+        el.run_rendering_step(0.0);
+        assert_eq!(*log.borrow(), vec!["raf", "mt"]);
+    }
+
+    #[test]
+    fn empty_rendering_step_is_noop() {
+        let el = EventLoop::new();
+        // run на пустом rAF-списке — должно отработать без паники.
+        el.run_rendering_step(42.0);
+        assert_eq!(el.pending_animation_frames(), 0);
     }
 
     #[test]
