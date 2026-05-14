@@ -46,10 +46,27 @@ impl<'a> JpegBitReader<'a> {
     }
 
     /// Если внутри bit-stream-а встретился маркер — возвращает его (без `0xFF`).
-    /// Используется тестами; production-код идёт через `read_restart_marker`.
+    /// Используется тестами; production-код progressive-loop-а получает то же
+    /// через `resync_pos_for_segments` (позиция перед маркером — `SegmentReader`
+    /// сам прочитает следующий segment).
     #[cfg(test)]
     pub fn peek_marker(&self) -> Option<u8> {
         self.marker
+    }
+
+    /// Возвращает байтовую позицию, c которой `SegmentReader` должен продолжить
+    /// чтение marker-segment-ов после завершения текущего scan-а (progressive).
+    /// Указывает на байт **после** finalizing `FF` marker-а, либо на текущий
+    /// `pos`, если marker не был "съеден" (отступаем на 2 байта, чтобы
+    /// `SegmentReader` ещё раз прочитал `FF NN`).
+    pub fn resync_pos_for_segments(&self) -> usize {
+        if self.marker.is_some() {
+            // refill() уже прошёл через `FF NN` — отступаем на 2 байта назад,
+            // чтобы SegmentReader пере-прочитал тот же marker.
+            self.pos - 2
+        } else {
+            self.pos
+        }
     }
 
     /// Сбрасывает marker-флаг и выравнивает bit-buffer по байтовой границе.
@@ -57,6 +74,13 @@ impl<'a> JpegBitReader<'a> {
     #[cfg(test)]
     pub fn consume_marker(&mut self) {
         self.marker = None;
+        self.buffer = 0;
+        self.buffer_bits = 0;
+    }
+
+    /// Выравнивает bit-buffer по байтовой границе, не трогая marker-флаг.
+    /// Используется progressive scan-loop-ом перед resync через `SegmentReader`.
+    pub fn byte_align(&mut self) {
         self.buffer = 0;
         self.buffer_bits = 0;
     }

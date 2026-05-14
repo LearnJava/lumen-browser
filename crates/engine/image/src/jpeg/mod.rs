@@ -1,14 +1,14 @@
-//! Декодер JPEG/JFIF baseline (SOF0) для Lumen.
+//! Декодер JPEG/JFIF baseline (SOF0) и progressive (SOF2) для Lumen.
 //!
 //! Свой код, без `jpeg-decoder` / `image` (см. §5 политики в `CLAUDE.md`).
-//! Phase 0 покрывает то, что встречается на типовой веб-странице:
-//! Baseline DCT (SOF0), 8-битная глубина, YCbCr 3-канальный или Y-only
-//! grayscale, sampling factors 1×1/2×2/2×1/1×2, restart markers (DRI/RST).
+//! Покрывает то, что встречается на типовой веб-странице: Baseline / Progressive
+//! Huffman DCT, 8-битная глубина, YCbCr 3-канальный или Y-only grayscale,
+//! sampling factors 1×1/2×2/2×1/1×2, restart markers (DRI/RST), переопределение
+//! Huffman-таблиц между progressive-scan-ами.
 //!
-//! **Не поддерживается:** progressive (SOF2), arithmetic coding,
-//! lossless (SOF3), hierarchical, 12-битная глубина, CMYK (4 канала),
-//! ICC color profiles (APP2 пропускается, без интерпретации). Всё это
-//! реальная веб-страница встречает редко, добавим отдельными задачами.
+//! **Не поддерживается:** arithmetic coding (SOF9-11), lossless (SOF3),
+//! hierarchical (SOF5-7), 12-битная глубина, CMYK (4 канала), ICC color
+//! profiles (APP2 пропускается, без интерпретации).
 //!
 //! Декодер не паникует на повреждённом входе — каждая ошибка возвращается
 //! как `JpegError` с конкретной причиной.
@@ -29,6 +29,7 @@ mod color;
 mod huffman;
 mod idct;
 mod marker;
+mod progressive;
 mod scan;
 
 use crate::{Image, PixelFormat};
@@ -46,17 +47,24 @@ pub use self::marker::JpegError;
 pub fn decode_jpeg(bytes: &[u8]) -> Result<Image, JpegError> {
     let mut reader = marker::SegmentReader::new(bytes);
     let context = reader.read_until_scan()?;
-    let pixels = scan::decode_scan(&mut reader, &context)?;
 
     let format = match context.frame.components.len() {
         1 => PixelFormat::Gray8,
         3 => PixelFormat::Rgb8,
         n => return Err(JpegError::UnsupportedComponentCount(n)),
     };
+    let width = u32::from(context.frame.width);
+    let height = u32::from(context.frame.height);
+
+    let pixels = if context.frame.is_progressive {
+        progressive::decode_progressive(&mut reader, context)?
+    } else {
+        scan::decode_scan(&mut reader, &context)?
+    };
 
     Ok(Image {
-        width: u32::from(context.frame.width),
-        height: u32::from(context.frame.height),
+        width,
+        height,
         format,
         data: pixels,
     })

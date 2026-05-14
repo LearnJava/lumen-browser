@@ -76,6 +76,7 @@ pub fn decode_scan(reader: &mut SegmentReader<'_>, ctx: &JpegContext) -> Result<
             for (ci, comp) in frame.components.iter().enumerate() {
                 let sc = ctx
                     .scan
+                    .components
                     .iter()
                     .find(|s| s.frame_index == ci)
                     .ok_or(JpegError::BadScanComponent(comp.id))?;
