@@ -340,6 +340,90 @@ pub struct Stylesheet {
     /// Phase 0 интеграция в каскад отложена — текущий compute_style
     /// итерирует только `rules`/`media_rules`. Здесь только parse+store.
     pub layers: Vec<LayerRule>,
+    /// CSS Conditional Rules L3 §2 — `@supports (cond) { rules }`. Условие
+    /// типизировано как [`SupportsCondition`]; вложенные rules применяются
+    /// если `condition.evaluate(...)` истинно. Phase 0: parse+store +
+    /// evaluator на основе списка известных property-имён; реальная
+    /// интеграция в каскад — следующая задача (см. media_rules).
+    pub supports_rules: Vec<SupportsRule>,
+    /// CSS Animations L1 §3 — `@keyframes name { 0% {...} 50% {...} ... }`.
+    /// Frames хранятся как `(offset_percent, declarations)`. Phase 0:
+    /// parse+store; реальный animation runtime (interpolation, timing
+    /// functions, animation-name связывание) отложен.
+    pub keyframes: Vec<KeyframesRule>,
+}
+
+/// `@keyframes name { offset { decls } ... }` — CSS Animations L1 §3.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyframesRule {
+    pub name: String,
+    /// Список frames в порядке появления в source. Один frame может
+    /// иметь несколько offset-ов (selector-list типа `0%, 50%`) —
+    /// разворачивается в отдельные записи.
+    pub frames: Vec<Keyframe>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Keyframe {
+    /// Offset в долях `[0, 1]`. `from` → 0.0, `to` → 1.0. Невалидные
+    /// (NaN или вне [0,1]) → пропускаются на этапе парсинга.
+    pub offset: f32,
+    pub declarations: Vec<Declaration>,
+}
+
+/// `@supports <condition> { rules }` блок — CSS Conditional Rules L3 §2.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SupportsRule {
+    pub condition: SupportsCondition,
+    pub rules: Vec<Rule>,
+}
+
+/// Условие в `@supports (...)`. Грамматика:
+/// `<condition> = <negation> | <conjunction> | <disjunction> | <test>`
+/// `<negation>  = "not" <inside-parens>`
+/// `<conjunction> = <test> ("and" <test>)+`
+/// `<disjunction> = <test> ("or" <test>)+`
+/// `<test>       = "(" <property>: <value> ")" | "(" <condition> ")"`.
+///
+/// Phase 0: парсер также распознаёт `selector(<simple>)` (CSS Conditional
+/// L4) и сохраняет селектор как сырую строку — реальный матчинг отложен.
+/// Неизвестные функциональные тесты (`font-tech(...)`, `font-format(...)`)
+/// → `Unknown`, evaluator возвращает false.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SupportsCondition {
+    /// `(prop: value)` — declaration test. Текущий supports-evaluator
+    /// проверяет, что `property` есть в списке known-property-имён,
+    /// не валидируя value (для Phase 0 этого достаточно — мы поддерживаем
+    /// конкретный набор properties, и tests типа `(display: grid)`
+    /// возвращают true, потому что мы парсим `display`, даже если
+    /// реального grid layout-а нет).
+    Decl { property: String, value: String },
+    Not(Box<SupportsCondition>),
+    And(Vec<SupportsCondition>),
+    Or(Vec<SupportsCondition>),
+    /// `selector(<sel>)` — CSS Conditional L4. Phase 0 не оценивает.
+    Selector(String),
+    /// Невалидный или нераспознанный тест — evaluator возвращает false.
+    Unknown,
+}
+
+impl SupportsCondition {
+    /// Вычислить условие: вернуть `true`, если потребитель поддерживает
+    /// все объявления в условии. `known_properties` — список property-
+    /// имён, которые css-parser/layout распознают (например, `display`,
+    /// `color`, `grid-template-columns`). `Selector(...)` и `Unknown`
+    /// в Phase 0 возвращают false.
+    pub fn evaluate(&self, known_properties: &[&str]) -> bool {
+        match self {
+            Self::Decl { property, .. } => known_properties
+                .iter()
+                .any(|p| p.eq_ignore_ascii_case(property)),
+            Self::Not(c) => !c.evaluate(known_properties),
+            Self::And(cs) => cs.iter().all(|c| c.evaluate(known_properties)),
+            Self::Or(cs) => cs.iter().any(|c| c.evaluate(known_properties)),
+            Self::Selector(_) | Self::Unknown => false,
+        }
+    }
 }
 
 /// `@layer name { rules }` блок.
@@ -537,7 +621,38 @@ enum AtRuleOutcome {
         name: Option<String>,
         rules: Vec<Rule>,
     },
+    Supports(SupportsRule),
+    Keyframes(KeyframesRule),
     None,
+}
+
+/// Парсит keyframe-селектор: `from` / `to` / `<percentage>` / списки
+/// через запятую (`0%, 50%`). Возвращает offset-ы в [0, 1]; невалидные
+/// токены пропускаются.
+fn parse_keyframe_selectors(s: &str) -> Vec<f32> {
+    let mut out = Vec::new();
+    for tok in s.split(',') {
+        let t = tok.trim();
+        if t.is_empty() {
+            continue;
+        }
+        if t.eq_ignore_ascii_case("from") {
+            out.push(0.0);
+            continue;
+        }
+        if t.eq_ignore_ascii_case("to") {
+            out.push(1.0);
+            continue;
+        }
+        if let Some(num_str) = t.strip_suffix('%')
+            && let Ok(n) = num_str.trim().parse::<f32>()
+            && n.is_finite()
+            && (0.0..=100.0).contains(&n)
+        {
+            out.push(n / 100.0);
+        }
+    }
+    out
 }
 
 /// Layer-имя — CSS-ident, опционально с точками (sub-layers через
@@ -629,6 +744,181 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
         out.push(&s[start..]);
     }
     out
+}
+
+/// Парсит `@supports`-условие из строки между `@supports` и `{`.
+///
+/// Грамматика (упрощённая): `<expr> = <term> (("and"|"or") <term>)*`,
+/// `<term> = "not"? <atom>`, `<atom> = "(" <inner> ")" | "selector(" sel ")"`,
+/// `<inner> = <expr> | <prop ":" value>`.
+///
+/// Phase 0 ограничения:
+/// - Mixing `and` и `or` на одном уровне не разрешено (per spec), но
+///   парсер lenient — берёт первый встретившийся combinator и применяет
+///   его ко всем term-ам этого уровня. Реалистичные tests этого не
+///   нарушают (`(a) and (b) and (c)` или `(a) or (b)`); смешанные — UB.
+/// - Нерекурсивный `selector(...)` хранит сырой селектор; реальный
+///   match — отложенная задача.
+pub fn parse_supports_condition(s: &str) -> SupportsCondition {
+    let s = s.trim();
+    if s.is_empty() {
+        return SupportsCondition::Unknown;
+    }
+    let bytes = s.as_bytes();
+    let mut pos = 0usize;
+    let result = parse_supports_expr(bytes, &mut pos);
+    skip_ws(bytes, &mut pos);
+    if pos < bytes.len() {
+        // Если что-то осталось — это синтаксическая ошибка; возвращаем
+        // частично разобранное (lenient).
+    }
+    result
+}
+
+fn skip_ws(b: &[u8], p: &mut usize) {
+    while *p < b.len() && b[*p].is_ascii_whitespace() {
+        *p += 1;
+    }
+}
+
+fn match_keyword_ci(b: &[u8], p: &mut usize, kw: &[u8]) -> bool {
+    skip_ws(b, p);
+    if *p + kw.len() > b.len() {
+        return false;
+    }
+    if !b[*p..*p + kw.len()].eq_ignore_ascii_case(kw) {
+        return false;
+    }
+    // Граница: следующий символ — не ident-char.
+    let after = *p + kw.len();
+    if after < b.len() {
+        let c = b[after];
+        if c.is_ascii_alphanumeric() || c == b'-' || c == b'_' {
+            return false;
+        }
+    }
+    *p = after;
+    true
+}
+
+fn parse_supports_expr(b: &[u8], p: &mut usize) -> SupportsCondition {
+    let first = parse_supports_term(b, p);
+    skip_ws(b, p);
+    // Определяем combinator (если есть).
+    let saved = *p;
+    if match_keyword_ci(b, p, b"and") {
+        let mut terms = vec![first];
+        loop {
+            terms.push(parse_supports_term(b, p));
+            skip_ws(b, p);
+            let save = *p;
+            if !match_keyword_ci(b, p, b"and") {
+                *p = save;
+                break;
+            }
+        }
+        return SupportsCondition::And(terms);
+    }
+    *p = saved;
+    if match_keyword_ci(b, p, b"or") {
+        let mut terms = vec![first];
+        loop {
+            terms.push(parse_supports_term(b, p));
+            skip_ws(b, p);
+            let save = *p;
+            if !match_keyword_ci(b, p, b"or") {
+                *p = save;
+                break;
+            }
+        }
+        return SupportsCondition::Or(terms);
+    }
+    first
+}
+
+fn parse_supports_term(b: &[u8], p: &mut usize) -> SupportsCondition {
+    skip_ws(b, p);
+    if match_keyword_ci(b, p, b"not") {
+        let inner = parse_supports_atom(b, p);
+        return SupportsCondition::Not(Box::new(inner));
+    }
+    parse_supports_atom(b, p)
+}
+
+fn parse_supports_atom(b: &[u8], p: &mut usize) -> SupportsCondition {
+    skip_ws(b, p);
+    // `selector( ... )`
+    let saved = *p;
+    if *p + 9 <= b.len() && b[*p..*p + 9].eq_ignore_ascii_case(b"selector(") {
+        *p += 9;
+        let start = *p;
+        let mut depth: i32 = 1;
+        while *p < b.len() && depth > 0 {
+            match b[*p] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 {
+                break;
+            }
+            *p += 1;
+        }
+        let sel_str = std::str::from_utf8(&b[start..*p]).unwrap_or("").trim().to_string();
+        if *p < b.len() && b[*p] == b')' {
+            *p += 1;
+        }
+        return SupportsCondition::Selector(sel_str);
+    }
+    *p = saved;
+    if *p < b.len() && b[*p] == b'(' {
+        *p += 1;
+        // Содержимое: может быть `<expr>` (nested condition) или
+        // `<prop>: <value>`. Различаем по наличию `:` на верхнем уровне.
+        let inner_start = *p;
+        let mut depth: i32 = 1;
+        while *p < b.len() && depth > 0 {
+            match b[*p] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 {
+                break;
+            }
+            *p += 1;
+        }
+        let inner = std::str::from_utf8(&b[inner_start..*p]).unwrap_or("");
+        if *p < b.len() && b[*p] == b')' {
+            *p += 1;
+        }
+        // Determine: declaration or nested condition. Top-level `:`?
+        let inner_t = inner.trim();
+        let mut colon_pos: Option<usize> = None;
+        let inner_bytes = inner_t.as_bytes();
+        let mut d: i32 = 0;
+        for (i, &c) in inner_bytes.iter().enumerate() {
+            match c {
+                b'(' => d += 1,
+                b')' => d -= 1,
+                b':' if d == 0 => {
+                    colon_pos = Some(i);
+                    break;
+                }
+                _ => {}
+            }
+        }
+        if let Some(idx) = colon_pos {
+            let property = inner_t[..idx].trim().to_string();
+            let value = inner_t[idx + 1..].trim().to_string();
+            if property.is_empty() {
+                return SupportsCondition::Unknown;
+            }
+            return SupportsCondition::Decl { property, value };
+        }
+        return parse_supports_condition(inner_t);
+    }
+    SupportsCondition::Unknown
 }
 
 /// Распарсить media query из строки между `@media` и `{`. Принимает
@@ -795,6 +1085,8 @@ impl<'a> Parser<'a> {
         let mut font_faces = Vec::new();
         let mut layer_order: Vec<String> = Vec::new();
         let mut layers: Vec<LayerRule> = Vec::new();
+        let mut supports_rules: Vec<SupportsRule> = Vec::new();
+        let mut keyframes: Vec<KeyframesRule> = Vec::new();
         let mut anon_counter: usize = 0;
         loop {
             self.skip_ws_and_comments();
@@ -825,6 +1117,8 @@ impl<'a> Parser<'a> {
                             rules: lr,
                         });
                     }
+                    AtRuleOutcome::Supports(s) => supports_rules.push(s),
+                    AtRuleOutcome::Keyframes(k) => keyframes.push(k),
                     AtRuleOutcome::None => {}
                 },
                 Some(_) => {
@@ -847,6 +1141,8 @@ impl<'a> Parser<'a> {
             font_faces,
             layer_order,
             layers,
+            supports_rules,
+            keyframes,
         }
     }
 
@@ -874,6 +1170,18 @@ impl<'a> Parser<'a> {
         }
         if name.eq_ignore_ascii_case("layer") {
             return self.parse_layer_at_rule();
+        }
+        if name.eq_ignore_ascii_case("supports") {
+            return self
+                .parse_supports_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::Supports);
+        }
+        if name.eq_ignore_ascii_case("keyframes")
+            || name.eq_ignore_ascii_case("-webkit-keyframes")
+        {
+            return self
+                .parse_keyframes_rule()
+                .map_or(AtRuleOutcome::None, AtRuleOutcome::Keyframes);
         }
         // Прочее @-правило: откатимся к '@' и пропустим как раньше.
         self.pos = start;
@@ -1108,6 +1416,113 @@ impl<'a> Parser<'a> {
             }
         }
         Some(MediaRule { query, rules })
+    }
+
+    /// Парсит тело `@supports <condition> { rules }` — CSS Conditional Rules L3 §2.
+    /// Берёт сырую condition-строку до `{` (с балансировкой `(`/`)`),
+    /// затем парсит её через [`parse_supports_condition`]. Тело — обычные
+    /// rules до `}`. Возвращает `None` если структура нарушена.
+    fn parse_supports_rule(&mut self) -> Option<SupportsRule> {
+        self.skip_ws_and_comments();
+        let cond_start = self.pos;
+        let mut depth: i32 = 0;
+        while let Some(c) = self.peek() {
+            if c == '(' {
+                depth += 1;
+            } else if c == ')' {
+                depth -= 1;
+            } else if c == '{' && depth == 0 {
+                break;
+            }
+            self.consume();
+        }
+        if self.peek() != Some('{') {
+            return None;
+        }
+        let cond_str = self.input[cond_start..self.pos].trim();
+        let condition = parse_supports_condition(cond_str);
+        self.consume(); // '{'
+        let mut rules = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some('@') => {
+                    // Nested @-правила внутри @supports пока skip.
+                    self.skip_at_rule();
+                }
+                Some(_) => {
+                    let before = self.pos;
+                    if let Some(rule) = self.parse_rule() {
+                        rules.push(rule);
+                    } else if self.pos == before {
+                        self.consume();
+                    }
+                }
+            }
+        }
+        Some(SupportsRule { condition, rules })
+    }
+
+    /// Парсит тело `@keyframes <name> { <frame>* }` — CSS Animations L1 §3.
+    /// Frame-selector: `from` / `to` / `<percentage>`. Поддерживается
+    /// `0%, 50% { ... }` (одна frame с несколькими offset-ами,
+    /// разворачивается в две записи). `name` — CSS-ident.
+    fn parse_keyframes_rule(&mut self) -> Option<KeyframesRule> {
+        self.skip_ws_and_comments();
+        let name = self.parse_ident()?;
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.skip_until_block_end();
+            return None;
+        }
+        self.consume(); // '{'
+        let mut frames: Vec<Keyframe> = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some('@') => {
+                    // Nested @-правила внутри @keyframes по spec не разрешены.
+                    self.skip_at_rule();
+                }
+                Some(_) => {
+                    let before = self.pos;
+                    let frame_selector_start = self.pos;
+                    while let Some(c) = self.peek() {
+                        if c == '{' || c == '}' {
+                            break;
+                        }
+                        self.consume();
+                    }
+                    if self.peek() != Some('{') {
+                        if self.pos == before {
+                            self.consume();
+                        }
+                        continue;
+                    }
+                    let selector_str = self.input[frame_selector_start..self.pos].trim();
+                    self.consume(); // '{'
+                    let declarations = self.parse_declaration_block();
+                    let offsets = parse_keyframe_selectors(selector_str);
+                    for offset in offsets {
+                        frames.push(Keyframe {
+                            offset,
+                            declarations: declarations.clone(),
+                        });
+                    }
+                }
+            }
+        }
+        Some(KeyframesRule { name, frames })
     }
 
     /// Парсит тело `@property`: имя `--name`, блок `{ ... }`, обязательные
@@ -3317,5 +3732,197 @@ mod tests {
         assert!(!is_layer_name("1invalid"));
         assert!(!is_layer_name(""));
         assert!(!is_layer_name("with space"));
+    }
+
+    // ── CSS Conditional Rules L3 §2 — @supports ──
+
+    #[test]
+    fn at_supports_simple_decl() {
+        let s = parse("@supports (display: grid) { p { color: red; } }");
+        assert_eq!(s.supports_rules.len(), 1);
+        let r = &s.supports_rules[0];
+        match &r.condition {
+            SupportsCondition::Decl { property, value } => {
+                assert_eq!(property, "display");
+                assert_eq!(value, "grid");
+            }
+            other => panic!("expected Decl, got {other:?}"),
+        }
+        assert_eq!(r.rules.len(), 1);
+    }
+
+    #[test]
+    fn at_supports_and_combinator() {
+        let s = parse("@supports (display: grid) and (color: red) { p { color: red; } }");
+        let r = &s.supports_rules[0];
+        match &r.condition {
+            SupportsCondition::And(terms) => assert_eq!(terms.len(), 2),
+            other => panic!("expected And, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_or_combinator() {
+        let s = parse("@supports (display: flex) or (display: -webkit-flex) { p { color: red; } }");
+        match &s.supports_rules[0].condition {
+            SupportsCondition::Or(terms) => assert_eq!(terms.len(), 2),
+            other => panic!("expected Or, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_negation() {
+        let s = parse("@supports not (display: pancake) { p { color: red; } }");
+        match &s.supports_rules[0].condition {
+            SupportsCondition::Not(inner) => match inner.as_ref() {
+                SupportsCondition::Decl { property, .. } => assert_eq!(property, "display"),
+                other => panic!("expected Decl inside Not, got {other:?}"),
+            },
+            other => panic!("expected Not, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_selector_test() {
+        let s = parse("@supports selector(:has(a)) { p { color: red; } }");
+        match &s.supports_rules[0].condition {
+            SupportsCondition::Selector(sel) => assert!(sel.contains(":has(a)")),
+            other => panic!("expected Selector, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_evaluate_known_property() {
+        let cond = parse_supports_condition("(display: grid)");
+        assert!(cond.evaluate(&["display", "color"]));
+        assert!(!cond.evaluate(&["color"]));
+    }
+
+    #[test]
+    fn at_supports_evaluate_and() {
+        let cond = parse_supports_condition("(display: grid) and (color: red)");
+        assert!(cond.evaluate(&["display", "color"]));
+        assert!(!cond.evaluate(&["display"]));
+    }
+
+    #[test]
+    fn at_supports_evaluate_or() {
+        let cond = parse_supports_condition("(unknown: x) or (color: red)");
+        assert!(cond.evaluate(&["color"]));
+        assert!(!cond.evaluate(&["other"]));
+    }
+
+    #[test]
+    fn at_supports_evaluate_not() {
+        let cond = parse_supports_condition("not (unknown: x)");
+        assert!(cond.evaluate(&["color"]));
+        let cond2 = parse_supports_condition("not (color: red)");
+        assert!(!cond2.evaluate(&["color"]));
+    }
+
+    #[test]
+    fn at_supports_nested_grouping() {
+        // `((display: grid))` — внутренние скобки = nested condition.
+        let s = parse("@supports ((display: grid)) { p { color: red; } }");
+        match &s.supports_rules[0].condition {
+            SupportsCondition::Decl { property, .. } => assert_eq!(property, "display"),
+            other => panic!("expected Decl after unwrapping, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_value_with_parens_balanced() {
+        let s = parse("@supports (color: rgba(0, 0, 0, 0.5)) { p { color: red; } }");
+        match &s.supports_rules[0].condition {
+            SupportsCondition::Decl { property, value } => {
+                assert_eq!(property, "color");
+                assert!(value.contains("rgba"));
+            }
+            other => panic!("expected Decl, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn at_supports_evaluator_selector_returns_false() {
+        let cond = parse_supports_condition("selector(:has(a))");
+        // Phase 0 не оценивает selector() — всегда false.
+        assert!(!cond.evaluate(&["color"]));
+    }
+
+    #[test]
+    fn at_supports_empty_returns_unknown() {
+        let cond = parse_supports_condition("");
+        assert!(matches!(cond, SupportsCondition::Unknown));
+        assert!(!cond.evaluate(&["color"]));
+    }
+
+    // ── CSS Animations L1 §3 — @keyframes ──
+
+    #[test]
+    fn at_keyframes_from_to() {
+        let s = parse("@keyframes fade { from { opacity: 0; } to { opacity: 1; } }");
+        assert_eq!(s.keyframes.len(), 1);
+        let kf = &s.keyframes[0];
+        assert_eq!(kf.name, "fade");
+        assert_eq!(kf.frames.len(), 2);
+        assert!((kf.frames[0].offset - 0.0).abs() < 1e-6);
+        assert!((kf.frames[1].offset - 1.0).abs() < 1e-6);
+        assert_eq!(kf.frames[0].declarations[0].property, "opacity");
+    }
+
+    #[test]
+    fn at_keyframes_percentages() {
+        let s = parse("@keyframes pulse { 0% { color: red; } 50% { color: blue; } 100% { color: red; } }");
+        let kf = &s.keyframes[0];
+        assert_eq!(kf.frames.len(), 3);
+        assert!((kf.frames[0].offset - 0.0).abs() < 1e-6);
+        assert!((kf.frames[1].offset - 0.5).abs() < 1e-6);
+        assert!((kf.frames[2].offset - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn at_keyframes_multiple_offsets_per_frame() {
+        // `0%, 50%` — один блок с двумя offset-ами, разворачивается.
+        let s = parse("@keyframes z { 0%, 50% { color: red; } 100% { color: blue; } }");
+        let kf = &s.keyframes[0];
+        assert_eq!(kf.frames.len(), 3);
+        assert!((kf.frames[0].offset - 0.0).abs() < 1e-6);
+        assert!((kf.frames[1].offset - 0.5).abs() < 1e-6);
+        // Декларации одинаковые между развёрнутыми frame-ами.
+        assert_eq!(kf.frames[0].declarations[0].value, "red");
+        assert_eq!(kf.frames[1].declarations[0].value, "red");
+    }
+
+    #[test]
+    fn at_keyframes_webkit_prefix() {
+        let s = parse("@-webkit-keyframes fade { from { x: 0; } }");
+        assert_eq!(s.keyframes.len(), 1);
+        assert_eq!(s.keyframes[0].name, "fade");
+    }
+
+    #[test]
+    fn at_keyframes_invalid_offset_skipped() {
+        // 150% > 100% → пропускается.
+        let s = parse("@keyframes z { 0% { x: 1; } 150% { x: 2; } 100% { x: 3; } }");
+        let kf = &s.keyframes[0];
+        assert_eq!(kf.frames.len(), 2);
+    }
+
+    #[test]
+    fn at_keyframes_empty_block() {
+        let s = parse("@keyframes z { }");
+        assert_eq!(s.keyframes.len(), 1);
+        assert_eq!(s.keyframes[0].frames.len(), 0);
+    }
+
+    #[test]
+    fn parse_keyframe_selectors_handles_keywords_and_percents() {
+        assert_eq!(parse_keyframe_selectors("from"), vec![0.0]);
+        assert_eq!(parse_keyframe_selectors("to"), vec![1.0]);
+        assert_eq!(parse_keyframe_selectors("From"), vec![0.0]); // case-insensitive
+        assert_eq!(parse_keyframe_selectors("0%, 50%, 100%"), vec![0.0, 0.5, 1.0]);
+        assert_eq!(parse_keyframe_selectors("bogus"), Vec::<f32>::new());
+        assert_eq!(parse_keyframe_selectors("-10%"), Vec::<f32>::new());
+        assert_eq!(parse_keyframe_selectors("150%"), Vec::<f32>::new());
     }
 }

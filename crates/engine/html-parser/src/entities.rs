@@ -1,11 +1,16 @@
 //! HTML5 named character references — расширенный набор.
 //!
 //! Полный набор HTML5 (~2125 имён, [WHATWG entities table]) — десятки KB
-//! исходника, заметная часть бинаря. В Phase 0 кладём ~250 наиболее
-//! частых: ASCII reserved (`amp`/`lt`/`gt`/`quot`/`apos`), Latin-1
-//! supplement (диакритика, copyright/registered, кавычки и тире),
-//! Greek alphabet, основные математические и стрелочные символы,
-//! whitespace controls (ensp/emsp/thinsp/zwnj/zwj/lrm/rlm).
+//! исходника, заметная часть бинаря. В Phase 0 кладём ~290 наиболее
+//! частых: ASCII reserved (`amp`/`lt`/`gt`/`quot`/`apos`), ASCII
+//! punctuation (`Tab`, `NewLine`, `lpar`/`rpar`, `lbrace`/`rbrace`,
+//! `lsqb`/`rsqb`, `excl`, `quest`, `semi`, `colon`, `comma`, `period`,
+//! `ast`, `commat`, `num`, `percnt`, `dollar`, `sol`, `bsol`, `equals`,
+//! `verbar`, `lowbar`, `plus`), Latin-1 supplement (диакритика,
+//! copyright/registered, кавычки и тире), Greek alphabet, основные
+//! математические (включая отрицания `nle`/`nge`/`nsim`/`nequiv`) и
+//! стрелочные символы, whitespace controls (ensp/emsp/thinsp/zwnj/zwj/
+//! lrm/rlm).
 //!
 //! Все имена — с обязательным trailing `;`. Legacy без `;` (~100 ссылок
 //! типа `&amp` без точки с запятой — HTML 4 compat) **не** поддерживаются;
@@ -40,6 +45,7 @@ static NAMED_ENTITIES: &[(&str, &str)] = &[
     ("Atilde;", "\u{00C3}"),
     ("Auml;", "\u{00C4}"),
     ("Beta;", "\u{0392}"),
+    ("CR;", "\u{000D}"),
     ("Ccedil;", "\u{00C7}"),
     ("Chi;", "\u{03A7}"),
     ("Dagger;", "\u{2021}"),
@@ -60,6 +66,7 @@ static NAMED_ENTITIES: &[(&str, &str)] = &[
     ("Kappa;", "\u{039A}"),
     ("Lambda;", "\u{039B}"),
     ("Mu;", "\u{039C}"),
+    ("NewLine;", "\u{000A}"),
     ("Ntilde;", "\u{00D1}"),
     ("Nu;", "\u{039D}"),
     ("OElig;", "\u{0152}"),
@@ -79,6 +86,7 @@ static NAMED_ENTITIES: &[(&str, &str)] = &[
     ("Scaron;", "\u{0160}"),
     ("Sigma;", "\u{03A3}"),
     ("THORN;", "\u{00DE}"),
+    ("Tab;", "\u{0009}"),
     ("Tau;", "\u{03A4}"),
     ("Theta;", "\u{0398}"),
     ("Uacute;", "\u{00DA}"),
@@ -101,13 +109,16 @@ static NAMED_ENTITIES: &[(&str, &str)] = &[
     ("and;", "\u{2227}"),
     ("ang;", "\u{2220}"),
     ("apos;", "'"),
+    ("approx;", "\u{2248}"),
     ("aring;", "\u{00E5}"),
+    ("ast;", "\u{002A}"),
     ("asymp;", "\u{2248}"),
     ("atilde;", "\u{00E3}"),
     ("auml;", "\u{00E4}"),
     ("bdquo;", "\u{201E}"),
     ("beta;", "\u{03B2}"),
     ("brvbar;", "\u{00A6}"),
+    ("bsol;", "\u{005C}"),
     ("bull;", "\u{2022}"),
     ("cap;", "\u{2229}"),
     ("ccedil;", "\u{00E7}"),
@@ -116,6 +127,8 @@ static NAMED_ENTITIES: &[(&str, &str)] = &[
     ("chi;", "\u{03C7}"),
     ("circ;", "\u{02C6}"),
     ("clubs;", "\u{2663}"),
+    ("colon;", "\u{003A}"),
+    ("commat;", "\u{0040}"),
     ("cong;", "\u{2245}"),
     ("copy;", "\u{00A9}"),
     ("crarr;", "\u{21B5}"),
@@ -135,6 +148,7 @@ static NAMED_ENTITIES: &[(&str, &str)] = &[
     ("emsp;", "\u{2003}"),
     ("ensp;", "\u{2002}"),
     ("epsilon;", "\u{03B5}"),
+    ("equals;", "\u{003D}"),
     ("equiv;", "\u{2261}"),
     ("eta;", "\u{03B7}"),
     ("eth;", "\u{00F0}"),
@@ -171,14 +185,19 @@ static NAMED_ENTITIES: &[(&str, &str)] = &[
     ("lang;", "\u{27E8}"),
     ("laquo;", "\u{00AB}"),
     ("larr;", "\u{2190}"),
+    ("lbrace;", "\u{007B}"),
+    ("lbrack;", "\u{005B}"),
     ("lceil;", "\u{2308}"),
     ("ldquo;", "\u{201C}"),
     ("le;", "\u{2264}"),
     ("lfloor;", "\u{230A}"),
     ("lowast;", "\u{2217}"),
+    ("lowbar;", "\u{005F}"),
     ("loz;", "\u{25CA}"),
+    ("lpar;", "\u{0028}"),
     ("lrm;", "\u{200E}"),
     ("lsaquo;", "\u{2039}"),
+    ("lsqb;", "\u{005B}"),
     ("lsquo;", "\u{2018}"),
     ("lt;", "<"),
     ("macr;", "\u{00AF}"),
@@ -186,12 +205,16 @@ static NAMED_ENTITIES: &[(&str, &str)] = &[
     ("micro;", "\u{00B5}"),
     ("middot;", "\u{00B7}"),
     ("minus;", "\u{2212}"),
+    ("mp;", "\u{2213}"),
     ("mu;", "\u{03BC}"),
     ("nabla;", "\u{2207}"),
     ("nbsp;", "\u{00A0}"),
     ("ndash;", "\u{2013}"),
     ("ne;", "\u{2260}"),
+    ("nequiv;", "\u{2262}"),
+    ("nge;", "\u{2271}"),
     ("ni;", "\u{220B}"),
+    ("nle;", "\u{2270}"),
     ("not;", "\u{00AC}"),
     ("notin;", "\u{2209}"),
     ("nsub;", "\u{2284}"),
@@ -214,12 +237,15 @@ static NAMED_ENTITIES: &[(&str, &str)] = &[
     ("ouml;", "\u{00F6}"),
     ("para;", "\u{00B6}"),
     ("part;", "\u{2202}"),
+    ("percnt;", "\u{0025}"),
+    ("period;", "\u{002E}"),
     ("permil;", "\u{2030}"),
     ("perp;", "\u{22A5}"),
     ("phi;", "\u{03C6}"),
     ("pi;", "\u{03C0}"),
     ("piv;", "\u{03D6}"),
     ("plusmn;", "\u{00B1}"),
+    ("pm;", "\u{00B1}"),
     ("pound;", "\u{00A3}"),
     ("prime;", "\u{2032}"),
     ("prod;", "\u{220F}"),
@@ -231,6 +257,8 @@ static NAMED_ENTITIES: &[(&str, &str)] = &[
     ("rang;", "\u{27E9}"),
     ("raquo;", "\u{00BB}"),
     ("rarr;", "\u{2192}"),
+    ("rbrace;", "\u{007D}"),
+    ("rbrack;", "\u{005D}"),
     ("rceil;", "\u{2309}"),
     ("rdquo;", "\u{201D}"),
     ("real;", "\u{211C}"),
@@ -238,16 +266,21 @@ static NAMED_ENTITIES: &[(&str, &str)] = &[
     ("rfloor;", "\u{230B}"),
     ("rho;", "\u{03C1}"),
     ("rlm;", "\u{200F}"),
+    ("rpar;", "\u{0029}"),
     ("rsaquo;", "\u{203A}"),
+    ("rsqb;", "\u{005D}"),
     ("rsquo;", "\u{2019}"),
     ("sbquo;", "\u{201A}"),
     ("scaron;", "\u{0161}"),
     ("sdot;", "\u{22C5}"),
     ("sect;", "\u{00A7}"),
+    ("semi;", "\u{003B}"),
     ("shy;", "\u{00AD}"),
     ("sigma;", "\u{03C3}"),
     ("sigmaf;", "\u{03C2}"),
     ("sim;", "\u{223C}"),
+    ("simeq;", "\u{2243}"),
+    ("sol;", "\u{002F}"),
     ("spades;", "\u{2660}"),
     ("sub;", "\u{2282}"),
     ("sube;", "\u{2286}"),
@@ -276,6 +309,8 @@ static NAMED_ENTITIES: &[(&str, &str)] = &[
     ("upsih;", "\u{03D2}"),
     ("upsilon;", "\u{03C5}"),
     ("uuml;", "\u{00FC}"),
+    ("verbar;", "\u{007C}"),
+    ("vert;", "\u{007C}"),
     ("weierp;", "\u{2118}"),
     ("xi;", "\u{03BE}"),
     ("yacute;", "\u{00FD}"),
@@ -348,5 +383,51 @@ mod tests {
     fn lookup_requires_semicolon_in_query() {
         // Caller передаёт имя с `;`. Без — None (legacy formats не поддерживаются).
         assert_eq!(lookup_named_entity("amp"), None);
+    }
+
+    #[test]
+    fn lookup_ascii_punctuation_names() {
+        assert_eq!(lookup_named_entity("lpar;"), Some("("));
+        assert_eq!(lookup_named_entity("rpar;"), Some(")"));
+        assert_eq!(lookup_named_entity("lbrace;"), Some("{"));
+        assert_eq!(lookup_named_entity("rbrace;"), Some("}"));
+        assert_eq!(lookup_named_entity("lsqb;"), Some("["));
+        assert_eq!(lookup_named_entity("rsqb;"), Some("]"));
+        assert_eq!(lookup_named_entity("lbrack;"), Some("["));
+        assert_eq!(lookup_named_entity("rbrack;"), Some("]"));
+        assert_eq!(lookup_named_entity("colon;"), Some(":"));
+        assert_eq!(lookup_named_entity("semi;"), Some(";"));
+        assert_eq!(lookup_named_entity("commat;"), Some("@"));
+        assert_eq!(lookup_named_entity("percnt;"), Some("%"));
+        assert_eq!(lookup_named_entity("period;"), Some("."));
+        assert_eq!(lookup_named_entity("sol;"), Some("/"));
+        assert_eq!(lookup_named_entity("bsol;"), Some("\\"));
+        assert_eq!(lookup_named_entity("ast;"), Some("*"));
+        assert_eq!(lookup_named_entity("verbar;"), Some("|"));
+        assert_eq!(lookup_named_entity("vert;"), Some("|"));
+        assert_eq!(lookup_named_entity("equals;"), Some("="));
+        assert_eq!(lookup_named_entity("lowbar;"), Some("_"));
+    }
+
+    #[test]
+    fn lookup_whitespace_controls() {
+        assert_eq!(lookup_named_entity("Tab;"), Some("\u{0009}"));
+        assert_eq!(lookup_named_entity("NewLine;"), Some("\u{000A}"));
+        assert_eq!(lookup_named_entity("CR;"), Some("\u{000D}"));
+    }
+
+    #[test]
+    fn lookup_math_negations() {
+        assert_eq!(lookup_named_entity("nequiv;"), Some("\u{2262}"));
+        assert_eq!(lookup_named_entity("nge;"), Some("\u{2271}"));
+        assert_eq!(lookup_named_entity("nle;"), Some("\u{2270}"));
+    }
+
+    #[test]
+    fn lookup_math_extras() {
+        assert_eq!(lookup_named_entity("pm;"), Some("\u{00B1}"));
+        assert_eq!(lookup_named_entity("mp;"), Some("\u{2213}"));
+        assert_eq!(lookup_named_entity("approx;"), Some("\u{2248}"));
+        assert_eq!(lookup_named_entity("simeq;"), Some("\u{2243}"));
     }
 }

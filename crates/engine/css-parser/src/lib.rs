@@ -17,9 +17,10 @@
 pub mod parser;
 
 pub use parser::{
-    parse, parse_media_query, AttrOp, AttrSelector, ColorScheme, Combinator, CompoundSelector,
-    ComplexSelector, Declaration, FontFaceRule, FontFaceSource, FontFaceSourceKind, ImportRule,
-    LayerRule, MediaCondition, MediaContext, MediaFeature, MediaOrientation, MediaQuery, MediaRule,
-    NthSpec, PropertyRule, PseudoClass, RelativeSelector, Rule, SimpleSelector, Specificity,
-    Stylesheet,
+    parse, parse_media_query, parse_supports_condition, AttrOp, AttrSelector, ColorScheme,
+    Combinator, CompoundSelector, ComplexSelector, Declaration, FontFaceRule, FontFaceSource,
+    FontFaceSourceKind, ImportRule, Keyframe, KeyframesRule, LayerRule, MediaCondition,
+    MediaContext, MediaFeature, MediaOrientation, MediaQuery, MediaRule, NthSpec, PropertyRule,
+    PseudoClass, RelativeSelector, Rule, SimpleSelector, Specificity, Stylesheet,
+    SupportsCondition, SupportsRule,
 };
