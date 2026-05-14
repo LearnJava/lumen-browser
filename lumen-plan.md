@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-_(никто ничего не зарезервировал)_
+- 🔄 sizes attribute + width-descriptor picker для srcset [P1] — srcset-sizes-picker — 2026-05-14
 
 
 ## Статус реализации
