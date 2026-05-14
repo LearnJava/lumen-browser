@@ -10,8 +10,6 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-_(никто ничего не зарезервировал)_
-
 
 ## Статус реализации
 
@@ -98,7 +96,7 @@ _(никто ничего не зарезервировал)_
 
 Порядок — по impact/effort. Внешний ревью указало, что текущий рендерер сломается на любой реальной странице из-за шрифтов и DPR; это перевешивает любые архитектурные рефакторинги.
 
-1. **`[P2]` Font fallback / matcher** — рендерер сейчас всегда Inter Regular. Любая реальная страница с эмодзи / CJK / явным `font-family: Roboto` отрисуется в `?`-глифы. Минимум: системный font-loader (Win32 GDI / fontconfig / CoreText напрямую, без сторонних crate-ов), cascade «Inter → системный по unicode-блоку». Парсер `font-family` в `lumen-css-parser` уже есть, в paint не используется. **Это блокер для Phase 1 как демонстрации.**
+1. **`[P2]` Font fallback / matcher** — рендерер сейчас всегда Inter Regular. Любая реальная страница с эмодзи / CJK / явным `font-family: Roboto` отрисуется в `?`-глифы. **Системный индекс шрифтов (`FontProvider` + `SystemFontIndex`) реализован** — `lookup_family("Roboto")` отдаёт пути к файлам. Осталось: (a) picker по `font-style` / `font-weight` (выбор Regular vs Bold vs Italic из multi-face семейства), (b) подключить в paint-pipeline вместо bundled-only, (c) cascade «Inter → системный по unicode-блоку» для эмодзи / CJK fallback. **Блокер для Phase 1 как демонстрации.**
 2. **`[P4]` Scroll + DPR-awareness в shell.** Вместе, потому что без `scale_factor` от winit scroll выглядит игрушечно на 4K. Открывает возможность работать с реальными статьями.
 3. **`[P1+P3+P4]` Progressive / streaming rendering pipeline.** Сейчас shell блокирующий: окно создаётся **после** загрузки HTML и **последовательного** фетча всех `<link rel=stylesheet>`. На реальном сайте (30+ внешних CSS — Habr и любой современный сайт) пользователь смотрит в чёрный экран 5–15 сек до первого кадра. Нужно: (1) окно создаётся первым, до fetch-ей; (2) HTML fetch в фоновом потоке, chunks → main thread через channel; (3) push-based tokenizer + инкрементальный tree builder; (4) параллельный fetch subresources (thread pool / async), до прихода CSS — UA stylesheet; (5) layout/paint reruns on dirty (relayout поддерева, throttle ~60 Гц). Касается shell + html-parser + network + layout — архитектурное перепроектирование main-loop и tokenizer. Прямо примыкает к «Network service в отдельном процессе», но streaming-парсер и инкрементальный DOM из site isolation **не вытекают автоматически**. **P4** — main loop shell-а / dirty scheduling / window-first инициализация; **P1** — push-based tokenizer + инкрементальный tree builder + dirty relayout granularity; **P3** — async fetch с chunks through channel + параллельный fetch subresources.
 

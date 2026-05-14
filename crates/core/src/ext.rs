@@ -9,6 +9,7 @@
 //! реализации, а не от всех альтернатив.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use crate::error::Result;
 use crate::event::Event;
@@ -189,6 +190,36 @@ pub trait EncodingDetector: Send + Sync {
     fn detect(&self, bytes: &[u8], content_type_hint: Option<&str>) -> Option<&'static str>;
 }
 
+/// Источник системных шрифтов. Реализация — в `lumen-font::system_fonts`.
+///
+/// CSS-каскад даёт `font-family: ["Roboto", "Arial", sans-serif]` — приоритетный
+/// список; rasterizer должен решить, какой реальный файл `.ttf` загрузить.
+/// `FontProvider` отделяет «как найти шрифт на этой ОС» от «что с ним делать
+/// дальше» (распарсить, растеризовать, добавить в атлас).
+///
+/// Возвращает `Vec<PathBuf>`: для одного семейства часто есть несколько
+/// face-ов (Regular / Bold / Italic / Bold Italic / разные weight-ы). Конкретный
+/// выбор по `font-style` / `font-weight` — задача потребителя; провайдер только
+/// перечисляет кандидатов.
+///
+/// Имена сравниваются ASCII-case-insensitive: CSS `"Times New Roman"` должен
+/// найти файл, у которого family name записан как `"Times New Roman"` или
+/// `"TIMES NEW ROMAN"` — спецификация (CSS Fonts L4 §4.3) явно требует
+/// case-insensitive matching.
+///
+/// `&[&str]` — codepoint coverage lookup отложен (для эмодзи / CJK fallback);
+/// добавим, когда пойдёт реальная страница. Сейчас провайдер — только индекс
+/// по имени.
+pub trait FontProvider: Send + Sync {
+    /// Найти все пути к файлам шрифтов, объявленным под данным family name.
+    /// Пустой Vec — семейство не найдено.
+    fn lookup_family(&self, family: &str) -> Vec<PathBuf>;
+
+    /// Имена всех известных семейств. Для отладки и тестов; в production
+    /// потребители используют `lookup_family`.
+    fn list_families(&self) -> Vec<String>;
+}
+
 /// JavaScript runtime — исполнение JS-кода (HTML inline scripts, `eval`,
 /// custom elements, и т.д.). Trait абстрагирует выбор движка: первая
 /// реализация — `rquickjs` поверх QuickJS (exception #4 в §5),
@@ -309,7 +340,6 @@ impl JsRuntime for NullJsRuntime {
 // Остальные точки расширения без выбранной зависимости — пишем свои
 // реализации сразу:
 //
-// - FontProvider      — поиск шрифтов с поддержкой кириллицы. Phase 1.
 // - HyphenationEngine — переносы слов для CSS hyphens. Phase 2.
 // - DnsResolver       — определён выше; реализации: SystemDnsResolver
 //                       (через `(host, port).to_socket_addrs()`),

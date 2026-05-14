@@ -20,7 +20,9 @@ pub mod url;
 pub use capability::{Capability, CapabilityToken};
 pub use error::{Error, Result};
 pub use event::{Event, TabId};
-pub use ext::{EventSink, JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime};
+pub use ext::{
+    EventSink, FontProvider, JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime,
+};
 pub use form::{
     decode_form_value, encode_form_multipart, encode_form_urlencoded, FormEntry, FormValue,
 };
