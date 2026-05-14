@@ -624,6 +624,63 @@ pub struct ComputedStyle {
     /// Phase 0: parsing — real intrinsic-aspect-ratio enforcement
     /// требует layout-time pass.
     pub aspect_ratio: Option<(f32, f32)>,
+    /// CSS Box Alignment L3 — alignment свойства для flex/grid items.
+    /// Все не наследуются. Phase 0: parsing only.
+    pub align_items: AlignValue,
+    pub align_self: AlignValue,
+    pub align_content: AlignValue,
+    pub justify_items: AlignValue,
+    pub justify_self: AlignValue,
+    pub justify_content: AlignValue,
+}
+
+/// CSS Box Alignment L3 §6.1 — значения для align-/justify- свойств.
+/// Phase 0: основной набор keyword-ов. `Auto` — default (resolve в
+/// `Normal` или specific behavior контекстом).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AlignValue {
+    /// CSS keyword `auto` — default. Behavior зависит от контекста
+    /// (parent layout type). Для absolute-positioned — `normal`.
+    #[default]
+    Auto,
+    /// `normal` — default-behavior для conteneur'а (stretch for grid,
+    /// start for flex).
+    Normal,
+    /// `stretch` — растянуть на доступное место (default для grid).
+    Stretch,
+    /// `start` / `flex-start` — выровнять к началу cross/main axis.
+    Start,
+    /// `end` / `flex-end` — выровнять к концу.
+    End,
+    /// `center` — выровнять по центру.
+    Center,
+    /// `baseline` — выровнять text-baseline (для align-items).
+    Baseline,
+    /// `space-between` — равные промежутки между items, по краям нет.
+    SpaceBetween,
+    /// `space-around` — промежутки между + половинные по краям.
+    SpaceAround,
+    /// `space-evenly` — все промежутки одинаковые, включая края.
+    SpaceEvenly,
+}
+
+impl AlignValue {
+    pub fn parse(s: &str) -> Option<Self> {
+        let lc = s.trim().to_ascii_lowercase();
+        match lc.as_str() {
+            "auto" => Some(Self::Auto),
+            "normal" => Some(Self::Normal),
+            "stretch" => Some(Self::Stretch),
+            "start" | "flex-start" | "self-start" => Some(Self::Start),
+            "end" | "flex-end" | "self-end" => Some(Self::End),
+            "center" => Some(Self::Center),
+            "baseline" | "first baseline" | "last baseline" => Some(Self::Baseline),
+            "space-between" => Some(Self::SpaceBetween),
+            "space-around" => Some(Self::SpaceAround),
+            "space-evenly" => Some(Self::SpaceEvenly),
+            _ => None,
+        }
+    }
 }
 
 /// CSS Masking L1 §3.5 — basic-shapes для `clip-path`. Phase 0
@@ -785,6 +842,12 @@ impl ComputedStyle {
             row_gap: 0.0,
             column_gap: 0.0,
             aspect_ratio: None,
+            align_items: AlignValue::Auto,
+            align_self: AlignValue::Auto,
+            align_content: AlignValue::Auto,
+            justify_items: AlignValue::Auto,
+            justify_self: AlignValue::Auto,
+            justify_content: AlignValue::Auto,
         }
     }
 }
@@ -880,6 +943,13 @@ pub fn compute_style(
         row_gap: 0.0,
         column_gap: 0.0,
         aspect_ratio: None,
+        // Box Alignment — все не наследуются, default = Auto.
+        align_items: AlignValue::Auto,
+        align_self: AlignValue::Auto,
+        align_content: AlignValue::Auto,
+        justify_items: AlignValue::Auto,
+        justify_self: AlignValue::Auto,
+        justify_content: AlignValue::Auto,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -3320,6 +3390,70 @@ fn apply_declaration(
                 style.aspect_ratio = None;
             } else if let Some(r) = parse_aspect_ratio_value(trimmed) {
                 style.aspect_ratio = Some(r);
+            }
+        }
+        // CSS Box Alignment L3 — alignment свойства. Парсятся как одно
+        // значение (полная грамматика с baseline-fallback и safe/unsafe —
+        // отложена).
+        "align-items" => {
+            if let Some(v) = AlignValue::parse(val) {
+                style.align_items = v;
+            }
+        }
+        "align-self" => {
+            if let Some(v) = AlignValue::parse(val) {
+                style.align_self = v;
+            }
+        }
+        "align-content" => {
+            if let Some(v) = AlignValue::parse(val) {
+                style.align_content = v;
+            }
+        }
+        "justify-items" => {
+            if let Some(v) = AlignValue::parse(val) {
+                style.justify_items = v;
+            }
+        }
+        "justify-self" => {
+            if let Some(v) = AlignValue::parse(val) {
+                style.justify_self = v;
+            }
+        }
+        "justify-content" => {
+            if let Some(v) = AlignValue::parse(val) {
+                style.justify_content = v;
+            }
+        }
+        // Shorthand: `place-items: <align-items> [<justify-items>]?`
+        "place-items" => {
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
+                style.align_items = a;
+                style.justify_items = parts
+                    .get(1)
+                    .and_then(|s| AlignValue::parse(s))
+                    .unwrap_or(a);
+            }
+        }
+        "place-self" => {
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
+                style.align_self = a;
+                style.justify_self = parts
+                    .get(1)
+                    .and_then(|s| AlignValue::parse(s))
+                    .unwrap_or(a);
+            }
+        }
+        "place-content" => {
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
+                style.align_content = a;
+                style.justify_content = parts
+                    .get(1)
+                    .and_then(|s| AlignValue::parse(s))
+                    .unwrap_or(a);
             }
         }
         "opacity" => {
