@@ -6132,6 +6132,12 @@ fn parse_function_color(s: &str) -> Option<Color> {
         (ColorFn::Hsl, b)
     } else if let Some(b) = lower.strip_prefix("oklch(").and_then(|t| t.strip_suffix(')')) {
         (ColorFn::Oklch, b)
+    } else if let Some(b) = lower.strip_prefix("oklab(").and_then(|t| t.strip_suffix(')')) {
+        (ColorFn::Oklab, b)
+    } else if let Some(b) = lower.strip_prefix("lab(").and_then(|t| t.strip_suffix(')')) {
+        (ColorFn::Lab, b)
+    } else if let Some(b) = lower.strip_prefix("lch(").and_then(|t| t.strip_suffix(')')) {
+        (ColorFn::Lch, b)
     } else {
         return None;
     };
@@ -6167,6 +6173,33 @@ fn parse_function_color(s: &str) -> Option<Color> {
             let (r, g, b) = oklch_to_srgb(l, c, h);
             Some(Color { r, g, b, a: alpha })
         }
+        ColorFn::Oklab => {
+            // OKLab: L=0..1, a/b — unitless (~±0.4). 100% для a/b = ±0.4.
+            let l = parse_oklch_lightness(&parts[0])?;
+            let a = parse_oklab_ab(&parts[1])?;
+            let b = parse_oklab_ab(&parts[2])?;
+            let (r, g, b) = oklab_to_srgb(l, a, b);
+            Some(Color { r, g, b, a: alpha })
+        }
+        ColorFn::Lab => {
+            // CIE Lab (D50): L=0..100, a/b — unitless (~±125). 100% = ±125.
+            let l = parse_lab_lightness(&parts[0])?;
+            let a = parse_lab_ab(&parts[1])?;
+            let b = parse_lab_ab(&parts[2])?;
+            let (r, g, b) = lab_to_srgb(l, a, b);
+            Some(Color { r, g, b, a: alpha })
+        }
+        ColorFn::Lch => {
+            // LCH: L=0..100, C≥0 (100% = 150), H в градусах.
+            let l = parse_lab_lightness(&parts[0])?;
+            let c = parse_lch_chroma(&parts[1])?;
+            let h = parse_hue_component(&parts[2])?;
+            let h_rad = h.to_radians();
+            let a = c * h_rad.cos();
+            let b_v = c * h_rad.sin();
+            let (r, g, b) = lab_to_srgb(l, a, b_v);
+            Some(Color { r, g, b, a: alpha })
+        }
     }
 }
 
@@ -6174,7 +6207,10 @@ enum ColorFn {
     Rgb,
     Hsl,
     Oklch,
-    // Прочие CSS4 расширения (lab / lch / oklab / color()) — позже.
+    Oklab,
+    Lab,
+    Lch,
+    // Прочие CSS4 расширения (color()) — позже.
 }
 
 /// Парсит lightness для oklch: число 0..1 или процент 0..100% → 0..1.
@@ -6194,6 +6230,114 @@ fn parse_oklch_chroma(s: &str) -> Option<f32> {
         return pct.trim().parse::<f32>().ok().map(|p| (p / 100.0 * 0.4).max(0.0));
     }
     s.parse::<f32>().ok().map(|v| v.max(0.0))
+}
+
+/// Парсит a/b для oklab: число (~±0.4) или процент (100% = 0.4).
+fn parse_oklab_ab(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        // CSS Color L4 §10.4: 100% = 0.4 для a/b.
+        return pct.trim().parse::<f32>().ok().map(|p| p / 100.0 * 0.4);
+    }
+    s.parse::<f32>().ok()
+}
+
+/// Парсит lightness для CIE Lab/LCH: число 0..100 или процент 0..100%.
+fn parse_lab_lightness(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        return pct.trim().parse::<f32>().ok().map(|p| p.clamp(0.0, 100.0));
+    }
+    s.parse::<f32>().ok().map(|v| v.clamp(0.0, 100.0))
+}
+
+/// Парсит a/b для CIE Lab: число (~±125) или процент (100% = 125).
+fn parse_lab_ab(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        // CSS Color L4 §10.5: 100% = 125.
+        return pct.trim().parse::<f32>().ok().map(|p| p / 100.0 * 125.0);
+    }
+    s.parse::<f32>().ok()
+}
+
+/// Парсит chroma для LCH: число (≥0, ~0..230) или процент (100% = 150).
+fn parse_lch_chroma(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        // CSS Color L4 §10.5: 100% = 150 для LCH.
+        return pct.trim().parse::<f32>().ok().map(|p| (p / 100.0 * 150.0).max(0.0));
+    }
+    s.parse::<f32>().ok().map(|v| v.max(0.0))
+}
+
+/// CSS Color L4 §10.4: OKLab напрямую → linear sRGB → gamma sRGB.
+/// `l` ∈ [0,1], `a`/`b` — unitless. Алгоритм — second half of oklch_to_srgb.
+fn oklab_to_srgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
+    let l_ = l + 0.396_337_77 * a + 0.215_803_76 * b;
+    let m_ = l - 0.105_561_35 * a - 0.063_854_17 * b;
+    let s_ = l - 0.089_484_18 * a - 1.291_485_5 * b;
+    let l3 = l_ * l_ * l_;
+    let m3 = m_ * m_ * m_;
+    let s3 = s_ * s_ * s_;
+    let lr = 4.076_741_7 * l3 - 3.307_711_6 * m3 + 0.230_969_94 * s3;
+    let lg = -1.268_438 * l3 + 2.609_757_4 * m3 - 0.341_319_38 * s3;
+    let lb = -0.004_196_086 * l3 - 0.703_418_6 * m3 + 1.707_614_7 * s3;
+    (encode_srgb(lr), encode_srgb(lg), encode_srgb(lb))
+}
+
+/// CSS Color L4 §10.5: CIE Lab (D50) → XYZ → D65 (Bradford) → linear sRGB.
+/// `l` ∈ [0,100], `a`/`b` — unitless (CIE units, не процентные).
+fn lab_to_srgb(l: f32, a: f32, b: f32) -> (u8, u8, u8) {
+    // Lab → XYZ (D50). Алгоритм CIE 15.3 §8.4.2.
+    let fy = (l + 16.0) / 116.0;
+    let fx = a / 500.0 + fy;
+    let fz = fy - b / 200.0;
+    let epsilon = 216.0 / 24389.0; // ≈ 0.008856
+    let kappa = 24389.0 / 27.0; // ≈ 903.3
+    let cube_or_linear = |f: f32, scaled: f32| -> f32 {
+        let cubed = f * f * f;
+        if cubed > epsilon {
+            cubed
+        } else {
+            scaled / kappa
+        }
+    };
+    let yr = if l > kappa * epsilon {
+        let v = (l + 16.0) / 116.0;
+        v * v * v
+    } else {
+        l / kappa
+    };
+    let xr = cube_or_linear(fx, 116.0 * fx - 16.0);
+    let zr = cube_or_linear(fz, 116.0 * fz - 16.0);
+    // D50 reference white (CIE 15.3 illuminant D50).
+    let xn = 0.964_22;
+    let yn = 1.0;
+    let zn = 0.825_21;
+    let x_d50 = xr * xn;
+    let y_d50 = yr * yn;
+    let z_d50 = zr * zn;
+    // Bradford D50→D65 adaptation (CSS Color L4 §11).
+    let x_d65 = 0.955_576_6 * x_d50 - 0.023_039_3 * y_d50 + 0.063_163_6 * z_d50;
+    let y_d65 = -0.028_289_5 * x_d50 + 1.009_941_6 * y_d50 + 0.021_007_7 * z_d50;
+    let z_d65 = 0.012_298_2 * x_d50 - 0.020_483_0 * y_d50 + 1.329_909_8 * z_d50;
+    // D65 XYZ → linear sRGB (sRGB primary matrix, CIE 1931).
+    let lr = 3.240_625_5 * x_d65 - 1.537_208 * y_d65 - 0.498_628_6 * z_d65;
+    let lg = -0.968_930_7 * x_d65 + 1.875_756_1 * y_d65 + 0.041_517_5 * z_d65;
+    let lb = 0.055_710_1 * x_d65 - 0.204_021_1 * y_d65 + 1.056_995_9 * z_d65;
+    (encode_srgb(lr), encode_srgb(lg), encode_srgb(lb))
+}
+
+/// Linear sRGB → gamma sRGB (IEC 61966-2-1).
+fn encode_srgb(c: f32) -> u8 {
+    let c = c.clamp(0.0, 1.0);
+    let v = if c <= 0.003_130_8 {
+        12.92 * c
+    } else {
+        1.055 * c.powf(1.0 / 2.4) - 0.055
+    };
+    (v * 255.0 + 0.5).clamp(0.0, 255.0) as u8
 }
 
 /// CSS Color L4 §10.3: OKLCH → OKLab → linear sRGB → sRGB (gamma-encoded).
@@ -6555,6 +6699,101 @@ mod tests {
     fn oklch_invalid_returns_none() {
         assert_eq!(parse_color("oklch(0.5)"), None);
         assert_eq!(parse_color("oklch(abc def ghi)"), None);
+    }
+
+    // ── CSS Color L4 §10.4 — oklab() ──
+
+    #[test]
+    fn oklab_white() {
+        // oklab(1 0 0) → белый (a=0, b=0, L=1).
+        let c = parse_color("oklab(1 0 0)").unwrap();
+        assert!(near(c.r, 255, 5));
+        assert!(near(c.g, 255, 5));
+        assert!(near(c.b, 255, 5));
+    }
+
+    #[test]
+    fn oklab_black() {
+        let c = parse_color("oklab(0 0 0)").unwrap();
+        assert_eq!(c.r, 0);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+    }
+
+    #[test]
+    fn oklab_neutral_gray() {
+        // a=b=0 → серый.
+        let c = parse_color("oklab(0.5 0 0)").unwrap();
+        assert_eq!(c.r, c.g);
+        assert_eq!(c.g, c.b);
+    }
+
+    #[test]
+    fn oklab_ab_percent() {
+        // 100% = 0.4.
+        let by_pct = parse_color("oklab(0.5 100% 0)").unwrap();
+        let by_num = parse_color("oklab(0.5 0.4 0)").unwrap();
+        assert_eq!(by_pct, by_num);
+    }
+
+    // ── CSS Color L4 §10.5 — lab() и lch() ──
+
+    #[test]
+    fn lab_white() {
+        // lab(100 0 0) → белый.
+        let c = parse_color("lab(100 0 0)").unwrap();
+        assert!(near(c.r, 255, 5));
+        assert!(near(c.g, 255, 5));
+        assert!(near(c.b, 255, 5));
+    }
+
+    #[test]
+    fn lab_black() {
+        let c = parse_color("lab(0 0 0)").unwrap();
+        assert_eq!(c.r, 0);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+    }
+
+    #[test]
+    fn lab_neutral_gray() {
+        let c = parse_color("lab(50 0 0)").unwrap();
+        assert_eq!(c.r, c.g);
+        assert_eq!(c.g, c.b);
+    }
+
+    #[test]
+    fn lab_lightness_percent() {
+        let by_pct = parse_color("lab(100% 0 0)").unwrap();
+        let by_num = parse_color("lab(100 0 0)").unwrap();
+        assert_eq!(by_pct, by_num);
+    }
+
+    #[test]
+    fn lch_white() {
+        let c = parse_color("lch(100 0 0)").unwrap();
+        assert!(near(c.r, 255, 5));
+        assert!(near(c.g, 255, 5));
+        assert!(near(c.b, 255, 5));
+    }
+
+    #[test]
+    fn lch_neutral_when_chroma_zero() {
+        let c = parse_color("lch(50 0 0)").unwrap();
+        assert_eq!(c.r, c.g);
+        assert_eq!(c.g, c.b);
+    }
+
+    #[test]
+    fn lch_with_alpha() {
+        let c = parse_color("lch(50 0 0 / 0.5)").unwrap();
+        assert!((c.a as i32 - 128).abs() <= 1);
+    }
+
+    #[test]
+    fn lab_invalid_returns_none() {
+        assert_eq!(parse_color("lab(50)"), None);
+        assert_eq!(parse_color("lab(abc def ghi)"), None);
     }
 
     #[test]

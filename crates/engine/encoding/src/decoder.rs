@@ -23,6 +23,8 @@ pub fn decode_to_string(encoding: Encoding, bytes: &[u8]) -> String {
         Encoding::Utf8 => decode_utf8(bytes),
         Encoding::Utf16Le => decode_utf16(bytes, /*little_endian=*/ true),
         Encoding::Utf16Be => decode_utf16(bytes, /*little_endian=*/ false),
+        Encoding::Utf32Le => decode_utf32(bytes, /*little_endian=*/ true),
+        Encoding::Utf32Be => decode_utf32(bytes, /*little_endian=*/ false),
         Encoding::Windows1251 => decode_single_byte(bytes, &WIN1251),
         Encoding::Koi8R => decode_single_byte(bytes, &KOI8_R),
         Encoding::Cp866 => decode_single_byte(bytes, &CP866),
@@ -100,6 +102,48 @@ fn decode_utf16(bytes: &[u8], little_endian: bool) -> String {
         out.push('\u{FFFD}');
     }
 
+    out
+}
+
+/// Декодирует UTF-32 в LE или BE. По 4 байта на code point. BOM
+/// (`FF FE 00 00` для LE, `00 00 FE FF` для BE) автоматически снимается
+/// независимо от endian (defensive — detector обычно уже выбрал верный
+/// вариант). Ошибки: code point вне Unicode (> U+10FFFF), surrogate
+/// (U+D800..=U+DFFF), нецелое число байт — replacement U+FFFD.
+fn decode_utf32(bytes: &[u8], little_endian: bool) -> String {
+    let bytes = if bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00])
+        || bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF])
+    {
+        &bytes[4..]
+    } else {
+        bytes
+    };
+
+    let read_u32 = |b: [u8; 4]| -> u32 {
+        if little_endian {
+            u32::from_le_bytes(b)
+        } else {
+            u32::from_be_bytes(b)
+        }
+    };
+
+    // Капасити: каждый code point в UTF-8 — до 4 байт, в исходных
+    // данных — 4 байта, так что строка не больше входа в UTF-8 байтах.
+    let mut out = String::with_capacity(bytes.len());
+    let mut i = 0;
+    while i + 4 <= bytes.len() {
+        let code = read_u32([bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]);
+        i += 4;
+        // Невалидные: > U+10FFFF или surrogates → U+FFFD.
+        match char::from_u32(code) {
+            Some(c) => out.push(c),
+            None => out.push('\u{FFFD}'),
+        }
+    }
+    // Остаток < 4 байт — невалидный хвост.
+    if i < bytes.len() {
+        out.push('\u{FFFD}');
+    }
     out
 }
 
@@ -283,5 +327,79 @@ mod tests {
     fn utf16_le_bom_only() {
         // Только BOM, ничего после — пустая строка.
         assert_eq!(decode(Encoding::Utf16Le, &[0xFF, 0xFE]), "");
+    }
+
+    // ── UTF-32 ──
+
+    #[test]
+    fn utf32_le_ascii() {
+        // 'A' = U+0041 → 41 00 00 00 в LE.
+        let bytes = &[0x41, 0x00, 0x00, 0x00, 0x42, 0x00, 0x00, 0x00];
+        assert_eq!(decode(Encoding::Utf32Le, bytes), "AB");
+    }
+
+    #[test]
+    fn utf32_be_ascii() {
+        // 'A' = U+0041 → 00 00 00 41 в BE.
+        let bytes = &[0x00, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00, 0x42];
+        assert_eq!(decode(Encoding::Utf32Be, bytes), "AB");
+    }
+
+    #[test]
+    fn utf32_le_bom_stripped() {
+        // BOM `FF FE 00 00` + 'A' = U+0041.
+        let bytes = &[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00];
+        assert_eq!(decode(Encoding::Utf32Le, bytes), "A");
+    }
+
+    #[test]
+    fn utf32_be_bom_stripped() {
+        // BOM `00 00 FE FF` + 'A' = U+0041 в BE.
+        let bytes = &[0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, 0x41];
+        assert_eq!(decode(Encoding::Utf32Be, bytes), "A");
+    }
+
+    #[test]
+    fn utf32_le_cyrillic() {
+        // 'П' = U+041F.
+        let bytes = &[0x1F, 0x04, 0x00, 0x00];
+        assert_eq!(decode(Encoding::Utf32Le, bytes), "П");
+    }
+
+    #[test]
+    fn utf32_supplementary_plane_emoji() {
+        // 😀 = U+1F600. В LE — 00 F6 01 00.
+        let bytes = &[0x00, 0xF6, 0x01, 0x00];
+        assert_eq!(decode(Encoding::Utf32Le, bytes), "😀");
+    }
+
+    #[test]
+    fn utf32_invalid_code_point() {
+        // U+110000 — за пределами Unicode.
+        let bytes = &[0x00, 0x00, 0x11, 0x00];
+        let s = decode(Encoding::Utf32Le, bytes);
+        assert_eq!(s, "\u{FFFD}");
+    }
+
+    #[test]
+    fn utf32_surrogate_invalid() {
+        // U+D800 — surrogate, не валидный code point в UTF-32.
+        let bytes = &[0x00, 0xD8, 0x00, 0x00];
+        let s = decode(Encoding::Utf32Le, bytes);
+        assert_eq!(s, "\u{FFFD}");
+    }
+
+    #[test]
+    fn utf32_trailing_partial_bytes() {
+        // 'A' + 3 лишних байта.
+        let bytes = &[0x41, 0x00, 0x00, 0x00, 0x42, 0x00, 0x00];
+        let s = decode(Encoding::Utf32Le, bytes);
+        assert_eq!(s, "A\u{FFFD}");
+    }
+
+    #[test]
+    fn utf32_empty() {
+        assert_eq!(decode(Encoding::Utf32Le, &[]), "");
+        assert_eq!(decode(Encoding::Utf32Be, &[]), "");
     }
 }

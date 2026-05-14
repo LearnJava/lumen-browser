@@ -58,6 +58,17 @@ fn sniff_bom(bytes: &[u8]) -> Option<Encoding> {
     if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
         return Some(Encoding::Utf8);
     }
+    // UTF-32 LE BOM (`FF FE 00 00`) — проверяется ДО UTF-16 LE
+    // (`FF FE`), потому что префикс совпадает. Аналогично UTF-32 BE
+    // (`00 00 FE FF`) — у UTF-16 BE нет совпадения в первых двух
+    // байтах (`FE FF`), но 4-байтовая форма стоит первой ради
+    // симметрии и forward-compat.
+    if bytes.starts_with(&[0xFF, 0xFE, 0x00, 0x00]) {
+        return Some(Encoding::Utf32Le);
+    }
+    if bytes.starts_with(&[0x00, 0x00, 0xFE, 0xFF]) {
+        return Some(Encoding::Utf32Be);
+    }
     if bytes.starts_with(&[0xFF, 0xFE]) {
         return Some(Encoding::Utf16Le);
     }
@@ -479,5 +490,39 @@ mod tests {
     fn label_utf16be_distinct() {
         assert_eq!(Encoding::from_label("utf-16be"), Some(Encoding::Utf16Be));
         assert_eq!(Encoding::from_label("UTF-16BE"), Some(Encoding::Utf16Be));
+    }
+
+    // ── UTF-32 ──
+
+    #[test]
+    fn detects_utf32_le_by_bom() {
+        let bytes = &[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00];
+        assert_eq!(detect(bytes, None), Encoding::Utf32Le);
+    }
+
+    #[test]
+    fn detects_utf32_be_by_bom() {
+        let bytes = &[0x00, 0x00, 0xFE, 0xFF, 0x00, 0x00, 0x00, 0x41];
+        assert_eq!(detect(bytes, None), Encoding::Utf32Be);
+    }
+
+    #[test]
+    fn utf32_le_bom_takes_precedence_over_utf16_le() {
+        // `FF FE` начало UTF-16 LE BOM, но если за ним `00 00` — это UTF-32 LE.
+        let bytes = &[0xFF, 0xFE, 0x00, 0x00, 0x41, 0x00, 0x00, 0x00];
+        assert_eq!(detect(bytes, None), Encoding::Utf32Le);
+    }
+
+    #[test]
+    fn label_utf32_maps_to_le() {
+        assert_eq!(Encoding::from_label("utf-32"), Some(Encoding::Utf32Le));
+        assert_eq!(Encoding::from_label("UTF-32"), Some(Encoding::Utf32Le));
+        assert_eq!(Encoding::from_label("utf-32le"), Some(Encoding::Utf32Le));
+    }
+
+    #[test]
+    fn label_utf32be_distinct() {
+        assert_eq!(Encoding::from_label("utf-32be"), Some(Encoding::Utf32Be));
+        assert_eq!(Encoding::from_label("UTF-32BE"), Some(Encoding::Utf32Be));
     }
 }
