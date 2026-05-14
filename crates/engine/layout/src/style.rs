@@ -411,6 +411,26 @@ impl BorderStyle {
     }
 }
 
+/// CSS Fragmentation L3 §3.1 — break-before / break-after / break-inside.
+/// Phase 0: parse+store; реальный break enforcement требует pagination /
+/// multi-column layout pipeline.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BreakValue {
+    #[default]
+    Auto,
+    /// `avoid` / `avoid-page` / `avoid-column` / `avoid-region` — все
+    /// нормализуются в `Avoid`. Phase 0 не различает page vs column vs region.
+    Avoid,
+    /// `always` / `page` (для break-before/after).
+    Always,
+    /// `column` — принудительный column break.
+    Column,
+    /// `page` — принудительный page break.
+    Page,
+    /// `region` — принудительный region break.
+    Region,
+}
+
 /// CSS `box-sizing`. Определяет, что именно задаёт `width` / `height`:
 ///   - `ContentBox` (CSS default): размер контента; padding и border прибавляются сверху.
 ///   - `BorderBox`: размер вместе с padding и border; контент сжимается, чтобы влезть.
@@ -618,6 +638,33 @@ pub struct ComputedStyle {
     /// не реализован, гарантированно gap не применяется.
     pub row_gap: f32,
     pub column_gap: f32,
+    /// CSS Multi-column L1 §3.2 — `column-count: <integer> | auto`. `None`
+    /// = `auto` (UA выбирает на основе column-width). Не наследуется.
+    /// Phase 0: parsing only — реальный column layout pipeline отложен.
+    pub column_count: Option<u32>,
+    /// CSS Multi-column L1 §3.3 — `column-width: <length> | auto`. В px
+    /// (resolved). `None` = `auto`. Не наследуется.
+    pub column_width: Option<f32>,
+    /// CSS Multi-column L1 §4.1 — `column-rule-width` (px). Default 0.
+    pub column_rule_width: f32,
+    /// CSS Multi-column L1 §4.2 — `column-rule-style`. Default `None`
+    /// (без линии — линия рисуется только если style != None и width > 0).
+    pub column_rule_style: BorderStyle,
+    /// CSS Multi-column L1 §4.3 — `column-rule-color`. `None` = currentColor.
+    pub column_rule_color: Option<Color>,
+    /// CSS Multi-column L1 §6.1 — `column-span: none | all`. По умолчанию
+    /// `None` (False), `Some(true)` = `all` (элемент растягивается через
+    /// все колонки). Не наследуется. Phase 0: parse+store.
+    pub column_span_all: bool,
+    /// CSS Multi-column L1 §6.2 — `column-fill: auto | balance`. `false`
+    /// = auto (default — заполняет последовательно), `true` = balance.
+    /// Не наследуется.
+    pub column_fill_balance: bool,
+    /// CSS Fragmentation L3 §3.1 — `break-before`. Phase 0 — enum со
+    /// значениями auto/avoid/always/page/column/region. Не наследуется.
+    pub break_before: BreakValue,
+    pub break_after: BreakValue,
+    pub break_inside: BreakValue,
     /// CSS Sizing L4 §6.1 — `aspect-ratio: auto | <ratio> | auto <ratio>`.
     /// `None` = `auto` (UA выбирает). `Some((w, h))` = явное отношение
     /// W:H (например, 16:9 → (16.0, 9.0)). Не наследуется.
@@ -1289,6 +1336,16 @@ impl ComputedStyle {
             filter: Vec::new(),
             row_gap: 0.0,
             column_gap: 0.0,
+            column_count: None,
+            column_width: None,
+            column_rule_width: 0.0,
+            column_rule_style: BorderStyle::None,
+            column_rule_color: None,
+            column_span_all: false,
+            column_fill_balance: false,
+            break_before: BreakValue::Auto,
+            break_after: BreakValue::Auto,
+            break_inside: BreakValue::Auto,
             aspect_ratio: None,
             align_items: AlignValue::Auto,
             align_self: AlignValue::Auto,
@@ -1419,6 +1476,17 @@ pub fn compute_style(
         // Box Alignment gap / Sizing aspect-ratio — не наследуются.
         row_gap: 0.0,
         column_gap: 0.0,
+        // CSS Multi-column — не наследуются.
+        column_count: None,
+        column_width: None,
+        column_rule_width: 0.0,
+        column_rule_style: BorderStyle::None,
+        column_rule_color: None,
+        column_span_all: false,
+        column_fill_balance: false,
+        break_before: BreakValue::Auto,
+        break_after: BreakValue::Auto,
+        break_inside: BreakValue::Auto,
         aspect_ratio: None,
         // Box Alignment — все не наследуются, default = Auto.
         align_items: AlignValue::Auto,
@@ -3896,6 +3964,136 @@ fn apply_declaration(
                 }
             }
         }
+        "column-count" => {
+            // CSS Multi-column L1 §3.2: <integer> | auto.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.column_count = None;
+            } else if let Ok(n) = trimmed.parse::<u32>()
+                && n > 0
+            {
+                style.column_count = Some(n);
+            }
+        }
+        "column-width" => {
+            // CSS Multi-column L1 §3.3: <length> | auto.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.column_width = None;
+            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport)
+                && px >= 0.0
+            {
+                style.column_width = Some(px);
+            }
+        }
+        "columns" => {
+            // CSS Multi-column L1 §3.4 shorthand: <column-width> || <column-count>.
+            // Любой токен может быть `auto`. Length → width, integer → count.
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            let mut count: Option<u32> = None;
+            let mut width: Option<f32> = None;
+            let mut had_width = false;
+            let mut had_count = false;
+            for p in &parts {
+                if p.eq_ignore_ascii_case("auto") {
+                    // Один auto — не назначаем, оставляем None для обоих.
+                    continue;
+                }
+                if let Ok(n) = p.parse::<u32>()
+                    && n > 0
+                    && !had_count
+                {
+                    count = Some(n);
+                    had_count = true;
+                    continue;
+                }
+                if let Some(px) = resolve_box_length(p, em_basis, viewport)
+                    && px >= 0.0
+                    && !had_width
+                {
+                    width = Some(px);
+                    had_width = true;
+                }
+            }
+            // Если хотя бы один токен распознали — применяем.
+            if had_width || had_count {
+                style.column_width = width;
+                style.column_count = count;
+            }
+        }
+        "column-rule-width" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.column_rule_width = px.max(0.0);
+            }
+        }
+        "column-rule-style" => {
+            style.column_rule_style = parse_border_style_opt(val.trim()).unwrap_or(BorderStyle::None);
+        }
+        "column-rule-color" => {
+            style.column_rule_color = parse_color(val.trim());
+        }
+        "column-rule" => {
+            // Shorthand: <width> || <style> || <color>. Любой порядок.
+            let mut rest = val.trim().to_string();
+            // Color может содержать пробелы (rgba(...)), но в Phase 0 — простой
+            // word-by-word проход.
+            for tok in val.split_whitespace() {
+                if let Some(s) = parse_border_style_opt(tok) {
+                    style.column_rule_style = s;
+                    rest = rest.replacen(tok, "", 1);
+                    continue;
+                }
+                if let Some(px) = resolve_box_length(tok, em_basis, viewport)
+                    && px >= 0.0
+                {
+                    style.column_rule_width = px;
+                    rest = rest.replacen(tok, "", 1);
+                    continue;
+                }
+                if let Some(c) = parse_color(tok) {
+                    style.column_rule_color = Some(c);
+                    rest = rest.replacen(tok, "", 1);
+                }
+            }
+            // Если в rest осталось что-то с скобками (`rgba(...)`) — пытаемся
+            // парсить как цвет.
+            let rest = rest.trim();
+            if !rest.is_empty()
+                && style.column_rule_color.is_none()
+                && let Some(c) = parse_color(rest)
+            {
+                style.column_rule_color = Some(c);
+            }
+        }
+        "column-span" => {
+            match val.trim().to_ascii_lowercase().as_str() {
+                "all" => style.column_span_all = true,
+                "none" => style.column_span_all = false,
+                _ => {}
+            }
+        }
+        "column-fill" => {
+            match val.trim().to_ascii_lowercase().as_str() {
+                "balance" => style.column_fill_balance = true,
+                "auto" => style.column_fill_balance = false,
+                _ => {}
+            }
+        }
+        "break-before" => {
+            if let Some(v) = parse_break_value(val.trim()) {
+                style.break_before = v;
+            }
+        }
+        "break-after" => {
+            if let Some(v) = parse_break_value(val.trim()) {
+                style.break_after = v;
+            }
+        }
+        "break-inside" => {
+            if let Some(v) = parse_break_value(val.trim()) {
+                style.break_inside = v;
+            }
+        }
         "aspect-ratio" => {
             // CSS Sizing L4 §6.1: `auto | <ratio>`. <ratio> = number или
             // `W / H`. Phase 0 игнорирует `auto <ratio>` форму
@@ -5517,6 +5715,29 @@ fn parse_border_style_kw(s: &str) -> BorderStyle {
         "dashed" => BorderStyle::Dashed,
         "dotted" => BorderStyle::Dotted,
         _ => BorderStyle::None,
+    }
+}
+
+fn parse_border_style_opt(s: &str) -> Option<BorderStyle> {
+    match s.trim() {
+        "none" => Some(BorderStyle::None),
+        "solid" => Some(BorderStyle::Solid),
+        "dashed" => Some(BorderStyle::Dashed),
+        "dotted" => Some(BorderStyle::Dotted),
+        _ => None,
+    }
+}
+
+/// Парсит CSS Fragmentation L3 §3.1 `break-*` keyword.
+fn parse_break_value(s: &str) -> Option<BreakValue> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "auto" => Some(BreakValue::Auto),
+        "avoid" | "avoid-page" | "avoid-column" | "avoid-region" => Some(BreakValue::Avoid),
+        "always" => Some(BreakValue::Always),
+        "page" => Some(BreakValue::Page),
+        "column" => Some(BreakValue::Column),
+        "region" => Some(BreakValue::Region),
+        _ => None,
     }
 }
 

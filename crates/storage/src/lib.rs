@@ -14,6 +14,8 @@
 
 pub mod autofill;
 pub mod bookmarks;
+pub mod broadcast_channels;
+pub mod cache_storage;
 pub mod cookies;
 pub mod dns_cache;
 pub mod downloads;
@@ -37,6 +39,8 @@ pub mod workspaces;
 
 pub use autofill::{Autofill, AutofillEntry};
 pub use bookmarks::{Bookmark, Bookmarks};
+pub use broadcast_channels::{BroadcastChannels, ChannelRegistration};
+pub use cache_storage::{CacheStorage, CachedEntry};
 pub use cookies::{parse_set_cookie, Cookie, CookieJar, SameSite};
 pub use dns_cache::{DnsCache, DnsEntry};
 pub use downloads::{DownloadEntry, DownloadStatus, Downloads};
