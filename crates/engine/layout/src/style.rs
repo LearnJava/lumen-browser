@@ -612,6 +612,18 @@ pub struct ComputedStyle {
     /// Список функций — blur/brightness/contrast/grayscale/etc. Не
     /// наследуется. Phase 0: parsing only.
     pub filter: Vec<FilterFn>,
+    /// CSS Box Alignment L3 §8 — `row-gap` / `column-gap` для
+    /// flex/grid container-ов. В пикселях (resolved). Default 0.
+    /// Не наследуется. Phase 0: parsing only — real flex/grid algorithm
+    /// не реализован, гарантированно gap не применяется.
+    pub row_gap: f32,
+    pub column_gap: f32,
+    /// CSS Sizing L4 §6.1 — `aspect-ratio: auto | <ratio> | auto <ratio>`.
+    /// `None` = `auto` (UA выбирает). `Some((w, h))` = явное отношение
+    /// W:H (например, 16:9 → (16.0, 9.0)). Не наследуется.
+    /// Phase 0: parsing — real intrinsic-aspect-ratio enforcement
+    /// требует layout-time pass.
+    pub aspect_ratio: Option<(f32, f32)>,
 }
 
 /// CSS Masking L1 §3.5 — basic-shapes для `clip-path`. Phase 0
@@ -770,6 +782,9 @@ impl ComputedStyle {
             clip_path: None,
             transform: Vec::new(),
             filter: Vec::new(),
+            row_gap: 0.0,
+            column_gap: 0.0,
+            aspect_ratio: None,
         }
     }
 }
@@ -861,6 +876,10 @@ pub fn compute_style(
         clip_path: None,
         transform: Vec::new(),
         filter: Vec::new(),
+        // Box Alignment gap / Sizing aspect-ratio — не наследуются.
+        row_gap: 0.0,
+        column_gap: 0.0,
+        aspect_ratio: None,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -3265,6 +3284,44 @@ fn apply_declaration(
                 style.filter = parse_filter_list(trimmed);
             }
         }
+        "row-gap" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.row_gap = px.max(0.0);
+            }
+        }
+        "column-gap" => {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+                style.column_gap = px.max(0.0);
+            }
+        }
+        "gap" => {
+            // Shorthand: `<row-gap> <column-gap>?` (если column отсутствует,
+            // = row).
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if !parts.is_empty() {
+                let row = resolve_box_length(parts[0], em_basis, viewport).map(|v| v.max(0.0));
+                let col = if parts.len() >= 2 {
+                    resolve_box_length(parts[1], em_basis, viewport).map(|v| v.max(0.0))
+                } else {
+                    row
+                };
+                if let (Some(r), Some(c)) = (row, col) {
+                    style.row_gap = r;
+                    style.column_gap = c;
+                }
+            }
+        }
+        "aspect-ratio" => {
+            // CSS Sizing L4 §6.1: `auto | <ratio>`. <ratio> = number или
+            // `W / H`. Phase 0 игнорирует `auto <ratio>` форму
+            // (intrinsic + override).
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.aspect_ratio = None;
+            } else if let Some(r) = parse_aspect_ratio_value(trimmed) {
+                style.aspect_ratio = Some(r);
+            }
+        }
         "opacity" => {
             // CSS Color L3 §3.2: <number 0..1> или <percentage>. Out-of-range
             // clamp-ается. Невалидные значения игнорируются.
@@ -4240,6 +4297,29 @@ fn parse_filter_list(s: &str) -> Vec<FilterFn> {
         }
     }
     out
+}
+
+/// CSS Sizing L4 §6.1 — парсит `<ratio>`: либо одно положительное
+/// число (трактуется как W:1), либо `W / H` пара. Phase 0 не
+/// поддерживает `auto <ratio>` форму (она бы хранилась как fallback,
+/// но требует расширения структуры).
+fn parse_aspect_ratio_value(s: &str) -> Option<(f32, f32)> {
+    let s = s.trim();
+    if let Some((w_str, h_str)) = s.split_once('/') {
+        let w = w_str.trim().parse::<f32>().ok()?;
+        let h = h_str.trim().parse::<f32>().ok()?;
+        if w > 0.0 && h > 0.0 {
+            return Some((w, h));
+        }
+        return None;
+    }
+    // Single number — W:1.
+    let v = s.parse::<f32>().ok()?;
+    if v > 0.0 {
+        Some((v, 1.0))
+    } else {
+        None
+    }
 }
 
 fn parse_filter_fn(name: &str, args: &str) -> Option<FilterFn> {
