@@ -254,6 +254,7 @@ mod tests {
             width_px: 1024.0,
             height_px: 768.0,
             root_font_size_px: 16.0,
+            prefers_dark: false,
         }
     }
 
@@ -262,6 +263,7 @@ mod tests {
             width_px: 500.0,
             height_px: 800.0,
             root_font_size_px: 16.0,
+            prefers_dark: false,
         }
     }
 

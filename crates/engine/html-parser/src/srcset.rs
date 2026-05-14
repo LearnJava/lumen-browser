@@ -243,20 +243,24 @@ pub enum SizeLength {
 /// Viewport-параметры для резолва `sizes` в CSS-пиксели. `root_font_size_px`
 /// используется для `em`/`rem` — sizes работает до построения DOM
 /// (в preload-сканере), поэтому element-context font-size недоступен;
-/// `em` трактуется как root-relative.
+/// `em` трактуется как root-relative. `prefers_dark` — пользовательская
+/// тема (CSS Media Queries L5 `prefers-color-scheme`); сюда же приходит
+/// для media-условий в `<source media>` / `<img sizes>`.
 #[derive(Debug, Clone, Copy)]
 pub struct SizesViewport {
     pub width_px: f32,
     pub height_px: f32,
     pub root_font_size_px: f32,
+    pub prefers_dark: bool,
 }
 
 impl SizesViewport {
-    /// Типичный desktop default: 1024×768, 16px root font-size.
+    /// Типичный desktop default: 1024×768, 16px root font-size, light theme.
     pub const DEFAULT: Self = Self {
         width_px: 1024.0,
         height_px: 768.0,
         root_font_size_px: 16.0,
+        prefers_dark: false,
     };
 }
 
@@ -285,6 +289,13 @@ pub enum Orientation {
     Landscape,
 }
 
+/// CSS Media Queries L5 `prefers-color-scheme` значение.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorScheme {
+    Light,
+    Dark,
+}
+
 /// Одиночная media-feature внутри media-condition. AND-list из
 /// `MediaClause` хранится в `MediaCondition::All`.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -294,6 +305,7 @@ pub enum MediaClause {
     MinHeight(SizeLength),
     MaxHeight(SizeLength),
     Orientation(Orientation),
+    PrefersColorScheme(ColorScheme),
 }
 
 impl MediaClause {
@@ -309,25 +321,33 @@ impl MediaClause {
             MediaClause::Orientation(Orientation::Landscape) => {
                 viewport.width_px > viewport.height_px
             }
+            MediaClause::PrefersColorScheme(ColorScheme::Dark) => viewport.prefers_dark,
+            MediaClause::PrefersColorScheme(ColorScheme::Light) => !viewport.prefers_dark,
         }
     }
 }
 
-/// Media-condition в `sizes`-атрибуте.
+/// Media-condition в `<source media>` / `<img sizes>`-атрибутах.
 ///
 /// Phase 0 поддерживает:
 ///   * single feature: `(min-width: 600px)`;
 ///   * AND-список: `(min-width: 600px) and (orientation: landscape)`;
+///   * ведущий `not <conditions>` (Media Queries L4 §3.2) — инвертирует
+///     результат _всей_ clause; `Unsupported` под `not` остаётся
+///     unknown (= false), spec: «If the result is unknown, then the
+///     negation also evaluates to unknown»;
 ///   * features: `min-width` / `max-width` / `min-height` / `max-height` /
-///     `orientation`.
+///     `orientation` / `prefers-color-scheme`.
 ///
 /// Неподдерживаемые формы (OR через запятую на уровне one condition,
-/// `not`, `only`, неизвестные features) дают `Unsupported` — никогда
-/// не матчат. OR на уровне всей `sizes`-строки обрабатывается естественно
-/// — это просто разделение на несколько `SourceSize`.
+/// неизвестные features, `only` без media-type, `(not (...))`-формы)
+/// дают `Unsupported` — никогда не матчат. OR на уровне всей `sizes`-
+/// строки обрабатывается естественно — это просто разделение на
+/// несколько `SourceSize`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MediaCondition {
-    All(Vec<MediaClause>),
+    /// AND-list features с опциональной инверсией (per §3.2 `not <q>`).
+    All { negated: bool, clauses: Vec<MediaClause> },
     Unsupported,
 }
 
@@ -337,7 +357,10 @@ impl MediaCondition {
     /// неизвестных features.
     pub fn matches(&self, viewport: SizesViewport) -> bool {
         match self {
-            MediaCondition::All(clauses) => clauses.iter().all(|c| c.matches(viewport)),
+            MediaCondition::All { negated, clauses } => {
+                let all = clauses.iter().all(|c| c.matches(viewport));
+                if *negated { !all } else { all }
+            }
             MediaCondition::Unsupported => false,
         }
     }
@@ -457,14 +480,37 @@ fn parse_size_length(s: &str) -> Option<SizeLength> {
 /// для атрибута `<source media>` — там та же грамматика
 /// (`(min-width: ...) and (...)`), потому что Phase 0 не различает полный
 /// media-query и sizes-media-condition.
+///
+/// Грамматика (Media Queries L4 §3.2 минимальное подмножество):
+/// ```text
+/// condition = [ "not" ]? clause ( " and " clause )*
+/// clause    = "(" name ":" value ")"
+/// ```
+///
+/// `only` намеренно не поддерживаем здесь: в `<source media>` /
+/// `sizes`-атрибутах этот L3-backcompat-модификатор не имеет смысла.
 pub fn parse_media_condition(s: &str) -> MediaCondition {
     let lower = s.trim().to_ascii_lowercase();
     if lower.is_empty() {
         return MediaCondition::Unsupported;
     }
+
+    // Ведущий `not` — инвертирует clause целиком. Должен быть отделён
+    // whitespace-ом (иначе ident-prefix вроде `notebook` сматчит).
+    let (negated, rest) = if let Some(after) = strip_leading_not(&lower) {
+        (true, after.trim_start())
+    } else {
+        (false, lower.as_str())
+    };
+
+    if rest.is_empty() {
+        // `not` без условий — invalid query.
+        return MediaCondition::Unsupported;
+    }
+
     // Split по " and " на top-level — внутри `()` " and " не встречается
     // (валидная media-feature имеет вид `(name: value)` без `and`).
-    let parts: Vec<&str> = lower.split(" and ").map(str::trim).collect();
+    let parts: Vec<&str> = rest.split(" and ").map(str::trim).collect();
     let mut clauses = Vec::with_capacity(parts.len());
     for part in parts {
         if part.is_empty() {
@@ -478,7 +524,20 @@ pub fn parse_media_condition(s: &str) -> MediaCondition {
     if clauses.is_empty() {
         MediaCondition::Unsupported
     } else {
-        MediaCondition::All(clauses)
+        MediaCondition::All { negated, clauses }
+    }
+}
+
+/// Снять ведущий `not` keyword (case-already-lowered). Возвращает
+/// остаток без keyword-а, либо `None` если строка не начинается с `not`
+/// с whitespace-границей.
+fn strip_leading_not(input: &str) -> Option<&str> {
+    let rest = input.strip_prefix("not")?;
+    let first = rest.as_bytes().first()?;
+    if matches!(first, b' ' | b'\t' | b'\n' | b'\r' | b'(') {
+        Some(rest)
+    } else {
+        None
     }
 }
 
@@ -499,6 +558,11 @@ fn parse_media_clause(s: &str) -> Option<MediaClause> {
         "orientation" => match value {
             "portrait" => Some(MediaClause::Orientation(Orientation::Portrait)),
             "landscape" => Some(MediaClause::Orientation(Orientation::Landscape)),
+            _ => None,
+        },
+        "prefers-color-scheme" => match value {
+            "light" => Some(MediaClause::PrefersColorScheme(ColorScheme::Light)),
+            "dark" => Some(MediaClause::PrefersColorScheme(ColorScheme::Dark)),
             _ => None,
         },
         _ => None,
@@ -831,6 +895,7 @@ mod tests {
             width_px: w,
             height_px: h,
             root_font_size_px: 16.0,
+            prefers_dark: false,
         }
     }
 
@@ -980,6 +1045,97 @@ mod tests {
         let c = parse_media_condition("");
         assert_eq!(c, MediaCondition::Unsupported);
         assert!(!c.matches(vp(800.0, 600.0)));
+    }
+
+    // ──────── sizes: not / prefers-color-scheme ────────
+
+    fn vp_dark(w: f32, h: f32) -> SizesViewport {
+        SizesViewport {
+            width_px: w,
+            height_px: h,
+            root_font_size_px: 16.0,
+            prefers_dark: true,
+        }
+    }
+
+    #[test]
+    fn condition_not_inverts() {
+        let c = parse_media_condition("not (min-width: 1000px)");
+        if let MediaCondition::All { negated, clauses } = &c {
+            assert!(*negated);
+            assert_eq!(clauses.len(), 1);
+        } else {
+            panic!("expected All, got {c:?}");
+        }
+        // viewport уже 800 — не достигает min-width: 1000px → inner=false, not → true.
+        assert!(c.matches(vp(800.0, 600.0)));
+        // viewport 1200 — inner=true, not → false.
+        assert!(!c.matches(vp(1200.0, 600.0)));
+    }
+
+    #[test]
+    fn condition_not_with_and_combination() {
+        // not (min-width: 600px) and (orientation: landscape)
+        // — clause negated если AND inner = true.
+        let c = parse_media_condition("not (min-width: 600px) and (orientation: landscape)");
+        // 800×600 landscape: inner true → not → false.
+        assert!(!c.matches(vp(800.0, 600.0)));
+        // 400×600 portrait: inner false (min-width не выполнен) → not → true.
+        assert!(c.matches(vp(400.0, 600.0)));
+    }
+
+    #[test]
+    fn condition_not_with_unsupported_stays_unknown() {
+        // not (gibberish: 5px) → Unsupported. matches → false even though "not".
+        let c = parse_media_condition("not (gibberish: 5px)");
+        assert_eq!(c, MediaCondition::Unsupported);
+        assert!(!c.matches(vp(800.0, 600.0)));
+    }
+
+    #[test]
+    fn condition_not_keyword_requires_separation() {
+        // `notebook` — НЕ keyword `not`; должно парситься как clause без
+        // условий → Unsupported (ident-как-media-type здесь не валиден,
+        // только `(feature)`-форма).
+        let c = parse_media_condition("notebook");
+        assert_eq!(c, MediaCondition::Unsupported);
+    }
+
+    #[test]
+    fn condition_not_without_body_unsupported() {
+        let c = parse_media_condition("not");
+        assert_eq!(c, MediaCondition::Unsupported);
+        let c = parse_media_condition("not   ");
+        assert_eq!(c, MediaCondition::Unsupported);
+    }
+
+    #[test]
+    fn condition_prefers_color_scheme_light_default_match() {
+        let c = parse_media_condition("(prefers-color-scheme: light)");
+        // По умолчанию prefers_dark=false → light матчит.
+        assert!(c.matches(vp(800.0, 600.0)));
+        // На dark theme — не матчит.
+        assert!(!c.matches(vp_dark(800.0, 600.0)));
+    }
+
+    #[test]
+    fn condition_prefers_color_scheme_dark() {
+        let c = parse_media_condition("(prefers-color-scheme: dark)");
+        assert!(c.matches(vp_dark(800.0, 600.0)));
+        assert!(!c.matches(vp(800.0, 600.0)));
+    }
+
+    #[test]
+    fn condition_not_prefers_dark_matches_light_theme() {
+        let c = parse_media_condition("not (prefers-color-scheme: dark)");
+        assert!(c.matches(vp(800.0, 600.0)));
+        assert!(!c.matches(vp_dark(800.0, 600.0)));
+    }
+
+    #[test]
+    fn condition_prefers_color_scheme_unknown_value() {
+        let c = parse_media_condition("(prefers-color-scheme: sepia)");
+        assert_eq!(c, MediaCondition::Unsupported);
     }
 
     // ──────── sizes: parse_sizes ────────
