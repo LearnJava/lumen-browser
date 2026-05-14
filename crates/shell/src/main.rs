@@ -100,6 +100,7 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
     let mut app = Lumen {
         display_list: initial_page.display_list,
         title: initial_page.title,
+        pending_images: initial_page.images,
         source,
         event_sink,
         modifiers: ModifiersState::empty(),
@@ -315,11 +316,20 @@ fn parse_cli(args: &[String]) -> Result<CliMode, String> {
 struct LoadedPage {
     display_list: DisplayList,
     title: Option<String>,
+    /// Декодированные `<img src="…">` для GPU upload через
+    /// `Renderer::register_image`. Ключ — raw src attribute value (тот же,
+    /// что попадает в `DisplayCommand::DrawImage.src`), чтобы render-side
+    /// мог сделать lookup без отдельной нормализации URL.
+    images: Vec<(String, lumen_image::Image)>,
 }
 
 impl LoadedPage {
     fn empty() -> Self {
-        Self { display_list: DisplayList::new(), title: None }
+        Self {
+            display_list: DisplayList::new(),
+            title: None,
+            images: Vec::new(),
+        }
     }
 }
 
@@ -457,6 +467,128 @@ fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>) {
     }
 }
 
+// ── Загрузка <img src> ───────────────────────────────────────────────────────
+
+/// Обходит DOM, для каждого `<img>` с непустым `src` скачивает байты, декодирует
+/// через `lumen_image::decode` (PNG/JPEG dispatch по сигнатуре) и собирает
+/// результаты в `Vec<(raw_src, Image)>`.
+///
+/// Побочный эффект: для тех `<img>`, у которых **не задан ни width, ни height**
+/// атрибут, проставляет оба из декодированного изображения. Это HTML5 §10
+/// «mapped attributes» — author CSS затем перекроет, если захочет. Если хоть
+/// один из атрибутов уже задан author-ом, не лезем (предполагаем, что author
+/// знает, что делает — например, форсирует aspect-ratio).
+///
+/// Ключ в результирующем Vec — raw href из `src` attribute, не resolved URL.
+/// Это совпадает с тем, что хранит `BoxKind::Image { src, alt }` после layout,
+/// поэтому `Renderer::register_image` будет видеть тот же ключ, который придёт
+/// в `DisplayCommand::DrawImage.src` при рендеринге.
+fn fetch_and_decode_images(
+    doc: &mut Document,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+) -> Vec<(String, lumen_image::Image)> {
+    let mut entries: Vec<(NodeId, String, bool, bool)> = Vec::new();
+    collect_img_entries(doc, doc.root(), &mut entries);
+
+    let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
+    for (node_id, src, has_w, has_h) in entries {
+        let bytes = match fetch_image_bytes(&src, base, sink) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("Пропуск картинки {src}: {e}");
+                continue;
+            }
+        };
+        let image = match lumen_image::decode(&bytes) {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("Не декодируется {src}: {e}");
+                continue;
+            }
+        };
+
+        if !has_w && !has_h {
+            apply_intrinsic_size(doc, node_id, image.width, image.height);
+        }
+
+        eprintln!(
+            "Загружена картинка: {src} ({}×{}, {:?})",
+            image.width, image.height, image.format
+        );
+        out.push((src, image));
+    }
+    out
+}
+
+fn collect_img_entries(
+    doc: &Document,
+    id: NodeId,
+    out: &mut Vec<(NodeId, String, bool, bool)>,
+) {
+    let node = doc.get(id);
+    if let NodeData::Element { name, attrs } = &node.data
+        && name.local == "img"
+    {
+        let src = attrs
+            .iter()
+            .find(|a| a.name.local.eq_ignore_ascii_case("src"))
+            .map(|a| a.value.clone())
+            .unwrap_or_default();
+        if !src.is_empty() {
+            let has_w = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("width"));
+            let has_h = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("height"));
+            out.push((id, src, has_w, has_h));
+        }
+        // <img> — void элемент, у него не бывает children, выходим.
+        return;
+    }
+    for &child in &node.children {
+        collect_img_entries(doc, child, out);
+    }
+}
+
+fn fetch_image_bytes(
+    raw_src: &str,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+) -> Result<Vec<u8>, Box<dyn Error>> {
+    match base.resolve(raw_src) {
+        ResolvedResource::File(path) => std::fs::read(&path).map_err(|e| {
+            format!("file://{} {e}", path.display()).into()
+        }),
+        ResolvedResource::Url(url) => {
+            use lumen_core::ext::NetworkTransport;
+            use lumen_core::url::Url;
+            use lumen_network::HttpClient;
+
+            let client = HttpClient::new().with_sink(sink.clone());
+            let lumen_url = Url::parse(&url)?;
+            Ok(client.fetch(&lumen_url)?)
+        }
+    }
+}
+
+fn apply_intrinsic_size(doc: &mut Document, node_id: NodeId, width: u32, height: u32) {
+    use lumen_dom::{Attribute, QualName};
+    let NodeData::Element { attrs, .. } = &mut doc.get_mut(node_id).data else {
+        return;
+    };
+    // Защита от race: если другой проход уже добавил атрибут, не дублируем.
+    if !attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("width")) {
+        attrs.push(Attribute {
+            name: QualName::html("width"),
+            value: width.to_string(),
+        });
+    }
+    if !attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("height")) {
+        attrs.push(Attribute {
+            name: QualName::html("height"),
+            value: height.to_string(),
+        });
+    }
+}
+
 // ── Рендер ───────────────────────────────────────────────────────────────────
 
 /// Результат фаз `decode → parse → layout` — общая часть для оконного и
@@ -466,6 +598,8 @@ struct ParsedPage {
     layout: LayoutBox,
     title: Option<String>,
     rule_count: usize,
+    /// Декодированные изображения, найденные при обходе DOM. См. [`LoadedPage::images`].
+    images: Vec<(String, lumen_image::Image)>,
 }
 
 fn parse_and_layout(
@@ -480,8 +614,15 @@ fn parse_and_layout(
     let source = lumen_encoding::decode(encoding, bytes);
     eprintln!("Кодировка: {}", encoding.name());
 
-    let doc = lumen_html_parser::parse(&source);
+    let mut doc = lumen_html_parser::parse(&source);
     let title = extract_title(&doc);
+
+    // Fetch + decode <img src>. Должно идти ДО layout, потому что intrinsic
+    // dimensions из декодированного изображения проставляются как HTML
+    // presentational hints (width/height attribute) и потом подхватываются
+    // style cascade. Errors silently пропускаются — битая картинка не валит
+    // всю страницу, layout нарисует серый placeholder.
+    let images = fetch_and_decode_images(&mut doc, base, sink);
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let mut css = extract_style_blocks(&doc);
@@ -502,6 +643,7 @@ fn parse_and_layout(
         layout,
         title,
         rule_count,
+        images,
     })
 }
 
@@ -514,14 +656,16 @@ fn render_bytes(
     let parsed = parse_and_layout(bytes, content_type, base, &sink)?;
     let display_list = lumen_paint::build_display_list(&parsed.layout);
     println!(
-        "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд",
+        "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок",
         parsed.document.len(),
         parsed.rule_count,
-        display_list.len()
+        display_list.len(),
+        parsed.images.len(),
     );
     Ok(LoadedPage {
         display_list,
         title: parsed.title,
+        images: parsed.images,
     })
 }
 
@@ -598,6 +742,11 @@ fn window_title(page_title: Option<&str>) -> String {
 struct Lumen {
     display_list: DisplayList,
     title: Option<String>,
+    /// Декодированные `<img>` ресурсы. До создания Renderer-а — хранятся
+    /// в Vec и заливаются в GPU в `resumed`; после — register_image идёт
+    /// напрямую в `reload`. На переходах между страницами очищается через
+    /// `Renderer::clear_images` + переустановка.
+    pending_images: Vec<(String, lumen_image::Image)>,
     source: PageSource,
     event_sink: Arc<dyn EventSink>,
     modifiers: ModifiersState,
@@ -627,6 +776,22 @@ impl Lumen {
             Ok(page) => {
                 self.display_list = page.display_list;
                 self.title = page.title;
+                if let Some(r) = self.renderer.as_mut() {
+                    // Старая GPU-cache картинок относится к предыдущей странице
+                    // (даже если src совпадает, content мог измениться). Чистим
+                    // и регистрируем заново.
+                    r.clear_images();
+                    for (src, image) in &page.images {
+                        if let Err(err) = r.register_image(src.clone(), image) {
+                            eprintln!("Картинка {src} не зарегистрирована: {err}");
+                        }
+                    }
+                } else {
+                    // Renderer ещё не создан — обычно невозможно (reload идёт
+                    // по клавише, окно уже есть), но защитимся: складываем в
+                    // pending_images, resumed подхватит.
+                    self.pending_images = page.images;
+                }
                 if let Some(w) = self.window.as_ref() {
                     w.set_title(&window_title(self.title.as_deref()));
                     w.request_redraw();
@@ -654,7 +819,7 @@ impl ApplicationHandler for Lumen {
             }
         };
 
-        let renderer = match Renderer::new(window.clone(), INTER_FONT.to_vec()) {
+        let mut renderer = match Renderer::new(window.clone(), INTER_FONT.to_vec()) {
             Ok(r) => r,
             Err(err) => {
                 eprintln!("Не удалось инициализировать рендер: {err}");
@@ -662,6 +827,14 @@ impl ApplicationHandler for Lumen {
                 return;
             }
         };
+
+        // Заливаем декодированные ранее картинки в GPU. Take, чтобы освободить
+        // память Vec (изображение копируется в wgpu Texture внутри register_image).
+        for (src, image) in self.pending_images.drain(..) {
+            if let Err(err) = renderer.register_image(src.clone(), &image) {
+                eprintln!("Картинка {src} не зарегистрирована: {err}");
+            }
+        }
 
         self.window = Some(window);
         self.renderer = Some(renderer);
