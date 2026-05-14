@@ -452,7 +452,12 @@ fn parse_size_length(s: &str) -> Option<SizeLength> {
 /// Распарсить media-condition. Lenient: `Unsupported` вместо `None` —
 /// чтобы caller отличал «корректный, но не sматчит» от «синтаксис
 /// сломан полностью». Здесь возвращаем всегда что-то.
-fn parse_media_condition(s: &str) -> MediaCondition {
+///
+/// Используется как из `parse_sizes` (внутренне), так и из `picture`-picker-а
+/// для атрибута `<source media>` — там та же грамматика
+/// (`(min-width: ...) and (...)`), потому что Phase 0 не различает полный
+/// media-query и sizes-media-condition.
+pub fn parse_media_condition(s: &str) -> MediaCondition {
     let lower = s.trim().to_ascii_lowercase();
     if lower.is_empty() {
         return MediaCondition::Unsupported;
