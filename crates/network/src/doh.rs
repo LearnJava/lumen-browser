@@ -35,15 +35,15 @@ use lumen_core::url::Url;
 // ── Wire format (RFC 1035 §4) ────────────────────────────────────────────────
 
 /// QTYPE / TYPE значения, нужные нам. RFC 1035 §3.2.2 + RFC 3596 §2.1.
-pub(crate) const TYPE_A: u16 = 1;
-pub(crate) const TYPE_AAAA: u16 = 28;
-pub(crate) const CLASS_IN: u16 = 1;
+pub const TYPE_A: u16 = 1;
+pub const TYPE_AAAA: u16 = 28;
+pub const CLASS_IN: u16 = 1;
 
 /// Закодировать стандартный DNS query — header + одна question. RD=1
 /// (recursion desired), остальные флаги нули; transaction_id для DoH
 /// RFC 8484 §4.1 советует 0 (HTTP сам трекает), но любое значение
 /// валидно — сервер вернёт то же ID в ответе.
-pub(crate) fn encode_query(transaction_id: u16, qname: &str, qtype: u16) -> Result<Vec<u8>> {
+pub fn encode_query(transaction_id: u16, qname: &str, qtype: u16) -> Result<Vec<u8>> {
     let mut out = Vec::with_capacity(64);
     // Header (12 байт)
     out.extend_from_slice(&transaction_id.to_be_bytes());
@@ -97,7 +97,7 @@ fn write_qname(out: &mut Vec<u8>, qname: &str) -> Result<()> {
 /// Распакованный DNS-ответ — без CNAME-цепочек, только IP-адреса из
 /// answer section. Пустой вектор = legitimate «нет адресов» (NODATA);
 /// `Err` = wire-format error / RCODE!=0 / truncated.
-pub(crate) fn decode_answer_ips(msg: &[u8]) -> Result<Vec<IpAddr>> {
+pub fn decode_answer_ips(msg: &[u8]) -> Result<Vec<IpAddr>> {
     if msg.len() < 12 {
         return Err(Error::Network(format!(
             "DNS: ответ короче header-а (12 байт): {} байт",
@@ -246,7 +246,7 @@ fn skip_name(msg: &[u8], mut pos: usize) -> Result<usize> {
 /// Закодировать байты в base64url **без padding** — RFC 8484 §4.1 явно
 /// требует `=`-padding опустить. Алфавит — стандартный base64 с заменой
 /// `+`→`-` и `/`→`_`.
-pub(crate) fn base64url_encode(bytes: &[u8]) -> String {
+pub fn base64url_encode(bytes: &[u8]) -> String {
     const ALPHABET: &[u8; 64] =
         b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
