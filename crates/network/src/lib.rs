@@ -21,7 +21,8 @@ use rustls::pki_types::ServerName;
 use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, TabId};
 use lumen_core::ext::{
-    DnsResolver, EventSink, HstsEnforcement, NetworkTransport, RequestFilter,
+    DnsResolver, EventSink, HstsEnforcement, HttpAuthScheme, HttpCredentialProvider,
+    NetworkTransport, RequestFilter,
 };
 use lumen_core::url::Url;
 
@@ -32,6 +33,7 @@ mod dot;
 mod hsts;
 mod pool;
 mod range;
+pub use auth::StaticCredentialProvider;
 pub use dns::SystemDnsResolver;
 pub use doh::DohResolver;
 pub use dot::{DotResolver, DOT_DEFAULT_PORT};
@@ -125,19 +127,26 @@ impl Connection {
     /// которые криво интерпретируют отсутствие хедера). Опциональный `range`
     /// добавляет header `Range: bytes=START-END` (RFC 7233 §3.1); невалидный
     /// RangeSpec (`end < start`) тихо опускает header — fetch получит full
-    /// response (200 OK), не упадёт.
+    /// response (200 OK), не упадёт. Опциональный `authorization` — готовая
+    /// строка для header `Authorization` (Basic / Digest), формируется на
+    /// уровень выше после 401-retry.
     fn write_request(
         &mut self,
         host: &str,
         path: &str,
         range: Option<&RangeSpec>,
+        authorization: Option<&str>,
     ) -> Result<()> {
         let range_header = match range.and_then(|r| r.header_value()) {
             Some(value) => format!("Range: {value}\r\n"),
             None => String::new(),
         };
+        let auth_header = match authorization {
+            Some(value) => format!("Authorization: {value}\r\n"),
+            None => String::new(),
+        };
         let req = format!(
-            "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\n{range_header}\r\n"
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\n{range_header}{auth_header}\r\n"
         );
         let stream = self.reader.get_mut();
         stream
@@ -431,6 +440,7 @@ fn fetch_single(
     request_host_header: &str,
     request_path: &str,
     range: Option<&RangeSpec>,
+    authorization: Option<&str>,
 ) -> Result<Response> {
     let key = PoolKey {
         host: host.to_owned(),
@@ -440,7 +450,7 @@ fn fetch_single(
 
     // Попытка 1: используем pooled connection, если он есть.
     if let Some(pooled) = pool.acquire(&key) {
-        match do_request(pooled, request_host_header, request_path, range) {
+        match do_request(pooled, request_host_header, request_path, range, authorization) {
             Ok((resp, conn)) => {
                 if !conn.closed {
                     pool.release(key, conn);
@@ -457,7 +467,7 @@ fn fetch_single(
 
     // Попытка 2 (или 1, если пул был пуст): свежий connect.
     let conn = connect(host, port, is_tls, resolver)?;
-    let (resp, conn) = do_request(conn, request_host_header, request_path, range)?;
+    let (resp, conn) = do_request(conn, request_host_header, request_path, range, authorization)?;
     if !conn.closed {
         pool.release(key, conn);
     }
@@ -469,8 +479,9 @@ fn do_request(
     host: &str,
     path: &str,
     range: Option<&RangeSpec>,
+    authorization: Option<&str>,
 ) -> Result<(Response, Connection)> {
-    conn.write_request(host, path, range)?;
+    conn.write_request(host, path, range, authorization)?;
     let resp = read_response(&mut conn)?;
     Ok((resp, conn))
 }
@@ -486,6 +497,7 @@ fn fetch_with_redirect(
     sink: Option<&dyn EventSink>,
     filter: Option<&dyn RequestFilter>,
     hsts_store: Option<&dyn HstsEnforcement>,
+    credentials: Option<&dyn HttpCredentialProvider>,
     range: Option<&RangeSpec>,
     tab_id: TabId,
 ) -> Result<Response> {
@@ -534,68 +546,117 @@ fn fetch_with_redirect(
         return Err(Error::Network(format!("blocked: {reason}")));
     }
 
-    if let Some(s) = sink {
-        s.emit(&Event::RequestStarted {
-            tab_id,
-            url: url.clone(),
-        });
-    }
-
-    let resp = fetch_single(
-        pool,
-        resolver,
-        &host_ascii,
-        port,
-        is_tls,
-        &host_ascii,
-        &url.path_and_query(),
-        range,
-    )?;
-
-    // HSTS: сохранить policy из header-а, если ответ пришёл по HTTPS и
-    // server прислал Strict-Transport-Security. RFC 6797 §8.1 — STS на
-    // HTTP-ответе игнорируется (active attacker мог бы её подделать).
-    // Best-effort: ошибки storage не валят fetch (см. doc HstsEnforcement).
-    // Делается на каждом hop, не только финальном: 3xx-ответ тоже может
-    // нести STS-policy.
-    if let Some(h) = hsts_store {
-        hsts::process_sts_response(h, url.scheme(), &host_ascii, &resp.headers, now_unix);
-    }
-
-    // RequestCompleted эмитим всегда после получения статуса, до анализа кода:
-    // редирект-hop, 4xx, 5xx — всё это «outgoing byte был виден ответом».
-    if let Some(s) = sink {
-        s.emit(&Event::RequestCompleted {
-            tab_id,
-            url: url.clone(),
-            status: resp.status,
-        });
-    }
-
-    match resp.status {
-        200..=299 => Ok(resp),
-        301 | 302 | 303 | 307 | 308 => {
-            let location = header_value(&resp.headers, "location")
-                .ok_or_else(|| Error::Network("redirect without Location".to_owned()))?;
-            let next = url
-                .resolve(location)
-                .map_err(|e| Error::Network(format!("resolve redirect '{location}': {e}")))?;
-            // Range пробрасывается в redirect-target: пользователь
-            // запросил range на исходном URL, ожидает тот же range от
-            // final-resource (это и есть смысл redirect для range-GET).
-            fetch_with_redirect(
-                &next,
-                hops_left - 1,
-                pool,
-                resolver,
-                sink,
-                filter,
-                hsts_store,
-                range,
+    // 401-retry loop: первый запрос без Authorization, при 401 + creds —
+    // один retry с Authorization-header построенным из challenge. Больше
+    // одного retry на hop запрещено (две 401 подряд = неверные creds).
+    //
+    // Authorization намеренно НЕ переносится на redirect-hop: RFC 7235 §3.1
+    // — implementations SHOULD NOT use credentials with arbitrary URIs; в
+    // нашей рекурсивной модели свежий fetch_with_redirect для redirect-target
+    // начинается с пустым `authorization`, и провайдер опрашивается заново
+    // под новый origin/realm.
+    let mut authorization: Option<String> = None;
+    loop {
+        if let Some(s) = sink {
+            s.emit(&Event::RequestStarted {
                 tab_id,
-            )
+                url: url.clone(),
+            });
         }
-        status => Err(Error::Network(format!("HTTP {status}"))),
+
+        let resp = fetch_single(
+            pool,
+            resolver,
+            &host_ascii,
+            port,
+            is_tls,
+            &host_ascii,
+            &url.path_and_query(),
+            range,
+            authorization.as_deref(),
+        )?;
+
+        // HSTS: сохранить policy из header-а, если ответ пришёл по HTTPS и
+        // server прислал Strict-Transport-Security. RFC 6797 §8.1 — STS на
+        // HTTP-ответе игнорируется (active attacker мог бы её подделать).
+        // Best-effort: ошибки storage не валят fetch (см. doc HstsEnforcement).
+        // Делается на каждом hop, не только финальном: 3xx-ответ тоже может
+        // нести STS-policy.
+        if let Some(h) = hsts_store {
+            hsts::process_sts_response(h, url.scheme(), &host_ascii, &resp.headers, now_unix);
+        }
+
+        // RequestCompleted эмитим всегда после получения статуса, до анализа кода:
+        // редирект-hop, 4xx, 5xx — всё это «outgoing byte был виден ответом».
+        if let Some(s) = sink {
+            s.emit(&Event::RequestCompleted {
+                tab_id,
+                url: url.clone(),
+                status: resp.status,
+            });
+        }
+
+        match resp.status {
+            200..=299 => return Ok(resp),
+            301 | 302 | 303 | 307 | 308 => {
+                let location = header_value(&resp.headers, "location")
+                    .ok_or_else(|| Error::Network("redirect without Location".to_owned()))?;
+                let next = url
+                    .resolve(location)
+                    .map_err(|e| Error::Network(format!("resolve redirect '{location}': {e}")))?;
+                // Range пробрасывается в redirect-target: пользователь
+                // запросил range на исходном URL, ожидает тот же range от
+                // final-resource (это и есть смысл redirect для range-GET).
+                return fetch_with_redirect(
+                    &next,
+                    hops_left - 1,
+                    pool,
+                    resolver,
+                    sink,
+                    filter,
+                    hsts_store,
+                    credentials,
+                    range,
+                    tab_id,
+                );
+            }
+            401 if authorization.is_none() && credentials.is_some() => {
+                // Распарсить WWW-Authenticate и попробовать построить Authorization.
+                // Любая ошибка по пути (нет header-а, неподдерживаемая схема,
+                // провайдер не нашёл creds, builder вернул None) → пробросить
+                // 401 как есть, без retry.
+                let www_auth = match header_value(&resp.headers, "www-authenticate") {
+                    Some(v) => v.to_owned(),
+                    None => return Err(Error::Network("HTTP 401".to_owned())),
+                };
+                let challenges = auth::parse_www_authenticate(&www_auth);
+                let (scheme, parsed) = match auth::select_best_challenge(&challenges) {
+                    Some(pair) => pair,
+                    None => return Err(Error::Network("HTTP 401".to_owned())),
+                };
+                let origin = auth::origin_of(url);
+                let api_challenge = auth::challenge_for_provider(&origin, scheme, parsed);
+                let creds = match credentials.unwrap().credentials(&api_challenge) {
+                    Some(c) => c,
+                    None => return Err(Error::Network("HTTP 401".to_owned())),
+                };
+                let header = match scheme {
+                    HttpAuthScheme::Basic => auth::build_basic_authorization(&creds),
+                    HttpAuthScheme::Digest => match auth::build_digest_authorization(
+                        &creds,
+                        parsed,
+                        "GET",
+                        &url.path_and_query(),
+                    ) {
+                        Some(h) => h,
+                        None => return Err(Error::Network("HTTP 401".to_owned())),
+                    },
+                };
+                authorization = Some(header);
+                // Continue loop — повторим тот же hop с Authorization.
+            }
+            status => return Err(Error::Network(format!("HTTP {status}"))),
+        }
     }
 }
 
@@ -617,6 +678,7 @@ pub struct HttpClient {
     pool: Arc<ConnectionPool>,
     resolver: Arc<dyn DnsResolver>,
     hsts: Option<Arc<dyn HstsEnforcement>>,
+    credentials: Option<Arc<dyn HttpCredentialProvider>>,
     tab_id: TabId,
 }
 
@@ -628,6 +690,7 @@ impl HttpClient {
             pool: Arc::new(ConnectionPool::new()),
             resolver: Arc::new(SystemDnsResolver),
             hsts: None,
+            credentials: None,
             tab_id: TabId(0),
         }
     }
@@ -685,6 +748,25 @@ impl HttpClient {
         self
     }
 
+    /// Подключить credential-провайдер для HTTP authentication (RFC 7235 /
+    /// 7616 / 7617). По умолчанию — нет: запросы уходят без `Authorization`
+    /// header, и 401 пробрасывается как `Err`. С подключённым провайдером:
+    /// — на 401 + `WWW-Authenticate` выбирается сильнейший challenge
+    ///   (Digest > Basic, внутри Digest — SHA-256 > MD5);
+    /// — провайдеру передаётся `HttpAuthChallenge { origin, realm, scheme }`;
+    /// — если он вернул `Some(creds)` — клиент шлёт второй запрос с
+    ///   `Authorization`; иначе 401 пробрасывается наверх.
+    /// Retry один на hop. Authorization не пересылается на 3xx-redirect:
+    /// после redirect-а провайдер опрашивается заново с новым origin.
+    #[must_use]
+    pub fn with_credentials(
+        mut self,
+        credentials: Arc<dyn HttpCredentialProvider>,
+    ) -> Self {
+        self.credentials = Some(credentials);
+        self
+    }
+
     /// Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
     /// (без вкладок) shell оставляет дефолтный `TabId(0)`.
     #[must_use]
@@ -724,6 +806,7 @@ impl HttpClient {
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
+            self.credentials.as_deref(),
             Some(&range),
             self.tab_id,
         )?;
@@ -750,6 +833,7 @@ impl NetworkTransport for HttpClient {
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.hsts.as_deref(),
+            self.credentials.as_deref(),
             None,
             self.tab_id,
         )

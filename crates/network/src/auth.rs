@@ -25,9 +25,14 @@
 //! - proxy-auth (`Proxy-Authenticate` / `Proxy-Authorization`, 407) — не
 //!   реализован: у нас пока нет concept-а HTTP-прокси.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use lumen_core::ext::{HttpAuthChallenge, HttpAuthScheme, HttpCredentials};
+use lumen_core::ext::{
+    HttpAuthChallenge, HttpAuthScheme, HttpCredentialProvider, HttpCredentials,
+};
+use lumen_core::url::Url;
 
 // ── WWW-Authenticate parser (RFC 7235 §2.1, §4.1) ───────────────────────────
 
@@ -253,13 +258,13 @@ fn skip_ows(bytes: &[u8], mut i: usize) -> usize {
 /// Приоритет: Digest > Basic. Внутри Digest предпочитается SHA-256 над MD5
 /// (RFC 7616 §3.7: «client should choose the algorithm that provides the
 /// strongest security»). Прочие схемы (Negotiate, NTLM, Bearer) игнорируются.
-pub(crate) fn select_best_challenge<'a>(
-    challenges: &'a [ParsedChallenge],
-) -> Option<(HttpAuthScheme, &'a ParsedChallenge)> {
+pub(crate) fn select_best_challenge(
+    challenges: &[ParsedChallenge],
+) -> Option<(HttpAuthScheme, &ParsedChallenge)> {
     // 1. Digest с sha-256.
     if let Some(c) = challenges
         .iter()
-        .find(|c| c.scheme == "digest" && c.get("algorithm").map_or(false, is_sha256_algo))
+        .find(|c| c.scheme == "digest" && c.get("algorithm").is_some_and(is_sha256_algo))
     {
         return Some((HttpAuthScheme::Digest, c));
     }
@@ -668,6 +673,100 @@ fn sha256(input: &[u8]) -> [u8; 32] {
 fn sha256_hex(input: &str) -> String {
     let digest = sha256(input.as_bytes());
     hex_lower(&digest)
+}
+
+// ── Origin helpers ──────────────────────────────────────────────────────────
+
+/// Сформировать origin-строку `scheme://host[:port]` для передачи в
+/// `HttpCredentialProvider`. Host — ASCII (Punycode для IDN), default-port
+/// (80 для http / 443 для https) опускается — origin становится канонической
+/// строкой, по которой провайдер ищет creds.
+pub(crate) fn origin_of(url: &Url) -> String {
+    let scheme = url.scheme();
+    let host = url.host_ascii().unwrap_or_default();
+    let port = url.effective_port();
+    let default_port = match scheme {
+        "http" => Some(80u16),
+        "https" => Some(443u16),
+        _ => None,
+    };
+    if port == default_port {
+        format!("{scheme}://{host}")
+    } else if let Some(p) = port {
+        format!("{scheme}://{host}:{p}")
+    } else {
+        format!("{scheme}://{host}")
+    }
+}
+
+// ── StaticCredentialProvider ────────────────────────────────────────────────
+
+/// Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
+/// (user, pass)`. Используется для тестов, CI-сценариев и curl-style
+/// конфигурации (`--user user:pass`).
+///
+/// Lookup: сначала точное совпадение `(origin, realm)`, затем
+/// `(origin, "")` (любой realm на этом origin), затем `("", realm)`
+/// (любой origin с этим realm — для прокси-сценариев в будущем), затем
+/// `("", "")` — fallback default.
+pub struct StaticCredentialProvider {
+    entries: Mutex<HashMap<(String, String), HttpCredentials>>,
+}
+
+impl StaticCredentialProvider {
+    pub fn new() -> Self {
+        Self {
+            entries: Mutex::new(HashMap::new()),
+        }
+    }
+
+    /// Точное совпадение `(origin, realm)`.
+    #[must_use]
+    pub fn with(self, origin: &str, realm: &str, user: &str, pass: &str) -> Self {
+        self.add(origin, realm, user, pass);
+        self
+    }
+
+    /// Зарегистрировать creds после конструирования. `&self` (не `&mut`) —
+    /// у нас Mutex; провайдер можно делить через Arc и доливать creds в
+    /// процессе работы (например, после UI-popup).
+    pub fn add(&self, origin: &str, realm: &str, user: &str, pass: &str) {
+        self.entries.lock().unwrap().insert(
+            (origin.to_string(), realm.to_string()),
+            HttpCredentials {
+                username: user.to_string(),
+                password: pass.to_string(),
+            },
+        );
+    }
+}
+
+impl Default for StaticCredentialProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HttpCredentialProvider for StaticCredentialProvider {
+    fn credentials(&self, challenge: &HttpAuthChallenge) -> Option<HttpCredentials> {
+        let entries = self.entries.lock().unwrap();
+        // 1. (origin, realm) exact
+        if let Some(c) = entries.get(&(challenge.origin.clone(), challenge.realm.clone())) {
+            return Some(c.clone());
+        }
+        // 2. (origin, "") — любой realm на этом origin
+        if let Some(c) = entries.get(&(challenge.origin.clone(), String::new())) {
+            return Some(c.clone());
+        }
+        // 3. ("", realm) — любой origin
+        if let Some(c) = entries.get(&(String::new(), challenge.realm.clone())) {
+            return Some(c.clone());
+        }
+        // 4. ("", "") — default
+        entries
+            .get(&(String::new(), String::new()))
+            .cloned()
+    }
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
