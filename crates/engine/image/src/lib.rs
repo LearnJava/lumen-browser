@@ -13,8 +13,10 @@
 //! Декодер не паникует на повреждённом входе — каждая ошибка возвращается
 //! как `DecodeError` с конкретной причиной.
 
+mod jpeg;
 mod png;
 
+pub use jpeg::{decode_jpeg, JpegError};
 pub use png::decode_png;
 
 /// Декодированное растровое изображение в плотной row-major упаковке без
