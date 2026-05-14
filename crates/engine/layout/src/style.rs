@@ -632,6 +632,81 @@ pub struct ComputedStyle {
     pub justify_items: AlignValue,
     pub justify_self: AlignValue,
     pub justify_content: AlignValue,
+    /// CSS Backgrounds L3 — `background-image`.
+    pub background_image: BackgroundImage,
+    pub background_repeat: BackgroundRepeat,
+    pub background_size: BackgroundSize,
+    pub background_attachment: BackgroundAttachment,
+}
+
+/// CSS Backgrounds L3 §3.1 — `background-image` value.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum BackgroundImage {
+    #[default]
+    None,
+    /// `url("path")` — внешний image-ресурс. Хранится без resolve
+    /// относительно base-href.
+    Url(String),
+    /// `linear-gradient(...)`, `radial-gradient(...)`, `conic-gradient(...)`
+    /// и их `repeating-` варианты. Phase 0 хранится сырая строка.
+    Gradient(String),
+}
+
+/// CSS Backgrounds L3 §3.4 — `background-repeat`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BackgroundRepeat {
+    #[default]
+    Repeat,
+    NoRepeat,
+    RepeatX,
+    RepeatY,
+    Round,
+    Space,
+}
+
+impl BackgroundRepeat {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "repeat" => Some(Self::Repeat),
+            "no-repeat" => Some(Self::NoRepeat),
+            "repeat-x" => Some(Self::RepeatX),
+            "repeat-y" => Some(Self::RepeatY),
+            "round" => Some(Self::Round),
+            "space" => Some(Self::Space),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Backgrounds L3 §3.5 — `background-size`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum BackgroundSize {
+    #[default]
+    Auto,
+    Cover,
+    Contain,
+    /// Width / Height в px. None для height = auto.
+    Length(f32, Option<f32>),
+}
+
+/// CSS Backgrounds L3 §3.6 — `background-attachment`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BackgroundAttachment {
+    #[default]
+    Scroll,
+    Fixed,
+    Local,
+}
+
+impl BackgroundAttachment {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "scroll" => Some(Self::Scroll),
+            "fixed" => Some(Self::Fixed),
+            "local" => Some(Self::Local),
+            _ => None,
+        }
+    }
 }
 
 /// CSS Box Alignment L3 §6.1 — значения для align-/justify- свойств.
@@ -848,6 +923,10 @@ impl ComputedStyle {
             justify_items: AlignValue::Auto,
             justify_self: AlignValue::Auto,
             justify_content: AlignValue::Auto,
+            background_image: BackgroundImage::None,
+            background_repeat: BackgroundRepeat::Repeat,
+            background_size: BackgroundSize::Auto,
+            background_attachment: BackgroundAttachment::Scroll,
         }
     }
 }
@@ -950,6 +1029,11 @@ pub fn compute_style(
         justify_items: AlignValue::Auto,
         justify_self: AlignValue::Auto,
         justify_content: AlignValue::Auto,
+        // Backgrounds — не наследуются, defaults.
+        background_image: BackgroundImage::None,
+        background_repeat: BackgroundRepeat::Repeat,
+        background_size: BackgroundSize::Auto,
+        background_attachment: BackgroundAttachment::Scroll,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -3446,6 +3530,51 @@ fn apply_declaration(
                     .unwrap_or(a);
             }
         }
+        "background-image" => {
+            // CSS Backgrounds L3 §3.1. `none` сбрасывает.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.background_image = BackgroundImage::None;
+            } else if let Some(url) = parse_url_value(trimmed) {
+                style.background_image = BackgroundImage::Url(url);
+            } else if is_gradient_function(trimmed) {
+                // Gradients хранятся сырой строкой — типизация отложена.
+                style.background_image = BackgroundImage::Gradient(trimmed.to_string());
+            }
+        }
+        "background-repeat" => {
+            if let Some(v) = BackgroundRepeat::parse(val) {
+                style.background_repeat = v;
+            }
+        }
+        "background-size" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.background_size = BackgroundSize::Auto;
+            } else if trimmed.eq_ignore_ascii_case("cover") {
+                style.background_size = BackgroundSize::Cover;
+            } else if trimmed.eq_ignore_ascii_case("contain") {
+                style.background_size = BackgroundSize::Contain;
+            } else {
+                let parts: Vec<&str> = trimmed.split_whitespace().collect();
+                let w = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport));
+                let h = parts.get(1).and_then(|s| {
+                    if s.eq_ignore_ascii_case("auto") {
+                        None
+                    } else {
+                        resolve_box_length(s, em_basis, viewport)
+                    }
+                });
+                if let Some(w) = w {
+                    style.background_size = BackgroundSize::Length(w, h);
+                }
+            }
+        }
+        "background-attachment" => {
+            if let Some(v) = BackgroundAttachment::parse(val) {
+                style.background_attachment = v;
+            }
+        }
         "place-content" => {
             let parts: Vec<&str> = val.split_whitespace().collect();
             if let Some(a) = parts.first().and_then(|s| AlignValue::parse(s)) {
@@ -4431,6 +4560,27 @@ fn parse_filter_list(s: &str) -> Vec<FilterFn> {
         }
     }
     out
+}
+
+/// Извлечь URL из `url(...)`-функции. Поддерживает кавычки и без них.
+/// Возвращает None если строка не выглядит как url().
+fn parse_url_value(s: &str) -> Option<String> {
+    let s = s.trim();
+    let after = s.strip_prefix("url(")?;
+    let close = after.rfind(')')?;
+    let inner = after[..close].trim().trim_matches(['"', '\''].as_ref());
+    Some(inner.to_string())
+}
+
+/// Проверка, является ли value одной из gradient-функций.
+fn is_gradient_function(s: &str) -> bool {
+    let s = s.trim().to_ascii_lowercase();
+    s.starts_with("linear-gradient(")
+        || s.starts_with("radial-gradient(")
+        || s.starts_with("conic-gradient(")
+        || s.starts_with("repeating-linear-gradient(")
+        || s.starts_with("repeating-radial-gradient(")
+        || s.starts_with("repeating-conic-gradient(")
 }
 
 /// CSS Sizing L4 §6.1 — парсит `<ratio>`: либо одно положительное
