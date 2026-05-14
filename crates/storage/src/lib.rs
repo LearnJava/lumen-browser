@@ -14,13 +14,16 @@
 
 pub mod bookmarks;
 pub mod cookies;
+pub mod dns_cache;
 pub mod downloads;
 pub mod history;
 pub mod http_cache;
 pub mod permissions;
 pub mod plugins;
 pub mod profiles;
+pub mod search_history;
 pub mod search_providers;
+pub mod site_engagement;
 pub mod sqlite_store;
 pub mod store;
 pub mod tab_sessions;
@@ -28,13 +31,16 @@ pub mod workspaces;
 
 pub use bookmarks::{Bookmark, Bookmarks};
 pub use cookies::{parse_set_cookie, Cookie, CookieJar, SameSite};
+pub use dns_cache::{DnsCache, DnsEntry};
 pub use downloads::{DownloadEntry, DownloadStatus, Downloads};
 pub use history::{History, HistoryEntry};
 pub use http_cache::{CacheControl, CachedResponse, HttpCache};
 pub use permissions::{PermissionEntry, PermissionKind, PermissionState, Permissions};
 pub use plugins::{PluginManifest, Plugins};
 pub use profiles::{Profile, ProfileRegistry};
+pub use search_history::{SearchHistory, SearchQuery};
 pub use search_providers::{SearchProviderEntry, SearchProviders};
+pub use site_engagement::{SiteEngagement, SiteEngagementStore};
 pub use sqlite_store::SqliteStorage;
 pub use store::InMemoryStorage;
 pub use tab_sessions::{SessionSnapshot, TabSession, TabSessions};
