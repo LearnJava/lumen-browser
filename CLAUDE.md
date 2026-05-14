@@ -205,29 +205,68 @@ crates/
 
 ## Политика зависимостей
 
-**Default — пишем сами.** Lumen — про собственный движок, не про обёртку над `html5ever` / `taffy` / `image` / `tokio`.
+**Стратегия: сначала рабочий браузер, потом разговор «что переписывать самим».** Lumen про собственный rendering engine — это ядро, его не трогаем. Всё остальное, что не определяет идентичность проекта (декодеры медиа-форматов, Unicode-таблицы, sub-протоколы), берём из готовых решений, чтобы добраться до Phase 1 в обозримом будущем. После этого — пересматриваем provisional-список и решаем, где есть смысл писать своё.
 
-**Исключение из «своё» — хранение данных пользователя.** Persistent storage (history, bookmarks, notes, read-later, cookies, профили, knowledge layer FTS, HTTP-кэш ресурсов) берём из готовых решений — стандарт индустрии браузеров, плюс зрелая БД с audit-ом против data-loss / corruption. Decoder-ы и parsers (PNG inflate, TTF parse, HTML/CSS) **под это правило не подпадают** — это streaming-форматы, не persistent data. In-memory структуры (DOM arena, layout tree, glyph atlas) — тоже не storage. Подробнее — [DECISIONS.md](DECISIONS.md) и [project-db-for-history](~/.claude/projects/.../memory/project_db_for_history.md).
+«Не делаем Google Chrome» означает: ядро (HTML/CSS/DOM/style/layout/paint/font/encoding, URL, HTTP/1.1, DNS, adblock matcher, knowledge layer, UI shell) — наше. Всё остальное — прагматика.
 
-### Пять разрешённых exception (только эти, всё остальное — свой код)
+### Две категории exception
+
+**Permanent (5 шт.) — никогда не переписываем сами.** Универсальные правила безопасности / здравого смысла: свой crypto / GPU API / OS event loop / SQL engine / JS engine не пишут.
 
 | Crate | За что | Почему не сами |
 |---|---|---|
 | `winit` | OS event loop + окна | Win32 + X11 + Wayland + AppKit — годы платформенных багов |
 | `wgpu` | GPU API (Vulkan/Metal/DX12) | 4 разных API, driver-баги, годы работы |
-| `rustls` | TLS / crypto (когда подключим сеть) | **Никогда не пиши свой crypto** |
-| JS engine (`rquickjs` / `rusty_v8`) | Исполнение JavaScript | 15 лет работы Google/Mozilla |
-| SQLite (`rusqlite` с `bundled`) | Персистентное хранилище: history, bookmarks, notes, read-later, cookies-TTL, профили + FTS5 для §12.1 | 25 лет, миллиарды inst, TH3-тестирование. Стандарт индустрии браузеров (Firefox/Chromium/Safari). FTS5 = полнотекстовый поиск без своего inverted index |
+| `rustls` + `webpki-roots` | TLS / crypto + bundle корневых CA-сертификатов | **Никогда не пиши свой crypto.** rustls — аудит + формальная верификация. `webpki-roots` — Mozilla CA bundle, без него HTTPS не валидируется |
+| `rusqlite` (`bundled` SQLite) | Persistent storage: history, bookmarks, notes, read-later, cookies-TTL, профили + FTS5 для §12.1 | 25 лет TH3-тестирования, стандарт индустрии. Цена ошибки persistent storage — молчаливая порча данных пользователя; та же асимметрия, что у crypto. FTS5 закрывает §12.1 без своего inverted index |
+| JS engine (`rquickjs` → `rusty_v8`) | Исполнение JavaScript | V8 — 15 лет, миллиарды долларов, сотни инженеров |
 
-Подробности и таблица «зачёркнутых» зависимостей (что пишем сами, хотя соблазн взять готовое) — в §5 плана.
+**Provisional accelerators — берём готовое сейчас, переписываем своё «когда».** У каждого — trait-anchor в `lumen-core::ext` и «graduation criterion» (событие, не дата). Список растёт по мере фаз; полная таблица — в §5 плана.
+
+| Crate (кандидаты) | Trait-anchor | Graduation criterion |
+|---|---|---|
+| Image decoders для JPEG/WebP/GIF (`zune-jpeg`, `image-webp`, узкий `image`) | `ImageDecoder` | Едва ли когда-то; PNG уже свой, остальные — black-box форматы без архитектурной ценности |
+| `icu4x` (segmentation / line-break / bidi / normalization) | `UnicodeProvider` | Когда P1 закроет CSS Selectors L4 и появится bandwidth на Unicode-таблицы; реалистично — никогда |
+| `brotli-decompressor` | расширение `ContentDecoder` | Едва ли когда-то; формат стабилен |
+| `ruzstd` / `zstd-safe` | расширение `ContentDecoder` для HTTP `Content-Encoding: zstd` | Реалистично — никогда; формат стабилен |
+| `idna` (полный UTS#46) | `IdnaProvider` | Когда найдём real edge-case, который наш Punycode-only не покрывает |
+| `publicsuffix` (или свой loader PSL.dat) | `PublicSuffixList` для cookie domain matching, eTLD+1 | Едва ли; формат простой, но обновляется регулярно |
+| `hyphenation` | `HyphenationProvider` | Phase 2+, когда дойдём до типографики; TeX-словари можно переписать на свой формат позже |
+| `woff2` | `FontFormat` (расширение) | Phase 2 при добавлении WebFonts; формат стабилен, маловероятно |
+| `hunspell-rs` / `spellbook` | `SpellChecker` | Phase 3 при spell-check; русская морфология сложна, переписывать дороже чем стоит |
+| `quinn` (HTTP/3 / QUIC) | расширение `NetworkTransport` | Никогда в обозримом; QUIC = год+ работы |
+
+«Реалистично никогда» — это не лицемерие, а честная маркировка: trait-anchor существует, заменить технически тривиально, но политических причин для замены нет.
+
+### Что НЕ переводится даже временно (ядро Lumen)
+
+Эти подсистемы — наша идентичность. Готовые crate-ы рассматриваются и **отвергаются**:
+
+- HTML parser (свой по WHATWG spec) — ~html5ever~
+- CSS parser, selectors, cascade — ~cssparser, selectors, stylo~
+- DOM (arena-based) — наш
+- Layout (block/inline/flex/grid) — ~taffy~
+- Paint (display list + wgpu rasterizer) — ~tiny-skia~
+- Font parser + rasterizer (TrueType) — ~ttf-parser, font-kit~
+- Encoding (cp1251/KOI8-R/CP866/UTF-8 + детектор) — ~encoding_rs~
+- URL parser (WHATWG) — ~url~
+- HTTP/1.1 + HTTP/2 — ~hyper~
+- DNS resolver с DoH/DoT — ~hickory-resolver~
+- Adblock matcher — ~adblock~
+- Punycode базовый, MD5/SHA-256 (для Digest), Base64 — все свои, маленькие, фундамент
+- PNG-декодер с собственным DEFLATE (уже написан, DEFLATE переиспользуется для HTTP gzip/deflate)
+- Knowledge layer (§12) — ценность для пользователя, не должна быть кому-то делегирована
+- UI shell — иммедиат-режим поверх своих paint-примитивов
+
+Если кто-то предлагает «возьми готовое» для пункта из этого списка — это шаг к Chrome-форку. Не делаем.
 
 ### Правило «no new dep без обоснования»
 
 Если в коммите добавляется новая запись в `[dependencies]`, в commit-теле обязателен пункт:
 
-> **Why this dependency:** \<обоснование, почему свой код категорически неуместен\>
+> **Why this dependency:** \<категория (permanent / provisional), trait-anchor, graduation criterion если provisional\>
 
-Без обоснования — пишем сами.
+Provisional-список расширяется по мере того, как фаза упирается в реальную задачу — не превентивно.
 
 ---
 
