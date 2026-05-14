@@ -2186,8 +2186,62 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
             // кандидата (а не E); кандидаты ищутся согласно combinator-у.
             list.iter().any(|rs| matches_relative(rs, doc, node))
         }
+        PseudoClass::PlaceholderShown => matches_placeholder_shown(doc, node),
         PseudoClass::Unsupported(_) => false,
     }
+}
+
+/// CSS Selectors L4 §15.1 `:placeholder-shown` — true для form-control,
+/// у которого есть непустой `placeholder`-атрибут И value-атрибут отсутствует
+/// либо пустой.
+///
+/// В Phase 0 без runtime form-state значение никем не вводится — текущее
+/// значение определяется только author-объявленным `value`-атрибутом. Этого
+/// достаточно для условных стилей вроде `input:placeholder-shown { color:
+/// gray }` на статически отрисованной форме.
+fn matches_placeholder_shown(doc: &Document, node: NodeId) -> bool {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else {
+        return false;
+    };
+    let tag = name.local.as_str();
+    if tag != "input" && tag != "textarea" {
+        return false;
+    }
+    let Some(placeholder) = node_ref.get_attr("placeholder") else {
+        return false;
+    };
+    if placeholder.trim().is_empty() {
+        return false;
+    }
+    // `value` атрибут с непустым содержимым → пользователь (или author)
+    // уже задал контент, placeholder скрыт. `<textarea>`-у HTML присваивает
+    // значение через текстовых детей (а не через атрибут), но Phase 0
+    // нашей кодовой базы DOM-mutations нет — текстовое содержимое <textarea>
+    // в DOM тоже трактуем как «не пустое значение».
+    if let Some(value) = node_ref.get_attr("value")
+        && !value.is_empty()
+    {
+        return false;
+    }
+    if tag == "textarea" && has_non_whitespace_text(doc, node) {
+        return false;
+    }
+    true
+}
+
+/// Проверка: у узла есть хоть один text-ребёнок с непустым содержимым
+/// (после whitespace-trim). Нужно для `<textarea>` чьё «значение» — это
+/// его текстовый контент в DOM (HTML5 §4.10.11), а не `value`-атрибут.
+fn has_non_whitespace_text(doc: &Document, node: NodeId) -> bool {
+    for &child in &doc.get(node).children {
+        if let NodeData::Text(t) = &doc.get(child).data
+            && !t.trim().is_empty()
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// Проверяет, что хоть один кандидат относительно `scope` (в зависимости от
