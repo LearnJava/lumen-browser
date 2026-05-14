@@ -25,6 +25,7 @@ use lumen_core::ext::{
 };
 use lumen_core::url::Url;
 
+mod auth;
 mod dns;
 mod doh;
 mod dot;
