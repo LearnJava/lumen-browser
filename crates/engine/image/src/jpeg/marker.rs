@@ -4,9 +4,11 @@
 //! payload: после `NN` идут 2 байта длины (BE, **включая сами 2 байта**),
 //! затем тело. SOI, EOI, RSTn и TEM — stand-alone, без длины.
 //!
-//! Reader накапливает таблицы (`DQT`, `DHT`) и параметры frame-а (`SOF0`,
-//! `DRI`) до встречи `SOS`, после чего управление передаётся в `scan` для
-//! entropy decode.
+//! Reader накапливает таблицы (`DQT`, `DHT`) и параметры frame-а (`SOF0` /
+//! `SOF2`, `DRI`) до встречи `SOS`, после чего управление передаётся в `scan` /
+//! `progressive` для entropy decode. Progressive-режим (SOF2) допускает
+//! несколько scan-ов с переопределением Huffman-таблиц между ними; для этого
+//! `read_next_segment_after_scan` пере-входит в marker-цикл после bit-stream-а.
 
 use super::huffman::HuffmanTable;
 
@@ -114,7 +116,7 @@ impl core::fmt::Display for JpegError {
 
 impl std::error::Error for JpegError {}
 
-/// Параметры frame-а из SOF0 (ISO/IEC 10918-1 §B.2.2).
+/// Параметры frame-а из SOF0 / SOF2 (ISO/IEC 10918-1 §B.2.2).
 #[derive(Debug, Clone)]
 pub struct Frame {
     pub width: u16,
@@ -124,6 +126,8 @@ pub struct Frame {
     pub h_max: u8,
     /// Максимальный vertical sampling factor по всем компонентам.
     pub v_max: u8,
+    /// SOF2 (progressive) → true, SOF0 (baseline) → false.
+    pub is_progressive: bool,
 }
 
 /// Один компонент изображения (§B.2.2 component-specification).
@@ -150,11 +154,28 @@ pub struct ScanComponent {
     pub ac_table: u8,
 }
 
+/// Параметры одного scan-а из SOS (`Ss Se Ah Al` поверх компонент).
+/// Для baseline (SOF0) всегда `ss=0`, `se=63`, `ah=0`, `al=0` и компоненты —
+/// все из frame (interleaved). Для progressive (SOF2) каждый scan покрывает
+/// часть спектра и/или один бит successive approximation.
+#[derive(Debug, Clone)]
+pub struct ScanInfo {
+    pub components: Vec<ScanComponent>,
+    /// Start of spectral selection (0..=63).
+    pub ss: u8,
+    /// End of spectral selection (Ss..=63).
+    pub se: u8,
+    /// Successive approximation bit position high (0 = initial scan).
+    pub ah: u8,
+    /// Successive approximation bit position low (точка bit-shift при store).
+    pub al: u8,
+}
+
 /// Состояние, собранное до начала entropy-coded scan-а.
 #[derive(Debug)]
 pub struct JpegContext {
     pub frame: Frame,
-    pub scan: Vec<ScanComponent>,
+    pub scan: ScanInfo,
     /// Quantization tables, индекс = Tq (0..=3); de-zigzagged в natural row-major.
     pub quant_tables: [Option<[u16; 64]>; 4],
     /// Huffman DC tables (id 0..=3).
@@ -163,6 +184,18 @@ pub struct JpegContext {
     pub ac_tables: [Option<HuffmanTable>; 4],
     /// Restart interval (`Ri` из DRI) — число MCU между RSTn. 0 = выключен.
     pub restart_interval: u16,
+}
+
+/// Что нашёл `read_next_segment_after_scan` после завершения scan-а в
+/// progressive-режиме. EOI → finalize; SOS → начать следующий scan;
+/// промежуточные DHT/DQT/DRI применяются in-place и не возвращаются.
+#[derive(Debug)]
+pub enum NextSegment {
+    /// Очередной scan: bit_reader должен пере-инициализироваться на
+    /// `bit_pos`, который совпадает с `SegmentReader::pos` сразу после payload-а.
+    Scan(ScanInfo),
+    /// Конец потока (FF D9).
+    Eoi,
 }
 
 /// Reader marker-segments. Хранит положение во входном буфере;
@@ -180,6 +213,13 @@ impl<'a> SegmentReader<'a> {
     /// Текущая позиция (для передачи в bit_reader после SOS).
     pub fn pos(&self) -> usize {
         self.pos
+    }
+
+    /// Устанавливает позицию (после того, как bit_reader прочитал часть потока
+    /// и встретил marker — используется в progressive-режиме при переходе к
+    /// следующему scan-у).
+    pub fn set_pos(&mut self, pos: usize) {
+        self.pos = pos;
     }
 
     /// Доступ к исходному буферу (нужен bit_reader-у).
@@ -245,7 +285,7 @@ impl<'a> SegmentReader<'a> {
         self.pos = 2;
 
         let mut frame: Option<Frame> = None;
-        let scan: Vec<ScanComponent>;
+        let scan: ScanInfo;
         let mut quant_tables: [Option<[u16; 64]>; 4] = [None, None, None, None];
         let mut dc_tables: [Option<HuffmanTable>; 4] = [None, None, None, None];
         let mut ac_tables: [Option<HuffmanTable>; 4] = [None, None, None, None];
@@ -261,11 +301,21 @@ impl<'a> SegmentReader<'a> {
                         return Err(JpegError::BadSegmentLength(len));
                     }
                     let payload = self.read_payload(usize::from(len) - 2)?;
-                    frame = Some(parse_sof0(payload)?);
+                    frame = Some(parse_sof(payload, /*progressive*/ false)?);
                 }
-                // SOF1..SOF15 кроме SOF4 (DHT) — другие профили, не поддерживаем.
-                0xC1 | 0xC2 | 0xC3 | 0xC5 | 0xC6 | 0xC7 | 0xC9 | 0xCA | 0xCB | 0xCD | 0xCE
-                | 0xCF => return Err(JpegError::UnsupportedSof(marker)),
+                // SOF2 — Progressive DCT (Huffman).
+                0xC2 => {
+                    let len = self.read_u16()?;
+                    if len < 2 {
+                        return Err(JpegError::BadSegmentLength(len));
+                    }
+                    let payload = self.read_payload(usize::from(len) - 2)?;
+                    frame = Some(parse_sof(payload, /*progressive*/ true)?);
+                }
+                // SOF1/3/5/6/7/9/10/11/13/14/15 — extended/lossless/hierarchical/arithmetic, не поддерживаем.
+                0xC1 | 0xC3 | 0xC5 | 0xC6 | 0xC7 | 0xC9 | 0xCA | 0xCB | 0xCD | 0xCE | 0xCF => {
+                    return Err(JpegError::UnsupportedSof(marker));
+                }
                 // DHT — Define Huffman Table.
                 0xC4 => {
                     let len = self.read_u16()?;
@@ -302,7 +352,7 @@ impl<'a> SegmentReader<'a> {
                     }
                     let payload = self.read_payload(usize::from(len) - 2)?;
                     let f = frame.as_ref().ok_or(JpegError::UnsupportedFeature(
-                        "SOS перед SOF0",
+                        "SOS перед SOF",
                     ))?;
                     scan = parse_sos(payload, f)?;
                     break;
@@ -349,10 +399,74 @@ impl<'a> SegmentReader<'a> {
             restart_interval,
         })
     }
+
+    /// Читает следующий segment после завершения progressive scan-а:
+    /// применяет промежуточные DHT/DQT/DRI к `ctx`, возвращает следующий
+    /// scan (через `NextSegment::Scan`) или EOI. Прочие SOFn/RSTn/SOI →
+    /// неожиданные маркеры.
+    pub fn read_next_segment_after_scan(
+        &mut self,
+        ctx: &mut JpegContext,
+    ) -> Result<NextSegment, JpegError> {
+        loop {
+            let marker = self.read_marker()?;
+            match marker {
+                // EOI — конец файла.
+                0xD9 => return Ok(NextSegment::Eoi),
+                // SOS — следующий scan.
+                0xDA => {
+                    let len = self.read_u16()?;
+                    if len < 2 {
+                        return Err(JpegError::BadSegmentLength(len));
+                    }
+                    let payload = self.read_payload(usize::from(len) - 2)?;
+                    let scan_info = parse_sos(payload, &ctx.frame)?;
+                    return Ok(NextSegment::Scan(scan_info));
+                }
+                // DHT — переопределение Huffman-таблиц между scan-ами (типично).
+                0xC4 => {
+                    let len = self.read_u16()?;
+                    if len < 2 {
+                        return Err(JpegError::BadSegmentLength(len));
+                    }
+                    let payload = self.read_payload(usize::from(len) - 2)?;
+                    parse_dht(payload, &mut ctx.dc_tables, &mut ctx.ac_tables)?;
+                }
+                // DQT — переопределение quantization (редко, но spec разрешает).
+                0xDB => {
+                    let len = self.read_u16()?;
+                    if len < 2 {
+                        return Err(JpegError::BadSegmentLength(len));
+                    }
+                    let payload = self.read_payload(usize::from(len) - 2)?;
+                    parse_dqt(payload, &mut ctx.quant_tables)?;
+                }
+                // DRI — переопределение restart interval.
+                0xDD => {
+                    let len = self.read_u16()?;
+                    if len != 4 {
+                        return Err(JpegError::BadSegmentLength(len));
+                    }
+                    ctx.restart_interval = self.read_u16()?;
+                }
+                // APPn / COM — пропускаем.
+                0xE0..=0xEF | 0xFE => {
+                    let len = self.read_u16()?;
+                    if len < 2 {
+                        return Err(JpegError::BadSegmentLength(len));
+                    }
+                    let _ = self.read_payload(usize::from(len) - 2)?;
+                }
+                // Прочие — не должны встретиться здесь.
+                _ => return Err(JpegError::UnexpectedMarker(marker)),
+            }
+        }
+    }
 }
 
-/// SOF0 payload: `P H V Nf [Ci Hi/Vi Tqi]×Nf`.
-fn parse_sof0(payload: &[u8]) -> Result<Frame, JpegError> {
+/// SOF0 / SOF2 payload: `P H V Nf [Ci Hi/Vi Tqi]×Nf`. Структура одинаковая,
+/// различается только marker — отсюда явный флаг `is_progressive`.
+fn parse_sof(payload: &[u8], is_progressive: bool) -> Result<Frame, JpegError> {
     if payload.len() < 6 {
         return Err(JpegError::BadTableSegment);
     }
@@ -413,6 +527,7 @@ fn parse_sof0(payload: &[u8]) -> Result<Frame, JpegError> {
         components,
         h_max,
         v_max,
+        is_progressive,
     })
 }
 
@@ -499,12 +614,27 @@ fn parse_dht(
 }
 
 /// SOS payload: `Ns [Csj Tdj/Taj]×Ns Ss Se Ah/Al`.
-fn parse_sos(payload: &[u8], frame: &Frame) -> Result<Vec<ScanComponent>, JpegError> {
+///
+/// Baseline (SOF0): требуем `Ss=0`, `Se=63`, `Ah=Al=0`, `Ns=Nf` (interleaved).
+///
+/// Progressive (SOF2):
+/// - DC scan имеет `Ss=Se=0`, может быть interleaved (Ns=Nf) или non-interleaved (Ns=1).
+/// - AC scan имеет `1≤Ss≤Se≤63`, всегда non-interleaved (Ns=1) — это требование spec §G.1.1.
+/// - `Al` — successive approximation bit position (значения коэффициентов сдвигаются на `Al`).
+/// - Initial scan: `Ah=0`. Refinement scan: `Ah = Al + 1`.
+fn parse_sos(payload: &[u8], frame: &Frame) -> Result<ScanInfo, JpegError> {
     if payload.is_empty() {
         return Err(JpegError::BadTableSegment);
     }
     let ns = payload[0];
-    if usize::from(ns) != frame.components.len() {
+    if !(1..=4).contains(&ns) {
+        return Err(JpegError::UnsupportedScan {
+            ns,
+            nf: frame.components.len() as u8,
+        });
+    }
+    if !frame.is_progressive && usize::from(ns) != frame.components.len() {
+        // Baseline JPEG: только interleaved (все компоненты в одном scan-е).
         return Err(JpegError::UnsupportedScan {
             ns,
             nf: frame.components.len() as u8,
@@ -514,7 +644,7 @@ fn parse_sos(payload: &[u8], frame: &Frame) -> Result<Vec<ScanComponent>, JpegEr
     if payload.len() != expected_len {
         return Err(JpegError::BadTableSegment);
     }
-    let mut scan = Vec::with_capacity(usize::from(ns));
+    let mut components = Vec::with_capacity(usize::from(ns));
     for j in 0..usize::from(ns) {
         let cs = payload[1 + 2 * j];
         let td_ta = payload[2 + 2 * j];
@@ -531,20 +661,48 @@ fn parse_sos(payload: &[u8], frame: &Frame) -> Result<Vec<ScanComponent>, JpegEr
             .iter()
             .position(|c| c.id == cs)
             .ok_or(JpegError::BadScanComponent(cs))?;
-        scan.push(ScanComponent {
+        components.push(ScanComponent {
             frame_index,
             dc_table,
             ac_table,
         });
     }
-    // Ss / Se / Ah-Al для baseline должны быть 0 / 63 / 0; нестрого проверяем,
-    // но в нашем case это всегда так — реальные baseline-encoder-ы пишут именно так.
     let ss = payload[1 + 2 * usize::from(ns)];
     let se = payload[2 + 2 * usize::from(ns)];
-    if ss != 0 || se != 63 {
-        return Err(JpegError::UnsupportedFeature("progressive SOS Ss/Se ≠ 0/63"));
+    let ah_al = payload[3 + 2 * usize::from(ns)];
+    let ah = ah_al >> 4;
+    let al = ah_al & 0x0F;
+    if frame.is_progressive {
+        if ss > 63 || se > 63 || (ss > 0 && se < ss) {
+            return Err(JpegError::BadCoefficientPosition(usize::from(ss.max(se))));
+        }
+        // §G.1.1.1.1: DC scan (Ss=0) требует Se=0; AC scan (Ss>0) требует Ns=1.
+        if ss == 0 && se != 0 {
+            return Err(JpegError::UnsupportedFeature("progressive scan: Ss=0 требует Se=0"));
+        }
+        if ss > 0 && ns != 1 {
+            return Err(JpegError::UnsupportedFeature("progressive AC scan: Ns должен быть 1"));
+        }
+        if ah > 13 || al > 13 {
+            return Err(JpegError::BadCoefficientSize(ah_al));
+        }
+        // Successive approximation: refinement scan имеет Ah = Al + 1.
+        if ah != 0 && ah != al + 1 {
+            return Err(JpegError::UnsupportedFeature("progressive scan: Ah/Al inconsistent"));
+        }
+    } else {
+        // Baseline: фиксированные значения.
+        if ss != 0 || se != 63 || ah_al != 0 {
+            return Err(JpegError::UnsupportedFeature("baseline SOS требует Ss=0, Se=63, Ah=Al=0"));
+        }
     }
-    Ok(scan)
+    Ok(ScanInfo {
+        components,
+        ss,
+        se,
+        ah,
+        al,
+    })
 }
 
 #[cfg(test)]
@@ -620,19 +778,20 @@ mod tests {
     fn sof0_parses_grayscale() {
         // P=8, h=10, w=20, Nf=1, [id=1, H/V=0x11, Tq=0].
         let payload = [8, 0, 10, 0, 20, 1, 1, 0x11, 0];
-        let frame = parse_sof0(&payload).unwrap();
+        let frame = parse_sof(&payload, false).unwrap();
         assert_eq!(frame.width, 20);
         assert_eq!(frame.height, 10);
         assert_eq!(frame.components.len(), 1);
         assert_eq!(frame.h_max, 1);
         assert_eq!(frame.v_max, 1);
+        assert!(!frame.is_progressive);
     }
 
     #[test]
     fn sof0_parses_rgb_420_subsampling() {
         // YCbCr 4:2:0: Y H/V=2/2, Cb,Cr H/V=1/1.
         let payload = [8, 0, 16, 0, 16, 3, 1, 0x22, 0, 2, 0x11, 1, 3, 0x11, 1];
-        let frame = parse_sof0(&payload).unwrap();
+        let frame = parse_sof(&payload, false).unwrap();
         assert_eq!(frame.components.len(), 3);
         assert_eq!(frame.h_max, 2);
         assert_eq!(frame.v_max, 2);
@@ -642,16 +801,77 @@ mod tests {
     }
 
     #[test]
-    fn sof0_rejects_progressive_via_unsupported_sof() {
-        // Тест — что caller-side: SOF2 маркер должен дать UnsupportedSof.
+    fn sof2_parses_grayscale_as_progressive() {
+        // SOF2 → is_progressive = true.
+        let payload = [8, 0, 10, 0, 20, 1, 1, 0x11, 0];
+        let frame = parse_sof(&payload, true).unwrap();
+        assert!(frame.is_progressive);
+    }
+
+    #[test]
+    fn unsupported_sof_still_rejected() {
+        // SOF3 (lossless) — не поддерживаем.
         let bytes = [
             0xFF, 0xD8, // SOI
-            0xFF, 0xC2, // SOF2 — progressive
+            0xFF, 0xC3, // SOF3 — lossless
             0x00, 0x08, // длина 8
             0x08, 0x00, 0x10, 0x00, 0x10, 0x01, 0x01, 0x11, 0x00,
         ];
         let mut r = SegmentReader::new(&bytes);
-        assert_eq!(r.read_until_scan().unwrap_err(), JpegError::UnsupportedSof(0xC2));
+        assert_eq!(r.read_until_scan().unwrap_err(), JpegError::UnsupportedSof(0xC3));
+    }
+
+    #[test]
+    fn progressive_sos_dc_initial_parses() {
+        // Frame progressive grayscale.
+        let frame = parse_sof(&[8, 0, 16, 0, 16, 1, 1, 0x11, 0], true).unwrap();
+        // SOS: Ns=1, Cs=1, Td/Ta=00, Ss=0, Se=0, Ah/Al=0x01.
+        let payload = [1, 1, 0x00, 0, 0, 0x01];
+        let scan = parse_sos(&payload, &frame).unwrap();
+        assert_eq!(scan.ss, 0);
+        assert_eq!(scan.se, 0);
+        assert_eq!(scan.ah, 0);
+        assert_eq!(scan.al, 1);
+        assert_eq!(scan.components.len(), 1);
+    }
+
+    #[test]
+    fn progressive_sos_ac_refinement_parses() {
+        let frame = parse_sof(&[8, 0, 16, 0, 16, 1, 1, 0x11, 0], true).unwrap();
+        // SOS: Ns=1, Cs=1, Td/Ta=01 (только AC table), Ss=1, Se=63, Ah/Al=0x21.
+        let payload = [1, 1, 0x01, 1, 63, 0x21];
+        let scan = parse_sos(&payload, &frame).unwrap();
+        assert_eq!(scan.ss, 1);
+        assert_eq!(scan.se, 63);
+        assert_eq!(scan.ah, 2);
+        assert_eq!(scan.al, 1);
+    }
+
+    #[test]
+    fn baseline_sos_rejects_progressive_params() {
+        let frame = parse_sof(&[8, 0, 16, 0, 16, 1, 1, 0x11, 0], false).unwrap();
+        // SOS с Ss != 0 для baseline → ошибка.
+        let payload = [1, 1, 0x00, 1, 63, 0x00];
+        assert!(matches!(
+            parse_sos(&payload, &frame),
+            Err(JpegError::UnsupportedFeature(_))
+        ));
+    }
+
+    #[test]
+    fn progressive_ac_scan_with_ns_gt_1_rejected() {
+        // Progressive RGB 4:4:4 frame.
+        let frame = parse_sof(
+            &[8, 0, 16, 0, 16, 3, 1, 0x11, 0, 2, 0x11, 0, 3, 0x11, 0],
+            true,
+        )
+        .unwrap();
+        // SOS: Ns=3, AC scan (Ss=1, Se=63) — недопустимо.
+        let payload = [3, 1, 0x00, 2, 0x00, 3, 0x00, 1, 63, 0x00];
+        assert!(matches!(
+            parse_sos(&payload, &frame),
+            Err(JpegError::UnsupportedFeature(_))
+        ));
     }
 
     #[test]
