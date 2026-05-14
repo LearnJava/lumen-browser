@@ -105,6 +105,8 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
         modifiers: ModifiersState::empty(),
         window: None,
         renderer: None,
+        runtime: runtime::EventLoop::new(),
+        epoch: std::time::Instant::now(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -601,6 +603,15 @@ struct Lumen {
     modifiers: ModifiersState,
     window: Option<Arc<Window>>,
     renderer: Option<Renderer>,
+    /// HTML event loop runtime. На каждой итерации winit-loop (AboutToWait)
+    /// выполняется одна task, на RedrawRequested — run_rendering_step
+    /// (вызывает rAF-callback-и), на WindowEvent::Resized —
+    /// deliver_observer_records(Resize).
+    runtime: runtime::EventLoop,
+    /// Эпоха для rAF-timestamp-ов в миллисекундах от старта shell-а
+    /// (DOMHighResTimeStamp — HTML §8.1.5.1: «timestamp passed to callback
+    /// should be the current high resolution time»).
+    epoch: std::time::Instant,
 }
 
 impl Lumen {
@@ -656,6 +667,25 @@ impl ApplicationHandler for Lumen {
         self.renderer = Some(renderer);
     }
 
+    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+        // HTML §8.1.4.2 «Processing model»: между событиями event-loop-а
+        // дренируем накопившиеся task-и. Каждый step выполняет одну task +
+        // microtask checkpoint. Дренируем все pending tasks за один проход,
+        // чтобы UI не отставал. Если task запланирует новую task — она
+        // выполнится на следующем about_to_wait (как и `setTimeout(..., 0)`
+        // в браузере).
+        let mut steps = 0;
+        while self.runtime.step() == runtime::StepResult::Ran {
+            steps += 1;
+            if steps >= 256 {
+                // Защита от runaway: если что-то рекурсивно планирует task в
+                // эту же итерацию, не блокируем UI больше чем на 256 task-ов;
+                // остаток обработается в следующем about_to_wait.
+                break;
+            }
+        }
+    }
+
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
@@ -668,6 +698,12 @@ impl ApplicationHandler for Lumen {
                 if let Some(r) = self.renderer.as_mut() {
                     r.resize(size.width, size.height);
                 }
+                // HTML §8.1.5.1, шаг 13: ResizeObserver delivery. В Phase 0
+                // никто не зарегистрирован (JS engine отсутствует), но
+                // future-proof: когда подключим QuickJS, JS-callback-и
+                // получат сигнал автоматически.
+                self.runtime
+                    .deliver_observer_records(runtime::ObserverKind::Resize);
                 if let Some(w) = self.window.as_ref() {
                     w.request_redraw();
                 }
@@ -679,6 +715,13 @@ impl ApplicationHandler for Lumen {
                 self.handle_key(event_loop, key_event);
             }
             WindowEvent::RedrawRequested => {
+                // HTML §8.1.5.1 «Update the rendering»: перед собственно
+                // отрисовкой выполняем rAF-callback-и с текущим timestamp-ом.
+                // Callback-и (когда подключим JS) могут поменять DOM/style;
+                // здесь они лишь Rust closure, но точка диспатча уже стоит.
+                let timestamp_ms =
+                    self.epoch.elapsed().as_secs_f64() * 1000.0;
+                self.runtime.run_rendering_step(timestamp_ms);
                 if let Some(r) = self.renderer.as_mut()
                     && let Err(err) = r.render(&self.display_list)
                 {
