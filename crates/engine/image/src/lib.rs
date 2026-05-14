@@ -19,6 +19,79 @@ mod png;
 pub use jpeg::{decode_jpeg, JpegError};
 pub use png::decode_png;
 
+/// PNG-сигнатура: `89 50 4E 47 0D 0A 1A 0A` (PNG §5.2).
+pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+/// JPEG SOI + начало следующего маркера: `FF D8 FF` (ISO/IEC 10918-1 §B.1.1.3 +
+/// B.2.4 — `FF D8` это SOI, далее обязан идти ещё один маркер, поэтому
+/// третий байт всегда `FF`). Проверка трёх байт даёт надёжный sniff: одиночные
+/// `FF D8` без продолжения встречаются в случайных бинарниках, а `FF D8 FF` —
+/// уже специфично для JPEG.
+pub const JPEG_SIGNATURE_PREFIX: [u8; 3] = [0xFF, 0xD8, 0xFF];
+
+/// Декодирует растровое изображение, определяя формат по сигнатуре первых
+/// байтов: PNG (`89 50 4E 47 0D 0A 1A 0A`) либо JPEG (`FF D8 FF`).
+///
+/// Если сигнатура не совпала ни с одной из поддерживаемых, либо вход короче
+/// нужного для распознавания, возвращается `ImageError::UnknownFormat`. Это
+/// поведение отличается от `decode_png(bytes)`, который при «не PNG» отдаёт
+/// `DecodeError::InvalidSignature`: общий dispatch более снисходителен и
+/// перекладывает решение «как реагировать на чужой формат» на caller-а.
+///
+/// # Errors
+/// - [`ImageError::UnknownFormat`] — сигнатура неизвестна (вкл. слишком короткий вход).
+/// - [`ImageError::Png`] — PNG-сигнатура совпала, но декодер выдал ошибку.
+/// - [`ImageError::Jpeg`] — JPEG-сигнатура совпала, но декодер выдал ошибку.
+pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
+    if bytes.len() >= PNG_SIGNATURE.len() && bytes[..PNG_SIGNATURE.len()] == PNG_SIGNATURE {
+        return decode_png(bytes).map_err(ImageError::Png);
+    }
+    if bytes.len() >= JPEG_SIGNATURE_PREFIX.len()
+        && bytes[..JPEG_SIGNATURE_PREFIX.len()] == JPEG_SIGNATURE_PREFIX
+    {
+        return decode_jpeg(bytes).map_err(ImageError::Jpeg);
+    }
+    Err(ImageError::UnknownFormat)
+}
+
+/// Ошибка `decode` — либо unknown format, либо проброшенная ошибка
+/// конкретного декодера. Имеет `Display`, чтобы caller мог просто
+/// `format!("{err}")` без match-а.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImageError {
+    /// Первые байты не похожи ни на одну из известных сигнатур, либо вход
+    /// слишком короток. Конкретного формата по этому ответу определить нельзя.
+    UnknownFormat,
+    /// PNG-сигнатура распознана, но декодер вернул ошибку.
+    Png(DecodeError),
+    /// JPEG-сигнатура распознана, но декодер вернул ошибку.
+    Jpeg(JpegError),
+}
+
+impl core::fmt::Display for ImageError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::UnknownFormat => write!(f, "формат изображения не распознан по сигнатуре"),
+            Self::Png(e) => write!(f, "PNG: {e}"),
+            Self::Jpeg(e) => write!(f, "JPEG: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for ImageError {}
+
+impl From<DecodeError> for ImageError {
+    fn from(e: DecodeError) -> Self {
+        Self::Png(e)
+    }
+}
+
+impl From<JpegError> for ImageError {
+    fn from(e: JpegError) -> Self {
+        Self::Jpeg(e)
+    }
+}
+
 /// Декодированное растровое изображение в плотной row-major упаковке без
 /// padding-а между строками. Длина `data` равна `width * height *
 /// bytes_per_pixel(format)`.
@@ -216,3 +289,76 @@ impl core::fmt::Display for DecodeError {
 }
 
 impl std::error::Error for DecodeError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_input_unknown_format() {
+        assert_eq!(decode(&[]), Err(ImageError::UnknownFormat));
+    }
+
+    #[test]
+    fn input_shorter_than_png_signature_unknown() {
+        // 7 байт — короче PNG-сигнатуры (8) и не подходит под JPEG (нужно FF D8 FF).
+        let bytes = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A];
+        assert_eq!(decode(&bytes), Err(ImageError::UnknownFormat));
+    }
+
+    #[test]
+    fn jpeg_soi_without_third_byte_unknown() {
+        // FF D8 без FF — недостаточно для JPEG dispatch.
+        let bytes = [0xFF, 0xD8];
+        assert_eq!(decode(&bytes), Err(ImageError::UnknownFormat));
+    }
+
+    #[test]
+    fn jpeg_soi_with_wrong_third_byte_unknown() {
+        let bytes = [0xFF, 0xD8, 0xFE, 0x00, 0x00];
+        assert_eq!(decode(&bytes), Err(ImageError::UnknownFormat));
+    }
+
+    #[test]
+    fn random_bytes_unknown_format() {
+        let bytes = [0u8; 16];
+        assert_eq!(decode(&bytes), Err(ImageError::UnknownFormat));
+    }
+
+    #[test]
+    fn png_signature_dispatches_to_png_decoder() {
+        // PNG-сигнатура совпадает, дальше декодер падает на IHDR — это
+        // нормальный path, важно что dispatch ушёл в PNG, а не вернул UnknownFormat.
+        let mut bytes = Vec::from(PNG_SIGNATURE);
+        bytes.extend_from_slice(&[0x00; 4]); // обрывающаяся длина чанка
+        let err = decode(&bytes).unwrap_err();
+        assert!(matches!(err, ImageError::Png(_)), "ожидался Png(_), получено {err:?}");
+    }
+
+    #[test]
+    fn jpeg_signature_dispatches_to_jpeg_decoder() {
+        // SOI + FF — dispatch уйдёт в JPEG, который упрётся в обрезанный поток.
+        let bytes = [0xFF, 0xD8, 0xFF, 0x00, 0x00];
+        let err = decode(&bytes).unwrap_err();
+        assert!(matches!(err, ImageError::Jpeg(_)), "ожидался Jpeg(_), получено {err:?}");
+    }
+
+    #[test]
+    fn image_error_from_decode_error() {
+        let err: ImageError = DecodeError::InvalidSignature.into();
+        assert!(matches!(err, ImageError::Png(DecodeError::InvalidSignature)));
+    }
+
+    #[test]
+    fn image_error_display_includes_inner() {
+        let err = ImageError::Png(DecodeError::InvalidSignature);
+        let s = format!("{err}");
+        assert!(s.starts_with("PNG:"), "Display должен начинаться с PNG: — получено {s:?}");
+    }
+
+    #[test]
+    fn image_error_display_unknown_format() {
+        let s = format!("{}", ImageError::UnknownFormat);
+        assert!(!s.is_empty());
+    }
+}
