@@ -11,6 +11,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
+use lumen_core::ext::HstsEnforcement;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 
@@ -242,6 +243,40 @@ impl HstsStore {
             .query_row("SELECT COUNT(*) FROM hsts_hosts", [], |r| r.get(0))
             .map_err(|e| Error::Storage(format!("hsts count: {e}")))?;
         Ok(n)
+    }
+}
+
+/// Адаптер `HstsStore` к `lumen-core::ext::HstsEnforcement` — позволяет
+/// `lumen-network::HttpClient` принимать `Arc<dyn HstsEnforcement>` без
+/// прямой зависимости на lumen-storage.
+///
+/// Fail-open: ошибки persistence (диск умер, mutex отравлен) логируются в
+/// stderr и трактуются как «нет HSTS» (`is_https_only → false`) или
+/// silent drop (`record_sts`). Принципы — в doc-комментарии trait-а.
+impl HstsEnforcement for HstsStore {
+    fn is_https_only(&self, host: &str, now_unix: i64) -> bool {
+        match HstsStore::is_https_only(self, host, now_unix) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("HstsStore::is_https_only error: {e}; treating as not-HSTS");
+                false
+            }
+        }
+    }
+
+    fn record_sts(
+        &self,
+        host: &str,
+        max_age: u64,
+        include_subdomains: bool,
+        preload: bool,
+        now_unix: i64,
+    ) {
+        if let Err(e) =
+            self.upsert(host, max_age, include_subdomains, preload, now_unix)
+        {
+            eprintln!("HstsStore::record_sts error: {e}; ignored");
+        }
     }
 }
 
