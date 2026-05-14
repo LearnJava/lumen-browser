@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-- 🔄 Progressive / streaming pipeline в roadmap [P4] — streaming-pipeline-plan — 2026-05-14
+- 🔄 Progressive pipeline + browser fundamentals аудит roadmap [P4] — streaming-pipeline-plan — 2026-05-14
 
 
 ## Статус реализации
@@ -1195,6 +1195,15 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 - Базовый adblock, DoH.
 - **Tab session export / import** (§12.7) — простая фича, экономит много боли.
 - Пакеты под Linux/macOS/Windows.
+- **Browser fundamentals — критичные подсистемы, обнаруженные при аудите против Chromium / Firefox / Servo / Ladybird** (полный список с обоснованиями — в [CLAUDE.md](CLAUDE.md) → roadmap «Browser fundamentals»):
+  - **HTML event loop + microtasks + rendering steps + observers** (`[P4]`) — контракт shell-а, не JS-движка. Без него ни Promise.then, ни ResizeObserver/IntersectionObserver/MutationObserver/PerformanceObserver, ни rAF не работают.
+  - **Stacking contexts + правильный CSS Painting Order** (`[P1]`, CSS 2.1 Appendix E) — сейчас paint в порядке DOM-обхода, z-index работает случайно.
+  - **Compositor thread + property trees** (`[P4]`) — TransformTree/ScrollTree/EffectTree/ClipTree на отдельном thread, off-main-thread scroll. Расширяет существующий план `compositor` крейта архитектурой.
+  - **Stacking-aware hit testing** (`[P4]`) — отдельная структура с z-index/pointer-events awareness.
+  - **Quirks mode vs standards mode** (`[P1]`) — без поддержки половина legacy-страниц сломается.
+  - **Same-Origin Policy enforcement + CORS preflight** (`[P3]`) — SOP checks при fetch/postMessage/storage; OPTIONS preflight для non-simple requests.
+  - **Mixed-content blocking + `<iframe sandbox>`** (`[P3]`) — HTTPS не грузит HTTP-script; sandbox flags.
+  - **Preload scanner** (`[P4]`) — отдельный pre-parser стартует fetch до DOM construction. Особенно важно над streaming pipeline.
 - **Цель:** ежедневный браузер для чтения статей.
 
 ### Фаза 2 — v0.5 «Interactive» (18–24 месяца)
@@ -1215,6 +1224,16 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
   - Focus mode (§12.6).
 - **`<meta viewport>` parsing + page zoom (Ctrl+/Ctrl-).** Без этого мобильная вёрстка всегда «как desktop», и нет ручного управления масштабом.
 - **Кастомизация UI** — drag&drop панелей, темы (§12.10).
+- **Browser fundamentals — Phase 2** (полный список — в [CLAUDE.md](CLAUDE.md) → roadmap «Browser fundamentals»):
+  - **Shadow DOM + custom elements + `<template>` + `<slot>`** (`[P1+P4]`) — Web Components. Без них половина современных сайтов сломается.
+  - **Accessibility tree + platform bridges** (`[P4]` — UIA / AT-SPI / NSAccessibility) — обязательно для NVDA / Orca / VoiceOver. «Русский first-class» требует.
+  - **Forms runtime** (`[P4]`) — Constraint Validation API, submission algorithm, file picker, autofill UI поверх существующего storage.
+  - **`<picture>` / `srcset` / `sizes` + `loading="lazy"`** (`[P2]`) — viewport+DPR-aware resource selection.
+  - **IME composition events** (`[P4]`) — без них японский / китайский / корейский ввод сломан.
+  - **Connection pooling + keep-alive + Brotli + Range requests** (`[P3]`) — без keep-alive реальный сайт = 50× TCP handshakes.
+  - **Find in page (Ctrl+F)** (`[P4]`).
+  - **DevTools / Inspector минимум через CDP** (`[P4]`) — DOM tree + computed styles + network log. Без этого debug собственного движка невозможен.
+  - **`mix-blend-mode` / `backdrop-filter` / `isolation`** (`[P1+P2]`) — нужны isolation groups в compositor pipeline.
 - **Цель:** публичная альфа, форумы и простые SPA, в Lumen начинают **жить** долго.
 
 ### Фаза 3 — v1.0 (36–48 месяцев)
@@ -1228,6 +1247,23 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 - WPT pass rate ≥ 60%.
 - **Опциональный AI-модуль (§12.5):** `lumen-ai` крейт за feature-флагом. Семантический поиск, суммаризация, RAG над собственной историей. Bundle без AI остаётся basic-вариантом.
 - **Семантические закладки (§12.8)** — опционально, требует AI.
+- **Browser fundamentals — Phase 3+** (полный список — в [CLAUDE.md](CLAUDE.md) → roadmap «Browser fundamentals»):
+  - **WebSockets (RFC 6455) + Server-Sent Events + Fetch API runtime с AbortController** (`[P3]`).
+  - **HTTP auth (Basic / Digest / Negotiate) + client certificates** (`[P3]`) — без них corporate web недоступен.
+  - **OCSP stapling + CT log enforcement + invalid cert UI** (`[P3]`).
+  - **Safe Browsing equivalent** (`[P3]`) — локальный hash-prefix фильтр-список malware / phishing.
+  - **Back/forward cache (bfcache)** (`[P4]`).
+  - **Navigation API + History API runtime** (`[P4]`).
+  - **Web Animations API runtime** (`[P4]`) — compositor-driven для transform/opacity.
+  - **`<contenteditable>` + Input Events Level 2 + Selection / Range API** (`[P4]`).
+  - **Service Worker runtime** (`[P4]`) — fetch interception / push / background sync.
+  - **Spell check** (`[P4]`) через Hunspell-словари — русский словарь обязателен.
+  - **Variable fonts axes runtime** (`[P2]`) — `font-variation-settings`.
+  - **Color management + Display P3 / Rec2020 / ICC** (`[P2]`).
+  - **Print pipeline runtime** (`[P1+P2+P4]`) — pagination algorithm над уже parsed `@page` и break-* properties, PDF generation.
+  - **GC integration JS ↔ DOM** (`[P4]`) — cycle collector между Rust DOM и JS engine. Архитектурная задача при интеграции QuickJS / V8.
+  - **Permission prompt UI + Download UI** (`[P4]`) поверх существующего permissions/downloads storage.
+  - **GPU process / sandbox** (`[P4]`) — seccomp / AppContainer / App Sandbox, расширение site isolation.
 - **Цель:** стабильный релиз.
 
 ### Фаза 4 — После 1.0
