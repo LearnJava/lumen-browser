@@ -22,8 +22,8 @@ pub use style::{
     parse_css_wide_keyword, AlignValue, BackgroundAttachment, BackgroundImage, BackgroundRepeat,
     BackgroundSize, BorderStyle, BoxShadow, BoxSizing, ClipPath, Color, ComputedStyle,
     CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle, FontVariant,
-    FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
-    TextTransform, TransformFn, Visibility, WhiteSpace,
+    FontWeight, Overflow, PointerEvents, ScrollBehavior, TextAlign, TextDecorationLine,
+    TextOverflow, TextShadow, TextTransform, TransformFn, UserSelect, Visibility, WhiteSpace,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -4461,6 +4461,105 @@ mod tests {
     fn aspect_ratio_invalid_kept_unchanged() {
         let root = lay("<p>x</p>", "p { aspect-ratio: 16 / abc; }");
         assert_eq!(first_p_style(&root).aspect_ratio, None);
+    }
+
+    // ──────── will-change / pointer-events / user-select / scroll-behavior ────────
+
+    #[test]
+    fn will_change_auto_is_empty_list() {
+        let root = lay("<p>x</p>", "p { will-change: auto; }");
+        assert!(first_p_style(&root).will_change.is_empty());
+    }
+
+    #[test]
+    fn will_change_property_list() {
+        let root = lay("<p>x</p>", "p { will-change: transform, opacity; }");
+        let s = first_p_style(&root);
+        assert_eq!(
+            s.will_change,
+            vec!["transform".to_string(), "opacity".to_string()]
+        );
+    }
+
+    #[test]
+    fn will_change_invalid_ident_skipped() {
+        let root = lay("<p>x</p>", "p { will-change: 1invalid, transform; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.will_change, vec!["transform".to_string()]);
+    }
+
+    #[test]
+    fn pointer_events_none() {
+        let root = lay("<p>x</p>", "p { pointer-events: none; }");
+        assert_eq!(first_p_style(&root).pointer_events, PointerEvents::None);
+    }
+
+    #[test]
+    fn pointer_events_all() {
+        let root = lay("<p>x</p>", "p { pointer-events: all; }");
+        assert_eq!(first_p_style(&root).pointer_events, PointerEvents::All);
+    }
+
+    #[test]
+    fn user_select_none() {
+        let root = lay("<p>x</p>", "p { user-select: none; }");
+        assert_eq!(first_p_style(&root).user_select, UserSelect::None);
+    }
+
+    #[test]
+    fn user_select_text() {
+        let root = lay("<p>x</p>", "p { user-select: text; }");
+        assert_eq!(first_p_style(&root).user_select, UserSelect::Text);
+    }
+
+    #[test]
+    fn user_select_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { user-select: none; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // Inherited.
+        assert_eq!(p.style.user_select, UserSelect::None);
+    }
+
+    #[test]
+    fn scroll_behavior_smooth() {
+        let root = lay("<p>x</p>", "p { scroll-behavior: smooth; }");
+        assert_eq!(first_p_style(&root).scroll_behavior, ScrollBehavior::Smooth);
+    }
+
+    #[test]
+    fn scroll_behavior_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { scroll-behavior: smooth; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.scroll_behavior, ScrollBehavior::Smooth);
+    }
+
+    #[test]
+    fn pointer_events_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { pointer-events: none; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // НЕ наследуется — у p default Auto.
+        assert_eq!(p.style.pointer_events, PointerEvents::Auto);
+        assert_eq!(div.style.pointer_events, PointerEvents::None);
+    }
+
+    #[test]
+    fn unknown_keyword_keeps_default() {
+        let root = lay("<p>x</p>", "p { pointer-events: garbage; user-select: weird; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.pointer_events, PointerEvents::Auto);
+        assert_eq!(s.user_select, UserSelect::Auto);
     }
 
     // ──────── background-* (CSS Backgrounds L3) ────────
