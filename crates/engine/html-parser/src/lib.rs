@@ -18,6 +18,10 @@ pub mod tokenizer;
 pub mod tree_builder;
 
 pub use quirks_mode::detect_document_mode;
-pub use srcset::{SrcsetCandidate, SrcsetDescriptor, parse_srcset, pick_best_for_density};
+pub use srcset::{
+    MediaClause, MediaCondition, Orientation, SizeLength, SizesViewport, SourceSize,
+    SrcsetCandidate, SrcsetDescriptor, evaluate_sizes, parse_sizes, parse_srcset,
+    pick_best_for_density, pick_best_for_width,
+};
 pub use tokenizer::{Token, Tokenizer};
 pub use tree_builder::parse;

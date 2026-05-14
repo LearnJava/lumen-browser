@@ -20,10 +20,12 @@ use rustls::pki_types::ServerName;
 
 use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, TabId};
-use lumen_core::ext::{EventSink, NetworkTransport, RequestFilter};
+use lumen_core::ext::{DnsResolver, EventSink, NetworkTransport, RequestFilter};
 use lumen_core::url::Url;
 
+mod dns;
 mod pool;
+pub use dns::SystemDnsResolver;
 pub use pool::ConnectionPool;
 
 use pool::PoolKey;
@@ -321,10 +323,40 @@ fn read_chunked<R: BufRead>(reader: &mut R) -> Result<Vec<u8>> {
 
 // ── Connect ─────────────────────────────────────────────────────────────────
 
-fn connect(host: &str, port: u16, is_tls: bool) -> Result<Connection> {
-    let addr = format!("{host}:{port}");
-    let tcp = TcpStream::connect(&addr)
-        .map_err(|e| Error::Network(format!("connect {addr}: {e}")))?;
+/// Открыть TCP (или TLS поверх TCP) к указанному origin. Резолв host →
+/// SocketAddr-ы делегируется в `resolver` (default = SystemDnsResolver).
+/// При нескольких адресах (DNS round-robin или IPv4+IPv6 dual-stack)
+/// пробуем connect по каждому до первого успешного; ошибка от последнего
+/// поднимается наверх, если ни один не подошёл.
+fn connect(
+    host: &str,
+    port: u16,
+    is_tls: bool,
+    resolver: &dyn DnsResolver,
+) -> Result<Connection> {
+    let addrs = resolver.resolve(host, port)?;
+    if addrs.is_empty() {
+        return Err(Error::Network(format!(
+            "resolve {host}:{port}: no addresses"
+        )));
+    }
+
+    let mut last_err: Option<Error> = None;
+    let mut tcp_opt: Option<TcpStream> = None;
+    for addr in &addrs {
+        match TcpStream::connect(addr) {
+            Ok(s) => {
+                tcp_opt = Some(s);
+                break;
+            }
+            Err(e) => {
+                last_err = Some(Error::Network(format!("connect {addr}: {e}")));
+            }
+        }
+    }
+    let tcp = tcp_opt.ok_or_else(|| {
+        last_err.unwrap_or_else(|| Error::Network(format!("connect {host}:{port}: no addresses")))
+    })?;
 
     if !is_tls {
         return Ok(Connection::new(RawStream::Plain(tcp)));
@@ -369,6 +401,7 @@ fn is_stale_error(err: &Error) -> bool {
 /// (соединение не закрыто) возвращает его в пул.
 fn fetch_single(
     pool: &ConnectionPool,
+    resolver: &dyn DnsResolver,
     host: &str,
     port: u16,
     is_tls: bool,
@@ -399,7 +432,7 @@ fn fetch_single(
     }
 
     // Попытка 2 (или 1, если пул был пуст): свежий connect.
-    let conn = connect(host, port, is_tls)?;
+    let conn = connect(host, port, is_tls, resolver)?;
     let (resp, conn) = do_request(conn, request_host_header, request_path)?;
     if !conn.closed {
         pool.release(key, conn);
@@ -419,10 +452,12 @@ fn do_request(
 
 // ── Редиректы ────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn fetch_with_redirect(
     url: &Url,
     hops_left: u8,
     pool: &ConnectionPool,
+    resolver: &dyn DnsResolver,
     sink: Option<&dyn EventSink>,
     filter: Option<&dyn RequestFilter>,
     tab_id: TabId,
@@ -468,6 +503,7 @@ fn fetch_with_redirect(
 
     let resp = fetch_single(
         pool,
+        resolver,
         &host_ascii,
         port,
         is_tls,
@@ -493,7 +529,7 @@ fn fetch_with_redirect(
             let next = url
                 .resolve(location)
                 .map_err(|e| Error::Network(format!("resolve redirect '{location}': {e}")))?;
-            fetch_with_redirect(&next, hops_left - 1, pool, sink, filter, tab_id)
+            fetch_with_redirect(&next, hops_left - 1, pool, resolver, sink, filter, tab_id)
         }
         status => Err(Error::Network(format!("HTTP {status}"))),
     }
@@ -515,6 +551,7 @@ pub struct HttpClient {
     sink: Option<Arc<dyn EventSink>>,
     filter: Option<Arc<dyn RequestFilter>>,
     pool: Arc<ConnectionPool>,
+    resolver: Arc<dyn DnsResolver>,
     tab_id: TabId,
 }
 
@@ -524,6 +561,7 @@ impl HttpClient {
             sink: None,
             filter: None,
             pool: Arc::new(ConnectionPool::new()),
+            resolver: Arc::new(SystemDnsResolver),
             tab_id: TabId(0),
         }
     }
@@ -555,6 +593,15 @@ impl HttpClient {
         self
     }
 
+    /// Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
+    /// `(host, port).to_socket_addrs()`); подменяется на `CachedDnsResolver`
+    /// (lumen-storage) для TTL-кеша, или на DoH/DoT для приватности (§13).
+    #[must_use]
+    pub fn with_dns_resolver(mut self, resolver: Arc<dyn DnsResolver>) -> Self {
+        self.resolver = resolver;
+        self
+    }
+
     /// Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
     /// (без вкладок) shell оставляет дефолтный `TabId(0)`.
     #[must_use]
@@ -576,6 +623,7 @@ impl NetworkTransport for HttpClient {
             url,
             5,
             &self.pool,
+            self.resolver.as_ref(),
             self.sink.as_deref(),
             self.filter.as_deref(),
             self.tab_id,
@@ -1240,6 +1288,161 @@ mod tests {
 
         server.join().unwrap();
         assert_eq!(accept_counter.load(Ordering::SeqCst), 2);
+    }
+
+    // ── Custom DnsResolver ───────────────────────────────────────────────────
+
+    use std::collections::HashMap;
+    use std::net::SocketAddr;
+
+    /// Тестовый resolver: маппит hostname → фиксированный SocketAddr (с
+    /// подменённым port на тот, что просит fetch). Используется, чтобы
+    /// доказать: подменённый resolver реально применяется в connect-path —
+    /// fetch к произвольному hostname типа "synthetic.test" приходит на
+    /// loopback-listener.
+    struct MockResolver {
+        map: Mutex<HashMap<String, std::net::IpAddr>>,
+        calls: AtomicUsize,
+    }
+
+    impl MockResolver {
+        fn with(host: &str, ip: std::net::IpAddr) -> Self {
+            let mut m = HashMap::new();
+            m.insert(host.to_ascii_lowercase(), ip);
+            Self {
+                map: Mutex::new(m),
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl DnsResolver for MockResolver {
+        fn resolve(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let key = hostname.to_ascii_lowercase();
+            let map = self.map.lock().unwrap();
+            match map.get(&key) {
+                Some(ip) => Ok(vec![SocketAddr::new(*ip, port)]),
+                None => Err(Error::Network(format!("mock NXDOMAIN: {hostname}"))),
+            }
+        }
+    }
+
+    #[test]
+    fn http_client_uses_custom_resolver_for_synthetic_hostname() {
+        // Mock listener слушает на 127.0.0.1:<port>; HttpClient просят
+        // fetch к URL с произвольным hostname "synthetic.test". Если resolver
+        // не подменился — SystemDnsResolver не разрешит "synthetic.test" в
+        // loopback, и fetch упадёт. Доказательство того, что with_dns_resolver
+        // реально применяется в fetch-path.
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\nresolved!".to_vec()
+        });
+
+        let resolver = Arc::new(MockResolver::with(
+            "synthetic.test",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        ));
+        let client = HttpClient::new().with_dns_resolver(resolver.clone());
+        let url = Url::parse(&format!("http://synthetic.test:{port}/")).unwrap();
+
+        let body = client.fetch(&url).expect("fetch through mock resolver");
+        assert_eq!(body, b"resolved!");
+        assert_eq!(resolver.call_count(), 1, "resolver вызван ровно один раз");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn http_client_resolver_err_propagates_as_fetch_err() {
+        // Resolver отдаёт Err — fetch не должен звать TCP connect, должен
+        // вернуть ту же ошибку как Network. RequestStarted эмитится
+        // (URL валидный), но никакого Completed — resolver Err приходит
+        // до сокета.
+        let resolver = Arc::new(MockResolver::with(
+            "known.host",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        ));
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_dns_resolver(resolver.clone())
+            .with_sink(sink.clone());
+        let url = Url::parse("http://unknown.host/").unwrap();
+
+        let err = client.fetch(&url).expect_err("resolver Err must bubble up");
+        assert!(
+            format!("{err:?}").contains("mock NXDOMAIN"),
+            "expected NXDOMAIN reason, got {err:?}"
+        );
+        assert_eq!(resolver.call_count(), 1);
+
+        let events = sink.events();
+        assert!(
+            matches!(events.first(), Some(Event::RequestStarted { .. })),
+            "RequestStarted эмитится до resolver: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, Event::RequestCompleted { .. })),
+            "RequestCompleted не должен прозвучать — connect не состоялся: {events:?}"
+        );
+    }
+
+    #[test]
+    fn http_client_resolver_called_per_redirect_hop() {
+        // 302 redirect на другой hostname → resolver должен вызваться дважды,
+        // по одному на hop. Это инвариант симметричный с тем, как обрабатываются
+        // sink-события и filter-проверки (per-hop).
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            for i in 1..=2u32 {
+                let (mut sock, _) = listener.accept().expect("accept");
+                let mut reader = BufReader::new(sock.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    let n = reader.read_line(&mut line).unwrap_or(0);
+                    if n == 0 || line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                }
+                let body: Vec<u8> = if i == 1 {
+                    format!(
+                        "HTTP/1.1 302 Found\r\nLocation: http://hop-two.test:{port}/done\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .into_bytes()
+                } else {
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndone"
+                        .to_vec()
+                };
+                let _ = sock.write_all(&body);
+                let _ = sock.shutdown(std::net::Shutdown::Both);
+            }
+        });
+
+        let mut map = HashMap::new();
+        map.insert(
+            "hop-one.test".to_owned(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        );
+        map.insert(
+            "hop-two.test".to_owned(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        );
+        let resolver = Arc::new(MockResolver {
+            map: Mutex::new(map),
+            calls: AtomicUsize::new(0),
+        });
+        let client = HttpClient::new().with_dns_resolver(resolver.clone());
+        let url = Url::parse(&format!("http://hop-one.test:{port}/start")).unwrap();
+
+        assert_eq!(client.fetch(&url).unwrap(), b"done");
+        assert_eq!(resolver.call_count(), 2, "resolver вызван per hop");
+
+        server.join().unwrap();
     }
 }
 
