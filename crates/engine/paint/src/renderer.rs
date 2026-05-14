@@ -1,11 +1,15 @@
 //! wgpu-растеризатор для display list.
 //!
-//! Два конвейера:
+//! Три конвейера:
 //! 1. **Fill** — заливка прямоугольников цветом. Вершина = (pos, color),
-//!    альфа-блендинг. Используется для backgrounds блоков.
+//!    альфа-блендинг. Используется для backgrounds блоков и border-edge-ей.
 //! 2. **Text** — текстурированные квады по глифам из atlas-а.
 //!    Вершина = (pos, uv, color), фрагмент сэмплит R8-альфу из atlas-а
 //!    и умножает на цвет текста.
+//! 3. **Image** — RGBA-texture quad per image. Вершина = (pos, uv), фрагмент
+//!    сэмплит per-image `Rgba8Unorm` текстуру. Каждый зарегистрированный
+//!    источник (`src`) держит свою `wgpu::Texture` + bind group; общий
+//!    sampler. Без cache hit — fallback на светло-серый fill (как раньше).
 //!
 //! Глифы растеризуются по требованию через `lumen_font::Rasterizer` при
 //! фиксированном `ATLAS_PIXEL_SIZE` (24 px); итоговый display-размер
@@ -18,6 +22,7 @@ use std::sync::Arc;
 
 use lumen_core::geom::Rect;
 use lumen_font::{Bitmap, Cmap, Font, Hhea, Hmtx, Outline, Rasterizer};
+use lumen_image::{Image, PixelFormat};
 use lumen_layout::Color;
 use winit::window::Window;
 
@@ -105,6 +110,43 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+const IMAGE_SHADER_SRC: &str = r#"
+struct Uniforms {
+    viewport: vec2<f32>,
+};
+
+@group(0) @binding(0) var<uniform> u: Uniforms;
+@group(1) @binding(0) var image_tex: texture_2d<f32>;
+@group(1) @binding(1) var image_smp: sampler;
+
+struct VIn {
+    @location(0) pos: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+};
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(in: VIn) -> VOut {
+    let ndc = vec2<f32>(
+        in.pos.x / u.viewport.x * 2.0 - 1.0,
+        1.0 - in.pos.y / u.viewport.y * 2.0,
+    );
+    var out: VOut;
+    out.clip = vec4<f32>(ndc, 0.0, 1.0);
+    out.uv = in.uv;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    return textureSample(image_tex, image_smp, in.uv);
+}
+"#;
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct FillVertex {
@@ -119,6 +161,55 @@ struct TextVertex {
     uv: [f32; 2],
     color: [f32; 4],
 }
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct ImageVertex {
+    pos: [f32; 2],
+    uv: [f32; 2],
+}
+
+/// GPU-ресурсы для одной зарегистрированной картинки. Texture хранит уже
+/// декодированные пиксели в формате `Rgba8Unorm` (Gray / GrayA / Rgb
+/// конвертируются в Rgba при upload-е); bind group привязан к
+/// `image_bind_group_layout` + общему sampler-у renderer-а.
+#[derive(Clone)]
+struct GpuImage {
+    bind_group: wgpu::BindGroup,
+    // texture держим как поле даже без явного использования — wgpu освобождает
+    // GPU-память когда дропается последняя ссылка; bind_group её не держит.
+    _texture: wgpu::Texture,
+}
+
+/// Ошибка `Renderer::register_image`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ImageRegisterError {
+    /// `width == 0` или `height == 0` — wgpu отклоняет такие текстуры
+    /// на валидации. Декодер lumen-image тоже не должен такое отдавать
+    /// (PNG/JPEG запрещают нулевые размеры), но на всякий случай ловим.
+    EmptyImage,
+    /// Размер изображения превышает `device.limits().max_texture_dimension_2d`
+    /// (на downlevel_defaults — 2048).
+    TooLarge {
+        width: u32,
+        height: u32,
+        max: u32,
+    },
+}
+
+impl core::fmt::Display for ImageRegisterError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::EmptyImage => write!(f, "пустое изображение (width или height = 0)"),
+            Self::TooLarge { width, height, max } => write!(
+                f,
+                "изображение {width}×{height} превышает предел GPU-текстуры {max}×{max}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ImageRegisterError {}
 
 /// Закешированная информация о глифе: позиция в атласе + метрики
 /// (left/top — на ATLAS_PIXEL_SIZE; advance — в font units, без масштабирования).
@@ -138,12 +229,19 @@ pub struct Renderer {
 
     fill_pipeline: wgpu::RenderPipeline,
     text_pipeline: wgpu::RenderPipeline,
+    image_pipeline: wgpu::RenderPipeline,
 
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
 
     atlas_texture: wgpu::Texture,
     atlas_bind_group: wgpu::BindGroup,
+
+    image_bgl: wgpu::BindGroupLayout,
+    image_sampler: wgpu::Sampler,
+    /// Cache декодированных картинок per-src. Заполняется через
+    /// [`Renderer::register_image`] из shell-уровня (после fetch+decode).
+    images: HashMap<String, GpuImage>,
 
     atlas: GlyphAtlas,
     font_bytes: Vec<u8>,
@@ -401,6 +499,88 @@ impl Renderer {
             cache: None,
         });
 
+        // ── Image pipeline (RGBA texture-quad, per-image bind group) ──────
+        let image_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("image-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let image_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("image-sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+        let image_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("image-shader"),
+            source: wgpu::ShaderSource::Wgsl(IMAGE_SHADER_SRC.into()),
+        });
+        let image_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("image-layout"),
+            bind_group_layouts: &[&uniform_bgl, &image_bgl],
+            push_constant_ranges: &[],
+        });
+        let image_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("image-pipeline"),
+            layout: Some(&image_layout),
+            vertex: wgpu::VertexState {
+                module: &image_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<ImageVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &image_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         let atlas = GlyphAtlas::new(ATLAS_DIM);
 
         Ok(Self {
@@ -410,14 +590,125 @@ impl Renderer {
             config,
             fill_pipeline,
             text_pipeline,
+            image_pipeline,
             uniform_buffer,
             uniform_bind_group,
             atlas_texture,
             atlas_bind_group,
+            image_bgl,
+            image_sampler,
+            images: HashMap::new(),
             atlas,
             font_bytes,
             cached_glyphs: HashMap::new(),
         })
+    }
+
+    /// Регистрирует декодированное изображение в GPU-cache под ключом `src`.
+    /// Если ключ уже был — старая запись (и её GPU-texture) заменяется.
+    ///
+    /// Изображение конвертируется в `Rgba8Unorm` (Gray → серый × 3 + alpha 255,
+    /// GrayA → серый × 3 + alpha из канала, Rgb → opaque, Rgba → как есть).
+    /// Color management в Phase 0 не делается — sRGB-coded байты идут «как есть».
+    ///
+    /// # Errors
+    /// - [`ImageRegisterError::EmptyImage`] при `width == 0 || height == 0`.
+    /// - [`ImageRegisterError::TooLarge`] если стороны превышают
+    ///   `device.limits().max_texture_dimension_2d`.
+    pub fn register_image(
+        &mut self,
+        src: String,
+        image: &Image,
+    ) -> Result<(), ImageRegisterError> {
+        if image.width == 0 || image.height == 0 {
+            return Err(ImageRegisterError::EmptyImage);
+        }
+        let max_dim = self.device.limits().max_texture_dimension_2d;
+        if image.width > max_dim || image.height > max_dim {
+            return Err(ImageRegisterError::TooLarge {
+                width: image.width,
+                height: image.height,
+                max: max_dim,
+            });
+        }
+        let rgba = convert_to_rgba(image);
+
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("lumen-image-texture"),
+            size: wgpu::Extent3d {
+                width: image.width,
+                height: image.height,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            // Не sRGB: surface у нас тоже non-sRGB, fragment пишет linear-байты
+            // напрямую. Color management — Phase 3+.
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &rgba,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(image.width * 4),
+                rows_per_image: Some(image.height),
+            },
+            wgpu::Extent3d {
+                width: image.width,
+                height: image.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("image-bg"),
+            layout: &self.image_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.image_sampler),
+                },
+            ],
+        });
+        self.images.insert(
+            src,
+            GpuImage {
+                bind_group,
+                _texture: texture,
+            },
+        );
+        Ok(())
+    }
+
+    /// Снимает регистрацию изображения. После этого `DrawImage` для `src`
+    /// снова рисует placeholder fill-quad.
+    pub fn unregister_image(&mut self, src: &str) {
+        self.images.remove(src);
+    }
+
+    /// Снимает регистрацию всех картинок (например, при переходе на новую
+    /// страницу). GPU-память освобождается при drop-е `GpuImage.texture`.
+    pub fn clear_images(&mut self) {
+        self.images.clear();
+    }
+
+    /// Зарегистрирована ли картинка с таким `src` (для shell-логирования).
+    #[must_use]
+    pub fn has_image(&self, src: &str) -> bool {
+        self.images.contains_key(src)
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -442,6 +733,13 @@ impl Renderer {
         // ── Сбор вершин ────────────────────────────────────────────────────
         let mut fill_vertices: Vec<FillVertex> = Vec::new();
         let mut text_vertices: Vec<TextVertex> = Vec::new();
+        let mut image_vertices: Vec<ImageVertex> = Vec::new();
+        // Per-batch info: bind_group (clone — Arc inside wgpu) + диапазон
+        // вершин в общем image_vbuf. Кладём в порядке появления DrawImage —
+        // картины с painter's order не сливаются между Block/InlineRun
+        // соседями, batching по src в Phase 0 не делаем (5-10 изображений
+        // на страницу = pareto draw call-ов).
+        let mut image_batches: Vec<(wgpu::BindGroup, u32, u32)> = Vec::new();
 
         let raster_native = head.map(|h| Rasterizer::new(ATLAS_PIXEL_SIZE, h.units_per_em));
 
@@ -491,6 +789,19 @@ impl Renderer {
                         &mut self.atlas,
                         &mut self.cached_glyphs,
                     );
+                }
+                DisplayCommand::DrawImage { rect, src, alt: _ } => {
+                    if let Some(gpu) = self.images.get(src) {
+                        let offset = image_vertices.len() as u32;
+                        push_image_quad(&mut image_vertices, *rect);
+                        let count = image_vertices.len() as u32 - offset;
+                        image_batches.push((gpu.bind_group.clone(), offset, count));
+                    } else {
+                        // Картинку никто не зарегистрировал (fetch не сделан /
+                        // декодер упал / неизвестный формат) — fallback на
+                        // серый placeholder, чтобы место в layout-е было видно.
+                        push_fill_quad(&mut fill_vertices, *rect, [0.85, 0.85, 0.85, 1.0]);
+                    }
                 }
             }
         }
@@ -554,6 +865,18 @@ impl Renderer {
             self.queue.write_buffer(&buf, 0, as_bytes(&text_vertices));
             Some(buf)
         };
+        let image_vbuf = if image_vertices.is_empty() {
+            None
+        } else {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("image-vbuf"),
+                size: std::mem::size_of_val(image_vertices.as_slice()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buf, 0, as_bytes(&image_vertices));
+            Some(buf)
+        };
 
         // ── Frame ─────────────────────────────────────────────────────────
         let frame = self.surface.get_current_texture()?;
@@ -587,6 +910,15 @@ impl Renderer {
                 pass.set_vertex_buffer(0, vb.slice(..));
                 pass.draw(0..fill_vertices.len() as u32, 0..1);
             }
+            if let Some(vb) = &image_vbuf {
+                pass.set_pipeline(&self.image_pipeline);
+                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                pass.set_vertex_buffer(0, vb.slice(..));
+                for (bind_group, offset, count) in &image_batches {
+                    pass.set_bind_group(1, bind_group, &[]);
+                    pass.draw(*offset..*offset + *count, 0..1);
+                }
+            }
             if let Some(vb) = &text_vbuf {
                 pass.set_pipeline(&self.text_pipeline);
                 pass.set_bind_group(0, &self.uniform_bind_group, &[]);
@@ -614,6 +946,53 @@ fn push_fill_quad(out: &mut Vec<FillVertex>, rect: Rect, color: [f32; 4]) {
         FillVertex { pos: [x1, y1], color },
         FillVertex { pos: [x0, y1], color },
     ]);
+}
+
+fn push_image_quad(out: &mut Vec<ImageVertex>, rect: Rect) {
+    // UV — фиксированный 0..1 на весь rect (без object-fit / -position).
+    let x0 = rect.x;
+    let y0 = rect.y;
+    let x1 = rect.x + rect.width;
+    let y1 = rect.y + rect.height;
+    out.extend_from_slice(&[
+        ImageVertex { pos: [x0, y0], uv: [0.0, 0.0] },
+        ImageVertex { pos: [x1, y0], uv: [1.0, 0.0] },
+        ImageVertex { pos: [x1, y1], uv: [1.0, 1.0] },
+        ImageVertex { pos: [x0, y0], uv: [0.0, 0.0] },
+        ImageVertex { pos: [x1, y1], uv: [1.0, 1.0] },
+        ImageVertex { pos: [x0, y1], uv: [0.0, 1.0] },
+    ]);
+}
+
+/// Конвертирует декодированное изображение в плотный `Rgba8Unorm`-буфер.
+/// Gray → серый × 3, alpha = 255. GrayA → серый × 3, alpha из канала.
+/// Rgb → opaque (alpha = 255). Rgba — копия.
+fn convert_to_rgba(image: &Image) -> Vec<u8> {
+    let pixel_count = (image.width as usize) * (image.height as usize);
+    let mut out = Vec::with_capacity(pixel_count * 4);
+    match image.format {
+        PixelFormat::Gray8 => {
+            for &g in &image.data {
+                out.extend_from_slice(&[g, g, g, 255]);
+            }
+        }
+        PixelFormat::GrayAlpha8 => {
+            for pair in image.data.chunks_exact(2) {
+                let g = pair[0];
+                let a = pair[1];
+                out.extend_from_slice(&[g, g, g, a]);
+            }
+        }
+        PixelFormat::Rgb8 => {
+            for triple in image.data.chunks_exact(3) {
+                out.extend_from_slice(&[triple[0], triple[1], triple[2], 255]);
+            }
+        }
+        PixelFormat::Rgba8 => {
+            out.extend_from_slice(&image.data);
+        }
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
