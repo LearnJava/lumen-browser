@@ -14,7 +14,7 @@ pub mod renderer;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};
 pub use display_list::{build_display_list, serialize_display_list, DisplayCommand, DisplayList};
-pub use renderer::Renderer;
+pub use renderer::{ImageRegisterError, Renderer};
 
 // ── FontMeasurer ────────────────────────────────────────────────────────────
 

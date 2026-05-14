@@ -214,3 +214,30 @@ fn box_sizing_border_box_with_padding_border() {
     );
     assert_snapshot("box_sizing_border_box_with_padding_border", &actual);
 }
+
+#[test]
+fn css_var_substitution_in_inherited_property() {
+    // CSS Variables L1: --c определён на <body>, inherited custom property
+    // виден у <p>; var(--c) разворачивается в red и применяется к color.
+    // Custom property declaration сама в snapshot не печатается — формат
+    // serialize_layout_tree её игнорирует (она в .custom_props, а не в
+    // resolved style fields).
+    let actual = build(
+        "<body><p>x</p></body>",
+        "body { --c: red; } p { color: var(--c); }",
+        800.0,
+    );
+    assert_snapshot("css_var_substitution_in_inherited_property", &actual);
+}
+
+#[test]
+fn img_replaced_element() {
+    // <img> создаёт BoxKind::Image с src/alt; width/height из HTML-атрибутов
+    // применяются как presentational hints, CSS перекрывает их.
+    let actual = build(
+        r#"<p>before</p><img src="logo.png" alt="Lumen logo" width="100" height="40"><p>after</p>"#,
+        "",
+        800.0,
+    );
+    assert_snapshot("img_replaced_element", &actual);
+}

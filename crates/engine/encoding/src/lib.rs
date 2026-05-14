@@ -38,6 +38,12 @@ pub enum Encoding {
     Utf8,
     Utf16Le,
     Utf16Be,
+    /// UTF-32 LE — четырёхбайтная кодировка, помеченная WHATWG как
+    /// obsolete. Декодируем для backward compat (никогда не encode-им).
+    Utf32Le,
+    /// UTF-32 BE — то же что Utf32Le, но big-endian. Detect по BOM
+    /// `00 00 FE FF`.
+    Utf32Be,
     Windows1251,
     Koi8R,
     Cp866,
@@ -51,6 +57,8 @@ impl Encoding {
             Self::Utf8 => "utf-8",
             Self::Utf16Le => "utf-16le",
             Self::Utf16Be => "utf-16be",
+            Self::Utf32Le => "utf-32le",
+            Self::Utf32Be => "utf-32be",
             Self::Windows1251 => "windows-1251",
             Self::Koi8R => "koi8-r",
             Self::Cp866 => "ibm866",
@@ -76,6 +84,8 @@ impl Encoding {
             "utf-16" | "utf-16le" | "utf16" | "utf16le" | "unicode" | "csunicode"
             | "iso-10646-ucs-2" | "ucs-2" => Some(Self::Utf16Le),
             "utf-16be" | "utf16be" => Some(Self::Utf16Be),
+            "utf-32" | "utf32" | "utf-32le" | "utf32le" => Some(Self::Utf32Le),
+            "utf-32be" | "utf32be" => Some(Self::Utf32Be),
             "windows-1251" | "cp1251" | "x-cp1251" | "windows1251" => Some(Self::Windows1251),
             "koi8-r" | "koi8r" | "koi8_r" | "koi" | "cskoi8r" => Some(Self::Koi8R),
             "ibm866" | "cp866" | "866" | "csibm866" => Some(Self::Cp866),

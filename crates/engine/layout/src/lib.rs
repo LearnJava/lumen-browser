@@ -19,9 +19,14 @@ pub mod style;
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
 pub use snapshot::serialize_layout_tree;
 pub use style::{
-    BorderStyle, BoxShadow, BoxSizing, Color, ComputedStyle, Cursor, Display, FontStretch,
-    FontStyle, FontVariant, FontWeight, Overflow, TextAlign, TextDecorationLine, TextOverflow,
-    TextShadow, TextTransform, Visibility, WhiteSpace,
+    parse_css_wide_keyword, AlignValue, BackgroundAttachment, BackgroundImage, BackgroundRepeat,
+    BackgroundSize, BorderStyle, BoxShadow, BoxSizing, BreakValue, ClipPath, Color, ComputedStyle,
+    Content, ContentItem, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch,
+    FontStyle, FontVariant, FontWeight, Hyphens, ListStylePosition, ListStyleType, Overflow,
+    OverflowWrap, OverscrollBehavior, PointerEvents, ScrollBehavior, ScrollSnapAlign,
+    ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType,
+    ScrollbarGutter, ScrollbarWidth, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
+    TextTransform, TransformFn, UserSelect, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -515,6 +520,111 @@ mod tests {
         let p = first_element_child(&root);
         // :hover в Phase 0 никогда не матчит.
         assert_eq!(p.style.color.r, 0);
+    }
+
+    // ── :placeholder-shown (CSS Selectors L4 §15.1) ──
+
+    fn first_named(doc: &lumen_dom::Document, root: &LayoutBox, local: &str) -> Color {
+        for c in walk_layout(root) {
+            if let lumen_dom::NodeData::Element { name, .. } = &doc.get(c.node).data
+                && name.local == local
+            {
+                return c.style.color;
+            }
+        }
+        panic!("element <{local}> not found");
+    }
+
+    fn walk_layout(root: &LayoutBox) -> Vec<&LayoutBox> {
+        let mut out = Vec::new();
+        let mut stack = vec![root];
+        while let Some(b) = stack.pop() {
+            out.push(b);
+            for c in b.children.iter().rev() {
+                stack.push(c);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn placeholder_shown_matches_input_with_placeholder() {
+        let (root, doc) = lay_with_doc(
+            r#"<input placeholder="Name">"#,
+            "input:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn placeholder_shown_no_placeholder_attr_no_match() {
+        let (root, doc) = lay_with_doc(
+            r#"<input>"#,
+            "input:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 0);
+    }
+
+    #[test]
+    fn placeholder_shown_whitespace_only_placeholder_no_match() {
+        // " " после trim — пустая строка → не матчит.
+        let (root, doc) = lay_with_doc(
+            r#"<input placeholder="   ">"#,
+            "input:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 0);
+    }
+
+    #[test]
+    fn placeholder_shown_filled_input_no_match() {
+        // value-атрибут с непустым контентом → placeholder скрыт.
+        let (root, doc) = lay_with_doc(
+            r#"<input placeholder="Name" value="John">"#,
+            "input:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 0);
+    }
+
+    #[test]
+    fn placeholder_shown_empty_value_still_matches() {
+        // value="" — пользователь ничего не ввёл, placeholder виден.
+        let (root, doc) = lay_with_doc(
+            r#"<input placeholder="Name" value="">"#,
+            "input:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn placeholder_shown_textarea_matches_when_empty() {
+        // <textarea> с placeholder и без текстового контента → матчит.
+        let (root, doc) = lay_with_doc(
+            r#"<textarea placeholder="Bio"></textarea>"#,
+            "textarea:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "textarea").r, 255);
+    }
+
+    #[test]
+    fn placeholder_shown_textarea_with_text_does_not_match() {
+        // <textarea> с текстом — значение задано через DOM children,
+        // placeholder скрыт.
+        let (root, doc) = lay_with_doc(
+            r#"<textarea placeholder="Bio">My biography</textarea>"#,
+            "textarea:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "textarea").r, 0);
+    }
+
+    #[test]
+    fn placeholder_shown_non_form_control_skipped() {
+        // <div placeholder="...">x</div> — placeholder не имеет смысла на
+        // не-form элементе; pseudo-class не матчит.
+        let (root, doc) = lay_with_doc(
+            r#"<div placeholder="hint">x</div>"#,
+            "div:placeholder-shown { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "div").r, 0);
     }
 
     #[test]
@@ -3286,5 +3396,2142 @@ mod tests {
         );
         let div = first_element_child(&root);
         assert_eq!(div.style.color.r, 255);
+    }
+
+    // ── direction (CSS Writing Modes L3 §2.1) ──────────────────────────────
+
+    #[test]
+    fn direction_default_ltr() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.direction, Direction::Ltr);
+    }
+
+    #[test]
+    fn direction_rtl_applied() {
+        let root = lay("<p>x</p>", "p { direction: rtl; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn direction_case_insensitive() {
+        // Keyword-ы CSS property values — ASCII case-insensitive
+        // (Values L4 §2.4). Документ может прийти с `RTL` или `Rtl`.
+        let root = lay("<p>x</p>", "p { direction: RTL; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn direction_inherited() {
+        // direction распространяется от родителя — основа bidi-каскада.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { direction: rtl; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.direction, Direction::Rtl);
+        assert_eq!(p.style.direction, Direction::Rtl);
+    }
+
+    #[test]
+    fn direction_child_overrides_inherited() {
+        // Inheritable, но потомок может явно переопределить — обратно на ltr.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { direction: rtl; } p { direction: ltr; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.direction, Direction::Rtl);
+        assert_eq!(p.style.direction, Direction::Ltr);
+    }
+
+    #[test]
+    fn direction_invalid_keeps_inherited() {
+        // Невалидное значение — сохраняем inherited (по CSS error recovery
+        // правилу: invalid declaration → ignore).
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { direction: rtl; } p { direction: vertical; }",
+        );
+        let p = first_element_child(first_element_child(&root));
+        assert_eq!(p.style.direction, Direction::Rtl);
+    }
+
+    // ── <img> replaced element ───────────────────────────────────────────
+
+    fn first_image_child(b: &LayoutBox) -> &LayoutBox {
+        b.children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::Image { .. }))
+            .expect("expected at least one image child")
+    }
+
+    #[test]
+    fn img_creates_image_box_with_src_and_alt() {
+        let root = lay(r#"<img src="logo.png" alt="logo">"#, "");
+        let img = first_image_child(&root);
+        match &img.kind {
+            BoxKind::Image { src, alt } => {
+                assert_eq!(src, "logo.png");
+                assert_eq!(alt, "logo");
+            }
+            other => panic!("expected BoxKind::Image, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn img_without_src_or_alt_has_empty_strings() {
+        let root = lay("<img>", "");
+        let img = first_image_child(&root);
+        if let BoxKind::Image { src, alt } = &img.kind {
+            assert_eq!(src, "");
+            assert_eq!(alt, "");
+        }
+    }
+
+    #[test]
+    fn img_html_attributes_set_dimensions() {
+        // HTML5 presentational hints: width/height атрибуты → CSS свойства,
+        // без CSS-каскада победившего alternative.
+        let root = lay(r#"<img src="x.png" width="120" height="80">"#, "");
+        let img = first_image_child(&root);
+        assert!((img.rect.width - 120.0).abs() < 0.1);
+        assert!((img.rect.height - 80.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn img_css_overrides_html_attribute_dimensions() {
+        // Author CSS перекрывает presentational hints (HTML5 §10).
+        let root = lay(
+            r#"<img src="x.png" width="120" height="80">"#,
+            "img { width: 200px; height: 50px; }",
+        );
+        let img = first_image_child(&root);
+        assert!((img.rect.width - 200.0).abs() < 0.1, "width={}", img.rect.width);
+        assert!((img.rect.height - 50.0).abs() < 0.1, "height={}", img.rect.height);
+    }
+
+    #[test]
+    fn img_without_dimensions_is_zero_sized() {
+        // Без атрибутов и без CSS — image не загружено, intrinsic неизвестен,
+        // коробка 0×0. Это honest placeholder — будет ясно, что чего-то не
+        // хватает.
+        let root = lay(r#"<img src="x.png">"#, "");
+        let img = first_image_child(&root);
+        assert!(img.rect.width.abs() < 0.1);
+        assert!(img.rect.height.abs() < 0.1);
+    }
+
+    #[test]
+    fn img_invalid_width_attribute_ignored() {
+        // HTML5: nonsense → ignore.
+        let root = lay(r#"<img src="x" width="abc" height="-50">"#, "");
+        let img = first_image_child(&root);
+        assert!(img.rect.width.abs() < 0.1);
+        assert!(img.rect.height.abs() < 0.1);
+    }
+
+    #[test]
+    fn img_padding_and_border_extend_box() {
+        // CSS box для replaced element ведёт себя как block: padding + border
+        // расширяют rect (content-box). Размер картинки 100×60, padding 10,
+        // border 2 → rect 124×84.
+        let root = lay(
+            r#"<img src="x" width="100" height="60">"#,
+            "img { padding: 10px; border: 2px solid red; }",
+        );
+        let img = first_image_child(&root);
+        assert!((img.rect.width - 124.0).abs() < 0.1, "width={}", img.rect.width);
+        assert!((img.rect.height - 84.0).abs() < 0.1, "height={}", img.rect.height);
+    }
+
+    #[test]
+    fn img_not_treated_as_inline_content() {
+        // <img> в Phase 0 — block-level. Текст до и после не объединяется с
+        // ним в один InlineRun.
+        let root = lay(r#"<div>before<img src="x" width="10" height="10">after</div>"#, "");
+        let div = first_element_child(&root);
+        // div должен иметь 3 потомка: InlineRun("before") + Image + InlineRun("after").
+        assert_eq!(div.children.len(), 3, "got {}", div.children.len());
+        assert!(matches!(div.children[0].kind, BoxKind::InlineRun { .. }));
+        assert!(matches!(div.children[1].kind, BoxKind::Image { .. }));
+        assert!(matches!(div.children[2].kind, BoxKind::InlineRun { .. }));
+    }
+
+    #[test]
+    fn img_display_none_is_skipped() {
+        let root = lay(
+            r#"<img src="x.png" width="100" height="50">"#,
+            "img { display: none; }",
+        );
+        let has_image = root.children.iter().any(|c| matches!(c.kind, BoxKind::Image { .. }));
+        assert!(!has_image, "img with display:none should not produce Image box");
+    }
+
+    #[test]
+    fn img_attr_name_case_insensitive() {
+        // HTML-парсер lower-case-ит имена тегов, но атрибуты могут попасть в
+        // mixed-case. Наш get_attr — ASCII case-insensitive.
+        let root = lay(r#"<img SRC="x.png" Width="50" HEIGHT="30">"#, "");
+        let img = first_image_child(&root);
+        if let BoxKind::Image { src, .. } = &img.kind {
+            assert_eq!(src, "x.png");
+        }
+        assert!((img.rect.width - 50.0).abs() < 0.1);
+        assert!((img.rect.height - 30.0).abs() < 0.1);
+    }
+
+    // ──────── CSS-wide keywords (CSS Cascade L4 §7) ────────
+
+    #[test]
+    fn parse_css_wide_keyword_matches_all_four() {
+        use crate::CssWideKeyword;
+        assert_eq!(crate::parse_css_wide_keyword("inherit"), Some(CssWideKeyword::Inherit));
+        assert_eq!(crate::parse_css_wide_keyword("INITIAL"), Some(CssWideKeyword::Initial));
+        assert_eq!(crate::parse_css_wide_keyword("Unset"), Some(CssWideKeyword::Unset));
+        assert_eq!(crate::parse_css_wide_keyword("revert"), Some(CssWideKeyword::Revert));
+        assert_eq!(crate::parse_css_wide_keyword("  inherit  "), Some(CssWideKeyword::Inherit));
+        assert_eq!(crate::parse_css_wide_keyword("red"), None);
+        assert_eq!(crate::parse_css_wide_keyword("inheritance"), None);
+    }
+
+    /// Получить style вложенного `<p>` из `<div><p>x</p></div>`-тестового
+    /// дерева. root → first child (anonymous wrapper или div) → first child block.
+    /// Возвращает style p — там и применяется тестируемая декларация.
+    fn nested_p_style(root: &LayoutBox) -> &ComputedStyle {
+        let div = root
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("div block");
+        let p = div
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("p block");
+        &p.style
+    }
+
+    fn lay_get_p_color(html: &str, css: &str) -> Color {
+        let root = lay(html, css);
+        nested_p_style(&root).color
+    }
+
+    #[test]
+    fn css_inherit_forces_parent_color_on_non_inherited_default() {
+        // Для inherited-свойств (color) — `inherit` совпадает с дефолтом
+        // (если родитель сам не переопределяет). Подтверждает no-op в этом
+        // тривиальном случае.
+        let c = lay_get_p_color(
+            "<div><p>x</p></div>",
+            "div { color: red; } p { color: inherit; }",
+        );
+        // p наследует от div = red.
+        assert_eq!(c, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn css_initial_resets_color_to_initial() {
+        // Initial value for color — black (Color::BLACK).
+        let c = lay_get_p_color(
+            "<div><p>x</p></div>",
+            "div { color: red; } p { color: initial; }",
+        );
+        assert_eq!(c, Color::BLACK);
+    }
+
+    #[test]
+    fn css_unset_inherited_property_acts_as_inherit() {
+        // color — inherited; `unset` для inherited = inherit → parent's red.
+        let c = lay_get_p_color(
+            "<div><p>x</p></div>",
+            "div { color: red; } p { color: unset; }",
+        );
+        assert_eq!(c, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn css_unset_undoes_prior_declaration() {
+        // p { color: blue; color: unset; } → unset вступает позже,
+        // откатывает blue до inherited (red).
+        let c = lay_get_p_color(
+            "<div><p>x</p></div>",
+            "div { color: red; } p { color: blue; color: unset; }",
+        );
+        assert_eq!(c, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn css_inherit_on_non_inherited_pulls_from_parent() {
+        // background-color НЕ inherited. По умолчанию None у потомка.
+        // `inherit` форсит наследование → background.color родителя.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { background-color: rgb(0, 100, 200); } p { background-color: inherit; }",
+        );
+        // Найдём p — это child div, который сам root.children[0].
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(
+            p.style.background_color,
+            Some(Color { r: 0, g: 100, b: 200, a: 255 })
+        );
+    }
+
+    #[test]
+    fn css_initial_on_non_inherited_resets_to_default() {
+        // background-color: red → initial → None (default).
+        let root = lay(
+            "<p>x</p>",
+            "p { background-color: red; background-color: initial; }",
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.background_color, None);
+    }
+
+    #[test]
+    fn css_font_size_inherit_uses_parent() {
+        // font-size: inherit для p → parent font_size = 30px.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { font-size: 30px; } p { font-size: 40px; font-size: inherit; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!((p.style.font_size - 30.0).abs() < 0.1, "fs={}", p.style.font_size);
+    }
+
+    #[test]
+    fn css_font_size_initial_is_16() {
+        let root = lay(
+            "<p>x</p>",
+            "p { font-size: 40px; font-size: initial; }",
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!((p.style.font_size - 16.0).abs() < 0.1, "fs={}", p.style.font_size);
+    }
+
+    #[test]
+    fn css_unset_non_inherited_resets_to_initial() {
+        // background-color: red → unset → None (initial — non-inherited prop).
+        let root = lay(
+            "<p>x</p>",
+            "p { background-color: red; background-color: unset; }",
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.background_color, None);
+    }
+
+    #[test]
+    fn css_revert_treated_like_unset_in_phase0() {
+        // Phase 0: revert == unset. Тест дублирует css_unset_*.
+        let c1 = lay_get_p_color(
+            "<div><p>x</p></div>",
+            "div { color: red; } p { color: blue; color: revert; }",
+        );
+        assert_eq!(c1, Color { r: 255, g: 0, b: 0, a: 255 }); // inherited
+    }
+
+    #[test]
+    fn css_wide_keyword_case_insensitive_in_value() {
+        // CSS keyword values — ASCII case-insensitive по CSS Values L4 §2.4.
+        let c = lay_get_p_color(
+            "<div><p>x</p></div>",
+            "div { color: red; } p { color: INHERIT; }",
+        );
+        assert_eq!(c, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    // ──────── @property syntax-валидация (CSS Properties and Values L1 §2) ────────
+
+    fn lay_get_custom_prop(html: &str, css: &str, key: &str) -> Option<String> {
+        let root = lay(html, css);
+        let p = root
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("first block");
+        p.style.custom_props.get(key).cloned()
+    }
+
+    #[test]
+    fn property_syntax_universal_accepts_anything() {
+        // syntax: '*' — любое значение проходит, в т.ч. бессмысленное.
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --foo { syntax: '*'; inherits: false; initial-value: 0; } p { --foo: garbage; }",
+            "--foo",
+        );
+        assert_eq!(v, Some("garbage".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_length_accepts_px() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --gap { syntax: '<length>'; inherits: false; initial-value: 0px; } p { --gap: 10px; }",
+            "--gap",
+        );
+        assert_eq!(v, Some("10px".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_length_rejects_color() {
+        // syntax: '<length>' + value=red → invalid; declaration пропускается,
+        // остаётся initial-value '0px'.
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --gap { syntax: '<length>'; inherits: false; initial-value: 0px; } p { --gap: red; }",
+            "--gap",
+        );
+        assert_eq!(v, Some("0px".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_length_rejects_percentage() {
+        // <length> НЕ принимает `%` — это <percentage>.
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --gap { syntax: '<length>'; inherits: false; initial-value: 0px; } p { --gap: 50%; }",
+            "--gap",
+        );
+        assert_eq!(v, Some("0px".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_color_accepts_named_and_hex() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --bg { syntax: '<color>'; inherits: false; initial-value: black; } p { --bg: red; }",
+            "--bg",
+        );
+        assert_eq!(v, Some("red".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_color_rejects_length() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --bg { syntax: '<color>'; inherits: false; initial-value: black; } p { --bg: 10px; }",
+            "--bg",
+        );
+        assert_eq!(v, Some("black".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_union_length_or_percentage() {
+        // `<length-percentage>` принимает оба.
+        let v1 = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --w { syntax: '<length-percentage>'; inherits: false; initial-value: 0px; } p { --w: 50%; }",
+            "--w",
+        );
+        assert_eq!(v1, Some("50%".to_string()));
+        let v2 = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --w { syntax: '<length-percentage>'; inherits: false; initial-value: 0px; } p { --w: 10rem; }",
+            "--w",
+        );
+        assert_eq!(v2, Some("10rem".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_or_alternative() {
+        // syntax с `|`: '<length> | <color>'. Оба подходят.
+        let v_len = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --x { syntax: '<length> | <color>'; inherits: false; initial-value: 0px; } p { --x: 5px; }",
+            "--x",
+        );
+        assert_eq!(v_len, Some("5px".to_string()));
+        let v_color = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --x { syntax: '<length> | <color>'; inherits: false; initial-value: 0px; } p { --x: blue; }",
+            "--x",
+        );
+        assert_eq!(v_color, Some("blue".to_string()));
+    }
+
+    #[test]
+    fn property_syntax_skips_value_with_var() {
+        // value содержит `var(` — пропускается без валидации, потому что
+        // expand var() происходит позже.
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --gap { syntax: '<length>'; inherits: false; initial-value: 0px; } p { --base: 7px; --gap: var(--base); }",
+            "--gap",
+        );
+        // var(--base) сохранён как есть; resolve будет при apply_declaration.
+        assert_eq!(v, Some("var(--base)".to_string()));
+    }
+
+    #[test]
+    fn property_invalid_initial_value_skipped() {
+        // initial-value не подходит под syntax → не подставляется. Без
+        // декларации потомка свойство остаётся вне custom_props.
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --gap { syntax: '<length>'; inherits: false; initial-value: red; }",
+            "--gap",
+        );
+        assert_eq!(v, None);
+    }
+
+    #[test]
+    fn property_validate_integer_accepts_signed() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --n { syntax: '<integer>'; inherits: false; initial-value: 0; } p { --n: -42; }",
+            "--n",
+        );
+        assert_eq!(v, Some("-42".to_string()));
+    }
+
+    #[test]
+    fn property_validate_integer_rejects_float() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --n { syntax: '<integer>'; inherits: false; initial-value: 0; } p { --n: 3.14; }",
+            "--n",
+        );
+        assert_eq!(v, Some("0".to_string()));
+    }
+
+    #[test]
+    fn property_validate_time_accepts_seconds_and_ms() {
+        let v_s = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --dur { syntax: '<time>'; inherits: false; initial-value: 0s; } p { --dur: 1.5s; }",
+            "--dur",
+        );
+        assert_eq!(v_s, Some("1.5s".to_string()));
+
+        let v_ms = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --dur { syntax: '<time>'; inherits: false; initial-value: 0s; } p { --dur: 200ms; }",
+            "--dur",
+        );
+        assert_eq!(v_ms, Some("200ms".to_string()));
+    }
+
+    #[test]
+    fn property_validate_time_rejects_non_time() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --dur { syntax: '<time>'; inherits: false; initial-value: 0s; } p { --dur: 100px; }",
+            "--dur",
+        );
+        assert_eq!(v, Some("0s".to_string()));
+    }
+
+    #[test]
+    fn property_validate_resolution_units() {
+        // <resolution> принимает dpi / dpcm / dppx / x (alias dppx).
+        for (val, expected) in [
+            ("96dpi", "96dpi"),
+            ("2dppx", "2dppx"),
+            ("38dpcm", "38dpcm"),
+            ("2x", "2x"),
+        ] {
+            let css = format!(
+                "@property --r {{ syntax: '<resolution>'; inherits: false; initial-value: 1dppx; }} p {{ --r: {val}; }}"
+            );
+            let v = lay_get_custom_prop("<p>x</p>", &css, "--r");
+            assert_eq!(v, Some(expected.to_string()), "value: {val}");
+        }
+    }
+
+    #[test]
+    fn property_validate_resolution_rejects_non_resolution() {
+        let v = lay_get_custom_prop(
+            "<p>x</p>",
+            "@property --r { syntax: '<resolution>'; inherits: false; initial-value: 1dppx; } p { --r: 5s; }",
+            "--r",
+        );
+        assert_eq!(v, Some("1dppx".to_string()));
+    }
+
+    // ──────── CSS counters (CSS Lists L3 §3) ────────
+
+    fn first_block_style(root: &LayoutBox) -> &ComputedStyle {
+        let p = root
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("p block");
+        &p.style
+    }
+
+    #[test]
+    fn counter_reset_single_default_zero() {
+        let root = lay("<p>x</p>", "p { counter-reset: section; }");
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_reset, vec![("section".to_string(), 0)]);
+    }
+
+    #[test]
+    fn counter_reset_with_explicit_value() {
+        let root = lay("<p>x</p>", "p { counter-reset: section 5; }");
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_reset, vec![("section".to_string(), 5)]);
+    }
+
+    #[test]
+    fn counter_reset_multiple() {
+        let root = lay(
+            "<p>x</p>",
+            "p { counter-reset: section 1 subsection 0 figure; }",
+        );
+        let s = first_block_style(&root);
+        assert_eq!(
+            s.counter_reset,
+            vec![
+                ("section".to_string(), 1),
+                ("subsection".to_string(), 0),
+                ("figure".to_string(), 0),  // default = 0
+            ]
+        );
+    }
+
+    #[test]
+    fn counter_reset_none_yields_empty() {
+        let root = lay("<p>x</p>", "p { counter-reset: none; }");
+        let s = first_block_style(&root);
+        assert!(s.counter_reset.is_empty());
+    }
+
+    #[test]
+    fn counter_reset_case_insensitive_none() {
+        let root = lay("<p>x</p>", "p { counter-reset: NONE; }");
+        let s = first_block_style(&root);
+        assert!(s.counter_reset.is_empty());
+    }
+
+    #[test]
+    fn counter_increment_default_one() {
+        let root = lay("<p>x</p>", "p { counter-increment: section; }");
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_increment, vec![("section".to_string(), 1)]);
+    }
+
+    #[test]
+    fn counter_increment_with_explicit_value() {
+        let root = lay("<p>x</p>", "p { counter-increment: section 2; }");
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_increment, vec![("section".to_string(), 2)]);
+    }
+
+    #[test]
+    fn counter_increment_multiple_with_mixed_defaults() {
+        let root = lay(
+            "<p>x</p>",
+            "p { counter-increment: a 3 b c 5; }",
+        );
+        let s = first_block_style(&root);
+        assert_eq!(
+            s.counter_increment,
+            vec![
+                ("a".to_string(), 3),
+                ("b".to_string(), 1),  // default = 1
+                ("c".to_string(), 5),
+            ]
+        );
+    }
+
+    #[test]
+    fn counter_not_inherited_by_default() {
+        // counter-reset / -increment не наследуются (CSS Lists L3 §3).
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { counter-reset: section; }",
+        );
+        // У <p> не должно быть счётчиков.
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!(p.style.counter_reset.is_empty());
+        assert!(!div.style.counter_reset.is_empty());  // у div есть
+    }
+
+    #[test]
+    fn counter_inherit_keyword_pulls_from_parent() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { counter-reset: section 7; } p { counter-reset: inherit; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.counter_reset, vec![("section".to_string(), 7)]);
+    }
+
+    #[test]
+    fn counter_initial_keyword_resets_to_empty() {
+        let root = lay(
+            "<p>x</p>",
+            "p { counter-reset: section 5; counter-reset: initial; }",
+        );
+        let s = first_block_style(&root);
+        assert!(s.counter_reset.is_empty());
+    }
+
+    #[test]
+    fn invalid_ident_in_counter_list_skipped() {
+        // Имя с цифрой первым символом — невалидный CSS-ident, должен пропуститься.
+        let root = lay(
+            "<p>x</p>",
+            "p { counter-reset: 1invalid valid 2; }",
+        );
+        let s = first_block_style(&root);
+        assert_eq!(s.counter_reset, vec![("valid".to_string(), 2)]);
+    }
+
+    // ──────── @media queries (Media Queries L4) ────────
+
+    fn lay_with_viewport(html: &str, css: &str, vw: f32, vh: f32) -> LayoutBox {
+        use lumen_dom::Document;
+        use lumen_core::Size;
+        let document: Document = lumen_html_parser::parse(html);
+        let stylesheet = lumen_css_parser::parse(css);
+        let viewport = Size { width: vw, height: vh };
+        crate::layout(&document, &stylesheet, viewport)
+    }
+
+    #[test]
+    fn media_min_width_matches_wide_viewport() {
+        // @media (min-width: 600px) { p { color: red; } }
+        // viewport 800×600 → match.
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (min-width: 600px) { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn media_min_width_skips_narrow_viewport() {
+        // viewport 500×600 → НЕ match (500 < 600).
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (min-width: 600px) { p { color: red; } }",
+            500.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // default color = BLACK (initial).
+        assert_eq!(p.style.color, Color::BLACK);
+    }
+
+    #[test]
+    fn media_max_width_matches_narrow() {
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (max-width: 500px) { p { color: blue; } }",
+            400.0,
+            300.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn media_orientation_landscape() {
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (orientation: landscape) { p { color: green; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn media_orientation_portrait_does_not_match_landscape() {
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (orientation: portrait) { p { color: green; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color::BLACK);
+    }
+
+    #[test]
+    fn media_screen_type_always_matches() {
+        // Phase 0 MediaContext always media_type="screen".
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media screen { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn media_print_type_does_not_match() {
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media print { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color::BLACK);
+    }
+
+    #[test]
+    fn media_and_combination() {
+        // @media (min-width: 600px) and (orientation: landscape) → match
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (min-width: 600px) and (orientation: landscape) { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn media_or_via_comma() {
+        // @media (max-width: 400px), (min-width: 700px) → match при viewport=800
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (max-width: 400px), (min-width: 700px) { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn media_rule_overrides_regular() {
+        // Source order: p{color:red}, потом @media(match){p{color:blue}}.
+        // @media rules идут после regular в нашем cascade-ordering,
+        // поэтому blue побеждает.
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "p { color: red; } @media (min-width: 100px) { p { color: blue; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn media_unknown_feature_does_not_match() {
+        // (unknown-feature: value) → Unsupported → не match.
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (color-gamut: p3) { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color::BLACK);
+    }
+
+    #[test]
+    fn display_flex_parses_and_stores() {
+        let root = lay("<p>x</p>", "p { display: flex; }");
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.display, Display::Flex);
+    }
+
+    #[test]
+    fn display_inline_flex_parses_and_stores() {
+        // inline-flex element внутри div — должен попасть в InlineRun
+        // (трактуется как inline-family).
+        let root = lay("<div><span>x</span></div>", "span { display: inline-flex; }");
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // div содержит InlineRun (inline-flex span внутри).
+        assert!(matches!(&div.children[0].kind, BoxKind::InlineRun { .. }));
+    }
+
+    #[test]
+    fn display_grid_parses_as_block_family() {
+        let root = lay("<p>x</p>", "p { display: grid; }");
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.display, Display::Grid);
+    }
+
+    #[test]
+    fn display_inline_grid_parses_as_inline_family() {
+        let root = lay("<div><span>x</span></div>", "span { display: inline-grid; }");
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!(matches!(&div.children[0].kind, BoxKind::InlineRun { .. }));
+    }
+
+    #[test]
+    fn display_unknown_value_keeps_previous() {
+        // unknown value игнорируется — лог по умолчанию остаётся.
+        let root = lay("<p>x</p>", "p { display: zomg-flexed; }");
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // Default для <p> от UA = Block.
+        assert_eq!(p.style.display, Display::Block);
+    }
+
+    // ──────── clip-path / transform / filter ────────
+
+    fn first_p_style(root: &LayoutBox) -> &ComputedStyle {
+        let p = root
+            .children
+            .iter()
+            .find(|c| matches!(&c.kind, BoxKind::Block))
+            .expect("p block");
+        &p.style
+    }
+
+    #[test]
+    fn clip_path_inset_parses() {
+        let root = lay("<p>x</p>", "p { clip-path: inset(10px 20px 30px 40px); }");
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Inset(parts)) => {
+                assert_eq!(parts, vec![10.0, 20.0, 30.0, 40.0]);
+            }
+            _ => panic!("expected Inset, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_circle_with_center() {
+        let root = lay("<p>x</p>", "p { clip-path: circle(50px at 100px 200px); }");
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Circle { radius, center }) => {
+                assert!((radius - 50.0).abs() < 0.01);
+                assert_eq!(center, Some((100.0, 200.0)));
+            }
+            _ => panic!("expected Circle, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_ellipse() {
+        let root = lay("<p>x</p>", "p { clip-path: ellipse(30px 60px); }");
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Ellipse { rx, ry, center: None }) => {
+                assert!((rx - 30.0).abs() < 0.01);
+                assert!((ry - 60.0).abs() < 0.01);
+            }
+            _ => panic!("expected Ellipse, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_polygon() {
+        let root = lay(
+            "<p>x</p>",
+            "p { clip-path: polygon(0 0, 100px 0, 50px 100px); }",
+        );
+        let cp = first_p_style(&root).clip_path.clone();
+        match cp {
+            Some(ClipPath::Polygon(verts)) => {
+                assert_eq!(verts.len(), 3);
+                assert_eq!(verts[0], (0.0, 0.0));
+                assert_eq!(verts[1], (100.0, 0.0));
+                assert_eq!(verts[2], (50.0, 100.0));
+            }
+            _ => panic!("expected Polygon, got {cp:?}"),
+        }
+    }
+
+    #[test]
+    fn clip_path_none_clears() {
+        let root = lay("<p>x</p>", "p { clip-path: circle(50px); clip-path: none; }");
+        assert_eq!(first_p_style(&root).clip_path, None);
+    }
+
+    #[test]
+    fn transform_translate() {
+        let root = lay("<p>x</p>", "p { transform: translate(10px, 20px); }");
+        let t = first_p_style(&root).transform.clone();
+        assert_eq!(t, vec![TransformFn::Translate(10.0, 20.0)]);
+    }
+
+    #[test]
+    fn transform_rotate_normalizes_to_radians() {
+        let root = lay("<p>x</p>", "p { transform: rotate(90deg); }");
+        let t = first_p_style(&root).transform.clone();
+        match &t[..] {
+            [TransformFn::Rotate(rad)] => {
+                assert!((rad - std::f32::consts::FRAC_PI_2).abs() < 1e-5);
+            }
+            _ => panic!("expected single Rotate, got {t:?}"),
+        }
+    }
+
+    #[test]
+    fn transform_scale_single_arg_uniform() {
+        let root = lay("<p>x</p>", "p { transform: scale(1.5); }");
+        let t = first_p_style(&root).transform.clone();
+        assert_eq!(t, vec![TransformFn::Scale(1.5, 1.5)]);
+    }
+
+    #[test]
+    fn transform_scale_two_args() {
+        let root = lay("<p>x</p>", "p { transform: scale(2, 0.5); }");
+        let t = first_p_style(&root).transform.clone();
+        assert_eq!(t, vec![TransformFn::Scale(2.0, 0.5)]);
+    }
+
+    #[test]
+    fn transform_matrix() {
+        let root = lay("<p>x</p>", "p { transform: matrix(1, 0, 0, 1, 50, 100); }");
+        let t = first_p_style(&root).transform.clone();
+        assert_eq!(
+            t,
+            vec![TransformFn::Matrix([1.0, 0.0, 0.0, 1.0, 50.0, 100.0])]
+        );
+    }
+
+    #[test]
+    fn transform_list_multiple() {
+        let root = lay(
+            "<p>x</p>",
+            "p { transform: translate(10px, 0) rotate(45deg) scale(2); }",
+        );
+        let t = first_p_style(&root).transform.clone();
+        assert_eq!(t.len(), 3);
+        assert!(matches!(t[0], TransformFn::Translate(_, _)));
+        assert!(matches!(t[1], TransformFn::Rotate(_)));
+        assert!(matches!(t[2], TransformFn::Scale(_, _)));
+    }
+
+    #[test]
+    fn transform_none_clears() {
+        let root = lay(
+            "<p>x</p>",
+            "p { transform: rotate(45deg); transform: none; }",
+        );
+        assert!(first_p_style(&root).transform.is_empty());
+    }
+
+    #[test]
+    fn filter_blur() {
+        let root = lay("<p>x</p>", "p { filter: blur(5px); }");
+        let f = first_p_style(&root).filter.clone();
+        assert_eq!(f, vec![FilterFn::Blur(5.0)]);
+    }
+
+    #[test]
+    fn filter_percentage_normalized() {
+        let root = lay("<p>x</p>", "p { filter: grayscale(50%); }");
+        let f = first_p_style(&root).filter.clone();
+        match &f[..] {
+            [FilterFn::Grayscale(v)] => assert!((v - 0.5).abs() < 1e-5),
+            _ => panic!("expected Grayscale, got {f:?}"),
+        }
+    }
+
+    #[test]
+    fn filter_chain() {
+        let root = lay(
+            "<p>x</p>",
+            "p { filter: blur(2px) brightness(1.2) saturate(0.8); }",
+        );
+        let f = first_p_style(&root).filter.clone();
+        assert_eq!(f.len(), 3);
+        assert!(matches!(f[0], FilterFn::Blur(_)));
+        assert!(matches!(f[1], FilterFn::Brightness(_)));
+        assert!(matches!(f[2], FilterFn::Saturate(_)));
+    }
+
+    #[test]
+    fn filter_hue_rotate_radians() {
+        let root = lay("<p>x</p>", "p { filter: hue-rotate(180deg); }");
+        let f = first_p_style(&root).filter.clone();
+        match &f[..] {
+            [FilterFn::HueRotate(rad)] => {
+                assert!((rad - std::f32::consts::PI).abs() < 1e-5);
+            }
+            _ => panic!("expected HueRotate, got {f:?}"),
+        }
+    }
+
+    #[test]
+    fn filter_none_clears() {
+        let root = lay("<p>x</p>", "p { filter: blur(5px); filter: none; }");
+        assert!(first_p_style(&root).filter.is_empty());
+    }
+
+    #[test]
+    fn filter_unknown_skipped() {
+        let root = lay("<p>x</p>", "p { filter: blur(5px) zomg(1); brightness(1); }");
+        // zomg() игнорируется, остальное парсится.
+        let f = first_p_style(&root).filter.clone();
+        // brightness вне filter declaration — отдельный selector? Нет,
+        // оно в той же декларации `filter: blur(5px) zomg(1)` — zomg
+        // skipped, blur остался.
+        assert!(matches!(f[0], FilterFn::Blur(_)));
+    }
+
+    #[test]
+    fn clip_transform_filter_not_inherited() {
+        // Эти свойства не наследуются.
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { clip-path: circle(50px); transform: rotate(45deg); filter: blur(5px); }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!(p.style.clip_path.is_none());
+        assert!(p.style.transform.is_empty());
+        assert!(p.style.filter.is_empty());
+        assert!(div.style.clip_path.is_some());
+        assert!(!div.style.transform.is_empty());
+        assert!(!div.style.filter.is_empty());
+    }
+
+    // ──────── gap / aspect-ratio ────────
+
+    #[test]
+    fn gap_shorthand_single_value() {
+        let root = lay("<p>x</p>", "p { gap: 10px; }");
+        let s = first_p_style(&root);
+        assert!((s.row_gap - 10.0).abs() < 0.01);
+        assert!((s.column_gap - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn gap_shorthand_two_values() {
+        let root = lay("<p>x</p>", "p { gap: 10px 20px; }");
+        let s = first_p_style(&root);
+        assert!((s.row_gap - 10.0).abs() < 0.01);
+        assert!((s.column_gap - 20.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn row_gap_individual() {
+        let root = lay("<p>x</p>", "p { row-gap: 15px; }");
+        assert!((first_p_style(&root).row_gap - 15.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn column_gap_individual() {
+        let root = lay("<p>x</p>", "p { column-gap: 25px; }");
+        assert!((first_p_style(&root).column_gap - 25.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn gap_em_resolved() {
+        // em разрешается относительно font-size элемента.
+        let root = lay("<p>x</p>", "p { font-size: 20px; gap: 1.5em; }");
+        let s = first_p_style(&root);
+        assert!((s.row_gap - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn gap_negative_clamped_to_zero() {
+        // gap не может быть отрицательным.
+        let root = lay("<p>x</p>", "p { gap: -5px; }");
+        assert_eq!(first_p_style(&root).row_gap, 0.0);
+    }
+
+    #[test]
+    fn aspect_ratio_single_number() {
+        let root = lay("<p>x</p>", "p { aspect-ratio: 1.5; }");
+        assert_eq!(first_p_style(&root).aspect_ratio, Some((1.5, 1.0)));
+    }
+
+    #[test]
+    fn aspect_ratio_w_h_pair() {
+        let root = lay("<p>x</p>", "p { aspect-ratio: 16 / 9; }");
+        assert_eq!(first_p_style(&root).aspect_ratio, Some((16.0, 9.0)));
+    }
+
+    #[test]
+    fn aspect_ratio_auto() {
+        let root = lay("<p>x</p>", "p { aspect-ratio: auto; }");
+        assert_eq!(first_p_style(&root).aspect_ratio, None);
+    }
+
+    #[test]
+    fn aspect_ratio_negative_rejected() {
+        let root = lay("<p>x</p>", "p { aspect-ratio: -1 / 2; }");
+        assert_eq!(first_p_style(&root).aspect_ratio, None);
+    }
+
+    #[test]
+    fn aspect_ratio_invalid_kept_unchanged() {
+        let root = lay("<p>x</p>", "p { aspect-ratio: 16 / abc; }");
+        assert_eq!(first_p_style(&root).aspect_ratio, None);
+    }
+
+    // ──────── CSS Multi-column L1 ────────
+
+    #[test]
+    fn column_count_integer() {
+        let root = lay("<p>x</p>", "p { column-count: 3; }");
+        assert_eq!(first_p_style(&root).column_count, Some(3));
+    }
+
+    #[test]
+    fn column_count_auto() {
+        let root = lay("<p>x</p>", "p { column-count: auto; }");
+        assert_eq!(first_p_style(&root).column_count, None);
+    }
+
+    #[test]
+    fn column_count_zero_rejected() {
+        let root = lay("<p>x</p>", "p { column-count: 0; }");
+        assert_eq!(first_p_style(&root).column_count, None);
+    }
+
+    #[test]
+    fn column_width_length() {
+        let root = lay("<p>x</p>", "p { column-width: 200px; }");
+        assert_eq!(first_p_style(&root).column_width, Some(200.0));
+    }
+
+    #[test]
+    fn column_width_auto() {
+        let root = lay("<p>x</p>", "p { column-width: auto; }");
+        assert_eq!(first_p_style(&root).column_width, None);
+    }
+
+    #[test]
+    fn columns_shorthand_both() {
+        let root = lay("<p>x</p>", "p { columns: 200px 3; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.column_width, Some(200.0));
+        assert_eq!(s.column_count, Some(3));
+    }
+
+    #[test]
+    fn columns_shorthand_width_only() {
+        let root = lay("<p>x</p>", "p { columns: 250px; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.column_width, Some(250.0));
+        assert_eq!(s.column_count, None);
+    }
+
+    #[test]
+    fn columns_shorthand_count_only() {
+        let root = lay("<p>x</p>", "p { columns: 4; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.column_count, Some(4));
+        assert_eq!(s.column_width, None);
+    }
+
+    #[test]
+    fn column_rule_individual() {
+        let root = lay(
+            "<p>x</p>",
+            "p { column-rule-width: 2px; column-rule-style: solid; }",
+        );
+        let s = first_p_style(&root);
+        assert!((s.column_rule_width - 2.0).abs() < 1e-6);
+        assert_eq!(s.column_rule_style, BorderStyle::Solid);
+    }
+
+    #[test]
+    fn column_rule_shorthand() {
+        let root = lay("<p>x</p>", "p { column-rule: 3px dashed; }");
+        let s = first_p_style(&root);
+        assert!((s.column_rule_width - 3.0).abs() < 1e-6);
+        assert_eq!(s.column_rule_style, BorderStyle::Dashed);
+    }
+
+    #[test]
+    fn column_span_all() {
+        let root = lay("<p>x</p>", "p { column-span: all; }");
+        assert!(first_p_style(&root).column_span_all);
+    }
+
+    #[test]
+    fn column_fill_balance() {
+        let root = lay("<p>x</p>", "p { column-fill: balance; }");
+        assert!(first_p_style(&root).column_fill_balance);
+    }
+
+    #[test]
+    fn break_before_avoid() {
+        let root = lay("<p>x</p>", "p { break-before: avoid; }");
+        assert_eq!(first_p_style(&root).break_before, BreakValue::Avoid);
+    }
+
+    #[test]
+    fn break_after_page() {
+        let root = lay("<p>x</p>", "p { break-after: page; }");
+        assert_eq!(first_p_style(&root).break_after, BreakValue::Page);
+    }
+
+    #[test]
+    fn break_inside_avoid_column() {
+        let root = lay("<p>x</p>", "p { break-inside: avoid-column; }");
+        assert_eq!(first_p_style(&root).break_inside, BreakValue::Avoid);
+    }
+
+    #[test]
+    fn column_count_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { column-count: 3; }",
+        );
+        // Дочерний p не должен унаследовать column-count (CSS Multi-column L1 §3.2 — не наследуется).
+        let p_style = nested_p_style(&root);
+        assert_eq!(p_style.column_count, None);
+    }
+
+    // ──────── CSS Environment Variables L1 — env() ────────
+
+    #[test]
+    fn env_fallback_used_when_unknown() {
+        // env() с unknown name + fallback → fallback применяется.
+        let root = lay(
+            "<p>x</p>",
+            "p { padding: env(safe-area-inset-top, 12px); }",
+        );
+        assert!((first_p_style(&root).padding_top - 12.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn env_without_fallback_invalidates_decl() {
+        // env() с unknown name и без fallback — декларация невалидна.
+        let root = lay(
+            "<p>x</p>",
+            "p { padding: env(safe-area-inset-top); }",
+        );
+        assert!((first_p_style(&root).padding_top - 0.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn env_with_indices_ignored_phase0() {
+        // `env(name 0, fallback)` — индекс игнорируется, имя = name.
+        let root = lay(
+            "<p>x</p>",
+            "p { padding: env(viewport-segment-width 0 0, 25px); }",
+        );
+        assert!((first_p_style(&root).padding_top - 25.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn env_inside_calc() {
+        // calc(env(...) + 5px) — env разворачивается до calc().
+        let root = lay(
+            "<p>x</p>",
+            "p { padding: calc(env(safe-area-inset-top, 10px) + 5px); }",
+        );
+        assert!((first_p_style(&root).padding_top - 15.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn env_inside_var_fallback() {
+        // var(--foo, env(name, 8px)) — env как fallback внутри var().
+        let root = lay(
+            "<p>x</p>",
+            "p { padding: var(--missing, env(safe-area-inset-top, 8px)); }",
+        );
+        assert!((first_p_style(&root).padding_top - 8.0).abs() < 1e-6);
+    }
+
+    // ──────── CSS Scroll Snap L1 ────────
+
+    #[test]
+    fn scroll_snap_type_none() {
+        let root = lay("<p>x</p>", "p { scroll-snap-type: none; }");
+        assert_eq!(first_p_style(&root).scroll_snap_type.axis, ScrollSnapAxis::None);
+    }
+
+    #[test]
+    fn scroll_snap_type_x_mandatory() {
+        let root = lay("<p>x</p>", "p { scroll-snap-type: x mandatory; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.scroll_snap_type.axis, ScrollSnapAxis::X);
+        assert_eq!(s.scroll_snap_type.strictness, ScrollSnapStrictness::Mandatory);
+    }
+
+    #[test]
+    fn scroll_snap_align_single_keyword() {
+        let root = lay("<p>x</p>", "p { scroll-snap-align: center; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.scroll_snap_align.block, ScrollSnapAlignKeyword::Center);
+        assert_eq!(s.scroll_snap_align.inline, ScrollSnapAlignKeyword::Center);
+    }
+
+    #[test]
+    fn scroll_snap_align_two_keywords() {
+        let root = lay("<p>x</p>", "p { scroll-snap-align: start end; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.scroll_snap_align.block, ScrollSnapAlignKeyword::Start);
+        assert_eq!(s.scroll_snap_align.inline, ScrollSnapAlignKeyword::End);
+    }
+
+    #[test]
+    fn scroll_snap_stop_always() {
+        let root = lay("<p>x</p>", "p { scroll-snap-stop: always; }");
+        assert_eq!(first_p_style(&root).scroll_snap_stop, ScrollSnapStop::Always);
+    }
+
+    #[test]
+    fn scroll_margin_individual() {
+        let root = lay("<p>x</p>", "p { scroll-margin-top: 10px; scroll-margin-left: 5px; }");
+        let s = first_p_style(&root);
+        assert!((s.scroll_margin_top - 10.0).abs() < 1e-6);
+        assert!((s.scroll_margin_left - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scroll_margin_shorthand_4_values() {
+        let root = lay("<p>x</p>", "p { scroll-margin: 1px 2px 3px 4px; }");
+        let s = first_p_style(&root);
+        assert!((s.scroll_margin_top - 1.0).abs() < 1e-6);
+        assert!((s.scroll_margin_right - 2.0).abs() < 1e-6);
+        assert!((s.scroll_margin_bottom - 3.0).abs() < 1e-6);
+        assert!((s.scroll_margin_left - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn scroll_padding_shorthand_1_value() {
+        let root = lay("<p>x</p>", "p { scroll-padding: 5px; }");
+        let s = first_p_style(&root);
+        assert!((s.scroll_padding_top - 5.0).abs() < 1e-6);
+        assert!((s.scroll_padding_right - 5.0).abs() < 1e-6);
+        assert!((s.scroll_padding_bottom - 5.0).abs() < 1e-6);
+        assert!((s.scroll_padding_left - 5.0).abs() < 1e-6);
+    }
+
+    // ──────── CSS Overscroll Behavior L1 ────────
+
+    #[test]
+    fn overscroll_behavior_contain() {
+        let root = lay("<p>x</p>", "p { overscroll-behavior: contain; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.overscroll_behavior_x, OverscrollBehavior::Contain);
+        assert_eq!(s.overscroll_behavior_y, OverscrollBehavior::Contain);
+    }
+
+    #[test]
+    fn overscroll_behavior_two_values() {
+        let root = lay("<p>x</p>", "p { overscroll-behavior: contain none; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.overscroll_behavior_x, OverscrollBehavior::Contain);
+        assert_eq!(s.overscroll_behavior_y, OverscrollBehavior::None);
+    }
+
+    #[test]
+    fn overscroll_behavior_individual_axis() {
+        let root = lay("<p>x</p>", "p { overscroll-behavior-x: none; overscroll-behavior-y: auto; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.overscroll_behavior_x, OverscrollBehavior::None);
+        assert_eq!(s.overscroll_behavior_y, OverscrollBehavior::Auto);
+    }
+
+    #[test]
+    fn scroll_snap_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { scroll-snap-type: x mandatory; }",
+        );
+        let p = nested_p_style(&root);
+        // Не наследуется.
+        assert_eq!(p.scroll_snap_type.axis, ScrollSnapAxis::None);
+    }
+
+    // ──────── mask-* + scrollbar-* ────────
+
+    #[test]
+    fn mask_image_url() {
+        let root = lay("<p>x</p>", "p { mask-image: url(\"mask.png\"); }");
+        assert_eq!(
+            first_p_style(&root).mask_image,
+            BackgroundImage::Url("mask.png".into())
+        );
+    }
+
+    #[test]
+    fn mask_image_none_clears() {
+        let root = lay("<p>x</p>", "p { mask-image: url(m.png); mask-image: none; }");
+        assert_eq!(first_p_style(&root).mask_image, BackgroundImage::None);
+    }
+
+    #[test]
+    fn mask_repeat_no_repeat() {
+        let root = lay("<p>x</p>", "p { mask-repeat: no-repeat; }");
+        assert_eq!(first_p_style(&root).mask_repeat, BackgroundRepeat::NoRepeat);
+    }
+
+    #[test]
+    fn mask_size_cover() {
+        let root = lay("<p>x</p>", "p { mask-size: cover; }");
+        assert_eq!(first_p_style(&root).mask_size, BackgroundSize::Cover);
+    }
+
+    #[test]
+    fn scrollbar_width_thin() {
+        let root = lay("<p>x</p>", "p { scrollbar-width: thin; }");
+        assert_eq!(first_p_style(&root).scrollbar_width, ScrollbarWidth::Thin);
+    }
+
+    #[test]
+    fn scrollbar_width_none() {
+        let root = lay("<p>x</p>", "p { scrollbar-width: none; }");
+        assert_eq!(first_p_style(&root).scrollbar_width, ScrollbarWidth::None);
+    }
+
+    #[test]
+    fn scrollbar_width_inherited() {
+        let root = lay("<div><p>x</p></div>", "div { scrollbar-width: thin; }");
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.scrollbar_width, ScrollbarWidth::Thin);
+    }
+
+    #[test]
+    fn scrollbar_color_pair() {
+        let root = lay(
+            "<p>x</p>",
+            "p { scrollbar-color: red blue; }",
+        );
+        let (thumb, track) = first_p_style(&root).scrollbar_color.unwrap();
+        assert_eq!(thumb, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(track, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn scrollbar_color_with_rgb_functions() {
+        let root = lay(
+            "<p>x</p>",
+            "p { scrollbar-color: rgb(100, 100, 100) rgb(200, 200, 200); }",
+        );
+        let (thumb, _) = first_p_style(&root).scrollbar_color.unwrap();
+        assert_eq!(thumb, Color { r: 100, g: 100, b: 100, a: 255 });
+    }
+
+    #[test]
+    fn scrollbar_color_auto() {
+        let root = lay("<p>x</p>", "p { scrollbar-color: red blue; scrollbar-color: auto; }");
+        assert!(first_p_style(&root).scrollbar_color.is_none());
+    }
+
+    #[test]
+    fn scrollbar_gutter_stable() {
+        let root = lay("<p>x</p>", "p { scrollbar-gutter: stable; }");
+        assert_eq!(first_p_style(&root).scrollbar_gutter, ScrollbarGutter::Stable);
+    }
+
+    #[test]
+    fn scrollbar_gutter_stable_both_edges() {
+        let root = lay("<p>x</p>", "p { scrollbar-gutter: stable both-edges; }");
+        assert_eq!(
+            first_p_style(&root).scrollbar_gutter,
+            ScrollbarGutter::StableBothEdges
+        );
+    }
+
+    // ──────── transform-origin / perspective / list-style-* / transition-* ────────
+
+    #[test]
+    fn transform_origin_x_y_z() {
+        let root = lay("<p>x</p>", "p { transform-origin: 10px 20px 30px; }");
+        assert_eq!(first_p_style(&root).transform_origin, (10.0, 20.0, 30.0));
+    }
+
+    #[test]
+    fn transform_origin_partial_defaults_to_zero() {
+        let root = lay("<p>x</p>", "p { transform-origin: 50px; }");
+        assert_eq!(first_p_style(&root).transform_origin, (50.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn transform_origin_not_inherited() {
+        let root = lay("<div><p>x</p></div>", "div { transform-origin: 10px 20px; }");
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.transform_origin, (0.0, 0.0, 0.0));
+        assert_eq!(div.style.transform_origin, (10.0, 20.0, 0.0));
+    }
+
+    #[test]
+    fn perspective_length() {
+        let root = lay("<p>x</p>", "p { perspective: 800px; }");
+        assert_eq!(first_p_style(&root).perspective, Some(800.0));
+    }
+
+    #[test]
+    fn perspective_none() {
+        let root = lay("<p>x</p>", "p { perspective: 800px; perspective: none; }");
+        assert_eq!(first_p_style(&root).perspective, None);
+    }
+
+    #[test]
+    fn perspective_zero_treated_as_none() {
+        let root = lay("<p>x</p>", "p { perspective: 0px; }");
+        assert_eq!(first_p_style(&root).perspective, None);
+    }
+
+    #[test]
+    fn list_style_type_decimal() {
+        let root = lay("<p>x</p>", "p { list-style-type: decimal; }");
+        assert_eq!(first_p_style(&root).list_style_type, ListStyleType::Decimal);
+    }
+
+    #[test]
+    fn list_style_type_none() {
+        let root = lay("<p>x</p>", "p { list-style-type: none; }");
+        assert_eq!(first_p_style(&root).list_style_type, ListStyleType::None);
+    }
+
+    #[test]
+    fn list_style_type_lower_roman() {
+        let root = lay("<p>x</p>", "p { list-style-type: lower-roman; }");
+        assert_eq!(first_p_style(&root).list_style_type, ListStyleType::LowerRoman);
+    }
+
+    #[test]
+    fn list_style_position_inside() {
+        let root = lay("<p>x</p>", "p { list-style-position: inside; }");
+        assert_eq!(first_p_style(&root).list_style_position, ListStylePosition::Inside);
+    }
+
+    #[test]
+    fn list_style_image_url() {
+        let root = lay("<p>x</p>", "p { list-style-image: url(\"bullet.png\"); }");
+        assert_eq!(
+            first_p_style(&root).list_style_image,
+            Some("bullet.png".to_string())
+        );
+    }
+
+    #[test]
+    fn list_style_shorthand_combines() {
+        let root = lay("<p>x</p>", "p { list-style: square inside; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.list_style_type, ListStyleType::Square);
+        assert_eq!(s.list_style_position, ListStylePosition::Inside);
+    }
+
+    #[test]
+    fn list_style_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { list-style-type: square; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.list_style_type, ListStyleType::Square);
+    }
+
+    #[test]
+    fn transition_property_single() {
+        let root = lay("<p>x</p>", "p { transition-property: opacity; }");
+        assert_eq!(
+            first_p_style(&root).transition_properties,
+            vec!["opacity".to_string()]
+        );
+    }
+
+    #[test]
+    fn transition_property_list() {
+        let root = lay("<p>x</p>", "p { transition-property: opacity, transform, color; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.transition_properties.len(), 3);
+        assert_eq!(s.transition_properties[0], "opacity");
+        assert_eq!(s.transition_properties[2], "color");
+    }
+
+    #[test]
+    fn transition_property_none_clears() {
+        let root = lay(
+            "<p>x</p>",
+            "p { transition-property: opacity; transition-property: none; }",
+        );
+        assert!(first_p_style(&root).transition_properties.is_empty());
+    }
+
+    #[test]
+    fn transition_duration_seconds_and_ms() {
+        let root = lay("<p>x</p>", "p { transition-duration: 0.5s, 200ms, 1s; }");
+        let durations = &first_p_style(&root).transition_durations;
+        assert_eq!(durations.len(), 3);
+        assert!((durations[0] - 0.5).abs() < 1e-5);
+        assert!((durations[1] - 0.2).abs() < 1e-5);
+        assert!((durations[2] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn transition_delay_parses() {
+        let root = lay("<p>x</p>", "p { transition-delay: 100ms; }");
+        let s = first_p_style(&root);
+        assert!((s.transition_delays[0] - 0.1).abs() < 1e-5);
+    }
+
+    // ──────── CSS Text typography (tab-size, caret-color, overflow-wrap, word-break, hyphens) ────────
+
+    #[test]
+    fn tab_size_integer_in_spaces() {
+        let root = lay("<p>x</p>", "p { tab-size: 4; }");
+        // integer 4 → 32px (8px-per-space).
+        assert!((first_p_style(&root).tab_size - 32.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn tab_size_length() {
+        let root = lay("<p>x</p>", "p { tab-size: 40px; }");
+        assert!((first_p_style(&root).tab_size - 40.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn tab_size_default_64() {
+        let root = lay("<p>x</p>", "p { color: red; }");
+        assert!((first_p_style(&root).tab_size - 64.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn tab_size_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { tab-size: 100px; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!((p.style.tab_size - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn caret_color_named() {
+        let root = lay("<p>x</p>", "p { caret-color: red; }");
+        assert_eq!(
+            first_p_style(&root).caret_color,
+            Some(Color { r: 255, g: 0, b: 0, a: 255 })
+        );
+    }
+
+    #[test]
+    fn caret_color_auto() {
+        let root = lay("<p>x</p>", "p { caret-color: red; caret-color: auto; }");
+        assert_eq!(first_p_style(&root).caret_color, None);
+    }
+
+    #[test]
+    fn caret_color_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { caret-color: blue; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.caret_color, Some(Color { r: 0, g: 0, b: 255, a: 255 }));
+    }
+
+    #[test]
+    fn overflow_wrap_break_word() {
+        let root = lay("<p>x</p>", "p { overflow-wrap: break-word; }");
+        assert_eq!(first_p_style(&root).overflow_wrap, OverflowWrap::BreakWord);
+    }
+
+    #[test]
+    fn word_wrap_alias_overflow_wrap() {
+        // `word-wrap` legacy alias.
+        let root = lay("<p>x</p>", "p { word-wrap: anywhere; }");
+        assert_eq!(first_p_style(&root).overflow_wrap, OverflowWrap::Anywhere);
+    }
+
+    #[test]
+    fn word_break_keep_all() {
+        let root = lay("<p>x</p>", "p { word-break: keep-all; }");
+        assert_eq!(first_p_style(&root).word_break, WordBreak::KeepAll);
+    }
+
+    #[test]
+    fn word_break_break_all() {
+        let root = lay("<p>x</p>", "p { word-break: break-all; }");
+        assert_eq!(first_p_style(&root).word_break, WordBreak::BreakAll);
+    }
+
+    #[test]
+    fn hyphens_auto() {
+        let root = lay("<p>x</p>", "p { hyphens: auto; }");
+        assert_eq!(first_p_style(&root).hyphens, Hyphens::Auto);
+    }
+
+    #[test]
+    fn hyphens_none() {
+        let root = lay("<p>x</p>", "p { hyphens: none; }");
+        assert_eq!(first_p_style(&root).hyphens, Hyphens::None);
+    }
+
+    #[test]
+    fn hyphens_default_manual() {
+        let root = lay("<p>x</p>", "p { color: red; }");
+        assert_eq!(first_p_style(&root).hyphens, Hyphens::Manual);
+    }
+
+    #[test]
+    fn text_typography_all_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { tab-size: 50px; overflow-wrap: break-word; word-break: keep-all; hyphens: auto; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!((p.style.tab_size - 50.0).abs() < 0.01);
+        assert_eq!(p.style.overflow_wrap, OverflowWrap::BreakWord);
+        assert_eq!(p.style.word_break, WordBreak::KeepAll);
+        assert_eq!(p.style.hyphens, Hyphens::Auto);
+        // А значения у div те же.
+        assert!((div.style.tab_size - 50.0).abs() < 0.01);
+    }
+
+    // ──────── will-change / pointer-events / user-select / scroll-behavior ────────
+
+    #[test]
+    fn will_change_auto_is_empty_list() {
+        let root = lay("<p>x</p>", "p { will-change: auto; }");
+        assert!(first_p_style(&root).will_change.is_empty());
+    }
+
+    #[test]
+    fn will_change_property_list() {
+        let root = lay("<p>x</p>", "p { will-change: transform, opacity; }");
+        let s = first_p_style(&root);
+        assert_eq!(
+            s.will_change,
+            vec!["transform".to_string(), "opacity".to_string()]
+        );
+    }
+
+    #[test]
+    fn will_change_invalid_ident_skipped() {
+        let root = lay("<p>x</p>", "p { will-change: 1invalid, transform; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.will_change, vec!["transform".to_string()]);
+    }
+
+    #[test]
+    fn pointer_events_none() {
+        let root = lay("<p>x</p>", "p { pointer-events: none; }");
+        assert_eq!(first_p_style(&root).pointer_events, PointerEvents::None);
+    }
+
+    #[test]
+    fn pointer_events_all() {
+        let root = lay("<p>x</p>", "p { pointer-events: all; }");
+        assert_eq!(first_p_style(&root).pointer_events, PointerEvents::All);
+    }
+
+    #[test]
+    fn user_select_none() {
+        let root = lay("<p>x</p>", "p { user-select: none; }");
+        assert_eq!(first_p_style(&root).user_select, UserSelect::None);
+    }
+
+    #[test]
+    fn user_select_text() {
+        let root = lay("<p>x</p>", "p { user-select: text; }");
+        assert_eq!(first_p_style(&root).user_select, UserSelect::Text);
+    }
+
+    #[test]
+    fn user_select_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { user-select: none; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // Inherited.
+        assert_eq!(p.style.user_select, UserSelect::None);
+    }
+
+    #[test]
+    fn scroll_behavior_smooth() {
+        let root = lay("<p>x</p>", "p { scroll-behavior: smooth; }");
+        assert_eq!(first_p_style(&root).scroll_behavior, ScrollBehavior::Smooth);
+    }
+
+    #[test]
+    fn scroll_behavior_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { scroll-behavior: smooth; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.scroll_behavior, ScrollBehavior::Smooth);
+    }
+
+    #[test]
+    fn pointer_events_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { pointer-events: none; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // НЕ наследуется — у p default Auto.
+        assert_eq!(p.style.pointer_events, PointerEvents::Auto);
+        assert_eq!(div.style.pointer_events, PointerEvents::None);
+    }
+
+    #[test]
+    fn unknown_keyword_keeps_default() {
+        let root = lay("<p>x</p>", "p { pointer-events: garbage; user-select: weird; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.pointer_events, PointerEvents::Auto);
+        assert_eq!(s.user_select, UserSelect::Auto);
+    }
+
+    // ──────── background-* (CSS Backgrounds L3) ────────
+
+    #[test]
+    fn background_image_url_parses() {
+        let root = lay("<p>x</p>", "p { background-image: url(\"bg.png\"); }");
+        let s = first_p_style(&root);
+        assert_eq!(s.background_image, BackgroundImage::Url("bg.png".into()));
+    }
+
+    #[test]
+    fn background_image_url_unquoted() {
+        let root = lay("<p>x</p>", "p { background-image: url(bg.png); }");
+        assert_eq!(
+            first_p_style(&root).background_image,
+            BackgroundImage::Url("bg.png".into())
+        );
+    }
+
+    #[test]
+    fn background_image_none() {
+        let root = lay(
+            "<p>x</p>",
+            "p { background-image: url(\"x.png\"); background-image: none; }",
+        );
+        assert_eq!(first_p_style(&root).background_image, BackgroundImage::None);
+    }
+
+    #[test]
+    fn background_image_gradient_kept_as_string() {
+        let root = lay(
+            "<p>x</p>",
+            "p { background-image: linear-gradient(to right, red, blue); }",
+        );
+        match &first_p_style(&root).background_image {
+            BackgroundImage::Gradient(s) => assert!(s.contains("linear-gradient")),
+            _ => panic!("expected Gradient"),
+        }
+    }
+
+    #[test]
+    fn background_repeat_values() {
+        for (s, expected) in [
+            ("repeat", BackgroundRepeat::Repeat),
+            ("no-repeat", BackgroundRepeat::NoRepeat),
+            ("repeat-x", BackgroundRepeat::RepeatX),
+            ("repeat-y", BackgroundRepeat::RepeatY),
+            ("round", BackgroundRepeat::Round),
+            ("space", BackgroundRepeat::Space),
+        ] {
+            let css = format!("p {{ background-repeat: {s}; }}");
+            let root = lay("<p>x</p>", &css);
+            assert_eq!(first_p_style(&root).background_repeat, expected);
+        }
+    }
+
+    #[test]
+    fn background_size_keywords() {
+        for (s, expected) in [
+            ("auto", BackgroundSize::Auto),
+            ("cover", BackgroundSize::Cover),
+            ("contain", BackgroundSize::Contain),
+        ] {
+            let css = format!("p {{ background-size: {s}; }}");
+            let root = lay("<p>x</p>", &css);
+            assert_eq!(first_p_style(&root).background_size, expected);
+        }
+    }
+
+    #[test]
+    fn background_size_length_single() {
+        let root = lay("<p>x</p>", "p { background-size: 200px; }");
+        match first_p_style(&root).background_size {
+            BackgroundSize::Length(w, h) => {
+                assert!((w - 200.0).abs() < 0.01);
+                assert_eq!(h, None);
+            }
+            _ => panic!("expected Length"),
+        }
+    }
+
+    #[test]
+    fn background_size_length_pair() {
+        let root = lay("<p>x</p>", "p { background-size: 200px 100px; }");
+        match first_p_style(&root).background_size {
+            BackgroundSize::Length(w, h) => {
+                assert!((w - 200.0).abs() < 0.01);
+                assert_eq!(h, Some(100.0));
+            }
+            _ => panic!("expected Length"),
+        }
+    }
+
+    #[test]
+    fn background_attachment_values() {
+        for (s, expected) in [
+            ("scroll", BackgroundAttachment::Scroll),
+            ("fixed", BackgroundAttachment::Fixed),
+            ("local", BackgroundAttachment::Local),
+        ] {
+            let css = format!("p {{ background-attachment: {s}; }}");
+            let root = lay("<p>x</p>", &css);
+            assert_eq!(first_p_style(&root).background_attachment, expected);
+        }
+    }
+
+    #[test]
+    fn background_properties_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { background-image: url(x.png); background-repeat: no-repeat; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.background_image, BackgroundImage::None);
+        assert_eq!(p.style.background_repeat, BackgroundRepeat::Repeat);
+    }
+
+    // ──────── place-items / align-* / justify-* (CSS Box Alignment L3) ────────
+
+    #[test]
+    fn align_items_center() {
+        let root = lay("<p>x</p>", "p { align-items: center; }");
+        assert_eq!(first_p_style(&root).align_items, AlignValue::Center);
+    }
+
+    #[test]
+    fn justify_content_space_between() {
+        let root = lay("<p>x</p>", "p { justify-content: space-between; }");
+        assert_eq!(first_p_style(&root).justify_content, AlignValue::SpaceBetween);
+    }
+
+    #[test]
+    fn flex_start_alias() {
+        // CSS spec: flex-start alias для start (вне flex-контекста).
+        let root = lay("<p>x</p>", "p { align-items: flex-start; }");
+        assert_eq!(first_p_style(&root).align_items, AlignValue::Start);
+    }
+
+    #[test]
+    fn place_items_single_value() {
+        let root = lay("<p>x</p>", "p { place-items: center; }");
+        let s = first_p_style(&root);
+        // Single value применяется к обоим осям.
+        assert_eq!(s.align_items, AlignValue::Center);
+        assert_eq!(s.justify_items, AlignValue::Center);
+    }
+
+    #[test]
+    fn place_items_two_values() {
+        let root = lay("<p>x</p>", "p { place-items: start end; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.align_items, AlignValue::Start);
+        assert_eq!(s.justify_items, AlignValue::End);
+    }
+
+    #[test]
+    fn place_self_shorthand() {
+        let root = lay("<p>x</p>", "p { place-self: center stretch; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.align_self, AlignValue::Center);
+        assert_eq!(s.justify_self, AlignValue::Stretch);
+    }
+
+    #[test]
+    fn place_content_shorthand() {
+        let root = lay("<p>x</p>", "p { place-content: space-around; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.align_content, AlignValue::SpaceAround);
+        assert_eq!(s.justify_content, AlignValue::SpaceAround);
+    }
+
+    #[test]
+    fn align_unknown_value_ignored() {
+        let root = lay("<p>x</p>", "p { align-items: garbage; }");
+        // default (Auto) сохраняется.
+        assert_eq!(first_p_style(&root).align_items, AlignValue::Auto);
+    }
+
+    #[test]
+    fn alignment_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { align-items: center; justify-content: space-between; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // У p должны быть defaults.
+        assert_eq!(p.style.align_items, AlignValue::Auto);
+        assert_eq!(p.style.justify_content, AlignValue::Auto);
+        // У div — заданные.
+        assert_eq!(div.style.align_items, AlignValue::Center);
+        assert_eq!(div.style.justify_content, AlignValue::SpaceBetween);
+    }
+
+    #[test]
+    fn align_value_parse_all_keywords() {
+        for (s, expected) in [
+            ("auto", AlignValue::Auto),
+            ("normal", AlignValue::Normal),
+            ("stretch", AlignValue::Stretch),
+            ("start", AlignValue::Start),
+            ("end", AlignValue::End),
+            ("center", AlignValue::Center),
+            ("baseline", AlignValue::Baseline),
+            ("space-between", AlignValue::SpaceBetween),
+            ("space-around", AlignValue::SpaceAround),
+            ("space-evenly", AlignValue::SpaceEvenly),
+            ("flex-start", AlignValue::Start),
+            ("flex-end", AlignValue::End),
+            ("self-start", AlignValue::Start),
+            ("CENTER", AlignValue::Center),  // case-insensitive
+        ] {
+            assert_eq!(AlignValue::parse(s), Some(expected), "input: {s}");
+        }
+    }
+
+    #[test]
+    fn align_value_parse_unknown_returns_none() {
+        assert_eq!(AlignValue::parse("garbage"), None);
+        assert_eq!(AlignValue::parse(""), None);
+    }
+
+    #[test]
+    fn gap_and_aspect_ratio_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { gap: 20px; aspect-ratio: 2; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.row_gap, 0.0);
+        assert_eq!(p.style.aspect_ratio, None);
+        assert!((div.style.row_gap - 20.0).abs() < 0.01);
+        assert!(div.style.aspect_ratio.is_some());
+    }
+
+    #[test]
+    fn media_prefers_color_scheme_light_default() {
+        // Phase 0: prefers_dark=false → 'light' matches.
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (prefers-color-scheme: light) { p { color: red; } }",
+            800.0,
+            600.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
     }
 }

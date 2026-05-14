@@ -1,8 +1,15 @@
 //! HTTP/1.1 клиент с TLS через rustls (Exception #3).
 //!
 //! Реализует `lumen_core::ext::NetworkTransport`.
-//! Поддерживает: HTTP и HTTPS, редиректы (до 5), chunked transfer encoding.
-//! Не поддерживает: HTTP/2, keep-alive, кэширование, аутентификацию.
+//! Поддерживает: HTTP и HTTPS, редиректы (до 5), chunked transfer encoding,
+//! **HTTP/1.1 keep-alive + connection pool** (переиспользование TCP/TLS
+//! между запросами к одному origin-у), retry-on-stale при попытке писать
+//! в закрытое сервером idle-соединение.
+//! Не поддерживает: HTTP/2, кэширование, аутентификацию.
+//!
+//! URL парсится в `lumen_core::url::Url` — никакого собственного парсера здесь
+//! не держим. Из `Url` берём scheme, host (Punycode для DNS/TLS/Host header
+//! через `host_ascii`), effective_port и `path_and_query` для request line.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -13,129 +20,136 @@ use rustls::pki_types::ServerName;
 
 use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, TabId};
-use lumen_core::ext::{EventSink, NetworkTransport};
-use lumen_core::idn;
+use lumen_core::ext::{
+    DnsResolver, EventSink, HstsEnforcement, NetworkTransport, RequestFilter,
+};
 use lumen_core::url::Url;
 
-// ── URL-парсинг ──────────────────────────────────────────────────────────────
+mod dns;
+mod doh;
+mod dot;
+mod hsts;
+mod pool;
+mod range;
+pub use dns::SystemDnsResolver;
+pub use doh::DohResolver;
+pub use dot::{DotResolver, DOT_DEFAULT_PORT};
+pub use pool::ConnectionPool;
+pub use range::{ContentRange, RangeResponse, RangeSpec, parse_content_range};
 
-#[derive(Debug, Clone)]
-struct ParsedUrl {
-    scheme: Scheme,
-    host: String,
-    port: u16,
-    path: String,
+use pool::PoolKey;
+
+/// Проверяет, что схема URL поддерживается транспортом (http/https) и
+/// извлекает всё, что нужно для connect: ASCII-форму host (Punycode для
+/// IDN — RFC 7230 §5.4, RFC 6066 §3), effective port (80/443 по схеме) и
+/// флаг TLS. Bad scheme (`ftp://`, `data:`, `file://`) — ранний выход без
+/// каких-либо побочных эффектов.
+fn require_http_scheme(url: &Url) -> Result<(String, u16, bool)> {
+    let is_tls = match url.scheme() {
+        "http" => false,
+        "https" => true,
+        other => return Err(Error::Network(format!("unsupported scheme: {other}"))),
+    };
+    let host = url
+        .host_ascii()
+        .map_err(|e| Error::Network(e.to_string()))?;
+    if host.is_empty() {
+        return Err(Error::Network(format!(
+            "empty host in URL: {}",
+            url.as_str()
+        )));
+    }
+    let port = url
+        .effective_port()
+        .ok_or_else(|| Error::Network(format!("no port for URL: {}", url.as_str())))?;
+    Ok((host, port, is_tls))
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Scheme {
-    Http,
-    Https,
-}
+// ── TCP + TLS stream ─────────────────────────────────────────────────────────
 
-fn parse_url(url: &str) -> Result<ParsedUrl> {
-    let (scheme, rest) = if let Some(r) = url.strip_prefix("https://") {
-        (Scheme::Https, r)
-    } else if let Some(r) = url.strip_prefix("http://") {
-        (Scheme::Http, r)
-    } else {
-        return Err(Error::Network(format!("unsupported scheme: {url}")));
-    };
-
-    let (authority, path) = match rest.find('/') {
-        Some(i) => (&rest[..i], rest[i..].to_owned()),
-        None => (rest, "/".to_owned()),
-    };
-
-    let (raw_host, port) = match authority.rfind(':') {
-        Some(i) => {
-            let h = &authority[..i];
-            let p = authority[i + 1..]
-                .parse::<u16>()
-                .map_err(|_| Error::Network(format!("invalid port in: {authority}")))?;
-            (h, p)
-        }
-        None => (
-            authority,
-            if scheme == Scheme::Https { 443 } else { 80 },
-        ),
-    };
-
-    // IDN → ASCII (Punycode). DNS, TLS SNI и Host: header требуют ASCII
-    // в hostname (RFC 7230 §5.4 для Host, RFC 6066 §3 для SNI).
-    let host = idn::domain_to_ascii(raw_host)
-        .map_err(|e| Error::Network(format!("idn conversion failed for '{raw_host}': {e}")))?;
-
-    Ok(ParsedUrl { scheme, host, port, path })
-}
-
-// ── TCP + TLS connection ─────────────────────────────────────────────────────
-
-enum Connection {
+/// Низкоуровневый stream — сырое TCP или TLS-обёртка над ним. Не содержит
+/// буферизации; буфера живут на уровень выше в `Connection`.
+pub(crate) enum RawStream {
     Plain(TcpStream),
     Tls(Box<rustls::StreamOwned<ClientConnection, TcpStream>>),
 }
 
-impl Read for Connection {
+impl Read for RawStream {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
-            Connection::Plain(s) => s.read(buf),
-            Connection::Tls(s) => s.read(buf),
+            RawStream::Plain(s) => s.read(buf),
+            RawStream::Tls(s) => s.read(buf),
         }
     }
 }
 
-impl Write for Connection {
+impl Write for RawStream {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
-            Connection::Plain(s) => s.write(buf),
-            Connection::Tls(s) => s.write(buf),
+            RawStream::Plain(s) => s.write(buf),
+            RawStream::Tls(s) => s.write(buf),
         }
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
-            Connection::Plain(s) => s.flush(),
-            Connection::Tls(s) => s.flush(),
+            RawStream::Plain(s) => s.flush(),
+            RawStream::Tls(s) => s.flush(),
         }
     }
 }
 
-fn connect(parsed: &ParsedUrl) -> Result<Connection> {
-    let addr = format!("{}:{}", parsed.host, parsed.port);
-    let tcp = TcpStream::connect(&addr)
-        .map_err(|e| Error::Network(format!("connect {addr}: {e}")))?;
+/// Persistent HTTP-соединение, пригодное к переиспользованию между запросами.
+///
+/// Содержит `BufReader<RawStream>` (постоянный, не пересоздаётся на каждый
+/// запрос — иначе входной буфер с остатками предыдущего ответа уйдёт в drop)
+/// и флаг `closed`, который выставляется, если сервер прислал
+/// `Connection: close` или мы получили EOF до завершения ответа. `closed`
+/// соединение нельзя возвращать в пул.
+pub(crate) struct Connection {
+    reader: BufReader<RawStream>,
+    closed: bool,
+}
 
-    match parsed.scheme {
-        Scheme::Http => Ok(Connection::Plain(tcp)),
-        Scheme::Https => {
-            let mut root_store = rustls::RootCertStore::empty();
-            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-            let config = rustls::ClientConfig::builder()
-                .with_root_certificates(root_store)
-                .with_no_client_auth();
-
-            let server_name = ServerName::try_from(parsed.host.clone())
-                .map_err(|e| Error::Network(format!("invalid hostname '{}': {e}", parsed.host)))?;
-
-            let conn = ClientConnection::new(Arc::new(config), server_name)
-                .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
-
-            Ok(Connection::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))))
+impl Connection {
+    fn new(stream: RawStream) -> Self {
+        Self {
+            reader: BufReader::new(stream),
+            closed: false,
         }
+    }
+
+    /// Записать HTTP-запрос в stream. Используется `Connection: keep-alive`
+    /// (HTTP/1.1 default, но явно для ясности и для совместимости с серверами,
+    /// которые криво интерпретируют отсутствие хедера). Опциональный `range`
+    /// добавляет header `Range: bytes=START-END` (RFC 7233 §3.1); невалидный
+    /// RangeSpec (`end < start`) тихо опускает header — fetch получит full
+    /// response (200 OK), не упадёт.
+    fn write_request(
+        &mut self,
+        host: &str,
+        path: &str,
+        range: Option<&RangeSpec>,
+    ) -> Result<()> {
+        let range_header = match range.and_then(|r| r.header_value()) {
+            Some(value) => format!("Range: {value}\r\n"),
+            None => String::new(),
+        };
+        let req = format!(
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\n{range_header}\r\n"
+        );
+        let stream = self.reader.get_mut();
+        stream
+            .write_all(req.as_bytes())
+            .map_err(|e| Error::Network(format!("write request: {e}")))?;
+        stream
+            .flush()
+            .map_err(|e| Error::Network(format!("flush request: {e}")))?;
+        Ok(())
     }
 }
 
-// ── HTTP/1.1 запрос / ответ ──────────────────────────────────────────────────
-
-fn write_request(conn: &mut Connection, host: &str, path: &str) -> Result<()> {
-    let req = format!(
-        "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: close\r\n\r\n"
-    );
-    conn.write_all(req.as_bytes())
-        .map_err(|e| Error::Network(format!("write request: {e}")))
-}
+// ── HTTP/1.1 ответ ───────────────────────────────────────────────────────────
 
 struct Response {
     status: u16,
@@ -151,23 +165,43 @@ fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a s
         .map(|(_, v)| v.as_str())
 }
 
-fn read_response(conn: Connection) -> Result<Response> {
-    let mut reader = BufReader::new(conn);
-
+/// Прочитать один HTTP-ответ из persistent connection. Не consume-ит
+/// соединение — после возврата `Connection` пригоден к следующему
+/// `write_request` (если `closed` остался false).
+///
+/// Корректно дочитывает: status-line, headers до `\r\n\r\n`, body по
+/// `Content-Length` или `Transfer-Encoding: chunked` (включая trailer-секцию,
+/// которая раньше пропускалась — без этого второй запрос на том же сокете
+/// читал бы хвост от предыдущего chunked-ответа).
+///
+/// Если сервер прислал `Connection: close` или произошёл EOF до окончания
+/// тела — выставляет `conn.closed = true`, и caller не должен возвращать
+/// такое соединение в пул.
+fn read_response(conn: &mut Connection) -> Result<Response> {
     // Status line.
     let mut status_line = String::new();
-    reader
+    let n = conn
+        .reader
         .read_line(&mut status_line)
         .map_err(|e| Error::Network(format!("read status: {e}")))?;
+    if n == 0 {
+        conn.closed = true;
+        return Err(Error::Network("EOF before status line".to_owned()));
+    }
     let status = parse_status(&status_line)?;
 
-    // Headers.
+    // Headers до пустой строки.
     let mut headers: Vec<(String, String)> = Vec::new();
     loop {
         let mut line = String::new();
-        reader
+        let n = conn
+            .reader
             .read_line(&mut line)
             .map_err(|e| Error::Network(format!("read header: {e}")))?;
+        if n == 0 {
+            conn.closed = true;
+            return Err(Error::Network("EOF in headers".to_owned()));
+        }
         let trimmed = line.trim_end_matches(['\r', '\n']);
         if trimmed.is_empty() {
             break;
@@ -177,29 +211,72 @@ fn read_response(conn: Connection) -> Result<Response> {
         }
     }
 
-    // Body.
-    let body = if header_value(&headers, "transfer-encoding")
+    // Решение о keep-alive: HTTP/1.1 default = keep-alive, отменяется явным
+    // `Connection: close` (case-insensitive, может содержаться в списке через
+    // запятую с другими токенами вроде `keep-alive`/`upgrade`).
+    let server_wants_close = header_value(&headers, "connection")
+        .map(|v| {
+            v.split(',')
+                .any(|t| t.trim().eq_ignore_ascii_case("close"))
+        })
+        .unwrap_or(false);
+
+    // Body: chunked > Content-Length > read-to-EOF (последнее — только если
+    // сервер обещал закрыть соединение; для keep-alive без Content-Length
+    // длина неизвестна, что нелегально по RFC 7230 §3.3.3).
+    let is_chunked = header_value(&headers, "transfer-encoding")
         .map(|v| v.to_ascii_lowercase().contains("chunked"))
-        .unwrap_or(false)
-    {
-        read_chunked(reader)?
-    } else if let Some(len) = header_value(&headers, "content-length")
-        .and_then(|v| v.trim().parse::<usize>().ok())
-    {
+        .unwrap_or(false);
+    let content_length =
+        header_value(&headers, "content-length").and_then(|v| v.trim().parse::<usize>().ok());
+
+    let body = if is_chunked {
+        match read_chunked(&mut conn.reader) {
+            Ok(b) => b,
+            Err(e) => {
+                conn.closed = true;
+                return Err(e);
+            }
+        }
+    } else if let Some(len) = content_length {
         let mut buf = vec![0u8; len];
-        reader
-            .read_exact(&mut buf)
-            .map_err(|e| Error::Network(format!("read body: {e}")))?;
+        if let Err(e) = conn.reader.read_exact(&mut buf) {
+            conn.closed = true;
+            return Err(Error::Network(format!("read body: {e}")));
+        }
         buf
+    } else if server_wants_close || status == 204 || status == 304 {
+        // 204 No Content / 304 Not Modified не имеют тела (RFC 7230 §3.3.3).
+        // Иначе при Connection: close без Content-Length — читаем до EOF.
+        if status == 204 || status == 304 {
+            Vec::new()
+        } else {
+            let mut buf = Vec::new();
+            if let Err(e) = conn.reader.read_to_end(&mut buf) {
+                conn.closed = true;
+                return Err(Error::Network(format!("read body: {e}")));
+            }
+            conn.closed = true;
+            buf
+        }
     } else {
-        let mut buf = Vec::new();
-        reader
-            .read_to_end(&mut buf)
-            .map_err(|e| Error::Network(format!("read body: {e}")))?;
-        buf
+        // RFC 7230: HTTP/1.1 без Content-Length и без chunked при keep-alive —
+        // протокольная ошибка. Закрываем соединение, чтобы не отравить пул.
+        conn.closed = true;
+        return Err(Error::Network(
+            "response without Content-Length or chunked".to_owned(),
+        ));
     };
 
-    Ok(Response { status, headers, body })
+    if server_wants_close {
+        conn.closed = true;
+    }
+
+    Ok(Response {
+        status,
+        headers,
+        body,
+    })
 }
 
 fn parse_status(line: &str) -> Result<u16> {
@@ -213,7 +290,12 @@ fn parse_status(line: &str) -> Result<u16> {
     Ok(code)
 }
 
-fn read_chunked<R: BufRead>(mut reader: R) -> Result<Vec<u8>> {
+/// Прочитать chunked-тело **полностью**, включая trailer-секцию и финальный
+/// CRLF. Без дочитывания trailer-а в BufReader остаётся хвост от прошлого
+/// ответа, который сломает следующий request на том же соединении — это и
+/// есть отличие от прежней реализации, которая работала только с
+/// `Connection: close`.
+fn read_chunked<R: BufRead>(reader: &mut R) -> Result<Vec<u8>> {
     let mut body = Vec::new();
     loop {
         let mut size_line = String::new();
@@ -226,6 +308,24 @@ fn read_chunked<R: BufRead>(mut reader: R) -> Result<Vec<u8>> {
         let chunk_size = usize::from_str_radix(size_hex, 16)
             .map_err(|_| Error::Network(format!("invalid chunk size: {size_hex:?}")))?;
         if chunk_size == 0 {
+            // Last chunk: дочитать trailer-section (произвольно много
+            // trailer-header строк) до пустой строки.
+            loop {
+                let mut line = String::new();
+                let n = reader
+                    .read_line(&mut line)
+                    .map_err(|e| Error::Network(format!("chunked trailer: {e}")))?;
+                if n == 0 {
+                    // EOF — для chunked это допустимо после last-chunk
+                    // (трейлер опционален), но caller должен mark соединение
+                    // closed чтобы не положить мёртвый stream в пул.
+                    break;
+                }
+                if line == "\r\n" || line == "\n" {
+                    break;
+                }
+                // Не-пустые строки — это trailer-headers; в Phase 0 их игнорим.
+            }
             break;
         }
         let mut chunk = vec![0u8; chunk_size];
@@ -242,80 +342,259 @@ fn read_chunked<R: BufRead>(mut reader: R) -> Result<Vec<u8>> {
     Ok(body)
 }
 
+// ── Connect ─────────────────────────────────────────────────────────────────
+
+/// Открыть TCP (или TLS поверх TCP) к указанному origin. Резолв host →
+/// SocketAddr-ы делегируется в `resolver` (default = SystemDnsResolver).
+/// При нескольких адресах (DNS round-robin или IPv4+IPv6 dual-stack)
+/// пробуем connect по каждому до первого успешного; ошибка от последнего
+/// поднимается наверх, если ни один не подошёл.
+fn connect(
+    host: &str,
+    port: u16,
+    is_tls: bool,
+    resolver: &dyn DnsResolver,
+) -> Result<Connection> {
+    let addrs = resolver.resolve(host, port)?;
+    if addrs.is_empty() {
+        return Err(Error::Network(format!(
+            "resolve {host}:{port}: no addresses"
+        )));
+    }
+
+    let mut last_err: Option<Error> = None;
+    let mut tcp_opt: Option<TcpStream> = None;
+    for addr in &addrs {
+        match TcpStream::connect(addr) {
+            Ok(s) => {
+                tcp_opt = Some(s);
+                break;
+            }
+            Err(e) => {
+                last_err = Some(Error::Network(format!("connect {addr}: {e}")));
+            }
+        }
+    }
+    let tcp = tcp_opt.ok_or_else(|| {
+        last_err.unwrap_or_else(|| Error::Network(format!("connect {host}:{port}: no addresses")))
+    })?;
+
+    if !is_tls {
+        return Ok(Connection::new(RawStream::Plain(tcp)));
+    }
+
+    let mut root_store = rustls::RootCertStore::empty();
+    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+    let config = rustls::ClientConfig::builder()
+        .with_root_certificates(root_store)
+        .with_no_client_auth();
+
+    let server_name = ServerName::try_from(host.to_owned())
+        .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
+
+    let conn = ClientConnection::new(Arc::new(config), server_name)
+        .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+
+    Ok(Connection::new(RawStream::Tls(Box::new(
+        rustls::StreamOwned::new(conn, tcp),
+    ))))
+}
+
+// ── Pool integration ─────────────────────────────────────────────────────────
+
+/// Решить, выглядит ли ошибка как «stale keep-alive»: сервер закрыл idle
+/// соединение, и наш write / первый read получил EOF или RST. Такие ошибки
+/// заслуживают однократного retry на свежем соединении.
+fn is_stale_error(err: &Error) -> bool {
+    let msg = format!("{err:?}");
+    msg.contains("BrokenPipe")
+        || msg.contains("ConnectionReset")
+        || msg.contains("ConnectionAborted")
+        || msg.contains("UnexpectedEof")
+        || msg.contains("EOF before status line")
+        || msg.contains("EOF in headers")
+}
+
+/// Один полный HTTP-запрос: acquire из пула (или connect), write_request,
+/// read_response, release. При попадании на stale pooled connection —
+/// однократный retry с свежим. Возвращает `Response` и в случае success
+/// (соединение не закрыто) возвращает его в пул.
+#[allow(clippy::too_many_arguments)]
+fn fetch_single(
+    pool: &ConnectionPool,
+    resolver: &dyn DnsResolver,
+    host: &str,
+    port: u16,
+    is_tls: bool,
+    request_host_header: &str,
+    request_path: &str,
+    range: Option<&RangeSpec>,
+) -> Result<Response> {
+    let key = PoolKey {
+        host: host.to_owned(),
+        port,
+        is_tls,
+    };
+
+    // Попытка 1: используем pooled connection, если он есть.
+    if let Some(pooled) = pool.acquire(&key) {
+        match do_request(pooled, request_host_header, request_path, range) {
+            Ok((resp, conn)) => {
+                if !conn.closed {
+                    pool.release(key, conn);
+                }
+                return Ok(resp);
+            }
+            Err(e) if is_stale_error(&e) => {
+                // Сервер успел закрыть idle-соединение — pooled умер. Дальше
+                // упадём на ветку «новый connect»; pooled уже не возвращается.
+            }
+            Err(e) => return Err(e),
+        }
+    }
+
+    // Попытка 2 (или 1, если пул был пуст): свежий connect.
+    let conn = connect(host, port, is_tls, resolver)?;
+    let (resp, conn) = do_request(conn, request_host_header, request_path, range)?;
+    if !conn.closed {
+        pool.release(key, conn);
+    }
+    Ok(resp)
+}
+
+fn do_request(
+    mut conn: Connection,
+    host: &str,
+    path: &str,
+    range: Option<&RangeSpec>,
+) -> Result<(Response, Connection)> {
+    conn.write_request(host, path, range)?;
+    let resp = read_response(&mut conn)?;
+    Ok((resp, conn))
+}
+
 // ── Редиректы ────────────────────────────────────────────────────────────────
 
+#[allow(clippy::too_many_arguments)]
 fn fetch_with_redirect(
-    url: &str,
+    url: &Url,
     hops_left: u8,
+    pool: &ConnectionPool,
+    resolver: &dyn DnsResolver,
     sink: Option<&dyn EventSink>,
+    filter: Option<&dyn RequestFilter>,
+    hsts_store: Option<&dyn HstsEnforcement>,
+    range: Option<&RangeSpec>,
     tab_id: TabId,
-) -> Result<Vec<u8>> {
+) -> Result<Response> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
     }
 
-    // parse_url валидирует scheme/host/port раньше, чем мы откроем сокет.
-    // События эмитим только если форма запроса прошла валидацию: на bad scheme
-    // (`ftp://...`) ни RequestStarted, ни RequestCompleted — байт даже не
-    // подумал улетать. Сетевые ошибки после parse (DNS, refused, TLS handshake)
-    // оставляют Started без Completed — это инвариант «started + missing
-    // completed = network failure»; явный RequestFailed добавим, когда увидим,
-    // что наблюдателям этого мало.
-    let parsed = parse_url(url)?;
+    // HSTS upgrade: до require_http_scheme (RFC 6797 §8.3 — канонизация URI
+    // делается на этапе URI loading, не fetch), до RequestFilter и до Started.
+    // Это значит, что filter и observer видят уже-upgraded URL: блок-листы
+    // могут не пропустить https-вариант, а network log показывает реальный
+    // URL, по которому пошёл трафик. Применяется на каждом redirect-hop —
+    // симметрично с filter / sink / resolver.
+    let now_unix = hsts::current_unix_time();
+    let upgraded: Option<Url> = match hsts_store {
+        Some(h) => hsts::maybe_upgrade_url_to_https(h, url, now_unix)?,
+        None => None,
+    };
+    let url = upgraded.as_ref().unwrap_or(url);
 
-    let event_url = Url::parse(url)
-        .expect("url validated by parse_url above (non-empty, http/https scheme)");
+    // require_http_scheme валидирует scheme/host/port раньше, чем мы откроем
+    // сокет. События эмитим только если форма запроса прошла валидацию: на
+    // bad scheme (`ftp://...`) ни RequestStarted, ни RequestCompleted, ни
+    // RequestBlocked — байт даже не подумал улетать, и сам URL невалиден для
+    // фильтра. Сетевые ошибки после валидации (DNS, refused, TLS handshake)
+    // оставляют Started без Completed — это инвариант «started + missing
+    // completed = network failure»; явный RequestFailed добавим, когда
+    // увидим, что наблюдателям этого мало.
+    let (host_ascii, port, is_tls) = require_http_scheme(url)?;
+
+    // Фильтрация — после валидации scheme/host (нет смысла спрашивать про
+    // невалидный URL), но ДО RequestStarted: блокированный запрос НЕ ходит
+    // в сеть и НЕ генерит Started/Completed. Каждый redirect-hop проверяется
+    // независимо, поэтому переход с нейтрального адреса на трекер тоже
+    // ловится.
+    if let Some(f) = filter
+        && let Some(reason) = f.should_block(url)
+    {
+        if let Some(s) = sink {
+            s.emit(&Event::RequestBlocked {
+                tab_id,
+                url: url.clone(),
+                reason: reason.clone(),
+            });
+        }
+        return Err(Error::Network(format!("blocked: {reason}")));
+    }
+
     if let Some(s) = sink {
         s.emit(&Event::RequestStarted {
             tab_id,
-            url: event_url.clone(),
+            url: url.clone(),
         });
     }
 
-    let mut conn = connect(&parsed)?;
-    write_request(&mut conn, &parsed.host, &parsed.path)?;
-    let resp = read_response(conn)?;
+    let resp = fetch_single(
+        pool,
+        resolver,
+        &host_ascii,
+        port,
+        is_tls,
+        &host_ascii,
+        &url.path_and_query(),
+        range,
+    )?;
+
+    // HSTS: сохранить policy из header-а, если ответ пришёл по HTTPS и
+    // server прислал Strict-Transport-Security. RFC 6797 §8.1 — STS на
+    // HTTP-ответе игнорируется (active attacker мог бы её подделать).
+    // Best-effort: ошибки storage не валят fetch (см. doc HstsEnforcement).
+    // Делается на каждом hop, не только финальном: 3xx-ответ тоже может
+    // нести STS-policy.
+    if let Some(h) = hsts_store {
+        hsts::process_sts_response(h, url.scheme(), &host_ascii, &resp.headers, now_unix);
+    }
 
     // RequestCompleted эмитим всегда после получения статуса, до анализа кода:
     // редирект-hop, 4xx, 5xx — всё это «outgoing byte был виден ответом».
     if let Some(s) = sink {
         s.emit(&Event::RequestCompleted {
             tab_id,
-            url: event_url,
+            url: url.clone(),
             status: resp.status,
         });
     }
 
     match resp.status {
-        200..=299 => Ok(resp.body),
+        200..=299 => Ok(resp),
         301 | 302 | 303 | 307 | 308 => {
             let location = header_value(&resp.headers, "location")
                 .ok_or_else(|| Error::Network("redirect without Location".to_owned()))?;
-
-            // Resolve relative redirects.
-            let next_url = if location.starts_with("http://") || location.starts_with("https://") {
-                location.to_owned()
-            } else {
-                let base = format!("{}://{}:{}", scheme_str(parsed.scheme), parsed.host, parsed.port);
-                if location.starts_with('/') {
-                    format!("{base}{location}")
-                } else {
-                    // Relative to current path dir.
-                    let dir = parsed.path.rfind('/').map(|i| &parsed.path[..=i]).unwrap_or("/");
-                    format!("{base}{dir}{location}")
-                }
-            };
-
-            fetch_with_redirect(&next_url, hops_left - 1, sink, tab_id)
+            let next = url
+                .resolve(location)
+                .map_err(|e| Error::Network(format!("resolve redirect '{location}': {e}")))?;
+            // Range пробрасывается в redirect-target: пользователь
+            // запросил range на исходном URL, ожидает тот же range от
+            // final-resource (это и есть смысл redirect для range-GET).
+            fetch_with_redirect(
+                &next,
+                hops_left - 1,
+                pool,
+                resolver,
+                sink,
+                filter,
+                hsts_store,
+                range,
+                tab_id,
+            )
         }
         status => Err(Error::Network(format!("HTTP {status}"))),
-    }
-}
-
-fn scheme_str(s: Scheme) -> &'static str {
-    match s {
-        Scheme::Http => "http",
-        Scheme::Https => "https",
     }
 }
 
@@ -323,11 +602,20 @@ fn scheme_str(s: Scheme) -> &'static str {
 
 /// HTTP/1.1 + HTTPS клиент.
 ///
-/// По умолчанию события никуда не уходят (sink не подключён). Подключите свой
-/// `EventSink` через `with_sink`, чтобы наблюдать `RequestStarted` /
-/// `RequestCompleted` для каждого исходящего запроса (включая редирект-hops).
+/// По умолчанию события никуда не уходят (sink не подключён), блокировок нет
+/// (filter не подключён) и используется собственный fresh `ConnectionPool`.
+/// Подключите свой `EventSink` через `with_sink`, чтобы наблюдать
+/// `RequestStarted` / `RequestCompleted` / `RequestBlocked` для каждого
+/// исходящего запроса (включая редирект-hops); подключите `RequestFilter`
+/// через `with_filter`, чтобы отсеивать запросы по URL (трекеры / ad-blocker);
+/// подключите общий `ConnectionPool` через `with_pool`, если хотите делить
+/// keep-alive соединения между несколькими `HttpClient`-ами.
 pub struct HttpClient {
     sink: Option<Arc<dyn EventSink>>,
+    filter: Option<Arc<dyn RequestFilter>>,
+    pool: Arc<ConnectionPool>,
+    resolver: Arc<dyn DnsResolver>,
+    hsts: Option<Arc<dyn HstsEnforcement>>,
     tab_id: TabId,
 }
 
@@ -335,6 +623,10 @@ impl HttpClient {
     pub fn new() -> Self {
         Self {
             sink: None,
+            filter: None,
+            pool: Arc::new(ConnectionPool::new()),
+            resolver: Arc::new(SystemDnsResolver),
+            hsts: None,
             tab_id: TabId(0),
         }
     }
@@ -343,6 +635,52 @@ impl HttpClient {
     #[must_use]
     pub fn with_sink(mut self, sink: Arc<dyn EventSink>) -> Self {
         self.sink = Some(sink);
+        self
+    }
+
+    /// Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
+    /// уходит в сеть. С подключённым фильтром каждый URL (включая
+    /// redirect-hops) проверяется через `should_block`; блокированные запросы
+    /// эмитят `RequestBlocked` (если sink подключён) и возвращают `Err`,
+    /// не делая TCP-соединения.
+    #[must_use]
+    pub fn with_filter(mut self, filter: Arc<dyn RequestFilter>) -> Self {
+        self.filter = Some(filter);
+        self
+    }
+
+    /// Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
+    /// свой собственный fresh-пул. Общий пул полезен, если несколько клиентов
+    /// делят одни и те же origin-ы (несколько вкладок одного браузера).
+    #[must_use]
+    pub fn with_pool(mut self, pool: Arc<ConnectionPool>) -> Self {
+        self.pool = pool;
+        self
+    }
+
+    /// Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
+    /// `(host, port).to_socket_addrs()`); подменяется на `CachedDnsResolver`
+    /// (lumen-storage) для TTL-кеша, или на DoH/DoT для приватности (§13).
+    #[must_use]
+    pub fn with_dns_resolver(mut self, resolver: Arc<dyn DnsResolver>) -> Self {
+        self.resolver = resolver;
+        self
+    }
+
+    /// Подключить HSTS-store (RFC 6797). По умолчанию — нет:
+    /// http-запросы идут как есть, `Strict-Transport-Security` header
+    /// в ответах игнорируется. С подключённым store:
+    /// — pre-request: http→https upgrade для known-hosts (включая
+    ///   includeSubDomains-родителей);
+    /// — post-response: парсинг STS header из HTTPS-ответов, persist policy.
+    /// Каждый redirect-hop проверяется независимо.
+    ///
+    /// Реализация — `lumen-storage::hsts::HstsStore`. Trait-граница
+    /// `HstsEnforcement` (lumen-core::ext) позволяет lumen-network не
+    /// зависеть от lumen-storage напрямую.
+    #[must_use]
+    pub fn with_hsts(mut self, hsts: Arc<dyn HstsEnforcement>) -> Self {
+        self.hsts = Some(hsts);
         self
     }
 
@@ -361,14 +699,60 @@ impl Default for HttpClient {
     }
 }
 
+impl HttpClient {
+    /// Запросить только диапазон байт ресурса (RFC 7233). Если сервер
+    /// поддерживает Range, ответит `206 Partial Content` с заголовком
+    /// `Content-Range: bytes START-END/TOTAL` — поле `content_range`
+    /// будет заполнено. Если сервер игнорирует Range и отдаёт `200 OK`
+    /// с полным телом, `content_range` будет `None` (RFC 7233 §3.1
+    /// явно разрешает оба ответа — клиент должен принять любой).
+    ///
+    /// 4xx/5xx, в том числе `416 Range Not Satisfiable`, возвращаются
+    /// как `Err(Error::Network("HTTP 416"))` — caller отличает их от
+    /// network failure по тексту.
+    ///
+    /// Phase 0 ограничения: single range (start..end или start..),
+    /// suffix `bytes=-N` и multi-range — не поддерживаются. Range header
+    /// пересылается на redirect-target (3xx сохраняет тот же range).
+    pub fn fetch_range(&self, url: &Url, range: RangeSpec) -> Result<RangeResponse> {
+        let resp = fetch_with_redirect(
+            url,
+            5,
+            &self.pool,
+            self.resolver.as_ref(),
+            self.sink.as_deref(),
+            self.filter.as_deref(),
+            self.hsts.as_deref(),
+            Some(&range),
+            self.tab_id,
+        )?;
+        let content_range = if resp.status == 206 {
+            header_value(&resp.headers, "content-range").and_then(parse_content_range)
+        } else {
+            None
+        };
+        Ok(RangeResponse {
+            status: resp.status,
+            body: resp.body,
+            content_range,
+        })
+    }
+}
+
 impl NetworkTransport for HttpClient {
     fn fetch(&self, url: &Url) -> Result<Vec<u8>> {
         fetch_with_redirect(
-            url.as_str(),
+            url,
             5,
+            &self.pool,
+            self.resolver.as_ref(),
             self.sink.as_deref(),
+            self.filter.as_deref(),
+            self.hsts.as_deref(),
+            None,
             self.tab_id,
         )
+        .map(|resp| resp.body)
     }
 }
 
@@ -379,57 +763,51 @@ mod tests {
     use super::*;
 
     #[test]
-    fn parse_https_default_port() {
-        let p = parse_url("https://example.com/path").unwrap();
-        assert_eq!(p.scheme, Scheme::Https);
-        assert_eq!(p.host, "example.com");
-        assert_eq!(p.port, 443);
-        assert_eq!(p.path, "/path");
+    fn require_http_scheme_http_default_port() {
+        let url = Url::parse("http://example.com/").unwrap();
+        let (host, port, is_tls) = require_http_scheme(&url).unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 80);
+        assert!(!is_tls);
     }
 
     #[test]
-    fn parse_http_default_port() {
-        let p = parse_url("http://example.com").unwrap();
-        assert_eq!(p.scheme, Scheme::Http);
-        assert_eq!(p.port, 80);
-        assert_eq!(p.path, "/");
+    fn require_http_scheme_https_default_port() {
+        let url = Url::parse("https://example.com/").unwrap();
+        let (host, port, is_tls) = require_http_scheme(&url).unwrap();
+        assert_eq!(host, "example.com");
+        assert_eq!(port, 443);
+        assert!(is_tls);
     }
 
     #[test]
-    fn parse_explicit_port() {
-        let p = parse_url("http://localhost:8080/index.html").unwrap();
-        assert_eq!(p.host, "localhost");
-        assert_eq!(p.port, 8080);
-        assert_eq!(p.path, "/index.html");
+    fn require_http_scheme_explicit_port() {
+        let url = Url::parse("https://example.com:8443/").unwrap();
+        let (_, port, _) = require_http_scheme(&url).unwrap();
+        assert_eq!(port, 8443);
     }
 
     #[test]
-    fn parse_unsupported_scheme() {
-        assert!(parse_url("ftp://example.com").is_err());
+    fn require_http_scheme_rejects_ftp() {
+        let url = Url::parse("ftp://example.com/").unwrap();
+        let err = require_http_scheme(&url).unwrap_err();
+        assert!(format!("{err:?}").contains("unsupported scheme"));
     }
 
     #[test]
-    fn parse_idn_cyrillic_host() {
-        // Кириллический host конвертируется в Punycode на этапе parse:
-        // DNS/TLS/Host: header получают ASCII-форму.
-        let p = parse_url("https://президент.рф/").unwrap();
-        assert_eq!(p.host, "xn--d1abbgf6aiiy.xn--p1ai");
-        assert_eq!(p.port, 443);
-        assert_eq!(p.path, "/");
+    fn require_http_scheme_idn_host_returns_punycode() {
+        // DNS / TLS SNI / Host header требуют ASCII (RFC 7230 §5.4, RFC 6066 §3).
+        let url = Url::parse("https://президент.рф/").unwrap();
+        let (host, _, _) = require_http_scheme(&url).unwrap();
+        assert_eq!(host, "xn--d1abbgf6aiiy.xn--p1ai");
     }
 
     #[test]
-    fn parse_idn_with_port() {
-        let p = parse_url("http://пример.рф:8080/test").unwrap();
-        assert_eq!(p.host, "xn--e1afmkfd.xn--p1ai");
-        assert_eq!(p.port, 8080);
-        assert_eq!(p.path, "/test");
-    }
-
-    #[test]
-    fn parse_idn_mixed_ascii_subdomain() {
-        let p = parse_url("https://api.пример.рф/v1").unwrap();
-        assert_eq!(p.host, "api.xn--e1afmkfd.xn--p1ai");
+    fn require_http_scheme_idn_with_port() {
+        let url = Url::parse("http://пример.рф:8080/test").unwrap();
+        let (host, port, _) = require_http_scheme(&url).unwrap();
+        assert_eq!(host, "xn--e1afmkfd.xn--p1ai");
+        assert_eq!(port, 8080);
     }
 
     #[test]
@@ -460,44 +838,75 @@ mod tests {
 
     #[test]
     fn chunked_decode_simple() {
-        // "5\r\nHello\r\n6\r\n World\r\n0\r\n\r\n"
+        // "5\r\nHello\r\n6\r\n World\r\n0\r\n\r\n" — last-chunk + пустой trailer.
         let data = b"5\r\nHello\r\n6\r\n World\r\n0\r\n\r\n";
-        let result = read_chunked(BufReader::new(&data[..])).unwrap();
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_chunked(&mut reader).unwrap();
         assert_eq!(result, b"Hello World");
     }
 
     #[test]
     fn chunked_decode_single_chunk() {
         let data = b"4\r\ntest\r\n0\r\n\r\n";
-        let result = read_chunked(BufReader::new(&data[..])).unwrap();
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_chunked(&mut reader).unwrap();
         assert_eq!(result, b"test");
     }
 
     #[test]
     fn chunked_decode_empty() {
         let data = b"0\r\n\r\n";
-        let result = read_chunked(BufReader::new(&data[..])).unwrap();
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_chunked(&mut reader).unwrap();
         assert!(result.is_empty());
     }
 
     #[test]
-    fn redirect_resolve_absolute() {
-        // Проверяем, что абсолютный Location не модифицируется.
-        let url = "https://other.com/page";
-        let p = parse_url(url).unwrap();
-        let resolved = if url.starts_with("http://") || url.starts_with("https://") {
-            url.to_owned()
-        } else {
-            format!("base{url}")
-        };
-        assert_eq!(resolved, "https://other.com/page");
-        let _ = p;
+    fn chunked_consumes_trailer_section() {
+        // После last-chunk сервер может прислать trailer-headers перед финальным
+        // CRLF. Они должны быть прочитаны и выброшены — иначе следующий
+        // запрос на keep-alive соединении прочитает их как новый status-line.
+        let data = b"3\r\nabc\r\n0\r\nX-Trailer: foo\r\n\r\nNEXT-RESPONSE-START";
+        let mut reader = BufReader::new(&data[..]);
+        let result = read_chunked(&mut reader).unwrap();
+        assert_eq!(result, b"abc");
+        // После read_chunked в reader-е должно остаться только "NEXT-RESPONSE-START".
+        let mut leftover = String::new();
+        reader.read_to_string(&mut leftover).unwrap();
+        assert_eq!(leftover, "NEXT-RESPONSE-START");
+    }
+
+    #[test]
+    fn redirect_resolve_relative_uses_url_resolve() {
+        // Полный E2E проверяется через mock-сервер ниже
+        // (fetch_emits_events_per_redirect_hop); здесь — точечно, что
+        // используемый редиректами `Url::resolve` дружит с реальным base+ref.
+        let base = Url::parse("http://localhost:8080/dir/page").unwrap();
+        let abs = base.resolve("/next").unwrap();
+        assert_eq!(abs.as_str(), "http://localhost:8080/next");
+        let rel = base.resolve("sibling.html").unwrap();
+        assert_eq!(rel.as_str(), "http://localhost:8080/dir/sibling.html");
+    }
+
+    #[test]
+    fn is_stale_error_recognises_eof_and_resets() {
+        assert!(is_stale_error(&Error::Network("EOF before status line".to_owned())));
+        assert!(is_stale_error(&Error::Network("EOF in headers".to_owned())));
+        assert!(is_stale_error(&Error::Network(
+            "write request: BrokenPipe (os error 32)".to_owned()
+        )));
+        assert!(is_stale_error(&Error::Network(
+            "read body: ConnectionReset".to_owned()
+        )));
+        assert!(!is_stale_error(&Error::Network("HTTP 500".to_owned())));
+        assert!(!is_stale_error(&Error::Network("blocked: tracker".to_owned())));
     }
 
     // ── EventSink ────────────────────────────────────────────────────────────
 
     use std::net::TcpListener;
     use std::sync::Mutex;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::thread;
 
     /// Тестовый sink, собирающий все события в порядке emit.
@@ -528,10 +937,9 @@ mod tests {
         let _c = HttpClient::new().with_tab(TabId(42));
     }
 
-    /// Запустить минимальный HTTP-сервер на 127.0.0.1:0, который ответит на
-    /// `accept_count` соединений согласно `responder`. Возвращает (port, join).
-    /// Responder вызывается с номером соединения (1..=accept_count) и возвращает
-    /// тело HTTP-ответа (включая статус-строку и заголовки).
+    /// Однократный mock-сервер: каждое соединение обслуживается **отдельно**,
+    /// после одного ответа socket закрывается. Удобен для прежних тестов и
+    /// для проверки случая `Connection: close`.
     fn mock_http_server<F>(accept_count: usize, responder: F) -> (u16, thread::JoinHandle<()>)
     where
         F: Fn(usize) -> Vec<u8> + Send + 'static,
@@ -556,6 +964,52 @@ mod tests {
                 let _ = sock.write_all(&body);
                 let _ = sock.shutdown(std::net::Shutdown::Both);
             }
+        });
+        (port, handle)
+    }
+
+    /// Keep-alive mock-сервер: один accept обслуживает несколько запросов
+    /// подряд на одном сокете, отвечая `responder(i)` на i-й запрос. После
+    /// `requests_to_serve` запросов сокет закрывается. `accept_counter`
+    /// инкрементится на каждом accept-е, чтобы тест мог убедиться, что
+    /// клиент действительно переиспользовал соединение (accept_count == 1).
+    fn mock_keepalive_server<F>(
+        requests_to_serve: usize,
+        accept_counter: Arc<AtomicUsize>,
+        responder: F,
+    ) -> (u16, thread::JoinHandle<()>)
+    where
+        F: Fn(usize) -> Vec<u8> + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            accept_counter.fetch_add(1, Ordering::SeqCst);
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            for i in 1..=requests_to_serve {
+                // Читаем один request до пустой строки.
+                let mut got_any = false;
+                loop {
+                    let mut line = String::new();
+                    let n = reader.read_line(&mut line).unwrap_or(0);
+                    if n == 0 {
+                        break;
+                    }
+                    got_any = true;
+                    if line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                }
+                if !got_any {
+                    break;
+                }
+                let body = responder(i);
+                if sock.write_all(&body).is_err() {
+                    break;
+                }
+            }
+            let _ = sock.shutdown(std::net::Shutdown::Both);
         });
         (port, handle)
     }
@@ -667,4 +1121,814 @@ mod tests {
         assert!(client.fetch(&url).is_err());
         assert!(sink.events().is_empty());
     }
+
+    // ── RequestFilter ────────────────────────────────────────────────────────
+
+    /// Тестовый фильтр: блокирует URL-ы, host которых содержит подстроку,
+    /// возвращает фиксированный reason.
+    struct BlockBySubstring {
+        needle: String,
+        reason: String,
+    }
+
+    impl RequestFilter for BlockBySubstring {
+        fn should_block(&self, url: &Url) -> Option<String> {
+            if url.as_str().contains(&self.needle) {
+                Some(self.reason.clone())
+            } else {
+                None
+            }
+        }
+    }
+
+    /// Фильтр, который не блокирует ничего. Нужен, чтобы убедиться:
+    /// с подключённым (но «разрешающим») фильтром обычный поток
+    /// Started/Completed не ломается.
+    struct AllowAll;
+
+    impl RequestFilter for AllowAll {
+        fn should_block(&self, _url: &Url) -> Option<String> {
+            None
+        }
+    }
+
+    #[test]
+    fn fetch_blocked_emits_request_blocked_and_skips_network() {
+        // Сетевого сервера НЕТ — фильтр обязан блокировать ДО любой попытки
+        // TCP. Если эта инвариантность сломается, тест словит «connection
+        // refused», и assert reason в err это поймает.
+        let sink = Arc::new(CollectingSink::new());
+        let filter: Arc<dyn RequestFilter> = Arc::new(BlockBySubstring {
+            needle: "tracker.invalid".to_owned(),
+            reason: "tracker".to_owned(),
+        });
+        let client = HttpClient::new()
+            .with_sink(sink.clone())
+            .with_filter(filter)
+            .with_tab(TabId(3));
+        let url = Url::parse("http://tracker.invalid/ad.js").unwrap();
+
+        let err = client.fetch(&url).expect_err("filter must block");
+        assert!(format!("{err:?}").contains("tracker"), "reason in error: {err:?}");
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1, "expected only RequestBlocked, got {events:?}");
+        match &events[0] {
+            Event::RequestBlocked { tab_id, url, reason } => {
+                assert_eq!(*tab_id, TabId(3));
+                assert_eq!(url.as_str(), "http://tracker.invalid/ad.js");
+                assert_eq!(reason, "tracker");
+            }
+            other => panic!("expected RequestBlocked, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fetch_with_allow_all_filter_normal_flow() {
+        // Фильтр подключён, но возвращает None — Started/Completed как обычно.
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+
+        let sink = Arc::new(CollectingSink::new());
+        let filter: Arc<dyn RequestFilter> = Arc::new(AllowAll);
+        let client = HttpClient::new().with_sink(sink.clone()).with_filter(filter);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
+
+        let events = sink.events();
+        assert_eq!(events.len(), 2, "expected Started + Completed, got {events:?}");
+        assert!(matches!(events[0], Event::RequestStarted { .. }));
+        assert!(matches!(events[1], Event::RequestCompleted { status: 200, .. }));
+        assert!(
+            !events.iter().any(|e| matches!(e, Event::RequestBlocked { .. })),
+            "no RequestBlocked when filter allows"
+        );
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_filter_blocks_on_redirect_hop() {
+        // Hop 1: 302 Location: http://127.0.0.1:<port>/tracker/pixel (без needle
+        // в host, но с needle в path) → блок-фильтр сработает на 2-м hop-е.
+        // Ожидаем 3 события: Started(hop1) → Completed(302, hop1) →
+        // RequestBlocked(hop2). НЕТ Started/Completed для hop2.
+        let needle = "/tracker";
+        let (port, server) = mock_http_server(1, move |_| {
+            // Один accept — для hop1; hop2 не должен попасть в сеть.
+            b"HTTP/1.1 302 Found\r\nLocation: /tracker/pixel\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+        });
+
+        let sink = Arc::new(CollectingSink::new());
+        let filter: Arc<dyn RequestFilter> = Arc::new(BlockBySubstring {
+            needle: needle.to_owned(),
+            reason: "tracker-path".to_owned(),
+        });
+        let client = HttpClient::new().with_sink(sink.clone()).with_filter(filter);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+
+        let err = client.fetch(&url).expect_err("redirect target must be blocked");
+        assert!(format!("{err:?}").contains("tracker-path"), "reason in error: {err:?}");
+
+        let events = sink.events();
+        assert_eq!(events.len(), 3, "expected Started + Completed(302) + Blocked, got {events:?}");
+        match &events[0] {
+            Event::RequestStarted { url, .. } => {
+                assert_eq!(url.as_str(), &format!("http://127.0.0.1:{port}/"));
+            }
+            other => panic!("expected RequestStarted for hop1, got {other:?}"),
+        }
+        match &events[1] {
+            Event::RequestCompleted { status, .. } => assert_eq!(*status, 302),
+            other => panic!("expected RequestCompleted(302), got {other:?}"),
+        }
+        match &events[2] {
+            Event::RequestBlocked { url, reason, .. } => {
+                assert_eq!(url.as_str(), &format!("http://127.0.0.1:{port}/tracker/pixel"));
+                assert_eq!(reason, "tracker-path");
+            }
+            other => panic!("expected RequestBlocked for hop2, got {other:?}"),
+        }
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_blocked_without_sink_returns_err_with_reason() {
+        // Без sink-а событие никто не услышит, но fetch всё равно отказывает
+        // с reason в тексте ошибки — caller (shell) узнает, почему отказали.
+        let filter: Arc<dyn RequestFilter> = Arc::new(BlockBySubstring {
+            needle: "example".to_owned(),
+            reason: "ads".to_owned(),
+        });
+        let client = HttpClient::new().with_filter(filter);
+        let url = Url::parse("http://example.com/banner").unwrap();
+
+        let err = client.fetch(&url).expect_err("must block");
+        assert!(format!("{err:?}").contains("ads"), "reason in error: {err:?}");
+    }
+
+    #[test]
+    fn fetch_filter_skipped_for_bad_scheme() {
+        // bad scheme → parse_url упадёт до filter-check; фильтр не должен
+        // быть спрошен, sink остаётся пустым (как и без фильтра).
+        struct PanicOnCheck;
+        impl RequestFilter for PanicOnCheck {
+            fn should_block(&self, _url: &Url) -> Option<String> {
+                panic!("filter must not be called for bad scheme");
+            }
+        }
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_sink(sink.clone())
+            .with_filter(Arc::new(PanicOnCheck));
+        let url = Url::parse("ftp://example.com/").unwrap();
+        assert!(client.fetch(&url).is_err());
+        assert!(sink.events().is_empty());
+    }
+
+    // ── Keep-alive / Connection Pool ─────────────────────────────────────────
+
+    #[test]
+    fn two_fetches_reuse_one_tcp_connection() {
+        // Сервер обслуживает два запроса на одном accept-е (HTTP/1.1
+        // keep-alive). Если HttpClient правильно переиспользует соединение,
+        // accept_count останется == 1.
+        let accept_counter = Arc::new(AtomicUsize::new(0));
+        let (port, server) = mock_keepalive_server(2, accept_counter.clone(), |i| match i {
+            1 => b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nFIR".to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\n\r\nSEC".to_vec(),
+            _ => unreachable!(),
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"FIR");
+        assert_eq!(client.fetch(&url).unwrap(), b"SEC");
+
+        server.join().unwrap();
+        assert_eq!(
+            accept_counter.load(Ordering::SeqCst),
+            1,
+            "expected exactly 1 TCP accept (keep-alive reuse)"
+        );
+    }
+
+    #[test]
+    fn server_says_connection_close_drops_pool_entry() {
+        // Сервер прислал `Connection: close` → соединение в пул не вернулось.
+        // Второй запрос требует свежий accept.
+        let accept_counter = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let counter = accept_counter.clone();
+        let server = thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut sock, _) = listener.accept().expect("accept");
+                counter.fetch_add(1, Ordering::SeqCst);
+                let mut reader = BufReader::new(sock.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    let n = reader.read_line(&mut line).unwrap_or(0);
+                    if n == 0 || line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                }
+                let _ = sock.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok",
+                );
+                let _ = sock.shutdown(std::net::Shutdown::Both);
+            }
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
+
+        server.join().unwrap();
+        assert_eq!(
+            accept_counter.load(Ordering::SeqCst),
+            2,
+            "Connection: close must force a fresh TCP connect on next request"
+        );
+    }
+
+    #[test]
+    fn stale_pooled_connection_triggers_retry() {
+        // Сервер сначала отдаёт ответ + закрывает сокет (без Connection: close
+        // — клиент думает «keep-alive»), потом на следующий accept отдаёт
+        // нормальный ответ. Клиент должен заметить stale-write/read и сделать
+        // retry на свежем connect-е. Ожидаем 2 accept-а, fetch проходит дважды.
+        let accept_counter = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let counter = accept_counter.clone();
+        let server = thread::spawn(move || {
+            // Соединение 1: ответ + сразу shutdown (не дожидаясь второго
+            // запроса) — это как «idle timeout у сервера».
+            let (mut sock1, _) = listener.accept().expect("accept1");
+            counter.fetch_add(1, Ordering::SeqCst);
+            let mut reader = BufReader::new(sock1.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line).unwrap_or(0);
+                if n == 0 || line == "\r\n" || line == "\n" {
+                    break;
+                }
+            }
+            let _ = sock1.write_all(
+                // Без Connection: close — сервер врёт про keep-alive,
+                // но всё равно закрывает.
+                b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst",
+            );
+            let _ = sock1.shutdown(std::net::Shutdown::Both);
+            drop(sock1);
+
+            // Соединение 2: после того, как клиент попытается переиспользовать
+            // первое и упадёт со stale-error, он откроет новое.
+            let (mut sock2, _) = listener.accept().expect("accept2");
+            counter.fetch_add(1, Ordering::SeqCst);
+            let mut reader = BufReader::new(sock2.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                let n = reader.read_line(&mut line).unwrap_or(0);
+                if n == 0 || line == "\r\n" || line == "\n" {
+                    break;
+                }
+            }
+            let _ = sock2.write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nsecond",
+            );
+            let _ = sock2.shutdown(std::net::Shutdown::Both);
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"first");
+        // Второй fetch должен сработать через retry-on-stale.
+        assert_eq!(client.fetch(&url).unwrap(), b"second");
+
+        server.join().unwrap();
+        assert_eq!(accept_counter.load(Ordering::SeqCst), 2);
+    }
+
+    // ── Custom DnsResolver ───────────────────────────────────────────────────
+
+    use std::collections::HashMap;
+    use std::net::SocketAddr;
+
+    /// Тестовый resolver: маппит hostname → фиксированный SocketAddr (с
+    /// подменённым port на тот, что просит fetch). Используется, чтобы
+    /// доказать: подменённый resolver реально применяется в connect-path —
+    /// fetch к произвольному hostname типа "synthetic.test" приходит на
+    /// loopback-listener.
+    struct MockResolver {
+        map: Mutex<HashMap<String, std::net::IpAddr>>,
+        calls: AtomicUsize,
+    }
+
+    impl MockResolver {
+        fn with(host: &str, ip: std::net::IpAddr) -> Self {
+            let mut m = HashMap::new();
+            m.insert(host.to_ascii_lowercase(), ip);
+            Self {
+                map: Mutex::new(m),
+                calls: AtomicUsize::new(0),
+            }
+        }
+
+        fn call_count(&self) -> usize {
+            self.calls.load(Ordering::SeqCst)
+        }
+    }
+
+    impl DnsResolver for MockResolver {
+        fn resolve(&self, hostname: &str, port: u16) -> Result<Vec<SocketAddr>> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            let key = hostname.to_ascii_lowercase();
+            let map = self.map.lock().unwrap();
+            match map.get(&key) {
+                Some(ip) => Ok(vec![SocketAddr::new(*ip, port)]),
+                None => Err(Error::Network(format!("mock NXDOMAIN: {hostname}"))),
+            }
+        }
+    }
+
+    #[test]
+    fn http_client_uses_custom_resolver_for_synthetic_hostname() {
+        // Mock listener слушает на 127.0.0.1:<port>; HttpClient просят
+        // fetch к URL с произвольным hostname "synthetic.test". Если resolver
+        // не подменился — SystemDnsResolver не разрешит "synthetic.test" в
+        // loopback, и fetch упадёт. Доказательство того, что with_dns_resolver
+        // реально применяется в fetch-path.
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 9\r\nConnection: close\r\n\r\nresolved!".to_vec()
+        });
+
+        let resolver = Arc::new(MockResolver::with(
+            "synthetic.test",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        ));
+        let client = HttpClient::new().with_dns_resolver(resolver.clone());
+        let url = Url::parse(&format!("http://synthetic.test:{port}/")).unwrap();
+
+        let body = client.fetch(&url).expect("fetch through mock resolver");
+        assert_eq!(body, b"resolved!");
+        assert_eq!(resolver.call_count(), 1, "resolver вызван ровно один раз");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn http_client_resolver_err_propagates_as_fetch_err() {
+        // Resolver отдаёт Err — fetch не должен звать TCP connect, должен
+        // вернуть ту же ошибку как Network. RequestStarted эмитится
+        // (URL валидный), но никакого Completed — resolver Err приходит
+        // до сокета.
+        let resolver = Arc::new(MockResolver::with(
+            "known.host",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        ));
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_dns_resolver(resolver.clone())
+            .with_sink(sink.clone());
+        let url = Url::parse("http://unknown.host/").unwrap();
+
+        let err = client.fetch(&url).expect_err("resolver Err must bubble up");
+        assert!(
+            format!("{err:?}").contains("mock NXDOMAIN"),
+            "expected NXDOMAIN reason, got {err:?}"
+        );
+        assert_eq!(resolver.call_count(), 1);
+
+        let events = sink.events();
+        assert!(
+            matches!(events.first(), Some(Event::RequestStarted { .. })),
+            "RequestStarted эмитится до resolver: {events:?}"
+        );
+        assert!(
+            !events.iter().any(|e| matches!(e, Event::RequestCompleted { .. })),
+            "RequestCompleted не должен прозвучать — connect не состоялся: {events:?}"
+        );
+    }
+
+    #[test]
+    fn http_client_resolver_called_per_redirect_hop() {
+        // 302 redirect на другой hostname → resolver должен вызваться дважды,
+        // по одному на hop. Это инвариант симметричный с тем, как обрабатываются
+        // sink-события и filter-проверки (per-hop).
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let server = thread::spawn(move || {
+            for i in 1..=2u32 {
+                let (mut sock, _) = listener.accept().expect("accept");
+                let mut reader = BufReader::new(sock.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    let n = reader.read_line(&mut line).unwrap_or(0);
+                    if n == 0 || line == "\r\n" || line == "\n" {
+                        break;
+                    }
+                }
+                let body: Vec<u8> = if i == 1 {
+                    format!(
+                        "HTTP/1.1 302 Found\r\nLocation: http://hop-two.test:{port}/done\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .into_bytes()
+                } else {
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndone"
+                        .to_vec()
+                };
+                let _ = sock.write_all(&body);
+                let _ = sock.shutdown(std::net::Shutdown::Both);
+            }
+        });
+
+        let mut map = HashMap::new();
+        map.insert(
+            "hop-one.test".to_owned(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        );
+        map.insert(
+            "hop-two.test".to_owned(),
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        );
+        let resolver = Arc::new(MockResolver {
+            map: Mutex::new(map),
+            calls: AtomicUsize::new(0),
+        });
+        let client = HttpClient::new().with_dns_resolver(resolver.clone());
+        let url = Url::parse(&format!("http://hop-one.test:{port}/start")).unwrap();
+
+        assert_eq!(client.fetch(&url).unwrap(), b"done");
+        assert_eq!(resolver.call_count(), 2, "resolver вызван per hop");
+
+        server.join().unwrap();
+    }
+
+    // ── HSTS integration ─────────────────────────────────────────────────────
+
+    use lumen_core::ext::HstsEnforcement;
+
+    /// In-memory HSTS-impl для integration-тестов — не требует SQLite.
+    /// Семантика exact-match (без includeSubDomains-логики) — достаточно
+    /// для проверки fetch-pathway; полное subdomain-поведение покрыто
+    /// unit-тестами в src/hsts.rs.
+    struct InMemHsts {
+        hosts: Mutex<Vec<String>>,
+    }
+
+    impl InMemHsts {
+        fn new() -> Self {
+            Self {
+                hosts: Mutex::new(Vec::new()),
+            }
+        }
+
+        fn add(&self, host: &str) {
+            self.hosts.lock().unwrap().push(host.to_owned());
+        }
+    }
+
+    impl HstsEnforcement for InMemHsts {
+        fn is_https_only(&self, host: &str, _now_unix: i64) -> bool {
+            self.hosts.lock().unwrap().iter().any(|h| h == host)
+        }
+
+        fn record_sts(
+            &self,
+            host: &str,
+            _max_age: u64,
+            _include_subdomains: bool,
+            _preload: bool,
+            _now_unix: i64,
+        ) {
+            self.hosts.lock().unwrap().push(host.to_owned());
+        }
+    }
+
+    #[test]
+    fn without_hsts_http_stays_http() {
+        // Sanity-check: HttpClient без with_hsts ведёт себя как раньше —
+        // http URL не upgrade-ится, обычный fetch проходит. Регрессионный
+        // тест: интеграция HSTS не должна сломать дефолтный поток.
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn with_hsts_unknown_host_no_upgrade() {
+        // HSTS-store подключён, но в нём нет нашего host-а → upgrade
+        // не применяется, fetch идёт по http как обычно. Это инвариант:
+        // unknown hosts остаются http (HSTS — opt-in, не блок-лист).
+        let (port, server) = mock_http_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 5\r\nConnection: close\r\n\r\nplain".to_vec()
+        });
+
+        let hsts: Arc<dyn HstsEnforcement> = Arc::new(InMemHsts::new());
+        let client = HttpClient::new().with_hsts(hsts);
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"plain");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn with_hsts_known_host_attempts_upgrade() {
+        // HSTS-known host → клиент upgrade-ит на https://. Mock-сервер
+        // слушает HTTP (без TLS), поэтому upgrade-attempt падает на TLS
+        // handshake — это доказывает, что upgrade действительно произошёл.
+        // Иначе на mock HTTP-сервере мы бы получили 200 OK, а не error.
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        // Сервер просто принимает соединения и закрывает — нам важна сама
+        // попытка TLS handshake клиента в момент, когда он считает, что
+        // открыл TCP к HTTPS-серверу.
+        let _server = thread::spawn(move || {
+            for _ in 0..3 {
+                if let Ok((sock, _)) = listener.accept() {
+                    let _ = sock.shutdown(std::net::Shutdown::Both);
+                }
+            }
+        });
+
+        // Подменяем resolver, чтобы synthetic "upgrade.test" разрешался
+        // в loopback (system DNS не знает таких имён). Punycode для не-IDN
+        // host = сам host.
+        let resolver = Arc::new(MockResolver::with(
+            "upgrade.test",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        ));
+        let inmem = Arc::new(InMemHsts::new());
+        inmem.add("upgrade.test");
+        let hsts: Arc<dyn HstsEnforcement> = inmem;
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_dns_resolver(resolver)
+            .with_hsts(hsts)
+            .with_sink(sink.clone());
+
+        // Делаем fetch по http — HSTS должен переписать на https и упасть
+        // на TLS handshake против plain-HTTP сервера.
+        let url = Url::parse(&format!("http://upgrade.test:{port}/")).unwrap();
+        let err = client.fetch(&url).expect_err("upgrade-attempt must fail TLS");
+        let msg = format!("{err:?}");
+        // Конкретный текст ошибки rustls — не гарантия, но содержит TLS-связанные
+        // токены: "tls" / "handshake" / "InvalidContentType" / similar. Главное —
+        // запрос не дошёл до status-line на HTTP-сервере (иначе reason был бы 200).
+        assert!(
+            !msg.contains("HTTP 200"),
+            "upgrade must redirect to https → TLS error, not 200 OK on plain port; got: {msg}"
+        );
+
+        // RequestStarted должен эмититься с UPGRADED URL — это важно для
+        // network log: пользователь видит реальный URL, по которому пошёл трафик.
+        let events = sink.events();
+        let started_url = events.iter().find_map(|e| match e {
+            Event::RequestStarted { url, .. } => Some(url.as_str().to_owned()),
+            _ => None,
+        });
+        assert_eq!(
+            started_url.as_deref(),
+            Some(format!("https://upgrade.test:{port}/").as_str()),
+            "RequestStarted должен содержать upgraded URL: {events:?}"
+        );
+    }
+
+    #[test]
+    fn with_hsts_https_url_stays_https() {
+        // https URL не должен трогаться HSTS-интеграцией (нечего upgrade-ить).
+        // Здесь мы не делаем реальный HTTPS-fetch (нет TLS mock), а проверяем
+        // что builder/policy applied correctly через ту же async-resolver
+        // pathway: fetch к https://known-host даёт TLS-ошибку, и в Started
+        // URL должен остаться https (НЕ повторно upgrade-нутый или какой-то
+        // ещё).
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let _server = thread::spawn(move || {
+            for _ in 0..3 {
+                if let Ok((sock, _)) = listener.accept() {
+                    let _ = sock.shutdown(std::net::Shutdown::Both);
+                }
+            }
+        });
+
+        let resolver = Arc::new(MockResolver::with(
+            "secure.test",
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+        ));
+        let inmem = Arc::new(InMemHsts::new());
+        inmem.add("secure.test");
+        let hsts: Arc<dyn HstsEnforcement> = inmem;
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_dns_resolver(resolver)
+            .with_hsts(hsts)
+            .with_sink(sink.clone());
+
+        let url = Url::parse(&format!("https://secure.test:{port}/")).unwrap();
+        let _ = client.fetch(&url); // ожидаем TLS error — нам важен только Started URL.
+
+        let events = sink.events();
+        let started_url = events.iter().find_map(|e| match e {
+            Event::RequestStarted { url, .. } => Some(url.as_str().to_owned()),
+            _ => None,
+        });
+        assert_eq!(
+            started_url.as_deref(),
+            Some(format!("https://secure.test:{port}/").as_str()),
+            "https URL не должен трогаться upgrade-логикой: {events:?}"
+        );
+    }
+
+    // ── HTTP Range requests ─────────────────────────────────────────────────
+
+    /// Mock-сервер, проверяющий Range header в запросе и отдающий
+    /// 206 Partial Content для honored range или 200 OK для full body.
+    /// `expected_range` — точное ожидаемое значение Range header (без префикса
+    /// `Range: `). Если None — Range header не должен присутствовать.
+    fn mock_range_server(
+        responder: impl Fn(Option<String>) -> Vec<u8> + Send + 'static,
+    ) -> (u16, thread::JoinHandle<()>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            let mut range_header: Option<String> = None;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let trimmed = line.trim_end_matches(['\r', '\n']);
+                if trimmed.is_empty() {
+                    break;
+                }
+                if let Some(v) = trimmed.strip_prefix("Range: ") {
+                    range_header = Some(v.to_owned());
+                }
+            }
+            let body = responder(range_header);
+            let _ = sock.write_all(&body);
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+        });
+        (port, handle)
+    }
+
+    #[test]
+    fn fetch_range_206_returns_partial_with_content_range() {
+        // Сервер видит Range: bytes=0-4, отвечает 206 с заголовком
+        // Content-Range и пятью байтами. RangeResponse.content_range
+        // должен быть распарсен; body — точно 5 байт; status = 206.
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range.as_deref(), Some("bytes=0-4"));
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 5\r\nContent-Range: bytes 0-4/100\r\nConnection: close\r\n\r\nhello"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::closed(0, 4)).unwrap();
+        assert_eq!(resp.status, 206);
+        assert_eq!(resp.body, b"hello");
+        assert_eq!(
+            resp.content_range,
+            Some(ContentRange { start: 0, end: 4, total: Some(100) })
+        );
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_open_ended_sends_correct_header() {
+        // bytes=500- (от 500 до конца) — сервер возвращает суффикс с
+        // unknown-total (`/*`), что валидно для chunked-source.
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range.as_deref(), Some("bytes=500-"));
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 4\r\nContent-Range: bytes 500-503/*\r\nConnection: close\r\n\r\ntail"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::from(500)).unwrap();
+        assert_eq!(resp.status, 206);
+        assert_eq!(resp.body, b"tail");
+        assert_eq!(
+            resp.content_range,
+            Some(ContentRange { start: 500, end: 503, total: None })
+        );
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_200_fallback_when_server_ignores_range() {
+        // RFC 7233 §3.1: сервер вправе ответить 200 с full body на Range-запрос.
+        // Клиент должен принять — body = full, content_range = None, status=200.
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range.as_deref(), Some("bytes=0-9"));
+            b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello world"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::closed(0, 9)).unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body, b"hello world");
+        assert!(resp.content_range.is_none());
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_416_not_satisfiable_returns_err() {
+        // Сервер ответил 416 — fetch_range возвращает Err. По текущему API
+        // мы не различаем 416 от других 4xx; caller проверяет текст ошибки
+        // или просто отбрасывает попытку.
+        let (port, server) = mock_range_server(|_| {
+            b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Length: 0\r\nContent-Range: bytes */100\r\nConnection: close\r\n\r\n"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let err = client.fetch_range(&url, RangeSpec::closed(1000, 2000)).unwrap_err();
+        assert!(format!("{err:?}").contains("416"), "expected HTTP 416, got: {err:?}");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_206_without_content_range_header() {
+        // Дефектный сервер отдал 206, но без Content-Range. Не падаем —
+        // body отдаём как есть, content_range = None. Caller сам решает,
+        // считать ли такой ответ валидным.
+        let (port, server) = mock_range_server(|_| {
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::closed(0, 2)).unwrap();
+        assert_eq!(resp.status, 206);
+        assert_eq!(resp.body, b"abc");
+        assert!(resp.content_range.is_none());
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_without_range_does_not_send_range_header() {
+        // Регрессия: обычный client.fetch() не должен слать Range header
+        // (он опциональный). Mock проверяет, что range_header остался None.
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range, None, "fetch() must not send Range header");
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        assert_eq!(client.fetch(&url).unwrap(), b"ok");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_invalid_spec_silently_omits_header() {
+        // RangeSpec.closed(100, 50): end < start — header_value возвращает
+        // None, write_request не вставляет Range header. Сервер видит как
+        // обычный GET, отдаёт 200 OK — fetch_range вернёт full body c
+        // content_range = None (по сути fallback на полный fetch).
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range, None, "invalid range spec must omit header");
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nfull".to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::closed(100, 50)).unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body, b"full");
+        assert!(resp.content_range.is_none());
+
+        server.join().unwrap();
+    }
 }
+

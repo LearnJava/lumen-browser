@@ -30,13 +30,17 @@ pub enum Token {
     Text(String),
     Comment(String),
     /// `<!DOCTYPE name PUBLIC "public_id" "system_id">` или
-    /// `<!DOCTYPE name SYSTEM "system_id">`. Все три поля могут быть пусты,
-    /// если в исходнике их нет (например, типичный `<!DOCTYPE html>`).
-    /// `name` хранится в lower-case (HTML5 §13.2.5.53 нормализует).
+    /// `<!DOCTYPE name SYSTEM "system_id">`. `name` хранится в lower-case
+    /// (HTML5 §13.2.5.53 нормализует). `public_id`/`system_id` —
+    /// `None` если соответствующий keyword отсутствует, `Some("")` если
+    /// keyword присутствует с пустой строкой. Различие важно для
+    /// quirks-detection: limited-quirks правила для HTML 4.01
+    /// Frameset/Transitional зависят от наличия system_id, не его
+    /// содержимого (HTML5 §13.2.5.1).
     Doctype {
         name: String,
-        public_id: String,
-        system_id: String,
+        public_id: Option<String>,
+        system_id: Option<String>,
     },
 }
 
@@ -382,22 +386,22 @@ impl<'a> Tokenizer<'a> {
         }
         self.skip_whitespace();
 
-        let mut public_id = String::new();
-        let mut system_id = String::new();
+        let mut public_id: Option<String> = None;
+        let mut system_id: Option<String> = None;
         if self.rest_starts_with_ascii_ci("public") {
             self.pos += "public".len();
             self.skip_whitespace();
-            public_id = self.consume_quoted_string().unwrap_or_default();
+            public_id = Some(self.consume_quoted_string().unwrap_or_default());
             self.skip_whitespace();
             // После public_id может идти system_id (тоже quoted), а может и
             // ничего (lenient).
             if matches!(self.peek(), Some('"' | '\'')) {
-                system_id = self.consume_quoted_string().unwrap_or_default();
+                system_id = Some(self.consume_quoted_string().unwrap_or_default());
             }
         } else if self.rest_starts_with_ascii_ci("system") {
             self.pos += "system".len();
             self.skip_whitespace();
-            system_id = self.consume_quoted_string().unwrap_or_default();
+            system_id = Some(self.consume_quoted_string().unwrap_or_default());
         }
 
         // Съесть всё до '>' (на случай мусора / несколько идентификаторов).
@@ -485,18 +489,21 @@ impl<'a> Tokenizer<'a> {
             return Some(ch.to_string());
         }
 
-        const ENTITIES: &[(&str, &str)] = &[
-            ("amp;", "&"),
-            ("lt;", "<"),
-            ("gt;", ">"),
-            ("quot;", "\""),
-            ("apos;", "'"),
-            ("nbsp;", "\u{00A0}"),
-        ];
-        for (name, val) in ENTITIES {
-            if rest.starts_with(name) {
-                self.pos += name.len();
-                return Some((*val).to_string());
+        // Named character reference — берём имя до `;` (включительно),
+        // максимум 32 байта чтобы не зацикливаться на повреждённом входе.
+        // HTML5 spec требует, чтобы имя кончалось `;`; legacy form без
+        // `;` (~100 ссылок типа `&amp` для HTML 4 compat) пока не
+        // поддерживается.
+        let end = rest
+            .bytes()
+            .take(32)
+            .position(|b| b == b';')
+            .map(|p| p + 1);
+        if let Some(name_len) = end {
+            let name = &rest[..name_len];
+            if let Some(decoded) = crate::entities::lookup_named_entity(name) {
+                self.pos += name_len;
+                return Some(decoded.to_string());
             }
         }
         None
@@ -649,8 +656,8 @@ mod tests {
             t[0],
             Token::Doctype {
                 name: "html".into(),
-                public_id: String::new(),
-                system_id: String::new(),
+                public_id: None,
+                system_id: None,
             }
         );
     }
@@ -678,8 +685,8 @@ mod tests {
             t[0],
             Token::Doctype {
                 name: "html".into(),
-                public_id: "-//W3C//DTD HTML 4.01//EN".into(),
-                system_id: "http://www.w3.org/TR/html4/strict.dtd".into(),
+                public_id: Some("-//W3C//DTD HTML 4.01//EN".into()),
+                system_id: Some("http://www.w3.org/TR/html4/strict.dtd".into()),
             }
         );
     }
@@ -691,8 +698,8 @@ mod tests {
             t[0],
             Token::Doctype {
                 name: "html".into(),
-                public_id: String::new(),
-                system_id: "about:legacy-compat".into(),
+                public_id: None,
+                system_id: Some("about:legacy-compat".into()),
             }
         );
     }
@@ -704,8 +711,8 @@ mod tests {
             t[0],
             Token::Doctype {
                 name: "html".into(),
-                public_id: "pid".into(),
-                system_id: "sid".into(),
+                public_id: Some("pid".into()),
+                system_id: Some("sid".into()),
             }
         );
     }
@@ -724,8 +731,37 @@ mod tests {
             t[0],
             Token::Doctype {
                 name: String::new(),
-                public_id: String::new(),
-                system_id: String::new(),
+                public_id: None,
+                system_id: None,
+            }
+        );
+    }
+
+    #[test]
+    fn doctype_public_missing_vs_empty() {
+        // `PUBLIC "" ""` — public/system_id присутствуют, но пустые.
+        // Различимо от полного отсутствия (`<!DOCTYPE html>` → None).
+        let t = tok(r#"<!DOCTYPE html PUBLIC "" "">"#);
+        assert_eq!(
+            t[0],
+            Token::Doctype {
+                name: "html".into(),
+                public_id: Some(String::new()),
+                system_id: Some(String::new()),
+            }
+        );
+    }
+
+    #[test]
+    fn doctype_public_without_system() {
+        // PUBLIC с одним id — system_id отсутствует (None, не Some("")).
+        let t = tok(r#"<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01 Frameset//EN">"#);
+        assert_eq!(
+            t[0],
+            Token::Doctype {
+                name: "html".into(),
+                public_id: Some("-//W3C//DTD HTML 4.01 Frameset//EN".into()),
+                system_id: None,
             }
         );
     }
@@ -745,6 +781,33 @@ mod tests {
         assert_eq!(tok("&lt;&gt;"), vec![Token::Text("<>".into())]);
         assert_eq!(tok("&quot;"), vec![Token::Text("\"".into())]);
         assert_eq!(tok("&nbsp;"), vec![Token::Text("\u{00A0}".into())]);
+    }
+
+    #[test]
+    fn entity_extended_named() {
+        // Расширенный набор из 250+ имён.
+        assert_eq!(tok("&copy;"), vec![Token::Text("\u{00A9}".into())]);
+        assert_eq!(tok("&mdash;"), vec![Token::Text("\u{2014}".into())]);
+        assert_eq!(tok("&hellip;"), vec![Token::Text("\u{2026}".into())]);
+        assert_eq!(tok("&trade;"), vec![Token::Text("\u{2122}".into())]);
+        assert_eq!(tok("&euro;"), vec![Token::Text("\u{20AC}".into())]);
+        // Greek
+        assert_eq!(tok("&alpha;"), vec![Token::Text("\u{03B1}".into())]);
+        assert_eq!(tok("&Omega;"), vec![Token::Text("\u{03A9}".into())]);
+        // Arrows
+        assert_eq!(tok("&rarr;"), vec![Token::Text("\u{2192}".into())]);
+        // Quotes
+        assert_eq!(
+            tok("&ldquo;hello&rdquo;"),
+            vec![Token::Text("\u{201C}hello\u{201D}".into())]
+        );
+    }
+
+    #[test]
+    fn entity_case_sensitive_per_html5() {
+        // HTML5 имена case-sensitive: Beta != beta.
+        assert_eq!(tok("&Beta;"), vec![Token::Text("\u{0392}".into())]);
+        assert_eq!(tok("&beta;"), vec![Token::Text("\u{03B2}".into())]);
     }
 
     #[test]

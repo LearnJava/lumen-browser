@@ -21,6 +21,7 @@ lumen-layout.workspace = true
 lumen-paint.workspace = true
 lumen-font.workspace = true
 lumen-encoding.workspace = true
+lumen-image.workspace = true
 
 # Exception #1 из §5: OS event loop + окна.
 winit.workspace = true

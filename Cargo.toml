@@ -5,6 +5,7 @@ members = [
     "crates/core",
     "crates/network",
     "crates/storage",
+    "crates/knowledge",
     "crates/bench",
     "crates/engine/html-parser",
     "crates/engine/css-parser",
@@ -13,6 +14,7 @@ members = [
     "crates/engine/paint",
     "crates/engine/font",
     "crates/engine/encoding",
+    "crates/engine/image",
 ]
 
 [workspace.package]
@@ -26,6 +28,7 @@ rust-version = "1.95"
 lumen-core = { path = "crates/core" }
 lumen-network = { path = "crates/network" }
 lumen-storage = { path = "crates/storage" }
+lumen-knowledge = { path = "crates/knowledge" }
 lumen-html-parser = { path = "crates/engine/html-parser" }
 lumen-css-parser = { path = "crates/engine/css-parser" }
 lumen-dom = { path = "crates/engine/dom" }
@@ -33,6 +36,7 @@ lumen-layout = { path = "crates/engine/layout" }
 lumen-paint = { path = "crates/engine/paint" }
 lumen-font = { path = "crates/engine/font" }
 lumen-encoding = { path = "crates/engine/encoding" }
+lumen-image = { path = "crates/engine/image" }
 
 # Exception #1 (§5): OS event loop + окна. Свой = годы Win32/X11/Wayland/AppKit.
 winit = "0.30"
@@ -41,6 +45,12 @@ wgpu = "26"
 # Exception #3 (§5): TLS / crypto. Своя реализация — security antipattern.
 rustls = { version = "0.23", features = ["std"] }
 webpki-roots = "0.26"
+# Exception #5 (§5): SQLite — persistent storage для history, bookmarks, notes,
+# read-later, cookies (TTL), профилей и knowledge layer (FTS5). 25 лет audit-а
+# и TH3-тестирование; стандарт в индустрии браузеров (Firefox places.sqlite,
+# Chromium History, Safari). Feature `bundled` компилирует SQLite в бинарь —
+# нулевая runtime-зависимость от системного libsqlite3.
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 [profile.dev]
 opt-level = 1
