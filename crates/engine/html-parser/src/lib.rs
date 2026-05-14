@@ -12,16 +12,18 @@
 //! у нас 250+ самых частых), foster parent reparenting.
 
 mod entities;
+pub mod picture;
 pub mod quirks_mode;
 pub mod srcset;
 pub mod tokenizer;
 pub mod tree_builder;
 
+pub use picture::{PickedSource, PictureParams, pick_img_source, pick_picture_source};
 pub use quirks_mode::detect_document_mode;
 pub use srcset::{
     MediaClause, MediaCondition, Orientation, SizeLength, SizesViewport, SourceSize,
-    SrcsetCandidate, SrcsetDescriptor, evaluate_sizes, parse_sizes, parse_srcset,
-    pick_best_for_density, pick_best_for_width,
+    SrcsetCandidate, SrcsetDescriptor, evaluate_sizes, parse_media_condition, parse_sizes,
+    parse_srcset, pick_best_for_density, pick_best_for_width,
 };
 pub use tokenizer::{Token, Tokenizer};
 pub use tree_builder::parse;
