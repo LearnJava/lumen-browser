@@ -136,6 +136,85 @@ fn level_for_destination(destination: RequestDestination) -> MixedContentLevel {
     }
 }
 
+/// Режим enforcement-а для mixed-content в `HttpClient`. Классификатор
+/// `classify_subresource_request` сам по себе не блокирует — решение «что
+/// делать с Optionally/Blockable» принимается на уровне политики, которую
+/// caller (shell) задаёт через builder. `Disabled` нужен для совместимости
+/// с существующими fetch-вызовами top-level navigation, у которых нет
+/// собственного secure-context — там mixed-content неприменим по определению.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MixedContentMode {
+    /// Не делать enforcement: classifier игнорируется. Поведение HttpClient
+    /// идентично состоянию до подключения mixed-content policy.
+    #[default]
+    Disabled,
+    /// Spec-default по W3C Mixed Content: блокируем `Blockable` (scripts /
+    /// styles / iframes / fonts / fetch / worker), пропускаем
+    /// `OptionallyBlockable` (images / media / prefetch). Такое же поведение
+    /// у современных браузеров в дефолтном режиме.
+    SpecDefault,
+    /// Strict: блокируем обе категории, в т.ч. `OptionallyBlockable`. На
+    /// старых сайтах с `<img src=http://...>` на HTTPS-странице картинки
+    /// не загрузятся — это цена максимальной гарантии TLS.
+    Strict,
+}
+
+/// Связка top-level origin + режим, передаваемая в `HttpClient` через
+/// builder `with_mixed_content_policy`. Origin документа неизменен между
+/// subresource-запросами (top-level navigation создаёт новый client с
+/// новым policy), поэтому хранится by-value.
+#[derive(Debug, Clone)]
+pub struct MixedContentPolicy {
+    top_level: Origin,
+    mode: MixedContentMode,
+}
+
+impl MixedContentPolicy {
+    pub fn new(top_level: Origin, mode: MixedContentMode) -> Self {
+        Self { top_level, mode }
+    }
+
+    pub fn top_level(&self) -> &Origin {
+        &self.top_level
+    }
+
+    pub fn mode(&self) -> MixedContentMode {
+        self.mode
+    }
+
+    /// Возвращает `Some(level)`, если запрос подресурса должен быть
+    /// заблокирован по текущему режиму; `None` — если разрешён (либо
+    /// NotMixed, либо OptionallyBlockable в SpecDefault, либо mode=Disabled).
+    pub fn evaluate(
+        &self,
+        subresource: &Url,
+        destination: RequestDestination,
+    ) -> Option<MixedContentLevel> {
+        if matches!(self.mode, MixedContentMode::Disabled) {
+            return None;
+        }
+        let level = classify_subresource_request(&self.top_level, subresource, destination);
+        let block = match self.mode {
+            MixedContentMode::Disabled => false,
+            MixedContentMode::SpecDefault => level.is_spec_default_blocked(),
+            MixedContentMode::Strict => level.is_strict_blocked(),
+        };
+        if block { Some(level) } else { None }
+    }
+}
+
+/// Текстовая причина для `Event::RequestBlocked.reason` — стабильный формат
+/// `mixed-content: <level>`, чтобы UI / network log могли отличить блок-причины
+/// друг от друга (mixed-content vs ad-block vs CORS).
+pub fn block_reason(level: MixedContentLevel) -> String {
+    let suffix = match level {
+        MixedContentLevel::Blockable => "blockable",
+        MixedContentLevel::OptionallyBlockable => "optionally-blockable",
+        MixedContentLevel::NotMixed => "not-mixed",
+    };
+    format!("mixed-content: {suffix}")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -359,5 +438,94 @@ mod tests {
         assert!(!MixedContentLevel::OptionallyBlockable.is_spec_default_blocked());
         assert!(MixedContentLevel::Blockable.is_spec_default_blocked());
         assert!(!MixedContentLevel::NotMixed.is_spec_default_blocked());
+    }
+
+    fn policy(mode: MixedContentMode) -> MixedContentPolicy {
+        MixedContentPolicy::new(secure_top(), mode)
+    }
+
+    #[test]
+    fn policy_disabled_never_blocks_anything() {
+        let p = policy(MixedContentMode::Disabled);
+        assert!(
+            p.evaluate(&url("http://cdn.example.org/lib.js"), RequestDestination::Script)
+                .is_none()
+        );
+        assert!(
+            p.evaluate(&url("http://cdn.example.org/pic.png"), RequestDestination::Image)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn policy_spec_default_blocks_blockable_only() {
+        let p = policy(MixedContentMode::SpecDefault);
+        assert_eq!(
+            p.evaluate(&url("http://cdn.example.org/lib.js"), RequestDestination::Script),
+            Some(MixedContentLevel::Blockable)
+        );
+        assert!(
+            p.evaluate(&url("http://cdn.example.org/pic.png"), RequestDestination::Image)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn policy_strict_blocks_both_categories() {
+        let p = policy(MixedContentMode::Strict);
+        assert_eq!(
+            p.evaluate(&url("http://cdn.example.org/lib.js"), RequestDestination::Script),
+            Some(MixedContentLevel::Blockable)
+        );
+        assert_eq!(
+            p.evaluate(&url("http://cdn.example.org/pic.png"), RequestDestination::Image),
+            Some(MixedContentLevel::OptionallyBlockable)
+        );
+    }
+
+    #[test]
+    fn policy_allows_https_subresource_in_any_mode() {
+        for mode in [MixedContentMode::SpecDefault, MixedContentMode::Strict] {
+            let p = policy(mode);
+            assert!(
+                p.evaluate(&url("https://cdn.example.org/lib.js"), RequestDestination::Script)
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn policy_with_insecure_top_level_never_blocks() {
+        // top-level HTTP — концепции mixed-content нет, любая под-схема допустима
+        // в любом режиме enforcement-а.
+        let p = MixedContentPolicy::new(insecure_top(), MixedContentMode::Strict);
+        assert!(
+            p.evaluate(&url("http://cdn.example.org/lib.js"), RequestDestination::Script)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn policy_allows_loopback_http_in_strict() {
+        // Mixed Content §3.1: loopback — potentially trustworthy, не mixed.
+        let p = policy(MixedContentMode::Strict);
+        assert!(
+            p.evaluate(&url("http://localhost/lib.js"), RequestDestination::Script)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn block_reason_strings_are_stable() {
+        assert_eq!(block_reason(MixedContentLevel::Blockable), "mixed-content: blockable");
+        assert_eq!(
+            block_reason(MixedContentLevel::OptionallyBlockable),
+            "mixed-content: optionally-blockable"
+        );
+    }
+
+    #[test]
+    fn mixed_content_mode_default_is_disabled() {
+        assert_eq!(MixedContentMode::default(), MixedContentMode::Disabled);
     }
 }
