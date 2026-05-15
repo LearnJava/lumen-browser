@@ -10,3 +10,8 @@ description = "Lumen: KV-хранилище с origin-партициониров
 [dependencies]
 lumen-core.workspace = true
 rusqlite.workspace = true
+# Provisional accelerator (§5): Public Suffix List как compiled-in static
+# таблица (без runtime I/O, без зависимостей). Trait-anchor — `PublicSuffixList`
+# в lumen-core::ext. Graduation criterion: реалистично — никогда (формат
+# PSL стабилен, обновления списка приходят снаружи через bump версии crate-а).
+psl = "2"

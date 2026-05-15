@@ -19,6 +19,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
+use lumen_core::ext::PublicSuffixList;
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection};
 
@@ -309,7 +310,9 @@ fn path_matches(request_path: &str, cookie_path: &str) -> bool {
     )
 }
 
-/// Распарсить значение HTTP-заголовка `Set-Cookie` в `Cookie`.
+/// Распарсить значение HTTP-заголовка `Set-Cookie` в `Cookie`. Без PSL
+/// проверок — backward-compat wrapper над [`parse_set_cookie_with_psl`]
+/// для caller-ов, у которых PSL не подключён.
 ///
 /// RFC 6265 §5.2. Формат:
 ///
@@ -339,6 +342,36 @@ pub fn parse_set_cookie(
     default_path: &str,
     now_unix: i64,
 ) -> Option<Cookie> {
+    parse_set_cookie_with_psl(header, default_domain, default_path, now_unix, None)
+}
+
+/// Расширенная версия [`parse_set_cookie`] с опциональной проверкой
+/// `PublicSuffixList` — реализует Storage Model RFC 6265bis §5.5
+/// шаги 5 (Domain attribute) и применяет правило public-suffix:
+///
+/// 1. Если `Domain` attribute не указан → cookie host-only, domain =
+///    `default_domain` (request host). Текущее поведение, PSL не влияет.
+/// 2. Если `Domain` указан и `default_domain` НЕ domain-match-ит cookie
+///    domain (например, server присылает `Domain=evil.com` для запроса
+///    `victim.com`) → cookie reject-ится, возвращаем `None`.
+/// 3. Если `Domain` указан и совпадает с известным public suffix:
+///    - если `domain == default_domain` → cookie остаётся host-only
+///      (Domain attribute treated as null);
+///    - иначе → reject, `None`. Это блокирует «super-cookie»-атаки, где
+///      `evil.com` пытается сохранить cookie с `Domain=co.uk`.
+/// 4. Если PSL = `None`, шаг 3 пропускается — для caller-ов, у которых
+///    PSL ещё не подключён (fail-open: cookie допускается, как и было
+///    до этой функции).
+///
+/// Шаг 2 (domain-match) проверяется **всегда**, даже без PSL — это базовая
+/// RFC 6265 §5.3 проверка, не требующая знания eTLD.
+pub fn parse_set_cookie_with_psl(
+    header: &str,
+    default_domain: &str,
+    default_path: &str,
+    now_unix: i64,
+    psl: Option<&dyn PublicSuffixList>,
+) -> Option<Cookie> {
     let mut parts = header.split(';');
     let first = parts.next()?.trim();
     let eq = first.find('=')?;
@@ -348,7 +381,8 @@ pub fn parse_set_cookie(
     }
     let value = first[eq + 1..].trim().to_string();
 
-    let mut domain = default_domain.to_string();
+    let default_domain_lc = default_domain.to_lowercase();
+    let mut domain_attr: Option<String> = None;
     let mut path = default_path.to_string();
     let mut expires_at: Option<i64> = None;
     let mut max_age: Option<i64> = None;
@@ -374,7 +408,11 @@ pub fn parse_set_cookie(
             }
         } else if key.eq_ignore_ascii_case("domain") {
             // Leading dot — strip (RFC 6265 §5.2.3 — host-relative).
-            domain = val.strip_prefix('.').unwrap_or(val).to_lowercase();
+            // Пустой Domain= после strip-а — игнорируем (как «не указан»).
+            let stripped = val.strip_prefix('.').unwrap_or(val).to_lowercase();
+            if !stripped.is_empty() {
+                domain_attr = Some(stripped);
+            }
         } else if key.eq_ignore_ascii_case("path") {
             // Пустой Path / не начинается с `/` — RFC 6265 §5.2.4 → default
             // (мы берём `default_path` как fallback).
@@ -395,6 +433,31 @@ pub fn parse_set_cookie(
             }
         }
     }
+
+    // Определить итоговый domain через RFC 6265bis §5.5 шаг 5.
+    let domain = match domain_attr {
+        None => default_domain_lc.clone(),
+        Some(d) => {
+            // RFC 6265 §5.3 step 4: request-host must domain-match Domain.
+            if !domain_matches(&default_domain_lc, &d) {
+                return None;
+            }
+            // RFC 6265bis §5.5: public-suffix защита.
+            if let Some(psl) = psl
+                && psl.is_public_suffix(&d)
+            {
+                if d == default_domain_lc {
+                    // Cookie остаётся host-only (Domain attribute → null).
+                    default_domain_lc.clone()
+                } else {
+                    // Super-cookie attempt — отвергаем.
+                    return None;
+                }
+            } else {
+                d
+            }
+        }
+    };
 
     // Max-Age priority над Expires (RFC 6265 §5.2.2). Max-Age <= 0 →
     // expired cookie сразу (timestamp в прошлом).
@@ -752,9 +815,12 @@ mod tests {
 
     #[test]
     fn parse_with_attributes() {
+        // request-host = host.example.com domain-match-ит Domain=example.com
+        // (RFC 6265 §5.3 step 4); без этого parse_set_cookie возвращает None
+        // — RFC 6265bis §5.5 шаг 5.1.
         let c = parse_set_cookie(
             "tok=xyz; Domain=.example.com; Path=/admin; Secure; HttpOnly; SameSite=Strict",
-            "fallback.com",
+            "host.example.com",
             "/",
             0,
         )
@@ -767,6 +833,20 @@ mod tests {
         assert!(c.secure);
         assert!(c.http_only);
         assert_eq!(c.same_site, SameSite::Strict);
+    }
+
+    #[test]
+    fn parse_rejects_cross_origin_domain() {
+        // RFC 6265 §5.3 step 4 / RFC 6265bis §5.5 step 5.1: server для
+        // fallback.com не может присылать Set-Cookie c Domain=example.com
+        // (domain-mismatch). Возврат None даже без PSL.
+        assert!(parse_set_cookie(
+            "tok=xyz; Domain=example.com",
+            "fallback.com",
+            "/",
+            0,
+        )
+        .is_none());
     }
 
     #[test]
@@ -901,5 +981,127 @@ mod tests {
             .unwrap();
         assert_eq!(got.len(), 1);
         assert_eq!(got[0].name, "remember");
+    }
+
+    // ── parse_set_cookie_with_psl — RFC 6265bis §5.5 шаг 5 ─────────────
+
+    use crate::psl::PslProvider;
+
+    #[test]
+    fn psl_rejects_super_cookie_attempt() {
+        // example.co.uk пытается поставить Domain=co.uk → super-cookie
+        // attempt, отвергается.
+        let psl = PslProvider::new();
+        let c = parse_set_cookie_with_psl(
+            "evil=1; Domain=co.uk",
+            "example.co.uk",
+            "/",
+            0,
+            Some(&psl),
+        );
+        assert!(c.is_none());
+    }
+
+    #[test]
+    fn psl_rejects_bare_tld_domain() {
+        // Domain=com — public suffix, отвергаем.
+        let psl = PslProvider::new();
+        assert!(parse_set_cookie_with_psl(
+            "k=v; Domain=com",
+            "example.com",
+            "/",
+            0,
+            Some(&psl),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn psl_treats_self_as_public_suffix_as_host_only() {
+        // request-host сам является public suffix (странный случай —
+        // например, прямое посещение `co.uk`). Set-Cookie c Domain=co.uk
+        // допускается как host-only.
+        let psl = PslProvider::new();
+        let c = parse_set_cookie_with_psl(
+            "k=v; Domain=co.uk",
+            "co.uk",
+            "/",
+            0,
+            Some(&psl),
+        )
+        .unwrap();
+        // Cookie остаётся как host-only с domain = request-host.
+        assert_eq!(c.domain, "co.uk");
+    }
+
+    #[test]
+    fn psl_allows_legitimate_domain_attribute() {
+        // example.co.uk ставит Domain=example.co.uk — registrable
+        // domain, валидно.
+        let psl = PslProvider::new();
+        let c = parse_set_cookie_with_psl(
+            "k=v; Domain=example.co.uk",
+            "www.example.co.uk",
+            "/",
+            0,
+            Some(&psl),
+        )
+        .unwrap();
+        assert_eq!(c.domain, "example.co.uk");
+    }
+
+    #[test]
+    fn psl_none_allows_super_cookie_fail_open() {
+        // Без PSL — fail-open (старое поведение). Не идеально, но
+        // лучше, чем падать у caller-ов, которые ещё не подключили PSL.
+        let c = parse_set_cookie_with_psl(
+            "evil=1; Domain=co.uk",
+            "example.co.uk",
+            "/",
+            0,
+            None,
+        )
+        .unwrap();
+        assert_eq!(c.domain, "co.uk");
+    }
+
+    #[test]
+    fn psl_keeps_existing_domain_match_check_independently() {
+        // Domain-mismatch отвергается даже с PSL (RFC 6265 §5.3 step 4).
+        let psl = PslProvider::new();
+        assert!(parse_set_cookie_with_psl(
+            "k=v; Domain=other.com",
+            "example.com",
+            "/",
+            0,
+            Some(&psl),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn psl_idn_domain_match() {
+        // Cyrillic IDN в Punycode-форме — PSL знает xn--p1ai (.рф).
+        // request-host www.xn--e1afmkfd.xn--p1ai, Domain=xn--p1ai →
+        // super-cookie attempt, отвергаем.
+        let psl = PslProvider::new();
+        assert!(parse_set_cookie_with_psl(
+            "k=v; Domain=xn--p1ai",
+            "www.xn--e1afmkfd.xn--p1ai",
+            "/",
+            0,
+            Some(&psl),
+        )
+        .is_none());
+        // Domain=xn--e1afmkfd.xn--p1ai (=пример.рф) — registrable, OK.
+        let c = parse_set_cookie_with_psl(
+            "k=v; Domain=xn--e1afmkfd.xn--p1ai",
+            "www.xn--e1afmkfd.xn--p1ai",
+            "/",
+            0,
+            Some(&psl),
+        )
+        .unwrap();
+        assert_eq!(c.domain, "xn--e1afmkfd.xn--p1ai");
     }
 }
