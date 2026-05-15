@@ -2949,8 +2949,250 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
             list.iter().any(|rs| matches_relative(rs, doc, node))
         }
         PseudoClass::PlaceholderShown => matches_placeholder_shown(doc, node),
+        PseudoClass::Required => matches_required(doc, node, true),
+        PseudoClass::Optional => matches_required(doc, node, false),
+        PseudoClass::ReadOnly => matches_read_only(doc, node),
+        PseudoClass::ReadWrite => matches_read_write(doc, node),
+        PseudoClass::Disabled => matches_disabled(doc, node, true),
+        PseudoClass::Enabled => matches_disabled(doc, node, false),
         PseudoClass::Unsupported(_) => false,
     }
+}
+
+/// Default-значение `<input type>` — `text` (HTML5 §4.10.5.1.2). Возвращает
+/// lower-case значение `type`-атрибута; пустая строка трактуется как `text`.
+fn input_type_lower(doc: &Document, node: NodeId) -> String {
+    let node_ref = doc.get(node);
+    node_ref
+        .get_attr("type")
+        .map(|t| t.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "text".to_string())
+}
+
+/// `<input>`-типы, к которым применимы `:read-only` / `:read-write` per HTML5
+/// §4.16.4 «mutable input» — text-like (введение текста).
+fn input_is_text_like(input_type: &str) -> bool {
+    matches!(
+        input_type,
+        "text"
+            | "search"
+            | "url"
+            | "tel"
+            | "email"
+            | "password"
+            | "number"
+            | "date"
+            | "month"
+            | "week"
+            | "time"
+            | "datetime-local"
+    )
+}
+
+/// `<input>`-типы, к которым применим `required` per HTML5 §4.10.3 — text-like
+/// + `checkbox` / `radio` / `file`.
+fn input_supports_required(input_type: &str) -> bool {
+    input_is_text_like(input_type)
+        || matches!(input_type, "checkbox" | "radio" | "file")
+}
+
+/// CSS Selectors L4 §15.4 / HTML5 §4.10.3 `:required` / `:optional`.
+/// `want_required = true` → `:required`, иначе `:optional`. Возвращает true
+/// только для form control-ов, к которым применим атрибут `required`.
+///
+/// Применимо: `<select>`, `<textarea>`, и `<input>` text-like / checkbox /
+/// radio / file. Прочие элементы (`<input type=hidden>`, `<button>`, `<div>`)
+/// не матчатся ни одним из двух.
+fn matches_required(doc: &Document, node: NodeId, want_required: bool) -> bool {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else {
+        return false;
+    };
+    let tag = name.local.as_str();
+    let applies = match tag {
+        "select" | "textarea" => true,
+        "input" => input_supports_required(&input_type_lower(doc, node)),
+        _ => false,
+    };
+    if !applies {
+        return false;
+    }
+    let has_required = node_ref.get_attr("required").is_some();
+    has_required == want_required
+}
+
+/// CSS Selectors L4 §15.5 / HTML5 §4.16.4 `:read-write` — «mutable» form
+/// control или `contenteditable`-элемент.
+///
+/// True для:
+///   - `<input>` text-like type БЕЗ `readonly` и БЕЗ `disabled`;
+///   - `<textarea>` БЕЗ `readonly` и БЕЗ `disabled`;
+///   - любого элемента с эффективным `contenteditable="true"` (включая
+///     наследование от ancestor — `contenteditable=""` тоже считается true).
+///
+/// Прочие элементы — false (и матчат `:read-only`).
+fn matches_read_write(doc: &Document, node: NodeId) -> bool {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else {
+        return false;
+    };
+    let tag = name.local.as_str();
+    let is_form_mutable = match tag {
+        "input" => {
+            input_is_text_like(&input_type_lower(doc, node))
+                && node_ref.get_attr("readonly").is_none()
+                && node_ref.get_attr("disabled").is_none()
+        }
+        "textarea" => {
+            node_ref.get_attr("readonly").is_none()
+                && node_ref.get_attr("disabled").is_none()
+        }
+        _ => false,
+    };
+    if is_form_mutable {
+        return true;
+    }
+    is_effectively_contenteditable(doc, node)
+}
+
+/// CSS Selectors L4 §15.5 / HTML5 §4.16.4 `:read-only` — «not mutable».
+///
+/// Per spec: «matches all other HTML elements» — то есть все Element-ы, не
+/// попадающие под `:read-write`. Не Element-ы (Text / Comment / Document) не
+/// матчатся ничем.
+fn matches_read_only(doc: &Document, node: NodeId) -> bool {
+    let node_ref = doc.get(node);
+    if !matches!(node_ref.data, NodeData::Element { .. }) {
+        return false;
+    }
+    !matches_read_write(doc, node)
+}
+
+/// Эффективное значение `contenteditable` с наследованием от ancestor-ов.
+/// `contenteditable="true"` или `contenteditable=""` (пустая строка) → true;
+/// `contenteditable="false"` → false (и обрывает наследование); отсутствие
+/// атрибута на узле — смотрим выше.
+fn is_effectively_contenteditable(doc: &Document, node: NodeId) -> bool {
+    let mut cur = Some(node);
+    while let Some(n) = cur {
+        let node_ref = doc.get(n);
+        if let NodeData::Element { .. } = node_ref.data
+            && let Some(v) = node_ref.get_attr("contenteditable")
+        {
+            let lower = v.trim().to_ascii_lowercase();
+            if lower.is_empty() || lower == "true" {
+                return true;
+            }
+            if lower == "false" {
+                return false;
+            }
+        }
+        cur = node_ref.parent;
+    }
+    false
+}
+
+/// HTML5 §4.10.19.2 «can be disabled»-элементы — `<button>`, `<input>`,
+/// `<select>`, `<textarea>`, `<optgroup>`, `<option>`, `<fieldset>`.
+fn is_disableable_form_control(tag: &str) -> bool {
+    matches!(
+        tag,
+        "button" | "input" | "select" | "textarea" | "optgroup" | "option" | "fieldset"
+    )
+}
+
+/// CSS Selectors L4 §14.2 / HTML5 §4.10.19.2 `:disabled` / `:enabled`.
+/// `want_disabled = true` → `:disabled`, иначе `:enabled`.
+///
+/// Элемент считается disabled, если:
+///   - применим к `:disabled` per `is_disableable_form_control` И;
+///   - либо у него самого есть атрибут `disabled`;
+///   - либо у `<option>` ancestor-`<optgroup>` имеет `disabled` (HTML5 §4.10.10);
+///   - либо элемент находится внутри `<fieldset disabled>` И НЕ внутри
+///     первого `<legend>`-ребёнка этого fieldset (HTML5 §4.10.16).
+///     `<fieldset>` сам disabled только по собственному атрибуту, не от
+///     ancestor-fieldset.
+///
+/// Прочие элементы (`<div>`, `<p>`, и т.д.) — не матчат ни `:disabled`, ни
+/// `:enabled`.
+fn matches_disabled(doc: &Document, node: NodeId, want_disabled: bool) -> bool {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else {
+        return false;
+    };
+    let tag = name.local.as_str();
+    if !is_disableable_form_control(tag) {
+        return false;
+    }
+    let actually_disabled = is_actually_disabled(doc, node, tag);
+    actually_disabled == want_disabled
+}
+
+fn is_actually_disabled(doc: &Document, node: NodeId, tag: &str) -> bool {
+    let node_ref = doc.get(node);
+    if node_ref.get_attr("disabled").is_some() {
+        return true;
+    }
+    // `<option>` наследует disabled от непосредственного `<optgroup>`-родителя
+    // (HTML5 §4.10.10): «An option element is disabled if its disabled attribute
+    // is set or if it is a child of an optgroup element whose disabled attribute
+    // is set».
+    if tag == "option"
+        && let Some(p) = node_ref.parent
+    {
+        let p_ref = doc.get(p);
+        if let NodeData::Element { name: pname, .. } = &p_ref.data
+            && pname.local.as_str() == "optgroup"
+            && p_ref.get_attr("disabled").is_some()
+        {
+            return true;
+        }
+    }
+    // `<fieldset>` сам disabled только по собственному атрибуту; ancestor-walk
+    // для него не нужен.
+    if tag == "fieldset" {
+        return false;
+    }
+    // Form control внутри `<fieldset disabled>` — disabled, кроме случая, когда
+    // он лежит в первом `<legend>`-ребёнке этого fieldset (HTML5 §4.10.16).
+    let mut child = node;
+    let mut cur = node_ref.parent;
+    while let Some(p) = cur {
+        let p_ref = doc.get(p);
+        if let NodeData::Element { name: pname, .. } = &p_ref.data
+            && pname.local.as_str() == "fieldset"
+            && p_ref.get_attr("disabled").is_some()
+            && !is_descendant_of_first_legend_child(doc, p, child)
+        {
+            return true;
+        }
+        child = p;
+        cur = p_ref.parent;
+    }
+    false
+}
+
+/// True, если `descendant_chain_start` — это сам first-`<legend>`-ребёнок
+/// `fieldset` или лежит в его поддереве. Для проверки достаточно посмотреть на
+/// `child` — тот узел, через которого мы дошли до fieldset; если он же —
+/// первый element-child `<legend>`, то вся ветка живёт под legend.
+fn is_descendant_of_first_legend_child(
+    doc: &Document,
+    fieldset: NodeId,
+    child_on_path: NodeId,
+) -> bool {
+    let first_legend = doc
+        .get(fieldset)
+        .children
+        .iter()
+        .copied()
+        .find(|&c| is_element(doc, c))
+        .filter(|&c| {
+            let c_ref = doc.get(c);
+            matches!(&c_ref.data, NodeData::Element { name, .. } if name.local.as_str() == "legend")
+        });
+    matches!(first_legend, Some(l) if l == child_on_path)
 }
 
 /// CSS Selectors L4 §15.1 `:placeholder-shown` — true для form-control,

@@ -642,6 +642,346 @@ mod tests {
         assert_eq!(first_named(&doc, &root, "div").r, 0);
     }
 
+    /// Цвет первого layout-box-а с указанным `id`-атрибутом. `panic!`, если
+    /// такого нет. Используется в form-state pseudo тестах, где нужно
+    /// различать несколько input-ов в одном документе.
+    fn color_by_id(doc: &lumen_dom::Document, root: &LayoutBox, id: &str) -> Color {
+        for c in walk_layout(root) {
+            if let lumen_dom::NodeData::Element { .. } = &doc.get(c.node).data
+                && let Some(v) = doc.get(c.node).get_attr("id")
+                && v == id
+            {
+                return c.style.color;
+            }
+        }
+        panic!("element id={id} not found");
+    }
+
+    // ──────────────── :required / :optional ────────────────
+
+    #[test]
+    fn required_matches_input_with_required_attr() {
+        let (root, doc) = lay_with_doc(
+            r#"<input required>"#,
+            "input:required { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn required_no_match_without_attr() {
+        let (root, doc) = lay_with_doc(
+            r#"<input>"#,
+            "input:required { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 0);
+    }
+
+    #[test]
+    fn optional_matches_input_without_required_attr() {
+        let (root, doc) = lay_with_doc(
+            r#"<input>"#,
+            "input:optional { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn optional_no_match_when_required_present() {
+        let (root, doc) = lay_with_doc(
+            r#"<input required>"#,
+            "input:optional { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 0);
+    }
+
+    #[test]
+    fn required_matches_select_and_textarea() {
+        let (root, doc) = lay_with_doc(
+            r#"<select id="s" required></select><textarea id="t" required></textarea>"#,
+            ":required { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "s").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "t").r, 255);
+    }
+
+    #[test]
+    fn required_skipped_for_hidden_input() {
+        // <input type="hidden"> не поддерживает required (HTML5 §4.10.3).
+        let (root, doc) = lay_with_doc(
+            r#"<input type="hidden" required>"#,
+            "input:required { color: red; } input:optional { color: blue; }",
+        );
+        let c = first_named(&doc, &root, "input");
+        assert_eq!(c.r, 0);
+        assert_eq!(c.b, 0);
+    }
+
+    #[test]
+    fn required_matches_checkbox_radio_file() {
+        let (root, doc) = lay_with_doc(
+            r#"<input id="c" type="checkbox" required>
+               <input id="r" type="radio" required>
+               <input id="f" type="file" required>"#,
+            ":required { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "c").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "r").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "f").r, 255);
+    }
+
+    #[test]
+    fn required_skipped_for_button_and_div() {
+        let (root, doc) = lay_with_doc(
+            r#"<button id="b" required></button><div id="d" required>x</div>"#,
+            ":required { color: red; } :optional { color: blue; }",
+        );
+        let b = color_by_id(&doc, &root, "b");
+        assert_eq!((b.r, b.b), (0, 0), "<button> не имеет required");
+        let d = color_by_id(&doc, &root, "d");
+        assert_eq!((d.r, d.b), (0, 0), "<div> не имеет required");
+    }
+
+    // ──────────────── :read-only / :read-write ────────────────
+
+    #[test]
+    fn read_write_matches_plain_input() {
+        let (root, doc) = lay_with_doc(
+            r#"<input>"#,
+            "input:read-write { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn read_only_matches_readonly_input() {
+        let (root, doc) = lay_with_doc(
+            r#"<input readonly>"#,
+            "input:read-only { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn read_only_matches_disabled_input() {
+        let (root, doc) = lay_with_doc(
+            r#"<input disabled>"#,
+            "input:read-only { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn read_write_matches_plain_textarea() {
+        let (root, doc) = lay_with_doc(
+            r#"<textarea></textarea>"#,
+            "textarea:read-write { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "textarea").r, 255);
+    }
+
+    #[test]
+    fn read_only_matches_readonly_textarea() {
+        let (root, doc) = lay_with_doc(
+            r#"<textarea readonly></textarea>"#,
+            "textarea:read-only { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "textarea").r, 255);
+    }
+
+    #[test]
+    fn read_only_matches_non_text_input_types() {
+        // Не-text-like input types — `:read-only` per HTML5 §4.16.4.
+        let (root, doc) = lay_with_doc(
+            r#"<input id="h" type="hidden">
+               <input id="s" type="submit">
+               <input id="r" type="range">
+               <input id="c" type="checkbox">"#,
+            ":read-only { color: red; } :read-write { color: blue; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "h").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "s").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "r").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "c").r, 255);
+    }
+
+    #[test]
+    fn read_write_matches_contenteditable_true() {
+        let (root, doc) = lay_with_doc(
+            r#"<div contenteditable="true">x</div>"#,
+            "div:read-write { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "div").r, 255);
+    }
+
+    #[test]
+    fn read_write_matches_contenteditable_empty_attr() {
+        // HTML5: contenteditable="" эквивалентно "true".
+        let (root, doc) = lay_with_doc(
+            r#"<div contenteditable>x</div>"#,
+            "div:read-write { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "div").r, 255);
+    }
+
+    #[test]
+    fn read_only_matches_contenteditable_false() {
+        let (root, doc) = lay_with_doc(
+            r#"<div contenteditable="false">x</div>"#,
+            "div:read-only { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "div").r, 255);
+    }
+
+    #[test]
+    fn read_only_matches_default_div() {
+        // Per spec: «matches all other HTML elements» — обычный <div> read-only.
+        let (root, doc) = lay_with_doc(
+            r#"<div>x</div>"#,
+            "div:read-only { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "div").r, 255);
+    }
+
+    #[test]
+    fn read_write_inherits_contenteditable_from_ancestor() {
+        let (root, doc) = lay_with_doc(
+            r#"<div contenteditable="true"><p id="inner">x</p></div>"#,
+            "p:read-write { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "inner").r, 255);
+    }
+
+    #[test]
+    fn read_only_when_descendant_overrides_to_false() {
+        let (root, doc) = lay_with_doc(
+            r#"<div contenteditable="true"><p contenteditable="false" id="inner">x</p></div>"#,
+            "p:read-only { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "inner").r, 255);
+    }
+
+    // ──────────────── :disabled / :enabled ────────────────
+
+    #[test]
+    fn disabled_matches_input_with_attr() {
+        let (root, doc) = lay_with_doc(
+            r#"<input disabled>"#,
+            "input:disabled { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn enabled_matches_input_without_attr() {
+        let (root, doc) = lay_with_doc(
+            r#"<input>"#,
+            "input:enabled { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn disabled_matches_button_select_textarea() {
+        let (root, doc) = lay_with_doc(
+            r#"<button id="b" disabled>x</button>
+               <select id="s" disabled></select>
+               <textarea id="t" disabled></textarea>"#,
+            ":disabled { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "b").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "s").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "t").r, 255);
+    }
+
+    #[test]
+    fn disabled_matches_fieldset_self() {
+        let (root, doc) = lay_with_doc(
+            r#"<fieldset disabled></fieldset>"#,
+            "fieldset:disabled { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "fieldset").r, 255);
+    }
+
+    #[test]
+    fn disabled_inherited_from_fieldset_ancestor() {
+        // Inputs внутри <fieldset disabled> вне <legend> — disabled.
+        let (root, doc) = lay_with_doc(
+            r#"<fieldset disabled>
+                 <input id="i">
+                 <select id="s"></select>
+               </fieldset>"#,
+            ":disabled { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "i").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "s").r, 255);
+    }
+
+    #[test]
+    fn enabled_inside_first_legend_of_disabled_fieldset() {
+        // HTML5 §4.10.16: input внутри первого <legend> ребёнка
+        // disabled-<fieldset> сохраняет enabled-state.
+        let (root, doc) = lay_with_doc(
+            r#"<fieldset disabled>
+                 <legend><input id="legend_input"></legend>
+                 <input id="body_input">
+               </fieldset>"#,
+            ":disabled { color: red; } :enabled { color: blue; }",
+        );
+        let legend = color_by_id(&doc, &root, "legend_input");
+        assert_eq!((legend.r, legend.b), (0, 255), "input в legend остаётся :enabled");
+        let body = color_by_id(&doc, &root, "body_input");
+        assert_eq!((body.r, body.b), (255, 0), "input вне legend — :disabled");
+    }
+
+    #[test]
+    fn second_legend_in_disabled_fieldset_still_disabled() {
+        // Только ПЕРВЫЙ <legend>-ребёнок «спасает» от disabled. Второй —
+        // обычный потомок, попадает под disabled.
+        let (root, doc) = lay_with_doc(
+            r#"<fieldset disabled>
+                 <legend>first</legend>
+                 <legend><input id="second_legend_input"></legend>
+               </fieldset>"#,
+            ":disabled { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "second_legend_input").r, 255);
+    }
+
+    #[test]
+    fn disabled_option_via_optgroup_ancestor() {
+        let (root, doc) = lay_with_doc(
+            r#"<select>
+                 <optgroup disabled>
+                   <option id="o">x</option>
+                 </optgroup>
+               </select>"#,
+            "option:disabled { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "o").r, 255);
+    }
+
+    #[test]
+    fn disabled_option_via_own_attr() {
+        let (root, doc) = lay_with_doc(
+            r#"<select><option id="o" disabled>x</option></select>"#,
+            "option:disabled { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "o").r, 255);
+    }
+
+    #[test]
+    fn disabled_does_not_apply_to_div() {
+        // <div disabled> — disabled на не-form элементе игнорируется. Ни
+        // :disabled, ни :enabled не матчат.
+        let (root, doc) = lay_with_doc(
+            r#"<div disabled>x</div>"#,
+            ":disabled { color: red; } :enabled { color: blue; }",
+        );
+        let c = first_named(&doc, &root, "div");
+        assert_eq!((c.r, c.b), (0, 0));
+    }
+
     #[test]
     fn id_wins_over_class() {
         // id specificity (1,0,0) > class (0,1,0). Порядок правил в CSS — class
