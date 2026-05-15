@@ -263,25 +263,49 @@ fn walk(b: &LayoutBox, parent_sc: StackingContextId, tree: &mut StackingTree) {
     }
 }
 
-/// Painting order — линейная последовательность пар `(StackingContextId, PaintPhase)`,
-/// в которой compositor / rasterizer обходит дерево. Один сериализованный
-/// порядок paint, готовый к feed-у в display list builder.
+/// Painting order — линейная последовательность пар `(StackingContextId,
+/// PaintPhase)`, в которой compositor / rasterizer обходит дерево. Один
+/// сериализованный порядок paint, готовый к feed-у в display list builder.
 ///
-/// Sprint 0 stub: только root-контекст в порядке `PaintPhase::ORDER`.
-/// Реальная импл — P2 п.2A.
+/// Каждая запись интерпретируется как «нарисовать SC при этой фазе»:
+/// - `RootBackground` (1) — собственный фон/бордеры SC-owner-а.
+/// - `BlockBackgrounds` (3) — фоны/бордеры блочных in-flow non-positioned
+///   потомков внутри этого SC.
+/// - `Floats` (4) — float-потомки.
+/// - `InlineContent` (5) — inline-level non-positioned потомки.
+///
+/// Фазы `NegativeZ` / `PositionedAndZAuto` / `PositiveZ` (2 / 6 / 7) — это
+/// «места рекурсии в дочерние SC»; в выводе `from_tree` они **не появляются**
+/// сами по себе, но соответствующие child-SC steps вставлены между
+/// «paint-meaningful» фазами родителя в правильном порядке. То есть:
+/// `[parent.RootBackground, ...neg children fully painted..., parent.BlockBackgrounds,
+///  parent.Floats, parent.InlineContent, ...auto/0 children..., ...positive children...]`.
 #[derive(Debug, Clone, Default)]
 pub struct PaintOrder {
     pub steps: Vec<(StackingContextId, PaintPhase)>,
 }
 
 impl PaintOrder {
-    /// Sprint 0 stub: проход только по root, без потомков.
+    /// Строит painting order по CSS 2.1 Appendix E + CSS Painting Order L3 §3.
+    ///
+    /// Рекурсивный обход stacking-дерева:
+    /// - Для каждого SC сначала эмитим `RootBackground`;
+    /// - затем разворачиваем все child-SC с отрицательным z-index (`children`
+    ///   уже отсортированы stable по z в `StackingTree::build`, так что
+    ///   достаточно фильтра по знаку);
+    /// - эмитим `BlockBackgrounds` + `Floats` + `InlineContent` собственного SC;
+    /// - разворачиваем child-SC с z-index `auto` / 0;
+    /// - разворачиваем child-SC с положительным z-index.
+    ///
+    /// Layout-уровень разбиения boxes по фазам 3/4/5 (block vs float vs inline)
+    /// — отдельная забота renderer-а: ему нужно walk-нуть `LayoutBox`-tree,
+    /// отфильтровать по SC-принадлежности и `display`/`float` свойствам.
+    /// Здесь даём только SC-уровневую последовательность.
     pub fn from_tree(tree: &StackingTree) -> Self {
-        let root = tree.root().id;
-        let steps = PaintPhase::ORDER
-            .iter()
-            .map(|phase| (root, *phase))
-            .collect();
+        let mut steps = Vec::new();
+        if !tree.contexts.is_empty() {
+            paint_sc(tree, StackingContextId::ROOT, &mut steps);
+        }
         Self { steps }
     }
 
@@ -291,6 +315,52 @@ impl PaintOrder {
 
     pub fn is_empty(&self) -> bool {
         self.steps.is_empty()
+    }
+}
+
+/// Эмитит paint-фазы одного SC, рекурсивно разворачивая child-SC.
+/// Children уже отсортированы stable по z в `StackingTree::build` —
+/// мы только фильтруем по знаку z, не пере-сортируем.
+fn paint_sc(
+    tree: &StackingTree,
+    sc_id: StackingContextId,
+    out: &mut Vec<(StackingContextId, PaintPhase)>,
+) {
+    let sc = &tree.contexts[sc_id.0 as usize];
+
+    out.push((sc_id, PaintPhase::RootBackground));
+
+    // Phase 2: child-SC с z < 0 (в z-order, ties — древесный порядок).
+    for &child_id in &sc.children {
+        if tree.contexts[child_id.0 as usize]
+            .z_index
+            .is_some_and(|z| z < 0)
+        {
+            paint_sc(tree, child_id, out);
+        }
+    }
+
+    // Phases 3, 4, 5: собственные блочные / float / inline-потомки.
+    out.push((sc_id, PaintPhase::BlockBackgrounds));
+    out.push((sc_id, PaintPhase::Floats));
+    out.push((sc_id, PaintPhase::InlineContent));
+
+    // Phase 6: child-SC с z `auto` (None) или 0.
+    for &child_id in &sc.children {
+        let z = tree.contexts[child_id.0 as usize].z_index;
+        if z.is_none() || z == Some(0) {
+            paint_sc(tree, child_id, out);
+        }
+    }
+
+    // Phase 7: child-SC с z > 0.
+    for &child_id in &sc.children {
+        if tree.contexts[child_id.0 as usize]
+            .z_index
+            .is_some_and(|z| z > 0)
+        {
+            paint_sc(tree, child_id, out);
+        }
     }
 }
 
@@ -331,13 +401,195 @@ mod tests {
     }
 
     #[test]
-    fn paint_order_from_empty_tree_covers_root_phases() {
+    fn paint_order_from_root_only_emits_four_phases() {
+        // Без child-SC: только paint-meaningful фазы root-а
+        // (RootBackground / BlockBackgrounds / Floats / InlineContent).
+        // Фазы NegativeZ / PositionedAndZAuto / PositiveZ — маркеры рекурсии
+        // в child-SC; в выводе не появляются, если детей нет.
         let tree = StackingTree::empty_root();
         let order = PaintOrder::from_tree(&tree);
-        assert_eq!(order.len(), 7);
-        for (i, phase) in PaintPhase::ORDER.iter().enumerate() {
-            assert_eq!(order.steps[i], (StackingContextId::ROOT, *phase));
-        }
+        assert_eq!(
+            order.steps,
+            vec![
+                (StackingContextId::ROOT, PaintPhase::RootBackground),
+                (StackingContextId::ROOT, PaintPhase::BlockBackgrounds),
+                (StackingContextId::ROOT, PaintPhase::Floats),
+                (StackingContextId::ROOT, PaintPhase::InlineContent),
+            ]
+        );
+    }
+
+    /// Хелпер для построения тестовых деревьев без layout: вручную набираем
+    /// `StackingContext`-ы с заданными z и parent-ссылками.
+    fn build_synthetic_tree(z_per_sc: &[Option<i32>], children_per_sc: &[Vec<u32>]) -> StackingTree {
+        assert_eq!(z_per_sc.len(), children_per_sc.len());
+        let contexts = z_per_sc
+            .iter()
+            .zip(children_per_sc.iter())
+            .enumerate()
+            .map(|(i, (z, children))| StackingContext {
+                id: StackingContextId(i as u32),
+                z_index: *z,
+                children: children.iter().map(|&c| StackingContextId(c)).collect(),
+            })
+            .collect();
+        StackingTree { contexts }
+    }
+
+    #[test]
+    fn negative_z_child_painted_after_root_background() {
+        // root (z=None) → один child с z=-1
+        let tree = build_synthetic_tree(&[None, Some(-1)], &[vec![1], vec![]]);
+        let order = PaintOrder::from_tree(&tree);
+        let root = StackingContextId::ROOT;
+        let neg = StackingContextId(1);
+        // root.RB → neg.RB / neg.BB / neg.F / neg.IC → root.BB / root.F / root.IC
+        assert_eq!(
+            order.steps,
+            vec![
+                (root, PaintPhase::RootBackground),
+                (neg, PaintPhase::RootBackground),
+                (neg, PaintPhase::BlockBackgrounds),
+                (neg, PaintPhase::Floats),
+                (neg, PaintPhase::InlineContent),
+                (root, PaintPhase::BlockBackgrounds),
+                (root, PaintPhase::Floats),
+                (root, PaintPhase::InlineContent),
+            ]
+        );
+    }
+
+    #[test]
+    fn positive_z_child_painted_after_root_inline_content() {
+        // root → один child с z=1
+        let tree = build_synthetic_tree(&[None, Some(1)], &[vec![1], vec![]]);
+        let order = PaintOrder::from_tree(&tree);
+        let root = StackingContextId::ROOT;
+        let pos = StackingContextId(1);
+        assert_eq!(
+            order.steps,
+            vec![
+                (root, PaintPhase::RootBackground),
+                (root, PaintPhase::BlockBackgrounds),
+                (root, PaintPhase::Floats),
+                (root, PaintPhase::InlineContent),
+                (pos, PaintPhase::RootBackground),
+                (pos, PaintPhase::BlockBackgrounds),
+                (pos, PaintPhase::Floats),
+                (pos, PaintPhase::InlineContent),
+            ]
+        );
+    }
+
+    #[test]
+    fn auto_z_child_painted_in_phase_six() {
+        // root → один child с z=None (auto). Phase 6: auto и 0 идут вместе
+        // ПОСЛЕ inline content родителя, но ДО positive-z.
+        let tree = build_synthetic_tree(&[None, None], &[vec![1], vec![]]);
+        let order = PaintOrder::from_tree(&tree);
+        // root.RB, root.BB, root.F, root.IC, then child fully
+        assert_eq!(order.len(), 8);
+        assert_eq!(order.steps[3].1, PaintPhase::InlineContent);
+        assert_eq!(order.steps[4].0, StackingContextId(1));
+        assert_eq!(order.steps[4].1, PaintPhase::RootBackground);
+    }
+
+    #[test]
+    fn zero_z_child_painted_same_phase_as_auto() {
+        // CSS Painting Order L3 §3: `auto value is treated as 0`. Дети с
+        // z=0 и z=None оба идут в фазе 6 родителя.
+        let tree = build_synthetic_tree(&[None, Some(0)], &[vec![1], vec![]]);
+        let order = PaintOrder::from_tree(&tree);
+        assert_eq!(order.steps[4].0, StackingContextId(1));
+        assert_eq!(order.steps[4].1, PaintPhase::RootBackground);
+    }
+
+    #[test]
+    fn mixed_z_children_ordered_negative_auto_positive() {
+        // root c тремя детьми: neg(z=-1), auto(z=None), pos(z=2).
+        // children_per_sc сохраняет порядок, в котором мы их добавляем —
+        // именно так StackingTree::build делает stable sort.
+        let tree = build_synthetic_tree(
+            &[None, Some(-1), None, Some(2)],
+            &[vec![1, 2, 3], vec![], vec![], vec![]],
+        );
+        let order = PaintOrder::from_tree(&tree);
+        // root.RB → neg full → root.BB/F/IC → auto full → pos full
+        let root = StackingContextId::ROOT;
+        let neg = StackingContextId(1);
+        let auto = StackingContextId(2);
+        let pos = StackingContextId(3);
+        assert_eq!(order.steps[0], (root, PaintPhase::RootBackground));
+        // negative-z child block
+        assert_eq!(order.steps[1], (neg, PaintPhase::RootBackground));
+        assert_eq!(order.steps[2], (neg, PaintPhase::BlockBackgrounds));
+        assert_eq!(order.steps[3], (neg, PaintPhase::Floats));
+        assert_eq!(order.steps[4], (neg, PaintPhase::InlineContent));
+        // own block/float/inline
+        assert_eq!(order.steps[5], (root, PaintPhase::BlockBackgrounds));
+        assert_eq!(order.steps[6], (root, PaintPhase::Floats));
+        assert_eq!(order.steps[7], (root, PaintPhase::InlineContent));
+        // auto child block
+        assert_eq!(order.steps[8], (auto, PaintPhase::RootBackground));
+        // ...auto.BB/F/IC then pos full
+        assert_eq!(order.steps[12], (pos, PaintPhase::RootBackground));
+        assert_eq!(order.len(), 16);
+    }
+
+    #[test]
+    fn nested_child_sc_recurses_correctly() {
+        // root → child(z=1) → grandchild(z=-1).
+        // Между child.RB и child.BB должны вклиниться все 4 фазы grandchild-а.
+        let tree = build_synthetic_tree(
+            &[None, Some(1), Some(-1)],
+            &[vec![1], vec![2], vec![]],
+        );
+        let order = PaintOrder::from_tree(&tree);
+        let child = StackingContextId(1);
+        let grand = StackingContextId(2);
+        // root.RB, root.BB, root.F, root.IC, then child full (which includes grand inside)
+        assert_eq!(order.steps[4], (child, PaintPhase::RootBackground));
+        // grandchild (z=-1) приходит сразу после child.RB
+        assert_eq!(order.steps[5], (grand, PaintPhase::RootBackground));
+        assert_eq!(order.steps[8], (grand, PaintPhase::InlineContent));
+        // child's own block/float/inline после grandchild
+        assert_eq!(order.steps[9], (child, PaintPhase::BlockBackgrounds));
+        assert_eq!(order.steps[10], (child, PaintPhase::Floats));
+        assert_eq!(order.steps[11], (child, PaintPhase::InlineContent));
+    }
+
+    #[test]
+    fn empty_tree_emits_no_steps() {
+        // Деградирующий случай: contexts вообще пустой (например, layout
+        // не отработал). Ничего эмитить нельзя — нет даже root-а.
+        let tree = StackingTree { contexts: vec![] };
+        let order = PaintOrder::from_tree(&tree);
+        assert!(order.is_empty());
+    }
+
+    #[test]
+    fn real_document_with_opacity_paints_child_after_root_inline() {
+        // E2E через layout: `<div style="opacity:0.5">x</div>` — div создаёт
+        // SC (z=None → phase 6). Дочерний SC рисуется после root.IC.
+        let tree = build_tree(
+            "<div>x</div>",
+            "div { opacity: 0.5; }",
+        );
+        let order = PaintOrder::from_tree(&tree);
+        // root + 1 child SC, всего 8 steps (4 + 4).
+        assert_eq!(tree.contexts.len(), 2);
+        assert_eq!(order.len(), 8);
+        // root inline content на 4-й позиции, дочерний SC начинается с 5-й.
+        assert_eq!(
+            order.steps[3],
+            (StackingContextId::ROOT, PaintPhase::InlineContent)
+        );
+        assert_eq!(
+            order.steps[4].1,
+            PaintPhase::RootBackground,
+            "child SC начинается с RootBackground"
+        );
+        assert_eq!(order.steps[4].0, StackingContextId(1));
     }
 
     #[test]
