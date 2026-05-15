@@ -31,15 +31,17 @@ pub use stacking::{
     StackingContext, StackingContextId, StackingTree,
 };
 pub use style::{
-    parse_css_wide_keyword, AlignValue, BackgroundAttachment, BackgroundImage, BackgroundRepeat,
-    BackgroundSize, BorderStyle, BoxShadow, BoxSizing, BreakValue, ClipPath, Color, ComputedStyle,
-    Content, ContentItem, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch,
-    FontStyle, FontVariant, FontWeight, Hyphens, Isolation, ListStylePosition, ListStyleType,
+    parse_css_wide_keyword, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
+    BackgroundAttachment, BackgroundImage, BackgroundRepeat, BackgroundSize, BorderStyle,
+    BoxShadow, BoxSizing, BreakValue, ClipPath, Color, ComputedStyle, Content, ContentItem,
+    CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle, FontVariant,
+    FontWeight, Hyphens, Isolation, IterationCount, ListStylePosition, ListStyleType,
     MixBlendMode, ObjectFit, ObjectPosition, Overflow, OverflowWrap, OverscrollBehavior,
     PointerEvents, Position, PositionComponent, ScrollBehavior, ScrollSnapAlign,
     ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType,
-    ScrollbarGutter, ScrollbarWidth, TextAlign, TextDecorationLine, TextOverflow, TextShadow,
-    TextTransform, TransformFn, UserSelect, Visibility, WhiteSpace, WordBreak,
+    ScrollbarGutter, ScrollbarWidth, StepPosition, TextAlign, TextDecorationLine, TextOverflow,
+    TextShadow, TextTransform, TimingFunction, TransformFn, UserSelect, Visibility, WhiteSpace,
+    WordBreak,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -5081,6 +5083,383 @@ mod tests {
         let root = lay("<p>x</p>", "p { transition-delay: 100ms; }");
         let s = first_p_style(&root);
         assert!((s.transition_delays[0] - 0.1).abs() < 1e-5);
+    }
+
+    // ──────── CSS Easing L1 — TimingFunction parser ────────
+
+    #[test]
+    fn timing_function_linear_keyword() {
+        assert_eq!(TimingFunction::parse("linear"), Some(TimingFunction::Linear));
+    }
+
+    #[test]
+    fn timing_function_ease_keywords() {
+        assert_eq!(
+            TimingFunction::parse("ease"),
+            Some(TimingFunction::CubicBezier(0.25, 0.1, 0.25, 1.0))
+        );
+        assert_eq!(
+            TimingFunction::parse("ease-in"),
+            Some(TimingFunction::CubicBezier(0.42, 0.0, 1.0, 1.0))
+        );
+        assert_eq!(
+            TimingFunction::parse("ease-out"),
+            Some(TimingFunction::CubicBezier(0.0, 0.0, 0.58, 1.0))
+        );
+        assert_eq!(
+            TimingFunction::parse("ease-in-out"),
+            Some(TimingFunction::CubicBezier(0.42, 0.0, 0.58, 1.0))
+        );
+    }
+
+    #[test]
+    fn timing_function_cubic_bezier_explicit() {
+        assert_eq!(
+            TimingFunction::parse("cubic-bezier(0.1, 0.7, 0.9, 0.3)"),
+            Some(TimingFunction::CubicBezier(0.1, 0.7, 0.9, 0.3))
+        );
+    }
+
+    #[test]
+    fn timing_function_cubic_bezier_x_out_of_range_rejected() {
+        // x1 / x2 ∈ [0, 1] by spec; out-of-range — invalid.
+        assert_eq!(TimingFunction::parse("cubic-bezier(1.5, 0, 0.5, 1)"), None);
+        assert_eq!(TimingFunction::parse("cubic-bezier(0, 0, -0.1, 1)"), None);
+    }
+
+    #[test]
+    fn timing_function_cubic_bezier_y_unbounded() {
+        // y координаты могут быть вне [0, 1] (overshoot easings).
+        assert_eq!(
+            TimingFunction::parse("cubic-bezier(0.5, -0.5, 0.5, 1.5)"),
+            Some(TimingFunction::CubicBezier(0.5, -0.5, 0.5, 1.5))
+        );
+    }
+
+    #[test]
+    fn timing_function_step_keywords() {
+        assert_eq!(
+            TimingFunction::parse("step-start"),
+            Some(TimingFunction::Steps(1, StepPosition::JumpStart))
+        );
+        assert_eq!(
+            TimingFunction::parse("step-end"),
+            Some(TimingFunction::Steps(1, StepPosition::JumpEnd))
+        );
+    }
+
+    #[test]
+    fn timing_function_steps_with_position() {
+        assert_eq!(
+            TimingFunction::parse("steps(4, jump-start)"),
+            Some(TimingFunction::Steps(4, StepPosition::JumpStart))
+        );
+        assert_eq!(
+            TimingFunction::parse("steps(3, end)"),
+            Some(TimingFunction::Steps(3, StepPosition::JumpEnd))
+        );
+        assert_eq!(
+            TimingFunction::parse("steps(5, jump-both)"),
+            Some(TimingFunction::Steps(5, StepPosition::JumpBoth))
+        );
+    }
+
+    #[test]
+    fn timing_function_steps_default_position_is_jump_end() {
+        // steps(n) без position ≡ steps(n, jump-end).
+        assert_eq!(
+            TimingFunction::parse("steps(7)"),
+            Some(TimingFunction::Steps(7, StepPosition::JumpEnd))
+        );
+    }
+
+    #[test]
+    fn timing_function_steps_jump_none_requires_n_ge_2() {
+        // jump-none с n=1 — невалидно (никаких шагов между границами).
+        assert_eq!(TimingFunction::parse("steps(1, jump-none)"), None);
+        assert_eq!(
+            TimingFunction::parse("steps(2, jump-none)"),
+            Some(TimingFunction::Steps(2, StepPosition::JumpNone))
+        );
+    }
+
+    #[test]
+    fn timing_function_steps_zero_invalid() {
+        assert_eq!(TimingFunction::parse("steps(0)"), None);
+        assert_eq!(TimingFunction::parse("steps(0, end)"), None);
+    }
+
+    #[test]
+    fn timing_function_case_insensitive() {
+        assert_eq!(
+            TimingFunction::parse("LINEAR"),
+            Some(TimingFunction::Linear)
+        );
+        assert_eq!(
+            TimingFunction::parse("Cubic-Bezier(0.25, 0.1, 0.25, 1.0)"),
+            Some(TimingFunction::CubicBezier(0.25, 0.1, 0.25, 1.0))
+        );
+    }
+
+    #[test]
+    fn timing_function_default_is_ease() {
+        assert_eq!(
+            TimingFunction::default(),
+            TimingFunction::CubicBezier(0.25, 0.1, 0.25, 1.0)
+        );
+    }
+
+    #[test]
+    fn timing_function_list_with_nested_commas() {
+        // split_top_level_commas должен корректно сохранять argument commas
+        // внутри cubic-bezier(...) и steps(...).
+        let list = TimingFunction::parse_list(
+            "linear, cubic-bezier(0.1, 0.2, 0.3, 0.4), steps(3, end)",
+        );
+        assert_eq!(list.len(), 3);
+        assert_eq!(list[0], TimingFunction::Linear);
+        assert_eq!(list[1], TimingFunction::CubicBezier(0.1, 0.2, 0.3, 0.4));
+        assert_eq!(list[2], TimingFunction::Steps(3, StepPosition::JumpEnd));
+    }
+
+    // ──────── CSS Transitions L1 — transition-timing-function ────────
+
+    #[test]
+    fn transition_timing_function_single() {
+        let root = lay("<p>x</p>", "p { transition-timing-function: ease-in-out; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.transition_timing_functions.len(), 1);
+        assert_eq!(
+            s.transition_timing_functions[0],
+            TimingFunction::CubicBezier(0.42, 0.0, 0.58, 1.0)
+        );
+    }
+
+    #[test]
+    fn transition_timing_function_list_of_three() {
+        let root = lay(
+            "<p>x</p>",
+            "p { transition-timing-function: linear, cubic-bezier(0.5, 0, 0.5, 1), steps(4); }",
+        );
+        let s = first_p_style(&root);
+        assert_eq!(s.transition_timing_functions.len(), 3);
+        assert_eq!(s.transition_timing_functions[0], TimingFunction::Linear);
+        assert_eq!(
+            s.transition_timing_functions[2],
+            TimingFunction::Steps(4, StepPosition::JumpEnd)
+        );
+    }
+
+    #[test]
+    fn transition_timing_function_default_empty() {
+        // Без декларации — пустой Vec (consumer применяет default `ease`
+        // через cyclically-reuse правило).
+        let root = lay("<p>x</p>", "p { color: red; }");
+        assert!(first_p_style(&root).transition_timing_functions.is_empty());
+    }
+
+    // ──────── CSS Animations L1 — animation-name ────────
+
+    #[test]
+    fn animation_name_single() {
+        let root = lay("<p>x</p>", "p { animation-name: spin; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.animation_names, vec!["spin".to_string()]);
+    }
+
+    #[test]
+    fn animation_name_comma_list() {
+        let root = lay("<p>x</p>", "p { animation-name: fade, slide, bounce; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.animation_names.len(), 3);
+        assert_eq!(s.animation_names[1], "slide");
+    }
+
+    #[test]
+    fn animation_name_none_clears() {
+        let root = lay(
+            "<p>x</p>",
+            "p { animation-name: spin; animation-name: none; }",
+        );
+        assert!(first_p_style(&root).animation_names.is_empty());
+    }
+
+    #[test]
+    fn animation_name_default_empty() {
+        let root = lay("<p>x</p>", "p { color: red; }");
+        assert!(first_p_style(&root).animation_names.is_empty());
+    }
+
+    // ──────── CSS Animations L1 — animation-duration / -delay ────────
+
+    #[test]
+    fn animation_duration_seconds_and_ms() {
+        let root = lay(
+            "<p>x</p>",
+            "p { animation-duration: 1s, 200ms, 0.5s; }",
+        );
+        let durations = &first_p_style(&root).animation_durations;
+        assert_eq!(durations.len(), 3);
+        assert!((durations[0] - 1.0).abs() < 1e-5);
+        assert!((durations[1] - 0.2).abs() < 1e-5);
+        assert!((durations[2] - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn animation_delay_negative_allowed() {
+        // Отрицательный animation-delay допустим (phase offset).
+        let root = lay("<p>x</p>", "p { animation-delay: -200ms; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.animation_delays.len(), 1);
+        assert!((s.animation_delays[0] - (-0.2)).abs() < 1e-5);
+    }
+
+    // ──────── CSS Animations L1 — animation-timing-function ────────
+
+    #[test]
+    fn animation_timing_function_keyword_and_function_mixed() {
+        let root = lay(
+            "<p>x</p>",
+            "p { animation-timing-function: ease, steps(4, jump-start); }",
+        );
+        let s = first_p_style(&root);
+        assert_eq!(s.animation_timing_functions.len(), 2);
+        assert_eq!(
+            s.animation_timing_functions[0],
+            TimingFunction::CubicBezier(0.25, 0.1, 0.25, 1.0)
+        );
+        assert_eq!(
+            s.animation_timing_functions[1],
+            TimingFunction::Steps(4, StepPosition::JumpStart)
+        );
+    }
+
+    // ──────── CSS Animations L1 — animation-iteration-count ────────
+
+    #[test]
+    fn animation_iteration_count_finite() {
+        let root = lay("<p>x</p>", "p { animation-iteration-count: 3; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.animation_iteration_counts.len(), 1);
+        assert_eq!(s.animation_iteration_counts[0], IterationCount::Finite(3.0));
+    }
+
+    #[test]
+    fn animation_iteration_count_fractional() {
+        // Spec L1 §3.5 — count может быть дробным (`2.5` ≡ две полных
+        // итерации + половина третьей).
+        let root = lay("<p>x</p>", "p { animation-iteration-count: 2.5; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.animation_iteration_counts[0], IterationCount::Finite(2.5));
+    }
+
+    #[test]
+    fn animation_iteration_count_infinite_keyword() {
+        let root = lay("<p>x</p>", "p { animation-iteration-count: infinite; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.animation_iteration_counts[0], IterationCount::Infinite);
+    }
+
+    #[test]
+    fn animation_iteration_count_list() {
+        let root = lay(
+            "<p>x</p>",
+            "p { animation-iteration-count: 1, infinite, 5; }",
+        );
+        let s = first_p_style(&root);
+        assert_eq!(s.animation_iteration_counts.len(), 3);
+        assert_eq!(s.animation_iteration_counts[0], IterationCount::Finite(1.0));
+        assert_eq!(s.animation_iteration_counts[1], IterationCount::Infinite);
+        assert_eq!(s.animation_iteration_counts[2], IterationCount::Finite(5.0));
+    }
+
+    #[test]
+    fn animation_iteration_count_negative_invalid() {
+        // Отрицательный count — invalid declaration, не записывается.
+        let root = lay("<p>x</p>", "p { animation-iteration-count: -1; }");
+        let s = first_p_style(&root);
+        assert!(s.animation_iteration_counts.is_empty());
+    }
+
+    // ──────── CSS Animations L1 — animation-direction ────────
+
+    #[test]
+    fn animation_direction_all_keywords() {
+        let cases = [
+            ("normal", AnimationDirection::Normal),
+            ("reverse", AnimationDirection::Reverse),
+            ("alternate", AnimationDirection::Alternate),
+            ("alternate-reverse", AnimationDirection::AlternateReverse),
+        ];
+        for (kw, expected) in cases {
+            let css = format!("p {{ animation-direction: {kw}; }}");
+            let root = lay("<p>x</p>", &css);
+            assert_eq!(first_p_style(&root).animation_directions[0], expected);
+        }
+    }
+
+    #[test]
+    fn animation_direction_list() {
+        let root = lay(
+            "<p>x</p>",
+            "p { animation-direction: normal, alternate-reverse; }",
+        );
+        let s = first_p_style(&root);
+        assert_eq!(s.animation_directions.len(), 2);
+        assert_eq!(s.animation_directions[1], AnimationDirection::AlternateReverse);
+    }
+
+    // ──────── CSS Animations L1 — animation-fill-mode ────────
+
+    #[test]
+    fn animation_fill_mode_all_keywords() {
+        let cases = [
+            ("none", AnimationFillMode::None),
+            ("forwards", AnimationFillMode::Forwards),
+            ("backwards", AnimationFillMode::Backwards),
+            ("both", AnimationFillMode::Both),
+        ];
+        for (kw, expected) in cases {
+            let css = format!("p {{ animation-fill-mode: {kw}; }}");
+            let root = lay("<p>x</p>", &css);
+            assert_eq!(first_p_style(&root).animation_fill_modes[0], expected);
+        }
+    }
+
+    // ──────── CSS Animations L1 — animation-play-state ────────
+
+    #[test]
+    fn animation_play_state_running_paused() {
+        let root = lay("<p>x</p>", "p { animation-play-state: paused; }");
+        let s = first_p_style(&root);
+        assert_eq!(s.animation_play_states[0], AnimationPlayState::Paused);
+    }
+
+    #[test]
+    fn animation_play_state_list() {
+        let root = lay(
+            "<p>x</p>",
+            "p { animation-play-state: running, paused, running; }",
+        );
+        let s = first_p_style(&root);
+        assert_eq!(s.animation_play_states.len(), 3);
+        assert_eq!(s.animation_play_states[1], AnimationPlayState::Paused);
+    }
+
+    // ──────── CSS Animations defaults — все списки пусты по initial value ────────
+
+    #[test]
+    fn animation_longhands_default_all_empty() {
+        let root = lay("<p>x</p>", "p { color: red; }");
+        let s = first_p_style(&root);
+        assert!(s.animation_names.is_empty());
+        assert!(s.animation_durations.is_empty());
+        assert!(s.animation_delays.is_empty());
+        assert!(s.animation_iteration_counts.is_empty());
+        assert!(s.animation_timing_functions.is_empty());
+        assert!(s.animation_directions.is_empty());
+        assert!(s.animation_fill_modes.is_empty());
+        assert!(s.animation_play_states.is_empty());
     }
 
     // ──────── CSS Text typography (tab-size, caret-color, overflow-wrap, word-break, hyphens) ────────
