@@ -184,9 +184,11 @@ crates/
 
 Все живут в `lumen-core::ext`. Каждая — место, где может появиться альтернативная реализация без правки потребителей.
 
-**Уже определены:** `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `RequestFilter`, `EncodingDetector`, `EventSink`, `DnsResolver`.
+**Уже определены:** `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `RequestFilter`, `EncodingDetector`, `EventSink`, `DnsResolver`, `HstsEnforcement`, `HttpCredentialProvider`, `FontProvider`, `JsRuntime` (`NullJsRuntime` stub).
 
-**Запланированы:** `WindowingBackend` (за winit), `RenderBackend` (за wgpu), `TlsBackend` (за rustls), `JsRuntime` (за V8/QuickJS), `KnowledgeStore`, `AiBackend`. Подробно — в §12 плана.
+**Sprint 0 P3 trait-anchors (stub-реализации `Null*` — «не поддерживается», см. roadmap «Sprint 0 — Контракты»):** `UnicodeProvider` (под `icu4x`), `IdnaProvider` (под `idna`), `PublicSuffixList` (под `publicsuffix`), `ContentDecoder` (расширение под `brotli-decompressor` / `ruzstd`; есть `UnsupportedContentDecoder` stub), `FontFormat` (под `woff2`), `SpellChecker` (под `hunspell-rs`), `HyphenationProvider` (под `hyphenation`).
+
+**Запланированы:** `WindowingBackend` (за winit), `RenderBackend` (за wgpu), `TlsBackend` (за rustls), `KnowledgeStore`, `AiBackend`. Подробно — в §12 плана.
 
 ---
 
