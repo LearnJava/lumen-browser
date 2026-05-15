@@ -8,8 +8,9 @@
 
 use lumen_core::geom::Rect;
 use lumen_layout::{
-    BoxKind, Color, FontStyle, FontWeight, InlineFrag, LayoutBox, ObjectFit, ObjectPosition,
-    PositionComponent,
+    box_can_own_stacking_context, creates_stacking_context, BoxKind, Color, FontStyle, FontWeight,
+    InlineFrag, LayoutBox, ObjectFit, ObjectPosition, PaintOrder, PaintPhase, PositionComponent,
+    StackingContextId, StackingTree,
 };
 
 /// CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
@@ -404,6 +405,189 @@ pub fn build_display_list(root: &LayoutBox) -> DisplayList {
     let mut list = Vec::new();
     walk(root, &mut list);
     list
+}
+
+/// Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E).
+///
+/// Разница с [`build_display_list`]: для документа с несколькими
+/// stacking-контекстами child-SC рисуются в правильных слотах parent SC
+/// (negative-z до контента, auto/0 и positive-z после).
+///
+/// Phase 0 упрощение: фазы `BlockBackgrounds` / `Floats` / `InlineContent`
+/// лумпятся в один «контент» bucket per SC, эмитимый при фазе
+/// `InlineContent`. Точное разделение по фазам 3/4/5 (block vs float vs
+/// inline-level descendant) — отдельная задача после flex / float layout.
+///
+/// Bucket-per-SC структура:
+/// - `root_bg`: bg/border SC-owner box-а (фаза 1 «RootBackground»).
+/// - `contents`: всё остальное содержимое SC (descendants, исключая собственно
+///   SC-creating потомков — те идут в свои buckets).
+pub fn build_display_list_ordered(
+    root: &LayoutBox,
+    tree: &StackingTree,
+    order: &PaintOrder,
+) -> DisplayList {
+    let n_sc = tree.contexts.len().max(1);
+    let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
+    let mut next_sc_id: u32 = 1;
+    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true);
+
+    let mut out = Vec::new();
+    for (sc_id, phase) in &order.steps {
+        let idx = sc_id.0 as usize;
+        if idx >= buckets.len() {
+            continue;
+        }
+        let bucket = &mut buckets[idx];
+        match phase {
+            PaintPhase::RootBackground => out.append(&mut bucket.root_bg),
+            PaintPhase::InlineContent => out.append(&mut bucket.contents),
+            // Phase 0: BlockBackgrounds / Floats merged into InlineContent;
+            // marker-фазы (NegativeZ / PositionedAndZAuto / PositiveZ) в
+            // выводе `PaintOrder::from_tree` не появляются — рекурсия
+            // энкодирует их позицию через линейный порядок.
+            _ => {}
+        }
+    }
+    out
+}
+
+#[derive(Default, Clone)]
+struct ScBucket {
+    /// CSS 2.1 Appendix E phase 1 — bg/border SC-owner box-а.
+    root_bg: Vec<DisplayCommand>,
+    /// Фазы 3/4/5 — descendants SC-owner-а кроме child-SC-creating box-ов.
+    contents: Vec<DisplayCommand>,
+}
+
+/// Walk-функция, идентичная по триггерам `StackingTree::build`: pre-order,
+/// SC-id присваивается монотонно при обнаружении SC-creating потомка.
+/// Boxes без SC-trigger остаются в `current_sc`.
+fn fill_buckets(
+    b: &LayoutBox,
+    current_sc: StackingContextId,
+    next_sc_id: &mut u32,
+    buckets: &mut [ScBucket],
+    is_sc_root: bool,
+) {
+    let bucket = &mut buckets[current_sc.0 as usize];
+    let target = if is_sc_root {
+        &mut bucket.root_bg
+    } else {
+        &mut bucket.contents
+    };
+    emit_box_self(b, target);
+
+    for child in &b.children {
+        let child_creates_sc =
+            box_can_own_stacking_context(child) && creates_stacking_context(&child.style);
+        if child_creates_sc {
+            let id = StackingContextId(*next_sc_id);
+            *next_sc_id += 1;
+            fill_buckets(child, id, next_sc_id, buckets, true);
+        } else {
+            fill_buckets(child, current_sc, next_sc_id, buckets, false);
+        }
+    }
+}
+
+/// Эмитит DisplayCommand-ы для одного box-а БЕЗ рекурсии в детей. Аналог
+/// тела `walk` для одного box-а.
+fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
+    match &b.kind {
+        BoxKind::Skip => {}
+        BoxKind::Block => {
+            if let Some(bg) = b.style.background_color
+                && bg.a > 0
+            {
+                out.push(DisplayCommand::FillRect {
+                    rect: b.rect,
+                    color: bg,
+                });
+            }
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width,
+                        s.border_right_width,
+                        s.border_bottom_width,
+                        s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.unwrap_or(cur),
+                        s.border_right_color.unwrap_or(cur),
+                        s.border_bottom_color.unwrap_or(cur),
+                        s.border_left_color.unwrap_or(cur),
+                    ],
+                });
+            }
+        }
+        BoxKind::InlineRun { lines, .. } => {
+            let line_h = b.style.font_size * b.style.line_height;
+            for (line_idx, line) in lines.iter().enumerate() {
+                let line_y = b.rect.y + line_idx as f32 * line_h;
+                for frag in line {
+                    out.push(DisplayCommand::DrawText {
+                        rect: Rect::new(b.rect.x + frag.x, line_y, b.rect.width, line_h),
+                        text: frag.text.clone(),
+                        font_size: frag.style.font_size,
+                        color: frag.style.color,
+                        font_family: frag.style.font_family.clone(),
+                        font_weight: frag.style.font_weight,
+                        font_style: frag.style.font_style,
+                    });
+                    push_text_decoration(out, b.rect.x, line_y, frag);
+                }
+            }
+        }
+        BoxKind::Image { src, alt } => {
+            if let Some(bg) = b.style.background_color
+                && bg.a > 0
+            {
+                out.push(DisplayCommand::FillRect {
+                    rect: b.rect,
+                    color: bg,
+                });
+            }
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width,
+                        s.border_right_width,
+                        s.border_bottom_width,
+                        s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.unwrap_or(cur),
+                        s.border_right_color.unwrap_or(cur),
+                        s.border_bottom_color.unwrap_or(cur),
+                        s.border_left_color.unwrap_or(cur),
+                    ],
+                });
+            }
+            out.push(DisplayCommand::DrawImage {
+                rect: b.rect,
+                src: src.clone(),
+                alt: alt.clone(),
+                object_fit: b.style.object_fit,
+                object_position: b.style.object_position,
+            });
+        }
+    }
 }
 
 fn walk(b: &LayoutBox, out: &mut DisplayList) {
@@ -1376,5 +1560,113 @@ mod tests {
         assert!(lines[2].starts_with("FillRect"));
         assert_eq!(lines[3], "PopOpacity");
         assert_eq!(lines[4], "PopClip");
+    }
+
+    // ── build_display_list_ordered ─────────────────────────────────────
+
+    fn build_ordered(html: &str, css: &str) -> DisplayList {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let tree = lumen_layout::layout_measured(
+            &doc,
+            &sheet,
+            Size::new(800.0, 600.0),
+            &Fixed8,
+        );
+        let stacking_tree = lumen_layout::StackingTree::build(&tree);
+        let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
+        build_display_list_ordered(&tree, &stacking_tree, &order)
+    }
+
+    #[test]
+    fn ordered_single_sc_matches_dom_order_output() {
+        // На странице без stacking-triggers `build_display_list_ordered`
+        // и `build_display_list` должны эмитить ровно одинаковые команды
+        // (порядок DOM = paint order для одного SC).
+        let html = "<div style='background:#f00;'>hello</div>";
+        let css = "";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let tree = lumen_layout::layout_measured(
+            &doc,
+            &sheet,
+            Size::new(800.0, 600.0),
+            &Fixed8,
+        );
+        let dom = build_display_list(&tree);
+        let stacking_tree = lumen_layout::StackingTree::build(&tree);
+        let order = lumen_layout::PaintOrder::from_tree(&stacking_tree);
+        let ordered = build_display_list_ordered(&tree, &stacking_tree, &order);
+        assert_eq!(dom, ordered);
+    }
+
+    #[test]
+    fn ordered_positive_z_child_painted_after_root_content() {
+        // <div z=1 (opacity)>SC-creating</div> рядом с inline-текстом.
+        // Ordered-вывод: root.bg → root.contents (включая текст) →
+        // child-SC contents (заминусованный, чтобы создать SC).
+        //
+        // Используем opacity:0.5 как SC-trigger без z-index (auto = phase 6,
+        // эмитится ПОСЛЕ root.InlineContent).
+        let dl = build_ordered(
+            "<p>hello</p><div>world</div>",
+            "div { opacity: 0.5; }",
+        );
+        // Должны быть текстовые узлы из обеих секций. Главное —
+        // div-content (world) появляется после p-content (hello).
+        let hello_idx = dl.iter().position(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text == "hello")
+        });
+        let world_idx = dl.iter().position(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text == "world")
+        });
+        assert!(
+            hello_idx.is_some() && world_idx.is_some(),
+            "обе строки должны рендериться"
+        );
+        assert!(
+            hello_idx.unwrap() < world_idx.unwrap(),
+            "child-SC (opacity div, phase 6) рисуется ПОСЛЕ root.contents (phase 5)"
+        );
+    }
+
+    #[test]
+    fn ordered_negative_z_child_painted_before_root_content() {
+        // div с position:relative + z-index:-1 создаёт SC с negative-z.
+        // Должен рисоваться до root.InlineContent (т.е. до текста "hello").
+        let dl = build_ordered(
+            "<div>neg</div><p>hello</p>",
+            "div { position: relative; z-index: -1; background: #0f0; }",
+        );
+        // neg-content (DrawText "neg" внутри div) должен идти до root.contents
+        // ("hello" внутри p).
+        let neg_text = dl.iter().position(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text == "neg")
+        });
+        let hello_idx = dl.iter().position(|c| {
+            matches!(c, DisplayCommand::DrawText { text, .. } if text == "hello")
+        });
+        assert!(neg_text.is_some(), "должен быть DrawText neg");
+        assert!(hello_idx.is_some(), "должен быть DrawText hello");
+        assert!(
+            neg_text.unwrap() < hello_idx.unwrap(),
+            "neg-z div (phase 2) рисуется ДО root.InlineContent (phase 5)"
+        );
+    }
+
+    #[test]
+    fn ordered_empty_tree_produces_empty_list() {
+        // Деградированный случай: StackingTree без contexts, layout —
+        // пустая страница (одинокий root Block без детей и без bg/border).
+        let doc = lumen_html_parser::parse("");
+        let sheet = lumen_css_parser::parse("");
+        let tree =
+            lumen_layout::layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        let dl = build_display_list_ordered(
+            &tree,
+            &lumen_layout::StackingTree { contexts: vec![] },
+            &lumen_layout::PaintOrder::default(),
+        );
+        assert!(dl.is_empty(), "пустой PaintOrder → пустой display list");
     }
 }
