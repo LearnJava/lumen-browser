@@ -2539,6 +2539,12 @@ pub fn compute_style(
     if let Some(fw) = ua_font_weight(doc, node) {
         style.font_weight = fw;
     }
+    if let Some(td) = ua_text_decoration_line(doc, node) {
+        style.text_decoration_line = td;
+    }
+    if let Some(c) = ua_color(doc, node) {
+        style.color = c;
+    }
 
     // CSS Quirks Mode — Quirks-only UA-rule для `<table>`: сбрасывает
     // font / color / text-align / white-space к initial-values, чтобы
@@ -3879,6 +3885,43 @@ fn ua_font_weight(doc: &Document, node: NodeId) -> Option<FontWeight> {
         }
         _ => None,
     }
+}
+
+/// UA stylesheet для text-decoration-line (HTML5 §15.3.7 «Phrasing content»):
+/// - `<u>`, `<ins>`, `<a href>` — `underline`.
+/// - `<s>`, `<del>`, `<strike>` — `line-through`.
+///
+/// `<a>` без `href` (named anchor) текст-декорации не получает, как и в
+/// браузерах. `:visited` / `:hover` различия не реализованы — Phase 0.
+fn ua_text_decoration_line(doc: &Document, node: NodeId) -> Option<TextDecorationLine> {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else {
+        return None;
+    };
+    match name.local.as_str() {
+        "u" | "ins" => Some(TextDecorationLine { underline: true, ..Default::default() }),
+        "s" | "del" | "strike" => {
+            Some(TextDecorationLine { line_through: true, ..Default::default() })
+        }
+        "a" if node_ref.get_attr("href").is_some() => {
+            Some(TextDecorationLine { underline: true, ..Default::default() })
+        }
+        _ => None,
+    }
+}
+
+/// UA stylesheet для color: `<a href>` получает «link-blue» (#0000EE — стандарт
+/// HTML5 rendering §15.3.2). Без `href` — нет, цвет наследуется. `:visited`
+/// отдельным цветом (#551A8B) в Phase 0 не реализован.
+fn ua_color(doc: &Document, node: NodeId) -> Option<Color> {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else {
+        return None;
+    };
+    if name.local.as_str() == "a" && node_ref.get_attr("href").is_some() {
+        return Some(Color { r: 0x00, g: 0x00, b: 0xEE, a: 0xFF });
+    }
+    None
 }
 
 /// Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
@@ -10927,5 +10970,79 @@ mod tests {
             &[0],
         );
         assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    // ──────────────── UA stylesheet: text-decoration + link color ────────────────
+
+    #[test]
+    fn ua_u_gets_underline() {
+        let s = cascade_at("<u>x</u>", "", &[0]);
+        assert!(s.text_decoration_line.underline);
+        assert!(!s.text_decoration_line.line_through);
+    }
+
+    #[test]
+    fn ua_ins_gets_underline() {
+        let s = cascade_at("<ins>x</ins>", "", &[0]);
+        assert!(s.text_decoration_line.underline);
+    }
+
+    #[test]
+    fn ua_s_gets_line_through() {
+        let s = cascade_at("<s>x</s>", "", &[0]);
+        assert!(s.text_decoration_line.line_through);
+        assert!(!s.text_decoration_line.underline);
+    }
+
+    #[test]
+    fn ua_del_gets_line_through() {
+        let s = cascade_at("<del>x</del>", "", &[0]);
+        assert!(s.text_decoration_line.line_through);
+    }
+
+    #[test]
+    fn ua_strike_gets_line_through() {
+        let s = cascade_at("<strike>x</strike>", "", &[0]);
+        assert!(s.text_decoration_line.line_through);
+    }
+
+    #[test]
+    fn ua_a_with_href_gets_blue_underline() {
+        let s = cascade_at(r#"<a href="https://x.com">x</a>"#, "", &[0]);
+        assert!(s.text_decoration_line.underline);
+        assert_eq!(s.color, Color { r: 0x00, g: 0x00, b: 0xEE, a: 0xFF });
+    }
+
+    #[test]
+    fn ua_a_without_href_keeps_inherited_color_and_no_underline() {
+        // Named anchor (без href) UA-стилей не получает: цвет наследуется,
+        // текст без подчёркивания.
+        let s = cascade_at(r#"<a name="anchor">x</a>"#, "", &[0]);
+        assert!(!s.text_decoration_line.underline);
+        // Default inherited color = BLACK (от ComputedStyle::root()).
+        assert_eq!(s.color, Color::BLACK);
+    }
+
+    #[test]
+    fn author_css_overrides_ua_link_color() {
+        // CSS Cascade L4 §8.1: UA — самый низкий origin, любая author-декларация
+        // выигрывает.
+        let s = cascade_at(
+            r#"<a href="https://x.com">x</a>"#,
+            "a { color: red; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn inline_style_overrides_ua_link_decoration() {
+        // Inline style побеждает UA stylesheet.
+        let s = cascade_at(
+            r#"<a href="https://x.com" style="text-decoration: none;">x</a>"#,
+            "",
+            &[0],
+        );
+        assert!(!s.text_decoration_line.underline);
     }
 }
