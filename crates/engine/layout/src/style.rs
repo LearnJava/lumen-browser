@@ -2180,8 +2180,9 @@ pub fn compute_style(
     // `inherited` целиком — для CSS-wide keywords (CSS Cascade L4 §7).
     let em_basis = style.font_size;
     let parent_weight = inherited.font_weight;
+    let is_quirks = doc.mode() == DocumentMode::Quirks;
     for (_, _, _, _, decl) in &matched {
-        apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, inherited);
+        apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, inherited, is_quirks);
     }
 
     style
@@ -2861,7 +2862,7 @@ fn split_top_level_commas(s: &str) -> Vec<&str> {
 
 /// Парсит одну box-shadow спецификацию. Формат:
 /// `[inset]? <length>{2,4} <color>?` — токены произвольно перемешаны.
-fn parse_box_shadow_one(s: &str, em_basis: f32, viewport: Size) -> Option<BoxShadow> {
+fn parse_box_shadow_one(s: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> Option<BoxShadow> {
     // Сложность: цветовые функции (`rgba(...)`) содержат пробелы — наивный
     // split_whitespace их разорвёт. Восстанавливаем токены, балансируя `()`.
     let mut tokens: Vec<String> = Vec::new();
@@ -2888,7 +2889,7 @@ fn parse_box_shadow_one(s: &str, em_basis: f32, viewport: Size) -> Option<BoxSha
     for tok in tokens {
         if tok.eq_ignore_ascii_case("inset") {
             inset = true;
-        } else if let Some(c) = parse_color(&tok) {
+        } else if let Some(c) = parse_color_legacy(&tok, is_quirks) {
             color = Some(c);
         } else if let Some(len) = parse_length(&tok)
             && let Some(px) = match len {
@@ -2913,7 +2914,7 @@ fn parse_box_shadow_one(s: &str, em_basis: f32, viewport: Size) -> Option<BoxSha
 
 /// Парсит одну text-shadow спецификацию. Формат:
 /// `<length>{2,3} <color>?` (без inset, без spread).
-fn parse_text_shadow_one(s: &str, em_basis: f32, viewport: Size) -> Option<TextShadow> {
+fn parse_text_shadow_one(s: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> Option<TextShadow> {
     // Тот же tokenization-трюк, что у box-shadow — балансируем `()`,
     // чтобы цветовые функции не разрывались.
     let mut tokens: Vec<String> = Vec::new();
@@ -2937,7 +2938,7 @@ fn parse_text_shadow_one(s: &str, em_basis: f32, viewport: Size) -> Option<TextS
     let mut lengths: Vec<f32> = Vec::new();
 
     for tok in tokens {
-        if let Some(c) = parse_color(&tok) {
+        if let Some(c) = parse_color_legacy(&tok, is_quirks) {
             color = Some(c);
         } else if let Some(len) = parse_length(&tok)
             && let Some(px) = match len {
@@ -4204,6 +4205,7 @@ fn apply_declaration(
     viewport: Size,
     parent_font_weight: FontWeight,
     inherited: &ComputedStyle,
+    is_quirks: bool,
 ) {
     let prop = decl.property.as_str();
 
@@ -4291,12 +4293,12 @@ fn apply_declaration(
             }
         }
         "color" => {
-            if let Some(c) = parse_color(val) {
+            if let Some(c) = parse_color_legacy(val, is_quirks) {
                 style.color = c;
             }
         }
         "background-color" | "background" => {
-            if let Some(c) = parse_color(val) {
+            if let Some(c) = parse_color_legacy(val, is_quirks) {
                 style.background_color = Some(c);
             }
         }
@@ -4306,7 +4308,7 @@ fn apply_declaration(
             let trimmed = val.trim();
             if trimmed.eq_ignore_ascii_case("auto") {
                 style.accent_color = None;
-            } else if let Some(c) = parse_color(trimmed) {
+            } else if let Some(c) = parse_color_legacy(trimmed, is_quirks) {
                 style.accent_color = Some(c);
             }
         }
@@ -4541,7 +4543,7 @@ fn apply_declaration(
             } else {
                 let mut shadows = Vec::new();
                 for piece in split_top_level_commas(val) {
-                    if let Some(s) = parse_box_shadow_one(piece.trim(), em_basis, viewport) {
+                    if let Some(s) = parse_box_shadow_one(piece.trim(), em_basis, viewport, is_quirks) {
                         shadows.push(s);
                     }
                 }
@@ -4559,7 +4561,7 @@ fn apply_declaration(
             } else {
                 let mut shadows = Vec::new();
                 for piece in split_top_level_commas(val) {
-                    if let Some(s) = parse_text_shadow_one(piece.trim(), em_basis, viewport) {
+                    if let Some(s) = parse_text_shadow_one(piece.trim(), em_basis, viewport, is_quirks) {
                         shadows.push(s);
                     }
                 }
@@ -4579,7 +4581,7 @@ fn apply_declaration(
                     style.outline_width = v;
                 } else if is_border_style_kw(tok) {
                     style.outline_style = parse_border_style_kw(tok);
-                } else if let Some(c) = parse_color(tok) {
+                } else if let Some(c) = parse_color_legacy(tok, is_quirks) {
                     style.outline_color = Some(c);
                 }
             }
@@ -4593,7 +4595,7 @@ fn apply_declaration(
             style.outline_style = parse_border_style_kw(val);
         }
         "outline-color" => {
-            if let Some(c) = parse_color(val) {
+            if let Some(c) = parse_color_legacy(val, is_quirks) {
                 style.outline_color = Some(c);
             }
         }
@@ -4739,7 +4741,7 @@ fn apply_declaration(
             style.column_rule_style = parse_border_style_opt(val.trim()).unwrap_or(BorderStyle::None);
         }
         "column-rule-color" => {
-            style.column_rule_color = parse_color(val.trim());
+            style.column_rule_color = parse_color_legacy(val.trim(), is_quirks);
         }
         "column-rule" => {
             // Shorthand: <width> || <style> || <color>. Любой порядок.
@@ -4759,7 +4761,7 @@ fn apply_declaration(
                     rest = rest.replacen(tok, "", 1);
                     continue;
                 }
-                if let Some(c) = parse_color(tok) {
+                if let Some(c) = parse_color_legacy(tok, is_quirks) {
                     style.column_rule_color = Some(c);
                     rest = rest.replacen(tok, "", 1);
                 }
@@ -4769,7 +4771,7 @@ fn apply_declaration(
             let rest = rest.trim();
             if !rest.is_empty()
                 && style.column_rule_color.is_none()
-                && let Some(c) = parse_color(rest)
+                && let Some(c) = parse_color_legacy(rest, is_quirks)
             {
                 style.column_rule_color = Some(c);
             }
@@ -5082,7 +5084,7 @@ fn apply_declaration(
             let trimmed = val.trim();
             if trimmed.eq_ignore_ascii_case("auto") {
                 style.caret_color = None;
-            } else if let Some(c) = parse_color(trimmed) {
+            } else if let Some(c) = parse_color_legacy(trimmed, is_quirks) {
                 style.caret_color = Some(c);
             }
         }
@@ -5260,7 +5262,7 @@ fn apply_declaration(
                 pieces.retain(|p| !p.is_empty());
                 if pieces.len() == 2
                     && let (Some(thumb), Some(track)) =
-                        (parse_color(&pieces[0]), parse_color(&pieces[1]))
+                        (parse_color_legacy(&pieces[0], is_quirks), parse_color_legacy(&pieces[1], is_quirks))
                 {
                     style.scrollbar_color = Some((thumb, track));
                 }
@@ -5370,7 +5372,7 @@ fn apply_declaration(
             // Decoration L3 §2.1). Парсер собирает линии-keyword-ы и пытается
             // отдельно интерпретировать остатки как цвет (rgb/hsl/oklch/hex
             // /name). style (solid/wavy/…) и `blink` пока тихо игнорируем.
-            let (line, color) = parse_text_decoration_shorthand(val);
+            let (line, color) = parse_text_decoration_shorthand_q(val, is_quirks);
             if let Some(d) = line {
                 style.text_decoration_line = d;
             }
@@ -5379,7 +5381,7 @@ fn apply_declaration(
             }
         }
         "text-decoration-line" => {
-            let (line, _color) = parse_text_decoration_shorthand(val);
+            let (line, _color) = parse_text_decoration_shorthand_q(val, is_quirks);
             if let Some(d) = line {
                 style.text_decoration_line = d;
             }
@@ -5390,24 +5392,24 @@ fn apply_declaration(
             // но `currentColor` имеет ту же семантику.
             if val.eq_ignore_ascii_case("currentcolor") {
                 style.text_decoration_color = None;
-            } else if let Some(c) = parse_color(val) {
+            } else if let Some(c) = parse_color_legacy(val, is_quirks) {
                 style.text_decoration_color = Some(c);
             }
         }
         // ── Borders ───────────────────────────────────────────────────────────
-        "border" => apply_border_shorthand(style, val, em_basis, viewport),
+        "border" => apply_border_shorthand(style, val, em_basis, viewport, is_quirks),
         "border-top" => apply_border_side_shorthand(
             &mut style.border_top_width, &mut style.border_top_style,
-            &mut style.border_top_color, val, em_basis, viewport),
+            &mut style.border_top_color, val, em_basis, viewport, is_quirks),
         "border-right" => apply_border_side_shorthand(
             &mut style.border_right_width, &mut style.border_right_style,
-            &mut style.border_right_color, val, em_basis, viewport),
+            &mut style.border_right_color, val, em_basis, viewport, is_quirks),
         "border-bottom" => apply_border_side_shorthand(
             &mut style.border_bottom_width, &mut style.border_bottom_style,
-            &mut style.border_bottom_color, val, em_basis, viewport),
+            &mut style.border_bottom_color, val, em_basis, viewport, is_quirks),
         "border-left" => apply_border_side_shorthand(
             &mut style.border_left_width, &mut style.border_left_style,
-            &mut style.border_left_color, val, em_basis, viewport),
+            &mut style.border_left_color, val, em_basis, viewport, is_quirks),
         "border-width" => {
             let sides = expand_border_4(val);
             if let Some(v) = resolve_box_length(sides[0], em_basis, viewport) { style.border_top_width = v; }
@@ -5424,10 +5426,10 @@ fn apply_declaration(
         }
         "border-color" => {
             let sides = expand_border_4(val);
-            if let Some(c) = parse_color(sides[0]) { style.border_top_color = Some(c); }
-            if let Some(c) = parse_color(sides[1]) { style.border_right_color = Some(c); }
-            if let Some(c) = parse_color(sides[2]) { style.border_bottom_color = Some(c); }
-            if let Some(c) = parse_color(sides[3]) { style.border_left_color = Some(c); }
+            if let Some(c) = parse_color_legacy(sides[0], is_quirks) { style.border_top_color = Some(c); }
+            if let Some(c) = parse_color_legacy(sides[1], is_quirks) { style.border_right_color = Some(c); }
+            if let Some(c) = parse_color_legacy(sides[2], is_quirks) { style.border_bottom_color = Some(c); }
+            if let Some(c) = parse_color_legacy(sides[3], is_quirks) { style.border_left_color = Some(c); }
         }
         "border-radius" => {
             // CSS Backgrounds L3 §5.5 shorthand. Поддерживаем только
@@ -5478,10 +5480,10 @@ fn apply_declaration(
         "border-right-style" => style.border_right_style = parse_border_style_kw(val),
         "border-bottom-style" => style.border_bottom_style = parse_border_style_kw(val),
         "border-left-style" => style.border_left_style = parse_border_style_kw(val),
-        "border-top-color" => { if let Some(c) = parse_color(val) { style.border_top_color = Some(c); } }
-        "border-right-color" => { if let Some(c) = parse_color(val) { style.border_right_color = Some(c); } }
-        "border-bottom-color" => { if let Some(c) = parse_color(val) { style.border_bottom_color = Some(c); } }
-        "border-left-color" => { if let Some(c) = parse_color(val) { style.border_left_color = Some(c); } }
+        "border-top-color" => { if let Some(c) = parse_color_legacy(val, is_quirks) { style.border_top_color = Some(c); } }
+        "border-right-color" => { if let Some(c) = parse_color_legacy(val, is_quirks) { style.border_right_color = Some(c); } }
+        "border-bottom-color" => { if let Some(c) = parse_color_legacy(val, is_quirks) { style.border_bottom_color = Some(c); } }
+        "border-left-color" => { if let Some(c) = parse_color_legacy(val, is_quirks) { style.border_left_color = Some(c); } }
         "box-sizing" => {
             style.box_sizing = match val.trim().to_ascii_lowercase().as_str() {
                 "border-box" => BoxSizing::BorderBox,
@@ -5507,7 +5509,14 @@ fn apply_declaration(
 ///
 /// `currentcolor` keyword в shorthand сбрасывает text-decoration-color в
 /// None (= fallback на currentColor при рендеринге).
+/// Wrapper для тестов и потребителей вне quirks-aware каскада.
+/// Эквивалент `parse_text_decoration_shorthand_q(val, false)`.
+#[cfg(test)]
 fn parse_text_decoration_shorthand(val: &str) -> (Option<TextDecorationLine>, Option<Color>) {
+    parse_text_decoration_shorthand_q(val, false)
+}
+
+fn parse_text_decoration_shorthand_q(val: &str, is_quirks: bool) -> (Option<TextDecorationLine>, Option<Color>) {
     let mut out = TextDecorationLine::default();
     let mut any_line = false;
     let mut none_seen = false;
@@ -5549,13 +5558,13 @@ fn parse_text_decoration_shorthand(val: &str) -> (Option<TextDecorationLine>, Op
         // Попробуем сначала весь residue (на случай color-функции с
         // пробелами: `rgb(0 0 0)` → токены `rgb(0`, `0`, `0)`).
         let joined = residue.join(" ");
-        if let Some(c) = parse_color(joined.trim()) {
+        if let Some(c) = parse_color_legacy(joined.trim(), is_quirks) {
             color = Some(c);
         } else {
             // Иначе пробуем токен за токеном — для named-color / hex без
             // пробелов внутри.
             for tok in &residue {
-                if let Some(c) = parse_color(tok) {
+                if let Some(c) = parse_color_legacy(tok, is_quirks) {
                     color = Some(c);
                     break;
                 }
@@ -6679,7 +6688,7 @@ fn parse_break_value(s: &str) -> Option<BreakValue> {
 
 /// Разбирает `border: <width> <style> <color>` (порядок произвольный, каждая
 /// часть опциональна). Применяет найденные значения ко всем четырём сторонам.
-fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32, viewport: Size) {
+fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32, viewport: Size, is_quirks: bool) {
     let tokens: Vec<&str> = val.split_whitespace().collect();
     for tok in &tokens {
         if let Some(v) = resolve_box_length(tok, em_basis, viewport) {
@@ -6693,7 +6702,7 @@ fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32, v
             style.border_right_style = bs;
             style.border_bottom_style = bs;
             style.border_left_style = bs;
-        } else if let Some(c) = parse_color(tok) {
+        } else if let Some(c) = parse_color_legacy(tok, is_quirks) {
             style.border_top_color = Some(c);
             style.border_right_color = Some(c);
             style.border_bottom_color = Some(c);
@@ -6710,13 +6719,14 @@ fn apply_border_side_shorthand(
     val: &str,
     em_basis: f32,
     viewport: Size,
+    is_quirks: bool,
 ) {
     for tok in val.split_whitespace() {
         if let Some(v) = resolve_box_length(tok, em_basis, viewport) {
             *width = v;
         } else if is_border_style_kw(tok) {
             *bstyle = parse_border_style_kw(tok);
-        } else if let Some(c) = parse_color(tok) {
+        } else if let Some(c) = parse_color_legacy(tok, is_quirks) {
             *color = Some(c);
         }
     }
@@ -6752,6 +6762,42 @@ fn parse_color(s: &str) -> Option<Color> {
         return Some(c);
     }
     parse_function_color(s)
+}
+
+/// CSS Quirks Mode §3.4 «hashless hex color quirk».
+///
+/// В quirks-mode значение `<color>`, не парсящееся стандартным `parse_color`,
+/// но состоящее ровно из 3, 6 или 8 ASCII hex-digits без ведущего `#`,
+/// трактуется так, будто `#` присутствовал. То есть в `<body
+/// style="color: ff0000">` цвет — красный, при условии что
+/// `Document.mode() == Quirks`.
+///
+/// Длины 3/6/8 покрывают `#rgb` / `#rrggbb` / `#rrggbbaa`. Spec упоминает
+/// также длины 7/9, но они появляются только из патологического
+/// padding-парсинга «legacy color value» (HTML5 §2.4.6) и в реальных
+/// браузерах не используются для CSS quirks.
+///
+/// В Standards / LimitedQuirks функция полностью эквивалентна `parse_color`.
+fn parse_color_legacy(s: &str, is_quirks: bool) -> Option<Color> {
+    if let Some(c) = parse_color(s) {
+        return Some(c);
+    }
+    if !is_quirks {
+        return None;
+    }
+    let trimmed = s.trim();
+    if trimmed.starts_with('#') {
+        return None;
+    }
+    let len = trimmed.len();
+    if !matches!(len, 3 | 6 | 8) {
+        return None;
+    }
+    if !trimmed.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return None;
+    }
+    let with_hash = format!("#{trimmed}");
+    parse_color(&with_hash)
 }
 
 /// CSS Color Module Level 3 §4.3 — X11 / SVG named colors. Принимает имя
@@ -7681,6 +7727,96 @@ mod tests {
         assert_eq!(parse_color("red"), Some(rgba(255, 0, 0, 255)));
         assert_eq!(parse_color("#ff0000"), Some(rgba(255, 0, 0, 255)));
         assert_eq!(parse_color("#f00"), Some(rgba(255, 0, 0, 255)));
+    }
+
+    // ── CSS Quirks Mode §3.4 — «hashless hex color quirk» ──────────────────
+
+    #[test]
+    fn quirks_hashless_hex_6_digit() {
+        // В quirks-mode bare 6-hex парсится как color.
+        assert_eq!(parse_color_legacy("ff0000", true), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_color_legacy("00ff00", true), Some(rgba(0, 255, 0, 255)));
+        assert_eq!(parse_color_legacy("0000ff", true), Some(rgba(0, 0, 255, 255)));
+    }
+
+    #[test]
+    fn quirks_hashless_hex_3_digit() {
+        // `f00` → `#f00` → red.
+        assert_eq!(parse_color_legacy("f00", true), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_color_legacy("0f0", true), Some(rgba(0, 255, 0, 255)));
+        assert_eq!(parse_color_legacy("00f", true), Some(rgba(0, 0, 255, 255)));
+    }
+
+    #[test]
+    fn quirks_hashless_hex_8_digit_with_alpha() {
+        // `ff000080` → `#ff000080` → red, alpha 128.
+        let c = parse_color_legacy("ff000080", true).unwrap();
+        assert_eq!(c.r, 255);
+        assert_eq!(c.g, 0);
+        assert_eq!(c.b, 0);
+        assert_eq!(c.a, 128);
+    }
+
+    #[test]
+    fn quirks_hashless_hex_case_insensitive() {
+        // Hex digits ASCII case-insensitive.
+        assert_eq!(parse_color_legacy("FF0000", true), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_color_legacy("Ff00aA", true), Some(rgba(255, 0, 170, 255)));
+    }
+
+    #[test]
+    fn standards_hashless_hex_rejected() {
+        // В Standards-mode bare hex без `#` — не color.
+        assert_eq!(parse_color_legacy("ff0000", false), None);
+        assert_eq!(parse_color_legacy("f00", false), None);
+        assert_eq!(parse_color_legacy("ff000080", false), None);
+    }
+
+    #[test]
+    fn quirks_hashless_hex_invalid_length() {
+        // Длины не 3/6/8 — игнорируются даже в quirks.
+        assert_eq!(parse_color_legacy("f", true), None);
+        assert_eq!(parse_color_legacy("ff", true), None);
+        assert_eq!(parse_color_legacy("ffff", true), None);
+        assert_eq!(parse_color_legacy("fffff", true), None);
+        assert_eq!(parse_color_legacy("fffffff", true), None);
+        assert_eq!(parse_color_legacy("fffffffff", true), None);
+    }
+
+    #[test]
+    fn quirks_hashless_hex_rejects_non_hex_chars() {
+        // `xyz`, `g`, `0xff` — не hex.
+        assert_eq!(parse_color_legacy("xyz", true), None);
+        assert_eq!(parse_color_legacy("ggg", true), None);
+        assert_eq!(parse_color_legacy("ff_000", true), None);
+    }
+
+    #[test]
+    fn quirks_hashless_does_not_override_standard() {
+        // Имя color побеждает hashless-quirk: `red` — это named color, не hex.
+        assert_eq!(parse_color_legacy("red", true), Some(rgba(255, 0, 0, 255)));
+        // `#ff0000` — обычный hex, парсится без quirk.
+        assert_eq!(parse_color_legacy("#ff0000", true), Some(rgba(255, 0, 0, 255)));
+        // `rgb(...)` — функциональный, тоже без quirk.
+        assert_eq!(parse_color_legacy("rgb(255, 0, 0)", true), Some(rgba(255, 0, 0, 255)));
+    }
+
+    #[test]
+    fn quirks_named_collision_three_letter_hex() {
+        // CSS Color L3: `fff` в quirks парсится как `#fff` (white), хотя
+        // `fff` не named color. `dad` — тоже не named, парсится как hex.
+        assert_eq!(parse_color_legacy("fff", true), Some(rgba(255, 255, 255, 255)));
+        assert_eq!(parse_color_legacy("dad", true), Some(rgba(0xdd, 0xaa, 0xdd, 255)));
+    }
+
+    #[test]
+    fn quirks_already_hash_prefixed_not_double_processed() {
+        // Уже с `#` — обычная ветка, quirks не вмешивается.
+        assert_eq!(parse_color_legacy("#ff0000", true), Some(rgba(255, 0, 0, 255)));
+        // Невалидный `#` + 4 hex digit-ов в L3 — `parse_hex_color` отдаёт #RGBA.
+        // Quirks НЕ должна попытаться повторно добавить `#`.
+        // (4-digit с `#` валиден; без `#` — длина 4 не в списке 3/6/8 → None.)
+        assert_eq!(parse_color_legacy("ffff", true), None);
     }
 
     #[test]
