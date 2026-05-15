@@ -21,7 +21,7 @@ use lumen_css_parser::{
     AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, Declaration, MediaContext,
     PropertyRule, PseudoClass, SimpleSelector, Specificity, Stylesheet,
 };
-use lumen_dom::{Attribute, Document, NodeData, NodeId};
+use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId};
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Display {
@@ -1877,6 +1877,13 @@ pub fn compute_style(
         style.font_weight = fw;
     }
 
+    // CSS Quirks Mode — Quirks-only UA-rule для `<table>`: сбрасывает
+    // font / color / text-align / white-space к initial-values, чтобы
+    // legacy table-layout страницы (где CSS на `<body>` задавал шрифт /
+    // цвет) рендерились с дефолтным шрифтом таблицы, как в IE/Netscape.
+    // В Standards / LimitedQuirks не применяется.
+    apply_quirks_table_reset(doc, node, &mut style);
+
     // HTML presentational hints (HTML5 §10): для `<img>` атрибуты
     // `width`/`height` задают начальные значения соответствующих CSS-свойств.
     // Применяются ДО CSS-каскада, поэтому любое author-CSS правило
@@ -2874,6 +2881,52 @@ fn parse_html_dimension(s: &str) -> Option<f32> {
         return None;
     }
     digits.parse::<u32>().ok().map(|n| n as f32)
+}
+
+/// CSS Quirks Mode — UA-rule только для Quirks-mode: элемент `<table>`
+/// сбрасывает font / color / text-align / white-space-related свойства
+/// к initial-values, не наследует от родителя. Эквивалент UA-stylesheet
+/// правила (как в Chromium / Firefox / WebKit):
+///
+/// ```css
+/// table {
+///     font-size: medium;
+///     font-weight: normal;
+///     font-style: normal;
+///     font-variant: normal;
+///     line-height: normal;
+///     color: -webkit-text;
+///     text-align: -webkit-auto;
+///     white-space: normal;
+///     font-family: -webkit-default;
+/// }
+/// ```
+///
+/// Эффект: classics 90-х/2000-х с `<body style="font: 20px serif; color:
+/// blue">` + table-layout не «протекают» в таблицу — таблица отрисовывается
+/// дефолтным шрифтом / цветом. В Standards / LimitedQuirks таблица
+/// наследует обычно. Author CSS поверх Quirks-reset выигрывает: spec
+/// §UA-stylesheet — это самый низкий cascade origin.
+fn apply_quirks_table_reset(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    if doc.mode() != DocumentMode::Quirks {
+        return;
+    }
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if name.local.as_str() != "table" {
+        return;
+    }
+    style.font_size = ROOT_FONT_SIZE;
+    style.line_height = 1.2;
+    style.font_family = Vec::new();
+    style.font_style = FontStyle::Normal;
+    style.font_variant = FontVariant::Normal;
+    style.font_weight = FontWeight::NORMAL;
+    style.font_stretch = FontStretch::NORMAL;
+    style.color = Color::BLACK;
+    style.text_align = TextAlign::Left;
+    style.white_space = WhiteSpace::Normal;
 }
 
 /// UA stylesheet для font-weight: `<b>`, `<strong>`, `<th>`, `<h1>`–`<h6>`

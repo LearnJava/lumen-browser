@@ -5544,4 +5544,205 @@ mod tests {
         let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
         assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
     }
+
+    // ── CSS Quirks Mode — UA-rule для <table> ──────────────────────────────
+
+    /// В Quirks-mode (нет DOCTYPE) `<table>` сбрасывает font-size к
+    /// initial-значению, не наследует от родителя.
+    #[test]
+    fn quirks_table_font_size_resets_to_initial() {
+        let root = lay(
+            "<body><table><tr><td>x</td></tr></table></body>",
+            "body { font-size: 30px; }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        assert!(
+            (body.style.font_size - 30.0).abs() < 0.01,
+            "body должен наследовать заявленные 30px"
+        );
+        assert!(
+            (table.style.font_size - 16.0).abs() < 0.01,
+            "table в Quirks должен сбросить font-size к initial 16, получено {}",
+            table.style.font_size
+        );
+    }
+
+    /// В Standards mode (`<!DOCTYPE html>`) `<table>` наследует font-size
+    /// от родителя как обычный элемент.
+    #[test]
+    fn standards_table_font_size_inherits() {
+        let root = lay(
+            "<!DOCTYPE html><body><table><tr><td>x</td></tr></table></body>",
+            "body { font-size: 30px; }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        assert!(
+            (table.style.font_size - 30.0).abs() < 0.01,
+            "table в Standards должен наследовать 30px, получено {}",
+            table.style.font_size
+        );
+    }
+
+    /// В Quirks color у `<table>` сбрасывается к BLACK, не наследуется.
+    #[test]
+    fn quirks_table_color_resets_to_black() {
+        let root = lay(
+            "<body><table><tr><td>x</td></tr></table></body>",
+            "body { color: red; }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        assert_eq!(body.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(table.style.color, Color::BLACK);
+    }
+
+    /// В Standards color наследуется.
+    #[test]
+    fn standards_table_color_inherits() {
+        let root = lay(
+            "<!DOCTYPE html><body><table><tr><td>x</td></tr></table></body>",
+            "body { color: red; }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        assert_eq!(table.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    /// В Quirks font-weight у `<table>` сбрасывается к NORMAL.
+    #[test]
+    fn quirks_table_font_weight_resets_to_normal() {
+        let root = lay(
+            "<body><table><tr><td>x</td></tr></table></body>",
+            "body { font-weight: bold; }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        assert_eq!(body.style.font_weight, FontWeight::BOLD);
+        assert_eq!(table.style.font_weight, FontWeight::NORMAL);
+    }
+
+    /// В Quirks font-style у `<table>` сбрасывается к Normal.
+    #[test]
+    fn quirks_table_font_style_resets_to_normal() {
+        let root = lay(
+            "<body><table><tr><td>x</td></tr></table></body>",
+            "body { font-style: italic; }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        assert_eq!(body.style.font_style, FontStyle::Italic);
+        assert_eq!(table.style.font_style, FontStyle::Normal);
+    }
+
+    /// В Quirks text-align у `<table>` сбрасывается к Left.
+    #[test]
+    fn quirks_table_text_align_resets_to_left() {
+        let root = lay(
+            "<body><table><tr><td>x</td></tr></table></body>",
+            "body { text-align: center; }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        assert_eq!(body.style.text_align, TextAlign::Center);
+        assert_eq!(table.style.text_align, TextAlign::Left);
+    }
+
+    /// В Quirks white-space у `<table>` сбрасывается к Normal.
+    #[test]
+    fn quirks_table_white_space_resets_to_normal() {
+        let root = lay(
+            "<body><table><tr><td>x</td></tr></table></body>",
+            "body { white-space: nowrap; }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        assert_eq!(body.style.white_space, WhiteSpace::Nowrap);
+        assert_eq!(table.style.white_space, WhiteSpace::Normal);
+    }
+
+    /// Author CSS поверх Quirks-reset выигрывает: spec-rule идёт как
+    /// низший cascade origin (UA).
+    #[test]
+    fn quirks_table_author_css_wins_over_reset() {
+        let root = lay(
+            "<body><table><tr><td>x</td></tr></table></body>",
+            "body { font-size: 30px; } table { font-size: 24px; color: blue; }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        assert!(
+            (table.style.font_size - 24.0).abs() < 0.01,
+            "author CSS должен переопределить Quirks-reset"
+        );
+        assert_eq!(table.style.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    /// Дочерние элементы `<table>` в Quirks наследуют от сброшенных
+    /// значений таблицы, не от прародителя.
+    #[test]
+    fn quirks_table_children_inherit_reset_values() {
+        // <body>=30px → <table>=16 (reset) → <td>=16 (inherits from table).
+        let root = lay(
+            "<body><table><tr><td>x</td></tr></table></body>",
+            "body { font-size: 30px; }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        // <tbody> wrap: html-parser сам не добавляет implicit `<tbody>`,
+        // поэтому <tr> может быть прямым ребёнком <table>. <td> внутри.
+        // Идём вглубь, пока не найдём td.
+        fn find_td(b: &LayoutBox) -> Option<&LayoutBox> {
+            for c in &b.children {
+                if matches!(&c.kind, BoxKind::Block) {
+                    if let Some(td) = find_td(c) {
+                        return Some(td);
+                    }
+                    return Some(c);
+                }
+            }
+            None
+        }
+        let td = find_td(table).expect("td не найден");
+        assert!(
+            (td.style.font_size - 16.0).abs() < 0.01,
+            "td должен унаследовать от table сброшенные 16px, получено {}",
+            td.style.font_size
+        );
+    }
+
+    /// Не-`<table>` элементы в Quirks-mode не сбрасывают inherited.
+    #[test]
+    fn quirks_non_table_inherits_normally() {
+        let root = lay(
+            "<body><p>x</p></body>",
+            "body { font-size: 30px; color: red; }",
+        );
+        let body = first_element_child(&root);
+        let p = first_element_child(body);
+        assert!(
+            (p.style.font_size - 30.0).abs() < 0.01,
+            "<p> в Quirks-mode должен наследовать font-size, получено {}",
+            p.style.font_size
+        );
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    /// LimitedQuirks (HTML 4.01 Transitional) — table-reset не применяется
+    /// (spec §4.1: только в Quirks-mode).
+    #[test]
+    fn limited_quirks_does_not_apply_table_reset() {
+        let root = lay(
+            "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\" \"http://www.w3.org/TR/html4/loose.dtd\"><body><table><tr><td>x</td></tr></table></body>",
+            "body { font-size: 30px; color: red; }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        assert!(
+            (table.style.font_size - 30.0).abs() < 0.01,
+            "table в LimitedQuirks должен наследовать font-size как в Standards"
+        );
+        assert_eq!(table.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
 }
