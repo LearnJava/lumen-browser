@@ -12,12 +12,21 @@
 //! Не поддерживается (Phase 2+): flex, grid, float, absolute positioning,
 //! font-weight/style на уровне inline.
 
+pub mod animation;
 pub mod box_tree;
+pub mod property_trees;
 pub mod snapshot;
+pub mod stacking;
 pub mod style;
 
+pub use animation::{AnimValue, AnimationInterpolator, NoopInterpolator};
 pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
+pub use property_trees::{
+    ClipNode, ClipTree, EffectNode, EffectTree, Mat4, PropertyTreeNodeId, PropertyTrees,
+    ScrollNode, ScrollTree, TransformNode, TransformTree,
+};
 pub use snapshot::serialize_layout_tree;
+pub use stacking::{PaintOrder, PaintPhase, StackingContext, StackingContextId, StackingTree};
 pub use style::{
     parse_css_wide_keyword, AlignValue, BackgroundAttachment, BackgroundImage, BackgroundRepeat,
     BackgroundSize, BorderStyle, BoxShadow, BoxSizing, BreakValue, ClipPath, Color, ComputedStyle,
