@@ -11,6 +11,7 @@
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
 - 🔄 Compositor scaffolding (P2 1B) [P2] — compositor-scaffolding — 2026-05-15
+- 🔄 Network security base — Origin + mixed-content + sandbox flags (P3 2A partial) [P3] — network-security-base — 2026-05-15
 
 ## Статус реализации
 
