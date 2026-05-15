@@ -17,3 +17,7 @@ Thumbs.db
 /*.zip
 /*.tar
 /*.tar.gz
+
+# Локальные утилиты — бинарники >100MB не принимает GitHub.
+# Скачать: https://www.gyan.dev/ffmpeg/builds/ (full build, 2022-09-15)
+/utils/ffmpeg.exe
