@@ -168,7 +168,7 @@ fn chars_eq_ci(a: char, b: char) -> bool {
         return true;
     }
     if a.is_ascii() && b.is_ascii() {
-        return a.to_ascii_lowercase() == b.to_ascii_lowercase();
+        return a.eq_ignore_ascii_case(&b);
     }
     let la = a.to_lowercase().next().unwrap_or(a);
     let lb = b.to_lowercase().next().unwrap_or(b);
