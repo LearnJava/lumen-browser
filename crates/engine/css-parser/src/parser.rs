@@ -115,6 +115,35 @@ pub enum PseudoClass {
     /// «не ввёл значение» сводится к «нет `value`-атрибута либо он пустой»
     /// — matcher делает соответствующую проверку на DOM.
     PlaceholderShown,
+    /// `:required` (CSS Selectors L4 §15.4, HTML5 §4.10.3) — form control с
+    /// атрибутом `required`. Применимо к `<input>`, `<textarea>`, `<select>`;
+    /// для `<input>` исключаются типы, где required не имеет смысла (`hidden`,
+    /// `range`, `color`, `submit`, `image`, `reset`, `button`).
+    Required,
+    /// `:optional` (CSS Selectors L4 §15.4, HTML5 §4.10.3) — form control,
+    /// который может быть `required`, но без атрибута `required`. Дополняет
+    /// `:required`, не пересекается с ним по множеству элементов.
+    Optional,
+    /// `:read-only` (CSS Selectors L4 §15.5, HTML5 §4.16.4) — элемент, чьё
+    /// содержимое не редактируется пользователем. Применимо к `<input>` с
+    /// атрибутом `readonly` или `disabled` (исключая non-editable input
+    /// types), `<textarea>` с `readonly`/`disabled`, прочим элементам без
+    /// `contenteditable`.
+    ReadOnly,
+    /// `:read-write` (CSS Selectors L4 §15.5, HTML5 §4.16.4) — элемент,
+    /// редактируемый пользователем. Применимо к `<input>` / `<textarea>` без
+    /// `readonly`/`disabled` (для input — текстовые types), и к элементам
+    /// с `contenteditable="true"`.
+    ReadWrite,
+    /// `:disabled` (CSS Selectors L4 §14.2, HTML5 §4.10.19.2) — form control,
+    /// у которого атрибут `disabled` либо находится внутри disabled-`<fieldset>`
+    /// (вне `<legend>` первого ребёнка). Применимо к `<button>`, `<input>`,
+    /// `<select>`, `<textarea>`, `<option>`, `<optgroup>`, `<fieldset>`.
+    Disabled,
+    /// `:enabled` (CSS Selectors L4 §14.2, HTML5 §4.10.19.2) — form control,
+    /// который может быть disabled, но не disabled сейчас. Дополняет
+    /// `:disabled`, не пересекается с ним.
+    Enabled,
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
@@ -2407,6 +2436,12 @@ impl<'a> Parser<'a> {
             "last-of-type" => PseudoClass::LastOfType,
             "only-of-type" => PseudoClass::OnlyOfType,
             "placeholder-shown" => PseudoClass::PlaceholderShown,
+            "required" => PseudoClass::Required,
+            "optional" => PseudoClass::Optional,
+            "read-only" => PseudoClass::ReadOnly,
+            "read-write" => PseudoClass::ReadWrite,
+            "disabled" => PseudoClass::Disabled,
+            "enabled" => PseudoClass::Enabled,
             _ => PseudoClass::Unsupported(name),
         };
         Some(SimpleSelector::PseudoClass(pc))
@@ -3209,6 +3244,12 @@ mod tests {
             ("last-of-type", PseudoClass::LastOfType),
             ("only-of-type", PseudoClass::OnlyOfType),
             ("placeholder-shown", PseudoClass::PlaceholderShown),
+            ("required", PseudoClass::Required),
+            ("optional", PseudoClass::Optional),
+            ("read-only", PseudoClass::ReadOnly),
+            ("read-write", PseudoClass::ReadWrite),
+            ("disabled", PseudoClass::Disabled),
+            ("enabled", PseudoClass::Enabled),
         ];
         for (name, expected) in cases {
             let s = parse(&format!(":{name} {{}}"));
