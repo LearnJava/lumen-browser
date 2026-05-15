@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-- 🔄 DisplayCommand layer-ops (P2 1B шаг c) [P2] — display-command-layer-ops — 2026-05-15
+- 🔄 BlendMode::from_keyword для CSS-каскада (P2 1B follow-up) [P2] — blend-mode-keyword — 2026-05-15
 
 ## Статус реализации
 
