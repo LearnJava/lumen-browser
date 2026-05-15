@@ -29,6 +29,7 @@ pub mod permissions;
 pub mod permissions_policy;
 pub mod plugins;
 pub mod profiles;
+pub mod psl;
 pub mod push_subscriptions;
 pub mod referrer_policy;
 pub mod safe_browsing;
@@ -61,6 +62,7 @@ pub use permissions_policy::{
 };
 pub use plugins::{PluginManifest, Plugins};
 pub use profiles::{Profile, ProfileRegistry};
+pub use psl::PslProvider;
 pub use push_subscriptions::{PushSubscription, PushSubscriptions};
 pub use referrer_policy::{ReferrerPolicies, ReferrerPolicy};
 pub use safe_browsing::{
