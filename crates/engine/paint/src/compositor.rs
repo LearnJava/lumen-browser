@@ -136,9 +136,9 @@ impl LayerTree for BasicLayerTree {
 /// только когда commit и flush разъезжаются на потоки.
 ///
 /// `commit` принимает `Arc<PropertyTrees>` — owned snapshot от main thread-а,
-/// который compositor хранит без копирования. Layer tree — `Box<dyn LayerTree
-/// + Send + Sync>` чтобы можно было передавать различные impl-ы и (в будущем)
-/// перекладывать между потоками.
+/// который compositor хранит без копирования. Layer tree —
+/// `Box<dyn LayerTree + Send + Sync>` чтобы можно было передавать различные
+/// impl-ы и (в будущем) перекладывать между потоками.
 pub trait Compositor {
     /// Кладёт новое состояние в pending-буфер. Active не меняется — старая
     /// сцена продолжает рендериться до следующего `flush_pending`. Повторный
