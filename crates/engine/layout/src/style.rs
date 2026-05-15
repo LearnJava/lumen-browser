@@ -5959,6 +5959,9 @@ fn apply_declaration(
         "animation" => {
             apply_animation_shorthand(style, val);
         }
+        "transition" => {
+            apply_transition_shorthand(style, val);
+        }
         "animation-name" => {
             let trimmed = val.trim();
             if trimmed.eq_ignore_ascii_case("none") || trimmed.is_empty() {
@@ -7426,6 +7429,113 @@ fn parse_single_animation(s: &str) -> SingleAnimation {
         if !name_set && !tok.is_empty() {
             out.name = tok;
             name_set = true;
+        }
+    }
+    out
+}
+
+/// CSS Transitions L1 §3 — `transition` shorthand.
+///
+/// Синтаксис: `transition = <single-transition>#`, где
+///
+/// ```text
+/// <single-transition> = [ none | <single-transition-property> ]
+///                    || <time> || <easing-function> || <time>
+/// ```
+///
+/// Слоты per layer (порядок в `||` произвольный):
+/// - 2 × `<time>`: первый — duration, второй — delay.
+/// - `<easing-function>`: timing function (linear / ease / cubic-bezier(…)
+///   / steps(…) / step-start / step-end).
+/// - property: `none` или CSS-ident (любое property name, плюс keyword
+///   `all`). Default = `all`.
+///
+/// Shorthand сбрасывает все 4 longhand Vec-а; каждый layer (одна позиция
+/// в comma-list) кладёт строго одну запись в каждый Vec. Un-set значения
+/// → initial-value (duration/delay = 0s, timing = ease, property = "all").
+///
+/// `none` в позиции property сохраняется как литеральная строка `"none"`
+/// — consumer (transition scheduler) skip-нет такие layers. Это отличается
+/// от longhand-парсинга `transition-property: none` (там → пустой Vec),
+/// что даёт parallel-length-инвариант после shorthand-развёртки.
+fn apply_transition_shorthand(style: &mut ComputedStyle, val: &str) {
+    let mut props: Vec<String> = Vec::new();
+    let mut durations: Vec<f32> = Vec::new();
+    let mut timings: Vec<TimingFunction> = Vec::new();
+    let mut delays: Vec<f32> = Vec::new();
+
+    for layer in split_top_level_commas(val) {
+        let layer = layer.trim();
+        if layer.is_empty() {
+            continue;
+        }
+        let parsed = parse_single_transition(layer);
+        props.push(parsed.property);
+        durations.push(parsed.duration);
+        timings.push(parsed.timing);
+        delays.push(parsed.delay);
+    }
+
+    style.transition_properties = props;
+    style.transition_durations = durations;
+    style.transition_timing_functions = timings;
+    style.transition_delays = delays;
+}
+
+/// Результат парсинга одного `<single-transition>` слоя. Все 4 поля
+/// заполнены: либо явное значение из CSS, либо initial-value.
+struct SingleTransition {
+    property: String,
+    duration: f32,
+    timing: TimingFunction,
+    delay: f32,
+}
+
+impl Default for SingleTransition {
+    fn default() -> Self {
+        Self {
+            property: "all".to_string(),
+            duration: 0.0,
+            timing: TimingFunction::default(),
+            delay: 0.0,
+        }
+    }
+}
+
+/// Парсит одну `<single-transition>`-секцию. Tokenize-with-parens →
+/// classify по первому подходящему slot-у. Property — последний
+/// fallback (любой ident, не подошедший под time / easing).
+fn parse_single_transition(s: &str) -> SingleTransition {
+    let mut out = SingleTransition::default();
+    let mut duration_set = false;
+    let mut delay_set = false;
+    let mut timing_set = false;
+    let mut property_set = false;
+
+    for tok in tokenize_with_parens(s) {
+        if let Some(t) = parse_time_seconds(&tok) {
+            if !duration_set {
+                out.duration = t;
+                duration_set = true;
+                continue;
+            }
+            if !delay_set {
+                out.delay = t;
+                delay_set = true;
+                continue;
+            }
+            continue;
+        }
+        if !timing_set
+            && let Some(tf) = TimingFunction::parse(&tok)
+        {
+            out.timing = tf;
+            timing_set = true;
+            continue;
+        }
+        if !property_set && !tok.is_empty() {
+            out.property = tok;
+            property_set = true;
         }
     }
     out
@@ -11419,5 +11529,203 @@ mod tests {
         // Внутри скобок пробелы и запятые сохраняются — это один токен.
         assert_eq!(tokens[1], "cubic-bezier(0.1, 0.2, 0.3, 0.4)");
         assert_eq!(tokens[2], "b");
+    }
+
+    // === transition shorthand parsing (CSS Transitions L1 §3) ===
+
+    fn ts(val: &str) -> ComputedStyle {
+        let mut s = ComputedStyle::root();
+        apply_transition_shorthand(&mut s, val);
+        s
+    }
+
+    #[test]
+    fn transition_shorthand_duration_only() {
+        // `transition: 1s` → property = initial "all".
+        let s = ts("1s");
+        assert_eq!(s.transition_properties, vec!["all".to_string()]);
+        assert!((s.transition_durations[0] - 1.0).abs() < 1e-4);
+        assert!((s.transition_delays[0] - 0.0).abs() < 1e-4);
+        assert_eq!(
+            s.transition_timing_functions[0],
+            TimingFunction::CubicBezier(0.25, 0.1, 0.25, 1.0)
+        );
+    }
+
+    #[test]
+    fn transition_shorthand_property_and_duration() {
+        let s = ts("opacity 0.3s");
+        assert_eq!(s.transition_properties, vec!["opacity".to_string()]);
+        assert!((s.transition_durations[0] - 0.3).abs() < 1e-4);
+    }
+
+    #[test]
+    fn transition_shorthand_full_form() {
+        let s = ts("opacity 0.3s ease-out 0.1s");
+        assert_eq!(s.transition_properties, vec!["opacity".to_string()]);
+        assert!((s.transition_durations[0] - 0.3).abs() < 1e-4);
+        assert!((s.transition_delays[0] - 0.1).abs() < 1e-4);
+        assert_eq!(
+            s.transition_timing_functions[0],
+            TimingFunction::CubicBezier(0.0, 0.0, 0.58, 1.0)
+        );
+    }
+
+    #[test]
+    fn transition_shorthand_any_order() {
+        // Per spec — `||` оператор, любой порядок.
+        let s = ts("ease-in 0.5s transform 0.2s");
+        assert_eq!(s.transition_properties, vec!["transform".to_string()]);
+        assert!((s.transition_durations[0] - 0.5).abs() < 1e-4);
+        assert!((s.transition_delays[0] - 0.2).abs() < 1e-4);
+        assert_eq!(
+            s.transition_timing_functions[0],
+            TimingFunction::CubicBezier(0.42, 0.0, 1.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn transition_shorthand_ms_units() {
+        let s = ts("opacity 200ms 50ms");
+        assert!((s.transition_durations[0] - 0.2).abs() < 1e-4);
+        assert!((s.transition_delays[0] - 0.05).abs() < 1e-4);
+    }
+
+    #[test]
+    fn transition_shorthand_multiple_layers() {
+        let s = ts("opacity 0.3s, transform 0.5s ease-in");
+        assert_eq!(
+            s.transition_properties,
+            vec!["opacity".to_string(), "transform".to_string()]
+        );
+        assert!((s.transition_durations[0] - 0.3).abs() < 1e-4);
+        assert!((s.transition_durations[1] - 0.5).abs() < 1e-4);
+        assert_eq!(
+            s.transition_timing_functions[1],
+            TimingFunction::CubicBezier(0.42, 0.0, 1.0, 1.0)
+        );
+    }
+
+    #[test]
+    fn transition_shorthand_three_layers_parallel_lengths() {
+        // Все 4 Vec-а должны иметь длину = числу layers.
+        let s = ts("opacity 1s, transform 2s linear, color 3s ease-in 0.5s");
+        assert_eq!(s.transition_properties.len(), 3);
+        assert_eq!(s.transition_durations.len(), 3);
+        assert_eq!(s.transition_timing_functions.len(), 3);
+        assert_eq!(s.transition_delays.len(), 3);
+    }
+
+    #[test]
+    fn transition_shorthand_none_layer() {
+        // `transition: none` — single layer, property=none, остальное — initial.
+        let s = ts("none");
+        assert_eq!(s.transition_properties, vec!["none".to_string()]);
+        assert!((s.transition_durations[0] - 0.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn transition_shorthand_cubic_bezier_with_spaces_inside() {
+        let s = ts("opacity 0.5s cubic-bezier(0.1, 0.2, 0.3, 0.4)");
+        assert_eq!(
+            s.transition_timing_functions[0],
+            TimingFunction::CubicBezier(0.1, 0.2, 0.3, 0.4)
+        );
+    }
+
+    #[test]
+    fn transition_shorthand_steps_with_args() {
+        let s = ts("opacity 1s steps(4, end)");
+        assert_eq!(
+            s.transition_timing_functions[0],
+            TimingFunction::Steps(4, StepPosition::JumpEnd)
+        );
+    }
+
+    #[test]
+    fn transition_shorthand_resets_previously_set_longhands() {
+        // CSS Cascade L4 §6.2: shorthand сбрасывает longhand-ы к initial.
+        let mut s = ComputedStyle::root();
+        s.transition_durations = vec![5.0, 10.0];
+        s.transition_delays = vec![1.0, 2.0];
+        s.transition_timing_functions = vec![TimingFunction::Linear];
+        apply_transition_shorthand(&mut s, "opacity 0.3s");
+        assert!((s.transition_durations[0] - 0.3).abs() < 1e-4);
+        assert!((s.transition_delays[0] - 0.0).abs() < 1e-4);
+        assert_eq!(
+            s.transition_timing_functions[0],
+            TimingFunction::CubicBezier(0.25, 0.1, 0.25, 1.0)
+        );
+        assert_eq!(s.transition_durations.len(), 1);
+        assert_eq!(s.transition_delays.len(), 1);
+        assert_eq!(s.transition_timing_functions.len(), 1);
+    }
+
+    #[test]
+    fn transition_shorthand_empty_value_clears_all() {
+        let s = ts("");
+        assert!(s.transition_properties.is_empty());
+        assert!(s.transition_durations.is_empty());
+        assert!(s.transition_timing_functions.is_empty());
+        assert!(s.transition_delays.is_empty());
+    }
+
+    #[test]
+    fn transition_shorthand_only_timing() {
+        // `transition: linear` — property=all (initial), duration=0.
+        let s = ts("linear");
+        assert_eq!(s.transition_properties, vec!["all".to_string()]);
+        assert_eq!(s.transition_timing_functions[0], TimingFunction::Linear);
+        assert!((s.transition_durations[0] - 0.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn transition_shorthand_step_start_keyword() {
+        let s = ts("opacity 0.5s step-start");
+        assert_eq!(
+            s.transition_timing_functions[0],
+            TimingFunction::Steps(1, StepPosition::JumpStart)
+        );
+    }
+
+    #[test]
+    fn transition_shorthand_through_apply_declaration() {
+        // Полная цепочка: Declaration → apply_declaration.
+        let mut s = ComputedStyle::root();
+        let viewport = Size {
+            width: 1024.0,
+            height: 768.0,
+        };
+        let inherited = ComputedStyle::root();
+        let decl = Declaration {
+            property: "transition".to_string(),
+            value: "transform 0.4s ease-in-out 0.1s".to_string(),
+            important: false,
+        };
+        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, false);
+        assert_eq!(s.transition_properties, vec!["transform".to_string()]);
+        assert!((s.transition_durations[0] - 0.4).abs() < 1e-4);
+        assert!((s.transition_delays[0] - 0.1).abs() < 1e-4);
+        assert_eq!(
+            s.transition_timing_functions[0],
+            TimingFunction::CubicBezier(0.42, 0.0, 0.58, 1.0)
+        );
+    }
+
+    #[test]
+    fn transition_shorthand_negative_delay_allowed() {
+        // CSS Transitions L1 §3: negative delay допустим — анимация
+        // начинается с прогрессом, как будто уже игралась.
+        let s = ts("opacity 1s -0.2s");
+        assert!((s.transition_durations[0] - 1.0).abs() < 1e-4);
+        assert!((s.transition_delays[0] - (-0.2)).abs() < 1e-4);
+    }
+
+    #[test]
+    fn transition_shorthand_two_times_duration_and_delay() {
+        // 1s сначала = duration, 0.5s потом = delay.
+        let s = ts("1s 0.5s");
+        assert!((s.transition_durations[0] - 1.0).abs() < 1e-4);
+        assert!((s.transition_delays[0] - 0.5).abs() < 1e-4);
     }
 }
