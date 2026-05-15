@@ -38,6 +38,43 @@ pub enum BlendMode {
     Luminosity,
 }
 
+impl BlendMode {
+    /// Парсит CSS-keyword `mix-blend-mode` / `background-blend-mode` (CSS
+    /// Compositing & Blending L1 §5). Case-insensitive — `MULTIPLY` и
+    /// `multiply` оба возвращают `Multiply`. Возвращает `None` на
+    /// нераспознанной строке; caller (CSS-каскад) трактует это как
+    /// invalid declaration и применяет initial value (`Normal`).
+    #[must_use]
+    pub fn from_keyword(s: &str) -> Option<Self> {
+        // ASCII case fold — keyword-ы CSS все ASCII, дешёвый match
+        // через to_ascii_lowercase в стек-буфер не нужен (хватает
+        // `eq_ignore_ascii_case`).
+        for (kw, mode) in [
+            ("normal", Self::Normal),
+            ("multiply", Self::Multiply),
+            ("screen", Self::Screen),
+            ("overlay", Self::Overlay),
+            ("darken", Self::Darken),
+            ("lighten", Self::Lighten),
+            ("color-dodge", Self::ColorDodge),
+            ("color-burn", Self::ColorBurn),
+            ("hard-light", Self::HardLight),
+            ("soft-light", Self::SoftLight),
+            ("difference", Self::Difference),
+            ("exclusion", Self::Exclusion),
+            ("hue", Self::Hue),
+            ("saturation", Self::Saturation),
+            ("color", Self::Color),
+            ("luminosity", Self::Luminosity),
+        ] {
+            if s.eq_ignore_ascii_case(kw) {
+                return Some(mode);
+            }
+        }
+        None
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DisplayCommand {
     FillRect {
@@ -1254,6 +1291,68 @@ mod tests {
     fn pop_blend_mode_serializes() {
         let dl = vec![DisplayCommand::PopBlendMode];
         assert_eq!(serialize_display_list(&dl), "PopBlendMode\n");
+    }
+
+    #[test]
+    fn blend_mode_from_keyword_all_16_modes() {
+        let cases = [
+            ("normal", BlendMode::Normal),
+            ("multiply", BlendMode::Multiply),
+            ("screen", BlendMode::Screen),
+            ("overlay", BlendMode::Overlay),
+            ("darken", BlendMode::Darken),
+            ("lighten", BlendMode::Lighten),
+            ("color-dodge", BlendMode::ColorDodge),
+            ("color-burn", BlendMode::ColorBurn),
+            ("hard-light", BlendMode::HardLight),
+            ("soft-light", BlendMode::SoftLight),
+            ("difference", BlendMode::Difference),
+            ("exclusion", BlendMode::Exclusion),
+            ("hue", BlendMode::Hue),
+            ("saturation", BlendMode::Saturation),
+            ("color", BlendMode::Color),
+            ("luminosity", BlendMode::Luminosity),
+        ];
+        for (kw, expected) in cases {
+            assert_eq!(
+                BlendMode::from_keyword(kw),
+                Some(expected),
+                "keyword {kw:?} → {expected:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn blend_mode_from_keyword_case_insensitive() {
+        assert_eq!(
+            BlendMode::from_keyword("MULTIPLY"),
+            Some(BlendMode::Multiply)
+        );
+        assert_eq!(
+            BlendMode::from_keyword("Color-Dodge"),
+            Some(BlendMode::ColorDodge)
+        );
+        assert_eq!(
+            BlendMode::from_keyword("hArD-LiGhT"),
+            Some(BlendMode::HardLight)
+        );
+    }
+
+    #[test]
+    fn blend_mode_from_keyword_unknown_returns_none() {
+        assert_eq!(BlendMode::from_keyword(""), None);
+        assert_eq!(BlendMode::from_keyword("bogus"), None);
+        // CSS использует kebab-case с дефисом; underscore — не валидный
+        assert_eq!(BlendMode::from_keyword("color_dodge"), None);
+        // Без префикса/суффикса
+        assert_eq!(BlendMode::from_keyword("dodge"), None);
+        // С пробелами не парсим — должна быть отдельная команда trim caller-ом
+        assert_eq!(BlendMode::from_keyword(" multiply "), None);
+    }
+
+    #[test]
+    fn blend_mode_default_is_normal() {
+        assert_eq!(BlendMode::default(), BlendMode::Normal);
     }
 
     #[test]
