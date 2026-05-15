@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — Layout и видимость</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #f0f4f8;
+      width: 1024px; height: 720px; overflow: hidden;
+      font-size: 13px; line-height: 1.4; color: #2d3748;
+    }
+    .hdr {
+      background: #1e3a5f; color: #e2e8f0;
+      padding: 0 16px; height: 36px; line-height: 36px;
+      font-size: 12px; font-weight: bold; letter-spacing: 1px;
+      border-bottom: 3px solid #e94560;
+    }
+    .hdr em { color: #7ec8e3; font-style: normal; }
+    .sec {
+      background: white; border-bottom: 1px solid #e2e8f0;
+      padding: 5px 16px;
+    }
+    .lbl {
+      font-size: 10px; color: #94a3b8;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .box {
+      background: #ebf8ff; border: 2px solid #3182ce;
+      padding: 4px 10px; font-size: 12px; color: #2b6cb0;
+    }
+  </style>
+</head>
+<body>
+  <div class="hdr">LUMEN BROWSER <em>/ LAYOUT И ВИДИМОСТЬ</em> — Страница 6 из 6</div>
+
+  <!-- display: block -->
+  <div class="sec">
+    <div class="lbl">display: block — каждый блок начинается с новой строки, занимает всю ширину</div>
+    <div class="box" style="margin-bottom: 3px;">Блок 1 (div) — display: block — вся ширина</div>
+    <div class="box" style="margin-bottom: 3px; background: #f0fff4; border-color: #38a169; color: #276749;">Блок 2 (div) — display: block — следующая строка</div>
+    <div class="box" style="background: #faf5ff; border-color: #805ad5; color: #553c9a;">Блок 3 (div) — display: block — и ещё одна строка</div>
+  </div>
+
+  <!-- display: inline — только цветовые span без padding/border -->
+  <div class="sec">
+    <div class="lbl">display: inline — span-элементы текут в строку (без padding/border — те стакаются вертикально)</div>
+    <p>
+      Текст строки:
+      <span style="color: #e53e3e; font-weight: bold;">красный bold</span>
+      <span style="color: #38a169; font-style: italic;">зелёный italic</span>
+      <span style="color: #3182ce; text-decoration: underline;">синий underline</span>
+      <span style="color: #805ad5;">фиолетовый</span>
+      <span style="color: #d69e2e; font-weight: bold;">золотой bold</span>
+      — все на одной строке, перенос при нехватке места.
+    </p>
+  </div>
+
+  <!-- display: none — используем div, не span (span с display:none не скрывается в Phase 0) -->
+  <div class="sec">
+    <div class="lbl">display: none — элемент полностью скрыт, место не занимает (только на блочных div)</div>
+    <p style="margin-bottom: 3px;">Первый параграф — видимый.</p>
+    <div style="display: none; background: red; color: white; padding: 4px 8px;">
+      ЭТОТ БЛОК СКРЫТ (display:none на div) — не занимает место
+    </div>
+    <p>Второй параграф — видимый. Между параграфами нет пробела — скрытый div не занял место.</p>
+  </div>
+
+  <!-- overflow: hidden vs visible -->
+  <div class="sec">
+    <div class="lbl">overflow: hidden — содержимое обрезается по границе блока</div>
+    <div style="width: 360px; height: 36px; overflow: hidden;
+                background: #ebf8ff; border: 2px solid #3182ce; padding: 4px 8px;
+                margin-bottom: 4px;">
+      overflow:hidden — этот текст очень длинный и будет обрезан при выходе за границу блока фиксированной высоты
+    </div>
+    <div style="width: 360px; height: 36px; overflow: visible;
+                background: #f0fff4; border: 2px solid #38a169; padding: 4px 8px;">
+      overflow:visible — текст выходит за пределы блока фиксированной высоты и виден снаружи блока
+    </div>
+  </div>
+
+  <!-- width в разных единицах -->
+  <div class="sec">
+    <div class="lbl">Единицы ширины: px, %, vw</div>
+    <div style="width: 200px; background: #fed7d7; border: 1px solid #e53e3e;
+                padding: 2px 8px; margin-bottom: 2px;">width: 200px — фиксированная</div>
+    <div style="width: 50%; background: #c6f6d5; border: 1px solid #38a169;
+                padding: 2px 8px; margin-bottom: 2px;">width: 50% — половина родителя</div>
+    <div style="width: 75vw; background: #bee3f8; border: 1px solid #3182ce;
+                padding: 2px 8px; margin-bottom: 2px;">width: 75vw — 75% ширины viewport (768px)</div>
+    <div style="width: 100%; background: #faf5ff; border: 1px solid #805ad5;
+                padding: 2px 8px;">width: 100% — вся доступная ширина</div>
+  </div>
+
+  <!-- height в разных единицах — блочные div, не span -->
+  <div class="sec">
+    <div class="lbl">Единицы высоты: px, vh — блочные div с фиксированной высотой</div>
+    <div style="display: inline-block; margin-right: 8px; vertical-align: top;">
+      <div style="background: #fed7d7; border: 1px solid #e53e3e;
+                  padding: 0 8px; height: 20px; width: 80px; overflow: hidden;">h:20px</div>
+    </div>
+    <div style="display: inline-block; margin-right: 8px; vertical-align: top;">
+      <div style="background: #c6f6d5; border: 1px solid #38a169;
+                  padding: 0 8px; height: 30px; width: 80px; overflow: hidden;">h:30px</div>
+    </div>
+    <div style="display: inline-block; margin-right: 8px; vertical-align: top;">
+      <div style="background: #bee3f8; border: 1px solid #3182ce;
+                  padding: 0 8px; height: 40px; width: 80px; overflow: hidden;">h:40px</div>
+    </div>
+    <div style="display: inline-block; margin-right: 8px; vertical-align: top;">
+      <div style="background: #faf5ff; border: 1px solid #805ad5;
+                  padding: 0 8px; height: 8vh; width: 80px; overflow: hidden;">h:8vh</div>
+    </div>
+    <div style="display: inline-block; vertical-align: top; font-size: 11px; color: #718096; padding-top: 4px;">
+      ← vh от высоты окна 720px · 8vh = ~58px
+    </div>
+  </div>
+
+  <!-- Наследование CSS -->
+  <div class="sec">
+    <div class="lbl">Наследование CSS — дочерние элементы наследуют color, font-size, font-style</div>
+    <div style="color: #e53e3e; font-size: 13px;">
+      Родитель: color=красный, font-size=13px.
+      <span style="font-weight: bold;">Дочерний span наследует цвет (bold локально).</span>
+      <div style="font-style: italic;">
+        Вложенный div: наследует красный + добавляет italic.
+        <span style="color: #3182ce;">Внук-span: цвет → синий, курсив унаследован.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Вложенные блоки -->
+  <div class="sec">
+    <div class="lbl">Вложенные блоки — порядок отрисовки DOM (дочерние поверх родителя)</div>
+    <div style="background: #e53e3e; padding: 8px; width: 500px;">
+      <span style="color: white; font-size: 11px;">Уровень 1 — красный фон</span>
+      <div style="background: #3182ce; padding: 6px; margin-top: 4px;">
+        <span style="color: white; font-size: 11px;">Уровень 2 — синий</span>
+        <div style="background: #38a169; padding: 5px; margin-top: 4px;">
+          <span style="color: white; font-size: 11px;">Уровень 3 — зелёный</span>
+          <div style="background: #fefcbf; padding: 4px; margin-top: 4px;">
+            <span style="color: #744210; font-size: 11px;">Уровень 4 — жёлтый (контент)</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>

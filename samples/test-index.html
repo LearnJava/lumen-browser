@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — Тестовые страницы</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #0f1923;
+      width: 1024px; height: 720px; overflow: hidden;
+      font-size: 14px; line-height: 1.5; color: #e2e8f0;
+    }
+    .hdr {
+      background: #1e3a5f;
+      padding: 8px 32px 10px;
+      border-bottom: 3px solid #e94560;
+    }
+    .hdr-title {
+      font-size: 20px; font-weight: bold; color: white;
+      letter-spacing: 2px; line-height: 1.2;
+    }
+    .hdr-sub {
+      font-size: 12px; color: #7ec8e3; letter-spacing: 1px;
+      line-height: 1.4; margin-top: 2px;
+    }
+    .body { padding: 24px 32px; }
+    .intro {
+      font-size: 13px; color: #a0aec0; margin-bottom: 20px;
+      border-left: 3px solid #e94560; padding-left: 12px;
+    }
+    .grid { }
+    .card {
+      background: #1a2a3a;
+      border: 1px solid #2d4a6a;
+      border-left: 4px solid #3182ce;
+      padding: 12px 16px;
+      margin-bottom: 8px;
+    }
+    .card-num {
+      font-size: 11px; color: #4a7fa5;
+      font-weight: bold; letter-spacing: 1px;
+      margin-bottom: 4px;
+    }
+    .card-title {
+      font-size: 16px; font-weight: bold; color: #7ec8e3;
+      margin-bottom: 4px;
+    }
+    .card-desc {
+      font-size: 12px; color: #718096;
+    }
+    .card-file {
+      font-size: 11px; color: #4a7fa5; margin-top: 4px;
+    }
+    .card-1 { border-left-color: #e53e3e; }
+    .card-2 { border-left-color: #dd6b20; }
+    .card-3 { border-left-color: #d69e2e; }
+    .card-4 { border-left-color: #38a169; }
+    .card-5 { border-left-color: #3182ce; }
+    .card-6 { border-left-color: #805ad5; }
+    .footer {
+      background: #0d1520; border-top: 1px solid #1e3a5f;
+      padding: 6px 32px; margin-top: 8px;
+      font-size: 11px; color: #4a5568;
+    }
+    .badge {
+      background: #1e3a5f; border: 1px solid #2d4a6a;
+      padding: 2px 8px; font-size: 11px; color: #7ec8e3;
+      margin-right: 8px;
+    }
+  </style>
+</head>
+<body>
+  <div class="hdr">
+    <div class="hdr-title">LUMEN BROWSER</div>
+    <div class="hdr-sub">SHOWCASE — ТЕСТОВЫЕ СТРАНИЦЫ ВОЗМОЖНОСТЕЙ БРАУЗЕРА — PHASE 0</div>
+  </div>
+
+  <div class="body">
+    <div class="intro">
+      Шесть страниц демонстрируют возможности браузера в Phase 0:
+      рендеринг текста, блочная модель, цвета, PNG/JPEG изображения, HTML-теги, layout.
+      Откройте каждую файл через: <span style="color:#7ec8e3;">cargo run -p lumen-shell -- samples/test-0N-*.html</span>
+    </div>
+
+    <div class="grid">
+      <div class="card card-1">
+        <div class="card-num">СТРАНИЦА 01</div>
+        <div class="card-title">Типографика</div>
+        <div class="card-desc">
+          H1–H6 · font-weight · font-style · text-decoration · color · text-transform ·
+          letter-spacing · word-spacing · text-align · line-height · font-size
+        </div>
+        <div class="card-file">samples/test-01-typography.html</div>
+      </div>
+
+      <div class="card card-2">
+        <div class="card-num">СТРАНИЦА 02</div>
+        <div class="card-title">Блочная модель (Box Model)</div>
+        <div class="card-desc">
+          margin · padding · border (width, color, стороны) · box-sizing: content-box vs border-box ·
+          вложенные блоки · width · height
+        </div>
+        <div class="card-file">samples/test-02-box-model.html</div>
+      </div>
+
+      <div class="card card-3">
+        <div class="card-num">СТРАНИЦА 03</div>
+        <div class="card-title">Цвета и фоны</div>
+        <div class="card-desc">
+          Named colors · hex #rrggbb · rgb() · rgba() с прозрачностью ·
+          сочетания фона и текста · серая шкала · цветные рамки · палитра
+        </div>
+        <div class="card-file">samples/test-03-colors.html</div>
+      </div>
+
+      <div class="card card-4">
+        <div class="card-num">СТРАНИЦА 04</div>
+        <div class="card-title">Изображения (AI-тема)</div>
+        <div class="card-desc">
+          PNG + JPEG декодирование · object-fit: cover / contain / fill ·
+          масштабирование · alt-текст · 4 картинки на тему ИИ с Wikimedia Commons
+        </div>
+        <div class="card-file">samples/test-04-images.html</div>
+      </div>
+
+      <div class="card card-5">
+        <div class="card-num">СТРАНИЦА 05</div>
+        <div class="card-title">HTML-теги</div>
+        <div class="card-desc">
+          strong · em · code · pre · blockquote · mark · del · ins · sub · sup ·
+          ul / ol / dl · table (thead/tbody) · hr · семантические теги HTML5
+        </div>
+        <div class="card-file">samples/test-05-html-tags.html</div>
+      </div>
+
+      <div class="card card-6">
+        <div class="card-num">СТРАНИЦА 06</div>
+        <div class="card-title">Layout и видимость</div>
+        <div class="card-desc">
+          display: block / inline / none · overflow: hidden vs visible ·
+          width: px/% /vw · height: px/vh · наследование CSS · вложенность блоков
+        </div>
+        <div class="card-file">samples/test-06-layout.html</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span class="badge">Phase 0</span>
+    <span class="badge">14 crates</span>
+    <span class="badge">2543 tests</span>
+    <span class="badge">PNG + JPEG</span>
+    <span class="badge">131 CSS properties</span>
+    <span style="color: #2d4a6a;">
+      Не реализовано в Phase 0: flexbox layout · grid · float · border-radius · box-shadow · gradients · animations
+    </span>
+  </div>
+</body>
+</html>

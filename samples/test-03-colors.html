@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — Цвета и фоны</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a202c;
+      width: 1024px; height: 720px; overflow: hidden;
+      font-size: 12px; line-height: 1.35; color: #e2e8f0;
+    }
+    .hdr {
+      background: #1e3a5f; color: #e2e8f0;
+      padding: 0 16px; height: 36px; line-height: 36px;
+      font-size: 12px; font-weight: bold; letter-spacing: 1px;
+      border-bottom: 3px solid #e94560;
+    }
+    .hdr em { color: #7ec8e3; font-style: normal; }
+    .sec { border-bottom: 1px solid #2d3748; padding: 5px 16px; }
+    .lbl {
+      font-size: 10px; color: #718096; text-transform: uppercase;
+      letter-spacing: 0.5px; margin-bottom: 3px;
+    }
+    /* Цветная плашка — блочный div */
+    .sw {
+      padding: 2px 10px; margin-bottom: 2px;
+      font-size: 11px;
+    }
+    /* Горизонтальная строка из нескольких div-ов через inline — используем p+span БЕЗ padding */
+    .row { font-size: 11px; margin-bottom: 1px; }
+  </style>
+</head>
+<body>
+  <div class="hdr">LUMEN BROWSER <em>/ ЦВЕТА И ФОНЫ</em> — Страница 3 из 6</div>
+
+  <!-- Именованные цвета — блочные divs, background работает -->
+  <div class="sec">
+    <div class="lbl">Именованные CSS-цвета (named colors) — background-color на блоке</div>
+    <div class="sw" style="background: red; color: white;">red</div>
+    <div class="sw" style="background: green; color: white;">green</div>
+    <div class="sw" style="background: blue; color: white;">blue</div>
+    <div class="sw" style="background: orange; color: white;">orange</div>
+    <div class="sw" style="background: purple; color: white;">purple</div>
+    <div class="sw" style="background: teal; color: white;">teal</div>
+    <div class="sw" style="background: navy; color: white;">navy</div>
+    <div class="sw" style="background: yellow; color: black;">yellow</div>
+    <div class="sw" style="background: silver; color: black;">silver · white · gray</div>
+  </div>
+
+  <!-- Hex-цвета — блочные divs -->
+  <div class="sec">
+    <div class="lbl">Hex-цвета #rrggbb — красный / зелёный / синий / смешанные</div>
+    <div class="sw" style="background: #e53e3e; color: white;">#e53e3e — насыщенный красный</div>
+    <div class="sw" style="background: #38a169; color: white;">#38a169 — насыщенный зелёный</div>
+    <div class="sw" style="background: #3182ce; color: white;">#3182ce — насыщенный синий</div>
+    <div class="sw" style="background: #805ad5; color: white;">#805ad5 — фиолетовый</div>
+    <div class="sw" style="background: #d69e2e; color: black;">#d69e2e — золотой</div>
+    <div class="sw" style="background: #e94560; color: white;">#e94560 — акцентный (используется в хедере)</div>
+  </div>
+
+  <!-- rgb() и rgba() -->
+  <div class="sec">
+    <div class="lbl">Функции rgb() и rgba() — прозрачность через alpha-канал</div>
+    <div class="sw" style="background: rgb(220,50,50); color:white;">rgb(220, 50, 50) — красный</div>
+    <div class="sw" style="background: rgb(50,150,220); color:white;">rgb(50, 150, 220) — синий</div>
+    <div class="sw" style="background: rgba(220,50,50,0.8); color:white;">rgba(220,50,50, 0.8) — α=0.8</div>
+    <div class="sw" style="background: rgba(220,50,50,0.4); color:black;">rgba(220,50,50, 0.4) — α=0.4</div>
+    <div class="sw" style="background: rgba(50,150,220,0.7); color:white;">rgba(50,150,220, 0.7) — α=0.7</div>
+  </div>
+
+  <!-- Серая шкала -->
+  <div class="sec">
+    <div class="lbl">Серая шкала — от чёрного к белому</div>
+    <div class="sw" style="background: #111; color: white;">#111111 — почти чёрный</div>
+    <div class="sw" style="background: #444; color: white;">#444444 — тёмно-серый</div>
+    <div class="sw" style="background: #777; color: white;">#777777 — средний серый</div>
+    <div class="sw" style="background: #aaa; color: black;">#aaaaaa — светло-серый</div>
+    <div class="sw" style="background: #ddd; color: black;">#dddddd — очень светлый</div>
+    <div class="sw" style="background: #fff; color: black; border: 1px solid #ccc;">#ffffff — белый</div>
+  </div>
+
+  <!-- Сочетания фон + цвет текста -->
+  <div class="sec">
+    <div class="lbl">Сочетания background-color + color — читаемость</div>
+    <div class="sw" style="background: #1a202c; color: #f6e05e;">Тёмный фон + жёлтый текст #f6e05e</div>
+    <div class="sw" style="background: #2d3748; color: #68d391;">Тёмный фон + зелёный текст #68d391</div>
+    <div class="sw" style="background: #ebf8ff; color: #2b6cb0;">Светлый фон + синий текст #2b6cb0</div>
+    <div class="sw" style="background: #fff5f5; color: #c53030;">Светлый фон + красный текст #c53030</div>
+    <div class="sw" style="background: #faf5ff; color: #553c9a;">Светлый фон + фиолетовый #553c9a</div>
+  </div>
+
+  <!-- Цветные рамки -->
+  <div class="sec">
+    <div class="lbl">Цветные рамки на блоке (border-color)</div>
+    <div style="border: 3px solid #e53e3e; padding: 3px 8px; margin-bottom: 2px; color: #e2e8f0;">border: 3px solid #e53e3e — красная рамка</div>
+    <div style="border: 3px solid #3182ce; padding: 3px 8px; margin-bottom: 2px; color: #e2e8f0;">border: 3px solid #3182ce — синяя рамка</div>
+    <div style="border: 3px solid #38a169; padding: 3px 8px; color: #e2e8f0;">border: 3px solid #38a169 — зелёная рамка</div>
+  </div>
+</body>
+</html>
