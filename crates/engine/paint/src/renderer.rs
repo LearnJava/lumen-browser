@@ -236,9 +236,10 @@ struct LoadedFace {
 }
 
 /// Распарсенный face для одного `render()`-вызова: Font + ключевые таблицы
-/// + per-face Rasterizer. Borrow от `LoadedFace.bytes`. Используется в
-/// codepoint-cascade: per-char проверяем `cmap.glyph_index` у каждого
-/// face-а и выбираем тот, где глиф найден.
+/// + per-face Rasterizer. Borrow от `LoadedFace.bytes`.
+///
+/// Используется в codepoint-cascade: per-char проверяем `cmap.glyph_index`
+/// у каждого face-а и выбираем тот, где глиф найден.
 struct ParsedFace<'a> {
     font: Font<'a>,
     head: Head,
@@ -652,6 +653,25 @@ impl Renderer {
     pub fn with_font_provider(mut self, provider: Option<Arc<dyn FontProvider>>) -> Self {
         self.font_provider = provider;
         self
+    }
+
+    /// Эагерно загружает указанные family-имена через текущий `FontProvider`,
+    /// чтобы они были доступны для codepoint cascade ещё до первого `DrawText`
+    /// с этой family-ой в CSS. Используется shell-ом для прогрева
+    /// fallback-цепочки (Noto Color Emoji / Noto Sans CJK / etc.), без
+    /// которой эмодзи и CJK на странице без явного `font-family` падают
+    /// в `.notdef`. Имена, не найденные в провайдере или с битым TTF, тихо
+    /// пропускаются. Берётся weight=400 + style=normal — для fallback-целей
+    /// этого достаточно. Идемпотентно: повторный вызов на уже загруженной
+    /// family не делает работы благодаря `face_id_by_path` cache-у.
+    pub fn preload_fallback_chain(&mut self, families: &[&str]) {
+        for name in families {
+            let _ = self.resolve_face_id(
+                &[(*name).to_string()],
+                FontWeight::NORMAL,
+                FontStyle::Normal,
+            );
+        }
     }
 
     /// Резолвит `face_id` для `DrawText` с указанным `font-family` списком.
