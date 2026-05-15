@@ -5924,6 +5924,9 @@ fn apply_declaration(
         "transition-timing-function" => {
             style.transition_timing_functions = TimingFunction::parse_list(val);
         }
+        "animation" => {
+            apply_animation_shorthand(style, val);
+        }
         "animation-name" => {
             let trimmed = val.trim();
             if trimmed.eq_ignore_ascii_case("none") || trimmed.is_empty() {
@@ -7214,6 +7217,217 @@ fn parse_content_fn(name: &str, args: &str) -> Option<ContentItem> {
         }
         _ => None,
     }
+}
+
+/// CSS Animations L1 §4 — `animation` shorthand.
+///
+/// Синтаксис: `animation = <single-animation>#`, где
+///
+/// ```text
+/// <single-animation> = <time> || <easing-function> || <time>
+///                   || <single-animation-iteration-count>
+///                   || <single-animation-direction>
+///                   || <single-animation-fill-mode>
+///                   || <single-animation-play-state>
+///                   || [ none | <keyframes-name> ]
+/// ```
+///
+/// Оператор `||` (CSS Values §1.3.4) разрешает любому subset-у этих 8
+/// «слотов» появляться в любом порядке. Первое подходящее `<time>` —
+/// duration, второе — delay. Любой identifier-токен, не подходящий ни
+/// под один keyword-slot, считается keyframes-name.
+///
+/// Поведение по spec semantics:
+/// - Shorthand сбрасывает ВСЕ 8 longhand Vec-ов: каждый layer (= одна
+///   позиция в comma-list) даёт строго одну запись в каждый из 8 Vec-ов;
+///   un-set значения — initial-value (`""` для name, `0.0s` для time-ов,
+///   `Default::default()` для остальных).
+/// - Один токен в позиции, где slot уже занят, — fall-through к
+///   следующему slot-у; если ни один не подошёл, токен трактуется как
+///   keyframes-name.
+/// - `none` без других именных кандидатов → `animation-fill-mode: none`
+///   (он валиден без других конфликтов). Это компромисс per Blink/WebKit:
+///   результат `animation: none` — пустое имя у этого layer-а →
+///   эффективно отсутствие анимации.
+fn apply_animation_shorthand(style: &mut ComputedStyle, val: &str) {
+    let mut names: Vec<String> = Vec::new();
+    let mut durations: Vec<f32> = Vec::new();
+    let mut timings: Vec<TimingFunction> = Vec::new();
+    let mut delays: Vec<f32> = Vec::new();
+    let mut iters: Vec<IterationCount> = Vec::new();
+    let mut dirs: Vec<AnimationDirection> = Vec::new();
+    let mut fills: Vec<AnimationFillMode> = Vec::new();
+    let mut plays: Vec<AnimationPlayState> = Vec::new();
+
+    for layer in split_top_level_commas(val) {
+        let layer = layer.trim();
+        if layer.is_empty() {
+            continue;
+        }
+        let parsed = parse_single_animation(layer);
+        names.push(parsed.name);
+        durations.push(parsed.duration);
+        timings.push(parsed.timing);
+        delays.push(parsed.delay);
+        iters.push(parsed.iter);
+        dirs.push(parsed.direction);
+        fills.push(parsed.fill);
+        plays.push(parsed.play_state);
+    }
+
+    style.animation_names = names;
+    style.animation_durations = durations;
+    style.animation_timing_functions = timings;
+    style.animation_delays = delays;
+    style.animation_iteration_counts = iters;
+    style.animation_directions = dirs;
+    style.animation_fill_modes = fills;
+    style.animation_play_states = plays;
+}
+
+/// Результат парсинга одного `<single-animation>` для shorthand. Все
+/// поля заполнены: либо явное значение из CSS, либо initial-value.
+/// Это обеспечивает совпадение длин всех 8 longhand Vec-ов после
+/// shorthand-разворота (см. [`apply_animation_shorthand`]).
+struct SingleAnimation {
+    name: String,
+    duration: f32,
+    timing: TimingFunction,
+    delay: f32,
+    iter: IterationCount,
+    direction: AnimationDirection,
+    fill: AnimationFillMode,
+    play_state: AnimationPlayState,
+}
+
+impl Default for SingleAnimation {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            duration: 0.0,
+            timing: TimingFunction::default(),
+            delay: 0.0,
+            iter: IterationCount::default(),
+            direction: AnimationDirection::default(),
+            fill: AnimationFillMode::default(),
+            play_state: AnimationPlayState::default(),
+        }
+    }
+}
+
+/// Парсит одну `<single-animation>`-секцию: токенизация с учётом круглых
+/// скобок (cubic-bezier / steps содержат запятые и пробелы), classify по
+/// первому подходящему slot-у, fall-through к следующему при коллизии,
+/// последний кандидат — keyframes-name.
+fn parse_single_animation(s: &str) -> SingleAnimation {
+    let mut out = SingleAnimation::default();
+    let mut duration_set = false;
+    let mut delay_set = false;
+    let mut timing_set = false;
+    let mut iter_set = false;
+    let mut direction_set = false;
+    let mut fill_set = false;
+    let mut play_set = false;
+    let mut name_set = false;
+
+    for tok in tokenize_with_parens(s) {
+        // 1) <time>: первое → duration, второе → delay. Per spec ordering.
+        if let Some(t) = parse_time_seconds(&tok) {
+            if !duration_set {
+                out.duration = t;
+                duration_set = true;
+                continue;
+            }
+            if !delay_set {
+                out.delay = t;
+                delay_set = true;
+                continue;
+            }
+            // Третье «<time>» некуда положить — игнорируем (spec: invalid).
+            continue;
+        }
+        // 2) <easing-function>: keyword / cubic-bezier(...) / steps(...).
+        if !timing_set
+            && let Some(tf) = TimingFunction::parse(&tok)
+        {
+            out.timing = tf;
+            timing_set = true;
+            continue;
+        }
+        // 3) <iteration-count>: `infinite` или unitless f32 ≥ 0.
+        if !iter_set
+            && let Some(ic) = IterationCount::parse(&tok)
+        {
+            out.iter = ic;
+            iter_set = true;
+            continue;
+        }
+        // 4) <direction>.
+        if !direction_set
+            && let Some(d) = AnimationDirection::parse(&tok)
+        {
+            out.direction = d;
+            direction_set = true;
+            continue;
+        }
+        // 5) <fill-mode>. `none` совпадает здесь и используется ДО name —
+        // совпадает с поведением Blink/WebKit/Gecko.
+        if !fill_set
+            && let Some(fm) = AnimationFillMode::parse(&tok)
+        {
+            out.fill = fm;
+            fill_set = true;
+            continue;
+        }
+        // 6) <play-state>.
+        if !play_set
+            && let Some(ps) = AnimationPlayState::parse(&tok)
+        {
+            out.play_state = ps;
+            play_set = true;
+            continue;
+        }
+        // 7) keyframes-name: любой токен, не подошедший выше. Только
+        // первый кандидат остаётся; последующие игнорируются (spec:
+        // дубликат недопустим, два keyframes-name делают объявление
+        // invalid; lenient — пропускаем).
+        if !name_set && !tok.is_empty() {
+            out.name = tok;
+            name_set = true;
+        }
+    }
+    out
+}
+
+/// Whitespace-разделение `<single-animation>`-слоя с уважением к
+/// круглым скобкам (`cubic-bezier(0.42, 0, 0.58, 1)` — один токен,
+/// несмотря на запятые и пробелы внутри).
+fn tokenize_with_parens(s: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    let mut depth = 0i32;
+    for c in s.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                buf.push(c);
+            }
+            ')' => {
+                depth -= 1;
+                buf.push(c);
+            }
+            ws if ws.is_whitespace() && depth == 0 => {
+                if !buf.is_empty() {
+                    tokens.push(std::mem::take(&mut buf));
+                }
+            }
+            _ => buf.push(c),
+        }
+    }
+    if !buf.is_empty() {
+        tokens.push(buf);
+    }
+    tokens
 }
 
 /// CSS Values L4 §8 — список `<time>` значений через запятую.
@@ -10784,5 +10998,283 @@ mod tests {
         assert!(approx(f.progress(0.5), 0.0));
         assert!(approx(f.progress(0.99), 0.0));
         assert!(approx(f.progress(1.0), 1.0));
+    }
+
+    // === animation shorthand parsing (CSS Animations L1 §4) ===
+
+    fn shorthand(val: &str) -> ComputedStyle {
+        let mut s = ComputedStyle::root();
+        apply_animation_shorthand(&mut s, val);
+        s
+    }
+
+    #[test]
+    fn shorthand_single_name_only() {
+        let s = shorthand("slidein");
+        assert_eq!(s.animation_names, vec!["slidein".to_string()]);
+        assert_eq!(s.animation_durations, vec![0.0]);
+        assert_eq!(s.animation_delays, vec![0.0]);
+        assert_eq!(s.animation_timing_functions.len(), 1);
+        assert_eq!(s.animation_iteration_counts, vec![IterationCount::Finite(1.0)]);
+        assert_eq!(s.animation_directions, vec![AnimationDirection::Normal]);
+        assert_eq!(s.animation_fill_modes, vec![AnimationFillMode::None]);
+        assert_eq!(s.animation_play_states, vec![AnimationPlayState::Running]);
+    }
+
+    #[test]
+    fn shorthand_duration_then_name() {
+        // Самый частый кейс в реальном CSS.
+        let s = shorthand("2s slidein");
+        assert_eq!(s.animation_names, vec!["slidein".to_string()]);
+        assert!((s.animation_durations[0] - 2.0).abs() < 1e-4);
+        assert!((s.animation_delays[0] - 0.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn shorthand_duration_easing_name() {
+        let s = shorthand("2s linear slidein");
+        assert_eq!(s.animation_names, vec!["slidein".to_string()]);
+        assert!((s.animation_durations[0] - 2.0).abs() < 1e-4);
+        assert_eq!(s.animation_timing_functions[0], TimingFunction::Linear);
+    }
+
+    #[test]
+    fn shorthand_two_times_duration_and_delay() {
+        // Первое <time> = duration, второе = delay.
+        let s = shorthand("2s 0.5s slidein");
+        assert!((s.animation_durations[0] - 2.0).abs() < 1e-4);
+        assert!((s.animation_delays[0] - 0.5).abs() < 1e-4);
+        assert_eq!(s.animation_names, vec!["slidein".to_string()]);
+    }
+
+    #[test]
+    fn shorthand_negative_delay_allowed() {
+        // Spec: negative delay = «анимация началась в прошлом».
+        let s = shorthand("2s -0.5s slidein");
+        assert!((s.animation_durations[0] - 2.0).abs() < 1e-4);
+        assert!((s.animation_delays[0] - -0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn shorthand_ms_units() {
+        let s = shorthand("500ms 100ms slidein");
+        assert!((s.animation_durations[0] - 0.5).abs() < 1e-4);
+        assert!((s.animation_delays[0] - 0.1).abs() < 1e-4);
+    }
+
+    #[test]
+    fn shorthand_full_form_in_canonical_order() {
+        // duration, easing, delay, iter-count, direction, fill-mode, play-state, name.
+        let s = shorthand("2s ease-in 1s 3 alternate forwards paused slidein");
+        assert!((s.animation_durations[0] - 2.0).abs() < 1e-4);
+        assert_eq!(
+            s.animation_timing_functions[0],
+            TimingFunction::CubicBezier(0.42, 0.0, 1.0, 1.0)
+        );
+        assert!((s.animation_delays[0] - 1.0).abs() < 1e-4);
+        assert_eq!(s.animation_iteration_counts[0], IterationCount::Finite(3.0));
+        assert_eq!(s.animation_directions[0], AnimationDirection::Alternate);
+        assert_eq!(s.animation_fill_modes[0], AnimationFillMode::Forwards);
+        assert_eq!(s.animation_play_states[0], AnimationPlayState::Paused);
+        assert_eq!(s.animation_names, vec!["slidein".to_string()]);
+    }
+
+    #[test]
+    fn shorthand_any_order() {
+        // `||` operator — токены могут идти в любом порядке.
+        let s = shorthand("slidein alternate-reverse 1.5s infinite ease-out");
+        assert_eq!(s.animation_names, vec!["slidein".to_string()]);
+        assert_eq!(
+            s.animation_directions[0],
+            AnimationDirection::AlternateReverse
+        );
+        assert!((s.animation_durations[0] - 1.5).abs() < 1e-4);
+        assert_eq!(s.animation_iteration_counts[0], IterationCount::Infinite);
+        assert_eq!(
+            s.animation_timing_functions[0],
+            TimingFunction::CubicBezier(0.0, 0.0, 0.58, 1.0)
+        );
+    }
+
+    #[test]
+    fn shorthand_cubic_bezier_with_spaces_inside() {
+        // Tokenizer должен трактовать `cubic-bezier(0.42, 0, 0.58, 1)` как
+        // один токен, несмотря на запятые/пробелы внутри.
+        let s = shorthand("2s cubic-bezier(0.42, 0, 0.58, 1) slidein");
+        assert!((s.animation_durations[0] - 2.0).abs() < 1e-4);
+        assert_eq!(
+            s.animation_timing_functions[0],
+            TimingFunction::CubicBezier(0.42, 0.0, 0.58, 1.0)
+        );
+        assert_eq!(s.animation_names, vec!["slidein".to_string()]);
+    }
+
+    #[test]
+    fn shorthand_steps_with_args() {
+        let s = shorthand("1s steps(4, end) slidein");
+        assert!((s.animation_durations[0] - 1.0).abs() < 1e-4);
+        assert_eq!(
+            s.animation_timing_functions[0],
+            TimingFunction::Steps(4, StepPosition::JumpEnd)
+        );
+    }
+
+    #[test]
+    fn shorthand_multiple_layers() {
+        // Comma-list: 2 layers, каждый со своим набором.
+        let s = shorthand("2s slidein, 3s linear slideout");
+        assert_eq!(s.animation_names, vec!["slidein".to_string(), "slideout".to_string()]);
+        assert!((s.animation_durations[0] - 2.0).abs() < 1e-4);
+        assert!((s.animation_durations[1] - 3.0).abs() < 1e-4);
+        assert_eq!(s.animation_timing_functions[1], TimingFunction::Linear);
+        // Layer 1 timing — default (ease).
+        assert_eq!(
+            s.animation_timing_functions[0],
+            TimingFunction::CubicBezier(0.25, 0.1, 0.25, 1.0)
+        );
+    }
+
+    #[test]
+    fn shorthand_three_layers_parallel_lengths() {
+        // Все 8 Vec-ов должны иметь одинаковую длину = числу layer-ов.
+        let s = shorthand("1s a, 2s b, 3s c");
+        assert_eq!(s.animation_names.len(), 3);
+        assert_eq!(s.animation_durations.len(), 3);
+        assert_eq!(s.animation_timing_functions.len(), 3);
+        assert_eq!(s.animation_delays.len(), 3);
+        assert_eq!(s.animation_iteration_counts.len(), 3);
+        assert_eq!(s.animation_directions.len(), 3);
+        assert_eq!(s.animation_fill_modes.len(), 3);
+        assert_eq!(s.animation_play_states.len(), 3);
+    }
+
+    #[test]
+    fn shorthand_none_keyword() {
+        // `animation: none` — single layer, `none` падает в fill-mode-slot.
+        // Имя остаётся пустым → consumer (animation scheduler) skip-нет.
+        let s = shorthand("none");
+        assert_eq!(s.animation_names, vec![String::new()]);
+        assert_eq!(s.animation_fill_modes, vec![AnimationFillMode::None]);
+    }
+
+    #[test]
+    fn shorthand_iteration_count_number() {
+        let s = shorthand("2s 5 slidein");
+        assert_eq!(s.animation_iteration_counts[0], IterationCount::Finite(5.0));
+    }
+
+    #[test]
+    fn shorthand_iteration_count_infinite() {
+        let s = shorthand("2s infinite slidein");
+        assert_eq!(s.animation_iteration_counts[0], IterationCount::Infinite);
+    }
+
+    #[test]
+    fn shorthand_iteration_count_fractional() {
+        let s = shorthand("2s 2.5 slidein");
+        assert_eq!(s.animation_iteration_counts[0], IterationCount::Finite(2.5));
+    }
+
+    #[test]
+    fn shorthand_resets_previously_set_longhands() {
+        // CSS Cascade L4 §6.2: shorthand сбрасывает ВСЕ longhand-ы к их
+        // initial-value, если они не упомянуты в shorthand-е.
+        let mut s = ComputedStyle::root();
+        s.animation_delays = vec![5.0, 10.0];
+        s.animation_fill_modes = vec![AnimationFillMode::Forwards];
+        s.animation_directions = vec![AnimationDirection::Reverse];
+        apply_animation_shorthand(&mut s, "2s slidein");
+        // duration упомянут → 2s. delay/fill/direction не упомянуты → initial.
+        assert!((s.animation_durations[0] - 2.0).abs() < 1e-4);
+        assert!((s.animation_delays[0] - 0.0).abs() < 1e-4);
+        assert_eq!(s.animation_fill_modes[0], AnimationFillMode::None);
+        assert_eq!(s.animation_directions[0], AnimationDirection::Normal);
+    }
+
+    #[test]
+    fn shorthand_empty_value_clears_all() {
+        // Пустое значение → нет layer-ов → все Vec-и пустые.
+        let s = shorthand("");
+        assert!(s.animation_names.is_empty());
+        assert!(s.animation_durations.is_empty());
+        assert!(s.animation_timing_functions.is_empty());
+        assert!(s.animation_delays.is_empty());
+        assert!(s.animation_iteration_counts.is_empty());
+        assert!(s.animation_directions.is_empty());
+        assert!(s.animation_fill_modes.is_empty());
+        assert!(s.animation_play_states.is_empty());
+    }
+
+    #[test]
+    fn shorthand_only_keywords_no_name() {
+        // Если имя не указано, name остаётся пустым.
+        let s = shorthand("2s linear forwards");
+        assert_eq!(s.animation_names, vec![String::new()]);
+        assert!((s.animation_durations[0] - 2.0).abs() < 1e-4);
+        assert_eq!(s.animation_timing_functions[0], TimingFunction::Linear);
+        assert_eq!(s.animation_fill_modes[0], AnimationFillMode::Forwards);
+    }
+
+    #[test]
+    fn shorthand_step_start_keyword() {
+        let s = shorthand("0.5s step-start slidein");
+        assert_eq!(
+            s.animation_timing_functions[0],
+            TimingFunction::Steps(1, StepPosition::JumpStart)
+        );
+    }
+
+    #[test]
+    fn shorthand_paused_play_state() {
+        let s = shorthand("2s paused slidein");
+        assert_eq!(s.animation_play_states[0], AnimationPlayState::Paused);
+    }
+
+    #[test]
+    fn shorthand_reverse_direction() {
+        let s = shorthand("2s reverse slidein");
+        assert_eq!(s.animation_directions[0], AnimationDirection::Reverse);
+    }
+
+    #[test]
+    fn shorthand_both_fill_mode() {
+        let s = shorthand("2s both slidein");
+        assert_eq!(s.animation_fill_modes[0], AnimationFillMode::Both);
+    }
+
+    #[test]
+    fn shorthand_through_apply_declaration() {
+        // Полная цепочка: Declaration → apply_declaration. Sanity-check
+        // что branch в match подхватывает shorthand.
+        let mut s = ComputedStyle::root();
+        let viewport = Size {
+            width: 1024.0,
+            height: 768.0,
+        };
+        let inherited = ComputedStyle::root();
+        let decl = Declaration {
+            property: "animation".to_string(),
+            value: "2s ease-in-out 0.5s 2 alternate forwards paused fade".to_string(),
+            important: false,
+        };
+        apply_declaration(&mut s, &decl, 16.0, viewport, FontWeight::default(), &inherited, false);
+        assert_eq!(s.animation_names, vec!["fade".to_string()]);
+        assert!((s.animation_durations[0] - 2.0).abs() < 1e-4);
+        assert!((s.animation_delays[0] - 0.5).abs() < 1e-4);
+        assert_eq!(s.animation_iteration_counts[0], IterationCount::Finite(2.0));
+        assert_eq!(s.animation_directions[0], AnimationDirection::Alternate);
+        assert_eq!(s.animation_fill_modes[0], AnimationFillMode::Forwards);
+        assert_eq!(s.animation_play_states[0], AnimationPlayState::Paused);
+    }
+
+    #[test]
+    fn shorthand_tokenize_with_parens_handles_nested() {
+        // Sanity-check helper: вложенные скобки не разбиваются на пробелах.
+        let tokens = tokenize_with_parens("a cubic-bezier(0.1, 0.2, 0.3, 0.4) b");
+        assert_eq!(tokens.len(), 3);
+        assert_eq!(tokens[0], "a");
+        // Внутри скобок пробелы и запятые сохраняются — это один токен.
+        assert_eq!(tokens[1], "cubic-bezier(0.1, 0.2, 0.3, 0.4)");
+        assert_eq!(tokens[2], "b");
     }
 }
