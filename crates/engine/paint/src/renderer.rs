@@ -775,6 +775,14 @@ impl Renderer {
                     text,
                     font_size,
                     color,
+                    // Метаданные шрифта (CSS Fonts L4 §5.2) уже доходят до
+                    // renderer-а, но пока игнорируются: рендер держит ровно
+                    // один Font (bundled Inter Regular). Выбор face через
+                    // FontProvider::pick_face и переключение Font на лету
+                    // — следующий шаг (c) задачи Font fallback / matcher.
+                    font_family: _,
+                    font_weight: _,
+                    font_style: _,
                 } => {
                     let (Some(head), Some(hhea), Some(cmap), Some(hmtx), Some(raster)) =
                         (&head, &hhea, &cmap, &hmtx, &raster_native)

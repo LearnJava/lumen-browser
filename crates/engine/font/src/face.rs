@@ -173,6 +173,11 @@ impl<'a> Font<'a> {
         crate::name::Name::parse(data)
     }
 
+    pub fn os2(&self) -> Result<crate::os2::Os2, FontError> {
+        let data = self.table(b"OS/2").ok_or(FontError::TableNotFound(*b"OS/2"))?;
+        crate::os2::Os2::parse(data)
+    }
+
     /// Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
     /// (например, space). Composite-глифы возвращаются с `Outline::Composite`
     /// (компонентами) — для разрешения в простые контуры используй

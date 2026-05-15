@@ -12,7 +12,6 @@
 
 *(пусто — все задачи свободны)*
 
-
 ## Статус реализации
 
 **Текущая фаза:** Phase 0 (прототип). Этот блок обновляется при каждом коммите, реализующем пункт плана. Условные обозначения: ✅ готово · 🟡 в работе · ⬜ запланировано.
@@ -135,7 +134,7 @@
 
 | # | Задача | Что разблокирует | Что НЕ блокирует |
 |---|---|---|---|
-| 1A | **`[P2]` Font fallback / matcher.** Системный индекс шрифтов (`FontProvider` + `SystemFontIndex`) реализован. Осталось: (a) picker по `font-style` / `font-weight`, (b) подключить в paint-pipeline вместо bundled-only, (c) cascade «Inter → системный по unicode-блоку» для эмодзи / CJK fallback. **Блокер для Phase 1 как демонстрации.** | Реальные страницы перестают быть `?`-глифами. Открывает «реальный сайт» как тест-площадку всем трём. | Никого. |
+| 1A | 🟡 **`[P2]` Font fallback / matcher.** Системный индекс шрифтов (`FontProvider` + `SystemFontIndex`) реализован. (a) picker по `font-style` / `font-weight` ✅ — `match_face` по CSS Fonts L4 §5.2 + OS/2 парсер + `FaceRecord` (`lumen-font::os2`, `lumen-core::ext::match_face`). (b) display-list plumbing ✅ — `DisplayCommand::DrawText` несёт `font_family`/`font_weight`/`font_style` (`lumen-paint::display_list`). Осталось: реальный switch face в renderer-е (Renderer держит `dyn FontProvider` + cache загруженных Font-инстансов), (c) cascade «Inter → системный по unicode-блоку» для эмодзи / CJK fallback. **Блокер для Phase 1 как демонстрации.** | Реальные страницы перестают быть `?`-глифами. Открывает «реальный сайт» как тест-площадку всем трём. | Никого. |
 | 1B | **`[P2+P1]` Compositor thread + layer tree scaffolding** против `PropertyTrees` от Sprint 0 (пустые trees → один layer). Двухбуферная commit-модель (pending tree / active tree, атомарный swap). | Foundation для: п.2B (hit testing), off-main-thread scroll, п.3B (Web Animations compositor path), п.4 (mix-blend-mode/backdrop-filter pipeline), GPU process у P3. **Самый большой enabler в P2.** | Структура pipeline готова до того, как P1 закончит property trees — drop-in переход. |
 | 2A | **`[P1+P2]` Painting order traversal** (CSS 2.1 Appendix E, 7-уровневый порядок). Пишется на типах `StackingContextId` от Sprint 0 — когда P1 п.2A заполнит реальные данные, z-index начнёт работать без правки P2. | z-index корректно. | Сейчас paint в порядке DOM-обхода — это допустимо до перехода. |
 | 2B | **`[P2]` Stacking-aware hit testing на layer tree** (O(log n) lookup; учитывает z-index, `pointer-events: none`, transform inversion). | P3 input dispatch / cursor / events — корректный hit test, чтобы JS получал правильный target. | P3 input уже работает на простом обходе layout-дерева — переход drop-in. |

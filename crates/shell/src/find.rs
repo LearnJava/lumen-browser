@@ -19,7 +19,7 @@
 //! - find-bar фиксированных размеров в правом верхнем углу окна.
 
 use lumen_core::geom::Rect;
-use lumen_layout::{Color, TextMeasurer};
+use lumen_layout::{Color, FontStyle, FontWeight, TextMeasurer};
 use lumen_paint::{DisplayCommand, DisplayList};
 
 /// Состояние find bar и текущего запроса.
@@ -247,6 +247,9 @@ fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh):
         text: label.to_string(),
         font_size: BAR_FONT_SIZE,
         color: BAR_FG,
+        font_family: Vec::new(),
+        font_weight: FontWeight::NORMAL,
+        font_style: FontStyle::Normal,
     });
 
     let input_x = x + 12.0 + label_w + 8.0;
@@ -262,6 +265,9 @@ fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh):
         text: state.query().to_string(),
         font_size: BAR_FONT_SIZE,
         color: BAR_FG,
+        font_family: Vec::new(),
+        font_weight: FontWeight::NORMAL,
+        font_style: FontStyle::Normal,
     });
 
     let status = if state.query().is_empty() {
@@ -276,6 +282,9 @@ fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh):
         text: status,
         font_size: BAR_FONT_SIZE - 2.0,
         color: BAR_DIM,
+        font_family: Vec::new(),
+        font_weight: FontWeight::NORMAL,
+        font_style: FontStyle::Normal,
     });
 }
 
@@ -297,6 +306,9 @@ mod tests {
             text: text.to_string(),
             font_size: 16.0,
             color: Color::BLACK,
+            font_family: Vec::new(),
+            font_weight: FontWeight::NORMAL,
+            font_style: FontStyle::Normal,
         }
     }
 
