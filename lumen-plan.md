@@ -11,7 +11,6 @@
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
 - 🔄 BlendMode::from_keyword для CSS-каскада (P2 1B follow-up) [P2] — blend-mode-keyword — 2026-05-15
-- 🔄 DPR / scale_factor в Renderer (P3 3A шаг a) [P3] — shell-dpr-support — 2026-05-15
 
 ## Статус реализации
 
