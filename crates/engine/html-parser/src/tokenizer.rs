@@ -63,6 +63,31 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
+    /// Создаёт tokenizer с заранее заданным `text_only`-состоянием.
+    /// Используется push-tokenizer-ом для возобновления токенизации
+    /// между chunk-ами: если предыдущий chunk закончился внутри
+    /// `<script>`/`<style>` (RAWTEXT) или `<title>`/`<textarea>` (RCDATA),
+    /// следующий chunk начинается в том же режиме.
+    pub fn with_state(input: &'a str, text_only: Option<(String, bool)>) -> Self {
+        Self {
+            input,
+            pos: 0,
+            text_only,
+        }
+    }
+
+    /// Текущая позиция курсора (в байтах от начала `input`). Используется
+    /// push-tokenizer-ом, чтобы понять, сколько байт уже потреблено.
+    pub fn pos(&self) -> usize {
+        self.pos
+    }
+
+    /// Текущее `text_only`-состояние. После исчерпания iterator-а это
+    /// финальное состояние — push-tokenizer переносит его в следующий chunk.
+    pub fn text_only_state(&self) -> Option<&(String, bool)> {
+        self.text_only.as_ref()
+    }
+
     fn peek(&self) -> Option<char> {
         self.input[self.pos..].chars().next()
     }
@@ -96,10 +121,19 @@ impl<'a> Iterator for Tokenizer<'a> {
         // <title>/<textarea> (RCDATA). `<` без `/tag` — текст; `&` —
         // декодируется только в RCDATA. Завершает режим `</tag` +
         // терминатор; сам `</tag>` потом токенизируется как обычный EndTag.
+        //
+        // ВАЖНО для push-режима: если в text_only loop мы упёрлись
+        // в EOF (не найдя `</tag`), state нужно восстановить — следующий
+        // вызов `next()` на дополненном вводе должен продолжить text_only,
+        // а не переключиться в data state. Если же выход через break
+        // на `</tag`, state остаётся очищенным (так и было), и data
+        // state корректно разберёт `</tag>` как EndTag.
         if let Some((tag, decode_entities)) = self.text_only.take() {
             let mut text = String::new();
+            let mut hit_terminator = false;
             while let Some(c) = self.peek() {
                 if c == '<' && self.starts_with_end_tag(&tag) {
+                    hit_terminator = true;
                     break;
                 }
                 if decode_entities && c == '&' {
@@ -114,11 +148,17 @@ impl<'a> Iterator for Tokenizer<'a> {
                     text.push(c);
                 }
             }
+            if !hit_terminator {
+                self.text_only = Some((tag, decode_entities));
+            }
             if !text.is_empty() {
                 return Some(Token::Text(text));
             }
-            // Текста не было — провалимся в обычный data state, где
-            // следующий же символ '<' разберётся как закрывающий тег.
+            if !hit_terminator {
+                // EOF в пустом text_only — больше ничего не вернём.
+                return None;
+            }
+            // hit_terminator + text пустой → fall through в data state.
         }
 
         if self.pos >= self.input.len() {

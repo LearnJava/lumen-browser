@@ -4,33 +4,101 @@
 //! spec (in_table / in_select / реструктуризация foster parent и т.д.) —
 //! этого достаточно для текстового веба и большинства простых страниц.
 //! При несовпадении закрывающего тега молча игнорирует.
+//!
+//! Доступен в двух режимах:
+//!
+//! * [`parse`] — pull-режим: вся строка целиком прогоняется через
+//!   [`Tokenizer`] и применяется к DOM.
+//! * [`IncrementalTreeBuilder`] — push-режим: ввод подаётся chunk-ами
+//!   через [`crate::PushTokenizer`], DOM растёт инкрементально.
+//!
+//! Инвариант: при идентичном входе оба режима дают одинаковый
+//! [`Document`]. Гарантируется через **text-node coalescing**: если
+//! push-tokenizer разбил непрерывный текстовый поток на несколько
+//! `Token::Text` (из-за chunk boundary), `apply_token` сливает их в
+//! один text-node. Pull-режим этим путём проходит no-op (он всегда
+//! отдаёт Text-токен единым куском).
 
-use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
+use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId, QualName};
 
+use crate::push_tokenizer::PushTokenizer;
 use crate::tokenizer::{Token, Tokenizer};
 
 pub fn parse(input: &str) -> Document {
-    use lumen_dom::DocumentMode;
-
-    let mut doc = Document::new();
-    let mut stack: Vec<NodeId> = vec![doc.root()];
-    // По §13.2.6.4.1 «The initial insertion mode»: при отсутствии DOCTYPE
-    // документ становится Quirks. Document::new() по умолчанию NoQuirks
-    // (для программного использования и unit-тестов), поэтому fallback
-    // ставим в конце функции, если ни одного DOCTYPE-токена не было.
-    let mut seen_doctype = false;
-
+    let mut builder = IncrementalTreeBuilder::new();
     for token in Tokenizer::new(input) {
+        builder.apply_token(token);
+    }
+    builder.finish()
+}
+
+/// Push-режим tree builder-а: принимает HTML chunk-ами, держит
+/// `Document` и DOM-стек между вызовами `feed`. Финализируется
+/// `finish(self) -> Document`.
+///
+/// Использование:
+/// ```ignore
+/// let mut b = IncrementalTreeBuilder::new();
+/// b.feed("<html><bo");
+/// b.feed("dy><p>hi</p></body></html>");
+/// let doc = b.finish();
+/// ```
+pub struct IncrementalTreeBuilder {
+    doc: Document,
+    stack: Vec<NodeId>,
+    tokenizer: PushTokenizer,
+    seen_doctype: bool,
+}
+
+impl IncrementalTreeBuilder {
+    pub fn new() -> Self {
+        let doc = Document::new();
+        let root = doc.root();
+        Self {
+            doc,
+            stack: vec![root],
+            tokenizer: PushTokenizer::new(),
+            seen_doctype: false,
+        }
+    }
+
+    /// Скармливает chunk push-токенизатору и применяет полученные
+    /// токены к DOM. После каждого `feed` `Document` валиден для
+    /// чтения (consumer может, например, запустить layout на текущем
+    /// снапшоте, хотя поддерево может быть незакрытым).
+    pub fn feed(&mut self, chunk: &str) {
+        for token in self.tokenizer.feed(chunk) {
+            self.apply_token(token);
+        }
+    }
+
+    /// Финализирует ввод. Хвост push-tokenizer-а токенизируется как
+    /// при EOF, оставшиеся токены применяются к DOM, выставляется
+    /// fallback `DocumentMode::Quirks` если ни одного DOCTYPE не было.
+    pub fn finish(mut self) -> Document {
+        for token in self.tokenizer.end() {
+            self.apply_token(token);
+        }
+        if !self.seen_doctype {
+            self.doc.set_mode(DocumentMode::Quirks);
+        }
+        self.doc
+    }
+
+    /// Применяет один токен к DOM. Используется и pull-парсером
+    /// `parse()`, и push-режимом — общая точка, чтобы поведение
+    /// гарантированно совпадало.
+    fn apply_token(&mut self, token: Token) {
         match token {
             Token::StartTag {
                 name,
                 attrs,
                 self_closing,
             } => {
-                let elem = doc.create_element(QualName::html(name.clone()));
+                let elem = self.doc.create_element(QualName::html(name.clone()));
                 if let NodeData::Element {
                     attrs: dom_attrs, ..
-                } = &mut doc.get_mut(elem).data
+                } = &mut self.doc.get_mut(elem).data
                 {
                     for (k, v) in attrs {
                         dom_attrs.push(Attribute {
@@ -39,73 +107,79 @@ pub fn parse(input: &str) -> Document {
                         });
                     }
                 }
-                let parent = *stack.last().expect("stack always non-empty");
-                doc.append_child(parent, elem);
+                let parent = *self.stack.last().expect("stack always non-empty");
+                self.doc.append_child(parent, elem);
                 if !self_closing && !is_void_element(&name) {
-                    stack.push(elem);
+                    self.stack.push(elem);
                 }
             }
             Token::EndTag { name } => {
-                let matched = stack.iter().enumerate().rev().find_map(|(idx, &id)| {
-                    if let NodeData::Element { name: n, .. } = &doc.get(id).data {
+                let matched = self.stack.iter().enumerate().rev().find_map(|(idx, &id)| {
+                    if let NodeData::Element { name: n, .. } = &self.doc.get(id).data {
                         (n.local == name).then_some(idx)
                     } else {
                         None
                     }
                 });
                 if let Some(idx) = matched {
-                    stack.truncate(idx);
+                    self.stack.truncate(idx);
                 }
             }
             Token::Text(s) => {
-                if !s.is_empty() {
-                    let text = doc.create_text(s);
-                    let parent = *stack.last().expect("stack always non-empty");
-                    doc.append_child(parent, text);
+                if s.is_empty() {
+                    return;
                 }
+                let parent = *self.stack.last().expect("stack always non-empty");
+                // text-node coalescing: если последний ребёнок — text,
+                // дописываем к нему вместо создания нового. Это
+                // ключевой инвариант для совпадения push/pull DOM:
+                // push может разбить непрерывный текст на несколько
+                // Token::Text по chunk boundary.
+                let last_child = self.doc.get(parent).children.last().copied();
+                if let Some(child) = last_child
+                    && let NodeData::Text(existing) = &mut self.doc.get_mut(child).data
+                {
+                    existing.push_str(&s);
+                    return;
+                }
+                let text = self.doc.create_text(s);
+                self.doc.append_child(parent, text);
             }
             Token::Comment(s) => {
-                let comment = doc.create_comment(s);
-                let parent = *stack.last().expect("stack always non-empty");
-                doc.append_child(parent, comment);
+                let comment = self.doc.create_comment(s);
+                let parent = *self.stack.last().expect("stack always non-empty");
+                self.doc.append_child(parent, comment);
             }
             Token::Doctype {
                 name,
                 public_id,
                 system_id,
             } => {
-                // По HTML5 spec DOCTYPE до <html> идёт прямо в Document.
-                // Без insertion modes мы кладём его туда, где сейчас стек —
-                // обычно тоже Document. Этого достаточно для рендеринга.
-                //
-                // Установить mode документа по §13.2.5.1 («The initial
-                // insertion mode»). Только первый DOCTYPE влияет — у нас
-                // нет insertion modes, но сторонние DOCTYPE-ы в середине
-                // документа — синтаксическая ошибка, и spec их игнорирует.
-                if !seen_doctype {
-                    doc.set_mode(crate::quirks_mode::detect_document_mode(
+                // §13.2.5.1: только первый DOCTYPE влияет на режим.
+                if !self.seen_doctype {
+                    self.doc.set_mode(crate::quirks_mode::detect_document_mode(
                         &name,
                         public_id.as_deref(),
                         system_id.as_deref(),
                     ));
-                    seen_doctype = true;
+                    self.seen_doctype = true;
                 }
-                let dt = doc.create_doctype(
+                let dt = self.doc.create_doctype(
                     name,
                     public_id.unwrap_or_default(),
                     system_id.unwrap_or_default(),
                 );
-                let parent = *stack.last().expect("stack always non-empty");
-                doc.append_child(parent, dt);
+                let parent = *self.stack.last().expect("stack always non-empty");
+                self.doc.append_child(parent, dt);
             }
         }
     }
+}
 
-    if !seen_doctype {
-        doc.set_mode(DocumentMode::Quirks);
+impl Default for IncrementalTreeBuilder {
+    fn default() -> Self {
+        Self::new()
     }
-
-    doc
 }
 
 fn is_void_element(name: &str) -> bool {
@@ -382,5 +456,195 @@ mod tests {
             r#"<!DOCTYPE html><p>x</p><!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">"#,
         );
         assert_eq!(doc.mode(), lumen_dom::DocumentMode::NoQuirks);
+    }
+
+    // ──────── IncrementalTreeBuilder — корректность независимо от chunk-боундари ────────
+
+    fn parse_incremental_chunks(input: &str, chunk_size: usize) -> Document {
+        let mut b = IncrementalTreeBuilder::new();
+        let bytes = input.as_bytes();
+        let mut start = 0;
+        while start < bytes.len() {
+            let mut end = (start + chunk_size).min(bytes.len());
+            while !input.is_char_boundary(end) {
+                end -= 1;
+            }
+            if end == start {
+                // chunk_size попал внутрь multi-byte char — продвинем
+                // до следующей границы.
+                end = (start + chunk_size + 4).min(bytes.len());
+                while !input.is_char_boundary(end) {
+                    end -= 1;
+                }
+            }
+            b.feed(&input[start..end]);
+            start = end;
+        }
+        b.finish()
+    }
+
+    fn parse_incremental_byte_by_byte(input: &str) -> Document {
+        let mut b = IncrementalTreeBuilder::new();
+        let mut start = 0;
+        for i in 1..=input.len() {
+            if !input.is_char_boundary(i) {
+                continue;
+            }
+            b.feed(&input[start..i]);
+            start = i;
+        }
+        b.finish()
+    }
+
+    fn assert_incremental_equals_pull(input: &str) {
+        let pull = parse(input).to_string();
+        let push_whole = {
+            let mut b = IncrementalTreeBuilder::new();
+            b.feed(input);
+            b.finish().to_string()
+        };
+        let push_byte = parse_incremental_byte_by_byte(input).to_string();
+        let push_chunk = parse_incremental_chunks(input, 8).to_string();
+        assert_eq!(push_whole, pull, "push(whole) != pull: {input:?}");
+        assert_eq!(push_byte, pull, "push(byte) != pull: {input:?}");
+        assert_eq!(push_chunk, pull, "push(8) != pull: {input:?}");
+    }
+
+    #[test]
+    fn incremental_empty() {
+        assert_incremental_equals_pull("");
+    }
+
+    #[test]
+    fn incremental_plain_text() {
+        assert_incremental_equals_pull("hello world");
+    }
+
+    #[test]
+    fn incremental_simple_tag() {
+        assert_incremental_equals_pull("<p>hello</p>");
+    }
+
+    #[test]
+    fn incremental_nested_tags() {
+        assert_incremental_equals_pull("<html><body><h1>Hello</h1></body></html>");
+    }
+
+    #[test]
+    fn incremental_attributes() {
+        assert_incremental_equals_pull(
+            r#"<a href="https://example.com" class='x' id=z>link</a>"#,
+        );
+    }
+
+    #[test]
+    fn incremental_void_element() {
+        assert_incremental_equals_pull("<p>a<br>b</p>");
+    }
+
+    #[test]
+    fn incremental_self_closing() {
+        assert_incremental_equals_pull("<img src=\"x.png\"/><p>after</p>");
+    }
+
+    #[test]
+    fn incremental_comment() {
+        assert_incremental_equals_pull("<p><!-- note -->text</p>");
+    }
+
+    #[test]
+    fn incremental_doctype_html5() {
+        assert_incremental_equals_pull("<!DOCTYPE html><p>x</p>");
+    }
+
+    #[test]
+    fn incremental_doctype_html4() {
+        assert_incremental_equals_pull(
+            r#"<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd"><p>x</p>"#,
+        );
+    }
+
+    #[test]
+    fn incremental_entity() {
+        assert_incremental_equals_pull("<p>a &amp; b &lt; c</p>");
+    }
+
+    #[test]
+    fn incremental_script_rawtext() {
+        assert_incremental_equals_pull("<script>var x = '<b>hi</b>'; if (a<b) f();</script>");
+    }
+
+    #[test]
+    fn incremental_title_rcdata() {
+        assert_incremental_equals_pull("<title>Foo &amp; <b>Bar</b></title>");
+    }
+
+    #[test]
+    fn incremental_textarea_xss_like() {
+        assert_incremental_equals_pull(
+            "<textarea>&lt;script&gt;alert(1)&lt;/script&gt;</textarea>",
+        );
+    }
+
+    #[test]
+    fn incremental_cyrillic() {
+        assert_incremental_equals_pull("<html><body><h1>Привет, мир</h1></body></html>");
+    }
+
+    #[test]
+    fn incremental_unclosed_tag() {
+        assert_incremental_equals_pull("<p>hello");
+    }
+
+    #[test]
+    fn incremental_unclosed_script() {
+        assert_incremental_equals_pull("<script>x = 1");
+    }
+
+    #[test]
+    fn incremental_no_doctype_yields_quirks() {
+        let mut b = IncrementalTreeBuilder::new();
+        b.feed("<p>");
+        b.feed("x</p>");
+        let doc = b.finish();
+        assert_eq!(doc.mode(), DocumentMode::Quirks);
+    }
+
+    #[test]
+    fn incremental_doctype_split_across_chunks() {
+        // DOCTYPE-токен может оказаться разорван по chunk-boundary,
+        // например `<!DOC` + `TYPE html>`. Push-tokenizer должен
+        // дождаться полного токена и применить mode.
+        let mut b = IncrementalTreeBuilder::new();
+        b.feed("<!DOC");
+        b.feed("TYPE html><p>x</p>");
+        let doc = b.finish();
+        assert_eq!(doc.mode(), DocumentMode::NoQuirks);
+    }
+
+    #[test]
+    fn incremental_entity_split_across_chunks() {
+        // `&amp;` разрезан посреди: `&am` + `p;`. Финальный DOM
+        // должен содержать декодированный `&`.
+        let mut b = IncrementalTreeBuilder::new();
+        b.feed("<p>a &am");
+        b.feed("p; b</p>");
+        let doc = b.finish();
+        let s = doc.to_string();
+        assert!(s.contains("\"a & b\""), "got: {s}");
+    }
+
+    #[test]
+    fn incremental_rawtext_close_tag_split() {
+        // `</script>` разорван — байт-за-байтом push не должен
+        // преждевременно закрыть script.
+        let mut b = IncrementalTreeBuilder::new();
+        b.feed("<script>x = 1; </scr");
+        b.feed("ipt><p>after</p>");
+        let doc = b.finish();
+        let s = doc.to_string();
+        assert!(s.contains("\"x = 1; \""), "got: {s}");
+        assert!(s.contains("<p>"));
+        assert!(s.contains("\"after\""));
     }
 }
