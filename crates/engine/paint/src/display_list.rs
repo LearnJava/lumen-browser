@@ -8,7 +8,8 @@
 
 use lumen_core::geom::Rect;
 use lumen_layout::{
-    BoxKind, Color, InlineFrag, LayoutBox, ObjectFit, ObjectPosition, PositionComponent,
+    BoxKind, Color, FontStyle, FontWeight, InlineFrag, LayoutBox, ObjectFit, ObjectPosition,
+    PositionComponent,
 };
 
 #[derive(Debug, Clone, PartialEq)]
@@ -29,6 +30,16 @@ pub enum DisplayCommand {
         text: String,
         font_size: f32,
         color: Color,
+        /// CSS Fonts L4 §3.1 — приоритизированный список имён семейств.
+        /// Пустой Vec означает «никакой явной family-инструкции» — renderer
+        /// использует bundled-шрифт (Inter Regular). Renderer перебирает имена
+        /// через `FontProvider::pick_face`; первый найденный face побеждает.
+        font_family: Vec<String>,
+        /// CSS-вес 1..1000. По умолчанию 400 (Regular). Передаётся в
+        /// `FontProvider::pick_face`; алгоритм матчинга — CSS Fonts L4 §5.2.
+        font_weight: FontWeight,
+        /// `font-style`. По умолчанию Normal.
+        font_style: FontStyle,
     },
     /// Растровое изображение из `<img>`. `rect` — итоговая коробка после
     /// расчёта по CSS (width/height + HTML presentational hints), `src` —
@@ -203,14 +214,37 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     cl.r, cl.g, cl.b, cl.a,
                 ));
             }
-            DisplayCommand::DrawText { rect, text, font_size, color } => {
+            DisplayCommand::DrawText {
+                rect, text, font_size, color, font_family, font_weight, font_style,
+            } => {
                 out.push_str(&format!(
-                    "DrawText ({:.2}, {:.2}, {:.2}, {:.2}) {:?} {:.2} #{:02x}{:02x}{:02x}{:02x}\n",
+                    "DrawText ({:.2}, {:.2}, {:.2}, {:.2}) {:?} {:.2} #{:02x}{:02x}{:02x}{:02x}",
                     rect.x, rect.y, rect.width, rect.height,
                     text,
                     font_size,
                     color.r, color.g, color.b, color.a,
                 ));
+                if !font_family.is_empty() {
+                    out.push_str(" family=[");
+                    for (i, name) in font_family.iter().enumerate() {
+                        if i > 0 {
+                            out.push(',');
+                        }
+                        out.push_str(&format!("{name:?}"));
+                    }
+                    out.push(']');
+                }
+                if *font_weight != FontWeight::NORMAL {
+                    out.push_str(&format!(" w={}", font_weight.0));
+                }
+                if *font_style != FontStyle::Normal {
+                    out.push_str(match font_style {
+                        FontStyle::Italic => " style=italic",
+                        FontStyle::Oblique => " style=oblique",
+                        FontStyle::Normal => "",
+                    });
+                }
+                out.push('\n');
             }
             DisplayCommand::DrawImage { rect, src, alt, object_fit, object_position } => {
                 out.push_str(&format!(
@@ -287,6 +321,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         text: frag.text.clone(),
                         font_size: frag.style.font_size,
                         color: frag.style.color,
+                        font_family: frag.style.font_family.clone(),
+                        font_weight: frag.style.font_weight,
+                        font_style: frag.style.font_style,
                     });
                     push_text_decoration(out, b.rect.x, line_y, frag);
                 }

@@ -381,11 +381,11 @@ pub trait FontProvider: Send + Sync {
 /// зависит от desired), затем weight по правилам §5 — для desired ≤ 400
 /// сначала меньшие, затем большие; для ≥ 600 — наоборот; 400 и 500 имеют
 /// особый «swap» (400 пробует 500 первым, 500 — 400).
-pub fn match_face<'a>(
-    faces: &'a [FaceRecord],
+pub fn match_face(
+    faces: &[FaceRecord],
     desired_weight: u16,
     desired_style: FontStyle,
-) -> Option<&'a FaceRecord> {
+) -> Option<&FaceRecord> {
     if faces.is_empty() {
         return None;
     }
