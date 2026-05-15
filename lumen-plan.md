@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-- 🔄 Codepoint cascade (P2 1A, шаг (c) — final) [P2] — codepoint-cascade — 2026-05-15
+- 🔄 Preload fallback chain (P2 1A — закрыто, follow-up) [P2] — preload-fallback — 2026-05-15
 
 ## Статус реализации
 
