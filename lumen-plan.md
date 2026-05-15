@@ -11,6 +11,7 @@
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
 - 🔄 Renderer face switch (P2 1A, шаг ©) [P2] — renderer-face-switch — 2026-05-15
+- 🔄 Stacking contexts impl (P1 2A) [P1] — stacking-contexts-build — 2026-05-15
 
 ## Статус реализации
 
