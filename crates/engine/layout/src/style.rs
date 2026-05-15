@@ -594,6 +594,261 @@ impl VerticalAlign {
     }
 }
 
+
+/// CSS Easing L1 §2 — easing function для CSS Transitions и CSS Animations.
+/// Не наследуется (используется как per-list-entry значение в
+/// transition/animation longhand-ах). Default по spec — `ease`, что
+/// эквивалентно `cubic-bezier(0.25, 0.1, 0.25, 1.0)`.
+///
+/// P2 п.3B compositor offload и P1 п.3A Web Animations interpolation —
+/// потребители этого AST: оба применяют функцию `progress(t) → [0, 1]`
+/// к линейному времени `t ∈ [0, 1]` для получения eased progress.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum TimingFunction {
+    /// `linear` ≡ `cubic-bezier(0, 0, 1, 1)`. progress(t) = t.
+    Linear,
+    /// `cubic-bezier(x1, y1, x2, y2)`. Также покрывает keyword-shortcuts:
+    /// `ease` ≡ (0.25, 0.1, 0.25, 1.0);
+    /// `ease-in` ≡ (0.42, 0, 1, 1);
+    /// `ease-out` ≡ (0, 0, 0.58, 1);
+    /// `ease-in-out` ≡ (0.42, 0, 0.58, 1).
+    /// x1, x2 ∈ [0, 1] (spec); y1, y2 — unbounded.
+    CubicBezier(f32, f32, f32, f32),
+    /// `steps(n, <step-position>)`. `step-start` ≡ `steps(1, jump-start)`,
+    /// `step-end` ≡ `steps(1, jump-end)`. `n` — положительное целое;
+    /// для `jump-none` ещё и ≥ 2.
+    Steps(u32, StepPosition),
+}
+
+impl Default for TimingFunction {
+    fn default() -> Self {
+        // CSS Transitions/Animations L1 — initial value = `ease`.
+        TimingFunction::CubicBezier(0.25, 0.1, 0.25, 1.0)
+    }
+}
+
+impl TimingFunction {
+    /// Парсит keyword (`linear` / `ease` / `ease-in` / `ease-out` /
+    /// `ease-in-out` / `step-start` / `step-end`) или функцию
+    /// (`cubic-bezier(...)` / `steps(...)`). Возвращает `None` для
+    /// невалидного значения (out-of-range x, n=0, неизвестный keyword).
+    pub fn parse(s: &str) -> Option<Self> {
+        let t = s.trim().to_ascii_lowercase();
+        match t.as_str() {
+            "linear" => return Some(Self::Linear),
+            "ease" => return Some(Self::CubicBezier(0.25, 0.1, 0.25, 1.0)),
+            "ease-in" => return Some(Self::CubicBezier(0.42, 0.0, 1.0, 1.0)),
+            "ease-out" => return Some(Self::CubicBezier(0.0, 0.0, 0.58, 1.0)),
+            "ease-in-out" => return Some(Self::CubicBezier(0.42, 0.0, 0.58, 1.0)),
+            "step-start" => return Some(Self::Steps(1, StepPosition::JumpStart)),
+            "step-end" => return Some(Self::Steps(1, StepPosition::JumpEnd)),
+            _ => {}
+        }
+        if let Some(args) = t
+            .strip_prefix("cubic-bezier(")
+            .and_then(|rest| rest.strip_suffix(')'))
+        {
+            let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+            if parts.len() != 4 {
+                return None;
+            }
+            let x1 = parts[0].parse::<f32>().ok()?;
+            let y1 = parts[1].parse::<f32>().ok()?;
+            let x2 = parts[2].parse::<f32>().ok()?;
+            let y2 = parts[3].parse::<f32>().ok()?;
+            if !(0.0..=1.0).contains(&x1) || !(0.0..=1.0).contains(&x2) {
+                return None;
+            }
+            return Some(Self::CubicBezier(x1, y1, x2, y2));
+        }
+        if let Some(args) = t
+            .strip_prefix("steps(")
+            .and_then(|rest| rest.strip_suffix(')'))
+        {
+            let parts: Vec<&str> = args.split(',').map(str::trim).collect();
+            if parts.is_empty() || parts.len() > 2 {
+                return None;
+            }
+            let n = parts[0].parse::<u32>().ok()?;
+            if n == 0 {
+                return None;
+            }
+            let pos = match parts.get(1).copied() {
+                None => StepPosition::JumpEnd,
+                Some("start") | Some("jump-start") => StepPosition::JumpStart,
+                Some("end") | Some("jump-end") => StepPosition::JumpEnd,
+                Some("jump-none") => {
+                    if n < 2 {
+                        return None;
+                    }
+                    StepPosition::JumpNone
+                }
+                Some("jump-both") => StepPosition::JumpBoth,
+                _ => return None,
+            };
+            return Some(Self::Steps(n, pos));
+        }
+        None
+    }
+
+    /// CSS Transitions/Animations L1 — comma-list of timing functions.
+    /// Пустые / невалидные entry — пропускаются (best-effort lenient).
+    pub fn parse_list(s: &str) -> Vec<TimingFunction> {
+        split_top_level_commas(s)
+            .into_iter()
+            .filter_map(TimingFunction::parse)
+            .collect()
+    }
+}
+
+/// CSS Easing L1 §3 — позиция шага в `steps()`. Default по spec — `jump-end`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum StepPosition {
+    /// `jump-start` (alias `start`) — первый прыжок на t=0,
+    /// последний шаг достигает 1 - 1/n.
+    JumpStart,
+    /// `jump-end` (alias `end`) — первый шаг на t > 0, последний прыжок
+    /// на t=1. Default.
+    #[default]
+    JumpEnd,
+    /// `jump-none` — `n` шагов, ни один на границе. Требует n ≥ 2.
+    JumpNone,
+    /// `jump-both` — n+1 шагов, оба на границах t=0 и t=1.
+    JumpBoth,
+}
+
+/// CSS Animations L1 §3.5 — `animation-iteration-count`. Либо число
+/// (может быть дробным; отрицательные значения трактуются как невалидные),
+/// либо ключевое слово `infinite`. Default = `Finite(1.0)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum IterationCount {
+    Finite(f32),
+    Infinite,
+}
+
+impl Default for IterationCount {
+    fn default() -> Self {
+        IterationCount::Finite(1.0)
+    }
+}
+
+impl IterationCount {
+    pub fn parse(s: &str) -> Option<Self> {
+        let t = s.trim();
+        if t.eq_ignore_ascii_case("infinite") {
+            return Some(Self::Infinite);
+        }
+        let n = t.parse::<f32>().ok()?;
+        if n.is_finite() && n >= 0.0 {
+            Some(Self::Finite(n))
+        } else {
+            None
+        }
+    }
+
+    pub fn parse_list(s: &str) -> Vec<IterationCount> {
+        split_top_level_commas(s)
+            .into_iter()
+            .filter_map(IterationCount::parse)
+            .collect()
+    }
+}
+
+/// CSS Animations L1 §3.6 — `animation-direction`. Default = `Normal`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AnimationDirection {
+    /// Прямое воспроизведение каждой итерации (0 → 100%).
+    #[default]
+    Normal,
+    /// Обратное воспроизведение (100% → 0).
+    Reverse,
+    /// Чётные итерации normal, нечётные reverse.
+    Alternate,
+    /// Чётные reverse, нечётные normal.
+    AlternateReverse,
+}
+
+impl AnimationDirection {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(Self::Normal),
+            "reverse" => Some(Self::Reverse),
+            "alternate" => Some(Self::Alternate),
+            "alternate-reverse" => Some(Self::AlternateReverse),
+            _ => None,
+        }
+    }
+
+    pub fn parse_list(s: &str) -> Vec<AnimationDirection> {
+        split_top_level_commas(s)
+            .into_iter()
+            .filter_map(AnimationDirection::parse)
+            .collect()
+    }
+}
+
+/// CSS Animations L1 §3.7 — `animation-fill-mode`. Default = `None`.
+/// Определяет, применяются ли значения keyframes до начала и/или после
+/// окончания анимации.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AnimationFillMode {
+    /// До начала и после конца — используется computed-style без keyframes.
+    #[default]
+    None,
+    /// После окончания — последняя keyframe сохраняется.
+    Forwards,
+    /// До начала — первая keyframe применяется.
+    Backwards,
+    /// Both `forwards` и `backwards` одновременно.
+    Both,
+}
+
+impl AnimationFillMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "forwards" => Some(Self::Forwards),
+            "backwards" => Some(Self::Backwards),
+            "both" => Some(Self::Both),
+            _ => None,
+        }
+    }
+
+    pub fn parse_list(s: &str) -> Vec<AnimationFillMode> {
+        split_top_level_commas(s)
+            .into_iter()
+            .filter_map(AnimationFillMode::parse)
+            .collect()
+    }
+}
+
+/// CSS Animations L1 §3.8 — `animation-play-state`. Default = `Running`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum AnimationPlayState {
+    /// Анимация идёт. Default.
+    #[default]
+    Running,
+    /// Пауза — текущее значение фиксируется.
+    Paused,
+}
+
+impl AnimationPlayState {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "running" => Some(Self::Running),
+            "paused" => Some(Self::Paused),
+            _ => None,
+        }
+    }
+
+    pub fn parse_list(s: &str) -> Vec<AnimationPlayState> {
+        split_top_level_commas(s)
+            .into_iter()
+            .filter_map(AnimationPlayState::parse)
+            .collect()
+    }
+}
+
 /// CSS-wide keywords (CSS Cascade L4 §7) — применимы к любому свойству.
 /// - `Inherit` — взять computed value родителя.
 /// - `Initial` — взять initial value свойства из спецификации.
@@ -851,6 +1106,14 @@ pub struct ComputedStyle {
     pub background_repeat: BackgroundRepeat,
     pub background_size: BackgroundSize,
     pub background_attachment: BackgroundAttachment,
+    /// CSS Backgrounds L3 §3.5 — `background-position`. Не наследуется.
+    /// Default `0% 0%` (top-left). Phase 0: parsing + storage; реальное
+    /// применение в paint pipeline (смещение background-image в pattern fill)
+    /// — отдельная задача с согласованием P2 (см. crate-ownership matrix).
+    /// Тип переиспользуется с `object-position`: те же 1-2-value формы,
+    /// keyword / length / percentage. Multi-background-position (список
+    /// через запятую) — отдельная задача после multi-background-image.
+    pub background_position: ObjectPosition,
     /// CSS Will Change L1. Список имён свойств для optimization hint.
     /// Пустой Vec = `auto` (default). Не наследуется.
     pub will_change: Vec<String>,
@@ -915,6 +1178,32 @@ pub struct ComputedStyle {
     pub transition_durations: Vec<f32>,
     /// CSS Transitions L1 §3 — `transition-delay: <time>+` в секундах.
     pub transition_delays: Vec<f32>,
+    /// CSS Transitions L1 §3 — `transition-timing-function: <easing-function>+`.
+    /// Per-property list; если длина короче `transition_properties`, при
+    /// resolve-time spec велит cyclically reuse последний элемент.
+    pub transition_timing_functions: Vec<TimingFunction>,
+    /// CSS Animations L1 §3.1 — `animation-name: none | <keyframes-name>#`.
+    /// `none` хранится как пустой `Vec` (нет анимаций); иначе список имён.
+    /// Имя соответствует `@keyframes name { ... }` в [`Stylesheet`].
+    pub animation_names: Vec<String>,
+    /// CSS Animations L1 §3.2 — `animation-duration: <time>#`. Секунды.
+    /// Параллельный список к `animation_names`; cyclically reuse при
+    /// несовпадении длины (resolve в P1 п.3A scheduler).
+    pub animation_durations: Vec<f32>,
+    /// CSS Animations L1 §3.3 — `animation-timing-function: <easing-function>#`.
+    pub animation_timing_functions: Vec<TimingFunction>,
+    /// CSS Animations L1 §3.4 — `animation-delay: <time>#`. Секунды.
+    /// Отрицательные значения допустимы и означают «анимация началась
+    /// в прошлом» (используется для phase-offset нескольких анимаций).
+    pub animation_delays: Vec<f32>,
+    /// CSS Animations L1 §3.5 — `animation-iteration-count: <single-iteration-count>#`.
+    pub animation_iteration_counts: Vec<IterationCount>,
+    /// CSS Animations L1 §3.6 — `animation-direction: <single-animation-direction>#`.
+    pub animation_directions: Vec<AnimationDirection>,
+    /// CSS Animations L1 §3.7 — `animation-fill-mode: <single-animation-fill-mode>#`.
+    pub animation_fill_modes: Vec<AnimationFillMode>,
+    /// CSS Animations L1 §3.8 — `animation-play-state: <single-animation-play-state>#`.
+    pub animation_play_states: Vec<AnimationPlayState>,
     /// CSS Masking L1 §4 — `mask-image: url(...) | linear-gradient(...) | none`.
     /// `BackgroundImage` переиспользуется как тип (same structure: None/Url/Gradient).
     pub mask_image: BackgroundImage,
@@ -945,6 +1234,11 @@ pub struct ComputedStyle {
     /// (y_offset фрагмента в inline-flow и DrawText в paint) — отдельная
     /// задача с согласованием P2 (см. doc-comment на [`VerticalAlign`]).
     pub vertical_align: VerticalAlign,
+    /// CSS Images L3 §6.1 — `image-rendering`. Inherited. Default `Auto`.
+    /// Phase 0: parsing + storage; реальное переключение GPU sampler filter
+    /// в `lumen-paint` (linear vs nearest-neighbour для `<img>` и background)
+    /// — отдельная задача с согласованием P2.
+    pub image_rendering: ImageRendering,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -1420,6 +1714,46 @@ impl ObjectFit {
     }
 }
 
+/// CSS Images L3 §6.1 — `image-rendering`. Hint для движка о том, как
+/// масштабировать растровое изображение (применимо к `<img>`, background-image,
+/// canvas, и т.д.). Inherited.
+///
+/// Phase 0: parsing + storage. Реальное переключение GPU sampler filter
+/// (`Linear` для `auto`/`smooth`/`high-quality`, `Nearest` для `pixelated`/
+/// `crisp-edges`) в `lumen-paint` — отдельная задача с согласованием P2.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ImageRendering {
+    /// `auto` (default) — UA выбирает алгоритм. Обычно — bilinear.
+    #[default]
+    Auto,
+    /// `smooth` — high-quality scaling, оптимизирован для smooth gradient.
+    /// На практике в современных движках = `auto`.
+    Smooth,
+    /// `high-quality` — высочайшее качество масштабирования (тяжелее `smooth`).
+    /// Спецификация добавлена в CSS Images L4; считается переименованием
+    /// `optimizeQuality` из L3 (которое теперь deprecated).
+    HighQuality,
+    /// `crisp-edges` — сохраняет контраст и резкость границ (pixel art /
+    /// vector graphics). UA может использовать nearest-neighbour или
+    /// edge-preserving алгоритм.
+    CrispEdges,
+    /// `pixelated` — nearest-neighbour. Полезно для масштабирования pixel art.
+    Pixelated,
+}
+
+impl ImageRendering {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "smooth" => Some(Self::Smooth),
+            "high-quality" => Some(Self::HighQuality),
+            "crisp-edges" => Some(Self::CrispEdges),
+            "pixelated" => Some(Self::Pixelated),
+            _ => None,
+        }
+    }
+}
+
 /// Одна компонента `object-position`. Length-варианты резолвятся в px
 /// относительно края коробки (positive = от left/top); percentage —
 /// относительно **свободного места** `box_size - content_size` (может быть
@@ -1460,6 +1794,19 @@ impl Default for ObjectPosition {
         Self {
             x: PositionComponent::Percent(0.5),
             y: PositionComponent::Percent(0.5),
+        }
+    }
+}
+
+impl ObjectPosition {
+    /// CSS Backgrounds L3 §3.5 — initial value `background-position: 0% 0%`
+    /// (top-left). Отличается от Object Position default (`50% 50%`, центр)
+    /// специально потому, что `background-image` обычно anchored к top-left
+    /// при первой укладке (см. CSS 2.1 §14.2.1).
+    pub const fn background_initial() -> Self {
+        Self {
+            x: PositionComponent::Percent(0.0),
+            y: PositionComponent::Percent(0.0),
         }
     }
 }
@@ -1804,6 +2151,7 @@ impl ComputedStyle {
             background_repeat: BackgroundRepeat::Repeat,
             background_size: BackgroundSize::Auto,
             background_attachment: BackgroundAttachment::Scroll,
+            background_position: ObjectPosition::background_initial(),
             will_change: Vec::new(),
             pointer_events: PointerEvents::Auto,
             user_select: UserSelect::Auto,
@@ -1836,6 +2184,15 @@ impl ComputedStyle {
             transition_properties: Vec::new(),
             transition_durations: Vec::new(),
             transition_delays: Vec::new(),
+            transition_timing_functions: Vec::new(),
+            animation_names: Vec::new(),
+            animation_durations: Vec::new(),
+            animation_timing_functions: Vec::new(),
+            animation_delays: Vec::new(),
+            animation_iteration_counts: Vec::new(),
+            animation_directions: Vec::new(),
+            animation_fill_modes: Vec::new(),
+            animation_play_states: Vec::new(),
             mask_image: BackgroundImage::None,
             mask_repeat: BackgroundRepeat::Repeat,
             mask_size: BackgroundSize::Auto,
@@ -1846,6 +2203,7 @@ impl ComputedStyle {
             object_fit: ObjectFit::Fill,
             object_position: ObjectPosition::default(),
             vertical_align: VerticalAlign::Baseline,
+            image_rendering: ImageRendering::Auto,
         }
     }
 }
@@ -1969,6 +2327,7 @@ pub fn compute_style(
         background_repeat: BackgroundRepeat::Repeat,
         background_size: BackgroundSize::Auto,
         background_attachment: BackgroundAttachment::Scroll,
+        background_position: ObjectPosition::background_initial(),
         // Will Change / Pointer Events — не наследуются.
         will_change: Vec::new(),
         pointer_events: PointerEvents::Auto,
@@ -2002,10 +2361,19 @@ pub fn compute_style(
         list_style_type: inherited.list_style_type,
         list_style_position: inherited.list_style_position,
         list_style_image: inherited.list_style_image.clone(),
-        // CSS Transitions — не наследуются.
+        // CSS Transitions / Animations — не наследуются. Initial = empty list.
         transition_properties: Vec::new(),
         transition_durations: Vec::new(),
         transition_delays: Vec::new(),
+        transition_timing_functions: Vec::new(),
+        animation_names: Vec::new(),
+        animation_durations: Vec::new(),
+        animation_timing_functions: Vec::new(),
+        animation_delays: Vec::new(),
+        animation_iteration_counts: Vec::new(),
+        animation_directions: Vec::new(),
+        animation_fill_modes: Vec::new(),
+        animation_play_states: Vec::new(),
         // CSS Masking — не наследуется.
         mask_image: BackgroundImage::None,
         mask_repeat: BackgroundRepeat::Repeat,
@@ -2021,6 +2389,8 @@ pub fn compute_style(
         object_position: ObjectPosition::default(),
         // CSS 2.1 §10.8.1 — vertical-align не наследуется. Initial = baseline.
         vertical_align: VerticalAlign::Baseline,
+        // CSS Images L3 §6.1 — image-rendering inherited.
+        image_rendering: inherited.image_rendering,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -4583,6 +4953,12 @@ fn apply_declaration(
                 }
             }
         }
+        "image-rendering" => {
+            // CSS Images L3 §6.1: enum-keyword. Inherited.
+            if let Some(v) = ImageRendering::parse(val) {
+                style.image_rendering = v;
+            }
+        }
         "width" if val != "auto" => {
             style.width = parse_length(val).and_then(|l| l.resolve(em_basis, None, viewport));
         }
@@ -5157,6 +5533,17 @@ fn apply_declaration(
                 style.background_attachment = v;
             }
         }
+        "background-position" => {
+            // CSS Backgrounds L3 §3.5. Парсер `<position>` переиспользуется
+            // с `object-position` (`ObjectPosition::parse`), но default
+            // для background-position другой — `0% 0%`, не `50% 50%`,
+            // поэтому используется отдельная константа `background_initial`.
+            // Multi-value список через запятую (для multi-background-image)
+            // — отдельная задача; здесь принимается один position.
+            if let Some(p) = ObjectPosition::parse(val, em_basis, viewport) {
+                style.background_position = p;
+            }
+        }
         "will-change" => {
             // CSS Will Change L1: `auto | <ident-list>`. Lenient parser —
             // comma-separated ident-имена.
@@ -5424,6 +5811,42 @@ fn apply_declaration(
         }
         "transition-delay" => {
             style.transition_delays = parse_time_list(val);
+        }
+        "transition-timing-function" => {
+            style.transition_timing_functions = TimingFunction::parse_list(val);
+        }
+        "animation-name" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") || trimmed.is_empty() {
+                style.animation_names = Vec::new();
+            } else {
+                style.animation_names = split_top_level_commas(trimmed)
+                    .into_iter()
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty() && !s.eq_ignore_ascii_case("none"))
+                    .collect();
+            }
+        }
+        "animation-duration" => {
+            style.animation_durations = parse_time_list(val);
+        }
+        "animation-delay" => {
+            style.animation_delays = parse_time_list(val);
+        }
+        "animation-timing-function" => {
+            style.animation_timing_functions = TimingFunction::parse_list(val);
+        }
+        "animation-iteration-count" => {
+            style.animation_iteration_counts = IterationCount::parse_list(val);
+        }
+        "animation-direction" => {
+            style.animation_directions = AnimationDirection::parse_list(val);
+        }
+        "animation-fill-mode" => {
+            style.animation_fill_modes = AnimationFillMode::parse_list(val);
+        }
+        "animation-play-state" => {
+            style.animation_play_states = AnimationPlayState::parse_list(val);
         }
         "mask-image" => {
             let trimmed = val.trim();
@@ -6237,6 +6660,24 @@ fn apply_css_wide_keyword(
                 inherited.vertical_align
             } else {
                 init.vertical_align
+            };
+        }
+        // CSS Backgrounds L3 §3.5 — background-position non-inherited.
+        "background-position" => {
+            style.background_position = if inh_only_inherit {
+                inherited.background_position
+            } else {
+                init.background_position
+            };
+        }
+        // CSS Images L3 §6.1 — image-rendering inherited. inh — общий
+        // алиас «брать inherited.value» (для inherited работает и при
+        // Inherit, и при Unset; см. вычисление inh выше).
+        "image-rendering" => {
+            style.image_rendering = if inh {
+                inherited.image_rendering
+            } else {
+                init.image_rendering
             };
         }
         // Прочие / неизвестные — silent no-op.
@@ -9864,5 +10305,221 @@ mod tests {
             &[0, 0],
         );
         assert_eq!(s.vertical_align, VerticalAlign::Baseline);
+    }
+
+    // -------- background-position (CSS Backgrounds L3 §3.5) --------
+
+    #[test]
+    fn background_position_default_is_top_left() {
+        // CSS Backgrounds L3 §3.5 — initial `0% 0%`, отличается от
+        // object-position default (`50% 50%`).
+        let s = cascade_at("<div></div>", "", &[0]);
+        assert_eq!(
+            s.background_position,
+            ObjectPosition {
+                x: PositionComponent::Percent(0.0),
+                y: PositionComponent::Percent(0.0),
+            }
+        );
+    }
+
+    #[test]
+    fn background_position_two_percent_values() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: 25% 75%; }",
+            &[0],
+        );
+        assert_eq!(s.background_position.x, PositionComponent::Percent(0.25));
+        assert_eq!(s.background_position.y, PositionComponent::Percent(0.75));
+    }
+
+    #[test]
+    fn background_position_two_lengths() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: 10px 20px; }",
+            &[0],
+        );
+        assert_eq!(s.background_position.x, PositionComponent::Px(10.0));
+        assert_eq!(s.background_position.y, PositionComponent::Px(20.0));
+    }
+
+    #[test]
+    fn background_position_single_value_centers_y() {
+        // Один token — второй компонент defaults to `center` (50%).
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: 30%; }",
+            &[0],
+        );
+        assert_eq!(s.background_position.x, PositionComponent::Percent(0.30));
+        assert_eq!(s.background_position.y, PositionComponent::Percent(0.5));
+    }
+
+    #[test]
+    fn background_position_keyword_right_bottom() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: right bottom; }",
+            &[0],
+        );
+        assert_eq!(s.background_position.x, PositionComponent::Percent(1.0));
+        assert_eq!(s.background_position.y, PositionComponent::Percent(1.0));
+    }
+
+    #[test]
+    fn background_position_keyword_center() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: center; }",
+            &[0],
+        );
+        assert_eq!(s.background_position.x, PositionComponent::Percent(0.5));
+        assert_eq!(s.background_position.y, PositionComponent::Percent(0.5));
+    }
+
+    #[test]
+    fn background_position_invalid_value_ignored() {
+        // Невалидное value → declaration invalid → остаётся initial.
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: bogus; }",
+            &[0],
+        );
+        assert_eq!(
+            s.background_position,
+            ObjectPosition::background_initial()
+        );
+    }
+
+    #[test]
+    fn background_position_not_inherited() {
+        // CSS Backgrounds L3 — non-inherited; ребёнок без своей декларации
+        // получает initial (`0% 0%`), а не родительское `right bottom`.
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { background-position: right bottom; }",
+            &[0, 0],
+        );
+        assert_eq!(
+            s.background_position,
+            ObjectPosition::background_initial()
+        );
+    }
+
+    #[test]
+    fn background_position_inherit_keyword_pulls_parent_value() {
+        // CSS Cascade L4 §7 — `inherit` принудительно тянет parent value
+        // даже для non-inherited.
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { background-position: center; } p { background-position: inherit; }",
+            &[0, 0],
+        );
+        assert_eq!(s.background_position.x, PositionComponent::Percent(0.5));
+        assert_eq!(s.background_position.y, PositionComponent::Percent(0.5));
+    }
+
+    #[test]
+    fn background_position_initial_resets_to_top_left() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: 80% 90%; background-position: initial; }",
+            &[0],
+        );
+        assert_eq!(
+            s.background_position,
+            ObjectPosition::background_initial()
+        );
+    }
+
+    // -------- image-rendering (CSS Images L3 §6.1) --------
+
+    #[test]
+    fn image_rendering_default_is_auto() {
+        let s = cascade_at("<img>", "", &[0]);
+        assert_eq!(s.image_rendering, ImageRendering::Auto);
+    }
+
+    #[test]
+    fn image_rendering_all_keywords_parse() {
+        for (val, expected) in [
+            ("auto", ImageRendering::Auto),
+            ("smooth", ImageRendering::Smooth),
+            ("high-quality", ImageRendering::HighQuality),
+            ("crisp-edges", ImageRendering::CrispEdges),
+            ("pixelated", ImageRendering::Pixelated),
+        ] {
+            let s = cascade_at(
+                "<img>",
+                &format!("img {{ image-rendering: {val}; }}"),
+                &[0],
+            );
+            assert_eq!(s.image_rendering, expected, "for value {val}");
+        }
+    }
+
+    #[test]
+    fn image_rendering_case_insensitive() {
+        let s = cascade_at(
+            "<img>",
+            "img { image-rendering: PIXELATED; }",
+            &[0],
+        );
+        assert_eq!(s.image_rendering, ImageRendering::Pixelated);
+    }
+
+    #[test]
+    fn image_rendering_invalid_value_ignored() {
+        let s = cascade_at(
+            "<img>",
+            "img { image-rendering: bogus; }",
+            &[0],
+        );
+        assert_eq!(s.image_rendering, ImageRendering::Auto);
+    }
+
+    #[test]
+    fn image_rendering_inherited() {
+        // CSS Images L3 §6.1 — inherited. Ребёнок без своей декларации
+        // получает значение от родителя.
+        let s = cascade_at(
+            "<div><img></div>",
+            "div { image-rendering: pixelated; }",
+            &[0, 0],
+        );
+        assert_eq!(s.image_rendering, ImageRendering::Pixelated);
+    }
+
+    #[test]
+    fn image_rendering_child_override_wins() {
+        let s = cascade_at(
+            "<div><img></div>",
+            "div { image-rendering: pixelated; } img { image-rendering: smooth; }",
+            &[0, 0],
+        );
+        assert_eq!(s.image_rendering, ImageRendering::Smooth);
+    }
+
+    #[test]
+    fn image_rendering_initial_keyword_resets() {
+        let s = cascade_at(
+            "<div><img></div>",
+            "div { image-rendering: pixelated; } img { image-rendering: initial; }",
+            &[0, 0],
+        );
+        assert_eq!(s.image_rendering, ImageRendering::Auto);
+    }
+
+    #[test]
+    fn image_rendering_unset_for_inherited_is_inherit() {
+        // CSS Cascade L4 §7: `unset` для inherited-свойства == `inherit`.
+        let s = cascade_at(
+            "<div><img></div>",
+            "div { image-rendering: crisp-edges; } img { image-rendering: unset; }",
+            &[0, 0],
+        );
+        assert_eq!(s.image_rendering, ImageRendering::CrispEdges);
     }
 }
