@@ -10,6 +10,8 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
+- 🔄 Quirks-mode application (hot-paths cascade/layout) [P1] — quirks-mode-application — 2026-05-15
+
 
 ## Статус реализации
 
