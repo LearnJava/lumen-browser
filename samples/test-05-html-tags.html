@@ -17,182 +17,152 @@
       border-bottom: 3px solid #e94560;
     }
     .hdr em { color: #7ec8e3; font-style: normal; }
-    .cols {
-      background: white; border-bottom: 1px solid #e2e8f0;
-      padding: 7px 16px;
-    }
+    .sec { background: white; border-bottom: 1px solid #e2e8f0; padding: 5px 16px; }
     .lbl {
-      font-size: 10px; color: #94a3b8;
-      text-transform: uppercase; letter-spacing: 0.5px;
-      margin-bottom: 4px;
+      font-size: 10px; color: #94a3b8; text-transform: uppercase;
+      letter-spacing: 0.5px; margin-bottom: 3px;
     }
-    /* Семантические теги */
-    strong { font-weight: bold; }
-    em { font-style: italic; }
-    code {
-      background: #edf2f7; border: 1px solid #e2e8f0;
-      padding: 1px 5px; font-size: 12px; color: #e53e3e;
+    /* Блочные теги */
+    blockquote {
+      border-left: 4px solid #805ad5;
+      background: #faf5ff; padding: 5px 12px;
+      color: #553c9a; font-style: italic;
+      margin-bottom: 3px;
     }
     pre {
       background: #1a202c; color: #68d391;
-      padding: 8px 12px; font-size: 12px;
+      padding: 6px 12px; font-size: 12px;
       border-left: 4px solid #38a169;
     }
-    blockquote {
-      border-left: 4px solid #805ad5;
-      background: #faf5ff; padding: 6px 12px;
-      color: #553c9a; font-style: italic;
-    }
-    mark { background: #fefcbf; color: #744210; }
-    abbr { border-bottom: 1px solid #718096; }
-    del { text-decoration: line-through; color: #a0aec0; }
-    ins { text-decoration: underline; color: #38a169; }
-    sub { font-size: 10px; }
-    sup { font-size: 10px; }
     /* Списки */
-    ul { padding-left: 20px; }
-    ol { padding-left: 20px; }
-    li { margin-bottom: 2px; }
-    dl dt { font-weight: bold; color: #2b6cb0; }
-    dl dd { padding-left: 16px; color: #4a5568; margin-bottom: 2px; }
-    /* Таблица */
-    table { border-collapse: collapse; font-size: 12px; width: 100%; }
-    th {
-      background: #2b6cb0; color: white;
-      padding: 4px 8px; text-align: left;
-      border: 1px solid #2c5282;
-    }
-    td {
-      padding: 3px 8px; border: 1px solid #bee3f8;
-      background: #ebf8ff;
-    }
+    ul { padding-left: 20px; margin-bottom: 0; }
+    ol { padding-left: 20px; margin-bottom: 0; }
+    li { margin-bottom: 1px; font-size: 12px; }
+    dl dt { font-weight: bold; color: #2b6cb0; font-size: 12px; }
+    dl dd { padding-left: 16px; color: #4a5568; margin-bottom: 1px; font-size: 12px; }
+    /* Таблица — в Phase 0 td/th рендерятся как блоки, не как ячейки */
+    table { border-collapse: collapse; font-size: 12px; }
+    th { background: #2b6cb0; color: white; padding: 3px 10px; border: 1px solid #2c5282; }
+    td { padding: 2px 10px; border: 1px solid #bee3f8; background: #ebf8ff; }
     tr:nth-child(even) td { background: #bee3f8; }
   </style>
 </head>
 <body>
-  <div class="hdr">LUMEN BROWSER <em>/ HTML-ТЕГИ</em> — Страница 5 из 6 — Phase 0</div>
+  <div class="hdr">LUMEN BROWSER <em>/ HTML-ТЕГИ</em> — Страница 5 из 6</div>
 
-  <!-- Инлайн-семантика -->
-  <div class="cols">
-    <div class="lbl">Инлайн-семантика: strong, em, code, mark, del, ins, sub, sup, abbr</div>
+  <!-- Инлайн-семантика (только стили текста, без background/padding на inline) -->
+  <div class="sec">
+    <div class="lbl">Инлайн-теги — только стили текста (без фона и рамок на inline-элементах)</div>
     <p>
-      Обычный текст —
+      Обычный —
       <strong>жирный (strong)</strong> —
       <em>курсив (em)</em> —
       <strong><em>жирный курсив</em></strong> —
-      <code>код inline (code)</code> —
-      <mark>выделенный (mark)</mark> —
-      <del>удалённый (del)</del> —
-      <ins>вставленный (ins)</ins> —
+      <del>зачёркнутый (del)</del> —
+      <ins>подчёркнутый (ins)</ins> —
       H<sub>2</sub>O (sub) —
       E=mc<sup>2</sup> (sup) —
-      <abbr title="Artificial Intelligence">AI</abbr> (abbr)
+      <b>b-тег</b> —
+      <i>i-тег</i> —
+      <u>u-тег</u> —
+      <s>s-тег</s> —
+      <small>small</small>
+    </p>
+    <p style="margin-top: 3px;">
+      <span style="color: #e53e3e; font-weight: bold;">Цветной bold span</span> —
+      <span style="color: #3182ce; font-style: italic;">синий курсив</span> —
+      <span style="color: #38a169;">зелёный</span> —
+      <span style="color: #805ad5; text-decoration: underline;">фиолетовый underline</span> —
+      <a href="https://example.com" style="color: #3182ce; text-decoration: underline;">ссылка &lt;a&gt;</a>
     </p>
   </div>
 
-  <!-- Блочные теги: p, blockquote, pre, code -->
-  <div class="cols">
-    <div class="lbl">Блочные теги: p, blockquote, pre+code</div>
-    <p style="margin-bottom: 4px;">
-      Параграф <code>&lt;p&gt;</code> — базовый блочный элемент. Содержит текст и инлайн-элементы.
-    </p>
-    <blockquote style="margin-bottom: 4px;">
-      «Искусственный интеллект — это попытка понять и воссоздать интеллект.» — blockquote
-    </blockquote>
-    <pre>// pre + code — форматированный текст, пробелы сохраняются
-function ai(input) { return neural_network.predict(input); }</pre>
+  <!-- Блочные семантические теги -->
+  <div class="sec">
+    <div class="lbl">Блочные теги: p, blockquote, pre, hr</div>
+    <p style="margin-bottom: 3px;">Параграф — базовый блочный элемент для текста.</p>
+    <blockquote>«Искусственный интеллект — попытка понять и воссоздать интеллект.» — blockquote</blockquote>
+    <pre>// pre — форматированный текст, пробелы сохраняются:
+function predict(x) { return model.forward(x); }</pre>
   </div>
 
-  <!-- Маркированный и нумерованный списки -->
-  <div class="cols">
-    <div class="lbl">Списки: ul (маркированный), ol (нумерованный), dl (определений)</div>
-    <span style="display: inline; vertical-align: top;">
-      <ul style="display: inline-block; width: 220px; vertical-align: top; margin-right: 20px;">
+  <!-- Списки — обычные блочные, без inline-block -->
+  <div class="sec">
+    <div class="lbl">Списки: ul, ol, dl — блочные элементы, вертикальный поток</div>
+    <div style="width: 300px; float: left;">
+      <div style="font-size: 10px; color: #718096; margin-bottom: 2px;">ul — маркированный</div>
+      <ul>
         <li>Нейронные сети</li>
         <li>Машинное обучение</li>
         <li>Глубокое обучение</li>
-        <li>Трансформеры</li>
+        <li>Трансформеры (LLM)</li>
       </ul>
-    </span>
-    <ol style="display: inline; margin-right: 20px;">
-      <li>Собрать данные</li>
-      <li>Обучить модель</li>
-      <li>Оценить качество</li>
-      <li>Развернуть</li>
-    </ol>
-    <dl style="display: inline;">
-      <dt>LLM</dt><dd>Large Language Model</dd>
-      <dt>CNN</dt><dd>Convolutional Neural Network</dd>
-    </dl>
+    </div>
+    <div style="width: 280px; float: left;">
+      <div style="font-size: 10px; color: #718096; margin-bottom: 2px;">ol — нумерованный</div>
+      <ol>
+        <li>Собрать датасет</li>
+        <li>Обучить модель</li>
+        <li>Оценить качество</li>
+        <li>Развернуть в продакшн</li>
+      </ol>
+    </div>
+    <div style="width: 240px; float: left;">
+      <div style="font-size: 10px; color: #718096; margin-bottom: 2px;">dl — определений</div>
+      <dl>
+        <dt>LLM</dt><dd>Large Language Model</dd>
+        <dt>CNN</dt><dd>Convolutional Neural Network</dd>
+        <dt>GAN</dt><dd>Generative Adversarial Net</dd>
+      </dl>
+    </div>
+    <div style="clear: both;"></div>
   </div>
 
-  <!-- Таблица -->
-  <div class="cols">
-    <div class="lbl">Таблица (table / thead / tbody / th / td) — AI-модели</div>
+  <!-- Таблица — Phase 0: td/th рендерятся как блоки -->
+  <div class="sec">
+    <div class="lbl">Таблица (table/thead/tbody/th/td) — Phase 0: td/th рендерятся как блочные элементы</div>
     <table>
       <thead>
         <tr>
           <th>Модель</th>
           <th>Тип</th>
-          <th>Параметры</th>
           <th>Год</th>
-          <th>Разработчик</th>
+          <th>Компания</th>
         </tr>
       </thead>
       <tbody>
-        <tr><td>GPT-4</td><td>LLM</td><td>~1.8T</td><td>2023</td><td>OpenAI</td></tr>
-        <tr><td>Claude 3</td><td>LLM</td><td>н/д</td><td>2024</td><td>Anthropic</td></tr>
-        <tr><td>Gemini</td><td>Мультимод.</td><td>н/д</td><td>2023</td><td>Google</td></tr>
-        <tr><td>LLaMA 3</td><td>LLM Open</td><td>70B</td><td>2024</td><td>Meta</td></tr>
+        <tr><td>GPT-4</td><td>LLM</td><td>2023</td><td>OpenAI</td></tr>
+        <tr><td>Claude 3</td><td>LLM</td><td>2024</td><td>Anthropic</td></tr>
+        <tr><td>Gemini</td><td>Мультимод.</td><td>2023</td><td>Google</td></tr>
       </tbody>
     </table>
   </div>
 
-  <!-- Горизонтальная линия + span + div -->
-  <div class="cols">
-    <div class="lbl">hr, span, div — разделитель, инлайн и блочный контейнеры</div>
-    <p>
-      Тег <code>&lt;span&gt;</code> — инлайн:
-      <span style="background: #fed7d7; padding: 1px 6px; border: 1px solid #e53e3e;">span1</span>
-      <span style="background: #c6f6d5; padding: 1px 6px; border: 1px solid #38a169;">span2</span>
-      <span style="background: #bee3f8; padding: 1px 6px; border: 1px solid #3182ce;">span3</span>
-      — не разрывает строку.
-    </p>
-    <hr style="border: none; border-top: 2px solid #e2e8f0; margin: 5px 0;">
-    <div style="background: #ebf8ff; border: 1px solid #bee3f8; padding: 4px 8px;">
-      Тег <code>&lt;div&gt;</code> — блочный контейнер, занимает всю ширину, начинается с новой строки.
+  <!-- hr и div -->
+  <div class="sec">
+    <div class="lbl">hr (горизонтальный разделитель) · div (блочный контейнер)</div>
+    <p style="margin-bottom: 3px;">Текст над разделителем — параграф.</p>
+    <hr style="border: none; border-top: 2px solid #e2e8f0; margin: 3px 0;">
+    <p style="margin-bottom: 3px;">Текст под hr. Разделитель отрисован как блочная линия.</p>
+    <hr style="border: none; border-top: 3px solid #e94560; margin: 3px 0;">
+    <div style="background: #ebf8ff; border-left: 4px solid #3182ce; padding: 4px 10px;">
+      div — блочный контейнер с фоном и рамкой слева. Занимает всю ширину строки.
     </div>
   </div>
 
-  <!-- a, small, b, i, u, s -->
-  <div class="cols">
-    <div class="lbl">Прочие инлайн-теги: a, b, i, u, s, small, q, cite</div>
+  <!-- Семантические теги HTML5 -->
+  <div class="sec">
+    <div class="lbl">Семантика HTML5: article, section, header, footer, main, nav, aside — все как display:block</div>
     <p>
-      <a href="https://example.com" style="color: #3182ce; text-decoration: underline;">ссылка &lt;a&gt;</a> —
-      <b>жирный &lt;b&gt;</b> —
-      <i>курсив &lt;i&gt;</i> —
-      <u>подчёркнутый &lt;u&gt;</u> —
-      <s>зачёркнутый &lt;s&gt;</s> —
-      <small>мелкий &lt;small&gt;</small> —
-      <q>цитата &lt;q&gt;</q> —
-      <cite>источник &lt;cite&gt;</cite>
-    </p>
-  </div>
-
-  <!-- Заголовочные теги в семантическом контексте -->
-  <div class="cols">
-    <div class="lbl">Семантический документ: article, section, header, footer, aside</div>
-    <p>
-      Браузер понимает
-      <code>&lt;article&gt;</code>,
-      <code>&lt;section&gt;</code>,
-      <code>&lt;header&gt;</code>,
-      <code>&lt;footer&gt;</code>,
-      <code>&lt;main&gt;</code>,
-      <code>&lt;nav&gt;</code>,
-      <code>&lt;aside&gt;</code> —
-      все рендерятся как блочные элементы (display: block).
-      <span style="color: #38a169; font-weight: bold;">HTML5 семантика парсируется корректно.</span>
+      Браузер корректно парсирует:
+      <span style="color: #3182ce;">&lt;article&gt;</span>
+      <span style="color: #38a169;">&lt;section&gt;</span>
+      <span style="color: #805ad5;">&lt;header&gt;</span>
+      <span style="color: #e53e3e;">&lt;footer&gt;</span>
+      <span style="color: #d69e2e;">&lt;main&gt;</span>
+      <span style="color: #319795;">&lt;nav&gt;</span>
+      <span style="color: #dd6b20;">&lt;aside&gt;</span>
+      — все рендерятся как блочные элементы.
     </p>
   </div>
 </body>

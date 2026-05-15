@@ -17,155 +17,90 @@
       border-bottom: 3px solid #e94560;
     }
     .hdr em { color: #7ec8e3; font-style: normal; }
-    .sec {
-      background: white; border-bottom: 1px solid #e2e8f0;
-      padding: 6px 16px;
-    }
+    .sec { background: white; border-bottom: 1px solid #e2e8f0; padding: 5px 16px; }
     .lbl {
-      font-size: 10px; color: #94a3b8;
-      text-transform: uppercase; letter-spacing: 0.5px;
-      margin-bottom: 5px;
-    }
-    /* Демо-блоки */
-    .demo-margin {
-      background: #bee3f8;
-      padding: 14px;
-    }
-    .demo-border {
-      border: 6px solid #3182ce;
-      background: #ebf8ff;
-      padding: 12px;
-    }
-    .demo-padding {
-      background: #c6f6d5;
-      padding: 12px;
-    }
-    .demo-content {
-      background: #fefcbf;
-      padding: 6px 10px;
-      font-weight: bold; font-size: 12px; color: #744210;
+      font-size: 10px; color: #94a3b8; text-transform: uppercase;
+      letter-spacing: 0.5px; margin-bottom: 4px;
     }
   </style>
 </head>
 <body>
-  <div class="hdr">LUMEN BROWSER <em>/ БЛОЧНАЯ МОДЕЛЬ</em> — Страница 2 из 6 — Phase 0</div>
+  <div class="hdr">LUMEN BROWSER <em>/ БЛОЧНАЯ МОДЕЛЬ</em> — Страница 2 из 6</div>
 
-  <!-- CSS Box Model: margin → border → padding → content -->
+  <!-- Вложенные блоки: margin → border → padding → content -->
   <div class="sec">
     <div class="lbl">CSS Box Model: margin (голубой) → border (синий) → padding (зелёный) → content (жёлтый)</div>
-    <div class="demo-margin">
-      <span style="font-size: 10px; color: #2b6cb0;">▲ MARGIN — внешний отступ (фон родителя проступает)</span>
-      <div class="demo-border">
-        <span style="font-size: 10px; color: #2b6cb0;">▲ BORDER 6px solid — рамка блока</span>
-        <div class="demo-padding">
-          <span style="font-size: 10px; color: #276749;">▲ PADDING — внутренний отступ</span>
-          <div class="demo-content">
-            CONTENT — само содержимое блока (текст, дочерние элементы)
+    <div style="background: #bee3f8; padding: 10px;">
+      <span style="font-size: 10px; color: #2b6cb0;">MARGIN — внешний отступ</span>
+      <div style="border: 5px solid #3182ce; background: #ebf8ff; padding: 10px; margin-top: 4px;">
+        <span style="font-size: 10px; color: #2b6cb0;">BORDER 5px solid</span>
+        <div style="background: #c6f6d5; padding: 8px; margin-top: 4px;">
+          <span style="font-size: 10px; color: #276749;">PADDING — внутренний отступ</span>
+          <div style="background: #fefcbf; padding: 5px 10px; margin-top: 4px;">
+            <span style="font-weight: bold; color: #744210;">CONTENT — содержимое блока</span>
           </div>
         </div>
       </div>
     </div>
   </div>
 
-  <!-- border-width и цвет рамки -->
+  <!-- border-width: блочные divs -->
   <div class="sec">
-    <div class="lbl">Ширина рамки (border-width) — от 1px до 8px</div>
-    <p>
-      <span style="border: 1px solid #2d3748; padding: 3px 10px; margin-right: 8px;">1px</span>
-      <span style="border: 2px solid #3182ce; padding: 3px 10px; margin-right: 8px;">2px</span>
-      <span style="border: 3px solid #38a169; padding: 3px 10px; margin-right: 8px;">3px</span>
-      <span style="border: 5px solid #805ad5; padding: 3px 10px; margin-right: 8px;">5px</span>
-      <span style="border: 8px solid #e53e3e; padding: 3px 10px;">8px</span>
-      <span style="margin-left: 20px; color: #718096;">← каждый span: border-N-solid</span>
-    </p>
+    <div class="lbl">Ширина рамки (border-width) — блочные элементы</div>
+    <div style="border: 1px solid #2d3748; padding: 2px 8px; margin-bottom: 2px; background: #fafafa;">border: 1px solid — тонкая рамка</div>
+    <div style="border: 2px solid #3182ce; padding: 2px 8px; margin-bottom: 2px; background: #ebf8ff;">border: 2px solid — стандартная</div>
+    <div style="border: 4px solid #38a169; padding: 2px 8px; margin-bottom: 2px; background: #f0fff4;">border: 4px solid — заметная</div>
+    <div style="border: 7px solid #805ad5; padding: 2px 8px; background: #faf5ff;">border: 7px solid — толстая</div>
   </div>
 
   <!-- Цвет каждой стороны -->
   <div class="sec">
-    <div class="lbl">Цвет каждой стороны рамки (border-top/right/bottom/left-color)</div>
+    <div class="lbl">Цвет каждой стороны (border-top/right/bottom/left-color)</div>
     <div style="border-top: 4px solid #e53e3e;
                 border-right: 4px solid #38a169;
                 border-bottom: 4px solid #3182ce;
                 border-left: 4px solid #805ad5;
-                padding: 8px 16px; background: #fafafa; width: 380px;">
+                padding: 6px 12px; background: #fafafa;">
       Верх — красный · Право — зелёный · Низ — синий · Лево — фиолетовый
     </div>
   </div>
 
-  <!-- Отступы: margin и padding -->
+  <!-- Частичные рамки -->
   <div class="sec">
-    <div class="lbl">Внешний отступ (margin) и внутренний отступ (padding)</div>
-    <p>
-      <span style="background: #fed7d7; border: 1px solid #e53e3e;
-                   padding: 2px 4px; margin-right: 4px;">padding: 2 4</span>
-      <span style="background: #fed7d7; border: 1px solid #e53e3e;
-                   padding: 6px 12px; margin-right: 8px;">padding: 6 12</span>
-      <span style="background: #fed7d7; border: 1px solid #e53e3e;
-                   padding: 12px 24px; margin-right: 16px;">padding: 12 24</span>
-      <span style="background: #c6f6d5; border: 1px solid #38a169;
-                   padding: 4px 8px; margin-right: 4px;">margin-r: 4</span>
-      <span style="background: #c6f6d5; border: 1px solid #38a169;
-                   padding: 4px 8px; margin-right: 16px;">margin-r: 16</span>
-      <span style="background: #c6f6d5; border: 1px solid #38a169;
-                   padding: 4px 8px; margin-right: 40px;">margin-r: 40</span>
-      <span style="background: #c6f6d5; border: 1px solid #38a169;
-                   padding: 4px 8px;">конец</span>
-    </p>
+    <div class="lbl">Только отдельные стороны рамки</div>
+    <div style="border-top: 3px solid #e53e3e; padding: 3px 8px; margin-bottom: 2px; background: #fff5f5;">border-top: 3px solid red</div>
+    <div style="border-left: 5px solid #38a169; padding: 3px 8px; margin-bottom: 2px; background: #f0fff4;">border-left: 5px solid green — как цитата</div>
+    <div style="border-bottom: 3px solid #3182ce; padding: 3px 8px; background: #ebf8ff;">border-bottom: 3px solid blue</div>
   </div>
 
-  <!-- Ширина и высота: width / height -->
+  <!-- Отступы: margin и padding — блочные divs -->
   <div class="sec">
-    <div class="lbl">Явные размеры блока (width / height)</div>
-    <span style="display: inline; background: #bee3f8; border: 1px solid #3182ce;
-                 width: 80px; padding: 4px; margin-right: 6px;">w:80</span>
-    <span style="display: inline; background: #c6f6d5; border: 1px solid #38a169;
-                 width: 140px; padding: 4px; margin-right: 6px;">w:140</span>
-    <span style="display: inline; background: #faf5ff; border: 1px solid #805ad5;
-                 width: 200px; padding: 4px; margin-right: 6px;">w:200</span>
-    <span style="display: inline; background: #fffbeb; border: 1px solid #d69e2e;
-                 width: 280px; padding: 4px;">w:280</span>
+    <div class="lbl">Внутренний отступ (padding) — блочные элементы</div>
+    <div style="background: #fed7d7; border: 1px solid #e53e3e; padding: 2px 6px; margin-bottom: 2px; width: 340px;">padding: 2px 6px — минимальный</div>
+    <div style="background: #fed7d7; border: 1px solid #e53e3e; padding: 8px 16px; margin-bottom: 2px; width: 340px;">padding: 8px 16px — стандартный</div>
+    <div style="background: #fed7d7; border: 1px solid #e53e3e; padding: 16px 32px; width: 340px;">padding: 16px 32px — увеличенный</div>
   </div>
 
   <!-- box-sizing -->
   <div class="sec">
-    <div class="lbl">box-sizing: content-box (ширина = только content) vs border-box (включая padding+border)</div>
-    <div style="background: #fed7d7; border: 4px solid #e53e3e; padding: 8px; margin-bottom: 4px;
-                width: 300px; box-sizing: content-box;">
-      box-sizing: content-box — width:300px — реальная ширина: 300 + 2×8(padding) + 2×4(border) = 324px
+    <div class="lbl">box-sizing: content-box vs border-box (оба width: 400px)</div>
+    <div style="background: #fed7d7; border: 4px solid #e53e3e; padding: 6px 10px; margin-bottom: 3px;
+                width: 400px; box-sizing: content-box;">
+      content-box: width=400px + 2×6(pad) + 2×4(border) = 424px реальная
     </div>
-    <div style="background: #c6f6d5; border: 4px solid #38a169; padding: 8px;
-                width: 300px; box-sizing: border-box;">
-      box-sizing: border-box — width:300px — реальная ширина ровно 300px (padding и border внутри)
+    <div style="background: #c6f6d5; border: 4px solid #38a169; padding: 6px 10px;
+                width: 400px; box-sizing: border-box;">
+      border-box: width=400px ровно — padding и border внутри
     </div>
   </div>
 
-  <!-- Отдельные стороны рамки -->
+  <!-- width в разных единицах — уже работало как блоки -->
   <div class="sec">
-    <div class="lbl">Частичные рамки — только отдельные стороны</div>
-    <p>
-      <span style="border-top: 3px solid #e53e3e; padding: 4px 10px; margin-right: 12px;
-                   background: #fff5f5;">border-top</span>
-      <span style="border-bottom: 3px solid #3182ce; padding: 4px 10px; margin-right: 12px;
-                   background: #ebf8ff;">border-bottom</span>
-      <span style="border-left: 4px solid #38a169; padding: 4px 10px; margin-right: 12px;
-                   background: #f0fff4;">border-left 4px</span>
-      <span style="border-right: 4px solid #805ad5; padding: 4px 10px;
-                   background: #faf5ff;">border-right 4px</span>
-    </p>
-  </div>
-
-  <!-- Вложенные блоки -->
-  <div class="sec">
-    <div class="lbl">Вложенные блоки — наследование фона и рамок</div>
-    <div style="background: #ebf8ff; border: 2px solid #3182ce; padding: 8px;">
-      Внешний блок (синий)
-      <div style="background: #f0fff4; border: 2px solid #38a169; padding: 6px; margin-top: 4px;">
-        Средний блок (зелёный)
-        <div style="background: #faf5ff; border: 2px solid #805ad5; padding: 5px; margin-top: 4px;">
-          Внутренний блок (фиолетовый) — глубина вложенности 3
-        </div>
-      </div>
-    </div>
+    <div class="lbl">Ширина блока (width: px / % / vw)</div>
+    <div style="width: 180px; background: #fed7d7; border: 1px solid #e53e3e; padding: 2px 6px; margin-bottom: 2px;">width: 180px</div>
+    <div style="width: 50%;   background: #c6f6d5; border: 1px solid #38a169; padding: 2px 6px; margin-bottom: 2px;">width: 50%</div>
+    <div style="width: 75vw;  background: #bee3f8; border: 1px solid #3182ce; padding: 2px 6px; margin-bottom: 2px;">width: 75vw</div>
+    <div style="width: 100%;  background: #faf5ff; border: 1px solid #805ad5; padding: 2px 6px;">width: 100%</div>
   </div>
 </body>
 </html>
