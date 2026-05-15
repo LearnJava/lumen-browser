@@ -9,10 +9,14 @@
 //! на основе TTF-данных; используется в shell для line wrapping при layout.
 
 pub mod atlas;
+pub mod compositor;
 pub mod display_list;
 pub mod renderer;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};
+pub use compositor::{
+    BasicLayer, BasicLayerTree, Compositor, InProcessCompositor, Layer, LayerTree,
+};
 pub use display_list::{build_display_list, serialize_display_list, DisplayCommand, DisplayList};
 pub use renderer::{ImageRegisterError, Renderer};
 
