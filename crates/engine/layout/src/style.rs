@@ -1234,6 +1234,11 @@ pub struct ComputedStyle {
     /// (y_offset фрагмента в inline-flow и DrawText в paint) — отдельная
     /// задача с согласованием P2 (см. doc-comment на [`VerticalAlign`]).
     pub vertical_align: VerticalAlign,
+    /// CSS Images L3 §6.1 — `image-rendering`. Inherited. Default `Auto`.
+    /// Phase 0: parsing + storage; реальное переключение GPU sampler filter
+    /// в `lumen-paint` (linear vs nearest-neighbour для `<img>` и background)
+    /// — отдельная задача с согласованием P2.
+    pub image_rendering: ImageRendering,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -1709,6 +1714,46 @@ impl ObjectFit {
     }
 }
 
+/// CSS Images L3 §6.1 — `image-rendering`. Hint для движка о том, как
+/// масштабировать растровое изображение (применимо к `<img>`, background-image,
+/// canvas, и т.д.). Inherited.
+///
+/// Phase 0: parsing + storage. Реальное переключение GPU sampler filter
+/// (`Linear` для `auto`/`smooth`/`high-quality`, `Nearest` для `pixelated`/
+/// `crisp-edges`) в `lumen-paint` — отдельная задача с согласованием P2.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ImageRendering {
+    /// `auto` (default) — UA выбирает алгоритм. Обычно — bilinear.
+    #[default]
+    Auto,
+    /// `smooth` — high-quality scaling, оптимизирован для smooth gradient.
+    /// На практике в современных движках = `auto`.
+    Smooth,
+    /// `high-quality` — высочайшее качество масштабирования (тяжелее `smooth`).
+    /// Спецификация добавлена в CSS Images L4; считается переименованием
+    /// `optimizeQuality` из L3 (которое теперь deprecated).
+    HighQuality,
+    /// `crisp-edges` — сохраняет контраст и резкость границ (pixel art /
+    /// vector graphics). UA может использовать nearest-neighbour или
+    /// edge-preserving алгоритм.
+    CrispEdges,
+    /// `pixelated` — nearest-neighbour. Полезно для масштабирования pixel art.
+    Pixelated,
+}
+
+impl ImageRendering {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "smooth" => Some(Self::Smooth),
+            "high-quality" => Some(Self::HighQuality),
+            "crisp-edges" => Some(Self::CrispEdges),
+            "pixelated" => Some(Self::Pixelated),
+            _ => None,
+        }
+    }
+}
+
 /// Одна компонента `object-position`. Length-варианты резолвятся в px
 /// относительно края коробки (positive = от left/top); percentage —
 /// относительно **свободного места** `box_size - content_size` (может быть
@@ -2158,6 +2203,7 @@ impl ComputedStyle {
             object_fit: ObjectFit::Fill,
             object_position: ObjectPosition::default(),
             vertical_align: VerticalAlign::Baseline,
+            image_rendering: ImageRendering::Auto,
         }
     }
 }
@@ -2343,6 +2389,8 @@ pub fn compute_style(
         object_position: ObjectPosition::default(),
         // CSS 2.1 §10.8.1 — vertical-align не наследуется. Initial = baseline.
         vertical_align: VerticalAlign::Baseline,
+        // CSS Images L3 §6.1 — image-rendering inherited.
+        image_rendering: inherited.image_rendering,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -4663,6 +4711,12 @@ fn apply_declaration(
                 }
             }
         }
+        "image-rendering" => {
+            // CSS Images L3 §6.1: enum-keyword. Inherited.
+            if let Some(v) = ImageRendering::parse(val) {
+                style.image_rendering = v;
+            }
+        }
         "width" if val != "auto" => {
             style.width = parse_length(val).and_then(|l| l.resolve(em_basis, None, viewport));
         }
@@ -6372,6 +6426,16 @@ fn apply_css_wide_keyword(
                 inherited.background_position
             } else {
                 init.background_position
+            };
+        }
+        // CSS Images L3 §6.1 — image-rendering inherited. inh — общий
+        // алиас «брать inherited.value» (для inherited работает и при
+        // Inherit, и при Unset; см. вычисление inh выше).
+        "image-rendering" => {
+            style.image_rendering = if inh {
+                inherited.image_rendering
+            } else {
+                init.image_rendering
             };
         }
         // Прочие / неизвестные — silent no-op.
@@ -10126,5 +10190,94 @@ mod tests {
             s.background_position,
             ObjectPosition::background_initial()
         );
+    }
+
+    // -------- image-rendering (CSS Images L3 §6.1) --------
+
+    #[test]
+    fn image_rendering_default_is_auto() {
+        let s = cascade_at("<img>", "", &[0]);
+        assert_eq!(s.image_rendering, ImageRendering::Auto);
+    }
+
+    #[test]
+    fn image_rendering_all_keywords_parse() {
+        for (val, expected) in [
+            ("auto", ImageRendering::Auto),
+            ("smooth", ImageRendering::Smooth),
+            ("high-quality", ImageRendering::HighQuality),
+            ("crisp-edges", ImageRendering::CrispEdges),
+            ("pixelated", ImageRendering::Pixelated),
+        ] {
+            let s = cascade_at(
+                "<img>",
+                &format!("img {{ image-rendering: {val}; }}"),
+                &[0],
+            );
+            assert_eq!(s.image_rendering, expected, "for value {val}");
+        }
+    }
+
+    #[test]
+    fn image_rendering_case_insensitive() {
+        let s = cascade_at(
+            "<img>",
+            "img { image-rendering: PIXELATED; }",
+            &[0],
+        );
+        assert_eq!(s.image_rendering, ImageRendering::Pixelated);
+    }
+
+    #[test]
+    fn image_rendering_invalid_value_ignored() {
+        let s = cascade_at(
+            "<img>",
+            "img { image-rendering: bogus; }",
+            &[0],
+        );
+        assert_eq!(s.image_rendering, ImageRendering::Auto);
+    }
+
+    #[test]
+    fn image_rendering_inherited() {
+        // CSS Images L3 §6.1 — inherited. Ребёнок без своей декларации
+        // получает значение от родителя.
+        let s = cascade_at(
+            "<div><img></div>",
+            "div { image-rendering: pixelated; }",
+            &[0, 0],
+        );
+        assert_eq!(s.image_rendering, ImageRendering::Pixelated);
+    }
+
+    #[test]
+    fn image_rendering_child_override_wins() {
+        let s = cascade_at(
+            "<div><img></div>",
+            "div { image-rendering: pixelated; } img { image-rendering: smooth; }",
+            &[0, 0],
+        );
+        assert_eq!(s.image_rendering, ImageRendering::Smooth);
+    }
+
+    #[test]
+    fn image_rendering_initial_keyword_resets() {
+        let s = cascade_at(
+            "<div><img></div>",
+            "div { image-rendering: pixelated; } img { image-rendering: initial; }",
+            &[0, 0],
+        );
+        assert_eq!(s.image_rendering, ImageRendering::Auto);
+    }
+
+    #[test]
+    fn image_rendering_unset_for_inherited_is_inherit() {
+        // CSS Cascade L4 §7: `unset` для inherited-свойства == `inherit`.
+        let s = cascade_at(
+            "<div><img></div>",
+            "div { image-rendering: crisp-edges; } img { image-rendering: unset; }",
+            &[0, 0],
+        );
+        assert_eq!(s.image_rendering, ImageRendering::CrispEdges);
     }
 }
