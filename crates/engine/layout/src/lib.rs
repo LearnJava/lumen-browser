@@ -26,7 +26,10 @@ pub use property_trees::{
     ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
 pub use snapshot::serialize_layout_tree;
-pub use stacking::{PaintOrder, PaintPhase, StackingContext, StackingContextId, StackingTree};
+pub use stacking::{
+    box_can_own_stacking_context, creates_stacking_context, PaintOrder, PaintPhase,
+    StackingContext, StackingContextId, StackingTree,
+};
 pub use style::{
     parse_css_wide_keyword, AlignValue, BackgroundAttachment, BackgroundImage, BackgroundRepeat,
     BackgroundSize, BorderStyle, BoxShadow, BoxSizing, BreakValue, ClipPath, Color, ComputedStyle,

@@ -18,7 +18,8 @@ pub use compositor::{
     BasicLayer, BasicLayerTree, Compositor, InProcessCompositor, Layer, LayerTree,
 };
 pub use display_list::{
-    build_display_list, serialize_display_list, BlendMode, DisplayCommand, DisplayList,
+    build_display_list, build_display_list_ordered, serialize_display_list, BlendMode,
+    DisplayCommand, DisplayList,
 };
 pub use renderer::{ImageRegisterError, Renderer};
 

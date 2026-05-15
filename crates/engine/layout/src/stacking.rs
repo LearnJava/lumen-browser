@@ -178,7 +178,7 @@ fn z_sort_key(ctx: &StackingContext) -> i32 {
 /// проверяется только для положенных боксов (если родитель использует
 /// `display: flex|grid`, мы ещё не пересчитываем — флаг flex/grid item
 /// добавим вместе с реальным flex/grid pass).
-fn creates_stacking_context(style: &ComputedStyle) -> bool {
+pub fn creates_stacking_context(style: &ComputedStyle) -> bool {
     match style.position {
         Position::Fixed | Position::Sticky => return true,
         Position::Relative | Position::Absolute => {
@@ -239,7 +239,7 @@ fn is_stacking_will_change(ident: &str) -> bool {
 /// если бы мы их учитывали, каждый текстовый InlineRun под opacity:0.5
 /// порождал бы фантомный SC. Замечание: реальный DOM-элемент над таким
 /// InlineRun-ом уже создаёт SC.
-fn box_can_own_stacking_context(b: &LayoutBox) -> bool {
+pub fn box_can_own_stacking_context(b: &LayoutBox) -> bool {
     matches!(b.kind, BoxKind::Block | BoxKind::Image { .. })
 }
 
