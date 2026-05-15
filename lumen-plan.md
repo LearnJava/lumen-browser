@@ -10,8 +10,6 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-- 🔄 Sprint 0 — контракты P1 (StackingContextId / PaintOrder / PropertyTrees / типизация ComputedStyle / AnimationInterpolator) [P1] — sprint0-p1-contracts — 2026-05-15
-
 
 ## Статус реализации
 
