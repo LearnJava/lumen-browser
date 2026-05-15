@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-- 🔄 Preload fallback chain (P2 1A — закрыто, follow-up) [P2] — preload-fallback — 2026-05-15
+- 🔄 Compositor scaffolding (P2 1B) [P2] — compositor-scaffolding — 2026-05-15
 
 ## Статус реализации
 
