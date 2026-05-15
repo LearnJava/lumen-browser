@@ -120,30 +120,57 @@ impl LayerTree for BasicLayerTree {
 }
 
 /// Compositor: получает обновления сцены через `commit`, отдаёт активную
-/// версию через `active_tree`. Реальный compositor работает в отдельном
-/// потоке с two-buffer (pending → atomic swap → active); Phase 0 —
-/// синхронный `InProcessCompositor`.
+/// версию через `active_tree`/`active_trees`.
+///
+/// **Two-buffer commit-модель** (как в Chromium):
+/// - `commit(trees, layer_tree)` — main thread кладёт новое состояние в
+///   pending-буфер. Не делает active-промоушн сразу: рендер всё ещё видит
+///   старую активную версию, никакого tearing-а кадра.
+/// - `flush_pending() -> bool` — compositor (Phase 1+ — отдельный поток)
+///   атомарно промотирует pending → active в начале своего «vsync-tick»-а.
+///   `true` если промоушн был; `false` если pending пуст.
+/// - `active_tree()` / `active_trees()` — то, что рендерится в текущем кадре.
+///
+/// Phase 0: один поток. Shell делает `commit(...); compositor.flush_pending();
+/// renderer.render(...)` подряд. Promotion синхронный; атомарность важна
+/// только когда commit и flush разъезжаются на потоки.
 ///
 /// `commit` принимает `Arc<PropertyTrees>` — owned snapshot от main thread-а,
-/// который compositor хранит без копирования. Layer tree — `Box<dyn LayerTree>`
-/// чтобы можно было передавать различные impl-ы.
+/// который compositor хранит без копирования. Layer tree — `Box<dyn LayerTree
+/// + Send + Sync>` чтобы можно было передавать различные impl-ы и (в будущем)
+/// перекладывать между потоками.
 pub trait Compositor {
-    /// Принимает новую сцену. Phase 0 impl-ы кладут её сразу в active.
+    /// Кладёт новое состояние в pending-буфер. Active не меняется — старая
+    /// сцена продолжает рендериться до следующего `flush_pending`. Повторный
+    /// `commit` до flush-а перезаписывает pending (последний коммит выигрывает —
+    /// каждые 16 мс рендерить промежуточный layout не нужно).
     fn commit(&mut self, trees: Arc<PropertyTrees>, layer_tree: Box<dyn LayerTree + Send + Sync>);
 
+    /// Атомарно промотирует pending → active. Возвращает `true`, если был
+    /// pending для промоушна; `false`, если новых обновлений не было (active
+    /// остаётся прежним, ре-рендерить не нужно).
+    fn flush_pending(&mut self) -> bool;
+
+    /// Есть ли pending-обновление, ожидающее flush-а. Используется
+    /// рендер-loop-ом, чтобы решить, нужен ли invalidate / repaint.
+    fn has_pending(&self) -> bool;
+
     /// Активный layer tree — то, что рендерится в текущем кадре.
-    /// `None` пока не было ни одного commit-а.
+    /// `None` пока не было ни одного `flush_pending`-а.
     fn active_tree(&self) -> Option<&dyn LayerTree>;
 
     /// Активные property trees — то, что рендерится в текущем кадре.
-    /// `None` пока не было ни одного commit-а.
+    /// `None` пока не было ни одного `flush_pending`-а.
     fn active_trees(&self) -> Option<&Arc<PropertyTrees>>;
 }
 
-/// Phase 0 in-process compositor: один поток, синхронный swap. Будет заменён
-/// на отдельный thread с two-buffer (pending / active + atomic swap) в P2
-/// «compositor thread + property trees + layer tree».
+/// Phase 0 in-process compositor: один поток, синхронный swap, без Mutex.
+/// Будет заменён на отдельный thread в roadmap «compositor thread»; API
+/// уже two-buffer-ный, чтобы переход был drop-in (поменять только Mutex
+/// вокруг pending-слотов).
 pub struct InProcessCompositor {
+    pending_layer_tree: Option<Box<dyn LayerTree + Send + Sync>>,
+    pending_trees: Option<Arc<PropertyTrees>>,
     active_layer_tree: Option<Box<dyn LayerTree + Send + Sync>>,
     active_trees: Option<Arc<PropertyTrees>>,
 }
@@ -152,6 +179,8 @@ impl InProcessCompositor {
     #[must_use]
     pub fn new() -> Self {
         Self {
+            pending_layer_tree: None,
+            pending_trees: None,
             active_layer_tree: None,
             active_trees: None,
         }
@@ -166,8 +195,25 @@ impl Default for InProcessCompositor {
 
 impl Compositor for InProcessCompositor {
     fn commit(&mut self, trees: Arc<PropertyTrees>, layer_tree: Box<dyn LayerTree + Send + Sync>) {
+        self.pending_trees = Some(trees);
+        self.pending_layer_tree = Some(layer_tree);
+    }
+
+    fn flush_pending(&mut self) -> bool {
+        let Some(trees) = self.pending_trees.take() else {
+            return false;
+        };
+        let layer_tree = self
+            .pending_layer_tree
+            .take()
+            .expect("pending_trees и pending_layer_tree всегда set/unset вместе");
         self.active_trees = Some(trees);
         self.active_layer_tree = Some(layer_tree);
+        true
+    }
+
+    fn has_pending(&self) -> bool {
+        self.pending_trees.is_some()
     }
 
     fn active_tree(&self) -> Option<&dyn LayerTree> {
@@ -216,26 +262,54 @@ mod tests {
         let comp = InProcessCompositor::new();
         assert!(comp.active_tree().is_none());
         assert!(comp.active_trees().is_none());
+        assert!(!comp.has_pending());
     }
 
     #[test]
-    fn compositor_commits_layer_tree() {
+    fn commit_does_not_promote_immediately() {
         let mut comp = InProcessCompositor::new();
         let bbox = Rect::new(0.0, 0.0, 800.0, 600.0);
-        let tree = BasicLayerTree::single_layer(bbox, sample_commands());
         let trees = Arc::new(PropertyTrees::empty());
-        comp.commit(trees.clone(), Box::new(tree));
-        let active = comp.active_tree().expect("commit makes tree active");
+        comp.commit(
+            trees,
+            Box::new(BasicLayerTree::single_layer(bbox, sample_commands())),
+        );
+        assert!(comp.has_pending());
+        assert!(
+            comp.active_tree().is_none(),
+            "commit без flush_pending не должен менять active"
+        );
+        assert!(comp.active_trees().is_none());
+    }
+
+    #[test]
+    fn flush_pending_promotes_pending_to_active() {
+        let mut comp = InProcessCompositor::new();
+        let bbox = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let trees = Arc::new(PropertyTrees::empty());
+        comp.commit(
+            trees.clone(),
+            Box::new(BasicLayerTree::single_layer(bbox, sample_commands())),
+        );
+        assert!(comp.flush_pending(), "был pending — flush возвращает true");
+        let active = comp.active_tree().expect("после flush есть active");
         assert_eq!(active.layer_count(), 1);
         assert_eq!(active.layer(0).unwrap().bbox(), bbox);
         assert!(Arc::ptr_eq(
-            comp.active_trees().expect("trees committed"),
+            comp.active_trees().expect("trees promoted"),
             &trees,
         ));
+        assert!(!comp.has_pending(), "после flush pending пуст");
     }
 
     #[test]
-    fn compositor_replaces_on_subsequent_commits() {
+    fn flush_pending_returns_false_when_empty() {
+        let mut comp = InProcessCompositor::new();
+        assert!(!comp.flush_pending());
+    }
+
+    #[test]
+    fn commit_overwrites_pending() {
         let mut comp = InProcessCompositor::new();
         let bbox_a = Rect::new(0.0, 0.0, 100.0, 100.0);
         let bbox_b = Rect::new(50.0, 50.0, 200.0, 200.0);
@@ -248,7 +322,27 @@ mod tests {
             trees,
             Box::new(BasicLayerTree::single_layer(bbox_b, Vec::new())),
         );
+        assert!(comp.flush_pending());
         let active = comp.active_tree().unwrap();
-        assert_eq!(active.layer(0).unwrap().bbox(), bbox_b);
+        assert_eq!(
+            active.layer(0).unwrap().bbox(),
+            bbox_b,
+            "последний commit до flush выигрывает"
+        );
+    }
+
+    #[test]
+    fn active_persists_across_flush_with_no_pending() {
+        let mut comp = InProcessCompositor::new();
+        let bbox = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let trees = Arc::new(PropertyTrees::empty());
+        comp.commit(
+            trees,
+            Box::new(BasicLayerTree::single_layer(bbox, Vec::new())),
+        );
+        comp.flush_pending();
+        // Без нового commit-а второй flush не меняет active.
+        assert!(!comp.flush_pending());
+        assert_eq!(comp.active_tree().unwrap().layer(0).unwrap().bbox(), bbox);
     }
 }
