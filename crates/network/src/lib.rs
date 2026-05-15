@@ -28,6 +28,7 @@ use lumen_core::url::Url;
 
 mod auth;
 mod brotli;
+mod cors;
 mod dns;
 mod doh;
 mod dot;
@@ -39,6 +40,13 @@ mod range;
 mod sandbox;
 pub use auth::StaticCredentialProvider;
 pub use brotli::BrotliContentDecoder;
+pub use cors::{
+    CorsError, CorsRequest, CredentialsMode, DEFAULT_PREFLIGHT_MAX_AGE_SECONDS,
+    MAX_SAFELISTED_HEADER_VALUE_LEN, PreflightCache, PreflightResult, build_preflight_headers,
+    check_cors_response_headers, evaluate_preflight_response, is_cors_safelisted_content_type,
+    is_cors_safelisted_method, is_cors_safelisted_request_header, is_forbidden_request_header,
+    needs_preflight, unsafe_request_header_names,
+};
 pub use dns::SystemDnsResolver;
 pub use doh::DohResolver;
 pub use dot::{DotResolver, DOT_DEFAULT_PORT};
