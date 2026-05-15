@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-- 🔄 BlendMode::from_keyword для CSS-каскада (P2 1B follow-up) [P2] — blend-mode-keyword — 2026-05-15
+- 🔄 Painting order traversal (P2 2A) [P2] — painting-order-traversal — 2026-05-15
 
 ## Статус реализации
 
