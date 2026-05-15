@@ -21,8 +21,8 @@ use rustls::pki_types::ServerName;
 use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, TabId};
 use lumen_core::ext::{
-    DnsResolver, EventSink, HstsEnforcement, HttpAuthScheme, HttpCredentialProvider,
-    NetworkTransport, RequestFilter,
+    ContentDecoder, DnsResolver, EventSink, HstsEnforcement, HttpAuthScheme,
+    HttpCredentialProvider, NetworkTransport, RequestFilter,
 };
 use lumen_core::url::Url;
 
@@ -138,6 +138,7 @@ impl Connection {
         path: &str,
         range: Option<&RangeSpec>,
         authorization: Option<&str>,
+        accept_encoding: Option<&str>,
     ) -> Result<()> {
         let range_header = match range.and_then(|r| r.header_value()) {
             Some(value) => format!("Range: {value}\r\n"),
@@ -147,8 +148,12 @@ impl Connection {
             Some(value) => format!("Authorization: {value}\r\n"),
             None => String::new(),
         };
+        let accept_encoding_header = match accept_encoding {
+            Some(value) if !value.is_empty() => format!("Accept-Encoding: {value}\r\n"),
+            _ => String::new(),
+        };
         let req = format!(
-            "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\n{range_header}{auth_header}\r\n"
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\n{accept_encoding_header}{range_header}{auth_header}\r\n"
         );
         let stream = self.reader.get_mut();
         stream
@@ -354,6 +359,52 @@ fn read_chunked<R: BufRead>(reader: &mut R) -> Result<Vec<u8>> {
     Ok(body)
 }
 
+/// Применить цепочку Content-Encoding декодеров к body. Парсит header-значение
+/// `Content-Encoding` (comma-separated, case-insensitive), ищет совпадающий
+/// декодер в `decoders` и прогоняет body через `decode()` в порядке,
+/// **обратном** order в header-е (RFC 7231 §3.1.2.2 — encodings applied
+/// в обратном порядке к телу: «If multiple encodings have been applied to
+/// the representation, the content codings are listed in the order in which
+/// they were applied»). `identity` и пустые токены пропускаются.
+///
+/// Отсутствие header-а / `identity` / `Content-Encoding:` пустой — body
+/// возвращается как есть. Encoding, для которого нет декодера, → Err
+/// (мы не объявляли его в Accept-Encoding; server нарушил RFC 7231 — лучше
+/// падать чем возвращать пользователю мусор).
+fn apply_content_encoding(
+    body: Vec<u8>,
+    headers: &[(String, String)],
+    decoders: &[Arc<dyn ContentDecoder>],
+) -> Result<Vec<u8>> {
+    let header_value = match header_value(headers, "content-encoding") {
+        Some(v) => v,
+        None => return Ok(body),
+    };
+    let encodings: Vec<String> = header_value
+        .split(',')
+        .map(|s| s.trim().to_ascii_lowercase())
+        .filter(|s| !s.is_empty() && s != "identity")
+        .collect();
+    if encodings.is_empty() {
+        return Ok(body);
+    }
+    let mut current = body;
+    // RFC 7231: apply encodings in REVERSE order — последний в header-е
+    // был применён первым на сервере, значит первым его и снимаем.
+    for encoding in encodings.iter().rev() {
+        let decoder = decoders
+            .iter()
+            .find(|d| d.encoding().eq_ignore_ascii_case(encoding))
+            .ok_or_else(|| {
+                Error::Network(format!(
+                    "unsupported Content-Encoding '{encoding}' (no decoder registered)"
+                ))
+            })?;
+        current = decoder.decode(&current)?;
+    }
+    Ok(current)
+}
+
 // ── Connect ─────────────────────────────────────────────────────────────────
 
 /// Открыть TCP (или TLS поверх TCP) к указанному origin. Резолв host →
@@ -443,6 +494,7 @@ fn fetch_single(
     request_path: &str,
     range: Option<&RangeSpec>,
     authorization: Option<&str>,
+    accept_encoding: Option<&str>,
 ) -> Result<Response> {
     let key = PoolKey {
         host: host.to_owned(),
@@ -452,7 +504,14 @@ fn fetch_single(
 
     // Попытка 1: используем pooled connection, если он есть.
     if let Some(pooled) = pool.acquire(&key) {
-        match do_request(pooled, request_host_header, request_path, range, authorization) {
+        match do_request(
+            pooled,
+            request_host_header,
+            request_path,
+            range,
+            authorization,
+            accept_encoding,
+        ) {
             Ok((resp, conn)) => {
                 if !conn.closed {
                     pool.release(key, conn);
@@ -469,7 +528,14 @@ fn fetch_single(
 
     // Попытка 2 (или 1, если пул был пуст): свежий connect.
     let conn = connect(host, port, is_tls, resolver)?;
-    let (resp, conn) = do_request(conn, request_host_header, request_path, range, authorization)?;
+    let (resp, conn) = do_request(
+        conn,
+        request_host_header,
+        request_path,
+        range,
+        authorization,
+        accept_encoding,
+    )?;
     if !conn.closed {
         pool.release(key, conn);
     }
@@ -482,8 +548,9 @@ fn do_request(
     path: &str,
     range: Option<&RangeSpec>,
     authorization: Option<&str>,
+    accept_encoding: Option<&str>,
 ) -> Result<(Response, Connection)> {
-    conn.write_request(host, path, range, authorization)?;
+    conn.write_request(host, path, range, authorization, accept_encoding)?;
     let resp = read_response(&mut conn)?;
     Ok((resp, conn))
 }
@@ -500,6 +567,8 @@ fn fetch_with_redirect(
     filter: Option<&dyn RequestFilter>,
     hsts_store: Option<&dyn HstsEnforcement>,
     credentials: Option<&dyn HttpCredentialProvider>,
+    decoders: &[Arc<dyn ContentDecoder>],
+    accept_encoding: Option<&str>,
     range: Option<&RangeSpec>,
     tab_id: TabId,
 ) -> Result<Response> {
@@ -566,7 +635,7 @@ fn fetch_with_redirect(
             });
         }
 
-        let resp = fetch_single(
+        let mut resp = fetch_single(
             pool,
             resolver,
             &host_ascii,
@@ -576,6 +645,7 @@ fn fetch_with_redirect(
             &url.path_and_query(),
             range,
             authorization.as_deref(),
+            accept_encoding,
         )?;
 
         // HSTS: сохранить policy из header-а, если ответ пришёл по HTTPS и
@@ -599,7 +669,16 @@ fn fetch_with_redirect(
         }
 
         match resp.status {
-            200..=299 => return Ok(resp),
+            200..=299 => {
+                // Content-Encoding decoding: применяется только к финальному
+                // (не redirect) ответу с success-статусом. 3xx редко несут body,
+                // и application к промежуточным телам редиректа бессмысленна —
+                // мы их выбрасываем. Decoding идёт на КАЖДОМ hop с финальным
+                // успехом; для 4xx/5xx — нет (caller получает Err по статусу,
+                // тело туда не доходит).
+                resp.body = apply_content_encoding(resp.body, &resp.headers, decoders)?;
+                return Ok(resp);
+            }
             301 | 302 | 303 | 307 | 308 => {
                 let location = header_value(&resp.headers, "location")
                     .ok_or_else(|| Error::Network("redirect without Location".to_owned()))?;
@@ -618,6 +697,8 @@ fn fetch_with_redirect(
                     filter,
                     hsts_store,
                     credentials,
+                    decoders,
+                    accept_encoding,
                     range,
                     tab_id,
                 );
@@ -681,6 +762,7 @@ pub struct HttpClient {
     resolver: Arc<dyn DnsResolver>,
     hsts: Option<Arc<dyn HstsEnforcement>>,
     credentials: Option<Arc<dyn HttpCredentialProvider>>,
+    decoders: Vec<Arc<dyn ContentDecoder>>,
     tab_id: TabId,
 }
 
@@ -693,6 +775,7 @@ impl HttpClient {
             resolver: Arc::new(SystemDnsResolver),
             hsts: None,
             credentials: None,
+            decoders: Vec::new(),
             tab_id: TabId(0),
         }
     }
@@ -776,6 +859,38 @@ impl HttpClient {
         self.tab_id = tab_id;
         self
     }
+
+    /// Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
+    /// в `Accept-Encoding` запроса (имя через `encoding()`); при получении
+    /// `Content-Encoding: <тот же encoding>` в ответе body прогоняется через
+    /// `decode()`. Можно вызывать многократно для разных encoding-ов; порядок
+    /// регистрации = порядок предпочтения в Accept-Encoding (первый — самый
+    /// предпочитаемый).
+    ///
+    /// По умолчанию декодеры не подключены — `Accept-Encoding` не выставляется,
+    /// и ответ с `Content-Encoding: <что-нибудь>` будет ошибкой
+    /// (RFC 7231 §3.1.2.2 — если клиент не объявлял поддержку, server не
+    /// должен использовать `Content-Encoding`, но реальные серверы это
+    /// нарушают). По принципу политики зависимостей (§5) — добавлять
+    /// декодеры в эту регистрацию должен caller (shell), не lumen-network:
+    /// тестовая среда хочет тестировать без brotli, production — с ним.
+    #[must_use]
+    pub fn with_content_decoder(mut self, decoder: Arc<dyn ContentDecoder>) -> Self {
+        self.decoders.push(decoder);
+        self
+    }
+
+    /// Сформировать значение `Accept-Encoding` из зарегистрированных декодеров,
+    /// или `None`, если декодеров нет. Имена через запятую, в порядке
+    /// регистрации.
+    fn accept_encoding_header(&self) -> Option<String> {
+        if self.decoders.is_empty() {
+            None
+        } else {
+            let parts: Vec<&str> = self.decoders.iter().map(|d| d.encoding()).collect();
+            Some(parts.join(", "))
+        }
+    }
 }
 
 impl Default for HttpClient {
@@ -800,6 +915,7 @@ impl HttpClient {
     /// suffix `bytes=-N` и multi-range — не поддерживаются. Range header
     /// пересылается на redirect-target (3xx сохраняет тот же range).
     pub fn fetch_range(&self, url: &Url, range: RangeSpec) -> Result<RangeResponse> {
+        let accept_encoding = self.accept_encoding_header();
         let resp = fetch_with_redirect(
             url,
             5,
@@ -809,6 +925,8 @@ impl HttpClient {
             self.filter.as_deref(),
             self.hsts.as_deref(),
             self.credentials.as_deref(),
+            &self.decoders,
+            accept_encoding.as_deref(),
             Some(&range),
             self.tab_id,
         )?;
@@ -827,6 +945,7 @@ impl HttpClient {
 
 impl NetworkTransport for HttpClient {
     fn fetch(&self, url: &Url) -> Result<Vec<u8>> {
+        let accept_encoding = self.accept_encoding_header();
         fetch_with_redirect(
             url,
             5,
@@ -836,6 +955,8 @@ impl NetworkTransport for HttpClient {
             self.filter.as_deref(),
             self.hsts.as_deref(),
             self.credentials.as_deref(),
+            &self.decoders,
+            accept_encoding.as_deref(),
             None,
             self.tab_id,
         )
@@ -2367,6 +2488,259 @@ mod tests {
         assert_eq!(seen[0].realm, "Admin Area");
         assert_eq!(seen[0].scheme, HttpAuthScheme::Basic);
 
+        server.join().unwrap();
+    }
+
+    // ── Content-Encoding pipeline ───────────────────────────────────────────
+
+    /// `Hello, World!` сжатый эталонным brotli CLI (см. тесты в `brotli` модуле).
+    const BROTLI_HELLO_WORLD: [u8; 17] = [
+        0x0f, 0x06, 0x80, 0x48, 0x65, 0x6c, 0x6c, 0x6f, 0x2c, 0x20, 0x57, 0x6f, 0x72, 0x6c, 0x64,
+        0x21, 0x03,
+    ];
+
+    /// Mock-сервер, который перед ответом сохраняет полученный request
+    /// (raw byte-block до пустой строки) в `captured`. Позволяет тестам
+    /// проверять, какие headers улетели на сервер.
+    fn mock_http_server_capturing<F>(
+        captured: Arc<Mutex<Vec<String>>>,
+        responder: F,
+    ) -> (u16, thread::JoinHandle<()>)
+    where
+        F: Fn(usize) -> Vec<u8> + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            let (mut sock, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(sock.try_clone().unwrap());
+            let mut request = String::new();
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                let is_blank = line == "\r\n" || line == "\n";
+                request.push_str(&line);
+                if is_blank {
+                    break;
+                }
+            }
+            captured.lock().unwrap().push(request);
+            let body = responder(1);
+            let _ = sock.write_all(&body);
+            let _ = sock.shutdown(std::net::Shutdown::Both);
+        });
+        (port, handle)
+    }
+
+    /// Mock decoder для unit-тестов цепочек encoding-ов. `name` — какое
+    /// имя возвращает `encoding()`; `decode` просто разворачивает байты,
+    /// чтобы тест мог детектировать, в каком порядке вызвался декодер.
+    #[derive(Debug)]
+    struct ReverseDecoder {
+        name: &'static str,
+    }
+    impl ContentDecoder for ReverseDecoder {
+        fn encoding(&self) -> &'static str {
+            self.name
+        }
+        fn decode(&self, input: &[u8]) -> Result<Vec<u8>> {
+            Ok(input.iter().rev().copied().collect())
+        }
+    }
+
+    /// Mock decoder, который к каждому байту добавляет `delta`. Позволяет
+    /// убедиться, что цепочка декодеров применяется в правильном порядке.
+    #[derive(Debug)]
+    struct ShiftDecoder {
+        name: &'static str,
+        delta: u8,
+    }
+    impl ContentDecoder for ShiftDecoder {
+        fn encoding(&self) -> &'static str {
+            self.name
+        }
+        fn decode(&self, input: &[u8]) -> Result<Vec<u8>> {
+            Ok(input.iter().map(|b| b.wrapping_sub(self.delta)).collect())
+        }
+    }
+
+    #[test]
+    fn apply_content_encoding_no_header_passthrough() {
+        let body = b"raw bytes".to_vec();
+        let out = apply_content_encoding(body.clone(), &[], &[]).expect("ok");
+        assert_eq!(out, body);
+    }
+
+    #[test]
+    fn apply_content_encoding_identity_passthrough() {
+        let headers = vec![("Content-Encoding".to_owned(), "identity".to_owned())];
+        let body = b"plain".to_vec();
+        let out = apply_content_encoding(body.clone(), &headers, &[]).expect("identity ok");
+        assert_eq!(out, body);
+    }
+
+    #[test]
+    fn apply_content_encoding_empty_header_passthrough() {
+        let headers = vec![("Content-Encoding".to_owned(), "".to_owned())];
+        let body = b"plain".to_vec();
+        let out = apply_content_encoding(body.clone(), &headers, &[]).expect("empty ok");
+        assert_eq!(out, body);
+    }
+
+    #[test]
+    fn apply_content_encoding_unknown_encoding_errors() {
+        let headers = vec![("Content-Encoding".to_owned(), "gzip".to_owned())];
+        let err = apply_content_encoding(b"x".to_vec(), &headers, &[])
+            .expect_err("must error on unknown");
+        let msg = format!("{err:?}");
+        assert!(msg.contains("gzip"), "unexpected message: {msg}");
+        assert!(msg.contains("no decoder registered"), "unexpected: {msg}");
+    }
+
+    #[test]
+    fn apply_content_encoding_brotli_decodes() {
+        let headers = vec![("Content-Encoding".to_owned(), "br".to_owned())];
+        let decoders: Vec<Arc<dyn ContentDecoder>> = vec![Arc::new(BrotliContentDecoder::new())];
+        let out =
+            apply_content_encoding(BROTLI_HELLO_WORLD.to_vec(), &headers, &decoders).expect("ok");
+        assert_eq!(out, b"Hello, World!");
+    }
+
+    #[test]
+    fn apply_content_encoding_header_case_insensitive() {
+        // Сервер может вернуть «BR» вместо «br» — токены case-insensitive.
+        let headers = vec![("Content-Encoding".to_owned(), "BR".to_owned())];
+        let decoders: Vec<Arc<dyn ContentDecoder>> = vec![Arc::new(BrotliContentDecoder::new())];
+        let out =
+            apply_content_encoding(BROTLI_HELLO_WORLD.to_vec(), &headers, &decoders).expect("ok");
+        assert_eq!(out, b"Hello, World!");
+    }
+
+    #[test]
+    fn apply_content_encoding_reverse_order_for_stacked() {
+        // RFC 7231 §3.1.2.2: encodings в header-е — в порядке применения.
+        // Header «a, b» означает: сначала server применил «a», потом «b».
+        // Снимать надо в обратном порядке: сначала «b», потом «a». Используем
+        // mock-decoder-ы, которые отнимают свой delta — если порядок неверный,
+        // байты получатся другие.
+        // Исходные: b'X' = 0x58.
+        // Симулируем server: применил `add 1` (a=`shift1`), потом `add 2` (b=`shift2`).
+        // Result-байт на проводе: 0x58 + 1 + 2 = 0x5b.
+        // Client header: «shift1, shift2».
+        // Apply order: shift2 (− 2 → 0x59), потом shift1 (− 1 → 0x58) = `X`. ОК.
+        let headers = vec![(
+            "Content-Encoding".to_owned(),
+            "shift1, shift2".to_owned(),
+        )];
+        let decoders: Vec<Arc<dyn ContentDecoder>> = vec![
+            Arc::new(ShiftDecoder { name: "shift1", delta: 1 }),
+            Arc::new(ShiftDecoder { name: "shift2", delta: 2 }),
+        ];
+        let out = apply_content_encoding(vec![0x5b], &headers, &decoders).expect("ok");
+        assert_eq!(out, b"X");
+    }
+
+    #[test]
+    fn apply_content_encoding_skips_identity_in_chain() {
+        // `Content-Encoding: identity, br` — identity dropped, br применяется.
+        let headers = vec![("Content-Encoding".to_owned(), "identity, br".to_owned())];
+        let decoders: Vec<Arc<dyn ContentDecoder>> = vec![Arc::new(BrotliContentDecoder::new())];
+        let out =
+            apply_content_encoding(BROTLI_HELLO_WORLD.to_vec(), &headers, &decoders).expect("ok");
+        assert_eq!(out, b"Hello, World!");
+    }
+
+    #[test]
+    fn accept_encoding_header_omitted_when_no_decoders() {
+        let client = HttpClient::new();
+        assert!(client.accept_encoding_header().is_none());
+    }
+
+    #[test]
+    fn accept_encoding_header_lists_decoders_in_order() {
+        let client = HttpClient::new()
+            .with_content_decoder(Arc::new(BrotliContentDecoder::new()))
+            .with_content_decoder(Arc::new(ReverseDecoder { name: "rev" }));
+        assert_eq!(client.accept_encoding_header().as_deref(), Some("br, rev"));
+    }
+
+    #[test]
+    fn fetch_decodes_brotli_response_e2e() {
+        // Mock сервер отдаёт Content-Encoding: br + brotli payload "Hello, World!".
+        let mut response = Vec::new();
+        response.extend_from_slice(b"HTTP/1.1 200 OK\r\n");
+        response.extend_from_slice(b"Content-Encoding: br\r\n");
+        response.extend_from_slice(
+            format!("Content-Length: {}\r\n", BROTLI_HELLO_WORLD.len()).as_bytes(),
+        );
+        response.extend_from_slice(b"Connection: close\r\n\r\n");
+        response.extend_from_slice(&BROTLI_HELLO_WORLD);
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) =
+            mock_http_server_capturing(captured.clone(), move |_| response.clone());
+
+        let client = HttpClient::new().with_content_decoder(Arc::new(BrotliContentDecoder::new()));
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let body = client.fetch(&url).expect("fetch");
+        assert_eq!(body, b"Hello, World!");
+
+        // Дополнительно: убедимся, что в request улетел Accept-Encoding: br.
+        let req = captured.lock().unwrap()[0].clone();
+        assert!(
+            req.to_ascii_lowercase().contains("accept-encoding: br"),
+            "no Accept-Encoding in request: {req:?}"
+        );
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_without_decoder_for_advertised_encoding_errors() {
+        // Сервер вернул Content-Encoding: br, но клиент не регистрировал
+        // декодер — это нарушение RFC 7231 (server должен использовать только
+        // объявленные в Accept-Encoding кодеки), но реальные серверы такое
+        // умеют. Лучше падать чем возвращать мусор.
+        let mut response = Vec::new();
+        response.extend_from_slice(b"HTTP/1.1 200 OK\r\n");
+        response.extend_from_slice(b"Content-Encoding: br\r\n");
+        response.extend_from_slice(
+            format!("Content-Length: {}\r\n", BROTLI_HELLO_WORLD.len()).as_bytes(),
+        );
+        response.extend_from_slice(b"Connection: close\r\n\r\n");
+        response.extend_from_slice(&BROTLI_HELLO_WORLD);
+        let (port, server) = mock_http_server(1, move |_| response.clone());
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let err = client.fetch(&url).expect_err("must error");
+        assert!(
+            format!("{err:?}").contains("unsupported Content-Encoding"),
+            "got: {err:?}"
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_no_accept_encoding_when_no_decoders() {
+        // Без декодеров клиент НЕ выставляет Accept-Encoding header (а не пустое
+        // значение): server должен трактовать отсутствие как «identity only».
+        let response =
+            b"HTTP/1.1 200 OK\r\nContent-Length: 3\r\nConnection: close\r\n\r\nfoo".to_vec();
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) =
+            mock_http_server_capturing(captured.clone(), move |_| response.clone());
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        client.fetch(&url).expect("fetch");
+
+        let req = captured.lock().unwrap()[0].clone();
+        assert!(
+            !req.to_ascii_lowercase().contains("accept-encoding"),
+            "Accept-Encoding leaked when no decoders: {req:?}"
+        );
         server.join().unwrap();
     }
 
