@@ -266,6 +266,54 @@ pub trait EncodingDetector: Send + Sync {
     fn detect(&self, bytes: &[u8], content_type_hint: Option<&str>) -> Option<&'static str>;
 }
 
+/// Начертание face-а: `font-style` из CSS Fonts L4. Phase 0 — три
+/// дискретных значения; oblique-angle (`oblique 20deg`) и variable-axis
+/// `slnt` отложены.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FontStyle {
+    Normal,
+    Italic,
+    Oblique,
+}
+
+impl FontStyle {
+    /// Парсит CSS-ключевое слово `normal | italic | oblique` (case-insensitive).
+    /// `oblique <angle>` редуцируется до `Oblique` (угол игнорируется).
+    pub fn parse_keyword(s: &str) -> Option<Self> {
+        let kw = s.trim();
+        let kw = kw.split_ascii_whitespace().next()?;
+        if kw.eq_ignore_ascii_case("normal") {
+            Some(FontStyle::Normal)
+        } else if kw.eq_ignore_ascii_case("italic") {
+            Some(FontStyle::Italic)
+        } else if kw.eq_ignore_ascii_case("oblique") {
+            Some(FontStyle::Oblique)
+        } else {
+            None
+        }
+    }
+}
+
+/// Метаданные одного face-а в индексе шрифтов.
+///
+/// Один family может иметь несколько face-ов (Regular / Bold / Italic /
+/// Bold Italic / Light / ExtraBold / …). Этот struct — то, что matcher
+/// использует, чтобы выбрать face под `font-style` + `font-weight` из CSS.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FaceRecord {
+    /// Family name, нормализованный к тому же регистру, в котором лежит
+    /// в индексе. Может отличаться от того, что попросил CSS — индекс
+    /// case-insensitive (CSS Fonts L4 §4.3).
+    pub family: String,
+    /// `usWeightClass` из OS/2 (CSS-совместимый, 1..1000). По умолчанию
+    /// `400` (Regular), если OS/2 нет.
+    pub weight: u16,
+    /// `font-style` face-а — Normal / Italic / Oblique.
+    pub style: FontStyle,
+    /// Путь к файлу шрифта (`.ttf` / `.otf`).
+    pub path: PathBuf,
+}
+
 /// Источник системных шрифтов. Реализация — в `lumen-font::system_fonts`.
 ///
 /// CSS-каскад даёт `font-family: ["Roboto", "Arial", sans-serif]` — приоритетный
@@ -273,27 +321,285 @@ pub trait EncodingDetector: Send + Sync {
 /// `FontProvider` отделяет «как найти шрифт на этой ОС» от «что с ним делать
 /// дальше» (распарсить, растеризовать, добавить в атлас).
 ///
-/// Возвращает `Vec<PathBuf>`: для одного семейства часто есть несколько
-/// face-ов (Regular / Bold / Italic / Bold Italic / разные weight-ы). Конкретный
-/// выбор по `font-style` / `font-weight` — задача потребителя; провайдер только
-/// перечисляет кандидатов.
-///
 /// Имена сравниваются ASCII-case-insensitive: CSS `"Times New Roman"` должен
 /// найти файл, у которого family name записан как `"Times New Roman"` или
 /// `"TIMES NEW ROMAN"` — спецификация (CSS Fonts L4 §4.3) явно требует
 /// case-insensitive matching.
 ///
-/// `&[&str]` — codepoint coverage lookup отложен (для эмодзи / CJK fallback);
-/// добавим, когда пойдёт реальная страница. Сейчас провайдер — только индекс
-/// по имени.
+/// API:
+/// - [`FontProvider::lookup_family`] — все пути к файлам семейства (для
+///   совместимости с кодом, которому достаточно одного face-а).
+/// - [`FontProvider::lookup_faces`] — face-ы с метаданными (weight / style)
+///   для font matcher-а.
+/// - [`FontProvider::pick_face`] — выбор лучшего face-а по CSS Fonts L4 §5.2
+///   с дефолтной реализацией поверх `lookup_faces`.
+///
+/// Codepoint coverage lookup (для эмодзи / CJK fallback) отложен —
+/// добавим как отдельный метод, когда пойдёт реальная страница.
 pub trait FontProvider: Send + Sync {
     /// Найти все пути к файлам шрифтов, объявленным под данным family name.
     /// Пустой Vec — семейство не найдено.
     fn lookup_family(&self, family: &str) -> Vec<PathBuf>;
 
     /// Имена всех известных семейств. Для отладки и тестов; в production
-    /// потребители используют `lookup_family`.
+    /// потребители используют `lookup_family` или `pick_face`.
     fn list_families(&self) -> Vec<String>;
+
+    /// Все face-ы данного семейства с метаданными. Default-реализация
+    /// синтезирует «Regular 400 Normal» для каждого пути из `lookup_family`
+    /// — это backward-compat для провайдеров без OS/2-парсинга;
+    /// продакшн-индекс ([`super::FontProvider`]'s `SystemFontIndex`)
+    /// переопределяет на реальные значения из таблицы OS/2.
+    fn lookup_faces(&self, family: &str) -> Vec<FaceRecord> {
+        self.lookup_family(family)
+            .into_iter()
+            .map(|path| FaceRecord {
+                family: family.to_string(),
+                weight: 400,
+                style: FontStyle::Normal,
+                path,
+            })
+            .collect()
+    }
+
+    /// Выбрать face, наиболее подходящий запрошенному `(weight, style)` —
+    /// CSS Fonts L4 §5.2. Default-реализация работает поверх
+    /// [`FontProvider::lookup_faces`] и [`match_face`]; переопределять
+    /// нужно только если у реализации есть нативный matcher (DirectWrite /
+    /// CoreText / Fontconfig).
+    fn pick_face(&self, family: &str, weight: u16, style: FontStyle) -> Option<FaceRecord> {
+        let faces = self.lookup_faces(family);
+        match_face(&faces, weight, style).cloned()
+    }
+}
+
+/// CSS Fonts L4 §5.2 алгоритм матчинга — извлечён из trait-а в свободную
+/// функцию, чтобы потребитель мог звать его на собственной коллекции face-ов
+/// (например, для FaceCascade в font-fallback chain).
+///
+/// Порядок: сначала фильтр по `style` (italic > oblique > normal приоритет
+/// зависит от desired), затем weight по правилам §5 — для desired ≤ 400
+/// сначала меньшие, затем большие; для ≥ 600 — наоборот; 400 и 500 имеют
+/// особый «swap» (400 пробует 500 первым, 500 — 400).
+pub fn match_face<'a>(
+    faces: &'a [FaceRecord],
+    desired_weight: u16,
+    desired_style: FontStyle,
+) -> Option<&'a FaceRecord> {
+    if faces.is_empty() {
+        return None;
+    }
+    let min_style_pri = faces
+        .iter()
+        .map(|f| style_priority(f.style, desired_style))
+        .min()?;
+    faces
+        .iter()
+        .filter(|f| style_priority(f.style, desired_style) == min_style_pri)
+        .min_by_key(|f| weight_priority(f.weight, desired_weight))
+}
+
+/// Приоритет face-style для заданного desired-style. Меньше — лучше.
+/// Соответствует CSS Fonts L4 §5.2 (оригинал говорит про angle для oblique;
+/// мы трактуем oblique как «не-italic, но наклонный»).
+fn style_priority(face: FontStyle, desired: FontStyle) -> u8 {
+    use FontStyle::*;
+    match (desired, face) {
+        (a, b) if a == b => 0,
+        (Italic, Oblique) | (Oblique, Italic) => 1,
+        (Italic, Normal) | (Oblique, Normal) => 2,
+        (Normal, Oblique) => 1,
+        (Normal, Italic) => 2,
+        _ => 3,
+    }
+}
+
+/// Приоритет face-weight для desired-weight. Меньше — лучше.
+fn weight_priority(face: u16, desired: u16) -> (u32, u32) {
+    if face == desired {
+        return (0, 0);
+    }
+    match desired {
+        400 => {
+            if face == 500 {
+                (1, 0)
+            } else if face < 400 {
+                (2, u32::from(400 - face))
+            } else {
+                // face > 500
+                (3, u32::from(face - 400))
+            }
+        }
+        500 => {
+            if face == 400 {
+                (1, 0)
+            } else if face < 400 {
+                (2, u32::from(400 - face))
+            } else {
+                // face > 500
+                (3, u32::from(face - 500))
+            }
+        }
+        d if d < 400 => {
+            if face < d {
+                (1, u32::from(d - face))
+            } else {
+                (2, u32::from(face - d))
+            }
+        }
+        d => {
+            if face > d {
+                (1, u32::from(face - d))
+            } else {
+                (2, u32::from(d - face))
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod font_provider_tests {
+    use super::*;
+
+    fn face(family: &str, weight: u16, style: FontStyle) -> FaceRecord {
+        FaceRecord {
+            family: family.to_string(),
+            weight,
+            style,
+            path: PathBuf::from(format!("{family}-{weight}-{style:?}.ttf")),
+        }
+    }
+
+    #[test]
+    fn font_style_parse_keyword() {
+        assert_eq!(FontStyle::parse_keyword("normal"), Some(FontStyle::Normal));
+        assert_eq!(FontStyle::parse_keyword("ITALIC"), Some(FontStyle::Italic));
+        assert_eq!(FontStyle::parse_keyword("Oblique"), Some(FontStyle::Oblique));
+        assert_eq!(
+            FontStyle::parse_keyword("oblique 20deg"),
+            Some(FontStyle::Oblique)
+        );
+        assert_eq!(FontStyle::parse_keyword("bogus"), None);
+        assert_eq!(FontStyle::parse_keyword(""), None);
+    }
+
+    #[test]
+    fn match_face_exact_weight_and_style() {
+        let faces = vec![
+            face("Inter", 400, FontStyle::Normal),
+            face("Inter", 700, FontStyle::Normal),
+            face("Inter", 400, FontStyle::Italic),
+        ];
+        let m = match_face(&faces, 700, FontStyle::Normal).unwrap();
+        assert_eq!(m.weight, 700);
+        assert_eq!(m.style, FontStyle::Normal);
+    }
+
+    #[test]
+    fn match_face_400_prefers_500_over_300() {
+        // Spec: для desired=400 сначала пробуется 500, потом descending.
+        let faces = vec![
+            face("F", 300, FontStyle::Normal),
+            face("F", 500, FontStyle::Normal),
+        ];
+        let m = match_face(&faces, 400, FontStyle::Normal).unwrap();
+        assert_eq!(m.weight, 500);
+    }
+
+    #[test]
+    fn match_face_500_prefers_400_over_600() {
+        let faces = vec![
+            face("F", 400, FontStyle::Normal),
+            face("F", 600, FontStyle::Normal),
+        ];
+        let m = match_face(&faces, 500, FontStyle::Normal).unwrap();
+        assert_eq!(m.weight, 400);
+    }
+
+    #[test]
+    fn match_face_300_descends_then_ascends() {
+        // desired=300 — сначала меньше desired, потом больше.
+        // Кандидаты: 100 (-200), 500 (+200) → должен победить 100.
+        let faces = vec![
+            face("F", 100, FontStyle::Normal),
+            face("F", 500, FontStyle::Normal),
+        ];
+        let m = match_face(&faces, 300, FontStyle::Normal).unwrap();
+        assert_eq!(m.weight, 100);
+    }
+
+    #[test]
+    fn match_face_700_ascends_then_descends() {
+        // desired=700 — сначала больше desired, потом меньше.
+        let faces = vec![
+            face("F", 400, FontStyle::Normal),
+            face("F", 900, FontStyle::Normal),
+        ];
+        let m = match_face(&faces, 700, FontStyle::Normal).unwrap();
+        assert_eq!(m.weight, 900);
+    }
+
+    #[test]
+    fn match_face_style_filter_strict_over_weight() {
+        // Если запросили italic и italic есть с любым весом — он побеждает
+        // даже более точный по весу normal.
+        let faces = vec![
+            face("F", 700, FontStyle::Normal),  // exact weight, but normal
+            face("F", 100, FontStyle::Italic),  // wrong weight, but italic
+        ];
+        let m = match_face(&faces, 700, FontStyle::Italic).unwrap();
+        assert_eq!(m.style, FontStyle::Italic);
+        assert_eq!(m.weight, 100);
+    }
+
+    #[test]
+    fn match_face_italic_falls_back_to_oblique_then_normal() {
+        let faces_with_oblique = vec![
+            face("F", 400, FontStyle::Normal),
+            face("F", 400, FontStyle::Oblique),
+        ];
+        let m = match_face(&faces_with_oblique, 400, FontStyle::Italic).unwrap();
+        assert_eq!(m.style, FontStyle::Oblique);
+
+        let faces_normal_only = vec![face("F", 400, FontStyle::Normal)];
+        let m = match_face(&faces_normal_only, 400, FontStyle::Italic).unwrap();
+        assert_eq!(m.style, FontStyle::Normal);
+    }
+
+    #[test]
+    fn match_face_normal_prefers_oblique_over_italic() {
+        let faces = vec![
+            face("F", 400, FontStyle::Italic),
+            face("F", 400, FontStyle::Oblique),
+        ];
+        let m = match_face(&faces, 400, FontStyle::Normal).unwrap();
+        assert_eq!(m.style, FontStyle::Oblique);
+    }
+
+    #[test]
+    fn match_face_empty_returns_none() {
+        let faces: Vec<FaceRecord> = Vec::new();
+        assert!(match_face(&faces, 400, FontStyle::Normal).is_none());
+    }
+
+    #[test]
+    fn match_face_full_css_weight_ladder_for_400() {
+        // Order: 400, 500, 300, 200, 100, 600, 700, 800, 900.
+        let weights = [100, 200, 300, 500, 600, 700, 800, 900];
+        let mut faces: Vec<FaceRecord> =
+            weights.iter().map(|&w| face("F", w, FontStyle::Normal)).collect();
+        // 500 first
+        let m = match_face(&faces, 400, FontStyle::Normal).unwrap();
+        assert_eq!(m.weight, 500);
+        // remove 500, expect 300
+        faces.retain(|f| f.weight != 500);
+        let m = match_face(&faces, 400, FontStyle::Normal).unwrap();
+        assert_eq!(m.weight, 300);
+        // remove 300/200/100, expect 600
+        faces.retain(|f| f.weight > 500);
+        let m = match_face(&faces, 400, FontStyle::Normal).unwrap();
+        assert_eq!(m.weight, 600);
+    }
 }
 
 /// JavaScript runtime — исполнение JS-кода (HTML inline scripts, `eval`,
