@@ -968,6 +968,16 @@ impl Renderer {
                         push_fill_quad(&mut fill_vertices, *rect, [0.85, 0.85, 0.85, 1.0]);
                     }
                 }
+                // Sprint 0 P2 stub-команды: clip / opacity / blend mode
+                // (interface-first, см. `display_list.rs`). Phase 0 renderer
+                // их игнорирует — реальный layer-pipeline это задачи P2 2A
+                // (painting order через compositor) и 4 (mix-blend-mode).
+                DisplayCommand::PushClipRect { .. }
+                | DisplayCommand::PopClip
+                | DisplayCommand::PushOpacity { .. }
+                | DisplayCommand::PopOpacity
+                | DisplayCommand::PushBlendMode { .. }
+                | DisplayCommand::PopBlendMode => {}
             }
         }
 

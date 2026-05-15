@@ -17,7 +17,9 @@ pub use atlas::{GlyphAtlas, GlyphEntry};
 pub use compositor::{
     BasicLayer, BasicLayerTree, Compositor, InProcessCompositor, Layer, LayerTree,
 };
-pub use display_list::{build_display_list, serialize_display_list, DisplayCommand, DisplayList};
+pub use display_list::{
+    build_display_list, serialize_display_list, BlendMode, DisplayCommand, DisplayList,
+};
 pub use renderer::{ImageRegisterError, Renderer};
 
 // ── FontMeasurer ────────────────────────────────────────────────────────────
