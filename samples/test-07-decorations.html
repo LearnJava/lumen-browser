@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<title>Test 07 — Decorations</title>
+<style>
+  body { font-family: Inter, sans-serif; margin: 24px; background: #fafafa; color: #222; }
+  h1 { font-size: 22px; margin: 0 0 16px 0; }
+  .sec { margin-bottom: 24px; padding: 12px; background: #fff; border: 1px solid #ddd; }
+  .lbl { font-size: 12px; color: #888; margin-bottom: 8px; text-transform: uppercase; }
+
+  .b-solid   { border: 3px solid   #c00; padding: 8px; margin-bottom: 6px; }
+  .b-dashed  { border: 3px dashed  #c00; padding: 8px; margin-bottom: 6px; }
+  .b-dotted  { border: 3px dotted  #c00; padding: 8px; margin-bottom: 6px; }
+  .b-double  { border: 6px double  #c00; padding: 8px; margin-bottom: 6px; }
+  .b-groove  { border: 6px groove  #c00; padding: 8px; margin-bottom: 6px; }
+  .b-ridge   { border: 6px ridge   #c00; padding: 8px; margin-bottom: 6px; }
+
+  .td-solid  { text-decoration: underline solid       #c00; }
+  .td-double { text-decoration: underline double       #c00; }
+  .td-dotted { text-decoration: underline dotted       #c00; }
+  .td-dashed { text-decoration: underline dashed       #c00; }
+  .td-wavy   { text-decoration: underline wavy         #c00; }
+  .td-color  { text-decoration: underline solid        #0a0; color: #222; }
+
+  .out-line { outline: 3px solid #07c; padding: 8px; margin: 12px 0; background: #fff; }
+  .out-dash { outline: 3px dashed #07c; padding: 8px; margin: 12px 0; background: #fff; }
+
+  .lst-square    { list-style-type: square; }
+  .lst-roman     { list-style-type: upper-roman; }
+  .lst-alpha     { list-style-type: lower-alpha; }
+  .lst-decimal-z { list-style-type: decimal-leading-zero; }
+
+  .grad-linear { height: 60px; background: linear-gradient(to right, #c00, #07c); margin-bottom: 8px; }
+  .grad-radial { height: 60px; background: radial-gradient(circle, #fc0, #c00); margin-bottom: 8px; }
+  .grad-angle  { height: 60px; background: linear-gradient(45deg, #0a0, #07c); }
+</style>
+</head>
+<body>
+  <h1>Test 07 — Decorations</h1>
+
+  <div class="sec">
+    <div class="lbl">border-style</div>
+    <div class="b-solid">solid 3px</div>
+    <div class="b-dashed">dashed 3px</div>
+    <div class="b-dotted">dotted 3px</div>
+    <div class="b-double">double 6px</div>
+    <div class="b-groove">groove 6px</div>
+    <div class="b-ridge">ridge 6px</div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">text-decoration-style / -color</div>
+    <p class="td-solid">underline solid — обычное подчёркивание</p>
+    <p class="td-double">underline double — двойная линия</p>
+    <p class="td-dotted">underline dotted — точечное</p>
+    <p class="td-dashed">underline dashed — штриховое</p>
+    <p class="td-wavy">underline wavy — волнистое</p>
+    <p class="td-color">underline зелёного цвета на чёрном тексте</p>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">outline (не влияет на layout)</div>
+    <div class="out-line">outline solid 3px — синяя обводка снаружи без сдвига соседей</div>
+    <div class="out-dash">outline dashed 3px</div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">list-style-type</div>
+    <ul class="lst-square"><li>square A</li><li>square B</li></ul>
+    <ol class="lst-roman"><li>Roman I</li><li>Roman II</li><li>Roman III</li></ol>
+    <ol class="lst-alpha"><li>alpha a</li><li>alpha b</li></ol>
+    <ol class="lst-decimal-z"><li>decimal 01</li><li>decimal 02</li></ol>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">gradients</div>
+    <div class="grad-linear"></div>
+    <div class="grad-radial"></div>
+    <div class="grad-angle"></div>
+  </div>
+</body>
+</html>

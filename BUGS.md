@@ -175,6 +175,8 @@ CSS Lists L3: `list-style-type` / `::marker` / `marker-side: inside|outside`. У
 
 **Где смотреть:** `lumen-layout::box_tree` — генерация anonymous marker-box для `display: list-item`.
 
+**Подтверждено повторно** 2026-05-15 на `test-07-decorations.html`: ни `disc`/`square` (для `<ul>`), ни `upper-roman`/`lower-alpha`/`decimal-leading-zero` (для `<ol>`) не рисуются. Когда исправление подойдёт — нужно покрыть все эти типы. См. `bugs/screenshots/bug-019-outline.png` (нижняя секция «list-style-type» — текст без маркеров).
+
 ---
 
 ### BUG-012 · `<del>` и `<ins>` ломают inline-flow (каждый — на отдельной строке)
@@ -244,6 +246,101 @@ DrawText (0.00, 1146.10, ...) "<aside> — все рендерятся как б
 `<img src="images/nonexistent.png" alt="[файл не найден — alt-текст]">` — должен показать alt-текст внутри прямоугольника `width × height`. В Lumen — пустое место (DrawImage эмитится, но изображение не зарегистрировано, ничего не рисуется), alt не отображается.
 
 **Где смотреть:** `lumen-shell` (decode images перед resumed) и `lumen-paint` — для DrawImage с unregistered src нужно рендерить fallback (alt-текст или плейсхолдер).
+
+---
+
+### BUG-016 · `border-style` поддерживает только `solid` (dashed/dotted рисуются как solid, double/groove/ridge — не рисуются вовсе)
+
+**Статус:** OPEN  
+**Компонент:** `lumen-layout` (cascade) / `lumen-paint` (stroke)  
+**Обнаружен:** 2026-05-15 на `test-07-decorations.html`  
+**Скриншот:** `bugs/screenshots/bug-016-border-style.png`
+
+**Описание:**  
+Из всех значений `border-style` корректно работает только `solid`. `dashed` и `dotted` отрисовываются как сплошная линия (стиль игнорируется, fallback к solid). `double`, `groove`, `ridge` приводят к **полному отсутствию рамки** — рамки не рисуются вовсе (вероятно, стиль не парсится и итоговый `border-style: none`).
+
+**Воспроизведение:**
+```html
+<div style="border: 3px dashed #c00; padding: 8px;">dashed</div>   <!-- рисуется как solid -->
+<div style="border: 3px dotted #c00; padding: 8px;">dotted</div>   <!-- рисуется как solid -->
+<div style="border: 6px double #c00; padding: 8px;">double</div>   <!-- рамки нет -->
+<div style="border: 6px groove #c00; padding: 8px;">groove</div>   <!-- рамки нет -->
+<div style="border: 6px ridge  #c00; padding: 8px;">ridge</div>    <!-- рамки нет -->
+```
+
+**Ожидается:** все 5 стилей визуально различимы (штрихи, точки, двойная линия, 3D-эффекты).  
+**Факт:** dashed/dotted = solid, double/groove/ridge = no border.
+
+**Гипотеза:** есть две разные ветви проблемы — (1) CSS-парсер принимает значения `dashed`/`dotted`, но paint в `display_list` всегда эмитит solid; (2) `double`/`groove`/`ridge` парсер не принимает и computed `border-style` остаётся `none`.
+
+**Где смотреть:** `lumen-css-parser` (longhand `border-*-style`), `lumen-layout::style` (`BorderStyle` enum, если есть), `lumen-paint::display_list` (stroke command, варианты стиля).
+
+---
+
+### BUG-017 · `text-decoration-style` игнорируется (double/dotted/dashed/wavy рисуются как solid)
+
+**Статус:** OPEN  
+**Компонент:** `lumen-layout` (cascade) / `lumen-paint` (underline stroke)  
+**Обнаружен:** 2026-05-15 на `test-07-decorations.html`  
+**Скриншот:** `bugs/screenshots/bug-017-text-decoration-style.png`
+
+**Описание:**  
+Все варианты `text-decoration-style` (`double`, `dotted`, `dashed`, `wavy`) отрисовываются как обычное `solid`-подчёркивание. Различить визуально нельзя.
+
+**Воспроизведение:**
+```html
+<p style="text-decoration: underline double #c00;">двойная</p>
+<p style="text-decoration: underline dotted #c00;">точечная</p>
+<p style="text-decoration: underline dashed #c00;">штриховая</p>
+<p style="text-decoration: underline wavy   #c00;">волнистая</p>
+```
+**Ожидается:** четыре визуально разных underline-стиля.  
+**Факт:** все четыре идентичны solid-варианту.
+
+**Где смотреть:** `lumen-css-parser` (поддерживает ли он longhand `text-decoration-style`), `lumen-layout::style` (хранится ли стиль в `ComputedStyle`), `lumen-paint` (FillRect для подчёркивания — нужно расширить до stroke с pattern или wavy curve).
+
+---
+
+### BUG-018 · `text-decoration-color` игнорируется (underline всегда цвета текста)
+
+**Статус:** OPEN  
+**Компонент:** `lumen-layout` (cascade)  
+**Обнаружен:** 2026-05-15 на `test-07-decorations.html`  
+**Скриншот:** `bugs/screenshots/bug-018-text-decoration-color.png`
+
+**Описание:**  
+`text-decoration-color` не применяется. Подчёркивание всегда рисуется цветом `color` текущего элемента.
+
+**Воспроизведение:**
+```html
+<p style="text-decoration: underline solid #0a0; color: #222;">зелёное подчёркивание под чёрным текстом</p>
+```
+**Ожидается:** чёрный текст с зелёной чертой снизу.  
+**Факт:** чёрный текст с чёрной чертой.
+
+**Где смотреть:** `lumen-css-parser` (поддерживает ли longhand `text-decoration-color`), `lumen-layout::style` (поле `text_decoration_color`), `lumen-paint` (использовать его при эмитировании underline вместо `color`).
+
+---
+
+### BUG-019 · `outline` не отрисовывается
+
+**Статус:** OPEN  
+**Компонент:** `lumen-css-parser` / `lumen-paint`  
+**Обнаружен:** 2026-05-15 на `test-07-decorations.html`  
+**Скриншот:** `bugs/screenshots/bug-019-outline.png`
+
+**Описание:**  
+Свойство `outline` (любого стиля и ширины) полностью игнорируется. Обводка не появляется. В отличие от `border`, `outline` не должен влиять на layout — но в Lumen его вообще нет ни в paint, ни в layout.
+
+**Воспроизведение:**
+```html
+<div style="outline: 3px solid #07c; padding: 8px;">обводка снаружи</div>
+<div style="outline: 3px dashed #07c; padding: 8px;">пунктирная обводка</div>
+```
+**Ожидается:** синяя/синяя пунктирная рамка снаружи блока, не сдвигающая соседей.  
+**Факт:** обводка отсутствует.
+
+**Где смотреть:** `lumen-css-parser` (longhand `outline-style/-width/-color/-offset`), `lumen-layout::style` (`outline_*` поля), `lumen-paint::display_list` (отдельный proceedingstep после стандартного painter — отрисовать вне border-box, не учитывая в layout).
 
 ---
 
