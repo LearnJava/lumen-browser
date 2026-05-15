@@ -1,50 +1,97 @@
 //! HTTP Range requests (RFC 7233).
 //!
-//! Поддержка single-range запросов через `Range: bytes=START-END[или START-]`.
-//! Сервер может ответить либо `206 Partial Content` (с заголовком
-//! `Content-Range: bytes START-END/TOTAL`), либо `200 OK` с полным телом
-//! (Range проигнорирован — RFC 7233 §3.1 разрешает оба ответа). Клиент
-//! принимает любой исход; `RangeResponse.content_range` показывает,
-//! сработало ли частичное чтение.
+//! Поддержка single-range запросов в трёх формах: закрытая
+//! `bytes=START-END`, открытая `bytes=START-` (от START до конца), и
+//! suffix `bytes=-N` (последние N байт). Сервер может ответить либо
+//! `206 Partial Content` (с заголовком `Content-Range: bytes START-END/TOTAL`),
+//! либо `200 OK` с полным телом (Range проигнорирован — RFC 7233 §3.1
+//! разрешает оба ответа). Клиент принимает любой исход; `RangeResponse.content_range`
+//! показывает, сработало ли частичное чтение.
 //!
-//! Phase 0 не поддерживает: suffix-range (`bytes=-N`), multi-range
-//! (`bytes=0-99,200-299` → multipart/byteranges — отдельный пайплайн
-//! парсинга боундари), If-Range conditional (нужен для resume без гонки
-//! с изменением ресурса). Все добавятся при необходимости.
+//! Опциональный `If-Range` (RFC 7233 §3.2) — conditional range, защищает
+//! от race condition при resume: если ресурс не изменился (ETag /
+//! Last-Modified совпадает), server отдаёт `206` с запрошенным диапазоном;
+//! если изменился — `200` с полным новым телом (валидатор стерильно
+//! инвалидирует диапазон). Caller передаёт validator из предыдущего
+//! ответа (заголовок `ETag` или `Last-Modified`); spec разрешает либо
+//! strong ETag, либо HTTP-date.
+//!
+//! Phase 0 не поддерживает: multi-range (`bytes=0-99,200-299` →
+//! multipart/byteranges — отдельный пайплайн парсинга боундари).
 
-/// Спецификация запрашиваемого диапазона байт (inclusive).
-///
-/// `end = None` означает «от `start` до конца ресурса». Сервер обязан
-/// отдать минимум `start..=last_byte_of_resource`. Если `start >=
-/// total_size` — сервер ответит `416 Range Not Satisfiable`, и `fetch_range`
-/// вернёт `Err`. `end < start` — protocol error, отрезаем в `header_value`.
+/// Спецификация запрашиваемого диапазона байт (inclusive по обоим концам
+/// в Closed-варианте). Три формы по RFC 7233 §2.1 «byte-range-spec» +
+/// «suffix-byte-range-spec».
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct RangeSpec {
-    pub start: u64,
-    pub end: Option<u64>,
+pub enum RangeSpec {
+    /// `bytes=START-END` — закрытый диапазон inclusive по обоим концам.
+    /// Если `end < start` — невалидно (см. `header_value`).
+    Closed { start: u64, end: u64 },
+    /// `bytes=START-` — от `start` до конца ресурса. Сервер обязан
+    /// отдать минимум `start..=last_byte_of_resource`. Если
+    /// `start >= total_size` — `416 Range Not Satisfiable`.
+    OpenEnded { start: u64 },
+    /// `bytes=-N` — последние N байт ресурса. RFC 7233 §2.1:
+    /// suffix-length > 0 (`bytes=-0` — protocol error). Если N больше
+    /// размера ресурса, сервер вправе либо отдать весь ресурс, либо `416`
+    /// (поведение implementation-defined).
+    Suffix { length: u64 },
 }
 
 impl RangeSpec {
     /// Закрытый диапазон `[start; end]` inclusive по обоим концам.
     pub fn closed(start: u64, end: u64) -> Self {
-        Self {
-            start,
-            end: Some(end),
-        }
+        Self::Closed { start, end }
     }
 
     /// Открытый диапазон от `start` до конца ресурса.
     pub fn from(start: u64) -> Self {
-        Self { start, end: None }
+        Self::OpenEnded { start }
+    }
+
+    /// Suffix-range: последние `length` байт ресурса. RFC 7233 §2.1.
+    /// `length = 0` сделает невалидный header (`header_value` вернёт None) —
+    /// `bytes=-0` не имеет смысла (отдай мне 0 последних байт = ничего).
+    pub fn suffix(length: u64) -> Self {
+        Self::Suffix { length }
     }
 
     /// Значение для HTTP-заголовка `Range:` (без префикса `Range: `).
-    /// Возвращает `None` если `end < start` (некорректная спецификация).
+    /// Возвращает `None` если спецификация некорректна: `end < start`
+    /// в Closed, `length = 0` в Suffix.
     pub(crate) fn header_value(&self) -> Option<String> {
-        match self.end {
-            Some(end) if end < self.start => None,
-            Some(end) => Some(format!("bytes={}-{}", self.start, end)),
-            None => Some(format!("bytes={}-", self.start)),
+        match self {
+            Self::Closed { start, end } if end < start => None,
+            Self::Closed { start, end } => Some(format!("bytes={start}-{end}")),
+            Self::OpenEnded { start } => Some(format!("bytes={start}-")),
+            Self::Suffix { length: 0 } => None,
+            Self::Suffix { length } => Some(format!("bytes=-{length}")),
+        }
+    }
+}
+
+/// Validator для `If-Range` header (RFC 7233 §3.2). Либо ETag (`"abc"`,
+/// `W/"weak"`), либо HTTP-date (`Tue, 15 Nov 1994 12:45:26 GMT`). Spec
+/// требует **strong** validator (strong ETag или date с точностью до
+/// секунды) — иначе race-condition: ресурс мог измениться внутри секунды.
+/// Caller-сторона ответственна за выбор подходящего validator-а из
+/// предыдущего ответа.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RangeValidator {
+    /// ETag (вместе с кавычками и опциональным `W/` префиксом). Передаётся
+    /// «как есть» из header-а предыдущего ответа.
+    ETag(String),
+    /// HTTP-date. Передаётся «как есть» из header-а предыдущего ответа.
+    LastModified(String),
+}
+
+impl RangeValidator {
+    /// Сырое значение для `If-Range:` header-а (без префикса `If-Range: `).
+    /// Spec §3.2 не требует никакой трансформации — клиент дословно копирует
+    /// validator из предыдущего ответа.
+    pub(crate) fn header_value(&self) -> &str {
+        match self {
+            Self::ETag(t) | Self::LastModified(t) => t,
         }
     }
 }
@@ -119,6 +166,46 @@ mod tests {
     fn range_spec_invalid_end_lt_start_is_none() {
         let r = RangeSpec::closed(100, 50);
         assert!(r.header_value().is_none());
+    }
+
+    #[test]
+    fn range_spec_suffix_header() {
+        let r = RangeSpec::suffix(500);
+        assert_eq!(r.header_value().as_deref(), Some("bytes=-500"));
+    }
+
+    #[test]
+    fn range_spec_suffix_single_byte() {
+        let r = RangeSpec::suffix(1);
+        assert_eq!(r.header_value().as_deref(), Some("bytes=-1"));
+    }
+
+    #[test]
+    fn range_spec_suffix_zero_is_none() {
+        // bytes=-0 — protocol error по RFC 7233 §2.1 «suffix-length > 0».
+        let r = RangeSpec::suffix(0);
+        assert!(r.header_value().is_none());
+    }
+
+    #[test]
+    fn range_validator_etag_strong() {
+        let v = RangeValidator::ETag("\"abc123\"".to_owned());
+        assert_eq!(v.header_value(), "\"abc123\"");
+    }
+
+    #[test]
+    fn range_validator_etag_weak() {
+        // Weak ETag (`W/"..."`) сохраняется дословно — server решает
+        // считать ли его strong-enough для conditional Range (§3.2:
+        // server SHOULD use strong validator, MAY accept weak).
+        let v = RangeValidator::ETag("W/\"weak-etag\"".to_owned());
+        assert_eq!(v.header_value(), "W/\"weak-etag\"");
+    }
+
+    #[test]
+    fn range_validator_last_modified_date() {
+        let v = RangeValidator::LastModified("Tue, 15 Nov 1994 12:45:26 GMT".to_owned());
+        assert_eq!(v.header_value(), "Tue, 15 Nov 1994 12:45:26 GMT");
     }
 
     #[test]

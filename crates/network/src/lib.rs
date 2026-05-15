@@ -48,7 +48,7 @@ pub use mixed_content::{
 };
 pub use origin::{Origin, OriginError};
 pub use pool::ConnectionPool;
-pub use range::{ContentRange, RangeResponse, RangeSpec, parse_content_range};
+pub use range::{ContentRange, RangeResponse, RangeSpec, RangeValidator, parse_content_range};
 pub use sandbox::{SandboxFlags, parse_sandbox_value};
 
 use pool::PoolKey;
@@ -136,22 +136,33 @@ impl Connection {
     /// Записать HTTP-запрос в stream. Используется `Connection: keep-alive`
     /// (HTTP/1.1 default, но явно для ясности и для совместимости с серверами,
     /// которые криво интерпретируют отсутствие хедера). Опциональный `range`
-    /// добавляет header `Range: bytes=START-END` (RFC 7233 §3.1); невалидный
-    /// RangeSpec (`end < start`) тихо опускает header — fetch получит full
-    /// response (200 OK), не упадёт. Опциональный `authorization` — готовая
-    /// строка для header `Authorization` (Basic / Digest), формируется на
-    /// уровень выше после 401-retry.
+    /// добавляет header `Range: bytes=START-END` / `bytes=START-` / `bytes=-N`
+    /// (RFC 7233 §3.1); невалидный RangeSpec (`end < start`, `suffix=0`)
+    /// тихо опускает header — fetch получит full response (200 OK), не упадёт.
+    /// Опциональный `if_range` — `If-Range` validator (RFC 7233 §3.2),
+    /// добавляется только вместе с Range. Опциональный `authorization` —
+    /// готовая строка для header `Authorization` (Basic / Digest),
+    /// формируется на уровень выше после 401-retry.
     fn write_request(
         &mut self,
         host: &str,
         path: &str,
         range: Option<&RangeSpec>,
+        if_range: Option<&RangeValidator>,
         authorization: Option<&str>,
         accept_encoding: Option<&str>,
     ) -> Result<()> {
-        let range_header = match range.and_then(|r| r.header_value()) {
+        let range_value = range.and_then(|r| r.header_value());
+        let range_header = match &range_value {
             Some(value) => format!("Range: {value}\r\n"),
             None => String::new(),
+        };
+        // If-Range шлём только если есть валидный Range — header без Range
+        // ничего не значит для сервера (RFC 7233 §3.2 «sent with a Range
+        // header field»).
+        let if_range_header = match (&range_value, if_range) {
+            (Some(_), Some(v)) => format!("If-Range: {}\r\n", v.header_value()),
+            _ => String::new(),
         };
         let auth_header = match authorization {
             Some(value) => format!("Authorization: {value}\r\n"),
@@ -162,7 +173,7 @@ impl Connection {
             _ => String::new(),
         };
         let req = format!(
-            "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\n{accept_encoding_header}{range_header}{auth_header}\r\n"
+            "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\n{accept_encoding_header}{range_header}{if_range_header}{auth_header}\r\n"
         );
         let stream = self.reader.get_mut();
         stream
@@ -502,6 +513,7 @@ fn fetch_single(
     request_host_header: &str,
     request_path: &str,
     range: Option<&RangeSpec>,
+    if_range: Option<&RangeValidator>,
     authorization: Option<&str>,
     accept_encoding: Option<&str>,
 ) -> Result<Response> {
@@ -518,6 +530,7 @@ fn fetch_single(
             request_host_header,
             request_path,
             range,
+            if_range,
             authorization,
             accept_encoding,
         ) {
@@ -542,6 +555,7 @@ fn fetch_single(
         request_host_header,
         request_path,
         range,
+        if_range,
         authorization,
         accept_encoding,
     )?;
@@ -551,15 +565,17 @@ fn fetch_single(
     Ok(resp)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn do_request(
     mut conn: Connection,
     host: &str,
     path: &str,
     range: Option<&RangeSpec>,
+    if_range: Option<&RangeValidator>,
     authorization: Option<&str>,
     accept_encoding: Option<&str>,
 ) -> Result<(Response, Connection)> {
-    conn.write_request(host, path, range, authorization, accept_encoding)?;
+    conn.write_request(host, path, range, if_range, authorization, accept_encoding)?;
     let resp = read_response(&mut conn)?;
     Ok((resp, conn))
 }
@@ -579,6 +595,7 @@ fn fetch_with_redirect(
     decoders: &[Arc<dyn ContentDecoder>],
     accept_encoding: Option<&str>,
     range: Option<&RangeSpec>,
+    if_range: Option<&RangeValidator>,
     tab_id: TabId,
     mixed_content: Option<&MixedContentPolicy>,
     destination: Option<RequestDestination>,
@@ -678,6 +695,7 @@ fn fetch_with_redirect(
             &host_ascii,
             &url.path_and_query(),
             range,
+            if_range,
             authorization.as_deref(),
             accept_encoding,
         )?;
@@ -734,6 +752,7 @@ fn fetch_with_redirect(
                     decoders,
                     accept_encoding,
                     range,
+                    if_range,
                     tab_id,
                     mixed_content,
                     destination,
@@ -969,14 +988,26 @@ impl HttpClient {
     /// с полным телом, `content_range` будет `None` (RFC 7233 §3.1
     /// явно разрешает оба ответа — клиент должен принять любой).
     ///
+    /// `if_range` — опциональный validator (`If-Range`, RFC 7233 §3.2):
+    /// если ресурс не изменился (ETag / Last-Modified совпадает), server
+    /// отдаёт `206` с запрошенным диапазоном; если изменился — `200` с
+    /// полным новым телом. Это защита от race condition при resume
+    /// downloads. `None` — без `If-Range` (clean range request).
+    ///
     /// 4xx/5xx, в том числе `416 Range Not Satisfiable`, возвращаются
     /// как `Err(Error::Network("HTTP 416"))` — caller отличает их от
     /// network failure по тексту.
     ///
-    /// Phase 0 ограничения: single range (start..end или start..),
-    /// suffix `bytes=-N` и multi-range — не поддерживаются. Range header
-    /// пересылается на redirect-target (3xx сохраняет тот же range).
-    pub fn fetch_range(&self, url: &Url, range: RangeSpec) -> Result<RangeResponse> {
+    /// Phase 0 ограничения: только single range (closed `START-END`,
+    /// open-ended `START-`, suffix `-N`); multi-range (`bytes=0-99,200-299`
+    /// → multipart/byteranges) — не поддерживается. Range и `If-Range`
+    /// пересылаются на redirect-target (3xx сохраняет conditional).
+    pub fn fetch_range(
+        &self,
+        url: &Url,
+        range: RangeSpec,
+        if_range: Option<RangeValidator>,
+    ) -> Result<RangeResponse> {
         let accept_encoding = self.accept_encoding_header();
         let resp = fetch_with_redirect(
             url,
@@ -990,6 +1021,7 @@ impl HttpClient {
             &self.decoders,
             accept_encoding.as_deref(),
             Some(&range),
+            if_range.as_ref(),
             self.tab_id,
             self.mixed_content.as_ref(),
             None,
@@ -1036,6 +1068,7 @@ impl HttpClient {
             &self.decoders,
             accept_encoding.as_deref(),
             None,
+            None,
             self.tab_id,
             self.mixed_content.as_ref(),
             Some(destination),
@@ -1058,6 +1091,7 @@ impl NetworkTransport for HttpClient {
             self.credentials.as_deref(),
             &self.decoders,
             accept_encoding.as_deref(),
+            None,
             None,
             self.tab_id,
             self.mixed_content.as_ref(),
@@ -2075,12 +2109,22 @@ mod tests {
     fn mock_range_server(
         responder: impl Fn(Option<String>) -> Vec<u8> + Send + 'static,
     ) -> (u16, thread::JoinHandle<()>) {
+        mock_range_server_full(move |range, _if_range| responder(range))
+    }
+
+    /// Расширенный mock — отдаёт responder-у и `Range:`, и `If-Range:` header-ы.
+    /// Нужен для If-Range conditional тестов: проверяем оба header-а в одном
+    /// сценарии без второго мока.
+    fn mock_range_server_full(
+        responder: impl Fn(Option<String>, Option<String>) -> Vec<u8> + Send + 'static,
+    ) -> (u16, thread::JoinHandle<()>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
         let port = listener.local_addr().unwrap().port();
         let handle = thread::spawn(move || {
             let (mut sock, _) = listener.accept().expect("accept");
             let mut reader = BufReader::new(sock.try_clone().unwrap());
             let mut range_header: Option<String> = None;
+            let mut if_range_header: Option<String> = None;
             loop {
                 let mut line = String::new();
                 if reader.read_line(&mut line).unwrap_or(0) == 0 {
@@ -2093,8 +2137,11 @@ mod tests {
                 if let Some(v) = trimmed.strip_prefix("Range: ") {
                     range_header = Some(v.to_owned());
                 }
+                if let Some(v) = trimmed.strip_prefix("If-Range: ") {
+                    if_range_header = Some(v.to_owned());
+                }
             }
-            let body = responder(range_header);
+            let body = responder(range_header, if_range_header);
             let _ = sock.write_all(&body);
             let _ = sock.shutdown(std::net::Shutdown::Both);
         });
@@ -2114,7 +2161,7 @@ mod tests {
 
         let client = HttpClient::new();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
-        let resp = client.fetch_range(&url, RangeSpec::closed(0, 4)).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::closed(0, 4), None).unwrap();
         assert_eq!(resp.status, 206);
         assert_eq!(resp.body, b"hello");
         assert_eq!(
@@ -2137,7 +2184,7 @@ mod tests {
 
         let client = HttpClient::new();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
-        let resp = client.fetch_range(&url, RangeSpec::from(500)).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::from(500), None).unwrap();
         assert_eq!(resp.status, 206);
         assert_eq!(resp.body, b"tail");
         assert_eq!(
@@ -2160,7 +2207,7 @@ mod tests {
 
         let client = HttpClient::new();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
-        let resp = client.fetch_range(&url, RangeSpec::closed(0, 9)).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::closed(0, 9), None).unwrap();
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body, b"hello world");
         assert!(resp.content_range.is_none());
@@ -2180,7 +2227,7 @@ mod tests {
 
         let client = HttpClient::new();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
-        let err = client.fetch_range(&url, RangeSpec::closed(1000, 2000)).unwrap_err();
+        let err = client.fetch_range(&url, RangeSpec::closed(1000, 2000), None).unwrap_err();
         assert!(format!("{err:?}").contains("416"), "expected HTTP 416, got: {err:?}");
 
         server.join().unwrap();
@@ -2198,7 +2245,7 @@ mod tests {
 
         let client = HttpClient::new();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
-        let resp = client.fetch_range(&url, RangeSpec::closed(0, 2)).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::closed(0, 2), None).unwrap();
         assert_eq!(resp.status, 206);
         assert_eq!(resp.body, b"abc");
         assert!(resp.content_range.is_none());
@@ -2235,10 +2282,163 @@ mod tests {
 
         let client = HttpClient::new();
         let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
-        let resp = client.fetch_range(&url, RangeSpec::closed(100, 50)).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::closed(100, 50), None).unwrap();
         assert_eq!(resp.status, 200);
         assert_eq!(resp.body, b"full");
         assert!(resp.content_range.is_none());
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_suffix_sends_bytes_dash_n() {
+        // bytes=-N — последние N байт. RFC 7233 §2.1 «suffix-byte-range-spec».
+        // Mock проверяет точный header и отвечает 206 с Content-Range,
+        // указывающим какие именно байты были возвращены (`start=total-N`).
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range.as_deref(), Some("bytes=-10"));
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 10\r\nContent-Range: bytes 90-99/100\r\nConnection: close\r\n\r\nlast 10byt"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::suffix(10), None).unwrap();
+        assert_eq!(resp.status, 206);
+        assert_eq!(resp.body, b"last 10byt");
+        assert_eq!(
+            resp.content_range,
+            Some(ContentRange { start: 90, end: 99, total: Some(100) })
+        );
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_suffix_zero_omits_header() {
+        // RangeSpec::suffix(0) — невалидно (RFC §2.1: suffix-length > 0);
+        // header_value() возвращает None, fetch ходит без Range, ответ
+        // приходит как обычный 200.
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range, None, "suffix=0 must omit Range header");
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nfull".to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client.fetch_range(&url, RangeSpec::suffix(0), None).unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body, b"full");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_if_range_etag_match_returns_206() {
+        // If-Range ETag совпал — server отдаёт 206 с запрошенным range.
+        // Mock проверяет, что и Range, и If-Range отправлены с правильными
+        // значениями.
+        let (port, server) = mock_range_server_full(|range, if_range| {
+            assert_eq!(range.as_deref(), Some("bytes=0-4"));
+            assert_eq!(if_range.as_deref(), Some("\"v1\""));
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 5\r\nContent-Range: bytes 0-4/10\r\nETag: \"v1\"\r\nConnection: close\r\n\r\nhello"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client
+            .fetch_range(
+                &url,
+                RangeSpec::closed(0, 4),
+                Some(RangeValidator::ETag("\"v1\"".to_owned())),
+            )
+            .unwrap();
+        assert_eq!(resp.status, 206);
+        assert_eq!(resp.body, b"hello");
+        assert!(resp.content_range.is_some());
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_if_range_etag_mismatch_returns_200_full_body() {
+        // If-Range ETag НЕ совпал — server по RFC 7233 §3.2 должен отдать 200
+        // с полным новым телом (диапазон проигнорирован, потому что ресурс
+        // изменился). Клиент принимает: status=200, content_range=None,
+        // body = full new resource.
+        let (port, server) = mock_range_server_full(|range, if_range| {
+            assert_eq!(range.as_deref(), Some("bytes=0-4"));
+            assert_eq!(if_range.as_deref(), Some("\"v1\""));
+            // Server: ETag теперь "v2" → mismatch → 200 + full body.
+            b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nETag: \"v2\"\r\nConnection: close\r\n\r\nhello world"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client
+            .fetch_range(
+                &url,
+                RangeSpec::closed(0, 4),
+                Some(RangeValidator::ETag("\"v1\"".to_owned())),
+            )
+            .unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.body, b"hello world");
+        assert!(resp.content_range.is_none());
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_if_range_last_modified_sent_verbatim() {
+        // LastModified validator: header передаётся дословно (включая запятые,
+        // пробелы и GMT). RFC 7233 §3.2 не требует трансформации.
+        let date = "Tue, 15 Nov 1994 12:45:26 GMT";
+        let date_owned = date.to_owned();
+        let (port, server) = mock_range_server_full(move |range, if_range| {
+            assert_eq!(range.as_deref(), Some("bytes=0-4"));
+            assert_eq!(if_range.as_deref(), Some(date_owned.as_str()));
+            b"HTTP/1.1 206 Partial Content\r\nContent-Length: 5\r\nContent-Range: bytes 0-4/10\r\nConnection: close\r\n\r\nhello"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client
+            .fetch_range(
+                &url,
+                RangeSpec::closed(0, 4),
+                Some(RangeValidator::LastModified(date.to_owned())),
+            )
+            .unwrap();
+        assert_eq!(resp.status, 206);
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_range_if_range_omitted_when_range_invalid() {
+        // If-Range без валидного Range не имеет смысла (RFC §3.2 «sent with a
+        // Range header field»). Проверяем регрессию: invalid range (end < start
+        // → header_value=None) приводит к тому, что и If-Range header не
+        // попадает в запрос.
+        let (port, server) = mock_range_server_full(|range, if_range| {
+            assert_eq!(range, None, "invalid range omits Range");
+            assert_eq!(if_range, None, "If-Range omitted without Range");
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let _ = client
+            .fetch_range(
+                &url,
+                RangeSpec::closed(100, 50),
+                Some(RangeValidator::ETag("\"v1\"".to_owned())),
+            )
+            .unwrap();
 
         server.join().unwrap();
     }
