@@ -254,6 +254,14 @@ pub struct Renderer {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
+    /// Device-pixel-ratio от winit (`Window::scale_factor`). Surface
+    /// сконфигурирован в physical pixels (`config.width/height`), но shader
+    /// делит позицию вершины на logical viewport (`config / scale_factor`),
+    /// чтобы 1 CSS pixel = `scale_factor` device pixels — корректное
+    /// масштабирование на HiDPI без правки display list-а.
+    /// Обновляется через [`Renderer::set_scale_factor`] при `ScaleFactorChanged`
+    /// событии winit (например, drag окна между мониторами с разной DPI).
+    scale_factor: f64,
 
     fill_pipeline: wgpu::RenderPipeline,
     text_pipeline: wgpu::RenderPipeline,
@@ -302,6 +310,12 @@ impl Renderer {
         let size = window.inner_size();
         let width = size.width.max(1);
         let height = size.height.max(1);
+        // winit отдаёт inner_size в physical pixels; surface конфигурируем
+        // в physical (config.width/height), но viewport uniform в render()
+        // делится на scale_factor — это даёт CSS-px координаты в shader-е.
+        // Изначальный scale_factor от текущего монитора; обновляется при
+        // ScaleFactorChanged-event-е через `set_scale_factor`.
+        let scale_factor = window.scale_factor();
 
         let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window)?;
@@ -628,6 +642,7 @@ impl Renderer {
             device,
             queue,
             config,
+            scale_factor,
             fill_pipeline,
             text_pipeline,
             image_pipeline,
@@ -841,6 +856,26 @@ impl Renderer {
         }
     }
 
+    /// Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
+    /// (например, при перетаскивании окна между мониторами с разной DPI).
+    /// Surface сам не меняется — winit отдаёт новый physical `inner_size`
+    /// через `inner_size_writer` отдельно, shell его прокинет в `resize`.
+    /// Этот метод лишь обновляет коэффициент, по которому в `render()` физический
+    /// размер surface превращается в logical viewport для shader-а.
+    /// Значения ≤ 0 игнорируются (защита от broken winit-backend-а).
+    pub fn set_scale_factor(&mut self, scale_factor: f64) {
+        if scale_factor > 0.0 {
+            self.scale_factor = scale_factor;
+        }
+    }
+
+    /// Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
+    /// shader делает деление сам в render-фазе).
+    #[must_use]
+    pub fn scale_factor(&self) -> f64 {
+        self.scale_factor
+    }
+
     pub fn render(&mut self, list: &DisplayList) -> Result<(), wgpu::SurfaceError> {
         // Pre-resolve primary face_id для каждой DrawText-команды +
         // lazy-загрузка новых face-ов до сбора вершин. Делается до парсинга
@@ -1006,9 +1041,16 @@ impl Renderer {
         }
 
         // ── Uniforms ──────────────────────────────────────────────────────
+        // Shader делит pos на viewport, чтобы получить clip-space. Surface
+        // сконфигурирован в physical pixels, но shader считает в CSS px:
+        // viewport = config / scale_factor → 1 CSS px = scale_factor device px.
+        // scale_factor=1 — поведение pre-DPR (1:1, обычный 1080p); =2 — 4K с
+        // 200% scaling, 16-px CSS текст рендерится на 32 device px.
+        // f32 cast терпит небольшую потерю точности — DPR редко > 4.0.
+        let dpr = self.scale_factor.max(1e-6) as f32;
         let viewport = [
-            self.config.width as f32,
-            self.config.height as f32,
+            self.config.width as f32 / dpr,
+            self.config.height as f32 / dpr,
             0.0,
             0.0,
         ];
