@@ -11,7 +11,6 @@
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
 - 🔄 Compositor scaffolding (P2 1B) [P2] — compositor-scaffolding — 2026-05-15
-- 🔄 Network security base — Origin + mixed-content + sandbox flags (P3 2A partial) [P3] — network-security-base — 2026-05-15
 
 ## Статус реализации
 
@@ -149,7 +148,7 @@
 | # | Задача | Что разблокирует | Что НЕ блокирует |
 |---|---|---|---|
 | 1B | **`[P3]` `rquickjs` integration scaffold** в новом крейте `lumen-js` (только runtime + eval, без DOM bindings пока). Реализует `JsRuntime` trait от Sprint 0. Exception #4. | Самый большой single enabler в проекте. Разблокирует: P1 п.6+ (Forms / Shadow DOM bindings / contenteditable / GC), P2 п.3B (anim scheduling), P3 (Service Workers, Navigation API runtime, History API, IntersectionObserver triggers, IME, DevTools). | Изолированный новый крейт. P1/P2 не задеваются. |
-| 2A | **`[P3]` SOP / CORS preflight + mixed-content blocking + `<iframe sandbox>` flags enforcement.** CSP/HSTS/SRI уже parsed — подключаем к fetch path. | Без enforcement браузер нельзя выпускать в публичную сеть. | Только `lumen-network`. |
+| 2A | 🟡 **`[P3]` SOP / CORS preflight + mixed-content blocking + `<iframe sandbox>` flags enforcement.** CSP/HSTS/SRI уже parsed — подключаем к fetch path. **Security base реализован в ветке `network-security-base`:** `Origin` tuple (HTML LS §7.5), `classify_subresource_request` (W3C Mixed Content + Fetch §3.2.7 destinations), `SandboxFlags` u32-bitset + `parse_sandbox_value` (HTML LS §7.6.5, все 14 keyword-ов) — все три как pure-classifiers без enforcement в HttpClient. Остаётся: CORS preflight (OPTIONS с `Access-Control-Request-*` + response-headers), enforcement mixed-content в `fetch_with_redirect`, sandbox-application в DOM-загрузчике shell-я. | Без enforcement браузер нельзя выпускать в публичную сеть. | Только `lumen-network` + shell. |
 | 2C | **`[P3]` Tab session export / import** (§12.7) — сериализация в snapshot-формат `lumen-storage`. | UX-фича, экономит много боли пользователя. | Только `lumen-storage` + shell. |
 | 3A | **`[P3]` DPR + scroll в shell** (`scale_factor` от winit, scroll-state, scroll-to-match для find). | Реальные страницы на 4K выглядят корректно. | Только `lumen-shell`. |
 | 3B | **`[P3]` HTML event loop integration в Lumen-loop** (`run_idle_callbacks` в about_to_wait после step → Idle, правильный ordering rendering steps stage `style → layout → paint`, `scheduler.postTask`, реальные triggers observers, reload через queue_task с Rc<RefCell<Lumen>>). 🟡 Framework + winit-integration + task source priorities + requestIdleCallback готовы. | P1 / P2 видят правильный rAF tick — им ничего делать не надо. | Только `lumen-shell::runtime`. |
@@ -220,8 +219,8 @@
 - **`[P2+P1]` Compositor thread + property trees.** Отдельные TransformTree / ScrollTree / EffectTree / ClipTree, копируются на compositor thread. Двухбуферная commit-модель. Off-main-thread scroll. **P2** — compositor pipeline / GPU primitives / layer tree; **P1** — построение property trees из style/layout.
 - **`[P2]` Stacking-aware hit testing.** Отдельная структура (O(log n) lookup), обновляется на composite commit; учитывает z-index, `pointer-events: none`, transform inversion.
 - **`[P1]` Quirks mode vs standards mode — application в layout/cascade.** Detection реализован. Осталось: реально читать `Document.mode` и переключать legacy CSS-поведения.
-- **`[P3]` Same-Origin Policy enforcement + CORS preflight.** SOP checks при fetch / postMessage / storage / cookies; CORS OPTIONS preflight для non-simple requests; credentials mode (omit / same-origin / include).
-- **`[P3]` Mixed-content blocking + `<iframe sandbox>`.** HTTPS-страница не грузит HTTP-script / css / iframe (blockable); `<iframe sandbox>` flags.
+- 🟡 **`[P3]` Same-Origin Policy enforcement + CORS preflight.** `Origin` tuple реализован (`lumen-network::Origin`, HTML LS §7.5 — scheme/host/port + same_origin + is_potentially_trustworthy). SOP checks при fetch / postMessage / storage / cookies — следующая задача (применить classifier в HttpClient). CORS OPTIONS preflight для non-simple requests; credentials mode (omit / same-origin / include) — отдельной веткой.
+- 🟡 **`[P3]` Mixed-content blocking + `<iframe sandbox>`.** Classifier-ы реализованы (`lumen-network::classify_subresource_request` для blockable/optionally + `SandboxFlags`/`parse_sandbox_value` для всех 14 keyword-ов). Остаётся: enforcement в HttpClient (блочить blockable до TCP) + DOM-применение sandbox в shell.
 - **`[P1+P3]` Preload scanner.** 🟡 **P1-часть готова** — `lumen_html_parser::preload_scanner::scan_preload_hints`. Осталось: **P3** — интеграция в shell-pipeline (когда запускать over chunks, как пробрасывать в HttpClient). Особенно полезно над streaming pipeline.
 
 #### Phase 2 (Interactive) — без этого современный веб не функционален
