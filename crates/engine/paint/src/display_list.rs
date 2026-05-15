@@ -12,6 +12,32 @@ use lumen_layout::{
     PositionComponent,
 };
 
+/// CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
+/// `Normal` (no-op); остальные 15 mode-ов парсятся в CSS-каскаде, но
+/// реальный composite-pipeline для них — задача P2 п.4 (mix-blend-mode).
+/// Хранится в `DisplayCommand::PushBlendMode` как stub-значение, чтобы
+/// расширить enum без правки потребителей.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum BlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DisplayCommand {
     FillRect {
@@ -60,6 +86,33 @@ pub enum DisplayCommand {
         object_fit: ObjectFit,
         object_position: ObjectPosition,
     },
+    /// Sprint 0 P2 stub. Открывает rect-клип: все последующие команды до
+    /// парного `PopClip` рисуются только в пределах `rect`. Используется
+    /// для `overflow: hidden`, `clip-path: inset(...)`. Phase 0: эмиттер
+    /// в `build_display_list` не выпускает, renderer игнорирует. Когда
+    /// P1 п.2A (stacking contexts impl) заполнит данные, эмиттер начнёт
+    /// выпускать; до этого момента — interface-first stub.
+    PushClipRect { rect: Rect },
+    /// Закрывает rect-клип, открытый ближайшим `PushClipRect`. Парность
+    /// гарантируется эмиттером.
+    PopClip,
+    /// Sprint 0 P2 stub. Открывает opacity-группу: все последующие
+    /// команды до парного `PopOpacity` композитятся как off-screen-layer
+    /// и накладываются с `alpha`. Используется для `opacity != 1`. Phase 0:
+    /// эмиттер не выпускает (нужен compositor с layer-pipeline-ом —
+    /// roadmap-задача), renderer игнорирует.
+    PushOpacity { alpha: f32 },
+    /// Закрывает opacity-группу.
+    PopOpacity,
+    /// Sprint 0 P2 stub. Открывает blend-группу с указанным режимом
+    /// смешения (CSS Compositing & Blending L1 §5). Все последующие
+    /// команды до парного `PopBlendMode` композитятся через `mode` поверх
+    /// родительского контекста. `BlendMode::Normal` — no-op (стандарт).
+    /// Phase 0: эмиттер не выпускает, renderer игнорирует — реальный
+    /// blend-pipeline это P2 п.4.
+    PushBlendMode { mode: BlendMode },
+    /// Закрывает blend-группу.
+    PopBlendMode,
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
@@ -263,9 +316,51 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                 }
                 out.push('\n');
             }
+            DisplayCommand::PushClipRect { rect } => {
+                out.push_str(&format!(
+                    "PushClipRect ({:.2}, {:.2}, {:.2}, {:.2})\n",
+                    rect.x, rect.y, rect.width, rect.height,
+                ));
+            }
+            DisplayCommand::PopClip => {
+                out.push_str("PopClip\n");
+            }
+            DisplayCommand::PushOpacity { alpha } => {
+                out.push_str(&format!("PushOpacity {alpha:.3}\n"));
+            }
+            DisplayCommand::PopOpacity => {
+                out.push_str("PopOpacity\n");
+            }
+            DisplayCommand::PushBlendMode { mode } => {
+                out.push_str(&format!("PushBlendMode {}\n", blend_mode_name(*mode)));
+            }
+            DisplayCommand::PopBlendMode => {
+                out.push_str("PopBlendMode\n");
+            }
         }
     }
     out
+}
+
+fn blend_mode_name(m: BlendMode) -> &'static str {
+    match m {
+        BlendMode::Normal => "normal",
+        BlendMode::Multiply => "multiply",
+        BlendMode::Screen => "screen",
+        BlendMode::Overlay => "overlay",
+        BlendMode::Darken => "darken",
+        BlendMode::Lighten => "lighten",
+        BlendMode::ColorDodge => "color-dodge",
+        BlendMode::ColorBurn => "color-burn",
+        BlendMode::HardLight => "hard-light",
+        BlendMode::SoftLight => "soft-light",
+        BlendMode::Difference => "difference",
+        BlendMode::Exclusion => "exclusion",
+        BlendMode::Hue => "hue",
+        BlendMode::Saturation => "saturation",
+        BlendMode::Color => "color",
+        BlendMode::Luminosity => "luminosity",
+    }
 }
 
 pub fn build_display_list(root: &LayoutBox) -> DisplayList {
@@ -893,6 +988,12 @@ mod tests {
                 DisplayCommand::DrawBorder { .. } => "DrawBorder",
                 DisplayCommand::DrawImage { .. } => "DrawImage",
                 DisplayCommand::DrawText { .. } => "DrawText",
+                DisplayCommand::PushClipRect { .. } => "PushClipRect",
+                DisplayCommand::PopClip => "PopClip",
+                DisplayCommand::PushOpacity { .. } => "PushOpacity",
+                DisplayCommand::PopOpacity => "PopOpacity",
+                DisplayCommand::PushBlendMode { .. } => "PushBlendMode",
+                DisplayCommand::PopBlendMode => "PopBlendMode",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);
@@ -1112,5 +1213,69 @@ mod tests {
         let s = serialize_display_list(&dl);
         assert!(!s.contains("fit="), "{s}");
         assert!(!s.contains("pos="), "{s}");
+    }
+
+    #[test]
+    fn push_clip_rect_serializes() {
+        let dl = vec![DisplayCommand::PushClipRect {
+            rect: Rect::new(10.0, 20.0, 100.0, 50.0),
+        }];
+        let s = serialize_display_list(&dl);
+        assert_eq!(s, "PushClipRect (10.00, 20.00, 100.00, 50.00)\n");
+    }
+
+    #[test]
+    fn pop_clip_serializes() {
+        let dl = vec![DisplayCommand::PopClip];
+        assert_eq!(serialize_display_list(&dl), "PopClip\n");
+    }
+
+    #[test]
+    fn push_opacity_serializes_with_alpha() {
+        let dl = vec![DisplayCommand::PushOpacity { alpha: 0.5 }];
+        assert_eq!(serialize_display_list(&dl), "PushOpacity 0.500\n");
+    }
+
+    #[test]
+    fn pop_opacity_serializes() {
+        let dl = vec![DisplayCommand::PopOpacity];
+        assert_eq!(serialize_display_list(&dl), "PopOpacity\n");
+    }
+
+    #[test]
+    fn push_blend_mode_serializes_with_name() {
+        let dl = vec![DisplayCommand::PushBlendMode {
+            mode: BlendMode::Multiply,
+        }];
+        assert_eq!(serialize_display_list(&dl), "PushBlendMode multiply\n");
+    }
+
+    #[test]
+    fn pop_blend_mode_serializes() {
+        let dl = vec![DisplayCommand::PopBlendMode];
+        assert_eq!(serialize_display_list(&dl), "PopBlendMode\n");
+    }
+
+    #[test]
+    fn nested_layer_ops_serialize_in_order() {
+        let dl = vec![
+            DisplayCommand::PushClipRect {
+                rect: Rect::new(0.0, 0.0, 100.0, 100.0),
+            },
+            DisplayCommand::PushOpacity { alpha: 0.7 },
+            DisplayCommand::FillRect {
+                rect: Rect::new(10.0, 10.0, 50.0, 50.0),
+                color: Color::BLACK,
+            },
+            DisplayCommand::PopOpacity,
+            DisplayCommand::PopClip,
+        ];
+        let s = serialize_display_list(&dl);
+        let lines: Vec<&str> = s.lines().collect();
+        assert_eq!(lines[0], "PushClipRect (0.00, 0.00, 100.00, 100.00)");
+        assert_eq!(lines[1], "PushOpacity 0.700");
+        assert!(lines[2].starts_with("FillRect"));
+        assert_eq!(lines[3], "PopOpacity");
+        assert_eq!(lines[4], "PopClip");
     }
 }
