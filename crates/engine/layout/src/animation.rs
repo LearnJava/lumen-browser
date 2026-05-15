@@ -20,13 +20,13 @@
 //!
 //! Sprint 0 stub имитирует discrete: всегда step-half, без типизации.
 
-use crate::style::{Color, Length, TransformFn};
+use crate::style::{Color, FilterFn, Length, TransformFn};
 
-/// Анимируемое значение. Phase 0: шесть вариантов — Number / Length / Color /
-/// TransformList / Discrete (для non-interpolable свойств).
+/// Анимируемое значение. Phase 0: семь вариантов — Number / Length / Color /
+/// TransformList / FilterList / Discrete (для non-interpolable свойств).
 ///
-/// Реальный список расширится дальше: Filter с per-function интерполяцией,
-/// GradientStops, Path-data для clip-path, и т.д.
+/// Реальный список расширится дальше: GradientStops, Path-data для clip-path,
+/// и т.д.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnimValue {
     Number(f32),
@@ -37,6 +37,12 @@ pub enum AnimValue {
     /// lerp для одинаковых по структуре списков и matrix-decompose для
     /// несовместимых пар.
     TransformList(Vec<TransformFn>),
+    /// CSS Filter Effects L1 §6 — список filter-функций. Пустой Vec
+    /// соответствует `filter: none`. Интерполяция: matched-pair lerp
+    /// при совпадающих типах и идентичных длинах; при несовпадающих
+    /// длинах но prefix-match — недостающую сторону дополняем lacuna
+    /// (identity) значениями; иначе — discrete (step-half).
+    FilterList(Vec<FilterFn>),
     /// Дискретное (не-интерполируемое) значение — хранится как ключ:
     /// для interpolation просто step-half.
     Discrete(String),
@@ -115,6 +121,11 @@ impl AnimationInterpolator for LinearInterpolator {
             (AnimValue::TransformList(a), AnimValue::TransformList(b)) => Some(
                 AnimValue::TransformList(interpolate_transform_list(a, b, t)),
             ),
+            (AnimValue::FilterList(a), AnimValue::FilterList(b)) => Some(
+                interpolate_filter_list(a, b, t)
+                    .map(AnimValue::FilterList)
+                    .unwrap_or_else(|| if t < 0.5 { from.clone() } else { to.clone() }),
+            ),
             _ => {
                 // Discrete или mixed (Number ↔ Length / Length ↔ Color, и т.д.)
                 // — §5.2 "discrete" step-half.
@@ -157,6 +168,119 @@ fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
     let af = f32::from(a);
     let bf = f32::from(b);
     (af + (bf - af) * t).round().clamp(0.0, 255.0) as u8
+}
+
+// ─── Filter-list interpolation (CSS Filter Effects L1 §6) ──────────────────
+
+/// Интерполяция filter-list по CSS Filter Effects L1 §6. Возвращает
+/// `Some(list)` при успешном matched-pair lerp; `None` сигнализирует
+/// caller-у о необходимости discrete fallback (step-half).
+///
+/// Правила:
+/// - Если обе стороны пусты — `none → none`, результат — пустой Vec.
+/// - Если одна из сторон пустая, другая — непустая: трактуем пустую как
+///   список lacuna (identity) значений, соответствующих позициям непустой
+///   стороны. Это покрывает `filter: none ↔ filter: blur(10px)` спецификой
+///   §6: «If only one filter is none, that side is treated as a list of
+///   identity filter functions».
+/// - При совпадающих длинах и совпадении `FilterFn` variant в каждой
+///   позиции — per-position lerp числовых компонентов.
+/// - При несовпадающих длинах, но prefix-match по типам — дополняем
+///   короткую сторону lacuna-значениями типов из длинной стороны.
+/// - Любое несовпадение типа в общем prefix → `None` (discrete).
+pub(crate) fn interpolate_filter_list(
+    from: &[FilterFn],
+    to: &[FilterFn],
+    t: f32,
+) -> Option<Vec<FilterFn>> {
+    if from.is_empty() && to.is_empty() {
+        return Some(Vec::new());
+    }
+
+    // Проверяем prefix-match по типам на пересечении длин.
+    let common = from.len().min(to.len());
+    for i in 0..common {
+        if !same_filter_kind(&from[i], &to[i]) {
+            return None;
+        }
+    }
+
+    let result_len = from.len().max(to.len());
+    let mut result = Vec::with_capacity(result_len);
+    for i in 0..result_len {
+        let a_owned;
+        let a: &FilterFn = if let Some(v) = from.get(i) {
+            v
+        } else {
+            a_owned = filter_identity_for(&to[i]);
+            &a_owned
+        };
+        let b_owned;
+        let b: &FilterFn = if let Some(v) = to.get(i) {
+            v
+        } else {
+            b_owned = filter_identity_for(&from[i]);
+            &b_owned
+        };
+        result.push(interpolate_filter_fn_same_kind(a, b, t));
+    }
+    Some(result)
+}
+
+fn same_filter_kind(a: &FilterFn, b: &FilterFn) -> bool {
+    use FilterFn::*;
+    matches!(
+        (a, b),
+        (Blur(_), Blur(_))
+            | (Brightness(_), Brightness(_))
+            | (Contrast(_), Contrast(_))
+            | (Grayscale(_), Grayscale(_))
+            | (HueRotate(_), HueRotate(_))
+            | (Invert(_), Invert(_))
+            | (Opacity(_), Opacity(_))
+            | (Saturate(_), Saturate(_))
+            | (Sepia(_), Sepia(_))
+    )
+}
+
+/// Lacuna (identity) value соответствующего типа — CSS Filter Effects L1 §6.
+/// Identity такой, что применение фильтра эквивалентно отсутствию фильтра:
+/// blur(0) / hue-rotate(0deg) / grayscale(0) / invert(0) / sepia(0) — нулевое
+/// воздействие; brightness/contrast/opacity/saturate(1) — нейтральный множитель.
+fn filter_identity_for(f: &FilterFn) -> FilterFn {
+    match f {
+        FilterFn::Blur(_) => FilterFn::Blur(0.0),
+        FilterFn::Brightness(_) => FilterFn::Brightness(1.0),
+        FilterFn::Contrast(_) => FilterFn::Contrast(1.0),
+        FilterFn::Grayscale(_) => FilterFn::Grayscale(0.0),
+        FilterFn::HueRotate(_) => FilterFn::HueRotate(0.0),
+        FilterFn::Invert(_) => FilterFn::Invert(0.0),
+        FilterFn::Opacity(_) => FilterFn::Opacity(1.0),
+        FilterFn::Saturate(_) => FilterFn::Saturate(1.0),
+        FilterFn::Sepia(_) => FilterFn::Sepia(0.0),
+    }
+}
+
+/// Per-function lerp. Контракт: вызывается только когда `same_filter_kind`
+/// истинно. Clamping значений в допустимый диапазон ([0,1] для
+/// grayscale/invert/sepia) — задача consumer-а: spec позволяет
+/// интерполировать «через» границу (например, brightness 0.5 → 2.0 даёт
+/// промежуточные >1), а финальное применение фильтра трактует значения
+/// согласно своему диапазону.
+fn interpolate_filter_fn_same_kind(a: &FilterFn, b: &FilterFn, t: f32) -> FilterFn {
+    use FilterFn::*;
+    match (a, b) {
+        (Blur(a), Blur(b)) => Blur(lerp_f32(*a, *b, t)),
+        (Brightness(a), Brightness(b)) => Brightness(lerp_f32(*a, *b, t)),
+        (Contrast(a), Contrast(b)) => Contrast(lerp_f32(*a, *b, t)),
+        (Grayscale(a), Grayscale(b)) => Grayscale(lerp_f32(*a, *b, t)),
+        (HueRotate(a), HueRotate(b)) => HueRotate(lerp_f32(*a, *b, t)),
+        (Invert(a), Invert(b)) => Invert(lerp_f32(*a, *b, t)),
+        (Opacity(a), Opacity(b)) => Opacity(lerp_f32(*a, *b, t)),
+        (Saturate(a), Saturate(b)) => Saturate(lerp_f32(*a, *b, t)),
+        (Sepia(a), Sepia(b)) => Sepia(lerp_f32(*a, *b, t)),
+        _ => a.clone(),
+    }
 }
 
 // ─── Transform-list interpolation (CSS Transforms L2 §15) ───────────────────
@@ -1044,5 +1168,195 @@ mod tests {
         let m = compose_2d_affine(&fns);
         // e = tx = 10, f = ty = 0, a = sx = 2, d = sy = 2.
         assert_affine_close(m, [2.0, 0.0, 0.0, 2.0, 10.0, 0.0]);
+    }
+
+    // ─── FilterList interpolation (CSS Filter Effects L1 §6) ──────────────
+
+    fn close_filter(a: &FilterFn, b: &FilterFn) -> bool {
+        use FilterFn::*;
+        match (a, b) {
+            (Blur(x), Blur(y))
+            | (Brightness(x), Brightness(y))
+            | (Contrast(x), Contrast(y))
+            | (Grayscale(x), Grayscale(y))
+            | (HueRotate(x), HueRotate(y))
+            | (Invert(x), Invert(y))
+            | (Opacity(x), Opacity(y))
+            | (Saturate(x), Saturate(y))
+            | (Sepia(x), Sepia(y)) => (x - y).abs() < 1e-5,
+            _ => false,
+        }
+    }
+
+    fn assert_filter_list_close(actual: &[FilterFn], expected: &[FilterFn]) {
+        assert_eq!(
+            actual.len(),
+            expected.len(),
+            "len mismatch: actual {actual:?}, expected {expected:?}"
+        );
+        for (i, (a, e)) in actual.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                close_filter(a, e),
+                "filter[{i}] mismatch: actual {a:?}, expected {e:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn filter_list_none_to_none_stays_empty() {
+        let r = interpolate_filter_list(&[], &[], 0.5);
+        assert_eq!(r.as_deref(), Some(&[] as &[FilterFn]));
+    }
+
+    #[test]
+    fn filter_list_same_kind_single_lerps_value() {
+        // blur(0) → blur(10px) at t=0.5 → blur(5)
+        let from = [FilterFn::Blur(0.0)];
+        let to = [FilterFn::Blur(10.0)];
+        let r = interpolate_filter_list(&from, &to, 0.5).expect("matched-pair");
+        assert_filter_list_close(&r, &[FilterFn::Blur(5.0)]);
+    }
+
+    #[test]
+    fn filter_list_multi_matched_pair_lerps_each() {
+        // [blur(0), brightness(1)] → [blur(8), brightness(2)] at t=0.25
+        let from = [FilterFn::Blur(0.0), FilterFn::Brightness(1.0)];
+        let to = [FilterFn::Blur(8.0), FilterFn::Brightness(2.0)];
+        let r = interpolate_filter_list(&from, &to, 0.25).expect("matched-pair");
+        assert_filter_list_close(&r, &[FilterFn::Blur(2.0), FilterFn::Brightness(1.25)]);
+    }
+
+    #[test]
+    fn filter_list_endpoints_return_exact() {
+        let from = [FilterFn::Grayscale(0.0), FilterFn::Sepia(0.0)];
+        let to = [FilterFn::Grayscale(1.0), FilterFn::Sepia(1.0)];
+        let r0 = interpolate_filter_list(&from, &to, 0.0).expect("matched-pair");
+        let r1 = interpolate_filter_list(&from, &to, 1.0).expect("matched-pair");
+        assert_filter_list_close(&r0, &from);
+        assert_filter_list_close(&r1, &to);
+    }
+
+    #[test]
+    fn filter_list_kind_mismatch_returns_none() {
+        // blur(...) vs brightness(...) на одной позиции → discrete fallback.
+        let from = [FilterFn::Blur(5.0)];
+        let to = [FilterFn::Brightness(2.0)];
+        assert_eq!(interpolate_filter_list(&from, &to, 0.5), None);
+    }
+
+    #[test]
+    fn filter_list_prefix_mismatch_anywhere_returns_none() {
+        // Префикс blur=blur матчится, второй элемент grayscale ≠ contrast →
+        // вся пара уходит в discrete.
+        let from = [FilterFn::Blur(0.0), FilterFn::Grayscale(0.0)];
+        let to = [FilterFn::Blur(10.0), FilterFn::Contrast(2.0)];
+        assert_eq!(interpolate_filter_list(&from, &to, 0.5), None);
+    }
+
+    #[test]
+    fn filter_list_none_to_single_pads_with_identity() {
+        // [] → [blur(10)]: пустая сторона трактуется как [blur(0)].
+        // t=0.5 → [blur(5)].
+        let r = interpolate_filter_list(&[], &[FilterFn::Blur(10.0)], 0.5)
+            .expect("identity-padded");
+        assert_filter_list_close(&r, &[FilterFn::Blur(5.0)]);
+    }
+
+    #[test]
+    fn filter_list_single_to_none_pads_with_identity() {
+        // [brightness(0.5)] → []: пустая правая → [brightness(1)] identity.
+        // t=0.5 → brightness(0.75).
+        let r = interpolate_filter_list(&[FilterFn::Brightness(0.5)], &[], 0.5)
+            .expect("identity-padded");
+        assert_filter_list_close(&r, &[FilterFn::Brightness(0.75)]);
+    }
+
+    #[test]
+    fn filter_list_shorter_prefix_padded_in_long_side() {
+        // [blur(0)] → [blur(10), grayscale(1)]:
+        // позиция 0 matched (blur), позиция 1 — left is None,
+        // дополняем left grayscale(0) (identity).
+        // t=0.5 → [blur(5), grayscale(0.5)].
+        let from = [FilterFn::Blur(0.0)];
+        let to = [FilterFn::Blur(10.0), FilterFn::Grayscale(1.0)];
+        let r = interpolate_filter_list(&from, &to, 0.5).expect("padded prefix-match");
+        assert_filter_list_close(&r, &[FilterFn::Blur(5.0), FilterFn::Grayscale(0.5)]);
+    }
+
+    #[test]
+    fn filter_list_long_to_short_pads_right() {
+        // [contrast(2), sepia(1)] → [contrast(0.5)]:
+        // позиция 0 matched, позиция 1 — right is None, padding sepia(0).
+        // t=0.25 → contrast(1.625), sepia(0.75).
+        let from = [FilterFn::Contrast(2.0), FilterFn::Sepia(1.0)];
+        let to = [FilterFn::Contrast(0.5)];
+        let r = interpolate_filter_list(&from, &to, 0.25).expect("padded prefix-match");
+        assert_filter_list_close(
+            &r,
+            &[FilterFn::Contrast(1.625), FilterFn::Sepia(0.75)],
+        );
+    }
+
+    #[test]
+    fn filter_list_hue_rotate_lerps_radians() {
+        // Парсер сохраняет hue-rotate в радианах. Линейный lerp без
+        // shortest-path: 0 → π at t=0.5 = π/2.
+        let pi = std::f32::consts::PI;
+        let r = interpolate_filter_list(
+            &[FilterFn::HueRotate(0.0)],
+            &[FilterFn::HueRotate(pi)],
+            0.5,
+        )
+        .expect("matched-pair");
+        assert_filter_list_close(&r, &[FilterFn::HueRotate(pi / 2.0)]);
+    }
+
+    // ─── LinearInterpolator wraps FilterList correctly ────────────────────
+
+    #[test]
+    fn linear_interpolator_filter_matched_pair() {
+        let interp = LinearInterpolator;
+        let from = AnimValue::FilterList(vec![FilterFn::Blur(0.0)]);
+        let to = AnimValue::FilterList(vec![FilterFn::Blur(10.0)]);
+        let r = interp.interpolate(&from, &to, 0.5).expect("some");
+        match r {
+            AnimValue::FilterList(list) => {
+                assert_filter_list_close(&list, &[FilterFn::Blur(5.0)])
+            }
+            other => panic!("expected FilterList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn linear_interpolator_filter_discrete_on_kind_mismatch() {
+        // Mismatched kinds → step-half через клонирование from/to.
+        let interp = LinearInterpolator;
+        let from = AnimValue::FilterList(vec![FilterFn::Blur(5.0)]);
+        let to = AnimValue::FilterList(vec![FilterFn::Brightness(2.0)]);
+        assert_eq!(interp.interpolate(&from, &to, 0.3), Some(from.clone()));
+        assert_eq!(interp.interpolate(&from, &to, 0.7), Some(to.clone()));
+    }
+
+    #[test]
+    fn linear_interpolator_filter_none_to_filter_pads() {
+        // FilterList([]) → FilterList([brightness(2)]) at t=0.5 → [brightness(1.5)].
+        let interp = LinearInterpolator;
+        let from = AnimValue::FilterList(Vec::new());
+        let to = AnimValue::FilterList(vec![FilterFn::Brightness(2.0)]);
+        match interp.interpolate(&from, &to, 0.5).expect("some") {
+            AnimValue::FilterList(list) => {
+                assert_filter_list_close(&list, &[FilterFn::Brightness(1.5)])
+            }
+            other => panic!("expected FilterList, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn linear_interpolator_filter_endpoints_exact() {
+        let interp = LinearInterpolator;
+        let from = AnimValue::FilterList(vec![FilterFn::Invert(0.0)]);
+        let to = AnimValue::FilterList(vec![FilterFn::Invert(1.0)]);
+        assert_eq!(interp.interpolate(&from, &to, 0.0), Some(from.clone()));
+        assert_eq!(interp.interpolate(&from, &to, 1.0), Some(to.clone()));
     }
 }
