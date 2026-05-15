@@ -11,7 +11,6 @@
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
 - 🔄 DisplayCommand layer-ops (P2 1B шаг c) [P2] — display-command-layer-ops — 2026-05-15
-- 🔄 Push-tokenizer + incremental tree builder (P1 3B) [P1] — push-tokenizer — 2026-05-15
 
 ## Статус реализации
 
