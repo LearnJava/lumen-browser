@@ -11,6 +11,7 @@
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
 - 🔄 Painting order traversal (P2 2A) [P2] — painting-order-traversal — 2026-05-15
+- 🔄 L4 nested (not (...))-conditions в media-condition (P1 4A finishing) [P1] — media-query-nested-not — 2026-05-15
 
 ## Статус реализации
 
