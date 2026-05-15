@@ -18,8 +18,8 @@ use std::collections::HashMap;
 
 use lumen_core::geom::Size;
 use lumen_css_parser::{
-    AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector, Declaration, MediaContext,
-    PropertyRule, PseudoClass, SimpleSelector, Specificity, Stylesheet,
+    parse_inline_style, AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector,
+    Declaration, MediaContext, PropertyRule, PseudoClass, SimpleSelector, Specificity, Stylesheet,
 };
 use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId};
 
@@ -2555,13 +2555,28 @@ pub fn compute_style(
     // в этих атрибутах игнорируются.
     apply_image_presentational_hints(doc, node, &mut style);
 
+    // CSS Cascade L4 §6.4.3 — inline style: парсим HTML-атрибут `style=""`
+    // и кладём его декларации в отдельный буфер. Они подключаются к каскаду
+    // через дополнительный sort-bit `is_inline` (ниже): внутри одного origin
+    // (нормального или !important) inline всегда побеждает любой селектор —
+    // это «Element-Attached Styles» тир в Cascade L4 §8.1, идущий после
+    // Layer/Specificity/Order, но до Importance-инверсии.
+    let inline_decls: Vec<Declaration> = doc
+        .get(node)
+        .get_attr("style")
+        .filter(|s| !s.is_empty())
+        .map(parse_inline_style)
+        .unwrap_or_default();
+
     // Собираем все matched declarations с их sort key:
-    // (important, specificity, rule_order, decl_index). `important` идёт
-    // первым: после ascending sort `true > false`, поэтому !important идёт в
-    // конец и побеждает normal даже при меньшей specificity (CSS Cascade L4
-    // §8.1). Внутри одного origin `important = false` сначала разрешается
-    // обычный каскад, потом тот же каскад применяется поверх с !important.
-    let mut matched: Vec<(bool, Specificity, usize, usize, &Declaration)> = Vec::new();
+    // (important, is_inline, specificity, rule_order, decl_index). `important`
+    // идёт первым: после ascending sort `true > false`, поэтому !important идёт
+    // в конец и побеждает normal даже при меньшей specificity (CSS Cascade L4
+    // §8.1). `is_inline` — вторым: в пределах одного `important` inline-style
+    // атрибут побеждает стилевой лист (CSS Cascade L4 §6.4.3). Внутри одного
+    // origin `important = false` сначала разрешается обычный каскад, потом тот
+    // же каскад применяется поверх с !important.
+    let mut matched: Vec<(bool, bool, Specificity, usize, usize, &Declaration)> = Vec::new();
     for (rule_idx, rule) in sheet.rules.iter().enumerate() {
         let mut best: Option<Specificity> = None;
         for complex in &rule.selectors {
@@ -2575,7 +2590,7 @@ pub fn compute_style(
         }
         if let Some(spec) = best {
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                matched.push((decl.important, spec, rule_idx, decl_idx, decl));
+                matched.push((decl.important, false, spec, rule_idx, decl_idx, decl));
             }
         }
     }
@@ -2605,19 +2620,36 @@ pub fn compute_style(
             }
             if let Some(spec) = best {
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    matched.push((decl.important, spec, next_rule_idx, decl_idx, decl));
+                    matched.push((decl.important, false, spec, next_rule_idx, decl_idx, decl));
                 }
             }
             next_rule_idx += 1;
         }
     }
-    matched.sort_by_key(|&(imp, spec, rule_idx, decl_idx, _)| (imp, spec, rule_idx, decl_idx));
+    // Inline-style declarations подключаются с `is_inline = true` и
+    // synthetic specificity = default (Cascade L4 §6.4.3 — реальная
+    // specificity inline-стиля игнорируется в сортировке: за порядок
+    // отвечает is_inline-бит, а внутри inline — источниковый порядок
+    // декларации в атрибуте).
+    for (decl_idx, decl) in inline_decls.iter().enumerate() {
+        matched.push((
+            decl.important,
+            true,
+            Specificity::default(),
+            next_rule_idx,
+            decl_idx,
+            decl,
+        ));
+    }
+    matched.sort_by_key(|&(imp, inline, spec, rule_idx, decl_idx, _)| {
+        (imp, inline, spec, rule_idx, decl_idx)
+    });
 
     // Pre-pass: применяем font-size раньше, потому что em/% других свойств
     // считаются относительно computed font-size этого же элемента, а em для
     // самого font-size — относительно inherited (родительского) font-size.
     let parent_fs = inherited.font_size;
-    for (_, _, _, _, decl) in &matched {
+    for (_, _, _, _, _, decl) in &matched {
         apply_font_size(&mut style, decl, parent_fs, viewport);
     }
 
@@ -2633,7 +2665,7 @@ pub fn compute_style(
     // значение (родительское inherited или initial-value) остаётся.
     // value, содержащее `var(`, пропускается без валидации — резолв
     // происходит позже, и итоговая строка может быть валидной.
-    for (_, _, _, _, decl) in &matched {
+    for (_, _, _, _, _, decl) in &matched {
         if let Some(name) = decl.property.strip_prefix("--") {
             let key = format!("--{name}");
             if let Some(prop_rule) = registry.get(key.as_str())
@@ -2660,7 +2692,7 @@ pub fn compute_style(
     let em_basis = style.font_size;
     let parent_weight = inherited.font_weight;
     let is_quirks = doc.mode() == DocumentMode::Quirks;
-    for (_, _, _, _, decl) in &matched {
+    for (_, _, _, _, _, decl) in &matched {
         apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, inherited, is_quirks);
     }
 
@@ -10784,5 +10816,116 @@ mod tests {
         assert!(approx(f.progress(0.5), 0.0));
         assert!(approx(f.progress(0.99), 0.0));
         assert!(approx(f.progress(1.0), 1.0));
+    }
+
+    // ──────────────── CSS Cascade L4 §6.4.3: inline style attribute ────────────────
+
+    #[test]
+    fn inline_style_background_applies() {
+        // Базовая проверка BUG-003 fix — inline `style="background: ..."`
+        // должен подключаться к каскаду и давать цветной фон.
+        let s = cascade_at(
+            r#"<div style="background: red;">x</div>"#,
+            "",
+            &[0],
+        );
+        assert_eq!(s.background_color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+    }
+
+    #[test]
+    fn inline_style_overrides_class_rule() {
+        // CSS Cascade L4 §6.4.3: inline побеждает любой селектор в author origin.
+        let s = cascade_at(
+            r#"<div class="k" style="color: blue;">x</div>"#,
+            ".k { color: red; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn inline_style_overrides_id_rule() {
+        // Inline побеждает даже ID-селектор, чья specificity (1,0,0) выше
+        // class (0,1,0): inline-tier приоритетнее specificity.
+        let s = cascade_at(
+            r#"<div id="x" style="color: blue;">x</div>"#,
+            "#x { color: red; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn inline_style_important_beats_class_important() {
+        // Inline !important побеждает class !important (равная Importance,
+        // разные тиры — Element-Attached Styles побеждает в author!important).
+        let s = cascade_at(
+            r#"<div class="k" style="color: blue !important;">x</div>"#,
+            ".k { color: red !important; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn class_important_beats_inline_normal() {
+        // Author !important побеждает author normal (включая inline normal),
+        // потому что Importance — главный sort-критерий.
+        let s = cascade_at(
+            r#"<div class="k" style="color: blue;">x</div>"#,
+            ".k { color: red !important; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn inline_style_multiple_properties() {
+        let s = cascade_at(
+            r#"<div style="background: green; color: yellow; padding: 5px;">x</div>"#,
+            "",
+            &[0],
+        );
+        assert_eq!(s.background_color, Some(Color { r: 0, g: 128, b: 0, a: 255 }));
+        assert_eq!(s.color, Color { r: 255, g: 255, b: 0, a: 255 });
+        assert_eq!(s.padding_top, 5.0);
+        assert_eq!(s.padding_right, 5.0);
+        assert_eq!(s.padding_bottom, 5.0);
+        assert_eq!(s.padding_left, 5.0);
+    }
+
+    #[test]
+    fn inline_style_display_none_hides_element() {
+        // BUG-001 manifestation: `style="display:none"` через inline должен
+        // ставить display = None.
+        let s = cascade_at(
+            r#"<div style="display: none;">hidden</div>"#,
+            "",
+            &[0],
+        );
+        assert_eq!(s.display, Display::None);
+    }
+
+    #[test]
+    fn inline_style_empty_attribute_is_noop() {
+        // Пустой `style=""` не ломает каскад; class-rule остаётся в силе.
+        let s = cascade_at(
+            r#"<div class="k" style="">x</div>"#,
+            ".k { color: red; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn inline_style_invalid_declaration_skipped() {
+        // Невалидное declaration пропускается (recovery в parse_inline_style),
+        // валидные применяются.
+        let s = cascade_at(
+            r#"<div style="garbage no colon; color: blue;">x</div>"#,
+            "",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
     }
 }
