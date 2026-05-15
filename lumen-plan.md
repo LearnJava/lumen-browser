@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-- 🔄 Compositor two-buffer commit model (P2 1B шаг b) [P2] — compositor-twobuffer — 2026-05-15
+- 🔄 DisplayCommand layer-ops (P2 1B шаг c) [P2] — display-command-layer-ops — 2026-05-15
 
 ## Статус реализации
 
