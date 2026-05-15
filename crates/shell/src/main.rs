@@ -895,6 +895,19 @@ impl ApplicationHandler for Lumen {
                     w.request_redraw();
                 }
             }
+            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
+                // Окно перетащили на монитор с другим DPI. Surface не пересоздаём —
+                // winit отдаст новый physical inner_size через последующий
+                // `WindowEvent::Resized`; здесь только обновляем коэффициент,
+                // по которому shader делит координаты, чтобы 1 CSS px остался
+                // равен scale_factor device px.
+                if let Some(r) = self.renderer.as_mut() {
+                    r.set_scale_factor(scale_factor);
+                }
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
             WindowEvent::ModifiersChanged(new_mods) => {
                 self.modifiers = winit_modifiers_state(&new_mods);
             }
