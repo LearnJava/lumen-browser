@@ -12,6 +12,7 @@
 
 - 🔄 Paint order consumer (P2 2A renderer-side) [P2] — paint-order-consumer — 2026-05-15
 - 🔄 CSS image-rendering parsing/storage [P1] — css-image-rendering — 2026-05-15
+- 🔄 Transform-list interpolation (P1 3A: matched-pair + matrix decompose) [P1] — transform-interpolate — 2026-05-15
 
 ## Статус реализации
 
