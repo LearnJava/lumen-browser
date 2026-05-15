@@ -11,7 +11,6 @@
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
 - 🔄 Paint order consumer (P2 2A renderer-side) [P2] — paint-order-consumer — 2026-05-15
-- 🔄 CSS vertical-align в inline layout [P1] — css-vertical-align — 2026-05-15
 
 ## Статус реализации
 
