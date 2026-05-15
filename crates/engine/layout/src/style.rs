@@ -444,6 +444,106 @@ pub enum BoxSizing {
     BorderBox,
 }
 
+/// CSS Positioned Layout L3 §3 — `position`. Не наследуется.
+/// `Static` — нормальный поток (default). Остальные создают
+/// containing-block-альтернативу и (для `Fixed` / `Sticky`, а также
+/// `Relative` / `Absolute` с явным `z-index`) могут создавать
+/// stacking context (§9.10).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Position {
+    #[default]
+    Static,
+    Relative,
+    Absolute,
+    Fixed,
+    Sticky,
+}
+
+impl Position {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "static" => Some(Self::Static),
+            "relative" => Some(Self::Relative),
+            "absolute" => Some(Self::Absolute),
+            "fixed" => Some(Self::Fixed),
+            "sticky" => Some(Self::Sticky),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Compositing & Blending L1 §2.1 — `isolation`. Не наследуется.
+/// `Isolate` принудительно создаёт stacking context, обеспечивая
+/// изоляцию blend / backdrop-filter эффектов потомков от внешних
+/// слоёв.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Isolation {
+    #[default]
+    Auto,
+    Isolate,
+}
+
+impl Isolation {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "isolate" => Some(Self::Isolate),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Compositing & Blending L1 §3.1 — `mix-blend-mode`. Не наследуется.
+/// Любое значение, отличное от `Normal`, создаёт stacking context
+/// (§9.10). Phase 0 layout только хранит — реальный compositor pipeline
+/// для blend-effects появится у P2 (§16 трек, п.4).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum MixBlendMode {
+    #[default]
+    Normal,
+    Multiply,
+    Screen,
+    Overlay,
+    Darken,
+    Lighten,
+    ColorDodge,
+    ColorBurn,
+    HardLight,
+    SoftLight,
+    Difference,
+    Exclusion,
+    Hue,
+    Saturation,
+    Color,
+    Luminosity,
+    PlusLighter,
+}
+
+impl MixBlendMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "normal" => Some(Self::Normal),
+            "multiply" => Some(Self::Multiply),
+            "screen" => Some(Self::Screen),
+            "overlay" => Some(Self::Overlay),
+            "darken" => Some(Self::Darken),
+            "lighten" => Some(Self::Lighten),
+            "color-dodge" => Some(Self::ColorDodge),
+            "color-burn" => Some(Self::ColorBurn),
+            "hard-light" => Some(Self::HardLight),
+            "soft-light" => Some(Self::SoftLight),
+            "difference" => Some(Self::Difference),
+            "exclusion" => Some(Self::Exclusion),
+            "hue" => Some(Self::Hue),
+            "saturation" => Some(Self::Saturation),
+            "color" => Some(Self::Color),
+            "luminosity" => Some(Self::Luminosity),
+            "plus-lighter" => Some(Self::PlusLighter),
+            _ => None,
+        }
+    }
+}
+
 /// CSS-wide keywords (CSS Cascade L4 §7) — применимы к любому свойству.
 /// - `Inherit` — взять computed value родителя.
 /// - `Initial` — взять initial value свойства из спецификации.
@@ -563,6 +663,23 @@ pub struct ComputedStyle {
     pub border_bottom_color: Option<Color>,
     pub border_left_color: Option<Color>,
     pub box_sizing: BoxSizing,
+    /// CSS Positioned Layout L3 §3 — `position`. Не наследуется. Default
+    /// `Static`. Phase 0 layout не делает позиционирование (offsets top/right/
+    /// bottom/left парсятся, но не применяются) — поле используется для
+    /// определения stacking context (§9.10) и для будущего позиционирования.
+    pub position: Position,
+    /// CSS Positioned Layout L3 §9.3 — `z-index: auto | <integer>`. Не
+    /// наследуется. `None` = `auto` (stacking context создаётся только если
+    /// другие триггеры в §9.10 совпали). `Some(n)` = явный integer; для
+    /// positioned- и flex/grid-item элементов это запускает создание
+    /// stacking context.
+    pub z_index: Option<i32>,
+    /// CSS Compositing & Blending L1 §2.1 — `isolation`. Не наследуется.
+    /// `Isolate` создаёт stacking context.
+    pub isolation: Isolation,
+    /// CSS Compositing & Blending L1 §3.1 — `mix-blend-mode`. Не наследуется.
+    /// Любое значение, отличное от `Normal`, создаёт stacking context.
+    pub mix_blend_mode: MixBlendMode,
     /// CSS Backgrounds L3 §5: радиус скругления углов (resolved px).
     /// Один аспект (без elliptical x/y) — Phase 0 упрощение. Не наследуется.
     pub border_top_left_radius: f32,
@@ -1582,6 +1699,10 @@ impl ComputedStyle {
             border_bottom_color: None,
             border_left_color: None,
             box_sizing: BoxSizing::ContentBox,
+            position: Position::Static,
+            z_index: None,
+            isolation: Isolation::Auto,
+            mix_blend_mode: MixBlendMode::Normal,
             border_top_left_radius: 0.0,
             border_top_right_radius: 0.0,
             border_bottom_right_radius: 0.0,
@@ -1732,6 +1853,11 @@ pub fn compute_style(
         border_bottom_color: None,
         border_left_color: None,
         box_sizing: BoxSizing::ContentBox,
+        // CSS Positioned Layout L3 §3 / Compositing L1 — не наследуются.
+        position: Position::Static,
+        z_index: None,
+        isolation: Isolation::Auto,
+        mix_blend_mode: MixBlendMode::Normal,
         // border-radius не наследуется.
         border_top_left_radius: 0.0,
         border_top_right_radius: 0.0,
@@ -4724,6 +4850,32 @@ fn apply_declaration(
                     .collect();
             }
         }
+        "position" => {
+            if let Some(v) = Position::parse(val) {
+                style.position = v;
+            }
+        }
+        "z-index" => {
+            // CSS Positioned Layout L3 §9.3 — `auto | <integer>`.
+            // `auto` → None (stacking context зависит от других триггеров);
+            // целое → Some(n).
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("auto") {
+                style.z_index = None;
+            } else if let Ok(n) = trimmed.parse::<i32>() {
+                style.z_index = Some(n);
+            }
+        }
+        "isolation" => {
+            if let Some(v) = Isolation::parse(val) {
+                style.isolation = v;
+            }
+        }
+        "mix-blend-mode" => {
+            if let Some(v) = MixBlendMode::parse(val) {
+                style.mix_blend_mode = v;
+            }
+        }
         "pointer-events" => {
             if let Some(v) = PointerEvents::parse(val) {
                 style.pointer_events = v;
@@ -5726,6 +5878,19 @@ fn apply_css_wide_keyword(
         }
         "filter" => {
             style.filter = if inh_only_inherit { inherited.filter.clone() } else { init.filter.clone() };
+        }
+        // CSS Positioned Layout / Compositing — non-inherited.
+        "position" => {
+            style.position = if inh_only_inherit { inherited.position } else { init.position };
+        }
+        "z-index" => {
+            style.z_index = if inh_only_inherit { inherited.z_index } else { init.z_index };
+        }
+        "isolation" => {
+            style.isolation = if inh_only_inherit { inherited.isolation } else { init.isolation };
+        }
+        "mix-blend-mode" => {
+            style.mix_blend_mode = if inh_only_inherit { inherited.mix_blend_mode } else { init.mix_blend_mode };
         }
         // CSS Images L3 §5.5 — object-fit / object-position non-inherited.
         "object-fit" => {
