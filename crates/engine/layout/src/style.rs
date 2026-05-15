@@ -851,6 +851,14 @@ pub struct ComputedStyle {
     pub background_repeat: BackgroundRepeat,
     pub background_size: BackgroundSize,
     pub background_attachment: BackgroundAttachment,
+    /// CSS Backgrounds L3 §3.5 — `background-position`. Не наследуется.
+    /// Default `0% 0%` (top-left). Phase 0: parsing + storage; реальное
+    /// применение в paint pipeline (смещение background-image в pattern fill)
+    /// — отдельная задача с согласованием P2 (см. crate-ownership matrix).
+    /// Тип переиспользуется с `object-position`: те же 1-2-value формы,
+    /// keyword / length / percentage. Multi-background-position (список
+    /// через запятую) — отдельная задача после multi-background-image.
+    pub background_position: ObjectPosition,
     /// CSS Will Change L1. Список имён свойств для optimization hint.
     /// Пустой Vec = `auto` (default). Не наследуется.
     pub will_change: Vec<String>,
@@ -1465,6 +1473,19 @@ impl Default for ObjectPosition {
 }
 
 impl ObjectPosition {
+    /// CSS Backgrounds L3 §3.5 — initial value `background-position: 0% 0%`
+    /// (top-left). Отличается от Object Position default (`50% 50%`, центр)
+    /// специально потому, что `background-image` обычно anchored к top-left
+    /// при первой укладке (см. CSS 2.1 §14.2.1).
+    pub const fn background_initial() -> Self {
+        Self {
+            x: PositionComponent::Percent(0.0),
+            y: PositionComponent::Percent(0.0),
+        }
+    }
+}
+
+impl ObjectPosition {
     /// CSS Values L4 §9.4 — `<position>` для object-position. Phase 0
     /// поддерживает:
     ///   - keyword `center` (= 50%),
@@ -1804,6 +1825,7 @@ impl ComputedStyle {
             background_repeat: BackgroundRepeat::Repeat,
             background_size: BackgroundSize::Auto,
             background_attachment: BackgroundAttachment::Scroll,
+            background_position: ObjectPosition::background_initial(),
             will_change: Vec::new(),
             pointer_events: PointerEvents::Auto,
             user_select: UserSelect::Auto,
@@ -1969,6 +1991,7 @@ pub fn compute_style(
         background_repeat: BackgroundRepeat::Repeat,
         background_size: BackgroundSize::Auto,
         background_attachment: BackgroundAttachment::Scroll,
+        background_position: ObjectPosition::background_initial(),
         // Will Change / Pointer Events — не наследуются.
         will_change: Vec::new(),
         pointer_events: PointerEvents::Auto,
@@ -4913,6 +4936,17 @@ fn apply_declaration(
                 style.background_attachment = v;
             }
         }
+        "background-position" => {
+            // CSS Backgrounds L3 §3.5. Парсер `<position>` переиспользуется
+            // с `object-position` (`ObjectPosition::parse`), но default
+            // для background-position другой — `0% 0%`, не `50% 50%`,
+            // поэтому используется отдельная константа `background_initial`.
+            // Multi-value список через запятую (для multi-background-image)
+            // — отдельная задача; здесь принимается один position.
+            if let Some(p) = ObjectPosition::parse(val, em_basis, viewport) {
+                style.background_position = p;
+            }
+        }
         "will-change" => {
             // CSS Will Change L1: `auto | <ident-list>`. Lenient parser —
             // comma-separated ident-имена.
@@ -5986,6 +6020,14 @@ fn apply_css_wide_keyword(
                 inherited.vertical_align
             } else {
                 init.vertical_align
+            };
+        }
+        // CSS Backgrounds L3 §3.5 — background-position non-inherited.
+        "background-position" => {
+            style.background_position = if inh_only_inherit {
+                inherited.background_position
+            } else {
+                init.background_position
             };
         }
         // Прочие / неизвестные — silent no-op.
@@ -9486,5 +9528,132 @@ mod tests {
             &[0, 0],
         );
         assert_eq!(s.vertical_align, VerticalAlign::Baseline);
+    }
+
+    // -------- background-position (CSS Backgrounds L3 §3.5) --------
+
+    #[test]
+    fn background_position_default_is_top_left() {
+        // CSS Backgrounds L3 §3.5 — initial `0% 0%`, отличается от
+        // object-position default (`50% 50%`).
+        let s = cascade_at("<div></div>", "", &[0]);
+        assert_eq!(
+            s.background_position,
+            ObjectPosition {
+                x: PositionComponent::Percent(0.0),
+                y: PositionComponent::Percent(0.0),
+            }
+        );
+    }
+
+    #[test]
+    fn background_position_two_percent_values() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: 25% 75%; }",
+            &[0],
+        );
+        assert_eq!(s.background_position.x, PositionComponent::Percent(0.25));
+        assert_eq!(s.background_position.y, PositionComponent::Percent(0.75));
+    }
+
+    #[test]
+    fn background_position_two_lengths() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: 10px 20px; }",
+            &[0],
+        );
+        assert_eq!(s.background_position.x, PositionComponent::Px(10.0));
+        assert_eq!(s.background_position.y, PositionComponent::Px(20.0));
+    }
+
+    #[test]
+    fn background_position_single_value_centers_y() {
+        // Один token — второй компонент defaults to `center` (50%).
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: 30%; }",
+            &[0],
+        );
+        assert_eq!(s.background_position.x, PositionComponent::Percent(0.30));
+        assert_eq!(s.background_position.y, PositionComponent::Percent(0.5));
+    }
+
+    #[test]
+    fn background_position_keyword_right_bottom() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: right bottom; }",
+            &[0],
+        );
+        assert_eq!(s.background_position.x, PositionComponent::Percent(1.0));
+        assert_eq!(s.background_position.y, PositionComponent::Percent(1.0));
+    }
+
+    #[test]
+    fn background_position_keyword_center() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: center; }",
+            &[0],
+        );
+        assert_eq!(s.background_position.x, PositionComponent::Percent(0.5));
+        assert_eq!(s.background_position.y, PositionComponent::Percent(0.5));
+    }
+
+    #[test]
+    fn background_position_invalid_value_ignored() {
+        // Невалидное value → declaration invalid → остаётся initial.
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: bogus; }",
+            &[0],
+        );
+        assert_eq!(
+            s.background_position,
+            ObjectPosition::background_initial()
+        );
+    }
+
+    #[test]
+    fn background_position_not_inherited() {
+        // CSS Backgrounds L3 — non-inherited; ребёнок без своей декларации
+        // получает initial (`0% 0%`), а не родительское `right bottom`.
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { background-position: right bottom; }",
+            &[0, 0],
+        );
+        assert_eq!(
+            s.background_position,
+            ObjectPosition::background_initial()
+        );
+    }
+
+    #[test]
+    fn background_position_inherit_keyword_pulls_parent_value() {
+        // CSS Cascade L4 §7 — `inherit` принудительно тянет parent value
+        // даже для non-inherited.
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { background-position: center; } p { background-position: inherit; }",
+            &[0, 0],
+        );
+        assert_eq!(s.background_position.x, PositionComponent::Percent(0.5));
+        assert_eq!(s.background_position.y, PositionComponent::Percent(0.5));
+    }
+
+    #[test]
+    fn background_position_initial_resets_to_top_left() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-position: 80% 90%; background-position: initial; }",
+            &[0],
+        );
+        assert_eq!(
+            s.background_position,
+            ObjectPosition::background_initial()
+        );
     }
 }
