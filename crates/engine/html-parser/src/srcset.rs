@@ -296,9 +296,13 @@ pub enum ColorScheme {
     Dark,
 }
 
-/// Одиночная media-feature внутри media-condition. AND-list из
-/// `MediaClause` хранится в `MediaCondition::All`.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Одиночный `<media-in-parens>` внутри media-condition (Media Queries L4
+/// §3.2). AND-list из `MediaClause` хранится в `MediaCondition::All`.
+///
+/// Variant `Nested` покрывает L4-формы `(not <cond>)` и `((<cond>))` —
+/// вложенную media-condition в скобках. Box нужен для recursion (Rust
+/// требует indirection в self-referential enum-ах).
+#[derive(Debug, Clone, PartialEq)]
 pub enum MediaClause {
     MinWidth(SizeLength),
     MaxWidth(SizeLength),
@@ -306,11 +310,14 @@ pub enum MediaClause {
     MaxHeight(SizeLength),
     Orientation(Orientation),
     PrefersColorScheme(ColorScheme),
+    /// `(not <cond>)` или `((<cond>))` — вложенная media-condition,
+    /// результат вычисляется рекурсивно через `MediaCondition::matches`.
+    Nested(Box<MediaCondition>),
 }
 
 impl MediaClause {
     fn matches(&self, viewport: SizesViewport) -> bool {
-        match *self {
+        match self {
             MediaClause::MinWidth(len) => viewport.width_px >= len.resolve(viewport),
             MediaClause::MaxWidth(len) => viewport.width_px <= len.resolve(viewport),
             MediaClause::MinHeight(len) => viewport.height_px >= len.resolve(viewport),
@@ -323,6 +330,7 @@ impl MediaClause {
             }
             MediaClause::PrefersColorScheme(ColorScheme::Dark) => viewport.prefers_dark,
             MediaClause::PrefersColorScheme(ColorScheme::Light) => !viewport.prefers_dark,
+            MediaClause::Nested(cond) => cond.matches(viewport),
         }
     }
 }
@@ -336,14 +344,18 @@ impl MediaClause {
 ///     результат _всей_ clause; `Unsupported` под `not` остаётся
 ///     unknown (= false), spec: «If the result is unknown, then the
 ///     negation also evaluates to unknown»;
+///   * **L4 nested-формы**: `(not <cond>)` и `((<cond>))` внутри
+///     `<media-in-parens>`. Реализованы через `MediaClause::Nested`,
+///     парсер рекурсивно разворачивает вложенный `<cond>`. Top-level
+///     split-by-`and` paren-aware — `(not (a) and (b))` корректно
+///     остаётся одной clause, не разваливается на две;
 ///   * features: `min-width` / `max-width` / `min-height` / `max-height` /
 ///     `orientation` / `prefers-color-scheme`.
 ///
 /// Неподдерживаемые формы (OR через запятую на уровне one condition,
-/// неизвестные features, `only` без media-type, `(not (...))`-формы)
-/// дают `Unsupported` — никогда не матчат. OR на уровне всей `sizes`-
-/// строки обрабатывается естественно — это просто разделение на
-/// несколько `SourceSize`.
+/// неизвестные features, `only` без media-type) дают `Unsupported` —
+/// никогда не матчат. OR на уровне всей `sizes`-строки обрабатывается
+/// естественно — это просто разделение на несколько `SourceSize`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum MediaCondition {
     /// AND-list features с опциональной инверсией (per §3.2 `not <q>`).
@@ -508,11 +520,13 @@ pub fn parse_media_condition(s: &str) -> MediaCondition {
         return MediaCondition::Unsupported;
     }
 
-    // Split по " and " на top-level — внутри `()` " and " не встречается
-    // (валидная media-feature имеет вид `(name: value)` без `and`).
-    let parts: Vec<&str> = rest.split(" and ").map(str::trim).collect();
+    // Split по " and " на top-level. Paren-aware: внутри `(...)` `and`
+    // может встретиться у nested-форм `(not (a) and (b))` — там его
+    // нельзя считать разделителем верхнего уровня.
+    let parts = split_top_level_and(rest);
     let mut clauses = Vec::with_capacity(parts.len());
     for part in parts {
+        let part = part.trim();
         if part.is_empty() {
             return MediaCondition::Unsupported;
         }
@@ -526,6 +540,42 @@ pub fn parse_media_condition(s: &str) -> MediaCondition {
     } else {
         MediaCondition::All { negated, clauses }
     }
+}
+
+/// Разбить media-condition по разделителю ` and ` на верхнем уровне,
+/// игнорируя `and` внутри `(...)`. Возвращает не менее одного куска.
+///
+/// Сегменты разделителя не trim-аются здесь — caller сам делает
+/// `.trim()`. Так как разделитель содержит whitespace по обе стороны,
+/// случайные `and` без пробелов (`brand`, `andrew`) не зацепятся.
+fn split_top_level_and(s: &str) -> Vec<&str> {
+    const SEP: &[u8] = b" and ";
+    let bytes = s.as_bytes();
+    let mut parts = Vec::new();
+    let mut depth: i32 = 0;
+    let mut start = 0usize;
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let c = bytes[i];
+        if c == b'(' {
+            depth += 1;
+            i += 1;
+        } else if c == b')' {
+            depth -= 1;
+            i += 1;
+        } else if depth == 0
+            && i + SEP.len() <= bytes.len()
+            && &bytes[i..i + SEP.len()] == SEP
+        {
+            parts.push(&s[start..i]);
+            i += SEP.len();
+            start = i;
+        } else {
+            i += 1;
+        }
+    }
+    parts.push(&s[start..]);
+    parts
 }
 
 /// Снять ведущий `not` keyword (case-already-lowered). Возвращает
@@ -542,11 +592,40 @@ fn strip_leading_not(input: &str) -> Option<&str> {
 }
 
 fn parse_media_clause(s: &str) -> Option<MediaClause> {
-    let s = s.trim();
-    if !s.starts_with('(') || !s.ends_with(')') {
-        return None;
+    let inner = strip_outer_parens(s.trim())?;
+    let inner = inner.trim();
+
+    // L4 nested-not: `not <media-in-parens>` внутри clause-скобок.
+    // Per spec `<media-not> = not <media-in-parens>` — `not` применяется
+    // строго к ОДНОЙ скобочной единице, без AND/OR-продолжения. Поэтому
+    // `(not (a) and (b))` → Unsupported (а не lenient «not (a AND b)»,
+    // как у top-level `not <a> and <b>` — см. doc-комментарий к
+    // `MediaCondition`).
+    if let Some(after) = strip_leading_not(inner) {
+        let rest = after.trim_start();
+        if rest.is_empty() {
+            return None;
+        }
+        strip_outer_parens(rest)?;
+        let sub = parse_media_condition(rest);
+        if matches!(sub, MediaCondition::Unsupported) {
+            return None;
+        }
+        return Some(MediaClause::Nested(Box::new(invert_condition(sub))));
     }
-    let inner = s[1..s.len() - 1].trim();
+
+    // L4 группировка: `((<cond>))`. Если inner сам начинается со скобки —
+    // это вложенная `<media-in-parens>`-форма без `not`. Парсим
+    // рекурсивно, оборачиваем в Nested без инверсии.
+    if inner.starts_with('(') {
+        let sub = parse_media_condition(inner);
+        if matches!(sub, MediaCondition::Unsupported) {
+            return None;
+        }
+        return Some(MediaClause::Nested(Box::new(sub)));
+    }
+
+    // Classic `name: value` feature.
     let (name, value) = inner.split_once(':')?;
     let name = name.trim();
     let value = value.trim();
@@ -566,6 +645,45 @@ fn parse_media_clause(s: &str) -> Option<MediaClause> {
             _ => None,
         },
         _ => None,
+    }
+}
+
+/// Срезать ровно одну внешнюю пару скобок, если строка вся «обёрнута»
+/// в `(...)`. Возвращает `None`, если скобки несбалансированы или
+/// группировки нет (например, `(a) and (b)` — внешний `(` закрывается
+/// до конца строки).
+fn strip_outer_parens(s: &str) -> Option<&str> {
+    let bytes = s.as_bytes();
+    if !s.starts_with('(') || !s.ends_with(')') {
+        return None;
+    }
+    let mut depth: i32 = 0;
+    for (i, &c) in bytes.iter().enumerate() {
+        if c == b'(' {
+            depth += 1;
+        } else if c == b')' {
+            depth -= 1;
+            if depth == 0 && i != bytes.len() - 1 {
+                return None;
+            }
+        }
+    }
+    if depth != 0 {
+        return None;
+    }
+    Some(&s[1..s.len() - 1])
+}
+
+/// Инвертировать media-condition. `Unsupported` остаётся `Unsupported`
+/// (per L4 §3.2 «If the result is unknown, then the negation also
+/// evaluates to unknown»).
+fn invert_condition(cond: MediaCondition) -> MediaCondition {
+    match cond {
+        MediaCondition::Unsupported => MediaCondition::Unsupported,
+        MediaCondition::All { negated, clauses } => MediaCondition::All {
+            negated: !negated,
+            clauses,
+        },
     }
 }
 
@@ -1107,6 +1225,128 @@ mod tests {
         assert_eq!(c, MediaCondition::Unsupported);
         let c = parse_media_condition("not   ");
         assert_eq!(c, MediaCondition::Unsupported);
+    }
+
+    // ──────── sizes: L4 nested (not (...)) и группировка ────────
+
+    #[test]
+    fn nested_not_inverts_single_feature() {
+        // `(not (min-width: 1000px))` — clause-уровневая инверсия,
+        // эквивалент top-level `not (min-width: 1000px)`.
+        let c = parse_media_condition("(not (min-width: 1000px))");
+        assert!(c.matches(vp(800.0, 600.0)));
+        assert!(!c.matches(vp(1200.0, 600.0)));
+        // Структурно — это `MediaCondition::All { negated: false,
+        // clauses: [Nested(All { negated: true, [MinWidth] })] }`.
+        if let MediaCondition::All { negated, clauses } = &c {
+            assert!(!*negated, "outer negated flag должен быть false");
+            assert_eq!(clauses.len(), 1);
+            assert!(matches!(clauses[0], MediaClause::Nested(_)));
+        } else {
+            panic!("expected All, got {c:?}");
+        }
+    }
+
+    #[test]
+    fn nested_not_then_and_does_not_negate_second_clause() {
+        // Spec §3.2: `<media-not> = not <media-in-parens>` — `not`
+        // применяется только к ОДНОЙ in-parens единице. Через nested-
+        // форму получаем правильный per-spec scope: (not (a)) и (b).
+        // 800×600 landscape: a (min-width:600px) true → not(a) false →
+        // false AND b → false.
+        // 400×600 portrait: a false → not(a) true → true AND b
+        // (orientation: portrait) true → true.
+        // 800×1000 portrait: a true → not(a) false → false AND _ → false.
+        let c = parse_media_condition("(not (min-width: 600px)) and (orientation: portrait)");
+        assert!(!c.matches(vp(800.0, 600.0)));
+        assert!(c.matches(vp(400.0, 600.0)));
+        assert!(!c.matches(vp(800.0, 1000.0)));
+    }
+
+    #[test]
+    fn nested_group_around_and_chain() {
+        // `((a) and (b))` — группировка, эквивалент `(a) and (b)`.
+        let c = parse_media_condition("((min-width: 600px) and (max-width: 1000px))");
+        assert!(c.matches(vp(800.0, 600.0)));
+        assert!(!c.matches(vp(500.0, 600.0)));
+        assert!(!c.matches(vp(1200.0, 600.0)));
+    }
+
+    #[test]
+    fn nested_not_then_and_inside_clause_unsupported() {
+        // `(not (a) and (b))` — по L4 §3.2 `<media-not> = not <media-in-
+        // parens>`: после `not` должна быть строго ОДНА скобочная
+        // единица, без AND/OR-продолжения. Поэтому invalid → Unsupported.
+        // (Top-level `not <a> and <b>` сохраняет старое lenient
+        // поведение — это уже задокументировано тестом
+        // `condition_not_with_and_combination`.)
+        let c = parse_media_condition("(not (min-width: 600px) and (orientation: landscape))");
+        assert_eq!(c, MediaCondition::Unsupported);
+    }
+
+    #[test]
+    fn nested_double_paren_idempotent() {
+        // `(((min-width: 600px)))` — двойная группировка, эквивалент
+        // одиночной `(min-width: 600px)`.
+        let c = parse_media_condition("(((min-width: 600px)))");
+        assert!(c.matches(vp(800.0, 600.0)));
+        assert!(!c.matches(vp(400.0, 600.0)));
+    }
+
+    #[test]
+    fn nested_double_not_cancels() {
+        // `(not (not (min-width: 600px)))` — двойная инверсия, должно
+        // вести себя как simple `(min-width: 600px)`.
+        let c = parse_media_condition("(not (not (min-width: 600px)))");
+        assert!(c.matches(vp(800.0, 600.0)));
+        assert!(!c.matches(vp(400.0, 600.0)));
+    }
+
+    #[test]
+    fn nested_and_mixes_with_simple_clause() {
+        // simple AND nested — оба варианта на одном уровне.
+        let c = parse_media_condition("(min-width: 600px) and (not (max-width: 1000px))");
+        // 800: min-width true AND not(max-width true) false → false.
+        assert!(!c.matches(vp(800.0, 600.0)));
+        // 1200: min-width true AND not(max-width false) true → true.
+        assert!(c.matches(vp(1200.0, 600.0)));
+        // 400: min-width false → AND short-circuit → false.
+        assert!(!c.matches(vp(400.0, 600.0)));
+    }
+
+    #[test]
+    fn nested_not_with_unsupported_inner_is_unsupported() {
+        // `(not (gibberish: 5px))` — invalid inner делает всю clause
+        // невалидной, та делает condition Unsupported.
+        let c = parse_media_condition("(not (gibberish: 5px))");
+        assert_eq!(c, MediaCondition::Unsupported);
+    }
+
+    #[test]
+    fn nested_unbalanced_parens_unsupported() {
+        // `(not (min-width: 600px)` — нет закрывающей скобки.
+        // Top-level clause не образует one-blob `(...)`, парсинг падает.
+        let c = parse_media_condition("(not (min-width: 600px)");
+        assert_eq!(c, MediaCondition::Unsupported);
+    }
+
+    #[test]
+    fn nested_and_inside_paren_not_split_top_level() {
+        // Регрессия: `and` ВНУТРИ nested-group `((..) and (..))` не
+        // должен ломать top-level split. До paren-aware split строка
+        // ниже разваливалась на 3 куска: `((a)`, `(b))`, `(c)`.
+        let c = parse_media_condition(
+            "((min-width: 600px) and (max-width: 1000px)) and (orientation: portrait)",
+        );
+        // 800×600 landscape: inner-AND true; outer-AND с portrait
+        // (false для landscape) → false.
+        assert!(!c.matches(vp(800.0, 600.0)));
+        // 800×1000 portrait: inner-AND true (min:600 ok, max:1000 ok);
+        // outer-AND portrait true → true.
+        assert!(c.matches(vp(800.0, 1000.0)));
+        // 1200×600 landscape: inner-AND false (max-width:1000 fails) →
+        // outer false.
+        assert!(!c.matches(vp(1200.0, 600.0)));
     }
 
     #[test]
