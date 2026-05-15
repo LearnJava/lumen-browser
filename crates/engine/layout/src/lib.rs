@@ -5748,4 +5748,88 @@ mod tests {
         );
         assert_eq!(table.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
     }
+
+    // ── CSS Quirks Mode §3.4 — «hashless hex color quirk» ──────────────────
+
+    /// В Quirks-mode `color: ff0000` (без `#`) парсится как red.
+    /// Это эквивалент `color: #ff0000` (CSS Quirks Mode §3.4).
+    #[test]
+    fn quirks_hashless_hex_in_color_property() {
+        // Нет DOCTYPE → Quirks.
+        let root = lay(
+            "<body><p>x</p></body>",
+            "p { color: ff0000; }",
+        );
+        let body = first_element_child(&root);
+        let p = first_element_child(body);
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    /// В Standards-mode `color: ff0000` (без `#`) — невалидное значение,
+    /// игнорируется. Цвет наследуется (по умолчанию BLACK).
+    #[test]
+    fn standards_hashless_hex_rejected_in_color_property() {
+        let root = lay(
+            "<!DOCTYPE html><body><p>x</p></body>",
+            "p { color: ff0000; }",
+        );
+        let body = first_element_child(&root);
+        let p = first_element_child(body);
+        // ff0000 без `#` — невалидно в Standards, color остаётся inherited
+        // от body (BLACK).
+        assert_eq!(p.style.color, Color::BLACK);
+    }
+
+    /// В Quirks `background-color: 00ff00` (6-hex без `#`) парсится как green.
+    #[test]
+    fn quirks_hashless_hex_in_background_color() {
+        let root = lay(
+            "<body><p>x</p></body>",
+            "p { background-color: 00ff00; }",
+        );
+        let body = first_element_child(&root);
+        let p = first_element_child(body);
+        assert_eq!(p.style.background_color, Some(Color { r: 0, g: 255, b: 0, a: 255 }));
+    }
+
+    /// В Quirks 3-hex bare digit-ы тоже парсятся: `f00` → red.
+    #[test]
+    fn quirks_hashless_hex_3_digit_short() {
+        let root = lay(
+            "<body><p>x</p></body>",
+            "p { color: f00; }",
+        );
+        let body = first_element_child(&root);
+        let p = first_element_child(body);
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    /// В Quirks border-color принимает bare hex.
+    #[test]
+    fn quirks_hashless_hex_in_border_color() {
+        let root = lay(
+            "<body><p>x</p></body>",
+            "p { border: 1px solid 0000ff; }",
+        );
+        let body = first_element_child(&root);
+        let p = first_element_child(body);
+        assert_eq!(
+            p.style.border_top_color,
+            Some(Color { r: 0, g: 0, b: 255, a: 255 }),
+        );
+    }
+
+    /// LimitedQuirks (HTML 4.01 Transitional) — hashless hex quirk
+    /// НЕ применяется (spec §1.1.1: «full quirks mode only»).
+    #[test]
+    fn limited_quirks_hashless_hex_rejected() {
+        let root = lay(
+            "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\" \"http://www.w3.org/TR/html4/loose.dtd\"><body><p>x</p></body>",
+            "p { color: ff0000; }",
+        );
+        let body = first_element_child(&root);
+        let p = first_element_child(body);
+        // В LimitedQuirks bare hex — invalid, как в Standards.
+        assert_eq!(p.style.color, Color::BLACK);
+    }
 }
