@@ -12,7 +12,6 @@
 
 - 🔄 Paint order consumer (P2 2A renderer-side) [P2] — paint-order-consumer — 2026-05-15
 - 🔄 CSS image-rendering parsing/storage [P1] — css-image-rendering — 2026-05-15
-- 🔄 Inline style attribute → cascade (BUG-003) [P1] — inline-style-attr — 2026-05-15
 
 ## Статус реализации
 

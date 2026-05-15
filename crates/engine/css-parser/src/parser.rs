@@ -756,6 +756,14 @@ pub fn parse(input: &str) -> Stylesheet {
     Parser::new(input).parse_stylesheet()
 }
 
+/// Парсит содержимое HTML-атрибута `style="..."` — declaration-list без
+/// окружающих фигурных скобок (CSS Style Attributes §2).
+/// Используется для подключения inline-стилей к каскаду в `lumen-layout`
+/// со specificity (1,0,0,0) согласно CSS Cascade L4 §6.4.3.
+pub fn parse_inline_style(input: &str) -> Vec<Declaration> {
+    Parser::new(input).parse_declaration_block()
+}
+
 enum AtRuleOutcome {
     Property(PropertyRule),
     Media(MediaRule),
@@ -4652,5 +4660,66 @@ mod tests {
         let mut dark = screen_ctx(500.0);
         dark.prefers_dark = true;
         assert!(!q.matches(&dark));
+    }
+
+    #[test]
+    fn inline_style_single_declaration() {
+        let decls = parse_inline_style("color: red");
+        assert_eq!(decls.len(), 1);
+        assert_eq!(decls[0].property, "color");
+        assert_eq!(decls[0].value, "red");
+        assert!(!decls[0].important);
+    }
+
+    #[test]
+    fn inline_style_multiple_declarations_with_trailing_semicolon() {
+        let decls = parse_inline_style("color: red; background: #fff; padding: 5px 10px;");
+        assert_eq!(decls.len(), 3);
+        assert_eq!(decls[0].property, "color");
+        assert_eq!(decls[1].property, "background");
+        assert_eq!(decls[1].value, "#fff");
+        assert_eq!(decls[2].property, "padding");
+        assert_eq!(decls[2].value, "5px 10px");
+    }
+
+    #[test]
+    fn inline_style_no_trailing_semicolon() {
+        let decls = parse_inline_style("width: 100px; height: 50px");
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[1].property, "height");
+        assert_eq!(decls[1].value, "50px");
+    }
+
+    #[test]
+    fn inline_style_important_flag() {
+        let decls = parse_inline_style("color: red !important");
+        assert_eq!(decls.len(), 1);
+        assert!(decls[0].important);
+        assert_eq!(decls[0].value, "red");
+    }
+
+    #[test]
+    fn inline_style_empty_input() {
+        assert!(parse_inline_style("").is_empty());
+        assert!(parse_inline_style("   ").is_empty());
+        assert!(parse_inline_style(";;;").is_empty());
+    }
+
+    #[test]
+    fn inline_style_recovers_from_invalid_declaration() {
+        let decls = parse_inline_style("color: red; garbage no colon here; background: blue");
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[0].property, "color");
+        assert_eq!(decls[1].property, "background");
+    }
+
+    #[test]
+    fn inline_style_with_url_and_quotes() {
+        let decls = parse_inline_style(
+            r#"background-image: url("a;b.png"); content: 'hi; there'"#,
+        );
+        assert_eq!(decls.len(), 2);
+        assert_eq!(decls[0].value, r#"url("a;b.png")"#);
+        assert_eq!(decls[1].value, "'hi; there'");
     }
 }
