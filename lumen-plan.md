@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-- 🔄 Renderer face switch (P2 1A, шаг ©) [P2] — renderer-face-switch — 2026-05-15
+- 🔄 Codepoint cascade (P2 1A, шаг (c) — final) [P2] — codepoint-cascade — 2026-05-15
 
 ## Статус реализации
 
