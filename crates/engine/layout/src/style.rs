@@ -3073,7 +3073,12 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
             Some(i) => spec.matches(i),
             None => false,
         },
-        PseudoClass::Not(inner) => !matches_compound(inner, doc, node),
+        PseudoClass::Not(list) => {
+            // CSS Selectors L4 §5.4: матчит, если ни один селектор из списка
+            // элементу не подходит. Внутри допустимы complex-селекторы и
+            // nested `:not` — рекурсия идёт через `matches_complex`.
+            !list.iter().any(|s| matches_complex(s, doc, node))
+        }
         PseudoClass::Is(list) | PseudoClass::Where(list) => {
             // CSS4 §17: матчит, если матчит хоть один селектор из списка.
             // `:where(...)` отличается только тем, что contributes 0 specificity —

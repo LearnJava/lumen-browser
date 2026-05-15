@@ -14,8 +14,10 @@
 //!       - `:nth-child(an+b)`, `:nth-last-child(an+b)`,
 //!         `:nth-of-type(an+b)`, `:nth-last-of-type(an+b)` — формулы
 //!         `an+b`, целые числа, ключевые слова `odd` / `even`;
-//!       - `:not(compound)` — отрицание; внутри — compound selector
-//!         без combinator-ов;
+//!       - `:not(selector-list)` — CSS Selectors L4 §5.4: отрицание
+//!         selector-list-а. Внутри разрешены complex-селекторы и nested
+//!         `:not`. Матчит элемент, если ни один из селекторов списка ему
+//!         не подходит. Specificity = максимум по списку (как у `:is`);
 //!       - `:is(selector-list)` / `:where(selector-list)` — CSS4; матчит,
 //!         если матчит любой из селекторов списка. Внутри разрешены любые
 //!         complex-селекторы. Specificity для `:is` = максимум по списку,
@@ -27,10 +29,8 @@
 //!   - комментарии `/* */`, перечисление селекторов через `,`, опциональный
 //!     trailing `;`. At-rules (`@media`, `@import`) пропускаются.
 //!
-//! Не поддерживается (отложено): `:has(...)`, `:not(complex)` со списком
-//! селекторов или combinator-ами, case-insensitive модификатор `[attr=val i]`,
-//! namespace prefix в селекторах, типизированные значения деклараций
-//! (length / color / calc).
+//! Не поддерживается (отложено): namespace prefix в селекторах,
+//! типизированные значения деклараций (length / color / calc).
 
 use std::cmp::Ordering;
 
@@ -91,10 +91,11 @@ pub enum PseudoClass {
     NthOfType(NthSpec),
     /// `:nth-last-of-type(an+b)` — индекс с конца среди sibling-ов того же тега.
     NthLastOfType(NthSpec),
-    /// `:not(compound)` — отрицание compound-селектора. Внутри запрещены
-    /// combinator-ы (CSS3 §6.6.7); `:not(:not(...))` тоже нельзя — поэтому
-    /// аргумент хранится как `CompoundSelector`, не как полный селектор.
-    Not(Box<CompoundSelector>),
+    /// `:not(selector-list)` — CSS Selectors L4 §5.4: отрицание selector-
+    /// list-а. Внутри допустимы complex-селекторы (с combinator-ами) и
+    /// nested `:not`. Specificity = максимум по списку (как у `:is`).
+    /// Матчит элемент, если ни один из селекторов списка ему не подходит.
+    Not(Vec<ComplexSelector>),
     /// `:is(s1, s2, …)` — матчит, если матчит хоть один из селекторов.
     /// CSS4 Selectors §17. Specificity вычисляется как максимум по списку
     /// (наследуется в родителя), независимо от того, какой именно матчит.
@@ -253,12 +254,11 @@ fn accumulate_specificity(comp: &CompoundSelector, spec: &mut Specificity) {
                 spec.b = spec.b.saturating_add(1);
             }
             SimpleSelector::PseudoClass(pc) => {
-                // `:not(inner)` сам не считается, но содержимое — да (CSS3 §16).
-                // `:is(...)` сам не считается, contributes max specificity по
-                // списку (CSS4 §17). `:where(...)` — всегда 0.
+                // `:not(...)` / `:is(...)` сами не считаются, contributes max
+                // specificity по списку (CSS Selectors L4 §16, §17). `:where(...)`
+                // — всегда 0.
                 match pc {
-                    PseudoClass::Not(inner) => accumulate_specificity(inner, spec),
-                    PseudoClass::Is(list) => {
+                    PseudoClass::Not(list) | PseudoClass::Is(list) => {
                         if let Some(max) = max_list_specificity(list) {
                             spec.a = spec.a.saturating_add(max.a);
                             spec.b = spec.b.saturating_add(max.b);
@@ -2465,23 +2465,15 @@ impl<'a> Parser<'a> {
             "nth-of-type" => Some(PseudoClass::NthOfType(self.parse_nth_spec()?)),
             "nth-last-of-type" => Some(PseudoClass::NthLastOfType(self.parse_nth_spec()?)),
             "not" => {
+                // CSS Selectors L4 §5.4: внутри `:not(...)` допустим полный
+                // selector-list (complex-селекторы с combinator-ами), nested
+                // `:not(:not(...))` тоже разрешён.
+                let list = self.parse_selector_list();
                 self.skip_ws_and_comments();
-                let inner = self.parse_compound_selector()?;
-                self.skip_ws_and_comments();
-                // `:not(a b)` (с combinator-ом) в CSS3 запрещено — если после
-                // compound есть что-то кроме `)`, считаем форму не поддерживаемой.
-                if self.peek() != Some(')') {
+                if self.peek() != Some(')') || list.is_empty() {
                     return None;
                 }
-                // `:not(:not(...))` тоже запрещено в CSS3.
-                if inner
-                    .parts
-                    .iter()
-                    .any(|p| matches!(p, SimpleSelector::PseudoClass(PseudoClass::Not(_))))
-                {
-                    return None;
-                }
-                Some(PseudoClass::Not(Box::new(inner)))
+                Some(PseudoClass::Not(list))
             }
             "is" => {
                 let list = self.parse_selector_list();
@@ -3496,8 +3488,10 @@ mod tests {
         let s = parse(":not(.foo) { color: red; }");
         let p = &s.rules[0].selectors[0].head.parts[0];
         match p {
-            SimpleSelector::PseudoClass(PseudoClass::Not(inner)) => {
-                assert_eq!(inner.parts, vec![SimpleSelector::Class("foo".into())]);
+            SimpleSelector::PseudoClass(PseudoClass::Not(list)) => {
+                assert_eq!(list.len(), 1);
+                assert_eq!(list[0].head.parts, vec![SimpleSelector::Class("foo".into())]);
+                assert!(list[0].tail.is_empty());
             }
             _ => panic!("expected :not(.foo), got {p:?}"),
         }
@@ -3508,30 +3502,68 @@ mod tests {
         let s = parse(":not(p.hl) { color: red; }");
         let p = &s.rules[0].selectors[0].head.parts[0];
         match p {
-            SimpleSelector::PseudoClass(PseudoClass::Not(inner)) => {
-                assert_eq!(inner.parts.len(), 2);
-                assert!(matches!(&inner.parts[0], SimpleSelector::Type(t) if t == "p"));
-                assert!(matches!(&inner.parts[1], SimpleSelector::Class(c) if c == "hl"));
+            SimpleSelector::PseudoClass(PseudoClass::Not(list)) => {
+                assert_eq!(list.len(), 1);
+                assert_eq!(list[0].head.parts.len(), 2);
+                assert!(matches!(&list[0].head.parts[0], SimpleSelector::Type(t) if t == "p"));
+                assert!(matches!(&list[0].head.parts[1], SimpleSelector::Class(c) if c == "hl"));
             }
             _ => panic!("expected :not(p.hl)"),
         }
     }
 
     #[test]
-    fn pseudo_not_with_combinator_falls_back() {
-        // `:not(a b)` запрещено в CSS3 (combinator внутри) → Unsupported.
-        let s = parse(":not(a b) { color: red; }");
+    fn pseudo_not_with_combinator_l4() {
+        // CSS Selectors L4 §5.4: combinator-ы внутри `:not` разрешены.
+        let s = parse(":not(a > b) { color: red; }");
         let p = &s.rules[0].selectors[0].head.parts[0];
-        assert!(
-            matches!(p, SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "not"),
-            "got {p:?}"
-        );
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::Not(list)) => {
+                assert_eq!(list.len(), 1);
+                assert_eq!(list[0].tail.len(), 1);
+                assert_eq!(list[0].tail[0].0, Combinator::Child);
+            }
+            _ => panic!("expected :not(a > b), got {p:?}"),
+        }
     }
 
     #[test]
-    fn pseudo_not_nested_forbidden() {
-        // `:not(:not(...))` запрещено в CSS3.
+    fn pseudo_not_nested_l4() {
+        // CSS Selectors L4 §5.4: nested `:not(:not(.x))` разрешён.
         let s = parse(":not(:not(.x)) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::Not(outer)) => {
+                assert_eq!(outer.len(), 1);
+                let inner_part = &outer[0].head.parts[0];
+                assert!(matches!(
+                    inner_part,
+                    SimpleSelector::PseudoClass(PseudoClass::Not(inner)) if inner.len() == 1
+                ));
+            }
+            _ => panic!("expected :not(:not(.x)), got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_not_selector_list() {
+        // CSS Selectors L4 §5.4: список селекторов.
+        let s = parse(":not(.foo, #bar) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::Not(list)) => {
+                assert_eq!(list.len(), 2);
+                assert_eq!(list[0].head.parts, vec![SimpleSelector::Class("foo".into())]);
+                assert_eq!(list[1].head.parts, vec![SimpleSelector::Id("bar".into())]);
+            }
+            _ => panic!("expected :not(.foo, #bar), got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_not_empty_falls_back() {
+        // `:not()` без аргументов — невалидно, должен дать Unsupported.
+        let s = parse(":not() { color: red; }");
         let p = &s.rules[0].selectors[0].head.parts[0];
         assert!(
             matches!(p, SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "not"),
@@ -3541,7 +3573,7 @@ mod tests {
 
     #[test]
     fn specificity_not_uses_inner() {
-        // :not(.foo) → внутренний .foo даёт b=1; сам :not — ноль.
+        // :not(.foo) → max-of-list = (.foo) даёт b=1; сам :not — ноль.
         let s = parse(":not(.foo) { color: red; }");
         assert_eq!(
             s.rules[0].selectors[0].specificity(),
@@ -3556,6 +3588,28 @@ mod tests {
         assert_eq!(
             s.rules[0].selectors[0].specificity(),
             Specificity { a: 1, b: 0, c: 0 }
+        );
+    }
+
+    #[test]
+    fn specificity_not_list_takes_max() {
+        // CSS Selectors L4 §16: `:not(.foo, #bar)` contributes max-specificity
+        // по списку = (#bar) = (1,0,0).
+        let s = parse(":not(.foo, #bar) { color: red; }");
+        assert_eq!(
+            s.rules[0].selectors[0].specificity(),
+            Specificity { a: 1, b: 0, c: 0 }
+        );
+    }
+
+    #[test]
+    fn specificity_not_complex_with_combinator() {
+        // `:not(a > b)` → max specificity selector-а внутри = (0, 0, 2) (a + b
+        // как type selectors).
+        let s = parse(":not(a > b) { color: red; }");
+        assert_eq!(
+            s.rules[0].selectors[0].specificity(),
+            Specificity { a: 0, b: 0, c: 2 }
         );
     }
 

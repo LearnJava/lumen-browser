@@ -1209,6 +1209,48 @@ mod tests {
         assert_eq!(divs[0].style.color.r, 255, "div.hl — не исключается");
     }
 
+    #[test]
+    fn not_selector_list_l4() {
+        // CSS Selectors L4 §5.4: список селекторов внутри `:not(...)` —
+        // элемент исключается, если матчит ХОТЯ БЫ ОДИН селектор списка.
+        let (root, doc) = lay_with_doc(
+            r#"<p>a</p><p class="hl">b</p><p id="x">c</p><p>d</p>"#,
+            "p:not(.hl, #x) { color: red; }",
+        );
+        let ps = block_children_by_tag(&root, &doc, "p");
+        assert_eq!(ps[0].style.color.r, 255, "a — матчит");
+        assert_eq!(ps[1].style.color.r, 0, "b.hl — исключается");
+        assert_eq!(ps[2].style.color.r, 0, "c#x — исключается");
+        assert_eq!(ps[3].style.color.r, 255, "d — матчит");
+    }
+
+    #[test]
+    fn not_complex_with_descendant_combinator_l4() {
+        // CSS Selectors L4 §5.4: combinator-ы внутри `:not` разрешены.
+        // Исключаем <p>, у которых внутри (descendant) есть <a>.
+        let (root, doc) = lay_with_doc(
+            r#"<p>a</p><p>b <a>link</a></p><p>c</p>"#,
+            "p:not(:has(a)) { color: red; }",
+        );
+        let ps = block_children_by_tag(&root, &doc, "p");
+        assert_eq!(ps[0].style.color.r, 255, "p без <a> — матчит");
+        assert_eq!(ps[1].style.color.r, 0, "p с <a> — исключается");
+        assert_eq!(ps[2].style.color.r, 255, "p без <a> — матчит");
+    }
+
+    #[test]
+    fn not_nested_double_negation_l4() {
+        // CSS Selectors L4 §5.4: nested `:not(:not(...))` разрешён.
+        // `:not(:not(.hl))` ≡ `.hl` (двойное отрицание).
+        let (root, doc) = lay_with_doc(
+            r#"<p>a</p><p class="hl">b</p>"#,
+            "p:not(:not(.hl)) { color: red; }",
+        );
+        let ps = block_children_by_tag(&root, &doc, "p");
+        assert_eq!(ps[0].style.color.r, 0, "a (нет .hl) — не матчит");
+        assert_eq!(ps[1].style.color.r, 255, "b.hl — матчит (двойное :not)");
+    }
+
     // ── Relative units: em / rem / % ────────────────────────────────────────
 
     #[test]
