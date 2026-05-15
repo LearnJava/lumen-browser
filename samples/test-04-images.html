@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — Изображения</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #f0f4f8;
+      width: 1024px; height: 720px; overflow: hidden;
+      font-size: 13px; line-height: 1.4;
+    }
+    .hdr {
+      background: #1e3a5f; color: #e2e8f0;
+      padding: 0 16px; height: 36px; line-height: 36px;
+      font-size: 12px; font-weight: bold; letter-spacing: 1px;
+      border-bottom: 3px solid #e94560;
+    }
+    .hdr em { color: #7ec8e3; font-style: normal; }
+    .sec {
+      background: white; border-bottom: 1px solid #e2e8f0;
+      padding: 6px 16px;
+    }
+    .lbl {
+      font-size: 10px; color: #94a3b8;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin-bottom: 5px;
+    }
+    .img-card {
+      display: inline;
+      margin-right: 12px;
+    }
+    .img-caption {
+      font-size: 10px; color: #718096; margin-top: 2px;
+    }
+  </style>
+</head>
+<body>
+  <div class="hdr">LUMEN BROWSER <em>/ ИЗОБРАЖЕНИЯ (PNG + JPEG)</em> — Страница 4 из 6 — Phase 0</div>
+
+  <!-- Форматы: JPEG и PNG -->
+  <div class="sec">
+    <div class="lbl">Поддерживаемые форматы: JPEG (фото) и PNG (с прозрачностью)</div>
+    <span class="img-card">
+      <img src="images/ai_wikipedia.jpg" width="180" height="120"
+           alt="AI и Wikipedia — JPEG 162 KB">
+    </span>
+    <span class="img-card">
+      <img src="images/agi_illustration.png" width="180" height="120"
+           alt="AGI иллюстрация — PNG 694 KB">
+    </span>
+    <span class="img-card">
+      <img src="images/sad_brain.png" width="120" height="120"
+           alt="AI мозг — PNG 248 KB">
+    </span>
+    <span class="img-card">
+      <img src="images/perceptron.png" width="160" height="120"
+           alt="Перцептрон — PNG 57 KB">
+    </span>
+    <span style="font-size: 11px; color: #718096; vertical-align: top;">
+      ← JPEG: ai_wikipedia.jpg · AGI illustration.png<br>
+      ← PNG: sad_brain.png · perceptron.png<br>
+      Тема: искусственный интеллект
+    </span>
+  </div>
+
+  <!-- object-fit: cover -->
+  <div class="sec">
+    <div class="lbl">object-fit: cover — изображение обрезается, заполняя контейнер без искажений</div>
+    <span class="img-card">
+      <img src="images/ai_wikipedia.jpg"
+           width="160" height="100" style="object-fit: cover;"
+           alt="cover 160×100">
+    </span>
+    <span class="img-card">
+      <img src="images/ai_wikipedia.jpg"
+           width="100" height="100" style="object-fit: cover;"
+           alt="cover 100×100 (квадрат)">
+    </span>
+    <span class="img-card">
+      <img src="images/ai_wikipedia.jpg"
+           width="220" height="80" style="object-fit: cover;"
+           alt="cover 220×80 (широкий)">
+    </span>
+    <span style="font-size: 11px; color: #718096; vertical-align: top;">
+      ← 160×100 · 100×100 · 220×80<br>
+      Изображение кадрируется по центру
+    </span>
+  </div>
+
+  <!-- object-fit: contain -->
+  <div class="sec">
+    <div class="lbl">object-fit: contain — изображение вписывается целиком, с полями</div>
+    <span class="img-card" style="background: #e2e8f0; border: 1px solid #cbd5e0;">
+      <img src="images/agi_illustration.png"
+           width="160" height="100" style="object-fit: contain;"
+           alt="contain 160×100">
+    </span>
+    <span style="margin-right: 8px;"></span>
+    <span class="img-card" style="background: #e2e8f0; border: 1px solid #cbd5e0;">
+      <img src="images/agi_illustration.png"
+           width="100" height="100" style="object-fit: contain;"
+           alt="contain 100×100">
+    </span>
+    <span style="margin-right: 8px;"></span>
+    <span class="img-card" style="background: #e2e8f0; border: 1px solid #cbd5e0;">
+      <img src="images/agi_illustration.png"
+           width="220" height="80" style="object-fit: contain;"
+           alt="contain 220×80">
+    </span>
+    <span style="font-size: 11px; color: #718096; vertical-align: top;">
+      ← серый фон = поля контейнера<br>
+      Исходные пропорции сохраняются
+    </span>
+  </div>
+
+  <!-- object-fit: fill (искажение) -->
+  <div class="sec">
+    <div class="lbl">object-fit: fill — изображение растягивается точно под контейнер (искажение)</div>
+    <span class="img-card">
+      <img src="images/sad_brain.png"
+           width="80" height="110" style="object-fit: fill;"
+           alt="fill узкий">
+    </span>
+    <span class="img-card">
+      <img src="images/sad_brain.png"
+           width="120" height="80" style="object-fit: fill;"
+           alt="fill широкий">
+    </span>
+    <span class="img-card">
+      <img src="images/sad_brain.png"
+           width="110" height="110" style="object-fit: fill;"
+           alt="fill квадрат">
+    </span>
+    <span style="font-size: 11px; color: #718096; vertical-align: top;">
+      ← 80×110 · 120×80 · 110×110<br>
+      Видны искажения при несовпадении<br>
+      пропорций контейнера и картинки
+    </span>
+  </div>
+
+  <!-- Размеры через атрибуты width/height -->
+  <div class="sec">
+    <div class="lbl">Масштабирование через width/height — один и тот же перцептрон</div>
+    <img src="images/perceptron.png" width="60" height="45" alt="60×45" style="margin-right:8px;">
+    <img src="images/perceptron.png" width="90" height="68" alt="90×68" style="margin-right:8px;">
+    <img src="images/perceptron.png" width="120" height="90" alt="120×90" style="margin-right:8px;">
+    <img src="images/perceptron.png" width="160" height="120" alt="160×120" style="margin-right:8px;">
+    <img src="images/perceptron.png" width="200" height="150" alt="200×150">
+    <span style="font-size: 11px; color: #718096; vertical-align: top; margin-left: 10px;">
+      60×45 · 90×68 · 120×90 · 160×120 · 200×150<br>
+      Браузер масштабирует при отрисовке
+    </span>
+  </div>
+
+  <!-- alt-текст при отсутствии картинки -->
+  <div class="sec">
+    <div class="lbl">alt-текст — отображается если картинка не загрузилась</div>
+    <img src="images/несуществующий.png" width="120" height="60"
+         alt="[AI-изображение: файл не найден]"
+         style="border: 2px solid #e53e3e; background: #fff5f5;">
+    <span style="font-size: 11px; color: #718096; margin-left: 10px;">
+      ← src=«несуществующий.png» · отображается alt-атрибут
+    </span>
+  </div>
+</body>
+</html>

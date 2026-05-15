@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — Типографика</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #f0f4f8;
+      width: 1024px; height: 720px; overflow: hidden;
+      font-size: 14px; line-height: 1.4;
+    }
+    .hdr {
+      background: #1e3a5f; color: #e2e8f0;
+      padding: 0 16px; height: 36px; line-height: 36px;
+      font-size: 12px; font-weight: bold; letter-spacing: 1px;
+      border-bottom: 3px solid #e94560;
+    }
+    .hdr em { color: #7ec8e3; font-style: normal; }
+    .sec {
+      background: white; border-bottom: 1px solid #e2e8f0;
+      padding: 5px 16px;
+    }
+    .lbl {
+      font-size: 10px; color: #94a3b8;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin-bottom: 3px;
+    }
+    h1 { font-size: 26px; color: #1a202c; margin: 1px 0; }
+    h2 { font-size: 21px; color: #2d3748; margin: 1px 0; }
+    h3 { font-size: 17px; color: #4a5568; margin: 1px 0; }
+    h4 { font-size: 14px; color: #718096; margin: 1px 0; }
+    h5 { font-size: 12px; color: #a0aec0; margin: 1px 0; }
+    h6 { font-size: 10px; color: #cbd5e0; margin: 1px 0; }
+    p { font-size: 14px; color: #2d3748; }
+  </style>
+</head>
+<body>
+  <div class="hdr">LUMEN BROWSER <em>/ ТИПОГРАФИКА</em> — Страница 1 из 6 — Phase 0</div>
+
+  <!-- H1–H6: иерархия заголовков -->
+  <div class="sec">
+    <div class="lbl">Иерархия заголовков HTML (H1–H6) — размер, насыщенность</div>
+    <h1>H1 — Заголовок первого уровня — Lumen Browser</h1>
+    <h2>H2 — Заголовок второго уровня — Искусственный интеллект</h2>
+    <h3>H3 — Заголовок третьего уровня — Нейронные сети</h3>
+    <h4>H4 — Заголовок четвёртого уровня — Машинное обучение</h4>
+    <h5>H5 — Пятый уровень — Глубокое обучение</h5>
+    <h6>H6 — Шестой уровень — Трансформеры</h6>
+  </div>
+
+  <!-- Начертание: font-weight, font-style -->
+  <div class="sec">
+    <div class="lbl">Начертание (font-weight / font-style)</div>
+    <p>
+      Обычный —
+      <span style="font-weight: bold;">Жирный (bold)</span> —
+      <span style="font-weight: 300;">Тонкий (300)</span> —
+      <span style="font-style: italic;">Курсив (italic)</span> —
+      <span style="font-weight: bold; font-style: italic;">Жирный курсив</span>
+    </p>
+  </div>
+
+  <!-- Декорации: text-decoration -->
+  <div class="sec">
+    <div class="lbl">Декорации текста (text-decoration-line)</div>
+    <p>
+      Без декорации —
+      <span style="text-decoration: underline;">Подчёркнутый (underline)</span> —
+      <span style="text-decoration: line-through;">Зачёркнутый (line-through)</span> —
+      <span style="text-decoration: overline;">Надчёркнутый (overline)</span>
+    </p>
+  </div>
+
+  <!-- Цвет текста -->
+  <div class="sec">
+    <div class="lbl">Цвет текста (color) — hex #rrggbb</div>
+    <p>
+      <span style="color: #e53e3e;">Красный #e53e3e</span> —
+      <span style="color: #3182ce;">Синий #3182ce</span> —
+      <span style="color: #38a169;">Зелёный #38a169</span> —
+      <span style="color: #805ad5;">Фиолетовый</span> —
+      <span style="color: #dd6b20;">Оранжевый</span> —
+      <span style="color: #319795;">Бирюзовый</span> —
+      <span style="color: #d69e2e;">Золотой</span>
+    </p>
+  </div>
+
+  <!-- Трансформации -->
+  <div class="sec">
+    <div class="lbl">Трансформации текста (text-transform)</div>
+    <p>
+      <span style="text-transform: uppercase;">текст uppercase — ВЕРХНИЙ РЕГИСТР</span> —
+      <span style="text-transform: lowercase;">ТЕКСТ lowercase — нижний регистр</span> —
+      <span style="text-transform: capitalize;">первая буква каждого слова — capitalize</span>
+    </p>
+  </div>
+
+  <!-- Межбуквенный интервал -->
+  <div class="sec">
+    <div class="lbl">Межбуквенный интервал (letter-spacing)</div>
+    <p>
+      <span style="letter-spacing: -1px; color: #e53e3e;">Тесно -1px</span> —
+      <span style="letter-spacing: 0px;">Норма 0px</span> —
+      <span style="letter-spacing: 3px; color: #3182ce;">Широко +3px</span> —
+      <span style="letter-spacing: 7px; color: #38a169;">Очень +7px</span>
+    </p>
+  </div>
+
+  <!-- Межсловный интервал -->
+  <div class="sec">
+    <div class="lbl">Межсловный интервал (word-spacing)</div>
+    <p>
+      <span style="word-spacing: -4px; color: #e53e3e;">Слова тесно -4px</span> —
+      <span style="word-spacing: 0px;">Слова нормально 0px</span> —
+      <span style="word-spacing: 10px; color: #3182ce;">Слова широко +10px</span>
+    </p>
+  </div>
+
+  <!-- Выравнивание текста -->
+  <div class="sec">
+    <div class="lbl">Выравнивание текста (text-align)</div>
+    <p style="text-align: left; background: #ebf8ff; padding: 3px 8px; margin-bottom: 3px;
+              border-left: 3px solid #3182ce;">
+      ← text-align: left — по левому краю (по умолчанию для LTR)
+    </p>
+    <p style="text-align: center; background: #faf5ff; padding: 3px 8px; margin-bottom: 3px;
+              border-left: 3px solid #805ad5;">
+      ↔ text-align: center — по центру ↔
+    </p>
+    <p style="text-align: right; background: #fff5f5; padding: 3px 8px;
+              border-left: 3px solid #e53e3e;">
+      text-align: right — по правому краю →
+    </p>
+  </div>
+
+  <!-- Межстрочный интервал -->
+  <div class="sec">
+    <div class="lbl">Межстрочный интервал (line-height) — 2 строки в каждом</div>
+    <p style="line-height: 1.0; background: #fffbeb; padding: 3px 8px; margin-bottom: 3px;
+              border-left: 3px solid #d69e2e;">
+      line-height: 1.0 — плотный. Первая строка текста нейронной сети.
+      Вторая строка прижата к первой — интервал минимален.
+    </p>
+    <p style="line-height: 2.0; background: #f0fff4; padding: 3px 8px;
+              border-left: 3px solid #38a169;">
+      line-height: 2.0 — разреженный. Первая строка с большим воздухом.
+      Вторая строка далеко от первой — двойной интервал.
+    </p>
+  </div>
+
+  <!-- Размеры шрифта -->
+  <div class="sec">
+    <div class="lbl">Размеры шрифта (font-size: px)</div>
+    <p>
+      <span style="font-size: 9px;">9px</span>
+      <span style="font-size: 11px;"> 11px</span>
+      <span style="font-size: 13px;"> 13px</span>
+      <span style="font-size: 16px;"> 16px</span>
+      <span style="font-size: 20px;"> 20px</span>
+      <span style="font-size: 26px;"> 26px</span>
+      <span style="font-size: 34px;"> 34px</span>
+    </p>
+  </div>
+</body>
+</html>
