@@ -67,7 +67,7 @@ pub use push_subscriptions::{PushSubscription, PushSubscriptions};
 pub use referrer_policy::{ReferrerPolicies, ReferrerPolicy};
 pub use safe_browsing::{
     SafeBrowsingFilter, SafeBrowsingList, ThreatType, canonical_expression_variants,
-    hash_expression,
+    canonical_expression_variants_with_psl, hash_expression,
 };
 pub use search_history::{SearchHistory, SearchQuery};
 pub use search_providers::{SearchProviderEntry, SearchProviders};

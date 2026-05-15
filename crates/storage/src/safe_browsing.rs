@@ -37,7 +37,7 @@
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use lumen_core::ext::RequestFilter;
+use lumen_core::ext::{PublicSuffixList, RequestFilter};
 use lumen_core::hash::sha256;
 use lumen_core::idn::domain_to_ascii;
 use lumen_core::url::Url;
@@ -95,7 +95,8 @@ impl ThreatType {
 // ── Canonical URL + hash variants ───────────────────────────────────────────
 
 /// Сгенерировать список всех 5×4=20 канонических вариантов `host/path?query`
-/// для проверки URL против Safe Browsing list-а.
+/// для проверки URL против Safe Browsing list-а. См. [`canonical_expression_variants_with_psl`]
+/// — basic версия без PSL, host-suffix enumeration урезается просто до 2-х компонент.
 ///
 /// Алгоритм по Safe Browsing v4 §4.4.2:
 /// - host: оригинальный + 4 потомка через срез leading-component-ов
@@ -107,7 +108,30 @@ impl ThreatType {
 ///
 /// Итог — `Vec<String>` (не deduped — caller хэширует каждый и вставит в
 /// `HashSet<[u8;32]>` если duplicates критичны).
+#[must_use]
 pub fn canonical_expression_variants(url: &Url) -> Vec<String> {
+    canonical_expression_variants_with_psl(url, None)
+}
+
+/// Версия [`canonical_expression_variants`] с опциональной обрезкой
+/// host-suffix enumeration через `PublicSuffixList` до eTLD+1 включительно.
+///
+/// Без PSL мы останавливаемся «когда осталась 1 компонента» — это правильно
+/// для `.com` (не идём до `com`), но неправильно для `.co.uk`: цепочка
+/// `a.b.example.co.uk` → `example.co.uk` → `co.uk` → STOP оставит `co.uk`
+/// в списке вариантов; запись «evil.co.uk» в Safe Browsing спокойно
+/// сматчит **любой** сайт `*.co.uk` через `co.uk` shadow-entry. PSL
+/// решает это: при `is_public_suffix(tail)` → break **без** добавления
+/// tail-а. Тогда для `a.b.example.co.uk` цепочка — `a.b.example.co.uk`
+/// → `b.example.co.uk` → `example.co.uk` → STOP (`co.uk` — public suffix).
+///
+/// Если PSL = `None`, поведение точно совпадает с
+/// [`canonical_expression_variants`] (фолбэк на 2-component rule).
+#[must_use]
+pub fn canonical_expression_variants_with_psl(
+    url: &Url,
+    psl: Option<&dyn PublicSuffixList>,
+) -> Vec<String> {
     let host = match url.host_ascii() {
         Ok(h) if !h.is_empty() => h.to_ascii_lowercase(),
         _ => return Vec::new(),
@@ -115,19 +139,35 @@ pub fn canonical_expression_variants(url: &Url) -> Vec<String> {
 
     // Host suffixes: full + срезы по leading-точкам.
     let mut hosts: Vec<String> = Vec::new();
-    hosts.push(host.clone());
-    let mut i = 0usize;
-    while let Some(pos) = host[i..].find('.') {
-        let start = i + pos + 1;
-        let tail = &host[start..];
-        // Не урезаем ниже 2 компонент (`example.com`); иначе попадают
-        // `com`, `org` — слишком широкие.
-        if tail.contains('.') {
+    // Если сам host — public suffix, ничего не enumerate-им (защита от
+    // input-а вида http://co.uk/ блокировать всё `.co.uk`).
+    if let Some(p) = psl
+        && p.is_public_suffix(&host)
+    {
+        // По-прежнему добавляем сам host (точечная блокировка по host —
+        // допустима, если caller сознательно добавил такую запись).
+        hosts.push(host.clone());
+    } else {
+        hosts.push(host.clone());
+        let mut i = 0usize;
+        while let Some(pos) = host[i..].find('.') {
+            let start = i + pos + 1;
+            let tail = &host[start..];
+            // PSL стоп-правило: tail — known public suffix → не идём ниже.
+            if let Some(p) = psl
+                && p.is_public_suffix(tail)
+            {
+                break;
+            }
+            // Без PSL: fallback на 2-component rule.
+            if psl.is_none() && !tail.contains('.') {
+                break;
+            }
             hosts.push(tail.to_string());
-        }
-        i = start;
-        if hosts.len() >= 5 {
-            break;
+            i = start;
+            if hosts.len() >= 5 {
+                break;
+            }
         }
     }
 
@@ -370,9 +410,22 @@ impl SafeBrowsingList {
     /// Главный entry-point фильтрации: проверить URL против всех списков,
     /// генерируя 20 канонических вариантов (host suffixes × path prefixes).
     /// На первый match возвращает `(list_name, threat_type)`; пустой host
-    /// → None (нечего проверять).
+    /// → None (нечего проверять). Без PSL обрезка host-suffix-ов идёт до
+    /// 2 компонент (см. [`canonical_expression_variants`]).
     pub fn lookup_url(&self, url: &Url) -> Result<Option<(String, ThreatType)>> {
-        let variants = canonical_expression_variants(url);
+        self.lookup_url_with_psl(url, None)
+    }
+
+    /// Версия [`Self::lookup_url`] с опциональной PSL-обрезкой host-suffix
+    /// enumeration. С PSL host-suffix цепочка останавливается на eTLD+1,
+    /// и `co.uk` / `xn--p1ai` сами не попадают в lookup-варианты — это
+    /// защищает от ложно-широких блокировок «whole-TLD».
+    pub fn lookup_url_with_psl(
+        &self,
+        url: &Url,
+        psl: Option<&dyn PublicSuffixList>,
+    ) -> Result<Option<(String, ThreatType)>> {
+        let variants = canonical_expression_variants_with_psl(url, psl);
         if variants.is_empty() {
             return Ok(None);
         }
@@ -444,12 +497,24 @@ impl SafeBrowsingList {
 /// диагностики; адекватный сетевой log приёмник появится отдельной задачей.
 pub struct SafeBrowsingFilter {
     list: Arc<SafeBrowsingList>,
+    psl: Option<Arc<dyn PublicSuffixList>>,
 }
 
 impl SafeBrowsingFilter {
     #[must_use]
     pub fn new(list: Arc<SafeBrowsingList>) -> Self {
-        Self { list }
+        Self { list, psl: None }
+    }
+
+    /// Builder-конструктор с подключённым `PublicSuffixList`. С PSL
+    /// host-suffix enumeration обрезается до eTLD+1 (см.
+    /// [`SafeBrowsingList::lookup_url_with_psl`]).
+    #[must_use]
+    pub fn with_psl(list: Arc<SafeBrowsingList>, psl: Arc<dyn PublicSuffixList>) -> Self {
+        Self {
+            list,
+            psl: Some(psl),
+        }
     }
 }
 
@@ -461,7 +526,8 @@ impl std::fmt::Debug for SafeBrowsingFilter {
 
 impl RequestFilter for SafeBrowsingFilter {
     fn should_block(&self, url: &Url) -> Option<String> {
-        match self.list.lookup_url(url) {
+        let psl = self.psl.as_deref();
+        match self.list.lookup_url_with_psl(url, psl) {
             Ok(Some((list_name, threat))) => {
                 Some(format!("{} ({list_name})", threat.as_code()))
             }
@@ -831,5 +897,80 @@ mod tests {
         let store = Arc::new(open());
         let filter = SafeBrowsingFilter::new(store);
         check_dyn(&filter);
+    }
+
+    // ── PSL integration ────────────────────────────────────────────────
+
+    use crate::psl::PslProvider;
+
+    #[test]
+    fn variants_with_psl_stops_at_etld_plus_one() {
+        // Без PSL: a.b.example.co.uk → [a.b.example.co.uk, b.example.co.uk,
+        //                              example.co.uk, co.uk] (4 хоста).
+        // С PSL: остановка на example.co.uk, `co.uk` исключён.
+        let url = Url::parse("http://a.b.example.co.uk/").unwrap();
+        let psl = PslProvider::new();
+        let v = canonical_expression_variants_with_psl(&url, Some(&psl));
+        // 3 host-suffix варианта × 1 path (root) = 3.
+        assert_eq!(v.len(), 3, "got {v:?}");
+        assert!(v.contains(&"a.b.example.co.uk/".to_string()));
+        assert!(v.contains(&"b.example.co.uk/".to_string()));
+        assert!(v.contains(&"example.co.uk/".to_string()));
+        assert!(!v.iter().any(|e| e == "co.uk/"), "co.uk leaked: {v:?}");
+    }
+
+    #[test]
+    fn variants_without_psl_includes_couk_unfortunately() {
+        // Без PSL `co.uk` остаётся в списке (документируем regression-у
+        // относительно `with_psl` — caller, который хочет точности, обязан
+        // подключить PSL).
+        let url = Url::parse("http://a.b.example.co.uk/").unwrap();
+        let v = canonical_expression_variants_with_psl(&url, None);
+        assert!(v.iter().any(|e| e == "co.uk/"), "expected co.uk in {v:?}");
+    }
+
+    #[test]
+    fn variants_with_psl_does_not_enumerate_bare_public_suffix() {
+        // Если сам host — public suffix (например, прямой `co.uk`),
+        // host-suffix enumeration не должна порождать `uk` или `com`-варианты.
+        let url = Url::parse("http://co.uk/path").unwrap();
+        let psl = PslProvider::new();
+        let v = canonical_expression_variants_with_psl(&url, Some(&psl));
+        // Только `co.uk` сам и его path-варианты — 1 host × 3 paths = 3.
+        assert!(v.iter().all(|e| e.starts_with("co.uk")), "leak: {v:?}");
+    }
+
+    #[test]
+    fn filter_with_psl_blocks_subdomain_via_etld_plus_one() {
+        // Записан hit по `example.co.uk/`. Запрос к sub-домену
+        // `tracker.example.co.uk/` должен сматчить через host-suffix.
+        let store = Arc::new(open());
+        let h = hash_expression("example.co.uk/");
+        store
+            .add_hash("list", &h, &ThreatType::Malware, 0)
+            .unwrap();
+        let filter = SafeBrowsingFilter::with_psl(store, Arc::new(PslProvider::new()));
+        let url = Url::parse("http://tracker.example.co.uk/").unwrap();
+        let reason = filter.should_block(&url);
+        assert_eq!(reason, Some("malware (list)".to_string()));
+    }
+
+    #[test]
+    fn filter_with_psl_does_not_match_through_public_suffix() {
+        // Адверсарь записал hit по `co.uk/` (в `list-a`). Без PSL это
+        // блокировало бы все `*.co.uk` сайты. С PSL — `co.uk` исключён
+        // из host-suffix вариантов, поэтому невинный `good.co.uk` не
+        // попадает под блокировку.
+        let store = Arc::new(open());
+        let evil_h = hash_expression("co.uk/");
+        store
+            .add_hash("bogus", &evil_h, &ThreatType::Malware, 0)
+            .unwrap();
+        let filter = SafeBrowsingFilter::with_psl(store, Arc::new(PslProvider::new()));
+        let url = Url::parse("http://good.co.uk/").unwrap();
+        assert!(
+            filter.should_block(&url).is_none(),
+            "co.uk shadow-entry blocked good.co.uk"
+        );
     }
 }
