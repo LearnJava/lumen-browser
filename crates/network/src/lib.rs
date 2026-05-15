@@ -32,15 +32,23 @@ mod dns;
 mod doh;
 mod dot;
 mod hsts;
+mod mixed_content;
+mod origin;
 mod pool;
 mod range;
+mod sandbox;
 pub use auth::StaticCredentialProvider;
 pub use brotli::BrotliContentDecoder;
 pub use dns::SystemDnsResolver;
 pub use doh::DohResolver;
 pub use dot::{DotResolver, DOT_DEFAULT_PORT};
+pub use mixed_content::{
+    MixedContentLevel, RequestDestination, classify_subresource_request,
+};
+pub use origin::{Origin, OriginError};
 pub use pool::ConnectionPool;
 pub use range::{ContentRange, RangeResponse, RangeSpec, parse_content_range};
+pub use sandbox::{SandboxFlags, parse_sandbox_value};
 
 use pool::PoolKey;
 
