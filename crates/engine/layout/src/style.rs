@@ -544,6 +544,56 @@ impl MixBlendMode {
     }
 }
 
+/// CSS Inline Layout / CSS 2.1 §10.8.1 — `vertical-align`. Не наследуется.
+/// Default `Baseline`.
+///
+/// Keyword-варианты (`Baseline`, `Sub`, `Super`, `Top`, `TextTop`, `Middle`,
+/// `Bottom`, `TextBottom`) — fixed enum values. `Length(px)` — resolved
+/// сдвиг по вертикали от baseline (positive = up по CSS, как у всех
+/// vertical-shift свойств). `Percent(p)` — процент от `line-height` текущего
+/// элемента; разрешается во время layout-а, поскольку требует line-box
+/// геометрии.
+///
+/// Phase 0: parsing + storage. Реальное применение к inline-flow требует
+/// поля `y_offset` в `InlineFrag` и совместной правки `lumen-paint`
+/// (DrawText.y-offset) — отдельная задача с согласованием P2.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum VerticalAlign {
+    #[default]
+    Baseline,
+    Sub,
+    Super,
+    Top,
+    TextTop,
+    Middle,
+    Bottom,
+    TextBottom,
+    /// Resolved px. Положительное — выше baseline, отрицательное — ниже
+    /// (как `<length>` в CSS 2.1 §10.8.1).
+    Length(f32),
+    /// Процент от `line-height` элемента (CSS 2.1 §10.8.1). Резолвится
+    /// в layout-pass — здесь хранится как есть.
+    Percent(f32),
+}
+
+impl VerticalAlign {
+    /// Парсит keyword-формы vertical-align. Не покрывает `<length>` /
+    /// `<percentage>` — те идут через [`parse_length`] (см. apply_declaration).
+    pub fn parse_keyword(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "baseline" => Some(Self::Baseline),
+            "sub" => Some(Self::Sub),
+            "super" => Some(Self::Super),
+            "top" => Some(Self::Top),
+            "text-top" => Some(Self::TextTop),
+            "middle" => Some(Self::Middle),
+            "bottom" => Some(Self::Bottom),
+            "text-bottom" => Some(Self::TextBottom),
+            _ => None,
+        }
+    }
+}
+
 /// CSS-wide keywords (CSS Cascade L4 §7) — применимы к любому свойству.
 /// - `Inherit` — взять computed value родителя.
 /// - `Initial` — взять initial value свойства из спецификации.
@@ -890,6 +940,11 @@ pub struct ComputedStyle {
     /// CSS Images L3 §5.5 — `object-position`. Не наследуется. Default
     /// `50% 50%` (центр коробки).
     pub object_position: ObjectPosition,
+    /// CSS Inline Layout / CSS 2.1 §10.8.1 — `vertical-align`. Не наследуется.
+    /// Default `Baseline`. Phase 0: parsing + storage; реальное применение
+    /// (y_offset фрагмента в inline-flow и DrawText в paint) — отдельная
+    /// задача с согласованием P2 (см. doc-comment на [`VerticalAlign`]).
+    pub vertical_align: VerticalAlign,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -1790,6 +1845,7 @@ impl ComputedStyle {
             content: Content::Normal,
             object_fit: ObjectFit::Fill,
             object_position: ObjectPosition::default(),
+            vertical_align: VerticalAlign::Baseline,
         }
     }
 }
@@ -1963,6 +2019,8 @@ pub fn compute_style(
         // CSS Images L3 §5.5 — object-fit / object-position не наследуются.
         object_fit: ObjectFit::Fill,
         object_position: ObjectPosition::default(),
+        // CSS 2.1 §10.8.1 — vertical-align не наследуется. Initial = baseline.
+        vertical_align: VerticalAlign::Baseline,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -4262,6 +4320,25 @@ fn apply_declaration(
                 style.object_position = op;
             }
         }
+        "vertical-align" => {
+            // CSS 2.1 §10.8.1: keyword | <percentage> | <length>.
+            // Keyword первым (text-top / text-bottom — двусоставные, не
+            // конфликтуют с length-парсером); затем length: Percent сохраняем
+            // как Percent (резолвится по line-height в layout-pass), остальные
+            // резолвим к px относительно текущего font-size.
+            if let Some(va) = VerticalAlign::parse_keyword(val) {
+                style.vertical_align = va;
+            } else if let Some(len) = parse_length(val) {
+                match len {
+                    Length::Percent(p) => style.vertical_align = VerticalAlign::Percent(p),
+                    other => {
+                        if let Some(px) = other.resolve(em_basis, None, viewport) {
+                            style.vertical_align = VerticalAlign::Length(px);
+                        }
+                    }
+                }
+            }
+        }
         "width" if val != "auto" => {
             style.width = parse_length(val).and_then(|l| l.resolve(em_basis, None, viewport));
         }
@@ -5901,6 +5978,14 @@ fn apply_css_wide_keyword(
                 inherited.object_position
             } else {
                 init.object_position
+            };
+        }
+        // CSS 2.1 §10.8.1 — vertical-align non-inherited.
+        "vertical-align" => {
+            style.vertical_align = if inh_only_inherit {
+                inherited.vertical_align
+            } else {
+                init.vertical_align
             };
         }
         // Прочие / неизвестные — silent no-op.
@@ -9257,5 +9342,149 @@ mod tests {
         let pc = PositionComponent::Px(15.0);
         assert!((pc.resolve(0.0) - 15.0).abs() < f32::EPSILON);
         assert!((pc.resolve(1000.0) - 15.0).abs() < f32::EPSILON);
+    }
+
+    // -------- vertical-align (CSS 2.1 §10.8.1) --------
+
+    #[test]
+    fn vertical_align_default_is_baseline() {
+        let s = cascade_at("<span></span>", "", &[0]);
+        assert_eq!(s.vertical_align, VerticalAlign::Baseline);
+    }
+
+    #[test]
+    fn vertical_align_all_keywords_parse() {
+        for (val, expected) in [
+            ("baseline", VerticalAlign::Baseline),
+            ("sub", VerticalAlign::Sub),
+            ("super", VerticalAlign::Super),
+            ("top", VerticalAlign::Top),
+            ("text-top", VerticalAlign::TextTop),
+            ("middle", VerticalAlign::Middle),
+            ("bottom", VerticalAlign::Bottom),
+            ("text-bottom", VerticalAlign::TextBottom),
+        ] {
+            let s = cascade_at(
+                "<span></span>",
+                &format!("span {{ vertical-align: {val}; }}"),
+                &[0],
+            );
+            assert_eq!(s.vertical_align, expected, "for value {val}");
+        }
+    }
+
+    #[test]
+    fn vertical_align_keywords_case_insensitive() {
+        // CSS Values L4 §2.4 — keywords ASCII case-insensitive.
+        let s = cascade_at(
+            "<span></span>",
+            "span { vertical-align: TEXT-Top; }",
+            &[0],
+        );
+        assert_eq!(s.vertical_align, VerticalAlign::TextTop);
+    }
+
+    #[test]
+    fn vertical_align_length_px() {
+        let s = cascade_at(
+            "<span></span>",
+            "span { vertical-align: 5px; }",
+            &[0],
+        );
+        assert_eq!(s.vertical_align, VerticalAlign::Length(5.0));
+    }
+
+    #[test]
+    fn vertical_align_negative_length() {
+        // Спецификация допускает отрицательные значения — сдвиг вниз
+        // от baseline.
+        let s = cascade_at(
+            "<span></span>",
+            "span { vertical-align: -3px; }",
+            &[0],
+        );
+        assert_eq!(s.vertical_align, VerticalAlign::Length(-3.0));
+    }
+
+    #[test]
+    fn vertical_align_em_resolved_against_element_font_size() {
+        // em для vertical-align резолвится по текущему font-size (10pxx2=20).
+        // Используем явный font-size 20 чтобы избежать зависимости от
+        // initial 16px (UA stylesheet может его не выставлять).
+        let s = cascade_at(
+            "<span></span>",
+            "span { font-size: 20px; vertical-align: 0.5em; }",
+            &[0],
+        );
+        assert_eq!(s.vertical_align, VerticalAlign::Length(10.0));
+    }
+
+    #[test]
+    fn vertical_align_percent_kept_as_percent() {
+        // % резолвится по line-height в layout-pass, не на этапе cascade —
+        // поэтому здесь должен остаться как Percent(50.0).
+        let s = cascade_at(
+            "<span></span>",
+            "span { vertical-align: 50%; }",
+            &[0],
+        );
+        assert_eq!(s.vertical_align, VerticalAlign::Percent(50.0));
+    }
+
+    #[test]
+    fn vertical_align_invalid_value_ignored() {
+        // Невалидное значение — declaration invalid; остаётся initial.
+        let s = cascade_at(
+            "<span></span>",
+            "span { vertical-align: bogus; }",
+            &[0],
+        );
+        assert_eq!(s.vertical_align, VerticalAlign::Baseline);
+    }
+
+    #[test]
+    fn vertical_align_not_inherited() {
+        // CSS 2.1 §10.8.1 — non-inherited. Ребёнок без своей декларации
+        // получает initial-value, а не значение родителя.
+        let s = cascade_at(
+            "<div><span></span></div>",
+            "div { vertical-align: super; }",
+            &[0, 0],
+        );
+        assert_eq!(s.vertical_align, VerticalAlign::Baseline);
+    }
+
+    #[test]
+    fn vertical_align_inherit_keyword_pulls_parent_value() {
+        // CSS Cascade L4 §7 — `inherit` принудительно тянет значение
+        // родителя даже для non-inherited свойства.
+        let s = cascade_at(
+            "<div><span></span></div>",
+            "div { vertical-align: sub; } span { vertical-align: inherit; }",
+            &[0, 0],
+        );
+        assert_eq!(s.vertical_align, VerticalAlign::Sub);
+    }
+
+    #[test]
+    fn vertical_align_initial_keyword_resets() {
+        // `initial` всегда даёт initial-value свойства (Baseline).
+        let s = cascade_at(
+            "<span></span>",
+            "span { vertical-align: top; vertical-align: initial; }",
+            &[0],
+        );
+        assert_eq!(s.vertical_align, VerticalAlign::Baseline);
+    }
+
+    #[test]
+    fn vertical_align_unset_for_non_inherited_is_initial() {
+        // CSS Cascade L4 §7: `unset` = `initial` для non-inherited.
+        let s = cascade_at(
+            "<div><span></span></div>",
+            "div { vertical-align: middle; } span { vertical-align: unset; }",
+            &[0, 0],
+        );
+        assert_eq!(s.vertical_align, VerticalAlign::Baseline);
     }
 }
