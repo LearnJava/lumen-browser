@@ -699,6 +699,115 @@ impl TimingFunction {
             .filter_map(TimingFunction::parse)
             .collect()
     }
+
+    /// CSS Easing L1 §2 — компьютация eased progress.
+    ///
+    /// Принимает линейный input ratio `t ∈ [0, 1]` (input progress по spec)
+    /// и возвращает output progress в [0, 1] для `Linear` и `Steps`. Для
+    /// `CubicBezier` выход может выходить за `[0, 1]` (overshoot — клиент
+    /// либо clamp-ает при применении к Length/Color, либо использует напрямую
+    /// — например для `transform`).
+    ///
+    /// Вне `[0, 1]` входное `t` clamp-ается, как требует §2: «If input
+    /// progress is less than 0, return 0. If input progress is greater
+    /// than 1, return 1.» (реальные `fill-mode` / `direction` обрабатываются
+    /// в animation engine ДО вызова progress().)
+    pub fn progress(&self, t: f32) -> f32 {
+        let x = t.clamp(0.0, 1.0);
+        match *self {
+            TimingFunction::Linear => x,
+            TimingFunction::CubicBezier(x1, y1, x2, y2) => cubic_bezier_progress(x1, y1, x2, y2, x),
+            TimingFunction::Steps(n, position) => steps_progress(n, position, x),
+        }
+    }
+}
+
+/// CSS Easing L1 §2.3 — cubic bezier easing. Кривая определена двумя
+/// контрольными точками `(x1, y1)`, `(x2, y2)` с эндпоинтами `(0, 0)`,
+/// `(1, 1)`. По заданному `x` (== input progress) находим параметр `u`,
+/// такой что `bezier_axis(u, x1, x2) = x`, и возвращаем
+/// `bezier_axis(u, y1, y2)` — eased output.
+///
+/// Алгоритм: Newton-Raphson (быстрая сходимость в большинстве кейсов) с
+/// bisection fallback на случай, когда производная около нуля или Newton
+/// расходится. Стандартный подход в Blink/WebKit/Gecko.
+fn cubic_bezier_progress(x1: f32, y1: f32, x2: f32, y2: f32, x: f32) -> f32 {
+    if x <= 0.0 {
+        return 0.0;
+    }
+    if x >= 1.0 {
+        return 1.0;
+    }
+    let u = solve_bezier_x(x1, x2, x);
+    bezier_axis(u, y1, y2)
+}
+
+/// `B(u) = 3(1-u)²·u·c1 + 3(1-u)·u²·c2 + u³` для P0=(0,0), P3=(1,1).
+fn bezier_axis(u: f32, c1: f32, c2: f32) -> f32 {
+    let omu = 1.0 - u;
+    3.0 * omu * omu * u * c1 + 3.0 * omu * u * u * c2 + u * u * u
+}
+
+/// `B'(u) = 3(1-u)²·c1 + 6(1-u)·u·(c2-c1) + 3u²·(1-c2)`.
+fn bezier_axis_derivative(u: f32, c1: f32, c2: f32) -> f32 {
+    let omu = 1.0 - u;
+    3.0 * omu * omu * c1 + 6.0 * omu * u * (c2 - c1) + 3.0 * u * u * (1.0 - c2)
+}
+
+/// Solve `bezier_axis(u, x1, x2) = x` for `u ∈ [0, 1]`.
+fn solve_bezier_x(x1: f32, x2: f32, x: f32) -> f32 {
+    const EPS: f32 = 1e-6;
+    let mut u = x;
+    for _ in 0..8 {
+        let xu = bezier_axis(u, x1, x2);
+        let err = xu - x;
+        if err.abs() < EPS {
+            return u.clamp(0.0, 1.0);
+        }
+        let d = bezier_axis_derivative(u, x1, x2);
+        if d.abs() < EPS {
+            break;
+        }
+        u -= err / d;
+        if !u.is_finite() {
+            break;
+        }
+    }
+    let (mut lo, mut hi) = (0.0_f32, 1.0_f32);
+    for _ in 0..64 {
+        let mid = (lo + hi) * 0.5;
+        let xu = bezier_axis(mid, x1, x2);
+        if (xu - x).abs() < EPS || (hi - lo) < EPS {
+            return mid;
+        }
+        if xu < x {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    (lo + hi) * 0.5
+}
+
+/// CSS Easing L1 §3.2 — `steps(n, <step-position>)` easing.
+///
+/// step-position определяет, сколько output-уровней и где «прыжки»:
+/// - `jump-start` / `start`: n уровней `1/n, 2/n, ..., n/n`. Прыжок при t=0.
+/// - `jump-end` / `end` (default): n+1 уровень `0/n, 1/n, ..., n/n`. Прыжок при t=1.
+/// - `jump-none`: n уровней `0/(n-1), ..., (n-1)/(n-1) = 1`. Прыжков на границах нет.
+/// - `jump-both`: n+2 уровня `1/(n+1), 2/(n+1), ..., (n+1)/(n+1) = 1`. Прыжки на обеих границах.
+///
+/// Для `t = 0` и `t = 1` корректно clamp-ается до границы output-диапазона.
+fn steps_progress(n: u32, position: StepPosition, t: f32) -> f32 {
+    let n_f = n as f32;
+    let (raw_index, divisor, max_step) = match position {
+        StepPosition::JumpStart => ((t * n_f).floor() + 1.0, n_f, n_f),
+        StepPosition::JumpEnd => ((t * n_f).floor(), n_f, n_f),
+        StepPosition::JumpNone => ((t * n_f).floor(), n_f - 1.0, n_f - 1.0),
+        StepPosition::JumpBoth => ((t * n_f).floor() + 1.0, n_f + 1.0, n_f + 1.0),
+    };
+    let step = raw_index.max(0.0).min(max_step);
+    (step / divisor).clamp(0.0, 1.0)
 }
 
 /// CSS Easing L1 §3 — позиция шага в `steps()`. Default по spec — `jump-end`.
@@ -10521,5 +10630,159 @@ mod tests {
             &[0, 0],
         );
         assert_eq!(s.image_rendering, ImageRendering::CrispEdges);
+    }
+
+    #[test]
+    fn linear_progress_is_identity() {
+        let f = TimingFunction::Linear;
+        assert!(approx(f.progress(0.0), 0.0));
+        assert!(approx(f.progress(0.25), 0.25));
+        assert!(approx(f.progress(0.5), 0.5));
+        assert!(approx(f.progress(0.75), 0.75));
+        assert!(approx(f.progress(1.0), 1.0));
+    }
+
+    #[test]
+    fn progress_clamps_t_out_of_range() {
+        let f = TimingFunction::Linear;
+        assert!(approx(f.progress(-0.5), 0.0));
+        assert!(approx(f.progress(2.0), 1.0));
+    }
+
+    #[test]
+    fn ease_keyword_endpoints() {
+        let f = TimingFunction::parse("ease").unwrap();
+        assert!(approx(f.progress(0.0), 0.0));
+        assert!(approx(f.progress(1.0), 1.0));
+        // Midpoint of ease (cubic-bezier(0.25, 0.1, 0.25, 1.0)) ≈ 0.802 per
+        // spec curves — well above 0.5, как и должно быть для ease-out shape.
+        let mid = f.progress(0.5);
+        assert!(mid > 0.7 && mid < 0.85, "ease(0.5) was {mid}");
+    }
+
+    #[test]
+    fn ease_in_starts_slow() {
+        // cubic-bezier(0.42, 0.0, 1.0, 1.0) — output быстро растёт во второй
+        // половине, медленно в первой. progress(0.25) должен быть < 0.25.
+        let f = TimingFunction::parse("ease-in").unwrap();
+        assert!(approx(f.progress(0.0), 0.0));
+        assert!(approx(f.progress(1.0), 1.0));
+        assert!(f.progress(0.25) < 0.15);
+    }
+
+    #[test]
+    fn ease_out_starts_fast() {
+        // cubic-bezier(0.0, 0.0, 0.58, 1.0) — output быстро растёт в первой
+        // половине. progress(0.25) должен быть > 0.25.
+        let f = TimingFunction::parse("ease-out").unwrap();
+        assert!(approx(f.progress(0.0), 0.0));
+        assert!(approx(f.progress(1.0), 1.0));
+        assert!(f.progress(0.25) > 0.35);
+    }
+
+    #[test]
+    fn ease_in_out_is_symmetric_around_half() {
+        // cubic-bezier(0.42, 0.0, 0.58, 1.0) — симметрично:
+        // f(0.5) ≈ 0.5; f(t) + f(1-t) ≈ 1.
+        let f = TimingFunction::parse("ease-in-out").unwrap();
+        assert!(approx(f.progress(0.5), 0.5));
+        let a = f.progress(0.2);
+        let b = f.progress(0.8);
+        assert!(approx(a + b, 1.0), "ease-in-out asymmetric: {a} + {b}");
+    }
+
+    #[test]
+    fn cubic_bezier_diagonal_equals_linear() {
+        // cubic-bezier(0, 0, 1, 1) ≡ linear (control points collinear с (0,0)→(1,1)).
+        let f = TimingFunction::CubicBezier(0.0, 0.0, 1.0, 1.0);
+        for &t in &[0.0_f32, 0.1, 0.3, 0.5, 0.7, 0.9, 1.0] {
+            assert!(
+                (f.progress(t) - t).abs() < 1e-3,
+                "diagonal bezier deviated at t={t}: {}",
+                f.progress(t)
+            );
+        }
+    }
+
+    #[test]
+    fn cubic_bezier_overshoot_allowed() {
+        // Контрольные y вне [0,1] → output может выходить за [0,1] (анимации
+        // "spring" / bounce). Спека не clamp-ает output.
+        let f = TimingFunction::CubicBezier(0.5, 1.5, 0.5, -0.5);
+        let mid = f.progress(0.5);
+        // По симметрии в середине ≈ 0.5, но в первой четверти > 1 не успеет
+        // — overshoot скорее в y2. Главное — обработка корректна.
+        let y_at_quarter = f.progress(0.25);
+        let y_at_three_quarters = f.progress(0.75);
+        // Симметричная кривая: f(t) + f(1-t) ≈ 1.
+        assert!(approx(y_at_quarter + y_at_three_quarters, 1.0));
+        assert!(approx(mid, 0.5));
+    }
+
+    #[test]
+    fn steps_jump_end_default() {
+        // steps(4, jump-end): 4 шага 0, 1/4, 2/4, 3/4 на интервалах
+        // [0, 1/4), [1/4, 2/4), [2/4, 3/4), [3/4, 1); t=1 → 1.
+        let f = TimingFunction::Steps(4, StepPosition::JumpEnd);
+        assert!(approx(f.progress(0.0), 0.0));
+        assert!(approx(f.progress(0.1), 0.0));
+        assert!(approx(f.progress(0.25), 0.25));
+        assert!(approx(f.progress(0.49), 0.25));
+        assert!(approx(f.progress(0.5), 0.5));
+        assert!(approx(f.progress(0.75), 0.75));
+        assert!(approx(f.progress(1.0), 1.0));
+    }
+
+    #[test]
+    fn steps_jump_start() {
+        // steps(4, jump-start): 4 шага 1/4, 2/4, 3/4, 1 (прыжок при t=0).
+        let f = TimingFunction::Steps(4, StepPosition::JumpStart);
+        assert!(approx(f.progress(0.0), 0.25));
+        assert!(approx(f.progress(0.1), 0.25));
+        assert!(approx(f.progress(0.25), 0.5));
+        assert!(approx(f.progress(0.5), 0.75));
+        assert!(approx(f.progress(0.75), 1.0));
+        assert!(approx(f.progress(1.0), 1.0));
+    }
+
+    #[test]
+    fn steps_jump_none() {
+        // steps(4, jump-none): 4 уровня 0, 1/3, 2/3, 1 (нет прыжков на границах).
+        let f = TimingFunction::Steps(4, StepPosition::JumpNone);
+        assert!(approx(f.progress(0.0), 0.0));
+        assert!(approx(f.progress(0.24), 0.0));
+        assert!(approx(f.progress(0.25), 1.0 / 3.0));
+        assert!(approx(f.progress(0.5), 2.0 / 3.0));
+        assert!(approx(f.progress(0.75), 1.0));
+        assert!(approx(f.progress(1.0), 1.0));
+    }
+
+    #[test]
+    fn steps_jump_both() {
+        // steps(4, jump-both): 5 шагов 1/5, 2/5, 3/5, 4/5, 1 (прыжки на обеих границах).
+        let f = TimingFunction::Steps(4, StepPosition::JumpBoth);
+        assert!(approx(f.progress(0.0), 0.2));
+        assert!(approx(f.progress(0.1), 0.2));
+        assert!(approx(f.progress(0.25), 0.4));
+        assert!(approx(f.progress(0.5), 0.6));
+        assert!(approx(f.progress(0.75), 0.8));
+        assert!(approx(f.progress(1.0), 1.0));
+    }
+
+    #[test]
+    fn step_start_keyword_jumps_immediately() {
+        let f = TimingFunction::parse("step-start").unwrap();
+        assert!(approx(f.progress(0.0), 1.0));
+        assert!(approx(f.progress(0.5), 1.0));
+        assert!(approx(f.progress(1.0), 1.0));
+    }
+
+    #[test]
+    fn step_end_keyword_jumps_at_end() {
+        let f = TimingFunction::parse("step-end").unwrap();
+        assert!(approx(f.progress(0.0), 0.0));
+        assert!(approx(f.progress(0.5), 0.0));
+        assert!(approx(f.progress(0.99), 0.0));
+        assert!(approx(f.progress(1.0), 1.0));
     }
 }
