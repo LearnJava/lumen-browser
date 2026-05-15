@@ -18,12 +18,14 @@
 
 use std::collections::HashMap;
 use std::error::Error;
+use std::path::PathBuf;
 use std::sync::Arc;
 
+use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
-use lumen_font::{Bitmap, Cmap, Font, Hhea, Hmtx, Outline, Rasterizer};
+use lumen_font::{Bitmap, Cmap, Font, Hhea, Hmtx, Outline, Rasterizer, SystemFontIndex};
 use lumen_image::{Image, PixelFormat};
-use lumen_layout::Color;
+use lumen_layout::{Color, FontStyle, FontWeight};
 use winit::window::Window;
 
 use crate::atlas::{GlyphAtlas, GlyphEntry};
@@ -226,6 +228,13 @@ struct CachedGlyph {
     advance_native: u16,
 }
 
+/// Один загруженный face: TTF-байты (parsed on-demand через `Font::parse`).
+/// face_id 0 — default (bundled, передан в `Renderer::new`); остальные
+/// `face_id` назначаются по мере lazy-загрузки из путей `FaceRecord`.
+struct LoadedFace {
+    bytes: Vec<u8>,
+}
+
 pub struct Renderer {
     surface: wgpu::Surface<'static>,
     device: wgpu::Device,
@@ -249,8 +258,20 @@ pub struct Renderer {
     images: HashMap<String, GpuImage>,
 
     atlas: GlyphAtlas,
-    font_bytes: Vec<u8>,
-    cached_glyphs: HashMap<u16, Option<CachedGlyph>>,
+    /// Загруженные face-ы. `faces[0]` — default (bundled), используется когда
+    /// `font-family` пуст или ни одно имя не нашлось через `FontProvider`.
+    /// Остальные добавляются лениво при первом `DrawText` с известной family.
+    faces: Vec<LoadedFace>,
+    /// `face_id` по абсолютному пути TTF — чтобы не грузить файл повторно.
+    face_id_by_path: HashMap<PathBuf, usize>,
+    /// Источник лукапа face-ов по `(family, weight, style)`. По умолчанию —
+    /// `SystemFontIndex`, который лениво сканирует системные font-директории.
+    /// `None` означает «без resolver-а — всегда default face» (для тестов /
+    /// headless-режимов).
+    font_provider: Option<Arc<dyn FontProvider>>,
+    /// Кэш растеризованных глифов: ключ `(face_id, glyph_id)`, потому что
+    /// glyph_id у разных face-ов имеют разное значение.
+    cached_glyphs: HashMap<(usize, u16), Option<CachedGlyph>>,
 }
 
 impl Renderer {
@@ -604,9 +625,70 @@ impl Renderer {
             image_sampler,
             images: HashMap::new(),
             atlas,
-            font_bytes,
+            faces: vec![LoadedFace { bytes: font_bytes }],
+            face_id_by_path: HashMap::new(),
+            font_provider: Some(Arc::new(SystemFontIndex::new())),
             cached_glyphs: HashMap::new(),
         })
+    }
+
+    /// Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
+    /// headless-режимов (отключить системный скан). `None` отключает поиск —
+    /// рендер всегда использует default face.
+    #[must_use]
+    pub fn with_font_provider(mut self, provider: Option<Arc<dyn FontProvider>>) -> Self {
+        self.font_provider = provider;
+        self
+    }
+
+    /// Резолвит `face_id` для `DrawText` с указанным `font-family` списком.
+    /// Если `font_provider` есть — перебирает имена в порядке приоритета
+    /// (CSS Fonts L4 §3.1), для первого найденного через `pick_face` — лениво
+    /// загружает TTF и возвращает `face_id`. Generic CSS-family-ы
+    /// (`serif`/`sans-serif`/`monospace`/`cursive`/`fantasy`/`system-ui`)
+    /// пропускаются — Phase 0 не имеет per-generic-fallback таблицы; в
+    /// конечном итоге падают в default. Если ни одно имя не найдено —
+    /// возвращает 0 (default face).
+    fn resolve_face_id(
+        &mut self,
+        families: &[String],
+        weight: FontWeight,
+        style: FontStyle,
+    ) -> usize {
+        let Some(provider) = self.font_provider.clone() else {
+            return 0;
+        };
+        for fam in families {
+            let lc = fam.to_lowercase();
+            if matches!(
+                lc.as_str(),
+                "serif" | "sans-serif" | "monospace" | "cursive" | "fantasy" | "system-ui"
+            ) {
+                continue;
+            }
+            let css_style = match style {
+                FontStyle::Normal => CssFontStyle::Normal,
+                FontStyle::Italic => CssFontStyle::Italic,
+                FontStyle::Oblique => CssFontStyle::Oblique,
+            };
+            let Some(rec) = provider.pick_face(fam, weight.0, css_style) else {
+                continue;
+            };
+            if let Some(&id) = self.face_id_by_path.get(&rec.path) {
+                return id;
+            }
+            let Ok(bytes) = std::fs::read(&rec.path) else {
+                continue;
+            };
+            if Font::parse(&bytes).is_err() {
+                continue;
+            }
+            let id = self.faces.len();
+            self.faces.push(LoadedFace { bytes });
+            self.face_id_by_path.insert(rec.path, id);
+            return id;
+        }
+        0
     }
 
     /// Регистрирует декодированное изображение в GPU-cache под ключом `src`.
@@ -727,15 +809,24 @@ impl Renderer {
     }
 
     pub fn render(&mut self, list: &DisplayList) -> Result<(), wgpu::SurfaceError> {
-        // Парсим шрифт раз в кадр (дёшево: только walk table directory).
-        let font = match Font::parse(&self.font_bytes) {
-            Ok(f) => f,
-            Err(_) => return Ok(()), // невозможно при правильном Renderer::new, но защитимся
-        };
-        let head = font.head().ok();
-        let hhea = font.hhea().ok();
-        let cmap = font.cmap().ok();
-        let hmtx = font.hmtx().ok();
+        // Парсинг шрифта дешёвый (table directory walk), но при per-DrawText
+        // парсинге одного и того же face N раз в кадре — лишняя работа.
+        // Pre-resolve face_id для каждой DrawText-команды + lazy-загрузка
+        // новых face-ов до сбора вершин, чтобы &self.faces[id] потом мог
+        // быть взят immutably параллельно с &mut self.atlas / self.cached_glyphs.
+        let mut text_face_ids: Vec<usize> = Vec::with_capacity(list.len());
+        for cmd in list {
+            if let DisplayCommand::DrawText {
+                font_family,
+                font_weight,
+                font_style,
+                ..
+            } = cmd
+            {
+                text_face_ids.push(self.resolve_face_id(font_family, *font_weight, *font_style));
+            }
+        }
+        let mut text_face_iter = text_face_ids.into_iter();
 
         // ── Сбор вершин ────────────────────────────────────────────────────
         let mut fill_vertices: Vec<FillVertex> = Vec::new();
@@ -747,8 +838,6 @@ impl Renderer {
         // соседями, batching по src в Phase 0 не делаем (5-10 изображений
         // на страницу = pareto draw call-ов).
         let mut image_batches: Vec<(wgpu::BindGroup, u32, u32)> = Vec::new();
-
-        let raster_native = head.map(|h| Rasterizer::new(ATLAS_PIXEL_SIZE, h.units_per_em));
 
         for cmd in list {
             match cmd {
@@ -775,15 +864,22 @@ impl Renderer {
                     text,
                     font_size,
                     color,
-                    // Метаданные шрифта (CSS Fonts L4 §5.2) уже доходят до
-                    // renderer-а, но пока игнорируются: рендер держит ровно
-                    // один Font (bundled Inter Regular). Выбор face через
-                    // FontProvider::pick_face и переключение Font на лету
-                    // — следующий шаг (c) задачи Font fallback / matcher.
                     font_family: _,
                     font_weight: _,
                     font_style: _,
                 } => {
+                    let face_id = text_face_iter.next().unwrap_or(0);
+                    let bytes = &self.faces[face_id].bytes;
+                    let Ok(font) = Font::parse(bytes) else {
+                        continue;
+                    };
+                    let head = font.head().ok();
+                    let hhea = font.hhea().ok();
+                    let cmap = font.cmap().ok();
+                    let hmtx = font.hmtx().ok();
+                    let raster_native = head
+                        .as_ref()
+                        .map(|h| Rasterizer::new(ATLAS_PIXEL_SIZE, h.units_per_em));
                     let (Some(head), Some(hhea), Some(cmap), Some(hmtx), Some(raster)) =
                         (&head, &hhea, &cmap, &hmtx, &raster_native)
                     else {
@@ -791,6 +887,7 @@ impl Renderer {
                     };
                     push_text_glyphs(
                         &mut text_vertices,
+                        face_id,
                         *rect,
                         text,
                         *font_size,
@@ -1032,6 +1129,7 @@ fn convert_to_rgba(image: &Image) -> Vec<u8> {
 #[allow(clippy::too_many_arguments)]
 fn push_text_glyphs(
     out: &mut Vec<TextVertex>,
+    face_id: usize,
     rect: Rect,
     text: &str,
     font_size: f32,
@@ -1043,7 +1141,7 @@ fn push_text_glyphs(
     raster: &Rasterizer,
     font: &Font,
     atlas: &mut GlyphAtlas,
-    cached: &mut HashMap<u16, Option<CachedGlyph>>,
+    cached: &mut HashMap<(usize, u16), Option<CachedGlyph>>,
 ) {
     // Display scale: глифы в атласе растеризованы на ATLAS_PIXEL_SIZE,
     // а нужно показать на font_size — умножаем.
@@ -1058,7 +1156,7 @@ fn push_text_glyphs(
     let mut cursor_x = rect.x;
     for ch in text.chars() {
         let glyph_id = cmap.glyph_index(ch as u32).unwrap_or(0);
-        let cached_glyph = ensure_glyph(cached, atlas, font, raster, hmtx, glyph_id);
+        let cached_glyph = ensure_glyph(cached, atlas, font, raster, hmtx, face_id, glyph_id);
 
         if let Some(g) = cached_glyph {
             let bm_left = g.left * display_scale;
@@ -1094,19 +1192,21 @@ fn push_text_glyphs(
 }
 
 fn ensure_glyph(
-    cached: &mut HashMap<u16, Option<CachedGlyph>>,
+    cached: &mut HashMap<(usize, u16), Option<CachedGlyph>>,
     atlas: &mut GlyphAtlas,
     font: &Font,
     raster: &Rasterizer,
     hmtx: &Hmtx,
+    face_id: usize,
     glyph_id: u16,
 ) -> Option<CachedGlyph> {
-    if let Some(&entry) = cached.get(&glyph_id) {
+    let key = (face_id, glyph_id);
+    if let Some(&entry) = cached.get(&key) {
         return entry;
     }
 
     let result = rasterize_and_insert(atlas, font, raster, hmtx, glyph_id);
-    cached.insert(glyph_id, result);
+    cached.insert(key, result);
     result
 }
 
