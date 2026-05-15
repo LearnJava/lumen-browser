@@ -27,6 +27,7 @@ use lumen_core::ext::{
 use lumen_core::url::Url;
 
 mod auth;
+mod brotli;
 mod dns;
 mod doh;
 mod dot;
@@ -34,6 +35,7 @@ mod hsts;
 mod pool;
 mod range;
 pub use auth::StaticCredentialProvider;
+pub use brotli::BrotliContentDecoder;
 pub use dns::SystemDnsResolver;
 pub use doh::DohResolver;
 pub use dot::{DotResolver, DOT_DEFAULT_PORT};
