@@ -11,7 +11,6 @@
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
 - 🔄 Renderer face switch (P2 1A, шаг ©) [P2] — renderer-face-switch — 2026-05-15
-- 🔄 PSL: publicsuffix через PublicSuffixList + cookie domain matching + Safe Browsing host-suffix [P3] — network-publicsuffix — 2026-05-15
 
 ## Статус реализации
 
