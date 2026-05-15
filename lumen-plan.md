@@ -11,6 +11,7 @@
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
 - 🔄 Compositor two-buffer commit model (P2 1B шаг b) [P2] — compositor-twobuffer — 2026-05-15
+- 🔄 Mixed-content enforcement в HttpClient (P3 2A шаг b) [P3] — mixed-content-enforcement — 2026-05-15
 
 ## Статус реализации
 
