@@ -145,6 +145,26 @@ pub enum PseudoClass {
     /// который может быть disabled, но не disabled сейчас. Дополняет
     /// `:disabled`, не пересекается с ним.
     Enabled,
+    /// `:checked` (CSS Selectors L4 §10.1, HTML5 §4.16.3) — checkbox/radio с
+    /// атрибутом `checked` либо `<option>` с атрибутом `selected`. В Phase 0
+    /// без runtime form-state — pure attribute-based matching: пользовательская
+    /// «отметка» checkbox через клик не отражается в DOM-атрибутах и не
+    /// учитывается. Этого достаточно для author CSS «default-checked» стилей.
+    Checked,
+    /// `:indeterminate` (CSS Selectors L4 §10.2, HTML5 §4.16.3) — checkbox
+    /// в indeterminate-состоянии (выставляется только через JS `.indeterminate
+    /// = true` — не выражено в DOM, в Phase 0 всегда `false` для checkbox);
+    /// radio в группе с одинаковым `name` без single `checked`-радио; элемент
+    /// `<progress>` без атрибута `value`. Для radio matcher обходит siblings
+    /// по форме / документу, проверяя что нет checked-собрата.
+    Indeterminate,
+    /// `:default` (CSS Selectors L4 §10.4, HTML5 §4.16.3) — «по-умолчанию
+    /// активный» form control: `<option selected>` внутри `<select>`,
+    /// checkbox/radio с атрибутом `checked`, default-submit-button формы
+    /// (первая `<button type=submit>` / `<input type=submit|image>` в DOM-
+    /// порядке формы). В Phase 0 — pure attribute-based + simple form-default-
+    /// button heuristic без runtime state.
+    Default,
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
@@ -2450,6 +2470,9 @@ impl<'a> Parser<'a> {
             "read-write" => PseudoClass::ReadWrite,
             "disabled" => PseudoClass::Disabled,
             "enabled" => PseudoClass::Enabled,
+            "checked" => PseudoClass::Checked,
+            "indeterminate" => PseudoClass::Indeterminate,
+            "default" => PseudoClass::Default,
             _ => PseudoClass::Unsupported(name),
         };
         Some(SimpleSelector::PseudoClass(pc))
@@ -3250,6 +3273,9 @@ mod tests {
             ("read-write", PseudoClass::ReadWrite),
             ("disabled", PseudoClass::Disabled),
             ("enabled", PseudoClass::Enabled),
+            ("checked", PseudoClass::Checked),
+            ("indeterminate", PseudoClass::Indeterminate),
+            ("default", PseudoClass::Default),
         ];
         for (name, expected) in cases {
             let s = parse(&format!(":{name} {{}}"));
