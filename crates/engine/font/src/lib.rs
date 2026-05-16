@@ -14,6 +14,7 @@
 pub mod binary;
 pub mod cmap;
 pub mod face;
+pub mod fvar;
 pub mod glyf;
 pub mod head;
 pub mod hhea;
@@ -28,6 +29,7 @@ pub mod system_fonts;
 pub use binary::BinaryReader;
 pub use cmap::Cmap;
 pub use face::{Font, FontError, OffsetTable, TableRecord};
+pub use fvar::{Fvar, VariationAxis};
 pub use glyf::{BoundingBox, CompositeComponent, Contour, Glyf, Glyph, Outline, OutlinePoint};
 pub use head::{Head, IndexToLocFormat};
 pub use hhea::Hhea;

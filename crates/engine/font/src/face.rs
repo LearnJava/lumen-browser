@@ -178,6 +178,16 @@ impl<'a> Font<'a> {
         crate::os2::Os2::parse(data)
     }
 
+    /// `fvar` (Font Variations) — описание variation axes (wght / wdth / slnt /
+    /// opsz / ital / custom). Возвращает `Err(TableNotFound)` для non-variable
+    /// fonts (обычные `.ttf` / `.otf` без вариаций — каков и bundled Inter
+    /// Regular). Phase 0 — парсятся только axis records, без instances
+    /// (Variable Fonts L1 enabler).
+    pub fn fvar(&self) -> Result<crate::fvar::Fvar, FontError> {
+        let data = self.table(b"fvar").ok_or(FontError::TableNotFound(*b"fvar"))?;
+        crate::fvar::Fvar::parse(data)
+    }
+
     /// Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
     /// (например, space). Composite-глифы возвращаются с `Outline::Composite`
     /// (компонентами) — для разрешения в простые контуры используй
