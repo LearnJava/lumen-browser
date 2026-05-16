@@ -13,7 +13,6 @@
 - 🔄 Paint order consumer (P2 2A renderer-side) [P2] — paint-order-consumer — 2026-05-15
 - 🔄 CSS image-rendering parsing/storage [P1] — css-image-rendering — 2026-05-15
 - 🔄 transition shorthand parsing (P1 3A finish) [P1] — transition-shorthand — 2026-05-15
-- 🔄 HTML5 legacy color parsing для `<body bgcolor>` / table-related attrs (P1 1A finish) [P1] — html-legacy-bgcolor — 2026-05-16
 
 ## Статус реализации
 
