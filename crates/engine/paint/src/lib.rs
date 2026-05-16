@@ -11,6 +11,7 @@
 pub mod atlas;
 pub mod compositor;
 pub mod display_list;
+pub mod hit_test;
 pub mod renderer;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};
@@ -21,6 +22,7 @@ pub use display_list::{
     build_display_list, build_display_list_ordered, serialize_display_list, BlendMode,
     DisplayCommand, DisplayList,
 };
+pub use hit_test::{hit_test, HitTestResult};
 pub use renderer::{ImageRegisterError, Renderer};
 
 // ── FontMeasurer ────────────────────────────────────────────────────────────

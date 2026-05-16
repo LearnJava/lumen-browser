@@ -9,6 +9,7 @@ description = "Lumen: display list and rasterization"
 
 [dependencies]
 lumen-core.workspace = true
+lumen-dom.workspace = true
 lumen-layout.workspace = true
 lumen-font.workspace = true
 lumen-image.workspace = true

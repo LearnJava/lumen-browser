@@ -140,6 +140,52 @@ impl Mat4 {
         }
         Self(out)
     }
+
+    /// Инверсия 2D affine-матрицы. Возвращает `None`, если матрица
+    /// сингулярна (`det == 0`). Используется hit testing-ом для
+    /// преобразования viewport-точки в локальные координаты бокса
+    /// (forward transform применяется к точкам бокса при рисовании →
+    /// обратный — при hit-тесте).
+    ///
+    /// Phase 0 ограничение: предполагает, что Z/W колонки — identity
+    /// (что верно для всех текущих `TransformFn`: translate / rotate /
+    /// scale / skew / matrix2d). Полный 4×4 invert понадобится только
+    /// при появлении 3D-трансформов.
+    pub fn invert_2d_affine(&self) -> Option<Self> {
+        let a = self.0[0];
+        let b = self.0[1];
+        let c = self.0[4];
+        let d = self.0[5];
+        let e = self.0[12];
+        let f = self.0[13];
+        let det = a * d - b * c;
+        if det.abs() < f32::EPSILON {
+            return None;
+        }
+        let inv_det = 1.0 / det;
+        Some(Self::from_2d_affine(
+            d * inv_det,
+            -b * inv_det,
+            -c * inv_det,
+            a * inv_det,
+            (c * f - d * e) * inv_det,
+            (b * e - a * f) * inv_det,
+        ))
+    }
+
+    /// Применяет 2D affine часть матрицы к точке `(x, y)`. Z/W колонки
+    /// игнорируются: считаются identity (см. `invert_2d_affine`).
+    /// Возвращает `(x', y')` в той же системе координат, что и входная
+    /// точка после применения этой матрицы.
+    pub fn transform_point_2d(&self, x: f32, y: f32) -> (f32, f32) {
+        let a = self.0[0];
+        let b = self.0[1];
+        let c = self.0[4];
+        let d = self.0[5];
+        let e = self.0[12];
+        let f = self.0[13];
+        (a * x + c * y + e, b * x + d * y + f)
+    }
 }
 
 impl Default for Mat4 {
@@ -618,6 +664,82 @@ mod tests {
         // Transform-вектор [1, 0, 0, 1]: x' = m[0]·1 + m[4]·0 + m[8]·0 + m[12]·1.
         let x_prime = m.0[0] * 1.0 + m.0[12];
         assert!(approx(x_prime, 12.0));
+    }
+
+    // ----- transform_point_2d / invert_2d_affine -----
+
+    #[test]
+    fn transform_point_2d_identity_is_noop() {
+        let (x, y) = Mat4::IDENTITY.transform_point_2d(3.0, 7.0);
+        assert!(approx(x, 3.0));
+        assert!(approx(y, 7.0));
+    }
+
+    #[test]
+    fn transform_point_2d_translate_shifts() {
+        let m = Mat4::translation_2d(10.0, -5.0);
+        let (x, y) = m.transform_point_2d(0.0, 0.0);
+        assert!(approx(x, 10.0));
+        assert!(approx(y, -5.0));
+    }
+
+    #[test]
+    fn transform_point_2d_scale_multiplies() {
+        let m = Mat4::scale_2d(2.0, 3.0);
+        let (x, y) = m.transform_point_2d(4.0, 5.0);
+        assert!(approx(x, 8.0));
+        assert!(approx(y, 15.0));
+    }
+
+    #[test]
+    fn invert_identity_is_identity() {
+        let inv = Mat4::IDENTITY.invert_2d_affine().unwrap();
+        assert!(inv.is_identity());
+    }
+
+    #[test]
+    fn invert_translate_negates_offsets() {
+        let m = Mat4::translation_2d(10.0, -5.0);
+        let inv = m.invert_2d_affine().unwrap();
+        let (x, y) = inv.transform_point_2d(10.0, -5.0);
+        assert!(approx(x, 0.0));
+        assert!(approx(y, 0.0));
+    }
+
+    #[test]
+    fn invert_scale_reciprocates() {
+        let m = Mat4::scale_2d(2.0, 4.0);
+        let inv = m.invert_2d_affine().unwrap();
+        let (x, y) = inv.transform_point_2d(10.0, 20.0);
+        assert!(approx(x, 5.0));
+        assert!(approx(y, 5.0));
+    }
+
+    #[test]
+    fn invert_round_trip_translate_scale() {
+        let m = Mat4::translation_2d(50.0, 30.0).multiply(&Mat4::scale_2d(2.0, 3.0));
+        let inv = m.invert_2d_affine().unwrap();
+        let (vx, vy) = m.transform_point_2d(7.0, 11.0);
+        let (px, py) = inv.transform_point_2d(vx, vy);
+        assert!(approx(px, 7.0));
+        assert!(approx(py, 11.0));
+    }
+
+    #[test]
+    fn invert_rotation_round_trips() {
+        let m = Mat4::rotate_2d(std::f32::consts::FRAC_PI_3);
+        let inv = m.invert_2d_affine().unwrap();
+        let (vx, vy) = m.transform_point_2d(42.0, -7.5);
+        let (px, py) = inv.transform_point_2d(vx, vy);
+        assert!(approx(px, 42.0));
+        assert!(approx(py, -7.5));
+    }
+
+    #[test]
+    fn invert_singular_matrix_returns_none() {
+        // scale(0, 0) — det == 0, инверсия невозможна.
+        let singular = Mat4::scale_2d(0.0, 0.0);
+        assert!(singular.invert_2d_affine().is_none());
     }
 
     // ----- Build PropertyTrees из layout-дерева -----
