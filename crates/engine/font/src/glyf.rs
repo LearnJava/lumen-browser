@@ -50,15 +50,36 @@ pub enum Outline {
     Composite(Vec<CompositeComponent>),
 }
 
-/// Один компонент composite-глифа: ссылка на другой глиф + 2×2 матрица + offset.
+/// Как компонент привязывается к parent-у.
 ///
-/// Применение к точке: `(x', y') = (a·x + c·y + dx, b·x + d·y + dy)`,
-/// где `transform = [a, b, c, d]`, `offset = (dx, dy)`.
+/// `ARGS_ARE_XY_VALUES` бит в OpenType composite определяет, как
+/// интерпретировать `arg1` / `arg2`:
+/// - `1` (современное поведение) — это `(dx, dy)` смещение в font units.
+/// - `0` — это **point indices**: `arg1` — индекс точки в **родительском**
+///   глифе (уже-собранных контурах предыдущих компонент), `arg2` — индекс
+///   точки в **этом** компоненте после применения transform-а. Component
+///   выравнивается так, чтобы child.point[arg2] совпал с parent.point[arg1].
+///   Это рудимент TrueType до 1996 года, в современных шрифтах ≈ не
+///   встречается, но изредка попадается в legacy `.ttf`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Anchor {
+    /// Прямой XY-offset (ARGS_ARE_XY_VALUES=1).
+    Offset(f32, f32),
+    /// Point-based выравнивание (ARGS_ARE_XY_VALUES=0).
+    Points { parent: u16, child: u16 },
+}
+
+/// Один компонент composite-глифа: ссылка на другой глиф + 2×2 матрица + anchor.
+///
+/// Применение к точке (для `Anchor::Offset(dx, dy)`):
+/// `(x', y') = (a·x + c·y + dx, b·x + d·y + dy)`, где
+/// `transform = [a, b, c, d]`. Для `Anchor::Points` смещение
+/// вычисляется на этапе resolve-а (см. `Font::glyph_resolved`).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct CompositeComponent {
     pub glyph_id: u16,
     pub transform: [f32; 4],
-    pub offset: (f32, f32),
+    pub anchor: Anchor,
 }
 
 #[derive(Debug, Clone)]
@@ -102,24 +123,34 @@ fn parse_composite(r: &mut BinaryReader) -> Result<Vec<CompositeComponent>, Font
         let flags = r.read_u16().ok_or(FontError::UnexpectedEof)?;
         let glyph_id = r.read_u16().ok_or(FontError::UnexpectedEof)?;
 
-        let (arg1, arg2) = if flags & COMPOSITE_ARG_1_AND_2_ARE_WORDS != 0 {
-            let a = r.read_i16().ok_or(FontError::UnexpectedEof)? as f32;
-            let b = r.read_i16().ok_or(FontError::UnexpectedEof)? as f32;
-            (a, b)
+        // Per OpenType spec: при ARGS_ARE_XY_VALUES=1 args1/args2 — это
+        // signed XY offsets в font units. При ARGS_ARE_XY_VALUES=0 они —
+        // unsigned point indices (u16 при ARG_1_AND_2_ARE_WORDS, u8 иначе).
+        let args_are_xy = flags & COMPOSITE_ARGS_ARE_XY_VALUES != 0;
+        let arg_words = flags & COMPOSITE_ARG_1_AND_2_ARE_WORDS != 0;
+        let anchor = if args_are_xy {
+            let (dx, dy) = if arg_words {
+                let a = r.read_i16().ok_or(FontError::UnexpectedEof)? as f32;
+                let b = r.read_i16().ok_or(FontError::UnexpectedEof)? as f32;
+                (a, b)
+            } else {
+                let a = r.read_u8().ok_or(FontError::UnexpectedEof)? as i8 as f32;
+                let b = r.read_u8().ok_or(FontError::UnexpectedEof)? as i8 as f32;
+                (a, b)
+            };
+            Anchor::Offset(dx, dy)
         } else {
-            // i8: один байт со знаком.
-            let a = r.read_u8().ok_or(FontError::UnexpectedEof)? as i8 as f32;
-            let b = r.read_u8().ok_or(FontError::UnexpectedEof)? as i8 as f32;
-            (a, b)
-        };
-
-        // Если флаг ARGS_ARE_XY_VALUES — это (dx, dy) в font units.
-        // Иначе — индексы точек для выравнивания (рудимент, в современных шрифтах
-        // практически не встречается; считаем offset = (0, 0)).
-        let offset = if flags & COMPOSITE_ARGS_ARE_XY_VALUES != 0 {
-            (arg1, arg2)
-        } else {
-            (0.0, 0.0)
+            // Point indices — unsigned (u16 / u8). При words = u16, иначе u8.
+            let (p, c) = if arg_words {
+                let p = r.read_u16().ok_or(FontError::UnexpectedEof)?;
+                let c = r.read_u16().ok_or(FontError::UnexpectedEof)?;
+                (p, c)
+            } else {
+                let p = r.read_u8().ok_or(FontError::UnexpectedEof)? as u16;
+                let c = r.read_u8().ok_or(FontError::UnexpectedEof)? as u16;
+                (p, c)
+            };
+            Anchor::Points { parent: p, child: c }
         };
 
         let transform = if flags & COMPOSITE_WE_HAVE_A_SCALE != 0 {
@@ -142,7 +173,7 @@ fn parse_composite(r: &mut BinaryReader) -> Result<Vec<CompositeComponent>, Font
         components.push(CompositeComponent {
             glyph_id,
             transform,
-            offset,
+            anchor,
         });
 
         if flags & COMPOSITE_MORE_COMPONENTS == 0 {
@@ -371,7 +402,7 @@ mod tests {
         };
         assert_eq!(components.len(), 1);
         assert_eq!(components[0].glyph_id, 5);
-        assert_eq!(components[0].offset, (10.0, 20.0));
+        assert_eq!(components[0].anchor, Anchor::Offset(10.0, 20.0));
         assert_eq!(components[0].transform, [1.0, 0.0, 0.0, 1.0]);
     }
 
@@ -395,7 +426,7 @@ mod tests {
             panic!();
         };
         assert_eq!(components[0].glyph_id, 42);
-        assert_eq!(components[0].offset, (300.0, -150.0));
+        assert_eq!(components[0].anchor, Anchor::Offset(300.0, -150.0));
         assert_eq!(components[0].transform, [0.5, 0.0, 0.0, 0.5]);
     }
 
@@ -425,7 +456,7 @@ mod tests {
         assert_eq!(components.len(), 2);
         assert_eq!(components[0].glyph_id, 1);
         assert_eq!(components[1].glyph_id, 2);
-        assert_eq!(components[1].offset, (5.0, 10.0));
+        assert_eq!(components[1].anchor, Anchor::Offset(5.0, 10.0));
     }
 
     #[test]
@@ -455,6 +486,51 @@ mod tests {
         assert!((t[1] - 0.707).abs() < 0.001);
         assert!((t[2] + 0.707).abs() < 0.001);
         assert!((t[3] - 0.707).abs() < 0.001);
+    }
+
+    #[test]
+    fn composite_glyph_with_point_indices_short() {
+        // ARGS_ARE_XY_VALUES=0 (точечное выравнивание), short-args (u8).
+        // flags = MORE_COMPONENTS не ставим = 0; ARGS_XY = 0; words = 0.
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(-1i16).to_be_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+        bytes.extend_from_slice(&0x0000u16.to_be_bytes()); // ничего, кроме умолчаний
+        bytes.extend_from_slice(&7u16.to_be_bytes()); // glyph_id
+        bytes.push(3u8); // parent point index
+        bytes.push(5u8); // child point index
+
+        let glyph = Glyph::parse(&bytes).unwrap();
+        let Outline::Composite(components) = &glyph.outline else {
+            panic!();
+        };
+        assert_eq!(components[0].glyph_id, 7);
+        assert_eq!(
+            components[0].anchor,
+            Anchor::Points { parent: 3, child: 5 }
+        );
+    }
+
+    #[test]
+    fn composite_glyph_with_point_indices_words() {
+        // Same — но ARG_1_AND_2_ARE_WORDS включено (u16 indices).
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&(-1i16).to_be_bytes());
+        bytes.extend_from_slice(&[0u8; 8]);
+        bytes.extend_from_slice(&0x0001u16.to_be_bytes()); // ARG_1_AND_2_ARE_WORDS
+        bytes.extend_from_slice(&8u16.to_be_bytes()); // glyph_id
+        bytes.extend_from_slice(&300u16.to_be_bytes()); // parent (u16)
+        bytes.extend_from_slice(&512u16.to_be_bytes()); // child (u16)
+
+        let glyph = Glyph::parse(&bytes).unwrap();
+        let Outline::Composite(components) = &glyph.outline else {
+            panic!();
+        };
+        assert_eq!(components[0].glyph_id, 8);
+        assert_eq!(
+            components[0].anchor,
+            Anchor::Points { parent: 300, child: 512 }
+        );
     }
 
     #[test]
