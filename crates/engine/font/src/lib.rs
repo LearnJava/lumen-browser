@@ -19,6 +19,7 @@ pub mod face;
 pub mod fvar;
 pub mod glyf;
 pub mod head;
+pub mod hvar;
 pub mod item_variation;
 pub mod hhea;
 pub mod hmtx;
@@ -39,6 +40,7 @@ pub use glyf::{
     Anchor, BoundingBox, CompositeComponent, Contour, Glyf, Glyph, Outline, OutlinePoint,
 };
 pub use head::{Head, IndexToLocFormat};
+pub use hvar::Hvar;
 pub use item_variation::{
     ItemVariationData, ItemVariationStore, RegionAxisCoordinates, VariationRegion,
     VariationRegionList,

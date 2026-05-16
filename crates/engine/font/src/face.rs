@@ -199,6 +199,21 @@ impl<'a> Font<'a> {
         crate::avar::Avar::parse(data)
     }
 
+    /// `HVAR` (Horizontal Metrics Variations) — variation deltas для
+    /// advance width / LSB / RSB per glyph. При активном variation-
+    /// instance шрифта runtime берёт base-метрики из `hmtx`, ищет
+    /// (outer, inner)-индекс через `Hvar::advance_width_index(glyph_id)`,
+    /// вычисляет delta через `ItemVariationStore` (когда `evaluate`
+    /// будет реализован) и прибавляет к base. Опционально — variable
+    /// font может не иметь HVAR, и тогда rasterizer использует `gvar`
+    /// (дороже: реинтерполировать outline и пересчитать метрики
+    /// вручную). Возвращает `Err(TableNotFound)` для не-VF и для VF
+    /// без HVAR.
+    pub fn hvar(&self) -> Result<crate::hvar::Hvar, FontError> {
+        let data = self.table(b"HVAR").ok_or(FontError::TableNotFound(*b"HVAR"))?;
+        crate::hvar::Hvar::parse(data)
+    }
+
     /// Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
     /// (например, space). Composite-глифы возвращаются с `Outline::Composite`
     /// (компонентами) — для разрешения в простые контуры используй
