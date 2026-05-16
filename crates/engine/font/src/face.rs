@@ -252,6 +252,35 @@ impl<'a> Font<'a> {
             let crate::glyf::Outline::Simple(sub_contours) = sub.outline else {
                 continue; // не должно случаться после рекурсии, но защитимся
             };
+
+            // Считаем XY-смещение компонента в координатах parent-а.
+            // Anchor::Offset — берём напрямую. Anchor::Points — ищем
+            // parent.point[parent_idx] в `merged` (уже-собранные контуры
+            // от предыдущих компонент) и child.point[child_idx] в
+            // `sub_contours` после применения transform-а; смещение =
+            // parent_xy − transformed_child_xy.
+            let (dx, dy) = match comp.anchor {
+                crate::glyf::Anchor::Offset(dx, dy) => (dx, dy),
+                crate::glyf::Anchor::Points { parent: pi, child: ci } => {
+                    let parent_xy = nth_point_xy(&merged, pi as usize);
+                    let transformed_child = nth_point_xy(&sub_contours, ci as usize)
+                        .map(|(cx, cy)| {
+                            let tx = comp.transform[0] * cx + comp.transform[2] * cy;
+                            let ty = comp.transform[1] * cx + comp.transform[3] * cy;
+                            (tx, ty)
+                        });
+                    match (parent_xy, transformed_child) {
+                        (Some((px, py)), Some((tx, ty))) => (px - tx, py - ty),
+                        // Если хотя бы одна точка не найдена (битый шрифт
+                        // или out-of-range index) — fallback на (0, 0);
+                        // компонент окажется в parent-origin. Визуально
+                        // приемлемо для legacy edge-case (раньше офсет
+                        // всегда был (0, 0)).
+                        _ => (0.0, 0.0),
+                    }
+                }
+            };
+
             for contour in sub_contours {
                 let transformed = contour
                     .points
@@ -260,8 +289,8 @@ impl<'a> Font<'a> {
                         let x = p.x as f32;
                         let y = p.y as f32;
                         // (x', y') = (a·x + c·y + dx, b·x + d·y + dy)
-                        let nx = comp.transform[0] * x + comp.transform[2] * y + comp.offset.0;
-                        let ny = comp.transform[1] * x + comp.transform[3] * y + comp.offset.1;
+                        let nx = comp.transform[0] * x + comp.transform[2] * y + dx;
+                        let ny = comp.transform[1] * x + comp.transform[3] * y + dy;
                         crate::glyf::OutlinePoint {
                             x: nx.round() as i16,
                             y: ny.round() as i16,
@@ -278,6 +307,22 @@ impl<'a> Font<'a> {
             outline: crate::glyf::Outline::Simple(merged),
         }))
     }
+}
+
+/// Возвращает XY n-ой точки в линейном обходе всех контуров. Per
+/// OpenType spec точки composite-глифа индексируются глобально по
+/// всем контурам подряд. Используется для point-based выравнивания
+/// компонент в `glyph_resolved_depth`.
+fn nth_point_xy(contours: &[crate::glyf::Contour], idx: usize) -> Option<(f32, f32)> {
+    let mut counter = 0usize;
+    for contour in contours {
+        if idx < counter + contour.points.len() {
+            let p = contour.points[idx - counter];
+            return Some((p.x as f32, p.y as f32));
+        }
+        counter += contour.points.len();
+    }
+    None
 }
 
 #[cfg(test)]
@@ -373,5 +418,49 @@ mod tests {
         bytes.extend_from_slice(&[0u8; 8]);
         let font = Font::parse(&bytes).unwrap();
         assert_eq!(font.offset_table.sfnt_version, OffsetTable::SFNT_OPENTYPE);
+    }
+
+    fn make_contour(points: &[(i16, i16)]) -> crate::glyf::Contour {
+        crate::glyf::Contour {
+            points: points
+                .iter()
+                .map(|&(x, y)| crate::glyf::OutlinePoint {
+                    x,
+                    y,
+                    on_curve: true,
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn nth_point_xy_first_contour() {
+        // Один контур из 3 точек: индексы 0..2 возвращают эти точки.
+        let contours = vec![make_contour(&[(10, 20), (30, 40), (50, 60)])];
+        assert_eq!(super::nth_point_xy(&contours, 0), Some((10.0, 20.0)));
+        assert_eq!(super::nth_point_xy(&contours, 1), Some((30.0, 40.0)));
+        assert_eq!(super::nth_point_xy(&contours, 2), Some((50.0, 60.0)));
+    }
+
+    #[test]
+    fn nth_point_xy_crosses_contour_boundary() {
+        // Два контура — глобальный index продолжается во второй после
+        // окончания первого. Per OpenType spec точки composite-глифа
+        // нумеруются последовательно по всем контурам.
+        let contours = vec![
+            make_contour(&[(0, 0), (1, 1)]),
+            make_contour(&[(2, 2), (3, 3)]),
+        ];
+        assert_eq!(super::nth_point_xy(&contours, 0), Some((0.0, 0.0)));
+        assert_eq!(super::nth_point_xy(&contours, 1), Some((1.0, 1.0)));
+        assert_eq!(super::nth_point_xy(&contours, 2), Some((2.0, 2.0)));
+        assert_eq!(super::nth_point_xy(&contours, 3), Some((3.0, 3.0)));
+    }
+
+    #[test]
+    fn nth_point_xy_out_of_range_returns_none() {
+        let contours = vec![make_contour(&[(0, 0), (1, 1)])];
+        assert_eq!(super::nth_point_xy(&contours, 5), None);
+        assert_eq!(super::nth_point_xy(&[], 0), None);
     }
 }

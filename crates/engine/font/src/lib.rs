@@ -32,7 +32,9 @@ pub use binary::BinaryReader;
 pub use cmap::Cmap;
 pub use face::{Font, FontError, OffsetTable, TableRecord};
 pub use fvar::{Fvar, VariationAxis};
-pub use glyf::{BoundingBox, CompositeComponent, Contour, Glyf, Glyph, Outline, OutlinePoint};
+pub use glyf::{
+    Anchor, BoundingBox, CompositeComponent, Contour, Glyf, Glyph, Outline, OutlinePoint,
+};
 pub use head::{Head, IndexToLocFormat};
 pub use hhea::Hhea;
 pub use hmtx::Hmtx;
