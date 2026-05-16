@@ -14,6 +14,7 @@
 pub mod avar;
 pub mod binary;
 pub mod cmap;
+pub mod delta_set_index_map;
 pub mod face;
 pub mod fvar;
 pub mod glyf;
@@ -31,6 +32,7 @@ pub mod system_fonts;
 pub use avar::{Avar, AxisValueMap, SegmentMap};
 pub use binary::BinaryReader;
 pub use cmap::Cmap;
+pub use delta_set_index_map::{DeltaSetIndex, DeltaSetIndexMap};
 pub use face::{Font, FontError, OffsetTable, TableRecord};
 pub use fvar::{Fvar, VariationAxis};
 pub use glyf::{
