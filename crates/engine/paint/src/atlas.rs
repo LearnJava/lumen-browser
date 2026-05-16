@@ -9,6 +9,13 @@
 //! Атлас сам по себе не знает про шрифты — принимает на вход уже
 //! растеризованный `Bitmap` от `lumen-font::Rasterizer`. Так atlas
 //! тестируется в изоляции, а renderer связывает font + atlas сам.
+//!
+//! Ключ кэша — opaque `u64`, который формирует caller. Renderer пакует в
+//! него `(face_id, glyph_id, size_bin)` для **multi-size glyph caching**:
+//! при `font-size: 16px` глифы растеризируются на bin 16 без масштабирования,
+//! при 32px — на bin 32 и т.д. Это устраняет blur от linear-sampler
+//! масштабирования fixed-size атласа (раньше все глифы рисовались на
+//! 24 px независимо от итогового размера).
 
 use std::collections::HashMap;
 
@@ -28,7 +35,7 @@ pub struct GlyphAtlas {
     width: u32,
     height: u32,
     pixels: Vec<u8>,
-    cache: HashMap<u16, GlyphEntry>,
+    cache: HashMap<u64, GlyphEntry>,
     cursor_x: u32,
     shelf_y: u32,
     shelf_height: u32,
@@ -71,15 +78,18 @@ impl GlyphAtlas {
         self.dirty = false;
     }
 
-    pub fn get(&self, glyph_id: u16) -> Option<&GlyphEntry> {
-        self.cache.get(&glyph_id)
+    pub fn get(&self, key: u64) -> Option<&GlyphEntry> {
+        self.cache.get(&key)
     }
 
     /// Кладёт растеризованный глиф в атлас. Возвращает `None` если место
-    /// исчерпано. Если глиф уже в кэше — возвращает существующую запись
+    /// исчерпано. Если ключ уже в кэше — возвращает существующую запись
     /// без перезаписи пикселей.
-    pub fn insert(&mut self, glyph_id: u16, bitmap: &Bitmap) -> Option<GlyphEntry> {
-        if let Some(&entry) = self.cache.get(&glyph_id) {
+    ///
+    /// Ключ opaque — caller отвечает за его уникальность. Renderer пакует
+    /// `(face_id, glyph_id, size_bin)` через `pack_atlas_key`.
+    pub fn insert(&mut self, key: u64, bitmap: &Bitmap) -> Option<GlyphEntry> {
+        if let Some(&entry) = self.cache.get(&key) {
             return Some(entry);
         }
         if bitmap.width == 0 || bitmap.height == 0 {
@@ -122,7 +132,7 @@ impl GlyphAtlas {
             width: bitmap.width,
             height: bitmap.height,
         };
-        self.cache.insert(glyph_id, entry);
+        self.cache.insert(key, entry);
         Some(entry)
     }
 }
@@ -174,12 +184,32 @@ mod tests {
     fn cached_glyph_returns_existing_entry() {
         let mut atlas = GlyphAtlas::new(64);
         let first = atlas.insert(1, &bitmap(10, 10, 100)).unwrap();
-        // Повторный insert с тем же id и даже другим bitmap — должен вернуть
-        // первую запись, не перезаписывая место в атласе.
+        // Повторный insert с тем же ключом и даже другим bitmap — должен
+        // вернуть первую запись, не перезаписывая место в атласе.
         let second = atlas.insert(1, &bitmap(20, 20, 200)).unwrap();
         assert_eq!(first, second);
         // Размер остался от первого insert.
         assert_eq!(second.width, 10);
+    }
+
+    #[test]
+    fn different_keys_store_separate_entries() {
+        // Multi-size key invariant: (face_id, glyph_id, size_bin=16) и
+        // (face_id, glyph_id, size_bin=32) для одного «глифа A» дают две
+        // разные записи. Без этого мы бы перезаписывали единственную
+        // запись (баг fixed-size атласа).
+        let mut atlas = GlyphAtlas::new(64);
+        let key_16 = 0x0000_0001_0010; // (face=0, glyph=1, size=16)
+        let key_32 = 0x0000_0001_0020; // (face=0, glyph=1, size=32)
+        let e16 = atlas.insert(key_16, &bitmap(10, 12, 100)).unwrap();
+        let e32 = atlas.insert(key_32, &bitmap(20, 24, 100)).unwrap();
+        assert_ne!(
+            (e16.atlas_x, e16.atlas_y),
+            (e32.atlas_x, e32.atlas_y),
+            "разные ключи занимают разные места"
+        );
+        assert_eq!(atlas.get(key_16).copied(), Some(e16));
+        assert_eq!(atlas.get(key_32).copied(), Some(e32));
     }
 
     #[test]
@@ -212,7 +242,7 @@ mod tests {
         atlas.insert(1, &bitmap(8, 8, 50)).unwrap();
         assert!(atlas.dirty());
         atlas.mark_clean();
-        // Повторный insert уже существующего — НЕ пометит dirty (ничего не записано).
+        // Повторный insert уже существующего ключа — НЕ пометит dirty (ничего не записано).
         atlas.insert(1, &bitmap(8, 8, 50)).unwrap();
         assert!(!atlas.dirty());
     }
