@@ -175,6 +175,20 @@ pub enum PseudoClass {
     /// делает language tags case-insensitive). Пустой список → парсер
     /// fallback-ит на `Unsupported(name)`.
     Lang(Vec<String>),
+    /// `:link` (CSS Selectors L4 §6.2.2) — unvisited hyperlink. HTML
+    /// hyperlinks: `<a>` / `<area>` / `<link>` элементы с `href`-атрибутом.
+    /// В Phase 0 без history-runtime все ссылки трактуются как unvisited
+    /// (нет visited-state). Эквивалентен `:any-link` для author-CSS.
+    Link,
+    /// `:visited` (CSS Selectors L4 §6.2.3) — посещённый hyperlink. В Phase 0
+    /// без history-runtime всегда `false`. Реальная реализация требует
+    /// safe-history-API с privacy-restrictions (CSS Privacy and Security §6)
+    /// — отдельная задача с интеграцией к `lumen-storage::History`.
+    Visited,
+    /// `:any-link` (CSS Selectors L4 §6.2.1) — любая ссылка независимо от
+    /// visited-state, эквивалент `:is(:link, :visited)`. Pure DOM-based:
+    /// `<a>` / `<area>` / `<link>` с `href`-атрибутом.
+    AnyLink,
     /// `:dir(ltr|rtl)` (CSS Selectors L4 §13.2). Single keyword argument
     /// (`ltr` или `rtl`, ASCII case-insensitive). Матчит элемент с
     /// соответствующей directionality, определяемой через `dir`-атрибут
@@ -2498,6 +2512,9 @@ impl<'a> Parser<'a> {
             "checked" => PseudoClass::Checked,
             "indeterminate" => PseudoClass::Indeterminate,
             "default" => PseudoClass::Default,
+            "link" => PseudoClass::Link,
+            "visited" => PseudoClass::Visited,
+            "any-link" => PseudoClass::AnyLink,
             _ => PseudoClass::Unsupported(name),
         };
         Some(SimpleSelector::PseudoClass(pc))
@@ -3364,6 +3381,9 @@ mod tests {
             ("checked", PseudoClass::Checked),
             ("indeterminate", PseudoClass::Indeterminate),
             ("default", PseudoClass::Default),
+            ("link", PseudoClass::Link),
+            ("visited", PseudoClass::Visited),
+            ("any-link", PseudoClass::AnyLink),
         ];
         for (name, expected) in cases {
             let s = parse(&format!(":{name} {{}}"));

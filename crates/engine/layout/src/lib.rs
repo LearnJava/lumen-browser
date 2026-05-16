@@ -1388,6 +1388,136 @@ mod tests {
         assert_eq!((c.r, c.b), (0, 255));
     }
 
+    // ──────────────── :link / :visited / :any-link (CSS Selectors L4 §6.2) ────────────────
+
+    /// Computes color для первого element-child указанного тега в DOM (без
+    /// layout-tree, чтобы тесты ловили inline-элементы вроде `<a>` / `<area>`
+    /// / `<link>` независимо от того, попадают они в LayoutBox или нет).
+    fn element_color(html: &str, css: &str, tag: &str) -> Color {
+        use crate::style::compute_style;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root_style = ComputedStyle::root();
+        let target = find_first_element(&doc, doc.root(), tag).expect("element not found");
+        compute_style(&doc, target, &sheet, &root_style, Size::new(800.0, 600.0)).color
+    }
+
+    fn find_first_element(
+        doc: &lumen_dom::Document,
+        node: lumen_dom::NodeId,
+        tag: &str,
+    ) -> Option<lumen_dom::NodeId> {
+        if let lumen_dom::NodeData::Element { name, .. } = &doc.get(node).data
+            && name.local == tag
+        {
+            return Some(node);
+        }
+        for &child in &doc.get(node).children {
+            if let Some(found) = find_first_element(doc, child, tag) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    #[test]
+    fn any_link_matches_a_with_href() {
+        let c = element_color(
+            r#"<a href="https://example.com">x</a>"#,
+            "a:any-link { color: red; }",
+            "a",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn any_link_does_not_match_a_without_href() {
+        // <a> без href — не hyperlink (HTML5 §4.6.1).
+        let c = element_color(
+            r#"<a>x</a>"#,
+            "a:any-link { color: red; }",
+            "a",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    #[test]
+    fn any_link_matches_area_with_href() {
+        // `<area>` внутри `<map>` — image-map link.
+        let c = element_color(
+            r##"<map><area href="#x"></map>"##,
+            "area:any-link { color: red; }",
+            "area",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn any_link_matches_link_with_href() {
+        let c = element_color(
+            r#"<link href="style.css" rel="stylesheet">"#,
+            "link:any-link { color: red; }",
+            "link",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn link_pseudo_matches_a_with_href_in_phase_0() {
+        // В Phase 0 без visited-runtime `:link` эквивалентен `:any-link`.
+        let c = element_color(
+            r#"<a href="x">a</a>"#,
+            "a:link { color: red; }",
+            "a",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn link_pseudo_does_not_match_without_href() {
+        let c = element_color(
+            r#"<a>x</a>"#,
+            "a:link { color: red; }",
+            "a",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    #[test]
+    fn visited_pseudo_never_matches_in_phase_0() {
+        // Phase 0 без history-runtime — никакая ссылка не считается посещённой.
+        // Безопасный default per privacy-by-default.
+        let c = element_color(
+            r#"<a href="x">a</a>"#,
+            "a:visited { color: red; }",
+            "a",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    #[test]
+    fn link_pseudos_do_not_match_div_with_href() {
+        // `href` на не-hyperlink-элементе игнорируется (только a/area/link).
+        let c = element_color(
+            r#"<div href="x">x</div>"#,
+            ":any-link { color: red; } :link { color: blue; }",
+            "div",
+        );
+        assert_eq!((c.r, c.b), (0, 0));
+    }
+
+    #[test]
+    fn any_link_specificity_class_level() {
+        // `:any-link` имеет specificity class-уровня (0,1,0). Equal-specificity
+        // — более позднее правило выигрывает (source-order).
+        let c = element_color(
+            r#"<a href="x">a</a>"#,
+            "a:any-link { color: red; } a:link { color: blue; }",
+            "a",
+        );
+        assert_eq!((c.r, c.b), (0, 255));
+    }
+
     #[test]
     fn id_wins_over_class() {
         // id specificity (1,0,0) > class (0,1,0). Порядок правил в CSS — class
