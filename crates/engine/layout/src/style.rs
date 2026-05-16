@@ -3113,6 +3113,7 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         PseudoClass::Checked => matches_checked(doc, node),
         PseudoClass::Indeterminate => matches_indeterminate(doc, node),
         PseudoClass::Default => matches_default(doc, node),
+        PseudoClass::Lang(tags) => matches_lang(doc, node, tags),
         PseudoClass::Unsupported(_) => false,
     }
 }
@@ -3584,6 +3585,63 @@ fn nearest_form(doc: &Document, node: NodeId) -> Option<NodeId> {
 /// radio-группы. Возвращает корень документа если предка `<form>` нет.
 fn nearest_form_or_root(doc: &Document, node: NodeId) -> NodeId {
     nearest_form(doc, node).unwrap_or_else(|| doc.root())
+}
+
+/// `:lang(<tag>#)` (CSS Selectors L4 §11). Элемент матчит, если его
+/// content-language matches хотя бы один из tag-ов в списке по RFC 4647
+/// §3.3.1 «basic filtering»: range matches tag, если range — exact equal
+/// или range — proper prefix tag с границей по `-`. То есть `:lang(en)`
+/// matches `lang="en"`, `lang="en-US"`, `lang="en-Latn-GB"`, но не
+/// `lang="english"` и не `lang="fr-en"` (последний — `fr` + `en` — `en`
+/// здесь регион/вариант, не language).
+///
+/// Content-language определяется через ближайший `lang` или `xml:lang`
+/// атрибут вверх по дереву (HTML5 §3.2.6 «inheritance»; xml:lang —
+/// исторически из XHTML, до сих пор используется в реальных страницах).
+/// Если ни один ancestor не имеет `lang`, элемент не имеет языка и не
+/// матчит ни один tag — кроме пустого `*` (Selectors L4 расширение пока
+/// не поддерживается).
+fn matches_lang(doc: &Document, node: NodeId, tags: &[String]) -> bool {
+    let Some(content_lang) = element_lang(doc, node) else {
+        return false;
+    };
+    let content_lc = content_lang.to_ascii_lowercase();
+    tags.iter().any(|range| lang_range_matches(range, &content_lc))
+}
+
+/// Определяет content-language элемента, walking up ancestors. Сначала
+/// `lang`, потом `xml:lang` на том же узле; затем родитель, и так далее.
+/// Возвращает None если ни у кого нет атрибута либо найденное значение —
+/// пустая строка (HTML5: `lang=""` — «явно неизвестен», не наследует от
+/// предков — Phase 0 трактует как «нет языка»).
+fn element_lang(doc: &Document, node: NodeId) -> Option<String> {
+    let mut cur = Some(node);
+    while let Some(n) = cur {
+        if let NodeData::Element { .. } = &doc.get(n).data {
+            let nr = doc.get(n);
+            if let Some(v) = nr.get_attr("lang") {
+                return if v.is_empty() { None } else { Some(v.to_string()) };
+            }
+            if let Some(v) = nr.get_attr("xml:lang") {
+                return if v.is_empty() { None } else { Some(v.to_string()) };
+            }
+        }
+        cur = doc.get(n).parent;
+    }
+    None
+}
+
+/// RFC 4647 §3.3.1 «basic filtering»: language range matches language tag,
+/// если range — case-insensitive prefix tag с границей по `-` или концом
+/// строки. Обе стороны уже ожидаются в lowercase.
+fn lang_range_matches(range_lc: &str, tag_lc: &str) -> bool {
+    if range_lc == tag_lc {
+        return true;
+    }
+    if let Some(rest) = tag_lc.strip_prefix(range_lc) {
+        return rest.starts_with('-');
+    }
+    false
 }
 
 /// Проверка: у узла есть хоть один text-ребёнок с непустым содержимым
