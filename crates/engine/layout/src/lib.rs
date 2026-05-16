@@ -982,6 +982,209 @@ mod tests {
         assert_eq!((c.r, c.b), (0, 0));
     }
 
+    // ──────────────── :checked / :indeterminate / :default ────────────────
+
+    #[test]
+    fn checked_matches_checkbox_with_attr() {
+        let (root, doc) = lay_with_doc(
+            r#"<input type="checkbox" checked>"#,
+            "input:checked { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn checked_matches_checkbox_empty_attr_value() {
+        // checked="" — атрибут присутствует, значение спецификацией не
+        // используется (HTML5 §2.4.2 boolean attribute).
+        let (root, doc) = lay_with_doc(
+            r#"<input type="checkbox" checked="">"#,
+            "input:checked { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn checked_no_match_without_attr() {
+        let (root, doc) = lay_with_doc(
+            r#"<input type="checkbox">"#,
+            "input:checked { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 0);
+    }
+
+    #[test]
+    fn checked_matches_radio_with_attr() {
+        let (root, doc) = lay_with_doc(
+            r#"<input type="radio" checked>"#,
+            "input:checked { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn checked_does_not_match_text_input() {
+        // text-input с атрибутом `checked` — атрибут не имеет смысла,
+        // :checked не матчит.
+        let (root, doc) = lay_with_doc(
+            r#"<input type="text" checked>"#,
+            "input:checked { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 0);
+    }
+
+    #[test]
+    fn checked_matches_option_with_selected() {
+        let (root, doc) = lay_with_doc(
+            r#"<select><option id="a">a</option><option id="b" selected>b</option></select>"#,
+            "option:checked { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "a").r, 0);
+        assert_eq!(color_by_id(&doc, &root, "b").r, 255);
+    }
+
+    #[test]
+    fn checked_does_not_match_div() {
+        let (root, doc) = lay_with_doc(
+            r#"<div checked>x</div>"#,
+            ":checked { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "div").r, 0);
+    }
+
+    #[test]
+    fn indeterminate_radio_group_no_checked() {
+        // Группа из двух radio с одинаковым name, ни один не checked →
+        // оба :indeterminate.
+        let (root, doc) = lay_with_doc(
+            r#"<form><input type="radio" name="g" id="a"><input type="radio" name="g" id="b"></form>"#,
+            "input:indeterminate { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "a").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "b").r, 255);
+    }
+
+    #[test]
+    fn indeterminate_radio_group_one_checked_no_match() {
+        // Один из группы checked → оба НЕ :indeterminate.
+        let (root, doc) = lay_with_doc(
+            r#"<form><input type="radio" name="g" id="a" checked><input type="radio" name="g" id="b"></form>"#,
+            "input:indeterminate { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "a").r, 0);
+        assert_eq!(color_by_id(&doc, &root, "b").r, 0);
+    }
+
+    #[test]
+    fn indeterminate_radio_distinct_groups_isolated() {
+        // Две группы с разным `name`: checked в одной не влияет на другую.
+        let (root, doc) = lay_with_doc(
+            r#"<form><input type="radio" name="g1" id="a" checked><input type="radio" name="g2" id="b"></form>"#,
+            "input:indeterminate { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "a").r, 0);
+        assert_eq!(color_by_id(&doc, &root, "b").r, 255);
+    }
+
+    #[test]
+    fn indeterminate_checkbox_never_in_phase_0() {
+        // Phase 0 без runtime: атрибут indeterminate (если бы такой существовал)
+        // не передаёт DOM-флаг; checkbox всегда вне :indeterminate.
+        let (root, doc) = lay_with_doc(
+            r#"<input type="checkbox">"#,
+            "input:indeterminate { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 0);
+    }
+
+    #[test]
+    fn indeterminate_progress_without_value() {
+        // <progress> без атрибута value → indeterminate progress.
+        let (root, doc) = lay_with_doc(
+            r#"<progress></progress>"#,
+            "progress:indeterminate { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "progress").r, 255);
+    }
+
+    #[test]
+    fn indeterminate_progress_with_value_no_match() {
+        let (root, doc) = lay_with_doc(
+            r#"<progress value="0.5"></progress>"#,
+            "progress:indeterminate { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "progress").r, 0);
+    }
+
+    #[test]
+    fn default_matches_option_with_selected() {
+        let (root, doc) = lay_with_doc(
+            r#"<select><option id="a">a</option><option id="b" selected>b</option></select>"#,
+            "option:default { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "a").r, 0);
+        assert_eq!(color_by_id(&doc, &root, "b").r, 255);
+    }
+
+    #[test]
+    fn default_matches_checked_checkbox() {
+        let (root, doc) = lay_with_doc(
+            r#"<input type="checkbox" checked>"#,
+            "input:default { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "input").r, 255);
+    }
+
+    #[test]
+    fn default_matches_first_submit_button_of_form() {
+        // Первая submit-кнопка в DOM-порядке формы — default-submit.
+        let (root, doc) = lay_with_doc(
+            r#"<form><button id="a" type="submit">A</button><button id="b" type="submit">B</button></form>"#,
+            "button:default { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "a").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "b").r, 0);
+    }
+
+    #[test]
+    fn default_matches_button_without_type_attr() {
+        // <button> без `type` имеет default type=submit (HTML5 §4.10.8).
+        let (root, doc) = lay_with_doc(
+            r#"<form><button id="a">go</button></form>"#,
+            "button:default { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "a").r, 255);
+    }
+
+    #[test]
+    fn default_matches_input_type_submit() {
+        let (root, doc) = lay_with_doc(
+            r#"<form><input id="a" type="submit"></form>"#,
+            "input:default { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "a").r, 255);
+    }
+
+    #[test]
+    fn default_no_match_for_submit_button_outside_form() {
+        // Без <form>-предка submit-кнопка не считается default-submit.
+        let (root, doc) = lay_with_doc(
+            r#"<button id="a" type="submit">go</button>"#,
+            "button:default { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "a").r, 0);
+    }
+
+    #[test]
+    fn default_button_type_button_no_match() {
+        // type=button — не submit, не default.
+        let (root, doc) = lay_with_doc(
+            r#"<form><button id="a" type="button">x</button></form>"#,
+            "button:default { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "a").r, 0);
+    }
+
     #[test]
     fn id_wins_over_class() {
         // id specificity (1,0,0) > class (0,1,0). Порядок правил в CSS — class

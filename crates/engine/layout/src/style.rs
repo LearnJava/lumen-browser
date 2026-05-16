@@ -3110,6 +3110,9 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         PseudoClass::ReadWrite => matches_read_write(doc, node),
         PseudoClass::Disabled => matches_disabled(doc, node, true),
         PseudoClass::Enabled => matches_disabled(doc, node, false),
+        PseudoClass::Checked => matches_checked(doc, node),
+        PseudoClass::Indeterminate => matches_indeterminate(doc, node),
+        PseudoClass::Default => matches_default(doc, node),
         PseudoClass::Unsupported(_) => false,
     }
 }
@@ -3387,6 +3390,200 @@ fn matches_placeholder_shown(doc: &Document, node: NodeId) -> bool {
         return false;
     }
     true
+}
+
+/// `:checked` (CSS Selectors L4 §10.1). Pure attribute-based matcher без
+/// runtime form-state:
+/// - `<input type=checkbox|radio>` с атрибутом `checked` (значение атрибута
+///   не имеет значения — спецификация трактует наличие как true);
+/// - `<option>` с атрибутом `selected`.
+///
+/// Динамически переключённый через клик/JS checkbox не отражается в
+/// DOM-атрибутах и здесь не учитывается — Phase 0 без form-state runtime.
+fn matches_checked(doc: &Document, node: NodeId) -> bool {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else {
+        return false;
+    };
+    match name.local.as_str() {
+        "input" => {
+            let t = input_type_lower(doc, node);
+            if t != "checkbox" && t != "radio" {
+                return false;
+            }
+            node_ref.get_attr("checked").is_some()
+        }
+        "option" => node_ref.get_attr("selected").is_some(),
+        _ => false,
+    }
+}
+
+/// `:indeterminate` (CSS Selectors L4 §10.2, HTML5 §4.16.3 + §4.10.18.4).
+/// Применяется к:
+/// - `<input type=checkbox>` с DOM-флагом indeterminate (Phase 0: всегда
+///   `false` — флаг существует только через JS `.indeterminate = true`,
+///   которого пока нет);
+/// - `<input type=radio>` в группе (одинаковый `name` внутри ближайшей
+///   form-owner-области) без ни одного checked-радио. Если радио без `name`,
+///   группа = только сам элемент — тогда indeterminate ≡ нет `checked`;
+/// - `<progress>` без атрибута `value` (indeterminate progress per HTML5).
+fn matches_indeterminate(doc: &Document, node: NodeId) -> bool {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else {
+        return false;
+    };
+    match name.local.as_str() {
+        "input" => {
+            let t = input_type_lower(doc, node);
+            if t == "radio" {
+                // Найти ближайший <form>-предок; если нет — корень документа.
+                let scope = nearest_form_or_root(doc, node);
+                let radio_name = node_ref.get_attr("name").map(|s| s.to_string());
+                !any_descendant(doc, scope, |n| {
+                    if !is_element(doc, n) {
+                        return false;
+                    }
+                    let other = doc.get(n);
+                    let NodeData::Element { name: n2, .. } = &other.data else {
+                        return false;
+                    };
+                    if n2.local.as_str() != "input" {
+                        return false;
+                    }
+                    let t2 = input_type_lower(doc, n);
+                    if t2 != "radio" {
+                        return false;
+                    }
+                    // Радио считается членом той же группы если name совпадает
+                    // (или оба отсутствуют — узкая группа из одного элемента).
+                    let n2_name = other.get_attr("name").map(|s| s.to_string());
+                    if n2_name != radio_name {
+                        return false;
+                    }
+                    other.get_attr("checked").is_some()
+                })
+            } else {
+                // Phase 0: checkbox indeterminate выставляется только через
+                // JS — DOM не выражает этого. Всегда false.
+                false
+            }
+        }
+        "progress" => node_ref.get_attr("value").is_none(),
+        _ => false,
+    }
+}
+
+/// `:default` (CSS Selectors L4 §10.4, HTML5 §4.16.3) — «по-умолчанию
+/// активный» form control:
+/// - `<option>` с атрибутом `selected`;
+/// - checkbox/radio с атрибутом `checked`;
+/// - default submit-button формы — первая в DOM-порядке формы
+///   `<button type=submit>` / `<input type=submit|image>`. `type=submit` —
+///   default для `<button>` (HTML5 §4.10.8) и для `<input>` без `type` это
+///   `text`, поэтому submit-button обязан иметь `type=submit`.
+fn matches_default(doc: &Document, node: NodeId) -> bool {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else {
+        return false;
+    };
+    let tag = name.local.as_str();
+    match tag {
+        "option" => node_ref.get_attr("selected").is_some(),
+        "input" => {
+            let t = input_type_lower(doc, node);
+            if (t == "checkbox" || t == "radio") && node_ref.get_attr("checked").is_some() {
+                return true;
+            }
+            if t == "submit" || t == "image" {
+                return is_default_submit_button(doc, node);
+            }
+            false
+        }
+        "button" => {
+            // default-type для <button> = submit (HTML5 §4.10.8).
+            let t = node_ref
+                .get_attr("type")
+                .map(|s| s.trim().to_ascii_lowercase())
+                .unwrap_or_else(|| "submit".to_string());
+            if t != "submit" {
+                return false;
+            }
+            is_default_submit_button(doc, node)
+        }
+        _ => false,
+    }
+}
+
+/// Default submit-button формы — первая submit-кнопка в DOM-порядке внутри
+/// ближайшего `<form>`-предка (HTML5 §4.10.22.3 «implicit submission»).
+/// Если предка `<form>` нет, кнопка не form-owner-связана и не считается
+/// default.
+fn is_default_submit_button(doc: &Document, node: NodeId) -> bool {
+    let Some(form) = nearest_form(doc, node) else {
+        return false;
+    };
+    let mut found: Option<NodeId> = None;
+    walk_first_submit(doc, form, &mut found);
+    found == Some(node)
+}
+
+/// Pre-order обход поддерева form в поиске первой submit-кнопки. Сохраняет
+/// результат в `found` и останавливается раньше через короткое замыкание
+/// `is_some()` на ранних уровнях.
+fn walk_first_submit(doc: &Document, scope: NodeId, found: &mut Option<NodeId>) {
+    if found.is_some() {
+        return;
+    }
+    for &child in &doc.get(scope).children {
+        if found.is_some() {
+            return;
+        }
+        if !is_element(doc, child) {
+            continue;
+        }
+        let NodeData::Element { name, .. } = &doc.get(child).data else {
+            continue;
+        };
+        let tag = name.local.as_str();
+        if tag == "input" {
+            let t = input_type_lower(doc, child);
+            if t == "submit" || t == "image" {
+                *found = Some(child);
+                return;
+            }
+        } else if tag == "button" {
+            let t = doc
+                .get(child)
+                .get_attr("type")
+                .map(|s| s.trim().to_ascii_lowercase())
+                .unwrap_or_else(|| "submit".to_string());
+            if t == "submit" {
+                *found = Some(child);
+                return;
+            }
+        }
+        walk_first_submit(doc, child, found);
+    }
+}
+
+/// Ближайший `<form>`-предок (или сам node, если он `<form>`). None — нет.
+fn nearest_form(doc: &Document, node: NodeId) -> Option<NodeId> {
+    let mut cur = Some(node);
+    while let Some(n) = cur {
+        if let NodeData::Element { name, .. } = &doc.get(n).data
+            && name.local.as_str() == "form"
+        {
+            return Some(n);
+        }
+        cur = doc.get(n).parent;
+    }
+    None
+}
+
+/// Ближайший `<form>`-предок или корень документа — scope-для-обхода
+/// radio-группы. Возвращает корень документа если предка `<form>` нет.
+fn nearest_form_or_root(doc: &Document, node: NodeId) -> NodeId {
+    nearest_form(doc, node).unwrap_or_else(|| doc.root())
 }
 
 /// Проверка: у узла есть хоть один text-ребёнок с непустым содержимым
