@@ -11,10 +11,14 @@
 //!    источник (`src`) держит свою `wgpu::Texture` + bind group; общий
 //!    sampler. Без cache hit — fallback на светло-серый fill (как раньше).
 //!
-//! Глифы растеризуются по требованию через `lumen_font::Rasterizer` при
-//! фиксированном `ATLAS_PIXEL_SIZE` (24 px); итоговый display-размер
-//! получается масштабированием квада (font_size / ATLAS_PIXEL_SIZE).
-//! Это компромисс ради простоты — multi-size atlas будет потом.
+//! Глифы растеризуются по требованию через `lumen_font::Rasterizer` на
+//! **подобранный bin размера** (`size_bin_for(font_size)`). Bin-набор —
+//! `SIZE_BINS = [8, 12, 16, 20, 24, 32, 48, 64]`; font_size округляется
+//! вверх до ближайшего bin (или до 64 если больше). Display-сторона
+//! масштабирует квад в долю `font_size / size_bin` — если font_size совпал
+//! с bin-ом (16/24 px), масштаба нет вовсе. Это устраняет blur от линейной
+//! интерполяции fixed-size атласа (раньше всё рисовалось на 24 px и потом
+//! масштабировалось).
 
 use std::collections::HashMap;
 use std::error::Error;
@@ -32,10 +36,49 @@ use crate::atlas::{GlyphAtlas, GlyphEntry};
 use crate::display_list::fit_image_quad;
 use crate::{DisplayCommand, DisplayList};
 
-/// Размер атласа в пикселях (квадратный).
-const ATLAS_DIM: u32 = 512;
-/// Размер растеризации глифа в атласе. Display-сторона потом масштабирует.
-const ATLAS_PIXEL_SIZE: f32 = 24.0;
+/// Размер атласа в пикселях (квадратный). Поднят с 512 до 1024 под
+/// multi-size atlas: типичная страница использует 2-3 размера шрифта,
+/// что даёт ~3× больше уникальных глифов в кеше.
+const ATLAS_DIM: u32 = 1024;
+
+/// Bin размеров растеризации (CSS px). `font_size` округляется до
+/// ближайшего bin вверх через `size_bin_for`. Если ≤ 8 — используется
+/// bin 8 (нечитаемо иначе всё равно); если > 64 — bin 64 с up-scaling-ом
+/// (большие заголовки редки, потеря качества на единичных headline-ах
+/// приемлема в Phase 0). При совпадении font_size с bin-ом квад не
+/// масштабируется (нет blur).
+const SIZE_BINS: [u16; 8] = [8, 12, 16, 20, 24, 32, 48, 64];
+
+/// CSS px → размер растеризации в `SIZE_BINS`. Round-up до ближайшего bin;
+/// > последнего bin — клампим к последнему.
+fn size_bin_for(font_size: f32) -> u16 {
+    // NaN / negative / 0 — недопустимый вход (Phase 0 не должно происходить),
+    // клампим к min-bin без panic. INFINITY = «больше любого bin» → max-bin.
+    if font_size.is_nan() || font_size <= 0.0 {
+        return SIZE_BINS[0];
+    }
+    if font_size.is_infinite() {
+        return SIZE_BINS[SIZE_BINS.len() - 1];
+    }
+    let target = font_size.ceil() as u16;
+    for &bin in &SIZE_BINS {
+        if bin >= target {
+            return bin;
+        }
+    }
+    SIZE_BINS[SIZE_BINS.len() - 1]
+}
+
+/// Пакует `(face_id, glyph_id, size_bin)` в opaque atlas key. face_id —
+/// usize (но мы используем u16: тысячи face-ов нереалистично, 1-16
+/// hardcap для Phase 0), glyph_id — u16 (по TTF spec), size_bin — u16.
+/// Итог: 16 бит face + 16 бит glyph + 16 бит size = 48 бит < u64.
+fn pack_atlas_key(face_id: usize, glyph_id: u16, size_bin: u16) -> u64 {
+    let face = (face_id as u64) & 0xFFFF;
+    let glyph = u64::from(glyph_id);
+    let size = u64::from(size_bin);
+    (face << 32) | (glyph << 16) | size
+}
 
 const FILL_SHADER_SRC: &str = r#"
 struct Uniforms {
@@ -218,8 +261,12 @@ impl core::fmt::Display for ImageRegisterError {
 
 impl std::error::Error for ImageRegisterError {}
 
-/// Закешированная информация о глифе: позиция в атласе + метрики
-/// (left/top — на ATLAS_PIXEL_SIZE; advance — в font units, без масштабирования).
+/// Закешированная информация о глифе: позиция в атласе + метрики.
+///
+/// `left` / `top` — в пикселях растеризации (т.е. на размер bin-а из
+/// `SIZE_BINS`); сюда влияют только параметры растеризации, не итоговый
+/// display-размер. `advance_native` — в font units (`hmtx.advance_width`),
+/// масштаб по `font_size / units_per_em` применяется на стороне caller-а.
 #[derive(Clone, Copy)]
 struct CachedGlyph {
     entry: GlyphEntry,
@@ -235,18 +282,19 @@ struct LoadedFace {
     bytes: Vec<u8>,
 }
 
-/// Распарсенный face для одного `render()`-вызова: Font + ключевые таблицы
-/// + per-face Rasterizer. Borrow от `LoadedFace.bytes`.
+/// Распарсенный face для одного `render()`-вызова: Font + ключевые таблицы.
+/// Borrow от `LoadedFace.bytes`.
 ///
 /// Используется в codepoint-cascade: per-char проверяем `cmap.glyph_index`
-/// у каждого face-а и выбираем тот, где глиф найден.
+/// у каждого face-а и выбираем тот, где глиф найден. Rasterizer создаётся
+/// per-DrawText (см. `push_text_glyphs`) — size_bin зависит от font-size,
+/// который варьируется по командам, а не по face-ам.
 struct ParsedFace<'a> {
     font: Font<'a>,
     head: Head,
     hhea: Hhea,
     cmap: Cmap<'a>,
     hmtx: Hmtx<'a>,
-    raster: Rasterizer,
 }
 
 pub struct Renderer {
@@ -291,9 +339,12 @@ pub struct Renderer {
     /// `None` означает «без resolver-а — всегда default face» (для тестов /
     /// headless-режимов).
     font_provider: Option<Arc<dyn FontProvider>>,
-    /// Кэш растеризованных глифов: ключ `(face_id, glyph_id)`, потому что
-    /// glyph_id у разных face-ов имеют разное значение.
-    cached_glyphs: HashMap<(usize, u16), Option<CachedGlyph>>,
+    /// Кэш растеризованных глифов: ключ `(face_id, glyph_id, size_bin)`.
+    /// `face_id` — глифы у разных face-ов имеют разный glyph_id; `size_bin`
+    /// — multi-size atlas (см. `SIZE_BINS`): один и тот же глиф для
+    /// font-size 16 и 32 даёт две разные записи (разная растеризация,
+    /// разный atlas-rect).
+    cached_glyphs: HashMap<(usize, u16, u16), Option<CachedGlyph>>,
 }
 
 impl Renderer {
@@ -907,8 +958,7 @@ impl Renderer {
                 let hhea = font.hhea().ok()?;
                 let cmap = font.cmap().ok()?;
                 let hmtx = font.hmtx().ok()?;
-                let raster = Rasterizer::new(ATLAS_PIXEL_SIZE, head.units_per_em);
-                Some(ParsedFace { font, head, hhea, cmap, hmtx, raster })
+                Some(ParsedFace { font, head, hhea, cmap, hmtx })
             })
             .collect();
 
@@ -1223,11 +1273,13 @@ fn push_text_glyphs(
     primary_face_id: usize,
     parsed: &[Option<ParsedFace<'_>>],
     atlas: &mut GlyphAtlas,
-    cached: &mut HashMap<(usize, u16), Option<CachedGlyph>>,
+    cached: &mut HashMap<(usize, u16, u16), Option<CachedGlyph>>,
 ) {
-    // Display scale: глифы в атласе растеризованы на ATLAS_PIXEL_SIZE,
-    // а нужно показать на font_size — умножаем.
-    let display_scale = font_size / ATLAS_PIXEL_SIZE;
+    // Multi-size atlas: подбираем bin под font_size, растеризируем глифы
+    // на этом bin. Display масштаб = font_size / size_bin — если font_size
+    // совпал с bin-ом (12/16/24/32/...) — масштаба нет, текст резкий.
+    let size_bin = size_bin_for(font_size);
+    let display_scale = font_size / size_bin as f32;
 
     // Baseline: ascent / (ascent − descent) primary face-а. Для Inter ≈ 0.80.
     // Используем primary для всех глифов в run-е — иначе при смешивании
@@ -1256,10 +1308,11 @@ fn push_text_glyphs(
             cached,
             atlas,
             &face.font,
-            &face.raster,
             &face.hmtx,
+            face.head.units_per_em,
             face_id,
             glyph_id,
+            size_bin,
         );
 
         if let Some(g) = cached_glyph {
@@ -1322,31 +1375,36 @@ fn pick_face_for_codepoint(
     (primary_face_id, 0)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn ensure_glyph(
-    cached: &mut HashMap<(usize, u16), Option<CachedGlyph>>,
+    cached: &mut HashMap<(usize, u16, u16), Option<CachedGlyph>>,
     atlas: &mut GlyphAtlas,
     font: &Font,
-    raster: &Rasterizer,
     hmtx: &Hmtx,
+    units_per_em: u16,
     face_id: usize,
     glyph_id: u16,
+    size_bin: u16,
 ) -> Option<CachedGlyph> {
-    let key = (face_id, glyph_id);
+    let key = (face_id, glyph_id, size_bin);
     if let Some(&entry) = cached.get(&key) {
         return entry;
     }
 
-    let result = rasterize_and_insert(atlas, font, raster, hmtx, glyph_id);
+    let result = rasterize_and_insert(atlas, font, hmtx, units_per_em, face_id, glyph_id, size_bin);
     cached.insert(key, result);
     result
 }
 
+#[allow(clippy::too_many_arguments)]
 fn rasterize_and_insert(
     atlas: &mut GlyphAtlas,
     font: &Font,
-    raster: &Rasterizer,
     hmtx: &Hmtx,
+    units_per_em: u16,
+    face_id: usize,
     glyph_id: u16,
+    size_bin: u16,
 ) -> Option<CachedGlyph> {
     // glyph_resolved разворачивает composite в Simple рекурсивно, подставляя
     // компоненты с их transform/offset. Для уже simple-глифа возвращает как есть.
@@ -1354,8 +1412,13 @@ fn rasterize_and_insert(
     if !matches!(glyph.outline, Outline::Simple(_)) {
         return None;
     }
+    // Rasterizer создаётся per-call на размер bin-а. Кэш `cached_glyphs`
+    // гарантирует, что для одной (face_id, glyph_id, size_bin)-комбинации
+    // растеризация запустится максимум один раз.
+    let raster = Rasterizer::new(f32::from(size_bin), units_per_em);
     let bitmap: Bitmap = raster.rasterize(&glyph)?;
-    let entry = atlas.insert(glyph_id, &bitmap)?;
+    let atlas_key = pack_atlas_key(face_id, glyph_id, size_bin);
+    let entry = atlas.insert(atlas_key, &bitmap)?;
     let advance_native = hmtx.advance_width(glyph_id).unwrap_or(0);
     Some(CachedGlyph {
         entry,
@@ -1405,5 +1468,83 @@ fn block_on<F: std::future::Future>(future: F) -> F::Output {
             Poll::Ready(v) => return v,
             Poll::Pending => thread::park(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn size_bin_for_exact_match() {
+        // Точное совпадение — bin == входу.
+        for &bin in &SIZE_BINS {
+            assert_eq!(size_bin_for(f32::from(bin)), bin, "bin {bin}");
+        }
+    }
+
+    #[test]
+    fn size_bin_for_rounds_up_to_next_bin() {
+        // 9 → 12, 13 → 16, 17 → 20, 25 → 32, 33 → 48.
+        assert_eq!(size_bin_for(9.0), 12);
+        assert_eq!(size_bin_for(13.0), 16);
+        assert_eq!(size_bin_for(17.0), 20);
+        assert_eq!(size_bin_for(25.0), 32);
+        assert_eq!(size_bin_for(33.0), 48);
+        // Дробные: 13.5 → 16 (ceil 14 → bin 16).
+        assert_eq!(size_bin_for(13.5), 16);
+    }
+
+    #[test]
+    fn size_bin_for_below_min_clamps_to_min() {
+        // < 8 — bin 8 (нечитаемо иначе).
+        assert_eq!(size_bin_for(1.0), 8);
+        assert_eq!(size_bin_for(7.0), 8);
+        assert_eq!(size_bin_for(0.5), 8);
+    }
+
+    #[test]
+    fn size_bin_for_above_max_clamps_to_max() {
+        // > 64 — bin 64 (с up-scaling-ом для редких headline-ов).
+        assert_eq!(size_bin_for(72.0), 64);
+        assert_eq!(size_bin_for(120.0), 64);
+        assert_eq!(size_bin_for(1000.0), 64);
+    }
+
+    #[test]
+    fn size_bin_for_invalid_returns_min() {
+        // NaN / negative / 0 → bin 8 (минимум, без panic).
+        assert_eq!(size_bin_for(f32::NAN), 8);
+        assert_eq!(size_bin_for(-1.0), 8);
+        assert_eq!(size_bin_for(0.0), 8);
+        assert_eq!(size_bin_for(f32::INFINITY), 64);
+    }
+
+    #[test]
+    fn pack_atlas_key_distinguishes_size_bins() {
+        // Один и тот же глиф на двух размерах = два разных ключа.
+        let k16 = pack_atlas_key(0, 42, 16);
+        let k32 = pack_atlas_key(0, 42, 32);
+        assert_ne!(k16, k32);
+    }
+
+    #[test]
+    fn pack_atlas_key_distinguishes_glyph_ids() {
+        let k_a = pack_atlas_key(0, 100, 16);
+        let k_b = pack_atlas_key(0, 200, 16);
+        assert_ne!(k_a, k_b);
+    }
+
+    #[test]
+    fn pack_atlas_key_distinguishes_face_ids() {
+        let k0 = pack_atlas_key(0, 42, 16);
+        let k1 = pack_atlas_key(1, 42, 16);
+        assert_ne!(k0, k1);
+    }
+
+    #[test]
+    fn pack_atlas_key_is_deterministic() {
+        // Одинаковые аргументы → одинаковый ключ (HashMap-инвариант).
+        assert_eq!(pack_atlas_key(3, 17, 24), pack_atlas_key(3, 17, 24));
     }
 }
