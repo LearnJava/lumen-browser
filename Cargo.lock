@@ -982,6 +982,7 @@ version = "0.0.1"
 dependencies = [
  "lumen-core",
  "lumen-css-parser",
+ "lumen-dom",
  "lumen-font",
  "lumen-html-parser",
  "lumen-image",
