@@ -1295,6 +1295,99 @@ mod tests {
         assert_eq!((c.r, c.b), (0, 255));
     }
 
+    // ──────────────── :dir(ltr|rtl) (CSS Selectors L4 §13.2) ────────────────
+
+    #[test]
+    fn dir_ltr_matches_by_default() {
+        // Без `dir`-атрибута — default ltr (HTML5 §3.2.6.1).
+        let (root, doc) = lay_with_doc(
+            r#"<p>x</p>"#,
+            "p:dir(ltr) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 255);
+    }
+
+    #[test]
+    fn dir_rtl_does_not_match_by_default() {
+        let (root, doc) = lay_with_doc(
+            r#"<p>x</p>"#,
+            "p:dir(rtl) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 0);
+    }
+
+    #[test]
+    fn dir_rtl_matches_when_attr_set() {
+        let (root, doc) = lay_with_doc(
+            r#"<p dir="rtl">x</p>"#,
+            "p:dir(rtl) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 255);
+    }
+
+    #[test]
+    fn dir_rtl_inherited_from_ancestor() {
+        let (root, doc) = lay_with_doc(
+            r#"<div dir="rtl"><p>x</p></div>"#,
+            "p:dir(rtl) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 255);
+    }
+
+    #[test]
+    fn dir_nearest_ancestor_wins() {
+        // Внутренний `dir="ltr"` overrideит ancestor `dir="rtl"`.
+        let (root, doc) = lay_with_doc(
+            r#"<div dir="rtl"><p dir="ltr">x</p></div>"#,
+            "p:dir(rtl) { color: red; } p:dir(ltr) { color: blue; }",
+        );
+        let c = first_named(&doc, &root, "p");
+        assert_eq!((c.r, c.b), (0, 255));
+    }
+
+    #[test]
+    fn dir_attr_case_insensitive() {
+        let (root, doc) = lay_with_doc(
+            r#"<p dir="RTL">x</p>"#,
+            "p:dir(rtl) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 255);
+    }
+
+    #[test]
+    fn dir_auto_treated_as_ltr_in_phase_0() {
+        // `dir="auto"` в Phase 0 без bidi-движка трактуется как ltr.
+        let (root, doc) = lay_with_doc(
+            r#"<p dir="auto">x</p>"#,
+            "p:dir(ltr) { color: red; } p:dir(rtl) { color: blue; }",
+        );
+        let c = first_named(&doc, &root, "p");
+        assert_eq!((c.r, c.b), (255, 0));
+    }
+
+    #[test]
+    fn dir_invalid_value_treated_as_ltr() {
+        // `dir="invalid"` — fallback на ltr (как и `auto`).
+        let (root, doc) = lay_with_doc(
+            r#"<p dir="invalid">x</p>"#,
+            "p:dir(ltr) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 255);
+    }
+
+    #[test]
+    fn dir_auto_finalizes_directionality_does_not_inherit() {
+        // `dir="auto"` на самом элементе — финализирует direction (Phase 0:
+        // ltr); ancestor `dir="rtl"` НЕ должен пробить — атрибут на элементе
+        // имеет приоритет, даже если значение `auto`.
+        let (root, doc) = lay_with_doc(
+            r#"<div dir="rtl"><p dir="auto">x</p></div>"#,
+            "p:dir(rtl) { color: red; } p:dir(ltr) { color: blue; }",
+        );
+        let c = first_named(&doc, &root, "p");
+        assert_eq!((c.r, c.b), (0, 255));
+    }
+
     #[test]
     fn id_wins_over_class() {
         // id specificity (1,0,0) > class (0,1,0). Порядок правил в CSS — class

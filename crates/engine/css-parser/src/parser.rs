@@ -175,9 +175,24 @@ pub enum PseudoClass {
     /// делает language tags case-insensitive). Пустой список → парсер
     /// fallback-ит на `Unsupported(name)`.
     Lang(Vec<String>),
+    /// `:dir(ltr|rtl)` (CSS Selectors L4 §13.2). Single keyword argument
+    /// (`ltr` или `rtl`, ASCII case-insensitive). Матчит элемент с
+    /// соответствующей directionality, определяемой через `dir`-атрибут
+    /// самого элемента или ближайшего ancestor-а (HTML5 §3.2.6.1).
+    /// При отсутствии `dir` — default `ltr`. `dir="auto"` в Phase 0
+    /// трактуется как `ltr` (real auto-direction по UAX #9 first-strong
+    /// отложен до bidi-движка). Невалидные аргументы → `Unsupported(name)`.
+    Dir(DirArg),
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
+}
+
+/// Аргумент `:dir(...)` pseudo-class (CSS Selectors L4 §13.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DirArg {
+    Ltr,
+    Rtl,
 }
 
 /// Один элемент relative-selector-list-а из `:has()`. `combinator` — если
@@ -2536,6 +2551,30 @@ impl<'a> Parser<'a> {
                 }
                 Some(PseudoClass::Has(list))
             }
+            "dir" => {
+                // CSS Selectors L4 §13.2: single keyword argument `ltr` или
+                // `rtl`, ASCII case-insensitive. Остальные значения, включая
+                // `auto`, — невалидны (фоллбэк на Unsupported у caller-а).
+                self.skip_ws_and_comments();
+                let mut kw = String::new();
+                while let Some(c) = self.peek() {
+                    if c.is_ascii_alphabetic() {
+                        kw.push(c.to_ascii_lowercase());
+                        self.consume();
+                    } else {
+                        break;
+                    }
+                }
+                self.skip_ws_and_comments();
+                if self.peek() != Some(')') {
+                    return None;
+                }
+                match kw.as_str() {
+                    "ltr" => Some(PseudoClass::Dir(DirArg::Ltr)),
+                    "rtl" => Some(PseudoClass::Dir(DirArg::Rtl)),
+                    _ => None,
+                }
+            }
             "lang" => {
                 // CSS Selectors L4 §11: comma-list BCP 47 language tags.
                 // Tag = ASCII alpha, после которого допустимы alpha/digit/`-`
@@ -3415,6 +3454,58 @@ mod tests {
         assert!(matches!(
             p,
             SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "lang"
+        ));
+    }
+
+    #[test]
+    fn pseudo_dir_ltr() {
+        let s = parse(":dir(ltr) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Dir(DirArg::Ltr))
+        ));
+    }
+
+    #[test]
+    fn pseudo_dir_rtl() {
+        let s = parse(":dir(rtl) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Dir(DirArg::Rtl))
+        ));
+    }
+
+    #[test]
+    fn pseudo_dir_case_insensitive_keyword() {
+        let s = parse(":dir(LTR) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Dir(DirArg::Ltr))
+        ));
+    }
+
+    #[test]
+    fn pseudo_dir_unknown_keyword_falls_back() {
+        // `auto` — невалидный аргумент для :dir в spec (только ltr/rtl).
+        // Парсер откатывает в Unsupported.
+        let s = parse(":dir(auto) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "dir"
+        ));
+    }
+
+    #[test]
+    fn pseudo_dir_empty_falls_back() {
+        let s = parse(":dir() { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "dir"
         ));
     }
 
