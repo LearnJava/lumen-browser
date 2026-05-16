@@ -9,13 +9,15 @@
 use lumen_core::geom::Rect;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, BoxKind, Color, FontStyle, FontWeight,
-    InlineFrag, LayoutBox, ObjectFit, ObjectPosition, PaintOrder, PaintPhase, PositionComponent,
-    StackingContextId, StackingTree,
+    InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition, Overflow,
+    PaintOrder, PaintPhase, PositionComponent, StackingContextId, StackingTree,
 };
 
 /// CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
-/// `Normal` (no-op); остальные 15 mode-ов парсятся в CSS-каскаде, но
+/// `Normal` (no-op); остальные 16 mode-ов парсятся в CSS-каскаде, но
 /// реальный composite-pipeline для них — задача P2 п.4 (mix-blend-mode).
+/// `PlusLighter` — из CSS Compositing & Blending L2 §6, реализуется
+/// как additive compositing с pre-multiplied alpha.
 /// Хранится в `DisplayCommand::PushBlendMode` как stub-значение, чтобы
 /// расширить enum без правки потребителей.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -37,6 +39,7 @@ pub enum BlendMode {
     Saturation,
     Color,
     Luminosity,
+    PlusLighter,
 }
 
 impl BlendMode {
@@ -67,6 +70,7 @@ impl BlendMode {
             ("saturation", Self::Saturation),
             ("color", Self::Color),
             ("luminosity", Self::Luminosity),
+            ("plus-lighter", Self::PlusLighter),
         ] {
             if s.eq_ignore_ascii_case(kw) {
                 return Some(mode);
@@ -398,6 +402,7 @@ fn blend_mode_name(m: BlendMode) -> &'static str {
         BlendMode::Saturation => "saturation",
         BlendMode::Color => "color",
         BlendMode::Luminosity => "luminosity",
+        BlendMode::PlusLighter => "plus-lighter",
     }
 }
 
@@ -419,9 +424,25 @@ pub fn build_display_list(root: &LayoutBox) -> DisplayList {
 /// inline-level descendant) — отдельная задача после flex / float layout.
 ///
 /// Bucket-per-SC структура:
+/// - `pre`: layer-ops, открываемые при входе в SC (PushOpacity / PushBlendMode
+///   / PushClipRect) — собственный SC-owner с `opacity<1` / `mix-blend-mode`
+///   ≠ normal / `overflow` ≠ visible.
 /// - `root_bg`: bg/border SC-owner box-а (фаза 1 «RootBackground»).
 /// - `contents`: всё остальное содержимое SC (descendants, исключая собственно
 ///   SC-creating потомков — те идут в свои buckets).
+/// - `post`: парные Pop-команды, в обратном порядке к `pre`.
+///
+/// **Phase 0 ограничение для layer-ops:** `pre` / `post` SC-owner-а охватывают
+/// только `root_bg + contents` собственного SC, **не** child-SC потомков (они
+/// рисуются после `InlineContent` parent-SC в линейном порядке, а `post` уже
+/// эмитится в той же `InlineContent`-фазе). Для строгой семантики
+/// `opacity / blend-mode` родителя на child-SC потребуется либо stack-based
+/// эмиссия с явным end-of-SC маркером в `PaintOrder`, либо группировка
+/// child-SC внутри parent-bucket. Renderer сейчас всё равно игнорирует
+/// Push/Pop (роадмап P2 п.1B шаг (c) — реальный layer-pipeline), так что
+/// текущая эмиссия — interface-level: парность сохранена, потребители
+/// (compositor) видят сами триггеры; уточнение охвата child-SC — отдельный
+/// шаг при реальном compositor pipeline.
 pub fn build_display_list_ordered(
     root: &LayoutBox,
     tree: &StackingTree,
@@ -440,8 +461,14 @@ pub fn build_display_list_ordered(
         }
         let bucket = &mut buckets[idx];
         match phase {
-            PaintPhase::RootBackground => out.append(&mut bucket.root_bg),
-            PaintPhase::InlineContent => out.append(&mut bucket.contents),
+            PaintPhase::RootBackground => {
+                out.append(&mut bucket.pre);
+                out.append(&mut bucket.root_bg);
+            }
+            PaintPhase::InlineContent => {
+                out.append(&mut bucket.contents);
+                out.append(&mut bucket.post);
+            }
             // Phase 0: BlockBackgrounds / Floats merged into InlineContent;
             // marker-фазы (NegativeZ / PositionedAndZAuto / PositiveZ) в
             // выводе `PaintOrder::from_tree` не появляются — рекурсия
@@ -454,15 +481,113 @@ pub fn build_display_list_ordered(
 
 #[derive(Default, Clone)]
 struct ScBucket {
+    /// PushOpacity / PushBlendMode / PushClipRect — открывают layer-effects
+    /// SC-owner-а перед собственным фоном.
+    pre: Vec<DisplayCommand>,
     /// CSS 2.1 Appendix E phase 1 — bg/border SC-owner box-а.
     root_bg: Vec<DisplayCommand>,
     /// Фазы 3/4/5 — descendants SC-owner-а кроме child-SC-creating box-ов.
     contents: Vec<DisplayCommand>,
+    /// Pop* в обратном порядке к `pre`. Эмитится после `contents` в фазе
+    /// `InlineContent`. См. Phase 0 ограничение в docstring
+    /// `build_display_list_ordered`.
+    post: Vec<DisplayCommand>,
+}
+
+/// CSS Compositing & Blending L1 §5: маппинг style-уровневого `MixBlendMode`
+/// (lumen-layout) в paint-уровневый `BlendMode` (lumen-paint). Enum-ы
+/// разные, чтобы не тянуть зависимость paint → layout в обратную сторону;
+/// варианты совпадают 1:1.
+fn map_blend_mode(m: LayoutBlendMode) -> BlendMode {
+    match m {
+        LayoutBlendMode::Normal => BlendMode::Normal,
+        LayoutBlendMode::Multiply => BlendMode::Multiply,
+        LayoutBlendMode::Screen => BlendMode::Screen,
+        LayoutBlendMode::Overlay => BlendMode::Overlay,
+        LayoutBlendMode::Darken => BlendMode::Darken,
+        LayoutBlendMode::Lighten => BlendMode::Lighten,
+        LayoutBlendMode::ColorDodge => BlendMode::ColorDodge,
+        LayoutBlendMode::ColorBurn => BlendMode::ColorBurn,
+        LayoutBlendMode::HardLight => BlendMode::HardLight,
+        LayoutBlendMode::SoftLight => BlendMode::SoftLight,
+        LayoutBlendMode::Difference => BlendMode::Difference,
+        LayoutBlendMode::Exclusion => BlendMode::Exclusion,
+        LayoutBlendMode::Hue => BlendMode::Hue,
+        LayoutBlendMode::Saturation => BlendMode::Saturation,
+        LayoutBlendMode::Color => BlendMode::Color,
+        LayoutBlendMode::Luminosity => BlendMode::Luminosity,
+        LayoutBlendMode::PlusLighter => BlendMode::PlusLighter,
+    }
+}
+
+/// CSS Overflow L3 §3.2: значения, при которых overflow создаёт clip-bound
+/// для содержимого. `Visible` не клипает.
+fn overflow_clips(o: Overflow) -> bool {
+    matches!(
+        o,
+        Overflow::Hidden | Overflow::Clip | Overflow::Scroll | Overflow::Auto
+    )
+}
+
+/// Собирает layer-effect триггеры одного box-а в pair (pre, post).
+/// Push-команды складываются в `pre` в порядке, парные `Pop` в `post` —
+/// в обратном порядке (LIFO). Возвращает пустые векторы для боксов без
+/// триггеров **или для анонимных боксов** (InlineRun / Skip), у которых
+/// нет своего DOM-элемента, к которому компилятор стиля привязал бы
+/// triggering свойство.
+///
+/// Симметрия с `box_can_own_stacking_context` / `box_can_own_property_node`:
+/// анонимные InlineRun-ы клонируют style родителя (включая opacity и
+/// overflow), и эмиссия layer-ops для них дала бы фантомные парные
+/// Push/Pop поверх настоящих от parent-Block-а. Та же защита здесь.
+///
+/// Триггеры:
+/// - `opacity < 1.0` → `PushOpacity { alpha } / PopOpacity`.
+/// - `mix-blend-mode != Normal` → `PushBlendMode { mode } / PopBlendMode`.
+/// - `overflow-x / overflow-y` ∈ {hidden, clip, scroll, auto} →
+///   `PushClipRect { rect: b.rect } / PopClip`.
+///
+/// Порядок Push-команд (для child compositor-а смысла не несёт, но
+/// детерминирован для тестируемости): Clip → Blend → Opacity. Pop —
+/// в обратном (Opacity → Blend → Clip). Так visual-результат не зависит:
+/// все эффекты применяются на off-screen-layer-е одного box-а.
+fn box_layer_ops(b: &LayoutBox) -> (Vec<DisplayCommand>, Vec<DisplayCommand>) {
+    let mut pre = Vec::new();
+    let mut post = Vec::new();
+    if !box_can_own_stacking_context(b) {
+        return (pre, post);
+    }
+    let s = &b.style;
+
+    if overflow_clips(s.overflow_x) || overflow_clips(s.overflow_y) {
+        pre.push(DisplayCommand::PushClipRect { rect: b.rect });
+        post.push(DisplayCommand::PopClip);
+    }
+    if s.mix_blend_mode != LayoutBlendMode::Normal {
+        pre.push(DisplayCommand::PushBlendMode {
+            mode: map_blend_mode(s.mix_blend_mode),
+        });
+        post.push(DisplayCommand::PopBlendMode);
+    }
+    if s.opacity < 1.0 {
+        pre.push(DisplayCommand::PushOpacity { alpha: s.opacity });
+        post.push(DisplayCommand::PopOpacity);
+    }
+    // post в LIFO порядке относительно pre.
+    post.reverse();
+    (pre, post)
 }
 
 /// Walk-функция, идентичная по триггерам `StackingTree::build`: pre-order,
 /// SC-id присваивается монотонно при обнаружении SC-creating потомка.
 /// Boxes без SC-trigger остаются в `current_sc`.
+///
+/// Layer-ops эмиссия:
+/// - Для SC-owner (`is_sc_root == true`) Push идёт в `bucket.pre`, Pop в
+///   `bucket.post`.
+/// - Для non-SC box-а (typically `overflow: hidden` без других триггеров —
+///   opacity/blend сами триггерят SC) Push/Pop эмитятся inline в
+///   `bucket.contents` вокруг собственного contents-emit-а и потомков.
 fn fill_buckets(
     b: &LayoutBox,
     current_sc: StackingContextId,
@@ -470,24 +595,49 @@ fn fill_buckets(
     buckets: &mut [ScBucket],
     is_sc_root: bool,
 ) {
-    let bucket = &mut buckets[current_sc.0 as usize];
-    let target = if is_sc_root {
-        &mut bucket.root_bg
-    } else {
-        &mut bucket.contents
-    };
-    emit_box_self(b, target);
+    let (pre_ops, post_ops) = box_layer_ops(b);
 
-    for child in &b.children {
-        let child_creates_sc =
-            box_can_own_stacking_context(child) && creates_stacking_context(&child.style);
-        if child_creates_sc {
-            let id = StackingContextId(*next_sc_id);
-            *next_sc_id += 1;
-            fill_buckets(child, id, next_sc_id, buckets, true);
-        } else {
-            fill_buckets(child, current_sc, next_sc_id, buckets, false);
+    if is_sc_root {
+        let bucket = &mut buckets[current_sc.0 as usize];
+        bucket.pre.extend(pre_ops);
+        emit_box_self(b, &mut bucket.root_bg);
+        // `post` эмитится в фазе InlineContent после descendants — заполним
+        // его сейчас, чтобы не повторно вычислять триггеры.
+        bucket.post.extend(post_ops);
+
+        for child in &b.children {
+            let child_creates_sc =
+                box_can_own_stacking_context(child) && creates_stacking_context(&child.style);
+            if child_creates_sc {
+                let id = StackingContextId(*next_sc_id);
+                *next_sc_id += 1;
+                fill_buckets(child, id, next_sc_id, buckets, true);
+            } else {
+                fill_buckets(child, current_sc, next_sc_id, buckets, false);
+            }
         }
+    } else {
+        // Non-SC box: inline Push/Pop в contents текущего SC. Это нужно для
+        // `overflow:hidden` на обычном in-flow box-е (opacity/blend
+        // триггерят SC сами, до сюда не дойдут с не-пустым pre_ops).
+        let bucket = &mut buckets[current_sc.0 as usize];
+        bucket.contents.extend(pre_ops);
+        emit_box_self(b, &mut bucket.contents);
+
+        for child in &b.children {
+            let child_creates_sc =
+                box_can_own_stacking_context(child) && creates_stacking_context(&child.style);
+            if child_creates_sc {
+                let id = StackingContextId(*next_sc_id);
+                *next_sc_id += 1;
+                fill_buckets(child, id, next_sc_id, buckets, true);
+            } else {
+                fill_buckets(child, current_sc, next_sc_id, buckets, false);
+            }
+        }
+
+        let bucket = &mut buckets[current_sc.0 as usize];
+        bucket.contents.extend(post_ops);
     }
 }
 
@@ -1652,6 +1802,238 @@ mod tests {
             neg_text.unwrap() < hello_idx.unwrap(),
             "neg-z div (phase 2) рисуется ДО root.InlineContent (phase 5)"
         );
+    }
+
+    // ── layer-ops эмиссия в build_display_list_ordered ─────────────────
+
+    /// Helper: количество вхождений варианта в DisplayList.
+    fn count_variant(dl: &DisplayList, predicate: impl Fn(&DisplayCommand) -> bool) -> usize {
+        dl.iter().filter(|c| predicate(c)).count()
+    }
+
+    #[test]
+    fn ordered_opacity_lt_one_emits_push_pop_pair() {
+        let dl = build_ordered("<div>x</div>", "div { opacity: 0.5; }");
+        let pushes = count_variant(&dl, |c| matches!(c, DisplayCommand::PushOpacity { .. }));
+        let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopOpacity));
+        assert_eq!(pushes, 1, "opacity<1 → один PushOpacity");
+        assert_eq!(pops, 1, "и парный PopOpacity");
+
+        // Push до контента, Pop после.
+        let push_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PushOpacity { .. }))
+            .unwrap();
+        let pop_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PopOpacity))
+            .unwrap();
+        let text_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "x"));
+        assert!(push_idx < pop_idx);
+        if let Some(text_idx) = text_idx {
+            assert!(push_idx < text_idx);
+            assert!(text_idx < pop_idx);
+        }
+    }
+
+    #[test]
+    fn ordered_opacity_alpha_value_preserved() {
+        let dl = build_ordered("<div>x</div>", "div { opacity: 0.25; }");
+        let push = dl
+            .iter()
+            .find(|c| matches!(c, DisplayCommand::PushOpacity { .. }))
+            .unwrap();
+        if let DisplayCommand::PushOpacity { alpha } = push {
+            assert!((alpha - 0.25).abs() < 1e-6);
+        } else {
+            panic!("expected PushOpacity");
+        }
+    }
+
+    #[test]
+    fn ordered_opacity_one_does_not_emit() {
+        let dl = build_ordered("<div>x</div>", "div { opacity: 1; }");
+        let pushes = count_variant(&dl, |c| matches!(c, DisplayCommand::PushOpacity { .. }));
+        assert_eq!(pushes, 0, "opacity:1 не триггерит Push");
+    }
+
+    #[test]
+    fn ordered_mix_blend_mode_emits_push_pop() {
+        let dl = build_ordered(
+            "<div>x</div>",
+            "div { mix-blend-mode: multiply; }",
+        );
+        let pushes: Vec<_> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::PushBlendMode { mode } => Some(*mode),
+                _ => None,
+            })
+            .collect();
+        let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopBlendMode));
+        assert_eq!(pushes, vec![BlendMode::Multiply]);
+        assert_eq!(pops, 1);
+    }
+
+    #[test]
+    fn ordered_mix_blend_mode_normal_does_not_emit() {
+        let dl = build_ordered(
+            "<div>x</div>",
+            "div { mix-blend-mode: normal; }",
+        );
+        let pushes = count_variant(&dl, |c| matches!(c, DisplayCommand::PushBlendMode { .. }));
+        assert_eq!(pushes, 0);
+    }
+
+    #[test]
+    fn ordered_overflow_hidden_on_sc_owner_emits_clip() {
+        // div c opacity<1 (= SC-owner) + overflow:hidden → Push/PopClipRect
+        // в SC-owner bucket. Opacity тоже эмитится; проверяем clip отдельно.
+        let dl = build_ordered(
+            "<div>x</div>",
+            "div { opacity: 0.5; overflow: hidden; width: 100px; height: 50px; }",
+        );
+        let pushes_clip: Vec<_> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::PushClipRect { rect } => Some(*rect),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(pushes_clip.len(), 1, "overflow:hidden → один PushClipRect");
+        let pops_clip = count_variant(&dl, |c| matches!(c, DisplayCommand::PopClip));
+        assert_eq!(pops_clip, 1);
+    }
+
+    #[test]
+    fn ordered_overflow_hidden_on_non_sc_emits_clip_inline() {
+        // div c overflow:hidden НЕ создаёт SC (overflow — не SC-trigger).
+        // PushClipRect эмитится inline в bucket.contents текущего SC.
+        let dl = build_ordered(
+            "<div>x</div>",
+            "div { overflow: hidden; width: 100px; height: 50px; }",
+        );
+        let pushes_clip = count_variant(&dl, |c| matches!(c, DisplayCommand::PushClipRect { .. }));
+        let pops_clip = count_variant(&dl, |c| matches!(c, DisplayCommand::PopClip));
+        assert_eq!(pushes_clip, 1);
+        assert_eq!(pops_clip, 1);
+        // SC не появился: PushOpacity/PushBlendMode не должны быть.
+        assert_eq!(
+            count_variant(&dl, |c| matches!(c, DisplayCommand::PushOpacity { .. })),
+            0
+        );
+    }
+
+    #[test]
+    fn ordered_overflow_visible_does_not_emit_clip() {
+        let dl = build_ordered(
+            "<div>x</div>",
+            "div { overflow: visible; opacity: 0.5; }",
+        );
+        let pushes_clip = count_variant(&dl, |c| matches!(c, DisplayCommand::PushClipRect { .. }));
+        assert_eq!(pushes_clip, 0, "overflow:visible не клипает");
+    }
+
+    #[test]
+    fn ordered_overflow_x_alone_triggers_clip() {
+        // Любое из overflow-x / overflow-y ≠ visible — достаточно для clip.
+        let dl = build_ordered(
+            "<div>x</div>",
+            "div { overflow-x: hidden; width: 100px; height: 50px; }",
+        );
+        let pushes_clip = count_variant(&dl, |c| matches!(c, DisplayCommand::PushClipRect { .. }));
+        assert_eq!(pushes_clip, 1);
+    }
+
+    #[test]
+    fn ordered_combined_opacity_blend_clip_emit_lifo() {
+        // SC-owner со всеми тремя триггерами: проверяем парность и LIFO.
+        let dl = build_ordered(
+            "<div>x</div>",
+            "div {
+                opacity: 0.5;
+                mix-blend-mode: multiply;
+                overflow: hidden;
+                width: 100px;
+                height: 50px;
+            }",
+        );
+        // Извлекаем последовательность layer-ops (без других команд).
+        let ops: Vec<&DisplayCommand> = dl
+            .iter()
+            .filter(|c| {
+                matches!(
+                    c,
+                    DisplayCommand::PushClipRect { .. }
+                        | DisplayCommand::PopClip
+                        | DisplayCommand::PushBlendMode { .. }
+                        | DisplayCommand::PopBlendMode
+                        | DisplayCommand::PushOpacity { .. }
+                        | DisplayCommand::PopOpacity
+                )
+            })
+            .collect();
+        // Ожидаемый порядок (см. box_layer_ops): Clip → Blend → Opacity (Push),
+        // потом Opacity → Blend → Clip (Pop) для LIFO-парности.
+        assert_eq!(ops.len(), 6, "три триггера = 6 layer-ops");
+        assert!(matches!(ops[0], DisplayCommand::PushClipRect { .. }));
+        assert!(matches!(ops[1], DisplayCommand::PushBlendMode { .. }));
+        assert!(matches!(ops[2], DisplayCommand::PushOpacity { .. }));
+        assert!(matches!(ops[3], DisplayCommand::PopOpacity));
+        assert!(matches!(ops[4], DisplayCommand::PopBlendMode));
+        assert!(matches!(ops[5], DisplayCommand::PopClip));
+    }
+
+    #[test]
+    fn ordered_nested_opacity_emits_two_pairs() {
+        // Внешний div с opacity, внутренний div с opacity. Каждый создаёт
+        // свой SC; должно быть 2 пары PushOpacity/PopOpacity.
+        let dl = build_ordered(
+            r#"<div class="outer"><div class="inner">x</div></div>"#,
+            ".outer { opacity: 0.5; } .inner { opacity: 0.25; }",
+        );
+        let pushes = count_variant(&dl, |c| matches!(c, DisplayCommand::PushOpacity { .. }));
+        let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopOpacity));
+        assert_eq!(pushes, 2);
+        assert_eq!(pops, 2);
+    }
+
+    #[test]
+    fn ordered_no_triggers_emits_no_layer_ops() {
+        // Простая страница без opacity/blend/overflow — ни одной layer-op.
+        let dl = build_ordered("<p>hello</p>", "");
+        let any_layer_op = dl.iter().any(|c| {
+            matches!(
+                c,
+                DisplayCommand::PushClipRect { .. }
+                    | DisplayCommand::PopClip
+                    | DisplayCommand::PushBlendMode { .. }
+                    | DisplayCommand::PopBlendMode
+                    | DisplayCommand::PushOpacity { .. }
+                    | DisplayCommand::PopOpacity
+            )
+        });
+        assert!(!any_layer_op);
+    }
+
+    #[test]
+    fn ordered_clip_rect_matches_box_rect() {
+        // PushClipRect должен использовать b.rect (после layout-а).
+        // Не привязываемся к точным значениям — проверяем, что rect не нулевой.
+        let dl = build_ordered(
+            "<div>x</div>",
+            "div { overflow: hidden; width: 200px; height: 100px; background: #f00; }",
+        );
+        let rect = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushClipRect { rect } => Some(*rect),
+                _ => None,
+            })
+            .expect("должен быть PushClipRect");
+        assert!(rect.width > 0.0 && rect.height > 0.0);
     }
 
     #[test]
