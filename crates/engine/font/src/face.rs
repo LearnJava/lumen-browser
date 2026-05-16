@@ -188,6 +188,17 @@ impl<'a> Font<'a> {
         crate::fvar::Fvar::parse(data)
     }
 
+    /// `avar` (Axis Variations) — piecewise-linear перенормализация осей из
+    /// linear-normalized `[-1, 0, 1]` в spec-correct normalized для lookup в
+    /// `gvar`. Опционально: variable font может не иметь `avar`, и тогда
+    /// все оси трактуются как identity (`Avar::default()` тоже identity).
+    /// Возвращает `Err(TableNotFound)`, если таблицы нет — caller обычно
+    /// fallback на identity.
+    pub fn avar(&self) -> Result<crate::avar::Avar, FontError> {
+        let data = self.table(b"avar").ok_or(FontError::TableNotFound(*b"avar"))?;
+        crate::avar::Avar::parse(data)
+    }
+
     /// Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
     /// (например, space). Composite-глифы возвращаются с `Outline::Composite`
     /// (компонентами) — для разрешения в простые контуры используй

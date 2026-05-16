@@ -11,6 +11,7 @@
 //! (для PostScript-OpenType), variable fonts, color glyphs (COLR/CPAL,
 //! sbix), bitmap strikes (EBDT/EBLC).
 
+pub mod avar;
 pub mod binary;
 pub mod cmap;
 pub mod face;
@@ -26,6 +27,7 @@ pub mod os2;
 pub mod rasterizer;
 pub mod system_fonts;
 
+pub use avar::{Avar, AxisValueMap, SegmentMap};
 pub use binary::BinaryReader;
 pub use cmap::Cmap;
 pub use face::{Font, FontError, OffsetTable, TableRecord};
