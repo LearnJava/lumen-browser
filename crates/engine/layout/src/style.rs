@@ -19,7 +19,8 @@ use std::collections::HashMap;
 use lumen_core::geom::Size;
 use lumen_css_parser::{
     parse_inline_style, AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector,
-    Declaration, MediaContext, PropertyRule, PseudoClass, SimpleSelector, Specificity, Stylesheet,
+    Declaration, DirArg, MediaContext, PropertyRule, PseudoClass, SimpleSelector, Specificity,
+    Stylesheet,
 };
 use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId};
 
@@ -3114,6 +3115,7 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         PseudoClass::Indeterminate => matches_indeterminate(doc, node),
         PseudoClass::Default => matches_default(doc, node),
         PseudoClass::Lang(tags) => matches_lang(doc, node, tags),
+        PseudoClass::Dir(arg) => matches_dir(doc, node, *arg),
         PseudoClass::Unsupported(_) => false,
     }
 }
@@ -3642,6 +3644,43 @@ fn lang_range_matches(range_lc: &str, tag_lc: &str) -> bool {
         return rest.starts_with('-');
     }
     false
+}
+
+/// `:dir(ltr|rtl)` (CSS Selectors L4 §13.2). Матчит элемент с
+/// соответствующей directionality, определяемой через `dir`-атрибут
+/// (с inherited fallback от ближайшего ancestor-а). При отсутствии
+/// `dir` нигде в цепочке — default `ltr` (HTML5 §3.2.6.1).
+fn matches_dir(doc: &Document, node: NodeId, want: DirArg) -> bool {
+    element_directionality(doc, node) == want
+}
+
+/// Computes content-directionality элемента по HTML5 §3.2.6.1
+/// «directionality»: значение `dir`-атрибута самого элемента, либо
+/// унаследовано от ближайшего ancestor с `dir`-атрибутом. Default `ltr`.
+///
+/// Phase 0 не реализует real auto-direction (UAX #9 first-strong scan по
+/// текстовому содержимому для `<bdi>` и `dir="auto"`) — оба трактуются
+/// как `ltr`, что соответствует поведению типичных страниц на латинице.
+/// Real bidi откладывается до layout-bidi движка (см. lumen-layout `Отложено`).
+fn element_directionality(doc: &Document, node: NodeId) -> DirArg {
+    let mut cur = Some(node);
+    while let Some(n) = cur {
+        if let NodeData::Element { .. } = &doc.get(n).data
+            && let Some(v) = doc.get(n).get_attr("dir")
+        {
+            return match v.trim().to_ascii_lowercase().as_str() {
+                "ltr" => DirArg::Ltr,
+                "rtl" => DirArg::Rtl,
+                // `auto` и любое другое значение — Phase 0 fallback to ltr;
+                // продолжаем walking up НЕ нужно: spec говорит, что
+                // `dir` атрибут на самом элементе финализирует
+                // directionality (`auto` тоже считается «явным»).
+                _ => DirArg::Ltr,
+            };
+        }
+        cur = doc.get(n).parent;
+    }
+    DirArg::Ltr
 }
 
 /// Проверка: у узла есть хоть один text-ребёнок с непустым содержимым
