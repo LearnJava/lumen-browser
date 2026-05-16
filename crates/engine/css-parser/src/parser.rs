@@ -165,6 +165,16 @@ pub enum PseudoClass {
     /// порядке формы). В Phase 0 — pure attribute-based + simple form-default-
     /// button heuristic без runtime state.
     Default,
+    /// `:lang(<language-tag>#)` (CSS Selectors L4 §11). Comma-list BCP 47
+    /// language tags. Элемент матчит, если его content-language (через
+    /// `lang`/`xml:lang` атрибут с наследованием от ancestor-ов) matches
+    /// хотя бы один из tag-ов в списке по правилам RFC 4647 §3.3.1
+    /// "basic filtering" — prefix-match с границей по `-` или концу строки.
+    ///
+    /// Tag-и нормализованы к ASCII lowercase при парсинге (BCP 47 спека
+    /// делает language tags case-insensitive). Пустой список → парсер
+    /// fallback-ит на `Unsupported(name)`.
+    Lang(Vec<String>),
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
@@ -2526,6 +2536,45 @@ impl<'a> Parser<'a> {
                 }
                 Some(PseudoClass::Has(list))
             }
+            "lang" => {
+                // CSS Selectors L4 §11: comma-list BCP 47 language tags.
+                // Tag = ASCII alpha, после которого допустимы alpha/digit/`-`
+                // (RFC 5646). Нормализуем к lowercase для case-insensitive
+                // matching. Whitespace внутри и вокруг запятой допускается;
+                // строковые литералы и quoted-tags по строгой спеке тоже
+                // допускаются, но в Phase 0 поддерживаем ident-форму — этого
+                // достаточно для подавляющего большинства author CSS.
+                let mut tags: Vec<String> = Vec::new();
+                loop {
+                    self.skip_ws_and_comments();
+                    if matches!(self.peek(), None | Some(')')) {
+                        break;
+                    }
+                    let mut buf = String::new();
+                    while let Some(c) = self.peek() {
+                        if c.is_ascii_alphanumeric() || c == '-' {
+                            buf.push(c.to_ascii_lowercase());
+                            self.consume();
+                        } else {
+                            break;
+                        }
+                    }
+                    if buf.is_empty() {
+                        return None;
+                    }
+                    tags.push(buf);
+                    self.skip_ws_and_comments();
+                    if self.peek() == Some(',') {
+                        self.consume();
+                    } else {
+                        break;
+                    }
+                }
+                if tags.is_empty() {
+                    return None;
+                }
+                Some(PseudoClass::Lang(tags))
+            }
             _ => None,
         }
     }
@@ -3307,6 +3356,66 @@ mod tests {
             }
             _ => panic!("expected NthChild(2n+1), got {p:?}"),
         }
+    }
+
+    #[test]
+    fn pseudo_lang_single_tag() {
+        let s = parse(":lang(en) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::Lang(tags)) => {
+                assert_eq!(tags, &vec!["en".to_string()]);
+            }
+            _ => panic!("expected Lang, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_lang_with_region() {
+        let s = parse(":lang(en-US) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::Lang(tags)) => {
+                assert_eq!(tags, &vec!["en-us".to_string()]);
+            }
+            _ => panic!("expected Lang, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_lang_comma_list() {
+        let s = parse(":lang(en, fr, ru) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::Lang(tags)) => {
+                assert_eq!(tags, &vec!["en".to_string(), "fr".to_string(), "ru".to_string()]);
+            }
+            _ => panic!("expected Lang, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_lang_case_normalized_to_lower() {
+        let s = parse(":lang(EN, FR-CA) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::Lang(tags)) => {
+                assert_eq!(tags, &vec!["en".to_string(), "fr-ca".to_string()]);
+            }
+            _ => panic!("expected Lang, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_lang_empty_falls_back_to_unsupported() {
+        // `:lang()` без аргументов — невалидно по spec, парсер откатывает
+        // в Unsupported.
+        let s = parse(":lang() { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "lang"
+        ));
     }
 
     #[test]

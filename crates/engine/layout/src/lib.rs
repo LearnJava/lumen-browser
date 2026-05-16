@@ -1185,6 +1185,116 @@ mod tests {
         assert_eq!(color_by_id(&doc, &root, "a").r, 0);
     }
 
+    // ──────────────── :lang(...) (CSS Selectors L4 §11) ────────────────
+
+    #[test]
+    fn lang_matches_self_lang_attr() {
+        let (root, doc) = lay_with_doc(
+            r#"<p lang="en">x</p>"#,
+            "p:lang(en) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 255);
+    }
+
+    #[test]
+    fn lang_matches_prefix_with_region() {
+        // RFC 4647 basic filtering: range "en" matches tag "en-US".
+        let (root, doc) = lay_with_doc(
+            r#"<p lang="en-US">x</p>"#,
+            "p:lang(en) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 255);
+    }
+
+    #[test]
+    fn lang_no_match_different_prefix() {
+        let (root, doc) = lay_with_doc(
+            r#"<p lang="fr">x</p>"#,
+            "p:lang(en) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 0);
+    }
+
+    #[test]
+    fn lang_no_match_substring_not_prefix() {
+        // "en" не должен матчить "fr-en" — `en` здесь регион, не язык.
+        let (root, doc) = lay_with_doc(
+            r#"<p lang="fr-en">x</p>"#,
+            "p:lang(en) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 0);
+    }
+
+    #[test]
+    fn lang_inherited_from_ancestor() {
+        let (root, doc) = lay_with_doc(
+            r#"<div lang="ru"><p>x</p></div>"#,
+            "p:lang(ru) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 255);
+    }
+
+    #[test]
+    fn lang_case_insensitive_match() {
+        // BCP 47: language tags case-insensitive. lang="EN-us" matches :lang(en).
+        let (root, doc) = lay_with_doc(
+            r#"<p lang="EN-us">x</p>"#,
+            "p:lang(en) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 255);
+    }
+
+    #[test]
+    fn lang_comma_list_any_matches() {
+        let (root, doc) = lay_with_doc(
+            r#"<p lang="fr">x</p>"#,
+            "p:lang(en, fr, ru) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 255);
+    }
+
+    #[test]
+    fn lang_no_match_when_no_lang_attr() {
+        // Ни один ancestor не имеет lang → элемент без языка → не матчит.
+        let (root, doc) = lay_with_doc(
+            r#"<p>x</p>"#,
+            "p:lang(en) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 0);
+    }
+
+    #[test]
+    fn lang_empty_attr_treated_as_no_language() {
+        // <p lang=""> — HTML5 «явно неизвестен», не наследует, не матчит.
+        let (root, doc) = lay_with_doc(
+            r#"<div lang="ru"><p lang="">x</p></div>"#,
+            "p:lang(ru) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 0);
+    }
+
+    #[test]
+    fn lang_xml_lang_fallback() {
+        // xml:lang атрибут используется как fallback (XHTML legacy).
+        let (root, doc) = lay_with_doc(
+            r#"<p xml:lang="ja">x</p>"#,
+            "p:lang(ja) { color: red; }",
+        );
+        assert_eq!(first_named(&doc, &root, "p").r, 255);
+    }
+
+    #[test]
+    fn lang_nearest_ancestor_wins() {
+        // Внутренний `lang` overrideит ancestor: внутри `lang="ru"`, p имеет
+        // `lang="en"` → matches en, не ru.
+        let (root, doc) = lay_with_doc(
+            r#"<div lang="ru"><p lang="en">x</p></div>"#,
+            "p:lang(ru) { color: red; } p:lang(en) { color: blue; }",
+        );
+        let c = first_named(&doc, &root, "p");
+        assert_eq!((c.r, c.b), (0, 255));
+    }
+
     #[test]
     fn id_wins_over_class() {
         // id specificity (1,0,0) > class (0,1,0). Порядок правил в CSS — class
