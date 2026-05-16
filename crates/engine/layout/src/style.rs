@@ -3116,6 +3116,14 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         PseudoClass::Default => matches_default(doc, node),
         PseudoClass::Lang(tags) => matches_lang(doc, node, tags),
         PseudoClass::Dir(arg) => matches_dir(doc, node, *arg),
+        PseudoClass::Link => matches_any_link(doc, node),
+        // CSS Selectors L4 §6.2.3: `:visited` требует history-runtime
+        // (`lumen-storage::History` + safe-history-API с privacy-ограничениями).
+        // Phase 0 без runtime — всегда false; никакая ссылка не считается
+        // посещённой. Это безопасный default (соответствует privacy-by-default
+        // принципу проекта №1: ничего не утекает через стилизацию).
+        PseudoClass::Visited => false,
+        PseudoClass::AnyLink => matches_any_link(doc, node),
         PseudoClass::Unsupported(_) => false,
     }
 }
@@ -3644,6 +3652,25 @@ fn lang_range_matches(range_lc: &str, tag_lc: &str) -> bool {
         return rest.starts_with('-');
     }
     false
+}
+
+/// `:any-link` / `:link` (CSS Selectors L4 §6.2.1 / §6.2.2, HTML5 §4.6).
+/// Hyperlinks в HTML: `<a>`, `<area>`, `<link>` элементы с **непустым**
+/// `href`-атрибутом (HTML5 §4.6.1 — hyperlink требует non-empty href; пустой
+/// href трактуется как ссылка на текущий документ и формально валиден, но
+/// все mainstream браузеры считают такой элемент hyperlink-ом — мы тоже).
+/// Spec различает hyperlink (`href` присутствует) от non-hyperlink (no href),
+/// последний не матчит ни `:link`, ни `:visited`, ни `:any-link`.
+fn matches_any_link(doc: &Document, node: NodeId) -> bool {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else {
+        return false;
+    };
+    let tag = name.local.as_str();
+    if !matches!(tag, "a" | "area" | "link") {
+        return false;
+    }
+    node_ref.get_attr("href").is_some()
 }
 
 /// `:dir(ltr|rtl)` (CSS Selectors L4 §13.2). Матчит элемент с
