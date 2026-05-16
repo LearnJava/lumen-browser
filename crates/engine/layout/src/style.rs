@@ -2555,6 +2555,15 @@ pub fn compute_style(
     // в этих атрибутах игнорируются.
     apply_image_presentational_hints(doc, node, &mut style);
 
+    // HTML5 §15 «Rendering»: `bgcolor` на `<body>` / `<table>` / `<thead>` /
+    // `<tbody>` / `<tfoot>` / `<tr>` / `<td>` / `<th>` мапается на
+    // `background-color` (presentational hint). Парсится по HTML5 §2.4.6
+    // «rules for parsing a legacy color value» — более лояльный алгоритм,
+    // чем CSS quirks hashless hex: принимает named colors, `#rgb` / `#rrggbb`,
+    // hashless hex произвольной длины и любую строку, в которой можно
+    // найти хотя бы какие-то hex-digits после padding-procedure.
+    apply_bgcolor_presentational_hint(doc, node, &mut style);
+
     // CSS Cascade L4 §6.4.3 — inline style: парсим HTML-атрибут `style=""`
     // и кладём его декларации в отдельный буфер. Они подключаются к каскаду
     // через дополнительный sort-bit `is_inline` (ниже): внутри одного origin
@@ -3805,6 +3814,161 @@ fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut Co
     }
     if let Some(h) = node_ref.get_attr("height").and_then(parse_html_dimension) {
         style.height = Some(h);
+    }
+}
+
+/// HTML5 §15: `bgcolor` атрибут на `<body>` / table-related элементах
+/// мапается на `background-color` (presentational hint). Парсится через
+/// HTML5 §2.4.6 «rules for parsing a legacy color value». Любое author-CSS
+/// правило в каскаде ниже перекроет hint — так и устроена presentational
+/// hint конструкция.
+///
+/// Список тегов взят из HTML5 §15.3.6 (`<body>`) и §15.3.8 (table-tree).
+/// Phase 0 ещё не делает табличный layout — но bgcolor попадает в
+/// `style.background_color` всё равно, чтобы при появлении table-layout
+/// рендеринг сразу работал.
+fn apply_bgcolor_presentational_hint(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    let tag = name.local.as_str();
+    if !matches!(
+        tag,
+        "body" | "table" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th"
+    ) {
+        return;
+    }
+    let node_ref = doc.get(node);
+    if let Some(val) = node_ref.get_attr("bgcolor")
+        && let Some(c) = parse_legacy_color_html_attr(val)
+    {
+        style.background_color = Some(c);
+    }
+}
+
+/// HTML5 §2.4.6 «rules for parsing a legacy color value».
+///
+/// Используется для presentational hint-атрибутов вроде `<body bgcolor>`,
+/// `<td bgcolor>`, `<font color>` (последний пока не применяется). Алгоритм
+/// значительно лояльнее CSS-парсера: принимает named colors, `#rgb` /
+/// `#rrggbb`, hashless hex произвольной длины, и через padding/truncate
+/// process выдаёт цвет из почти любой непустой строки, отличной от
+/// «transparent».
+///
+/// Отказы (Spec: «error»):
+/// - пустая строка / только whitespace;
+/// - ASCII case-insensitive match «transparent».
+///
+/// Все остальные строки возвращают непустой цвет — это нужно для
+/// совместимости с legacy-разметкой, где атрибуты часто содержат мусор.
+///
+/// Реализация работает в `Vec<char>` (Unicode code points), как требует
+/// spec — не в байтах. Не-BMP code-point (> U+FFFF) заменяется на две
+/// ASCII-«0» (spec step 6).
+fn parse_legacy_color_html_attr(input: &str) -> Option<Color> {
+    // Step 1-2: empty → error.
+    if input.is_empty() {
+        return None;
+    }
+    // Step 3: strip leading/trailing ASCII whitespace.
+    let trimmed = input.trim_matches(|c: char| matches!(c, '\t' | '\n' | '\x0C' | '\r' | ' '));
+    if trimmed.is_empty() {
+        return None;
+    }
+    // Step 4: case-insensitive «transparent» → error.
+    if trimmed.eq_ignore_ascii_case("transparent") {
+        return None;
+    }
+    // Step 5: named X11 / CSS3 color.
+    let lc = trimmed.to_ascii_lowercase();
+    // `named_color` принимает уже-lc имя и для «transparent» вернул бы
+    // TRANSPARENT-константу — но мы уже отказали выше, так что попадание
+    // невозможно.
+    if let Some(c) = named_color(&lc) {
+        return Some(c);
+    }
+    // Step 6: special-case 4-char `#xyz` short hex.
+    let bytes = trimmed.as_bytes();
+    if trimmed.len() == 4
+        && bytes[0] == b'#'
+        && bytes[1].is_ascii_hexdigit()
+        && bytes[2].is_ascii_hexdigit()
+        && bytes[3].is_ascii_hexdigit()
+    {
+        let r = hex_digit_value(bytes[1]) * 17;
+        let g = hex_digit_value(bytes[2]) * 17;
+        let b = hex_digit_value(bytes[3]) * 17;
+        return Some(Color { r, g, b, a: 255 });
+    }
+    // Step 7: replace non-BMP code-points с двумя «0»; затем truncate до 128.
+    let mut chars: Vec<char> = Vec::with_capacity(trimmed.len());
+    for c in trimmed.chars() {
+        if (c as u32) > 0xFFFF {
+            chars.push('0');
+            chars.push('0');
+        } else {
+            chars.push(c);
+        }
+    }
+    if chars.len() > 128 {
+        chars.truncate(128);
+    }
+    // Step 8: leading `#` удаляется.
+    if !chars.is_empty() && chars[0] == '#' {
+        chars.remove(0);
+    }
+    // Step 9: не-hex-digits заменяются на «0».
+    for c in &mut chars {
+        if !c.is_ascii_hexdigit() {
+            *c = '0';
+        }
+    }
+    // Step 10: padding нулями до длины > 0 и multiple of 3.
+    while chars.is_empty() || !chars.len().is_multiple_of(3) {
+        chars.push('0');
+    }
+    // Step 11: split на три равных компонента.
+    let mut length = chars.len() / 3;
+    let mut red: Vec<char> = chars[0..length].to_vec();
+    let mut green: Vec<char> = chars[length..length * 2].to_vec();
+    let mut blue: Vec<char> = chars[length * 2..length * 3].to_vec();
+    // Step 12: если length > 8, оставляем только последние 8 (срезаем leading).
+    if length > 8 {
+        let skip = length - 8;
+        red.drain(0..skip);
+        green.drain(0..skip);
+        blue.drain(0..skip);
+        length = 8;
+    }
+    // Step 13: пока length > 2 и у всех трёх компонентов лидирующий «0» —
+    // удаляем по «0» из каждого. Это «strip common leading zeros».
+    while length > 2 && red[0] == '0' && green[0] == '0' && blue[0] == '0' {
+        red.remove(0);
+        green.remove(0);
+        blue.remove(0);
+        length -= 1;
+    }
+    // Step 14: если length всё ещё > 2, оставляем только первые 2.
+    if length > 2 {
+        red.truncate(2);
+        green.truncate(2);
+        blue.truncate(2);
+    }
+    // Step 15-19: parse hex.
+    let r = u8::from_str_radix(&red.iter().collect::<String>(), 16).ok()?;
+    let g = u8::from_str_radix(&green.iter().collect::<String>(), 16).ok()?;
+    let b = u8::from_str_radix(&blue.iter().collect::<String>(), 16).ok()?;
+    Some(Color { r, g, b, a: 255 })
+}
+
+/// Значение ASCII hex-digit как 0..=15. Caller гарантирует
+/// `is_ascii_hexdigit()` — иначе возвращает 0.
+fn hex_digit_value(b: u8) -> u8 {
+    match b {
+        b'0'..=b'9' => b - b'0',
+        b'a'..=b'f' => b - b'a' + 10,
+        b'A'..=b'F' => b - b'A' + 10,
+        _ => 0,
     }
 }
 
@@ -11732,5 +11896,212 @@ mod tests {
         let s = ts("1s 0.5s");
         assert!((s.transition_durations[0] - 1.0).abs() < 1e-4);
         assert!((s.transition_delays[0] - 0.5).abs() < 1e-4);
+    }
+
+    // ── HTML5 §2.4.6 «rules for parsing a legacy color value» ─────────────
+
+    #[test]
+    fn legacy_color_empty_is_error() {
+        assert_eq!(parse_legacy_color_html_attr(""), None);
+    }
+
+    #[test]
+    fn legacy_color_whitespace_only_is_error() {
+        // Spec step 3 trim → empty → fail.
+        assert_eq!(parse_legacy_color_html_attr("   "), None);
+        assert_eq!(parse_legacy_color_html_attr("\t\n\r"), None);
+    }
+
+    #[test]
+    fn legacy_color_transparent_keyword_is_error() {
+        // Spec step 4: «transparent» — единственный keyword, дающий error.
+        assert_eq!(parse_legacy_color_html_attr("transparent"), None);
+        assert_eq!(parse_legacy_color_html_attr("TRANSPARENT"), None);
+        assert_eq!(parse_legacy_color_html_attr("  Transparent  "), None);
+    }
+
+    #[test]
+    fn legacy_color_named_lookup() {
+        assert_eq!(parse_legacy_color_html_attr("red"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_legacy_color_html_attr("RED"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_legacy_color_html_attr("Blue"), Some(rgba(0, 0, 255, 255)));
+        assert_eq!(parse_legacy_color_html_attr("rebeccapurple"), Some(rgba(102, 51, 153, 255)));
+    }
+
+    #[test]
+    fn legacy_color_hash_short_hex() {
+        // Spec step 6: 4-char #rgb с hex-digits expand до #rrggbb.
+        assert_eq!(parse_legacy_color_html_attr("#f00"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_legacy_color_html_attr("#0f0"), Some(rgba(0, 255, 0, 255)));
+        assert_eq!(parse_legacy_color_html_attr("#abc"), Some(rgba(170, 187, 204, 255)));
+    }
+
+    #[test]
+    fn legacy_color_hash_long_hex() {
+        // Spec steps 8+: # удаляется, остальное идёт в общий padding-procedure.
+        assert_eq!(parse_legacy_color_html_attr("#ff0000"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_legacy_color_html_attr("#FF0000"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_legacy_color_html_attr("#abcdef"), Some(rgba(0xab, 0xcd, 0xef, 255)));
+    }
+
+    #[test]
+    fn legacy_color_hashless_hex_6_digits() {
+        // HTML legacy (в отличие от CSS quirk!) принимает hashless hex.
+        // 6 digits → split на 3 по 2 → strip leading zeros (none) → r,g,b.
+        assert_eq!(parse_legacy_color_html_attr("ff0000"), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_legacy_color_html_attr("00ff00"), Some(rgba(0, 255, 0, 255)));
+    }
+
+    #[test]
+    fn legacy_color_hashless_3_digits_no_expand() {
+        // ВАЖНО: для hashless `f00` short-hex expand (step 6) НЕ работает —
+        // он только для 4-char `#xyz`. «f00» проходит через общий path:
+        // split на 3 по 1 → length=1, не пакуется до 2 → r=0xf, g=0, b=0.
+        assert_eq!(parse_legacy_color_html_attr("f00"), Some(rgba(15, 0, 0, 255)));
+    }
+
+    #[test]
+    fn legacy_color_garbage_replaced_with_zeros() {
+        // Spec step 9: не-hex chars заменяются на «0». «garbage» → «0a0ba0e».
+        // Длина 7 не multiple of 3 → padding до 9 → «0a0ba0e00».
+        // Split: «0a0», «ba0», «e00». length=3. Все ведущие? red[0]='0',
+        // green[0]='b' — нет, не strip. Truncate до 2 каждый: «0a», «ba», «e0».
+        assert_eq!(parse_legacy_color_html_attr("garbage"), Some(rgba(0x0a, 0xba, 0xe0, 255)));
+    }
+
+    #[test]
+    fn legacy_color_pads_short_to_multiple_of_three() {
+        // «1» → padding → «100» → split «1»,«0»,«0» → r=1, g=0, b=0.
+        // length=1, не > 2, не truncate. Парсим: «1»→1, «0»→0, «0»→0.
+        assert_eq!(parse_legacy_color_html_attr("1"), Some(rgba(1, 0, 0, 255)));
+    }
+
+    #[test]
+    fn legacy_color_strips_common_leading_zeros() {
+        // «000a000b000c» → length=4, > 2. Все ведущие «0»? red[0]='0',
+        // green[0]='0', blue[0]='0' → strip. length=3, всё ещё все ведущие
+        // '0' → strip. length=2, останавливаемся. red=«0a», green=«0b», blue=«0c».
+        assert_eq!(parse_legacy_color_html_attr("000a000b000c"), Some(rgba(0x0a, 0x0b, 0x0c, 255)));
+    }
+
+    #[test]
+    fn legacy_color_truncates_after_strip() {
+        // «aabbccdd0aabbccdd0aabbccdd0» — 27 chars, length=9. Step 12:
+        // length > 8 → срезаем leading 1 (=length-8) из каждого, length=8.
+        // Затем step 13 / 14. Проверяем что точно не паникует и валидный
+        // цвет, без захода в детали значения.
+        let result = parse_legacy_color_html_attr("aabbccdd0aabbccdd0aabbccdd0");
+        assert!(result.is_some());
+    }
+
+    #[test]
+    fn legacy_color_strips_hash_from_long_string() {
+        // С `#` префиксом, но не вписывается в step 6 (длина ≠ 4): идёт через
+        // step 8 (strip `#`) + общий процесс. «#xyz» с не-hex → `0`-replace.
+        // Здесь «#ff» → strip `#` → «ff» → pad до 3 → «ff0» → split «f»,«f»,«0»
+        // → length=1 → r=15, g=15, b=0.
+        assert_eq!(parse_legacy_color_html_attr("#ff"), Some(rgba(15, 15, 0, 255)));
+    }
+
+    #[test]
+    fn legacy_color_4char_hash_with_non_hex_takes_general_path() {
+        // «#xyz» — длина 4, начинается с `#`, но `x` не hex → step 6 не
+        // срабатывает. Идёт общий путь: strip `#` → «xyz» → replace non-hex
+        // → «000» → split «0»,«0»,«0» → r=g=b=0.
+        assert_eq!(parse_legacy_color_html_attr("#xyz"), Some(rgba(0, 0, 0, 255)));
+    }
+
+    #[test]
+    fn legacy_color_non_bmp_replaced_with_two_zeros() {
+        // U+1F3A8 (🎨) > U+FFFF → заменяется на «00». «🎨» → «00» → pad до 3
+        // → «000» → r=g=b=0.
+        assert_eq!(parse_legacy_color_html_attr("🎨"), Some(rgba(0, 0, 0, 255)));
+    }
+
+    #[test]
+    fn legacy_color_trim_outer_whitespace() {
+        // Spec step 3 strip leading/trailing whitespace — но не внутренний
+        // (мусор внутри идёт через replace-non-hex).
+        assert_eq!(parse_legacy_color_html_attr("  red  "), Some(rgba(255, 0, 0, 255)));
+        assert_eq!(parse_legacy_color_html_attr("\t#ff0000\n"), Some(rgba(255, 0, 0, 255)));
+    }
+
+    // ── apply_bgcolor_presentational_hint integration ────────────────────
+
+    fn doc_root_child_style(html: &str) -> ComputedStyle {
+        // Берём первого ребёнка document root (`<body>` / `<table>` / ...),
+        // считаем для него ComputedStyle с пустым CSS.
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root_style = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        compute_style(&doc, node, &sheet, &root_style, Size::new(800.0, 600.0))
+    }
+
+    #[test]
+    fn bgcolor_hint_body_named() {
+        let s = doc_root_child_style("<body bgcolor=\"red\"></body>");
+        assert_eq!(s.background_color, Some(rgba(255, 0, 0, 255)));
+    }
+
+    #[test]
+    fn bgcolor_hint_body_hash() {
+        let s = doc_root_child_style("<body bgcolor=\"#00ff00\"></body>");
+        assert_eq!(s.background_color, Some(rgba(0, 255, 0, 255)));
+    }
+
+    #[test]
+    fn bgcolor_hint_body_hashless_legacy() {
+        // Главное отличие HTML legacy от CSS quirk: hashless hex принимается
+        // без зависимости от document mode.
+        let s = doc_root_child_style("<body bgcolor=\"0000ff\"></body>");
+        assert_eq!(s.background_color, Some(rgba(0, 0, 255, 255)));
+    }
+
+    #[test]
+    fn bgcolor_hint_table_named() {
+        let s = doc_root_child_style("<table bgcolor=\"yellow\"></table>");
+        assert_eq!(s.background_color, Some(rgba(255, 255, 0, 255)));
+    }
+
+    #[test]
+    fn bgcolor_hint_not_applied_to_div() {
+        // <div bgcolor="red"> — bgcolor не присутствует в spec для div,
+        // hint игнорируется.
+        let s = doc_root_child_style("<div bgcolor=\"red\"></div>");
+        assert_eq!(s.background_color, None);
+    }
+
+    #[test]
+    fn bgcolor_hint_transparent_does_not_apply() {
+        // «transparent» — error в legacy-парсере, hint не применяется.
+        let s = doc_root_child_style("<body bgcolor=\"transparent\"></body>");
+        assert_eq!(s.background_color, None);
+    }
+
+    #[test]
+    fn bgcolor_hint_overridden_by_author_css() {
+        // Presentational hint имеет lowest specificity — любой author CSS
+        // перекрывает (HTML5 §10 «Mapped attributes»).
+        let doc = lumen_html_parser::parse("<body bgcolor=\"red\"></body>");
+        let sheet = lumen_css_parser::parse("body { background-color: blue; }");
+        let root_style = ComputedStyle::root();
+        let body = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, body, &sheet, &root_style, Size::new(800.0, 600.0));
+        assert_eq!(s.background_color, Some(rgba(0, 0, 255, 255)));
+    }
+
+    #[test]
+    fn bgcolor_hint_td_inside_table() {
+        // td тоже принимает bgcolor.
+        let doc = lumen_html_parser::parse("<table><tr><td bgcolor=\"#abcdef\">x</td></tr></table>");
+        let sheet = lumen_css_parser::parse("");
+        let root_style = ComputedStyle::root();
+        // Найдём td через обход.
+        let table = doc.get(doc.root()).children[0];
+        let tr = doc.get(table).children[0];
+        let td = doc.get(tr).children[0];
+        let s = compute_style(&doc, td, &sheet, &root_style, Size::new(800.0, 600.0));
+        assert_eq!(s.background_color, Some(rgba(0xab, 0xcd, 0xef, 255)));
     }
 }
