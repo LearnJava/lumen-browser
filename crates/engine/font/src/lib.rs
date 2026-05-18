@@ -32,6 +32,7 @@ pub mod os2;
 pub mod post;
 pub mod rasterizer;
 pub mod system_fonts;
+pub mod variation;
 pub mod vvar;
 
 pub use avar::{Avar, AxisValueMap, SegmentMap};
@@ -60,4 +61,5 @@ pub use os2::Os2;
 pub use post::Post;
 pub use rasterizer::{Bitmap, Rasterizer};
 pub use system_fonts::SystemFontIndex;
+pub use variation::apply_variations_to_simple_outline;
 pub use vvar::Vvar;
