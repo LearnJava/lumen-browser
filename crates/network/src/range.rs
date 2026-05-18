@@ -348,9 +348,9 @@ fn skip_line_terminator(buf: &[u8], pos: usize) -> usize {
 }
 
 fn trim_trailing_line_terminator(buf: &[u8], start: usize, end: usize) -> usize {
-    if end >= 2 && end - 2 >= start && &buf[end - 2..end] == b"\r\n" {
+    if end >= start + 2 && &buf[end - 2..end] == b"\r\n" {
         end - 2
-    } else if end >= 1 && end - 1 >= start && buf[end - 1] == b'\n' {
+    } else if end > start && buf[end - 1] == b'\n' {
         end - 1
     } else {
         end
