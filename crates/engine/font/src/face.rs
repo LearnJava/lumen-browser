@@ -214,6 +214,17 @@ impl<'a> Font<'a> {
         crate::hvar::Hvar::parse(data)
     }
 
+    /// `VVAR` (Vertical Metrics Variations) — зеркало `HVAR` для
+    /// вертикальных метрик: advance height / TSB / BSB / vertical
+    /// origin Y. Используется в шрифтах с поддержкой вертикального
+    /// текста (CJK vertical, Mongolian). Возвращает
+    /// `Err(TableNotFound)` для шрифтов без VVAR (большинство
+    /// западных VF) и для не-VF.
+    pub fn vvar(&self) -> Result<crate::vvar::Vvar, FontError> {
+        let data = self.table(b"VVAR").ok_or(FontError::TableNotFound(*b"VVAR"))?;
+        crate::vvar::Vvar::parse(data)
+    }
+
     /// Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
     /// (например, space). Composite-глифы возвращаются с `Outline::Composite`
     /// (компонентами) — для разрешения в простые контуры используй

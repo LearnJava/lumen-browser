@@ -29,6 +29,7 @@ pub mod name;
 pub mod os2;
 pub mod rasterizer;
 pub mod system_fonts;
+pub mod vvar;
 
 pub use avar::{Avar, AxisValueMap, SegmentMap};
 pub use binary::BinaryReader;
@@ -53,3 +54,4 @@ pub use name::Name;
 pub use os2::Os2;
 pub use rasterizer::{Bitmap, Rasterizer};
 pub use system_fonts::SystemFontIndex;
+pub use vvar::Vvar;
