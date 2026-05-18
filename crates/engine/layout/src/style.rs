@@ -473,6 +473,44 @@ impl BorderStyle {
     }
 }
 
+/// CSS Basic UI L4 §5.3 — `outline-style`. Включает все `<border-style>`
+/// keyword-ы плюс `auto` (UA-defined focus indicator).
+///
+/// Phase 0: `Auto` рендерится как Solid с currentColor; отдельный variant
+/// сохраняется, чтобы позже отличить «явный solid от автора» от «default
+/// UA focus ring» — нужно для accessibility (нельзя глушить focus ring
+/// через `outline-style: none` при `:focus-visible` в стиле UA).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OutlineStyle {
+    #[default]
+    None,
+    Auto,
+    Solid,
+    Dashed,
+    Dotted,
+}
+
+impl OutlineStyle {
+    pub fn is_visible(self) -> bool {
+        !matches!(self, OutlineStyle::None)
+    }
+}
+
+/// CSS Basic UI L4 §5.4 — `outline-color`. Помимо явного цвета поддерживает
+/// `auto` (UA-defined контрастный цвет) и `currentColor` (вычисленный `color`
+/// элемента).
+///
+/// Phase 0: `Auto` и `CurrentColor` оба резолвятся в `style.color` при
+/// рендеринге — настоящий UA contrast требует знания фона за outline и
+/// откладывается.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OutlineColor {
+    #[default]
+    Auto,
+    CurrentColor,
+    Color(Color),
+}
+
 /// CSS Fragmentation L3 §3.1 — break-before / break-after / break-inside.
 /// Phase 0: parse+store; реальный break enforcement требует pagination /
 /// multi-column layout pipeline.
@@ -1189,14 +1227,20 @@ pub struct ComputedStyle {
     /// blending этого уровня; индивидуальные альфы в `color`/`background`
     /// продолжают работать.
     pub opacity: f32,
-    /// CSS UI L4 §3: outline. В отличие от border не сдвигает соседей и
-    /// не учитывается в width/height (рисуется поверх / снаружи коробки).
-    /// Color = None → currentColor. Не наследуется.
+    /// CSS Basic UI L4 §5: outline. В отличие от border не сдвигает соседей
+    /// и не учитывается в width/height (рисуется поверх / снаружи коробки).
+    /// Не наследуется.
+    ///
+    /// Initial computed `outline-width` = `medium` (3 px по UA convention);
+    /// **used** value становится 0 при `outline-style: none` (CSS 2.1
+    /// §17.6.1 / Basic UI L4 §5.2) — см. `outline_used_width()`. Поэтому
+    /// «outline по умолчанию невидим» обеспечивается style=None, а не
+    /// width=0.
     pub outline_width: f32,
-    pub outline_style: BorderStyle,
-    pub outline_color: Option<Color>,
-    /// CSS UI L4 §3.4 — outline-offset (resolved px). Положительное —
-    /// outline отрисовывается дальше от боксa, отрицательное — внутрь.
+    pub outline_style: OutlineStyle,
+    pub outline_color: OutlineColor,
+    /// CSS Basic UI L4 §5.5 — outline-offset (resolved px). Положительное —
+    /// outline отрисовывается дальше от бокса, отрицательное — внутрь.
     pub outline_offset: f32,
     /// CSS UI L4 §6.1 — accent-color. Цвет встроенных form widgets
     /// (checkbox, radio, range, progress). `None` = `auto` (UA default).
@@ -2212,6 +2256,18 @@ pub enum FilterFn {
 }
 
 impl ComputedStyle {
+    /// CSS 2.1 §17.6.1 / Basic UI L4 §5.2 — **used** value `outline-width`
+    /// равно 0, если `outline-style` равен `none` (это spec, не аппроксимация).
+    /// Computed `outline_width` хранится как есть (medium = 3 по UA convention),
+    /// чтобы `outline-style: solid` без явного width давал видимый outline.
+    pub fn outline_used_width(&self) -> f32 {
+        if matches!(self.outline_style, OutlineStyle::None) {
+            0.0
+        } else {
+            self.outline_width
+        }
+    }
+
     /// Два стиля рендерят текст одинаково (цвет, размер, интерлиньяж, начертание,
     /// насыщенность, letter/word-spacing, декорация). Используется для слияния
     /// inline-фрагментов в wrap_inline_run.
@@ -2298,9 +2354,9 @@ impl ComputedStyle {
             overflow_y: Overflow::Visible,
             text_overflow: TextOverflow::Clip,
             opacity: 1.0,
-            outline_width: 0.0,
-            outline_style: BorderStyle::None,
-            outline_color: None,
+            outline_width: 3.0,
+            outline_style: OutlineStyle::None,
+            outline_color: OutlineColor::Auto,
             outline_offset: 0.0,
             accent_color: None,
             custom_props: HashMap::new(),
@@ -2472,9 +2528,9 @@ pub fn compute_style(
         overflow_y: Overflow::Visible,
         text_overflow: TextOverflow::Clip,
         opacity: 1.0,
-        outline_width: 0.0,
-        outline_style: BorderStyle::None,
-        outline_color: None,
+        outline_width: 3.0,
+        outline_style: OutlineStyle::None,
+        outline_color: OutlineColor::Auto,
         outline_offset: 0.0,
         // CSS Lists L3 §3 — не наследуются.
         counter_reset: Vec::new(),
@@ -6063,32 +6119,48 @@ fn apply_declaration(
             }
         }
         "outline" => {
-            // outline shorthand — аналог border-shorthand, но применяется к
-            // одному «слою» поверх коробки. Сбрасывает все три свойства.
-            style.outline_width = 0.0;
-            style.outline_style = BorderStyle::None;
-            style.outline_color = None;
+            // CSS Basic UI L4 §5.1 — `outline` shorthand сбрасывает все три
+            // longhand-а в initial и парсит токены `[<'outline-color'> ||
+            // <'outline-style'> || <'outline-width'>]` в любом порядке.
+            // Каждый slot заполняется первым подходящим токеном.
+            style.outline_width = 3.0; // medium
+            style.outline_style = OutlineStyle::None;
+            style.outline_color = OutlineColor::Auto;
+            let mut width_set = false;
+            let mut style_set = false;
+            let mut color_set = false;
             for tok in val.split_whitespace() {
-                if let Some(v) = resolve_box_length(tok, em_basis, viewport) {
-                    style.outline_width = v;
-                } else if is_border_style_kw(tok) {
-                    style.outline_style = parse_border_style_kw(tok);
-                } else if let Some(c) = parse_color_legacy(tok, is_quirks) {
-                    style.outline_color = Some(c);
+                if !style_set
+                    && let Some(s) = parse_outline_style_opt(tok)
+                {
+                    style.outline_style = s;
+                    style_set = true;
+                } else if !width_set
+                    && let Some(w) = parse_line_width(tok, em_basis, viewport)
+                {
+                    style.outline_width = w;
+                    width_set = true;
+                } else if !color_set
+                    && let Some(c) = parse_outline_color_opt(tok, is_quirks)
+                {
+                    style.outline_color = c;
+                    color_set = true;
                 }
             }
         }
         "outline-width" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(v) = parse_line_width(val, em_basis, viewport) {
                 style.outline_width = v;
             }
         }
         "outline-style" => {
-            style.outline_style = parse_border_style_kw(val);
+            if let Some(s) = parse_outline_style_opt(val) {
+                style.outline_style = s;
+            }
         }
         "outline-color" => {
-            if let Some(c) = parse_color_legacy(val, is_quirks) {
-                style.outline_color = Some(c);
+            if let Some(c) = parse_outline_color_opt(val, is_quirks) {
+                style.outline_color = c;
             }
         }
         "outline-offset" => {
@@ -8597,6 +8669,50 @@ fn parse_border_style_opt(s: &str) -> Option<BorderStyle> {
         "dotted" => Some(BorderStyle::Dotted),
         _ => None,
     }
+}
+
+/// CSS Backgrounds L3 §4.2 / Basic UI L4 §5.2 — `<line-width>` =
+/// `<length> | thin | medium | thick`. UA convention: thin=1, medium=3,
+/// thick=5 (Chromium/Firefox/WebKit совпадают).
+fn parse_line_width(val: &str, em_basis: f32, viewport: Size) -> Option<f32> {
+    match val.trim() {
+        s if s.eq_ignore_ascii_case("thin") => Some(1.0),
+        s if s.eq_ignore_ascii_case("medium") => Some(3.0),
+        s if s.eq_ignore_ascii_case("thick") => Some(5.0),
+        other => resolve_box_length(other, em_basis, viewport),
+    }
+}
+
+/// CSS Basic UI L4 §5.3 — `outline-style: auto | <'border-style'>`. Возвращает
+/// `None` для невалидного токена, чтобы caller мог попробовать его как
+/// width/color в shorthand.
+fn parse_outline_style_opt(s: &str) -> Option<OutlineStyle> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("auto") {
+        return Some(OutlineStyle::Auto);
+    }
+    match parse_border_style_opt(s)? {
+        BorderStyle::None => Some(OutlineStyle::None),
+        BorderStyle::Solid => Some(OutlineStyle::Solid),
+        BorderStyle::Dashed => Some(OutlineStyle::Dashed),
+        BorderStyle::Dotted => Some(OutlineStyle::Dotted),
+    }
+}
+
+/// CSS Basic UI L4 §5.4 — `outline-color: auto | <color>`. `currentcolor`
+/// — это CSS Color L3 keyword, выделяется в отдельный variant, чтобы
+/// renderer мог разрешить его в момент paint (а не подмёшивать
+/// `style.color` на этапе cascade — последнее ломает наследование при
+/// последующем изменении `color`).
+fn parse_outline_color_opt(s: &str, is_quirks: bool) -> Option<OutlineColor> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("auto") {
+        return Some(OutlineColor::Auto);
+    }
+    if s.eq_ignore_ascii_case("currentcolor") {
+        return Some(OutlineColor::CurrentColor);
+    }
+    parse_color_legacy(s, is_quirks).map(OutlineColor::Color)
 }
 
 /// Расширяет 1-4 значения `Vec<f32>` в (top, right, bottom, left) по
