@@ -1528,6 +1528,18 @@ pub struct ComputedStyle {
     /// в `lumen-paint` (linear vs nearest-neighbour для `<img>` и background)
     /// — отдельная задача с согласованием P2.
     pub image_rendering: ImageRendering,
+    /// CSS Text Module Level 4 §6.4.1 — `text-wrap-mode`. Inherited.
+    /// Default `Wrap`. Phase 0: parsing + storage; реальная связка с
+    /// inline-flow line-breaker-ом (когда `Nowrap` подавляет soft wraps
+    /// и эмитит overflowing line, эквивалентно legacy `white-space: nowrap`)
+    /// — отдельная задача рядом с типизацией white-space (P1 1B).
+    pub text_wrap_mode: TextWrapMode,
+    /// CSS Text Module Level 4 §6.4.2 — `text-wrap-style`. Inherited.
+    /// Default `Auto`. Phase 0: parsing + storage; реальная интерпретация
+    /// `balance` / `pretty` / `stable` требует Knuth–Plass-style breaker-а
+    /// и Unicode line-break tables — отложено до интеграции `UnicodeProvider`
+    /// (provisional `icu4x`, P1 п.5).
+    pub text_wrap_style: TextWrapStyle,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -2043,6 +2055,69 @@ impl ImageRendering {
     }
 }
 
+/// CSS Text Module Level 4 §6.4.1 — `text-wrap-mode`. Inherited.
+///
+/// Управляет тем, переносятся ли строки внутри блока. `wrap` — нормальный
+/// перенос по soft wrap opportunities (initial). `nowrap` — текст растягивается
+/// в одну линию, до явного break-control (`<br>`, preserved newline).
+///
+/// Является non-shorthand-частью `text-wrap` (§6.4.3) и одновременно
+/// частью legacy `white-space` shorthand (§2.1 — `white-space-collapse` ||
+/// `text-wrap-mode` || `white-space-trim`). В этой кодовой базе `white-space`
+/// исторически хранится отдельным [`WhiteSpace`] enum-ом — связка двух полей
+/// уйдёт в типизацию декрараций (P1 1B).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextWrapMode {
+    /// `wrap` (initial) — обычный перенос строк.
+    #[default]
+    Wrap,
+    /// `nowrap` — без переноса, текст в одну линию.
+    Nowrap,
+}
+
+impl TextWrapMode {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "wrap" => Some(Self::Wrap),
+            "nowrap" => Some(Self::Nowrap),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Text Module Level 4 §6.4.2 — `text-wrap-style`. Inherited.
+///
+/// Расширенные стратегии перевода строк. `auto` — UA выбирает по умолчанию
+/// (обычно greedy first-fit). Остальные значения — типографические
+/// улучшения, требующие реального line-breaker-а (Knuth–Plass / Latin
+/// last-line orphan-prevention) — Phase 0 хранит как atom, применение
+/// откладывается до интеграции с `UnicodeProvider` (provisional `icu4x`,
+/// P1 п.5).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextWrapStyle {
+    /// `auto` (initial) — UA-default стратегия (обычно greedy).
+    #[default]
+    Auto,
+    /// `balance` — балансировать длины строк короткого блока (≤ ~10 строк).
+    Balance,
+    /// `stable` — стабильные break-points при редактировании (для contenteditable).
+    Stable,
+    /// `pretty` — улучшенный last-line (без orphan / висячих слов).
+    Pretty,
+}
+
+impl TextWrapStyle {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "balance" => Some(Self::Balance),
+            "stable" => Some(Self::Stable),
+            "pretty" => Some(Self::Pretty),
+            _ => None,
+        }
+    }
+}
+
 /// Одна компонента `object-position`. Length-варианты резолвятся в px
 /// относительно края коробки (positive = от left/top); percentage —
 /// относительно **свободного места** `box_size - content_size` (может быть
@@ -2512,6 +2587,8 @@ impl ComputedStyle {
             object_position: ObjectPosition::default(),
             vertical_align: VerticalAlign::Baseline,
             image_rendering: ImageRendering::Auto,
+            text_wrap_mode: TextWrapMode::Wrap,
+            text_wrap_style: TextWrapStyle::Auto,
         }
     }
 }
@@ -2704,6 +2781,9 @@ pub fn compute_style(
         vertical_align: VerticalAlign::Baseline,
         // CSS Images L3 §6.1 — image-rendering inherited.
         image_rendering: inherited.image_rendering,
+        // CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style inherited.
+        text_wrap_mode: inherited.text_wrap_mode,
+        text_wrap_style: inherited.text_wrap_style,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -5963,6 +6043,26 @@ fn apply_declaration(
                 style.image_rendering = v;
             }
         }
+        "text-wrap-mode" => {
+            // CSS Text Module Level 4 §6.4.1: wrap | nowrap. Inherited.
+            if let Some(v) = TextWrapMode::parse(val) {
+                style.text_wrap_mode = v;
+            }
+        }
+        "text-wrap-style" => {
+            // CSS Text Module Level 4 §6.4.2: auto | balance | stable | pretty. Inherited.
+            if let Some(v) = TextWrapStyle::parse(val) {
+                style.text_wrap_style = v;
+            }
+        }
+        "text-wrap" => {
+            // CSS Text Module Level 4 §6.4.3: shorthand для text-wrap-mode и
+            // text-wrap-style; синтаксис `<'text-wrap-mode'> || <'text-wrap-style'>`.
+            // 1 или 2 идентификатора, любой порядок. Каждый shorthand сбрасывает
+            // обе longhand-компоненты к initial-value, после чего применяются
+            // указанные. См. CSS Cascade L4 §3.1 для семантики shorthand reset.
+            apply_text_wrap_shorthand(style, val);
+        }
         "width" if val != "auto" => {
             style.width = parse_length(val).and_then(|l| l.resolve(em_basis, None, viewport));
         }
@@ -7581,6 +7681,44 @@ fn apply_text_emphasis_shorthand(style: &mut ComputedStyle, val: &str, is_quirks
     }
 }
 
+/// CSS Text Module Level 4 §6.4.3 — `text-wrap` shorthand.
+///
+/// Сбрасывает обе longhand-компоненты (`text-wrap-mode` / `text-wrap-style`)
+/// к initial-value и применяет распознанные токены. Грамматика
+/// `<'text-wrap-mode'> || <'text-wrap-style'>` — 1..=2 keyword-а, любой
+/// порядок, без повторов внутри своего слота. Нераспознанный токен ⇒
+/// весь shorthand невалиден (initial-значения сохраняются как «после reset»).
+fn apply_text_wrap_shorthand(style: &mut ComputedStyle, val: &str) {
+    style.text_wrap_mode = TextWrapMode::Wrap;
+    style.text_wrap_style = TextWrapStyle::Auto;
+
+    let mut mode: Option<TextWrapMode> = None;
+    let mut wrap_style: Option<TextWrapStyle> = None;
+    for tok in val.split_whitespace() {
+        if let Some(m) = TextWrapMode::parse(tok) {
+            if mode.is_some() {
+                return;
+            }
+            mode = Some(m);
+            continue;
+        }
+        if let Some(s) = TextWrapStyle::parse(tok) {
+            if wrap_style.is_some() {
+                return;
+            }
+            wrap_style = Some(s);
+            continue;
+        }
+        return;
+    }
+    if let Some(m) = mode {
+        style.text_wrap_mode = m;
+    }
+    if let Some(s) = wrap_style {
+        style.text_wrap_style = s;
+    }
+}
+
 /// CSS Cascade L4 §7 — применить CSS-wide keyword к одному свойству.
 ///
 /// Источник значения:
@@ -8060,6 +8198,35 @@ fn apply_css_wide_keyword(
                 inherited.image_rendering
             } else {
                 init.image_rendering
+            };
+        }
+        // CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style
+        // оба inherited; shorthand text-wrap раскрывается на два longhand-а
+        // и применяет CSS-wide ключевое слово к каждому.
+        "text-wrap-mode" => {
+            style.text_wrap_mode = if inh {
+                inherited.text_wrap_mode
+            } else {
+                init.text_wrap_mode
+            };
+        }
+        "text-wrap-style" => {
+            style.text_wrap_style = if inh {
+                inherited.text_wrap_style
+            } else {
+                init.text_wrap_style
+            };
+        }
+        "text-wrap" => {
+            style.text_wrap_mode = if inh {
+                inherited.text_wrap_mode
+            } else {
+                init.text_wrap_mode
+            };
+            style.text_wrap_style = if inh {
+                inherited.text_wrap_style
+            } else {
+                init.text_wrap_style
             };
         }
         // Прочие / неизвестные — silent no-op.
@@ -12440,6 +12607,198 @@ mod tests {
             &[0, 0],
         );
         assert_eq!(s.image_rendering, ImageRendering::CrispEdges);
+    }
+
+    // ── CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style / text-wrap ──
+
+    #[test]
+    fn text_wrap_defaults_are_initial() {
+        let s = cascade_at("<p></p>", "", &[0]);
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Wrap);
+        assert_eq!(s.text_wrap_style, TextWrapStyle::Auto);
+    }
+
+    #[test]
+    fn text_wrap_mode_keywords_parse() {
+        for (val, expected) in [
+            ("wrap", TextWrapMode::Wrap),
+            ("nowrap", TextWrapMode::Nowrap),
+        ] {
+            let s = cascade_at(
+                "<p></p>",
+                &format!("p {{ text-wrap-mode: {val}; }}"),
+                &[0],
+            );
+            assert_eq!(s.text_wrap_mode, expected, "for value {val}");
+        }
+    }
+
+    #[test]
+    fn text_wrap_style_keywords_parse() {
+        for (val, expected) in [
+            ("auto", TextWrapStyle::Auto),
+            ("balance", TextWrapStyle::Balance),
+            ("stable", TextWrapStyle::Stable),
+            ("pretty", TextWrapStyle::Pretty),
+        ] {
+            let s = cascade_at(
+                "<p></p>",
+                &format!("p {{ text-wrap-style: {val}; }}"),
+                &[0],
+            );
+            assert_eq!(s.text_wrap_style, expected, "for value {val}");
+        }
+    }
+
+    #[test]
+    fn text_wrap_mode_case_insensitive() {
+        let s = cascade_at("<p></p>", "p { text-wrap-mode: NOWRAP; }", &[0]);
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Nowrap);
+    }
+
+    #[test]
+    fn text_wrap_invalid_longhand_ignored() {
+        // Невалидное значение longhand → declaration invalid → initial.
+        let s = cascade_at("<p></p>", "p { text-wrap-mode: bogus; }", &[0]);
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Wrap);
+        let s = cascade_at("<p></p>", "p { text-wrap-style: bogus; }", &[0]);
+        assert_eq!(s.text_wrap_style, TextWrapStyle::Auto);
+    }
+
+    #[test]
+    fn text_wrap_shorthand_single_mode() {
+        let s = cascade_at("<p></p>", "p { text-wrap: nowrap; }", &[0]);
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Nowrap);
+        assert_eq!(s.text_wrap_style, TextWrapStyle::Auto);
+    }
+
+    #[test]
+    fn text_wrap_shorthand_single_style() {
+        let s = cascade_at("<p></p>", "p { text-wrap: balance; }", &[0]);
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Wrap);
+        assert_eq!(s.text_wrap_style, TextWrapStyle::Balance);
+    }
+
+    #[test]
+    fn text_wrap_shorthand_mode_then_style() {
+        let s = cascade_at("<p></p>", "p { text-wrap: nowrap pretty; }", &[0]);
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Nowrap);
+        assert_eq!(s.text_wrap_style, TextWrapStyle::Pretty);
+    }
+
+    #[test]
+    fn text_wrap_shorthand_style_then_mode() {
+        // `<'mode'> || <'style'>` — порядок свободный.
+        let s = cascade_at("<p></p>", "p { text-wrap: pretty nowrap; }", &[0]);
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Nowrap);
+        assert_eq!(s.text_wrap_style, TextWrapStyle::Pretty);
+    }
+
+    #[test]
+    fn text_wrap_shorthand_resets_longhands() {
+        // Shorthand сбрасывает обе компоненты к initial, даже если в правиле
+        // только одна указана.
+        let s = cascade_at(
+            "<p></p>",
+            "p { text-wrap-mode: nowrap; text-wrap-style: pretty; text-wrap: balance; }",
+            &[0],
+        );
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Wrap);
+        assert_eq!(s.text_wrap_style, TextWrapStyle::Balance);
+    }
+
+    #[test]
+    fn text_wrap_shorthand_invalid_token_aborts() {
+        // Нераспознанный токен ⇒ shorthand отбрасывается; обе longhand остаются
+        // initial после reset (см. doc-comment на apply_text_wrap_shorthand).
+        let s = cascade_at("<p></p>", "p { text-wrap: bogus pretty; }", &[0]);
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Wrap);
+        assert_eq!(s.text_wrap_style, TextWrapStyle::Auto);
+    }
+
+    #[test]
+    fn text_wrap_shorthand_duplicate_slot_aborts() {
+        // Два token-а из одного слота (две стилистические опции) ⇒ невалидно.
+        let s = cascade_at("<p></p>", "p { text-wrap: balance pretty; }", &[0]);
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Wrap);
+        assert_eq!(s.text_wrap_style, TextWrapStyle::Auto);
+    }
+
+    #[test]
+    fn text_wrap_mode_inherited() {
+        // CSS Text 4 §6.4.1 — text-wrap-mode inherited.
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { text-wrap-mode: nowrap; }",
+            &[0, 0],
+        );
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Nowrap);
+    }
+
+    #[test]
+    fn text_wrap_style_inherited() {
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { text-wrap-style: balance; }",
+            &[0, 0],
+        );
+        assert_eq!(s.text_wrap_style, TextWrapStyle::Balance);
+    }
+
+    #[test]
+    fn text_wrap_child_override_wins() {
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { text-wrap-mode: nowrap; } p { text-wrap-mode: wrap; }",
+            &[0, 0],
+        );
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Wrap);
+    }
+
+    #[test]
+    fn text_wrap_initial_keyword_resets() {
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { text-wrap-style: pretty; } p { text-wrap-style: initial; }",
+            &[0, 0],
+        );
+        assert_eq!(s.text_wrap_style, TextWrapStyle::Auto);
+    }
+
+    #[test]
+    fn text_wrap_unset_for_inherited_is_inherit() {
+        // CSS Cascade L4 §7: `unset` для inherited-свойства ≡ `inherit`.
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { text-wrap-mode: nowrap; } p { text-wrap-mode: unset; }",
+            &[0, 0],
+        );
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Nowrap);
+    }
+
+    #[test]
+    fn text_wrap_shorthand_css_wide_keyword_inherit_both() {
+        // CSS-wide-keyword на shorthand применяется к обоим longhand-ам.
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { text-wrap-mode: nowrap; text-wrap-style: balance; } \
+             p { text-wrap: inherit; }",
+            &[0, 0],
+        );
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Nowrap);
+        assert_eq!(s.text_wrap_style, TextWrapStyle::Balance);
+    }
+
+    #[test]
+    fn text_wrap_shorthand_css_wide_keyword_initial_both() {
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { text-wrap-mode: nowrap; text-wrap-style: balance; } \
+             p { text-wrap: initial; }",
+            &[0, 0],
+        );
+        assert_eq!(s.text_wrap_mode, TextWrapMode::Wrap);
+        assert_eq!(s.text_wrap_style, TextWrapStyle::Auto);
     }
 
     #[test]
