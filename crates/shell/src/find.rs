@@ -309,6 +309,7 @@ fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh):
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
+        font_variation_coords: Vec::new(),
     });
 
     let input_x = x + 12.0 + label_w + 8.0;
@@ -327,6 +328,7 @@ fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh):
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
+        font_variation_coords: Vec::new(),
     });
 
     let status = if state.query().is_empty() {
@@ -344,6 +346,7 @@ fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh):
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
+        font_variation_coords: Vec::new(),
     });
 }
 
@@ -368,6 +371,7 @@ mod tests {
             font_family: Vec::new(),
             font_weight: FontWeight::NORMAL,
             font_style: FontStyle::Normal,
+            font_variation_coords: Vec::new(),
         }
     }
 
