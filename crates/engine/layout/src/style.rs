@@ -3067,14 +3067,18 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         PseudoClass::FirstOfType => is_first_of_type(doc, node),
         PseudoClass::LastOfType => is_last_of_type(doc, node),
         PseudoClass::OnlyOfType => is_first_of_type(doc, node) && is_last_of_type(doc, node),
-        PseudoClass::NthChild(spec) => match element_index(doc, node, false) {
-            Some(i) => spec.matches(i),
-            None => false,
-        },
-        PseudoClass::NthLastChild(spec) => match element_index(doc, node, true) {
-            Some(i) => spec.matches(i),
-            None => false,
-        },
+        PseudoClass::NthChild(spec, of) => {
+            match element_index_filtered(doc, node, false, of.as_deref()) {
+                Some(i) => spec.matches(i),
+                None => false,
+            }
+        }
+        PseudoClass::NthLastChild(spec, of) => {
+            match element_index_filtered(doc, node, true, of.as_deref()) {
+                Some(i) => spec.matches(i),
+                None => false,
+            }
+        }
         PseudoClass::NthOfType(spec) => match element_index_of_type(doc, node, false) {
             Some(i) => spec.matches(i),
             None => false,
@@ -3801,6 +3805,52 @@ fn element_index(doc: &Document, node: NodeId, from_end: bool) -> Option<i32> {
     };
     for &id in iter {
         if !is_element(doc, id) {
+            continue;
+        }
+        index += 1;
+        if id == node {
+            return Some(index);
+        }
+    }
+    None
+}
+
+/// 1-based индекс элемента среди sibling-ов, удовлетворяющих опциональному
+/// `of <selector-list>` фильтру (CSS Selectors L4 §6.6.5.1). При `of=None`
+/// эквивалент `element_index` (все element-sibling-ы). При `of=Some(list)`:
+/// сначала проверяем, что сам узел матчит хотя бы один из селекторов
+/// списка — иначе `:nth-child(... of S)` не применим, возвращаем None;
+/// затем считаем index среди siblings, удовлетворяющих тому же list-у.
+fn element_index_filtered(
+    doc: &Document,
+    node: NodeId,
+    from_end: bool,
+    of: Option<&[ComplexSelector]>,
+) -> Option<i32> {
+    let Some(list) = of else {
+        return element_index(doc, node, from_end);
+    };
+    if !is_element(doc, node) {
+        return None;
+    }
+    // Сам элемент должен матчить хотя бы один селектор list-а — иначе
+    // `:nth-child(an+b of S)` к нему вообще не применяется.
+    if !list.iter().any(|s| matches_complex(s, doc, node)) {
+        return None;
+    }
+    let parent = doc.get(node).parent?;
+    let siblings = &doc.get(parent).children;
+    let mut index: i32 = 0;
+    let iter: Box<dyn Iterator<Item = &NodeId>> = if from_end {
+        Box::new(siblings.iter().rev())
+    } else {
+        Box::new(siblings.iter())
+    };
+    for &id in iter {
+        if !is_element(doc, id) {
+            continue;
+        }
+        if !list.iter().any(|s| matches_complex(s, doc, id)) {
             continue;
         }
         index += 1;
