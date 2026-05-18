@@ -288,16 +288,58 @@ impl<'a> Font<'a> {
     /// Ограничение глубины — 8 уровней (защита от циклических ссылок в битых
     /// шрифтах). При превышении и при ссылке на отсутствующий глиф компонент
     /// тихо пропускается.
+    ///
+    /// Для variable fonts с заданной точкой в пространстве осей используй
+    /// [`Font::glyph_resolved_with_coords`].
     pub fn glyph_resolved(
         &self,
         glyph_id: u16,
     ) -> Result<Option<crate::glyf::Glyph>, FontError> {
-        self.glyph_resolved_depth(glyph_id, 0)
+        self.glyph_resolved_inner(glyph_id, &[], None, 0)
     }
 
-    fn glyph_resolved_depth(
+    /// Variable-fonts вариант [`Font::glyph_resolved`]: применяет gvar deltas
+    /// в указанной точке пространства осей.
+    ///
+    /// `coords` — normalized axis coordinates (per-axis в `[-1.0, 1.0]`, длина
+    /// = `fvar.axis_count` = `gvar.axis_count`). Если `coords` пуст или у
+    /// шрифта нет `gvar` — функция эквивалентна `glyph_resolved` (deltas не
+    /// применяются). Если длина `coords` не совпадает с `gvar.axis_count` —
+    /// per-variation скип в `apply_variations_to_simple_outline` (defensive
+    /// против malformed input).
+    ///
+    /// Для composite-глифа deltas применяются к outline-ам *каждого
+    /// child-компонента независимо* до transform-а. Phase 0 ограничение:
+    /// component-level gvar variations (которые сдвигают origin компонентов
+    /// относительно parent-а) **не применяются** — это требует варьирования
+    /// `CompositeComponent.anchor`, что отложено. На практике для variable
+    /// fonts с simple-outline кириллицей (Inter-Variable строит А/В/Е/К/...
+    /// composite из Latin) toggling wght/wdth корректно варьирует толщину
+    /// штрихов через base-glyphs, но позиционирование компонент остаётся
+    /// фиксированным (как в `Regular` instance).
+    ///
+    /// Глубина рекурсии — 8 уровней; защита от циклических ссылок та же,
+    /// что в `glyph_resolved`.
+    pub fn glyph_resolved_with_coords(
         &self,
         glyph_id: u16,
+        coords: &[f32],
+    ) -> Result<Option<crate::glyf::Glyph>, FontError> {
+        // Caching gvar один раз перед спуском — у composite будет много
+        // обращений к `parse_glyph(child_id)`, и каждое требует `Gvar`.
+        let gvar = if coords.is_empty() {
+            None
+        } else {
+            self.gvar().ok()
+        };
+        self.glyph_resolved_inner(glyph_id, coords, gvar.as_ref(), 0)
+    }
+
+    fn glyph_resolved_inner(
+        &self,
+        glyph_id: u16,
+        coords: &[f32],
+        gvar: Option<&crate::gvar::Gvar<'a>>,
         depth: u32,
     ) -> Result<Option<crate::glyf::Glyph>, FontError> {
         const MAX_DEPTH: u32 = 8;
@@ -305,17 +347,31 @@ impl<'a> Font<'a> {
             return Ok(None);
         }
 
-        let Some(glyph) = self.glyph(glyph_id)? else {
+        let Some(mut glyph) = self.glyph(glyph_id)? else {
             return Ok(None);
         };
         let components = match glyph.outline {
-            crate::glyf::Outline::Simple(_) => return Ok(Some(glyph)),
+            crate::glyf::Outline::Simple(ref mut contours) => {
+                if let Some(g) = gvar
+                    && !coords.is_empty()
+                    && let Ok(Some(gvd)) = g.parse_glyph(glyph_id)
+                {
+                    crate::variation::apply_variations_to_simple_outline(
+                        contours,
+                        &gvd.tuple_variations,
+                        coords,
+                    );
+                }
+                return Ok(Some(glyph));
+            }
             crate::glyf::Outline::Composite(c) => c,
         };
 
         let mut merged: Vec<crate::glyf::Contour> = Vec::new();
         for comp in components {
-            let Some(sub) = self.glyph_resolved_depth(comp.glyph_id, depth + 1)? else {
+            let Some(sub) =
+                self.glyph_resolved_inner(comp.glyph_id, coords, gvar, depth + 1)?
+            else {
                 continue;
             };
             let crate::glyf::Outline::Simple(sub_contours) = sub.outline else {
@@ -381,7 +437,7 @@ impl<'a> Font<'a> {
 /// Возвращает XY n-ой точки в линейном обходе всех контуров. Per
 /// OpenType spec точки composite-глифа индексируются глобально по
 /// всем контурам подряд. Используется для point-based выравнивания
-/// компонент в `glyph_resolved_depth`.
+/// компонент в `glyph_resolved_inner`.
 fn nth_point_xy(contours: &[crate::glyf::Contour], idx: usize) -> Option<(f32, f32)> {
     let mut counter = 0usize;
     for contour in contours {
