@@ -221,6 +221,18 @@ pub enum PseudoClass {
     /// всех элементов (privacy-safe default — стилизация не утекает через
     /// URL).
     Target,
+    /// `:target-within` (CSS Selectors L4 §9.7). Матчит element, который сам
+    /// удовлетворяет `:target`, либо у которого в поддереве (любой descendant)
+    /// есть element, удовлетворяющий `:target`. Используется чтобы стилизовать
+    /// «контейнер с активным фрагментом», например подсвечивать `<section>`
+    /// под текущим якорем.
+    ///
+    /// Эквивалентно `:has(:target), :target`. Отдельный matcher (а не
+    /// expansion в `:has`-form) — для прямолинейности и чтобы не зависеть от
+    /// relational pseudo при простом sub-tree обходе. Phase 0 ограничение —
+    /// то же, что у `:target`: без shell-интеграции `Document::target()`
+    /// возвращает `None`, и matcher молча даёт `false`.
+    TargetWithin,
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
@@ -2554,6 +2566,7 @@ impl<'a> Parser<'a> {
             "any-link" => PseudoClass::AnyLink,
             "scope" => PseudoClass::Scope,
             "target" => PseudoClass::Target,
+            "target-within" => PseudoClass::TargetWithin,
             _ => PseudoClass::Unsupported(name),
         };
         Some(SimpleSelector::PseudoClass(pc))
@@ -3506,6 +3519,7 @@ mod tests {
             ("any-link", PseudoClass::AnyLink),
             ("scope", PseudoClass::Scope),
             ("target", PseudoClass::Target),
+            ("target-within", PseudoClass::TargetWithin),
         ];
         for (name, expected) in cases {
             let s = parse(&format!(":{name} {{}}"));
@@ -3750,6 +3764,29 @@ mod tests {
         let s = parse(":target { color: red; }");
         let spec = s.rules[0].selectors[0].specificity();
         assert_eq!(spec, Specificity { a: 0, b: 1, c: 0 });
+    }
+
+    #[test]
+    fn pseudo_target_within_recognized() {
+        // Подтверждение, что `:target-within` парсится как отдельный variant,
+        // а не как `target`-ident с suffix-ом или Unsupported.
+        let s = parse(":target-within { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::TargetWithin)
+        ));
+    }
+
+    #[test]
+    fn pseudo_target_within_does_not_accept_arguments() {
+        // Не functional pseudo — `:target-within(x)` → Unsupported.
+        let s = parse(":target-within(x) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "target-within"
+        ));
     }
 
     #[test]

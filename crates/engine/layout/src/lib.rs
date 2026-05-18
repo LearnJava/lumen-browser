@@ -1666,6 +1666,98 @@ mod tests {
         assert_eq!((c.r, c.b), (0, 255));
     }
 
+    // ──────────────── :target-within (CSS Selectors L4 §9.7) ────────────────
+
+    #[test]
+    fn target_within_matches_target_element_itself() {
+        // Element, который сам :target, также матчит :target-within
+        // (spec: «matches elements that are themselves matching :target or
+        // that have a descendant which matches»).
+        let c = element_color_with_target(
+            r#"<html><body><h2 id="t">x</h2></body></html>"#,
+            ":target-within { color: red; }",
+            "h2",
+            Some("t"),
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn target_within_matches_ancestor_of_target() {
+        // `<section>` сам не :target, но contains `<h2 id="t">` — матчит.
+        let c = element_color_with_target(
+            r#"<html><body><section><h2 id="t">x</h2></section></body></html>"#,
+            "section:target-within { color: red; }",
+            "section",
+            Some("t"),
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn target_within_matches_distant_ancestor() {
+        // `<body>` глубоко выше `<h2 id="t">` — всё равно матчит (любой
+        // descendant — не только прямой ребёнок).
+        let c = element_color_with_target(
+            r#"<html><body><div><section><h2 id="t">x</h2></section></div></body></html>"#,
+            "body:target-within { color: red; }",
+            "body",
+            Some("t"),
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn target_within_does_not_match_sibling() {
+        // Sibling рядом с target-ом не матчит — `:target-within` не bubble-ит
+        // через parent наверх (только subtree containment).
+        let c = element_color_with_target(
+            r#"<html><body><h2 id="t">x</h2><p>sibling</p></body></html>"#,
+            "p:target-within { color: red; }",
+            "p",
+            Some("t"),
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    #[test]
+    fn target_within_returns_false_when_no_fragment() {
+        // Без `Document::target()` matcher всегда false — даже для элементов
+        // с descendant-ами, имеющими этот id.
+        let c = element_color_with_target(
+            r#"<html><body><h2 id="t">x</h2></body></html>"#,
+            "body:target-within { color: red; }",
+            "body",
+            None,
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    #[test]
+    fn target_within_does_not_match_unrelated_element() {
+        // Element без target-descendant и не target сам — false.
+        let c = element_color_with_target(
+            r#"<html><body><section><h2 id="t">x</h2></section><aside>y</aside></body></html>"#,
+            "aside:target-within { color: red; }",
+            "aside",
+            Some("t"),
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    #[test]
+    fn target_within_specificity_pseudo_class_level() {
+        // `:target-within` — specificity (0,1,0); equal-specificity tie-break
+        // by source-order.
+        let c = element_color_with_target(
+            r#"<html><body><section class="c"><h2 id="t">x</h2></section></body></html>"#,
+            "section.c { color: red; } section:target-within { color: blue; }",
+            "section",
+            Some("t"),
+        );
+        assert_eq!((c.r, c.b), (0, 255));
+    }
+
     #[test]
     fn id_wins_over_class() {
         // id specificity (1,0,0) > class (0,1,0). Порядок правил в CSS — class

@@ -3148,6 +3148,11 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // Phase 0: значение target_id выставляет shell-интеграция (P3) при
         // навигации; до её появления matcher всегда возвращает false.
         PseudoClass::Target => matches_target(doc, node),
+        // CSS Selectors L4 §9.7: `:target-within` — element сам :target или
+        // у него в поддереве есть :target-element. Short-circuit при
+        // `Document::target() == None` — на странице без fragment-а никто
+        // не матчит, walk поддерева не нужен.
+        PseudoClass::TargetWithin => matches_target_within(doc, node),
         PseudoClass::Unsupported(_) => false,
     }
 }
@@ -3710,6 +3715,23 @@ fn matches_target(doc: &Document, node: NodeId) -> bool {
         return false;
     }
     node_ref.get_attr("id") == Some(target)
+}
+
+/// `:target-within` matcher (CSS Selectors L4 §9.7). Element matches if it
+/// itself is `:target`, OR has any descendant element matching `:target`.
+/// Short-circuits на `Document::target() == None` (нет fragment-а — никто не
+/// матчит, сэкономим обход поддерева).
+fn matches_target_within(doc: &Document, node: NodeId) -> bool {
+    let Some(target) = doc.target() else {
+        return false;
+    };
+    if !is_element(doc, node) {
+        return false;
+    }
+    if doc.get(node).get_attr("id") == Some(target) {
+        return true;
+    }
+    any_descendant(doc, node, |n| doc.get(n).get_attr("id") == Some(target))
 }
 
 /// `:dir(ltr|rtl)` (CSS Selectors L4 §13.2). Матчит элемент с
