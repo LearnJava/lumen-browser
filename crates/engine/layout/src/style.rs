@@ -3141,6 +3141,13 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // (P3 + JS-runtime) — пока что в layout-cascade оба ведут себя
         // одинаково.
         PseudoClass::Scope => is_root_element(doc, node),
+        // CSS Selectors L4 §9.6: `:target` matches element с id равным
+        // URL fragment-у (case-sensitive — HTML LS §3.2.6 делает `id`
+        // case-sensitive, поэтому matcher не lowercase'ит). Без fragment-а
+        // (`Document::target() == None`) — никакой element не матчит.
+        // Phase 0: значение target_id выставляет shell-интеграция (P3) при
+        // навигации; до её появления matcher всегда возвращает false.
+        PseudoClass::Target => matches_target(doc, node),
         PseudoClass::Unsupported(_) => false,
     }
 }
@@ -3688,6 +3695,21 @@ fn matches_any_link(doc: &Document, node: NodeId) -> bool {
         return false;
     }
     node_ref.get_attr("href").is_some()
+}
+
+/// `:target` matcher (CSS Selectors L4 §9.6). Возвращает true, если у элемента
+/// есть `id`-атрибут, равный текущему `Document::target()` (URL fragment без
+/// `#`). Comparison case-sensitive — HTML id case-sensitive per HTML LS §3.2.6.
+/// Текстовые узлы и не-element-узлы не матчат.
+fn matches_target(doc: &Document, node: NodeId) -> bool {
+    let Some(target) = doc.target() else {
+        return false;
+    };
+    let node_ref = doc.get(node);
+    if !matches!(&node_ref.data, NodeData::Element { .. }) {
+        return false;
+    }
+    node_ref.get_attr("id") == Some(target)
 }
 
 /// `:dir(ltr|rtl)` (CSS Selectors L4 §13.2). Матчит элемент с
