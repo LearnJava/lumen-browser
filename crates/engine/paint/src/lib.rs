@@ -19,6 +19,7 @@ pub use atlas::{GlyphAtlas, GlyphEntry};
 pub use fallback::CURATED_FALLBACK_FAMILIES;
 pub use compositor::{
     BasicLayer, BasicLayerTree, Compositor, InProcessCompositor, Layer, LayerTree,
+    ThreadedCompositor, ThreadedCompositorHandle,
 };
 pub use display_list::{
     build_display_list, build_display_list_ordered, serialize_display_list, BlendMode,
