@@ -63,6 +63,11 @@ pub enum BoxKind {
         segments: Vec<InlineSegment>,
         lines: Vec<Vec<InlineFrag>>,
     },
+    /// Анонимный контейнер для горизонтального потока `display: inline-block`
+    /// элементов. Сами дочерние боксы хранятся в `LayoutBox.children`. При
+    /// layout дети раскладываются горизонтально слева направо; высота строки
+    /// = высота самого высокого дочернего элемента.
+    InlineBlockRow,
     /// Replaced element: изображение (`<img>`). В Phase 0 — block-level
     /// (одна картинка занимает свою строку). `src` — путь / URL ресурса
     /// (декодирование откладывается на следующий шаг), `alt` — alternate-текст
@@ -125,6 +130,24 @@ fn is_inline_content(
         }
         _ => false,
     }
+}
+
+/// Является ли DOM-узел `display: inline-block` элементом.
+/// Возвращает false для изображений (`<img>` — replaced element).
+fn is_inline_block(
+    doc: &Document,
+    sheet: &Stylesheet,
+    id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { .. }
+        if !is_image_element(doc, id)
+            && compute_style(doc, id, sheet, inherited, viewport).display
+                == Display::InlineBlock
+    )
 }
 
 /// Рекурсивно собирает `InlineSegment`-ы из поддерева inline-контента.
@@ -228,6 +251,60 @@ fn build_box(
                         style: inline_style,
                         kind: BoxKind::InlineRun { segments: segs, lines: vec![] },
                         children: vec![],
+                    });
+                }
+            } else if is_inline_block(doc, sheet, child_id, &style, viewport) {
+                // Собираем последовательный run display:inline-block элементов
+                // в анонимный InlineBlockRow — горизонтальный контейнер.
+                // Whitespace-only текст между ними пропускается.
+                let mut row_children: Vec<LayoutBox> = Vec::new();
+                loop {
+                    if i >= dom_children.len() {
+                        break;
+                    }
+                    let cid = dom_children[i];
+                    // Пропускаем whitespace-only текст между inline-block элементами.
+                    if let NodeData::Text(s) = &doc.get(cid).data
+                        && s.chars().all(char::is_whitespace)
+                    {
+                        i += 1;
+                        continue;
+                    }
+                    if !is_inline_block(doc, sheet, cid, &style, viewport) {
+                        break;
+                    }
+                    row_children.push(build_box(doc, sheet, cid, &style, viewport));
+                    i += 1;
+                }
+                if !row_children.is_empty() {
+                    // Анонимный InlineBlockRow не имеет собственного box-model spacing.
+                    let mut row_style = style.clone();
+                    row_style.margin_top = 0.0;
+                    row_style.margin_right = 0.0;
+                    row_style.margin_bottom = 0.0;
+                    row_style.margin_left = 0.0;
+                    row_style.padding_top = 0.0;
+                    row_style.padding_right = 0.0;
+                    row_style.padding_bottom = 0.0;
+                    row_style.padding_left = 0.0;
+                    row_style.background_color = None;
+                    row_style.width = None;
+                    row_style.height = None;
+                    row_style.min_width = None;
+                    row_style.max_width = None;
+                    row_style.min_height = None;
+                    row_style.max_height = None;
+                    row_style.border_top_width = 0.0;
+                    row_style.border_right_width = 0.0;
+                    row_style.border_bottom_width = 0.0;
+                    row_style.border_left_width = 0.0;
+                    row_style.box_sizing = BoxSizing::ContentBox;
+                    children.push(LayoutBox {
+                        node: id,
+                        rect: Rect::ZERO,
+                        style: row_style,
+                        kind: BoxKind::InlineBlockRow,
+                        children: row_children,
                     });
                 }
             } else {
@@ -373,6 +450,32 @@ fn lay_out(
             if let Some(min_h) = s.min_height {
                 b.rect.height = b.rect.height.max(outer_vert(min_h).max(0.0));
             }
+        }
+        BoxKind::InlineBlockRow => {
+            // Горизонтальный layout для display:inline-block элементов.
+            // Дети раскладываются слева направо; высота строки = высота
+            // самого высокого дочернего элемента (включая его margin).
+            // Анонимный контейнер не имеет padding/border (всё сброшено
+            // в build_box), поэтому content_x = b.rect.x, content_y = b.rect.y.
+            let mut cur_x = content_x;
+            let mut max_h: f32 = 0.0;
+            for child in &mut b.children {
+                // Для inline-block не растягиваем child на весь available_width
+                // (только если нет CSS width, вернётся auto = content_width,
+                // что Phase 0 принимает как fallback для shrink-to-fit).
+                lay_out(child, cur_x, content_y, content_width, measurer);
+                if matches!(child.kind, BoxKind::Skip) {
+                    continue;
+                }
+                // Следующий дочерний бокс начинается сразу после правого margin.
+                cur_x = child.rect.x + child.rect.width + child.style.margin_right;
+                // Высота строки — максимум full-height (с вертикальными margin).
+                let child_full_h =
+                    child.style.margin_top + child.rect.height + child.style.margin_bottom;
+                max_h = max_h.max(child_full_h);
+            }
+            // Анонимный контейнер: нет padding/border, height = max дочернего.
+            b.rect.height = max_h;
         }
         BoxKind::InlineRun { .. } => unreachable!(),
         BoxKind::Skip => unreachable!(),

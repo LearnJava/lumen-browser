@@ -29,6 +29,7 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
     let kind = match &b.kind {
         BoxKind::Block => "Block",
         BoxKind::InlineRun { .. } => "InlineRun",
+        BoxKind::InlineBlockRow => "InlineBlockRow",
         BoxKind::Image { .. } => "Image",
         BoxKind::Skip => "Skip",
     };
@@ -87,6 +88,7 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
         Display::InlineFlex => out.push_str(" display=inline-flex"),
         Display::Grid => out.push_str(" display=grid"),
         Display::InlineGrid => out.push_str(" display=inline-grid"),
+        Display::InlineBlock => out.push_str(" display=inline-block"),
     }
     if let Some(w) = s.width {
         let _ = write!(out, " w={w:.2}");

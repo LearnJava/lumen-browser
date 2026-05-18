@@ -40,6 +40,11 @@ pub enum Display {
     Grid,
     /// `display: inline-grid`.
     InlineGrid,
+    /// CSS 2.1 §9.2.4 — `display: inline-block`. Внешне ведёт себя как
+    /// inline (участвует в inline-потоке родителя), внутри — block
+    /// formatting context (имеет собственные width/height/padding/border).
+    /// В layout собирается в `BoxKind::InlineBlockRow`.
+    InlineBlock,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -6049,6 +6054,7 @@ fn apply_declaration(
                 "inline-flex" => Display::InlineFlex,
                 "grid" => Display::Grid,
                 "inline-grid" => Display::InlineGrid,
+                "inline-block" => Display::InlineBlock,
                 _ => style.display,
             };
         }
@@ -7235,11 +7241,11 @@ fn apply_declaration(
             }
         }
         "margin" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
-                style.margin_top = v;
-                style.margin_right = v;
-                style.margin_bottom = v;
-                style.margin_left = v;
+            if let Some((t, r, b, l)) = parse_box_shorthand(val, em_basis, viewport) {
+                style.margin_top = t;
+                style.margin_right = r;
+                style.margin_bottom = b;
+                style.margin_left = l;
             }
         }
         "margin-top" => set_box_length(&mut style.margin_top, val, em_basis, viewport),
@@ -7247,11 +7253,11 @@ fn apply_declaration(
         "margin-bottom" => set_box_length(&mut style.margin_bottom, val, em_basis, viewport),
         "margin-left" => set_box_length(&mut style.margin_left, val, em_basis, viewport),
         "padding" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
-                style.padding_top = v;
-                style.padding_right = v;
-                style.padding_bottom = v;
-                style.padding_left = v;
+            if let Some((t, r, b, l)) = parse_box_shorthand(val, em_basis, viewport) {
+                style.padding_top = t;
+                style.padding_right = r;
+                style.padding_bottom = b;
+                style.padding_left = l;
             }
         }
         "padding-top" => set_box_length(&mut style.padding_top, val, em_basis, viewport),
@@ -9242,6 +9248,60 @@ fn resolve_box_length(val: &str, em_basis: f32, viewport: Size) -> Option<f32> {
 fn set_box_length(target: &mut f32, val: &str, em_basis: f32, viewport: Size) {
     if let Some(v) = resolve_box_length(val, em_basis, viewport) {
         *target = v;
+    }
+}
+
+/// Токенизирует CSS box shorthand значение по пробелам вне скобок.
+/// Нужно для `calc(5px + 3px)` — пробелы внутри calc() не разделяют tokens.
+fn split_box_tokens(val: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut depth: u32 = 0;
+    let mut start: Option<usize> = None;
+    for (i, ch) in val.char_indices() {
+        match ch {
+            '(' => depth += 1,
+            ')' => depth = depth.saturating_sub(1),
+            ' ' | '\t' if depth == 0 => {
+                if let Some(s) = start {
+                    tokens.push(&val[s..i]);
+                    start = None;
+                }
+                continue;
+            }
+            _ => {}
+        }
+        if start.is_none() && (ch != ' ' && ch != '\t') {
+            start = Some(i);
+        }
+    }
+    if let Some(s) = start {
+        tokens.push(&val[s..]);
+    }
+    tokens
+}
+
+/// Парсит CSS box shorthand (margin / padding) с 1-4 пробельно-разделёнными
+/// длинами. CSS 2.1 §8.3: 1 → все стороны; 2 → [верт] [гориз];
+/// 3 → [top] [гориз] [bottom]; 4 → [top] [right] [bottom] [left].
+/// `auto` трактуется как 0 (авто-margin centering — отдельная задача).
+fn parse_box_shorthand(val: &str, em_basis: f32, viewport: Size) -> Option<(f32, f32, f32, f32)> {
+    let resolve = |s: &str| -> Option<f32> {
+        if s == "auto" { return Some(0.0); }
+        resolve_box_length(s, em_basis, viewport)
+    };
+    let parts = split_box_tokens(val);
+    match parts.as_slice() {
+        [a] => { let v = resolve(a)?; Some((v, v, v, v)) }
+        [tb, lr] => {
+            Some((resolve(tb)?, resolve(lr)?, resolve(tb)?, resolve(lr)?))
+        }
+        [t, lr, b] => {
+            Some((resolve(t)?, resolve(lr)?, resolve(b)?, resolve(lr)?))
+        }
+        [t, r, b, l] => {
+            Some((resolve(t)?, resolve(r)?, resolve(b)?, resolve(l)?))
+        }
+        _ => None,
     }
 }
 
@@ -11582,6 +11642,36 @@ mod tests {
         let s = style_for("padding: calc(5px + 3px)");
         assert!((s.padding_top - 8.0).abs() < 0.01);
         assert!((s.padding_right - 8.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn padding_two_values_shorthand() {
+        // padding: vertical horizontal → top=bottom=8, left=right=12.
+        let s = style_for("padding: 8px 12px");
+        assert!((s.padding_top - 8.0).abs() < 0.01, "top");
+        assert!((s.padding_right - 12.0).abs() < 0.01, "right");
+        assert!((s.padding_bottom - 8.0).abs() < 0.01, "bottom");
+        assert!((s.padding_left - 12.0).abs() < 0.01, "left");
+    }
+
+    #[test]
+    fn padding_four_values_shorthand() {
+        // padding: top right bottom left.
+        let s = style_for("padding: 4px 8px 12px 16px");
+        assert!((s.padding_top - 4.0).abs() < 0.01, "top");
+        assert!((s.padding_right - 8.0).abs() < 0.01, "right");
+        assert!((s.padding_bottom - 12.0).abs() < 0.01, "bottom");
+        assert!((s.padding_left - 16.0).abs() < 0.01, "left");
+    }
+
+    #[test]
+    fn margin_four_values_shorthand() {
+        // margin: 0 6px 6px 0 — реальный CSS из графических тестов.
+        let s = style_for("margin: 0 6px 6px 0");
+        assert!((s.margin_top - 0.0).abs() < 0.01, "top");
+        assert!((s.margin_right - 6.0).abs() < 0.01, "right");
+        assert!((s.margin_bottom - 6.0).abs() < 0.01, "bottom");
+        assert!((s.margin_left - 0.0).abs() < 0.01, "left");
     }
 
     #[test]

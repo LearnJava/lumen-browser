@@ -5836,6 +5836,57 @@ mod tests {
     }
 
     #[test]
+    fn display_inline_block_creates_inline_block_row() {
+        // display:inline-block элементы внутри div группируются в InlineBlockRow.
+        let root = lay(
+            "<div><span>a</span><span>b</span></div>",
+            "span { display: inline-block; width: 50px; height: 20px; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // div должен иметь один дочерний InlineBlockRow.
+        assert!(
+            div.children.iter().any(|c| matches!(&c.kind, BoxKind::InlineBlockRow)),
+            "expected InlineBlockRow in div, got: {:?}", div.children.iter().map(|c| &c.kind).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn display_inline_block_parses_style() {
+        // <p display:inline-block> попадает в InlineBlockRow, не как прямой Block.
+        let root = lay("<p>x</p>", "p { display: inline-block; }");
+        // Ищем InlineBlockRow в дереве, внутри него первый child — это <p>.
+        fn find_row(b: &LayoutBox) -> Option<&LayoutBox> {
+            if matches!(b.kind, BoxKind::InlineBlockRow) {
+                return Some(b);
+            }
+            b.children.iter().find_map(find_row)
+        }
+        let row = find_row(&root).expect("InlineBlockRow not found");
+        let p = row.children.first().expect("p not found in row");
+        assert_eq!(p.style.display, Display::InlineBlock);
+    }
+
+    #[test]
+    fn inline_block_row_lays_out_horizontally() {
+        // Два inline-block 50×20 должны оказаться рядом по горизонтали.
+        let root = lay_measured(
+            "<div><span>a</span><span>b</span></div>",
+            "span { display: inline-block; width: 50px; height: 20px; }",
+            800.0,
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let row = div.children.iter().find(|c| matches!(&c.kind, BoxKind::InlineBlockRow)).unwrap();
+        assert_eq!(row.children.len(), 2, "InlineBlockRow должен содержать 2 child");
+        let a = &row.children[0];
+        let b_box = &row.children[1];
+        // a.rect.x < b.rect.x — лежат горизонтально
+        assert!(a.rect.x < b_box.rect.x, "первый span должен быть левее второго");
+        // b.rect.x ≥ a.rect.x + a.rect.width
+        assert!(b_box.rect.x >= a.rect.x + a.rect.width,
+            "второй span не должен перекрываться с первым");
+    }
+
+    #[test]
     fn display_unknown_value_keeps_previous() {
         // unknown value игнорируется — лог по умолчанию остаётся.
         let root = lay("<p>x</p>", "p { display: zomg-flexed; }");

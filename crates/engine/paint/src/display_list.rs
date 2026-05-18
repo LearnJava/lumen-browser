@@ -810,6 +810,13 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 walk(child, out);
             }
         }
+        BoxKind::InlineBlockRow => {
+            // Анонимный контейнер: нет фона/бордера собственного.
+            // Просто рекурсивно рисуем всех дочерних (BoxKind::Block).
+            for child in &b.children {
+                walk(child, out);
+            }
+        }
         BoxKind::InlineRun { lines, .. } => {
             let line_h = b.style.font_size * b.style.line_height;
             for (line_idx, line) in lines.iter().enumerate() {
