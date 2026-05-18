@@ -199,6 +199,20 @@ impl<'a> Font<'a> {
         crate::avar::Avar::parse(data)
     }
 
+    /// `gvar` (Glyph Variations) — per-glyph variation deltas для outline
+    /// points (включая 4 phantom points). При активном variation-instance
+    /// rasterizer для каждого глифа: берёт base-outline из `glyf`, обходит
+    /// tuple variations, вычисляет scalar по tent-функции (peak +
+    /// опциональный intermediate region), умножает delta-векторы на scalar
+    /// и прибавляет к координатам указанных точек; для не-упомянутых
+    /// точек применяется IUP (Interpolation of Untouched Points).
+    /// Phase 0 — parser; IUP и runtime в rasterizer-е — отдельная задача.
+    /// Возвращает `Err(TableNotFound)` для non-variable fonts.
+    pub fn gvar(&self) -> Result<crate::gvar::Gvar<'a>, FontError> {
+        let data = self.table(b"gvar").ok_or(FontError::TableNotFound(*b"gvar"))?;
+        crate::gvar::Gvar::parse(data)
+    }
+
     /// `HVAR` (Horizontal Metrics Variations) — variation deltas для
     /// advance width / LSB / RSB per glyph. При активном variation-
     /// instance шрифта runtime берёт base-метрики из `hmtx`, ищет
