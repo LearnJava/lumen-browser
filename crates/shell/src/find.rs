@@ -13,7 +13,6 @@
 //! игнорируются — Phase 0 ограничение.
 //!
 //! Phase 0 ограничения:
-//! - нет scroll-to-match (scroll ещё не реализован — задача scroll-dpr-awareness);
 //! - letter-spacing / word-spacing внутри фрагмента смещают реальные глифы
 //!   относительно вычисленного rect-а на величину аккумулированного spacing-а;
 //! - find-bar фиксированных размеров в правом верхнем углу окна.
@@ -104,6 +103,45 @@ pub struct FindMatch {
 
 pub const HIGHLIGHT_INACTIVE: Color = Color { r: 255, g: 235, b: 90, a: 255 };
 pub const HIGHLIGHT_ACTIVE: Color = Color { r: 255, g: 150, b: 50, a: 255 };
+
+/// Доля viewport-а сверху, в которую попадает match при scroll-to. Берётся
+/// «верхняя четверть» как компромисс между двумя крайностями: alignment-top
+/// (Chromium до 2017) — match прижат к самому верху, контекста перед ним нет;
+/// центрирование — теряется ощущение, что ты «листал вниз» (match всегда в
+/// середине независимо от того, на следующей он строке или на следующей
+/// странице). Firefox/Chromium сейчас используют примерно 20-30%.
+const SCROLL_MARGIN_FRACTION: f32 = 0.25;
+
+/// Вычисляет новое значение `scroll_y` так, чтобы `match_rect` попал в
+/// видимую область. Возвращает `None`, если match уже полностью видим — это
+/// сигнал caller-у не дёргать redraw.
+///
+/// Координаты — в page-space (как в `FindMatch::rect`), `viewport_height` и
+/// `current_scroll` — в CSS px. Caller обязан сам сделать clamp в
+/// `[0, max_scroll]` после получения значения: эта функция геометрию max-а
+/// не знает (content_height живёт в shell-state), и `target.max(0.0)`
+/// тут защищает только от отрицательных значений, не от переезда за конец.
+pub fn scroll_to_match(
+    match_rect: Rect,
+    viewport_height: f32,
+    current_scroll: f32,
+) -> Option<f32> {
+    if viewport_height <= 0.0 {
+        return None;
+    }
+    let match_top = match_rect.y;
+    let match_bottom = match_rect.y + match_rect.height;
+    let view_top = current_scroll;
+    let view_bottom = current_scroll + viewport_height;
+    if match_top >= view_top && match_bottom <= view_bottom {
+        return None;
+    }
+    let target = (match_top - viewport_height * SCROLL_MARGIN_FRACTION).max(0.0);
+    if (target - current_scroll).abs() < f32::EPSILON {
+        return None;
+    }
+    Some(target)
+}
 
 /// Находит все непересекающиеся вхождения `query` в DrawText-командах
 /// `dl`. Возвращает абсолютные `Rect`-ы (на основе уже посчитанных
@@ -618,5 +656,80 @@ mod tests {
     fn find_returns_empty_when_query_empty_even_with_text() {
         let dl = vec![draw_text("anything", 0.0, 0.0, 100.0, 20.0)];
         assert!(find_matches(&dl, "", &Fixed8).is_empty());
+    }
+
+    #[test]
+    fn scroll_to_match_already_visible_returns_none() {
+        // viewport [100, 700], match [200..220] — целиком внутри.
+        let r = Rect::new(0.0, 200.0, 100.0, 20.0);
+        assert!(scroll_to_match(r, 600.0, 100.0).is_none());
+    }
+
+    #[test]
+    fn scroll_to_match_below_viewport_scrolls_down() {
+        // viewport [0, 600], match на 800. Margin = 600 * 0.25 = 150.
+        // target = 800 - 150 = 650.
+        let r = Rect::new(0.0, 800.0, 100.0, 20.0);
+        let target = scroll_to_match(r, 600.0, 0.0).expect("должен скроллить");
+        assert!((target - 650.0).abs() < 0.01, "target={target}");
+    }
+
+    #[test]
+    fn scroll_to_match_above_viewport_scrolls_up() {
+        // viewport [500, 1100], match на 100. target = 100 - 150 = -50 -> clamp 0.
+        let r = Rect::new(0.0, 100.0, 100.0, 20.0);
+        let target = scroll_to_match(r, 600.0, 500.0).expect("должен скроллить");
+        assert!((target - 0.0).abs() < 0.01, "target={target}");
+    }
+
+    #[test]
+    fn scroll_to_match_partially_below_scrolls() {
+        // viewport [0, 100], match [90..130] — нижний край за viewport.
+        let r = Rect::new(0.0, 90.0, 100.0, 40.0);
+        let target = scroll_to_match(r, 100.0, 0.0).expect("должен скроллить");
+        // margin = 100 * 0.25 = 25; target = 90 - 25 = 65.
+        assert!((target - 65.0).abs() < 0.01, "target={target}");
+    }
+
+    #[test]
+    fn scroll_to_match_partially_above_scrolls() {
+        // viewport [200, 800], match [190..210] — верхний край выше viewport.
+        let r = Rect::new(0.0, 190.0, 100.0, 20.0);
+        let target = scroll_to_match(r, 600.0, 200.0).expect("должен скроллить");
+        // margin = 150; target = 190 - 150 = 40.
+        assert!((target - 40.0).abs() < 0.01, "target={target}");
+    }
+
+    #[test]
+    fn scroll_to_match_zero_viewport_returns_none() {
+        let r = Rect::new(0.0, 100.0, 100.0, 20.0);
+        assert!(scroll_to_match(r, 0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn scroll_to_match_negative_viewport_returns_none() {
+        let r = Rect::new(0.0, 100.0, 100.0, 20.0);
+        assert!(scroll_to_match(r, -1.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn scroll_to_match_exact_top_no_scroll() {
+        // match сидит ровно на target-позиции (top - margin). Если бы мы
+        // всё равно вернули Some, caller сделал бы лишний request_redraw.
+        // viewport_height=400, margin=100; current=300, match.y=400 → target=300.
+        let r = Rect::new(0.0, 400.0, 100.0, 20.0);
+        // match.y=400 в viewport [300..700], целиком виден — должен быть None.
+        assert!(scroll_to_match(r, 400.0, 300.0).is_none());
+    }
+
+    #[test]
+    fn scroll_to_match_does_not_overshoot_caller_max() {
+        // Функция саму границу content_height не знает: caller обязан clamp-нуть.
+        // Здесь просто проверяем — функция возвращает запрошенный target без
+        // верхнего ограничения.
+        let r = Rect::new(0.0, 99_999.0, 100.0, 20.0);
+        let target = scroll_to_match(r, 600.0, 0.0).expect("должен скроллить");
+        // 99_999 - 150 = 99_849
+        assert!((target - 99_849.0).abs() < 0.1, "target={target}");
     }
 }

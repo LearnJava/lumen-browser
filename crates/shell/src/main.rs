@@ -1091,6 +1091,7 @@ impl Lumen {
             }
             KeyCode::Backspace => {
                 self.find.backspace();
+                self.scroll_to_active_match();
                 self.request_redraw();
             }
             KeyCode::Enter | KeyCode::F3 => {
@@ -1101,6 +1102,7 @@ impl Lumen {
                     } else {
                         self.find.next(total);
                     }
+                    self.scroll_to_active_match();
                     self.request_redraw();
                 }
             }
@@ -1116,9 +1118,29 @@ impl Lumen {
                     && !text.is_empty()
                 {
                     self.find.append_str(text);
+                    self.scroll_to_active_match();
                     self.request_redraw();
                 }
             }
+        }
+    }
+
+    /// Если активный match вне видимой части viewport-а — сдвигает scroll так,
+    /// чтобы он попал в верхнюю четверть окна. Вызывается после любого
+    /// действия, меняющего active match: next/prev, backspace, текстовый ввод.
+    /// При закрытом баре / пустом query / отсутствии матчей — no-op.
+    fn scroll_to_active_match(&mut self) {
+        let matches = self.current_matches();
+        if matches.is_empty() {
+            return;
+        }
+        let active = self.find.active_index();
+        let Some(m) = matches.get(active) else {
+            return;
+        };
+        let vh = self.viewport_height_css();
+        if let Some(target) = find::scroll_to_match(m.rect, vh, self.scroll_y) {
+            self.scroll_to(target);
         }
     }
 
