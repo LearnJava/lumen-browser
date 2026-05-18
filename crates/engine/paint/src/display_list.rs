@@ -720,6 +720,43 @@ fn fill_buckets(
 ///
 /// Per CSS Basic UI L4 §5.4: `OutlineColor::Auto` / `CurrentColor`
 /// резолвятся в `style.color` (Phase 0 без UA contrast-цвета).
+/// Эмитит per-fragment text-shadow DrawText-команды ПЕРЕД основным
+/// DrawText. Несколько теней в списке: spec CSS Text Decoration L3 §6
+/// — «the first shadow is on top, subsequent shadows are layered
+/// behind it», что в painter's order означает обратный обход
+/// (последний рисуется первым, первый — последним за основным
+/// текстом). Phase 0 — без `blur`: тень = тот же текст со смещением
+/// (offset_x, offset_y) и shadow.color (None → currentColor =
+/// frag.style.color).
+fn emit_text_shadows(
+    out: &mut Vec<DisplayCommand>,
+    base_rect: Rect,
+    line_h: f32,
+    frag: &InlineFrag,
+) {
+    if frag.style.text_shadow.is_empty() {
+        return;
+    }
+    for shadow in frag.style.text_shadow.iter().rev() {
+        let color = shadow.color.unwrap_or(frag.style.color);
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(
+                base_rect.x + shadow.offset_x,
+                base_rect.y + shadow.offset_y,
+                base_rect.width,
+                line_h,
+            ),
+            text: frag.text.clone(),
+            font_size: frag.style.font_size,
+            color,
+            font_family: frag.style.font_family.clone(),
+            font_weight: frag.style.font_weight,
+            font_style: frag.style.font_style,
+            font_variation_coords: Vec::new(),
+        });
+    }
+}
+
 fn emit_outline(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     let s = &b.style;
     if !s.outline_style.is_visible() || s.outline_width <= 0.0 {
@@ -782,8 +819,12 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             for (line_idx, line) in lines.iter().enumerate() {
                 let line_y = b.rect.y + line_idx as f32 * line_h;
                 for frag in line {
+                    let base_rect = Rect::new(b.rect.x + frag.x, line_y, b.rect.width, line_h);
+                    // text-shadow (CSS Text Decoration L3 §6) рисуется ДО
+                    // основного текста — painter's order: first shadow on top.
+                    emit_text_shadows(out, base_rect, line_h, frag);
                     out.push(DisplayCommand::DrawText {
-                        rect: Rect::new(b.rect.x + frag.x, line_y, b.rect.width, line_h),
+                        rect: base_rect,
                         text: frag.text.clone(),
                         font_size: frag.style.font_size,
                         color: frag.style.color,
@@ -897,8 +938,12 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             for (line_idx, line) in lines.iter().enumerate() {
                 let line_y = b.rect.y + line_idx as f32 * line_h;
                 for frag in line {
+                    let base_rect = Rect::new(b.rect.x + frag.x, line_y, b.rect.width, line_h);
+                    // text-shadow (CSS Text Decoration L3 §6) рисуется ДО
+                    // основного текста — painter's order: first shadow on top.
+                    emit_text_shadows(out, base_rect, line_h, frag);
                     out.push(DisplayCommand::DrawText {
-                        rect: Rect::new(b.rect.x + frag.x, line_y, b.rect.width, line_h),
+                        rect: base_rect,
                         text: frag.text.clone(),
                         font_size: frag.style.font_size,
                         color: frag.style.color,
@@ -2301,5 +2346,94 @@ mod tests {
         });
         let s2 = serialize_display_list(&dl2);
         assert!(s2.contains("off=5.00"));
+    }
+
+    // ───────── text-shadow rendering ─────────
+
+    fn texts_with_colors(dl: &DisplayList) -> Vec<(String, [u8; 3])> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawText { text, color, .. } => {
+                    Some((text.clone(), [color.r, color.g, color.b]))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn text_rects(dl: &DisplayList) -> Vec<(String, [f32; 2])> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawText { text, rect, .. } => {
+                    Some((text.clone(), [rect.x, rect.y]))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn text_shadow_none_emits_only_main_text() {
+        // Без text-shadow — ровно один DrawText на фрагмент (как раньше).
+        let dl = build("<p>hello</p>", "p { color: black; }");
+        let texts = texts_with_colors(&dl);
+        assert_eq!(texts.len(), 1);
+        assert_eq!(texts[0].0, "hello");
+    }
+
+    #[test]
+    fn text_shadow_one_emits_shadow_before_main() {
+        // Один text-shadow → 2 DrawText: сначала shadow, потом main.
+        // Spec painter's order: shadow рисуется ПОД основным текстом.
+        let dl = build(
+            "<p>hi</p>",
+            "p { color: black; text-shadow: 2px 3px red; }",
+        );
+        let texts = texts_with_colors(&dl);
+        assert_eq!(texts.len(), 2, "shadow + main = 2 DrawText");
+        // Painter's order: shadow первый (под main), main второй (поверх).
+        assert_eq!(texts[0].1, [255, 0, 0], "первый = красная тень");
+        assert_eq!(texts[1].1, [0, 0, 0], "второй = чёрный основной");
+        // Тень смещена на (2, 3) px относительно main.
+        let rects = text_rects(&dl);
+        let dx = rects[0].1[0] - rects[1].1[0];
+        let dy = rects[0].1[1] - rects[1].1[1];
+        assert!((dx - 2.0).abs() < 0.01, "shadow_x смещён на 2px, got {dx}");
+        assert!((dy - 3.0).abs() < 0.01, "shadow_y смещён на 3px, got {dy}");
+    }
+
+    #[test]
+    fn text_shadow_multiple_reverse_order() {
+        // Spec L3 §6: «first shadow is on top, subsequent shadows are
+        // layered behind it». Значит painter's order: последняя в списке
+        // рисуется первой (под всеми), первая — последней (над всеми, но
+        // под main). Список: red(1px), green(2px), blue(3px) — порядок
+        // эмиссии: blue → green → red → main.
+        let dl = build(
+            "<p>z</p>",
+            "p { color: black; \
+             text-shadow: 1px 0 red, 2px 0 green, 3px 0 blue; }",
+        );
+        let texts = texts_with_colors(&dl);
+        assert_eq!(texts.len(), 4, "3 shadows + main = 4 DrawText");
+        assert_eq!(texts[0].1, [0, 0, 255], "blue painted first (deepest)");
+        assert_eq!(texts[1].1, [0, 128, 0], "green painted second");
+        assert_eq!(texts[2].1, [255, 0, 0], "red painted third");
+        assert_eq!(texts[3].1, [0, 0, 0], "main painted last (top)");
+    }
+
+    #[test]
+    fn text_shadow_color_omitted_uses_currentcolor() {
+        // CSS Text Decoration L3 §6: «If <color> is not specified, the
+        // value used for color (currentColor) is used.»
+        let dl = build(
+            "<p>x</p>",
+            "p { color: rgb(10, 20, 30); text-shadow: 1px 1px; }",
+        );
+        let texts = texts_with_colors(&dl);
+        assert_eq!(texts.len(), 2);
+        // Shadow color = currentColor = (10, 20, 30).
+        assert_eq!(texts[0].1, [10, 20, 30]);
+        assert_eq!(texts[1].1, [10, 20, 30]);
     }
 }
