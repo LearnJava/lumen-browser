@@ -21,3 +21,7 @@ Thumbs.db
 # Локальные утилиты — бинарники >100MB не принимает GitHub.
 # Скачать: https://www.gyan.dev/ffmpeg/builds/ (full build, 2022-09-15)
 /utils/ffmpeg.exe
+
+# Графические тесты: рабочие скрины (Edge-эталон, Lumen-захват, diff) — не коммитим.
+# См. CLAUDE.md → «Графические тесты», правило №1.
+/bugs/screenshots/
