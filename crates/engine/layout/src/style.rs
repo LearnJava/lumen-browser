@@ -3128,6 +3128,12 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // принципу проекта №1: ничего не утекает через стилизацию).
         PseudoClass::Visited => false,
         PseudoClass::AnyLink => matches_any_link(doc, node),
+        // CSS Selectors L4 §4.2: `:scope` matches the document's root element
+        // в author-CSS context (без runtime querySelector). Эквивалент `:root`.
+        // Реальная разница появится при integration с DOM querySelector API
+        // (P3 + JS-runtime) — пока что в layout-cascade оба ведут себя
+        // одинаково.
+        PseudoClass::Scope => is_root_element(doc, node),
         PseudoClass::Unsupported(_) => false,
     }
 }

@@ -1518,6 +1518,48 @@ mod tests {
         assert_eq!((c.r, c.b), (0, 255));
     }
 
+    // ──────────────── :scope (CSS Selectors L4 §4.2) ────────────────
+
+    #[test]
+    fn scope_matches_root_element() {
+        // В author-CSS без querySelector-runtime `:scope` matches document
+        // root element (эквивалентно `:root`).
+        let c = element_color(
+            "<html><body><p>x</p></body></html>",
+            ":scope { color: red; }",
+            "html",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn scope_does_not_match_descendants() {
+        // `:scope` matches root only, не вложенные элементы.
+        let c = element_color(
+            "<html><body><p>x</p></body></html>",
+            ":scope { color: red; }",
+            "body",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    #[test]
+    fn scope_equivalent_to_root_in_author_css() {
+        // В author-CSS без runtime querySelector `:scope` и `:root` дают
+        // одинаковый результат — оба matches root element.
+        let c1 = element_color(
+            "<html><body>x</body></html>",
+            ":scope { color: red; }",
+            "html",
+        );
+        let c2 = element_color(
+            "<html><body>x</body></html>",
+            ":root { color: red; }",
+            "html",
+        );
+        assert_eq!(c1.r, c2.r);
+    }
+
     #[test]
     fn id_wins_over_class() {
         // id specificity (1,0,0) > class (0,1,0). Порядок правил в CSS — class
