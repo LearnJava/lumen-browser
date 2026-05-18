@@ -11,7 +11,7 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, BackgroundClip, BoxKind, Color,
     FontStyle, FontWeight, InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode, ObjectFit,
     ObjectPosition, OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase,
-    PositionComponent, StackingContextId, StackingTree,
+    PositionComponent, StackingContextId, StackingTree, Visibility,
 };
 
 /// CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
@@ -852,12 +852,24 @@ fn emit_outline(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     });
 }
 
+/// CSS Display L3 §4 — `visibility: hidden` (и `collapse` для не-table
+/// per spec) делает box-self **не-рисуемым** (background, border,
+/// outline, box-shadow, content), но layout остаётся (`Skip` иной
+/// семантики). Children по-прежнему обходятся: visibility наследуется,
+/// но child может явно вернуть себя через `visibility: visible`.
+fn is_paint_visible(b: &LayoutBox) -> bool {
+    matches!(b.style.visibility, Visibility::Visible)
+}
+
 /// Эмитит DisplayCommand-ы для одного box-а БЕЗ рекурсии в детей. Аналог
 /// тела `walk` для одного box-а.
 fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     match &b.kind {
         BoxKind::Skip => {}
         BoxKind::Block => {
+            if !is_paint_visible(b) {
+                return;
+            }
             emit_box_shadows(b, out);
             if let Some(bg) = b.style.background_color
                 && bg.a > 0
@@ -897,6 +909,12 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             for (line_idx, line) in lines.iter().enumerate() {
                 let line_y = b.rect.y + line_idx as f32 * line_h;
                 for frag in line {
+                    // Per-frag visibility (inline element может иметь свой,
+                    // отличный от parent-а — `<span visibility:visible>` внутри
+                    // `<div visibility:hidden>`).
+                    if !matches!(frag.style.visibility, Visibility::Visible) {
+                        continue;
+                    }
                     let base_rect = Rect::new(b.rect.x + frag.x, line_y, b.rect.width, line_h);
                     // text-shadow (CSS Text Decoration L3 §6) рисуется ДО
                     // основного текста — painter's order: first shadow on top.
@@ -920,6 +938,9 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         }
         BoxKind::InlineBlockRow => {}
         BoxKind::Image { src, alt } => {
+            if !is_paint_visible(b) {
+                return;
+            }
             emit_box_shadows(b, out);
             if let Some(bg) = b.style.background_color
                 && bg.a > 0
@@ -968,43 +989,51 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
     match &b.kind {
         BoxKind::Skip => {}
         BoxKind::Block => {
-            emit_box_shadows(b, out);
-            if let Some(bg) = b.style.background_color
-                && bg.a > 0
-            {
-                let clip = background_clip_rect(b);
-                if clip.width > 0.0 && clip.height > 0.0 {
-                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+            // CSS Display L3 §4 — `visibility: hidden`: self не рисуется
+            // (фон/border/outline/shadow), но children обходятся (inherited
+            // visibility, но child может вернуть себя через `:visible`).
+            let self_visible = is_paint_visible(b);
+            if self_visible {
+                emit_box_shadows(b, out);
+                if let Some(bg) = b.style.background_color
+                    && bg.a > 0
+                {
+                    let clip = background_clip_rect(b);
+                    if clip.width > 0.0 && clip.height > 0.0 {
+                        out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                    }
                 }
-            }
-            let s = &b.style;
-            let has_border = s.border_top_style.is_visible()
-                || s.border_right_style.is_visible()
-                || s.border_bottom_style.is_visible()
-                || s.border_left_style.is_visible();
-            if has_border {
-                let cur = s.color;
-                out.push(DisplayCommand::DrawBorder {
-                    rect: b.rect,
-                    widths: [
-                        s.border_top_width, s.border_right_width,
-                        s.border_bottom_width, s.border_left_width,
-                    ],
-                    colors: [
-                        s.border_top_color.unwrap_or(cur),
-                        s.border_right_color.unwrap_or(cur),
-                        s.border_bottom_color.unwrap_or(cur),
-                        s.border_left_color.unwrap_or(cur),
-                    ],
-                });
+                let s = &b.style;
+                let has_border = s.border_top_style.is_visible()
+                    || s.border_right_style.is_visible()
+                    || s.border_bottom_style.is_visible()
+                    || s.border_left_style.is_visible();
+                if has_border {
+                    let cur = s.color;
+                    out.push(DisplayCommand::DrawBorder {
+                        rect: b.rect,
+                        widths: [
+                            s.border_top_width, s.border_right_width,
+                            s.border_bottom_width, s.border_left_width,
+                        ],
+                        colors: [
+                            s.border_top_color.unwrap_or(cur),
+                            s.border_right_color.unwrap_or(cur),
+                            s.border_bottom_color.unwrap_or(cur),
+                            s.border_left_color.unwrap_or(cur),
+                        ],
+                    });
+                }
             }
             for child in &b.children {
                 walk(child, out);
             }
-            // CSS Basic UI L4 §5: outline рисуется поверх контента box-а
-            // (включая children), снаружи bounding-box-а. Phase 0 без
-            // деления paint phases для outline — эмитим в конце box-walk-а.
-            emit_outline(b, out);
+            if self_visible {
+                // CSS Basic UI L4 §5: outline рисуется поверх контента box-а
+                // (включая children), снаружи bounding-box-а. Phase 0 без
+                // деления paint phases для outline — эмитим в конце box-walk-а.
+                emit_outline(b, out);
+            }
         }
         BoxKind::InlineBlockRow => {
             // Анонимный контейнер: нет фона/бордера собственного.
@@ -1018,6 +1047,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             for (line_idx, line) in lines.iter().enumerate() {
                 let line_y = b.rect.y + line_idx as f32 * line_h;
                 for frag in line {
+                    // Per-frag visibility (см. emit_box_self).
+                    if !matches!(frag.style.visibility, Visibility::Visible) {
+                        continue;
+                    }
                     let base_rect = Rect::new(b.rect.x + frag.x, line_y, b.rect.width, line_h);
                     // text-shadow (CSS Text Decoration L3 §6) рисуется ДО
                     // основного текста — painter's order: first shadow on top.
@@ -1040,6 +1073,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             }
         }
         BoxKind::Image { src, alt } => {
+            // visibility:hidden на `<img>` пропускает всё (no children).
+            if !is_paint_visible(b) {
+                return;
+            }
             // Painter's order для replaced element: фон → border → image.
             // background/border у `<img>` валидны по CSS — например, для
             // подложки на время загрузки или рамки вокруг картинки.
@@ -2758,5 +2795,105 @@ mod tests {
             .filter(|c| matches!(c, DisplayCommand::FillRect { color, .. } if color.r == 255))
             .collect();
         assert!(bg_fills.is_empty(), "collapsed bg должен быть пропущен");
+    }
+
+    // ───────── visibility: hidden ─────────
+
+    fn cmd_count(dl: &DisplayList) -> usize {
+        dl.iter()
+            .filter(|c| !matches!(c, DisplayCommand::PushClipRect { .. }
+                                  | DisplayCommand::PopClip
+                                  | DisplayCommand::PushOpacity { .. }
+                                  | DisplayCommand::PopOpacity
+                                  | DisplayCommand::PushBlendMode { .. }
+                                  | DisplayCommand::PopBlendMode))
+            .count()
+    }
+
+    #[test]
+    fn visibility_hidden_block_suppresses_self_paint() {
+        let visible = build(
+            "<div></div>",
+            "div { width: 50px; height: 30px; background: red; border: 2px solid black; }",
+        );
+        let hidden = build(
+            "<div></div>",
+            "div { width: 50px; height: 30px; background: red; border: 2px solid black; \
+             visibility: hidden; }",
+        );
+        // visible: FillRect (bg) + DrawBorder.
+        assert!(cmd_count(&visible) >= 2);
+        // hidden: ничего из self не эмитим (никаких children → пусто).
+        assert_eq!(cmd_count(&hidden), 0);
+    }
+
+    #[test]
+    fn visibility_hidden_block_still_walks_visible_children() {
+        // Parent hidden, child явно visible (override через inherit).
+        let dl = build(
+            "<div><p>x</p></div>",
+            "div { background: red; visibility: hidden; } \
+             p { display: block; background: blue; visibility: visible; \
+                 width: 20px; height: 10px; }",
+        );
+        // Должна быть синяя FillRect от child, но не красная от parent.
+        let blues = dl.iter().filter(|c| {
+            matches!(c, DisplayCommand::FillRect { color, .. } if color.b == 255)
+        });
+        let reds = dl.iter().filter(|c| {
+            matches!(c, DisplayCommand::FillRect { color, .. } if color.r == 255 && color.b == 0)
+        });
+        assert!(blues.count() >= 1, "child должен рисоваться");
+        assert_eq!(reds.count(), 0, "parent bg не рисуется");
+    }
+
+    #[test]
+    fn visibility_hidden_skips_text() {
+        // text inherits visibility=hidden → DrawText не эмитим.
+        let dl = build(
+            "<p>hello</p>",
+            "p { visibility: hidden; color: black; }",
+        );
+        let texts: Vec<_> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawText { .. }))
+            .collect();
+        assert!(texts.is_empty(), "hidden parent → text не эмитим");
+    }
+
+    // Note: inline visibility override (parent hidden + child <span>
+    // visibility:visible) зависит от того, что layout формирует отдельный
+    // InlineFrag со style от span. Тест на это случае отложен — текущее
+    // layout-поведение может склеивать text-nodes в один frag со
+    // стилем родителя. Когда P1 разделит inline-fragments по style-runs,
+    // добавим этот test обратно.
+
+    #[test]
+    fn visibility_collapse_treated_as_hidden_outside_table() {
+        // CSS L3 §4: vne table-row `collapse` ведёт себя как `hidden`.
+        let dl = build(
+            "<div></div>",
+            "div { width: 50px; height: 30px; background: red; \
+             visibility: collapse; }",
+        );
+        let bg_fills: Vec<_> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::FillRect { color, .. } if color.r == 255))
+            .collect();
+        assert!(bg_fills.is_empty(), "collapse вне table → hidden");
+    }
+
+    #[test]
+    fn visibility_hidden_image_skipped() {
+        // visibility:hidden на `<img>` — DrawImage не эмитим.
+        let dl = build(
+            r#"<img src="x.png" width="50" height="50">"#,
+            "img { visibility: hidden; }",
+        );
+        let images: Vec<_> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawImage { .. }))
+            .collect();
+        assert!(images.is_empty());
     }
 }
