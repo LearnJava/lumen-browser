@@ -6,10 +6,16 @@
 //! отдельная фаза, в которую можно вынести скролл / transform / opacity без
 //! relayout-а (off-main-thread scroll, GPU-accelerated transform).
 //!
-//! Phase 0 — только контракты и in-process trivial-impl-ы. Реальный
-//! compositor thread, blend-pipeline, hit testing — следующие задачи (P2
-//! 2A/2B/3B/4). Подсистемы строятся **против trait-ов** ниже, не против
-//! конкретных типов: drop-in переход на реальный impl без правки потребителей.
+//! Phase 0 — два concrete impl-а одного trait-а:
+//! - `InProcessCompositor` — single-thread, синхронный, без Mutex.
+//! - `ThreadedCompositor` + `ThreadedCompositorHandle` — Mutex-обёрнутая
+//!   версия. Main thread держит owner-а и шлёт `commit`, render/compositor
+//!   thread держит cloned `ThreadedCompositorHandle` и читает active.
+//!
+//! Реальный compositor thread (отдельный поток с tick-loop-ом), blend-pipeline,
+//! GPU-layer pipeline — следующие задачи (P2 4, P2 1B шаг (c)). Сейчас оба
+//! impl-а используют одну и ту же two-buffer-модель и API — drop-in переход
+//! между ними не меняет потребителя.
 //!
 //! Архитектура (как в Chromium):
 //! - `LayerTree` — иерархия layer-ов (root + детей); каждый layer — bbox +
@@ -20,21 +26,25 @@
 //!   реализованы в `lumen-layout::property_trees` (P1 Sprint 0). Mutations
 //!   property-узлов compositor применяет без relayout-а.
 //! - `Compositor` — принимает `commit(trees, layer_tree)`; внутри ведёт
-//!   two-buffer (pending / active) и отдаёт активный tree на render.
+//!   two-buffer (pending / active) и отдаёт активный snapshot через `Arc`.
+//!
+//! **Почему `Arc<dyn LayerTree>` вместо `&dyn LayerTree` / `Box<dyn LayerTree>`:**
+//! main thread пишет в pending, compositor/render thread читает active. Если
+//! бы `active_tree()` возвращал `&dyn LayerTree` на поле внутри `Mutex`, нам
+//! пришлось бы держать `MutexGuard` живым на время рендера кадра — это
+//! блокировало бы main thread от следующего `commit`. Возврат cloned `Arc` —
+//! O(1) atomic refcount bump, lock сразу освобождается, main thread свободен.
 //!
 //! Phase 0 ограничения:
 //! - `BasicLayerTree::single_layer(commands)` — один layer на всю страницу
 //!   (root stacking context). Реальное разбиение по stacking contexts —
 //!   задача P1 п.2A (наполнение `StackingContextId`).
-//! - `InProcessCompositor` синхронный: commit копирует layer tree в active
-//!   немедленно (без атомарного swap и буфера pending). Two-buffer-модель
-//!   — задача compositor thread (P2, после Sprint 0).
-//! - `Compositor::commit` не использует `PropertyTrees` — Phase 0 рендер
-//!   плоский (без transform / opacity / scroll). API уже принимает trees,
-//!   чтобы драматически не менять сигнатуру при подключении реального
+//! - `Compositor::commit` не использует `PropertyTrees` в рендере — Phase 0
+//!   рендер плоский (без transform / opacity / scroll). API уже принимает
+//!   trees, чтобы драматически не менять сигнатуру при подключении реального
 //!   compositor pipeline.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use lumen_core::geom::Rect;
 use lumen_layout::{PropertyTrees, StackingContextId};
@@ -129,22 +139,23 @@ impl LayerTree for BasicLayerTree {
 /// - `flush_pending() -> bool` — compositor (Phase 1+ — отдельный поток)
 ///   атомарно промотирует pending → active в начале своего «vsync-tick»-а.
 ///   `true` если промоушн был; `false` если pending пуст.
-/// - `active_tree()` / `active_trees()` — то, что рендерится в текущем кадре.
+/// - `active_tree()` / `active_trees()` — Arc-snapshot активной версии,
+///   рендерится в текущем кадре. `Arc::clone` на возврате; не держит lock.
 ///
-/// Phase 0: один поток. Shell делает `commit(...); compositor.flush_pending();
-/// renderer.render(...)` подряд. Promotion синхронный; атомарность важна
-/// только когда commit и flush разъезжаются на потоки.
-///
-/// `commit` принимает `Arc<PropertyTrees>` — owned snapshot от main thread-а,
-/// который compositor хранит без копирования. Layer tree —
-/// `Box<dyn LayerTree + Send + Sync>` чтобы можно было передавать различные
-/// impl-ы и (в будущем) перекладывать между потоками.
+/// `commit` принимает `Arc<dyn LayerTree + Send + Sync>` — caller владеет
+/// своим Arc, compositor клонирует refcount себе. Это позволяет одному
+/// snapshot-у одновременно жить в pending одного compositor-а и в active
+/// другого (или в active + render-loop в одной сессии).
 pub trait Compositor {
     /// Кладёт новое состояние в pending-буфер. Active не меняется — старая
     /// сцена продолжает рендериться до следующего `flush_pending`. Повторный
     /// `commit` до flush-а перезаписывает pending (последний коммит выигрывает —
     /// каждые 16 мс рендерить промежуточный layout не нужно).
-    fn commit(&mut self, trees: Arc<PropertyTrees>, layer_tree: Box<dyn LayerTree + Send + Sync>);
+    fn commit(
+        &mut self,
+        trees: Arc<PropertyTrees>,
+        layer_tree: Arc<dyn LayerTree + Send + Sync>,
+    );
 
     /// Атомарно промотирует pending → active. Возвращает `true`, если был
     /// pending для промоушна; `false`, если новых обновлений не было (active
@@ -155,23 +166,23 @@ pub trait Compositor {
     /// рендер-loop-ом, чтобы решить, нужен ли invalidate / repaint.
     fn has_pending(&self) -> bool;
 
-    /// Активный layer tree — то, что рендерится в текущем кадре.
+    /// Snapshot активного layer tree — то, что рендерится в текущем кадре.
     /// `None` пока не было ни одного `flush_pending`-а.
-    fn active_tree(&self) -> Option<&dyn LayerTree>;
+    fn active_tree(&self) -> Option<Arc<dyn LayerTree + Send + Sync>>;
 
-    /// Активные property trees — то, что рендерится в текущем кадре.
+    /// Snapshot активных property trees — то, что рендерится в текущем кадре.
     /// `None` пока не было ни одного `flush_pending`-а.
-    fn active_trees(&self) -> Option<&Arc<PropertyTrees>>;
+    fn active_trees(&self) -> Option<Arc<PropertyTrees>>;
 }
 
-/// Phase 0 in-process compositor: один поток, синхронный swap, без Mutex.
-/// Будет заменён на отдельный thread в roadmap «compositor thread»; API
-/// уже two-buffer-ный, чтобы переход был drop-in (поменять только Mutex
-/// вокруг pending-слотов).
+/// Single-thread in-process compositor: синхронный swap, без Mutex.
+/// Pending/active живут как `Arc`-snapshot-ы, чтобы потребитель мог
+/// клонировать active и хранить его за пределами compositor-а (например,
+/// renderer держит copy на время кадра).
 pub struct InProcessCompositor {
-    pending_layer_tree: Option<Box<dyn LayerTree + Send + Sync>>,
+    pending_layer_tree: Option<Arc<dyn LayerTree + Send + Sync>>,
     pending_trees: Option<Arc<PropertyTrees>>,
-    active_layer_tree: Option<Box<dyn LayerTree + Send + Sync>>,
+    active_layer_tree: Option<Arc<dyn LayerTree + Send + Sync>>,
     active_trees: Option<Arc<PropertyTrees>>,
 }
 
@@ -194,7 +205,11 @@ impl Default for InProcessCompositor {
 }
 
 impl Compositor for InProcessCompositor {
-    fn commit(&mut self, trees: Arc<PropertyTrees>, layer_tree: Box<dyn LayerTree + Send + Sync>) {
+    fn commit(
+        &mut self,
+        trees: Arc<PropertyTrees>,
+        layer_tree: Arc<dyn LayerTree + Send + Sync>,
+    ) {
         self.pending_trees = Some(trees);
         self.pending_layer_tree = Some(layer_tree);
     }
@@ -216,14 +231,203 @@ impl Compositor for InProcessCompositor {
         self.pending_trees.is_some()
     }
 
-    fn active_tree(&self) -> Option<&dyn LayerTree> {
-        // Сужаем `dyn LayerTree + Send + Sync` до `dyn LayerTree`: trait
-        // object с auto-trait-ами — отдельный тип, нужен явный reborrow.
-        self.active_layer_tree.as_ref().map(|b| &**b as &dyn LayerTree)
+    fn active_tree(&self) -> Option<Arc<dyn LayerTree + Send + Sync>> {
+        self.active_layer_tree.clone()
     }
 
-    fn active_trees(&self) -> Option<&Arc<PropertyTrees>> {
-        self.active_trees.as_ref()
+    fn active_trees(&self) -> Option<Arc<PropertyTrees>> {
+        self.active_trees.clone()
+    }
+}
+
+/// Внутреннее shared state ThreadedCompositor-а. Один Mutex на все четыре
+/// слота (pending+active × layer_tree+trees) — простая модель, гарантирует
+/// что commit и flush видят consistent состояние. Lock contention пока не
+/// проблема: Phase 0 рендер на main thread, commit-ы редкие (1 на кадр).
+struct ThreadedState {
+    pending_layer_tree: Option<Arc<dyn LayerTree + Send + Sync>>,
+    pending_trees: Option<Arc<PropertyTrees>>,
+    active_layer_tree: Option<Arc<dyn LayerTree + Send + Sync>>,
+    active_trees: Option<Arc<PropertyTrees>>,
+}
+
+impl ThreadedState {
+    fn new() -> Self {
+        Self {
+            pending_layer_tree: None,
+            pending_trees: None,
+            active_layer_tree: None,
+            active_trees: None,
+        }
+    }
+}
+
+/// Thread-safe compositor: тот же API two-buffer-а, но `commit` и
+/// `flush_pending` могут вызываться из разных threads. Используется когда
+/// main thread шлёт commit-ы, а compositor/render thread читает active.
+///
+/// `ThreadedCompositor` — *owner*-структура (реализует [`Compositor`]
+/// trait через `&mut self` для drop-in замены `InProcessCompositor`).
+/// Для shared доступа из других threads — [`ThreadedCompositor::handle`].
+///
+/// Phase 0: оба impl-а реализуют один trait — потребитель может писать
+/// против `&mut dyn Compositor` и подменять single/threaded вариант без
+/// правок. Реальный compositor-thread tick-loop с отдельным `JoinHandle`
+/// (читает pending каждые N мс, делает GPU upload) — следующая задача.
+pub struct ThreadedCompositor {
+    state: Arc<Mutex<ThreadedState>>,
+}
+
+impl ThreadedCompositor {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ThreadedState::new())),
+        }
+    }
+
+    /// Cheap-clone handle для другого потока: shared доступ к тому же
+    /// state-у. Используется когда render/compositor thread должен читать
+    /// active, пока main thread держит owner-а и пишет pending.
+    #[must_use]
+    pub fn handle(&self) -> ThreadedCompositorHandle {
+        ThreadedCompositorHandle {
+            state: Arc::clone(&self.state),
+        }
+    }
+}
+
+impl Default for ThreadedCompositor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Compositor for ThreadedCompositor {
+    fn commit(
+        &mut self,
+        trees: Arc<PropertyTrees>,
+        layer_tree: Arc<dyn LayerTree + Send + Sync>,
+    ) {
+        let mut guard = self
+            .state
+            .lock()
+            .expect("ThreadedCompositor state mutex poisoned");
+        guard.pending_trees = Some(trees);
+        guard.pending_layer_tree = Some(layer_tree);
+    }
+
+    fn flush_pending(&mut self) -> bool {
+        let mut guard = self
+            .state
+            .lock()
+            .expect("ThreadedCompositor state mutex poisoned");
+        let Some(trees) = guard.pending_trees.take() else {
+            return false;
+        };
+        let layer_tree = guard
+            .pending_layer_tree
+            .take()
+            .expect("pending_trees и pending_layer_tree всегда set/unset вместе");
+        guard.active_trees = Some(trees);
+        guard.active_layer_tree = Some(layer_tree);
+        true
+    }
+
+    fn has_pending(&self) -> bool {
+        self.state
+            .lock()
+            .expect("ThreadedCompositor state mutex poisoned")
+            .pending_trees
+            .is_some()
+    }
+
+    fn active_tree(&self) -> Option<Arc<dyn LayerTree + Send + Sync>> {
+        self.state
+            .lock()
+            .expect("ThreadedCompositor state mutex poisoned")
+            .active_layer_tree
+            .clone()
+    }
+
+    fn active_trees(&self) -> Option<Arc<PropertyTrees>> {
+        self.state
+            .lock()
+            .expect("ThreadedCompositor state mutex poisoned")
+            .active_trees
+            .clone()
+    }
+}
+
+/// Cheap-clone handle на тот же state, что и parent [`ThreadedCompositor`].
+/// `&self` методы — interior mutability через Mutex; несколько threads
+/// могут держать свои clone-ы handle-а одновременно.
+///
+/// Семантика: handle и owner равноправны. owner-у не нужен «exclusive»-доступ —
+/// он просто реализует [`Compositor`] trait (`&mut self`) для совместимости
+/// с in-process call sites, а handle даёт `&self` API для shared-thread
+/// потребителей. Внутри оба используют один и тот же `Arc<Mutex<...>>`.
+#[derive(Clone)]
+pub struct ThreadedCompositorHandle {
+    state: Arc<Mutex<ThreadedState>>,
+}
+
+impl ThreadedCompositorHandle {
+    pub fn commit(
+        &self,
+        trees: Arc<PropertyTrees>,
+        layer_tree: Arc<dyn LayerTree + Send + Sync>,
+    ) {
+        let mut guard = self
+            .state
+            .lock()
+            .expect("ThreadedCompositorHandle state mutex poisoned");
+        guard.pending_trees = Some(trees);
+        guard.pending_layer_tree = Some(layer_tree);
+    }
+
+    pub fn flush_pending(&self) -> bool {
+        let mut guard = self
+            .state
+            .lock()
+            .expect("ThreadedCompositorHandle state mutex poisoned");
+        let Some(trees) = guard.pending_trees.take() else {
+            return false;
+        };
+        let layer_tree = guard
+            .pending_layer_tree
+            .take()
+            .expect("pending_trees и pending_layer_tree всегда set/unset вместе");
+        guard.active_trees = Some(trees);
+        guard.active_layer_tree = Some(layer_tree);
+        true
+    }
+
+    #[must_use]
+    pub fn has_pending(&self) -> bool {
+        self.state
+            .lock()
+            .expect("ThreadedCompositorHandle state mutex poisoned")
+            .pending_trees
+            .is_some()
+    }
+
+    #[must_use]
+    pub fn active_tree(&self) -> Option<Arc<dyn LayerTree + Send + Sync>> {
+        self.state
+            .lock()
+            .expect("ThreadedCompositorHandle state mutex poisoned")
+            .active_layer_tree
+            .clone()
+    }
+
+    #[must_use]
+    pub fn active_trees(&self) -> Option<Arc<PropertyTrees>> {
+        self.state
+            .lock()
+            .expect("ThreadedCompositorHandle state mutex poisoned")
+            .active_trees
+            .clone()
     }
 }
 
@@ -257,8 +461,10 @@ mod tests {
         assert_eq!(layer.commands().len(), 1);
     }
 
+    // --- InProcessCompositor ---
+
     #[test]
-    fn compositor_starts_empty() {
+    fn in_process_compositor_starts_empty() {
         let comp = InProcessCompositor::new();
         assert!(comp.active_tree().is_none());
         assert!(comp.active_trees().is_none());
@@ -266,13 +472,13 @@ mod tests {
     }
 
     #[test]
-    fn commit_does_not_promote_immediately() {
+    fn in_process_commit_does_not_promote_immediately() {
         let mut comp = InProcessCompositor::new();
         let bbox = Rect::new(0.0, 0.0, 800.0, 600.0);
         let trees = Arc::new(PropertyTrees::empty());
         comp.commit(
             trees,
-            Box::new(BasicLayerTree::single_layer(bbox, sample_commands())),
+            Arc::new(BasicLayerTree::single_layer(bbox, sample_commands())),
         );
         assert!(comp.has_pending());
         assert!(
@@ -283,44 +489,44 @@ mod tests {
     }
 
     #[test]
-    fn flush_pending_promotes_pending_to_active() {
+    fn in_process_flush_pending_promotes_pending_to_active() {
         let mut comp = InProcessCompositor::new();
         let bbox = Rect::new(0.0, 0.0, 800.0, 600.0);
         let trees = Arc::new(PropertyTrees::empty());
         comp.commit(
-            trees.clone(),
-            Box::new(BasicLayerTree::single_layer(bbox, sample_commands())),
+            Arc::clone(&trees),
+            Arc::new(BasicLayerTree::single_layer(bbox, sample_commands())),
         );
         assert!(comp.flush_pending(), "был pending — flush возвращает true");
         let active = comp.active_tree().expect("после flush есть active");
         assert_eq!(active.layer_count(), 1);
         assert_eq!(active.layer(0).unwrap().bbox(), bbox);
         assert!(Arc::ptr_eq(
-            comp.active_trees().expect("trees promoted"),
+            &comp.active_trees().expect("trees promoted"),
             &trees,
         ));
         assert!(!comp.has_pending(), "после flush pending пуст");
     }
 
     #[test]
-    fn flush_pending_returns_false_when_empty() {
+    fn in_process_flush_pending_returns_false_when_empty() {
         let mut comp = InProcessCompositor::new();
         assert!(!comp.flush_pending());
     }
 
     #[test]
-    fn commit_overwrites_pending() {
+    fn in_process_commit_overwrites_pending() {
         let mut comp = InProcessCompositor::new();
         let bbox_a = Rect::new(0.0, 0.0, 100.0, 100.0);
         let bbox_b = Rect::new(50.0, 50.0, 200.0, 200.0);
         let trees = Arc::new(PropertyTrees::empty());
         comp.commit(
-            trees.clone(),
-            Box::new(BasicLayerTree::single_layer(bbox_a, Vec::new())),
+            Arc::clone(&trees),
+            Arc::new(BasicLayerTree::single_layer(bbox_a, Vec::new())),
         );
         comp.commit(
             trees,
-            Box::new(BasicLayerTree::single_layer(bbox_b, Vec::new())),
+            Arc::new(BasicLayerTree::single_layer(bbox_b, Vec::new())),
         );
         assert!(comp.flush_pending());
         let active = comp.active_tree().unwrap();
@@ -332,17 +538,199 @@ mod tests {
     }
 
     #[test]
-    fn active_persists_across_flush_with_no_pending() {
+    fn in_process_active_persists_across_flush_with_no_pending() {
         let mut comp = InProcessCompositor::new();
         let bbox = Rect::new(0.0, 0.0, 100.0, 100.0);
         let trees = Arc::new(PropertyTrees::empty());
         comp.commit(
             trees,
-            Box::new(BasicLayerTree::single_layer(bbox, Vec::new())),
+            Arc::new(BasicLayerTree::single_layer(bbox, Vec::new())),
         );
         comp.flush_pending();
         // Без нового commit-а второй flush не меняет active.
         assert!(!comp.flush_pending());
         assert_eq!(comp.active_tree().unwrap().layer(0).unwrap().bbox(), bbox);
+    }
+
+    // --- ThreadedCompositor (single-thread API parity с InProcessCompositor) ---
+
+    #[test]
+    fn threaded_compositor_starts_empty() {
+        let comp = ThreadedCompositor::new();
+        assert!(comp.active_tree().is_none());
+        assert!(comp.active_trees().is_none());
+        assert!(!comp.has_pending());
+    }
+
+    #[test]
+    fn threaded_commit_does_not_promote_immediately() {
+        let mut comp = ThreadedCompositor::new();
+        let bbox = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let trees = Arc::new(PropertyTrees::empty());
+        comp.commit(
+            trees,
+            Arc::new(BasicLayerTree::single_layer(bbox, sample_commands())),
+        );
+        assert!(comp.has_pending());
+        assert!(comp.active_tree().is_none());
+        assert!(comp.active_trees().is_none());
+    }
+
+    #[test]
+    fn threaded_flush_pending_promotes() {
+        let mut comp = ThreadedCompositor::new();
+        let bbox = Rect::new(0.0, 0.0, 800.0, 600.0);
+        let trees = Arc::new(PropertyTrees::empty());
+        comp.commit(
+            Arc::clone(&trees),
+            Arc::new(BasicLayerTree::single_layer(bbox, sample_commands())),
+        );
+        assert!(comp.flush_pending());
+        let active = comp.active_tree().expect("после flush есть active");
+        assert_eq!(active.layer_count(), 1);
+        assert!(Arc::ptr_eq(
+            &comp.active_trees().expect("trees promoted"),
+            &trees,
+        ));
+        assert!(!comp.has_pending());
+    }
+
+    #[test]
+    fn threaded_flush_returns_false_when_empty() {
+        let mut comp = ThreadedCompositor::new();
+        assert!(!comp.flush_pending());
+    }
+
+    #[test]
+    fn threaded_commit_overwrites_pending() {
+        let mut comp = ThreadedCompositor::new();
+        let bbox_a = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let bbox_b = Rect::new(50.0, 50.0, 200.0, 200.0);
+        let trees = Arc::new(PropertyTrees::empty());
+        comp.commit(
+            Arc::clone(&trees),
+            Arc::new(BasicLayerTree::single_layer(bbox_a, Vec::new())),
+        );
+        comp.commit(
+            trees,
+            Arc::new(BasicLayerTree::single_layer(bbox_b, Vec::new())),
+        );
+        assert!(comp.flush_pending());
+        let active = comp.active_tree().unwrap();
+        assert_eq!(active.layer(0).unwrap().bbox(), bbox_b);
+    }
+
+    // --- ThreadedCompositorHandle: shared state с owner-ом ---
+
+    #[test]
+    fn handle_shares_state_with_owner() {
+        let owner = ThreadedCompositor::new();
+        let handle = owner.handle();
+        let bbox = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let trees = Arc::new(PropertyTrees::empty());
+        // commit через handle — owner видит pending.
+        handle.commit(
+            Arc::clone(&trees),
+            Arc::new(BasicLayerTree::single_layer(bbox, Vec::new())),
+        );
+        assert!(owner.has_pending(), "handle.commit виден owner-у");
+        // flush через handle — active появляется у обоих.
+        assert!(handle.flush_pending());
+        let active_owner = owner.active_tree().expect("owner видит active");
+        let active_handle = handle.active_tree().expect("handle видит active");
+        assert!(
+            Arc::ptr_eq(&active_owner, &active_handle),
+            "owner и handle отдают тот же Arc-snapshot"
+        );
+    }
+
+    #[test]
+    fn handle_clone_shares_state() {
+        let owner = ThreadedCompositor::new();
+        let handle_a = owner.handle();
+        let handle_b = handle_a.clone();
+        let bbox = Rect::new(0.0, 0.0, 50.0, 50.0);
+        handle_a.commit(
+            Arc::new(PropertyTrees::empty()),
+            Arc::new(BasicLayerTree::single_layer(bbox, Vec::new())),
+        );
+        assert!(handle_b.has_pending(), "cloned handle видит pending");
+        assert!(handle_b.flush_pending());
+        assert_eq!(
+            handle_a.active_tree().unwrap().layer(0).unwrap().bbox(),
+            bbox
+        );
+    }
+
+    // --- Multi-thread сценарий: main thread commit, другой thread flush+read ---
+
+    #[test]
+    fn cross_thread_commit_and_flush() {
+        use std::thread;
+
+        let mut owner = ThreadedCompositor::new();
+        let handle = owner.handle();
+
+        let bbox = Rect::new(0.0, 0.0, 400.0, 300.0);
+        let trees = Arc::new(PropertyTrees::empty());
+        owner.commit(
+            trees,
+            Arc::new(BasicLayerTree::single_layer(bbox, sample_commands())),
+        );
+
+        // Reader thread: видит pending, делает flush, читает active.
+        let reader = thread::spawn(move || {
+            assert!(handle.has_pending());
+            assert!(handle.flush_pending());
+            let active = handle.active_tree().expect("active после flush");
+            active.layer(0).unwrap().bbox()
+        });
+
+        let observed_bbox = reader.join().expect("reader thread не паникнул");
+        assert_eq!(observed_bbox, bbox);
+        // owner после flush на reader-thread тоже видит active.
+        assert_eq!(owner.active_tree().unwrap().layer(0).unwrap().bbox(), bbox);
+    }
+
+    #[test]
+    fn cross_thread_concurrent_commits_last_wins() {
+        use std::sync::{
+            Barrier,
+            atomic::{AtomicUsize, Ordering},
+        };
+        use std::thread;
+
+        let owner = ThreadedCompositor::new();
+        let barrier = Arc::new(Barrier::new(4));
+        let counter = Arc::new(AtomicUsize::new(0));
+
+        // 4 commit-thread-а одновременно — ровно один pending должен выжить.
+        let mut writers = Vec::new();
+        for i in 0..4 {
+            let handle = owner.handle();
+            let barrier = Arc::clone(&barrier);
+            let counter = Arc::clone(&counter);
+            writers.push(thread::spawn(move || {
+                let side = 10.0 + i as f32;
+                let bbox = Rect::new(0.0, 0.0, side, side);
+                barrier.wait();
+                handle.commit(
+                    Arc::new(PropertyTrees::empty()),
+                    Arc::new(BasicLayerTree::single_layer(bbox, Vec::new())),
+                );
+                counter.fetch_add(1, Ordering::SeqCst);
+            }));
+        }
+        for w in writers {
+            w.join().unwrap();
+        }
+        assert_eq!(counter.load(Ordering::SeqCst), 4);
+        // После всех 4 commit-ов pending присутствует (последний выжил).
+        assert!(owner.has_pending());
+        let handle = owner.handle();
+        assert!(handle.flush_pending());
+        let active_bbox = handle.active_tree().unwrap().layer(0).unwrap().bbox();
+        // bbox принадлежит одному из commit-ов (валидные значения 10..14).
+        assert!(active_bbox.width >= 10.0 && active_bbox.width <= 13.0);
     }
 }
