@@ -3153,8 +3153,33 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // `Document::target() == None` — на странице без fragment-а никто
         // не матчит, walk поддерева не нужен.
         PseudoClass::TargetWithin => matches_target_within(doc, node),
+        // CSS Selectors L4 §6.4.1, HTML LS §4.13.5 — `:defined` матчит
+        // built-in HTML/SVG/MathML элементы и зарегистрированные custom
+        // elements. Custom-element-имена по HTML LS §4.13.2 обязаны иметь
+        // ASCII `-`; без registry в Phase 0 matcher использует это правило
+        // как аппроксимацию: имя без `-` → built-in (defined); имя с `-` →
+        // un-registered custom element (undefined). Когда P3 поднимет
+        // registry, проверка станет `built-in || registry.has(name)`.
+        PseudoClass::Defined => matches_defined(doc, node),
         PseudoClass::Unsupported(_) => false,
     }
+}
+
+/// `:defined` matcher per CSS Selectors L4 §6.4.1 / HTML LS §4.13.5.
+///
+/// Текстовые / комментарные ноды псевдо-классам не подвергаются вообще
+/// (Selector L4 §3.1 «selectors only apply to elements»), но selector
+/// engine приходит сюда только для элементов — на всякий случай делаем
+/// fast-fail на не-элемент.
+fn matches_defined(doc: &Document, node: NodeId) -> bool {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return false;
+    };
+    // HTML LS §4.13.2 «Valid custom element name»: имя custom-element-а
+    // обязано содержать дефис. Это единственная синтаксическая разница
+    // между «built-in» и «custom». В Phase 0 без CustomElementRegistry
+    // считаем все built-in defined, все custom-имена — undefined.
+    !name.local.as_str().contains('-')
 }
 
 /// Default-значение `<input type>` — `text` (HTML5 §4.10.5.1.2). Возвращает
@@ -12710,5 +12735,66 @@ mod tests {
             }
         }
         None
+    }
+
+    // ── matches_defined (CSS Selectors L4 §6.4.1 / HTML LS §4.13.5) ──────
+
+    fn first_child_of_root(doc: &lumen_dom::Document) -> lumen_dom::NodeId {
+        doc.get(doc.root()).children[0]
+    }
+
+    #[test]
+    fn defined_matches_builtin_html_element() {
+        // `<div>` — built-in, defined.
+        let doc = lumen_html_parser::parse("<div></div>");
+        let node = first_child_of_root(&doc);
+        assert!(matches_defined(&doc, node));
+    }
+
+    #[test]
+    fn defined_matches_arbitrary_unknown_no_hyphen() {
+        // `<foo>` без дефиса не может быть валидным custom-element-именем
+        // (HTML LS §4.13.2 требует дефис), значит трактуется как built-in
+        // unknown — defined.
+        let doc = lumen_html_parser::parse("<foo></foo>");
+        let node = first_child_of_root(&doc);
+        assert!(matches_defined(&doc, node));
+    }
+
+    #[test]
+    fn defined_does_not_match_custom_element_name() {
+        // `<my-button>` — валидное custom-element-имя, в Phase 0 без
+        // registry никогда не defined.
+        let doc = lumen_html_parser::parse("<my-button></my-button>");
+        let node = first_child_of_root(&doc);
+        assert!(!matches_defined(&doc, node));
+    }
+
+    #[test]
+    fn defined_does_not_match_deep_custom_element_name() {
+        // Имя с несколькими дефисами — тоже custom (`<x-y-z>` валидно).
+        let doc = lumen_html_parser::parse("<x-y-z></x-y-z>");
+        let node = first_child_of_root(&doc);
+        assert!(!matches_defined(&doc, node));
+    }
+
+    #[test]
+    fn defined_selector_filters_custom_elements_in_cascade() {
+        // E2E: `:not(:defined) { display: none }` скрывает custom-element
+        // (FOUC-protection idiom). Built-in остаётся видимым.
+        let doc =
+            lumen_html_parser::parse("<my-card></my-card><div></div>");
+        let sheet =
+            lumen_css_parser::parse(":not(:defined) { display: none; }");
+        let root_style = ComputedStyle::root();
+        let root = doc.get(doc.root());
+        let my_card = root.children[0];
+        let div = root.children[1];
+        let my_card_style =
+            compute_style(&doc, my_card, &sheet, &root_style, Size::new(800.0, 600.0));
+        let div_style =
+            compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
+        assert_eq!(my_card_style.display, Display::None);
+        assert_ne!(div_style.display, Display::None);
     }
 }

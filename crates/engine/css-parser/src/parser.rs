@@ -233,6 +233,18 @@ pub enum PseudoClass {
     /// то же, что у `:target`: без shell-интеграции `Document::target()`
     /// возвращает `None`, и matcher молча даёт `false`.
     TargetWithin,
+    /// `:defined` (CSS Selectors L4 §6.4.1, HTML LS §4.13.5) — матчит элементы,
+    /// которые определены: все built-in HTML / SVG / MathML элементы, а также
+    /// зарегистрированные custom elements. Не-`:defined` — custom-element-имя,
+    /// которое ещё не передано в `CustomElementRegistry.define()`.
+    ///
+    /// По HTML LS §4.13.2 имя custom-element-а обязано содержать ASCII `-`
+    /// (например, `<my-button>`) — это отличает их от built-in. В Phase 0 без
+    /// custom-elements registry matcher использует это правило как
+    /// аппроксимацию: local name без `-` → defined (built-in); local name с
+    /// `-` → undefined (registry пуст). Когда P3 поднимет registry,
+    /// проверка станет: `built-in || registry.has(name)`.
+    Defined,
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
@@ -2567,6 +2579,7 @@ impl<'a> Parser<'a> {
             "scope" => PseudoClass::Scope,
             "target" => PseudoClass::Target,
             "target-within" => PseudoClass::TargetWithin,
+            "defined" => PseudoClass::Defined,
             _ => PseudoClass::Unsupported(name),
         };
         Some(SimpleSelector::PseudoClass(pc))
@@ -3520,6 +3533,7 @@ mod tests {
             ("scope", PseudoClass::Scope),
             ("target", PseudoClass::Target),
             ("target-within", PseudoClass::TargetWithin),
+            ("defined", PseudoClass::Defined),
         ];
         for (name, expected) in cases {
             let s = parse(&format!(":{name} {{}}"));
@@ -3787,6 +3801,37 @@ mod tests {
             p,
             SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "target-within"
         ));
+    }
+
+    #[test]
+    fn pseudo_defined_case_insensitive_name() {
+        // CSS Syntax §4.4: pseudo-class names ASCII case-insensitive.
+        for src in [":defined { }", ":DEFINED { }", ":Defined { }"] {
+            let s = parse(src);
+            let p = &s.rules[0].selectors[0].head.parts[0];
+            assert!(
+                matches!(p, SimpleSelector::PseudoClass(PseudoClass::Defined)),
+                "src={src}"
+            );
+        }
+    }
+
+    #[test]
+    fn pseudo_defined_does_not_accept_arguments() {
+        // `:defined` — не functional. `:defined(x)` → Unsupported.
+        let s = parse(":defined(x) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "defined"
+        ));
+    }
+
+    #[test]
+    fn pseudo_defined_specificity_is_pseudo_class_level() {
+        let s = parse(":defined { color: red; }");
+        let spec = s.rules[0].selectors[0].specificity();
+        assert_eq!(spec, Specificity { a: 0, b: 1, c: 0 });
     }
 
     #[test]
