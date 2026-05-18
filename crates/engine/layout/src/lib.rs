@@ -40,8 +40,9 @@ pub use style::{
     OverscrollBehavior, PointerEvents, Position, PositionComponent, ScrollBehavior,
     ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop,
     ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter, ScrollbarWidth, StepPosition,
-    TextAlign, TextDecorationLine, TextOverflow, TextShadow, TextTransform, TimingFunction,
-    TransformFn, UserSelect, Visibility, WhiteSpace, WordBreak,
+    TextAlign, TextDecorationLine, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
+    TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFn, UserSelect, Visibility,
+    WhiteSpace, WordBreak,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -3862,6 +3863,230 @@ mod tests {
         assert!((p.style.outline_width - 20.0).abs() < 0.01, "computed=20");
         assert_eq!(p.style.outline_style, OutlineStyle::None);
         assert_eq!(p.style.outline_used_width(), 0.0, "used=0 при style=none");
+    }
+
+    // ── text-emphasis (CSS Text Decoration L4 §5) ───────────────────────────
+
+    #[test]
+    fn text_emphasis_default_none() {
+        let root = lay("<p>x</p>", "");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.text_emphasis_style, TextEmphasisStyle::None);
+        assert!(p.style.text_emphasis_color.is_none(), "initial = currentColor");
+        assert_eq!(
+            p.style.text_emphasis_position,
+            TextEmphasisPosition::OverRight
+        );
+    }
+
+    #[test]
+    fn text_emphasis_style_symbol_filled_circle() {
+        let root = lay("<p>x</p>", "p { text-emphasis-style: filled circle; }");
+        let p = first_element_child(&root);
+        assert_eq!(
+            p.style.text_emphasis_style,
+            TextEmphasisStyle::Symbol {
+                filled: true,
+                shape: TextEmphasisShape::Circle
+            }
+        );
+    }
+
+    #[test]
+    fn text_emphasis_style_only_fill_fallback_circle() {
+        // Spec: shape по умолчанию = circle при horizontal writing mode.
+        let root = lay("<p>x</p>", "p { text-emphasis-style: open; }");
+        let p = first_element_child(&root);
+        assert_eq!(
+            p.style.text_emphasis_style,
+            TextEmphasisStyle::Symbol {
+                filled: false,
+                shape: TextEmphasisShape::Circle
+            }
+        );
+    }
+
+    #[test]
+    fn text_emphasis_style_only_shape_fallback_filled() {
+        let root = lay("<p>x</p>", "p { text-emphasis-style: sesame; }");
+        let p = first_element_child(&root);
+        assert_eq!(
+            p.style.text_emphasis_style,
+            TextEmphasisStyle::Symbol {
+                filled: true,
+                shape: TextEmphasisShape::Sesame
+            }
+        );
+    }
+
+    #[test]
+    fn text_emphasis_style_string() {
+        let root = lay("<p>x</p>", "p { text-emphasis-style: \"★\"; }");
+        let p = first_element_child(&root);
+        assert_eq!(
+            p.style.text_emphasis_style,
+            TextEmphasisStyle::String("★".to_string())
+        );
+    }
+
+    #[test]
+    fn text_emphasis_style_order_independent() {
+        // Spec: `[ filled | open ] || [ ...shape... ]` — порядок любой.
+        let r1 = lay(
+            "<p>x</p>",
+            "p { text-emphasis-style: triangle filled; }",
+        );
+        let p1 = first_element_child(&r1);
+        let r2 = lay(
+            "<p>x</p>",
+            "p { text-emphasis-style: filled triangle; }",
+        );
+        let p2 = first_element_child(&r2);
+        assert_eq!(p1.style.text_emphasis_style, p2.style.text_emphasis_style);
+    }
+
+    #[test]
+    fn text_emphasis_color_explicit_and_currentcolor() {
+        let r1 = lay("<p>x</p>", "p { text-emphasis-color: red; }");
+        let p1 = first_element_child(&r1);
+        assert_eq!(p1.style.text_emphasis_color.unwrap().r, 255);
+
+        // Override → currentColor сбрасывает в None.
+        let r2 = lay(
+            "<p>x</p>",
+            "p { text-emphasis-color: red; text-emphasis-color: currentColor; }",
+        );
+        let p2 = first_element_child(&r2);
+        assert!(p2.style.text_emphasis_color.is_none());
+    }
+
+    #[test]
+    fn text_emphasis_position_grammar() {
+        // [over | under] && [right | left]? — vertical обязателен, horizontal
+        // опционален с default right.
+        let r1 = lay("<p>x</p>", "p { text-emphasis-position: under left; }");
+        let p1 = first_element_child(&r1);
+        assert_eq!(
+            p1.style.text_emphasis_position,
+            TextEmphasisPosition::UnderLeft
+        );
+
+        let r2 = lay("<p>x</p>", "p { text-emphasis-position: left over; }");
+        let p2 = first_element_child(&r2);
+        assert_eq!(
+            p2.style.text_emphasis_position,
+            TextEmphasisPosition::OverLeft,
+            "tokens are unordered"
+        );
+
+        // Только vertical — horizontal default right.
+        let r3 = lay("<p>x</p>", "p { text-emphasis-position: under; }");
+        let p3 = first_element_child(&r3);
+        assert_eq!(
+            p3.style.text_emphasis_position,
+            TextEmphasisPosition::UnderRight
+        );
+
+        // Только horizontal — invalid (vertical обязателен).
+        let r4 = lay("<p>x</p>", "p { text-emphasis-position: left; }");
+        let p4 = first_element_child(&r4);
+        assert_eq!(
+            p4.style.text_emphasis_position,
+            TextEmphasisPosition::OverRight,
+            "invalid declaration ignored, initial"
+        );
+    }
+
+    #[test]
+    fn text_emphasis_inherited() {
+        // CSS Text Decoration L4 §5 — все три text-emphasis-* longhand-а
+        // inherited. Это ключевое отличие от text-decoration (там Phase 0
+        // тоже inherit, но spec не-inherit с propagation).
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { text-emphasis: filled circle red; text-emphasis-position: under; }",
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert_eq!(div.style.text_emphasis_style, p.style.text_emphasis_style);
+        assert_eq!(div.style.text_emphasis_color, p.style.text_emphasis_color);
+        assert_eq!(
+            div.style.text_emphasis_position,
+            p.style.text_emphasis_position
+        );
+        assert_eq!(
+            p.style.text_emphasis_position,
+            TextEmphasisPosition::UnderRight
+        );
+    }
+
+    #[test]
+    fn text_emphasis_shorthand_style_plus_color() {
+        let root = lay("<p>x</p>", "p { text-emphasis: filled dot blue; }");
+        let p = first_element_child(&root);
+        assert_eq!(
+            p.style.text_emphasis_style,
+            TextEmphasisStyle::Symbol {
+                filled: true,
+                shape: TextEmphasisShape::Dot
+            }
+        );
+        assert_eq!(p.style.text_emphasis_color.unwrap().b, 255);
+    }
+
+    #[test]
+    fn text_emphasis_shorthand_resets_longhands() {
+        // Shorthand сбрасывает оба longhand-а в initial и потом применяет
+        // токены. Position — отдельный longhand, не часть shorthand-а
+        // (см. spec §5.6); поэтому сохраняется.
+        let root = lay(
+            "<p>x</p>",
+            "p { text-emphasis-style: open triangle; \
+                 text-emphasis-color: green; \
+                 text-emphasis-position: under left; \
+                 text-emphasis: red; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(
+            p.style.text_emphasis_style,
+            TextEmphasisStyle::None,
+            "shorthand без style-токена → initial None"
+        );
+        assert_eq!(p.style.text_emphasis_color.unwrap().r, 255);
+        assert_eq!(
+            p.style.text_emphasis_position,
+            TextEmphasisPosition::UnderLeft,
+            "position не входит в shorthand"
+        );
+    }
+
+    #[test]
+    fn text_emphasis_shorthand_none() {
+        let root = lay("<p>x</p>", "p { text-emphasis: none; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.text_emphasis_style, TextEmphasisStyle::None);
+        assert!(p.style.text_emphasis_color.is_none());
+    }
+
+    #[test]
+    fn text_emphasis_shorthand_string_only() {
+        let root = lay("<p>x</p>", "p { text-emphasis: \"♥\"; }");
+        let p = first_element_child(&root);
+        assert_eq!(
+            p.style.text_emphasis_style,
+            TextEmphasisStyle::String("♥".to_string())
+        );
+    }
+
+    #[test]
+    fn text_emphasis_style_invalid_ignored() {
+        // Невалидное значение (два shape) — declaration ignored, остаётся initial.
+        let root = lay(
+            "<p>x</p>",
+            "p { text-emphasis-style: dot triangle; }",
+        );
+        let p = first_element_child(&root);
+        assert_eq!(p.style.text_emphasis_style, TextEmphasisStyle::None);
     }
 
     // ── visibility (CSS Display L3 §4) ──────────────────────────────────────
