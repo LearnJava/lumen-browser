@@ -18,6 +18,7 @@ pub mod delta_set_index_map;
 pub mod face;
 pub mod fvar;
 pub mod glyf;
+pub mod gvar;
 pub mod head;
 pub mod hvar;
 pub mod item_variation;
@@ -42,6 +43,7 @@ pub use fvar::{Fvar, NamedInstance, VariationAxis};
 pub use glyf::{
     Anchor, BoundingBox, CompositeComponent, Contour, Glyf, Glyph, Outline, OutlinePoint,
 };
+pub use gvar::{GlyphVariationData, Gvar, PointNumbers, TupleVariation};
 pub use head::{Head, IndexToLocFormat};
 pub use hvar::Hvar;
 pub use item_variation::{
