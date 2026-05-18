@@ -329,6 +329,37 @@ fn build_box(
     }
 }
 
+/// Phase 0 shrink-to-fit: возвращает «предпочтительную» ширину inline-block-бокса
+/// (включая padding+border самого бокса). Алгоритм: если у бокса явная CSS `width` —
+/// берём её; иначе рекурсивно ищем максимальную preferred_width среди потомков
+/// и добавляем padding+border текущего бокса. Возвращает `None` если явных размеров
+/// нет ни у бокса, ни у его потомков.
+fn preferred_inline_block_width(b: &LayoutBox) -> Option<f32> {
+    let s = &b.style;
+    if let Some(w) = s.width {
+        let outer = match s.box_sizing {
+            BoxSizing::ContentBox => w + s.padding_left + s.padding_right
+                + s.border_left_width + s.border_right_width,
+            BoxSizing::BorderBox => w,
+        };
+        return Some(outer.max(0.0));
+    }
+    let max_child = b
+        .children
+        .iter()
+        .filter_map(preferred_inline_block_width)
+        .fold(0.0_f32, f32::max);
+    if max_child > 0.0 {
+        Some(
+            (max_child + s.padding_left + s.padding_right
+                + s.border_left_width + s.border_right_width)
+                .max(0.0),
+        )
+    } else {
+        None
+    }
+}
+
 fn lay_out(
     b: &mut LayoutBox,
     start_x: f32,
@@ -380,6 +411,14 @@ fn lay_out(
     }
     if let Some(min_w) = s.min_width {
         b.rect.width = b.rect.width.max(outer_horiz(min_w).max(0.0));
+    }
+    // Phase 0 shrink-to-fit для inline-block без явной CSS width.
+    // Полный алгоритм (CSS 2.1 §10.3.9) требует двух проходов; здесь —
+    // упрощение: ищем максимальную explicit-width среди потомков.
+    if s.width.is_none() && s.display == Display::InlineBlock
+        && let Some(pref_w) = preferred_inline_block_width(b)
+    {
+        b.rect.width = pref_w.min(b.rect.width);
     }
 
     let content_x = b.rect.x + s.padding_left + s.border_left_width;
