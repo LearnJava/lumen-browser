@@ -56,7 +56,11 @@ pub use mixed_content::{
 };
 pub use origin::{Origin, OriginError};
 pub use pool::ConnectionPool;
-pub use range::{ContentRange, RangeResponse, RangeSpec, RangeValidator, parse_content_range};
+pub use range::{
+    ContentRange, MultiRangeResponse, RangePart, RangeRequest, RangeResponse, RangeSpec,
+    RangeValidator, parse_boundary_from_content_type, parse_content_range,
+    parse_multipart_byteranges,
+};
 pub use sandbox::{SandboxFlags, parse_sandbox_value};
 
 use pool::PoolKey;
@@ -157,7 +161,7 @@ impl Connection {
         method: &str,
         host: &str,
         path: &str,
-        range: Option<&RangeSpec>,
+        range: Option<&RangeRequest>,
         if_range: Option<&RangeValidator>,
         authorization: Option<&str>,
         accept_encoding: Option<&str>,
@@ -528,7 +532,7 @@ fn fetch_single(
     method: &str,
     request_host_header: &str,
     request_path: &str,
-    range: Option<&RangeSpec>,
+    range: Option<&RangeRequest>,
     if_range: Option<&RangeValidator>,
     authorization: Option<&str>,
     accept_encoding: Option<&str>,
@@ -592,7 +596,7 @@ fn do_request(
     method: &str,
     host: &str,
     path: &str,
-    range: Option<&RangeSpec>,
+    range: Option<&RangeRequest>,
     if_range: Option<&RangeValidator>,
     authorization: Option<&str>,
     accept_encoding: Option<&str>,
@@ -711,7 +715,7 @@ fn fetch_with_redirect(
     credentials: Option<&dyn HttpCredentialProvider>,
     decoders: &[Arc<dyn ContentDecoder>],
     accept_encoding: Option<&str>,
-    range: Option<&RangeSpec>,
+    range: Option<&RangeRequest>,
     if_range: Option<&RangeValidator>,
     tab_id: TabId,
     mixed_content: Option<&MixedContentPolicy>,
@@ -1315,6 +1319,7 @@ impl HttpClient {
         if_range: Option<RangeValidator>,
     ) -> Result<RangeResponse> {
         let accept_encoding = self.accept_encoding_header();
+        let request = RangeRequest::Single(range);
         let resp = fetch_with_redirect(
             url,
             5,
@@ -1326,7 +1331,7 @@ impl HttpClient {
             self.credentials.as_deref(),
             &self.decoders,
             accept_encoding.as_deref(),
-            Some(&range),
+            Some(&request),
             if_range.as_ref(),
             self.tab_id,
             self.mixed_content.as_ref(),
@@ -1343,6 +1348,91 @@ impl HttpClient {
             body: resp.body,
             content_range,
         })
+    }
+
+    /// Multi-range запрос (RFC 7233 §4.1). Один request на несколько
+    /// диапазонов, единый `MultiRangeResponse` обратно — независимо от
+    /// того, ответил сервер `200`, `206`-single или `206`-multipart.
+    ///
+    /// Сервер вправе:
+    /// - проигнорировать Range и вернуть `200 OK` с полным телом — мы
+    ///   нормализуем в один `RangePart { body=full, content_range=None }`;
+    /// - вернуть `206` с обычным `Content-Range` (например, объединил
+    ///   соседние диапазоны в один) — один RangePart с распарсенным
+    ///   Content-Range;
+    /// - вернуть `206` с `Content-Type: multipart/byteranges; boundary=X` —
+    ///   парсим body на parts через `parse_multipart_byteranges`. Если
+    ///   парсинг не дал ни одного part-а (пустой ответ, кривая boundary)
+    ///   — отдаём `parts=Vec::new()`, status=206 (caller сам решит, что
+    ///   делать с пустым multi-range).
+    /// - `416 Range Not Satisfiable` или другой 4xx/5xx — `Err`.
+    ///
+    /// `specs` обязан содержать хотя бы один валидный spec, иначе вернём
+    /// `Err(InvalidUrl)` — нечего слать в header. Это симметрично с
+    /// поведением `fetch_range` на невалидном Single, кроме точки отказа.
+    pub fn fetch_multi_range(
+        &self,
+        url: &Url,
+        specs: &[RangeSpec],
+        if_range: Option<RangeValidator>,
+    ) -> Result<MultiRangeResponse> {
+        let request = RangeRequest::Multi(specs.to_vec());
+        if request.header_value().is_none() {
+            return Err(Error::Network(
+                "fetch_multi_range: пустой/невалидный набор диапазонов".to_owned(),
+            ));
+        }
+        let accept_encoding = self.accept_encoding_header();
+        let resp = fetch_with_redirect(
+            url,
+            5,
+            &self.pool,
+            self.resolver.as_ref(),
+            self.sink.as_deref(),
+            self.filter.as_deref(),
+            self.hsts.as_deref(),
+            self.credentials.as_deref(),
+            &self.decoders,
+            accept_encoding.as_deref(),
+            Some(&request),
+            if_range.as_ref(),
+            self.tab_id,
+            self.mixed_content.as_ref(),
+            None,
+            None,
+        )?;
+        Ok(parse_multi_range_response(resp))
+    }
+}
+
+/// Нормализатор HTTP-ответа на multi-range запрос в единый
+/// `MultiRangeResponse`. Изолирован от `fetch_with_redirect` для удобства
+/// юнит-тестов (без поднятия mock-TcpListener).
+fn parse_multi_range_response(resp: Response) -> MultiRangeResponse {
+    if resp.status != 206 {
+        // 200 OK или любой иной success-ответ — Range проигнорирован,
+        // отдаём как один part с полным телом (caller сам поймёт, что
+        // нужно нарезать клиент-сайд, если ему важны границы).
+        return MultiRangeResponse {
+            status: resp.status,
+            parts: vec![RangePart { body: resp.body, content_range: None }],
+        };
+    }
+    // 206 — либо single Content-Range, либо multipart/byteranges.
+    let ct = header_value(&resp.headers, "content-type")
+        .and_then(parse_boundary_from_content_type);
+    if let Some(boundary) = ct {
+        let parts = parse_multipart_byteranges(&resp.body, &boundary).unwrap_or_default();
+        return MultiRangeResponse { status: resp.status, parts };
+    }
+    // Single Content-Range form (сервер объединил соседние диапазоны).
+    let content_range = header_value(&resp.headers, "content-range").and_then(parse_content_range);
+    MultiRangeResponse {
+        status: resp.status,
+        parts: vec![RangePart {
+            body: resp.body,
+            content_range,
+        }],
     }
 }
 
@@ -2749,6 +2839,220 @@ mod tests {
             )
             .unwrap();
 
+        server.join().unwrap();
+    }
+
+    // ── Multi-range / multipart/byteranges ──────────────────────────────────
+
+    #[test]
+    fn fetch_multi_range_206_multipart_two_parts() {
+        // Сервер видит `Range: bytes=0-4,10-14`, отвечает 206 с
+        // multipart/byteranges и двумя parts. fetch_multi_range нормализует
+        // это в MultiRangeResponse с двумя RangePart-ами; status=206.
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range.as_deref(), Some("bytes=0-4,10-14"));
+            let body = b"--BNDRY\r\n\
+Content-Type: application/octet-stream\r\n\
+Content-Range: bytes 0-4/100\r\n\r\n\
+hello\r\n\
+--BNDRY\r\n\
+Content-Type: application/octet-stream\r\n\
+Content-Range: bytes 10-14/100\r\n\r\n\
+world\r\n\
+--BNDRY--\r\n";
+            let mut resp = Vec::new();
+            resp.extend_from_slice(b"HTTP/1.1 206 Partial Content\r\n");
+            resp.extend_from_slice(b"Content-Type: multipart/byteranges; boundary=BNDRY\r\n");
+            resp.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
+            resp.extend_from_slice(b"Connection: close\r\n\r\n");
+            resp.extend_from_slice(body);
+            resp
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client
+            .fetch_multi_range(
+                &url,
+                &[RangeSpec::closed(0, 4), RangeSpec::closed(10, 14)],
+                None,
+            )
+            .unwrap();
+        assert_eq!(resp.status, 206);
+        assert_eq!(resp.parts.len(), 2);
+        assert_eq!(resp.parts[0].body, b"hello");
+        assert_eq!(
+            resp.parts[0].content_range,
+            Some(ContentRange { start: 0, end: 4, total: Some(100) })
+        );
+        assert_eq!(resp.parts[1].body, b"world");
+        assert_eq!(
+            resp.parts[1].content_range,
+            Some(ContentRange { start: 10, end: 14, total: Some(100) })
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_multi_range_206_single_content_range_form() {
+        // RFC 7233 §4.1: сервер вправе объединить пересекающиеся
+        // диапазоны и ответить обычным 206 с одним Content-Range, без
+        // multipart. fetch_multi_range трактует как один RangePart с
+        // распарсенным Content-Range.
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range.as_deref(), Some("bytes=0-4,3-9"));
+            b"HTTP/1.1 206 Partial Content\r\nContent-Type: application/octet-stream\r\nContent-Length: 10\r\nContent-Range: bytes 0-9/100\r\nConnection: close\r\n\r\nhelloworld".to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client
+            .fetch_multi_range(
+                &url,
+                &[RangeSpec::closed(0, 4), RangeSpec::closed(3, 9)],
+                None,
+            )
+            .unwrap();
+        assert_eq!(resp.status, 206);
+        assert_eq!(resp.parts.len(), 1);
+        assert_eq!(resp.parts[0].body, b"helloworld");
+        assert_eq!(
+            resp.parts[0].content_range,
+            Some(ContentRange { start: 0, end: 9, total: Some(100) })
+        );
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_multi_range_200_fallback_when_server_ignores_range() {
+        // Сервер проигнорировал Range — 200 OK с полным телом.
+        // fetch_multi_range вернёт один RangePart с content_range=None.
+        let (port, server) = mock_range_server(|range| {
+            assert!(range.is_some(), "Range header должен быть отправлен");
+            b"HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhelloworld!"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client
+            .fetch_multi_range(
+                &url,
+                &[RangeSpec::closed(0, 4), RangeSpec::closed(10, 14)],
+                None,
+            )
+            .unwrap();
+        assert_eq!(resp.status, 200);
+        assert_eq!(resp.parts.len(), 1);
+        assert_eq!(resp.parts[0].body, b"helloworld!");
+        assert!(resp.parts[0].content_range.is_none());
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_multi_range_416_returns_err() {
+        // Запрошенные диапазоны вне ресурса — 416 Range Not Satisfiable.
+        let (port, server) = mock_range_server(|_| {
+            b"HTTP/1.1 416 Range Not Satisfiable\r\nContent-Range: bytes */100\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                .to_vec()
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let err = client
+            .fetch_multi_range(
+                &url,
+                &[RangeSpec::closed(1000, 2000), RangeSpec::closed(3000, 4000)],
+                None,
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::Network(_)));
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_multi_range_empty_specs_returns_err_before_socket() {
+        // Pre-condition: пустой vec невозможно сериализовать в header.
+        // Возврат Err до открытия сокета — никакого TCP-трафика.
+        let client = HttpClient::new();
+        let url = Url::parse("http://127.0.0.1:1/").unwrap();
+        let err = client.fetch_multi_range(&url, &[], None).unwrap_err();
+        assert!(matches!(err, Error::Network(_)));
+    }
+
+    #[test]
+    fn fetch_multi_range_all_invalid_specs_returns_err_before_socket() {
+        // Все spec-ы невалидны → header_value=None → Err без сети.
+        let client = HttpClient::new();
+        let url = Url::parse("http://127.0.0.1:1/").unwrap();
+        let err = client
+            .fetch_multi_range(
+                &url,
+                &[RangeSpec::closed(100, 50), RangeSpec::suffix(0)],
+                None,
+            )
+            .unwrap_err();
+        assert!(matches!(err, Error::Network(_)));
+    }
+
+    #[test]
+    fn fetch_multi_range_mixed_valid_invalid_specs_sends_only_valid() {
+        // Невалидные spec-ы внутри Multi молча отбрасываются (см.
+        // RangeRequest::header_value semantics). Сервер видит только
+        // валидные диапазоны.
+        let (port, server) = mock_range_server(|range| {
+            assert_eq!(range.as_deref(), Some("bytes=0-4,200-299"));
+            let body = b"--Z\r\nContent-Range: bytes 0-4/500\r\n\r\nhello\r\n--Z\r\nContent-Range: bytes 200-299/500\r\n\r\nbody\r\n--Z--\r\n";
+            let mut resp = Vec::new();
+            resp.extend_from_slice(b"HTTP/1.1 206 Partial Content\r\n");
+            resp.extend_from_slice(b"Content-Type: multipart/byteranges; boundary=Z\r\n");
+            resp.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
+            resp.extend_from_slice(b"Connection: close\r\n\r\n");
+            resp.extend_from_slice(body);
+            resp
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client
+            .fetch_multi_range(
+                &url,
+                &[
+                    RangeSpec::closed(0, 4),
+                    RangeSpec::closed(100, 50),
+                    RangeSpec::suffix(0),
+                    RangeSpec::closed(200, 299),
+                ],
+                None,
+            )
+            .unwrap();
+        assert_eq!(resp.status, 206);
+        assert_eq!(resp.parts.len(), 2);
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_multi_range_206_multipart_quoted_boundary() {
+        // Boundary в Content-Type — quoted-string. parse_boundary_from_content_type
+        // должен корректно его распаковать.
+        let (port, server) = mock_range_server(|_| {
+            let body = b"--has space\r\nContent-Range: bytes 0-2/10\r\n\r\nabc\r\n--has space--\r\n";
+            let mut resp = Vec::new();
+            resp.extend_from_slice(b"HTTP/1.1 206 Partial Content\r\n");
+            resp.extend_from_slice(b"Content-Type: multipart/byteranges; boundary=\"has space\"\r\n");
+            resp.extend_from_slice(format!("Content-Length: {}\r\n", body.len()).as_bytes());
+            resp.extend_from_slice(b"Connection: close\r\n\r\n");
+            resp.extend_from_slice(body);
+            resp
+        });
+
+        let client = HttpClient::new();
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/")).unwrap();
+        let resp = client
+            .fetch_multi_range(&url, &[RangeSpec::closed(0, 2)], None)
+            .unwrap();
+        assert_eq!(resp.parts.len(), 1);
+        assert_eq!(resp.parts[0].body, b"abc");
         server.join().unwrap();
     }
 
