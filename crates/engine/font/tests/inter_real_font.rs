@@ -190,6 +190,92 @@ fn rasterize_cyrillic_a_via_composite_resolution() {
     assert!(visible > 50, "Cyrillic А rasterized as too few pixels: {visible}");
 }
 
+/// `glyph_resolved_with_coords` для Inter-Regular (без `gvar`) обязан вести
+/// себя как `glyph_resolved`: coords игнорируются, deltas не применяются,
+/// outline точка-в-точку совпадает с base.
+#[test]
+fn glyph_resolved_with_coords_ignored_on_non_variable_font() {
+    let data = font_bytes();
+    let font = Font::parse(&data).unwrap();
+    let cmap = font.cmap().unwrap();
+
+    // Inter-Regular — статический шрифт, gvar отсутствует.
+    assert!(
+        font.gvar().is_err(),
+        "Inter-Regular shouldn't have gvar; if upstream switched bundle to a \
+         variable build, this test (and rasterizer cache key) needs revisit"
+    );
+
+    for ch in ['A', 'M', 'g', 'А', 'Я'] {
+        let gid = cmap.glyph_index(ch as u32).unwrap();
+        let base = font.glyph_resolved(gid).unwrap().unwrap();
+        let with_coords = font
+            .glyph_resolved_with_coords(gid, &[0.5, -0.25])
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            base.bbox, with_coords.bbox,
+            "bbox should match for '{ch}' without gvar"
+        );
+        let Outline::Simple(base_c) = base.outline else {
+            panic!("Inter '{ch}' must resolve to Simple");
+        };
+        let Outline::Simple(coord_c) = with_coords.outline else {
+            panic!("with_coords '{ch}' must resolve to Simple");
+        };
+        assert_outlines_equal(&base_c, &coord_c, ch);
+    }
+}
+
+/// Пустой `coords` short-circuit-ит на путь `glyph_resolved` — для любого
+/// glyph-а (simple и composite) результат идентичен (включая когда `gvar`
+/// у font-а есть, но caller хочет default-instance).
+#[test]
+fn glyph_resolved_with_coords_empty_matches_glyph_resolved() {
+    let data = font_bytes();
+    let font = Font::parse(&data).unwrap();
+    let cmap = font.cmap().unwrap();
+
+    // Latin 'A' — simple; кириллическая 'А' — composite (use Latin 'A').
+    for ch in ['A', 'А'] {
+        let gid = cmap.glyph_index(ch as u32).unwrap();
+        let base = font.glyph_resolved(gid).unwrap().unwrap();
+        let empty = font
+            .glyph_resolved_with_coords(gid, &[])
+            .unwrap()
+            .unwrap();
+        assert_eq!(base.bbox, empty.bbox, "bbox differs for '{ch}'");
+        match (base.outline, empty.outline) {
+            (Outline::Simple(a), Outline::Simple(b)) => assert_outlines_equal(&a, &b, ch),
+            _ => panic!("glyph_resolved must return Simple for '{ch}'"),
+        }
+    }
+}
+
+fn assert_outlines_equal(
+    a: &[lumen_font::Contour],
+    b: &[lumen_font::Contour],
+    label: char,
+) {
+    assert_eq!(
+        a.len(),
+        b.len(),
+        "'{label}': contour count differs ({} vs {})",
+        a.len(),
+        b.len()
+    );
+    for (i, (ca, cb)) in a.iter().zip(b.iter()).enumerate() {
+        assert_eq!(
+            ca.points.len(),
+            cb.points.len(),
+            "'{label}' contour {i}: point count differs"
+        );
+        for (j, (pa, pb)) in ca.points.iter().zip(cb.points.iter()).enumerate() {
+            assert_eq!(pa, pb, "'{label}' contour {i} point {j} differs");
+        }
+    }
+}
+
 #[test]
 fn reads_family_name_from_inter() {
     let data = font_bytes();
