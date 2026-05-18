@@ -209,6 +209,18 @@ pub enum PseudoClass {
     /// JS-runtime), где scope = the element on which the selector matching
     /// is rooted (e.g. el.querySelector(':scope > .x') ищет относительно el).
     Scope,
+    /// `:target` (CSS Selectors L4 §9.6, HTML LS §7.10.6 «the indicated part
+    /// of the document»). Матчит element, чей `id`-атрибут равен текущему
+    /// URL fragment-у документа. Comparison case-sensitive (HTML id
+    /// case-sensitive per HTML LS §3.2.6). Если в URL нет fragment-а —
+    /// никакой element не матчит.
+    ///
+    /// Phase 0: matcher читает `Document::target()`. Shell-интеграция
+    /// (выставление target_id из URL fragment при загрузке) — отдельная
+    /// P3-задача; до её появления `:target` молча возвращает `false` для
+    /// всех элементов (privacy-safe default — стилизация не утекает через
+    /// URL).
+    Target,
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
@@ -2541,6 +2553,7 @@ impl<'a> Parser<'a> {
             "visited" => PseudoClass::Visited,
             "any-link" => PseudoClass::AnyLink,
             "scope" => PseudoClass::Scope,
+            "target" => PseudoClass::Target,
             _ => PseudoClass::Unsupported(name),
         };
         Some(SimpleSelector::PseudoClass(pc))
@@ -3492,6 +3505,7 @@ mod tests {
             ("visited", PseudoClass::Visited),
             ("any-link", PseudoClass::AnyLink),
             ("scope", PseudoClass::Scope),
+            ("target", PseudoClass::Target),
         ];
         for (name, expected) in cases {
             let s = parse(&format!(":{name} {{}}"));
@@ -3702,6 +3716,40 @@ mod tests {
             p,
             SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "dir"
         ));
+    }
+
+    #[test]
+    fn pseudo_target_case_insensitive_name() {
+        // pseudo-class names ASCII case-insensitive (CSS Syntax §4.4) —
+        // `:TARGET` распознаётся как `:target`.
+        for src in [":target { }", ":TARGET { }", ":Target { }"] {
+            let s = parse(src);
+            let p = &s.rules[0].selectors[0].head.parts[0];
+            assert!(
+                matches!(p, SimpleSelector::PseudoClass(PseudoClass::Target)),
+                "name={src}"
+            );
+        }
+    }
+
+    #[test]
+    fn pseudo_target_does_not_accept_arguments() {
+        // `:target` — не functional pseudo. `:target(x)` — невалидное use,
+        // fallback на Unsupported.
+        let s = parse(":target(x) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "target"
+        ));
+    }
+
+    #[test]
+    fn pseudo_target_specificity_is_pseudo_class_level() {
+        // CSS Selectors L4 §16: pseudo-class contributes (0,1,0) — class-уровень.
+        let s = parse(":target { color: red; }");
+        let spec = s.rules[0].selectors[0].specificity();
+        assert_eq!(spec, Specificity { a: 0, b: 1, c: 0 });
     }
 
     #[test]

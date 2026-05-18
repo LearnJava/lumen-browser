@@ -263,6 +263,7 @@ pub struct Document {
     nodes: Vec<Node>,
     root: NodeId,
     mode: DocumentMode,
+    target_id: Option<String>,
 }
 
 impl Default for Document {
@@ -282,6 +283,7 @@ impl Document {
             nodes: vec![root_node],
             root: NodeId(0),
             mode: DocumentMode::default(),
+            target_id: None,
         }
     }
 
@@ -301,6 +303,28 @@ impl Document {
     /// документа — пользовательский код вызывает редко.
     pub fn set_mode(&mut self, mode: DocumentMode) {
         self.mode = mode;
+    }
+
+    /// Текущий target — id из URL fragment (без ведущего `#`), к которому
+    /// привязан `:target` pseudo-class (CSS Selectors L4 §9.6, HTML LS
+    /// §7.10.6 «the indicated part of the document»). `None`, если URL без
+    /// fragment-а либо fragment пустой / не указывает на существующий
+    /// element с этим id. Сравнение `:target` matcher-а case-sensitive
+    /// (HTML id attribute case-sensitive per HTML LS §3.2.6).
+    ///
+    /// Phase 0: значение здесь не выставляется автоматически — это shell-
+    /// интеграция (P3): при загрузке URL парсить fragment и звать
+    /// [`Document::set_target`] до style cascade, чтобы matcher имел
+    /// корректное значение к моменту layout.
+    pub fn target(&self) -> Option<&str> {
+        self.target_id.as_deref()
+    }
+
+    /// Установить current target (id без `#`). `None` — нет fragment-а в URL.
+    /// Caller отвечает за rerun style cascade: пересчёт `:target` matcher-а
+    /// не вызывается отсюда.
+    pub fn set_target<S: Into<String>>(&mut self, id: Option<S>) {
+        self.target_id = id.map(Into::into).filter(|s| !s.is_empty());
     }
 
     pub fn get(&self, id: NodeId) -> &Node {
@@ -851,5 +875,31 @@ mod tests {
         assert_eq!(doc.mode(), DocumentMode::LimitedQuirks);
         doc.set_mode(DocumentMode::NoQuirks);
         assert_eq!(doc.mode(), DocumentMode::NoQuirks);
+    }
+
+    // ──────── target_id ────────
+
+    #[test]
+    fn document_default_target_is_none() {
+        let doc = Document::new();
+        assert_eq!(doc.target(), None);
+    }
+
+    #[test]
+    fn document_target_round_trips_set_get() {
+        let mut doc = Document::new();
+        doc.set_target(Some("intro"));
+        assert_eq!(doc.target(), Some("intro"));
+        doc.set_target::<String>(None);
+        assert_eq!(doc.target(), None);
+    }
+
+    #[test]
+    fn document_set_target_empty_becomes_none() {
+        // Empty fragment («#» в URL) трактуется как «нет target-а»: страница
+        // не должна никого подсвечивать. Совпадает с поведением major-браузеров.
+        let mut doc = Document::new();
+        doc.set_target(Some(""));
+        assert_eq!(doc.target(), None);
     }
 }

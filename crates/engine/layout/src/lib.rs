@@ -1560,6 +1560,112 @@ mod tests {
         assert_eq!(c1.r, c2.r);
     }
 
+    // ──────────────── :target (CSS Selectors L4 §9.6) ────────────────
+
+    /// Computes color для первого element-child указанного тега с указанным
+    /// target_id, выставленным в Document перед каскадом. Эквивалент
+    /// `element_color`, но с `Document::set_target(...)`.
+    fn element_color_with_target(
+        html: &str,
+        css: &str,
+        tag: &str,
+        target: Option<&str>,
+    ) -> Color {
+        use crate::style::compute_style;
+        let mut doc = lumen_html_parser::parse(html);
+        doc.set_target(target);
+        let sheet = lumen_css_parser::parse(css);
+        let root_style = ComputedStyle::root();
+        let target_node = find_first_element(&doc, doc.root(), tag).expect("element not found");
+        compute_style(&doc, target_node, &sheet, &root_style, Size::new(800.0, 600.0)).color
+    }
+
+    #[test]
+    fn target_matches_element_with_matching_id() {
+        let c = element_color_with_target(
+            r#"<html><body><h2 id="intro">x</h2></body></html>"#,
+            ":target { color: red; }",
+            "h2",
+            Some("intro"),
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn target_does_not_match_other_elements() {
+        // Только element с совпадающим id матчит — sibling с другим id нет.
+        let c = element_color_with_target(
+            r#"<html><body><h2 id="intro">x</h2><h2 id="other">y</h2></body></html>"#,
+            ":target { color: red; }",
+            "h2",
+            Some("other"),
+        );
+        // Первый h2 (id="intro") — не матчит, color остаётся default (black).
+        assert_eq!(c.r, 0);
+    }
+
+    #[test]
+    fn target_returns_false_when_no_fragment() {
+        // Document::target() == None — никакой element не матчит.
+        let c = element_color_with_target(
+            r#"<html><body><h2 id="intro">x</h2></body></html>"#,
+            ":target { color: red; }",
+            "h2",
+            None,
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    #[test]
+    fn target_returns_false_for_empty_fragment() {
+        // Пустой fragment («#» в URL) трактуется как None — Document::set_target
+        // фильтрует empty string. Поведение совпадает с major-браузерами.
+        let c = element_color_with_target(
+            r#"<html><body><h2 id="">x</h2></body></html>"#,
+            ":target { color: red; }",
+            "h2",
+            Some(""),
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    #[test]
+    fn target_is_case_sensitive() {
+        // HTML id case-sensitive (HTML LS §3.2.6) — `Intro` != `intro`.
+        let c = element_color_with_target(
+            r#"<html><body><h2 id="Intro">x</h2></body></html>"#,
+            ":target { color: red; }",
+            "h2",
+            Some("intro"),
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    #[test]
+    fn target_compound_with_type() {
+        // `h2:target` — compound selector с type matcher-ом.
+        let c = element_color_with_target(
+            r#"<html><body><h2 id="t">x</h2></body></html>"#,
+            "h2:target { color: red; }",
+            "h2",
+            Some("t"),
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn target_specificity_pseudo_class_level() {
+        // `:target` имеет specificity (0,1,0) — class-уровень. Equal-specificity
+        // — выигрывает более позднее правило (source-order).
+        let c = element_color_with_target(
+            r#"<html><body><h2 id="t" class="c">x</h2></body></html>"#,
+            "h2.c { color: red; } h2:target { color: blue; }",
+            "h2",
+            Some("t"),
+        );
+        assert_eq!((c.r, c.b), (0, 255));
+    }
+
     #[test]
     fn id_wins_over_class() {
         // id specificity (1,0,0) > class (0,1,0). Порядок правил в CSS — class
