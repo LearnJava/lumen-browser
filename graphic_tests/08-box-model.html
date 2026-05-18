@@ -1,0 +1,117 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — box model</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a202c; color: #e2e8f0;
+      width: 1024px; height: 720px;
+      font-size: 12px; line-height: 1.4;
+    }
+    .hdr {
+      background: #1e3a5f; padding: 0 16px;
+      height: 36px; line-height: 36px;
+      font-size: 12px; font-weight: bold;
+      letter-spacing: 1px;
+      border-bottom: 3px solid #e94560;
+    }
+    .sec { border-bottom: 1px solid #2d3748; padding: 8px 16px; }
+    .lbl {
+      font-size: 10px; color: #718096;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    /* width / height: 200×60, разные box-sizing — разная итоговая коробка */
+    .cbox {
+      width: 200px; height: 60px;
+      padding: 10px; border: 4px solid #f6ad55;
+      background: #2d3748;
+      box-sizing: content-box;
+      display: inline-block; vertical-align: top;
+      margin-right: 12px; font-size: 11px;
+    }
+    .bbox {
+      width: 200px; height: 60px;
+      padding: 10px; border: 4px solid #68d391;
+      background: #2d3748;
+      box-sizing: border-box;
+      display: inline-block; vertical-align: top;
+      margin-right: 12px; font-size: 11px;
+    }
+
+    .ruler {
+      width: 200px; height: 8px; background: #4a5568;
+      display: inline-block; vertical-align: top;
+      margin-right: 12px;
+    }
+
+    /* min-/max- ограничения */
+    .row { margin: 4px 0; padding: 6px 10px; background: #2d3748; }
+    .w-small  { width: 80px; }
+    .w-large  { width: 800px; }
+    .w-min    { width: 80px; min-width: 200px; }   /* 200px побеждает */
+    .w-max    { width: 800px; max-width: 300px; }  /* 300px побеждает */
+    .w-clamp  { width: 50px; min-width: 150px; max-width: 100px; }  /* min > max → min */
+
+    /* margin → расстояние между блоками */
+    .m-box {
+      width: 200px; padding: 6px 10px;
+      background: #234e52; color: #e2e8f0;
+      margin-bottom: 4px;
+    }
+    .m4  { margin-left: 4px; }
+    .m20 { margin-left: 20px; }
+    .m40 { margin-left: 40px; }
+    .m80 { margin-left: 80px; }
+  </style>
+</head>
+<body>
+  <div class="hdr">LUMEN — BOX MODEL (width / height / box-sizing / min-max / margin / padding)</div>
+
+  <div class="sec">
+    <div class="lbl">одинаковые width:200 height:60 padding:10 border:4 — разная итоговая коробка</div>
+    <div>
+      <div class="cbox"><div style="font-size: 10px; color: #f6ad55;">content-box</div>итог: 200+padding(20)+border(8) = 228×88</div>
+      <div class="bbox"><div style="font-size: 10px; color: #68d391;">border-box</div>итог: ровно 200×60, content area = 172×32</div>
+    </div>
+    <div style="margin-top: 6px;">
+      <div class="ruler"></div>
+      <div class="ruler"></div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">min-width / max-width — clamp фактической ширины</div>
+    <div class="row w-small">width: 80px (~ маленький)</div>
+    <div class="row w-large">width: 800px (~ большой)</div>
+    <div class="row w-min">width: 80px; min-width: 200px → реально 200px</div>
+    <div class="row w-max">width: 800px; max-width: 300px → реально 300px</div>
+    <div class="row w-clamp">width: 50; min-width: 150; max-width: 100 → min побеждает = 150</div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">padding — внутренний отступ (4 значения)</div>
+    <div style="background: #2d3748; padding: 2px;">
+      <div style="background: #234e52; padding: 4px 8px;">padding: 4px 8px</div>
+    </div>
+    <div style="background: #2d3748; padding: 2px; margin-top: 4px;">
+      <div style="background: #234e52; padding: 12px 24px;">padding: 12px 24px</div>
+    </div>
+    <div style="background: #2d3748; padding: 2px; margin-top: 4px;">
+      <div style="background: #234e52; padding: 20px 8px 4px 32px;">padding: 20 8 4 32 (top right bottom left)</div>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">margin-left — горизонтальный сдвиг блока</div>
+    <div class="m-box">no margin (0)</div>
+    <div class="m-box m4">margin-left: 4px</div>
+    <div class="m-box m20">margin-left: 20px</div>
+    <div class="m-box m40">margin-left: 40px</div>
+    <div class="m-box m80">margin-left: 80px</div>
+  </div>
+</body>
+</html>

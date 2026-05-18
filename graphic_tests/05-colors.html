@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — color parsing (CSS3 + L4)</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #f7fafc; color: #1a202c;
+      width: 1024px; height: 720px;
+      font-size: 13px; line-height: 1.4;
+    }
+    .hdr {
+      background: #1e3a5f; color: #e2e8f0;
+      padding: 0 16px; height: 36px; line-height: 36px;
+      font-size: 12px; font-weight: bold;
+      letter-spacing: 1px;
+      border-bottom: 3px solid #e94560;
+    }
+    .sec { border-bottom: 1px solid #cbd5e0; padding: 8px 16px; }
+    .lbl {
+      font-size: 10px; color: #4a5568;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .sw {
+      display: inline-block;
+      width: 100px; height: 36px;
+      margin: 2px 4px 2px 0;
+      color: #fff; font-size: 10px;
+      padding: 4px 6px;
+      letter-spacing: 0.3px;
+    }
+    .sw.dark { color: #1a202c; }
+  </style>
+</head>
+<body>
+  <div class="hdr">LUMEN — CSS COLOR PARSING (147 named + L4 rebeccapurple + hex + rgb + hsl)</div>
+
+  <div class="sec">
+    <div class="lbl">named colors (147 CSS3 + rebeccapurple)</div>
+    <div>
+      <span class="sw" style="background: red;">red</span>
+      <span class="sw" style="background: blue;">blue</span>
+      <span class="sw" style="background: green;">green</span>
+      <span class="sw" style="background: yellow; color: #000;">yellow</span>
+      <span class="sw" style="background: magenta;">magenta</span>
+      <span class="sw" style="background: cyan; color: #000;">cyan</span>
+      <span class="sw" style="background: rebeccapurple;">rebeccapurple</span>
+      <span class="sw" style="background: tomato;">tomato</span>
+      <span class="sw" style="background: dodgerblue;">dodgerblue</span>
+    </div>
+    <div>
+      <span class="sw" style="background: gray;">gray</span>
+      <span class="sw" style="background: grey;">grey (alias)</span>
+      <span class="sw" style="background: lightgray; color: #000;">lightgray</span>
+      <span class="sw" style="background: slategray;">slategray</span>
+      <span class="sw" style="background: indianred;">indianred</span>
+      <span class="sw" style="background: seagreen;">seagreen</span>
+      <span class="sw" style="background: peru;">peru</span>
+      <span class="sw" style="background: orchid;">orchid</span>
+      <span class="sw" style="background: teal;">teal</span>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">hex — #RGB / #RGBA / #RRGGBB / #RRGGBBAA</div>
+    <div>
+      <span class="sw" style="background: #f00;">#f00</span>
+      <span class="sw" style="background: #0f0; color: #000;">#0f0</span>
+      <span class="sw" style="background: #00f;">#00f</span>
+      <span class="sw" style="background: #f0f0;">#f0f0 (alpha 0)</span>
+      <span class="sw" style="background: #ff8c00;">#ff8c00</span>
+      <span class="sw" style="background: #4a5568;">#4a5568</span>
+      <span class="sw" style="background: #00000080; color: #fff;">#00000080</span>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">rgb() / rgba() — comma + space + slash-alpha + percent</div>
+    <div>
+      <span class="sw" style="background: rgb(255, 0, 0);">rgb(255,0,0)</span>
+      <span class="sw" style="background: rgb(0 200 0); color: #000;">rgb(0 200 0)</span>
+      <span class="sw" style="background: rgba(0, 0, 255, 0.7);">rgba(0,0,255,.7)</span>
+      <span class="sw" style="background: rgb(255 100 0 / 0.5);">rgb(... / .5)</span>
+      <span class="sw" style="background: rgb(50%, 50%, 50%);">rgb(50% 50% 50%)</span>
+      <span class="sw" style="background: rgb(100% 0% 50%);">100% 0% 50%</span>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">hsl() / hsla() — hue в deg / turn / rad / grad</div>
+    <div>
+      <span class="sw" style="background: hsl(0, 100%, 50%);">hsl(0,100,50)</span>
+      <span class="sw" style="background: hsl(120 100% 35%);">hsl(120 100 35)</span>
+      <span class="sw" style="background: hsl(240, 100%, 60%);">hsl(240,100,60)</span>
+      <span class="sw" style="background: hsla(280, 80%, 50%, 0.8);">hsla 280 .8</span>
+      <span class="sw" style="background: hsl(0.5turn 80% 40%);">hsl 0.5turn</span>
+      <span class="sw" style="background: hsl(3.14rad 70% 50%);">hsl 3.14rad</span>
+      <span class="sw" style="background: hsl(200grad 90% 50%);">hsl 200grad</span>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">transparent + currentColor</div>
+    <div style="color: #d53f8c;">
+      <span class="sw" style="background: transparent; color: #d53f8c;">transparent</span>
+      <span class="sw" style="background: currentColor;">currentColor (= pink родителя)</span>
+      <span class="sw dark" style="background: rgba(213, 63, 140, 0.2);">alpha 0.2 розовый</span>
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">case-insensitive matching (147 named + hex)</div>
+    <div>
+      <span class="sw" style="background: RED;">RED</span>
+      <span class="sw" style="background: Red;">Red</span>
+      <span class="sw" style="background: rEbEcCaPuRpLe;">rEbEcCaPuRpLe</span>
+      <span class="sw" style="background: #FF8C00;">#FF8C00</span>
+      <span class="sw" style="background: RGB(0, 128, 128);">RGB(0,128,128)</span>
+    </div>
+  </div>
+</body>
+</html>

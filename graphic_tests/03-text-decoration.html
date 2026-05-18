@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — text-decoration</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a202c; color: #e2e8f0;
+      width: 1024px; height: 720px;
+      font-size: 16px; line-height: 1.6;
+    }
+    .hdr {
+      background: #1e3a5f; padding: 0 16px;
+      height: 36px; line-height: 36px;
+      font-size: 12px; font-weight: bold;
+      letter-spacing: 1px;
+      border-bottom: 3px solid #e94560;
+    }
+    .sec { border-bottom: 1px solid #2d3748; padding: 10px 16px; }
+    .lbl {
+      font-size: 10px; color: #718096;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+    .row { margin: 4px 0; }
+    .tag {
+      display: inline-block; width: 170px;
+      font-size: 10px; color: #4a7fa5;
+      text-transform: uppercase; letter-spacing: 0.5px;
+    }
+
+    .u  { text-decoration: underline; }
+    .o  { text-decoration: overline; }
+    .l  { text-decoration: line-through; }
+    .ul { text-decoration: underline line-through; }
+    .ou { text-decoration: overline underline; }
+    .all { text-decoration: underline overline line-through; }
+
+    .red    { text-decoration: underline; text-decoration-color: #e94560; }
+    .green  { text-decoration: underline; text-decoration-color: #48bb78; }
+    .yellow { text-decoration: underline; text-decoration-color: #f6e05e; }
+    .blue   { text-decoration: line-through; text-decoration-color: #4299e1; }
+    .purple { text-decoration: overline; text-decoration-color: #b794f4; }
+
+    .big   { font-size: 28px; }
+    .small { font-size: 12px; }
+  </style>
+</head>
+<body>
+  <div class="hdr">LUMEN — TEXT-DECORATION (underline / overline / line-through)</div>
+
+  <div class="sec">
+    <div class="lbl">базовые линии</div>
+    <div class="row"><span class="tag">underline</span><span class="u">подчёркивание · The quick brown fox</span></div>
+    <div class="row"><span class="tag">overline</span><span class="o">надчёркивание · The quick brown fox</span></div>
+    <div class="row"><span class="tag">line-through</span><span class="l">перечёркивание · The quick brown fox</span></div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">комбинации</div>
+    <div class="row"><span class="tag">underline + line-through</span><span class="ul">comma-separated пометка отказа</span></div>
+    <div class="row"><span class="tag">overline + underline</span><span class="ou">двойная рамка из линий</span></div>
+    <div class="row"><span class="tag">все три</span><span class="all">underline + overline + line-through</span></div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">text-decoration-color — currentColor fallback при отсутствии</div>
+    <div class="row"><span class="tag">red underline</span><span class="red">текст обычного цвета, линия красная</span></div>
+    <div class="row"><span class="tag">green underline</span><span class="green">текст обычного цвета, линия зелёная</span></div>
+    <div class="row"><span class="tag">yellow underline</span><span class="yellow">текст обычного цвета, линия жёлтая</span></div>
+    <div class="row"><span class="tag">blue line-through</span><span class="blue">синяя перечёркивающая линия</span></div>
+    <div class="row"><span class="tag">purple overline</span><span class="purple">фиолетовая надстрочная линия</span></div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">пропорциональная толщина — ~7% от font-size, min 1px</div>
+    <div class="row small u">мелкий 12px — тонкая линия</div>
+    <div class="row u">средний 16px — нормальная линия</div>
+    <div class="row big u">крупный 28px — толстая линия</div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">ссылки (UA-stylesheet underline + inherit color)</div>
+    <div class="row">
+      Обычный текст с <a href="#" style="color: #63b3ed;">ссылкой</a>
+      и ещё с <a href="#" style="color: #f6ad55;">оранжевой ссылкой</a>
+      и с <a href="#" style="color: #fc8181; text-decoration: none;">ссылкой без подчёркивания</a>.
+    </div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">подчёркивание на переносе строк</div>
+    <div class="row u" style="width: 480px;">
+      Длинный текст с подчёркиванием который должен перенестись на несколько строк
+      и подчёркивание сохраняется на каждой из строк независимо.
+    </div>
+  </div>
+</body>
+</html>

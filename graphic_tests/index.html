@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — графические тесты</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a202c; color: #e2e8f0;
+      width: 1024px; height: 720px;
+      font-size: 14px; line-height: 1.5;
+    }
+    .hdr {
+      background: #1e3a5f; padding: 0 16px;
+      height: 36px; line-height: 36px;
+      font-size: 12px; font-weight: bold;
+      letter-spacing: 1px;
+      border-bottom: 3px solid #e94560;
+    }
+    .intro {
+      padding: 10px 16px;
+      background: #2d3748;
+      font-size: 12px; color: #cbd5e0;
+      border-bottom: 1px solid #4a5568;
+    }
+    .intro code {
+      background: #1a202c; color: #f6ad55;
+      padding: 1px 6px;
+    }
+    .grid { padding: 8px 16px; }
+    .item {
+      display: inline-block; vertical-align: top;
+      width: 320px; margin: 0 8px 8px 0;
+      padding: 8px 12px;
+      background: #2d3748;
+      border-left: 4px solid #63b3ed;
+    }
+    .item .num {
+      display: inline-block; width: 22px;
+      color: #f6ad55; font-weight: bold;
+    }
+    .item .name {
+      color: #e2e8f0; font-weight: bold;
+      font-size: 13px;
+    }
+    .item .desc {
+      font-size: 11px; color: #a0aec0;
+      margin-top: 3px; padding-left: 22px;
+    }
+    a { color: #63b3ed; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="hdr">LUMEN — ГРАФИЧЕСКИЕ ТЕСТЫ · 12 СТРАНИЦ</div>
+
+  <div class="intro">
+    Каждая страница фокусируется на одном визуальном эффекте. Запуск:
+    <code>cargo run -p lumen-shell -- graphic_tests/01-fonts.html</code>
+    (или <code>--dump-display-list</code> для headless-снимка).
+    Все страницы рассчитаны на viewport 1024×720.
+  </div>
+
+  <div class="grid">
+    <div class="item">
+      <span class="num">01</span><span class="name"><a href="01-fonts.html">fonts.html</a></span>
+      <div class="desc">multi-size glyph atlas, кириллица, composite glyphs, font-family fallback</div>
+    </div>
+    <div class="item">
+      <span class="num">02</span><span class="name"><a href="02-text-style.html">text-style.html</a></span>
+      <div class="desc">text-transform (uppercase/lowercase/capitalize) + text-align</div>
+    </div>
+    <div class="item">
+      <span class="num">03</span><span class="name"><a href="03-text-decoration.html">text-decoration.html</a></span>
+      <div class="desc">underline / overline / line-through + decoration-color</div>
+    </div>
+    <div class="item">
+      <span class="num">04</span><span class="name"><a href="04-text-spacing.html">text-spacing.html</a></span>
+      <div class="desc">letter-spacing / word-spacing / text-indent</div>
+    </div>
+    <div class="item">
+      <span class="num">05</span><span class="name"><a href="05-colors.html">colors.html</a></span>
+      <div class="desc">named / hex / rgb / hsl / slash-alpha (CSS3 + L4)</div>
+    </div>
+    <div class="item">
+      <span class="num">06</span><span class="name"><a href="06-backgrounds.html">backgrounds.html</a></span>
+      <div class="desc">background-color + контраст текста, alpha-каналы</div>
+    </div>
+    <div class="item">
+      <span class="num">07</span><span class="name"><a href="07-borders.html">borders.html</a></span>
+      <div class="desc">solid borders, per-side colors, currentColor fallback</div>
+    </div>
+    <div class="item">
+      <span class="num">08</span><span class="name"><a href="08-box-model.html">box-model.html</a></span>
+      <div class="desc">width / height / box-sizing / min-max / margin / padding</div>
+    </div>
+    <div class="item">
+      <span class="num">09</span><span class="name"><a href="09-calc.html">calc.html</a></span>
+      <div class="desc">calc / min / max / clamp / sin / cos / sqrt / hypot</div>
+    </div>
+    <div class="item">
+      <span class="num">10</span><span class="name"><a href="10-images.html">images.html</a></span>
+      <div class="desc">PNG + JPEG, разные размеры, прозрачность над bg</div>
+    </div>
+    <div class="item">
+      <span class="num">11</span><span class="name"><a href="11-object-fit.html">object-fit.html</a></span>
+      <div class="desc">fill / contain / cover / none / scale-down + object-position</div>
+    </div>
+    <div class="item">
+      <span class="num">12</span><span class="name"><a href="12-bgcolor-quirks.html">bgcolor-quirks.html</a></span>
+      <div class="desc">legacy bgcolor + hashless hex (без DOCTYPE → Quirks mode)</div>
+    </div>
+  </div>
+</body>
+</html>

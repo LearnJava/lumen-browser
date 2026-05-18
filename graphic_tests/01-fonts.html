@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — Шрифты и глифы</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      background: #1a202c; color: #e2e8f0;
+      width: 1024px; height: 720px;
+      font-size: 14px; line-height: 1.4;
+    }
+    .hdr {
+      background: #1e3a5f; padding: 0 16px;
+      height: 36px; line-height: 36px;
+      font-size: 12px; font-weight: bold;
+      letter-spacing: 1px;
+      border-bottom: 3px solid #e94560;
+    }
+    .sec { border-bottom: 1px solid #2d3748; padding: 8px 16px; }
+    .lbl {
+      font-size: 10px; color: #718096;
+      text-transform: uppercase; letter-spacing: 0.5px;
+      margin-bottom: 4px;
+    }
+    .row { color: #cbd5e0; }
+    .s8  { font-size: 8px; }
+    .s12 { font-size: 12px; }
+    .s16 { font-size: 16px; }
+    .s20 { font-size: 20px; }
+    .s24 { font-size: 24px; }
+    .s32 { font-size: 32px; }
+    .s48 { font-size: 48px; }
+    .composite { font-size: 22px; color: #7ec8e3; }
+    .latin { font-size: 18px; color: #f6ad55; }
+    .mixed { font-size: 16px; color: #68d391; }
+  </style>
+</head>
+<body>
+  <div class="hdr">LUMEN — ШРИФТЫ, ГЛИФЫ, МАСШТАБ</div>
+
+  <div class="sec">
+    <div class="lbl">multi-size glyph atlas — bins 8/12/16/20/24/32/48</div>
+    <div class="row s8">The quick brown fox jumps over the lazy dog · 8 px</div>
+    <div class="row s12">The quick brown fox jumps over the lazy dog · 12 px</div>
+    <div class="row s16">The quick brown fox jumps over the lazy dog · 16 px</div>
+    <div class="row s20">The quick brown fox jumps over the lazy dog · 20 px</div>
+    <div class="row s24">The quick brown fox · 24 px</div>
+    <div class="row s32">The quick brown fox · 32 px</div>
+    <div class="row s48">Lumen · 48 px</div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">composite glyphs — кириллица через latin (А=A, В=B, Е=E, К=K, М=M, Н=H, О=O, Р=P, С=C, Т=T, Х=X)</div>
+    <div class="composite">АВЕКМНОРСТХ авекмнорстх</div>
+    <div class="composite">Москва · Севастополь · Ярославль · Архангельск</div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">cmap format 4 + format 12 — пангграммы</div>
+    <div class="latin">The five boxing wizards jump quickly</div>
+    <div class="mixed">Съешь ещё этих мягких французских булок, да выпей чаю</div>
+    <div class="mixed">В чащах юга жил-был цитрус? Да, но фальшивый экземпляр!</div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">font-family fallback (system index): Verdana → Arial → sans-serif</div>
+    <div style="font-family: Verdana, Arial, sans-serif; font-size: 18px;">Verdana / Arial запрос — если есть в системе, рендер подменится</div>
+    <div style="font-family: 'Times New Roman', serif; font-size: 18px;">Times New Roman запрос</div>
+    <div style="font-family: 'NoSuchFontExists', 'AlsoMissing'; font-size: 18px;">Полностью отсутствующее семейство — fallback на bundled Inter</div>
+  </div>
+
+  <div class="sec">
+    <div class="lbl">смешение размеров в одной строке (baseline alignment)</div>
+    <div>
+      <span style="font-size: 12px;">маленький</span>
+      <span style="font-size: 18px;">средний</span>
+      <span style="font-size: 28px;">большой</span>
+      <span style="font-size: 14px;">снова мелкий</span>
+    </div>
+  </div>
+</body>
+</html>
