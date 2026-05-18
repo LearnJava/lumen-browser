@@ -1395,6 +1395,15 @@ pub struct ComputedStyle {
     pub background_repeat: BackgroundRepeat,
     pub background_size: BackgroundSize,
     pub background_attachment: BackgroundAttachment,
+    /// CSS Backgrounds L3 §3.7 — `background-origin`. Не наследуется. Default
+    /// `PaddingBox`. Phase 0: parsing + storage; реальный выбор box-edge для
+    /// позиционной системы background-image — отдельная задача с согласованием
+    /// P2 (crate-ownership matrix).
+    pub background_origin: BackgroundOrigin,
+    /// CSS Backgrounds L3 §3.8 — `background-clip`. Не наследуется. Default
+    /// `BorderBox`. Variant `Text` (CSS Backgrounds L4) хранится как atom;
+    /// реальная отсечка по форме глифов требует mask-pipeline в `lumen-paint`.
+    pub background_clip: BackgroundClip,
     /// CSS Backgrounds L3 §3.5 — `background-position`. Не наследуется.
     /// Default `0% 0%` (top-left). Phase 0: parsing + storage; реальное
     /// применение в paint pipeline (смещение background-image в pattern fill)
@@ -1978,6 +1987,76 @@ impl BackgroundAttachment {
     }
 }
 
+/// CSS Backgrounds L3 §3.7 — `background-origin`. Non-inherited.
+///
+/// Определяет, к какому **краю box-а** привязана позиционная система
+/// для `background-image` (initial = padding edge). На `background-color`
+/// не влияет (тот всегда заливает border-edge независимо от origin).
+///
+/// **Phase 0 ограничение:** parsing + storage only. Реальное смещение
+/// origin-у в paint pipeline (выбор `border_box` / `padding_box` /
+/// `content_box` rect при расчёте начала tile-тиления) — отдельная
+/// задача с согласованием P2 (crate-ownership matrix).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BackgroundOrigin {
+    /// `border-box` — позиционная система начинается с border-edge.
+    BorderBox,
+    /// `padding-box` (initial) — с padding-edge (= внутренний край border-а).
+    #[default]
+    PaddingBox,
+    /// `content-box` — с content-edge (= внутренний край padding-а).
+    ContentBox,
+}
+
+impl BackgroundOrigin {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "border-box" => Some(Self::BorderBox),
+            "padding-box" => Some(Self::PaddingBox),
+            "content-box" => Some(Self::ContentBox),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Backgrounds L3 §3.8 — `background-clip`. Non-inherited.
+///
+/// Определяет, к какому **краю box-а** обрезается `background-color`
+/// и `background-image` (initial = border edge, т.е. фон видно даже
+/// сквозь полупрозрачную рамку).
+///
+/// Variant `Text` (CSS Backgrounds L4) клипает фон по форме глифов —
+/// классический паттерн «gradient text» через `background-clip: text`
+/// и `color: transparent`. Реализация в paint требует подмаски через
+/// glyph-cache mask-image — отдельная задача с согласованием P2.
+///
+/// **Phase 0 ограничение:** parsing + storage only.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum BackgroundClip {
+    /// `border-box` (initial) — фон под border-ом виден.
+    #[default]
+    BorderBox,
+    /// `padding-box` — фон обрезается до внутреннего края border-а.
+    PaddingBox,
+    /// `content-box` — фон только в content-area.
+    ContentBox,
+    /// `text` (CSS Backgrounds L4) — фон клипается по форме текста
+    /// внутри box-а. Phase 0 хранит как atom, реальный clip — P2.
+    Text,
+}
+
+impl BackgroundClip {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "border-box" => Some(Self::BorderBox),
+            "padding-box" => Some(Self::PaddingBox),
+            "content-box" => Some(Self::ContentBox),
+            "text" => Some(Self::Text),
+            _ => None,
+        }
+    }
+}
+
 /// CSS Images L3 §5.5 — `object-fit`. Применяется к replaced elements
 /// (`<img>`, `<video>`, `<canvas>` и т.д.) и определяет, как «коробка»
 /// заливается содержимым с учётом intrinsic-размеров. Не наследуется.
@@ -2534,6 +2613,8 @@ impl ComputedStyle {
             background_repeat: BackgroundRepeat::Repeat,
             background_size: BackgroundSize::Auto,
             background_attachment: BackgroundAttachment::Scroll,
+            background_origin: BackgroundOrigin::PaddingBox,
+            background_clip: BackgroundClip::BorderBox,
             background_position: ObjectPosition::background_initial(),
             will_change: Vec::new(),
             pointer_events: PointerEvents::Auto,
@@ -2717,6 +2798,8 @@ pub fn compute_style(
         background_repeat: BackgroundRepeat::Repeat,
         background_size: BackgroundSize::Auto,
         background_attachment: BackgroundAttachment::Scroll,
+        background_origin: BackgroundOrigin::PaddingBox,
+        background_clip: BackgroundClip::BorderBox,
         background_position: ObjectPosition::background_initial(),
         // Will Change / Pointer Events — не наследуются.
         will_change: Vec::new(),
@@ -6653,6 +6736,23 @@ fn apply_declaration(
                 style.background_attachment = v;
             }
         }
+        "background-origin" => {
+            // CSS Backgrounds L3 §3.7: border-box | padding-box | content-box.
+            // Non-inherited; initial padding-box. Multi-value (для multi-background)
+            // — отложено до multi-background-image (хранение Vec).
+            if let Some(v) = BackgroundOrigin::parse(val) {
+                style.background_origin = v;
+            }
+        }
+        "background-clip" => {
+            // CSS Backgrounds L3 §3.8 + L4 (`text`):
+            // border-box | padding-box | content-box | text. Non-inherited;
+            // initial border-box. Multi-value (для multi-background) —
+            // отложено до multi-background-image.
+            if let Some(v) = BackgroundClip::parse(val) {
+                style.background_clip = v;
+            }
+        }
         "background-position" => {
             // CSS Backgrounds L3 §3.5. Парсер `<position>` переиспользуется
             // с `object-position` (`ObjectPosition::parse`), но default
@@ -8188,6 +8288,22 @@ fn apply_css_wide_keyword(
                 inherited.background_position
             } else {
                 init.background_position
+            };
+        }
+        // CSS Backgrounds L3 §3.7 / §3.8 — background-origin / background-clip
+        // non-inherited.
+        "background-origin" => {
+            style.background_origin = if inh_only_inherit {
+                inherited.background_origin
+            } else {
+                init.background_origin
+            };
+        }
+        "background-clip" => {
+            style.background_clip = if inh_only_inherit {
+                inherited.background_clip
+            } else {
+                init.background_clip
             };
         }
         // CSS Images L3 §6.1 — image-rendering inherited. inh — общий
@@ -12607,6 +12723,150 @@ mod tests {
             &[0, 0],
         );
         assert_eq!(s.image_rendering, ImageRendering::CrispEdges);
+    }
+
+    // ── CSS Backgrounds L3 §3.7 / §3.8 — background-origin / background-clip ──
+
+    #[test]
+    fn background_origin_default_is_padding_box() {
+        let s = cascade_at("<div></div>", "", &[0]);
+        assert_eq!(s.background_origin, BackgroundOrigin::PaddingBox);
+    }
+
+    #[test]
+    fn background_origin_all_keywords_parse() {
+        for (val, expected) in [
+            ("border-box", BackgroundOrigin::BorderBox),
+            ("padding-box", BackgroundOrigin::PaddingBox),
+            ("content-box", BackgroundOrigin::ContentBox),
+        ] {
+            let s = cascade_at(
+                "<div></div>",
+                &format!("div {{ background-origin: {val}; }}"),
+                &[0],
+            );
+            assert_eq!(s.background_origin, expected, "for value {val}");
+        }
+    }
+
+    #[test]
+    fn background_origin_case_insensitive() {
+        let s = cascade_at("<div></div>", "div { background-origin: BORDER-BOX; }", &[0]);
+        assert_eq!(s.background_origin, BackgroundOrigin::BorderBox);
+    }
+
+    #[test]
+    fn background_origin_invalid_value_ignored() {
+        let s = cascade_at("<div></div>", "div { background-origin: bogus; }", &[0]);
+        assert_eq!(s.background_origin, BackgroundOrigin::PaddingBox);
+    }
+
+    #[test]
+    fn background_origin_not_inherited() {
+        // CSS Backgrounds L3 §3.7 — non-inherited.
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { background-origin: content-box; }",
+            &[0, 0],
+        );
+        assert_eq!(s.background_origin, BackgroundOrigin::PaddingBox);
+    }
+
+    #[test]
+    fn background_origin_inherit_keyword_takes_parent() {
+        // `inherit` явно тянет значение родителя даже для non-inherited.
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { background-origin: content-box; } p { background-origin: inherit; }",
+            &[0, 0],
+        );
+        assert_eq!(s.background_origin, BackgroundOrigin::ContentBox);
+    }
+
+    #[test]
+    fn background_origin_initial_keyword_resets() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-origin: content-box; } div { background-origin: initial; }",
+            &[0],
+        );
+        assert_eq!(s.background_origin, BackgroundOrigin::PaddingBox);
+    }
+
+    #[test]
+    fn background_origin_unset_for_non_inherited_is_initial() {
+        // CSS Cascade L4 §7: `unset` для non-inherited == `initial`.
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { background-origin: content-box; } p { background-origin: unset; }",
+            &[0, 0],
+        );
+        assert_eq!(s.background_origin, BackgroundOrigin::PaddingBox);
+    }
+
+    #[test]
+    fn background_clip_default_is_border_box() {
+        let s = cascade_at("<div></div>", "", &[0]);
+        assert_eq!(s.background_clip, BackgroundClip::BorderBox);
+    }
+
+    #[test]
+    fn background_clip_all_keywords_parse() {
+        for (val, expected) in [
+            ("border-box", BackgroundClip::BorderBox),
+            ("padding-box", BackgroundClip::PaddingBox),
+            ("content-box", BackgroundClip::ContentBox),
+            ("text", BackgroundClip::Text),
+        ] {
+            let s = cascade_at(
+                "<div></div>",
+                &format!("div {{ background-clip: {val}; }}"),
+                &[0],
+            );
+            assert_eq!(s.background_clip, expected, "for value {val}");
+        }
+    }
+
+    #[test]
+    fn background_clip_case_insensitive() {
+        let s = cascade_at("<div></div>", "div { background-clip: TEXT; }", &[0]);
+        assert_eq!(s.background_clip, BackgroundClip::Text);
+    }
+
+    #[test]
+    fn background_clip_invalid_value_ignored() {
+        let s = cascade_at("<div></div>", "div { background-clip: bogus; }", &[0]);
+        assert_eq!(s.background_clip, BackgroundClip::BorderBox);
+    }
+
+    #[test]
+    fn background_clip_not_inherited() {
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { background-clip: padding-box; }",
+            &[0, 0],
+        );
+        assert_eq!(s.background_clip, BackgroundClip::BorderBox);
+    }
+
+    #[test]
+    fn background_clip_inherit_keyword_takes_parent() {
+        let s = cascade_at(
+            "<div><p></p></div>",
+            "div { background-clip: text; } p { background-clip: inherit; }",
+            &[0, 0],
+        );
+        assert_eq!(s.background_clip, BackgroundClip::Text);
+    }
+
+    #[test]
+    fn background_clip_initial_keyword_resets() {
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-clip: text; } div { background-clip: initial; }",
+            &[0],
+        );
+        assert_eq!(s.background_clip, BackgroundClip::BorderBox);
     }
 
     // ── CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style / text-wrap ──
