@@ -757,6 +757,46 @@ fn emit_text_shadows(
     }
 }
 
+/// Эмитит outset box-shadow ПЕРЕД background (painter's order по CSS
+/// Backgrounds L3 §4.6 — shadow «cast … behind the element», то есть
+/// под background-color). Phase 0:
+/// * `blur` игнорируется — требует off-screen Gaussian pass (P2 п.4+);
+///   shadow = резкий FillRect со смещением и spread.
+/// * `inset` тени пропускаются — требуют clip (PushClipRect Phase 0
+///   не работает, ждёт реальный layer-pipeline / P2 1B шаг c).
+/// * Multiple shadows: per spec «the first shadow is on top» —
+///   эмитим в reverse iter (последняя в CSS-списке рисуется первой /
+///   ниже всех, первая — последней-перед-background).
+/// * `spread`: расширяет / сжимает rect ± по всем сторонам перед
+///   смещением. Полностью схлопывающийся rect (w/h ≤ 0) — skip.
+/// * Полностью прозрачная shadow (color.a == 0) — skip.
+fn emit_box_shadows(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
+    let s = &b.style;
+    if s.box_shadow.is_empty() {
+        return;
+    }
+    for shadow in s.box_shadow.iter().rev() {
+        if shadow.inset {
+            continue;
+        }
+        let color = shadow.color.unwrap_or(s.color);
+        if color.a == 0 {
+            continue;
+        }
+        let x = b.rect.x + shadow.offset_x - shadow.spread;
+        let y = b.rect.y + shadow.offset_y - shadow.spread;
+        let w = b.rect.width + 2.0 * shadow.spread;
+        let h = b.rect.height + 2.0 * shadow.spread;
+        if w <= 0.0 || h <= 0.0 {
+            continue;
+        }
+        out.push(DisplayCommand::FillRect {
+            rect: Rect::new(x, y, w, h),
+            color,
+        });
+    }
+}
+
 fn emit_outline(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     let s = &b.style;
     if !s.outline_style.is_visible() || s.outline_width <= 0.0 {
@@ -781,6 +821,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     match &b.kind {
         BoxKind::Skip => {}
         BoxKind::Block => {
+            emit_box_shadows(b, out);
             if let Some(bg) = b.style.background_color
                 && bg.a > 0
             {
@@ -842,6 +883,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         }
         BoxKind::InlineBlockRow => {}
         BoxKind::Image { src, alt } => {
+            emit_box_shadows(b, out);
             if let Some(bg) = b.style.background_color
                 && bg.a > 0
             {
@@ -889,6 +931,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
     match &b.kind {
         BoxKind::Skip => {}
         BoxKind::Block => {
+            emit_box_shadows(b, out);
             if let Some(bg) = b.style.background_color
                 && bg.a > 0
             {
@@ -2435,5 +2478,157 @@ mod tests {
         // Shadow color = currentColor = (10, 20, 30).
         assert_eq!(texts[0].1, [10, 20, 30]);
         assert_eq!(texts[1].1, [10, 20, 30]);
+    }
+
+    // ───────── box-shadow rendering ─────────
+
+    fn fills_with_color(dl: &DisplayList) -> Vec<(Rect, [u8; 4])> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillRect { rect, color } => {
+                    Some((*rect, [color.r, color.g, color.b, color.a]))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn box_shadow_none_emits_no_extra_fill() {
+        // Без box-shadow div с background даёт ровно одну FillRect.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: red; }",
+        );
+        let fills = fills_with_color(&dl);
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].1, [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn box_shadow_outset_emits_fill_before_background() {
+        // Outset shadow → 2 FillRect: сначала shadow (под bg), потом bg.
+        // shadow смещена на (3, 5) px.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: white; \
+             box-shadow: 3px 5px black; }",
+        );
+        let fills = fills_with_color(&dl);
+        assert_eq!(fills.len(), 2);
+        // Painter's order: shadow первый (под bg).
+        assert_eq!(fills[0].1, [0, 0, 0, 255], "shadow первой");
+        assert_eq!(fills[1].1, [255, 255, 255, 255], "background второй");
+        // shadow смещена на (3, 5).
+        let dx = fills[0].0.x - fills[1].0.x;
+        let dy = fills[0].0.y - fills[1].0.y;
+        assert!((dx - 3.0).abs() < 0.01);
+        assert!((dy - 5.0).abs() < 0.01);
+        // Размер shadow совпадает с box (spread=0).
+        assert!((fills[0].0.width - fills[1].0.width).abs() < 0.01);
+    }
+
+    #[test]
+    fn box_shadow_inset_skipped_phase0() {
+        // Inset shadow Phase 0 пропускается (требует clip).
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: red; \
+             box-shadow: inset 3px 5px black; }",
+        );
+        let fills = fills_with_color(&dl);
+        // Только bg, без shadow.
+        assert_eq!(fills.len(), 1, "inset shadow Phase 0 пропускается");
+        assert_eq!(fills[0].1, [255, 0, 0, 255]);
+    }
+
+    #[test]
+    fn box_shadow_spread_expands_rect() {
+        // spread=10 → shadow rect расширен на 10px по всем сторонам.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: white; \
+             box-shadow: 0 0 0 10px black; }",
+        );
+        let fills = fills_with_color(&dl);
+        assert_eq!(fills.len(), 2);
+        let shadow_rect = fills[0].0;
+        let bg_rect = fills[1].0;
+        // shadow расширен на 10 по всем сторонам.
+        assert!((shadow_rect.width - bg_rect.width - 20.0).abs() < 0.01);
+        assert!((shadow_rect.height - bg_rect.height - 20.0).abs() < 0.01);
+        assert!((shadow_rect.x - bg_rect.x + 10.0).abs() < 0.01);
+        assert!((shadow_rect.y - bg_rect.y + 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn box_shadow_multiple_reverse_order() {
+        // Spec: «first shadow is on top». Painter's order: последняя
+        // shadow рисуется первой (ниже всех), первая — последней-перед-bg.
+        let dl = build(
+            "<div></div>",
+            "div { width: 50px; height: 50px; background: white; \
+             box-shadow: 1px 0 red, 2px 0 green, 3px 0 blue; }",
+        );
+        let fills = fills_with_color(&dl);
+        assert_eq!(fills.len(), 4, "3 shadows + bg = 4 FillRect");
+        assert_eq!(fills[0].1[..3], [0, 0, 255]); // blue первой (ниже всех)
+        assert_eq!(fills[1].1[..3], [0, 128, 0]); // green
+        assert_eq!(fills[2].1[..3], [255, 0, 0]); // red (поверх теней)
+        assert_eq!(fills[3].1[..3], [255, 255, 255]); // bg (поверх всего)
+    }
+
+    #[test]
+    fn box_shadow_color_omitted_uses_currentcolor() {
+        // CSS Backgrounds L3 §4.6 — «If no color is specified, the value
+        // of the color property is used».
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: white; \
+             color: rgb(10, 20, 30); box-shadow: 2px 2px; }",
+        );
+        let fills = fills_with_color(&dl);
+        assert_eq!(fills.len(), 2);
+        assert_eq!(fills[0].1[..3], [10, 20, 30]);
+    }
+
+    #[test]
+    fn box_shadow_negative_spread_collapses_to_skip() {
+        // spread=-100 на box 50×50 → final w/h = -150, отрицательный
+        // → пропускаем (не эмитим бессмысленный FillRect).
+        let dl = build(
+            "<div></div>",
+            "div { width: 50px; height: 50px; background: red; \
+             box-shadow: 0 0 0 -100px black; }",
+        );
+        let fills = fills_with_color(&dl);
+        assert_eq!(fills.len(), 1, "collapsed shadow пропускается");
+    }
+
+    #[test]
+    fn box_shadow_transparent_color_skipped() {
+        // a == 0 → нечего рисовать.
+        let dl = build(
+            "<div></div>",
+            "div { width: 50px; height: 50px; background: red; \
+             box-shadow: 5px 5px transparent; }",
+        );
+        let fills = fills_with_color(&dl);
+        assert_eq!(fills.len(), 1);
+    }
+
+    #[test]
+    fn box_shadow_blur_ignored_phase0() {
+        // blur не влияет на rect в Phase 0 — эмитим резкую копию.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: white; \
+             box-shadow: 5px 5px 20px black; }",
+        );
+        let fills = fills_with_color(&dl);
+        assert_eq!(fills.len(), 2);
+        // Размер shadow == размер box (spread=0); blur игнорируется.
+        assert!((fills[0].0.width - fills[1].0.width).abs() < 0.01);
+        assert!((fills[0].0.height - fills[1].0.height).abs() < 0.01);
     }
 }
