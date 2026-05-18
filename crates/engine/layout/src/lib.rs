@@ -32,7 +32,8 @@ pub use stacking::{
 };
 pub use style::{
     parse_css_wide_keyword, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
-    BackgroundAttachment, BackgroundImage, BackgroundRepeat, BackgroundSize, BorderStyle,
+    BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundOrigin, BackgroundRepeat,
+    BackgroundSize, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, ClipPath, Color, ComputedStyle, Content, ContentItem,
     CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle, FontVariant,
     FontWeight, Hyphens, Isolation, IterationCount, ListStylePosition, ListStyleType,

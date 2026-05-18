@@ -8,10 +8,10 @@
 
 use lumen_core::geom::Rect;
 use lumen_layout::{
-    box_can_own_stacking_context, creates_stacking_context, BoxKind, Color, FontStyle, FontWeight,
-    InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
-    OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent,
-    StackingContextId, StackingTree,
+    box_can_own_stacking_context, creates_stacking_context, BackgroundClip, BoxKind, Color,
+    FontStyle, FontWeight, InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode, ObjectFit,
+    ObjectPosition, OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase,
+    PositionComponent, StackingContextId, StackingTree,
 };
 
 /// CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
@@ -757,6 +757,43 @@ fn emit_text_shadows(
     }
 }
 
+/// CSS Backgrounds L3 §3.8 — `background-clip` clip rect для фона.
+/// Phase 0 (без border-radius — углы прямоугольные):
+/// * `BorderBox` (initial): `b.rect` без изменений.
+/// * `PaddingBox`: shrink на border-widths по всем сторонам.
+/// * `ContentBox`: shrink на border + padding.
+/// * `Text` (L4): Phase 0 fallback на `BorderBox` (реальный glyph-mask
+///   clip требует off-screen alpha-pass, P2 п.4+).
+/// `max(0.0)` страхует от negative-w/h на очень узких box-ах.
+fn background_clip_rect(b: &LayoutBox) -> Rect {
+    let s = &b.style;
+    match s.background_clip {
+        BackgroundClip::BorderBox | BackgroundClip::Text => b.rect,
+        BackgroundClip::PaddingBox => Rect::new(
+            b.rect.x + s.border_left_width,
+            b.rect.y + s.border_top_width,
+            (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+            (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+        ),
+        BackgroundClip::ContentBox => Rect::new(
+            b.rect.x + s.border_left_width + s.padding_left,
+            b.rect.y + s.border_top_width + s.padding_top,
+            (b.rect.width
+                - s.border_left_width
+                - s.border_right_width
+                - s.padding_left
+                - s.padding_right)
+                .max(0.0),
+            (b.rect.height
+                - s.border_top_width
+                - s.border_bottom_width
+                - s.padding_top
+                - s.padding_bottom)
+                .max(0.0),
+        ),
+    }
+}
+
 /// Эмитит outset box-shadow ПЕРЕД background (painter's order по CSS
 /// Backgrounds L3 §4.6 — shadow «cast … behind the element», то есть
 /// под background-color). Phase 0:
@@ -825,10 +862,10 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             if let Some(bg) = b.style.background_color
                 && bg.a > 0
             {
-                out.push(DisplayCommand::FillRect {
-                    rect: b.rect,
-                    color: bg,
-                });
+                let clip = background_clip_rect(b);
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
             }
             let s = &b.style;
             let has_border = s.border_top_style.is_visible()
@@ -887,10 +924,10 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             if let Some(bg) = b.style.background_color
                 && bg.a > 0
             {
-                out.push(DisplayCommand::FillRect {
-                    rect: b.rect,
-                    color: bg,
-                });
+                let clip = background_clip_rect(b);
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
             }
             let s = &b.style;
             let has_border = s.border_top_style.is_visible()
@@ -935,10 +972,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             if let Some(bg) = b.style.background_color
                 && bg.a > 0
             {
-                out.push(DisplayCommand::FillRect {
-                    rect: b.rect,
-                    color: bg,
-                });
+                let clip = background_clip_rect(b);
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
             }
             let s = &b.style;
             let has_border = s.border_top_style.is_visible()
@@ -1009,10 +1046,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             if let Some(bg) = b.style.background_color
                 && bg.a > 0
             {
-                out.push(DisplayCommand::FillRect {
-                    rect: b.rect,
-                    color: bg,
-                });
+                let clip = background_clip_rect(b);
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
             }
             let s = &b.style;
             let has_border = s.border_top_style.is_visible()
@@ -2630,5 +2667,96 @@ mod tests {
         // Размер shadow == размер box (spread=0); blur игнорируется.
         assert!((fills[0].0.width - fills[1].0.width).abs() < 0.01);
         assert!((fills[0].0.height - fills[1].0.height).abs() < 0.01);
+    }
+
+    // ───────── background-clip rendering ─────────
+
+    fn first_bg_rect(dl: &DisplayList) -> Rect {
+        dl.iter()
+            .find_map(|c| match c {
+                // bg = single non-shadow FillRect: ищем по цвету ≠ pre-shadow
+                DisplayCommand::FillRect { rect, .. } => Some(*rect),
+                _ => None,
+            })
+            .expect("должна быть хотя бы одна FillRect")
+    }
+
+    #[test]
+    fn background_clip_border_box_default_uses_full_rect() {
+        // BorderBox initial: bg рисуется на полный b.rect.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; padding: 20px; \
+             border: 5px solid black; background: red; }",
+        );
+        let bg = first_bg_rect(&dl);
+        // box-sizing: content-box default → внешний размер = 100 + 2*20 + 2*5 = 150.
+        assert!((bg.width - 150.0).abs() < 0.01);
+        assert!((bg.height - 100.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn background_clip_padding_box_shrinks_by_border() {
+        // PaddingBox: bg ужимается на border (по 5px со всех сторон).
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; padding: 20px; \
+             border: 5px solid black; background: red; \
+             background-clip: padding-box; }",
+        );
+        let bg = first_bg_rect(&dl);
+        // padding-box = border-box minus 2*5 border = 150 - 10 = 140.
+        assert!((bg.width - 140.0).abs() < 0.01, "got width {}", bg.width);
+        assert!((bg.height - 90.0).abs() < 0.01, "got height {}", bg.height);
+        // Сдвиг по x на левый border (+5).
+        assert!((bg.x - 5.0).abs() < 0.01, "got x {}", bg.x);
+    }
+
+    #[test]
+    fn background_clip_content_box_shrinks_by_border_plus_padding() {
+        // ContentBox: bg ужимается на border + padding.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; padding: 20px; \
+             border: 5px solid black; background: red; \
+             background-clip: content-box; }",
+        );
+        let bg = first_bg_rect(&dl);
+        // content-box = border-box minus 2*(5+20) = 150 - 50 = 100.
+        assert!((bg.width - 100.0).abs() < 0.01, "got width {}", bg.width);
+        assert!((bg.height - 50.0).abs() < 0.01, "got height {}", bg.height);
+        // Сдвиг по x = border + padding = 5 + 20 = 25.
+        assert!((bg.x - 25.0).abs() < 0.01, "got x {}", bg.x);
+    }
+
+    #[test]
+    fn background_clip_text_falls_back_to_border_box_phase0() {
+        // Phase 0 без glyph-mask: text-clip эмитим как border-box.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: red; \
+             background-clip: text; }",
+        );
+        let bg = first_bg_rect(&dl);
+        assert!((bg.width - 100.0).abs() < 0.01);
+        assert!((bg.height - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn background_clip_collapsed_rect_skipped() {
+        // Если border + padding больше box-а → clip rect collapses to 0 → skip.
+        // box-sizing:border-box + width:50 + border:30 → content = 50 - 60 = -10,
+        // max(0) → 0 → FillRect bg не эмитится.
+        let dl = build(
+            "<div></div>",
+            "div { box-sizing: border-box; width: 50px; height: 20px; \
+             border: 30px solid black; \
+             background: red; background-clip: content-box; }",
+        );
+        let bg_fills: Vec<_> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::FillRect { color, .. } if color.r == 255))
+            .collect();
+        assert!(bg_fills.is_empty(), "collapsed bg должен быть пропущен");
     }
 }
