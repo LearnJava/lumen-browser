@@ -215,11 +215,25 @@ fn build_box(
             let child_id = dom_children[i];
             if is_inline_content(doc, sheet, child_id, &style, viewport) {
                 // Собираем последовательный run inline-контента в один InlineRun.
+                // Whitespace-only текст между inline-элементами — межэлементный
+                // пробел — пропускаем, не прерывая run (иначе каждый <span>
+                // получил бы отдельный InlineRun).
                 let mut segs: Vec<InlineSegment> = Vec::new();
-                while i < dom_children.len()
-                    && is_inline_content(doc, sheet, dom_children[i], &style, viewport)
-                {
-                    collect_inline_segments(doc, sheet, dom_children[i], &style, viewport, &mut segs);
+                loop {
+                    if i >= dom_children.len() {
+                        break;
+                    }
+                    let cid = dom_children[i];
+                    if let NodeData::Text(s) = &doc.get(cid).data
+                        && s.chars().all(char::is_whitespace)
+                    {
+                        i += 1;
+                        continue;
+                    }
+                    if !is_inline_content(doc, sheet, cid, &style, viewport) {
+                        break;
+                    }
+                    collect_inline_segments(doc, sheet, cid, &style, viewport, &mut segs);
                     i += 1;
                 }
                 if !segs.is_empty() {
