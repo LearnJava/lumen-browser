@@ -83,10 +83,14 @@ pub enum PseudoClass {
     FirstOfType,
     LastOfType,
     OnlyOfType,
-    /// `:nth-child(an+b)` — индекс среди всех element-sibling-ов (1-based).
-    NthChild(NthSpec),
-    /// `:nth-last-child(an+b)` — индекс с конца.
-    NthLastChild(NthSpec),
+    /// `:nth-child(an+b [of <selector-list>])` — индекс среди всех
+    /// element-sibling-ов (1-based). Опциональный `of <selector-list>`
+    /// clause (CSS Selectors L4 §6.6.5.1) фильтрует sibling-pool перед
+    /// нумерацией: только элементы, матчащие хотя бы один из селекторов,
+    /// участвуют в подсчёте.
+    NthChild(NthSpec, Option<Vec<ComplexSelector>>),
+    /// `:nth-last-child(an+b [of <selector-list>])` — то же с конца.
+    NthLastChild(NthSpec, Option<Vec<ComplexSelector>>),
     /// `:nth-of-type(an+b)` — индекс среди sibling-ов того же тега.
     NthOfType(NthSpec),
     /// `:nth-last-of-type(an+b)` — индекс с конца среди sibling-ов того же тега.
@@ -335,6 +339,19 @@ fn accumulate_specificity(comp: &CompoundSelector, spec: &mut Specificity) {
                             .map(|rs| rs.selector.specificity())
                             .max();
                         if let Some(max) = max {
+                            spec.a = spec.a.saturating_add(max.a);
+                            spec.b = spec.b.saturating_add(max.b);
+                            spec.c = spec.c.saturating_add(max.c);
+                        }
+                    }
+                    PseudoClass::NthChild(_, of) | PseudoClass::NthLastChild(_, of) => {
+                        // CSS Selectors L4 §17 «:nth-child(<an+b> of S)»:
+                        // specificity = 1 pseudo-class + max-specificity of S
+                        // (если S задан). Без `of` clause — только 1.
+                        spec.b = spec.b.saturating_add(1);
+                        if let Some(list) = of
+                            && let Some(max) = max_list_specificity(list)
+                        {
                             spec.a = spec.a.saturating_add(max.a);
                             spec.b = spec.b.saturating_add(max.b);
                             spec.c = spec.c.saturating_add(max.c);
@@ -2525,8 +2542,14 @@ impl<'a> Parser<'a> {
     /// и проглотит остаток до `)`.
     fn parse_functional_pseudo_body(&mut self, name_lower: &str) -> Option<PseudoClass> {
         match name_lower {
-            "nth-child" => Some(PseudoClass::NthChild(self.parse_nth_spec()?)),
-            "nth-last-child" => Some(PseudoClass::NthLastChild(self.parse_nth_spec()?)),
+            "nth-child" => {
+                let (spec, of) = self.parse_nth_spec_with_of()?;
+                Some(PseudoClass::NthChild(spec, of))
+            }
+            "nth-last-child" => {
+                let (spec, of) = self.parse_nth_spec_with_of()?;
+                Some(PseudoClass::NthLastChild(spec, of))
+            }
             "nth-of-type" => Some(PseudoClass::NthOfType(self.parse_nth_spec()?)),
             "nth-last-of-type" => Some(PseudoClass::NthLastOfType(self.parse_nth_spec()?)),
             "not" => {
@@ -2674,6 +2697,9 @@ impl<'a> Parser<'a> {
 
     /// Парсит `an+b`, число или ключевые слова `odd`/`even`. Останавливается на
     /// `)` или конце ввода — caller съест `)` через `skip_to_paren_close`.
+    /// **Не** парсит `of <selector-list>` — для этого `parse_nth_spec_with_of`;
+    /// этот метод оставлен для `:nth-of-type` / `:nth-last-of-type` (per spec
+    /// они не поддерживают `of` clause).
     fn parse_nth_spec(&mut self) -> Option<NthSpec> {
         self.skip_ws_and_comments();
         // Соберём «токен» формулы — всё до `)` или конца.
@@ -2686,6 +2712,78 @@ impl<'a> Parser<'a> {
             self.consume();
         }
         parse_nth_spec_str(raw.trim())
+    }
+
+    /// Парсит `an+b [of <selector-list>]` для `:nth-child` / `:nth-last-child`
+    /// (CSS Selectors L4 §6.6.5.1). Возвращает `(NthSpec, Option<list>)`:
+    /// `None` для list означает отсутствие `of`-clause; `Some(non-empty list)`
+    /// — фильтр siblings. Пустой `of` clause (`of` без следующего selector-а)
+    /// → возврат `None` из всего метода — caller fallback-ит на `Unsupported`.
+    ///
+    /// Алгоритм: собираем raw-tokens до встречи `of` (ASCII case-insensitive,
+    /// окружённого whitespace или скобками — чтобы `2nof.x` не схлопывалось)
+    /// либо `)`. Затем nth-spec парсится из собранного prefix; если за ним
+    /// есть `of` — парсим selector-list до `)`.
+    fn parse_nth_spec_with_of(&mut self) -> Option<(NthSpec, Option<Vec<ComplexSelector>>)> {
+        self.skip_ws_and_comments();
+        let mut raw = String::new();
+        // Собираем nth-spec токены до встречи `of`-keyword (отделённого
+        // whitespace по обе стороны: spec требует whitespace вокруг `of`,
+        // чтобы `2nof.x` не схлопнулось как nth-spec `2nof` + `.x`).
+        // Без `of` — собираем всё до `)`, как старый `parse_nth_spec`.
+        loop {
+            let saved = self.pos;
+            self.skip_ws_and_comments();
+            let after_ws = self.pos;
+            let Some(c) = self.peek() else { break };
+            if c == ')' {
+                self.pos = saved;
+                break;
+            }
+            if after_ws > saved && self.peek_ident_matches_of() {
+                // Откатываемся к началу whitespace, чтобы of-clause увидел
+                // boundary сам.
+                self.pos = saved;
+                break;
+            }
+            if after_ws > saved {
+                raw.push(' ');
+            }
+            raw.push(c);
+            self.consume();
+        }
+        let spec = parse_nth_spec_str(raw.trim())?;
+        self.skip_ws_and_comments();
+        if !self.peek_ident_matches_of() {
+            return Some((spec, None));
+        }
+        self.consume(); // 'o'
+        self.consume(); // 'f'
+        self.skip_ws_and_comments();
+        let list = self.parse_selector_list();
+        self.skip_ws_and_comments();
+        if list.is_empty() || self.peek() != Some(')') {
+            return None;
+        }
+        Some((spec, Some(list)))
+    }
+
+    /// Возвращает true, если следующие 2 байта — `of` (ASCII case-insensitive)
+    /// И за ними следует НЕ-ident-continuation байт (whitespace, `)`, EOF,
+    /// и т.д.). Без consume.
+    fn peek_ident_matches_of(&self) -> bool {
+        let b = self.input.as_bytes();
+        let p = self.pos;
+        if p + 1 >= b.len() {
+            return false;
+        }
+        if !b[p].eq_ignore_ascii_case(&b'o') || !b[p + 1].eq_ignore_ascii_case(&b'f') {
+            return false;
+        }
+        match b.get(p + 2) {
+            None => true,
+            Some(&c) => !c.is_ascii_alphanumeric() && c != b'-' && c != b'_',
+        }
     }
 
     fn skip_to_paren_close(&mut self) {
@@ -3410,11 +3508,78 @@ mod tests {
         let s = parse(":nth-child(2n+1) { color: red; }");
         let p = &s.rules[0].selectors[0].head.parts[0];
         match p {
-            SimpleSelector::PseudoClass(PseudoClass::NthChild(spec)) => {
+            SimpleSelector::PseudoClass(PseudoClass::NthChild(spec, of)) => {
                 assert_eq!(*spec, NthSpec { a: 2, b: 1 });
+                assert!(of.is_none(), "no of-clause expected");
             }
             _ => panic!("expected NthChild(2n+1), got {p:?}"),
         }
+    }
+
+    #[test]
+    fn pseudo_nth_child_with_of_clause() {
+        // CSS Selectors L4 §6.6.5.1.
+        let s = parse(":nth-child(odd of .visible) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::NthChild(spec, of)) => {
+                assert_eq!(*spec, NthSpec::ODD);
+                let list = of.as_ref().expect("of-clause expected");
+                assert_eq!(list.len(), 1);
+            }
+            _ => panic!("expected NthChild with of-clause, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_nth_last_child_with_of_clause() {
+        let s = parse(":nth-last-child(1 of li.active) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::NthLastChild(spec, of)) => {
+                assert_eq!(*spec, NthSpec { a: 0, b: 1 });
+                assert!(of.is_some(), "of-clause expected");
+            }
+            _ => panic!("expected NthLastChild with of-clause, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_nth_child_of_selector_list() {
+        // `of` принимает selector-list через запятую.
+        let s = parse(":nth-child(2n of .x, .y) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        match p {
+            SimpleSelector::PseudoClass(PseudoClass::NthChild(_, Some(list))) => {
+                assert_eq!(list.len(), 2);
+            }
+            _ => panic!("expected NthChild with selector-list of, got {p:?}"),
+        }
+    }
+
+    #[test]
+    fn pseudo_nth_child_empty_of_clause_invalid() {
+        // `:nth-child(odd of)` без selector-а → invalid, fallback на Unsupported.
+        let s = parse(":nth-child(odd of) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "nth-child"
+        ));
+    }
+
+    #[test]
+    fn pseudo_nth_of_type_does_not_accept_of_clause() {
+        // CSS Selectors L4 §6.6.5.1: `of` clause НЕ применяется к
+        // `:nth-of-type` (type filter — implicit). Если у пользователя там
+        // случайно `of` — спека требует invalid; наш парсер собирает всё
+        // в spec-string, который parse_nth_spec_str отвергает.
+        let s = parse(":nth-of-type(odd of .x) { color: red; }");
+        let p = &s.rules[0].selectors[0].head.parts[0];
+        assert!(matches!(
+            p,
+            SimpleSelector::PseudoClass(PseudoClass::Unsupported(n)) if n == "nth-of-type"
+        ));
     }
 
     #[test]
@@ -3704,8 +3869,8 @@ mod tests {
             };
             let is_nth = matches!(
                 pc,
-                PseudoClass::NthChild(_)
-                    | PseudoClass::NthLastChild(_)
+                PseudoClass::NthChild(_, _)
+                    | PseudoClass::NthLastChild(_, _)
                     | PseudoClass::NthOfType(_)
                     | PseudoClass::NthLastOfType(_)
             );

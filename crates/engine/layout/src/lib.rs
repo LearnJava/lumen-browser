@@ -1697,6 +1697,77 @@ mod tests {
     }
 
     #[test]
+    fn nth_child_of_selector_filters_pool() {
+        // CSS Selectors L4 §6.6.5.1: `:nth-child(odd of .v)` нумерует ТОЛЬКО
+        // элементы с классом `v`, остальные siblings не участвуют. Из
+        // .v#a (index 1), .v#b (2), .v#c (3) — odd = a и c.
+        let (root, doc) = lay_with_doc(
+            r#"<p>x</p><p class="v" id="a">x</p><p>x</p><p class="v" id="b">x</p><p class="v" id="c">x</p>"#,
+            "p:nth-child(odd of .v) { color: red; }",
+        );
+        assert_eq!(color_by_id(&doc, &root, "a").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "b").r, 0);
+        assert_eq!(color_by_id(&doc, &root, "c").r, 255);
+    }
+
+    #[test]
+    fn nth_child_of_selector_does_not_match_non_filtered() {
+        // Элемент, не матчащий of-selector, никогда не матчит pseudo —
+        // независимо от того, какой у него index среди ВСЕХ siblings.
+        let (root, doc) = lay_with_doc(
+            r#"<p class="v" id="a">x</p><p id="b">x</p><p class="v" id="c">x</p>"#,
+            "p:nth-child(1 of .v) { color: red; }",
+        );
+        // .v#a — первый матчащий .v → matches.
+        // #b — не .v, не матчит вообще.
+        // .v#c — второй матчащий .v → не matches 1.
+        assert_eq!(color_by_id(&doc, &root, "a").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "b").r, 0);
+        assert_eq!(color_by_id(&doc, &root, "c").r, 0);
+    }
+
+    #[test]
+    fn nth_last_child_of_selector_filters_from_end() {
+        let (root, doc) = lay_with_doc(
+            r#"<p class="v" id="a">x</p><p class="v" id="b">x</p><p id="c">x</p><p class="v" id="d">x</p>"#,
+            "p:nth-last-child(1 of .v) { color: red; }",
+        );
+        // С конца: первый .v — d (matches), второй .v — b (no), третий — a (no).
+        assert_eq!(color_by_id(&doc, &root, "a").r, 0);
+        assert_eq!(color_by_id(&doc, &root, "b").r, 0);
+        assert_eq!(color_by_id(&doc, &root, "c").r, 0);
+        assert_eq!(color_by_id(&doc, &root, "d").r, 255);
+    }
+
+    #[test]
+    fn nth_child_of_selector_list_union() {
+        // of-clause принимает selector-list через запятую: соответствие
+        // хотя бы одному → элемент в pool.
+        let (root, doc) = lay_with_doc(
+            r#"<p class="x" id="a">x</p><p id="b">x</p><p class="y" id="c">x</p><p class="x" id="d">x</p>"#,
+            "p:nth-child(odd of .x, .y) { color: red; }",
+        );
+        // Pool по «.x OR .y»: a, c, d. odd-index в этом pool: a(1), d(3).
+        assert_eq!(color_by_id(&doc, &root, "a").r, 255);
+        assert_eq!(color_by_id(&doc, &root, "b").r, 0);
+        assert_eq!(color_by_id(&doc, &root, "c").r, 0);
+        assert_eq!(color_by_id(&doc, &root, "d").r, 255);
+    }
+
+    #[test]
+    fn nth_child_backward_compat_without_of() {
+        // Базовое поведение без of-clause не должно регрессировать.
+        let (root, doc) = lay_with_doc(
+            "<p>a</p><p>b</p><p>c</p>",
+            "p:nth-child(2) { color: red; }",
+        );
+        let ps = block_children_by_tag(&root, &doc, "p");
+        assert_eq!(ps[0].style.color.r, 0);
+        assert_eq!(ps[1].style.color.r, 255);
+        assert_eq!(ps[2].style.color.r, 0);
+    }
+
+    #[test]
     fn first_of_type_matches() {
         let (root, doc) = lay_with_doc(
             "<h1>x</h1><p>p1</p><p>p2</p>",
