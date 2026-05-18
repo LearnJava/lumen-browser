@@ -32,7 +32,7 @@ use lumen_image::{Image, PixelFormat};
 use lumen_layout::{Color, FontStyle, FontWeight};
 use winit::window::Window;
 
-use crate::atlas::{GlyphAtlas, GlyphEntry};
+use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
 use crate::display_list::fit_image_quad;
 use crate::DisplayCommand;
 
@@ -69,15 +69,18 @@ fn size_bin_for(font_size: f32) -> u16 {
     SIZE_BINS[SIZE_BINS.len() - 1]
 }
 
-/// Пакует `(face_id, glyph_id, size_bin)` в opaque atlas key. face_id —
-/// usize (но мы используем u16: тысячи face-ов нереалистично, 1-16
-/// hardcap для Phase 0), glyph_id — u16 (по TTF spec), size_bin — u16.
-/// Итог: 16 бит face + 16 бит glyph + 16 бит size = 48 бит < u64.
-fn pack_atlas_key(face_id: usize, glyph_id: u16, size_bin: u16) -> u64 {
-    let face = (face_id as u64) & 0xFFFF;
-    let glyph = u64::from(glyph_id);
-    let size = u64::from(size_bin);
-    (face << 32) | (glyph << 16) | size
+/// Конструктор `AtlasKey` из renderer-овых типов. face_id хранится в
+/// renderer как `usize`, но atlas использует `u16` (Phase 0 hardcap на
+/// число face-ов — тысячи нереалистично, 1-16 типично). Конверсия с
+/// `as` ⇒ значения >65535 будут warapped — приемлемо для defensive Phase 0
+/// (atlas всё равно перестанет работать задолго до).
+fn atlas_key(
+    face_id: usize,
+    glyph_id: u16,
+    size_bin: u16,
+    coords_hash: u64,
+) -> AtlasKey {
+    AtlasKey::new((face_id & 0xFFFF) as u16, glyph_id, size_bin, coords_hash)
 }
 
 const FILL_SHADER_SRC: &str = r#"
@@ -344,7 +347,7 @@ pub struct Renderer {
     /// — multi-size atlas (см. `SIZE_BINS`): один и тот же глиф для
     /// font-size 16 и 32 даёт две разные записи (разная растеризация,
     /// разный atlas-rect).
-    cached_glyphs: HashMap<(usize, u16, u16), Option<CachedGlyph>>,
+    cached_glyphs: HashMap<AtlasKey, Option<CachedGlyph>>,
 }
 
 impl Renderer {
@@ -1036,6 +1039,7 @@ impl Renderer {
                     font_family: _,
                     font_weight: _,
                     font_style: _,
+                    font_variation_coords,
                 } => {
                     let primary_face_id = text_face_iter.next().unwrap_or(0);
                     if parsed_faces
@@ -1055,6 +1059,7 @@ impl Renderer {
                         &parsed_faces,
                         &mut self.atlas,
                         &mut self.cached_glyphs,
+                        font_variation_coords,
                     );
                 }
                 DisplayCommand::DrawImage {
@@ -1316,7 +1321,8 @@ fn push_text_glyphs(
     primary_face_id: usize,
     parsed: &[Option<ParsedFace<'_>>],
     atlas: &mut GlyphAtlas,
-    cached: &mut HashMap<(usize, u16, u16), Option<CachedGlyph>>,
+    cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
+    font_variation_coords: &[f32],
 ) {
     // Multi-size atlas: подбираем bin под font_size, растеризируем глифы
     // на этом bin. Display масштаб = font_size / size_bin — если font_size
@@ -1356,6 +1362,7 @@ fn push_text_glyphs(
             face_id,
             glyph_id,
             size_bin,
+            font_variation_coords,
         );
 
         if let Some(g) = cached_glyph {
@@ -1420,7 +1427,7 @@ fn pick_face_for_codepoint(
 
 #[allow(clippy::too_many_arguments)]
 fn ensure_glyph(
-    cached: &mut HashMap<(usize, u16, u16), Option<CachedGlyph>>,
+    cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
     atlas: &mut GlyphAtlas,
     font: &Font,
     hmtx: &Hmtx,
@@ -1428,41 +1435,39 @@ fn ensure_glyph(
     face_id: usize,
     glyph_id: u16,
     size_bin: u16,
+    coords: &[f32],
 ) -> Option<CachedGlyph> {
-    let key = (face_id, glyph_id, size_bin);
+    let key = atlas_key(face_id, glyph_id, size_bin, AtlasKey::hash_coords(coords));
     if let Some(&entry) = cached.get(&key) {
         return entry;
     }
 
-    let result = rasterize_and_insert(atlas, font, hmtx, units_per_em, face_id, glyph_id, size_bin);
+    let result = rasterize_and_insert(atlas, font, hmtx, units_per_em, key, coords);
     cached.insert(key, result);
     result
 }
 
-#[allow(clippy::too_many_arguments)]
 fn rasterize_and_insert(
     atlas: &mut GlyphAtlas,
     font: &Font,
     hmtx: &Hmtx,
     units_per_em: u16,
-    face_id: usize,
-    glyph_id: u16,
-    size_bin: u16,
+    key: AtlasKey,
+    coords: &[f32],
 ) -> Option<CachedGlyph> {
-    // glyph_resolved разворачивает composite в Simple рекурсивно, подставляя
-    // компоненты с их transform/offset. Для уже simple-глифа возвращает как есть.
-    let glyph = font.glyph_resolved(glyph_id).ok().flatten()?;
+    // `glyph_resolved_with_coords` разворачивает composite в Simple
+    // рекурсивно и применяет gvar deltas в указанной точке пространства
+    // осей. Пустой coords (default-instance) → short-circuit на путь
+    // `glyph_resolved` (для non-VF шрифтов или CSS без
+    // `font-variation-settings`).
+    let glyph = font.glyph_resolved_with_coords(key.glyph_id, coords).ok().flatten()?;
     if !matches!(glyph.outline, Outline::Simple(_)) {
         return None;
     }
-    // Rasterizer создаётся per-call на размер bin-а. Кэш `cached_glyphs`
-    // гарантирует, что для одной (face_id, glyph_id, size_bin)-комбинации
-    // растеризация запустится максимум один раз.
-    let raster = Rasterizer::new(f32::from(size_bin), units_per_em);
+    let raster = Rasterizer::new(f32::from(key.size_bin), units_per_em);
     let bitmap: Bitmap = raster.rasterize(&glyph)?;
-    let atlas_key = pack_atlas_key(face_id, glyph_id, size_bin);
-    let entry = atlas.insert(atlas_key, &bitmap)?;
-    let advance_native = hmtx.advance_width(glyph_id).unwrap_or(0);
+    let entry = atlas.insert(key, &bitmap)?;
+    let advance_native = hmtx.advance_width(key.glyph_id).unwrap_or(0);
     Some(CachedGlyph {
         entry,
         left: bitmap.left,
@@ -1564,30 +1569,40 @@ mod tests {
     }
 
     #[test]
-    fn pack_atlas_key_distinguishes_size_bins() {
+    fn atlas_key_distinguishes_size_bins() {
         // Один и тот же глиф на двух размерах = два разных ключа.
-        let k16 = pack_atlas_key(0, 42, 16);
-        let k32 = pack_atlas_key(0, 42, 32);
+        let k16 = atlas_key(0, 42, 16, 0);
+        let k32 = atlas_key(0, 42, 32, 0);
         assert_ne!(k16, k32);
     }
 
     #[test]
-    fn pack_atlas_key_distinguishes_glyph_ids() {
-        let k_a = pack_atlas_key(0, 100, 16);
-        let k_b = pack_atlas_key(0, 200, 16);
+    fn atlas_key_distinguishes_glyph_ids() {
+        let k_a = atlas_key(0, 100, 16, 0);
+        let k_b = atlas_key(0, 200, 16, 0);
         assert_ne!(k_a, k_b);
     }
 
     #[test]
-    fn pack_atlas_key_distinguishes_face_ids() {
-        let k0 = pack_atlas_key(0, 42, 16);
-        let k1 = pack_atlas_key(1, 42, 16);
+    fn atlas_key_distinguishes_face_ids() {
+        let k0 = atlas_key(0, 42, 16, 0);
+        let k1 = atlas_key(1, 42, 16, 0);
         assert_ne!(k0, k1);
     }
 
     #[test]
-    fn pack_atlas_key_is_deterministic() {
-        // Одинаковые аргументы → одинаковый ключ (HashMap-инвариант).
-        assert_eq!(pack_atlas_key(3, 17, 24), pack_atlas_key(3, 17, 24));
+    fn atlas_key_distinguishes_variation_coords_hashes() {
+        // Тот же (face, glyph, size), но разные normalized coords ⇒ разные
+        // ключи. Без этого variant glyph перезаписывал бы default-instance
+        // в atlas-кеше.
+        let k_default = atlas_key(0, 42, 16, 0);
+        let k_bold = atlas_key(0, 42, 16, 0xdead_beef_cafe_babe);
+        assert_ne!(k_default, k_bold);
+    }
+
+    #[test]
+    fn atlas_key_is_deterministic() {
+        assert_eq!(atlas_key(3, 17, 24, 0), atlas_key(3, 17, 24, 0));
+        assert_eq!(atlas_key(3, 17, 24, 42), atlas_key(3, 17, 24, 42));
     }
 }

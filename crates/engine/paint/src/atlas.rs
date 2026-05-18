@@ -10,16 +10,58 @@
 //! растеризованный `Bitmap` от `lumen-font::Rasterizer`. Так atlas
 //! тестируется в изоляции, а renderer связывает font + atlas сам.
 //!
-//! Ключ кэша — opaque `u64`, который формирует caller. Renderer пакует в
-//! него `(face_id, glyph_id, size_bin)` для **multi-size glyph caching**:
-//! при `font-size: 16px` глифы растеризируются на bin 16 без масштабирования,
-//! при 32px — на bin 32 и т.д. Это устраняет blur от linear-sampler
-//! масштабирования fixed-size атласа (раньше все глифы рисовались на
-//! 24 px независимо от итогового размера).
+//! Ключ кэша — структурированный `AtlasKey { face_id, glyph_id, size_bin,
+//! coords_hash }`. Первые три поля закрывают **multi-size glyph caching**
+//! (при `font-size: 16px` глифы растеризируются на bin 16 без
+//! масштабирования, при 32px — на bin 32; раньше всё рисовалось на 24 px
+//! с linear-sampler-blur). `coords_hash` — 64-битный хэш normalized
+//! variation coords, который добавляет **variable-fonts caching**: один
+//! `(face, glyph, size)` для двух разных `font-variation-settings` дают
+//! разные записи и не перезаписывают друг друга. Empty coords (default
+//! instance) → `coords_hash = 0`, ключ совпадает с pre-variable-fonts
+//! поведением (backward-compatible).
 
 use std::collections::HashMap;
 
 use lumen_font::Bitmap;
+
+/// Композитный ключ glyph-кэша. См. module-level docs.
+///
+/// Caller (Renderer) формирует key через `AtlasKey::new(...)`. `coords_hash`
+/// вычисляется через `AtlasKey::hash_coords(coords)` из normalized axis
+/// coordinates (Variable Fonts L1, normalized в `[-1.0, 1.0]` per axis,
+/// длина = `Font::fvar().axis_count`). Empty coords → `hash_coords` → 0.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct AtlasKey {
+    pub face_id: u16,
+    pub glyph_id: u16,
+    pub size_bin: u16,
+    pub coords_hash: u64,
+}
+
+impl AtlasKey {
+    pub fn new(face_id: u16, glyph_id: u16, size_bin: u16, coords_hash: u64) -> Self {
+        Self { face_id, glyph_id, size_bin, coords_hash }
+    }
+
+    /// Стабильный 64-битный хэш normalized variation coords для cache key.
+    /// Empty / all-zeros coords → 0 (совпадает с default-instance путём и
+    /// pre-variable-fonts поведением). f32 хэшится через побитовое
+    /// представление (`to_bits()`), что даёт детерминированную канонизацию
+    /// `±0.0` и `NaN`-pattern-ов; для variation-coords это корректно (caller
+    /// нормализует к финальной float-форме до хэширования).
+    pub fn hash_coords(coords: &[f32]) -> u64 {
+        if coords.is_empty() || coords.iter().all(|&c| c == 0.0) {
+            return 0;
+        }
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for &c in coords {
+            c.to_bits().hash(&mut hasher);
+        }
+        hasher.finish()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GlyphEntry {
@@ -35,7 +77,7 @@ pub struct GlyphAtlas {
     width: u32,
     height: u32,
     pixels: Vec<u8>,
-    cache: HashMap<u64, GlyphEntry>,
+    cache: HashMap<AtlasKey, GlyphEntry>,
     cursor_x: u32,
     shelf_y: u32,
     shelf_height: u32,
@@ -78,17 +120,14 @@ impl GlyphAtlas {
         self.dirty = false;
     }
 
-    pub fn get(&self, key: u64) -> Option<&GlyphEntry> {
+    pub fn get(&self, key: AtlasKey) -> Option<&GlyphEntry> {
         self.cache.get(&key)
     }
 
     /// Кладёт растеризованный глиф в атлас. Возвращает `None` если место
     /// исчерпано. Если ключ уже в кэше — возвращает существующую запись
     /// без перезаписи пикселей.
-    ///
-    /// Ключ opaque — caller отвечает за его уникальность. Renderer пакует
-    /// `(face_id, glyph_id, size_bin)` через `pack_atlas_key`.
-    pub fn insert(&mut self, key: u64, bitmap: &Bitmap) -> Option<GlyphEntry> {
+    pub fn insert(&mut self, key: AtlasKey, bitmap: &Bitmap) -> Option<GlyphEntry> {
         if let Some(&entry) = self.cache.get(&key) {
             return Some(entry);
         }
@@ -151,10 +190,14 @@ mod tests {
         }
     }
 
+    fn k(glyph: u16) -> AtlasKey {
+        AtlasKey::new(0, glyph, 16, 0)
+    }
+
     #[test]
     fn insert_single_glyph_at_origin() {
         let mut atlas = GlyphAtlas::new(64);
-        let entry = atlas.insert(42, &bitmap(10, 12, 200)).unwrap();
+        let entry = atlas.insert(k(42), &bitmap(10, 12, 200)).unwrap();
         assert_eq!(
             entry,
             GlyphEntry {
@@ -174,8 +217,8 @@ mod tests {
     #[test]
     fn second_glyph_placed_after_first_with_padding() {
         let mut atlas = GlyphAtlas::new(64);
-        atlas.insert(1, &bitmap(10, 12, 100)).unwrap();
-        let e2 = atlas.insert(2, &bitmap(8, 10, 80)).unwrap();
+        atlas.insert(k(1), &bitmap(10, 12, 100)).unwrap();
+        let e2 = atlas.insert(k(2), &bitmap(8, 10, 80)).unwrap();
         assert_eq!(e2.atlas_x, 11); // 10 + 1 padding
         assert_eq!(e2.atlas_y, 0);
     }
@@ -183,10 +226,10 @@ mod tests {
     #[test]
     fn cached_glyph_returns_existing_entry() {
         let mut atlas = GlyphAtlas::new(64);
-        let first = atlas.insert(1, &bitmap(10, 10, 100)).unwrap();
+        let first = atlas.insert(k(1), &bitmap(10, 10, 100)).unwrap();
         // Повторный insert с тем же ключом и даже другим bitmap — должен
         // вернуть первую запись, не перезаписывая место в атласе.
-        let second = atlas.insert(1, &bitmap(20, 20, 200)).unwrap();
+        let second = atlas.insert(k(1), &bitmap(20, 20, 200)).unwrap();
         assert_eq!(first, second);
         // Размер остался от первого insert.
         assert_eq!(second.width, 10);
@@ -199,8 +242,8 @@ mod tests {
         // разные записи. Без этого мы бы перезаписывали единственную
         // запись (баг fixed-size атласа).
         let mut atlas = GlyphAtlas::new(64);
-        let key_16 = 0x0000_0001_0010; // (face=0, glyph=1, size=16)
-        let key_32 = 0x0000_0001_0020; // (face=0, glyph=1, size=32)
+        let key_16 = AtlasKey::new(0, 1, 16, 0);
+        let key_32 = AtlasKey::new(0, 1, 32, 0);
         let e16 = atlas.insert(key_16, &bitmap(10, 12, 100)).unwrap();
         let e32 = atlas.insert(key_32, &bitmap(20, 24, 100)).unwrap();
         assert_ne!(
@@ -213,11 +256,65 @@ mod tests {
     }
 
     #[test]
+    fn different_variation_coords_store_separate_entries() {
+        // Variable-fonts invariant: тот же `(face, glyph, size)`, но разные
+        // normalized variation coords → разные cache-записи. Без этого
+        // wght=400 и wght=700 глиф 'A' перезаписывали бы друг друга в
+        // атласе, и второй вариант рисовался бы из глюк-пикселей первого.
+        let mut atlas = GlyphAtlas::new(64);
+        let coords_a = [0.0_f32];
+        let coords_b = [1.0_f32];
+        let k_a = AtlasKey::new(0, 1, 16, AtlasKey::hash_coords(&coords_a));
+        let k_b = AtlasKey::new(0, 1, 16, AtlasKey::hash_coords(&coords_b));
+        assert_ne!(k_a, k_b, "разные coords дают разные ключи");
+        let ea = atlas.insert(k_a, &bitmap(10, 12, 100)).unwrap();
+        let eb = atlas.insert(k_b, &bitmap(10, 12, 200)).unwrap();
+        assert_ne!((ea.atlas_x, ea.atlas_y), (eb.atlas_x, eb.atlas_y));
+    }
+
+    #[test]
+    fn empty_coords_hash_equals_zero() {
+        // Backward-compatible: до variable-fonts default-instance glyph
+        // (coords == []) должен попадать в ту же запись что и pre-VF код,
+        // где coords_hash отсутствовал. Hash от пустого slice = 0.
+        assert_eq!(AtlasKey::hash_coords(&[]), 0);
+        // All-zero coords (CSS default normalized) тоже даёт 0 — один
+        // glyph не растеризируется дважды при безсодержательной cascade.
+        assert_eq!(AtlasKey::hash_coords(&[0.0]), 0);
+        assert_eq!(AtlasKey::hash_coords(&[0.0, 0.0, 0.0]), 0);
+    }
+
+    #[test]
+    fn non_zero_coords_hash_is_non_zero() {
+        // Любая ненулевая coord — нетривиальный hash. (Защита от случая
+        // когда DefaultHasher для [1.0] случайно вернёт 0 — теоретически
+        // возможно, но крайне маловероятно для конкретной таблицы.)
+        assert_ne!(AtlasKey::hash_coords(&[1.0]), 0);
+        assert_ne!(AtlasKey::hash_coords(&[0.5, -0.5]), 0);
+    }
+
+    #[test]
+    fn coords_hash_distinguishes_axis_order() {
+        // [0.5, 0.0] и [0.0, 0.5] — разные variation-instance в разных
+        // осях (например, wght=high vs wdth=high). Хэш должен различать.
+        let h1 = AtlasKey::hash_coords(&[0.5, 0.0]);
+        let h2 = AtlasKey::hash_coords(&[0.0, 0.5]);
+        assert_ne!(h1, h2);
+    }
+
+    #[test]
+    fn coords_hash_is_deterministic() {
+        let h1 = AtlasKey::hash_coords(&[0.25, -0.5, 1.0]);
+        let h2 = AtlasKey::hash_coords(&[0.25, -0.5, 1.0]);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
     fn new_shelf_when_row_overflows() {
         let mut atlas = GlyphAtlas::new(32);
-        atlas.insert(1, &bitmap(20, 10, 100)).unwrap(); // (0, 0); cursor=21
+        atlas.insert(k(1), &bitmap(20, 10, 100)).unwrap(); // (0, 0); cursor=21
         // 21 + 20 + 1 = 42 > 32 → новая полка.
-        let e2 = atlas.insert(2, &bitmap(20, 10, 100)).unwrap();
+        let e2 = atlas.insert(k(2), &bitmap(20, 10, 100)).unwrap();
         assert_eq!(e2.atlas_x, 0);
         assert_eq!(e2.atlas_y, 11); // 10 + 1 padding
     }
@@ -227,10 +324,10 @@ mod tests {
         let mut atlas = GlyphAtlas::new(24);
         // 4 глифа 10×10 поместятся: 2 на полке × 2 полки.
         for id in 1..=4 {
-            assert!(atlas.insert(id, &bitmap(10, 10, 100)).is_some(), "id {id}");
+            assert!(atlas.insert(k(id), &bitmap(10, 10, 100)).is_some(), "id {id}");
         }
         // 5-й уже не помещается.
-        assert!(atlas.insert(5, &bitmap(10, 10, 100)).is_none());
+        assert!(atlas.insert(k(5), &bitmap(10, 10, 100)).is_none());
     }
 
     #[test]
@@ -239,25 +336,25 @@ mod tests {
         assert!(atlas.dirty()); // свежий атлас — dirty (нужна первая загрузка пустой текстуры).
         atlas.mark_clean();
         assert!(!atlas.dirty());
-        atlas.insert(1, &bitmap(8, 8, 50)).unwrap();
+        atlas.insert(k(1), &bitmap(8, 8, 50)).unwrap();
         assert!(atlas.dirty());
         atlas.mark_clean();
         // Повторный insert уже существующего ключа — НЕ пометит dirty (ничего не записано).
-        atlas.insert(1, &bitmap(8, 8, 50)).unwrap();
+        atlas.insert(k(1), &bitmap(8, 8, 50)).unwrap();
         assert!(!atlas.dirty());
     }
 
     #[test]
     fn oversized_glyph_rejected() {
         let mut atlas = GlyphAtlas::new(16);
-        assert!(atlas.insert(1, &bitmap(20, 10, 100)).is_none());
-        assert!(atlas.insert(2, &bitmap(10, 20, 100)).is_none());
+        assert!(atlas.insert(k(1), &bitmap(20, 10, 100)).is_none());
+        assert!(atlas.insert(k(2), &bitmap(10, 20, 100)).is_none());
     }
 
     #[test]
     fn zero_sized_bitmap_rejected() {
         let mut atlas = GlyphAtlas::new(32);
-        assert!(atlas.insert(1, &bitmap(0, 10, 100)).is_none());
-        assert!(atlas.insert(2, &bitmap(10, 0, 100)).is_none());
+        assert!(atlas.insert(k(1), &bitmap(0, 10, 100)).is_none());
+        assert!(atlas.insert(k(2), &bitmap(10, 0, 100)).is_none());
     }
 }
