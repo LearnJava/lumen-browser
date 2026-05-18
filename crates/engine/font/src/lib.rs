@@ -37,7 +37,7 @@ pub use binary::BinaryReader;
 pub use cmap::Cmap;
 pub use delta_set_index_map::{DeltaSetIndex, DeltaSetIndexMap};
 pub use face::{Font, FontError, OffsetTable, TableRecord};
-pub use fvar::{Fvar, VariationAxis};
+pub use fvar::{Fvar, NamedInstance, VariationAxis};
 pub use glyf::{
     Anchor, BoundingBox, CompositeComponent, Contour, Glyf, Glyph, Outline, OutlinePoint,
 };
