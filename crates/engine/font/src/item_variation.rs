@@ -34,11 +34,84 @@ pub struct RegionAxisCoordinates {
     pub end: f32,
 }
 
+impl RegionAxisCoordinates {
+    /// Per-axis scalar для tent-функции в `coord`. Возвращает значение
+    /// в `[0.0, 1.0]`. Правила per OpenType spec
+    /// (<https://learn.microsoft.com/en-us/typography/opentype/spec/otvarcommonformats#variation-regions>):
+    /// - `peak == 0` → scalar = 1.0 (axis нейтральная, регион всегда
+    ///   активен независимо от coord);
+    /// - `coord == peak` → 1.0;
+    /// - `coord < start || coord > end` → 0.0;
+    /// - `start < 0 && peak > 0 && coord > 0`: clamp `start = 0` (axis-
+    ///   side mismatch), и наоборот для negative peak / positive coord;
+    /// - `coord < peak` → линейная интерполяция `(coord - start) /
+    ///   (peak - start)`;
+    /// - `coord > peak` → `(end - coord) / (end - peak)`.
+    pub fn scalar(&self, coord: f32) -> f32 {
+        // Spec corner case: peak == 0 — axis нейтральная, scalar = 1.0
+        // для любой coord (регион применяется всегда).
+        if self.peak == 0.0 {
+            return 1.0;
+        }
+        // Точно в peak — scalar = 1.0. Это покрывает «start = peak = end»
+        // degenerate case и обычный coord == peak.
+        if coord == self.peak {
+            return 1.0;
+        }
+        // Spec: peak > 0 + coord < 0 (или peak < 0 + coord > 0) → 0.
+        // Polarity mismatch.
+        if (self.peak > 0.0 && coord < 0.0) || (self.peak < 0.0 && coord > 0.0) {
+            return 0.0;
+        }
+        // Outside [start, end] → 0.0. Используем strict inequality:
+        // coord == start (или == end) — спорный edge case; spec говорит
+        // 0 для «outside», т.е. для == границы — 0 (граница не включена).
+        if coord < self.start || coord > self.end {
+            return 0.0;
+        }
+        if coord < self.peak {
+            let denom = self.peak - self.start;
+            if denom == 0.0 {
+                return 0.0;
+            }
+            (coord - self.start) / denom
+        } else {
+            // coord > peak.
+            let denom = self.end - self.peak;
+            if denom == 0.0 {
+                return 0.0;
+            }
+            (self.end - coord) / denom
+        }
+    }
+}
+
 /// Один variation region — кортеж `RegionAxisCoordinates` на каждую ось.
 /// Количество элементов = `VariationRegionList::axis_count`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct VariationRegion {
     pub axes: Vec<RegionAxisCoordinates>,
+}
+
+impl VariationRegion {
+    /// Региональный scalar — произведение per-axis scalars. Region
+    /// активен (scalar > 0) только если все axes активны одновременно.
+    ///
+    /// `coords` — нормализованные координаты (после `avar`) длиной
+    /// `axes.len()`. Если короче — недостающие axes считаются равными
+    /// 0.0 (default position, нейтральные). Если длиннее — лишние
+    /// игнорируются.
+    pub fn scalar(&self, coords: &[f32]) -> f32 {
+        let mut acc = 1.0_f32;
+        for (i, axis) in self.axes.iter().enumerate() {
+            let c = coords.get(i).copied().unwrap_or(0.0);
+            acc *= axis.scalar(c);
+            if acc == 0.0 {
+                return 0.0;
+            }
+        }
+        acc
+    }
 }
 
 /// Список всех регионов, на которые могут ссылаться item-variation-data
@@ -109,6 +182,35 @@ impl ItemVariationStore {
             region_list,
             data_blocks,
         })
+    }
+
+    /// Вычисляет суммарный delta для item `(outer, inner)` при текущих
+    /// нормализованных axis-coordinates. Алгоритм per OpenType spec:
+    /// sum_i (region_scalar[region_indexes[i]] * delta_sets[inner][i]).
+    ///
+    /// `coords` — нормализованные axis values (после `avar`), длина
+    /// должна совпадать с `region_list.axis_count`. Короткий vec
+    /// доколачивается нулями (per `VariationRegion::scalar`).
+    ///
+    /// Возвращает `None`, если `outer` / `inner` вне диапазона —
+    /// caller должен использовать base-метрику без variation (типичный
+    /// fallback для битых HVAR-мапов).
+    pub fn evaluate(&self, outer: u16, inner: u16, coords: &[f32]) -> Option<f32> {
+        let block = self.data_blocks.get(outer as usize)?;
+        let delta_set = block.delta_sets.get(inner as usize)?;
+        let mut sum = 0.0_f32;
+        for (i, &region_index) in block.region_indexes.iter().enumerate() {
+            let region = self.region_list.regions.get(region_index as usize)?;
+            let scalar = region.scalar(coords);
+            if scalar == 0.0 {
+                continue;
+            }
+            // delta хранится как i32 (i16 word или i8 byte после parse),
+            // scalar в [0, 1]; результат — f32.
+            let delta = *delta_set.get(i)? as f32;
+            sum += scalar * delta;
+        }
+        Some(sum)
     }
 
     /// `true`, если store не содержит ни регионов, ни data blocks —
@@ -413,5 +515,193 @@ mod tests {
         assert!((axis.start - (-1.0)).abs() < 1e-3);
         assert!((axis.peak - (-0.5)).abs() < 1e-3);
         assert!((axis.end - 0.0).abs() < 1e-3);
+    }
+
+    // ───── scalar (tent-function) ─────
+
+    fn axis(start: f32, peak: f32, end: f32) -> RegionAxisCoordinates {
+        RegionAxisCoordinates { start, peak, end }
+    }
+
+    fn approx(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-5
+    }
+
+    #[test]
+    fn scalar_peak_zero_always_one() {
+        // peak == 0 → axis нейтральная: scalar = 1.0 для любого coord.
+        let a = axis(-1.0, 0.0, 1.0);
+        assert!(approx(a.scalar(-0.5), 1.0));
+        assert!(approx(a.scalar(0.0), 1.0));
+        assert!(approx(a.scalar(0.5), 1.0));
+    }
+
+    #[test]
+    fn scalar_at_peak_is_one() {
+        let a = axis(0.0, 1.0, 1.0);
+        assert!(approx(a.scalar(1.0), 1.0));
+    }
+
+    #[test]
+    fn scalar_below_start_is_zero() {
+        let a = axis(0.0, 1.0, 1.0);
+        assert!(approx(a.scalar(-0.1), 0.0));
+        assert!(approx(a.scalar(0.0), 0.0));
+    }
+
+    #[test]
+    fn scalar_above_end_is_zero() {
+        let a = axis(0.0, 1.0, 1.0);
+        // coord == end → scalar = 0 (exclusive per spec).
+        assert!(approx(a.scalar(1.0), 1.0)); // на peak = end
+        let a2 = axis(0.0, 0.5, 1.0);
+        assert!(approx(a2.scalar(1.0), 0.0));
+        assert!(approx(a2.scalar(1.5), 0.0));
+    }
+
+    #[test]
+    fn scalar_linear_below_peak() {
+        // start=0, peak=1, end=1. coord=0.5 → (0.5 - 0)/(1.0 - 0) = 0.5.
+        let a = axis(0.0, 1.0, 1.0);
+        assert!(approx(a.scalar(0.5), 0.5));
+        assert!(approx(a.scalar(0.25), 0.25));
+    }
+
+    #[test]
+    fn scalar_linear_above_peak() {
+        // start=-1, peak=0.5, end=1. coord=0.75 → (1.0 - 0.75)/(1.0 - 0.5) = 0.5.
+        let a = axis(-1.0, 0.5, 1.0);
+        assert!(approx(a.scalar(0.75), 0.5));
+    }
+
+    #[test]
+    fn scalar_polarity_mismatch_returns_zero() {
+        // Spec: peak > 0, coord < 0 → 0.
+        let a = axis(-1.0, 0.5, 1.0);
+        assert!(approx(a.scalar(-0.3), 0.0));
+        // И наоборот: peak < 0, coord > 0 → 0.
+        let a2 = axis(-1.0, -0.5, 1.0);
+        assert!(approx(a2.scalar(0.3), 0.0));
+    }
+
+    #[test]
+    fn region_scalar_is_product_of_axis_scalars() {
+        // Регион с двумя осями: scalar = axis0.scalar(c0) * axis1.scalar(c1).
+        let r = VariationRegion {
+            axes: vec![axis(0.0, 1.0, 1.0), axis(0.0, 0.5, 1.0)],
+        };
+        // c0=1.0 → 1.0; c1=0.25 → (0.25-0)/(0.5-0) = 0.5. итог 0.5.
+        assert!(approx(r.scalar(&[1.0, 0.25]), 0.5));
+        // c1=0.0 → 0.0; итог 0.0.
+        assert!(approx(r.scalar(&[1.0, 0.0]), 0.0));
+    }
+
+    #[test]
+    fn region_scalar_short_coords_treated_as_zero() {
+        // Coords длиной 1 при axes длиной 2 — недостающая считается 0.0.
+        // c1 = 0.0 → axis1.scalar(0.0) = 0.0 → региональный scalar = 0.0.
+        let r = VariationRegion {
+            axes: vec![axis(0.0, 1.0, 1.0), axis(0.0, 0.5, 1.0)],
+        };
+        assert!(approx(r.scalar(&[1.0]), 0.0));
+    }
+
+    // ───── ItemVariationStore::evaluate ─────
+
+    #[test]
+    fn evaluate_at_peak_returns_full_delta() {
+        // 1 axis, 1 region peak at c=1; 1 data block с 1 item × 1 delta = 100.
+        // coord = [1.0] → scalar = 1.0 → delta = 100.0.
+        let data = build_store(
+            1,
+            &[vec![(0.0, 1.0, 1.0)]],
+            &[(1, vec![0], vec![100])],
+        );
+        let store = ItemVariationStore::parse(&data).unwrap();
+        assert!(approx(store.evaluate(0, 0, &[1.0]).unwrap(), 100.0));
+    }
+
+    #[test]
+    fn evaluate_at_default_returns_zero() {
+        // coord = [0.0] → axis на peak=1 даёт 0 → delta = 0.
+        let data = build_store(
+            1,
+            &[vec![(0.0, 1.0, 1.0)]],
+            &[(1, vec![0], vec![100])],
+        );
+        let store = ItemVariationStore::parse(&data).unwrap();
+        assert!(approx(store.evaluate(0, 0, &[0.0]).unwrap(), 0.0));
+    }
+
+    #[test]
+    fn evaluate_at_midpoint_interpolates() {
+        let data = build_store(
+            1,
+            &[vec![(0.0, 1.0, 1.0)]],
+            &[(1, vec![0], vec![100])],
+        );
+        let store = ItemVariationStore::parse(&data).unwrap();
+        // c=0.5 → scalar=0.5 → delta = 50.
+        assert!(approx(store.evaluate(0, 0, &[0.5]).unwrap(), 50.0));
+    }
+
+    #[test]
+    fn evaluate_sums_multiple_regions() {
+        // 1 axis, 2 регионов: peak=1.0 и peak=-1.0. Один item с двумя
+        // deltas (100, 200), привязан к обоим регионам через region_indexes
+        // = [0, 1]. coord=1.0 → region0.scalar=1.0, region1.scalar=0.0 →
+        // итог = 100.
+        let data = build_store(
+            1,
+            &[vec![(0.0, 1.0, 1.0)], vec![(-1.0, -1.0, 0.0)]],
+            &[(2, vec![0, 1], vec![100, 200])],
+        );
+        let store = ItemVariationStore::parse(&data).unwrap();
+        assert!(approx(store.evaluate(0, 0, &[1.0]).unwrap(), 100.0));
+        // coord=-1.0 → region0=0, region1=1 → итог = 200.
+        assert!(approx(store.evaluate(0, 0, &[-1.0]).unwrap(), 200.0));
+    }
+
+    #[test]
+    fn evaluate_multiple_items_independent() {
+        // 1 region, 2 items: deltas [10] и [-30]. evaluate должна различать.
+        let data = build_store(
+            1,
+            &[vec![(0.0, 1.0, 1.0)]],
+            &[(1, vec![0], vec![10, -30])],
+        );
+        let store = ItemVariationStore::parse(&data).unwrap();
+        assert!(approx(store.evaluate(0, 0, &[1.0]).unwrap(), 10.0));
+        assert!(approx(store.evaluate(0, 1, &[1.0]).unwrap(), -30.0));
+    }
+
+    #[test]
+    fn evaluate_out_of_range_returns_none() {
+        let data = build_store(
+            1,
+            &[vec![(0.0, 1.0, 1.0)]],
+            &[(1, vec![0], vec![100])],
+        );
+        let store = ItemVariationStore::parse(&data).unwrap();
+        // outer вне диапазона.
+        assert!(store.evaluate(99, 0, &[1.0]).is_none());
+        // inner вне диапазона.
+        assert!(store.evaluate(0, 99, &[1.0]).is_none());
+    }
+
+    #[test]
+    fn evaluate_two_axis_region() {
+        // 2 axes; 1 регион (peak=(1, 1)); 1 delta = 100.
+        // coord=(1, 1) → scalar 1.0 → 100; coord=(1, 0.5) → 1.0 * 0.5 = 0.5 → 50.
+        let data = build_store(
+            2,
+            &[vec![(0.0, 1.0, 1.0), (0.0, 1.0, 1.0)]],
+            &[(1, vec![0], vec![100])],
+        );
+        let store = ItemVariationStore::parse(&data).unwrap();
+        assert!(approx(store.evaluate(0, 0, &[1.0, 1.0]).unwrap(), 100.0));
+        assert!(approx(store.evaluate(0, 0, &[1.0, 0.5]).unwrap(), 50.0));
+        // c0=0.0 → axis0.scalar=0 → итог 0.0.
+        assert!(approx(store.evaluate(0, 0, &[0.0, 1.0]).unwrap(), 0.0));
     }
 }
