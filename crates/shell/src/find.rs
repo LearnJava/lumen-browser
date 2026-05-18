@@ -191,19 +191,15 @@ const BAR_HEIGHT: f32 = 40.0;
 const BAR_PAD: f32 = 12.0;
 const BAR_FONT_SIZE: f32 = 16.0;
 
-/// Собирает финальный display list для отрисовки.
-///
-/// Под каждый матч вставляется `FillRect` непосредственно перед его исходным
-/// `DrawText` — благодаря этому подсветка ложится поверх фона блока, но под
-/// глифами текста. В самом конце дописывается overlay-бар (фон + label +
-/// input + counter), который рисуется поверх всей страницы.
-pub fn build_with_overlay(
+/// Собирает page-полосу display list-а: исходные команды + highlight-FillRect-ы
+/// перед каждой DrawText с матчем. Подсветка ложится поверх фона блока, но
+/// под глифами текста. Эта полоса прокручивается со страницей в renderer-е.
+pub fn build_page_with_highlights(
     base: &DisplayList,
     state: &FindState,
     matches: &[FindMatch],
-    bar: BarOverlay,
 ) -> DisplayList {
-    let mut out: DisplayList = Vec::with_capacity(base.len() + matches.len() + 5);
+    let mut out: DisplayList = Vec::with_capacity(base.len() + matches.len());
 
     let mut by_index: Vec<Vec<(usize, &FindMatch)>> = vec![Vec::new(); base.len()];
     for (i, m) in matches.iter().enumerate() {
@@ -226,7 +222,32 @@ pub fn build_with_overlay(
         }
         out.push(cmd.clone());
     }
+    out
+}
 
+/// Собирает overlay-полосу: только find-bar (фон + label + input + counter).
+/// Эта полоса рисуется поверх страницы без scroll-смещения — viewport-locked.
+pub fn build_bar_overlay(
+    state: &FindState,
+    matches_count: usize,
+    bar: BarOverlay,
+) -> DisplayList {
+    let mut out: DisplayList = Vec::with_capacity(5);
+    append_bar(&mut out, state, matches_count, bar.window_size);
+    out
+}
+
+/// Совместимая сборка: page + bar в один list. Используется тестами и
+/// dump-режимами, не для рендера (рендер вызывает page и bar по отдельности,
+/// чтобы скроллить только page-часть).
+#[cfg(test)]
+pub fn build_with_overlay(
+    base: &DisplayList,
+    state: &FindState,
+    matches: &[FindMatch],
+    bar: BarOverlay,
+) -> DisplayList {
+    let mut out = build_page_with_highlights(base, state, matches);
     append_bar(&mut out, state, matches.len(), bar.window_size);
     out
 }

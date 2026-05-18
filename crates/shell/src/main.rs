@@ -56,7 +56,7 @@ impl EventSink for StdoutEventSink {
 /// SIL OFL 1.1, см. assets/fonts/OFL.txt.
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, Modifiers, WindowEvent};
+use winit::event::{ElementState, KeyEvent, Modifiers, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -98,6 +98,7 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
             return ExitCode::FAILURE;
         }
     };
+    let content_height = content_height_of(&initial_page.display_list);
     let mut app = Lumen {
         display_list: initial_page.display_list,
         title: initial_page.title,
@@ -110,6 +111,8 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
         runtime: runtime::EventLoop::new(),
         epoch: std::time::Instant::now(),
         find: find::FindState::default(),
+        scroll_y: 0.0,
+        content_height,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -342,6 +345,18 @@ enum KeyCommand {
     Reload,
     Exit,
     FindOpen,
+    /// Скролл на одну строку вниз (стрелка вниз).
+    ScrollLineDown,
+    /// Скролл на одну строку вверх (стрелка вверх).
+    ScrollLineUp,
+    /// Скролл на ~90% viewport-а вниз (PageDown / Space).
+    ScrollPageDown,
+    /// Скролл на ~90% viewport-а вверх (PageUp / Shift+Space).
+    ScrollPageUp,
+    /// Прыжок к началу документа (Home).
+    ScrollHome,
+    /// Прыжок к концу документа (End).
+    ScrollEnd,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -351,12 +366,17 @@ enum KeyCommand {
 /// Esc без модификаторов → Exit.
 /// Ctrl+W                → Exit.
 /// Ctrl+F                → FindOpen.
+/// ↓ / ↑                 → ScrollLineDown / ScrollLineUp (без модификаторов).
+/// PageDown / PageUp     → ScrollPageDown / ScrollPageUp.
+/// Space / Shift+Space   → ScrollPageDown / ScrollPageUp (привычка пробела в браузерах).
+/// Home / End            → ScrollHome / ScrollEnd.
 ///
 /// Прочие комбинации (Ctrl+Shift+R, F5+Ctrl, и т.д.) — пока None: не хотим
 /// перехватывать привычные web-shortcuts (force-reload, etc.) до того, как
 /// решим, что они должны делать.
 fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
     let ctrl_only = mods == ModifiersState::CONTROL;
+    let shift_only = mods == ModifiersState::SHIFT;
     let no_mods = mods.is_empty();
     match code {
         KeyCode::F5 if no_mods => Some(KeyCommand::Reload),
@@ -364,6 +384,14 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::Escape if no_mods => Some(KeyCommand::Exit),
         KeyCode::KeyW if ctrl_only => Some(KeyCommand::Exit),
         KeyCode::KeyF if ctrl_only => Some(KeyCommand::FindOpen),
+        KeyCode::ArrowDown if no_mods => Some(KeyCommand::ScrollLineDown),
+        KeyCode::ArrowUp if no_mods => Some(KeyCommand::ScrollLineUp),
+        KeyCode::PageDown if no_mods => Some(KeyCommand::ScrollPageDown),
+        KeyCode::PageUp if no_mods => Some(KeyCommand::ScrollPageUp),
+        KeyCode::Space if no_mods => Some(KeyCommand::ScrollPageDown),
+        KeyCode::Space if shift_only => Some(KeyCommand::ScrollPageUp),
+        KeyCode::Home if no_mods => Some(KeyCommand::ScrollHome),
+        KeyCode::End if no_mods => Some(KeyCommand::ScrollEnd),
         _ => None,
     }
 }
@@ -771,6 +799,15 @@ struct Lumen {
     /// (close() полностью очищает state); это сознательно: после reload
     /// display list другой, и старые позиции совпадений уже невалидны.
     find: find::FindState,
+    /// Текущее вертикальное смещение страницы (CSS px). 0 — верх документа.
+    /// Растёт вниз, клампится в `clamp_scroll` диапазоном
+    /// `[0, max(0, content_height − viewport_height)]`. На load и reload
+    /// сбрасывается в 0, чтобы пользователь видел верх новой страницы.
+    scroll_y: f32,
+    /// Полная высота контента в CSS px — `max(rect.y + rect.height)` по
+    /// текущему display list-у. Используется для clamping-а scroll_y. Обновляется
+    /// после load/reload вместе с display_list. 0 — нет контента.
+    content_height: f32,
 }
 
 impl Lumen {
@@ -784,12 +821,15 @@ impl Lumen {
         println!("Reload: {}", self.source.describe());
         match self.source.load(self.event_sink.clone()) {
             Ok(page) => {
+                self.content_height = content_height_of(&page.display_list);
                 self.display_list = page.display_list;
                 self.title = page.title;
                 // Display list другой → старые match-rect-ы невалидны.
                 // Closing полностью сбрасывает query/active — пользователю
                 // нужно открыть find заново после reload, что естественно.
                 self.find.close();
+                // Новая страница — показываем сверху.
+                self.scroll_y = 0.0;
                 if let Some(r) = self.renderer.as_mut() {
                     // Старая GPU-cache картинок относится к предыдущей странице
                     // (даже если src совпадает, content мог измениться). Чистим
@@ -915,6 +955,25 @@ impl ApplicationHandler for Lumen {
             WindowEvent::KeyboardInput { event: ref key_event, .. } => {
                 self.handle_key(event_loop, key_event);
             }
+            WindowEvent::MouseWheel { delta, .. } => {
+                // winit отдаёт два типа дельты:
+                // - LineDelta(_, lines): количество «строк» (mouse wheel notch
+                //   обычно 1.0). Множим на line-step ≈ 40 CSS px — близко к
+                //   ощущениям в Firefox/Chromium без smooth-scroll.
+                // - PixelDelta({x, y}): уже в device-пикселях (touchpad). Делим
+                //   на DPR — в нашем scroll model 1 CSS px = scale device px.
+                // Y положительный = wheel up = страница вверх (scroll_y вниз);
+                // в winit y_delta > 0 — wheel up, поэтому scroll_y -= delta.
+                let dpr = self
+                    .renderer
+                    .as_ref()
+                    .map_or(1.0_f32, |r| r.scale_factor() as f32);
+                let dy_css = match delta {
+                    MouseScrollDelta::LineDelta(_, lines) => -lines * 40.0,
+                    MouseScrollDelta::PixelDelta(p) => -(p.y as f32) / dpr.max(1e-6),
+                };
+                self.scroll_by(dy_css);
+            }
             WindowEvent::RedrawRequested => {
                 // HTML §8.1.5.1 «Update the rendering»: перед собственно
                 // отрисовкой выполняем rAF-callback-и с текущим timestamp-ом.
@@ -924,28 +983,38 @@ impl ApplicationHandler for Lumen {
                     self.epoch.elapsed().as_secs_f64() * 1000.0;
                 self.runtime.run_rendering_step(timestamp_ms);
 
-                // Когда find bar открыт — собираем composite display list:
-                // подсветки матчей перед своими DrawText + overlay-бар поверх.
-                // Иначе рисуем base display list напрямую, без аллокаций.
-                let composite = if self.find.is_open() {
-                    let win_size = self.window.as_ref().map_or((1024, 720), |w| {
-                        let s = w.inner_size();
-                        (s.width, s.height)
-                    });
-                    let matches = self.current_matches();
-                    Some(find::build_with_overlay(
-                        &self.display_list,
-                        &self.find,
-                        &matches,
-                        find::BarOverlay { window_size: win_size },
-                    ))
-                } else {
-                    None
-                };
+                // Page-полоса: исходный display list + highlight-FillRect-ы
+                // перед своими DrawText (когда find открыт). Прокручивается.
+                // Overlay-полоса: только find-bar — viewport-locked.
+                // Без find — page = self.display_list, overlay пустой.
+                let (page_buf, overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
+                    if self.find.is_open() {
+                        let win_size = self.window.as_ref().map_or((1024, 720), |w| {
+                            let s = w.inner_size();
+                            (s.width, s.height)
+                        });
+                        let matches = self.current_matches();
+                        let page = find::build_page_with_highlights(
+                            &self.display_list,
+                            &self.find,
+                            &matches,
+                        );
+                        let bar = find::build_bar_overlay(
+                            &self.find,
+                            matches.len(),
+                            find::BarOverlay { window_size: win_size },
+                        );
+                        (Some(page), bar)
+                    } else {
+                        (None, Vec::new())
+                    };
 
+                let scroll_y = self.scroll_y;
                 if let Some(r) = self.renderer.as_mut() {
-                    let dl = composite.as_ref().unwrap_or(&self.display_list);
-                    if let Err(err) = r.render(dl) {
+                    let page: &[lumen_paint::DisplayCommand] = page_buf
+                        .as_deref()
+                        .unwrap_or(&self.display_list);
+                    if let Err(err) = r.render(page, &overlay_buf, scroll_y) {
                         eprintln!("Ошибка рендера: {err:?}");
                     }
                 }
@@ -972,12 +1041,23 @@ impl Lumen {
             return;
         }
 
-        if key_event.repeat {
-            return;
-        }
         let Some(cmd) = keybinding_for(code, self.modifiers) else {
             return;
         };
+        // Scroll-команды разрешаем на repeat (auto-repeat при удержании),
+        // остальные — только на первое нажатие.
+        let is_scroll = matches!(
+            cmd,
+            KeyCommand::ScrollLineDown
+                | KeyCommand::ScrollLineUp
+                | KeyCommand::ScrollPageDown
+                | KeyCommand::ScrollPageUp
+                | KeyCommand::ScrollHome
+                | KeyCommand::ScrollEnd
+        );
+        if key_event.repeat && !is_scroll {
+            return;
+        }
         match cmd {
             KeyCommand::Reload => self.reload(),
             KeyCommand::Exit => event_loop.exit(),
@@ -985,6 +1065,18 @@ impl Lumen {
                 self.find.open();
                 self.request_redraw();
             }
+            KeyCommand::ScrollLineDown => self.scroll_by(LINE_STEP_CSS_PX),
+            KeyCommand::ScrollLineUp => self.scroll_by(-LINE_STEP_CSS_PX),
+            KeyCommand::ScrollPageDown => {
+                let vh = self.viewport_height_css();
+                self.scroll_by(page_step(vh));
+            }
+            KeyCommand::ScrollPageUp => {
+                let vh = self.viewport_height_css();
+                self.scroll_by(-page_step(vh));
+            }
+            KeyCommand::ScrollHome => self.scroll_to(0.0),
+            KeyCommand::ScrollEnd => self.scroll_to(f32::INFINITY),
         }
     }
 
@@ -1036,6 +1128,43 @@ impl Lumen {
         }
     }
 
+    /// Текущая логическая (CSS px) высота viewport-а. Если окно ещё не создано —
+    /// fallback на layout-viewport 720 px, который у нас hardcoded в pipeline.
+    fn viewport_height_css(&self) -> f32 {
+        match (self.window.as_ref(), self.renderer.as_ref()) {
+            (Some(w), Some(r)) => {
+                let phys = w.inner_size().height as f32;
+                let dpr = (r.scale_factor() as f32).max(1e-6);
+                phys / dpr
+            }
+            _ => 720.0,
+        }
+    }
+
+    /// Максимальный валидный scroll_y: ничего не скроллим, если контент
+    /// помещается в viewport. Иначе — `content_height − viewport_height`.
+    fn max_scroll(&self) -> f32 {
+        (self.content_height - self.viewport_height_css()).max(0.0)
+    }
+
+    /// Сдвинуть скролл на относительную дельту в CSS px (положительная — вниз).
+    /// Кламп + request_redraw на изменении.
+    fn scroll_by(&mut self, delta: f32) {
+        let target = self.scroll_y + delta;
+        self.scroll_to(target);
+    }
+
+    /// Установить scroll_y в абсолютное значение (после clamping-а). `f32::INFINITY`
+    /// = «к самому низу», `0.0` = «вверх». Запрашивает redraw только если значение
+    /// действительно изменилось — иначе wheel-spam в самом низу не дёргал бы GPU.
+    fn scroll_to(&mut self, target: f32) {
+        let clamped = clamp_scroll(target, self.max_scroll());
+        if (clamped - self.scroll_y).abs() > f32::EPSILON {
+            self.scroll_y = clamped;
+            self.request_redraw();
+        }
+    }
+
     /// Пересчитывает текущий список совпадений по `display_list` и `find.query`.
     /// Возвращает пустой Vec, если bar закрыт или запрос пустой. Используется
     /// и для рендера, и для счётчика `next`/`prev`.
@@ -1058,6 +1187,54 @@ impl Lumen {
 /// нужно физическое состояние).
 fn winit_modifiers_state(mods: &Modifiers) -> ModifiersState {
     mods.state()
+}
+
+/// Сколько CSS px скроллим за стрелку (line-step). Эмпирическое значение,
+/// близкое к Firefox/Chromium без smooth-scroll — около 2.5 строк 16-px текста.
+const LINE_STEP_CSS_PX: f32 = 40.0;
+
+/// PageDown / PageUp / Space — сколько от viewport-а захватываем за нажатие.
+/// Меньше 100% даёт overlap между «страницами»: пользователь не теряет последнюю
+/// строку из вида, читать длинные тексты комфортнее.
+fn page_step(viewport_height: f32) -> f32 {
+    viewport_height * 0.9
+}
+
+/// Кламп scroll_y в `[0, max]`. NaN-input → 0 (защита от arithmetic errors).
+fn clamp_scroll(target: f32, max: f32) -> f32 {
+    if target.is_nan() {
+        return 0.0;
+    }
+    target.clamp(0.0, max)
+}
+
+/// Полная высота контента в CSS px — `max(rect.y + rect.height)` по всем
+/// rect-несущим командам display list-а. Используется для clamping-а scroll_y.
+///
+/// Учитываем команды: FillRect, DrawBorder, DrawText, DrawImage, PushClipRect.
+/// Pop-команды и opacity / blend / fill outside-rect — без rect-а, пропускаем.
+fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
+    use lumen_paint::DisplayCommand;
+    let mut max_y = 0.0_f32;
+    for cmd in dl {
+        let r = match cmd {
+            DisplayCommand::FillRect { rect, .. }
+            | DisplayCommand::DrawBorder { rect, .. }
+            | DisplayCommand::DrawText { rect, .. }
+            | DisplayCommand::DrawImage { rect, .. }
+            | DisplayCommand::PushClipRect { rect, .. } => rect,
+            DisplayCommand::PopClip
+            | DisplayCommand::PushOpacity { .. }
+            | DisplayCommand::PopOpacity
+            | DisplayCommand::PushBlendMode { .. }
+            | DisplayCommand::PopBlendMode => continue,
+        };
+        let bottom = r.y + r.height;
+        if bottom > max_y {
+            max_y = bottom;
+        }
+    }
+    max_y
 }
 
 #[cfg(test)]
@@ -1476,5 +1653,145 @@ mod tests {
     fn parse_cli_too_many_args_errors() {
         let err = parse_cli(&args(&["--dump-layout", "a.html", "b.html"])).unwrap_err();
         assert!(err.contains("много"), "got: {err}");
+    }
+
+    // ── Scroll-state helpers ─────────────────────────────────────────────────
+
+    #[test]
+    fn clamp_scroll_inside_range() {
+        assert_eq!(clamp_scroll(50.0, 100.0), 50.0);
+        assert_eq!(clamp_scroll(0.0, 100.0), 0.0);
+        assert_eq!(clamp_scroll(100.0, 100.0), 100.0);
+    }
+
+    #[test]
+    fn clamp_scroll_clamps_negative_to_zero() {
+        assert_eq!(clamp_scroll(-5.0, 100.0), 0.0);
+        assert_eq!(clamp_scroll(f32::NEG_INFINITY, 100.0), 0.0);
+    }
+
+    #[test]
+    fn clamp_scroll_clamps_overshoot_to_max() {
+        assert_eq!(clamp_scroll(200.0, 100.0), 100.0);
+        assert_eq!(clamp_scroll(f32::INFINITY, 100.0), 100.0);
+    }
+
+    #[test]
+    fn clamp_scroll_zero_max_keeps_at_zero() {
+        // Контент помещается в viewport — max_scroll = 0.
+        assert_eq!(clamp_scroll(50.0, 0.0), 0.0);
+        assert_eq!(clamp_scroll(-5.0, 0.0), 0.0);
+    }
+
+    #[test]
+    fn clamp_scroll_nan_defaults_to_zero() {
+        assert_eq!(clamp_scroll(f32::NAN, 100.0), 0.0);
+    }
+
+    #[test]
+    fn page_step_is_below_full_viewport() {
+        // 90% от viewport-а — оставляет overlap, чтобы при PageDown пользователь
+        // не терял последнюю строку из вида.
+        assert!((page_step(720.0) - 648.0).abs() < 0.01);
+        assert!(page_step(720.0) < 720.0);
+    }
+
+    #[test]
+    fn content_height_empty_list_is_zero() {
+        assert_eq!(content_height_of(&Vec::new()), 0.0);
+    }
+
+    #[test]
+    fn content_height_takes_max_bottom() {
+        use lumen_core::geom::Rect;
+        use lumen_layout::Color;
+        use lumen_paint::DisplayCommand;
+        let dl: lumen_paint::DisplayList = vec![
+            DisplayCommand::FillRect {
+                rect: Rect::new(0.0, 0.0, 100.0, 50.0),
+                color: Color { r: 0, g: 0, b: 0, a: 255 },
+            },
+            DisplayCommand::FillRect {
+                rect: Rect::new(0.0, 200.0, 100.0, 30.0),
+                color: Color { r: 0, g: 0, b: 0, a: 255 },
+            },
+            DisplayCommand::FillRect {
+                rect: Rect::new(0.0, 100.0, 100.0, 20.0),
+                color: Color { r: 0, g: 0, b: 0, a: 255 },
+            },
+        ];
+        // max(50, 230, 120) = 230
+        assert!((content_height_of(&dl) - 230.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn content_height_ignores_pop_commands() {
+        use lumen_paint::DisplayCommand;
+        let dl: lumen_paint::DisplayList = vec![
+            DisplayCommand::PopClip,
+            DisplayCommand::PopOpacity,
+            DisplayCommand::PopBlendMode,
+        ];
+        assert_eq!(content_height_of(&dl), 0.0);
+    }
+
+    // ── Scroll-keybindings ────────────────────────────────────────────────────
+
+    #[test]
+    fn keybinding_arrow_down_scrolls() {
+        assert_eq!(
+            keybinding_for(KeyCode::ArrowDown, ModifiersState::empty()),
+            Some(KeyCommand::ScrollLineDown),
+        );
+        assert_eq!(
+            keybinding_for(KeyCode::ArrowUp, ModifiersState::empty()),
+            Some(KeyCommand::ScrollLineUp),
+        );
+    }
+
+    #[test]
+    fn keybinding_arrow_with_modifier_is_none() {
+        // Ctrl+стрелка не наша — оставлено для возможной интеграции с
+        // word-wise navigation в будущем (когда появится omnibox).
+        assert_eq!(
+            keybinding_for(KeyCode::ArrowDown, ModifiersState::CONTROL),
+            None,
+        );
+    }
+
+    #[test]
+    fn keybinding_page_keys_scroll() {
+        assert_eq!(
+            keybinding_for(KeyCode::PageDown, ModifiersState::empty()),
+            Some(KeyCommand::ScrollPageDown),
+        );
+        assert_eq!(
+            keybinding_for(KeyCode::PageUp, ModifiersState::empty()),
+            Some(KeyCommand::ScrollPageUp),
+        );
+    }
+
+    #[test]
+    fn keybinding_space_scrolls_page() {
+        assert_eq!(
+            keybinding_for(KeyCode::Space, ModifiersState::empty()),
+            Some(KeyCommand::ScrollPageDown),
+        );
+        assert_eq!(
+            keybinding_for(KeyCode::Space, ModifiersState::SHIFT),
+            Some(KeyCommand::ScrollPageUp),
+        );
+    }
+
+    #[test]
+    fn keybinding_home_end_jump() {
+        assert_eq!(
+            keybinding_for(KeyCode::Home, ModifiersState::empty()),
+            Some(KeyCommand::ScrollHome),
+        );
+        assert_eq!(
+            keybinding_for(KeyCode::End, ModifiersState::empty()),
+            Some(KeyCommand::ScrollEnd),
+        );
     }
 }

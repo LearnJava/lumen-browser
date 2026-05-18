@@ -937,14 +937,13 @@ fn fetch_with_redirect(
         // запрос с Authorization для CORS-режима.
         if cross_origin_target.is_some()
             && let Some(cx) = cors_ctx
-        {
-            if let Err(err) = cors::check_cors_response_headers(
+            && let Err(err) = cors::check_cors_response_headers(
                 &resp.headers,
                 &cx.requestor,
                 cx.credentials_mode,
-            ) {
-                return Err(emit_cors_blocked(sink, tab_id, url, "response", &err));
-            }
+            )
+        {
+            return Err(emit_cors_blocked(sink, tab_id, url, "response", &err));
         }
 
         match resp.status {

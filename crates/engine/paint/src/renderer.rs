@@ -34,7 +34,7 @@ use winit::window::Window;
 
 use crate::atlas::{GlyphAtlas, GlyphEntry};
 use crate::display_list::fit_image_quad;
-use crate::{DisplayCommand, DisplayList};
+use crate::DisplayCommand;
 
 /// Размер атласа в пикселях (квадратный). Поднят с 512 до 1024 под
 /// multi-size atlas: типичная страница использует 2-3 размера шрифта,
@@ -940,12 +940,30 @@ impl Renderer {
         self.scale_factor
     }
 
-    pub fn render(&mut self, list: &DisplayList) -> Result<(), wgpu::SurfaceError> {
+    /// Рендерит две полосы display list-а одним кадром:
+    /// - `content` — основная страница; ко всем `rect`-ам применяется
+    ///   вертикальное смещение `-scroll_y` (CSS px). Так пользователь
+    ///   «прокручивает» документ под фиксированным viewport-ом.
+    /// - `overlay` — UI поверх (find-bar и т.п.); рисуется как есть, без
+    ///   scroll-смещения. Делает overlay viewport-locked даже когда страница
+    ///   прокручена.
+    ///
+    /// `scroll_y ≥ 0`. Negatives caller обязан клампить до 0 (top-bounce
+    ///  нам пока не нужен).
+    pub fn render(
+        &mut self,
+        content: &[DisplayCommand],
+        overlay: &[DisplayCommand],
+        scroll_y: f32,
+    ) -> Result<(), wgpu::SurfaceError> {
         // Pre-resolve primary face_id для каждой DrawText-команды +
         // lazy-загрузка новых face-ов до сбора вершин. Делается до парсинга
-        // (resolve мутирует self.faces).
-        let mut text_face_ids: Vec<usize> = Vec::with_capacity(list.len());
-        for cmd in list {
+        // (resolve мутирует self.faces). Resolve бежит по обеим полосам
+        // в том же порядке, в котором DrawText встречается в render-loop-е
+        // ниже — иначе iter "поедет" и попадёт чужой face_id.
+        let mut text_face_ids: Vec<usize> =
+            Vec::with_capacity(content.len() + overlay.len());
+        for cmd in content.iter().chain(overlay.iter()) {
             if let DisplayCommand::DrawText {
                 font_family,
                 font_weight,
@@ -986,13 +1004,17 @@ impl Renderer {
         // на страницу = pareto draw call-ов).
         let mut image_batches: Vec<(wgpu::BindGroup, u32, u32)> = Vec::new();
 
-        for cmd in list {
+        let chained = content
+            .iter()
+            .map(|c| (c, -scroll_y))
+            .chain(overlay.iter().map(|c| (c, 0.0_f32)));
+        for (cmd, dy) in chained {
             match cmd {
                 DisplayCommand::FillRect { rect, color } => {
-                    push_fill_quad(&mut fill_vertices, *rect, color_to_array(color));
+                    push_fill_quad(&mut fill_vertices, translate_rect_y(*rect, dy), color_to_array(color));
                 }
                 DisplayCommand::DrawBorder { rect, widths: [wt, wr, wb, wl], colors: [ct, cr, cb, cl] } => {
-                    let r = *rect;
+                    let r = translate_rect_y(*rect, dy);
                     if *wt > 0.0 {
                         push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, r.width, *wt), color_to_array(ct));
                     }
@@ -1025,7 +1047,7 @@ impl Renderer {
                     }
                     push_text_glyphs(
                         &mut text_vertices,
-                        *rect,
+                        translate_rect_y(*rect, dy),
                         text,
                         *font_size,
                         color_to_array(color),
@@ -1042,6 +1064,7 @@ impl Renderer {
                     object_fit,
                     object_position,
                 } => {
+                    let scrolled = translate_rect_y(*rect, dy);
                     if let Some(gpu) = self.images.get(src) {
                         // CSS Images L3 §5.5: размещаем intrinsic-картинку
                         // согласно object-fit / object-position, обрезаем
@@ -1049,7 +1072,7 @@ impl Renderer {
                         // Пустое пересечение (полностью за пределами box) —
                         // пропускаем quad, placeholder тоже не рисуем.
                         if let Some((visible, uv_min, uv_max)) = fit_image_quad(
-                            *rect,
+                            scrolled,
                             (gpu.width, gpu.height),
                             *object_fit,
                             *object_position,
@@ -1063,7 +1086,7 @@ impl Renderer {
                         // Картинку никто не зарегистрировал (fetch не сделан /
                         // декодер упал / неизвестный формат) — fallback на
                         // серый placeholder, чтобы место в layout-е было видно.
-                        push_fill_quad(&mut fill_vertices, *rect, [0.85, 0.85, 0.85, 1.0]);
+                        push_fill_quad(&mut fill_vertices, scrolled, [0.85, 0.85, 0.85, 1.0]);
                     }
                 }
                 // Sprint 0 P2 stub-команды: clip / opacity / blend mode
@@ -1211,6 +1234,13 @@ impl Renderer {
         frame.present();
         Ok(())
     }
+}
+
+/// Сдвиг rect-а по Y (CSS px). Используется в `render` для применения
+/// scroll-offset-а к page-полосе display list-а; overlay-полоса получает
+/// `dy = 0`. Без mutation — Rect: Copy.
+fn translate_rect_y(rect: Rect, dy: f32) -> Rect {
+    Rect::new(rect.x, rect.y + dy, rect.width, rect.height)
 }
 
 fn push_fill_quad(out: &mut Vec<FillVertex>, rect: Rect, color: [f32; 4]) {
