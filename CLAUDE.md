@@ -135,7 +135,7 @@ export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
 
 ### Текущее число тестов и crates
 
-На момент написания: 3536 тестов, 14 крейтов (`shell`, `core`, `network`, `storage`, `knowledge`, `bench`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`, `image`). При прохождении следующих фаз появится `lumen-ai` и др.
+На момент написания: 3550 тестов, 14 крейтов (`shell`, `core`, `network`, `storage`, `knowledge`, `bench`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`, `image`). При прохождении следующих фаз появится `lumen-ai` и др.
 
 ---
 

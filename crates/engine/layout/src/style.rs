@@ -428,6 +428,63 @@ pub enum TextDecorationThickness {
     Percentage(f32),
 }
 
+/// CSS Text Decoration L4 §5.3 — `text-emphasis-style`. Форма emphasis-marks
+/// (точечный набор над/под глифами).
+///
+/// Spec inherited: yes.
+///
+/// Grammar: `none | [ [ filled | open ] || [ dot | circle | double-circle |
+/// triangle | sesame ] ] | <string>`. Если задан только fill keyword без
+/// shape — UA fallback shape = `circle` для horizontal writing mode
+/// (Phase 0 единственный supported); для vertical было бы `sesame`.
+/// Если задан только shape без fill — fallback fill = `filled`.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum TextEmphasisStyle {
+    #[default]
+    None,
+    /// Один из 5 предустановленных shape-ов, заполненный или контурный.
+    Symbol {
+        filled: bool,
+        shape: TextEmphasisShape,
+    },
+    /// Произвольная строка-mark (по spec — первый grapheme cluster; в
+    /// Phase 0 храним всю строку как есть, рендерер сам возьмёт первый
+    /// graphem).
+    String(String),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextEmphasisShape {
+    Dot,
+    #[default]
+    Circle,
+    DoubleCircle,
+    Triangle,
+    Sesame,
+}
+
+/// CSS Text Decoration L4 §5.5 — `text-emphasis-position`. Сторона
+/// относительно текстовой строки, на которой рисуются marks.
+///
+/// Grammar: `[ over | under ] && [ right | left ]?`. Initial `over right`
+/// для horizontal writing mode (наш default; для vertical было бы `over
+/// right` тоже, но right имеет другой геометрический смысл — Phase 0 без
+/// writing-mode не различает).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextEmphasisPosition {
+    #[default]
+    OverRight,
+    OverLeft,
+    UnderRight,
+    UnderLeft,
+}
+
+impl TextEmphasisPosition {
+    pub fn is_over(self) -> bool {
+        matches!(self, Self::OverRight | Self::OverLeft)
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
     pub r: u8,
@@ -1147,6 +1204,17 @@ pub struct ComputedStyle {
     /// CSS Text Decoration L3 §2.3 — `text-decoration-thickness`. Initial: Auto.
     /// Inherited через каскад (Phase 0; см. doc на [`TextDecorationThickness`]).
     pub text_decoration_thickness: TextDecorationThickness,
+    /// CSS Text Decoration L4 §5.3 — `text-emphasis-style`. Inherited.
+    /// Initial: `None` (нет emphasis marks). Phase 0 layout: parse+store;
+    /// real rendering поверх каждого глифа — задача P2.
+    pub text_emphasis_style: TextEmphasisStyle,
+    /// CSS Text Decoration L4 §5.4 — `text-emphasis-color`. Inherited.
+    /// Initial: `None` = currentColor (тот же паттерн, что
+    /// `text_decoration_color`). При рендере резолвится в `style.color`.
+    pub text_emphasis_color: Option<Color>,
+    /// CSS Text Decoration L4 §5.5 — `text-emphasis-position`. Inherited.
+    /// Initial: `OverRight` (horizontal writing-mode).
+    pub text_emphasis_position: TextEmphasisPosition,
     /// Явная ширина (CSS `width: Npx`). None = auto (растягивается на контейнер).
     pub width: Option<f32>,
     /// Явная высота (CSS `height: Npx`). None = auto (по содержимому).
@@ -2311,6 +2379,9 @@ impl ComputedStyle {
             text_decoration_color: None,
             text_decoration_style: TextDecorationStyle::Solid,
             text_decoration_thickness: TextDecorationThickness::Auto,
+            text_emphasis_style: TextEmphasisStyle::None,
+            text_emphasis_color: None,
+            text_emphasis_position: TextEmphasisPosition::OverRight,
             width: None,
             height: None,
             min_width: None,
@@ -2474,6 +2545,9 @@ pub fn compute_style(
         text_decoration_color: inherited.text_decoration_color,
         text_decoration_style: inherited.text_decoration_style,
         text_decoration_thickness: inherited.text_decoration_thickness,
+        text_emphasis_style: inherited.text_emphasis_style.clone(),
+        text_emphasis_color: inherited.text_emphasis_color,
+        text_emphasis_position: inherited.text_emphasis_position,
         accent_color: inherited.accent_color,
         // CSS Variables L1: все custom properties inherited.
         custom_props: inherited.custom_props.clone(),
@@ -7031,6 +7105,35 @@ fn apply_declaration(
                 style.text_decoration_thickness = t;
             }
         }
+        "text-emphasis-style" => {
+            // CSS Text Decoration L4 §5.3 — `none | [ filled | open ] ||
+            // [ dot | circle | double-circle | triangle | sesame ] | <string>`.
+            if let Some(s) = parse_text_emphasis_style(val) {
+                style.text_emphasis_style = s;
+            }
+        }
+        "text-emphasis-color" => {
+            // CSS Text Decoration L4 §5.4. `currentcolor` → None (fallback на
+            // style.color при рендеринге; тот же паттерн, что у
+            // text-decoration-color).
+            if val.eq_ignore_ascii_case("currentcolor") {
+                style.text_emphasis_color = None;
+            } else if let Some(c) = parse_color_legacy(val, is_quirks) {
+                style.text_emphasis_color = Some(c);
+            }
+        }
+        "text-emphasis-position" => {
+            // CSS Text Decoration L4 §5.5 — `[over | under] && [right | left]?`.
+            if let Some(p) = parse_text_emphasis_position(val) {
+                style.text_emphasis_position = p;
+            }
+        }
+        "text-emphasis" => {
+            // CSS Text Decoration L4 §5.6 — shorthand для -style и -color
+            // (НЕ включает -position по spec). Сбрасывает обе longhand-ы в
+            // initial и потом извлекает style+color из value.
+            apply_text_emphasis_shorthand(style, val, is_quirks);
+        }
         // ── Borders ───────────────────────────────────────────────────────────
         "border" => apply_border_shorthand(style, val, em_basis, viewport, is_quirks),
         "border-top" => apply_border_side_shorthand(
@@ -7295,6 +7398,189 @@ fn parse_text_decoration_thickness(
     Some(TextDecorationThickness::Length(px))
 }
 
+fn parse_text_emphasis_shape(s: &str) -> Option<TextEmphasisShape> {
+    match s.to_ascii_lowercase().as_str() {
+        "dot" => Some(TextEmphasisShape::Dot),
+        "circle" => Some(TextEmphasisShape::Circle),
+        "double-circle" => Some(TextEmphasisShape::DoubleCircle),
+        "triangle" => Some(TextEmphasisShape::Triangle),
+        "sesame" => Some(TextEmphasisShape::Sesame),
+        _ => None,
+    }
+}
+
+fn parse_text_emphasis_fill(s: &str) -> Option<bool> {
+    match s.to_ascii_lowercase().as_str() {
+        "filled" => Some(true),
+        "open" => Some(false),
+        _ => None,
+    }
+}
+
+/// Извлекает первый строковый литерал в value: `"X"` или `'X'`. Возвращает
+/// (content_without_quotes, rest_after_close). Невалидное / unterminated → None.
+fn extract_first_string(val: &str) -> Option<(String, &str)> {
+    let trimmed = val.trim_start();
+    let mut chars = trimmed.char_indices();
+    let (_, quote) = chars.next()?;
+    if quote != '"' && quote != '\'' {
+        return None;
+    }
+    for (i, ch) in chars {
+        if ch == quote {
+            let start_byte = trimmed.char_indices().next()?.0 + quote.len_utf8();
+            let content = trimmed[start_byte..i].to_string();
+            return Some((content, &trimmed[i + ch.len_utf8()..]));
+        }
+    }
+    None
+}
+
+/// CSS Text Decoration L4 §5.3 — `text-emphasis-style`. Returns `None` если
+/// value не парсится (invalid declaration ignored).
+fn parse_text_emphasis_style(val: &str) -> Option<TextEmphasisStyle> {
+    let trimmed = val.trim();
+    if trimmed.eq_ignore_ascii_case("none") {
+        return Some(TextEmphasisStyle::None);
+    }
+    if let Some((s, rest)) = extract_first_string(trimmed) {
+        if !rest.trim().is_empty() {
+            return None;
+        }
+        return Some(TextEmphasisStyle::String(s));
+    }
+    let mut fill: Option<bool> = None;
+    let mut shape: Option<TextEmphasisShape> = None;
+    for tok in trimmed.split_whitespace() {
+        if let Some(f) = parse_text_emphasis_fill(tok) {
+            if fill.is_some() {
+                return None;
+            }
+            fill = Some(f);
+        } else if let Some(sh) = parse_text_emphasis_shape(tok) {
+            if shape.is_some() {
+                return None;
+            }
+            shape = Some(sh);
+        } else {
+            return None;
+        }
+    }
+    if fill.is_none() && shape.is_none() {
+        return None;
+    }
+    Some(TextEmphasisStyle::Symbol {
+        filled: fill.unwrap_or(true),
+        shape: shape.unwrap_or(TextEmphasisShape::Circle),
+    })
+}
+
+/// CSS Text Decoration L4 §5.5 — `text-emphasis-position`. Grammar
+/// `[ over | under ] && [ right | left ]?`. Spec: vertical axis (over/under)
+/// обязателен, horizontal axis (right/left) опционален с default `right`.
+fn parse_text_emphasis_position(val: &str) -> Option<TextEmphasisPosition> {
+    let mut over: Option<bool> = None;
+    let mut right: Option<bool> = None;
+    for tok in val.split_whitespace() {
+        match tok.to_ascii_lowercase().as_str() {
+            "over" => {
+                if over.is_some() {
+                    return None;
+                }
+                over = Some(true);
+            }
+            "under" => {
+                if over.is_some() {
+                    return None;
+                }
+                over = Some(false);
+            }
+            "right" => {
+                if right.is_some() {
+                    return None;
+                }
+                right = Some(true);
+            }
+            "left" => {
+                if right.is_some() {
+                    return None;
+                }
+                right = Some(false);
+            }
+            _ => return None,
+        }
+    }
+    let over = over?;
+    let right = right.unwrap_or(true);
+    Some(match (over, right) {
+        (true, true) => TextEmphasisPosition::OverRight,
+        (true, false) => TextEmphasisPosition::OverLeft,
+        (false, true) => TextEmphasisPosition::UnderRight,
+        (false, false) => TextEmphasisPosition::UnderLeft,
+    })
+}
+
+/// CSS Text Decoration L4 §5.6 — `text-emphasis` shorthand для `-style` и
+/// `-color`. По spec position НЕ часть shorthand-а.
+///
+/// Извлекает первый color-токен (consumes полностью) и оставшийся текст
+/// парсит как text-emphasis-style. Невалидные cases — оба longhand-а
+/// сбрасываются к initial.
+fn apply_text_emphasis_shorthand(style: &mut ComputedStyle, val: &str, is_quirks: bool) {
+    style.text_emphasis_style = TextEmphasisStyle::None;
+    style.text_emphasis_color = None;
+    let trimmed = val.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    // string-форма `text-emphasis: "★"` — без других токенов.
+    if let Some((s, rest)) = extract_first_string(trimmed)
+        && rest.trim().is_empty()
+    {
+        style.text_emphasis_style = TextEmphasisStyle::String(s);
+        return;
+    }
+
+    let mut color: Option<Color> = None;
+    let mut saw_currentcolor = false;
+    let mut style_tokens: Vec<&str> = Vec::new();
+    for tok in trimmed.split_whitespace() {
+        if tok.eq_ignore_ascii_case("currentcolor") {
+            if color.is_some() || saw_currentcolor {
+                return;
+            }
+            saw_currentcolor = true;
+            continue;
+        }
+        if parse_text_emphasis_fill(tok).is_some() || parse_text_emphasis_shape(tok).is_some() {
+            style_tokens.push(tok);
+            continue;
+        }
+        if !saw_currentcolor && color.is_none()
+            && let Some(c) = parse_color_legacy(tok, is_quirks)
+        {
+            color = Some(c);
+            continue;
+        }
+        return;
+    }
+
+    style.text_emphasis_color = if saw_currentcolor { None } else { color };
+
+    if style_tokens.is_empty() {
+        return;
+    }
+    let joined = style_tokens.join(" ");
+    if joined.eq_ignore_ascii_case("none") {
+        style.text_emphasis_style = TextEmphasisStyle::None;
+        return;
+    }
+    if let Some(s) = parse_text_emphasis_style(&joined) {
+        style.text_emphasis_style = s;
+    }
+}
+
 /// CSS Cascade L4 §7 — применить CSS-wide keyword к одному свойству.
 ///
 /// Источник значения:
@@ -7417,6 +7703,34 @@ fn apply_css_wide_keyword(
                 inherited.text_decoration_thickness
             } else {
                 init.text_decoration_thickness
+            };
+        }
+        "text-emphasis-style" | "text-emphasis" => {
+            style.text_emphasis_style = if inh {
+                inherited.text_emphasis_style.clone()
+            } else {
+                init.text_emphasis_style.clone()
+            };
+            if prop == "text-emphasis" {
+                style.text_emphasis_color = if inh {
+                    inherited.text_emphasis_color
+                } else {
+                    init.text_emphasis_color
+                };
+            }
+        }
+        "text-emphasis-color" => {
+            style.text_emphasis_color = if inh {
+                inherited.text_emphasis_color
+            } else {
+                init.text_emphasis_color
+            };
+        }
+        "text-emphasis-position" => {
+            style.text_emphasis_position = if inh {
+                inherited.text_emphasis_position
+            } else {
+                init.text_emphasis_position
             };
         }
         "text-shadow" => {
