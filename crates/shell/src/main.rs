@@ -1244,6 +1244,7 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawBorder { rect, .. }
             | DisplayCommand::DrawText { rect, .. }
             | DisplayCommand::DrawImage { rect, .. }
+            | DisplayCommand::DrawOutline { rect, .. }
             | DisplayCommand::PushClipRect { rect, .. } => rect,
             DisplayCommand::PopClip
             | DisplayCommand::PushOpacity { .. }
