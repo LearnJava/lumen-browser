@@ -367,6 +367,67 @@ impl TextDecorationLine {
     }
 }
 
+/// CSS Text Decoration L3 §2.2 — `text-decoration-style`. Стиль штриха
+/// для всех активных линий (`underline` / `overline` / `line-through`).
+///
+/// Spec inherited: no — но в Phase 0 наследуем визуально, по той же причине
+/// что [`TextDecorationLine`] (см. doc-комментарий выше).
+///
+/// Initial: `Solid`. Phase 0 рендерер рисует все стили как Solid одиночной
+/// линией; реальное визуальное отличие (`Double` — две параллельные,
+/// `Dotted` / `Dashed` — pattern, `Wavy` — синусоида) — задача P2.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextDecorationStyle {
+    #[default]
+    Solid,
+    Double,
+    Dotted,
+    Dashed,
+    Wavy,
+}
+
+impl TextDecorationStyle {
+    /// Парсит одиночный keyword. Возвращает `None` для невалидных и для
+    /// keyword-ов, имеющих другой смысл в context-е shorthand (например,
+    /// `none` — это `<line>`, не `<style>`).
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "solid" => Some(Self::Solid),
+            "double" => Some(Self::Double),
+            "dotted" => Some(Self::Dotted),
+            "dashed" => Some(Self::Dashed),
+            "wavy" => Some(Self::Wavy),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Text Decoration L3 §2.3 — `text-decoration-thickness`. Толщина
+/// штриха для линий декорации.
+///
+/// - `Auto` — UA выбирает (наш default; в Phase 0 рендерер использует 1px).
+/// - `FromFont` — берётся из шрифтового `underlinePosition` / `underlineThickness`
+///   (post-таблица), если шрифт их экспортирует; иначе как `Auto`.
+/// - `Length(px)` — явная resolved-px толщина (после `<length>` resolution).
+/// - `Percentage(frac)` — доля от **1em parent font-size** (spec явно
+///   ссылается на parent, не на свой font-size). Храним как fraction
+///   `0.05` для `5%`; resolved-px вычисляется в renderer-е, где известен
+///   parent.font_size.
+///
+/// Spec inherited: no — но в Phase 0 наследуем визуально, по той же причине
+/// что [`TextDecorationLine`].
+///
+/// Phase 0 рендерер игнорирует это значение (всегда 1px); реальное
+/// использование — задача P2.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum TextDecorationThickness {
+    #[default]
+    Auto,
+    FromFont,
+    Length(f32),
+    Percentage(f32),
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
     pub r: u8,
@@ -1042,6 +1103,12 @@ pub struct ComputedStyle {
     /// Inherited через каскад (как и `text-decoration-line` в Phase 0 — см.
     /// decisions log).
     pub text_decoration_color: Option<Color>,
+    /// CSS Text Decoration L3 §2.2 — `text-decoration-style`. Initial: Solid.
+    /// Inherited через каскад (Phase 0; см. doc на [`TextDecorationStyle`]).
+    pub text_decoration_style: TextDecorationStyle,
+    /// CSS Text Decoration L3 §2.3 — `text-decoration-thickness`. Initial: Auto.
+    /// Inherited через каскад (Phase 0; см. doc на [`TextDecorationThickness`]).
+    pub text_decoration_thickness: TextDecorationThickness,
     /// Явная ширина (CSS `width: Npx`). None = auto (растягивается на контейнер).
     pub width: Option<f32>,
     /// Явная высота (CSS `height: Npx`). None = auto (по содержимому).
@@ -2160,6 +2227,8 @@ impl ComputedStyle {
             && (self.word_spacing - other.word_spacing).abs() < f32::EPSILON
             && self.text_decoration_line == other.text_decoration_line
             && self.text_decoration_color == other.text_decoration_color
+            && self.text_decoration_style == other.text_decoration_style
+            && self.text_decoration_thickness == other.text_decoration_thickness
     }
 
     /// Стартовые значения для корня документа.
@@ -2184,6 +2253,8 @@ impl ComputedStyle {
             word_spacing: 0.0,
             text_decoration_line: TextDecorationLine::default(),
             text_decoration_color: None,
+            text_decoration_style: TextDecorationStyle::Solid,
+            text_decoration_thickness: TextDecorationThickness::Auto,
             width: None,
             height: None,
             min_width: None,
@@ -2345,6 +2416,8 @@ pub fn compute_style(
         word_spacing: inherited.word_spacing,
         text_decoration_line: inherited.text_decoration_line,
         text_decoration_color: inherited.text_decoration_color,
+        text_decoration_style: inherited.text_decoration_style,
+        text_decoration_thickness: inherited.text_decoration_thickness,
         accent_color: inherited.accent_color,
         // CSS Variables L1: все custom properties inherited.
         custom_props: inherited.custom_props.clone(),
@@ -6840,21 +6913,25 @@ fn apply_declaration(
         "padding-bottom" => set_box_length(&mut style.padding_bottom, val, em_basis, viewport),
         "padding-left" => set_box_length(&mut style.padding_left, val, em_basis, viewport),
         "text-decoration" => {
-            // Shorthand: `<line> <style> <color>` в любом порядке (CSS Text
-            // Decoration L3 §2.1). Парсер собирает линии-keyword-ы и пытается
-            // отдельно интерпретировать остатки как цвет (rgb/hsl/oklch/hex
-            // /name). style (solid/wavy/…) и `blink` пока тихо игнорируем.
-            let (line, color) = parse_text_decoration_shorthand_q(val, is_quirks);
-            if let Some(d) = line {
-                style.text_decoration_line = d;
-            }
-            if let Some(c) = color {
-                style.text_decoration_color = Some(c);
+            // Shorthand: `<line> || <style> || <color>` в любом порядке (CSS Text
+            // Decoration L3 §2.1). Спецификация L3 не включает thickness в
+            // shorthand — для неё отдельный longhand. Per spec shorthand сбрасывает
+            // все 4 longhand-а к initial, затем применяет указанные значения.
+            let parsed = parse_text_decoration_shorthand_q(val, is_quirks);
+            // Если shorthand был полностью невалиден (ни одного распознанного
+            // токена) — declaration ignored. Распознаём по тому, что хоть
+            // что-то распарсилось.
+            if parsed.any_recognized {
+                style.text_decoration_line = parsed.line.unwrap_or_default();
+                style.text_decoration_color = parsed.color;
+                style.text_decoration_style = parsed.style.unwrap_or_default();
+                // text-decoration-thickness shorthand-ом не сбрасывается
+                // (исключена из L3 shorthand-а; см. §2.1).
             }
         }
         "text-decoration-line" => {
-            let (line, _color) = parse_text_decoration_shorthand_q(val, is_quirks);
-            if let Some(d) = line {
+            let parsed = parse_text_decoration_shorthand_q(val, is_quirks);
+            if let Some(d) = parsed.line {
                 style.text_decoration_line = d;
             }
         }
@@ -6866,6 +6943,20 @@ fn apply_declaration(
                 style.text_decoration_color = None;
             } else if let Some(c) = parse_color_legacy(val, is_quirks) {
                 style.text_decoration_color = Some(c);
+            }
+        }
+        "text-decoration-style" => {
+            // CSS Text Decoration L3 §2.2 — единственный keyword из
+            // `solid | double | dotted | dashed | wavy`. Невалидное — ignored.
+            if let Some(s) = TextDecorationStyle::parse(val) {
+                style.text_decoration_style = s;
+            }
+        }
+        "text-decoration-thickness" => {
+            // CSS Text Decoration L3 §2.3 — `auto | from-font | <length> |
+            // <percentage>`. Невалидное — ignored.
+            if let Some(t) = parse_text_decoration_thickness(val, em_basis, viewport) {
+                style.text_decoration_thickness = t;
             }
         }
         // ── Borders ───────────────────────────────────────────────────────────
@@ -6967,33 +7058,47 @@ fn apply_declaration(
     }
 }
 
+/// Результат разбора `text-decoration` shorthand-а.
+///
+/// `any_recognized` отличает «полностью невалидный shorthand → declaration
+/// ignored» от «частично распознанный → применяется initial для непроставленных
+/// сторон». Без него `text-decoration: foo` молча сбрасывал бы существующее
+/// значение к initial.
+pub(crate) struct ParsedTextDecorationShorthand {
+    pub line: Option<TextDecorationLine>,
+    pub color: Option<Color>,
+    pub style: Option<TextDecorationStyle>,
+    pub any_recognized: bool,
+}
+
 /// Разбирает `text-decoration` shorthand или `text-decoration-line`.
 ///
-/// Возвращает `(line, color)`. `color` извлекается только если в строке
-/// есть остаточный токен после keyword-ов линий и стилей — и он успешно
-/// парсится `parse_color`-ом.
+/// CSS Text Decoration L3 §2.1 shorthand: `<line> || <style> || <color>` в любом
+/// порядке. `text-decoration-thickness` исключена из L3 shorthand-а (L4
+/// собирается её туда вернуть; пока следуем L3).
 ///
 /// Phase 0 keyword-ы линий: `underline`, `overline`, `line-through`, `none`.
-/// `none` сбрасывает все линии (CSS3 «none — initial value», интуитивно
-/// побеждает явный сброс). Стиль (`solid`/`wavy`/`dashed`/`dotted`/`double`)
-/// и `blink` (CSS2 deprecated) пока тихо игнорируем — нет реализации в
-/// paint, но токены распознаём, чтобы их остаток не попадал в color-парсер.
+/// `none` сбрасывает все линии (CSS3 «none — initial value», явный сброс
+/// побеждает другие line-keyword-ы).
+/// Стиль: `solid`/`wavy`/`dashed`/`dotted`/`double`. `blink` (CSS2 deprecated)
+/// тихо поглощаем, чтобы не попадал в color-парсер.
 ///
-/// `currentcolor` keyword в shorthand сбрасывает text-decoration-color в
-/// None (= fallback на currentColor при рендеринге).
+/// `currentcolor` keyword сбрасывает color в None (= fallback на currentColor
+/// при рендеринге).
 /// Wrapper для тестов и потребителей вне quirks-aware каскада.
-/// Эквивалент `parse_text_decoration_shorthand_q(val, false)`.
 #[cfg(test)]
-fn parse_text_decoration_shorthand(val: &str) -> (Option<TextDecorationLine>, Option<Color>) {
+fn parse_text_decoration_shorthand(val: &str) -> ParsedTextDecorationShorthand {
     parse_text_decoration_shorthand_q(val, false)
 }
 
-fn parse_text_decoration_shorthand_q(val: &str, is_quirks: bool) -> (Option<TextDecorationLine>, Option<Color>) {
-    let mut out = TextDecorationLine::default();
+fn parse_text_decoration_shorthand_q(val: &str, is_quirks: bool) -> ParsedTextDecorationShorthand {
+    let mut out_line = TextDecorationLine::default();
     let mut any_line = false;
     let mut none_seen = false;
+    let mut out_style: Option<TextDecorationStyle> = None;
     let mut color: Option<Color> = None;
     let mut color_currentcolor = false;
+    let mut any_recognized = false;
     // Цвет может быть многословным: `rgb(0, 0, 0)`, `hsl(0 0% 0% / 1)`, …
     // Соберём «не-линия / не-стиль» токены и попытаемся склеить.
     let mut residue: Vec<&str> = Vec::new();
@@ -7003,25 +7108,51 @@ fn parse_text_decoration_shorthand_q(val: &str, is_quirks: bool) -> (Option<Text
             "none" => {
                 none_seen = true;
                 any_line = true;
+                any_recognized = true;
             }
             "underline" => {
-                out.underline = true;
+                out_line.underline = true;
                 any_line = true;
+                any_recognized = true;
             }
             "overline" => {
-                out.overline = true;
+                out_line.overline = true;
                 any_line = true;
+                any_recognized = true;
             }
             "line-through" => {
-                out.line_through = true;
+                out_line.line_through = true;
                 any_line = true;
+                any_recognized = true;
             }
-            "solid" | "wavy" | "dashed" | "dotted" | "double" | "blink" => {
-                // Стиль — пока не реализован, токен поглощается, чтобы не
-                // попасть в color-парсер.
+            "solid" => {
+                out_style = Some(TextDecorationStyle::Solid);
+                any_recognized = true;
+            }
+            "double" => {
+                out_style = Some(TextDecorationStyle::Double);
+                any_recognized = true;
+            }
+            "dotted" => {
+                out_style = Some(TextDecorationStyle::Dotted);
+                any_recognized = true;
+            }
+            "dashed" => {
+                out_style = Some(TextDecorationStyle::Dashed);
+                any_recognized = true;
+            }
+            "wavy" => {
+                out_style = Some(TextDecorationStyle::Wavy);
+                any_recognized = true;
+            }
+            "blink" => {
+                // CSS2 deprecated; токен поглощаем, чтобы он не попал в
+                // color-парсер.
+                any_recognized = true;
             }
             "currentcolor" => {
                 color_currentcolor = true;
+                any_recognized = true;
             }
             _ => residue.push(token),
         }
@@ -7032,12 +7163,14 @@ fn parse_text_decoration_shorthand_q(val: &str, is_quirks: bool) -> (Option<Text
         let joined = residue.join(" ");
         if let Some(c) = parse_color_legacy(joined.trim(), is_quirks) {
             color = Some(c);
+            any_recognized = true;
         } else {
             // Иначе пробуем токен за токеном — для named-color / hex без
             // пробелов внутри.
             for tok in &residue {
                 if let Some(c) = parse_color_legacy(tok, is_quirks) {
                     color = Some(c);
+                    any_recognized = true;
                     break;
                 }
             }
@@ -7050,11 +7183,44 @@ fn parse_text_decoration_shorthand_q(val: &str, is_quirks: bool) -> (Option<Text
         // ничего не делаем (style.text_decoration_color остаётся как есть).
     }
     let line = if any_line {
-        if none_seen { Some(TextDecorationLine::default()) } else { Some(out) }
+        if none_seen { Some(TextDecorationLine::default()) } else { Some(out_line) }
     } else {
         None
     };
-    (line, color)
+    ParsedTextDecorationShorthand {
+        line,
+        color,
+        style: out_style,
+        any_recognized,
+    }
+}
+
+/// Парсит значение `text-decoration-thickness` (CSS Text Decoration L3 §2.3).
+///
+/// `auto | from-font | <length> | <percentage>`. Длина резолвится в
+/// resolved-px через [`Length::resolve`] (поддерживает px/em/rem/vw/vh/calc).
+/// Процент сохраняется как fraction (`5%` → 0.05) — финальное домножение на
+/// parent.font_size происходит в renderer-е по spec.
+fn parse_text_decoration_thickness(
+    val: &str,
+    em_basis: f32,
+    viewport: Size,
+) -> Option<TextDecorationThickness> {
+    let trimmed = val.trim();
+    let lower = trimmed.to_ascii_lowercase();
+    match lower.as_str() {
+        "auto" => return Some(TextDecorationThickness::Auto),
+        "from-font" => return Some(TextDecorationThickness::FromFont),
+        _ => {}
+    }
+    if let Some(pct_str) = trimmed.strip_suffix('%')
+        && let Ok(n) = pct_str.trim().parse::<f32>()
+    {
+        return Some(TextDecorationThickness::Percentage(n / 100.0));
+    }
+    let len = parse_length(trimmed)?;
+    let px = len.resolve(em_basis, None, viewport)?;
+    Some(TextDecorationThickness::Length(px))
 }
 
 /// CSS Cascade L4 §7 — применить CSS-wide keyword к одному свойству.
@@ -7150,12 +7316,35 @@ fn apply_css_wide_keyword(
             } else {
                 init.text_decoration_color
             };
+            // L3 shorthand сбрасывает также style (но не thickness — он
+            // исключён из L3 shorthand-а; см. parse_text_decoration_shorthand_q).
+            if prop == "text-decoration" {
+                style.text_decoration_style = if inh {
+                    inherited.text_decoration_style
+                } else {
+                    init.text_decoration_style
+                };
+            }
         }
         "text-decoration-color" => {
             style.text_decoration_color = if inh {
                 inherited.text_decoration_color
             } else {
                 init.text_decoration_color
+            };
+        }
+        "text-decoration-style" => {
+            style.text_decoration_style = if inh {
+                inherited.text_decoration_style
+            } else {
+                init.text_decoration_style
+            };
+        }
+        "text-decoration-thickness" => {
+            style.text_decoration_thickness = if inh {
+                inherited.text_decoration_thickness
+            } else {
+                init.text_decoration_thickness
             };
         }
         "text-shadow" => {
@@ -9795,24 +9984,24 @@ mod tests {
 
     #[test]
     fn text_decoration_underline_sets_only_underline() {
-        let (line, color) = parse_text_decoration_shorthand("underline");
-        let d = line.unwrap();
+        let p = parse_text_decoration_shorthand("underline");
+        let d = p.line.unwrap();
         assert!(d.underline);
         assert!(!d.overline);
         assert!(!d.line_through);
-        assert!(color.is_none());
+        assert!(p.color.is_none());
     }
 
     #[test]
     fn text_decoration_none_returns_empty() {
-        let (line, _) = parse_text_decoration_shorthand("none");
-        assert!(line.unwrap().is_empty());
+        let p = parse_text_decoration_shorthand("none");
+        assert!(p.line.unwrap().is_empty());
     }
 
     #[test]
     fn text_decoration_multiple_keywords_combine() {
-        let (line, _) = parse_text_decoration_shorthand("overline underline");
-        let d = line.unwrap();
+        let p = parse_text_decoration_shorthand("overline underline");
+        let d = p.line.unwrap();
         assert!(d.underline);
         assert!(d.overline);
         assert!(!d.line_through);
@@ -9820,40 +10009,41 @@ mod tests {
 
     #[test]
     fn text_decoration_line_through_with_hyphen() {
-        let (line, _) = parse_text_decoration_shorthand("line-through");
-        assert!(line.unwrap().line_through);
+        let p = parse_text_decoration_shorthand("line-through");
+        assert!(p.line.unwrap().line_through);
     }
 
     #[test]
     fn text_decoration_none_with_other_clears_all() {
         // `none` всегда побеждает: интуитивный сброс.
-        let (line, _) = parse_text_decoration_shorthand("underline none");
-        assert!(line.unwrap().is_empty());
+        let p = parse_text_decoration_shorthand("underline none");
+        assert!(p.line.unwrap().is_empty());
     }
 
     #[test]
     fn text_decoration_blink_and_style_tokens_ignored_for_line() {
-        // `blink` и `solid` — игнорируем для line; теперь `red` — color.
-        let (line, color) = parse_text_decoration_shorthand("underline blink solid");
-        let d = line.unwrap();
+        // `blink` — поглощаем (CSS2 deprecated); `solid` — это style, не line.
+        let p = parse_text_decoration_shorthand("underline blink solid");
+        let d = p.line.unwrap();
         assert!(d.underline);
         assert!(!d.overline);
         assert!(!d.line_through);
-        assert!(color.is_none(), "no color token → None");
+        assert!(p.color.is_none(), "no color token → None");
+        assert_eq!(p.style, Some(TextDecorationStyle::Solid));
     }
 
     #[test]
     fn text_decoration_unrecognized_only_returns_none_line() {
-        let (line, _) = parse_text_decoration_shorthand("blink");
-        assert!(line.is_none());
-        let (line, _) = parse_text_decoration_shorthand("");
-        assert!(line.is_none());
+        let p = parse_text_decoration_shorthand("blink");
+        assert!(p.line.is_none());
+        let p = parse_text_decoration_shorthand("");
+        assert!(p.line.is_none());
     }
 
     #[test]
     fn text_decoration_is_case_insensitive() {
-        let (line, _) = parse_text_decoration_shorthand("UNDERLINE Line-Through");
-        let d = line.unwrap();
+        let p = parse_text_decoration_shorthand("UNDERLINE Line-Through");
+        let d = p.line.unwrap();
         assert!(d.underline);
         assert!(d.line_through);
     }
@@ -9863,25 +10053,25 @@ mod tests {
     #[test]
     fn text_decoration_color_named_in_shorthand() {
         // `text-decoration: underline red` — линия + цвет.
-        let (line, color) = parse_text_decoration_shorthand("underline red");
-        assert!(line.unwrap().underline);
-        assert_eq!(color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+        let p = parse_text_decoration_shorthand("underline red");
+        assert!(p.line.unwrap().underline);
+        assert_eq!(p.color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
     }
 
     #[test]
     fn text_decoration_color_hex_in_shorthand() {
-        let (line, color) = parse_text_decoration_shorthand("overline #00ff00");
-        assert!(line.unwrap().overline);
-        assert_eq!(color, Some(Color { r: 0, g: 255, b: 0, a: 255 }));
+        let p = parse_text_decoration_shorthand("overline #00ff00");
+        assert!(p.line.unwrap().overline);
+        assert_eq!(p.color, Some(Color { r: 0, g: 255, b: 0, a: 255 }));
     }
 
     #[test]
     fn text_decoration_color_rgb_function_in_shorthand() {
         // Color-функция с пробелами (modern CSS syntax) — токены должны
         // склеиваться обратно.
-        let (line, color) = parse_text_decoration_shorthand("line-through rgb(0 0 255)");
-        assert!(line.unwrap().line_through);
-        assert_eq!(color, Some(Color { r: 0, g: 0, b: 255, a: 255 }));
+        let p = parse_text_decoration_shorthand("line-through rgb(0 0 255)");
+        assert!(p.line.unwrap().line_through);
+        assert_eq!(p.color, Some(Color { r: 0, g: 0, b: 255, a: 255 }));
     }
 
     #[test]
@@ -9927,6 +10117,180 @@ mod tests {
         // рендеринге.
         let s = ComputedStyle::root();
         assert!(s.text_decoration_color.is_none());
+    }
+
+    // ── text-decoration-style ──────────────────────────────────────────────
+
+    #[test]
+    fn text_decoration_style_default_is_solid() {
+        let s = ComputedStyle::root();
+        assert_eq!(s.text_decoration_style, TextDecorationStyle::Solid);
+    }
+
+    #[test]
+    fn text_decoration_style_longhand_keywords() {
+        assert_eq!(style_for("text-decoration-style: double").text_decoration_style,
+                   TextDecorationStyle::Double);
+        assert_eq!(style_for("text-decoration-style: dotted").text_decoration_style,
+                   TextDecorationStyle::Dotted);
+        assert_eq!(style_for("text-decoration-style: dashed").text_decoration_style,
+                   TextDecorationStyle::Dashed);
+        assert_eq!(style_for("text-decoration-style: wavy").text_decoration_style,
+                   TextDecorationStyle::Wavy);
+        assert_eq!(style_for("text-decoration-style: solid").text_decoration_style,
+                   TextDecorationStyle::Solid);
+    }
+
+    #[test]
+    fn text_decoration_style_invalid_ignored() {
+        // Невалидное значение — declaration ignored, initial остаётся.
+        let s = style_for("text-decoration-style: invalid-value");
+        assert_eq!(s.text_decoration_style, TextDecorationStyle::Solid);
+    }
+
+    #[test]
+    fn text_decoration_style_case_insensitive() {
+        assert_eq!(style_for("text-decoration-style: WAVY").text_decoration_style,
+                   TextDecorationStyle::Wavy);
+        assert_eq!(style_for("text-decoration-style: Dotted").text_decoration_style,
+                   TextDecorationStyle::Dotted);
+    }
+
+    #[test]
+    fn text_decoration_style_in_shorthand() {
+        // `text-decoration: underline wavy red` — все три компонента.
+        let s = style_for("text-decoration: underline wavy red");
+        assert!(s.text_decoration_line.underline);
+        assert_eq!(s.text_decoration_style, TextDecorationStyle::Wavy);
+        assert_eq!(s.text_decoration_color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+    }
+
+    #[test]
+    fn text_decoration_style_shorthand_resets_to_initial() {
+        // CSS Text Decoration L3 §2.1: shorthand сбрасывает все longhand-ы
+        // (кроме thickness — она исключена из L3 shorthand-а).
+        let s = style_for("text-decoration-style: wavy; text-decoration: underline");
+        assert_eq!(s.text_decoration_style, TextDecorationStyle::Solid,
+                   "shorthand сбросил style к initial");
+        assert!(s.text_decoration_line.underline);
+    }
+
+    #[test]
+    fn text_decoration_style_inherited_via_cascade() {
+        // Phase 0 каскадирует text-decoration-style через inherit (как и
+        // line / color).
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-style: dotted; }");
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.text_decoration_style, TextDecorationStyle::Dotted);
+        let p = doc.get(div).children[0];
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(p_style.text_decoration_style, TextDecorationStyle::Dotted);
+    }
+
+    // ── text-decoration-thickness ──────────────────────────────────────────
+
+    #[test]
+    fn text_decoration_thickness_default_is_auto() {
+        let s = ComputedStyle::root();
+        assert_eq!(s.text_decoration_thickness, TextDecorationThickness::Auto);
+    }
+
+    #[test]
+    fn text_decoration_thickness_keywords() {
+        assert_eq!(style_for("text-decoration-thickness: auto").text_decoration_thickness,
+                   TextDecorationThickness::Auto);
+        assert_eq!(style_for("text-decoration-thickness: from-font").text_decoration_thickness,
+                   TextDecorationThickness::FromFont);
+    }
+
+    #[test]
+    fn text_decoration_thickness_length_px() {
+        let s = style_for("text-decoration-thickness: 3px");
+        match s.text_decoration_thickness {
+            TextDecorationThickness::Length(px) => assert!((px - 3.0).abs() < 0.01),
+            other => panic!("expected Length(3.0), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_decoration_thickness_length_em_resolved() {
+        // 0.5em при font-size 16 → 8px (resolve через em_basis).
+        let s = style_for("text-decoration-thickness: 0.5em");
+        match s.text_decoration_thickness {
+            TextDecorationThickness::Length(px) => assert!((px - 8.0).abs() < 0.01,
+                                                            "0.5em @ 16px = 8, got {px}"),
+            other => panic!("expected Length, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_decoration_thickness_percentage() {
+        // 25% хранится как fraction 0.25.
+        let s = style_for("text-decoration-thickness: 25%");
+        match s.text_decoration_thickness {
+            TextDecorationThickness::Percentage(f) => assert!((f - 0.25).abs() < 0.001),
+            other => panic!("expected Percentage(0.25), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn text_decoration_thickness_invalid_ignored() {
+        let s = style_for("text-decoration-thickness: foobar");
+        assert_eq!(s.text_decoration_thickness, TextDecorationThickness::Auto);
+    }
+
+    #[test]
+    fn text_decoration_thickness_case_insensitive() {
+        assert_eq!(style_for("text-decoration-thickness: AUTO").text_decoration_thickness,
+                   TextDecorationThickness::Auto);
+        assert_eq!(style_for("text-decoration-thickness: From-Font").text_decoration_thickness,
+                   TextDecorationThickness::FromFont);
+    }
+
+    #[test]
+    fn text_decoration_thickness_not_in_l3_shorthand() {
+        // CSS Text Decoration L3 §2.1 — thickness НЕ входит в shorthand.
+        // Установка через longhand + shorthand не должна сбрасывать thickness.
+        let s = style_for("text-decoration-thickness: 5px; text-decoration: underline");
+        match s.text_decoration_thickness {
+            TextDecorationThickness::Length(px) => assert!((px - 5.0).abs() < 0.01,
+                                                            "shorthand НЕ должен сбрасывать thickness"),
+            other => panic!("expected Length(5.0), got {other:?}"),
+        }
+        assert!(s.text_decoration_line.underline);
+    }
+
+    #[test]
+    fn text_decoration_thickness_inherited_via_cascade() {
+        let doc = lumen_html_parser::parse("<div><p>x</p></div>");
+        let sheet = lumen_css_parser::parse("div { text-decoration-thickness: 4px; }");
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
+        let p = doc.get(div).children[0];
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
+        match p_style.text_decoration_thickness {
+            TextDecorationThickness::Length(px) => assert!((px - 4.0).abs() < 0.01),
+            other => panic!("expected inherited Length(4.0), got {other:?}"),
+        }
+    }
+
+    // ── CSS-wide keywords для text-decoration-style / -thickness ───────────
+
+    #[test]
+    fn text_decoration_style_initial_keyword_resets() {
+        // `initial` сбрасывает к спецификационному initial (Solid).
+        let s = style_for("text-decoration-style: wavy; text-decoration-style: initial");
+        assert_eq!(s.text_decoration_style, TextDecorationStyle::Solid);
+    }
+
+    #[test]
+    fn text_decoration_thickness_initial_keyword_resets() {
+        let s = style_for("text-decoration-thickness: 5px; text-decoration-thickness: initial");
+        assert_eq!(s.text_decoration_thickness, TextDecorationThickness::Auto);
     }
 
     // ── Border parsing ────────────────────────────────────────────────────────
