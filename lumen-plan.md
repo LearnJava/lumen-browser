@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-- 🔄 Variable fonts: glyph_resolved + coords [P2] — variable-fonts-glyph-resolved — 2026-05-18
+- 🔄 Atlas variation-aware cache key + DrawText.font_variation_coords [P2] — atlas-variation-key — 2026-05-18
 
 ## Статус реализации
 
