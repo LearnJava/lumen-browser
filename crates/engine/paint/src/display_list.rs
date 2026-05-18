@@ -861,9 +861,27 @@ fn is_paint_visible(b: &LayoutBox) -> bool {
     matches!(b.style.visibility, Visibility::Visible)
 }
 
+/// CSS Color L3 §3.2 — `opacity: 0` создаёт stacking context, и после
+/// off-screen compositor pass весь subtree даёт fully-transparent
+/// результат. Phase 0 без compositor-pass-ов: pure-pixel skip всего
+/// subtree (children тоже не рисуются — это отличие от visibility:
+/// hidden, где children могут override через `:visible`). Сравнение
+/// `<= 0.0` страхует от sub-normal значений, попавших в opacity
+/// через клипанг — layout cascade clamp-ит в `[0.0, 1.0]`, но
+/// defensive check дешёвый. opacity > 0 && < 1 Phase 0 не обрабатывается
+/// (требует off-screen pass с per-pixel alpha multiply — P2 п.4+).
+fn is_opacity_subtree_painted(b: &LayoutBox) -> bool {
+    b.style.opacity > 0.0
+}
+
 /// Эмитит DisplayCommand-ы для одного box-а БЕЗ рекурсии в детей. Аналог
 /// тела `walk` для одного box-а.
 fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
+    // opacity:0 → whole-subtree invisible (см. is_opacity_subtree_painted).
+    // emit_box_self не идёт в children, но self-content тоже skip-аем.
+    if !is_opacity_subtree_painted(b) {
+        return;
+    }
     match &b.kind {
         BoxKind::Skip => {}
         BoxKind::Block => {
@@ -986,6 +1004,13 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
 }
 
 fn walk(b: &LayoutBox, out: &mut DisplayList) {
+    // CSS Color L3 §3.2 — opacity:0 на box-е делает весь subtree после
+    // composite полностью прозрачным. Phase 0 эмулирует это pure-pixel
+    // skip-ом (отличие от visibility:hidden, где children могут
+    // override через `:visible` — opacity-0 такого override не имеет).
+    if !is_opacity_subtree_painted(b) {
+        return;
+    }
     match &b.kind {
         BoxKind::Skip => {}
         BoxKind::Block => {
@@ -2895,5 +2920,83 @@ mod tests {
             .filter(|c| matches!(c, DisplayCommand::DrawImage { .. }))
             .collect();
         assert!(images.is_empty());
+    }
+
+    // ───────── opacity:0 skip ─────────
+
+    #[test]
+    fn opacity_zero_skips_block_and_subtree() {
+        // opacity:0 на parent → ни parent, ни children не рисуются.
+        let dl = build(
+            "<div><p>x</p></div>",
+            "div { opacity: 0; background: red; } \
+             p { display: block; background: blue; width: 20px; height: 10px; }",
+        );
+        let fills_count = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::FillRect { .. }))
+            .count();
+        assert_eq!(fills_count, 0, "opacity:0 → whole subtree skipped");
+    }
+
+    #[test]
+    fn opacity_zero_skips_text() {
+        let dl = build(
+            "<p>hello</p>",
+            "p { opacity: 0; }",
+        );
+        let texts: Vec<_> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawText { .. }))
+            .collect();
+        assert!(texts.is_empty(), "opacity:0 → text skipped");
+    }
+
+    #[test]
+    fn opacity_one_renders_normally() {
+        // Sanity: opacity:1 default — всё рисуется.
+        let dl = build(
+            "<div><p>x</p></div>",
+            "div { background: red; } \
+             p { display: block; background: blue; width: 20px; height: 10px; }",
+        );
+        let reds = dl.iter().filter(|c| {
+            matches!(c, DisplayCommand::FillRect { color, .. } if color.r == 255 && color.b == 0)
+        });
+        let blues = dl.iter().filter(|c| {
+            matches!(c, DisplayCommand::FillRect { color, .. } if color.b == 255 && color.r == 0)
+        });
+        assert!(reds.count() >= 1);
+        assert!(blues.count() >= 1);
+    }
+
+    #[test]
+    fn opacity_half_phase0_does_not_change_emission() {
+        // Phase 0: opacity > 0 && < 1 не обрабатывается; FillRect эмитим
+        // с original color без модификации (true compositing — P2 п.4+).
+        let dl = build(
+            "<div></div>",
+            "div { background: red; opacity: 0.5; width: 50px; height: 30px; }",
+        );
+        let reds: Vec<_> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::FillRect { color, .. } if color.r == 255))
+            .collect();
+        assert_eq!(reds.len(), 1, "opacity:0.5 не skip-аем; alpha не множим в Phase 0");
+    }
+
+    #[test]
+    fn opacity_zero_image_subtree_skipped() {
+        let dl = build(
+            r#"<img src="x.png" width="50" height="50">"#,
+            "img { opacity: 0; }",
+        );
+        let any: Vec<_> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawImage { .. }
+                                  | DisplayCommand::FillRect { .. }
+                                  | DisplayCommand::DrawBorder { .. }))
+            .collect();
+        assert!(any.is_empty());
     }
 }
