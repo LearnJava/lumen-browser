@@ -201,6 +201,14 @@ pub enum PseudoClass {
     /// трактуется как `ltr` (real auto-direction по UAX #9 first-strong
     /// отложен до bidi-движка). Невалидные аргументы → `Unsupported(name)`.
     Dir(DirArg),
+    /// `:scope` (CSS Selectors L4 §4.2) — root of selector matching context.
+    /// В author-CSS-stylesheet без runtime querySelector/matches API scope =
+    /// document root element. Spec: «In all other contexts, :scope matches
+    /// the document's root element, exactly like :root.» Реальная разница с
+    /// `:root` появится при integration с DOM querySelector API (P3 +
+    /// JS-runtime), где scope = the element on which the selector matching
+    /// is rooted (e.g. el.querySelector(':scope > .x') ищет относительно el).
+    Scope,
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
@@ -2532,6 +2540,7 @@ impl<'a> Parser<'a> {
             "link" => PseudoClass::Link,
             "visited" => PseudoClass::Visited,
             "any-link" => PseudoClass::AnyLink,
+            "scope" => PseudoClass::Scope,
             _ => PseudoClass::Unsupported(name),
         };
         Some(SimpleSelector::PseudoClass(pc))
@@ -3482,6 +3491,7 @@ mod tests {
             ("link", PseudoClass::Link),
             ("visited", PseudoClass::Visited),
             ("any-link", PseudoClass::AnyLink),
+            ("scope", PseudoClass::Scope),
         ];
         for (name, expected) in cases {
             let s = parse(&format!(":{name} {{}}"));
