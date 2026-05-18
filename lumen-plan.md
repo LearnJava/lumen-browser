@@ -13,7 +13,6 @@
 - 🔄 Paint order consumer (P2 2A renderer-side) [P2] — paint-order-consumer — 2026-05-15
 - 🔄 CSS image-rendering parsing/storage [P1] — css-image-rendering — 2026-05-15
 - 🔄 transition shorthand parsing (P1 3A finish) [P1] — transition-shorthand — 2026-05-15
-- 🔄 :target-within pseudo-class (CSS Selectors L4 §9.7) [P1] — target-within-pseudo — 2026-05-18
 
 ## Статус реализации
 
