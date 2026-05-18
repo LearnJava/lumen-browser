@@ -2565,6 +2565,13 @@ pub fn compute_style(
     // найти хотя бы какие-то hex-digits после padding-procedure.
     apply_bgcolor_presentational_hint(doc, node, &mut style);
 
+    // HTML5 §15.3.6 «The page»: `text` атрибут на `<body>` и `<font color>`
+    // на любом элементе мапаются на CSS `color` (presentational hint).
+    // Парсятся тем же legacy-парсером, что и `bgcolor`. Author CSS поверх —
+    // выигрывает. `<body link/vlink/alink>` отложены: `:link` единственный
+    // матчится в Phase 0, `:visited`/`:active` без runtime — no-op.
+    apply_text_color_presentational_hint(doc, node, &mut style);
+
     // CSS Cascade L4 §6.4.3 — inline style: парсим HTML-атрибут `style=""`
     // и кладём его декларации в отдельный буфер. Они подключаются к каскаду
     // через дополнительный sort-bit `is_inline` (ниже): внутри одного origin
@@ -3134,6 +3141,13 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // (P3 + JS-runtime) — пока что в layout-cascade оба ведут себя
         // одинаково.
         PseudoClass::Scope => is_root_element(doc, node),
+        // CSS Selectors L4 §9.6: `:target` matches element с id равным
+        // URL fragment-у (case-sensitive — HTML LS §3.2.6 делает `id`
+        // case-sensitive, поэтому matcher не lowercase'ит). Без fragment-а
+        // (`Document::target() == None`) — никакой element не матчит.
+        // Phase 0: значение target_id выставляет shell-интеграция (P3) при
+        // навигации; до её появления matcher всегда возвращает false.
+        PseudoClass::Target => matches_target(doc, node),
         PseudoClass::Unsupported(_) => false,
     }
 }
@@ -3683,6 +3697,21 @@ fn matches_any_link(doc: &Document, node: NodeId) -> bool {
     node_ref.get_attr("href").is_some()
 }
 
+/// `:target` matcher (CSS Selectors L4 §9.6). Возвращает true, если у элемента
+/// есть `id`-атрибут, равный текущему `Document::target()` (URL fragment без
+/// `#`). Comparison case-sensitive — HTML id case-sensitive per HTML LS §3.2.6.
+/// Текстовые узлы и не-element-узлы не матчат.
+fn matches_target(doc: &Document, node: NodeId) -> bool {
+    let Some(target) = doc.target() else {
+        return false;
+    };
+    let node_ref = doc.get(node);
+    if !matches!(&node_ref.data, NodeData::Element { .. }) {
+        return false;
+    }
+    node_ref.get_attr("id") == Some(target)
+}
+
 /// `:dir(ltr|rtl)` (CSS Selectors L4 §13.2). Матчит элемент с
 /// соответствующей directionality, определяемой через `dir`-атрибут
 /// (с inherited fallback от ближайшего ancestor-а). При отсутствии
@@ -4223,13 +4252,51 @@ fn apply_bgcolor_presentational_hint(doc: &Document, node: NodeId, style: &mut C
     }
 }
 
+/// HTML5 §15.3.6 «The page» (для `<body text>`) + §15.3.2 «Phrasing
+/// content» (для `<font color>`): мапает legacy-атрибуты на CSS `color`.
+///
+/// - `<body text="…">` → `body.color`. Через CSS-наследование цвет
+///   распространяется на всех потомков, у которых нет явного `color`.
+/// - `<font color="…">` → элементный `color`. Атрибут применим к любому
+///   элементу с именем `font`, в т.ч. внутри других элементов.
+///
+/// `<body link/vlink/alink>` отложены: hyperlink coloring требует UA
+/// stylesheet с descendant-селектором (`body :link { color: … }`), а в
+/// Phase 0 без visited/active runtime два из трёх атрибутов всё равно
+/// были бы no-op.
+///
+/// Парсинг — `parse_legacy_color_html_attr` (HTML5 §2.4.6). Hint
+/// применяется ДО CSS-каскада, поэтому любое author-CSS правило
+/// перекроет атрибут.
+fn apply_text_color_presentational_hint(
+    doc: &Document,
+    node: NodeId,
+    style: &mut ComputedStyle,
+) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    let tag = name.local.as_str();
+    let node_ref = doc.get(node);
+    let attr_name = match tag {
+        "body" => "text",
+        "font" => "color",
+        _ => return,
+    };
+    if let Some(val) = node_ref.get_attr(attr_name)
+        && let Some(c) = parse_legacy_color_html_attr(val)
+    {
+        style.color = c;
+    }
+}
+
 /// HTML5 §2.4.6 «rules for parsing a legacy color value».
 ///
 /// Используется для presentational hint-атрибутов вроде `<body bgcolor>`,
-/// `<td bgcolor>`, `<font color>` (последний пока не применяется). Алгоритм
-/// значительно лояльнее CSS-парсера: принимает named colors, `#rgb` /
-/// `#rrggbb`, hashless hex произвольной длины, и через padding/truncate
-/// process выдаёт цвет из почти любой непустой строки, отличной от
+/// `<td bgcolor>`, `<body text>`, `<font color>`. Алгоритм значительно
+/// лояльнее CSS-парсера: принимает named colors, `#rgb` / `#rrggbb`,
+/// hashless hex произвольной длины, и через padding/truncate process
+/// выдаёт цвет из почти любой непустой строки, отличной от
 /// «transparent».
 ///
 /// Отказы (Spec: «error»):
@@ -12480,5 +12547,146 @@ mod tests {
         let td = doc.get(tr).children[0];
         let s = compute_style(&doc, td, &sheet, &root_style, Size::new(800.0, 600.0));
         assert_eq!(s.background_color, Some(rgba(0xab, 0xcd, 0xef, 255)));
+    }
+
+    // ── apply_text_color_presentational_hint integration ─────────────────
+
+    #[test]
+    fn text_hint_body_named() {
+        let s = doc_root_child_style("<body text=\"red\"></body>");
+        assert_eq!(s.color, rgba(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn text_hint_body_hash() {
+        let s = doc_root_child_style("<body text=\"#00ff00\"></body>");
+        assert_eq!(s.color, rgba(0, 255, 0, 255));
+    }
+
+    #[test]
+    fn text_hint_body_hashless_legacy() {
+        // Hashless hex принимается legacy-парсером без зависимости от
+        // document mode — как и в bgcolor.
+        let s = doc_root_child_style("<body text=\"0000ff\"></body>");
+        assert_eq!(s.color, rgba(0, 0, 255, 255));
+    }
+
+    #[test]
+    fn text_hint_transparent_does_not_apply() {
+        // «transparent» — error в legacy-парсере, hint не применяется
+        // → color остаётся default (BLACK через initial).
+        let s = doc_root_child_style("<body text=\"transparent\"></body>");
+        assert_eq!(s.color, Color::BLACK);
+    }
+
+    #[test]
+    fn text_hint_not_applied_to_div() {
+        // <div text="red"> — `text` атрибут не присутствует в spec для div,
+        // hint игнорируется.
+        let s = doc_root_child_style("<div text=\"red\"></div>");
+        assert_eq!(s.color, Color::BLACK);
+    }
+
+    #[test]
+    fn text_hint_overridden_by_author_css() {
+        // Presentational hint имеет lowest specificity — author CSS перекрывает.
+        let doc = lumen_html_parser::parse("<body text=\"red\"></body>");
+        let sheet = lumen_css_parser::parse("body { color: blue; }");
+        let root_style = ComputedStyle::root();
+        let body = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, body, &sheet, &root_style, Size::new(800.0, 600.0));
+        assert_eq!(s.color, rgba(0, 0, 255, 255));
+    }
+
+    #[test]
+    fn text_hint_body_inherits_to_children() {
+        // CSS `color` — inherited; legacy `text` на `<body>` должно через
+        // наследование красить потомков без явного color.
+        let doc = lumen_html_parser::parse("<body text=\"red\"><div>x</div></body>");
+        let sheet = lumen_css_parser::parse("");
+        let root_style = ComputedStyle::root();
+        let body = doc.get(doc.root()).children[0];
+        let div = doc.get(body).children[0];
+        let body_style = compute_style(&doc, body, &sheet, &root_style, Size::new(800.0, 600.0));
+        let div_style = compute_style(&doc, div, &sheet, &body_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.color, rgba(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn font_color_hint_named() {
+        // <font color="red"> сам по себе. doc_root_child_style вернёт стиль
+        // <font>-элемента; tree builder может обернуть его в <body> —
+        // используем явный обход.
+        let doc = lumen_html_parser::parse("<font color=\"red\">x</font>");
+        let sheet = lumen_css_parser::parse("");
+        let root_style = ComputedStyle::root();
+        let font = find_first_element(&doc, doc.root(), "font").expect("font found");
+        let s = compute_style(&doc, font, &sheet, &root_style, Size::new(800.0, 600.0));
+        assert_eq!(s.color, rgba(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn font_color_hint_hash() {
+        let doc = lumen_html_parser::parse("<font color=\"#abcdef\">x</font>");
+        let sheet = lumen_css_parser::parse("");
+        let root_style = ComputedStyle::root();
+        let font = find_first_element(&doc, doc.root(), "font").expect("font found");
+        let s = compute_style(&doc, font, &sheet, &root_style, Size::new(800.0, 600.0));
+        assert_eq!(s.color, rgba(0xab, 0xcd, 0xef, 255));
+    }
+
+    #[test]
+    fn font_color_hint_overridden_by_author_css() {
+        let doc = lumen_html_parser::parse("<font color=\"red\">x</font>");
+        let sheet = lumen_css_parser::parse("font { color: blue; }");
+        let root_style = ComputedStyle::root();
+        let font = find_first_element(&doc, doc.root(), "font").expect("font found");
+        let s = compute_style(&doc, font, &sheet, &root_style, Size::new(800.0, 600.0));
+        assert_eq!(s.color, rgba(0, 0, 255, 255));
+    }
+
+    #[test]
+    fn font_color_hint_inherits_to_children() {
+        let doc =
+            lumen_html_parser::parse("<font color=\"red\"><span>x</span></font>");
+        let sheet = lumen_css_parser::parse("");
+        let root_style = ComputedStyle::root();
+        let font = find_first_element(&doc, doc.root(), "font").expect("font found");
+        let span = find_first_element(&doc, font, "span").expect("span found");
+        let font_style = compute_style(&doc, font, &sheet, &root_style, Size::new(800.0, 600.0));
+        let span_style =
+            compute_style(&doc, span, &sheet, &font_style, Size::new(800.0, 600.0));
+        assert_eq!(span_style.color, rgba(255, 0, 0, 255));
+    }
+
+    #[test]
+    fn color_attr_on_div_does_not_apply() {
+        // `color` атрибут — presentational hint только для `<font>`. На
+        // `<div color="red">` игнорируется.
+        let doc = lumen_html_parser::parse("<div color=\"red\">x</div>");
+        let sheet = lumen_css_parser::parse("");
+        let root_style = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
+        assert_eq!(s.color, Color::BLACK);
+    }
+
+    fn find_first_element(
+        doc: &lumen_dom::Document,
+        from: lumen_dom::NodeId,
+        local: &str,
+    ) -> Option<lumen_dom::NodeId> {
+        let node = doc.get(from);
+        if let lumen_dom::NodeData::Element { name, .. } = &node.data
+            && name.local == local
+        {
+            return Some(from);
+        }
+        for child in &node.children {
+            if let Some(found) = find_first_element(doc, *child, local) {
+                return Some(found);
+            }
+        }
+        None
     }
 }

@@ -178,6 +178,18 @@ impl<'a> Font<'a> {
         crate::os2::Os2::parse(data)
     }
 
+    /// `post` — PostScript Information Table. Содержит italic angle и
+    /// рекомендуемые underline metrics (position + thickness в font
+    /// units), is_fixed_pitch hint. Используется `lumen-paint` для
+    /// font-specific позиционирования underline-линий (раньше hardcoded
+    /// ≈ baseline + 10% font_size — теперь можно брать `post`-значение
+    /// и масштабировать по `font_size / units_per_em`). Phase 0 —
+    /// только header; glyph name table (v2.0+) отложена.
+    pub fn post(&self) -> Result<crate::post::Post, FontError> {
+        let data = self.table(b"post").ok_or(FontError::TableNotFound(*b"post"))?;
+        crate::post::Post::parse(data)
+    }
+
     /// `fvar` (Font Variations) — описание variation axes (wght / wdth / slnt /
     /// opsz / ital / custom). Возвращает `Err(TableNotFound)` для non-variable
     /// fonts (обычные `.ttf` / `.otf` без вариаций — каков и bundled Inter
