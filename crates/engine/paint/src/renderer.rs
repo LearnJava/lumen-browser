@@ -740,6 +740,19 @@ impl Renderer {
         }
     }
 
+    /// Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
+    /// Emoji / Noto Sans CJK / Apple Color Emoji / Segoe UI Emoji /
+    /// PingFang / Hiragino / Microsoft YaHei / Yu Gothic / Malgun Gothic /
+    /// Noto Sans Arabic / Hebrew / Devanagari / Thai). На каждой ОС
+    /// найдётся лишь часть имён — остальные тихо пропустятся. Это
+    /// разблокирует codepoint-cascade для эмодзи / CJK / RTL / Indic /
+    /// Thai на страницах **без явного CSS `font-family`** для этих
+    /// скриптов. Вызывается shell-ом один раз после `Renderer::new_async`.
+    /// Идемпотентен (preload_fallback_chain → resolve_face_id cache).
+    pub fn preload_curated_fallbacks(&mut self) {
+        self.preload_fallback_chain(crate::fallback::CURATED_FALLBACK_FAMILIES);
+    }
+
     /// Резолвит `face_id` для `DrawText` с указанным `font-family` списком.
     /// Если `font_provider` есть — перебирает имена в порядке приоритета
     /// (CSS Fonts L4 §3.1), для первого найденного через `pick_face` — лениво

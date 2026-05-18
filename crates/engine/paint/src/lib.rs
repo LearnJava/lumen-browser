@@ -11,10 +11,12 @@
 pub mod atlas;
 pub mod compositor;
 pub mod display_list;
+pub mod fallback;
 pub mod hit_test;
 pub mod renderer;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};
+pub use fallback::CURATED_FALLBACK_FAMILIES;
 pub use compositor::{
     BasicLayer, BasicLayerTree, Compositor, InProcessCompositor, Layer, LayerTree,
 };
