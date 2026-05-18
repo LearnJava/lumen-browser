@@ -214,6 +214,23 @@ impl<'a> Font<'a> {
         crate::hvar::Hvar::parse(data)
     }
 
+    /// `MVAR` (Metrics Variations) — variation deltas для глобальных
+    /// метрик шрифта: x-height (`xhgt`), cap-height (`cpht`), underline
+    /// position/thickness (`undo`/`unds`), strikeout (`strs`/`stro`),
+    /// sub/super-script offsets (`sbxs`/`sbxy`/`sbxo`/`sbyo`/`spxs`/
+    /// `spxy`/`spxo`/`spyo`), ascender/descender и др. При активном
+    /// variation-instance caller берёт base-метрику из соответствующей
+    /// таблицы (`OS/2`/`hhea`/`post`/...), ищет ValueRecord через
+    /// `Mvar::lookup(tag)` и прибавляет delta из
+    /// `ItemVariationStore.evaluate(coords)` (когда `evaluate` будет
+    /// реализован). Возвращает `Err(TableNotFound)` для не-VF и для VF
+    /// без MVAR (legacy VF могут не иметь — в этом случае глобальные
+    /// метрики не варьируются).
+    pub fn mvar(&self) -> Result<crate::mvar::Mvar, FontError> {
+        let data = self.table(b"MVAR").ok_or(FontError::TableNotFound(*b"MVAR"))?;
+        crate::mvar::Mvar::parse(data)
+    }
+
     /// Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
     /// (например, space). Composite-глифы возвращаются с `Outline::Composite`
     /// (компонентами) — для разрешения в простые контуры используй
