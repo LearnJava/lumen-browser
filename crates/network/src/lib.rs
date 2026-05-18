@@ -151,14 +151,17 @@ impl Connection {
     /// добавляется только вместе с Range. Опциональный `authorization` —
     /// готовая строка для header `Authorization` (Basic / Digest),
     /// формируется на уровень выше после 401-retry.
+    #[allow(clippy::too_many_arguments)]
     fn write_request(
         &mut self,
+        method: &str,
         host: &str,
         path: &str,
         range: Option<&RangeSpec>,
         if_range: Option<&RangeValidator>,
         authorization: Option<&str>,
         accept_encoding: Option<&str>,
+        extra_headers: &str,
     ) -> Result<()> {
         let range_value = range.and_then(|r| r.header_value());
         let range_header = match &range_value {
@@ -180,8 +183,12 @@ impl Connection {
             Some(value) if !value.is_empty() => format!("Accept-Encoding: {value}\r\n"),
             _ => String::new(),
         };
+        // `extra_headers` уже содержит свои CRLF после каждой строки (формат
+        // pre-built). Используется CORS-путём для `Origin` / `Access-Control-*`
+        // и для пользовательских author-headers. Caller гарантирует, что
+        // среди них нет дублей `Host`/`Connection`/`Content-Length` и т.п.
         let req = format!(
-            "GET {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\n{accept_encoding_header}{range_header}{if_range_header}{auth_header}\r\n"
+            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\n{accept_encoding_header}{range_header}{if_range_header}{auth_header}{extra_headers}\r\n"
         );
         let stream = self.reader.get_mut();
         stream
@@ -518,12 +525,14 @@ fn fetch_single(
     host: &str,
     port: u16,
     is_tls: bool,
+    method: &str,
     request_host_header: &str,
     request_path: &str,
     range: Option<&RangeSpec>,
     if_range: Option<&RangeValidator>,
     authorization: Option<&str>,
     accept_encoding: Option<&str>,
+    extra_headers: &str,
 ) -> Result<Response> {
     let key = PoolKey {
         host: host.to_owned(),
@@ -535,12 +544,14 @@ fn fetch_single(
     if let Some(pooled) = pool.acquire(&key) {
         match do_request(
             pooled,
+            method,
             request_host_header,
             request_path,
             range,
             if_range,
             authorization,
             accept_encoding,
+            extra_headers,
         ) {
             Ok((resp, conn)) => {
                 if !conn.closed {
@@ -560,12 +571,14 @@ fn fetch_single(
     let conn = connect(host, port, is_tls, resolver)?;
     let (resp, conn) = do_request(
         conn,
+        method,
         request_host_header,
         request_path,
         range,
         if_range,
         authorization,
         accept_encoding,
+        extra_headers,
     )?;
     if !conn.closed {
         pool.release(key, conn);
@@ -576,16 +589,112 @@ fn fetch_single(
 #[allow(clippy::too_many_arguments)]
 fn do_request(
     mut conn: Connection,
+    method: &str,
     host: &str,
     path: &str,
     range: Option<&RangeSpec>,
     if_range: Option<&RangeValidator>,
     authorization: Option<&str>,
     accept_encoding: Option<&str>,
+    extra_headers: &str,
 ) -> Result<(Response, Connection)> {
-    conn.write_request(host, path, range, if_range, authorization, accept_encoding)?;
+    conn.write_request(
+        method,
+        host,
+        path,
+        range,
+        if_range,
+        authorization,
+        accept_encoding,
+        extra_headers,
+    )?;
     let resp = read_response(&mut conn)?;
     Ok((resp, conn))
+}
+
+// ── CORS context ─────────────────────────────────────────────────────────────
+
+/// Контекст CORS-enabled fetch-а, прокидывается через `fetch_with_redirect`
+/// на каждый hop. `cache` обязателен для memoization preflight-результатов
+/// по (requestor, target, credentials_mode). См. [`HttpClient::fetch_cors`].
+///
+/// На каждом hop:
+/// 1. Если `Origin::from_url(url) != requestor` (cross-origin) — собираем
+///    `CorsRequest` под текущий target и идём в preflight enforcement +
+///    actual-response validation.
+/// 2. Same-origin hop — поведение идентично обычному `fetch_subresource`
+///    (Origin header не шлётся, ACAO не проверяется).
+struct CorsContext<'a> {
+    requestor: Origin,
+    method: String,
+    headers: Vec<(String, String)>,
+    credentials_mode: cors::CredentialsMode,
+    cache: &'a cors::PreflightCache,
+}
+
+/// Эмит RequestBlocked + Err для CORS-отказа. Reason имеет формат
+/// `cors-<phase>: <CorsError>` чтобы наблюдатели могли различить preflight
+/// и actual-response failures.
+fn emit_cors_blocked(
+    sink: Option<&dyn EventSink>,
+    tab_id: TabId,
+    url: &Url,
+    phase: &str,
+    err: &cors::CorsError,
+) -> Error {
+    let reason = format!("cors-{phase}: {err}");
+    if let Some(s) = sink {
+        s.emit(&Event::RequestBlocked {
+            tab_id,
+            url: url.clone(),
+            reason: reason.clone(),
+        });
+    }
+    Error::Network(format!("blocked: {reason}"))
+}
+
+/// Собрать значение `extra_headers` для actual cross-origin запроса:
+/// `Origin` (RFC 6454 / Fetch §3.5) + author-headers, кроме тех, что мы и так
+/// формируем в `write_request` (Host / Connection / User-Agent / Accept /
+/// Accept-Encoding / Authorization / Range / If-Range). Author code НЕ должен
+/// эти заголовки ставить — Fetch §4.4.4 «forbidden request-header name»
+/// (caller отфильтровывал заранее), но защитимся case-insensitively.
+fn build_actual_cross_origin_headers(
+    requestor: &Origin,
+    author_headers: &[(String, String)],
+) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("Origin: {}\r\n", requestor.serialize()));
+    for (k, v) in author_headers {
+        let lower = k.to_ascii_lowercase();
+        if matches!(
+            lower.as_str(),
+            "host"
+                | "connection"
+                | "user-agent"
+                | "accept"
+                | "accept-encoding"
+                | "authorization"
+                | "range"
+                | "if-range"
+                | "content-length"
+                | "origin"
+        ) {
+            continue;
+        }
+        out.push_str(&format!("{k}: {v}\r\n"));
+    }
+    out
+}
+
+/// Заголовки для preflight (Fetch §4.8 step 2-7) в виде pre-formatted string.
+fn build_preflight_extra_headers(cors_req: &cors::CorsRequest) -> String {
+    let pairs = cors::build_preflight_headers(cors_req);
+    let mut out = String::new();
+    for (k, v) in pairs {
+        out.push_str(&format!("{k}: {v}\r\n"));
+    }
+    out
 }
 
 // ── Редиректы ────────────────────────────────────────────────────────────────
@@ -607,6 +716,7 @@ fn fetch_with_redirect(
     tab_id: TabId,
     mixed_content: Option<&MixedContentPolicy>,
     destination: Option<RequestDestination>,
+    cors_ctx: Option<&CorsContext<'_>>,
 ) -> Result<Response> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
@@ -676,6 +786,94 @@ fn fetch_with_redirect(
         return Err(Error::Network(format!("blocked: {reason}")));
     }
 
+    // CORS preflight enforcement (Fetch §4.8) — после mixed-content / filter,
+    // до RequestStarted / fetch_single. Включается только если caller
+    // создал `CorsContext` (через `HttpClient::fetch_cors`); top-level
+    // navigation и same-origin subresource этого не делают.
+    //
+    // Hop-локальная классификация: target_origin = Origin::from_url(url) на
+    // ТЕКУЩЕМ hop-е. Cross-origin → собираем `CorsRequest` под этот hop и:
+    //   1) lookup в кеше по `(requestor, target_origin, credentials_mode)`,
+    //      покрывает ли cached PreflightResult текущий method+headers;
+    //   2) если не покрывает И `needs_preflight(&req)` — шлём OPTIONS
+    //      preflight (метод OPTIONS, extra-headers = Origin / ACRM / ACRH).
+    //      На preflight тоже эмитятся RequestStarted+RequestCompleted —
+    //      этот байт пользователь видит (принцип №4 «каждый исходящий байт
+    //      виден»). При неуспехе — RequestBlocked + Err.
+    //   3) при cache-hit или successful preflight — продолжаем к actual.
+    //
+    // Same-origin или `cors_ctx == None` → ветка не активируется.
+    let mut cross_origin_target: Option<Origin> = None;
+    if let Some(cx) = cors_ctx
+        && let Ok(target_origin) = Origin::from_url(url)
+        && !cx.requestor.same_origin(&target_origin)
+    {
+        cross_origin_target = Some(target_origin.clone());
+        let cors_req = cors::CorsRequest {
+            origin: cx.requestor.clone(),
+            target: url.clone(),
+            method: cx.method.clone(),
+            headers: cx.headers.clone(),
+            credentials_mode: cx.credentials_mode,
+        };
+        // Cache hit shortcut.
+        if !cx.cache.allows(&cors_req) && cors::needs_preflight(&cors_req) {
+            if let Some(s) = sink {
+                s.emit(&Event::RequestStarted {
+                    tab_id,
+                    url: url.clone(),
+                });
+            }
+            let preflight_extra = build_preflight_extra_headers(&cors_req);
+            let preflight_resp = fetch_single(
+                pool,
+                resolver,
+                &host_ascii,
+                port,
+                is_tls,
+                "OPTIONS",
+                &host_ascii,
+                &url.path_and_query(),
+                None,
+                None,
+                None,
+                None,
+                &preflight_extra,
+            )?;
+            if let Some(s) = sink {
+                s.emit(&Event::RequestCompleted {
+                    tab_id,
+                    url: url.clone(),
+                    status: preflight_resp.status,
+                });
+            }
+            match cors::evaluate_preflight_response(
+                preflight_resp.status,
+                &preflight_resp.headers,
+                &cors_req,
+            ) {
+                Ok(result) => {
+                    cx.cache.insert(
+                        cx.requestor.clone(),
+                        target_origin,
+                        cx.credentials_mode,
+                        result,
+                    );
+                }
+                Err(err) => {
+                    return Err(emit_cors_blocked(sink, tab_id, url, "preflight", &err));
+                }
+            }
+        }
+    }
+
+    // Метод и cross-origin extra-headers для actual запроса.
+    let actual_method = cors_ctx.map(|cx| cx.method.as_str()).unwrap_or("GET");
+    let actual_extra_headers = match (cors_ctx, &cross_origin_target) {
+        (Some(cx), Some(_)) => build_actual_cross_origin_headers(&cx.requestor, &cx.headers),
+        _ => String::new(),
+    };
+
     // 401-retry loop: первый запрос без Authorization, при 401 + creds —
     // один retry с Authorization-header построенным из challenge. Больше
     // одного retry на hop запрещено (две 401 подряд = неверные creds).
@@ -700,12 +898,14 @@ fn fetch_with_redirect(
             &host_ascii,
             port,
             is_tls,
+            actual_method,
             &host_ascii,
             &url.path_and_query(),
             range,
             if_range,
             authorization.as_deref(),
             accept_encoding,
+            &actual_extra_headers,
         )?;
 
         // HSTS: сохранить policy из header-а, если ответ пришёл по HTTPS и
@@ -728,6 +928,25 @@ fn fetch_with_redirect(
             });
         }
 
+        // CORS actual-response validation (Fetch §4.10) — на каждом
+        // cross-origin hop, ДО status-branching. ACAO обязан присутствовать
+        // в любом cross-origin ответе (включая 3xx с body), иначе response
+        // — «cors-filtered», caller прав видеть тело не имеет. При ошибке
+        // эмитим RequestBlocked + Err. Auth-retry (401 без ACAO) ловится
+        // здесь же — это намеренно, без ACAO мы не имеем права повторять
+        // запрос с Authorization для CORS-режима.
+        if cross_origin_target.is_some()
+            && let Some(cx) = cors_ctx
+        {
+            if let Err(err) = cors::check_cors_response_headers(
+                &resp.headers,
+                &cx.requestor,
+                cx.credentials_mode,
+            ) {
+                return Err(emit_cors_blocked(sink, tab_id, url, "response", &err));
+            }
+        }
+
         match resp.status {
             200..=299 => {
                 // Content-Encoding decoding: применяется только к финальному
@@ -748,6 +967,9 @@ fn fetch_with_redirect(
                 // Range пробрасывается в redirect-target: пользователь
                 // запросил range на исходном URL, ожидает тот же range от
                 // final-resource (это и есть смысл redirect для range-GET).
+                // CORS context — тот же `requestor` через все hops, чтобы
+                // cross-origin redirect-hop re-classify-ился под актуальный
+                // target_origin (см. начало fetch_with_redirect).
                 return fetch_with_redirect(
                     &next,
                     hops_left - 1,
@@ -764,6 +986,7 @@ fn fetch_with_redirect(
                     tab_id,
                     mixed_content,
                     destination,
+                    cors_ctx,
                 );
             }
             401 if authorization.is_none() && credentials.is_some() => {
@@ -791,7 +1014,7 @@ fn fetch_with_redirect(
                     HttpAuthScheme::Digest => match auth::build_digest_authorization(
                         &creds,
                         parsed,
-                        "GET",
+                        actual_method,
                         &url.path_and_query(),
                     ) {
                         Some(h) => h,
@@ -828,6 +1051,7 @@ pub struct HttpClient {
     decoders: Vec<Arc<dyn ContentDecoder>>,
     tab_id: TabId,
     mixed_content: Option<MixedContentPolicy>,
+    cors_cache: Option<Arc<cors::PreflightCache>>,
 }
 
 impl HttpClient {
@@ -842,6 +1066,7 @@ impl HttpClient {
             decoders: Vec::new(),
             tab_id: TabId(0),
             mixed_content: None,
+            cors_cache: None,
         }
     }
 
@@ -1010,6 +1235,80 @@ impl HttpClient {
     /// open-ended `START-`, suffix `-N`); multi-range (`bytes=0-99,200-299`
     /// → multipart/byteranges) — не поддерживается. Range и `If-Range`
     /// пересылаются на redirect-target (3xx сохраняет conditional).
+    pub fn with_cors_cache(mut self, cache: Arc<cors::PreflightCache>) -> Self {
+        self.cors_cache = Some(cache);
+        self
+    }
+
+    /// CORS-enabled fetch для cross-origin subresource (Fetch §3-§4).
+    /// Поведение:
+    /// - Same-origin: тождественно `fetch(url)` — preflight не шлётся,
+    ///   Origin header не добавляется, ACAO не проверяется.
+    /// - Cross-origin без preflight (`needs_preflight(&req) == false`,
+    ///   например GET без custom headers и cookies-Omit): запрос уходит с
+    ///   `Origin`-header, ответ валидируется через `check_cors_response_headers`.
+    /// - Cross-origin с preflight: lookup в `PreflightCache`, если miss —
+    ///   отправляется OPTIONS preflight с `Origin`/`ACRM`/`ACRH`; ответ
+    ///   evaluatе через `evaluate_preflight_response`; успешный результат
+    ///   кешируется на `Access-Control-Max-Age` секунд. Затем actual
+    ///   запрос + actual-response validation.
+    /// - На каждом redirect-hop hop-локальный target_origin переклассифицируется
+    ///   (HTTPS → cross-origin redirect → re-preflight под новый target).
+    /// - При CORS-отказе (preflight или response) эмитится `RequestBlocked`
+    ///   с reason `cors-preflight: <CorsError>` или `cors-response: <CorsError>`,
+    ///   функция возвращает `Err`.
+    ///
+    /// **Требует `with_cors_cache(...)`** — без подключённого кеша вызов
+    /// возвращает Err. Кеш можно делить между несколькими `HttpClient`-ами
+    /// (через `Arc::clone`) — кэш thread-safe.
+    ///
+    /// Phase 0 ограничения:
+    /// - HttpClient в Phase 0 не поддерживает request body — POST/PUT/PATCH
+    ///   уходят без body (Content-Length: 0). Для preflight + ACAO-проверки
+    ///   это работает; для реальных XHR с JSON-body нужно body-pipeline.
+    /// - Cookie-jar не интегрирован, credentials_mode влияет только на
+    ///   ACAO=`*` rejection и ACAC=true requirement.
+    /// - Forbidden request-headers caller обязан отфильтровать заранее
+    ///   (`cors::is_forbidden_request_header`).
+    pub fn fetch_cors(
+        &self,
+        request: cors::CorsRequest,
+        destination: Option<RequestDestination>,
+    ) -> Result<Vec<u8>> {
+        let cache = self
+            .cors_cache
+            .as_deref()
+            .ok_or_else(|| Error::Network("CORS preflight cache not configured (call with_cors_cache)".to_owned()))?;
+        let target = request.target.clone();
+        let cors_ctx = CorsContext {
+            requestor: request.origin,
+            method: request.method,
+            headers: request.headers,
+            credentials_mode: request.credentials_mode,
+            cache,
+        };
+        let accept_encoding = self.accept_encoding_header();
+        fetch_with_redirect(
+            &target,
+            5,
+            &self.pool,
+            self.resolver.as_ref(),
+            self.sink.as_deref(),
+            self.filter.as_deref(),
+            self.hsts.as_deref(),
+            self.credentials.as_deref(),
+            &self.decoders,
+            accept_encoding.as_deref(),
+            None,
+            None,
+            self.tab_id,
+            self.mixed_content.as_ref(),
+            destination,
+            Some(&cors_ctx),
+        )
+        .map(|resp| resp.body)
+    }
+
     pub fn fetch_range(
         &self,
         url: &Url,
@@ -1032,6 +1331,7 @@ impl HttpClient {
             if_range.as_ref(),
             self.tab_id,
             self.mixed_content.as_ref(),
+            None,
             None,
         )?;
         let content_range = if resp.status == 206 {
@@ -1080,6 +1380,7 @@ impl HttpClient {
             self.tab_id,
             self.mixed_content.as_ref(),
             Some(destination),
+            None,
         )
         .map(|resp| resp.body)
     }
@@ -1103,6 +1404,7 @@ impl NetworkTransport for HttpClient {
             None,
             self.tab_id,
             self.mixed_content.as_ref(),
+            None,
             None,
         )
         .map(|resp| resp.body)
@@ -3330,6 +3632,391 @@ mod tests {
 
         let events = sink.events();
         assert!(!events.iter().any(|e| matches!(e, Event::RequestBlocked { .. })));
+
+        server.join().unwrap();
+    }
+
+    // ── CORS preflight enforcement (Fetch §3-§4) ─────────────────────────────
+
+    /// Mock-сервер, который capture-ит сырые request-headers каждого
+    /// принятого соединения (до пустой строки) и шлёт `responder(i)` —
+    /// одно соединение на запрос (server закрывает после ответа, чтобы тесты
+    /// не страдали от keep-alive interleaving).
+    fn mock_cors_server<F>(
+        accept_count: usize,
+        captured: Arc<Mutex<Vec<String>>>,
+        responder: F,
+    ) -> (u16, thread::JoinHandle<()>)
+    where
+        F: Fn(usize) -> Vec<u8> + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            for i in 1..=accept_count {
+                let (mut sock, _) = match listener.accept() {
+                    Ok(p) => p,
+                    Err(_) => break,
+                };
+                let mut reader = BufReader::new(sock.try_clone().unwrap());
+                let mut req = String::new();
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                        break;
+                    }
+                    let is_blank = line == "\r\n" || line == "\n";
+                    req.push_str(&line);
+                    if is_blank {
+                        break;
+                    }
+                }
+                captured.lock().unwrap().push(req);
+                let body = responder(i);
+                let _ = sock.write_all(&body);
+                let _ = sock.shutdown(std::net::Shutdown::Both);
+            }
+        });
+        (port, handle)
+    }
+
+    fn cross_origin_requestor() -> Origin {
+        Origin::from_url(&Url::parse("https://app.example.com/").unwrap()).unwrap()
+    }
+
+    fn cors_request(method: &str, target: &Url, headers: &[(&str, &str)]) -> CorsRequest {
+        CorsRequest {
+            origin: cross_origin_requestor(),
+            target: target.clone(),
+            method: method.to_owned(),
+            headers: headers
+                .iter()
+                .map(|(k, v)| ((*k).to_owned(), (*v).to_owned()))
+                .collect(),
+            credentials_mode: CredentialsMode::SameOrigin,
+        }
+    }
+
+    #[test]
+    fn fetch_cors_requires_cache() {
+        // Без with_cors_cache fetch_cors возвращает Err и в сеть НЕ ходит.
+        let url = Url::parse("http://nonexistent.invalid/").unwrap();
+        let client = HttpClient::new();
+        let err = client
+            .fetch_cors(cors_request("GET", &url, &[]), None)
+            .expect_err("must error without cache");
+        assert!(
+            format!("{err:?}").contains("CORS preflight cache not configured"),
+            "got: {err:?}"
+        );
+    }
+
+    #[test]
+    fn fetch_cors_simple_get_no_preflight_with_acao() {
+        // CORS-safelisted GET без custom headers → preflight НЕ нужен; одна
+        // accept-итерация. Сервер обязан вернуть `Access-Control-Allow-Origin`,
+        // иначе actual-response validation падает.
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_cors_server(1, captured.clone(), |_| {
+            b"HTTP/1.1 200 OK\r\n\
+              Access-Control-Allow-Origin: https://app.example.com\r\n\
+              Content-Length: 4\r\n\
+              Connection: close\r\n\r\nbody"
+                .to_vec()
+        });
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_sink(sink.clone())
+            .with_cors_cache(Arc::new(PreflightCache::new()));
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/api/data")).unwrap();
+        let body = client
+            .fetch_cors(cors_request("GET", &url, &[]), None)
+            .expect("fetch");
+        assert_eq!(body, b"body");
+
+        // Один запрос — actual GET, без preflight.
+        let reqs = captured.lock().unwrap().clone();
+        assert_eq!(reqs.len(), 1);
+        assert!(reqs[0].starts_with("GET /api/data "), "got: {:?}", reqs[0]);
+        // Origin header обязан присутствовать на cross-origin.
+        assert!(
+            reqs[0].contains("Origin: https://app.example.com"),
+            "missing Origin: {:?}",
+            reqs[0]
+        );
+
+        // Только Started + Completed — без preflight pair.
+        let events = sink.events();
+        assert_eq!(events.len(), 2, "got: {events:?}");
+        assert!(matches!(events[0], Event::RequestStarted { .. }));
+        assert!(matches!(events[1], Event::RequestCompleted { status: 200, .. }));
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_cors_simple_get_missing_acao_blocks() {
+        // Cross-origin GET без Access-Control-Allow-Origin в ответе →
+        // RequestBlocked + Err. Проверяет actual-response validation.
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_cors_server(1, captured.clone(), |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
+        });
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_sink(sink.clone())
+            .with_cors_cache(Arc::new(PreflightCache::new()));
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/api")).unwrap();
+        let err = client
+            .fetch_cors(cors_request("GET", &url, &[]), None)
+            .expect_err("must block on missing ACAO");
+        assert!(
+            format!("{err:?}").contains("cors-response"),
+            "got: {err:?}"
+        );
+
+        // Events: Started → Completed (got actual response) → Blocked.
+        let events = sink.events();
+        assert_eq!(events.len(), 3, "got: {events:?}");
+        assert!(matches!(events[0], Event::RequestStarted { .. }));
+        assert!(matches!(events[1], Event::RequestCompleted { status: 200, .. }));
+        match &events[2] {
+            Event::RequestBlocked { reason, .. } => {
+                assert!(reason.starts_with("cors-response: "), "got: {reason}");
+                assert!(reason.contains("Access-Control-Allow-Origin"), "got: {reason}");
+            }
+            other => panic!("expected RequestBlocked, got {other:?}"),
+        }
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_cors_custom_header_triggers_preflight_then_actual() {
+        // GET с X-Custom header → preflight OPTIONS обязательно. Сервер
+        // отвечает 204 на OPTIONS (с ACAO+ACAH), затем 200 на GET (с ACAO).
+        // Ожидаем: 2 accept-итерации, 4 события (2×Started+Completed).
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_cors_server(2, captured.clone(), |i| match i {
+            1 => b"HTTP/1.1 204 No Content\r\n\
+                   Access-Control-Allow-Origin: https://app.example.com\r\n\
+                   Access-Control-Allow-Headers: x-custom\r\n\
+                   Content-Length: 0\r\n\
+                   Connection: close\r\n\r\n"
+                .to_vec(),
+            2 => b"HTTP/1.1 200 OK\r\n\
+                   Access-Control-Allow-Origin: https://app.example.com\r\n\
+                   Content-Length: 4\r\n\
+                   Connection: close\r\n\r\nbody"
+                .to_vec(),
+            _ => unreachable!(),
+        });
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_sink(sink.clone())
+            .with_cors_cache(Arc::new(PreflightCache::new()));
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/api")).unwrap();
+        let body = client
+            .fetch_cors(cors_request("GET", &url, &[("X-Custom", "yes")]), None)
+            .expect("fetch");
+        assert_eq!(body, b"body");
+
+        let reqs = captured.lock().unwrap().clone();
+        assert_eq!(reqs.len(), 2, "expected preflight + actual, got: {reqs:?}");
+        // 1) Preflight OPTIONS с Access-Control-Request-Method + Request-Headers.
+        assert!(reqs[0].starts_with("OPTIONS /api "), "got: {:?}", reqs[0]);
+        assert!(
+            reqs[0].contains("Access-Control-Request-Method: GET"),
+            "missing ACRM: {:?}",
+            reqs[0]
+        );
+        assert!(
+            reqs[0]
+                .to_ascii_lowercase()
+                .contains("access-control-request-headers: x-custom"),
+            "missing ACRH: {:?}",
+            reqs[0]
+        );
+        assert!(reqs[0].contains("Origin: https://app.example.com"));
+        // 2) Actual GET c Origin + X-Custom.
+        assert!(reqs[1].starts_with("GET /api "), "got: {:?}", reqs[1]);
+        assert!(reqs[1].contains("Origin: https://app.example.com"));
+        assert!(reqs[1].contains("X-Custom: yes"));
+
+        // 4 события: preflight Started+Completed, actual Started+Completed.
+        let events = sink.events();
+        assert_eq!(events.len(), 4, "got: {events:?}");
+        match &events[1] {
+            Event::RequestCompleted { status, .. } => assert_eq!(*status, 204),
+            other => panic!("expected preflight Completed(204), got {other:?}"),
+        }
+        match &events[3] {
+            Event::RequestCompleted { status, .. } => assert_eq!(*status, 200),
+            other => panic!("expected actual Completed(200), got {other:?}"),
+        }
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_cors_preflight_rejected_blocks_before_actual() {
+        // Preflight 200 без ACAO → evaluate_preflight_response падает,
+        // actual request НЕ отправляется. Server accept_count=1
+        // подтверждает, что второго соединения не было.
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_cors_server(1, captured.clone(), |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".to_vec()
+        });
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_sink(sink.clone())
+            .with_cors_cache(Arc::new(PreflightCache::new()));
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/api")).unwrap();
+        let err = client
+            .fetch_cors(cors_request("GET", &url, &[("X-Custom", "x")]), None)
+            .expect_err("preflight must fail");
+        assert!(
+            format!("{err:?}").contains("cors-preflight"),
+            "got: {err:?}"
+        );
+
+        // Только preflight запрос — actual не ушёл.
+        let reqs = captured.lock().unwrap().clone();
+        assert_eq!(reqs.len(), 1, "got: {reqs:?}");
+        assert!(reqs[0].starts_with("OPTIONS "));
+
+        // Events: Started(preflight), Completed(preflight), Blocked.
+        let events = sink.events();
+        assert_eq!(events.len(), 3, "got: {events:?}");
+        match &events[2] {
+            Event::RequestBlocked { reason, .. } => {
+                assert!(reason.starts_with("cors-preflight: "), "got: {reason}");
+            }
+            other => panic!("expected RequestBlocked, got {other:?}"),
+        }
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_cors_preflight_cached_skips_second_options() {
+        // Первый запрос с PUT (non-simple) → preflight + actual. Кеш
+        // запоминает на max-age=600 секунд. Второй идентичный запрос
+        // обходит preflight (cache hit) и идёт сразу к actual.
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_cors_server(3, captured.clone(), |i| match i {
+            1 => b"HTTP/1.1 204 No Content\r\n\
+                   Access-Control-Allow-Origin: https://app.example.com\r\n\
+                   Access-Control-Allow-Methods: PUT\r\n\
+                   Access-Control-Max-Age: 600\r\n\
+                   Content-Length: 0\r\n\
+                   Connection: close\r\n\r\n"
+                .to_vec(),
+            2 | 3 => b"HTTP/1.1 200 OK\r\n\
+                       Access-Control-Allow-Origin: https://app.example.com\r\n\
+                       Content-Length: 2\r\n\
+                       Connection: close\r\n\r\nok"
+                .to_vec(),
+            _ => unreachable!(),
+        });
+
+        let sink = Arc::new(CollectingSink::new());
+        let cache = Arc::new(PreflightCache::new());
+        let client = HttpClient::new()
+            .with_sink(sink.clone())
+            .with_cors_cache(cache.clone());
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/api")).unwrap();
+
+        // 1-я итерация: preflight + actual = 2 accept-а.
+        client
+            .fetch_cors(cors_request("PUT", &url, &[]), None)
+            .expect("first call");
+        // 2-я итерация: только actual (cache hit) = 1 accept.
+        client
+            .fetch_cors(cors_request("PUT", &url, &[]), None)
+            .expect("second call");
+
+        let reqs = captured.lock().unwrap().clone();
+        assert_eq!(reqs.len(), 3, "expected preflight + 2×actual, got: {reqs:?}");
+        assert!(reqs[0].starts_with("OPTIONS "), "got: {:?}", reqs[0]);
+        assert!(reqs[1].starts_with("PUT "), "got: {:?}", reqs[1]);
+        assert!(reqs[2].starts_with("PUT "), "got: {:?}", reqs[2]);
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_cors_credentials_include_rejects_wildcard_acao() {
+        // credentials_mode=Include требует explicit-Origin, ACAO=`*`
+        // обязан быть отвергнут (Fetch §4.10 шаг 2).
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_cors_server(1, captured.clone(), |_| {
+            b"HTTP/1.1 200 OK\r\n\
+              Access-Control-Allow-Origin: *\r\n\
+              Access-Control-Allow-Credentials: true\r\n\
+              Content-Length: 2\r\n\
+              Connection: close\r\n\r\nok"
+                .to_vec()
+        });
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_sink(sink.clone())
+            .with_cors_cache(Arc::new(PreflightCache::new()));
+        let url = Url::parse(&format!("http://127.0.0.1:{port}/api")).unwrap();
+        let mut request = cors_request("GET", &url, &[]);
+        request.credentials_mode = CredentialsMode::Include;
+        let err = client
+            .fetch_cors(request, None)
+            .expect_err("wildcard ACAO with credentials must block");
+        assert!(
+            format!("{err:?}").contains("cors-response"),
+            "got: {err:?}"
+        );
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_cors_same_origin_skips_enforcement() {
+        // Если requestor.origin == target.origin — preflight не нужен,
+        // ACAO не проверяется (даже отсутствует — ок). Сервер не возвращает
+        // никаких CORS headers, и запрос проходит как обычный fetch.
+        let captured: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let (port, server) = mock_cors_server(1, captured.clone(), |_| {
+            b"HTTP/1.1 200 OK\r\nContent-Length: 4\r\nConnection: close\r\n\r\nsame".to_vec()
+        });
+        // Origin совпадает с target: http://127.0.0.1:PORT.
+        let target = Url::parse(&format!("http://127.0.0.1:{port}/local")).unwrap();
+        let requestor = Origin::from_url(&target).unwrap();
+
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_sink(sink.clone())
+            .with_cors_cache(Arc::new(PreflightCache::new()));
+        let req = CorsRequest {
+            origin: requestor,
+            target,
+            method: "GET".to_owned(),
+            headers: vec![("X-Custom".to_owned(), "y".to_owned())],
+            credentials_mode: CredentialsMode::Include,
+        };
+        assert_eq!(client.fetch_cors(req, None).unwrap(), b"same");
+
+        let reqs = captured.lock().unwrap().clone();
+        assert_eq!(reqs.len(), 1);
+        // Single GET — no preflight даже при non-simple header.
+        assert!(reqs[0].starts_with("GET "), "got: {:?}", reqs[0]);
+        // Origin header НЕ шлётся для same-origin запроса.
+        assert!(
+            !reqs[0].contains("Origin:"),
+            "Origin should not be set: {:?}",
+            reqs[0]
+        );
 
         server.join().unwrap();
     }
