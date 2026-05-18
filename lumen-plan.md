@@ -13,6 +13,7 @@
 - 🔄 Paint order consumer (P2 2A renderer-side) [P2] — paint-order-consumer — 2026-05-15
 - 🔄 CSS image-rendering parsing/storage [P1] — css-image-rendering — 2026-05-15
 - 🔄 transition shorthand parsing (P1 3A finish) [P1] — transition-shorthand — 2026-05-15
+- 🔄 text-decoration-style + text-decoration-thickness longhands (CSS Text Decoration L3 §2.2/§2.3) [P1] — text-decoration-style-thickness — 2026-05-18
 
 ## Статус реализации
 
