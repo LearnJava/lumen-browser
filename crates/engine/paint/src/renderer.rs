@@ -1062,6 +1062,55 @@ impl Renderer {
                         font_variation_coords,
                     );
                 }
+                DisplayCommand::DrawOutline { rect, width, style: _, color, offset } => {
+                    // CSS Basic UI L4 §5: outline рисуется СНАРУЖИ box-а.
+                    // Outer rect = box + outline-offset (по всем сторонам) +
+                    // outline-width (тоже по всем сторонам). Inner граница =
+                    // box + outline-offset. Phase 0: все стили (Solid /
+                    // Dashed / Dotted / Auto) рисуются как Solid — 4
+                    // fill-quad-а вокруг inner rect, идентично DrawBorder
+                    // (но снаружи box, а не внутри). Реальные стили
+                    // dashed/dotted это P2 п.5+, как и для DrawBorder.
+                    if *width <= 0.0 {
+                        continue;
+                    }
+                    let r = translate_rect_y(*rect, dy);
+                    // Inflate на offset: outline начинается на расстоянии
+                    // offset от box.
+                    let inner = Rect::new(
+                        r.x - offset,
+                        r.y - offset,
+                        r.width + 2.0 * offset,
+                        r.height + 2.0 * offset,
+                    );
+                    let w = *width;
+                    let c = color_to_array(color);
+                    // Top: горизонтальная полоса над inner, от inner.x-w до
+                    // inner.x+inner.width+w (углы "outset" stroke).
+                    push_fill_quad(
+                        &mut fill_vertices,
+                        Rect::new(inner.x - w, inner.y - w, inner.width + 2.0 * w, w),
+                        c,
+                    );
+                    // Bottom.
+                    push_fill_quad(
+                        &mut fill_vertices,
+                        Rect::new(inner.x - w, inner.y + inner.height, inner.width + 2.0 * w, w),
+                        c,
+                    );
+                    // Left (между top и bottom, чтобы не двоиться в углах).
+                    push_fill_quad(
+                        &mut fill_vertices,
+                        Rect::new(inner.x - w, inner.y, w, inner.height),
+                        c,
+                    );
+                    // Right.
+                    push_fill_quad(
+                        &mut fill_vertices,
+                        Rect::new(inner.x + inner.width, inner.y, w, inner.height),
+                        c,
+                    );
+                }
                 DisplayCommand::DrawImage {
                     rect,
                     src,

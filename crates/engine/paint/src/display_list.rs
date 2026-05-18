@@ -9,8 +9,9 @@
 use lumen_core::geom::Rect;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, BoxKind, Color, FontStyle, FontWeight,
-    InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition, Overflow,
-    PaintOrder, PaintPhase, PositionComponent, StackingContextId, StackingTree,
+    InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
+    OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent,
+    StackingContextId, StackingTree,
 };
 
 /// CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
@@ -92,6 +93,22 @@ pub enum DisplayCommand {
         widths: [f32; 4],
         /// Цвета сторон: [top, right, bottom, left].
         colors: [Color; 4],
+    },
+    /// CSS Basic UI L4 §5 — `outline`. Рисуется СНАРУЖИ box-а (в отличие
+    /// от border, который часть box-model), не занимает место в layout,
+    /// может перекрывать соседей и не ловит pointer-события. `rect` —
+    /// исходная коробка box-а (renderer сам расширит её на `offset` и
+    /// `width`). `style` ≠ None / Hidden — иначе emit не происходит.
+    /// `color` уже разрешён в конкретный `Color` на emission-стороне
+    /// (Auto / CurrentColor резолвится в `style.color`).
+    /// Phase 0: renderer рисует только `Solid` (Dashed / Dotted / Auto
+    /// fallback на Solid — как `DrawBorder` делает с Double).
+    DrawOutline {
+        rect: Rect,
+        width: f32,
+        style: OutlineStyle,
+        color: Color,
+        offset: f32,
     },
     DrawText {
         rect: Rect,
@@ -370,6 +387,20 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                 }
                 out.push('\n');
             }
+            DisplayCommand::DrawOutline { rect, width, style, color, offset } => {
+                out.push_str(&format!(
+                    "DrawOutline ({:.2}, {:.2}, {:.2}, {:.2}) w={:.2} \
+                     s={} #{:02x}{:02x}{:02x}{:02x}",
+                    rect.x, rect.y, rect.width, rect.height,
+                    width,
+                    outline_style_name(*style),
+                    color.r, color.g, color.b, color.a,
+                ));
+                if *offset != 0.0 {
+                    out.push_str(&format!(" off={offset:.2}"));
+                }
+                out.push('\n');
+            }
             DisplayCommand::DrawImage { rect, src, alt, object_fit, object_position } => {
                 out.push_str(&format!(
                     "DrawImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?} alt={alt:?}",
@@ -411,6 +442,16 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
         }
     }
     out
+}
+
+fn outline_style_name(s: OutlineStyle) -> &'static str {
+    match s {
+        OutlineStyle::None => "none",
+        OutlineStyle::Auto => "auto",
+        OutlineStyle::Solid => "solid",
+        OutlineStyle::Dashed => "dashed",
+        OutlineStyle::Dotted => "dotted",
+    }
 }
 
 fn blend_mode_name(m: BlendMode) -> &'static str {
@@ -670,6 +711,33 @@ fn fill_buckets(
     }
 }
 
+/// Если у box-а видимый `outline` — эмитит `DrawOutline`. Caller гарантирует
+/// правильный порядок (outline рисуется ПОВЕРХ контента box-а и его детей,
+/// но в **рамках своей stacking phase** — Phase 0 без точного разделения
+/// фаз outline эмитится сразу после background/border bounding-box-а у
+/// `emit_box_self` и после children в `walk`, чтобы потомки не закрывали
+/// его пиксели в случае negative `outline-offset`).
+///
+/// Per CSS Basic UI L4 §5.4: `OutlineColor::Auto` / `CurrentColor`
+/// резолвятся в `style.color` (Phase 0 без UA contrast-цвета).
+fn emit_outline(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
+    let s = &b.style;
+    if !s.outline_style.is_visible() || s.outline_width <= 0.0 {
+        return;
+    }
+    let color = match s.outline_color {
+        OutlineColor::Color(c) => c,
+        OutlineColor::Auto | OutlineColor::CurrentColor => s.color,
+    };
+    out.push(DisplayCommand::DrawOutline {
+        rect: b.rect,
+        width: s.outline_width,
+        style: s.outline_style,
+        color,
+        offset: s.outline_offset,
+    });
+}
+
 /// Эмитит DisplayCommand-ы для одного box-а БЕЗ рекурсии в детей. Аналог
 /// тела `walk` для одного box-а.
 fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
@@ -707,6 +775,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     ],
                 });
             }
+            emit_outline(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
             let line_h = b.style.font_size * b.style.line_height;
@@ -770,6 +839,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 object_fit: b.style.object_fit,
                 object_position: b.style.object_position,
             });
+            emit_outline(b, out);
         }
     }
 }
@@ -810,6 +880,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             for child in &b.children {
                 walk(child, out);
             }
+            // CSS Basic UI L4 §5: outline рисуется поверх контента box-а
+            // (включая children), снаружи bounding-box-а. Phase 0 без
+            // деления paint phases для outline — эмитим в конце box-walk-а.
+            emit_outline(b, out);
         }
         BoxKind::InlineBlockRow => {
             // Анонимный контейнер: нет фона/бордера собственного.
@@ -885,6 +959,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 object_fit: b.style.object_fit,
                 object_position: b.style.object_position,
             });
+            emit_outline(b, out);
         }
     }
 }
@@ -1402,6 +1477,7 @@ mod tests {
             .map(|c| match c {
                 DisplayCommand::FillRect { .. } => "FillRect",
                 DisplayCommand::DrawBorder { .. } => "DrawBorder",
+                DisplayCommand::DrawOutline { .. } => "DrawOutline",
                 DisplayCommand::DrawImage { .. } => "DrawImage",
                 DisplayCommand::DrawText { .. } => "DrawText",
                 DisplayCommand::PushClipRect { .. } => "PushClipRect",
@@ -2095,5 +2171,135 @@ mod tests {
             &lumen_layout::PaintOrder::default(),
         );
         assert!(dl.is_empty(), "пустой PaintOrder → пустой display list");
+    }
+
+    // ───────── outline rendering ─────────
+
+    fn outlines(dl: &DisplayList) -> Vec<(&Color, f32, f32, OutlineStyle)> {
+        dl.iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawOutline { color, width, offset, style, .. } => {
+                    Some((color, *width, *offset, *style))
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn outline_solid_emits_draw_outline() {
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; outline: 2px solid red; }",
+        );
+        let o = outlines(&dl);
+        assert_eq!(o.len(), 1, "ровно одна DrawOutline на div");
+        let (color, width, offset, style) = o[0];
+        assert_eq!(color.r, 255);
+        assert!((width - 2.0).abs() < 0.01);
+        assert!((offset - 0.0).abs() < 0.01);
+        assert_eq!(style, OutlineStyle::Solid);
+    }
+
+    #[test]
+    fn outline_none_emits_nothing() {
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; outline: 2px none red; }",
+        );
+        assert!(outlines(&dl).is_empty(), "outline:none → no DrawOutline");
+    }
+
+    #[test]
+    fn outline_zero_width_emits_nothing() {
+        // outline-width: 0 → invisible (CSS Basic UI L4 §5.1).
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; outline: 0 solid red; }",
+        );
+        assert!(outlines(&dl).is_empty(), "outline-width:0 → no DrawOutline");
+    }
+
+    #[test]
+    fn outline_offset_is_preserved() {
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; \
+             outline: 2px solid red; outline-offset: 5px; }",
+        );
+        let o = outlines(&dl);
+        assert_eq!(o.len(), 1);
+        assert!((o[0].2 - 5.0).abs() < 0.01, "offset=5px должен сохраниться");
+    }
+
+    #[test]
+    fn outline_color_currentcolor_resolves_to_text_color() {
+        // currentColor → CSS color (Phase 0 reduces Auto/CurrentColor to color).
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; color: rgb(10, 20, 30); \
+             outline: 2px solid currentColor; }",
+        );
+        let o = outlines(&dl);
+        assert_eq!(o.len(), 1);
+        let (color, _, _, _) = o[0];
+        assert_eq!((color.r, color.g, color.b), (10, 20, 30));
+    }
+
+    #[test]
+    fn outline_after_children_in_walk() {
+        // Outline parent-а должен идти ПОСЛЕ background ребёнка — иначе при
+        // негативном outline-offset (Phase 2) outline парента закрывался бы
+        // содержимым ребёнка. Phase 0 проверка ordering: DrawOutline
+        // последняя из своего box-а.
+        let dl = build(
+            "<div><p></p></div>",
+            "div { width: 100px; height: 50px; outline: 2px solid red; } \
+             p { display: block; background: blue; width: 30px; height: 10px; }",
+        );
+        let outline_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::DrawOutline { .. }))
+            .expect("должна быть DrawOutline");
+        // FillRect ребёнка (background: blue) должен идти раньше DrawOutline.
+        let child_bg_idx = dl
+            .iter()
+            .enumerate()
+            .find(|(_, c)| matches!(c, DisplayCommand::FillRect { color, .. } if color.b == 255))
+            .map(|(i, _)| i)
+            .expect("должен быть синий FillRect ребёнка");
+        assert!(
+            child_bg_idx < outline_idx,
+            "outline (idx {outline_idx}) должен идти после child background (idx {child_bg_idx})"
+        );
+    }
+
+    #[test]
+    fn outline_serializes_with_short_offset_only_when_nonzero() {
+        // DrawOutline с offset=0 не выводит `off=…` в сериализацию (как
+        // DrawText опускает default-значения).
+        let mut dl = DisplayList::new();
+        dl.push(DisplayCommand::DrawOutline {
+            rect: Rect::new(0.0, 0.0, 100.0, 50.0),
+            width: 2.0,
+            style: OutlineStyle::Solid,
+            color: Color { r: 255, g: 0, b: 0, a: 255 },
+            offset: 0.0,
+        });
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("DrawOutline (0.00, 0.00, 100.00, 50.00) w=2.00 s=solid #ff0000ff"));
+        assert!(!s.contains("off="));
+
+        // Non-zero offset → должен присутствовать.
+        let mut dl2 = DisplayList::new();
+        dl2.push(DisplayCommand::DrawOutline {
+            rect: Rect::new(0.0, 0.0, 100.0, 50.0),
+            width: 2.0,
+            style: OutlineStyle::Solid,
+            color: Color { r: 255, g: 0, b: 0, a: 255 },
+            offset: 5.0,
+        });
+        let s2 = serialize_display_list(&dl2);
+        assert!(s2.contains("off=5.00"));
     }
 }
