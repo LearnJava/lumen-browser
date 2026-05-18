@@ -730,6 +730,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 }
             }
         }
+        BoxKind::InlineBlockRow => {}
         BoxKind::Image { src, alt } => {
             if let Some(bg) = b.style.background_color
                 && bg.a > 0
