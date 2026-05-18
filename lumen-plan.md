@@ -11,6 +11,7 @@
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
 - 🔄 Variable fonts: glyph_resolved + coords [P2] — variable-fonts-glyph-resolved — 2026-05-18
+- 🔄 CSS background-clip + background-origin (Backgrounds L3 §3.7-§3.8) [P1] — background-clip-origin — 2026-05-18
 
 ## Статус реализации
 
