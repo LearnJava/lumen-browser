@@ -3124,6 +3124,8 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // принципу проекта №1: ничего не утекает через стилизацию).
         PseudoClass::Visited => false,
         PseudoClass::AnyLink => matches_any_link(doc, node),
+        PseudoClass::InRange => matches_in_range(doc, node) == Some(true),
+        PseudoClass::OutOfRange => matches_in_range(doc, node) == Some(false),
         PseudoClass::Unsupported(_) => false,
     }
 }
@@ -3671,6 +3673,88 @@ fn matches_any_link(doc: &Document, node: NodeId) -> bool {
         return false;
     }
     node_ref.get_attr("href").is_some()
+}
+
+/// Общий matcher для `:in-range` / `:out-of-range` (CSS Selectors L4 §14.5,
+/// HTML5 §4.10.21.4 «Range checks»).
+///
+/// Возвращает:
+/// - `Some(true)` — элемент имеет range-limitations и его текущее value
+///   попадает в `[min, max]` → матчит `:in-range`;
+/// - `Some(false)` — имеет range-limitations и value вне диапазона → матчит
+///   `:out-of-range`;
+/// - `None` — элемент не имеет range-limitations либо не имеет «отображаемого»
+///   значения (пустое/невалидное value) → не матчит ни одну pseudo.
+///
+/// Поддерживаемые типы в Phase 0: `number`, `range`. Для type=range дефолтный
+/// диапазон `[0, 100]` существует всегда (HTML5 §4.10.5.1.13), `value`
+/// атрибут опционален: при отсутствии берётся середина `(min+max)/2`,
+/// clamped в `[min, max]` (поведение spec для initial state of range input).
+///
+/// Date / month / week / time / datetime-local пока возвращают `None` —
+/// корректное сравнение требует нормализации формата (для `time` и
+/// `datetime-local` seconds опциональны, fractional seconds произвольной
+/// длины), что выходит за рамки этой задачи. Когда поддержка появится,
+/// добавится отдельная ветка без изменения публичного API.
+fn matches_in_range(doc: &Document, node: NodeId) -> Option<bool> {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else {
+        return None;
+    };
+    if name.local.as_str() != "input" {
+        return None;
+    }
+    let t = input_type_lower(doc, node);
+    let supports_numeric = matches!(t.as_str(), "number" | "range");
+    if !supports_numeric {
+        // date / month / week / time / datetime-local — отложено, см. doc-комментарий.
+        return None;
+    }
+
+    let min_attr = node_ref.get_attr("min").and_then(parse_html_number);
+    let max_attr = node_ref.get_attr("max").and_then(parse_html_number);
+
+    let (min, max) = match t.as_str() {
+        "range" => (min_attr.unwrap_or(0.0), max_attr.unwrap_or(100.0)),
+        _ => {
+            // Без min и без max — у элемента нет range-limitations.
+            if min_attr.is_none() && max_attr.is_none() {
+                return None;
+            }
+            (min_attr.unwrap_or(f64::NEG_INFINITY), max_attr.unwrap_or(f64::INFINITY))
+        }
+    };
+
+    // HTML5: min > max — обмен в spec не делают, range остаётся пустым.
+    // Тогда любое value out-of-range, но lower/upper bound становятся
+    // одинаковыми (default value for range = min). Берём value как есть.
+    let value = match node_ref.get_attr("value").and_then(parse_html_number) {
+        Some(v) => v,
+        None => {
+            if t == "range" {
+                // Spec §4.10.5.1.13 «Range state»: default value = min + (max-min)/2,
+                // clamped to [min, max]. Range всегда имеет displayed value.
+                let mid = min + (max - min) / 2.0;
+                mid.clamp(min, max)
+            } else {
+                return None;
+            }
+        }
+    };
+
+    Some(value >= min && value <= max)
+}
+
+/// Парсит строку как HTML5 «valid floating-point number» (§2.5.5) с
+/// упрощениями Phase 0: используем `f64::from_str`, дополнительно отбрасываем
+/// NaN / ±∞ и leading `+` (HTML5 не допускает; Rust допускает).
+fn parse_html_number(s: &str) -> Option<f64> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() || trimmed.starts_with('+') {
+        return None;
+    }
+    let v: f64 = trimmed.parse().ok()?;
+    if v.is_finite() { Some(v) } else { None }
 }
 
 /// `:dir(ltr|rtl)` (CSS Selectors L4 §13.2). Матчит элемент с

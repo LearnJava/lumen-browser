@@ -1518,6 +1518,185 @@ mod tests {
         assert_eq!((c.r, c.b), (0, 255));
     }
 
+    // ──────────────── :in-range / :out-of-range (CSS Selectors L4 §14.5) ────────────────
+
+    #[test]
+    fn in_range_number_value_within_min_max() {
+        let c = element_color(
+            r#"<input type="number" min="1" max="10" value="5">"#,
+            "input:in-range { color: red; }",
+            "input",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn out_of_range_number_value_above_max() {
+        let c = element_color(
+            r#"<input type="number" min="1" max="10" value="15">"#,
+            "input:out-of-range { color: red; }",
+            "input",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn out_of_range_number_value_below_min() {
+        let c = element_color(
+            r#"<input type="number" min="0" max="10" value="-5">"#,
+            "input:out-of-range { color: red; }",
+            "input",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn in_range_value_equals_max_endpoint() {
+        // Spec §4.10.21.4: «greater than max» = strict. Value == max → in-range.
+        let c = element_color(
+            r#"<input type="number" min="0" max="10" value="10">"#,
+            "input:in-range { color: red; }",
+            "input",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn in_range_only_min_attribute() {
+        // Range exists даже если только min — :in-range / :out-of-range
+        // зависят от значения (max = +∞).
+        let c = element_color(
+            r#"<input type="number" min="0" value="100">"#,
+            "input:in-range { color: red; }",
+            "input",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn out_of_range_only_min_attribute_value_below() {
+        let c = element_color(
+            r#"<input type="number" min="0" value="-1">"#,
+            "input:out-of-range { color: red; }",
+            "input",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn neither_when_no_min_no_max() {
+        // Нет range-limitations → не матчит ни одну pseudo.
+        let c = element_color(
+            r#"<input type="number" value="5">"#,
+            "input:in-range { color: red; } input:out-of-range { color: blue; }",
+            "input",
+        );
+        assert_eq!((c.r, c.b), (0, 0));
+    }
+
+    #[test]
+    fn neither_when_value_missing() {
+        // Нет displayed value (для number) → не матчит ни одну.
+        let c = element_color(
+            r#"<input type="number" min="1" max="10">"#,
+            "input:in-range { color: red; } input:out-of-range { color: blue; }",
+            "input",
+        );
+        assert_eq!((c.r, c.b), (0, 0));
+    }
+
+    #[test]
+    fn neither_when_value_invalid() {
+        // Невалидное value → нет displayed numeric value → не матчит.
+        let c = element_color(
+            r#"<input type="number" min="1" max="10" value="abc">"#,
+            "input:in-range { color: red; } input:out-of-range { color: blue; }",
+            "input",
+        );
+        assert_eq!((c.r, c.b), (0, 0));
+    }
+
+    #[test]
+    fn in_range_text_input_skipped() {
+        // type=text не поддерживает range — :in-range не матчит даже если
+        // min/max выставлены.
+        let c = element_color(
+            r#"<input type="text" min="1" max="10" value="5">"#,
+            "input:in-range { color: red; }",
+            "input",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    #[test]
+    fn in_range_textarea_skipped() {
+        // <textarea> не имеет range-checks.
+        let c = element_color(
+            r#"<textarea min="1" max="10">5</textarea>"#,
+            "textarea:in-range { color: red; }",
+            "textarea",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    #[test]
+    fn in_range_range_input_default_min_max() {
+        // type=range без атрибутов: дефолтный диапазон [0, 100], default
+        // value = середина = 50 → :in-range.
+        let c = element_color(
+            r#"<input type="range">"#,
+            "input:in-range { color: red; }",
+            "input",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn out_of_range_range_input_value_above_max() {
+        let c = element_color(
+            r#"<input type="range" min="0" max="100" value="150">"#,
+            "input:out-of-range { color: red; }",
+            "input",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn in_range_fractional_number() {
+        // Дробные значения должны парситься как f64.
+        let c = element_color(
+            r#"<input type="number" min="1.5" max="2.5" value="2.0">"#,
+            "input:in-range { color: red; }",
+            "input",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    #[test]
+    fn neither_for_date_type_phase_0() {
+        // Phase 0: date / month / week / time / datetime-local пока не
+        // поддерживаются — pseudo не матчит (см. doc к matches_in_range).
+        let c = element_color(
+            r#"<input type="date" min="2025-01-01" max="2025-12-31" value="2025-06-15">"#,
+            "input:in-range { color: red; } input:out-of-range { color: blue; }",
+            "input",
+        );
+        assert_eq!((c.r, c.b), (0, 0));
+    }
+
+    #[test]
+    fn in_range_specificity_is_class_level() {
+        // pseudo-class contributes (0, 1, 0) к specificity. Type + pseudo
+        // (0,1,1) > type-only (0,0,1) — правило с pseudo выигрывает несмотря
+        // на DOM source-order.
+        let c = element_color(
+            r#"<input type="number" min="0" max="10" value="5">"#,
+            "input:in-range { color: red; } input { color: blue; }",
+            "input",
+        );
+        assert_eq!((c.r, c.b), (255, 0));
+    }
+
     #[test]
     fn id_wins_over_class() {
         // id specificity (1,0,0) > class (0,1,0). Порядок правил в CSS — class
