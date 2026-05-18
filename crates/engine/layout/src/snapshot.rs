@@ -12,8 +12,8 @@
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
 use crate::style::{
     BorderStyle, BoxSizing, Color, ComputedStyle, Cursor, Direction, Display, FontStretch,
-    FontStyle, FontVariant, FontWeight, Overflow, TextAlign, TextOverflow, TextTransform,
-    Visibility, WhiteSpace,
+    FontStyle, FontVariant, FontWeight, OutlineColor, OutlineStyle, Overflow, TextAlign,
+    TextOverflow, TextTransform, Visibility, WhiteSpace,
 };
 use std::fmt::Write;
 
@@ -251,13 +251,17 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     if (s.opacity - 1.0).abs() > 0.001 {
         let _ = write!(out, " opacity={:.3}", s.opacity);
     }
-    if s.outline_style.is_visible() && s.outline_width > 0.0 {
+    let used_outline = s.outline_used_width();
+    if s.outline_style.is_visible() && used_outline > 0.0 {
         let _ = write!(
             out,
             " outline={}/{:.2}",
-            border_style_str(s.outline_style),
-            s.outline_width
+            outline_style_str(s.outline_style),
+            used_outline
         );
+        if !matches!(s.outline_color, OutlineColor::Auto) {
+            let _ = write!(out, "/{}", outline_color_str(s.outline_color));
+        }
     }
     if s.outline_offset.abs() > 0.01 {
         let _ = write!(out, " outline-offset={:.2}", s.outline_offset);
@@ -320,12 +324,21 @@ fn overflow_str(o: Overflow) -> &'static str {
     }
 }
 
-fn border_style_str(b: BorderStyle) -> &'static str {
-    match b {
-        BorderStyle::None => "none",
-        BorderStyle::Solid => "solid",
-        BorderStyle::Dashed => "dashed",
-        BorderStyle::Dotted => "dotted",
+fn outline_style_str(s: OutlineStyle) -> &'static str {
+    match s {
+        OutlineStyle::None => "none",
+        OutlineStyle::Auto => "auto",
+        OutlineStyle::Solid => "solid",
+        OutlineStyle::Dashed => "dashed",
+        OutlineStyle::Dotted => "dotted",
+    }
+}
+
+fn outline_color_str(c: OutlineColor) -> String {
+    match c {
+        OutlineColor::Auto => "auto".to_string(),
+        OutlineColor::CurrentColor => "currentcolor".to_string(),
+        OutlineColor::Color(col) => color_hex(col),
     }
 }
 

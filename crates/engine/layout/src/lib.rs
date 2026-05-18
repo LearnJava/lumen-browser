@@ -36,12 +36,12 @@ pub use style::{
     BoxShadow, BoxSizing, BreakValue, ClipPath, Color, ComputedStyle, Content, ContentItem,
     CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle, FontVariant,
     FontWeight, Hyphens, Isolation, IterationCount, ListStylePosition, ListStyleType,
-    MixBlendMode, ObjectFit, ObjectPosition, Overflow, OverflowWrap, OverscrollBehavior,
-    PointerEvents, Position, PositionComponent, ScrollBehavior, ScrollSnapAlign,
-    ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType,
-    ScrollbarGutter, ScrollbarWidth, StepPosition, TextAlign, TextDecorationLine, TextOverflow,
-    TextShadow, TextTransform, TimingFunction, TransformFn, UserSelect, Visibility, WhiteSpace,
-    WordBreak,
+    MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
+    OverscrollBehavior, PointerEvents, Position, PositionComponent, ScrollBehavior,
+    ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop,
+    ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter, ScrollbarWidth, StepPosition,
+    TextAlign, TextDecorationLine, TextOverflow, TextShadow, TextTransform, TimingFunction,
+    TransformFn, UserSelect, Visibility, WhiteSpace, WordBreak,
 };
 
 /// Интерфейс измерения ширины символов для line wrapping.
@@ -3700,15 +3700,18 @@ mod tests {
         assert!((p.style.opacity - 1.0).abs() < f32::EPSILON);
     }
 
-    // ── outline (CSS UI L4 §3) ──────────────────────────────────────────────
+    // ── outline (CSS Basic UI L4 §5) ────────────────────────────────────────
 
     #[test]
     fn outline_shorthand() {
         let root = lay("<p>x</p>", "p { outline: 3px dashed red; }");
         let p = first_element_child(&root);
         assert!((p.style.outline_width - 3.0).abs() < 0.01);
-        assert_eq!(p.style.outline_style, BorderStyle::Dashed);
-        assert_eq!(p.style.outline_color.unwrap().r, 255);
+        assert_eq!(p.style.outline_style, OutlineStyle::Dashed);
+        match p.style.outline_color {
+            OutlineColor::Color(c) => assert_eq!(c.r, 255),
+            other => panic!("expected Color, got {other:?}"),
+        }
     }
 
     #[test]
@@ -3719,8 +3722,11 @@ mod tests {
         );
         let p = first_element_child(&root);
         assert!((p.style.outline_width - 5.0).abs() < 0.01);
-        assert_eq!(p.style.outline_style, BorderStyle::Solid);
-        assert_eq!(p.style.outline_color.unwrap().b, 255);
+        assert_eq!(p.style.outline_style, OutlineStyle::Solid);
+        match p.style.outline_color {
+            OutlineColor::Color(c) => assert_eq!(c.b, 255),
+            other => panic!("expected Color, got {other:?}"),
+        }
     }
 
     #[test]
@@ -3751,11 +3757,15 @@ mod tests {
 
     #[test]
     fn outline_default_invisible() {
+        // CSS Basic UI L4 §5: initial outline-style = none, outline-width = medium
+        // (3px). Used-value outline-width = 0 при style=none, поэтому outline
+        // невидим по умолчанию.
         let root = lay("<p>x</p>", "");
         let p = first_element_child(&root);
-        assert_eq!(p.style.outline_width, 0.0);
-        assert_eq!(p.style.outline_style, BorderStyle::None);
-        assert!(p.style.outline_color.is_none());
+        assert!((p.style.outline_width - 3.0).abs() < 0.01, "computed=medium");
+        assert_eq!(p.style.outline_used_width(), 0.0, "used=0 при style=none");
+        assert_eq!(p.style.outline_style, OutlineStyle::None);
+        assert_eq!(p.style.outline_color, OutlineColor::Auto);
         assert_eq!(p.style.outline_offset, 0.0);
     }
 
@@ -3767,8 +3777,91 @@ mod tests {
         );
         let div = first_element_child(&root);
         let p = first_element_child(div);
-        assert!(div.style.outline_width > 0.0);
-        assert_eq!(p.style.outline_width, 0.0);
+        assert!(div.style.outline_used_width() > 0.0);
+        assert_eq!(p.style.outline_style, OutlineStyle::None);
+        assert_eq!(p.style.outline_used_width(), 0.0);
+    }
+
+    #[test]
+    fn outline_width_line_width_keywords() {
+        // CSS Basic UI L4 §5.2 — <line-width> = thin | medium | thick |
+        // <length>. UA convention thin=1, medium=3, thick=5.
+        let thin = lay("<p>x</p>", "p { outline: thin solid red; }");
+        let p = first_element_child(&thin);
+        assert!((p.style.outline_width - 1.0).abs() < 0.01);
+
+        let med = lay("<p>x</p>", "p { outline: medium solid red; }");
+        let p = first_element_child(&med);
+        assert!((p.style.outline_width - 3.0).abs() < 0.01);
+
+        let thick = lay("<p>x</p>", "p { outline: thick solid red; }");
+        let p = first_element_child(&thick);
+        assert!((p.style.outline_width - 5.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn outline_style_auto_keyword() {
+        // CSS Basic UI L4 §5.3 — `auto` = UA-defined focus indicator. Хранится
+        // отдельным variant-ом, чтобы UA-stylesheet `:focus-visible { outline:
+        // auto }` отличался от явного `outline: solid` автора.
+        let root = lay("<p>x</p>", "p { outline-style: auto; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.outline_style, OutlineStyle::Auto);
+        assert!(p.style.outline_used_width() > 0.0, "auto делает outline видимым");
+    }
+
+    #[test]
+    fn outline_color_auto_and_current_color() {
+        // CSS Basic UI L4 §5.4 — `auto` = UA-defined contrast, `currentColor`
+        // = вычисленный color элемента. Оба хранятся отдельными variant-ами.
+        let auto_r = lay("<p>x</p>", "p { outline-color: auto; }");
+        let p = first_element_child(&auto_r);
+        assert_eq!(p.style.outline_color, OutlineColor::Auto);
+
+        let cc_r = lay("<p>x</p>", "p { outline-color: currentColor; }");
+        let p = first_element_child(&cc_r);
+        assert_eq!(p.style.outline_color, OutlineColor::CurrentColor);
+    }
+
+    #[test]
+    fn outline_shorthand_with_auto_style() {
+        // `outline: auto` = style=auto, остальное initial.
+        let root = lay("<p>x</p>", "p { outline: auto; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.outline_style, OutlineStyle::Auto);
+        assert!((p.style.outline_width - 3.0).abs() < 0.01, "medium initial");
+        assert_eq!(p.style.outline_color, OutlineColor::Auto);
+    }
+
+    #[test]
+    fn outline_shorthand_resets_longhands() {
+        // CSS Cascade L4 §3.1 — shorthand сбрасывает все longhand-а в
+        // initial. Здесь сначала ставим конкретные значения, потом `outline`
+        // должен затереть их к initial+token-set.
+        let root = lay(
+            "<p>x</p>",
+            "p { outline-color: green; outline-offset: 10px; outline: 4px solid; }",
+        );
+        let p = first_element_child(&root);
+        // shorthand сбросил color к Auto (initial) — токен solid 4px не
+        // содержал цвета.
+        assert_eq!(p.style.outline_color, OutlineColor::Auto);
+        assert_eq!(p.style.outline_style, OutlineStyle::Solid);
+        assert!((p.style.outline_width - 4.0).abs() < 0.01);
+        // outline-offset — longhand, НЕ часть shorthand `outline`, не
+        // сбрасывается (по spec). Проверяем, что offset сохранён.
+        assert!((p.style.outline_offset - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn outline_used_width_zero_when_hidden_style_none() {
+        // Used-value rule (CSS 2.1 §17.6.1 / Basic UI L4 §5.2): даже если
+        // computed width задан явно, used = 0 при style=none.
+        let root = lay("<p>x</p>", "p { outline-width: 20px; }");
+        let p = first_element_child(&root);
+        assert!((p.style.outline_width - 20.0).abs() < 0.01, "computed=20");
+        assert_eq!(p.style.outline_style, OutlineStyle::None);
+        assert_eq!(p.style.outline_used_width(), 0.0, "used=0 при style=none");
     }
 
     // ── visibility (CSS Display L3 §4) ──────────────────────────────────────
