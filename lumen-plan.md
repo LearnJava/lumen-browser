@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-_(нет активных резерваций)_
+- 🔄 cursor-icon feedback на hover scrollbar thumb [P3] — scrollbar-cursor-feedback — 2026-05-19
 
 ## Статус реализации
 
