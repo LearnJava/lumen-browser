@@ -300,6 +300,51 @@ struct OffscreenLayer {
     height: u32,
 }
 
+/// GPU-снимок слоя, загруженный из CPU-пикселей через
+/// `Renderer::upload_layer_snapshot`. Хранит `Rgba8Unorm`-текстуру
+/// (COPY_DST | TEXTURE_BINDING) и bind group для `image_bgl`,
+/// позволяя рендерить снимок через image-pipeline как позиционированный quad.
+///
+/// Bind group использует `image_bgl` (а не `composite_bgl`), чтобы
+/// переиспользовать существующую image-pipeline с поддержкой rect/alpha.
+struct GpuLayerSnapshot {
+    // texture держим даже без явного обращения — wgpu освобождает GPU-память
+    // когда дропается последняя ссылка; bind_group её не держит.
+    _texture: wgpu::Texture,
+    bind_group: wgpu::BindGroup,
+    width: u32,
+    height: u32,
+}
+
+/// Ошибка `Renderer::upload_layer_snapshot`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SnapshotUploadError {
+    /// `width == 0` или `height == 0`.
+    EmptySnapshot,
+    /// Стороны превышают `device.limits().max_texture_dimension_2d`.
+    TooLarge { width: u32, height: u32, max: u32 },
+    /// `pixels.len() != width * height * 4` (ожидается Rgba8, 4 байта/пиксель).
+    InvalidDataSize { expected: usize, actual: usize },
+}
+
+impl core::fmt::Display for SnapshotUploadError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::EmptySnapshot => write!(f, "пустой снимок (width или height = 0)"),
+            Self::TooLarge { width, height, max } => write!(
+                f,
+                "снимок {width}×{height} превышает предел GPU-текстуры {max}×{max}"
+            ),
+            Self::InvalidDataSize { expected, actual } => write!(
+                f,
+                "неверный размер данных снимка: ожидалось {expected} байт, получено {actual}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SnapshotUploadError {}
+
 /// Ошибка `Renderer::register_image`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ImageRegisterError {
@@ -400,6 +445,9 @@ pub struct Renderer {
     /// Cache декодированных картинок per-src. Заполняется через
     /// [`Renderer::register_image`] из shell-уровня (после fetch+decode).
     images: HashMap<String, GpuImage>,
+    /// Cache GPU-снимков слоёв per-id. Заполняется compositor-ом через
+    /// [`Renderer::upload_layer_snapshot`] для кеширования неизменных слоёв.
+    layer_snapshots: HashMap<u64, GpuLayerSnapshot>,
 
     atlas: GlyphAtlas,
     /// Загруженные face-ы. `faces[0]` — default (bundled), используется когда
@@ -870,6 +918,7 @@ impl Renderer {
             image_bgl,
             image_sampler,
             images: HashMap::new(),
+            layer_snapshots: HashMap::new(),
             composite_pipeline,
             composite_bgl,
             layer_sampler,
@@ -1081,6 +1130,108 @@ impl Renderer {
     #[must_use]
     pub fn has_image(&self, src: &str) -> bool {
         self.images.contains_key(src)
+    }
+
+    // ── Layer snapshot API ────────────────────────────────────────────────
+
+    /// Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
+    /// GPU-снимок слоя. Bind group использует `image_bgl` — снимок рендерится
+    /// через image-pipeline как позиционированный quad при
+    /// `DisplayCommand::DrawLayerSnapshot`.
+    ///
+    /// Если снимок с `id` уже существует — старая GPU-память освобождается при
+    /// drop-е; новая занимает её место.
+    ///
+    /// # Errors
+    /// - [`SnapshotUploadError::EmptySnapshot`] при нулевой стороне.
+    /// - [`SnapshotUploadError::TooLarge`] если стороны превышают предел GPU.
+    /// - [`SnapshotUploadError::InvalidDataSize`] если `pixels.len() != width * height * 4`.
+    pub fn upload_layer_snapshot(
+        &mut self,
+        id: u64,
+        pixels: &[u8],
+        width: u32,
+        height: u32,
+    ) -> Result<(), SnapshotUploadError> {
+        if width == 0 || height == 0 {
+            return Err(SnapshotUploadError::EmptySnapshot);
+        }
+        let max_dim = self.device.limits().max_texture_dimension_2d;
+        if width > max_dim || height > max_dim {
+            return Err(SnapshotUploadError::TooLarge { width, height, max: max_dim });
+        }
+        let expected = (width as usize) * (height as usize) * 4;
+        if pixels.len() != expected {
+            return Err(SnapshotUploadError::InvalidDataSize {
+                expected,
+                actual: pixels.len(),
+            });
+        }
+
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("layer-snapshot"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("layer-snapshot-bg"),
+            layout: &self.image_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.image_sampler),
+                },
+            ],
+        });
+        self.layer_snapshots.insert(id, GpuLayerSnapshot { _texture: texture, bind_group, width, height });
+        Ok(())
+    }
+
+    /// Удаляет снимок с `id`. GPU-память освобождается при drop-е.
+    pub fn evict_layer_snapshot(&mut self, id: u64) {
+        self.layer_snapshots.remove(&id);
+    }
+
+    /// Удаляет все снимки (например, при переходе на новую страницу).
+    pub fn clear_layer_snapshots(&mut self) {
+        self.layer_snapshots.clear();
+    }
+
+    /// Зарегистрирован ли снимок с таким `id`.
+    #[must_use]
+    pub fn has_layer_snapshot(&self, id: u64) -> bool {
+        self.layer_snapshots.contains_key(&id)
+    }
+
+    /// Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован.
+    #[must_use]
+    pub fn snapshot_dimensions(&self, id: u64) -> Option<(u32, u32)> {
+        self.layer_snapshots.get(&id).map(|s| (s.width, s.height))
     }
 
     pub fn resize(&mut self, width: u32, height: u32) {
@@ -1571,6 +1722,29 @@ impl Renderer {
                 }
                 DisplayCommand::PopBlendMode => {
                     blend_mode_stack.pop();
+                }
+                DisplayCommand::DrawLayerSnapshot { id, rect, alpha } => {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
+                    let scrolled = translate_rect_y(*rect, dy);
+                    // Снимок рендерится через image-pipeline: UV всегда [0,0]→[1,1]
+                    // (весь снимок без object-fit). Если id не зарегистрирован —
+                    // команда молча игнорируется (compositor мог вызвать evict).
+                    if let Some(snap) = self.layer_snapshots.get(id) {
+                        let v_start = image_vertices.len() as u32;
+                        push_image_quad(
+                            &mut image_vertices,
+                            scrolled,
+                            [0.0, 0.0],
+                            [1.0, 1.0],
+                            *alpha,
+                        );
+                        let v_count = image_vertices.len() as u32 - v_start;
+                        let image_batch_idx = image_bind_groups.len() as u32;
+                        image_bind_groups.push(snap.bind_group.clone());
+                        draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
+                    }
                 }
             }
         }

@@ -133,3 +133,49 @@ fn img_with_background_and_border() {
     );
     assert_snapshot("img_with_background_and_border", &actual);
 }
+
+// ── DrawLayerSnapshot serialization ─────────────────────────────────────────
+
+#[test]
+fn layer_snapshot_serializes() {
+    use lumen_core::geom::Rect;
+    use lumen_paint::DisplayCommand;
+    // Проверяем, что DrawLayerSnapshot сериализуется в ожидаемый формат.
+    let dl: Vec<DisplayCommand> = vec![DisplayCommand::DrawLayerSnapshot {
+        id: 42,
+        rect: Rect::new(10.0, 20.0, 100.0, 80.0),
+        alpha: 0.75,
+    }];
+    let s = lumen_paint::serialize_display_list(&dl);
+    assert_snapshot("layer_snapshot_serializes", &s);
+}
+
+#[test]
+fn layer_snapshot_zero_alpha_is_transparent() {
+    use lumen_core::geom::Rect;
+    use lumen_paint::DisplayCommand;
+    // alpha=0.0 — полностью прозрачный снимок.
+    let dl = vec![DisplayCommand::DrawLayerSnapshot {
+        id: 0,
+        rect: Rect::new(0.0, 0.0, 50.0, 50.0),
+        alpha: 0.0,
+    }];
+    let s = lumen_paint::serialize_display_list(&dl);
+    assert!(s.contains("alpha=0.000"), "alpha=0 must serialize correctly");
+}
+
+#[test]
+fn layer_snapshot_full_alpha_is_opaque() {
+    use lumen_core::geom::Rect;
+    use lumen_paint::DisplayCommand;
+    // alpha=1.0 — непрозрачный снимок.
+    let dl = vec![DisplayCommand::DrawLayerSnapshot {
+        id: 999,
+        rect: Rect::new(5.0, 15.0, 200.0, 150.0),
+        alpha: 1.0,
+    }];
+    let s = lumen_paint::serialize_display_list(&dl);
+    assert!(s.contains("id=999"), "must contain snapshot id");
+    assert!(s.contains("alpha=1.000"), "must contain alpha");
+    assert!(s.contains("DrawLayerSnapshot"), "must contain command name");
+}
