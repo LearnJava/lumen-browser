@@ -751,10 +751,10 @@ fn fetch_with_redirect(
 
     // Mixed-content enforcement (W3C Mixed Content §5) — после HSTS upgrade
     // (если http→https произошёл, mixed-content уже не возникнет), перед
-    // RequestFilter и Started. Срабатывает только для subresource-запросов
-    // через `fetch_subresource(url, destination)`: top-level navigation
-    // через `fetch(url)` идёт без destination и не enforce-ится (top-level
-    // сам формирует secure-context, «mixing» бессмысленно).
+    // RequestFilter и Started. Активируется только когда оба значения
+    // (policy и destination) заданы. fetch_subresource передаёт явный
+    // destination; NetworkTransport::fetch использует Other как fallback
+    // когда policy задана, None — когда нет (top-level navigation).
     //
     // Per redirect-hop: HTTPS → HTTP редирект на blockable destination
     // тоже блокируется (URL берётся именно тот, по которому пойдёт трафик).
@@ -1478,6 +1478,12 @@ impl HttpClient {
 impl NetworkTransport for HttpClient {
     fn fetch(&self, url: &Url) -> Result<Vec<u8>> {
         let accept_encoding = self.accept_encoding_header();
+        // Когда mixed_content policy задана (клиент работает в secure-context),
+        // используем RequestDestination::Other (Blockable) как fallback —
+        // чтобы enforcement сработал даже без явного destination.
+        // Для top-level navigation policy не задаётся, поэтому destination
+        // остаётся None и check не активируется.
+        let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
         fetch_with_redirect(
             url,
             5,
@@ -1493,7 +1499,7 @@ impl NetworkTransport for HttpClient {
             None,
             self.tab_id,
             self.mixed_content.as_ref(),
-            None,
+            destination,
             None,
         )
         .map(|resp| resp.body)
@@ -3861,12 +3867,11 @@ world\r\n\
     }
 
     #[test]
-    fn fetch_top_level_ignores_mixed_content_policy() {
-        // `fetch` (NetworkTransport) — путь top-level navigation, mixed-content
-        // не enforce-ится даже при подключённой policy. Если бы enforce-илось,
-        // запрос упал бы с mixed-content reason — но мы хотим Started + Completed
-        // для 127.0.0.1 (trustworthy и так — но независимо от этого, fetch
-        // НЕ передаёт destination, значит enforcement-блок не активируется).
+    fn fetch_allows_trustworthy_http_url_with_mixed_content_policy() {
+        // fetch() теперь использует RequestDestination::Other когда policy задана,
+        // поэтому enforcement активируется. Но 127.0.0.1 — loopback (potentially
+        // trustworthy по W3C Secure Contexts §3.1) → classify_subresource_request
+        // возвращает NotMixed → блокировки нет, Started + Completed.
         let (port, server) = mock_http_server(1, |_| {
             b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".to_vec()
         });
@@ -3883,6 +3888,38 @@ world\r\n\
         assert!(!events.iter().any(|e| matches!(e, Event::RequestBlocked { .. })));
 
         server.join().unwrap();
+    }
+
+    #[test]
+    fn fetch_blocks_non_trustworthy_http_url_with_mixed_content_policy() {
+        // Сетевого сервера НЕТ: policy обязана блокировать запрос ДО connect-а.
+        // fetch() использует RequestDestination::Other (Blockable) когда policy
+        // задана — enforce-ится идентично fetch_subresource с blockable dest.
+        let sink = Arc::new(CollectingSink::new());
+        let client = HttpClient::new()
+            .with_sink(sink.clone())
+            .with_tab(TabId(7))
+            .with_mixed_content_policy(https_example_origin(), MixedContentMode::SpecDefault);
+        let url = Url::parse("http://cdn.invalid/resource").unwrap();
+
+        let err = client
+            .fetch(&url)
+            .expect_err("blockable fetch on https context must be blocked");
+        assert!(
+            format!("{err:?}").contains("mixed-content"),
+            "reason in err: {err:?}"
+        );
+
+        let events = sink.events();
+        assert_eq!(events.len(), 1, "expected only RequestBlocked, got {events:?}");
+        match &events[0] {
+            Event::RequestBlocked { tab_id, url, reason } => {
+                assert_eq!(*tab_id, TabId(7));
+                assert_eq!(url.as_str(), "http://cdn.invalid/resource");
+                assert_eq!(reason, "mixed-content: blockable");
+            }
+            other => panic!("expected RequestBlocked, got {other:?}"),
+        }
     }
 
     #[test]
