@@ -218,6 +218,20 @@ struct ImageVertex {
     uv: [f32; 2],
 }
 
+/// Атомарная команда render-pass-а после сборки display list-а. Каждый
+/// DisplayCommand → один (рисующий) DrawOp; PushClipRect/PopClip → отдельные
+/// SetScissor (если scissor реально меняется). Render-pass проходит список
+/// линейно: SetScissor вызывает `pass.set_scissor_rect`, Fill/Text/Image
+/// — соответствующий pipeline + draw на указанный диапазон вершин.
+/// `image_batch_idx` индексирует `image_batches[i].bind_group` (Vec на
+/// уровне render(), не клонируется в DrawOp).
+enum DrawOp {
+    SetScissor(DeviceScissor),
+    Fill { v_start: u32, v_count: u32 },
+    Text { v_start: u32, v_count: u32 },
+    Image { v_start: u32, v_count: u32, image_batch_idx: u32 },
+}
+
 /// GPU-ресурсы для одной зарегистрированной картинки. Texture хранит уже
 /// декодированные пиксели в формате `Rgba8Unorm` (Gray / GrayA / Rgb
 /// конвертируются в Rgba при upload-е); bind group привязан к
@@ -1000,12 +1014,29 @@ impl Renderer {
         let mut fill_vertices: Vec<FillVertex> = Vec::new();
         let mut text_vertices: Vec<TextVertex> = Vec::new();
         let mut image_vertices: Vec<ImageVertex> = Vec::new();
-        // Per-batch info: bind_group (clone — Arc inside wgpu) + диапазон
-        // вершин в общем image_vbuf. Кладём в порядке появления DrawImage —
-        // картины с painter's order не сливаются между Block/InlineRun
-        // соседями, batching по src в Phase 0 не делаем (5-10 изображений
-        // на страницу = pareto draw call-ов).
-        let mut image_batches: Vec<(wgpu::BindGroup, u32, u32)> = Vec::new();
+        // Bind groups для image draw-ов в порядке появления. DrawOp::Image
+        // хранит индекс в этот Vec вместо клонирования BindGroup в каждый op.
+        let mut image_bind_groups: Vec<wgpu::BindGroup> = Vec::new();
+
+        // Ordered draw operations. Каждая рисующая DisplayCommand → один
+        // DrawOp в этом списке. SetScissor добавляется при изменении clip-стека.
+        // В render-pass обходим список линейно — это сохраняет painter's order
+        // между типами команд (fill/image/text больше не идут тремя раздельными
+        // блоками — теперь смешаны в исходном порядке появления).
+        let mut draw_ops: Vec<DrawOp> = Vec::new();
+
+        // Стек активных clip-rect-ов в CSS-px (после intersection с предыдущими).
+        // Пустой стек = full-frame scissor. PushClipRect добавляет пересечение
+        // с топом; PopClip снимает.
+        let mut clip_stack: Vec<Rect> = Vec::new();
+
+        // Текущий выставленный scissor (для дедупликации SetScissor-команд).
+        // None = не выставлен (первый SetScissor нужен в любом случае).
+        let mut current_scissor: Option<DeviceScissor> = None;
+        let surface_w = self.config.width;
+        let surface_h = self.config.height;
+
+        let dpr_f32 = self.scale_factor.max(1e-6) as f32;
 
         let chained = content
             .iter()
@@ -1014,10 +1045,22 @@ impl Renderer {
         for (cmd, dy) in chained {
             match cmd {
                 DisplayCommand::FillRect { rect, color } => {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
+                    let v_start = fill_vertices.len() as u32;
                     push_fill_quad(&mut fill_vertices, translate_rect_y(*rect, dy), color_to_array(color));
+                    let v_count = fill_vertices.len() as u32 - v_start;
+                    if v_count > 0 {
+                        draw_ops.push(DrawOp::Fill { v_start, v_count });
+                    }
                 }
                 DisplayCommand::DrawBorder { rect, widths: [wt, wr, wb, wl], colors: [ct, cr, cb, cl] } => {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
                     let r = translate_rect_y(*rect, dy);
+                    let v_start = fill_vertices.len() as u32;
                     if *wt > 0.0 {
                         push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, r.width, *wt), color_to_array(ct));
                     }
@@ -1029,6 +1072,10 @@ impl Renderer {
                     }
                     if *wl > 0.0 {
                         push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, *wl, r.height), color_to_array(cl));
+                    }
+                    let v_count = fill_vertices.len() as u32 - v_start;
+                    if v_count > 0 {
+                        draw_ops.push(DrawOp::Fill { v_start, v_count });
                     }
                 }
                 DisplayCommand::DrawText {
@@ -1049,6 +1096,10 @@ impl Renderer {
                     {
                         continue;
                     }
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
+                    let v_start = text_vertices.len() as u32;
                     push_text_glyphs(
                         &mut text_vertices,
                         translate_rect_y(*rect, dy),
@@ -1061,6 +1112,10 @@ impl Renderer {
                         &mut self.cached_glyphs,
                         font_variation_coords,
                     );
+                    let v_count = text_vertices.len() as u32 - v_start;
+                    if v_count > 0 {
+                        draw_ops.push(DrawOp::Text { v_start, v_count });
+                    }
                 }
                 DisplayCommand::DrawOutline { rect, width, style: _, color, offset } => {
                     // CSS Basic UI L4 §5: outline рисуется СНАРУЖИ box-а.
@@ -1074,9 +1129,10 @@ impl Renderer {
                     if *width <= 0.0 {
                         continue;
                     }
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
                     let r = translate_rect_y(*rect, dy);
-                    // Inflate на offset: outline начинается на расстоянии
-                    // offset от box.
                     let inner = Rect::new(
                         r.x - offset,
                         r.y - offset,
@@ -1085,31 +1141,31 @@ impl Renderer {
                     );
                     let w = *width;
                     let c = color_to_array(color);
-                    // Top: горизонтальная полоса над inner, от inner.x-w до
-                    // inner.x+inner.width+w (углы "outset" stroke).
+                    let v_start = fill_vertices.len() as u32;
                     push_fill_quad(
                         &mut fill_vertices,
                         Rect::new(inner.x - w, inner.y - w, inner.width + 2.0 * w, w),
                         c,
                     );
-                    // Bottom.
                     push_fill_quad(
                         &mut fill_vertices,
                         Rect::new(inner.x - w, inner.y + inner.height, inner.width + 2.0 * w, w),
                         c,
                     );
-                    // Left (между top и bottom, чтобы не двоиться в углах).
                     push_fill_quad(
                         &mut fill_vertices,
                         Rect::new(inner.x - w, inner.y, w, inner.height),
                         c,
                     );
-                    // Right.
                     push_fill_quad(
                         &mut fill_vertices,
                         Rect::new(inner.x + inner.width, inner.y, w, inner.height),
                         c,
                     );
+                    let v_count = fill_vertices.len() as u32 - v_start;
+                    if v_count > 0 {
+                        draw_ops.push(DrawOp::Fill { v_start, v_count });
+                    }
                 }
                 DisplayCommand::DrawImage {
                     rect,
@@ -1118,6 +1174,9 @@ impl Renderer {
                     object_fit,
                     object_position,
                 } => {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
                     let scrolled = translate_rect_y(*rect, dy);
                     if let Some(gpu) = self.images.get(src) {
                         // CSS Images L3 §5.5: размещаем intrinsic-картинку
@@ -1131,25 +1190,45 @@ impl Renderer {
                             *object_fit,
                             *object_position,
                         ) {
-                            let offset = image_vertices.len() as u32;
+                            let v_start = image_vertices.len() as u32;
                             push_image_quad(&mut image_vertices, visible, uv_min, uv_max);
-                            let count = image_vertices.len() as u32 - offset;
-                            image_batches.push((gpu.bind_group.clone(), offset, count));
+                            let v_count = image_vertices.len() as u32 - v_start;
+                            let image_batch_idx = image_bind_groups.len() as u32;
+                            image_bind_groups.push(gpu.bind_group.clone());
+                            draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
                         }
                     } else {
                         // Картинку никто не зарегистрировал (fetch не сделан /
                         // декодер упал / неизвестный формат) — fallback на
                         // серый placeholder, чтобы место в layout-е было видно.
+                        let v_start = fill_vertices.len() as u32;
                         push_fill_quad(&mut fill_vertices, scrolled, [0.85, 0.85, 0.85, 1.0]);
+                        let v_count = fill_vertices.len() as u32 - v_start;
+                        if v_count > 0 {
+                            draw_ops.push(DrawOp::Fill { v_start, v_count });
+                        }
                     }
                 }
-                // Sprint 0 P2 stub-команды: clip / opacity / blend mode
-                // (interface-first, см. `display_list.rs`). Phase 0 renderer
-                // их игнорирует — реальный layer-pipeline это задачи P2 2A
-                // (painting order через compositor) и 4 (mix-blend-mode).
-                DisplayCommand::PushClipRect { .. }
-                | DisplayCommand::PopClip
-                | DisplayCommand::PushOpacity { .. }
+                // Clip-stack управление. PushClipRect добавляет пересечение
+                // с топом (CSS Masking L1 §3 — clip-rect = intersection всех
+                // ancestor clip-region-ов). PopClip снимает топ. Scissor для
+                // wgpu выставляется лениво — следующая draw-команда вызовет
+                // sync_scissor_to_stack.
+                DisplayCommand::PushClipRect { rect } => {
+                    let scrolled = translate_rect_y(*rect, dy);
+                    let new = match clip_stack.last() {
+                        Some(prev) => intersect_rects(*prev, scrolled),
+                        None => scrolled,
+                    };
+                    clip_stack.push(new);
+                }
+                DisplayCommand::PopClip => {
+                    clip_stack.pop();
+                }
+                // Phase 0 stub-команды: opacity / blend mode. Реальный
+                // off-screen-layer pipeline — задачи P2 1B step (c)-cont
+                // (opacity) и 4 (mix-blend-mode / backdrop-filter).
+                DisplayCommand::PushOpacity { .. }
                 | DisplayCommand::PopOpacity
                 | DisplayCommand::PushBlendMode { .. }
                 | DisplayCommand::PopBlendMode => {}
@@ -1261,27 +1340,55 @@ impl Renderer {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            if let Some(vb) = &fill_vbuf {
-                pass.set_pipeline(&self.fill_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_vertex_buffer(0, vb.slice(..));
-                pass.draw(0..fill_vertices.len() as u32, 0..1);
-            }
-            if let Some(vb) = &image_vbuf {
-                pass.set_pipeline(&self.image_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_vertex_buffer(0, vb.slice(..));
-                for (bind_group, offset, count) in &image_batches {
-                    pass.set_bind_group(1, bind_group, &[]);
-                    pass.draw(*offset..*offset + *count, 0..1);
+            // Iterate ordered DrawOp-list. Каждая Set/Draw в нужный момент
+            // в исходном painter's order. set_pipeline/set_bind_group/
+            // set_vertex_buffer на каждый draw — wgpu кэширует state-changes
+            // внутри одного pass-а; для Phase 0 это безопасно (50-500 draw
+            // calls на кадр).
+            for op in &draw_ops {
+                match op {
+                    DrawOp::SetScissor(s) => {
+                        if s.is_empty() {
+                            // Пустой scissor wgpu не примет (panic). Caller
+                            // (sync_scissor_to_stack) уже пропустил все draw
+                            // под этим scissor-ом — SetScissor можно проставить
+                            // на минимальную область, но проще схлопнуть к 1×1
+                            // в углу: всё равно ничего не нарисуется.
+                            pass.set_scissor_rect(0, 0, 1.min(surface_w), 1.min(surface_h));
+                        } else {
+                            pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                        }
+                    }
+                    DrawOp::Fill { v_start, v_count } => {
+                        if let Some(vb) = &fill_vbuf {
+                            pass.set_pipeline(&self.fill_pipeline);
+                            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                            pass.set_vertex_buffer(0, vb.slice(..));
+                            pass.draw(*v_start..*v_start + *v_count, 0..1);
+                        }
+                    }
+                    DrawOp::Text { v_start, v_count } => {
+                        if let Some(vb) = &text_vbuf {
+                            pass.set_pipeline(&self.text_pipeline);
+                            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                            pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+                            pass.set_vertex_buffer(0, vb.slice(..));
+                            pass.draw(*v_start..*v_start + *v_count, 0..1);
+                        }
+                    }
+                    DrawOp::Image { v_start, v_count, image_batch_idx } => {
+                        if let (Some(vb), Some(bind_group)) = (
+                            &image_vbuf,
+                            image_bind_groups.get(*image_batch_idx as usize),
+                        ) {
+                            pass.set_pipeline(&self.image_pipeline);
+                            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                            pass.set_bind_group(1, bind_group, &[]);
+                            pass.set_vertex_buffer(0, vb.slice(..));
+                            pass.draw(*v_start..*v_start + *v_count, 0..1);
+                        }
+                    }
                 }
-            }
-            if let Some(vb) = &text_vbuf {
-                pass.set_pipeline(&self.text_pipeline);
-                pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                pass.set_bind_group(1, &self.atlas_bind_group, &[]);
-                pass.set_vertex_buffer(0, vb.slice(..));
-                pass.draw(0..text_vertices.len() as u32, 0..1);
             }
         }
         self.queue.submit([encoder.finish()]);
@@ -1534,6 +1641,107 @@ fn color_to_array(c: &Color) -> [f32; 4] {
     ]
 }
 
+/// Scissor rect для wgpu в device pixels — все 4 компоненты u32 (× 16-битных,
+/// но wgpu принимает u32). `set_scissor_rect(x, y, w, h)` обрезает все
+/// последующие fragments в pass-е координатами окна. Пустой scissor
+/// (`width=0` или `height=0`) запрещён wgpu и в нашем коде кодируется как
+/// «ничего не рисуем» — caller проверяет `is_empty()` и пропускает draw.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DeviceScissor {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl DeviceScissor {
+    /// Полный фрейм — scissor = вся область surface. wgpu reset = установить
+    /// scissor в (0,0,W,H) перед draw.
+    pub(crate) fn full(surface_w: u32, surface_h: u32) -> Self {
+        Self { x: 0, y: 0, width: surface_w, height: surface_h }
+    }
+
+    /// Пустой scissor нельзя задать в wgpu — caller обязан проверить и
+    /// пропустить draw. Возвращается из `from_css`, когда clip-rect пуст
+    /// (после intersection всё схлопнулось до 0).
+    pub(crate) fn is_empty(&self) -> bool {
+        self.width == 0 || self.height == 0
+    }
+}
+
+/// Пересечение двух прямоугольников в CSS-px (origin-top-left). Пустое
+/// пересечение представляется как `Rect { width: 0.0, height: 0.0 }` —
+/// `is_empty_rect` это распознаёт. Используется для combine-логики стека
+/// `PushClipRect` (новый scissor = пересечение с текущим), CSS Masking L1 §3.
+pub(crate) fn intersect_rects(a: Rect, b: Rect) -> Rect {
+    let x0 = a.x.max(b.x);
+    let y0 = a.y.max(b.y);
+    let x1 = (a.x + a.width).min(b.x + b.width);
+    let y1 = (a.y + a.height).min(b.y + b.height);
+    if x1 <= x0 || y1 <= y0 {
+        Rect::new(x0, y0, 0.0, 0.0)
+    } else {
+        Rect::new(x0, y0, x1 - x0, y1 - y0)
+    }
+}
+
+/// Перед draw-командой убедиться, что в `ops` стоит актуальный `SetScissor`
+/// для текущего `clip_stack` (топ стека = пересечение всех Push-ов).
+/// Возвращает `false`, если scissor пуст (`width==0` || `height==0`) — caller
+/// обязан пропустить draw, wgpu иначе паникует на set_scissor_rect(0,0,0,0).
+/// `current_scissor=None` означает, что `SetScissor` ещё не выставлялся
+/// в этом render-loop-е — тогда команда добавляется даже если desired==full
+/// (нет гарантии, что предыдущий кадр оставил scissor на полный размер).
+fn sync_scissor_to_stack(
+    clip_stack: &[Rect],
+    current_scissor: &mut Option<DeviceScissor>,
+    ops: &mut Vec<DrawOp>,
+    dpr: f32,
+    surface_w: u32,
+    surface_h: u32,
+) -> bool {
+    let desired = match clip_stack.last() {
+        Some(rect) => css_rect_to_device_scissor(*rect, dpr, surface_w, surface_h),
+        None => DeviceScissor::full(surface_w, surface_h),
+    };
+    if Some(desired) != *current_scissor {
+        ops.push(DrawOp::SetScissor(desired));
+        *current_scissor = Some(desired);
+    }
+    !desired.is_empty()
+}
+
+/// CSS-px rect → device-px scissor с учётом DPR и Y-axis inversion для wgpu.
+/// Шейдер у нас работает в CSS px (viewport = surface / dpr); scissor wgpu
+/// работает в device px (Y top-left). Округление: внешние границы наружу
+/// (`floor` для x/y, `ceil` для right/bottom) — чтобы scissor НЕ обрезал
+/// край pixel-perfect содержимого внутри clip-rect-а. Затем clamp в
+/// `[0, surface_*]`. Пустой результат — `is_empty()`-флаг.
+pub(crate) fn css_rect_to_device_scissor(
+    rect: Rect,
+    dpr: f32,
+    surface_w: u32,
+    surface_h: u32,
+) -> DeviceScissor {
+    let dpr = dpr.max(1e-6);
+    let x0 = (rect.x * dpr).floor().max(0.0);
+    let y0 = (rect.y * dpr).floor().max(0.0);
+    let x1 = ((rect.x + rect.width) * dpr).ceil().max(0.0);
+    let y1 = ((rect.y + rect.height) * dpr).ceil().max(0.0);
+    let sw = surface_w as f32;
+    let sh = surface_h as f32;
+    let cx0 = x0.min(sw) as u32;
+    let cy0 = y0.min(sh) as u32;
+    let cx1 = x1.min(sw) as u32;
+    let cy1 = y1.min(sh) as u32;
+    DeviceScissor {
+        x: cx0,
+        y: cy0,
+        width: cx1.saturating_sub(cx0),
+        height: cy1.saturating_sub(cy0),
+    }
+}
+
 // SAFETY: T: Copy + #[repr(C)] плюс отсутствие padding-байт делают этот
 // каст безопасным. Используется только для POD-типов из этого файла.
 fn as_bytes<T: Copy>(slice: &[T]) -> &[u8] {
@@ -1653,5 +1861,177 @@ mod tests {
     fn atlas_key_is_deterministic() {
         assert_eq!(atlas_key(3, 17, 24, 0), atlas_key(3, 17, 24, 0));
         assert_eq!(atlas_key(3, 17, 24, 42), atlas_key(3, 17, 24, 42));
+    }
+
+    // ── Clip stack / scissor ──────────────────────────────────────────────
+
+    #[test]
+    fn intersect_rects_overlapping() {
+        let a = Rect::new(10.0, 10.0, 50.0, 50.0);
+        let b = Rect::new(30.0, 30.0, 50.0, 50.0);
+        let i = intersect_rects(a, b);
+        assert_eq!(i, Rect::new(30.0, 30.0, 30.0, 30.0));
+    }
+
+    #[test]
+    fn intersect_rects_b_inside_a() {
+        let a = Rect::new(0.0, 0.0, 100.0, 100.0);
+        let b = Rect::new(20.0, 30.0, 40.0, 50.0);
+        assert_eq!(intersect_rects(a, b), b);
+    }
+
+    #[test]
+    fn intersect_rects_disjoint_returns_zero_size() {
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(20.0, 20.0, 10.0, 10.0);
+        let i = intersect_rects(a, b);
+        assert_eq!(i.width, 0.0);
+        assert_eq!(i.height, 0.0);
+    }
+
+    #[test]
+    fn intersect_rects_touching_edges_returns_zero_size() {
+        // Касание ребра (x=10 правая граница a == x=10 левая граница b) —
+        // пересечение пустое (right strictly > left требуется).
+        let a = Rect::new(0.0, 0.0, 10.0, 10.0);
+        let b = Rect::new(10.0, 0.0, 10.0, 10.0);
+        let i = intersect_rects(a, b);
+        assert_eq!(i.width, 0.0);
+        assert_eq!(i.height, 0.0);
+    }
+
+    #[test]
+    fn css_to_device_scissor_dpr1_exact() {
+        // DPR=1, rect полностью в viewport — scissor совпадает с rect.
+        let r = Rect::new(10.0, 20.0, 100.0, 50.0);
+        let s = css_rect_to_device_scissor(r, 1.0, 1024, 720);
+        assert_eq!(s, DeviceScissor { x: 10, y: 20, width: 100, height: 50 });
+    }
+
+    #[test]
+    fn css_to_device_scissor_dpr2_doubles() {
+        // DPR=2 — все координаты × 2.
+        let r = Rect::new(10.0, 20.0, 100.0, 50.0);
+        let s = css_rect_to_device_scissor(r, 2.0, 2048, 1440);
+        assert_eq!(s, DeviceScissor { x: 20, y: 40, width: 200, height: 100 });
+    }
+
+    #[test]
+    fn css_to_device_scissor_fractional_expands_outward() {
+        // Дробные координаты: x.floor(), right.ceil() — scissor расширяется
+        // наружу, чтобы не обрезать pixel-perfect содержимое внутри.
+        let r = Rect::new(10.3, 20.7, 100.4, 50.1);
+        let s = css_rect_to_device_scissor(r, 1.0, 1024, 720);
+        // x.floor() = 10; y.floor() = 20; right.ceil() = 111; bottom.ceil() = 71.
+        assert_eq!(s, DeviceScissor { x: 10, y: 20, width: 101, height: 51 });
+    }
+
+    #[test]
+    fn css_to_device_scissor_clamps_to_surface() {
+        // Rect частично за пределами surface — scissor клампается.
+        let r = Rect::new(900.0, 600.0, 500.0, 500.0);
+        let s = css_rect_to_device_scissor(r, 1.0, 1024, 720);
+        // right = 1400 → clamp to 1024; bottom = 1100 → clamp to 720.
+        assert_eq!(s, DeviceScissor { x: 900, y: 600, width: 124, height: 120 });
+    }
+
+    #[test]
+    fn css_to_device_scissor_negative_origin_clamps_to_zero() {
+        // Rect частично слева/сверху surface — origin клампится в 0.
+        let r = Rect::new(-50.0, -30.0, 100.0, 60.0);
+        let s = css_rect_to_device_scissor(r, 1.0, 1024, 720);
+        // x.floor()=-50 → max(0)=0, right.ceil()=50 → 50; y similar → 30.
+        assert_eq!(s, DeviceScissor { x: 0, y: 0, width: 50, height: 30 });
+    }
+
+    #[test]
+    fn css_to_device_scissor_fully_outside_is_empty() {
+        // Rect полностью справа от surface.
+        let r = Rect::new(1500.0, 0.0, 100.0, 50.0);
+        let s = css_rect_to_device_scissor(r, 1.0, 1024, 720);
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn css_to_device_scissor_zero_rect_is_empty() {
+        // Rect с нулевой шириной — пустой scissor.
+        let r = Rect::new(10.0, 20.0, 0.0, 50.0);
+        let s = css_rect_to_device_scissor(r, 1.0, 1024, 720);
+        assert!(s.is_empty());
+    }
+
+    #[test]
+    fn device_scissor_full_covers_surface() {
+        let s = DeviceScissor::full(1024, 720);
+        assert_eq!(s, DeviceScissor { x: 0, y: 0, width: 1024, height: 720 });
+        assert!(!s.is_empty());
+    }
+
+    #[test]
+    fn device_scissor_is_empty_detects_zero_dim() {
+        assert!(DeviceScissor { x: 0, y: 0, width: 0, height: 10 }.is_empty());
+        assert!(DeviceScissor { x: 0, y: 0, width: 10, height: 0 }.is_empty());
+        assert!(!DeviceScissor { x: 0, y: 0, width: 1, height: 1 }.is_empty());
+    }
+
+    #[test]
+    fn sync_scissor_pushes_full_on_empty_stack() {
+        let mut current: Option<DeviceScissor> = None;
+        let mut ops: Vec<DrawOp> = Vec::new();
+        let ok = sync_scissor_to_stack(&[], &mut current, &mut ops, 1.0, 1024, 720);
+        assert!(ok);
+        assert_eq!(ops.len(), 1);
+        assert!(matches!(ops[0], DrawOp::SetScissor(s) if s == DeviceScissor::full(1024, 720)));
+        assert_eq!(current, Some(DeviceScissor::full(1024, 720)));
+    }
+
+    #[test]
+    fn sync_scissor_dedupes_same_scissor() {
+        // Первый вызов выставляет full; второй с тем же стеком — не пушит.
+        let mut current: Option<DeviceScissor> = None;
+        let mut ops: Vec<DrawOp> = Vec::new();
+        sync_scissor_to_stack(&[], &mut current, &mut ops, 1.0, 1024, 720);
+        let n_after_first = ops.len();
+        sync_scissor_to_stack(&[], &mut current, &mut ops, 1.0, 1024, 720);
+        assert_eq!(ops.len(), n_after_first, "повторный вызов не должен пушить op");
+    }
+
+    #[test]
+    fn sync_scissor_pushes_on_stack_change() {
+        let mut current: Option<DeviceScissor> = None;
+        let mut ops: Vec<DrawOp> = Vec::new();
+        sync_scissor_to_stack(&[], &mut current, &mut ops, 1.0, 1024, 720);
+        // Стек добавил clip — scissor сужается.
+        let stack = vec![Rect::new(100.0, 100.0, 200.0, 200.0)];
+        sync_scissor_to_stack(&stack, &mut current, &mut ops, 1.0, 1024, 720);
+        assert_eq!(ops.len(), 2);
+        assert!(matches!(
+            ops[1],
+            DrawOp::SetScissor(s) if s == DeviceScissor { x: 100, y: 100, width: 200, height: 200 }
+        ));
+    }
+
+    #[test]
+    fn sync_scissor_returns_false_on_empty_scissor() {
+        // Clip полностью за пределами surface — sync возвращает false,
+        // caller должен пропустить draw.
+        let mut current: Option<DeviceScissor> = None;
+        let mut ops: Vec<DrawOp> = Vec::new();
+        let stack = vec![Rect::new(2000.0, 2000.0, 100.0, 100.0)];
+        let ok = sync_scissor_to_stack(&stack, &mut current, &mut ops, 1.0, 1024, 720);
+        assert!(!ok);
+    }
+
+    #[test]
+    fn sync_scissor_dpr_scales_stack_rect() {
+        // Стек хранится в CSS-px; sync переводит в device-px через DPR.
+        let mut current: Option<DeviceScissor> = None;
+        let mut ops: Vec<DrawOp> = Vec::new();
+        let stack = vec![Rect::new(50.0, 50.0, 100.0, 100.0)];
+        sync_scissor_to_stack(&stack, &mut current, &mut ops, 2.0, 2048, 1440);
+        assert!(matches!(
+            ops[0],
+            DrawOp::SetScissor(s) if s == DeviceScissor { x: 100, y: 100, width: 200, height: 200 }
+        ));
     }
 }
