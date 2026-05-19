@@ -2,6 +2,8 @@
 
 Project context for Claude Code. Auto-loaded each session. Keeps the assistant oriented without re-asking questions answerable from code or adjacent docs.
 
+**This file is English-only.** All edits — including gotchas added by other sessions — must be written in English. Translate before committing.
+
 Update this file whenever you change architecture, invariants, or policies.
 
 ---
