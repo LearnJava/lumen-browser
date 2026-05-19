@@ -2,6 +2,8 @@
 
 use std::fmt;
 
+pub use lumen_core::sandbox::{parse_sandbox_value, SandboxFlags};
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NodeId(u32);
 
@@ -83,6 +85,20 @@ impl Node {
                 .map(|a| a.value.as_str()),
             _ => None,
         }
+    }
+
+    /// Sandbox-ограничения для `<iframe sandbox="...">` по HTML LS §7.6.5.
+    ///
+    /// Возвращает `None` для всех не-`iframe` элементов. Для `<iframe>` без
+    /// атрибута `sandbox` — `SandboxFlags::empty()` (без ограничений). Для
+    /// `<iframe sandbox>` или `<iframe sandbox="">` — `SandboxFlags::all_restrictions()`.
+    /// Конкретные `allow-*` keyword-ы снимают соответствующие биты.
+    pub fn sandbox_flags(&self) -> Option<SandboxFlags> {
+        let name = self.element_name()?;
+        if !name.local.eq_ignore_ascii_case("iframe") {
+            return None;
+        }
+        Some(parse_sandbox_value(self.get_attr("sandbox")))
     }
 
     /// HTML5 form input type для `<input type="...">`. Возвращает None
@@ -901,5 +917,69 @@ mod tests {
         let mut doc = Document::new();
         doc.set_target(Some(""));
         assert_eq!(doc.target(), None);
+    }
+
+    // ──────── sandbox_flags ────────
+
+    fn build_iframe(sandbox: Option<&str>) -> (Document, NodeId) {
+        let mut doc = Document::new();
+        let iframe = doc.create_element(QualName::html("iframe"));
+        if let Some(val) = sandbox
+            && let NodeData::Element { attrs, .. } = &mut doc.get_mut(iframe).data
+        {
+            attrs.push(Attribute {
+                name: QualName::html("sandbox"),
+                value: val.to_string(),
+            });
+        }
+        doc.append_child(doc.root(), iframe);
+        (doc, iframe)
+    }
+
+    #[test]
+    fn sandbox_flags_none_for_non_iframe() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), div);
+        assert_eq!(doc.get(div).sandbox_flags(), None);
+    }
+
+    #[test]
+    fn sandbox_flags_iframe_without_attribute_is_empty() {
+        let (doc, iframe) = build_iframe(None);
+        let flags = doc.get(iframe).sandbox_flags().unwrap();
+        assert!(flags.is_empty());
+    }
+
+    #[test]
+    fn sandbox_flags_iframe_empty_attribute_all_restrictions() {
+        let (doc, iframe) = build_iframe(Some(""));
+        let flags = doc.get(iframe).sandbox_flags().unwrap();
+        assert_eq!(flags, SandboxFlags::all_restrictions());
+    }
+
+    #[test]
+    fn sandbox_flags_allow_scripts_lifts_scripts() {
+        let (doc, iframe) = build_iframe(Some("allow-scripts"));
+        let flags = doc.get(iframe).sandbox_flags().unwrap();
+        assert!(!flags.contains(SandboxFlags::SCRIPTS));
+        assert!(flags.contains(SandboxFlags::FORMS));
+    }
+
+    #[test]
+    fn sandbox_flags_allow_forms_and_scripts() {
+        let (doc, iframe) = build_iframe(Some("allow-scripts allow-forms"));
+        let flags = doc.get(iframe).sandbox_flags().unwrap();
+        assert!(!flags.contains(SandboxFlags::SCRIPTS));
+        assert!(!flags.contains(SandboxFlags::FORMS));
+        assert!(flags.contains(SandboxFlags::ORIGIN));
+    }
+
+    #[test]
+    fn sandbox_flags_allow_same_origin() {
+        let (doc, iframe) = build_iframe(Some("allow-same-origin"));
+        let flags = doc.get(iframe).sandbox_flags().unwrap();
+        assert!(!flags.contains(SandboxFlags::ORIGIN));
+        assert!(flags.contains(SandboxFlags::SCRIPTS));
     }
 }

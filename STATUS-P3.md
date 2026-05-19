@@ -1,6 +1,5 @@
-In progress: —
-
-Next: 2A.2 sandbox_flags on iframe       lumen-plan.md:181
+In progress: 2A.2 sandbox_flags on iframe  branch: sandbox-flags-dom
+Next step: merge to main
 
 Queue:
 2A.2 sandbox_flags on iframe       lumen-plan.md:181

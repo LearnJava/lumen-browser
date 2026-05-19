@@ -918,6 +918,9 @@ version = "0.0.1"
 [[package]]
 name = "lumen-dom"
 version = "0.0.1"
+dependencies = [
+ "lumen-core",
+]
 
 [[package]]
 name = "lumen-encoding"
