@@ -1244,6 +1244,89 @@ mod tests {
     }
 
     #[test]
+    fn about_to_wait_pattern_drains_tasks_then_fires_idle() {
+        // Моделирует pattern Lumen::about_to_wait: пока step возвращает Ran —
+        // дренируем, потом одним вызовом запускаем idle-callback-и. Без второго
+        // шага registered idle-callback не получает запуск никогда (regression-
+        // тест против ранее существовавшего gap, когда about_to_wait делал
+        // только step()×N).
+        let el = EventLoop::new();
+        let h = el.handle();
+        let task_runs = Rc::new(RefCell::new(0_usize));
+        let idle_runs = Rc::new(RefCell::new(0_usize));
+
+        // Несколько task-ов в очереди + один idle-callback.
+        for _ in 0..3 {
+            let t = Rc::clone(&task_runs);
+            h.queue_task(TaskSource::Timer, move || *t.borrow_mut() += 1);
+        }
+        let i = Rc::clone(&idle_runs);
+        h.request_idle_callback(move |_d| *i.borrow_mut() += 1, None, 0.0);
+
+        // Один тик event-loop-а.
+        let mut steps = 0;
+        let mut reached_idle = true;
+        while el.step() == StepResult::Ran {
+            steps += 1;
+            if steps >= 256 {
+                reached_idle = false;
+                break;
+            }
+        }
+        let remaining_ms = if reached_idle { 10.0 } else { 0.0 };
+        el.run_idle_callbacks(remaining_ms, 0.0);
+
+        assert_eq!(*task_runs.borrow(), 3);
+        assert_eq!(*idle_runs.borrow(), 1);
+        assert!(reached_idle, "task-очередь конечна — должны естественно достичь Idle");
+    }
+
+    #[test]
+    fn about_to_wait_cap_hit_signals_zero_idle_budget() {
+        // Если очередь больше 256 task-ов, cap=256 срабатывает; pattern Lumen-я
+        // передаёт remaining_ms=0 в run_idle_callbacks — timeout-callback
+        // всё равно сработает (did_timeout=true), а обычный idle с remaining=0
+        // формально может ничего не делать (что и ожидается: бюджета нет).
+        let el = EventLoop::new();
+        let h = el.handle();
+        let task_runs = Rc::new(RefCell::new(0_usize));
+        let captured = Rc::new(RefCell::new(None::<(f64, bool)>));
+
+        // 300 task-ов — гарантированно упрёмся в cap=256.
+        for _ in 0..300 {
+            let t = Rc::clone(&task_runs);
+            h.queue_task(TaskSource::Timer, move || *t.borrow_mut() += 1);
+        }
+
+        let c = Rc::clone(&captured);
+        // Timeout=0 ms означает «timeout уже истёк» при любом now_ms > 0 ⇒
+        // did_timeout=true (см. idle_callback_fires_with_did_timeout_when_timeout_elapsed).
+        h.request_idle_callback(
+            move |d| *c.borrow_mut() = Some((d.time_remaining(), d.did_timeout())),
+            Some(0.0),
+            0.0,
+        );
+
+        let mut steps = 0;
+        let mut reached_idle = true;
+        while el.step() == StepResult::Ran {
+            steps += 1;
+            if steps >= 256 {
+                reached_idle = false;
+                break;
+            }
+        }
+        let remaining_ms = if reached_idle { 10.0 } else { 0.0 };
+        el.run_idle_callbacks(remaining_ms, 1.0);
+
+        assert!(!reached_idle, "300 task-ов должны упереться в cap=256");
+        assert_eq!(*task_runs.borrow(), 256);
+        let cap = captured.borrow().expect("idle-callback должен сработать по timeout");
+        assert!(cap.1, "timeout=0 + now=1 ⇒ did_timeout=true");
+        assert_eq!(cap.0, 0.0, "did_timeout пути всегда даёт remaining_ms=0");
+    }
+
+    #[test]
     fn pending_counters_reflect_queue_state() {
         let el = EventLoop::new();
         let h = el.handle();
