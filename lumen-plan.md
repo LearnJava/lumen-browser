@@ -183,7 +183,7 @@
 | 2A.5 | ✅ navigation restriction enforcement | `dom/src/lib.rs` + `shell/src/main.rs` | — |
 | 2C | ⬜ **`[P3]` Tab session export/import** | UX | storage + shell |
 | 3A | 🟡 **`[P3]` DPR + scroll в shell** | 4K + длинные страницы | shell + paint |
-| 3A.1 | ⬜ relayout-on-resize | `shell/src/main.rs` | — |
+| 3A.1 | ✅ relayout-on-resize | `shell/src/main.rs` | — |
 | 3A.2 | ⬜ horizontal scroll | `shell/src/main.rs` | — |
 | 3A.3 | ⬜ momentum scroll | `shell/src/main.rs` | — |
 | 3B | 🟡 **`[P3]` HTML event loop в Lumen-loop** | P1/P2 rAF | Только `lumen-shell::runtime` |
@@ -1540,7 +1540,7 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 ### Фаза 1 — v0.1 «Reader» (9 месяцев от старта)
 - **Базовая пригодность shell** — без этого «открыть Habr-статью» невозможно как демо:
   - **Font fallback / matcher.** Рендерер сейчас всегда `Inter Regular` — любая страница с эмодзи / CJK / `font-family: Roboto` падает в `?`-глифы. Минимум: системный font-loader (Win32 GDI / fontconfig / CoreText — без сторонних crate-ов), cascade «Inter → системный по unicode-блоку». Парсер `font-family` уже есть, не используется в paint.
-  - **HiDPI / DPR-awareness.** 🟡 paint-side: `Renderer` теперь хранит `scale_factor` и делит viewport uniform на него (1 CSS px = `scale_factor` device px на 4K). Layout-side: viewport остаётся hardcoded 1024×720; relayout-on-resize + передача реального `inner_size` в layout — отдельная задача (structural refactor pipeline).
+  - **HiDPI / DPR-awareness.** ✅ paint-side: `Renderer` хранит `scale_factor` и делит viewport uniform на него (1 CSS px = `scale_factor` device px на 4K). ✅ Layout-side: viewport читается из `Renderer::viewport_size()` на каждый resize; `LayoutSource {document, stylesheet}` хранится в `Lumen` и переиспользуется для relayout без re-fetch/re-parse.
   - **Scroll + базовый input в shell.** Без scroll длинные страницы недоступны.
   - **Progressive / streaming rendering pipeline.** Сейчас shell блокирующий: окно создаётся **после** того, как HTML загружен, все `<link rel=stylesheet>` фетчатся **последовательно**, и только потом layout/paint. На странице с 30+ внешними CSS (Habr, любой современный сайт) пользователь смотрит в чёрный экран 5–15 секунд, после чего сразу появляется готовая страница. Это противоречит привычной модели браузера. Требуемая архитектура: (1) окно создаётся **первым**, до любых fetch-ей, пустое до прихода данных; (2) HTML fetch в фоновом потоке, chunks через channel в main thread; (3) tokenizer переделать на push-based (скармливаешь chunks — получаешь events), tree builder инкрементальный (новые узлы добавляются в существующий DOM); (4) subresources (CSS, картинки) фетчатся параллельно через thread pool / async; до прихода CSS — применяется UA stylesheet; (5) layout/paint reruns on dirty (relayout только поддерева, не всего дерева) с throttling до ~60 Гц. Касается shell + html-parser + network + layout. Большая задача, требует **архитектурного перепроектирования** main-loop shell-а и tokenizer-а. Прямо примыкает к «Network service в отдельном процессе» из той же фазы — оба про async-fetch, но streaming-парсинг и инкрементальный DOM из site isolation не следуют автоматически.
 - **`Url` как структурированный тип** — `struct { scheme, host, port, path, query, fragment }`. Сейчас `Url` это тонкая обёртка над String, network ad-hoc парсит то же самое. Дедуплицировать парсинг до того, как появятся CSP / cookie jar / cross-origin checks. Несколько часов работы пока потребителей мало.
