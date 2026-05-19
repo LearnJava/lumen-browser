@@ -1,4 +1,5 @@
-In progress: —
+In progress: 2A.5 navigation restriction  branch: navigation-restriction
+Next step: add check_navigation_gate to dom, call from shell  crates/engine/dom/src/lib.rs:562
 
 Next: 2A.5 navigation restriction        lumen-plan.md:184
 
