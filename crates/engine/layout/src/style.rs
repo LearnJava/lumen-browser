@@ -4462,9 +4462,12 @@ fn default_display(doc: &Document, node: NodeId) -> Display {
     };
     match name.local.as_str() {
         // <head> и его метаданные никогда не рендерятся как видимый контент.
-        "head" | "title" | "style" | "script" | "meta" | "link" | "base" | "noscript" => {
-            Display::None
-        }
+        // `<source>` и `<track>` — child-кандидаты `<picture>` / `<video>` /
+        // `<audio>`; реальное визуальное представление даёт inner `<img>`
+        // (резолвится `pick_picture_source`) или сам media-элемент. Сами
+        // эти теги в DOM есть, но layout-бокса не порождают.
+        "head" | "title" | "style" | "script" | "meta" | "link" | "base" | "noscript"
+        | "source" | "track" => Display::None,
         // Inline-уровневые элементы. Phase 0: пока трактуем как block — текст
         // внутри `<a>`/`<span>` будет на своей строке. Это известное ограничение.
         "a" | "span" | "b" | "i" | "em" | "strong" | "code" | "small" | "sub" | "sup"

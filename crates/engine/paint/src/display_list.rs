@@ -8,9 +8,9 @@
 
 use lumen_core::geom::Rect;
 use lumen_layout::{
-    box_can_own_stacking_context, creates_stacking_context, BackgroundClip, BoxKind, Color,
-    FontStyle, FontWeight, InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode, ObjectFit,
-    ObjectPosition, OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase,
+    box_can_own_stacking_context, creates_stacking_context, BackgroundClip, BorderStyle, BoxKind,
+    Color, FontStyle, FontWeight, InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode,
+    ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase,
     PositionComponent, StackingContextId, StackingTree, TextDecorationStyle,
     TextDecorationThickness, Visibility,
 };
@@ -94,6 +94,11 @@ pub enum DisplayCommand {
         widths: [f32; 4],
         /// Цвета сторон: [top, right, bottom, left].
         colors: [Color; 4],
+        /// Стили сторон: [top, right, bottom, left]. CSS Backgrounds L3 §6.
+        /// `None` обычно фильтруется emit-side через `is_visible()`, в команду
+        /// попадает Solid / Dashed / Dotted (по текущему `BorderStyle` enum).
+        /// Renderer разворачивает Dashed/Dotted в pattern из штрихов / точек.
+        styles: [BorderStyle; 4],
     },
     /// CSS Basic UI L4 §5 — `outline`. Рисуется СНАРУЖИ box-а (в отличие
     /// от border, который часть box-model), не занимает место в layout,
@@ -319,7 +324,20 @@ pub fn fit_image_quad(
 /// Формат (одна команда — одна строка):
 /// - `FillRect (x.xx, y.xx, w.xx, h.xx) #rrggbbaa`
 /// - `DrawBorder (x.xx, y.xx, w.xx, h.xx) w=[t,r,b,l] c=[#top,#right,#bottom,#left]`
+///   плюс `s=[t,r,b,l]` если хоть один стиль ≠ Solid (bw-compat: чистый
+///   Solid-border печатается как раньше, snapshot-ы не ломаются).
 /// - `DrawText (x.xx, y.xx, w.xx, h.xx) "text" fs.xx #rrggbbaa`
+/// Сокращённый префикс `BorderStyle` для snapshot-сериализатора.
+/// None уже фильтруется emit-side, но обрабатываем для устойчивости.
+fn border_style_short(s: BorderStyle) -> &'static str {
+    match s {
+        BorderStyle::None => "n",
+        BorderStyle::Solid => "s",
+        BorderStyle::Dashed => "da",
+        BorderStyle::Dotted => "do",
+    }
+}
+
 pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
     let mut out = String::new();
     for cmd in dl {
@@ -331,12 +349,17 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     color.r, color.g, color.b, color.a,
                 ));
             }
-            DisplayCommand::DrawBorder { rect, widths: [wt, wr, wb, wl], colors: [ct, cr, cb, cl] } => {
+            DisplayCommand::DrawBorder {
+                rect,
+                widths: [wt, wr, wb, wl],
+                colors: [ct, cr, cb, cl],
+                styles: [st, sr, sb, sl],
+            } => {
                 out.push_str(&format!(
                     "DrawBorder ({:.2}, {:.2}, {:.2}, {:.2}) \
                      w=[{:.2},{:.2},{:.2},{:.2}] \
                      c=[#{:02x}{:02x}{:02x}{:02x},#{:02x}{:02x}{:02x}{:02x},\
-                        #{:02x}{:02x}{:02x}{:02x},#{:02x}{:02x}{:02x}{:02x}]\n",
+                        #{:02x}{:02x}{:02x}{:02x},#{:02x}{:02x}{:02x}{:02x}]",
                     rect.x, rect.y, rect.width, rect.height,
                     wt, wr, wb, wl,
                     ct.r, ct.g, ct.b, ct.a,
@@ -344,6 +367,19 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     cb.r, cb.g, cb.b, cb.a,
                     cl.r, cl.g, cl.b, cl.a,
                 ));
+                let any_non_solid = ![*st, *sr, *sb, *sl]
+                    .iter()
+                    .all(|s| matches!(s, BorderStyle::Solid | BorderStyle::None));
+                if any_non_solid {
+                    out.push_str(&format!(
+                        " s=[{},{},{},{}]",
+                        border_style_short(*st),
+                        border_style_short(*sr),
+                        border_style_short(*sb),
+                        border_style_short(*sl),
+                    ));
+                }
+                out.push('\n');
             }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, font_family, font_weight, font_style,
@@ -1039,6 +1075,12 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         s.border_bottom_color.unwrap_or(cur),
                         s.border_left_color.unwrap_or(cur),
                     ],
+                    styles: [
+                        s.border_top_style,
+                        s.border_right_style,
+                        s.border_bottom_style,
+                        s.border_left_style,
+                    ],
                 });
             }
             emit_outline(b, out);
@@ -1111,6 +1153,12 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         s.border_bottom_color.unwrap_or(cur),
                         s.border_left_color.unwrap_or(cur),
                     ],
+                    styles: [
+                        s.border_top_style,
+                        s.border_right_style,
+                        s.border_bottom_style,
+                        s.border_left_style,
+                    ],
                 });
             }
             out.push(DisplayCommand::DrawImage {
@@ -1169,6 +1217,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                             s.border_right_color.unwrap_or(cur),
                             s.border_bottom_color.unwrap_or(cur),
                             s.border_left_color.unwrap_or(cur),
+                        ],
+                        styles: [
+                            s.border_top_style, s.border_right_style,
+                            s.border_bottom_style, s.border_left_style,
                         ],
                     });
                 }
@@ -1255,6 +1307,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         s.border_bottom_color.unwrap_or(cur),
                         s.border_left_color.unwrap_or(cur),
                     ],
+                    styles: [
+                        s.border_top_style, s.border_right_style,
+                        s.border_bottom_style, s.border_left_style,
+                    ],
                 });
             }
             // Image content внутри padding/border-области; в Phase 0
@@ -1336,11 +1392,15 @@ fn resolve_decoration_thickness(value: TextDecorationThickness, font_size: f32) 
 ///   простой 1:1 паттерн.
 /// - `Dashed` — серия штрихов длиной `2 × thickness`, шаг `3 × thickness`
 ///   (gap = thickness). UA-defined.
-/// - `Wavy` — Phase 0 fallback на Solid: текущий renderer-pipeline
-///   поддерживает только axis-aligned rect-ы, реальная синусоида
-///   требует path-pipeline или off-screen-растеризации (отдельная
-///   задача P2). Чтобы декорация не исчезла молча, рисуем `Solid`
-///   с тем же thickness/color.
+/// - `Wavy` — синусоидальная волна аппроксимируется серией узких
+///   axis-aligned столбцов (renderer pipeline без curves): сдвиг
+///   центра толщины по `dy = sin(2π · rel_x / λ) · A`, где
+///   `A = WAVY_AMPLITUDE_FACTOR · thickness`, `λ =
+///   WAVY_WAVELENGTH_FACTOR · thickness`. Шаг между columns =
+///   `max(1, thickness · 0.5)` — компромисс между визуальной
+///   гладкостью и числом FillRect-ов (≈ 2 sample / thickness CSS px).
+///   Толщина каждого column = thickness, ширина = step (или остаток
+///   до `x + width`). Видимый ascent/descent от baseline = `A + t/2`.
 fn emit_decoration_line(
     out: &mut DisplayList,
     x: f32,
@@ -1354,11 +1414,14 @@ fn emit_decoration_line(
         return;
     }
     match style {
-        TextDecorationStyle::Solid | TextDecorationStyle::Wavy => {
+        TextDecorationStyle::Solid => {
             out.push(DisplayCommand::FillRect {
                 rect: Rect::new(x, y, width, thickness),
                 color,
             });
+        }
+        TextDecorationStyle::Wavy => {
+            emit_wavy_line(out, x, y, width, thickness, color);
         }
         TextDecorationStyle::Double => {
             out.push(DisplayCommand::FillRect {
@@ -1399,6 +1462,54 @@ fn emit_decoration_line(
                 cx += step;
             }
         }
+    }
+}
+
+/// Амплитуда волны в долях `thickness` — peak-deviation центра от
+/// baseline в обе стороны. 1.5×thickness даёт ясно различимую волну
+/// без излишнего вертикального expansion за пределы line-box-а.
+const WAVY_AMPLITUDE_FACTOR: f32 = 1.5;
+
+/// Длина волны в долях `thickness`. 4×thickness — UA-defined компромисс
+/// (Chrome ≈ 3-4×, Firefox ≈ 6×; берём середину). При thickness=1px →
+/// период 4px, ~3 цикла на каждые 12 CSS-px font-size.
+const WAVY_WAVELENGTH_FACTOR: f32 = 4.0;
+
+/// Аппроксимирует синусоидальную линию серией axis-aligned FillRect-ов:
+/// для каждого sampled-X эмитим тонкий столбец `[x, x+step] × [cy+dy-t/2,
+/// cy+dy+t/2]`, где `cy = y + t/2` — центр толщины, `dy = sin(2π·rel/λ)·A`.
+/// Step выбран `max(1, t·0.5)`: ниже — растёт число FillRect (≈ 2·width/t),
+/// выше — лестница становится грубее, что особенно заметно при крутых
+/// склонах волны (там `|dy'| → t·A/λ·2π`).
+fn emit_wavy_line(
+    out: &mut DisplayList,
+    x: f32,
+    y: f32,
+    width: f32,
+    thickness: f32,
+    color: Color,
+) {
+    let amplitude = thickness * WAVY_AMPLITUDE_FACTOR;
+    let wavelength = thickness * WAVY_WAVELENGTH_FACTOR;
+    let step = (thickness * 0.5).max(1.0);
+    let cy = y + thickness * 0.5;
+    let end = x + width;
+    let mut cx = x;
+    while cx < end {
+        let w = step.min(end - cx);
+        if w <= 0.0 {
+            break;
+        }
+        // Используем центр столбца как sample-точку — это даёт
+        // чуть более точную аппроксимацию, чем left-edge sampling.
+        let sample_x = cx + w * 0.5;
+        let phase = (sample_x - x) / wavelength * std::f32::consts::TAU;
+        let dy = phase.sin() * amplitude;
+        out.push(DisplayCommand::FillRect {
+            rect: Rect::new(cx, cy + dy - thickness * 0.5, w, thickness),
+            color,
+        });
+        cx += step;
     }
 }
 
@@ -1843,21 +1954,119 @@ mod tests {
         }
     }
 
-    /// `Wavy` в Phase 0 fallback-ит на Solid (renderer-pipeline пока без
-    /// path-примитивов); один rect полной ширины.
+    /// `Wavy` эмитит серию тонких axis-aligned столбцов, аппроксимирующих
+    /// синусоиду. Каждый столбец = `step × thickness`, sin-сдвиг центра.
     #[test]
-    fn style_wavy_falls_back_to_solid() {
+    fn style_wavy_emits_sampled_columns() {
+        // Один inline char ≈ 8px @ 16px font; thickness = 16·0.07 ≈ 1.12,
+        // step = max(1, 1.12·0.5) = 1.0 → ~8 столбцов.
         let dl = build_wrapped(
             "<p><a>x</a></p>",
             "a { text-decoration: underline wavy; }",
             800.0,
         );
         let rects = fill_rects(&dl);
-        assert_eq!(rects.len(), 1, "wavy falls back to single rect");
         assert!(
-            (rects[0].width - 8.0).abs() < 0.01,
-            "expected full-width fallback, got {}",
-            rects[0].width
+            rects.len() >= 4,
+            "wavy emits multiple columns, got {}",
+            rects.len()
+        );
+        // Sum of widths ≈ underline-width (8px).
+        let total_w: f32 = rects.iter().map(|r| r.width).sum();
+        assert!(
+            (total_w - 8.0).abs() < 0.1,
+            "columns cover full width: sum={}, expected ≈ 8",
+            total_w
+        );
+        // Все столбцы — одной thickness (height).
+        let h0 = rects[0].height;
+        for r in &rects {
+            assert!((r.height - h0).abs() < 0.01, "uniform thickness");
+        }
+        // Y-координаты не одинаковы — иначе это бы Solid line.
+        let y_min = rects.iter().map(|r| r.y).fold(f32::INFINITY, f32::min);
+        let y_max = rects.iter().map(|r| r.y).fold(f32::NEG_INFINITY, f32::max);
+        assert!(
+            y_max - y_min > 0.5,
+            "wavy must vertically displace columns: range={}",
+            y_max - y_min
+        );
+    }
+
+    /// Амплитуда sin-сдвига должна не превышать `1.5 × thickness`
+    /// (peak deviation от центра в обе стороны). Sum-y-range ≤
+    /// 2·A + thickness, и не сильно меньше — амплитуда должна
+    /// достигаться хотя бы раз на достаточной ширине.
+    #[test]
+    fn style_wavy_amplitude_matches_factor() {
+        // 40px ширина с большой толщиной → волна успевает достичь обоих peak-ов.
+        let dl = build_wrapped(
+            "<p><a>xxxxx</a></p>",
+            "a { text-decoration: underline wavy; \
+                  text-decoration-thickness: 4px; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        assert!(rects.len() >= 8);
+        let y_min = rects.iter().map(|r| r.y).fold(f32::INFINITY, f32::min);
+        let y_max = rects.iter().map(|r| r.y).fold(f32::NEG_INFINITY, f32::max);
+        // A = 4 * 1.5 = 6; peak-to-peak ≈ 12, отступы между centers
+        // достигают этого диапазона.
+        let y_range = y_max - y_min;
+        assert!(
+            y_range > 6.0,
+            "amplitude expected ≥ 6, got range={}",
+            y_range
+        );
+        assert!(
+            y_range <= 13.0,
+            "amplitude should not exceed 2·A=12 (+1 sampling tolerance), got {}",
+            y_range
+        );
+    }
+
+    /// Wavy uses the same color as Solid (text-decoration-color / fallback).
+    #[test]
+    fn style_wavy_preserves_color() {
+        let dl = build_wrapped(
+            "<p style=\"color: red\"><a>x</a></p>",
+            "a { text-decoration: underline wavy; }",
+            800.0,
+        );
+        let fills: Vec<_> = dl
+            .iter()
+            .filter_map(|cmd| match cmd {
+                DisplayCommand::FillRect { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect();
+        assert!(!fills.is_empty());
+        for c in &fills {
+            assert_eq!([c.r, c.g, c.b, c.a], [255, 0, 0, 255]);
+        }
+    }
+
+    /// Каждый wavy column не выпадает за горизонтальные границы линии:
+    /// последний column обрезается до остатка, не overshoot-ит.
+    #[test]
+    fn style_wavy_columns_clip_to_width() {
+        let dl = build_wrapped(
+            "<p><a>xx</a></p>",
+            "a { text-decoration: underline wavy; \
+                  text-decoration-thickness: 3px; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        // x-min равен старту линии; x-max не превышает старт+width.
+        let x_start = rects.iter().map(|r| r.x).fold(f32::INFINITY, f32::min);
+        let x_end = rects
+            .iter()
+            .map(|r| r.x + r.width)
+            .fold(f32::NEG_INFINITY, f32::max);
+        let total_w: f32 = rects.iter().map(|r| r.width).sum();
+        assert!(
+            (x_end - x_start - total_w).abs() < 0.01,
+            "columns are non-overlapping and tile the line",
         );
     }
 
@@ -1946,11 +2155,96 @@ mod tests {
         let dl = build("<p>x</p>", "p { border: 2px solid red; }");
         let b = borders(&dl);
         assert_eq!(b.len(), 1, "должна быть одна DrawBorder команда");
-        if let DisplayCommand::DrawBorder { widths, colors, .. } = b[0] {
+        if let DisplayCommand::DrawBorder { widths, colors, styles, .. } = b[0] {
             assert!((widths[0] - 2.0).abs() < 0.01, "top width");
             assert!((widths[1] - 2.0).abs() < 0.01, "right width");
             assert_eq!(colors[0].r, 255, "top color — red");
+            assert_eq!(
+                *styles,
+                [
+                    BorderStyle::Solid,
+                    BorderStyle::Solid,
+                    BorderStyle::Solid,
+                    BorderStyle::Solid,
+                ],
+            );
         }
+    }
+
+    #[test]
+    fn border_dashed_styles_propagate_to_command() {
+        let dl = build("<p>x</p>", "p { border: 3px dashed blue; }");
+        let b = borders(&dl);
+        assert_eq!(b.len(), 1);
+        if let DisplayCommand::DrawBorder { styles, .. } = b[0] {
+            assert_eq!(
+                *styles,
+                [
+                    BorderStyle::Dashed,
+                    BorderStyle::Dashed,
+                    BorderStyle::Dashed,
+                    BorderStyle::Dashed,
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn border_mixed_styles_per_side() {
+        let dl = build(
+            "<p>x</p>",
+            "p { border-top: 2px solid black; \
+                 border-right: 2px dashed black; \
+                 border-bottom: 2px dotted black; \
+                 border-left: 2px solid black; }",
+        );
+        let b = borders(&dl);
+        assert_eq!(b.len(), 1);
+        if let DisplayCommand::DrawBorder { styles, .. } = b[0] {
+            assert_eq!(styles[0], BorderStyle::Solid);
+            assert_eq!(styles[1], BorderStyle::Dashed);
+            assert_eq!(styles[2], BorderStyle::Dotted);
+            assert_eq!(styles[3], BorderStyle::Solid);
+        }
+    }
+
+    #[test]
+    fn serialize_drawborder_solid_omits_styles() {
+        // bw-compat: чистый Solid не печатает `s=[...]` — snapshot-ы
+        // прежней версии остаются валидными.
+        let dl = build("<p>x</p>", "p { border: 2px solid black; }");
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("DrawBorder"));
+        assert!(!s.contains(" s=["), "Solid не печатает s=[...]: {s}");
+    }
+
+    #[test]
+    fn serialize_drawborder_dashed_emits_styles_field() {
+        let dl = build("<p>x</p>", "p { border: 2px dashed black; }");
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("DrawBorder"));
+        assert!(
+            s.contains(" s=[da,da,da,da]"),
+            "Dashed эмитит s=[...]: {s}"
+        );
+    }
+
+    #[test]
+    fn serialize_drawborder_dotted_short_marker() {
+        let dl = build("<p>x</p>", "p { border: 2px dotted black; }");
+        let s = serialize_display_list(&dl);
+        assert!(s.contains(" s=[do,do,do,do]"), "Dotted: {s}");
+    }
+
+    #[test]
+    fn serialize_drawborder_mixed_marks_only_non_solid() {
+        let dl = build(
+            "<p>x</p>",
+            "p { border: 2px solid black; \
+                 border-right-style: dashed; }",
+        );
+        let s = serialize_display_list(&dl);
+        assert!(s.contains(" s=[s,da,s,s]"), "Mixed: {s}");
     }
 
     #[test]

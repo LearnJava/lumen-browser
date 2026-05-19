@@ -11,6 +11,9 @@
 use lumen_core::geom::{Rect, Size};
 use lumen_css_parser::Stylesheet;
 use lumen_dom::{Document, NodeData, NodeId};
+use lumen_html_parser::{
+    PictureParams, SizesViewport, pick_img_source, pick_picture_source,
+};
 
 use crate::style::{compute_style, BackgroundImage, BoxSizing, ComputedStyle, Display, TextAlign};
 use crate::TextMeasurer;
@@ -23,6 +26,72 @@ fn is_image_element(doc: &Document, id: NodeId) -> bool {
         &doc.get(id).data,
         NodeData::Element { name, .. } if name.local == "img"
     )
+}
+
+/// HTML-имя `<picture>` — обёртка над `<source>`-кандидатами и одним
+/// `<img>`-fallback-ом. Сам по себе пиктур ничего не рендерит, его
+/// единственная роль — переадресовать source-selection на inner `<img>`.
+fn is_picture_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "picture"
+    )
+}
+
+/// Финальный URL картинки + author-объявленные intrinsic dimensions.
+/// Заполняется `resolve_image_source` ниже — это адаптер `PickedSource`
+/// из `lumen-html-parser`, плюс legacy-fallback на голый `src`-атрибут
+/// для битых страниц, у которых picker отказал.
+struct ImageSource {
+    url: String,
+    intrinsic_width: Option<u32>,
+    intrinsic_height: Option<u32>,
+}
+
+/// Выбрать источник для `<img>`-элемента с учётом окружающего контекста:
+///  1. Если parent — `<picture>`, прогоняем picture-picker
+///     (выбирает `<source>` или fallback на `<img>` по `media`/`type`/
+///     `srcset`/`sizes`).
+///  2. Иначе — `<img>`-picker, учитывающий собственный `srcset`/`sizes`/`src`.
+///  3. Если оба picker-а вернули `None` (нет ни `srcset`, ни `src`) —
+///     fallback на голый `src` атрибут как раньше: для битой разметки
+///     лучше отрисовать пустую коробку, чем ничего.
+///
+/// Phase 0: DPR=1.0 (layout не знает про device pixel ratio renderer-а —
+/// это интегрирует P3 при relayout-on-resize), фильтр MIME-типов
+/// выключен (`supported_types: None`), `prefers_dark` = false. Когда
+/// эти значения появятся в layout-pipeline — заменим без изменения
+/// сигнатуры picker-ов.
+fn resolve_image_source(doc: &Document, img_id: NodeId, viewport: Size) -> ImageSource {
+    let sizes_vp = SizesViewport {
+        width_px: viewport.width,
+        height_px: viewport.height,
+        root_font_size_px: 16.0,
+        prefers_dark: false,
+    };
+    let params = PictureParams { viewport: sizes_vp, dpr: 1.0, supported_types: None };
+
+    if let Some(parent_id) = doc.get(img_id).parent
+        && is_picture_element(doc, parent_id)
+        && let Some(picked) = pick_picture_source(doc, parent_id, &params)
+    {
+        return ImageSource {
+            url: picked.url,
+            intrinsic_width: picked.intrinsic_width,
+            intrinsic_height: picked.intrinsic_height,
+        };
+    }
+
+    if let Some(picked) = pick_img_source(doc, img_id, sizes_vp, params.dpr) {
+        return ImageSource {
+            url: picked.url,
+            intrinsic_width: picked.intrinsic_width,
+            intrinsic_height: picked.intrinsic_height,
+        };
+    }
+
+    let raw_src = doc.get(img_id).get_attr("src").unwrap_or("").to_string();
+    ImageSource { url: raw_src, intrinsic_width: None, intrinsic_height: None }
 }
 
 #[derive(Debug, Clone)]
@@ -297,7 +366,7 @@ fn build_box(
     inherited: &ComputedStyle,
     viewport: Size,
 ) -> LayoutBox {
-    let style = compute_style(doc, id, sheet, inherited, viewport);
+    let mut style = compute_style(doc, id, sheet, inherited, viewport);
 
     let kind = match &doc.get(id).data {
         NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. } => BoxKind::Skip,
@@ -305,11 +374,25 @@ fn build_box(
             if style.display == Display::None {
                 BoxKind::Skip
             } else if is_image_element(doc, id) {
-                let node = doc.get(id);
-                BoxKind::Image {
-                    src: node.get_attr("src").unwrap_or("").to_string(),
-                    alt: node.get_attr("alt").unwrap_or("").to_string(),
+                let src = resolve_image_source(doc, id, viewport);
+                let alt = doc.get(id).get_attr("alt").unwrap_or("").to_string();
+                // Intrinsic dimensions у выбранного `<source>` действуют как
+                // presentational hint: заполняют только пустые слоты, не
+                // перекрывают ни CSS-каскад, ни собственные `<img width|
+                // height>` атрибуты (последние уже легли в style через
+                // `apply_image_presentational_hints`). HTML5 §10 «mapped
+                // attributes»: hint = UA-rule с specificity 0.
+                if style.width.is_none()
+                    && let Some(w) = src.intrinsic_width
+                {
+                    style.width = Some(w as f32);
                 }
+                if style.height.is_none()
+                    && let Some(h) = src.intrinsic_height
+                {
+                    style.height = Some(h as f32);
+                }
+                BoxKind::Image { src: src.url, alt }
             } else {
                 BoxKind::Block
             }
