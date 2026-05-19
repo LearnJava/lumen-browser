@@ -57,7 +57,7 @@ impl EventSink for StdoutEventSink {
 /// SIL OFL 1.1, см. assets/fonts/OFL.txt.
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, Modifiers, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{Window, WindowId};
@@ -114,6 +114,8 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
         find: find::FindState::default(),
         scroll_y: 0.0,
         content_height,
+        cursor_position: None,
+        scroll_drag: None,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -809,6 +811,16 @@ struct Lumen {
     /// текущему display list-у. Используется для clamping-а scroll_y. Обновляется
     /// после load/reload вместе с display_list. 0 — нет контента.
     content_height: f32,
+    /// Последняя известная позиция курсора в **physical** пикселях (от winit).
+    /// `None` пока курсор не вошёл в окно. Конвертируется в CSS px через
+    /// `scale_factor()` непосредственно в hit-test / drag callback-ах.
+    cursor_position: Option<winit::dpi::PhysicalPosition<f64>>,
+    /// Активный drag scrollbar-thumb-а: `Some` пока зажата левая кнопка после
+    /// click-а по thumb-у. `MouseInput Released` или `CursorLeft` сбрасывают
+    /// в `None`. Снапшот `(start_scroll_y, start_mouse_y)` фиксирован на момент
+    /// начала drag-а — это даёт «закреплённый под пальцем» thumb (стандартный
+    /// scrollbar UX).
+    scroll_drag: Option<scrollbar::ScrollDrag>,
 }
 
 impl Lumen {
@@ -831,6 +843,9 @@ impl Lumen {
                 self.find.close();
                 // Новая страница — показываем сверху.
                 self.scroll_y = 0.0;
+                // Любой активный drag прерывается (content_height другой,
+                // thumb-геометрия пересчитана с нуля).
+                self.scroll_drag = None;
                 if let Some(r) = self.renderer.as_mut() {
                     // Старая GPU-cache картинок относится к предыдущей странице
                     // (даже если src совпадает, content мог измениться). Чистим
@@ -955,6 +970,66 @@ impl ApplicationHandler for Lumen {
             }
             WindowEvent::KeyboardInput { event: ref key_event, .. } => {
                 self.handle_key(event_loop, key_event);
+            }
+            WindowEvent::CursorMoved { position, .. } => {
+                self.cursor_position = Some(position);
+                // Активный drag — пересчитать scroll по новой позиции.
+                if let Some(drag) = self.scroll_drag {
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let cursor_y_css = (position.y as f32) / dpr;
+                    let target = drag.scroll_for(
+                        cursor_y_css,
+                        self.content_height,
+                        self.viewport_height_css(),
+                    );
+                    self.scroll_to(target);
+                }
+            }
+            WindowEvent::CursorLeft { .. } => {
+                self.cursor_position = None;
+                // Драг продолжается даже когда курсор вышел из окна — winit
+                // продолжит слать CursorMoved-события за пределами client area,
+                // пока зажата кнопка. Сбросим drag только на MouseInput Release
+                // или если события прекратятся (мы не получим MouseInput, но
+                // повторный CursorEntered/CursorMoved оживят drag — допустимо
+                // для Phase 0).
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if button != MouseButton::Left {
+                    // Phase 0: только левая кнопка управляет drag-ом scrollbar-а.
+                    // Middle / right / back / forward — пропускаем.
+                } else if state == ElementState::Pressed {
+                    let Some(cursor) = self.cursor_position else {
+                        // Без CursorMoved-snapshot-а до Press — не знаем где
+                        // клик; bail out. Реалистично — Press всегда приходит
+                        // после CursorMoved, но защитимся.
+                        return;
+                    };
+                    let dpr = self
+                        .renderer
+                        .as_ref()
+                        .map_or(1.0_f32, |r| r.scale_factor() as f32)
+                        .max(1e-6);
+                    let x_css = (cursor.x as f32) / dpr;
+                    let y_css = (cursor.y as f32) / dpr;
+                    if scrollbar::thumb_hit_test(
+                        x_css,
+                        y_css,
+                        self.scroll_y,
+                        self.content_height,
+                        self.viewport_width_css(),
+                        self.viewport_height_css(),
+                    ) {
+                        self.scroll_drag = Some(scrollbar::ScrollDrag::new(self.scroll_y, y_css));
+                    }
+                } else {
+                    // Released — завершаем drag (если он был).
+                    self.scroll_drag = None;
+                }
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 // winit отдаёт два типа дельты:
