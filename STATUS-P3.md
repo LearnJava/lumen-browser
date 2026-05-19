@@ -1,5 +1,4 @@
-In progress: 2A.4 form submission gate  branch: form-submission-gate
-Next step: FormInfo + collect_forms + check_form_gate  dom/src/lib.rs:486
+In progress: —
 
 Next: 2A.5 navigation restriction        lumen-plan.md:184
 
@@ -17,4 +16,4 @@ Queue:
 4B.4 preload deduplication         lumen-plan.md:199
 4B.5 preload priority + EventSink  lumen-plan.md:200
 
-Recent: script-execution-gate 2026-05-19
+Recent: form-submission-gate 2026-05-19
