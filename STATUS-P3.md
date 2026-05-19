@@ -1,5 +1,4 @@
-In progress: 2A.1 block blockable in HttpClient::fetch   branch: http-fetch-blockable
-Next step: commit + merge   crates/network/src/lib.rs:1479
+In progress: —
 
 Next: 2A.2 sandbox_flags on iframe       lumen-plan.md:181
 
