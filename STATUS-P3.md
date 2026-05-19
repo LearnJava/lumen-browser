@@ -1,9 +1,9 @@
-In progress: —
+In progress: 2A.4 form submission gate  branch: form-submission-gate
+Next step: FormInfo + collect_forms + check_form_gate  dom/src/lib.rs:486
 
-Next: 2A.4 form submission gate           lumen-plan.md:183
+Next: 2A.5 navigation restriction        lumen-plan.md:184
 
 Queue:
-2A.4 form submission gate          lumen-plan.md:183
 2A.5 navigation restriction        lumen-plan.md:184
 3A.1 relayout-on-resize            lumen-plan.md:187
 3A.2 horizontal scroll             lumen-plan.md:188
