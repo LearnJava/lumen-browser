@@ -15,6 +15,7 @@ pub mod idn;
 pub mod json;
 pub mod module;
 pub mod punycode;
+pub mod sandbox;
 pub mod sri;
 pub mod url;
 
@@ -31,6 +32,7 @@ pub use form::{
 pub use json::{parse as parse_json, JsonError, JsonResult, JsonValue};
 pub use geom::{Point, Rect, Size};
 pub use module::Module;
+pub use sandbox::{parse_sandbox_value, SandboxFlags};
 pub use sri::{DigestProvider, IntegrityList, SriAlgorithm, SriError, SriHash, SriResult};
 pub use url::Url;
 
