@@ -1,8 +1,8 @@
-In progress: 2A.2 sandbox_flags on iframe  branch: sandbox-flags-dom
-Next step: merge to main
+In progress: —
+
+Next: 2A.3 script execution gate          lumen-plan.md:182
 
 Queue:
-2A.2 sandbox_flags on iframe       lumen-plan.md:181
 2A.3 script execution gate         lumen-plan.md:182
 2A.4 form submission gate          lumen-plan.md:183
 2A.5 navigation restriction        lumen-plan.md:184
