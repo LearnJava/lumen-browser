@@ -1,9 +1,8 @@
 In progress: —
 
-Next: 2A.4 form submission gate           lumen-plan.md:183
+Next: 2A.5 navigation restriction        lumen-plan.md:184
 
 Queue:
-2A.4 form submission gate          lumen-plan.md:183
 2A.5 navigation restriction        lumen-plan.md:184
 3A.1 relayout-on-resize            lumen-plan.md:187
 3A.2 horizontal scroll             lumen-plan.md:188
@@ -17,4 +16,4 @@ Queue:
 4B.4 preload deduplication         lumen-plan.md:199
 4B.5 preload priority + EventSink  lumen-plan.md:200
 
-Recent: script-execution-gate 2026-05-19
+Recent: form-submission-gate 2026-05-19

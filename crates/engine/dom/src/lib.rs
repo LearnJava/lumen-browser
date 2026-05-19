@@ -250,6 +250,17 @@ impl InputType {
     }
 }
 
+/// Данные `<form>` элемента — URL назначения, метод и число полей ввода.
+#[derive(Debug, Clone)]
+pub struct FormInfo {
+    /// Значение атрибута `action` (пустая строка если отсутствует).
+    pub action: String,
+    /// Значение атрибута `method` в нижнем регистре, по умолчанию `"get"`.
+    pub method: String,
+    /// Число дочерних элементов-потомков типа input/select/textarea/button.
+    pub field_count: usize,
+}
+
 /// Парсинг-режим документа по HTML5 §13.2.6.2 «The insertion mode».
 ///
 /// Решается tree builder-ом по DOCTYPE-токену (см. §13.2.5.1
@@ -481,6 +492,74 @@ fn write_tree(doc: &Document, id: NodeId, depth: usize, f: &mut fmt::Formatter<'
         write_tree(doc, child, depth + 1, f)?;
     }
     Ok(())
+}
+
+fn count_form_controls(doc: &Document, id: NodeId) -> usize {
+    let mut count = 0;
+    for &child in &doc.get(id).children.clone() {
+        if doc
+            .get(child)
+            .element_name()
+            .map(|n| {
+                matches!(
+                    n.local.to_ascii_lowercase().as_str(),
+                    "input" | "select" | "textarea" | "button"
+                )
+            })
+            .unwrap_or(false)
+        {
+            count += 1;
+        }
+        count += count_form_controls(doc, child);
+    }
+    count
+}
+
+fn collect_forms(doc: &Document, id: NodeId, out: &mut Vec<FormInfo>) {
+    let node = doc.get(id);
+    if node
+        .element_name()
+        .map(|n| n.local.eq_ignore_ascii_case("form"))
+        .unwrap_or(false)
+    {
+        let action = node.get_attr("action").unwrap_or("").to_string();
+        let method = node
+            .get_attr("method")
+            .unwrap_or("get")
+            .to_ascii_lowercase();
+        let field_count = count_form_controls(doc, id);
+        out.push(FormInfo {
+            action,
+            method,
+            field_count,
+        });
+        return;
+    }
+    for &child in &node.children.clone() {
+        collect_forms(doc, child, out);
+    }
+}
+
+/// Гейт отправки форм по sandbox-флагу HTML §7.6.5.
+///
+/// Если `sandbox` содержит [`SandboxFlags::FORMS`] — отправка заблокирована;
+/// функция логирует число заблокированных форм и возвращает его.
+/// Если флаг не установлен — возвращает 0. В Phase 0 реальной отправки
+/// нет; вызов устанавливает инфраструктуру для будущего FormRuntime.
+pub fn check_form_gate(doc: &Document, sandbox: SandboxFlags) -> usize {
+    let mut forms = Vec::new();
+    collect_forms(doc, doc.root(), &mut forms);
+    if forms.is_empty() {
+        return 0;
+    }
+    if sandbox.contains(SandboxFlags::FORMS) {
+        eprintln!(
+            "sandbox: заблокировано {} форм(ы) (sandbox=forms)",
+            forms.len()
+        );
+        return forms.len();
+    }
+    0
 }
 
 #[cfg(test)]
@@ -981,5 +1060,102 @@ mod tests {
         let flags = doc.get(iframe).sandbox_flags().unwrap();
         assert!(!flags.contains(SandboxFlags::ORIGIN));
         assert!(flags.contains(SandboxFlags::SCRIPTS));
+    }
+
+    // ──────── collect_forms / check_form_gate ────────
+
+    fn build_doc_with_form(
+        action: Option<&str>,
+        method: Option<&str>,
+        controls: &[&str],
+    ) -> Document {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let body = doc.create_element(QualName::html("body"));
+        let form = doc.create_element(QualName::html("form"));
+        if let Some(a) = action
+            && let NodeData::Element { attrs, .. } = &mut doc.get_mut(form).data
+        {
+            attrs.push(Attribute {
+                name: QualName::html("action"),
+                value: a.to_string(),
+            });
+        }
+        if let Some(m) = method
+            && let NodeData::Element { attrs, .. } = &mut doc.get_mut(form).data
+        {
+            attrs.push(Attribute {
+                name: QualName::html("method"),
+                value: m.to_string(),
+            });
+        }
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        doc.append_child(body, form);
+        for &tag in controls {
+            let el = doc.create_element(QualName::html(tag));
+            doc.append_child(form, el);
+        }
+        doc
+    }
+
+    #[test]
+    fn collect_forms_finds_form_with_action_and_method() {
+        let doc = build_doc_with_form(Some("/submit"), Some("post"), &["input"]);
+        let mut forms = Vec::new();
+        collect_forms(&doc, doc.root(), &mut forms);
+        assert_eq!(forms.len(), 1);
+        assert_eq!(forms[0].action, "/submit");
+        assert_eq!(forms[0].method, "post");
+        assert_eq!(forms[0].field_count, 1);
+    }
+
+    #[test]
+    fn collect_forms_defaults_action_and_method() {
+        let doc = build_doc_with_form(None, None, &[]);
+        let mut forms = Vec::new();
+        collect_forms(&doc, doc.root(), &mut forms);
+        assert_eq!(forms.len(), 1);
+        assert_eq!(forms[0].action, "");
+        assert_eq!(forms[0].method, "get");
+        assert_eq!(forms[0].field_count, 0);
+    }
+
+    #[test]
+    fn collect_forms_counts_all_control_types() {
+        let doc =
+            build_doc_with_form(None, None, &["input", "select", "textarea", "button"]);
+        let mut forms = Vec::new();
+        collect_forms(&doc, doc.root(), &mut forms);
+        assert_eq!(forms[0].field_count, 4);
+    }
+
+    #[test]
+    fn collect_forms_skips_non_form_elements() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), div);
+        let mut forms = Vec::new();
+        collect_forms(&doc, doc.root(), &mut forms);
+        assert!(forms.is_empty());
+    }
+
+    #[test]
+    fn check_form_gate_no_forms_returns_zero() {
+        let doc = Document::new();
+        assert_eq!(check_form_gate(&doc, SandboxFlags::empty()), 0);
+        assert_eq!(check_form_gate(&doc, SandboxFlags::FORMS), 0);
+    }
+
+    #[test]
+    fn check_form_gate_blocked_by_sandbox_returns_count() {
+        let doc = build_doc_with_form(Some("/login"), None, &["input"]);
+        assert_eq!(check_form_gate(&doc, SandboxFlags::FORMS), 1);
+    }
+
+    #[test]
+    fn check_form_gate_allowed_returns_zero() {
+        let doc = build_doc_with_form(Some("/login"), None, &["input"]);
+        assert_eq!(check_form_gate(&doc, SandboxFlags::empty()), 0);
     }
 }

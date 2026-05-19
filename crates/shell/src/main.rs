@@ -28,7 +28,7 @@ use std::sync::Arc;
 use lumen_core::event::Event;
 use lumen_core::ext::EventSink;
 use lumen_core::geom::Size;
-use lumen_dom::{Document, NodeData, NodeId};
+use lumen_dom::{Document, NodeData, NodeId, check_form_gate};
 use lumen_layout::LayoutBox;
 use lumen_paint::{DisplayList, Renderer};
 use winit::application::ApplicationHandler;
@@ -660,6 +660,9 @@ fn parse_and_layout(
     // (SandboxFlags::empty()), поэтому блокировки не будет. NullJsRuntime
     // возвращает NotImplemented — это ожидаемое поведение до подключения QuickJS.
     run_scripts(&doc, lumen_core::SandboxFlags::empty(), &lumen_core::NullJsRuntime);
+
+    // Гейт отправки форм: Phase 0 — top-level документ не sandboxed.
+    check_form_gate(&doc, lumen_core::SandboxFlags::empty());
 
     // Fetch + decode <img src>. Должно идти ДО layout, потому что intrinsic
     // dimensions из декодированного изображения проставляются как HTML
