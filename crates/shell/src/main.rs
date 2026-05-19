@@ -85,8 +85,9 @@ fn main() -> ExitCode {
 fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCode {
     println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
 
-    let initial_page = match source.load(event_sink.clone()) {
-        Ok(page) => page,
+    let initial_viewport = Size::new(1024.0, 720.0);
+    let (initial_page, layout_source) = match source.load(event_sink.clone(), initial_viewport) {
+        Ok(r) => r,
         Err(err) => {
             eprintln!("Ошибка загрузки {}: {err}", source.describe());
             return ExitCode::FAILURE;
@@ -119,6 +120,7 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
         scroll_drag: None,
         scroll_anim: None,
         last_cursor_icon: None,
+        layout_source,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -152,12 +154,14 @@ fn run_dump(
             Ok(())
         }
         DumpKind::Layout => {
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink)?;
+            let vp = Size::new(1024.0, 720.0);
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink)?;
+            let vp = Size::new(1024.0, 720.0);
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp)?;
             let dl = lumen_paint::build_display_list(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -235,12 +239,18 @@ impl PageSource {
         }
     }
 
-    fn load(&self, sink: Arc<dyn EventSink>) -> Result<LoadedPage, Box<dyn Error>> {
+    fn load(
+        &self,
+        sink: Arc<dyn EventSink>,
+        viewport: Size,
+    ) -> Result<(LoadedPage, Option<LayoutSource>), Box<dyn Error>> {
         if matches!(self, PageSource::Empty) {
-            return Ok(LoadedPage::empty());
+            return Ok((LoadedPage::empty(), None));
         }
         let raw = self.load_bytes(sink.clone())?;
-        render_bytes(&raw.bytes, raw.content_type, &raw.base, sink)
+        let (page, layout_source) =
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport)?;
+        Ok((page, Some(layout_source)))
     }
 }
 
@@ -634,6 +644,7 @@ fn apply_intrinsic_size(doc: &mut Document, node_id: NodeId, width: u32, height:
 /// dump-режимов. Поля владеют своими данными — нет ссылок наружу.
 struct ParsedPage {
     document: Document,
+    stylesheet: lumen_css_parser::Stylesheet,
     layout: LayoutBox,
     title: Option<String>,
     rule_count: usize,
@@ -641,11 +652,19 @@ struct ParsedPage {
     images: Vec<(String, lumen_image::Image)>,
 }
 
+/// Источник для повторного layout без повторной загрузки/парсинга.
+/// Хранится в `Lumen`; обновляется только при reload/load новой страницы.
+struct LayoutSource {
+    document: Document,
+    stylesheet: lumen_css_parser::Stylesheet,
+}
+
 fn parse_and_layout(
     bytes: &[u8],
     content_type: Option<&str>,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
+    viewport: Size,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -679,7 +698,6 @@ fn parse_and_layout(
     css.push_str(&load_linked_stylesheets(&doc, base, sink));
 
     let sheet = lumen_css_parser::parse(&css);
-    let viewport = Size::new(1024.0, 720.0);
 
     let font = lumen_font::Font::parse(INTER_FONT)
         .map_err(|e| format!("ошибка разбора шрифта: {e}"))?;
@@ -690,6 +708,7 @@ fn parse_and_layout(
     let rule_count = sheet.rules.len();
     Ok(ParsedPage {
         document: doc,
+        stylesheet: sheet,
         layout,
         title,
         rule_count,
@@ -697,13 +716,23 @@ fn parse_and_layout(
     })
 }
 
+/// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
+/// Парсинг HTML/CSS не выполняется — только layout и build_display_list.
+fn relayout_page(src: &LayoutSource, viewport: Size) -> DisplayList {
+    let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
+    let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
+    let layout = lumen_layout::layout_measured(&src.document, &src.stylesheet, viewport, &measurer);
+    lumen_paint::build_display_list(&layout)
+}
+
 fn render_bytes(
     bytes: &[u8],
     content_type: Option<&str>,
     base: &ResourceBase,
     sink: Arc<dyn EventSink>,
-) -> Result<LoadedPage, Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink)?;
+    viewport: Size,
+) -> Result<(LoadedPage, LayoutSource), Box<dyn Error>> {
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport)?;
     let display_list = lumen_paint::build_display_list(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок",
@@ -712,11 +741,18 @@ fn render_bytes(
         display_list.len(),
         parsed.images.len(),
     );
-    Ok(LoadedPage {
-        display_list,
-        title: parsed.title,
-        images: parsed.images,
-    })
+    let layout_source = LayoutSource {
+        document: parsed.document,
+        stylesheet: parsed.stylesheet,
+    };
+    Ok((
+        LoadedPage {
+            display_list,
+            title: parsed.title,
+            images: parsed.images,
+        },
+        layout_source,
+    ))
 }
 
 /// Найти первый `<title>` в дереве и склеить его текстовые дети.
@@ -906,9 +942,28 @@ struct Lumen {
     /// сотни событий в секунду при активном движении мыши) не дёргать
     /// `Window::set_cursor` напрасно. `None` — ещё не выставляли (init).
     last_cursor_icon: Option<CursorIcon>,
+    /// DOM + stylesheet для relayout без повторного fetch/parse. Обновляется
+    /// при каждом load/reload. `None` — страница не загружена (Empty source).
+    layout_source: Option<LayoutSource>,
 }
 
 impl Lumen {
+    /// Повторный layout+paint при изменении размера viewport.
+    /// Использует сохранённый `LayoutSource`; парсинг не повторяется.
+    fn relayout(&mut self) {
+        let Some(src) = self.layout_source.as_ref() else { return };
+        let Some(r) = self.renderer.as_ref() else { return };
+        let vp_size = r.viewport_size();
+        let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
+        let new_dl = relayout_page(src, viewport);
+        self.content_height = content_height_of(&new_dl);
+        self.display_list = new_dl;
+        self.scroll_y = clamp_scroll(self.scroll_y, self.max_scroll());
+        if let Some(w) = self.window.as_ref() {
+            w.request_redraw();
+        }
+    }
+
     /// Перезагрузить текущий источник: fetch/parse/layout/paint снова. На
     /// `PageSource::Empty` — no-op (грузить нечего). При ошибке — оставляем
     /// предыдущий display_list, печатаем причину в stderr.
@@ -917,8 +972,16 @@ impl Lumen {
             return;
         }
         println!("Reload: {}", self.source.describe());
-        match self.source.load(self.event_sink.clone()) {
-            Ok(page) => {
+        let viewport = self.renderer.as_ref().map_or_else(
+            || Size::new(1024.0, 720.0),
+            |r| {
+                let s = r.viewport_size();
+                Size::new(s.width as f32, s.height as f32)
+            },
+        );
+        match self.source.load(self.event_sink.clone(), viewport) {
+            Ok((page, new_layout_source)) => {
+                self.layout_source = new_layout_source;
                 self.content_height = content_height_of(&page.display_list);
                 self.display_list = page.display_list;
                 self.title = page.title;
@@ -1044,15 +1107,13 @@ impl ApplicationHandler for Lumen {
                 if let Some(r) = self.renderer.as_mut() {
                     r.resize(size.width, size.height);
                 }
+                self.relayout();
                 // HTML §8.1.5.1, шаг 13: ResizeObserver delivery. В Phase 0
                 // никто не зарегистрирован (JS engine отсутствует), но
                 // future-proof: когда подключим QuickJS, JS-callback-и
                 // получат сигнал автоматически.
                 self.runtime
                     .deliver_observer_records(runtime::ObserverKind::Resize);
-                if let Some(w) = self.window.as_ref() {
-                    w.request_redraw();
-                }
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 // Окно перетащили на монитор с другим DPI. Surface не пересоздаём —
