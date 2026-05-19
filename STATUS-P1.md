@@ -1,23 +1,21 @@
 In progress: —
 
-Next:
-1A unitless length quirk (img width/height attrs)  layout/src/style.rs:2945
-1A IE7 line-height quirk (legend/fieldset)         layout/src/style.rs:4925
-1A quirks test coverage                            layout/src/lib.rs:7550
-1B Length type through all cascade declarations    layout/src/style.rs:5069 + :2699
-1B Color type through all cascade declarations     layout/src/style.rs:494  + :2699
-4B flex-direction + flex-wrap properties           layout/src/style.rs:1392 + :6720
-4B flex-grow + flex-shrink + flex-basis            layout/src/style.rs:1392
-4B flex item layout pass (main/cross axis)         layout/src/box_tree.rs:509
-4B flex gap application                            layout/src/box_tree.rs:509
-4B flex wrapping + multi-line logic                layout/src/box_tree.rs:509
-5  ICU4x struct + segmenter init                   core/src/ext.rs (after NullUnicodeProvider)
-5  line_break_opportunities impl                   core/src/ext.rs
-5  grapheme_boundaries impl                        core/src/ext.rs
-5  word_boundaries impl                            core/src/ext.rs
-5  bidi_runs impl                                  core/src/ext.rs
+Next: 1A.1 unitless length quirk   lumen-plan.md:126
 
-Blocked:
-5  ICU4x — needs UnicodeProvider wired into layout first
+Queue:
+1A.2 IE7 line-height quirk         lumen-plan.md:127
+1A.3 quirks test coverage          lumen-plan.md:128
+1B.1 Length type cascade           lumen-plan.md:130
+1B.2 Color type cascade            lumen-plan.md:131
+4B.1 flex-direction + flex-wrap    lumen-plan.md:138
+4B.2 flex-grow/shrink/basis        lumen-plan.md:139
+4B.3 flex item layout pass         lumen-plan.md:140
+4B.4 flex gap                      lumen-plan.md:141
+4B.5 flex wrapping + multi-line    lumen-plan.md:142
+5.1  ICU4x struct + init           lumen-plan.md:144
+5.2  line_break_opportunities      lumen-plan.md:145
+5.3  grapheme_boundaries           lumen-plan.md:146
+5.4  word_boundaries               lumen-plan.md:147
+5.5  bidi_runs                     lumen-plan.md:148
 
 Recent: graphic-tests-rework 2026-05-19

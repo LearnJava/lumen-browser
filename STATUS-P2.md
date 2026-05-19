@@ -1,19 +1,16 @@
 In progress: —
 
-Next:
-1B CompositorThread struct + spawn loop            paint/src/compositor.rs:277
-1B vsync tick-loop 60fps                           paint/src/compositor.rs (after CompositorThread)
-1B PushBlendMode/PopBlendMode in build_display_list  paint/src/display_list.rs:196
-1B off-screen opacity layer rendering              paint/src/renderer.rs
-1B GPU texture upload for layer snapshots          paint/src/renderer.rs
-3A ColorSpace enum in ComputedStyle                layout/src/style.rs:1159
-3A Display P3 parsing in CSS color functions       layout/src/style.rs:9919
-3A HDR tone-mapping utilities (sRGB↔P3 matrices)  layout/src/style.rs
-3A ColorFloat variant (f32 channels)               layout/src/style.rs:494
-3A color space awareness in renderer               paint/src/renderer.rs
+Next: 1B.1 CompositorThread + spawn loop   lumen-plan.md:157
 
-Blocked:
-3A color management — needs P1 1B Color type first
-3B animations offload — needs P1 1B + P3 scheduling
+Queue:
+1B.2 vsync tick-loop 60fps         lumen-plan.md:158
+1B.3 PushBlendMode/PopBlendMode    lumen-plan.md:159
+1B.4 off-screen opacity rendering  lumen-plan.md:160
+1B.5 GPU texture upload            lumen-plan.md:161
+3A.1 ColorSpace enum               lumen-plan.md:165  (blocked: P1 1B.1+1B.2)
+3A.2 Display P3 parsing            lumen-plan.md:166  (blocked: P1 1B.1+1B.2)
+3A.3 HDR tone-mapping              lumen-plan.md:167  (blocked: P1 1B.1+1B.2)
+3A.4 ColorFloat variant            lumen-plan.md:168  (blocked: P1 1B.1+1B.2)
+3A.5 color space in renderer       lumen-plan.md:169  (blocked: P1 1B.1+1B.2)
 
 Recent: graphic-tests-rework 2026-05-19
