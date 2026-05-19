@@ -1016,15 +1016,30 @@ impl ApplicationHandler for Lumen {
                         .max(1e-6);
                     let x_css = (cursor.x as f32) / dpr;
                     let y_css = (cursor.y as f32) / dpr;
-                    if scrollbar::thumb_hit_test(
+                    let vh = self.viewport_height_css();
+                    match scrollbar::classify_track_click(
                         x_css,
                         y_css,
                         self.scroll_y,
                         self.content_height,
                         self.viewport_width_css(),
-                        self.viewport_height_css(),
+                        vh,
                     ) {
-                        self.scroll_drag = Some(scrollbar::ScrollDrag::new(self.scroll_y, y_css));
+                        scrollbar::TrackClick::Thumb => {
+                            self.scroll_drag = Some(scrollbar::ScrollDrag::new(
+                                self.scroll_y,
+                                y_css,
+                            ));
+                        }
+                        scrollbar::TrackClick::Above => {
+                            // Клик по track выше thumb-а — прыжок на страницу вверх.
+                            self.scroll_by(-page_step(vh));
+                        }
+                        scrollbar::TrackClick::Below => {
+                            // Клик по track ниже thumb-а — прыжок на страницу вниз.
+                            self.scroll_by(page_step(vh));
+                        }
+                        scrollbar::TrackClick::None => {}
                     }
                 } else {
                     // Released — завершаем drag (если он был).
