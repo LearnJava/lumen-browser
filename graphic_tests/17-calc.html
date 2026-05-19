@@ -10,9 +10,11 @@
     .ref  { height: 28px; background: #718096; margin-bottom: 4px; }
     .test { height: 28px; background: #38a169; margin-bottom: 4px; }
     .sep  { height: 24px; }
+      .__m { width: 1024px; height: 1px; background: #ff00ff; }
   </style>
 </head>
 <body>
+  <div class="__m"></div>
   <!-- group 1: all should equal 200px -->
   <div class="ref"  style="width: 200px;"></div>
   <div class="test" style="width: calc(100px + 100px);"></div>

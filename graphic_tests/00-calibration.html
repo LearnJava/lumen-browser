@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 00 calibration</title>
+  <style>
+    /* Калибровочный тест: 1024×720 viewport с магента-рамкой 1px по верху и низу.
+       Workflow находит магента-пиксели в desktop-снимке Lumen → знает точные координаты
+       верхнего-левого угла content-area → передаёт crop offset во все следующие тесты.
+       Если этот тест не проходит (магента не найдена) — pipeline останавливается. */
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 1024px; height: 720px; }
+    body { background: #000000; }
+    .marker-top, .marker-bottom { width: 1024px; height: 1px; background: #ff00ff; }
+    .body-fill { width: 1024px; height: 718px; background: #000000; }
+  </style>
+</head>
+<body>
+  <div class="marker-top"></div>
+  <div class="body-fill"></div>
+  <div class="marker-bottom"></div>
+</body>
+</html>

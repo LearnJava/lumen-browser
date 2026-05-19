@@ -12,9 +12,11 @@
     .ct { width: 160px; height: 100px; background: #2d3748; }
     /* overflowing child (larger than container) */
     .ch { width: 220px; height: 140px; }
+      .__m { width: 1024px; height: 1px; background: #ff00ff; }
   </style>
 </head>
 <body>
+  <div class="__m"></div>
   <!-- overflow: visible (default) — child bleeds right and down -->
   <div class="col">
     <div class="ct" style="overflow: visible;">

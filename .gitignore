@@ -24,4 +24,5 @@ Thumbs.db
 
 # Графические тесты: рабочие скрины (Edge-эталон, Lumen-захват, diff) — не коммитим.
 # См. CLAUDE.md → «Графические тесты», правило №1.
-/bugs/screenshots/
+/graphic_tests/screenshots/
+/graphic_tests/debug/
