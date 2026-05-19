@@ -15,7 +15,10 @@ use lumen_html_parser::{
     PictureParams, SizesViewport, pick_img_source, pick_picture_source,
 };
 
-use crate::style::{compute_style, BackgroundImage, BoxSizing, ComputedStyle, Display, TextAlign};
+use crate::style::{
+    compute_style, BackgroundImage, BoxSizing, ComputedStyle, Display, Length, LengthOrAuto,
+    TextAlign,
+};
 use crate::TextMeasurer;
 
 /// HTML-имя элемента `<img>` для распознавания replaced-боксов в layout.
@@ -155,7 +158,7 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let root_style = ComputedStyle::root();
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
     propagate_canvas_background(doc, &mut root);
-    lay_out(&mut root, 0.0, 0.0, viewport.width, None);
+    lay_out(&mut root, 0.0, 0.0, viewport.width, None, viewport);
     root
 }
 
@@ -168,7 +171,7 @@ pub fn layout_measured(
     let root_style = ComputedStyle::root();
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
     propagate_canvas_background(doc, &mut root);
-    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(measurer));
+    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(measurer), viewport);
     root
 }
 
@@ -285,14 +288,14 @@ fn is_inline_block(
 /// Обнуляет box-model spacing анонимного контейнера (InlineRun / InlineBlockRow).
 fn anon_style(parent: &ComputedStyle) -> ComputedStyle {
     let mut s = parent.clone();
-    s.margin_top = 0.0;
-    s.margin_right = 0.0;
-    s.margin_bottom = 0.0;
-    s.margin_left = 0.0;
-    s.padding_top = 0.0;
-    s.padding_right = 0.0;
-    s.padding_bottom = 0.0;
-    s.padding_left = 0.0;
+    s.margin_top = LengthOrAuto::ZERO;
+    s.margin_right = LengthOrAuto::ZERO;
+    s.margin_bottom = LengthOrAuto::ZERO;
+    s.margin_left = LengthOrAuto::ZERO;
+    s.padding_top = Length::Px(0.0);
+    s.padding_right = Length::Px(0.0);
+    s.padding_bottom = Length::Px(0.0);
+    s.padding_left = Length::Px(0.0);
     s.background_color = None;
     s.width = None;
     s.height = None;
@@ -385,12 +388,12 @@ fn build_box(
                 if style.width.is_none()
                     && let Some(w) = src.intrinsic_width
                 {
-                    style.width = Some(w as f32);
+                    style.width = Some(Length::Px(w as f32));
                 }
                 if style.height.is_none()
                     && let Some(h) = src.intrinsic_height
                 {
-                    style.height = Some(h as f32);
+                    style.height = Some(Length::Px(h as f32));
                 }
                 BoxKind::Image { src: src.url, alt }
             } else {
@@ -480,11 +483,20 @@ fn build_box(
 /// берём её; иначе рекурсивно ищем максимальную preferred_width среди потомков
 /// и добавляем padding+border текущего бокса. Возвращает `None` если явных размеров
 /// нет ни у бокса, ни у его потомков.
-fn preferred_inline_block_width(b: &LayoutBox) -> Option<f32> {
+///
+/// Для typed-Length полей используем em = font_size, cb_width = 0 как
+/// аппроксимацию (shrink-to-fit не знает cb_width заранее).
+fn preferred_inline_block_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
     let s = &b.style;
-    if let Some(w) = s.width {
+    let em = s.font_size;
+    // % ширины на этом этапе не разрешима — трактуем как отсутствие.
+    let pl = s.padding_left.resolve_or_zero(em, 0.0, viewport);
+    let pr = s.padding_right.resolve_or_zero(em, 0.0, viewport);
+    if let Some(w_len) = &s.width
+        && let Some(w) = w_len.resolve(em, Some(0.0), viewport)
+    {
         let outer = match s.box_sizing {
-            BoxSizing::ContentBox => w + s.padding_left + s.padding_right
+            BoxSizing::ContentBox => w + pl + pr
                 + s.border_left_width + s.border_right_width,
             BoxSizing::BorderBox => w,
         };
@@ -493,11 +505,11 @@ fn preferred_inline_block_width(b: &LayoutBox) -> Option<f32> {
     let max_child = b
         .children
         .iter()
-        .filter_map(preferred_inline_block_width)
+        .filter_map(|c| preferred_inline_block_width(c, viewport))
         .fold(0.0_f32, f32::max);
     if max_child > 0.0 {
         Some(
-            (max_child + s.padding_left + s.padding_right
+            (max_child + pl + pr
                 + s.border_left_width + s.border_right_width)
                 .max(0.0),
         )
@@ -512,6 +524,7 @@ fn lay_out(
     start_y: f32,
     available_width: f32,
     measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
 ) {
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
@@ -519,8 +532,20 @@ fn lay_out(
     }
 
     let s = b.style.clone();
-    b.rect.x = start_x + s.margin_left;
-    b.rect.y = start_y + s.margin_top;
+    let em = s.font_size;
+    let cb = available_width;
+
+    // Резолвим typed Length-поля с known containing block.
+    let margin_left = s.margin_left.resolve_or_zero(em, cb, viewport);
+    let margin_right = s.margin_right.resolve_or_zero(em, cb, viewport);
+    let margin_top = s.margin_top.resolve_or_zero(em, cb, viewport);
+    let padding_left = s.padding_left.resolve_or_zero(em, cb, viewport);
+    let padding_right = s.padding_right.resolve_or_zero(em, cb, viewport);
+    let padding_top = s.padding_top.resolve_or_zero(em, cb, viewport);
+    let padding_bottom = s.padding_bottom.resolve_or_zero(em, cb, viewport);
+
+    b.rect.x = start_x + margin_left;
+    b.rect.y = start_y + margin_top;
     // Block: auto-ширина = весь доступный inline-размер контейнера.
     // Replaced element (Image): auto-ширина = intrinsic (0 в Phase 0, без
     // декодированных пикселей). Это CSS 2.1 §10.3.2 — replaced-боксы
@@ -529,15 +554,17 @@ fn lay_out(
     b.rect.width = if is_replaced {
         0.0
     } else {
-        (available_width - s.margin_left - s.margin_right).max(0.0)
+        (available_width - margin_left - margin_right).max(0.0)
     };
     // Явная ширина (CSS width: Npx) перекрывает auto-ширину.
     // box-sizing определяет, к какой части бокса относится `width`:
     //   - content-box: width — это размер контента, padding+border прибавляются;
     //   - border-box: width — общий размер вместе с padding+border.
-    if let Some(w) = s.width {
+    if let Some(w_len) = &s.width
+        && let Some(w) = w_len.resolve(em, Some(cb), viewport)
+    {
         b.rect.width = match s.box_sizing {
-            BoxSizing::ContentBox => (w + s.padding_left + s.padding_right
+            BoxSizing::ContentBox => (w + padding_left + padding_right
                 + s.border_left_width + s.border_right_width).max(0.0),
             BoxSizing::BorderBox => w.max(0.0),
         };
@@ -548,29 +575,33 @@ fn lay_out(
     // box-sizing модели, что и width: content-box добавляет padding+border,
     // border-box оставляет как есть.
     let outer_horiz = |v: f32| match s.box_sizing {
-        BoxSizing::ContentBox => v + s.padding_left + s.padding_right
+        BoxSizing::ContentBox => v + padding_left + padding_right
             + s.border_left_width + s.border_right_width,
         BoxSizing::BorderBox => v,
     };
-    if let Some(max_w) = s.max_width {
+    if let Some(max_len) = &s.max_width
+        && let Some(max_w) = max_len.resolve(em, Some(cb), viewport)
+    {
         b.rect.width = b.rect.width.min(outer_horiz(max_w).max(0.0));
     }
-    if let Some(min_w) = s.min_width {
-        b.rect.width = b.rect.width.max(outer_horiz(min_w).max(0.0));
+    if let Some(min_len) = &s.min_width
+        && let Some(min_w) = min_len.resolve(em, Some(cb), viewport)
+    {
+        b.rect.width = b.rect.width.max(outer_horiz(min_w.max(0.0)));
     }
     // Phase 0 shrink-to-fit для inline-block без явной CSS width.
     // Полный алгоритм (CSS 2.1 §10.3.9) требует двух проходов; здесь —
     // упрощение: ищем максимальную explicit-width среди потомков.
     if s.width.is_none() && s.display == Display::InlineBlock
-        && let Some(pref_w) = preferred_inline_block_width(b)
+        && let Some(pref_w) = preferred_inline_block_width(b, viewport)
     {
         b.rect.width = pref_w.min(b.rect.width);
     }
 
-    let content_x = b.rect.x + s.padding_left + s.border_left_width;
-    let content_y = b.rect.y + s.padding_top + s.border_top_width;
+    let content_x = b.rect.x + padding_left + s.border_left_width;
+    let content_y = b.rect.y + padding_top + s.border_top_width;
     let content_width = (b.rect.width
-        - s.padding_left - s.padding_right
+        - padding_left - padding_right
         - s.border_left_width - s.border_right_width).max(0.0);
 
     // InlineRun обрабатывается до основного match.
@@ -584,7 +615,8 @@ fn lay_out(
             } else {
                 content_width
             };
-            *lines = wrap_inline_run(segments, wrap_width, s.font_size, s.text_indent, m);
+            let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport);
+            *lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, m);
             if s.text_align != TextAlign::Left {
                 align_lines(lines, content_width, s.text_align);
             }
@@ -605,25 +637,33 @@ fn lay_out(
             // визуально корректно).
             let mut child_y = content_y;
             for child in &mut b.children {
-                lay_out(child, content_x, child_y, content_width, measurer);
+                lay_out(child, content_x, child_y, content_width, measurer, viewport);
                 if matches!(child.kind, BoxKind::Skip) {
                     continue;
                 }
-                child_y = child.rect.y + child.rect.height + child.style.margin_bottom;
+                // child margins resolved against parent content_width (= cb_width for child).
+                let child_mb = child.style.margin_bottom.resolve_or_zero(
+                    child.style.font_size, content_width, viewport);
+                child_y = child.rect.y + child.rect.height + child_mb;
             }
             let content_height = (child_y - content_y).max(0.0);
             // Явная высота (CSS height: Npx) перекрывает auto-высоту по содержимому.
             // box-sizing работает симметрично width: content-box прибавляет
             // padding+border, border-box оставляет h как итоговую высоту.
-            b.rect.height = if let Some(h) = s.height {
-                match s.box_sizing {
-                    BoxSizing::ContentBox => h
-                        + s.padding_top + s.padding_bottom
-                        + s.border_top_width + s.border_bottom_width,
-                    BoxSizing::BorderBox => h.max(0.0),
+            b.rect.height = if let Some(h_len) = &s.height {
+                if let Some(h) = h_len.resolve(em, Some(cb), viewport) {
+                    match s.box_sizing {
+                        BoxSizing::ContentBox => h
+                            + padding_top + padding_bottom
+                            + s.border_top_width + s.border_bottom_width,
+                        BoxSizing::BorderBox => h.max(0.0),
+                    }
+                } else {
+                    content_height + padding_top + padding_bottom
+                        + s.border_top_width + s.border_bottom_width
                 }
             } else {
-                content_height + s.padding_top + s.padding_bottom
+                content_height + padding_top + padding_bottom
                     + s.border_top_width + s.border_bottom_width
             };
             // CSS 2.1 §10.4: clamp [min-height, max-height]. Симметрия с
@@ -631,15 +671,19 @@ fn lay_out(
             // оверфлоу-ит коробку если min режет ниже — это правильное
             // поведение CSS.
             let outer_vert = |v: f32| match s.box_sizing {
-                BoxSizing::ContentBox => v + s.padding_top + s.padding_bottom
+                BoxSizing::ContentBox => v + padding_top + padding_bottom
                     + s.border_top_width + s.border_bottom_width,
                 BoxSizing::BorderBox => v,
             };
-            if let Some(max_h) = s.max_height {
+            if let Some(max_len) = &s.max_height
+                && let Some(max_h) = max_len.resolve(em, Some(cb), viewport)
+            {
                 b.rect.height = b.rect.height.min(outer_vert(max_h).max(0.0));
             }
-            if let Some(min_h) = s.min_height {
-                b.rect.height = b.rect.height.max(outer_vert(min_h).max(0.0));
+            if let Some(min_len) = &s.min_height
+                && let Some(min_h) = min_len.resolve(em, Some(cb), viewport)
+            {
+                b.rect.height = b.rect.height.max(outer_vert(min_h.max(0.0)));
             }
         }
         BoxKind::InlineBlockRow => {
@@ -655,13 +699,17 @@ fn lay_out(
                 } else {
                     content_width
                 };
-                lay_out(child, cur_x, content_y, child_avail, measurer);
+                lay_out(child, cur_x, content_y, child_avail, measurer, viewport);
                 if matches!(child.kind, BoxKind::Skip) {
                     continue;
                 }
-                cur_x = child.rect.x + child.rect.width + child.style.margin_right;
-                let child_full_h =
-                    child.style.margin_top + child.rect.height + child.style.margin_bottom;
+                // child margins resolved against parent content_width (cb for child).
+                let c_em = child.style.font_size;
+                let child_mr = child.style.margin_right.resolve_or_zero(c_em, content_width, viewport);
+                let child_mt = child.style.margin_top.resolve_or_zero(c_em, content_width, viewport);
+                let child_mb = child.style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
+                cur_x = child.rect.x + child.rect.width + child_mr;
+                let child_full_h = child_mt + child.rect.height + child_mb;
                 max_h = max_h.max(child_full_h);
             }
             b.rect.height = max_h;

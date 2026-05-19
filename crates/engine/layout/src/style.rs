@@ -1184,10 +1184,9 @@ pub struct ComputedStyle {
     pub font_family: Vec<String>,
     pub text_transform: TextTransform,
     pub white_space: WhiteSpace,
-    /// CSS Text L3 §7.1: отступ перед первой строкой inline-content
-    /// текущего блока (resolved px). Inherited; применяется к каждому
-    /// потомку, который порождает первую строку.
-    pub text_indent: f32,
+    /// CSS Text L3 §7.1: отступ перед первой строкой inline-content.
+    /// Inherited. Typed `Length`; `%` = % cb_width, резолвится при layout.
+    pub text_indent: Length,
     /// CSS Text L3 §11.2: дополнительное расстояние между каждой парой
     /// символов и между словами (resolved px). Inherited. Может быть
     /// отрицательным (сжимает текст). Применяется в wrap_inline_run при
@@ -1221,28 +1220,31 @@ pub struct ComputedStyle {
     /// CSS Text Decoration L4 §5.5 — `text-emphasis-position`. Inherited.
     /// Initial: `OverRight` (horizontal writing-mode).
     pub text_emphasis_position: TextEmphasisPosition,
-    /// Явная ширина (CSS `width: Npx`). None = auto (растягивается на контейнер).
-    pub width: Option<f32>,
-    /// Явная высота (CSS `height: Npx`). None = auto (по содержимому).
-    pub height: Option<f32>,
-    /// CSS 2.1 §10.4: нижняя граница ширины коробки. None = 0 (default).
-    /// Применяется после `width`. Если min > max — побеждает min.
-    pub min_width: Option<f32>,
-    /// CSS 2.1 §10.4: верхняя граница ширины коробки. None = `none` (без
-    /// ограничения).
-    pub max_width: Option<f32>,
-    /// CSS 2.1 §10.4: нижняя граница высоты коробки. None = 0 (default).
-    pub min_height: Option<f32>,
-    /// CSS 2.1 §10.4: верхняя граница высоты коробки. None = `none`.
-    pub max_height: Option<f32>,
-    pub margin_top: f32,
-    pub margin_right: f32,
-    pub margin_bottom: f32,
-    pub margin_left: f32,
-    pub padding_top: f32,
-    pub padding_right: f32,
-    pub padding_bottom: f32,
-    pub padding_left: f32,
+    /// Явная ширина (CSS `width`). `None` = auto. Typed `Length`; `%`
+    /// резолвится при layout с known cb_width.
+    pub width: Option<Length>,
+    /// Явная высота (CSS `height`). `None` = auto.
+    pub height: Option<Length>,
+    /// CSS 2.1 §10.4 — `min-width`. `None` = initial/auto (≡ 0).
+    pub min_width: Option<Length>,
+    /// CSS 2.1 §10.4 — `max-width`. `None` = `none` (без ограничения).
+    pub max_width: Option<Length>,
+    /// CSS 2.1 §10.4 — `min-height`. `None` = initial/auto (≡ 0).
+    pub min_height: Option<Length>,
+    /// CSS 2.1 §10.4 — `max-height`. `None` = `none`.
+    pub max_height: Option<Length>,
+    /// CSS 2.1 §8.3 — внешние отступы. `Auto` для `margin: auto` (centering).
+    /// `%` = % cb_width, резолвится при layout. Initial = `Length(Px(0.0))`.
+    pub margin_top: LengthOrAuto,
+    pub margin_right: LengthOrAuto,
+    pub margin_bottom: LengthOrAuto,
+    pub margin_left: LengthOrAuto,
+    /// CSS 2.1 §8.4 — внутренние отступы. `%` = % cb_width, резолв при
+    /// layout. Initial = `Px(0.0)`.
+    pub padding_top: Length,
+    pub padding_right: Length,
+    pub padding_bottom: Length,
+    pub padding_left: Length,
     pub border_top_width: f32,
     pub border_right_width: f32,
     pub border_bottom_width: f32,
@@ -1313,9 +1315,9 @@ pub struct ComputedStyle {
     pub outline_width: f32,
     pub outline_style: OutlineStyle,
     pub outline_color: OutlineColor,
-    /// CSS Basic UI L4 §5.5 — outline-offset (resolved px). Положительное —
-    /// outline отрисовывается дальше от бокса, отрицательное — внутрь.
-    pub outline_offset: f32,
+    /// CSS Basic UI L4 §5.5 — outline-offset. Положительное — дальше от
+    /// бокса, отрицательное — внутрь. Typed `Length`; резолвится при paint.
+    pub outline_offset: Length,
     /// CSS UI L4 §6.1 — accent-color. Цвет встроенных form widgets
     /// (checkbox, radio, range, progress). `None` = `auto` (UA default).
     /// Inherited. В Phase 0 layout только хранит — real применение появится
@@ -1353,15 +1355,16 @@ pub struct ComputedStyle {
     /// flex/grid container-ов. В пикселях (resolved). Default 0.
     /// Не наследуется. Phase 0: parsing only — real flex/grid algorithm
     /// не реализован, гарантированно gap не применяется.
-    pub row_gap: f32,
-    pub column_gap: f32,
+    /// CSS Box Alignment L3 §8 — `row-gap` / `column-gap` для flex/grid.
+    /// Typed `Length`; `%` = % cb_size. Default `Px(0)`. Phase 0: parse only.
+    pub row_gap: Length,
+    pub column_gap: Length,
     /// CSS Multi-column L1 §3.2 — `column-count: <integer> | auto`. `None`
-    /// = `auto` (UA выбирает на основе column-width). Не наследуется.
-    /// Phase 0: parsing only — реальный column layout pipeline отложен.
+    /// = `auto`. Phase 0: parsing only.
     pub column_count: Option<u32>,
-    /// CSS Multi-column L1 §3.3 — `column-width: <length> | auto`. В px
-    /// (resolved). `None` = `auto`. Не наследуется.
-    pub column_width: Option<f32>,
+    /// CSS Multi-column L1 §3.3 — `column-width: <length> | auto`. Typed.
+    /// `None` = `auto`. Phase 0: parsing only.
+    pub column_width: Option<Length>,
     /// CSS Multi-column L1 §4.1 — `column-rule-width` (px). Default 0.
     pub column_rule_width: f32,
     /// CSS Multi-column L1 §4.2 — `column-rule-style`. Default `None`
@@ -2549,7 +2552,7 @@ impl ComputedStyle {
             font_family: Vec::new(),
             text_transform: TextTransform::None,
             white_space: WhiteSpace::Normal,
-            text_indent: 0.0,
+            text_indent: Length::Px(0.0),
             letter_spacing: 0.0,
             word_spacing: 0.0,
             text_decoration_line: TextDecorationLine::default(),
@@ -2565,14 +2568,14 @@ impl ComputedStyle {
             max_width: None,
             min_height: None,
             max_height: None,
-            margin_top: 0.0,
-            margin_right: 0.0,
-            margin_bottom: 0.0,
-            margin_left: 0.0,
-            padding_top: 0.0,
-            padding_right: 0.0,
-            padding_bottom: 0.0,
-            padding_left: 0.0,
+            margin_top: LengthOrAuto::ZERO,
+            margin_right: LengthOrAuto::ZERO,
+            margin_bottom: LengthOrAuto::ZERO,
+            margin_left: LengthOrAuto::ZERO,
+            padding_top: Length::Px(0.0),
+            padding_right: Length::Px(0.0),
+            padding_bottom: Length::Px(0.0),
+            padding_left: Length::Px(0.0),
             border_top_width: 0.0,
             border_right_width: 0.0,
             border_bottom_width: 0.0,
@@ -2605,7 +2608,7 @@ impl ComputedStyle {
             outline_width: 3.0,
             outline_style: OutlineStyle::None,
             outline_color: OutlineColor::Auto,
-            outline_offset: 0.0,
+            outline_offset: Length::Px(0.0),
             accent_color: None,
             custom_props: HashMap::new(),
             counter_reset: Vec::new(),
@@ -2613,8 +2616,8 @@ impl ComputedStyle {
             clip_path: None,
             transform: Vec::new(),
             filter: Vec::new(),
-            row_gap: 0.0,
-            column_gap: 0.0,
+            row_gap: Length::Px(0.0),
+            column_gap: Length::Px(0.0),
             column_count: None,
             column_width: None,
             column_rule_width: 0.0,
@@ -2719,7 +2722,7 @@ pub fn compute_style(
         font_family: inherited.font_family.clone(),
         text_transform: inherited.text_transform,
         white_space: inherited.white_space,
-        text_indent: inherited.text_indent,
+        text_indent: inherited.text_indent.clone(),
         letter_spacing: inherited.letter_spacing,
         word_spacing: inherited.word_spacing,
         text_decoration_line: inherited.text_decoration_line,
@@ -2740,14 +2743,14 @@ pub fn compute_style(
         max_width: None,
         min_height: None,
         max_height: None,
-        margin_top: 0.0,
-        margin_right: 0.0,
-        margin_bottom: 0.0,
-        margin_left: 0.0,
-        padding_top: 0.0,
-        padding_right: 0.0,
-        padding_bottom: 0.0,
-        padding_left: 0.0,
+        margin_top: LengthOrAuto::ZERO,
+        margin_right: LengthOrAuto::ZERO,
+        margin_bottom: LengthOrAuto::ZERO,
+        margin_left: LengthOrAuto::ZERO,
+        padding_top: Length::Px(0.0),
+        padding_right: Length::Px(0.0),
+        padding_bottom: Length::Px(0.0),
+        padding_left: Length::Px(0.0),
         border_top_width: 0.0,
         border_right_width: 0.0,
         border_bottom_width: 0.0,
@@ -2786,7 +2789,7 @@ pub fn compute_style(
         outline_width: 3.0,
         outline_style: OutlineStyle::None,
         outline_color: OutlineColor::Auto,
-        outline_offset: 0.0,
+        outline_offset: Length::Px(0.0),
         // CSS Lists L3 §3 — не наследуются.
         counter_reset: Vec::new(),
         counter_increment: Vec::new(),
@@ -2795,8 +2798,8 @@ pub fn compute_style(
         transform: Vec::new(),
         filter: Vec::new(),
         // Box Alignment gap / Sizing aspect-ratio — не наследуются.
-        row_gap: 0.0,
-        column_gap: 0.0,
+        row_gap: Length::Px(0.0),
+        column_gap: Length::Px(0.0),
         // CSS Multi-column — не наследуются.
         column_count: None,
         column_width: None,
@@ -4744,10 +4747,10 @@ fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut Co
     }
     let node_ref = doc.get(node);
     if let Some(w) = node_ref.get_attr("width").and_then(parse_html_dimension) {
-        style.width = Some(w);
+        style.width = Some(Length::Px(w));
     }
     if let Some(h) = node_ref.get_attr("height").and_then(parse_html_dimension) {
-        style.height = Some(h);
+        style.height = Some(Length::Px(h));
     }
 }
 
@@ -5143,6 +5146,37 @@ fn relative_bolder(parent: FontWeight) -> FontWeight {
 /// настроек пользователя). Используется как базис для `rem`.
 pub const ROOT_FONT_SIZE: f32 = 16.0;
 
+/// CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
+/// отдельную семантику (centering). Typed; `%` резолвится при layout с
+/// known containing block. Initial value margin = `Length(Px(0.0))`, не `Auto`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum LengthOrAuto {
+    Auto,
+    Length(Length),
+}
+
+impl LengthOrAuto {
+    pub const ZERO: LengthOrAuto = LengthOrAuto::Length(Length::Px(0.0));
+
+    pub fn is_auto(&self) -> bool {
+        matches!(self, Self::Auto)
+    }
+
+    /// Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`.
+    /// `em` = font_size элемента, `cb_width` = containing-block width.
+    pub fn resolve(&self, em: f32, cb_width: f32, vp: Size) -> Option<f32> {
+        match self {
+            Self::Auto => None,
+            Self::Length(l) => l.resolve(em, Some(cb_width), vp),
+        }
+    }
+
+    /// Резолвит в пиксели; для `Auto` и нерезолвируемых значений → 0.0.
+    pub fn resolve_or_zero(&self, em: f32, cb_width: f32, vp: Size) -> f32 {
+        self.resolve(em, cb_width, vp).unwrap_or(0.0)
+    }
+}
+
 /// Типизированная длина CSS до резолва в пиксели.
 ///
 /// Не `Copy`, потому что вариант `Calc` хранит `Box<CalcNode>` с поддеревом
@@ -5476,6 +5510,12 @@ impl Length {
             Length::Vmax(v) => Some(*v / 100.0 * viewport.width.max(viewport.height)),
             Length::Calc(node) => node.resolve(em_basis, percent_basis, viewport),
         }
+    }
+
+    /// Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче.
+    /// Удобна для padding, gap и других не-auto полей.
+    pub fn resolve_or_zero(&self, em: f32, cb_width: f32, vp: Size) -> f32 {
+        self.resolve(em, Some(cb_width), vp).unwrap_or(0.0)
     }
 }
 
@@ -6288,36 +6328,61 @@ fn apply_declaration(
             // указанные. См. CSS Cascade L4 §3.1 для семантики shorthand reset.
             apply_text_wrap_shorthand(style, val);
         }
-        "width" if val != "auto" => {
-            style.width = parse_length_q(val, is_quirks).and_then(|l| l.resolve(em_basis, None, viewport));
+        "width" => {
+            // `auto` = None (сдвигается на контейнер); иначе typed Length.
+            if val.trim() == "auto" {
+                style.width = None;
+            } else {
+                style.width = parse_length_q(val, is_quirks);
+            }
         }
-        "height" if val != "auto" => {
-            style.height = parse_length_q(val, is_quirks).and_then(|l| l.resolve(em_basis, None, viewport));
+        "height" => {
+            if val.trim() == "auto" {
+                style.height = None;
+            } else {
+                style.height = parse_length_q(val, is_quirks);
+            }
         }
-        // CSS 2.1 §10.4: min-/max- ширина и высота. Отрицательные значения
-        // запрещены спецификацией — отбрасываем. `none` для max-* = снять
-        // ограничение (None). `auto` для min-* (CSS3 Sizing default для
-        // flex/grid) трактуем как None — Phase 0 без flex/grid, это
-        // эквивалентно нулевому минимуму.
-        "min-width" if val != "auto" => {
-            style.min_width = parse_length_q(val, is_quirks)
-                .and_then(|l| l.resolve(em_basis, None, viewport))
-                .filter(|v| *v >= 0.0);
+        // CSS 2.1 §10.4: min-/max- ширина и высота. Отрицательные `<length>`
+        // запрещены — сохраняем typed, фильтрация при resolve в box_tree.
+        // `auto` для min-* = None (Phase 0: эквивалентно 0); `none` для
+        // max-* = None (без ограничения). `%` теперь сохраняется, резолв
+        // при layout с known cb_width.
+        "min-width" => {
+            if val.trim() == "auto" {
+                style.min_width = None;
+            } else if let Some(len) = parse_length_q(val, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.min_width = Some(len);
+            }
         }
-        "max-width" if val != "none" => {
-            style.max_width = parse_length_q(val, is_quirks)
-                .and_then(|l| l.resolve(em_basis, None, viewport))
-                .filter(|v| *v >= 0.0);
+        "max-width" => {
+            if val.trim() == "none" {
+                style.max_width = None;
+            } else if let Some(len) = parse_length_q(val, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.max_width = Some(len);
+            }
         }
-        "min-height" if val != "auto" => {
-            style.min_height = parse_length_q(val, is_quirks)
-                .and_then(|l| l.resolve(em_basis, None, viewport))
-                .filter(|v| *v >= 0.0);
+        "min-height" => {
+            if val.trim() == "auto" {
+                style.min_height = None;
+            } else if let Some(len) = parse_length_q(val, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.min_height = Some(len);
+            }
         }
-        "max-height" if val != "none" => {
-            style.max_height = parse_length_q(val, is_quirks)
-                .and_then(|l| l.resolve(em_basis, None, viewport))
-                .filter(|v| *v >= 0.0);
+        "max-height" => {
+            if val.trim() == "none" {
+                style.max_height = None;
+            } else if let Some(len) = parse_length_q(val, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.max_height = Some(len);
+            }
         }
         "font-size" => {
             // Обрабатывается в pre-pass; в этой ветке пропускаем.
@@ -6369,43 +6434,32 @@ fn apply_declaration(
             }
         }
         "text-indent" => {
-            // CSS Text L3 §7.1: <length> | <percentage>. % требует
-            // containing-block-width — Phase 0 пока игнорирует, как и в
-            // margin/padding. Поддерживаем px/em/rem/vh/vw.
-            if let Some(len) = parse_length_q(val, is_quirks)
-                && let Some(px) = match len {
-                    Length::Percent(_) => None,
-                    other => other.resolve(em_basis, None, viewport),
-                }
-            {
-                style.text_indent = px;
+            // CSS Text L3 §7.1: <length> | <percentage>. `%` теперь хранится
+            // typed — резолвится при layout с known cb_width.
+            if let Some(len) = parse_length_q(val, is_quirks) {
+                style.text_indent = len;
             }
         }
         "letter-spacing" => {
-            // CSS Text L3 §11.2: normal (= 0) | <length>. Может быть
-            // отрицательным.
+            // CSS Text L3 §11.2: normal (= 0) | <length>. `%` не валиден.
+            // Резолвим сразу — em_basis уже известен на каскаде.
             if val.trim() == "normal" {
                 style.letter_spacing = 0.0;
             } else if let Some(len) = parse_length_q(val, is_quirks)
-                && let Some(px) = match len {
-                    Length::Percent(_) => None,
-                    other => other.resolve(em_basis, None, viewport),
-                }
+                && let Some(px) = len.resolve(em_basis, None, viewport)
             {
                 style.letter_spacing = px;
             }
         }
         "word-spacing" => {
-            // CSS Text L3 §11.3: normal (= 0) | <length> | <percentage>.
-            // % требует ширину space-glyph и Phase 0 не считаем.
+            // CSS Text L3 §11.3: normal (= 0) | <length>. `%` требует
+            // метрику space-glyph — Phase 0 не считаем, игнорируем.
             if val.trim() == "normal" {
                 style.word_spacing = 0.0;
-            } else if let Some(len) = parse_length_q(val, is_quirks)
-                && let Some(px) = match len {
-                    Length::Percent(_) => None,
-                    other => other.resolve(em_basis, None, viewport),
-                }
-            {
+            } else if let Some(px) = parse_length_q(val, is_quirks).and_then(|len| match len {
+                Length::Percent(_) => None,
+                other => other.resolve(em_basis, None, viewport),
+            }) {
                 style.word_spacing = px;
             }
         }
@@ -6564,13 +6618,8 @@ fn apply_declaration(
         }
         "outline-offset" => {
             // <length>; отрицательные значения валидны (CSS UI L4 §3.4).
-            if let Some(len) = parse_length_q(val, is_quirks)
-                && let Some(px) = match len {
-                    Length::Percent(_) => None,
-                    other => other.resolve(em_basis, None, viewport),
-                }
-            {
-                style.outline_offset = px;
+            if let Some(len) = parse_length_q(val, is_quirks) {
+                style.outline_offset = len;
             }
         }
         "counter-reset" => {
@@ -6612,29 +6661,47 @@ fn apply_declaration(
             }
         }
         "row-gap" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
-                style.row_gap = px.max(0.0);
+            // Typed Length — % = % cb_height, резолвится при layout.
+            // Отрицательные значения запрещены (CSS Multi-column §3.4).
+            if let Some(len) = parse_length_q(val, is_quirks) {
+                style.row_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
+                    Length::Px(0.0)
+                } else {
+                    len
+                };
             }
         }
         "column-gap" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
-                style.column_gap = px.max(0.0);
+            if let Some(len) = parse_length_q(val, is_quirks) {
+                style.column_gap = if matches!(&len, Length::Px(v) if *v < 0.0) {
+                    Length::Px(0.0)
+                } else {
+                    len
+                };
             }
         }
         "gap" => {
             // Shorthand: `<row-gap> <column-gap>?` (если column отсутствует,
             // = row).
-            let parts: Vec<&str> = val.split_whitespace().collect();
-            if !parts.is_empty() {
-                let row = resolve_box_length(parts[0], em_basis, viewport, is_quirks).map(|v| v.max(0.0));
-                let col = if parts.len() >= 2 {
-                    resolve_box_length(parts[1], em_basis, viewport, is_quirks).map(|v| v.max(0.0))
+            let clamp_gap = |len: Length| -> Length {
+                if matches!(&len, Length::Px(v) if *v < 0.0) {
+                    Length::Px(0.0)
                 } else {
-                    row
+                    len
+                }
+            };
+            let parts: Vec<&str> = val.split_whitespace().collect();
+            if !parts.is_empty()
+                && let Some(row) = parse_length_q(parts[0], is_quirks)
+            {
+                let col = if parts.len() >= 2 {
+                    parse_length_q(parts[1], is_quirks)
+                } else {
+                    Some(row.clone())
                 };
-                if let (Some(r), Some(c)) = (row, col) {
-                    style.row_gap = r;
-                    style.column_gap = c;
+                if let Some(c) = col {
+                    style.row_gap = clamp_gap(row);
+                    style.column_gap = clamp_gap(c);
                 }
             }
         }
@@ -6650,14 +6717,12 @@ fn apply_declaration(
             }
         }
         "column-width" => {
-            // CSS Multi-column L1 §3.3: <length> | auto.
+            // CSS Multi-column L1 §3.3: <length> | auto. Typed.
             let trimmed = val.trim();
             if trimmed.eq_ignore_ascii_case("auto") {
                 style.column_width = None;
-            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport, is_quirks)
-                && px >= 0.0
-            {
-                style.column_width = Some(px);
+            } else if let Some(len) = parse_length_q(trimmed, is_quirks) {
+                style.column_width = Some(len);
             }
         }
         "columns" => {
@@ -6665,12 +6730,11 @@ fn apply_declaration(
             // Любой токен может быть `auto`. Length → width, integer → count.
             let parts: Vec<&str> = val.split_whitespace().collect();
             let mut count: Option<u32> = None;
-            let mut width: Option<f32> = None;
+            let mut width: Option<Length> = None;
             let mut had_width = false;
             let mut had_count = false;
             for p in &parts {
                 if p.eq_ignore_ascii_case("auto") {
-                    // Один auto — не назначаем, оставляем None для обоих.
                     continue;
                 }
                 if let Ok(n) = p.parse::<u32>()
@@ -6681,15 +6745,13 @@ fn apply_declaration(
                     had_count = true;
                     continue;
                 }
-                if let Some(px) = resolve_box_length(p, em_basis, viewport, is_quirks)
-                    && px >= 0.0
-                    && !had_width
+                if !had_width
+                    && let Some(len) = parse_length_q(p, is_quirks)
                 {
-                    width = Some(px);
+                    width = Some(len);
                     had_width = true;
                 }
             }
-            // Если хотя бы один токен распознали — применяем.
             if had_width || had_count {
                 style.column_width = width;
                 style.column_count = count;
@@ -7377,29 +7439,29 @@ fn apply_declaration(
             }
         }
         "margin" => {
-            if let Some((t, r, b, l)) = parse_box_shorthand(val, em_basis, viewport, is_quirks) {
+            if let Some((t, r, b, l)) = parse_margin_shorthand(val, is_quirks) {
                 style.margin_top = t;
                 style.margin_right = r;
                 style.margin_bottom = b;
                 style.margin_left = l;
             }
         }
-        "margin-top" => set_box_length(&mut style.margin_top, val, em_basis, viewport, is_quirks),
-        "margin-right" => set_box_length(&mut style.margin_right, val, em_basis, viewport, is_quirks),
-        "margin-bottom" => set_box_length(&mut style.margin_bottom, val, em_basis, viewport, is_quirks),
-        "margin-left" => set_box_length(&mut style.margin_left, val, em_basis, viewport, is_quirks),
+        "margin-top" => set_margin_side(&mut style.margin_top, val, is_quirks),
+        "margin-right" => set_margin_side(&mut style.margin_right, val, is_quirks),
+        "margin-bottom" => set_margin_side(&mut style.margin_bottom, val, is_quirks),
+        "margin-left" => set_margin_side(&mut style.margin_left, val, is_quirks),
         "padding" => {
-            if let Some((t, r, b, l)) = parse_box_shorthand(val, em_basis, viewport, is_quirks) {
+            if let Some((t, r, b, l)) = parse_padding_shorthand(val, is_quirks) {
                 style.padding_top = t;
                 style.padding_right = r;
                 style.padding_bottom = b;
                 style.padding_left = l;
             }
         }
-        "padding-top" => set_box_length(&mut style.padding_top, val, em_basis, viewport, is_quirks),
-        "padding-right" => set_box_length(&mut style.padding_right, val, em_basis, viewport, is_quirks),
-        "padding-bottom" => set_box_length(&mut style.padding_bottom, val, em_basis, viewport, is_quirks),
-        "padding-left" => set_box_length(&mut style.padding_left, val, em_basis, viewport, is_quirks),
+        "padding-top" => set_padding_side(&mut style.padding_top, val, is_quirks),
+        "padding-right" => set_padding_side(&mut style.padding_right, val, is_quirks),
+        "padding-bottom" => set_padding_side(&mut style.padding_bottom, val, is_quirks),
+        "padding-left" => set_padding_side(&mut style.padding_left, val, is_quirks),
         "text-decoration" => {
             // Shorthand: `<line> || <style> || <color>` в любом порядке (CSS Text
             // Decoration L3 §2.1). Спецификация L3 не включает thickness в
@@ -7552,10 +7614,26 @@ fn apply_declaration(
                 style.border_bottom_left_radius = v.max(0.0);
             }
         }
-        "border-top-width" => set_box_length(&mut style.border_top_width, val, em_basis, viewport, is_quirks),
-        "border-right-width" => set_box_length(&mut style.border_right_width, val, em_basis, viewport, is_quirks),
-        "border-bottom-width" => set_box_length(&mut style.border_bottom_width, val, em_basis, viewport, is_quirks),
-        "border-left-width" => set_box_length(&mut style.border_left_width, val, em_basis, viewport, is_quirks),
+        "border-top-width" => {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+                style.border_top_width = v;
+            }
+        }
+        "border-right-width" => {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+                style.border_right_width = v;
+            }
+        }
+        "border-bottom-width" => {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+                style.border_bottom_width = v;
+            }
+        }
+        "border-left-width" => {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+                style.border_left_width = v;
+            }
+        }
         "border-top-style" => style.border_top_style = parse_border_style_kw(val),
         "border-right-style" => style.border_right_style = parse_border_style_kw(val),
         "border-bottom-style" => style.border_bottom_style = parse_border_style_kw(val),
@@ -8035,7 +8113,7 @@ fn apply_css_wide_keyword(
             style.white_space = if inh { inherited.white_space } else { init.white_space };
         }
         "text-indent" => {
-            style.text_indent = if inh { inherited.text_indent } else { init.text_indent };
+            style.text_indent = if inh { inherited.text_indent.clone() } else { init.text_indent.clone() };
         }
         "letter-spacing" => {
             style.letter_spacing = if inh { inherited.letter_spacing } else { init.letter_spacing };
@@ -8141,66 +8219,33 @@ fn apply_css_wide_keyword(
                 init.background_color
             };
         }
-        "width" => style.width = if inh_only_inherit { inherited.width } else { init.width },
-        "height" => style.height = if inh_only_inherit { inherited.height } else { init.height },
-        "min-width" => {
-            style.min_width = if inh_only_inherit { inherited.min_width } else { init.min_width };
-        }
-        "max-width" => {
-            style.max_width = if inh_only_inherit { inherited.max_width } else { init.max_width };
-        }
-        "min-height" => {
-            style.min_height = if inh_only_inherit { inherited.min_height } else { init.min_height };
-        }
-        "max-height" => {
-            style.max_height = if inh_only_inherit { inherited.max_height } else { init.max_height };
-        }
-        "margin-top" => {
-            style.margin_top = if inh_only_inherit { inherited.margin_top } else { init.margin_top };
-        }
-        "margin-right" => {
-            style.margin_right = if inh_only_inherit { inherited.margin_right } else { init.margin_right };
-        }
-        "margin-bottom" => {
-            style.margin_bottom = if inh_only_inherit { inherited.margin_bottom } else { init.margin_bottom };
-        }
-        "margin-left" => {
-            style.margin_left = if inh_only_inherit { inherited.margin_left } else { init.margin_left };
-        }
+        "width" => style.width = if inh_only_inherit { inherited.width.clone() } else { init.width.clone() },
+        "height" => style.height = if inh_only_inherit { inherited.height.clone() } else { init.height.clone() },
+        "min-width" => style.min_width = if inh_only_inherit { inherited.min_width.clone() } else { init.min_width.clone() },
+        "max-width" => style.max_width = if inh_only_inherit { inherited.max_width.clone() } else { init.max_width.clone() },
+        "min-height" => style.min_height = if inh_only_inherit { inherited.min_height.clone() } else { init.min_height.clone() },
+        "max-height" => style.max_height = if inh_only_inherit { inherited.max_height.clone() } else { init.max_height.clone() },
+        "margin-top" => style.margin_top = if inh_only_inherit { inherited.margin_top.clone() } else { init.margin_top.clone() },
+        "margin-right" => style.margin_right = if inh_only_inherit { inherited.margin_right.clone() } else { init.margin_right.clone() },
+        "margin-bottom" => style.margin_bottom = if inh_only_inherit { inherited.margin_bottom.clone() } else { init.margin_bottom.clone() },
+        "margin-left" => style.margin_left = if inh_only_inherit { inherited.margin_left.clone() } else { init.margin_left.clone() },
         "margin" => {
-            // shorthand → reset все 4 стороны
-            let (t, r, b, l) = if inh_only_inherit {
-                (inherited.margin_top, inherited.margin_right, inherited.margin_bottom, inherited.margin_left)
-            } else {
-                (init.margin_top, init.margin_right, init.margin_bottom, init.margin_left)
-            };
-            style.margin_top = t;
-            style.margin_right = r;
-            style.margin_bottom = b;
-            style.margin_left = l;
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.margin_top = src.margin_top.clone();
+            style.margin_right = src.margin_right.clone();
+            style.margin_bottom = src.margin_bottom.clone();
+            style.margin_left = src.margin_left.clone();
         }
-        "padding-top" => {
-            style.padding_top = if inh_only_inherit { inherited.padding_top } else { init.padding_top };
-        }
-        "padding-right" => {
-            style.padding_right = if inh_only_inherit { inherited.padding_right } else { init.padding_right };
-        }
-        "padding-bottom" => {
-            style.padding_bottom = if inh_only_inherit { inherited.padding_bottom } else { init.padding_bottom };
-        }
-        "padding-left" => {
-            style.padding_left = if inh_only_inherit { inherited.padding_left } else { init.padding_left };
-        }
+        "padding-top" => style.padding_top = if inh_only_inherit { inherited.padding_top.clone() } else { init.padding_top.clone() },
+        "padding-right" => style.padding_right = if inh_only_inherit { inherited.padding_right.clone() } else { init.padding_right.clone() },
+        "padding-bottom" => style.padding_bottom = if inh_only_inherit { inherited.padding_bottom.clone() } else { init.padding_bottom.clone() },
+        "padding-left" => style.padding_left = if inh_only_inherit { inherited.padding_left.clone() } else { init.padding_left.clone() },
         "padding" => {
-            let (t, r, b, l) = if inh_only_inherit {
-                (inherited.padding_top, inherited.padding_right, inherited.padding_bottom, inherited.padding_left)
-            } else {
-                (init.padding_top, init.padding_right, init.padding_bottom, init.padding_left)
-            };
-            style.padding_top = t;
-            style.padding_right = r;
-            style.padding_bottom = b;
-            style.padding_left = l;
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.padding_top = src.padding_top.clone();
+            style.padding_right = src.padding_right.clone();
+            style.padding_bottom = src.padding_bottom.clone();
+            style.padding_left = src.padding_left.clone();
         }
         "box-sizing" => {
             style.box_sizing = if inh_only_inherit { inherited.box_sizing } else { init.box_sizing };
@@ -8243,7 +8288,7 @@ fn apply_css_wide_keyword(
             style.outline_color = if inh_only_inherit { inherited.outline_color } else { init.outline_color };
         }
         "outline-offset" => {
-            style.outline_offset = if inh_only_inherit { inherited.outline_offset } else { init.outline_offset };
+            style.outline_offset = if inh_only_inherit { inherited.outline_offset.clone() } else { init.outline_offset.clone() };
         }
         "outline" => {
             // shorthand: width + style + color (offset не входит per spec).
@@ -9382,9 +9427,22 @@ fn resolve_box_length(val: &str, em_basis: f32, viewport: Size, is_quirks: bool)
     }
 }
 
-fn set_box_length(target: &mut f32, val: &str, em_basis: f32, viewport: Size, is_quirks: bool) {
-    if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
-        *target = v;
+/// Устанавливает одну сторону margin как typed `LengthOrAuto`.
+/// `auto` → `Auto`; length → `Length(...)`.
+fn set_margin_side(target: &mut LengthOrAuto, val: &str, is_quirks: bool) {
+    if val.trim() == "auto" {
+        *target = LengthOrAuto::Auto;
+    } else if let Some(len) = parse_length_q(val, is_quirks) {
+        *target = LengthOrAuto::Length(len);
+    }
+}
+
+/// Устанавливает одну сторону padding как typed `Length`.
+/// `auto` не валиден для padding — игнорируем; отрицательные px — игнорируем.
+fn set_padding_side(target: &mut Length, val: &str, is_quirks: bool) {
+    if let Some(len) = parse_length_q(val, is_quirks) {
+        if matches!(&len, Length::Px(v) if *v < 0.0) { return; }
+        *target = len;
     }
 }
 
@@ -9417,26 +9475,55 @@ fn split_box_tokens(val: &str) -> Vec<&str> {
     tokens
 }
 
-/// Парсит CSS box shorthand (margin / padding) с 1-4 пробельно-разделёнными
-/// длинами. CSS 2.1 §8.3: 1 → все стороны; 2 → [верт] [гориз];
-/// 3 → [top] [гориз] [bottom]; 4 → [top] [right] [bottom] [left].
-/// `auto` трактуется как 0 (авто-margin centering — отдельная задача).
-fn parse_box_shorthand(val: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> Option<(f32, f32, f32, f32)> {
-    let resolve = |s: &str| -> Option<f32> {
-        if s == "auto" { return Some(0.0); }
-        resolve_box_length(s, em_basis, viewport, is_quirks)
+/// Парсит CSS `margin` shorthand — 1-4 токена. CSS 2.1 §8.3.
+/// Возвращает `(top, right, bottom, left)` как `LengthOrAuto`.
+fn parse_margin_shorthand(
+    val: &str,
+    is_quirks: bool,
+) -> Option<(LengthOrAuto, LengthOrAuto, LengthOrAuto, LengthOrAuto)> {
+    let parse = |s: &str| -> Option<LengthOrAuto> {
+        if s.trim() == "auto" { return Some(LengthOrAuto::Auto); }
+        parse_length_q(s, is_quirks).map(LengthOrAuto::Length)
     };
     let parts = split_box_tokens(val);
     match parts.as_slice() {
-        [a] => { let v = resolve(a)?; Some((v, v, v, v)) }
+        [a] => { let v = parse(a)?; Some((v.clone(), v.clone(), v.clone(), v)) }
         [tb, lr] => {
-            Some((resolve(tb)?, resolve(lr)?, resolve(tb)?, resolve(lr)?))
+            let t = parse(tb)?; let r = parse(lr)?;
+            Some((t.clone(), r.clone(), t, r))
         }
         [t, lr, b] => {
-            Some((resolve(t)?, resolve(lr)?, resolve(b)?, resolve(lr)?))
+            let tv = parse(t)?; let rv = parse(lr)?; let bv = parse(b)?;
+            Some((tv, rv.clone(), bv, rv))
         }
         [t, r, b, l] => {
-            Some((resolve(t)?, resolve(r)?, resolve(b)?, resolve(l)?))
+            Some((parse(t)?, parse(r)?, parse(b)?, parse(l)?))
+        }
+        _ => None,
+    }
+}
+
+/// Парсит CSS `padding` shorthand — 1-4 токена. Аналогично margin.
+/// `auto` не валиден; отрицательные px тоже. При ошибке — None.
+fn parse_padding_shorthand(val: &str, is_quirks: bool) -> Option<(Length, Length, Length, Length)> {
+    let parse = |s: &str| -> Option<Length> {
+        let len = parse_length_q(s, is_quirks)?;
+        if matches!(&len, Length::Px(v) if *v < 0.0) { return None; }
+        Some(len)
+    };
+    let parts = split_box_tokens(val);
+    match parts.as_slice() {
+        [a] => { let v = parse(a)?; Some((v.clone(), v.clone(), v.clone(), v)) }
+        [tb, lr] => {
+            let t = parse(tb)?; let r = parse(lr)?;
+            Some((t.clone(), r.clone(), t, r))
+        }
+        [t, lr, b] => {
+            let tv = parse(t)?; let rv = parse(lr)?; let bv = parse(b)?;
+            Some((tv, rv.clone(), bv, rv))
+        }
+        [t, r, b, l] => {
+            Some((parse(t)?, parse(r)?, parse(b)?, parse(l)?))
         }
         _ => None,
     }
@@ -11480,7 +11567,7 @@ mod tests {
     #[test]
     fn var_substitutes_length_value() {
         let s = style_for("--w: 50px; width: var(--w)");
-        assert!((s.width.unwrap() - 50.0).abs() < 0.01);
+        assert_eq!(s.width, Some(Length::Px(50.0)));
     }
 
     #[test]
@@ -11883,55 +11970,58 @@ mod tests {
 
     #[test]
     fn calc_in_width_property_applies() {
-        // Интеграция: width: calc(10px * 2 + 20px) = 40px.
+        // Интеграция: width: calc(10px * 2 + 20px) = 40px при layout-resolve.
         let s = style_for("width: calc(10px * 2 + 20px)");
-        assert_eq!(s.width, Some(40.0));
+        let vp = Size::new(800.0, 600.0);
+        let resolved = s.width.as_ref().unwrap().resolve_or_zero(16.0, 0.0, vp);
+        assert!((resolved - 40.0).abs() < 0.01, "got {resolved}");
     }
 
     #[test]
     fn calc_in_padding_property_applies() {
-        // padding shorthand берёт одно length — calc() даёт 5+3=8px.
+        // padding shorthand берёт одно length — calc() даёт 5+3=8px при resolve.
         let s = style_for("padding: calc(5px + 3px)");
-        assert!((s.padding_top - 8.0).abs() < 0.01);
-        assert!((s.padding_right - 8.0).abs() < 0.01);
+        let vp = Size::new(800.0, 600.0);
+        assert!((s.padding_top.resolve_or_zero(16.0, 0.0, vp) - 8.0).abs() < 0.01);
+        assert!((s.padding_right.resolve_or_zero(16.0, 0.0, vp) - 8.0).abs() < 0.01);
     }
 
     #[test]
     fn padding_two_values_shorthand() {
         // padding: vertical horizontal → top=bottom=8, left=right=12.
         let s = style_for("padding: 8px 12px");
-        assert!((s.padding_top - 8.0).abs() < 0.01, "top");
-        assert!((s.padding_right - 12.0).abs() < 0.01, "right");
-        assert!((s.padding_bottom - 8.0).abs() < 0.01, "bottom");
-        assert!((s.padding_left - 12.0).abs() < 0.01, "left");
+        assert_eq!(s.padding_top, Length::Px(8.0), "top");
+        assert_eq!(s.padding_right, Length::Px(12.0), "right");
+        assert_eq!(s.padding_bottom, Length::Px(8.0), "bottom");
+        assert_eq!(s.padding_left, Length::Px(12.0), "left");
     }
 
     #[test]
     fn padding_four_values_shorthand() {
         // padding: top right bottom left.
         let s = style_for("padding: 4px 8px 12px 16px");
-        assert!((s.padding_top - 4.0).abs() < 0.01, "top");
-        assert!((s.padding_right - 8.0).abs() < 0.01, "right");
-        assert!((s.padding_bottom - 12.0).abs() < 0.01, "bottom");
-        assert!((s.padding_left - 16.0).abs() < 0.01, "left");
+        assert_eq!(s.padding_top, Length::Px(4.0), "top");
+        assert_eq!(s.padding_right, Length::Px(8.0), "right");
+        assert_eq!(s.padding_bottom, Length::Px(12.0), "bottom");
+        assert_eq!(s.padding_left, Length::Px(16.0), "left");
     }
 
     #[test]
     fn margin_four_values_shorthand() {
         // margin: 0 6px 6px 0 — реальный CSS из графических тестов.
         let s = style_for("margin: 0 6px 6px 0");
-        assert!((s.margin_top - 0.0).abs() < 0.01, "top");
-        assert!((s.margin_right - 6.0).abs() < 0.01, "right");
-        assert!((s.margin_bottom - 6.0).abs() < 0.01, "bottom");
-        assert!((s.margin_left - 0.0).abs() < 0.01, "left");
+        assert_eq!(s.margin_top, LengthOrAuto::ZERO, "top");
+        assert_eq!(s.margin_right, LengthOrAuto::Length(Length::Px(6.0)), "right");
+        assert_eq!(s.margin_bottom, LengthOrAuto::Length(Length::Px(6.0)), "bottom");
+        assert_eq!(s.margin_left, LengthOrAuto::ZERO, "left");
     }
 
     #[test]
     fn calc_with_var_inside() {
-        // var() сначала разворачивается → строка `calc(10px + 5px)`,
-        // потом парсится calc() → 15.
+        // var() сначала разворачивается → calc(10px + 5px), resolve = 15px.
         let s = style_for("--gap: 10px; padding: calc(var(--gap) + 5px)");
-        assert!((s.padding_top - 15.0).abs() < 0.01);
+        let vp = Size::new(800.0, 600.0);
+        assert!((s.padding_top.resolve_or_zero(16.0, 0.0, vp) - 15.0).abs() < 0.01);
     }
 
     #[test]
@@ -12107,23 +12197,29 @@ mod tests {
 
     #[test]
     fn min_in_width_property_applies() {
-        // width: min(50px, 200px) = 50px.
+        // width: min(50px, 200px) = 50px при resolve.
         let s = style_for("width: min(50px, 200px)");
-        assert_eq!(s.width, Some(50.0));
+        let vp = Size::new(800.0, 600.0);
+        let v = s.width.as_ref().unwrap().resolve_or_zero(16.0, 0.0, vp);
+        assert!((v - 50.0).abs() < 0.01, "got {v}");
     }
 
     #[test]
     fn clamp_in_width_property_applies() {
-        // width: clamp(50px, 100px, 200px) = 100px.
+        // width: clamp(50px, 100px, 200px) = 100px при resolve.
         let s = style_for("width: clamp(50px, 100px, 200px)");
-        assert_eq!(s.width, Some(100.0));
+        let vp = Size::new(800.0, 600.0);
+        let v = s.width.as_ref().unwrap().resolve_or_zero(16.0, 0.0, vp);
+        assert!((v - 100.0).abs() < 0.01, "got {v}");
     }
 
     #[test]
     fn min_with_var_inside() {
-        // var() → строка → min() работает.
+        // var() → строка → min() работает; resolve даёт меньшее.
         let s = style_for("--w: 80px; width: min(var(--w), 50px)");
-        assert_eq!(s.width, Some(50.0));
+        let vp = Size::new(800.0, 600.0);
+        let v = s.width.as_ref().unwrap().resolve_or_zero(16.0, 0.0, vp);
+        assert!((v - 50.0).abs() < 0.01, "got {v}");
     }
 
     #[test]
@@ -12359,9 +12455,11 @@ mod tests {
 
     #[test]
     fn round_to_step_in_width() {
-        // width: round(13px, 5px) = 15px.
+        // width: round(13px, 5px) = 15px при resolve.
         let s = style_for("width: round(13px, 5px)");
-        assert_eq!(s.width, Some(15.0));
+        let vp = Size::new(800.0, 600.0);
+        let v = s.width.as_ref().unwrap().resolve_or_zero(16.0, 0.0, vp);
+        assert!((v - 15.0).abs() < 0.01, "got {v}");
     }
 
     #[test]
@@ -12433,9 +12531,11 @@ mod tests {
 
     #[test]
     fn round_strategy_in_width() {
-        // width: round(up, 13px, 5px) = 15px.
+        // width: round(up, 13px, 5px) = 15px при resolve.
         let s = style_for("width: round(up, 13px, 5px)");
-        assert_eq!(s.width, Some(15.0));
+        let vp = Size::new(800.0, 600.0);
+        let v = s.width.as_ref().unwrap().resolve_or_zero(16.0, 0.0, vp);
+        assert!((v - 15.0).abs() < 0.01, "got {v}");
     }
 
     #[test]
@@ -12477,17 +12577,21 @@ mod tests {
 
     #[test]
     fn pow_in_width_property() {
-        // width: pow(2, 5) * 1px = 32px.
+        // width: pow(2, 5) * 1px = 32px при resolve.
         let s = style_for("width: calc(pow(2, 5) * 1px)");
-        assert_eq!(s.width, Some(32.0));
+        let vp = Size::new(800.0, 600.0);
+        let v = s.width.as_ref().unwrap().resolve_or_zero(16.0, 0.0, vp);
+        assert!((v - 32.0).abs() < 0.01, "got {v}");
     }
 
     #[test]
     fn sin_with_var_arg() {
         // var() разворачивается до парсинга calc — sin принимает результат.
         let s = style_for("--a: 90deg; width: calc(sin(var(--a)) * 100px)");
+        let vp = Size::new(800.0, 600.0);
         // sin(π/2) = 1, поэтому width = 100.
-        assert!((s.width.unwrap() - 100.0).abs() < 1e-3);
+        let v = s.width.as_ref().unwrap().resolve_or_zero(16.0, 0.0, vp);
+        assert!((v - 100.0).abs() < 1e-3, "got {v}");
     }
 
     #[test]
@@ -13627,10 +13731,10 @@ mod tests {
         );
         assert_eq!(s.background_color, Some(Color { r: 0, g: 128, b: 0, a: 255 }));
         assert_eq!(s.color, Color { r: 255, g: 255, b: 0, a: 255 });
-        assert_eq!(s.padding_top, 5.0);
-        assert_eq!(s.padding_right, 5.0);
-        assert_eq!(s.padding_bottom, 5.0);
-        assert_eq!(s.padding_left, 5.0);
+        assert_eq!(s.padding_top, Length::Px(5.0));
+        assert_eq!(s.padding_right, Length::Px(5.0));
+        assert_eq!(s.padding_bottom, Length::Px(5.0));
+        assert_eq!(s.padding_left, Length::Px(5.0));
     }
 
     #[test]

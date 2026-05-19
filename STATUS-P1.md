@@ -1,9 +1,8 @@
 In progress: —
 
-Next: 1B.1 Length type cascade   lumen-plan.md:130
+Next: 1B.2 Color type cascade   lumen-plan.md:131
 
 Queue:
-1B.1 Length type cascade           lumen-plan.md:130
 1B.2 Color type cascade            lumen-plan.md:131
 4B.1 flex-direction + flex-wrap    lumen-plan.md:138
 4B.2 flex-grow/shrink/basis        lumen-plan.md:139
@@ -16,4 +15,4 @@ Queue:
 5.4  word_boundaries               lumen-plan.md:147
 5.5  bidi_runs                     lumen-plan.md:148
 
-Recent: quirks-test-coverage 2026-05-19
+Recent: length-type-cascade 2026-05-19, quirks-test-coverage 2026-05-19
