@@ -1,572 +1,450 @@
 # CLAUDE.md
 
-Контекст проекта для Claude Code. Этот файл подгружается автоматически в каждой сессии, открытой в этой папке. Цель — чтобы Claude (или другой ассистент) сразу знал суть проекта, не задавая вопросов, на которые ответ есть в коде или соседних документах.
+Project context for Claude Code. Auto-loaded each session. Keeps the assistant oriented without re-asking questions answerable from code or adjacent docs.
 
-Если правишь архитектуру, инварианты или политики — синхронизируй это и здесь.
+Update this file whenever you change architecture, invariants, or policies.
 
 ---
 
-## Что это
+## What is this
 
-**Lumen** — приватный, лёгкий, прозрачный браузер на Rust с собственным движком. Не обёртка над Chromium / WebKit, а отдельный rendering engine, JS-движок встраивается готовый.
+**Lumen** — private, lightweight, transparent browser in Rust with a custom engine. Not a Chromium/WebKit wrapper; a standalone rendering engine with an embedded JS engine.
 
-Текущая фаза — **Phase 0 (прототип)**. Цель фазы: открыть локальный HTML с CSS и нарисовать в окне через собственный pipeline. На момент написания этого файла фаза близка к завершению — открывается `samples/page.html`, рисуются фоны и текст через bundled Inter.
+Current phase: **Phase 0 (prototype)**. Goal: open local HTML+CSS and render it via own pipeline. Status: `samples/page.html` opens, backgrounds and text render via bundled Inter.
 
-Главные документы:
-
-| Файл | Что внутри |
+| File | Contents |
 |---|---|
-| `README.md` | User-facing: установка, команды, что увидит пользователь. |
-| `lumen-plan.md` | Подробный design doc (~1200 строк, 22 главы): принципы, scope, архитектура, фазы, уникальные фичи. **Шапка содержит блок «Статус реализации»** — обновляй при каждой реализации пункта плана. |
-| `CLAUDE.md` | (этот файл) Конвенции и инварианты для ассистента. |
-| `samples/page.html` | Тестовая страница для прогона pipeline. |
-| `assets/fonts/Inter-Regular.ttf` | Bundled шрифт (SIL OFL 1.1). |
+| `README.md` | User-facing: install, commands, what to expect. |
+| `STATUS.md` | Current sprint: in-progress tasks, next items per P1/P2/P3, recent merges. **Read this instead of lumen-plan.md for current status.** |
+| `lumen-plan.md` | Full design doc (~1200 lines, 22 chapters): principles, scope, architecture, phases. Read for architecture/history, not daily status. |
+| `CLAUDE.md` | (this file) Conventions and invariants for the assistant. |
+| `samples/page.html` | Test page for pipeline runs. |
+| `assets/fonts/Inter-Regular.ttf` | Bundled font (SIL OFL 1.1). |
 
 ---
 
-## Рабочая зона
+## Working boundary
 
-**Писать код можно только в пределах папки браузера** — `/home/konstantin/RustroverProjects/lumen-browser/` и её worktree-копии в `.claude/worktrees/*`. То же касается любых других правок в репо: документации, конфигов, snapshot-тестов. Всё, что вне этого корня — `~/.bashrc`, `~/.config/*`, системные dotfile-ы, соседние проекты, **ad-hoc worktree-ы вроде `~/RustroverProjects/lumen-<task>/`** — не трогаем даже «для удобства». Если задача требует правки чего-то вовне (например, шага установки в README) — описываем словами, что пользователю сделать, и ждём его согласия.
+**Write code only inside the browser folder** — `D:\RustProjects\lumen-browser\` and its worktree copies in `.claude/worktrees/*`. Same applies to docs, configs, snapshot tests. Everything outside — `~/.bashrc`, `~/.config/*`, system dotfiles, sibling projects, **ad-hoc worktrees like `../lumen-<task>/`** — do not touch. If a task requires external changes, describe what the user should do and wait for approval.
 
-`git worktree add` подчиняется тому же правилу: путь worktree-а — `.claude/worktrees/<имя-задачи>/` (внутри папки браузера), **не** `../lumen-<имя-задачи>/` или любая другая папка снаружи. Подробнее — раздел «Изоляция через `git worktree`» в Git workflow.
+`git worktree add` follows the same rule: path must be `.claude/worktrees/<task-name>/` (inside the browser folder), **not** `../lumen-<task>/` or anywhere outside.
 
-Исключение: память Claude (`~/.claude/projects/.../memory/`) — она и так живёт вне репо by design; ей правила «только в папке» не касаются.
+Exception: Claude memory (`~/.claude/projects/.../memory/`) lives outside the repo by design — the boundary rule does not apply to it.
 
 ---
 
-## Распределение задач между программистами
+## Developer assignments
 
-Над проектом параллельно работают **три программиста** (3 сессии Claude Code, каждая в своём `git worktree` — см. «Координация параллельных сессий»). Каждый закреплён за своей доменной зоной, чтобы конфликты merge-а были минимальными. Бывшая роль P4 (shell + JS + runtime + UI) объединена с P3 — роли упростились до трёх, без потери покрытия.
+Three parallel developers (3 Claude Code sessions, each in its own `git worktree`). Each owns a domain to minimize merge conflicts. Former P4 role (shell + JS + runtime + UI) is merged into P3.
 
-**Если в начале сессии пользователь говорит «ты программист N» — найди свою колонку ниже, и бери задачи с маркером `[PN]` из раздела «Roadmap — приоритизация задач» в `lumen-plan.md`. Если все задачи с твоим маркером взяты другими сессиями (видно через `git branch` + блок «🔄 В работе сейчас» в `lumen-plan.md`) — спроси пользователя, какую следующую брать.**
+**If the user says "you are developer N" at session start — find your column below and take tasks marked `[PN]` from the "Roadmap" section in `lumen-plan.md`. If all your tasks are taken (visible via `git branch` + "🔄 In progress" block in `lumen-plan.md`) — ask the user which task to take next.**
 
-| Программист | Доменная зона | Основные крейты / подсистемы |
+Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `font` `encoding` `image` | `network` `storage` `knowledge` `bench`
+
+| Developer | Domain | Crates |
 |---|---|---|
-| **P1** | Frontend engine: исходник → layout-дерево | `lumen-html-parser`, `lumen-css-parser`, `lumen-dom`, `lumen-layout`, `lumen-encoding`; форм-DOM (ValidityState / pseudo-classes), Shadow DOM cascade, accessibility tree **construction**, Web Animations **value interpolation**, print **pagination algorithm**, contenteditable **DOM mutations + Selection model**, preload-scanner tokenizer mode, **stacking contexts model**, **property trees построение**, **push-tokenizer + incremental tree builder**, Quirks-mode application |
-| **P2** | Backend rendering: layout-дерево → пиксели | `lumen-font`, `lumen-paint`, `lumen-image`; **compositor thread + property trees + layer tree**, **layer-tree hit testing**, `mix-blend-mode` / `backdrop-filter` pipeline, CSS Painting Order traversal, color management (ICC / P3 / Rec2020), `<picture>` / `srcset` resource selection (image-side), `<img>` GPU upload, Canvas 2D, print **PDF generation**, font fallback / matcher, WebFonts (WOFF2), variable fonts |
-| **P3** | Runtime + system: всё, что вне engine | `lumen-shell`, `lumen-network`, `lumen-storage`, `lumen-knowledge`, `lumen-core::ext`, JS-integration (`rquickjs` → `rusty_v8`), `lumen-ai`; **SOP / CORS / mixed-content / iframe-sandbox enforcement**, connection pooling + Brotli + Range + keep-alive + HTTP/2, WebSocket / SSE / Fetch backend, HTTP auth + client certs, OCSP / CT, Safe Browsing, Service Worker (fetch interception backend + JS worker context + lifecycle), spell-check (storage + UI), **HTML event loop + microtasks + rAF + observers**, streaming pipeline shell coordination, JS ↔ DOM bindings, GC integration, Web Animations **scheduling**, navigation API + bfcache, forms **UI** (file picker, autofill popup, validation tooltip), IME composition, find-in-page, DevTools + CDP server, accessibility **platform bridges** (UIA / AT-SPI / NSAccessibility), permission / download UI, focus mode, customization, scroll + DPR, site isolation, GPU process + sandbox |
+| **P1** | Frontend engine: source → layout tree | `html-parser`, `css-parser`, `dom`, `layout`, `encoding` |
+| **P2** | Backend rendering: layout tree → pixels | `font`, `paint`, `image` |
+| **P3** | Runtime + system: everything outside the engine | `shell`, `network`, `storage`, `knowledge`, `core::ext` |
 
-> **Подзадачи с несколькими маркерами** (`[P1+P2]`, `[P1+P3]`, `[P1+P2+P3]`) встречаются часто — в основном из-за runtime, который пересекает domain boundaries. В таких случаях **первый маркер = главный owner**; остальные участвуют ревью / интерфейсом / реализуют свою часть в отдельных PR-ах. Маркер `[P3]` теперь покрывает и бывшие `[P4]`-задачи; в исторических commit-сообщениях `[P4]` сохраняется без правок.
+Full subsystem breakdown per role — [lumen-plan.md](lumen-plan.md) §developer-assignments.
 
-### Правила взаимодействия
+> **Multi-marker subtasks** (`[P1+P2]` etc.) are common due to cross-domain runtime. **First marker = primary owner**; others contribute via review / interface / separate branches. `[P3]` now covers former `[P4]` tasks; historical commits keep `[P4]` unchanged.
 
-- **Crate ownership.** Если ты P1 — не лезешь в `lumen-paint` без согласования с P2; если P3 — не правишь layout без согласования с P1. Это снижает merge-конфликты, а не запрещает ревью.
-- **`lumen-core` — общая поверхность.** Trait-ы в `lumen-core::ext` правит обычно P3 (Network/Storage/EventSink/Url/JsRuntime), но если P2 нужен новый `FontProvider` trait или P1 — `AccessibilityProvider` — добавляют сами, не блокируясь на P3. Coordination через коммит-сообщение.
-- **`lumen-shell` — у P3.** Это единственный shell-интегратор. Каждая новая capability у P1 / P2, требующая интеграции в окно/loop/runtime, завершается тем, что P3 поднимает её отдельной задачей. Не интегрируешь сам, если ты не P3 — описываешь интеграционную точку в commit-body.
-- **Runtime пересекает домены.** Compositor, Web Animations, Forms, contenteditable, Service Worker, Print — каждая такая подсистема **разделена** между несколькими программистами (см. таблицу). Главный owner координирует, но не блокирует остальных: каждый делает свою часть в отдельной ветке, интеграция — следующей задачей.
-- **Interface-first.** Любая cross-team задача начинается с того, что owner публикует **типы/трейты** (с `todo!()` или stub) в отдельный коммит. Потребители пишут импл *против stub-а* и не ждут реальной реализации. Стыковка проходит drop-in: пустой stub → реальный impl, потребитель ничего не правит.
-- **Точки расширения добавляет тот, кому нужно.** Не блокируй другую сессию на «P3 ещё не добавил trait» — добавь trait сам, P3 ревьюит post-factum.
+### Collaboration rules
 
-### Как зарезервировать задачу под себя
+- **Crate ownership.** P1 stays out of `lumen-paint` without P2 agreement; P3 stays out of layout without P1 agreement. Reduces conflicts, doesn't block review.
+- **`lumen-core` is shared.** P3 usually owns `lumen-core::ext` traits, but P1/P2 can add their own traits (e.g. `FontProvider`, `AccessibilityProvider`) without waiting. Coordinate via commit message.
+- **`lumen-shell` is P3's.** Only P3 integrates into the shell. P1/P2 describe integration points in commit body; P3 picks them up as separate tasks.
+- **Interface-first.** Cross-team tasks start with the owner publishing **types/traits** (with `todo!()` stubs) in a dedicated commit. Consumers implement against the stub; the real impl is a drop-in replacement.
+- **Add extension points yourself.** Don't block on "P3 hasn't added the trait yet" — add it yourself, P3 reviews post-factum.
 
-Стандартный протокол из раздела «Координация параллельных сессий»: создаёшь feature-ветку (`git checkout -b <имя>`) → первым же коммитом добавляешь строку в блок «🔄 В работе сейчас» в `lumen-plan.md` в формате:
+### Reserving a task
+
+Create a feature branch (`git checkout -b <name>`) → in the **first commit on that branch** add a line to the "🔄 In progress" block in `lumen-plan.md`:
 
 ```
-- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>
+- 🔄 <task name> [PN] — <branch name> — <YYYY-MM-DD>
 ```
-
-`[PN]` в строке — чтобы другие сессии видели, кто чем занят, и не дублировались.
 
 ---
 
-## Project Skills (скиллы)
+## Project Skills
 
-Проект содержит 4 скилла в `.claude/skills/`. Используй их вместо ручного следования протоколам:
+4 skills in `.claude/skills/`. Use them instead of following protocols manually:
 
-| Скилл | Когда применять |
+| Skill | When to use |
 |---|---|
-| `/lumen-add-css-property` | Добавляешь новое CSS-свойство в `lumen-layout` |
-| `/lumen-task-start <имя>` | Берёшь новую задачу из roadmap (создаёт worktree + резервирует в плане) |
-| `/lumen-task-finish <имя>` | Задача готова к merge (clippy → тесты → merge --no-ff → worktree remove) |
-| `/lumen-new-crate <имя>` | Создаёшь новый Cargo-крейт в workspace |
+| `/lumen-add-css-property` | Adding a new CSS property to `lumen-layout` |
+| `/lumen-task-start <name>` | Starting a new roadmap task (creates worktree + reserves in plan) |
+| `/lumen-task-finish <name>` | Task ready to merge (clippy → tests → merge --no-ff → worktree remove) |
+| `/lumen-new-crate <name>` | Creating a new Cargo crate in the workspace |
 
-`lumen-task-start` и `lumen-task-finish` — только по явному вызову (`/`).
-`lumen-add-css-property` и `lumen-new-crate` — Claude может вызвать сам по контексту.
+`lumen-task-start` and `lumen-task-finish` — explicit invocation only (`/`).
+`lumen-add-css-property` and `lumen-new-crate` — Claude may invoke automatically from context.
 
 ---
 
-## Команды для работы
+## Commands
 
 ```bash
-# Быстрая проверка (без линковки) — 1-2 сек.
-cargo check
+# Fast check (no linking) — 1-2 sec.
+cargo check -p lumen-layout
 
-# Все тесты в workspace.
-cargo test --workspace
-
-# Тесты конкретного крейта.
+# Tests for a specific crate.
 cargo test -p lumen-font
 
-# Интеграционные тесты на bundled Inter.
+# Integration tests on bundled Inter.
 cargo test -p lumen-font --test inter_real_font
 
-# Clippy строго (warnings = ошибки). Обязательно перед коммитом.
-cargo clippy --workspace --all-targets -- -D warnings
+# Strict clippy (warnings = errors). Required before every commit.
+cargo clippy -p lumen-layout --all-targets -- -D warnings
 
-# Запуск браузера с тестовой страницей (фоны + текст).
+# Run browser with test page.
 cargo run -p lumen-shell -- samples/page.html
 
-# Пустое окно.
+# Empty window.
 cargo run -p lumen-shell
 
-# Headless dump-режимы (без winit / wgpu). Pipeline до нужной фазы,
-# результат в stdout, диагностика в stderr — удобно для CI и сравнения.
+# Headless dump modes (no winit / wgpu). Result to stdout, diagnostics to stderr.
 cargo run -p lumen-shell -- --dump-source samples/page.html
 cargo run -p lumen-shell -- --dump-layout samples/page.html
 cargo run -p lumen-shell -- --dump-display-list samples/page.html
 
-# ASCII-превью растеризации глифов из Inter.
+# ASCII glyph rasterization preview.
 cargo run --example preview -p lumen-font
 
-# Baseline-замеры pipeline (decode → parse → layout → paint) на samples/page.html.
-# По умолчанию 100 итераций, переопределяется через LUMEN_BENCH_ITERS=...
+# Pipeline benchmark (decode → parse → layout → paint). Default 100 iters; override with LUMEN_BENCH_ITERS=...
 cargo run -p lumen-bench --release
 ```
 
-### Важно про PATH (Windows + Git Bash)
+### Token efficiency rules
 
-`cargo` установлен через `winget Rustlang.Rustup` и лежит в `C:\Users\konstantin\.cargo\bin`. В Git Bash на этой машине эта папка **не подхватывается автоматически**. Перед каждой командой `cargo` (или после установки в `~/.bashrc`):
+**One task — one session.** Start a new chat for each task. Long sessions accumulate context — every message costs more as the session grows. Use `/compact` if the session grew large but the task isn't finished yet.
+
+**No verification reads after edits.** Don't ask to re-read a file after Edit/Write — the tool reports failure if something went wrong. Verify correctness with `cargo check`, not by re-reading.
+
+**Precise task descriptions upfront.** Before describing a bug or task, grep/read to find the exact location first. Include file:line so the next session doesn't re-search:
+
+```
+crates/engine/layout/src/style.rs:248 — compute_style,
+margin: auto doesn't account for containing block width
+```
+
+**Use dump modes before reading source.** 5 lines of dump output often replace reading 3-4 source files:
+
+```bash
+# layout bugs (box model, margin, padding, inline flow):
+cargo run -p lumen-shell -- --dump-layout samples/page.html 2>&1 | grep -A2 "margin\|padding"
+
+# paint/rendering bugs (colors, order, display list):
+cargo run -p lumen-shell -- --dump-display-list samples/page.html 2>&1 | grep -A2 "FillRect\|Text"
+```
+
+**STATUS.md over lumen-plan.md.** `lumen-plan.md` is ~1200 lines (~5k tokens per read). For current-sprint status, read `STATUS.md` (20 lines) instead. Update `STATUS.md` when tasks start/finish; keep `lumen-plan.md` as the full archive.
+
+**Session start protocol.** At the beginning of each session read only: `STATUS.md` + `git branch`. Do not read `lumen-plan.md` unless the task explicitly requires architecture or roadmap details.
+
+### Cargo output rules
+
+Always use `-p <crate>`, never `--workspace`.
+
+- **Success** — one line: `cargo check OK`, `Clippy clean`, `All tests passed (23/23)`.
+- **Build/clippy failure** — show each full `error[...]` block (message + file:line + code + help lines), skip all `warning[...]` blocks entirely.
+- **Test failure** — show test name + first 10 lines of panic output, skip the rest.
+
+### PATH note (Windows + Git Bash)
+
+`cargo` is at `C:\Users\konstantin\.cargo\bin`. Git Bash on this machine does **not** pick it up automatically. Add before any `cargo` command:
 
 ```bash
 export PATH="/c/Users/konstantin/.cargo/bin:$PATH"
 ```
 
-В новых терминалах cmd / PowerShell это не нужно — там PATH корректный.
-
-### Текущее число тестов и crates
-
-На момент написания: 3823 теста, 14 крейтов (`shell`, `core`, `network`, `storage`, `knowledge`, `bench`, `dom`, `html-parser`, `css-parser`, `layout`, `paint`, `font`, `encoding`, `image`). При прохождении следующих фаз появится `lumen-ai` и др.
+Not needed in cmd / PowerShell — PATH is correct there.
 
 ---
 
-## Графические тесты
+## Graphic tests
 
-`graphic_tests/NN-*.html` — 22 страницы (00 calibration + 01-20 свойства + `1000000-final.html`), каждая под один визуальный эффект, viewport 1024×720. Все тесты — только графические объекты, без текста.
+`graphic_tests/NN-*.html` — 22 pages (00 calibration + 01-20 properties + `1000000-final.html`), one visual effect each, viewport 1024×720. Graphics only, no text.
 
-**00-calibration.html** — обязательный первый тест: магента-полоски (`#ff00ff`) шириной 1024 px по верху и низу body. Используется для динамического определения crop offset в desktop-снимке Lumen.
+**00-calibration.html** — required first test: magenta stripes (`#ff00ff`) 1024 px wide at top and bottom of body. Used to detect crop offset in the Lumen desktop screenshot.
 
-**Магента-маркер во всех тестах.** Каждая тест-страница 01–20 начинается с `<div class="__m"></div>` (1024×1 магента) как первый ребёнок body. Это якорь для crop offset workflow-а — независимо от того, в какой позиции на десктопе winit поставил окно. Маркер сдвигает контент на 1 px вниз идентично в Edge и Lumen, поэтому diff остаётся валидным. Триггеры для запуска: «Ищи баги по скринам», «Прогони graphic_tests».
+**Magenta marker in all tests.** Each test page 01–20 starts with `<div class="__m"></div>` (1024×1 magenta) as the first child of body. Anchor for crop offset — regardless of where winit placed the window. Shifts content 1 px down identically in Edge and Lumen, keeping diffs valid. Trigger phrases: "find bugs from screenshots", "run graphic_tests".
 
-### Запуск
+### Running
 
 ```bash
-python graphic_tests/run.py            # блокирующий пайплайн: первый fail = стоп
-python graphic_tests/run.py --only 03  # только тест 03
-python graphic_tests/run.py --continue-on-fail  # для диагностики, прогоняет всё
+python graphic_tests/run.py                   # blocking pipeline: first fail = stop
+python graphic_tests/run.py --only 03         # single test
+python graphic_tests/run.py --continue-on-fail  # diagnostic mode
 ```
 
-Пайплайн делает: build Lumen release (если нет), для каждого теста — Edge headless + Lumen gdigrab + crop по магента-маркеру + diff + % порог. Первый тест с diff > threshold останавливает пайплайн (тесты-зависимости делают последующие неинформативными).
+Pipeline: build Lumen release (if needed), then for each test — Edge headless + Lumen gdigrab + crop by magenta marker + pixel diff + % threshold. First test exceeding threshold stops the pipeline.
 
-### Правило: добавление нового CSS-свойства
+Output is one line per test:
+```
+TEST-03: PASS (0.2%)
+TEST-07: FAIL (18.4%) ← pipeline stopped here
+```
 
-При реализации любого нового CSS-свойства **в том же коммите** обязательно:
+### Rule: adding a new CSS property
 
-1. Добавить объект(ы) в соответствующий тест серии `02–20` (или создать новый файл, если свойство не покрыто ни одним).
-2. Добавить демонстрацию в `graphic_tests/1000000-final.html` — финальный тест, где все свойства видны сразу.
-3. Обновить таблицу в `graphic_tests/COVERAGE.md` — добавить строку для нового свойства.
-4. Если создаётся новый тест-файл — добавить `<div class="__m"></div>` первым ребёнком body и правило `.__m { width: 1024px; height: 1px; background: #ff00ff; }` в `<style>`.
-5. Добавить запись в `TESTS` в `graphic_tests/run.py`.
+In the **same commit** as the implementation:
 
-Текущее покрытие и список непокрытых свойств — в `graphic_tests/COVERAGE.md`.
+1. Add object(s) to the relevant test in series `02–20` (or create a new file if not covered).
+2. Add a demo to `graphic_tests/1000000-final.html`.
+3. Update `graphic_tests/COVERAGE.md` — add a row for the property.
+4. If creating a new test file — add `<div class="__m"></div>` as first body child and `.__m { width: 1024px; height: 1px; background: #ff00ff; }` in `<style>`.
+5. Add an entry to `TESTS` in `graphic_tests/run.py`.
 
-### Правила прогона
+Current coverage — `graphic_tests/COVERAGE.md`.
 
-1. **Скрины не сохраняем в репо.** `graphic_tests/screenshots/*.png` — рабочие артефакты для текущего анализа, не коммитим (ни Edge-эталон, ни Lumen-захват, ни diff). В коммит идёт только обновлённый корневой [`BUGS.md`](BUGS.md).
-2. **Багом считается только визуально заметный артефакт.** Любые ненулевые пиксели в `NN-diff.png` сами по себе — не баг. Если расхождение видно только при попиксельном сравнении и пользователь его не заметит — пропускаем.
-3. **Текст пока игнорируем.** Антиалиасинг глифов гарантированно расходится с Edge — не фиксируем как баги до отдельной задачи. Это касается subpixel-rendering, hinting, kerning, weight rendering. Геометрия text-box, padding/margin вокруг текста, line-height — это **не текст**, это layout, его проверяем как обычно.
-4. **Единый трекер — `BUGS.md` в корне репо.** Найден новый — добавляем следующим номером (текущий хвост: BUG-022). Уже зафиксированный воспроизвёлся — обновляем дату/скриншот-описание, статус не трогаем. Фикснули — переносим в раздел «Исправленные баги» со статусом `FIXED <дата>`, **запись не удаляем**. WONTFIX до Phase N+ — тоже остаётся в файле.
+### Run rules
+
+1. **No screenshots in the repo.** `graphic_tests/screenshots/*.png` are work artifacts — do not commit. Only the updated [`BUGS.md`](BUGS.md) goes in.
+2. **A bug is only a visually noticeable artifact.** Non-zero pixels in `NN-diff.png` alone are not a bug. Skip if only visible under pixel-by-pixel inspection.
+3. **Ignore text for now.** Glyph antialiasing will always diverge from Edge — not tracked until a dedicated task. Text-box geometry, padding/margin around text, line-height — that's layout, check as normal.
+4. **Single tracker — `BUGS.md` in the repo root.** One line per bug, compact format:
+   ```
+   BUG-018 | OPEN  | inline padding wrong on nested divs | layout/src/flow.rs:312
+   BUG-003 | FIXED 2026-05-10 | composite glyphs missing | font/src/parser.rs:201
+   ```
+   New bug: append with next number (current tail: BUG-022). Fixed: change `OPEN` → `FIXED <date>`, do not delete. WONTFIX: stays in file as-is.
 
 ---
 
-## Архитектура (краткая)
+## Architecture
 
-### Структура workspace
+Dependency graph and crate scope — in [lumen-plan.md](lumen-plan.md). Direction: `lumen-core` → dom/font/parsers → layout → paint → shell. No cycles.
 
-```
-crates/
-├── shell/                — бинарь `lumen`: окно, ввод, точка входа
-├── core/                 — фундамент: типы, trait-точки расширения
-└── engine/
-    ├── html-parser/      — HTML5 tokenizer + tree builder
-    ├── css-parser/       — селекторы и declarations
-    ├── dom/              — arena-based DOM (NodeId, Document)
-    ├── layout/           — block flow + style cascade
-    ├── paint/            — display list + wgpu-rasterizer + glyph atlas
-    ├── font/             — TrueType parser + scanline rasterizer
-    ├── encoding/         — детектор и однобайтовые декодеры (cp1251/koi8-r/cp866)
-    └── image/            — PNG-декодер: CRC32 + chunks + IHDR + inflate + filter undo
-```
+### Extension traits (`lumen-core::ext`)
 
-### Направление зависимостей
+**Defined:** `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `RequestFilter`, `EncodingDetector`, `EventSink`, `DnsResolver`, `HstsEnforcement`, `HttpCredentialProvider`, `FontProvider`, `JsRuntime` (`NullJsRuntime` stub).
 
-Однонаправленное, без циклов. Внизу — `lumen-core`. Все остальные крейты зависят на него; он не зависит ни на что Lumen-внутреннее.
+**Sprint 0 stubs:** `UnicodeProvider`, `IdnaProvider`, `PublicSuffixList`, `ContentDecoder` (`UnsupportedContentDecoder`), `FontFormat`, `SpellChecker`, `HyphenationProvider`.
 
-```
-                       ┌──────────────┐
-                       │  lumen-core  │
-                       └──────┬───────┘
-              ┌───────────────┼───────────────┐
-              │               │               │
-       lumen-dom         lumen-font   (другие крейты)
-              │               │
-       lumen-html-parser      │
-       lumen-css-parser       │
-              │               │
-              └──→  lumen-layout  ←──┘
-                          │
-                    lumen-paint
-                          │
-                    lumen-shell
-```
-
-### Trait-точки расширения
-
-Все живут в `lumen-core::ext`. Каждая — место, где может появиться альтернативная реализация без правки потребителей.
-
-**Уже определены:** `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `RequestFilter`, `EncodingDetector`, `EventSink`, `DnsResolver`, `HstsEnforcement`, `HttpCredentialProvider`, `FontProvider`, `JsRuntime` (`NullJsRuntime` stub).
-
-**Sprint 0 P3 trait-anchors (stub-реализации `Null*` — «не поддерживается», см. roadmap «Sprint 0 — Контракты»):** `UnicodeProvider` (под `icu4x`), `IdnaProvider` (под `idna`), `PublicSuffixList` (под `publicsuffix`), `ContentDecoder` (расширение под `brotli-decompressor` / `ruzstd`; есть `UnsupportedContentDecoder` stub), `FontFormat` (под `woff2`), `SpellChecker` (под `hunspell-rs`), `HyphenationProvider` (под `hyphenation`).
-
-**Запланированы:** `WindowingBackend` (за winit), `RenderBackend` (за wgpu), `TlsBackend` (за rustls), `KnowledgeStore`, `AiBackend`. Подробно — в §12 плана.
+**Planned:** `WindowingBackend`, `RenderBackend`, `TlsBackend`, `KnowledgeStore`, `AiBackend`.
 
 ---
 
-## Принципы (8 штук, §1 плана)
+## Principles
 
-1. **Приватность по умолчанию** — никакой телеметрии, аккаунтов, облака.
-2. **Лёгкость** — холодный старт < 300 мс, RAM < 100 МБ на пустую вкладку.
-3. **Контролируемая поверхность** — экзотические Web API (WebUSB, WebBluetooth, FedCM, и т.д.) не реализуем принципиально.
-4. **Прозрачность** — каждый исходящий байт виден пользователю в network log.
-5. **Стабильный UI** — никаких «редизайнов» каждый релиз.
-6. **Memory safety** — `unsafe` только на FFI-границах, всё ревьюится.
-7. **Русский язык — first-class** — кодировки, шрифты, IDN, локаль, переводы. На всех этапах. См. §10.
-8. **Knowledge layer как ценность для пользователя** — полнотекстовый поиск истории, аннотации, офлайн-чтение, опциональный локальный AI. Это то, что массовые браузеры не делают по бизнес-причинам. См. §12.
+Full list (8 items) — [lumen-plan.md](lumen-plan.md) §1.
 
 ---
 
-## Политика зависимостей
+## Dependency policy
 
-**Стратегия: сначала рабочий браузер, потом разговор «что переписывать самим».** Lumen про собственный rendering engine — это ядро, его не трогаем. Всё остальное, что не определяет идентичность проекта (декодеры медиа-форматов, Unicode-таблицы, sub-протоколы), берём из готовых решений, чтобы добраться до Phase 1 в обозримом будущем. После этого — пересматриваем provisional-список и решаем, где есть смысл писать своё.
+Full tables (permanent + provisional + Lumen core) — [lumen-plan.md](lumen-plan.md) §5.
 
-«Не делаем Google Chrome» означает: ядро (HTML/CSS/DOM/style/layout/paint/font/encoding, URL, HTTP/1.1, DNS, adblock matcher, knowledge layer, UI shell) — наше. Всё остальное — прагматика.
+### No new dep without justification
 
-### Две категории exception
+Every new `[dependencies]` entry requires this in the commit body:
 
-**Permanent (5 шт.) — никогда не переписываем сами.** Универсальные правила безопасности / здравого смысла: свой crypto / GPU API / OS event loop / SQL engine / JS engine не пишут.
-
-| Crate | За что | Почему не сами |
-|---|---|---|
-| `winit` | OS event loop + окна | Win32 + X11 + Wayland + AppKit — годы платформенных багов |
-| `wgpu` | GPU API (Vulkan/Metal/DX12) | 4 разных API, driver-баги, годы работы |
-| `rustls` + `webpki-roots` | TLS / crypto + bundle корневых CA-сертификатов | **Никогда не пиши свой crypto.** rustls — аудит + формальная верификация. `webpki-roots` — Mozilla CA bundle, без него HTTPS не валидируется |
-| `rusqlite` (`bundled` SQLite) | Persistent storage: history, bookmarks, notes, read-later, cookies-TTL, профили + FTS5 для §12.1 | 25 лет TH3-тестирования, стандарт индустрии. Цена ошибки persistent storage — молчаливая порча данных пользователя; та же асимметрия, что у crypto. FTS5 закрывает §12.1 без своего inverted index |
-| JS engine (`rquickjs` → `rusty_v8`) | Исполнение JavaScript | V8 — 15 лет, миллиарды долларов, сотни инженеров |
-
-**Provisional accelerators — берём готовое сейчас, переписываем своё «когда».** У каждого — trait-anchor в `lumen-core::ext` и «graduation criterion» (событие, не дата). Список растёт по мере фаз; полная таблица — в §5 плана.
-
-| Crate (кандидаты) | Trait-anchor | Graduation criterion |
-|---|---|---|
-| Image decoders для JPEG/WebP/GIF (`zune-jpeg`, `image-webp`, узкий `image`) | `ImageDecoder` | Едва ли когда-то; PNG уже свой, остальные — black-box форматы без архитектурной ценности |
-| `icu4x` (segmentation / line-break / bidi / normalization) | `UnicodeProvider` | Когда P1 закроет CSS Selectors L4 и появится bandwidth на Unicode-таблицы; реалистично — никогда |
-| `brotli-decompressor` | расширение `ContentDecoder` | Едва ли когда-то; формат стабилен |
-| `ruzstd` / `zstd-safe` | расширение `ContentDecoder` для HTTP `Content-Encoding: zstd` | Реалистично — никогда; формат стабилен |
-| `idna` (полный UTS#46) | `IdnaProvider` | Когда найдём real edge-case, который наш Punycode-only не покрывает |
-| `publicsuffix` (или свой loader PSL.dat) | `PublicSuffixList` для cookie domain matching, eTLD+1 | Едва ли; формат простой, но обновляется регулярно |
-| `hyphenation` | `HyphenationProvider` | Phase 2+, когда дойдём до типографики; TeX-словари можно переписать на свой формат позже |
-| `woff2` | `FontFormat` (расширение) | Phase 2 при добавлении WebFonts; формат стабилен, маловероятно |
-| `hunspell-rs` / `spellbook` | `SpellChecker` | Phase 3 при spell-check; русская морфология сложна, переписывать дороже чем стоит |
-| `quinn` (HTTP/3 / QUIC) | расширение `NetworkTransport` | Никогда в обозримом; QUIC = год+ работы |
-
-«Реалистично никогда» — это не лицемерие, а честная маркировка: trait-anchor существует, заменить технически тривиально, но политических причин для замены нет.
-
-### Что НЕ переводится даже временно (ядро Lumen)
-
-Эти подсистемы — наша идентичность. Готовые crate-ы рассматриваются и **отвергаются**:
-
-- HTML parser (свой по WHATWG spec) — ~html5ever~
-- CSS parser, selectors, cascade — ~cssparser, selectors, stylo~
-- DOM (arena-based) — наш
-- Layout (block/inline/flex/grid) — ~taffy~
-- Paint (display list + wgpu rasterizer) — ~tiny-skia~
-- Font parser + rasterizer (TrueType) — ~ttf-parser, font-kit~
-- Encoding (cp1251/KOI8-R/CP866/UTF-8 + детектор) — ~encoding_rs~
-- URL parser (WHATWG) — ~url~
-- HTTP/1.1 + HTTP/2 — ~hyper~
-- DNS resolver с DoH/DoT — ~hickory-resolver~
-- Adblock matcher — ~adblock~
-- Punycode базовый, MD5/SHA-256 (для Digest), Base64 — все свои, маленькие, фундамент
-- PNG-декодер с собственным DEFLATE (уже написан, DEFLATE переиспользуется для HTTP gzip/deflate)
-- Knowledge layer (§12) — ценность для пользователя, не должна быть кому-то делегирована
-- UI shell — иммедиат-режим поверх своих paint-примитивов
-
-Если кто-то предлагает «возьми готовое» для пункта из этого списка — это шаг к Chrome-форку. Не делаем.
-
-### Правило «no new dep без обоснования»
-
-Если в коммите добавляется новая запись в `[dependencies]`, в commit-теле обязателен пункт:
-
-> **Why this dependency:** \<категория (permanent / provisional), trait-anchor, graduation criterion если provisional\>
-
-Provisional-список расширяется по мере того, как фаза упирается в реальную задачу — не превентивно.
+> **Why this dependency:** \<category (permanent / provisional), trait-anchor, graduation criterion if provisional\>
 
 ---
 
-## Конвенции кода
+## Code conventions
 
-### Rust версия и edition
+### Rust version and edition
 
-- **Rust 1.95+ stable**, зафиксировано в `rust-toolchain.toml`.
+- **Rust 1.95+ stable**, pinned in `rust-toolchain.toml`.
 - **Edition 2024**, resolver "3".
-- MSVC toolchain на Windows.
+- MSVC toolchain on Windows.
 
-### Стиль
+### Style
 
-- Профиль `dev` использует `opt-level = 1` для своего кода (компромисс: debug-сборка медленнее на 10%, но layout/paint работают в 5-10 раз быстрее) и `opt-level = 3` для зависимостей через `[profile.dev.package."*"]` (wgpu / winit / rustls в чистом debug невыносимы; обоснование — в [DECISIONS.md](DECISIONS.md)).
-- `clippy::all` + `clippy::pedantic` пока **не включены** глобально, но `cargo clippy --workspace --all-targets -- -D warnings` обязан проходить перед коммитом.
-- Никаких лишних комментариев: только если объясняют *почему*, а не *что*. Doc-комментарии (`///`) на публичных API — приветствуются.
-- Имена — `snake_case` для функций/полей, `PascalCase` для типов, `SCREAMING_SNAKE` для констант (стандарт Rust).
+- `dev` profile uses `opt-level = 1` for own code (10% slower build, 5-10× faster layout/paint) and `opt-level = 3` for deps via `[profile.dev.package."*"]` (wgpu/winit/rustls are unusable in pure debug; rationale in [DECISIONS.md](DECISIONS.md)).
+- `clippy::all` + `clippy::pedantic` not yet enabled globally, but `cargo clippy -p <crate> --all-targets -- -D warnings` must pass before every commit.
+- No unnecessary comments — only when explaining *why*, not *what*. `///` doc comments on public APIs are welcome.
+- Names: `snake_case` functions/fields, `PascalCase` types, `SCREAMING_SNAKE` constants.
 
-### Tests-first для парсеров и алгоритмов
+### Tests-first for parsers and algorithms
 
-Для парсеров (`html-parser`, `css-parser`, `font`) и алгоритмов (rasterizer, layout) сначала пишутся тесты, потом код. Иначе очень легко получить код, который выглядит правильно, но не работает на спорных входах.
+Write tests before code for parsers (`html-parser`, `css-parser`, `font`) and algorithms (rasterizer, layout).
 
-Особенно — **интеграционные тесты на реальных данных**. Юнит-тесты на синтетических байтах TTF прошли успешно, но баг в hhea-парсере (skip 16 вместо 22) обнаружил только интеграционный тест на bundled Inter. Урок: синтетика **не заменяет** реальность.
+**Integration tests on real data are mandatory.** Unit tests on synthetic TTF bytes passed, but the `hhea` parser bug (skip 16 instead of 22) was only caught by an integration test on bundled Inter. Synthetic data does not replace reality.
 
-### Обработка ошибок
+### Error handling
 
-- В user-facing API — `Result<T, E>` с осмысленным `Error` enum.
-- Internal: `Option` где None означает «не нашли» / «не applicable» (а не «ошибка»).
-- Никаких `panic!` / `unwrap()` в продакшн-коде; в тестах — допустимо.
-- На FFI-границах (wgpu, V8 в будущем) — `unsafe` инкапсулирован в один модуль, документирован, ревьюится.
+- User-facing API: `Result<T, E>` with a meaningful `Error` enum.
+- Internal: `Option` where `None` means "not found" / "not applicable" (not an error).
+- No `panic!` / `unwrap()` in production code; allowed in tests.
+- FFI boundaries (wgpu, future V8): `unsafe` isolated in one module, documented, reviewed.
 
-### Регулирование `unsafe`
+### `unsafe` policy
 
-- Запрещён вне FFI-границ.
-- Каждый `unsafe`-блок должен иметь `// SAFETY:` комментарий.
+- Forbidden outside FFI boundaries.
+- Every `unsafe` block requires a `// SAFETY:` comment.
 
 ---
 
 ## Git workflow
 
-### Ветки
+### Branches
 
-**Главное правило: вся работа выполняется в feature-ветках. Прямые коммиты на `main` запрещены.**
-
-Каждая задача — отдельная feature-ветка от свежего `main`:
+**All work happens in feature branches. Direct commits to `main` are forbidden.**
 
 ```bash
 git checkout -b text-rendering
-# ... коммиты ...
+# ... commits ...
 git checkout main
-git merge --no-ff text-rendering -m "Влить ветку text-rendering: ..."
+git merge --no-ff text-rendering -m "Merge text-rendering: ..."
 git branch -d text-rendering
 ```
 
-**`--no-ff` обязателен** — сохраняет видимую структуру «эта серия коммитов = одна задача» в `git log --graph`.
+**`--no-ff` is required** — preserves "this commit series = one task" structure in `git log --graph`.
 
-Имена веток — короткие kebab-case, без префиксов (`text-rendering`, `font-atlas`, `http-client`, `claude-md`).
+Branch names: short kebab-case, no prefixes (`text-rendering`, `font-atlas`, `http-client`).
 
-### Коммиты
+### Commits
 
-- **Один логический шаг = один коммит.** Не батчить несвязанные изменения.
-- **Перед коммитом** должно проходить минимум `cargo check`. Лучше — полные тесты + clippy.
-- **Сообщение на русском.** Заголовок краткий (под 80 символов), потом пустая строка, тело объясняет *почему*, не *что* (что видно по diff).
-- **Trailer всегда в конце:**
+- **One logical step = one commit.** Don't batch unrelated changes.
+- **Before commit:** at minimum `cargo check` must pass. Prefer full tests + clippy.
+- **Commit message in Russian.** Short subject (under 80 chars), blank line, body explains *why* (not *what* — that's in the diff).
+- **Trailer always at the end:**
   ```
   Co-Authored-By: Claude Opus 4.7 (1M context) <noreply@anthropic.com>
   ```
-  Машинно-читаемый, остаётся английским.
-- **Стейджинг по конкретным файлам** (`git add path1 path2`), не `git add -A` / `.` — защита от случайного попадания секретов / архивов.
+- **Stage specific files** (`git add path1 path2`), not `git add -A` / `.` — prevents accidental inclusion of secrets or archives.
 
-### Запрещено
+### Forbidden
 
-- **Любые коммиты прямо на `main`** — включая правки документации, «мелкие фиксы» и координационные пометки.
-- Force-push на `main`.
-- Rewrite опубликованной истории.
-- `git config` изменения (никогда).
-- Skip hooks (`--no-verify`).
-- `git push` без явной просьбы пользователя.
+- **Any commit directly to `main`** — including docs, "minor fixes", coordination notes.
+- Force-push to `main`.
+- Rewriting published history.
+- `git config` changes (never).
+- Skipping hooks (`--no-verify`).
+- `git push` without explicit user request.
 
-### Координация параллельных сессий
+### Parallel session coordination
 
-Над репозиторием могут одновременно работать несколько сессий Claude Code. Чтобы они не брали из roadmap одну и ту же задачу:
+Multiple Claude Code sessions may work simultaneously. To avoid duplicate task pickup:
 
-1. **Перед стартом** — прочитать `git branch` и блок **«🔄 В работе сейчас»** в шапке `lumen-plan.md`. Если ветка с нужным именем уже существует или задача в списке — выбрать другую.
-2. **Зарезервировать задачу**: создать feature-ветку (`git checkout -b <имя>`) и в **первом же коммите на этой ветке** добавить строку в «В работе сейчас»: `- 🔄 <имя задачи> — <имя ветки> — <YYYY-MM-DD>`. Резервация видна другим сессиям через `git branch`.
-3. **При merge в `main`** — в merge-коммите убрать строку из «В работе сейчас» и обновить статусы в плане/CLAUDE.md как обычно.
-4. **Если работа отменена** — удалить ветку; строку из «В работе сейчас» убрать в отдельной ветке `cleanup-<имя>`, слить в main.
+1. **Before starting** — read `git branch` and the **"🔄 In progress"** block in `lumen-plan.md`. If the branch or task already exists — pick another.
+2. **Reserve a task**: create a feature branch and in the **first commit** add a line to "In progress": `- 🔄 <task name> [PN] — <branch> — <YYYY-MM-DD>`.
+3. **On merge to `main`** — remove the line from "In progress" and update plan status in the merge commit.
+4. **If work is cancelled** — delete the branch; remove the line in a `cleanup-<name>` branch, merge to main.
 
-**Почему ветка — достаточная резервация:** `git branch` виден всем сессиям в том же репозитории без fetch. Имя ветки = имя задачи = резервация. Предыдущий протокол с мини-коммитами на `main` нарушал правило «no commits to main» и создавал лишний шум в истории.
+#### Worktree isolation — mandatory
 
-#### Изоляция через `git worktree` — обязательная
+**Every parallel Claude Code session MUST work in its own `git worktree`.**
 
-**Каждая параллельная сессия Claude Code ОБЯЗАНА работать в отдельном `git worktree`, а не делать `git checkout` в одном и том же каталоге с другой сессией.**
-
-Создание worktree для новой задачи (путь — **внутри** папки браузера, см. «Рабочая зона»):
 ```bash
-# из основного клона:
-git worktree add .claude/worktrees/<имя-задачи> -b <имя-ветки>
-cd .claude/worktrees/<имя-задачи>
+git worktree add .claude/worktrees/<task-name> -b <branch-name>
 ```
 
-После этого сессия живёт в `.claude/worktrees/<имя-задачи>/` и не трогает чужой рабочий tree. Worktree-ы снаружи (`../lumen-<имя-задачи>/`, `~/RustroverProjects/lumen-<имя-задачи>/`) — запрещены: они нарушают правило «писать код только в папке браузера». По завершении (после merge в main):
+Path must be inside the browser folder. Worktrees outside (`../lumen-<task>/`) are forbidden. After merge:
+
 ```bash
-git worktree remove .claude/worktrees/<имя-задачи>
+git worktree remove .claude/worktrees/<task-name>
 ```
 
-**Почему обязательна:** при `git checkout <чужая-ветка>` в shared рабочем дереве git стэшит чужие незакомиченные правки в `git stash` и перебрасывает обоих на новую ветку. Восстановление возможно (`git stash list` / `git stash pop`), но трудоёмко: легко получить файлы от чужой задачи, частично потерять собственные правки, попасть в конфликт. Worktree-ы дают каждой сессии собственный изолированный рабочий каталог при общем git-репо (`.git/`), `git branch` всё ещё виден всем — резервация сохраняется.
+Two sessions doing `git checkout` in the same directory causes git to stash one session's work — recovery via `git stash pop` is fragile.
 
-#### Запрещено в shared working tree
+#### Forbidden in shared working tree
 
-- `git checkout <чужая-ветка>` если в твоём рабочем дереве есть uncommitted changes — даже если ветка пустая. Если очень нужно переключиться — сначала `git commit -am "wip"` или `git stash push -m "<описание>"`.
-- Если по ошибке оказался на чужой ветке: НЕ делай `git restore .` или `git checkout -- .` — сначала проверь `git stash list`, верни своё через `git stash pop`, и только потом переключайся обратно. Восстановление через stash хрупкое; если есть сомнения — не торопись.
+- `git checkout <foreign-branch>` with uncommitted changes. Commit (`git commit -am "wip"`) or stash first.
+- If accidentally on a foreign branch: do **not** run `git restore .` — check `git stash list` first, restore with `git stash pop`, then switch back.
 
-#### Defensive WIP-коммиты
+#### Defensive WIP commits
 
-Перед любой длинной паузой (debug, прогон тестов, большая правка нескольких файлов) — `git commit -am "wip: <описание>"` на своей ветке. Это защита от:
-- внезапного `git checkout` чужой сессией (в shared dir, если worktree почему-то не используется);
-- потери uncommitted работы при сбое процесса;
-- конфликтов при попытке восстановить из stash.
+Before any long pause (debug, test run, large multi-file edit) — `git commit -am "wip: <description>"` on your branch. Protects against process crashes and accidental stash collisions.
 
-Для cleanup перед merge: можно `git rebase -i HEAD~N` локально, склеив wip-коммиты — но **только** пока ветка ещё не публиковалась (т.е. пока её не подтянула другая сессия / merge не выполнен).
+Before merge, squash wip commits with `git rebase -i HEAD~N` — only while the branch hasn't been pulled by another session.
 
-#### Никогда не оставлять worktree на `main` с uncommitted / staged изменениями
+#### Never leave a worktree on `main` with uncommitted/staged changes
 
-Worktree на `main` (с веткой `[main]` или detached HEAD на main HEAD) — это **временная конструкция для атомарного merge**. Сразу после merge / `update-ref` — `git worktree remove <path>`. Длительный worktree на main с любым грязным состоянием — **блокер для всех остальных сессий**:
+A `main` worktree is a **temporary construct for atomic merge**. Remove it immediately after merge:
 
-- Другая сессия не может сделать `git checkout main` (для `git merge --no-ff <task>`) — git откажет: `fatal: 'main' is already used by worktree at <твой path>`.
-- Атомарный merge через `update-ref refs/heads/main NEW OLD` с детачем не помогает — пока кто-то держит main checked out, никто другой не может встать на main в своём worktree.
-
-**Признак зомби-worktree:** имя пути не совпадает с веткой (например, `.claude/worktrees/css-foo/` где `[main]`) — это след давно мёртвой сессии. Если git status показывает large staged-diff, который выглядит как «откат недавно влитых задач» — это устаревший снимок, не намеренный revert.
-
-**Лечение зомби, не теряя WIP:**
 ```bash
-# 1. Архивируем patch на всякий случай
-git -C <zombie-path> diff --cached > .claude/archive/zombie-staged-$(date +%Y%m%d).patch
-
-# 2. Переводим worktree со staged-state на отдельную ветку
-git -C <zombie-path> checkout -B zombie-stale-wip-<дата>
-git -C <zombie-path> commit -m "WIP from zombie session ..."
-
-# 3. main свободен. Ветка остаётся как карантин — удалить через
-#    git branch -D zombie-stale-wip-<дата>, если revert признан мусором.
+git worktree remove <path>
 ```
 
-**Для своих временных worktree** (например, при атомарном merge через `git worktree add --detach`): создал → выполнил `update-ref` → `git worktree remove <path>` в той же команде. Не оставляй на потом, не уходи спать с открытым worktree на main.
+A dirty `main` worktree blocks all other sessions — git refuses `checkout main` with `fatal: 'main' is already used by worktree at <path>`.
+
+**Zombie worktree** (path doesn't match branch, e.g. `.claude/worktrees/css-foo/` on `[main]`): `git -C <path> checkout -B zombie-stale-wip && git -C <path> commit -m "wip"` — frees main. Full procedure with patch archive — `.claude/docs/zombie-worktree.md`.
 
 ---
 
-## Коммуникация (когда отвечаешь пользователю)
+## Communication
 
-- **Язык ответа — русский** по умолчанию. Пользователь говорит по-русски.
-- **Тон — техничный, без лишних эмодзи**. Эмодзи только если пользователь сам их использует.
-- **Кратко, по делу.** Если ответ на вопрос — короткий ответ + что сделал. Не разворачивать в развёрнутые маркетинговые тексты.
-- **Файлы кликабельными ссылками:** `[lumen-plan.md](lumen-plan.md)`, `[crates/engine/font/src/rasterizer.rs:48](crates/engine/font/src/rasterizer.rs)`.
+- **Reply language: Russian.** The user speaks Russian.
+- **Tone: technical, no emoji** unless the user uses them.
+- **Brief and direct.** Short answer + what was done. No marketing text.
+- **Files as clickable links:** `[lumen-plan.md](lumen-plan.md)`, `[crates/engine/font/src/rasterizer.rs:48](crates/engine/font/src/rasterizer.rs)`.
 
-### Запрещённые слова
+### Banned words
 
-«Wikipedia» / «Википедия» — пользователь явно попросил не использовать. Вместо этого «энциклопедийная статья», «текстовая статья», «внешняя страница».
-
----
-
-## Статус реализации — поддерживай актуальным
-
-Текущее состояние отражается в `lumen-plan.md`, `SUBSYSTEMS.md` и `CLAUDE.md` (плюс commit-message). Все обновляются **в том же коммите**, что и сама реализация — не отдельным.
-
-### 1. `lumen-plan.md`
-
-В шапке — блок **«Статус реализации»**, и в §16 — маркеры рядом с задачами фазы. Условные обозначения: ✅ готово · 🟡 в работе / частично · ⬜ запланировано.
-
-После реализации:
-- меняй ⬜ → ✅ (или 🟡 → ✅);
-- если работа разбита — ставь 🟡 с пометкой, что готово, что нет;
-- при появлении новых крупных тем (новая trait-точка, новый крейт) — добавляй строку в соответствующий подсписок.
-
-### 2. Сопутствующие файлы
-
-При значимых вехах обновляй:
-
-- **[SUBSYSTEMS.md](SUBSYSTEMS.md)** — расширь раздел соответствующего крейта (что добавлено в «Готово» / убрано из «Отложено» / число тестов).
-- **`lumen-plan.md` → «Roadmap — приоритизация задач»** — если пункт реализован, удали из roadmap (он стал готовым).
-- **[DECISIONS.md](DECISIONS.md)** — если приняли архитектурное решение (например, новый exception в политику зависимостей, выбор API подхода).
-- **CLAUDE.md → «Известные нюансы и ловушки»** — если ловушка устранена (например, composite-глифы перестали пропускаться) или добавлена новая.
-
-Что **не** требует ручного обновления документации:
-- Тривиальные правки (опечатки, форматирование, мелкие refactor-ы без изменения API).
-- Тесты, не меняющие capability крейта.
-- Документация в коде / комментарии.
-- История merge-ов — выводится из `git log --oneline`.
-
-Для всех таких — достаточно обновить план.
+"Wikipedia" / "Википедия" — user explicitly asked not to use. Say "reference article", "external article", "external page" instead.
 
 ---
 
-## Состояние подсистем (детально)
+## Keep implementation status current
 
-Полное состояние каждого крейта — в [SUBSYSTEMS.md](SUBSYSTEMS.md): scope, что готово / отложено, инварианты для будущих изменений. Обновляй этот файл при каждом коммите, реализующем пункт плана (см. «Статус реализации — поддерживай актуальным»).
+Update `lumen-plan.md`, `SUBSYSTEMS.md`, and `CLAUDE.md` **in the same commit** as the implementation — not separately.
+
+### `lumen-plan.md`
+
+Header has the **"Implementation Status"** block; §16 has per-task markers. Legend: ✅ done · 🟡 in progress / partial · ⬜ planned.
+
+After implementation: change ⬜ → ✅ (or 🟡 → ✅). If split — use 🟡 with a note.
+
+### Related files
+
+On significant milestones update:
+
+- **[SUBSYSTEMS.md](SUBSYSTEMS.md)** — extend the crate section (added to "Done" / removed from "Deferred" / test count).
+- **`lumen-plan.md` → Roadmap** — remove completed items.
+- **[DECISIONS.md](DECISIONS.md)** — new architectural decision (new dep exception, API approach choice).
+- **CLAUDE.md → "Known gotchas"** — if a gotcha is resolved or a new one is found.
+
+No manual doc update needed for: typos, formatting, minor refactors without API changes, tests not changing crate capability, code comments, merge history.
+
+---
+
+## Subsystem state
+
+Full per-crate state (scope, done, deferred, invariants) — [SUBSYSTEMS.md](SUBSYSTEMS.md). Update on every plan-item commit.
 
 ---
 
 ## Decisions log
 
-Архитектурные решения и их обоснования — в [DECISIONS.md](DECISIONS.md). При появлении нового решения добавляй туда (а не сюда).
+Architectural decisions and rationale — [DECISIONS.md](DECISIONS.md). Add there, not here.
 
 ---
 
-## Уникальные фичи Lumen (§12 плана)
+## Unique features (§12)
 
-Это то, чем мы будем отличаться от Chromium-форков. Не приоритет Phase 0, но архитектура должна оставлять место.
-
-| Фича | Фаза | Заметка |
-|---|---|---|
-| Tab session export / import | 1 | Простое, экономит много боли |
-| Полнотекстовый поиск по истории | 2 | Cyrillic-aware токенизация. То, что Chrome не делает по бизнес-причинам |
-| Аннотации и заметки | 2 | Локально, ищется тем же FTS |
-| Read-later / офлайн | 2 | Замена Pocket / Instapaper |
-| Поиск по содержимому открытых вкладок | 2 | `@tabs` префикс в omnibox |
-| Focus mode | 2 | Снижение когнитивной нагрузки |
-| Кастомизация UI | 2-3 | drag&drop панелей, темы |
-| Локальный AI layer | 3+ | Опциональный, через Ollama HTTP или встроенный llama.cpp (потенциальный 5-й exception) |
-| Семантические закладки | 3 | Зависит от AI |
-| Граф знаний | 3+ | Визуализация коллекции |
-| Кросс-устройственный sync (E2E) | 4+ | Self-host или P2P, без облачного сервиса |
+Full list with phases — [lumen-plan.md](lumen-plan.md) §12.
 
 ---
 
-## Известные нюансы и ловушки
+## Known gotchas
 
-- **Cargo.lock коммитится** (workspace включает binary).
-- **Line endings:** `.gitattributes` форсит LF в репо. Если Git ругается на CRLF→LF — это норма, не паникуй.
-- **Архивы в корне репо игнорируются** (`/*.zip`, `/*.tar*`). Если пользователь скачал что-то — оно не попадёт в коммит случайно.
-- **Composite glyphs теперь поддерживаются** через `Font::glyph_resolved` (с max recursion depth 8). Оба варианта alignment — `Anchor::Offset(dx, dy)` (современный ARGS_ARE_XY_VALUES=1) и `Anchor::Points { parent, child }` (рудиментарный TrueType pre-1996, ARGS_ARE_XY_VALUES=0). Кириллические заглавные `А / В / Е / К / М / Н / О / Р / С / Т / Х` (которые в Inter composite через Latin-эквиваленты) и их строчные — рендерятся. Renderer вызывает `glyph_resolved`, не `glyph` напрямую.
-- **Тесты в `lumen-paint::display_list` и `lumen-paint::atlas`** — это unit-тесты. Renderer (`renderer.rs`) визуальный, без автотестов; проверяй через `cargo run`. Display list snapshot-тесты реализованы в `tests/snapshot_tests.rs`.
-- **Multi-size + variation-aware glyph atlas.** Глифы растеризируются на bin-подобранный размер (`SIZE_BINS = [8, 12, 16, 20, 24, 32, 48, 64]`), display-масштаб = `font_size / size_bin`. При font-size, совпавшем с bin (12/16/24/32...), масштаба нет — текст резкий; иначе небольшая интерполяция (16→20 ≈ 0.88×). Раньше всё рисовалось на фиксированном 24 px — заметный блюр на 12/16/32+. Cache-ключ — `AtlasKey { face_id, glyph_id, size_bin, coords_hash }` где `coords_hash` от normalized variation coords (variable fonts L1): variant-глиф (`wght=700`) не перезаписывает base (`wght=400`). Empty coords / default-instance → hash=0, ключ совпадает с pre-VF поведением (backward-compatible для snapshot-тестов и не-VF страниц).
-- **Font fallback / matcher реализован полностью (CSS Fonts L4 §3.1+§5.2+§5.3).** Renderer держит `Vec<LoadedFace>` + `font_provider: Option<Arc<dyn FontProvider>>` (по умолчанию `SystemFontIndex`). При `font-family: Roboto, Arial` обходит имена в приоритете, для первого найденного через `pick_face` (§5.2 weight/style matcher) грузит TTF лениво. Per-char codepoint cascade (§5.3): если в primary face нет глифа для символа — обходим остальные loaded faces; если ни у кого нет — рисуется `.notdef`. **Ограничение Phase 0:** cascade работает только по уже-загруженным face-ам — если CSS не упоминает CJK/эмодзи-шрифт, символ не покроется. Eager preload курируемого fallback-списка — отдельная задача. Generic CSS-family (`serif`/`sans-serif`/`monospace`) пока пропускаются на этапе face resolution.
-- **HiDPI / DPR частично поддержан.** Renderer хранит `scale_factor` от `winit` и делит viewport uniform на него — на 4K с 200% scaling 1 CSS px = 2 device px, текст и shape-ы выглядят корректно. `WindowEvent::ScaleFactorChanged` обновляет коэффициент on-the-fly (drag окна между мониторами). **Что ещё не поддержано:** layout viewport остаётся hardcoded 1024×720 — окно открывается этим размером, real `inner_size` в layout не передаётся, relayout при `Resized` отсутствует. Это отдельная ловушка, требует structural refactor pipeline (layout вызывается до создания окна) и трогает P1.
-- **Scroll-state поддержан вертикально.** `Lumen { scroll_y, content_height }` + `Renderer::render(content, overlay, scroll_y)`: page-полоса display list-а смещается на `-scroll_y`, overlay-полоса (find-bar + scrollbar) рисуется без смещения = viewport-locked. Ввод: MouseWheel (LineDelta — 40 CSS px на «notch», PixelDelta делится на DPR), стрелки ↑/↓ (40 px, auto-repeat), PageDown/PageUp/Space (90% viewport), Home/End. Кламп `[0, max(0, content_height − viewport_height)]`. Reload сбрасывает scroll в 0. **Scroll-to-match для find:** `find::scroll_to_match(rect, vh, scroll) -> Option<f32>` (None если match уже виден, иначе target такой, чтобы match попал в верхнюю четверть viewport-а); `Lumen::scroll_to_active_match` дёргается после next/prev/backspace/text-input в find-bar и сам делает clamp через `scroll_to`. **Vertical scrollbar overlay:** `lumen-shell::scrollbar::build_scrollbar_overlay(scroll_y, content_height, vw, vh)` — pure-fn, возвращает 2 FillRect (track + thumb у правого края, 8 px), скрыт при `content_height <= viewport_height`. Thumb-геометрия: `h = max(24, vh²/ch) clamp до vh`, `top = (vh − h) × scroll / max_scroll`. `RedrawRequested` подмешивает scrollbar в overlay-буфер перед find-bar-командами. **Drag + track-click:** `scrollbar::classify_track_click(x, y, scroll_y, ch, vw, vh) -> TrackClick { None, Thumb, Above, Below }` — единая точка решения для MouseDown: Thumb → старт drag (`ScrollDrag { start_scroll_y, start_mouse_y }` + `scroll_for(current_y, ch, vh)` = `start + Δy × max_scroll / (vh − h)`, caller клампит), Above/Below → page-jump на ±`page_step(vh)` ≈ 90% viewport (та же формула, что у клавиш PageUp/PageDown), None → клик мимо scrollbar-а. MouseUp / reload сбрасывают drag. Lumen хранит `cursor_position` (winit physical px → CSS px через DPR) и `scroll_drag: Option<ScrollDrag>`. **Smooth-scroll** (`lumen-shell::scroll_anim`): keyboard / wheel / page-jump / find-scroll-to-match плавно анимируются (out-cubic easing, 200 ms) вместо мгновенного прыжка. `Lumen { scroll_anim: Option<ScrollAnim { start_y, target_y, start_time_ms }> }`; `start_smooth_scroll(target)` запускает анимацию (cancel-ит активную), `scroll_by_smooth(delta)` аддитивен поверх текущего target-а — repeat-wheel/keys не «откатывает» к старту. `RedrawRequested` тикает через `advance_scroll_anim()` → `request_redraw()` пока не завершилась. Drag thumb scrollbar-а остаётся instant (interactive). Reload и page-load сбрасывают `scroll_anim = None`. **Cursor-icon feedback** (`Lumen::update_cursor_icon`): при hover над scrollbar thumb-ом winit cursor меняется на `CursorIcon::Pointer` (сигнал «здесь интерактив»), вне scrollbar-а или над пустым track-ом — `CursorIcon::Default` (стандарт всех браузеров — track-click тоже clickable, но cursor-change на пустом track-е был бы шумным). Во время активного drag thumb-а cursor «прилипает» к Pointer, даже когда курсор уходит за пределы окна (winit продолжает слать CursorMoved). `last_cursor_icon` кэширует предыдущее значение — не дёргает FFI `set_cursor` без нужды. **Ограничения:** только Y-axis (горизонтального скролла нет), нет momentum (free-flick на trackpad). Relayout-on-resize всё ещё нет (см. ловушку выше).
-- **Pipeline блокирующий, окно открывается после полной загрузки.** `lumen-shell::resumed()` делает синхронно: fetch HTML → parse → собрать `<link href>` → fetch каждого CSS подряд → layout → paint → `window.create()`. До этого момента winit event loop даже не запущен — окно не появляется. На современных сайтах с десятками внешних CSS пользователь смотрит в терминал (network log в stderr) много секунд. `HttpClient` тоже синхронный (`std::net::TcpStream` + blocking rustls). Progressive / streaming rendering — отдельная задача в roadmap «Ближайшее» п.3.
-- **Параллельные сессии в одном working tree = катастрофа.** Если две Claude-сессии в одной папке делают `git checkout` разных веток — git стэшит работу одной из них и переключает обе на новую ветку. Восстановление через `git stash list` / `git stash pop` хрупкое: легко получить файлы от чужой задачи, потерять часть собственной работы при `git restore`, попасть в конфликты. **Решение — обязательные `git worktree`-ы** для каждой сессии (см. раздел «Изоляция через `git worktree`» в Git workflow). Если попался на чужой ветке — `git stash list` покажет, что было утеряно; не делай `git restore .` пока не восстановил.
-
----
-
-## Память (`~/.claude/projects/.../memory/`)
-
-Это **локально на машине**, не в репо. В ней хранятся пользовательские предпочтения, ускоряющие работу в новых сессиях. Туда я (Claude Code) пишу:
-
-- `user_*.md` — про пользователя (язык общения, опыт).
-- `feedback_*.md` — правила и пожелания пользователя.
-- `project_*.md` — факты про проект.
-- `reference_*.md` — ссылки на внешние ресурсы.
-
-На другой машине эта память не появится. Поэтому всё важное должно дублироваться в коде / `CLAUDE.md` / `lumen-plan.md` (которые в репо).
+- **Cargo.lock is committed** (workspace includes a binary).
+- **Line endings:** `.gitattributes` enforces LF. Git warning about CRLF→LF is normal.
+- **Archives in repo root are gitignored** (`/*.zip`, `/*.tar*`). Downloaded files won't accidentally get committed.
+- **Composite glyphs are supported** via `Font::glyph_resolved` (max recursion depth 8). Both alignment variants: `Anchor::Offset(dx, dy)` (modern, ARGS_ARE_XY_VALUES=1) and `Anchor::Points { parent, child }` (legacy TrueType pre-1996). Cyrillic uppercase `А/В/Е/К/М/Н/О/Р/С/Т/Х` (composite via Latin equivalents in Inter) render correctly. Renderer calls `glyph_resolved`, not `glyph` directly.
+- **Tests in `lumen-paint::display_list` and `lumen-paint::atlas`** are unit tests. `renderer.rs` is visual, no auto-tests — verify via `cargo run`. Display list snapshot tests are in `tests/snapshot_tests.rs`.
+- **Multi-size + variation-aware glyph atlas.** Glyphs rasterized at a bin-matched size (`SIZE_BINS = [8, 12, 16, 20, 24, 32, 48, 64]`), display scale = `font_size / size_bin`. Exact bin match → no scaling, crisp text. Cache key: `AtlasKey { face_id, glyph_id, size_bin, coords_hash }` where `coords_hash` is from normalized variation coords. Empty coords → hash=0 (backward-compatible).
+- **Font fallback / matcher fully implemented** (CSS Fonts L4 §3.1+§5.2+§5.3). Per-char codepoint cascade: if primary face lacks a glyph, iterate other loaded faces; if none have it, render `.notdef`. **Phase 0 limitation:** cascade only covers already-loaded faces — CJK/emoji won't render unless explicitly listed in CSS. Generic families (`serif`/`sans-serif`/`monospace`) currently skipped during face resolution.
+- **HiDPI / DPR partially supported.** Renderer stores `scale_factor` from winit. `ScaleFactorChanged` updates it on-the-fly. **Not yet supported:** layout viewport is hardcoded 1024×720 — `inner_size` not passed to layout, no relayout on `Resized`. Requires structural pipeline refactor (layout runs before window creation) — P1 concern.
+- **Scroll state implemented** (Y-axis, smooth scroll out-cubic 200 ms, scrollbar drag + track-click, find-scroll-to-match, cursor feedback). API details — `SUBSYSTEMS.md` / `lumen-shell`. Limitations: no X-axis, no momentum, no relayout-on-resize.
+- **Pipeline is blocking; window opens only after full load.** `lumen-shell::resumed()` runs synchronously: fetch HTML → parse → collect `<link href>` → fetch each CSS → layout → paint → `window.create()`. On sites with many external CSS files the user sees only the terminal for several seconds. Progressive/streaming rendering is a separate roadmap item.
+- **Parallel sessions in the same working tree = disaster.** Two sessions doing `git checkout` of different branches causes git to stash one session's work. Recovery via `git stash pop` is fragile. **Solution: mandatory `git worktree`s** (see Worktree isolation above). If you find yourself on a foreign branch — check `git stash list` before running `git restore .`.
 
 ---
 
-## Когда что-то непонятно
+## When in doubt
 
-- **Архитектура / scope** — `lumen-plan.md`.
-- **Как запустить / собрать** — `README.md`.
-- **Что есть сейчас в коде** — `git log --oneline` или статус-блок в плане.
-- **Почему такое решение принято** — комментарии в коде или commit-сообщения.
+- **Architecture / scope** — `lumen-plan.md`.
+- **How to build / run** — `README.md`.
+- **Current code state** — `git log --oneline` or status block in the plan.
+- **Why a decision was made** — code comments or commit messages.
 
-Если вопрос не закрывается этими источниками — спроси пользователя, не предполагай.
+If the question isn't answered by these sources — ask the user, don't assume.
