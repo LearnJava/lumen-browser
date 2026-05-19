@@ -429,14 +429,9 @@ Full list with phases — [lumen-plan.md](lumen-plan.md) §12.
 - **Cargo.lock is committed** (workspace includes a binary).
 - **Line endings:** `.gitattributes` enforces LF. Git warning about CRLF→LF is normal.
 - **Archives in repo root are gitignored** (`/*.zip`, `/*.tar*`). Downloaded files won't accidentally get committed.
-- **Composite glyphs are supported** via `Font::glyph_resolved` (max recursion depth 8). Both alignment variants: `Anchor::Offset(dx, dy)` (modern, ARGS_ARE_XY_VALUES=1) and `Anchor::Points { parent, child }` (legacy TrueType pre-1996). Cyrillic uppercase `А/В/Е/К/М/Н/О/Р/С/Т/Х` (composite via Latin equivalents in Inter) render correctly. Renderer calls `glyph_resolved`, not `glyph` directly.
-- **Tests in `lumen-paint::display_list` and `lumen-paint::atlas`** are unit tests. `renderer.rs` is visual, no auto-tests — verify via `cargo run`. Display list snapshot tests are in `tests/snapshot_tests.rs`.
-- **Multi-size + variation-aware glyph atlas.** Glyphs rasterized at a bin-matched size (`SIZE_BINS = [8, 12, 16, 20, 24, 32, 48, 64]`), display scale = `font_size / size_bin`. Exact bin match → no scaling, crisp text. Cache key: `AtlasKey { face_id, glyph_id, size_bin, coords_hash }` where `coords_hash` is from normalized variation coords. Empty coords → hash=0 (backward-compatible).
-- **Font fallback / matcher fully implemented** (CSS Fonts L4 §3.1+§5.2+§5.3). Per-char codepoint cascade: if primary face lacks a glyph, iterate other loaded faces; if none have it, render `.notdef`. **Phase 0 limitation:** cascade only covers already-loaded faces — CJK/emoji won't render unless explicitly listed in CSS. Generic families (`serif`/`sans-serif`/`monospace`) currently skipped during face resolution.
-- **HiDPI / DPR partially supported.** Renderer stores `scale_factor` from winit. `ScaleFactorChanged` updates it on-the-fly. **Not yet supported:** layout viewport is hardcoded 1024×720 — `inner_size` not passed to layout, no relayout on `Resized`. Requires structural pipeline refactor (layout runs before window creation) — P1 concern.
-- **Scroll state implemented** (Y-axis, smooth scroll out-cubic 200 ms, scrollbar drag + track-click, find-scroll-to-match, cursor feedback). API details — `SUBSYSTEMS.md` / `lumen-shell`. Limitations: no X-axis, no momentum, no relayout-on-resize.
-- **Pipeline is blocking; window opens only after full load.** `lumen-shell::resumed()` runs synchronously: fetch HTML → parse → collect `<link href>` → fetch each CSS → layout → paint → `window.create()`. On sites with many external CSS files the user sees only the terminal for several seconds. Progressive/streaming rendering is a separate roadmap item.
 - **Parallel sessions in the same working tree = disaster.** Two sessions doing `git checkout` of different branches causes git to stash one session's work. Recovery via `git stash pop` is fragile. **Solution: mandatory `git worktree`s** (see Worktree isolation above). If you find yourself on a foreign branch — check `git stash list` before running `git restore .`.
+
+When you discover a non-obvious implementation detail in a specific subsystem, add it to [`SUBSYSTEMS.md`](SUBSYSTEMS.md) under the relevant crate section (in English), not here.
 
 ---
 
