@@ -155,7 +155,7 @@
 | 1B | 🟡 **`[P2+P1]` Compositor thread + layer tree** | Off-main-thread scroll | P1/P3 работают против stub |
 | 1B.1 | ✅ CompositorThread struct + spawn loop | `paint/src/compositor.rs:277` | — |
 | 1B.2 | ✅ vsync tick-loop 60fps | `paint/src/compositor.rs:277` | — |
-| 1B.3 | ⬜ PushBlendMode/PopBlendMode в display list | `paint/src/display_list.rs:196` | — |
+| 1B.3 | ✅ PushBlendMode/PopBlendMode pipeline Phase 0 | `paint/src/renderer.rs:1834` | — |
 | 1B.4 | ⬜ off-screen opacity layer rendering | `paint/src/renderer.rs` | — |
 | 1B.5 | ⬜ GPU texture upload for layer snapshots | `paint/src/renderer.rs` | — |
 | 2A | ✅ **`[P1+P2]` Painting order traversal** | — | — |

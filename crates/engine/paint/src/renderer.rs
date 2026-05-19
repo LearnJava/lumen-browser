@@ -33,7 +33,7 @@ use lumen_layout::{BorderStyle, Color, FontStyle, FontWeight, OutlineStyle};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
-use crate::display_list::fit_image_quad;
+use crate::display_list::{fit_image_quad, BlendMode};
 use crate::DisplayCommand;
 
 /// Размер атласа в пикселях (квадратный). Поднят с 512 до 1024 под
@@ -1051,6 +1051,12 @@ impl Renderer {
         // корректно — это покрывает 80%+ web-страниц Phase 0.
         let mut opacity_stack: Vec<f32> = Vec::new();
 
+        // Стек активных blend-mode-ов (CSS Compositing & Blending L1 §5).
+        // Phase 0: stack отслеживается для корректного баланса Push/Pop;
+        // рендеринг всегда использует Normal pipeline (ALPHA_BLENDING).
+        // Реальное переключение pipeline по mode — задача P2 1B.4.
+        let mut blend_mode_stack: Vec<BlendMode> = Vec::new();
+
         // Текущий выставленный scissor (для дедупликации SetScissor-команд).
         // None = не выставлен (первый SetScissor нужен в любом случае).
         let mut current_scissor: Option<DeviceScissor> = None;
@@ -1338,10 +1344,15 @@ impl Renderer {
                 DisplayCommand::PopOpacity => {
                     opacity_stack.pop();
                 }
-                // Phase 0 stub: blend mode. Off-screen-layer composite pass —
-                // задача P2 1B шаг (c-cont) / P2 4 (mix-blend-mode /
-                // backdrop-filter).
-                DisplayCommand::PushBlendMode { .. } | DisplayCommand::PopBlendMode => {}
+                // Blend-mode stack tracking. current_blend_mode() возвращает
+                // топ стека; Phase 0 — рендеринг использует Normal pipeline
+                // независимо от mode. Реальный pipeline switch — P2 1B.4.
+                DisplayCommand::PushBlendMode { mode } => {
+                    blend_mode_stack.push(*mode);
+                }
+                DisplayCommand::PopBlendMode => {
+                    blend_mode_stack.pop();
+                }
             }
         }
 
@@ -1815,6 +1826,15 @@ pub(crate) fn effective_alpha(opacity_stack: &[f32]) -> f32 {
         product *= a.clamp(0.0, 1.0);
     }
     product
+}
+
+/// Активный blend mode из стека (CSS Compositing & Blending L1 §5): топ стека.
+/// Пустой стек = `BlendMode::Normal` (стандарт; источник без blend-group).
+/// Phase 0: renderer использует Normal pipeline независимо от возвращаемого
+/// значения; функция готовит инфраструктуру для переключения pipeline в 1B.4.
+#[allow(dead_code)]
+pub(crate) fn current_blend_mode(blend_mode_stack: &[BlendMode]) -> BlendMode {
+    blend_mode_stack.last().copied().unwrap_or(BlendMode::Normal)
 }
 
 /// Применяет alpha-multiplier к RGBA-вершине: `color.a *= alpha`. Используется
@@ -2351,6 +2371,49 @@ mod tests {
         // NaN — лучше не рисовать (default-safe).
         assert_eq!(effective_alpha(&[f32::NAN]), 0.0);
         assert_eq!(effective_alpha(&[0.5, f32::NAN, 0.8]), 0.0);
+    }
+
+    // ── current_blend_mode ───────────────────────────────────────────────
+
+    #[test]
+    fn current_blend_mode_empty_stack_is_normal() {
+        assert_eq!(current_blend_mode(&[]), BlendMode::Normal);
+    }
+
+    #[test]
+    fn current_blend_mode_single_push() {
+        assert_eq!(current_blend_mode(&[BlendMode::Multiply]), BlendMode::Multiply);
+        assert_eq!(current_blend_mode(&[BlendMode::Screen]), BlendMode::Screen);
+        assert_eq!(current_blend_mode(&[BlendMode::PlusLighter]), BlendMode::PlusLighter);
+    }
+
+    #[test]
+    fn current_blend_mode_nested_returns_top() {
+        // Вложенные blend-mode-ы: активен самый внутренний (топ стека).
+        assert_eq!(
+            current_blend_mode(&[BlendMode::Multiply, BlendMode::Screen]),
+            BlendMode::Screen
+        );
+        assert_eq!(
+            current_blend_mode(&[BlendMode::Normal, BlendMode::Overlay, BlendMode::Darken]),
+            BlendMode::Darken
+        );
+    }
+
+    #[test]
+    fn current_blend_mode_pop_restores_previous() {
+        let mut stack = vec![BlendMode::Multiply, BlendMode::Screen];
+        assert_eq!(current_blend_mode(&stack), BlendMode::Screen);
+        stack.pop();
+        assert_eq!(current_blend_mode(&stack), BlendMode::Multiply);
+        stack.pop();
+        assert_eq!(current_blend_mode(&stack), BlendMode::Normal);
+    }
+
+    #[test]
+    fn current_blend_mode_normal_on_stack_returns_normal() {
+        // Явный Normal на стеке — тот же результат что и пустой стек.
+        assert_eq!(current_blend_mode(&[BlendMode::Normal]), BlendMode::Normal);
     }
 
     #[test]

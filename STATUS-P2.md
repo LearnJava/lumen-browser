@@ -1,6 +1,6 @@
 In progress: —
 
-Next: 1B.3 PushBlendMode/PopBlendMode    lumen-plan.md:159
+Next: 1B.4 off-screen opacity rendering    lumen-plan.md:160
 
 Queue:
 1B.4 off-screen opacity rendering  lumen-plan.md:160
