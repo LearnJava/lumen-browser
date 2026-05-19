@@ -11,9 +11,9 @@
 
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
 use crate::style::{
-    BorderStyle, BoxSizing, Color, ComputedStyle, Cursor, Direction, Display, FontStretch,
-    FontStyle, FontVariant, FontWeight, Length, LengthOrAuto, OutlineColor, OutlineStyle,
-    Overflow, TextAlign, TextOverflow, TextTransform, Visibility, WhiteSpace,
+    BorderStyle, BoxSizing, Color, ComputedStyle, CssColor, Cursor, Direction, Display,
+    FontStretch, FontStyle, FontVariant, FontWeight, Length, LengthOrAuto, OutlineColor,
+    OutlineStyle, Overflow, TextAlign, TextOverflow, TextTransform, Visibility, WhiteSpace,
 };
 
 fn fmt_len(l: &Length) -> String {
@@ -107,7 +107,7 @@ fn write_frag(out: &mut String, indent: &str, i: usize, frag: &InlineFrag) {
 
 /// Полный набор отличий стиля от root (включая display / width / height / margin / padding).
 fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
-    if let Some(bg) = s.background_color
+    if let Some(CssColor::Rgba(bg)) = s.background_color
         && bg.a > 0
     {
         let _ = write!(out, " bg={}", color_hex(bg));
@@ -202,10 +202,15 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
             bs_str(s.border_top_style), bs_str(s.border_right_style),
             bs_str(s.border_bottom_style), bs_str(s.border_left_style)
         );
-        let any_color = s.border_top_color.is_some() || s.border_right_color.is_some()
-            || s.border_bottom_color.is_some() || s.border_left_color.is_some();
+        let any_color = matches!(s.border_top_color, CssColor::Rgba(_))
+            || matches!(s.border_right_color, CssColor::Rgba(_))
+            || matches!(s.border_bottom_color, CssColor::Rgba(_))
+            || matches!(s.border_left_color, CssColor::Rgba(_));
         if any_color {
-            let c = |opt: Option<Color>| opt.map(color_hex).unwrap_or_else(|| "currentColor".into());
+            let c = |cc: CssColor| match cc {
+                CssColor::Rgba(col) => color_hex(col),
+                CssColor::CurrentColor => "currentColor".into(),
+            };
             let _ = write!(
                 out,
                 " bc=({},{},{},{})",

@@ -125,9 +125,9 @@
 | 1A.1 | ✅ unitless length quirk | `layout/src/style.rs:2945` | — |
 | 1A.2 | ✅ IE7 line-height quirk | `layout/src/style.rs:5013` | — |
 | 1A.3 | ✅ quirks test coverage | `layout/src/lib.rs:8449` | — |
-| 1B | ⬜ **`[P1]` Типизированные `Length`/`Color`** | P2 п.3A; P3 CSSOM | — |
+| 1B | ✅ **`[P1]` Типизированные `Length`/`Color`** | P2 п.3A; P3 CSSOM | — |
 | 1B.1 | ✅ Length type через все декларации каскада | `layout/src/style.rs` | 2026-05-19 |
-| 1B.2 | ⬜ Color type через все декларации каскада | `layout/src/style.rs:494` | — |
+| 1B.2 | ✅ Color type через все декларации каскада | `layout/src/style.rs` | 2026-05-19 |
 | 2A | ✅ **`[P1+P2]` Stacking contexts impl** | P2 п.2A | — |
 | 2B | ✅ **`[P2+P1]` Property trees построение** | P2 п.1B | — |
 | 3A | 🟡 **`[P1+P2+P3]` Web Animations interpolation** | P2 п.3B; P3 scheduling | Stub компилируется |

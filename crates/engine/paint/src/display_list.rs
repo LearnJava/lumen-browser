@@ -9,7 +9,7 @@
 use lumen_core::geom::Rect;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, BackgroundClip, BorderStyle, BoxKind,
-    Color, FontStyle, FontWeight, InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode,
+    Color, CssColor, FontStyle, FontWeight, InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode,
     ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase,
     PositionComponent, StackingContextId, StackingTree, TextDecorationStyle,
     TextDecorationThickness, Visibility,
@@ -1049,7 +1049,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 return;
             }
             emit_box_shadows(b, out);
-            if let Some(bg) = b.style.background_color
+            if let Some(CssColor::Rgba(bg)) = b.style.background_color
                 && bg.a > 0
             {
                 let clip = background_clip_rect(b);
@@ -1074,10 +1074,10 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         s.border_left_width,
                     ],
                     colors: [
-                        s.border_top_color.unwrap_or(cur),
-                        s.border_right_color.unwrap_or(cur),
-                        s.border_bottom_color.unwrap_or(cur),
-                        s.border_left_color.unwrap_or(cur),
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
                     ],
                     styles: [
                         s.border_top_style,
@@ -1127,7 +1127,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 return;
             }
             emit_box_shadows(b, out);
-            if let Some(bg) = b.style.background_color
+            if let Some(CssColor::Rgba(bg)) = b.style.background_color
                 && bg.a > 0
             {
                 let clip = background_clip_rect(b);
@@ -1152,10 +1152,10 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         s.border_left_width,
                     ],
                     colors: [
-                        s.border_top_color.unwrap_or(cur),
-                        s.border_right_color.unwrap_or(cur),
-                        s.border_bottom_color.unwrap_or(cur),
-                        s.border_left_color.unwrap_or(cur),
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
                     ],
                     styles: [
                         s.border_top_style,
@@ -1194,7 +1194,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             let self_visible = is_paint_visible(b);
             if self_visible {
                 emit_box_shadows(b, out);
-                if let Some(bg) = b.style.background_color
+                if let Some(CssColor::Rgba(bg)) = b.style.background_color
                     && bg.a > 0
                 {
                     let clip = background_clip_rect(b);
@@ -1217,10 +1217,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                             s.border_bottom_width, s.border_left_width,
                         ],
                         colors: [
-                            s.border_top_color.unwrap_or(cur),
-                            s.border_right_color.unwrap_or(cur),
-                            s.border_bottom_color.unwrap_or(cur),
-                            s.border_left_color.unwrap_or(cur),
+                            s.border_top_color.resolve(cur),
+                            s.border_right_color.resolve(cur),
+                            s.border_bottom_color.resolve(cur),
+                            s.border_left_color.resolve(cur),
                         ],
                         styles: [
                             s.border_top_style, s.border_right_style,
@@ -1284,7 +1284,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             // Painter's order для replaced element: фон → border → image.
             // background/border у `<img>` валидны по CSS — например, для
             // подложки на время загрузки или рамки вокруг картинки.
-            if let Some(bg) = b.style.background_color
+            if let Some(CssColor::Rgba(bg)) = b.style.background_color
                 && bg.a > 0
             {
                 let clip = background_clip_rect(b);
@@ -1306,10 +1306,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         s.border_bottom_width, s.border_left_width,
                     ],
                     colors: [
-                        s.border_top_color.unwrap_or(cur),
-                        s.border_right_color.unwrap_or(cur),
-                        s.border_bottom_color.unwrap_or(cur),
-                        s.border_left_color.unwrap_or(cur),
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
                     ],
                     styles: [
                         s.border_top_style, s.border_right_style,
@@ -1352,7 +1352,7 @@ fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, fr
     let thickness = resolve_decoration_thickness(frag.style.text_decoration_thickness, fs);
     let style = frag.style.text_decoration_style;
     let x = container_x + frag.x;
-    let color = frag.style.text_decoration_color.unwrap_or(frag.style.color);
+    let color = frag.style.text_decoration_color.resolve(frag.style.color);
 
     if decoration.underline {
         let y = baseline_y + fs * 0.10;
