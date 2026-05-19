@@ -1,6 +1,7 @@
-In progress: —
+In progress: 2A.3 script execution gate  branch: script-execution-gate
+Next step: run_scripts() gate in parse_and_layout  shell/src/main.rs:656
 
-Next: 2A.3 script execution gate          lumen-plan.md:182
+Next: 2A.4 form submission gate           lumen-plan.md:183
 
 Queue:
 2A.3 script execution gate         lumen-plan.md:182
