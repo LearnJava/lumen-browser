@@ -1,5 +1,4 @@
-In progress: 1A.3 quirks test coverage  branch: quirks-test-coverage
-Next step: commit integration tests for bgcolor/text hints  lib.rs:8449
+In progress: —
 
 Next: 1B.1 Length type cascade   lumen-plan.md:130
 
@@ -17,4 +16,4 @@ Queue:
 5.4  word_boundaries               lumen-plan.md:147
 5.5  bidi_runs                     lumen-plan.md:148
 
-Recent: ie7-line-height-quirk 2026-05-19
+Recent: quirks-test-coverage 2026-05-19
