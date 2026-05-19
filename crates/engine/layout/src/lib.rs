@@ -5149,6 +5149,169 @@ mod tests {
         assert!((img.rect.height - 30.0).abs() < 0.1);
     }
 
+    // ──────── <picture> / <img srcset> source-selection integration ────────
+
+    /// Рекурсивный поиск первого `Image`-бокса в дереве. Нужен для тестов
+    /// с `<picture>`: inner `<img>` зарывается на 2 уровня (picture-обёртка
+    /// сначала становится Block).
+    fn find_image(b: &LayoutBox) -> Option<&LayoutBox> {
+        if matches!(b.kind, BoxKind::Image { .. }) {
+            return Some(b);
+        }
+        for c in &b.children {
+            if let Some(found) = find_image(c) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
+    /// Рекурсивный поиск любого `LayoutBox`, у которого `BoxKind::Image`
+    /// присутствует — возвращает все, чтобы посчитать.
+    fn count_image_boxes(b: &LayoutBox) -> usize {
+        let mut n = usize::from(matches!(b.kind, BoxKind::Image { .. }));
+        for c in &b.children {
+            n += count_image_boxes(c);
+        }
+        n
+    }
+
+    #[test]
+    fn picture_uses_source_srcset_over_inner_img() {
+        // `<picture>`-picker выбирает первый матчащий `<source>` до
+        // fallback `<img>`. У нас один `<source>` без media-фильтра —
+        // он всегда выигрывает у inner img.
+        let root = lay(
+            r#"<picture>
+                <source srcset="hires.png">
+                <img src="fallback.png">
+            </picture>"#,
+            "",
+        );
+        let img = find_image(&root).expect("img inside picture");
+        if let BoxKind::Image { src, .. } = &img.kind {
+            assert_eq!(src, "hires.png", "picker должен был выбрать source, а не fallback");
+        } else {
+            panic!("expected Image");
+        }
+    }
+
+    #[test]
+    fn picture_media_filter_picks_matching_source() {
+        // viewport 800×600 — `(min-width: 700px)` матчит, `(max-width: 500px)` нет.
+        let root = lay(
+            r#"<picture>
+                <source media="(max-width: 500px)" srcset="small.png">
+                <source media="(min-width: 700px)" srcset="big.png">
+                <img src="fallback.png">
+            </picture>"#,
+            "",
+        );
+        let img = find_image(&root).expect("img inside picture");
+        if let BoxKind::Image { src, .. } = &img.kind {
+            assert_eq!(src, "big.png");
+        }
+    }
+
+    #[test]
+    fn picture_falls_back_to_inner_img_when_no_source_matches() {
+        // Все `<source>` отсеяны media-фильтром → picker идёт на inner `<img>`.
+        let root = lay(
+            r#"<picture>
+                <source media="(max-width: 100px)" srcset="tiny.png">
+                <img src="fallback.png">
+            </picture>"#,
+            "",
+        );
+        let img = find_image(&root).expect("img inside picture");
+        if let BoxKind::Image { src, .. } = &img.kind {
+            assert_eq!(src, "fallback.png");
+        }
+    }
+
+    #[test]
+    fn img_srcset_density_picker_selects_one_x_at_dpr_1() {
+        // DPR в layout фиксирован на 1.0 (Phase 0). Среди density-кандидатов
+        // picker выберет 1x как ближайший — это `low.png`.
+        let root = lay(r#"<img srcset="low.png 1x, high.png 2x" src="z.png">"#, "");
+        let img = find_image(&root).expect("img");
+        if let BoxKind::Image { src, .. } = &img.kind {
+            assert_eq!(src, "low.png");
+        }
+    }
+
+    #[test]
+    fn img_srcset_falls_back_to_src_when_picker_empty() {
+        // srcset из одних запятых — нет валидных кандидатов; picker
+        // возвращает raw src через свой внутренний fallback.
+        let root = lay(r#"<img srcset=",,," src="real.png">"#, "");
+        let img = find_image(&root).expect("img");
+        if let BoxKind::Image { src, .. } = &img.kind {
+            assert_eq!(src, "real.png");
+        }
+    }
+
+    #[test]
+    fn img_without_src_and_srcset_produces_empty_url() {
+        // Битая разметка — picker возвращает None, мы падаем в legacy
+        // fallback и сохраняем пустой src (как и было до интеграции).
+        let root = lay("<img>", "");
+        let img = find_image(&root).expect("img");
+        if let BoxKind::Image { src, .. } = &img.kind {
+            assert_eq!(src, "");
+        }
+    }
+
+    #[test]
+    fn source_element_does_not_produce_box() {
+        // `<source>` теперь Display::None — два source-а внутри `<picture>` не
+        // порождают LayoutBox-ов. Проверяем по двум инвариантам: ровно один
+        // Image-box в дереве (от inner `<img>`) и общее число дочерних
+        // блоков у picture-обёртки = 1 (только сам `<img>`-box, плюс
+        // потенциально whitespace InlineRun-ы).
+        let root = lay(
+            r#"<picture><source srcset="a.png"><source srcset="b.png"><img src="c.png"></picture>"#,
+            "",
+        );
+        assert_eq!(count_image_boxes(&root), 1);
+        let img = find_image(&root).expect("img");
+        if let BoxKind::Image { src, .. } = &img.kind {
+            assert_eq!(src, "a.png", "первый матчащий source — победитель");
+        }
+    }
+
+    #[test]
+    fn picture_source_intrinsic_dims_fill_blank_style() {
+        // У выбранного `<source>` есть width/height атрибуты, у inner `<img>` нет,
+        // и автор CSS не задал — intrinsic dims с source-а попадают в layout-box.
+        let root = lay(
+            r#"<picture>
+                <source srcset="big.png" width="240" height="160">
+                <img src="fallback.png">
+            </picture>"#,
+            "",
+        );
+        let img = find_image(&root).expect("img");
+        assert!((img.rect.width - 240.0).abs() < 0.1, "width={}", img.rect.width);
+        assert!((img.rect.height - 160.0).abs() < 0.1, "height={}", img.rect.height);
+    }
+
+    #[test]
+    fn picture_source_intrinsic_does_not_override_author_css() {
+        // Author CSS перекрывает intrinsic dimensions с `<source>` — это
+        // обычная presentational-hint специфика (HTML5 §10).
+        let root = lay(
+            r#"<picture>
+                <source srcset="big.png" width="240" height="160">
+                <img src="fallback.png">
+            </picture>"#,
+            "img { width: 100px; height: 50px; }",
+        );
+        let img = find_image(&root).expect("img");
+        assert!((img.rect.width - 100.0).abs() < 0.1);
+        assert!((img.rect.height - 50.0).abs() < 0.1);
+    }
+
     // ──────── CSS-wide keywords (CSS Cascade L4 §7) ────────
 
     #[test]
