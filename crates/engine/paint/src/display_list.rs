@@ -801,8 +801,9 @@ fn background_clip_rect(b: &LayoutBox) -> Rect {
 /// под background-color). Phase 0:
 /// * `blur` игнорируется — требует off-screen Gaussian pass (P2 п.4+);
 ///   shadow = резкий FillRect со смещением и spread.
-/// * `inset` тени пропускаются — требуют clip (PushClipRect Phase 0
-///   не работает, ждёт реальный layer-pipeline / P2 1B шаг c).
+/// * `inset` тени рисуются отдельно — `emit_inset_box_shadows` после
+///   background и до border, по спеке §3.5.1 «inset shadows are drawn
+///   inside the box, above the background and below the border».
 /// * Multiple shadows: per spec «the first shadow is on top» —
 ///   эмитим в reverse iter (последняя в CSS-списке рисуется первой /
 ///   ниже всех, первая — последней-перед-background).
@@ -833,6 +834,123 @@ fn emit_box_shadows(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             rect: Rect::new(x, y, w, h),
             color,
         });
+    }
+}
+
+/// Эмитит inset box-shadow МЕЖДУ background и border (CSS Backgrounds
+/// L3 §3.5.1: «inset shadows are drawn inside the padding edge of the
+/// box, above the background but below the border and content»).
+///
+/// Геометрия per spec:
+/// * **outer** = padding-box (border-rect минус border-widths) — это
+///   область, в которой видна тень; тень клипается outer-ом.
+/// * **inner** = `outer`, **смещённый** на `(offset_x, offset_y)` и
+///   **сжатый** на `spread` (положительный spread → меньший inner →
+///   шире кольцо тени; отрицательный spread → inner может выйти за
+///   outer → тень коллапсирует к нулю).
+///
+/// Видимая тень = `outer \ (inner ∩ outer)` — кольцо/каёмка. Phase 0
+/// без border-radius / blur разворачивается в 4 FillRect-а (top /
+/// bottom / left / right), окаймляющие «дырку» внутри outer. Если
+/// inner полностью НЕ пересекается с outer — заливаем весь outer
+/// одним FillRect (тень закрывает всё). Если inner полностью покрывает
+/// outer (отрицательный spread достаточной величины) — ничего не
+/// эмитим.
+///
+/// Multiple inset shadows: тот же reverse-iter, что у outset — «first
+/// shadow on top» (последняя в CSS-списке кладётся первой, первая —
+/// последней; верхние перекрывают нижние). Несколько inset друг над
+/// другом — нормальный паттерн под «двойную» обводку.
+///
+/// Phase 0 ограничения, совпадающие с outset:
+/// * `blur` игнорируется (нужен Gaussian pass).
+/// * Полностью прозрачная shadow (`color.a == 0`) — skip.
+/// * `currentColor` для `color: None` берётся из `s.color`.
+fn emit_inset_box_shadows(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
+    let s = &b.style;
+    if s.box_shadow.is_empty() {
+        return;
+    }
+    let outer_x = b.rect.x + s.border_left_width;
+    let outer_y = b.rect.y + s.border_top_width;
+    let outer_w = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
+    let outer_h = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
+    if outer_w <= 0.0 || outer_h <= 0.0 {
+        return;
+    }
+    let outer_right = outer_x + outer_w;
+    let outer_bottom = outer_y + outer_h;
+    for shadow in s.box_shadow.iter().rev() {
+        if !shadow.inset {
+            continue;
+        }
+        let color = shadow.color.unwrap_or(s.color);
+        if color.a == 0 {
+            continue;
+        }
+        // inner = outer, translated by offset, then inset by spread.
+        let inner_x = outer_x + shadow.offset_x + shadow.spread;
+        let inner_y = outer_y + shadow.offset_y + shadow.spread;
+        let inner_right = outer_right + shadow.offset_x - shadow.spread;
+        let inner_bottom = outer_bottom + shadow.offset_y - shadow.spread;
+        // Inner полностью покрывает outer — кольцо нулевое, тени не видно.
+        if inner_x <= outer_x
+            && inner_y <= outer_y
+            && inner_right >= outer_right
+            && inner_bottom >= outer_bottom
+        {
+            continue;
+        }
+        // Inner не пересекает outer — тень покрывает весь outer.
+        let no_overlap = inner_x >= outer_right
+            || inner_y >= outer_bottom
+            || inner_right <= outer_x
+            || inner_bottom <= outer_y;
+        if no_overlap {
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(outer_x, outer_y, outer_w, outer_h),
+                color,
+            });
+            continue;
+        }
+        // Hole = inner clamped to outer.
+        let hole_left = inner_x.max(outer_x);
+        let hole_top = inner_y.max(outer_y);
+        let hole_right = inner_right.min(outer_right);
+        let hole_bottom = inner_bottom.min(outer_bottom);
+        // Top frame.
+        if hole_top > outer_y {
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(outer_x, outer_y, outer_w, hole_top - outer_y),
+                color,
+            });
+        }
+        // Bottom frame.
+        if hole_bottom < outer_bottom {
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(outer_x, hole_bottom, outer_w, outer_bottom - hole_bottom),
+                color,
+            });
+        }
+        // Left frame.
+        if hole_left > outer_x {
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(outer_x, hole_top, hole_left - outer_x, hole_bottom - hole_top),
+                color,
+            });
+        }
+        // Right frame.
+        if hole_right < outer_right {
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(
+                    hole_right,
+                    hole_top,
+                    outer_right - hole_right,
+                    hole_bottom - hole_top,
+                ),
+                color,
+            });
+        }
     }
 }
 
@@ -899,6 +1017,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                 }
             }
+            emit_inset_box_shadows(b, out);
             let s = &b.style;
             let has_border = s.border_top_style.is_visible()
                 || s.border_right_style.is_visible()
@@ -970,6 +1089,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                 }
             }
+            emit_inset_box_shadows(b, out);
             let s = &b.style;
             let has_border = s.border_top_style.is_visible()
                 || s.border_right_style.is_visible()
@@ -1030,6 +1150,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                     }
                 }
+                emit_inset_box_shadows(b, out);
                 let s = &b.style;
                 let has_border = s.border_top_style.is_visible()
                     || s.border_right_style.is_visible()
@@ -2879,17 +3000,213 @@ mod tests {
     }
 
     #[test]
-    fn box_shadow_inset_skipped_phase0() {
-        // Inset shadow Phase 0 пропускается (требует clip).
+    fn box_shadow_inset_offset_emits_frame() {
+        // offset (3, 5) внутри 100×50 без border / spread:
+        // outer = padding-box = (0..100, 0..50).
+        // inner = (3..103, 5..55) — частично за outer.
+        // hole = inner ∩ outer = (3..100, 5..50).
+        // Тень = 4 кольцевых рамки; нулевая bottom (50..50) и right (100..100)
+        // skip-ятся. Остаются top (0..5) + left (0..3 на полосе 5..50).
         let dl = build(
             "<div></div>",
             "div { width: 100px; height: 50px; background: red; \
              box-shadow: inset 3px 5px black; }",
         );
         let fills = fills_with_color(&dl);
-        // Только bg, без shadow.
-        assert_eq!(fills.len(), 1, "inset shadow Phase 0 пропускается");
-        assert_eq!(fills[0].1, [255, 0, 0, 255]);
+        // bg + top frame + left frame = 3.
+        assert_eq!(fills.len(), 3);
+        // Painter's order: bg первый, inset тени поверх.
+        assert_eq!(fills[0].1, [255, 0, 0, 255], "bg = red");
+        // Top frame: x=0, y=0, w=100, h=5.
+        assert_eq!(fills[1].1[..3], [0, 0, 0], "frame = black");
+        let top = fills[1].0;
+        assert!((top.x - 0.0).abs() < 0.01);
+        assert!((top.y - 0.0).abs() < 0.01);
+        assert!((top.width - 100.0).abs() < 0.01);
+        assert!((top.height - 5.0).abs() < 0.01);
+        // Left frame: x=0, y=5, w=3, h=45.
+        let left = fills[2].0;
+        assert!((left.x - 0.0).abs() < 0.01);
+        assert!((left.y - 5.0).abs() < 0.01);
+        assert!((left.width - 3.0).abs() < 0.01);
+        assert!((left.height - 45.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn box_shadow_inset_spread_only_emits_four_frames() {
+        // Только spread, без offset: inner симметрично сжат на 10px →
+        // hole = (10..90, 10..40). Все 4 рамки видимы.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: white; \
+             box-shadow: inset 0 0 0 10px black; }",
+        );
+        let fills = fills_with_color(&dl);
+        // bg + 4 frames.
+        assert_eq!(fills.len(), 5);
+        assert_eq!(fills[0].1, [255, 255, 255, 255], "bg = white");
+        // Все 4 рамки = black.
+        for fill in &fills[1..] {
+            assert_eq!(fill.1[..3], [0, 0, 0]);
+        }
+        // Top (0, 0, 100, 10).
+        let top = fills[1].0;
+        assert!((top.height - 10.0).abs() < 0.01);
+        // Bottom (0, 40, 100, 10).
+        let bottom = fills[2].0;
+        assert!((bottom.y - 40.0).abs() < 0.01);
+        assert!((bottom.height - 10.0).abs() < 0.01);
+        // Left (0, 10, 10, 30).
+        let left = fills[3].0;
+        assert!((left.x - 0.0).abs() < 0.01);
+        assert!((left.width - 10.0).abs() < 0.01);
+        assert!((left.height - 30.0).abs() < 0.01);
+        // Right (90, 10, 10, 30).
+        let right = fills[4].0;
+        assert!((right.x - 90.0).abs() < 0.01);
+        assert!((right.width - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn box_shadow_inset_large_offset_fills_whole_outer() {
+        // offset_x=200 при width=100 → inner полностью справа от outer.
+        // no_overlap → один FillRect, покрывающий весь padding-box.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: white; \
+             box-shadow: inset 200px 0 black; }",
+        );
+        let fills = fills_with_color(&dl);
+        assert_eq!(fills.len(), 2, "bg + single full-outer shadow");
+        assert_eq!(fills[1].1[..3], [0, 0, 0]);
+        let shadow = fills[1].0;
+        assert!((shadow.width - 100.0).abs() < 0.01);
+        assert!((shadow.height - 50.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn box_shadow_inset_negative_spread_covers_outer_skips() {
+        // Отрицательный spread с большим модулем — inner полностью покрывает
+        // outer (расширен наружу с каждой стороны). Тени не видно.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: white; \
+             box-shadow: inset 0 0 0 -100px black; }",
+        );
+        let fills = fills_with_color(&dl);
+        // Только bg.
+        assert_eq!(fills.len(), 1);
+        assert_eq!(fills[0].1[..3], [255, 255, 255]);
+    }
+
+    #[test]
+    fn box_shadow_inset_uses_padding_box_when_border_present() {
+        // box-sizing: border-box + 100×50 + border:5px → padding-box =
+        // (5, 5, 90, 40). offset 0,0 + spread 5 → inner = (10, 10, 80, 30)
+        // внутри padding-box. Все 4 frames лежат строго в padding-box.
+        let dl = build(
+            "<div></div>",
+            "div { box-sizing: border-box; width: 100px; height: 50px; \
+             background: white; border: 5px solid green; \
+             box-shadow: inset 0 0 0 5px black; }",
+        );
+        let fills = fills_with_color(&dl);
+        // 4 inset frames + bg + (possibly border fills через DrawBorder; они
+        // не попадают в fills_with_color — DrawBorder отдельный command).
+        let shadow_fills: Vec<_> = fills
+            .iter()
+            .filter(|(_, c)| c[..3] == [0, 0, 0])
+            .collect();
+        assert_eq!(shadow_fills.len(), 4, "border-aware padding-box → 4 frames");
+        // Все рамки лежат внутри padding-box: x in [5..95], y in [5..45].
+        for (rect, _) in &shadow_fills {
+            assert!(rect.x >= 5.0 - 0.01, "left edge inside padding-box: {}", rect.x);
+            assert!(
+                rect.x + rect.width <= 95.0 + 0.01,
+                "right edge inside padding-box: {}",
+                rect.x + rect.width
+            );
+            assert!(rect.y >= 5.0 - 0.01, "top edge inside padding-box: {}", rect.y);
+            assert!(
+                rect.y + rect.height <= 45.0 + 0.01,
+                "bottom edge inside padding-box: {}",
+                rect.y + rect.height
+            );
+        }
+    }
+
+    #[test]
+    fn box_shadow_inset_currentcolor_fallback() {
+        // CSS Backgrounds L3 §4.6 — отсутствующий color = currentColor.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; color: blue; \
+             box-shadow: inset 0 0 0 10px; }",
+        );
+        let fills = fills_with_color(&dl);
+        // 4 inset frames (без bg).
+        assert_eq!(fills.len(), 4);
+        for fill in &fills {
+            assert_eq!(fill.1[..3], [0, 0, 255], "frame = currentColor (blue)");
+        }
+    }
+
+    #[test]
+    fn box_shadow_inset_multiple_reverse_order() {
+        // Spec: «first shadow is on top» — последний inset эмитим первым,
+        // первый — последним (поверх всех).
+        let dl = build(
+            "<div></div>",
+            "div { width: 50px; height: 50px; background: white; \
+             box-shadow: inset 0 0 0 5px red, inset 0 0 0 10px green, inset 0 0 0 15px blue; }",
+        );
+        let fills = fills_with_color(&dl);
+        // bg + 3 inset × 4 frames = 1 + 12 = 13. Но frames с w=0 / h=0
+        // skip-ятся; spread > 0 всегда даёт все 4 frames.
+        assert_eq!(fills.len(), 13);
+        assert_eq!(fills[0].1[..3], [255, 255, 255], "bg first");
+        // Дальше — blue (последний CSS-shadow рисуется первым).
+        for fill in &fills[1..5] {
+            assert_eq!(fill.1[..3], [0, 0, 255]);
+        }
+        for fill in &fills[5..9] {
+            assert_eq!(fill.1[..3], [0, 128, 0]);
+        }
+        // red — поверх всех (первый CSS-shadow рисуется последним).
+        for fill in &fills[9..13] {
+            assert_eq!(fill.1[..3], [255, 0, 0]);
+        }
+    }
+
+    #[test]
+    fn box_shadow_inset_and_outset_coexist() {
+        // Одна inset и одна outset — outset перед bg, inset после bg.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: white; \
+             box-shadow: 5px 5px red, inset 0 0 0 5px blue; }",
+        );
+        let fills = fills_with_color(&dl);
+        // outset (1) + bg (1) + inset (4 frames) = 6.
+        assert_eq!(fills.len(), 6);
+        assert_eq!(fills[0].1[..3], [255, 0, 0], "outset red first");
+        assert_eq!(fills[1].1[..3], [255, 255, 255], "bg second");
+        for fill in &fills[2..6] {
+            assert_eq!(fill.1[..3], [0, 0, 255], "inset blue frames");
+        }
+    }
+
+    #[test]
+    fn box_shadow_inset_transparent_color_skipped() {
+        // a=0 — shadow невидим, не эмитим.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: red; \
+             box-shadow: inset 0 0 0 10px rgba(0,0,0,0); }",
+        );
+        let fills = fills_with_color(&dl);
+        assert_eq!(fills.len(), 1, "transparent inset shadow skipped");
+        assert_eq!(fills[0].1[..3], [255, 0, 0]);
     }
 
     #[test]
