@@ -1649,7 +1649,8 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushOpacity { .. }
             | DisplayCommand::PopOpacity
             | DisplayCommand::PushBlendMode { .. }
-            | DisplayCommand::PopBlendMode => continue,
+            | DisplayCommand::PopBlendMode
+            | DisplayCommand::DrawLayerSnapshot { .. } => continue,
         };
         let bottom = r.y + r.height;
         if bottom > max_y {
