@@ -8446,4 +8446,196 @@ mod tests {
             Some(Color { r: 255, g: 0, b: 0, a: 255 })
         );
     }
+
+    // ── HTML presentational hints: bgcolor / text (HTML5 §15) ──────────────
+
+    /// `<body bgcolor="red">` — presentational hint задаёт background-color.
+    /// После canvas-propagation фон переходит на html-box.
+    #[test]
+    fn body_bgcolor_attr_sets_background() {
+        let root = lay("<html><body bgcolor=\"red\"><p>x</p></body></html>", "");
+        let (html, body) = html_and_body(&root);
+        assert_eq!(
+            html.style.background_color,
+            Some(Color { r: 255, g: 0, b: 0, a: 255 }),
+            "html должен получить фон из bgcolor после propagation"
+        );
+        assert_eq!(body.style.background_color, None, "body фон обнуляется после propagation");
+    }
+
+    /// `<body bgcolor="ff0000">` — hashless hex принимается по HTML5 §2.4.6
+    /// legacy color algorithm.
+    #[test]
+    fn body_bgcolor_hashless_hex_accepted() {
+        let root = lay("<html><body bgcolor=\"ff0000\"><p>x</p></body></html>", "");
+        let (html, _body) = html_and_body(&root);
+        assert_eq!(
+            html.style.background_color,
+            Some(Color { r: 255, g: 0, b: 0, a: 255 }),
+            "hashless hex bgcolor должен распознаваться"
+        );
+    }
+
+    /// `<table bgcolor="navy">` — bgcolor на table-элементе.
+    #[test]
+    fn table_bgcolor_attr_sets_background() {
+        let root = lay("<body><table bgcolor=\"navy\"><tr><td>x</td></tr></table></body>", "");
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        assert_eq!(
+            table.style.background_color,
+            Some(Color { r: 0, g: 0, b: 128, a: 255 }),
+            "bgcolor на table должен задавать background-color"
+        );
+    }
+
+    /// `<tr bgcolor="lime">` — bgcolor на tr-элементе.
+    #[test]
+    fn tr_bgcolor_attr_sets_background() {
+        let root = lay("<body><table><tr bgcolor=\"lime\"><td>x</td></tr></table></body>", "");
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        let tr = first_element_child(table);
+        assert_eq!(
+            tr.style.background_color,
+            Some(Color { r: 0, g: 255, b: 0, a: 255 }),
+            "bgcolor на tr должен задавать background-color"
+        );
+    }
+
+    /// `<td bgcolor="#00f">` — bgcolor на td-элементе, short hex form.
+    #[test]
+    fn td_bgcolor_attr_sets_background() {
+        let root = lay("<body><table><tr><td bgcolor=\"#00f\">x</td></tr></table></body>", "");
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        let tr = first_element_child(table);
+        let td = first_element_child(tr);
+        assert_eq!(
+            td.style.background_color,
+            Some(Color { r: 0, g: 0, b: 255, a: 255 }),
+            "bgcolor на td должен задавать background-color"
+        );
+    }
+
+    /// Author CSS `background-color` выигрывает у presentational hint `bgcolor`.
+    #[test]
+    fn author_css_overrides_bgcolor_hint() {
+        let root = lay(
+            "<html><body bgcolor=\"red\"><p>x</p></body></html>",
+            "body { background-color: blue; }",
+        );
+        let (html, _body) = html_and_body(&root);
+        assert_eq!(
+            html.style.background_color,
+            Some(Color { r: 0, g: 0, b: 255, a: 255 }),
+            "author CSS background-color должен побеждать bgcolor атрибут"
+        );
+    }
+
+    /// `<body bgcolor="transparent">` — по HTML5 §2.4.6 «transparent» является
+    /// ошибкой; атрибут игнорируется, фон остаётся None.
+    #[test]
+    fn body_bgcolor_transparent_is_ignored() {
+        let root = lay("<html><body bgcolor=\"transparent\"><p>x</p></body></html>", "");
+        let (html, body) = html_and_body(&root);
+        assert_eq!(html.style.background_color, None, "transparent bgcolor должен игнорироваться");
+        assert_eq!(body.style.background_color, None);
+    }
+
+    /// `<body bgcolor="olive">` — named color через HTML5 legacy-парсер.
+    #[test]
+    fn body_bgcolor_named_color() {
+        let root = lay("<html><body bgcolor=\"olive\"><p>x</p></body></html>", "");
+        let (html, _body) = html_and_body(&root);
+        assert_eq!(
+            html.style.background_color,
+            Some(Color { r: 128, g: 128, b: 0, a: 255 }),
+            "named color 'olive' должен правильно конвертироваться"
+        );
+    }
+
+    // ── HTML presentational hints: body text / font color (HTML5 §15.3) ────
+
+    /// `<body text="red">` → body.color = red.
+    #[test]
+    fn body_text_attr_sets_color() {
+        let root = lay("<html><body text=\"red\"><p>x</p></body></html>", "");
+        let (_html, body) = html_and_body(&root);
+        assert_eq!(
+            body.style.color,
+            Color { r: 255, g: 0, b: 0, a: 255 },
+            "body text= должен задавать color"
+        );
+    }
+
+    /// `<body text="blue">` — цвет наследуется дочерними элементами.
+    #[test]
+    fn body_text_color_inherited_by_child() {
+        let root = lay("<html><body text=\"blue\"><p>x</p></body></html>", "");
+        let (_html, body) = html_and_body(&root);
+        let p = first_element_child(body);
+        assert_eq!(
+            p.style.color,
+            Color { r: 0, g: 0, b: 255, a: 255 },
+            "<p> должен наследовать color из body text="
+        );
+    }
+
+    /// Author CSS `color` выигрывает у presentational hint `text=`.
+    #[test]
+    fn author_css_overrides_body_text_hint() {
+        let root = lay(
+            "<html><body text=\"red\"><p>x</p></body></html>",
+            "body { color: green; }",
+        );
+        let (_html, body) = html_and_body(&root);
+        assert_eq!(
+            body.style.color,
+            Color { r: 0, g: 128, b: 0, a: 255 },
+            "author CSS color должен побеждать body text= атрибут"
+        );
+    }
+
+    /// `<font color="red">` задаёт color на элементе font.
+    #[test]
+    fn font_color_attr_sets_color() {
+        let root = lay("<body><font color=\"red\">x</font></body>", "");
+        let body = first_element_child(&root);
+        let font = first_element_child(body);
+        assert_eq!(
+            font.style.color,
+            Color { r: 255, g: 0, b: 0, a: 255 },
+            "<font color=> должен задавать color"
+        );
+    }
+
+    /// `<font color="#0000ff">` — hash long hex form.
+    #[test]
+    fn font_color_hash_long_hex() {
+        let root = lay("<body><font color=\"#0000ff\">x</font></body>", "");
+        let body = first_element_child(&root);
+        let font = first_element_child(body);
+        assert_eq!(
+            font.style.color,
+            Color { r: 0, g: 0, b: 255, a: 255 },
+            "<font color=#0000ff> должен задавать blue"
+        );
+    }
+
+    /// Author CSS `color` выигрывает у `<font color=>`.
+    #[test]
+    fn author_css_overrides_font_color_hint() {
+        let root = lay(
+            "<body><font color=\"red\">x</font></body>",
+            "font { color: blue; }",
+        );
+        let body = first_element_child(&root);
+        let font = first_element_child(body);
+        assert_eq!(
+            font.style.color,
+            Color { r: 0, g: 0, b: 255, a: 255 },
+            "author CSS должен побеждать font color= атрибут"
+        );
+    }
 }
