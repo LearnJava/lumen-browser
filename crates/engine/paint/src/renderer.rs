@@ -29,7 +29,7 @@ use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{Bitmap, Cmap, Font, Head, Hhea, Hmtx, Outline, Rasterizer, SystemFontIndex};
 use lumen_image::{Image, PixelFormat};
-use lumen_layout::{Color, FontStyle, FontWeight};
+use lumen_layout::{Color, FontStyle, FontWeight, OutlineStyle};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
@@ -1154,15 +1154,14 @@ impl Renderer {
                         draw_ops.push(DrawOp::Text { v_start, v_count });
                     }
                 }
-                DisplayCommand::DrawOutline { rect, width, style: _, color, offset } => {
+                DisplayCommand::DrawOutline { rect, width, style, color, offset } => {
                     // CSS Basic UI L4 §5: outline рисуется СНАРУЖИ box-а.
                     // Outer rect = box + outline-offset (по всем сторонам) +
                     // outline-width (тоже по всем сторонам). Inner граница =
-                    // box + outline-offset. Phase 0: все стили (Solid /
-                    // Dashed / Dotted / Auto) рисуются как Solid — 4
-                    // fill-quad-а вокруг inner rect, идентично DrawBorder
-                    // (но снаружи box, а не внутри). Реальные стили
-                    // dashed/dotted это P2 п.5+, как и для DrawBorder.
+                    // box + outline-offset. `OutlineStyle::Auto` рендерится
+                    // как Solid (UA focus ring без дополнительного хвоста);
+                    // Dashed/Dotted разворачиваются в pattern из квадратов
+                    // через `emit_outline_side`.
                     if *width <= 0.0 {
                         continue;
                     }
@@ -1183,25 +1182,42 @@ impl Renderer {
                     let w = *width;
                     let c = apply_alpha_to_color(color_to_array(color), alpha);
                     let v_start = fill_vertices.len() as u32;
-                    push_fill_quad(
+                    // Top stripe (с "ear" по углам слева/справа).
+                    emit_outline_side(
                         &mut fill_vertices,
                         Rect::new(inner.x - w, inner.y - w, inner.width + 2.0 * w, w),
+                        true,
+                        w,
                         c,
+                        *style,
                     );
-                    push_fill_quad(
+                    // Bottom stripe (тоже с углами).
+                    emit_outline_side(
                         &mut fill_vertices,
                         Rect::new(inner.x - w, inner.y + inner.height, inner.width + 2.0 * w, w),
+                        true,
+                        w,
                         c,
+                        *style,
                     );
-                    push_fill_quad(
+                    // Left stripe (между inner.y и inner.y+inner.height,
+                    // без углов — они уже в top/bottom).
+                    emit_outline_side(
                         &mut fill_vertices,
                         Rect::new(inner.x - w, inner.y, w, inner.height),
+                        false,
+                        w,
                         c,
+                        *style,
                     );
-                    push_fill_quad(
+                    // Right stripe.
+                    emit_outline_side(
                         &mut fill_vertices,
                         Rect::new(inner.x + inner.width, inner.y, w, inner.height),
+                        false,
+                        w,
                         c,
+                        *style,
                     );
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
@@ -1771,6 +1787,90 @@ pub(crate) fn apply_alpha_to_color(color: [f32; 4], alpha: f32) -> [f32; 4] {
     [color[0], color[1], color[2], color[3] * alpha]
 }
 
+/// Разбивает полосу длиной `total_length` на серию dash-сегментов
+/// `(offset, length)` по pattern-у `(dash_len, gap_len)`. Используется
+/// для outline-style Dashed/Dotted. Сегменты центрируются: если общая
+/// длина пользованного pattern-а меньше `total_length`, leftover делится
+/// поровну в leading/trailing — визуально аккуратные углы.
+///
+/// Возвращает empty при degenerate-входе: `total_length <= 0`,
+/// `dash_len <= 0`. При `gap_len <= 0` возвращает один full-length сегмент
+/// (= Solid fallback, защищает от деления на ноль).
+///
+/// `n_dashes` — `floor((total_length + gap_len) / (dash_len + gap_len))`
+/// округлено вниз до >= 1. Последний даш обрезается до `total_length`,
+/// если pattern не помещается ровно (например, total=10, dash=3, gap=2 →
+/// 3 даша на 13 пытались бы, helper зажимает до 10 — обрезка финального).
+pub(crate) fn dash_segments(
+    total_length: f32,
+    dash_len: f32,
+    gap_len: f32,
+) -> Vec<(f32, f32)> {
+    if total_length <= 0.0 || dash_len <= 0.0 {
+        return Vec::new();
+    }
+    if gap_len <= 0.0 {
+        return vec![(0.0, total_length)];
+    }
+    let period = dash_len + gap_len;
+    let n_floor = ((total_length + gap_len) / period).floor() as i32;
+    let n_dashes = n_floor.max(1) as usize;
+    let used = n_dashes as f32 * dash_len + (n_dashes.saturating_sub(1)) as f32 * gap_len;
+    let leading = ((total_length - used) * 0.5).max(0.0);
+    let mut out = Vec::with_capacity(n_dashes);
+    let mut x = leading;
+    for _ in 0..n_dashes {
+        let seg_start = x.max(0.0);
+        let seg_end = (x + dash_len).min(total_length);
+        if seg_end > seg_start {
+            out.push((seg_start, seg_end - seg_start));
+        }
+        x += period;
+    }
+    out
+}
+
+/// Рисует одну сторону outline (top / right / bottom / left) с учётом
+/// `OutlineStyle`. `horizontal=true` для top/bottom (даш-pattern идёт
+/// по X), `false` для left/right (по Y). `width` — толщина outline
+/// (CSS px), используется как dash/dot длина. Для Solid/Auto/None —
+/// один full-rect; для Dashed — pattern `(2w, w)`; для Dotted — `(w, w)`.
+fn emit_outline_side(
+    out: &mut Vec<FillVertex>,
+    side_rect: Rect,
+    horizontal: bool,
+    width: f32,
+    color: [f32; 4],
+    style: OutlineStyle,
+) {
+    let total = if horizontal { side_rect.width } else { side_rect.height };
+    let pattern = match style {
+        OutlineStyle::Dashed => {
+            let dash_len = (width * 2.0).max(1.0);
+            let gap_len = width.max(1.0);
+            dash_segments(total, dash_len, gap_len)
+        }
+        OutlineStyle::Dotted => {
+            let dot_len = width.max(1.0);
+            dash_segments(total, dot_len, dot_len)
+        }
+        // Solid / Auto / None — full-length rect. None обычно не доходит
+        // до emit (фильтр на стороне build_display_list), но мы устойчивы.
+        OutlineStyle::Solid | OutlineStyle::Auto | OutlineStyle::None => {
+            push_fill_quad(out, side_rect, color);
+            return;
+        }
+    };
+    for (offset, len) in pattern {
+        let segment_rect = if horizontal {
+            Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
+        } else {
+            Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
+        };
+        push_fill_quad(out, segment_rect, color);
+    }
+}
+
 /// Перед draw-командой убедиться, что в `ops` стоит актуальный `SetScissor`
 /// для текущего `clip_stack` (топ стека = пересечение всех Push-ов).
 /// Возвращает `false`, если scissor пуст (`width==0` || `height==0`) — caller
@@ -2169,6 +2269,85 @@ mod tests {
         // alpha=0 → final-color.a = 0 (полностью прозрачно).
         let out = apply_alpha_to_color([1.0, 0.5, 0.25, 1.0], 0.0);
         assert_eq!(out, [1.0, 0.5, 0.25, 0.0]);
+    }
+
+    // ── dash_segments ────────────────────────────────────────────────────
+
+    #[test]
+    fn dash_segments_zero_length_returns_empty() {
+        assert!(dash_segments(0.0, 4.0, 2.0).is_empty());
+        assert!(dash_segments(-5.0, 4.0, 2.0).is_empty());
+    }
+
+    #[test]
+    fn dash_segments_zero_dash_returns_empty() {
+        assert!(dash_segments(10.0, 0.0, 2.0).is_empty());
+        assert!(dash_segments(10.0, -1.0, 2.0).is_empty());
+    }
+
+    #[test]
+    fn dash_segments_zero_gap_returns_single_full() {
+        // gap=0 — это solid, не разрывается.
+        let segs = dash_segments(10.0, 4.0, 0.0);
+        assert_eq!(segs, vec![(0.0, 10.0)]);
+    }
+
+    #[test]
+    fn dash_segments_exact_fit() {
+        // dash=4, gap=2 → period=6; total=10 → (10+2)/6=2 dashes;
+        // used = 2*4 + 1*2 = 10; leading=(10-10)/2 = 0.
+        // Сегменты: (0, 4), (6, 4).
+        let segs = dash_segments(10.0, 4.0, 2.0);
+        assert_eq!(segs.len(), 2);
+        assert!((segs[0].0 - 0.0).abs() < 1e-6);
+        assert!((segs[0].1 - 4.0).abs() < 1e-6);
+        assert!((segs[1].0 - 6.0).abs() < 1e-6);
+        assert!((segs[1].1 - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn dash_segments_centered_leftover() {
+        // dash=2, gap=2 → period=4; total=10 → (10+2)/4=3 dashes;
+        // used = 3*2 + 2*2 = 10; leading=0; сегменты (0,2),(4,2),(8,2).
+        let segs = dash_segments(10.0, 2.0, 2.0);
+        assert_eq!(segs.len(), 3);
+        assert_eq!(segs[0], (0.0, 2.0));
+        assert_eq!(segs[1], (4.0, 2.0));
+        assert_eq!(segs[2], (8.0, 2.0));
+    }
+
+    #[test]
+    fn dash_segments_with_leftover_centers() {
+        // dash=2, gap=2 → period=4; total=11 → (11+2)/4=3 dashes;
+        // used=10; leading=(11-10)/2=0.5.
+        let segs = dash_segments(11.0, 2.0, 2.0);
+        assert_eq!(segs.len(), 3);
+        assert!((segs[0].0 - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn dash_segments_too_short_one_dash() {
+        // total=3, dash=4, gap=2 — n_floor=(3+2)/6=0 → max(1)=1; used=4;
+        // leading=max((3-4)/2, 0)=0; сегмент (0,3) обрезается до total.
+        let segs = dash_segments(3.0, 4.0, 2.0);
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].0, 0.0);
+        assert!((segs[0].1 - 3.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn dash_segments_dotted_pattern() {
+        // dot_len=2, gap=2 (как Dotted с width=2): total=10 → 3 точки на (0,2),(4,2),(8,2).
+        let segs = dash_segments(10.0, 2.0, 2.0);
+        assert_eq!(segs.len(), 3);
+    }
+
+    #[test]
+    fn dash_segments_count_for_typical_outline() {
+        // Outline width=2, dashed: dash=4, gap=2; полоса 100 px.
+        // n=(100+2)/6=17 dashes; used=17*4 + 16*2 = 68+32 = 100; leading=0.
+        let segs = dash_segments(100.0, 4.0, 2.0);
+        assert_eq!(segs.len(), 17);
     }
 
     #[test]
