@@ -11,7 +11,8 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, BackgroundClip, BoxKind, Color,
     FontStyle, FontWeight, InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode, ObjectFit,
     ObjectPosition, OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase,
-    PositionComponent, StackingContextId, StackingTree, Visibility,
+    PositionComponent, StackingContextId, StackingTree, TextDecorationStyle,
+    TextDecorationThickness, Visibility,
 };
 
 /// CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
@@ -1154,10 +1155,12 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
 
 /// Эмитит FillRect-ы для активных линий text-decoration. Геометрия —
 /// приблизительная: baseline ≈ line_y + font_size * 0.80 (соответствует
-/// ascent ratio Inter, на котором рендерер позиционирует глифы). Толщина —
-/// около 7% от font_size, минимум 1px. Цвет — цвет самого фрагмента
-/// (упрощение Phase 0 — CSS3 говорит использовать text-decoration-color,
-/// который у нас не реализован, поэтому falls back на currentColor).
+/// ascent ratio Inter, на котором рендерер позиционирует глифы). Толщина
+/// резолвится через [`resolve_decoration_thickness`] из
+/// `text-decoration-thickness` (L3 §2.3). Стиль (`Solid` / `Double` /
+/// `Dotted` / `Dashed` / `Wavy`, L3 §2.2) разворачивается в один или
+/// несколько FillRect-ов через [`emit_decoration_line`]. Цвет — из
+/// `text-decoration-color` с fallback на currentColor (L3 §3).
 fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, frag: &InlineFrag) {
     let decoration = frag.style.text_decoration_line;
     if decoration.is_empty() || frag.width <= 0.0 {
@@ -1165,35 +1168,116 @@ fn push_text_decoration(out: &mut DisplayList, container_x: f32, line_y: f32, fr
     }
     let fs = frag.style.font_size;
     let baseline_y = line_y + fs * 0.80;
-    let thickness = (fs * 0.07).max(1.0);
+    let thickness = resolve_decoration_thickness(frag.style.text_decoration_thickness, fs);
+    let style = frag.style.text_decoration_style;
     let x = container_x + frag.x;
-    // CSS Text Decoration L3 §3: text-decoration-color, fallback на
-    // currentColor (= frag.style.color).
     let color = frag.style.text_decoration_color.unwrap_or(frag.style.color);
 
     if decoration.underline {
-        // Под baseline, ниже на ~10% от размера шрифта.
         let y = baseline_y + fs * 0.10;
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(x, y, frag.width, thickness),
-            color,
-        });
+        emit_decoration_line(out, x, y, frag.width, thickness, color, style);
     }
     if decoration.line_through {
-        // Примерно по середине строчных букв (mid x-height): ~30% выше baseline.
         let y = baseline_y - fs * 0.30;
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(x, y, frag.width, thickness),
-            color,
-        });
+        emit_decoration_line(out, x, y, frag.width, thickness, color, style);
     }
     if decoration.overline {
-        // Чуть выше верха capital-line (≈ font_size * 0.75 над baseline).
         let y = baseline_y - fs * 0.78;
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(x, y, frag.width, thickness),
-            color,
-        });
+        emit_decoration_line(out, x, y, frag.width, thickness, color, style);
+    }
+}
+
+/// Резолвит [`TextDecorationThickness`] в device-px по CSS Text Decoration
+/// L3 §2.3. `Auto` / `FromFont` — UA дефолт ≈ 7% от font-size (минимум
+/// 1px); Phase 0 без font-access для `FromFont`, поэтому тот же default.
+/// `Length` — уже resolved-px из cascade. `Percentage` хранится как
+/// fraction; spec ссылается на 1em **parent** font-size, Phase 0
+/// используем frag.font_size как приближение (документировано в
+/// `style.rs`).
+fn resolve_decoration_thickness(value: TextDecorationThickness, font_size: f32) -> f32 {
+    match value {
+        TextDecorationThickness::Auto | TextDecorationThickness::FromFont => {
+            (font_size * 0.07).max(1.0)
+        }
+        TextDecorationThickness::Length(px) => px.max(0.0),
+        TextDecorationThickness::Percentage(frac) => (frac * font_size).max(0.0),
+    }
+}
+
+/// Эмитит FillRect-ы для одной decoration-линии в выбранном стиле
+/// (CSS Text Decoration L3 §2.2). `(x, y)` — верхний левый угол.
+///
+/// - `Solid` — один rect (initial).
+/// - `Double` — два параллельных rect-а с gap = thickness; итого
+///   span ≈ 3 × thickness, верхний у `y`, нижний у `y + 2·t`.
+/// - `Dotted` — серия квадратиков `thickness × thickness`, шаг
+///   `2 × thickness` (gap = thickness). Геометрия UA-defined; выбран
+///   простой 1:1 паттерн.
+/// - `Dashed` — серия штрихов длиной `2 × thickness`, шаг `3 × thickness`
+///   (gap = thickness). UA-defined.
+/// - `Wavy` — Phase 0 fallback на Solid: текущий renderer-pipeline
+///   поддерживает только axis-aligned rect-ы, реальная синусоида
+///   требует path-pipeline или off-screen-растеризации (отдельная
+///   задача P2). Чтобы декорация не исчезла молча, рисуем `Solid`
+///   с тем же thickness/color.
+fn emit_decoration_line(
+    out: &mut DisplayList,
+    x: f32,
+    y: f32,
+    width: f32,
+    thickness: f32,
+    color: Color,
+    style: TextDecorationStyle,
+) {
+    if width <= 0.0 || thickness <= 0.0 {
+        return;
+    }
+    match style {
+        TextDecorationStyle::Solid | TextDecorationStyle::Wavy => {
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(x, y, width, thickness),
+                color,
+            });
+        }
+        TextDecorationStyle::Double => {
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(x, y, width, thickness),
+                color,
+            });
+            out.push(DisplayCommand::FillRect {
+                rect: Rect::new(x, y + 2.0 * thickness, width, thickness),
+                color,
+            });
+        }
+        TextDecorationStyle::Dotted => {
+            let step = thickness * 2.0;
+            let end = x + width;
+            let mut cx = x;
+            while cx + thickness <= end + f32::EPSILON {
+                out.push(DisplayCommand::FillRect {
+                    rect: Rect::new(cx, y, thickness, thickness),
+                    color,
+                });
+                cx += step;
+            }
+        }
+        TextDecorationStyle::Dashed => {
+            let dash = thickness * 2.0;
+            let step = thickness * 3.0;
+            let end = x + width;
+            let mut cx = x;
+            while cx < end {
+                let w = (end - cx).min(dash);
+                if w <= 0.0 {
+                    break;
+                }
+                out.push(DisplayCommand::FillRect {
+                    rect: Rect::new(cx, y, w, thickness),
+                    color,
+                });
+                cx += step;
+            }
+        }
     }
 }
 
@@ -1540,6 +1624,174 @@ mod tests {
             800.0,
         );
         assert!(fill_rects(&dl).is_empty(), "a should override underline");
+    }
+
+    /// `text-decoration: underline solid` — sanity, что explicit Solid ведёт
+    /// себя как default (один FillRect).
+    #[test]
+    fn style_solid_emits_one_rect() {
+        let dl = build_wrapped(
+            "<p><a>x</a></p>",
+            "a { text-decoration: underline solid; }",
+            800.0,
+        );
+        assert_eq!(fill_rects(&dl).len(), 1);
+    }
+
+    /// `Double` — две параллельные линии той же ширины с gap = thickness;
+    /// второй rect ниже первого на `2 × thickness`.
+    #[test]
+    fn style_double_emits_two_parallel_rects() {
+        let dl = build_wrapped(
+            "<p><a>x</a></p>",
+            "a { text-decoration: underline double; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        assert_eq!(rects.len(), 2, "Double = two parallel lines");
+        assert!((rects[0].width - rects[1].width).abs() < 0.01);
+        let t = (16.0_f32 * 0.07).max(1.0);
+        let dy = rects[1].y - rects[0].y;
+        assert!(
+            (dy - 2.0 * t).abs() < 0.05,
+            "expected dy ≈ 2·t = {}, got {dy}",
+            2.0 * t
+        );
+    }
+
+    /// Двойной underline + line-through → 4 rect-а суммарно.
+    #[test]
+    fn double_with_multiple_lines_emits_four_rects() {
+        let dl = build_wrapped(
+            "<p><a>x</a></p>",
+            "a { text-decoration: underline line-through double; }",
+            800.0,
+        );
+        assert_eq!(fill_rects(&dl).len(), 4);
+    }
+
+    /// `Dotted` — серия квадратиков `thickness × thickness`, count > 5
+    /// для текста шириной 80px (10 символов × 8px char-width).
+    #[test]
+    fn style_dotted_emits_square_dots() {
+        let dl = build_wrapped(
+            "<p><a>longertext</a></p>",
+            "a { text-decoration: underline dotted; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        assert!(rects.len() > 5, "got {} dots, expected many", rects.len());
+        // Каждый dot — квадрат width = height = thickness.
+        let t = (16.0_f32 * 0.07).max(1.0);
+        for r in &rects {
+            assert!(
+                (r.width - r.height).abs() < 0.01,
+                "dot not square: {}×{}",
+                r.width,
+                r.height
+            );
+            assert!(
+                (r.width - t).abs() < 0.01,
+                "dot width={}, expected t={t}",
+                r.width
+            );
+        }
+    }
+
+    /// `Dashed` — серия штрихов длиной `2 × thickness`, count > 3.
+    #[test]
+    fn style_dashed_emits_dashes() {
+        let dl = build_wrapped(
+            "<p><a>longertext</a></p>",
+            "a { text-decoration: underline dashed; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        assert!(rects.len() > 3, "got {} dashes", rects.len());
+        let t = (16.0_f32 * 0.07).max(1.0);
+        // Все dashes кроме, возможно, последнего — длиной 2·t.
+        // Высота — thickness.
+        for r in &rects[..rects.len() - 1] {
+            assert!(
+                (r.width - 2.0 * t).abs() < 0.05,
+                "dash width={}, expected {}",
+                r.width,
+                2.0 * t
+            );
+            assert!((r.height - t).abs() < 0.01);
+        }
+    }
+
+    /// `Wavy` в Phase 0 fallback-ит на Solid (renderer-pipeline пока без
+    /// path-примитивов); один rect полной ширины.
+    #[test]
+    fn style_wavy_falls_back_to_solid() {
+        let dl = build_wrapped(
+            "<p><a>x</a></p>",
+            "a { text-decoration: underline wavy; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        assert_eq!(rects.len(), 1, "wavy falls back to single rect");
+        assert!(
+            (rects[0].width - 8.0).abs() < 0.01,
+            "expected full-width fallback, got {}",
+            rects[0].width
+        );
+    }
+
+    /// `text-decoration-thickness: 4px` override-ит default 7%.
+    #[test]
+    fn thickness_length_overrides_default() {
+        let dl = build_wrapped(
+            "<p><a>x</a></p>",
+            "a { text-decoration: underline; text-decoration-thickness: 4px; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        assert_eq!(rects.len(), 1);
+        assert!(
+            (rects[0].height - 4.0).abs() < 0.01,
+            "thickness height={}, expected 4",
+            rects[0].height
+        );
+    }
+
+    /// `text-decoration-thickness: 25%` → 25% от font-size (Phase 0 от
+    /// frag.font_size, не parent — задокументировано в style.rs).
+    #[test]
+    fn thickness_percentage_resolves_against_font_size() {
+        let dl = build_wrapped(
+            "<p><a>x</a></p>",
+            "a { text-decoration: underline; text-decoration-thickness: 25%; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        assert_eq!(rects.len(), 1);
+        assert!(
+            (rects[0].height - 4.0).abs() < 0.01,
+            "expected 0.25·16 = 4, got {}",
+            rects[0].height
+        );
+    }
+
+    /// `text-decoration-thickness: from-font` в Phase 0 — без font-доступа,
+    /// поэтому совпадает с `Auto` (≈ 7% от font-size).
+    #[test]
+    fn thickness_from_font_falls_back_to_auto() {
+        let dl = build_wrapped(
+            "<p><a>x</a></p>",
+            "a { text-decoration: underline; text-decoration-thickness: from-font; }",
+            800.0,
+        );
+        let rects = fill_rects(&dl);
+        assert_eq!(rects.len(), 1);
+        let default = (16.0_f32 * 0.07).max(1.0);
+        assert!(
+            (rects[0].height - default).abs() < 0.01,
+            "height={}, expected ≈ {default}",
+            rects[0].height
+        );
     }
 
     /// Inline-ран переносится: второй DrawText смещён по Y.

@@ -41,7 +41,8 @@ pub use style::{
     OverscrollBehavior, PointerEvents, Position, PositionComponent, ScrollBehavior,
     ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop,
     ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter, ScrollbarWidth, StepPosition,
-    TextAlign, TextDecorationLine, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
+    TextAlign, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
+    TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
     TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFn, UserSelect, Visibility,
     WhiteSpace, WordBreak,
 };
