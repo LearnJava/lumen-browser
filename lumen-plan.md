@@ -157,7 +157,7 @@
 | 1B.2 | ✅ vsync tick-loop 60fps | `paint/src/compositor.rs:277` | — |
 | 1B.3 | ✅ PushBlendMode/PopBlendMode pipeline Phase 0 | `paint/src/renderer.rs:1834` | — |
 | 1B.4 | ✅ off-screen opacity layer rendering | `paint/src/renderer.rs` | 2026-05-19 |
-| 1B.5 | ⬜ GPU texture upload for layer snapshots | `paint/src/renderer.rs` | — |
+| 1B.5 | ✅ GPU texture upload for layer snapshots | `paint/src/renderer.rs` | 2026-05-19 |
 | 2A | ✅ **`[P1+P2]` Painting order traversal** | — | — |
 | 2B | ✅ **`[P2]` Stacking-aware hit testing** | P3 shell input handler | — |
 | 3A | ⬜ **`[P2]` Color management + Display P3/Rec2020** (blocked: P1 1B) | Фотографии с P3-профилем | Только `lumen-paint` |

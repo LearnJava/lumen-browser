@@ -198,6 +198,12 @@ pub enum DisplayCommand {
     PushBlendMode { mode: BlendMode },
     /// Закрывает blend-группу.
     PopBlendMode,
+    /// Рисует ранее загруженный GPU-снимок слоя (см. `Renderer::upload_layer_snapshot`)
+    /// как текстурированный quad в `rect`. UV покрывает весь снимок ([0,0]→[1,1]).
+    /// `alpha` — финальная прозрачность (0.0=прозрачный, 1.0=непрозрачный).
+    /// Если снимок с `id` не зарегистрирован — команда молча игнорируется.
+    /// Используется compositor-ом для повторного использования неизменных слоёв.
+    DrawLayerSnapshot { id: u64, rect: Rect, alpha: f32 },
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
@@ -479,6 +485,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::PopBlendMode => {
                 out.push_str("PopBlendMode\n");
+            }
+            DisplayCommand::DrawLayerSnapshot { id, rect, alpha } => {
+                out.push_str(&format!(
+                    "DrawLayerSnapshot id={id} ({:.2}, {:.2}, {:.2}, {:.2}) alpha={alpha:.3}\n",
+                    rect.x, rect.y, rect.width, rect.height,
+                ));
             }
         }
     }
@@ -2345,6 +2357,7 @@ mod tests {
                 DisplayCommand::PopOpacity => "PopOpacity",
                 DisplayCommand::PushBlendMode { .. } => "PushBlendMode",
                 DisplayCommand::PopBlendMode => "PopBlendMode",
+                DisplayCommand::DrawLayerSnapshot { .. } => "DrawLayerSnapshot",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);

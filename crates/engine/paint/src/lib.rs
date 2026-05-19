@@ -26,7 +26,7 @@ pub use display_list::{
     DisplayCommand, DisplayList,
 };
 pub use hit_test::{hit_test, HitTestResult};
-pub use renderer::{ImageRegisterError, Renderer};
+pub use renderer::{ImageRegisterError, Renderer, SnapshotUploadError};
 
 // ── FontMeasurer ────────────────────────────────────────────────────────────
 
