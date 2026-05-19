@@ -1,4 +1,5 @@
-In progress: —
+In progress: 1B.5 GPU texture upload  branch: gpu-layer-snapshot
+Next step: GpuLayerSnapshot struct + upload_layer_snapshot()  renderer.rs:293
 
 Next: 1B.5 GPU texture upload            lumen-plan.md:161
 
