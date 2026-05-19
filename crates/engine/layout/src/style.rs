@@ -3532,6 +3532,23 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // un-registered custom element (undefined). Когда P3 поднимет
         // registry, проверка станет `built-in || registry.has(name)`.
         PseudoClass::Defined => matches_defined(doc, node),
+        // Fullscreen API §4.2 `:fullscreen` — runtime-only: top-layer
+        // элементов, поднятых через `Element.requestFullscreen()`. Phase 0
+        // без Fullscreen API в shell — всегда `false` (privacy-/UX-safe
+        // default: страница не может имитировать fullscreen-стили
+        // вне реального fullscreen-режима).
+        PseudoClass::Fullscreen => false,
+        // CSS Selectors L4 §16.5.2 `:modal` — `<dialog>` после
+        // `dialog.showModal()` (но не `dialog.show()` non-modal) или
+        // элемент в fullscreen top-layer. Runtime-only: атрибут `open`
+        // не разделяет modal vs non-modal dialog. Phase 0 без dialog
+        // runtime — всегда `false`.
+        PseudoClass::Modal => false,
+        // HTML LS §6.12.2 `:popover-open` — popover в открытом состоянии
+        // после `element.showPopover()` / клика по `popovertarget`.
+        // Runtime-only: атрибут `popover` декларирует тип, но не открытое
+        // состояние. Phase 0 без Popover API runtime — всегда `false`.
+        PseudoClass::PopoverOpen => false,
         PseudoClass::Unsupported(_) => false,
     }
 }
