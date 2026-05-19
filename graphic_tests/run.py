@@ -60,6 +60,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('18', '18-images.html',      5.0,  'images'),
     ('19', '19-object-fit.html',  5.0,  'object-fit'),
     ('20', '20-quirks-bgcolor.html', 5.0, 'quirks-bgcolor'),
+    ('21', '21-border-style.html',   5.0, 'border-style dashed/dotted/double'),
 ]
 
 # --- PNG reader (stdlib only) ---

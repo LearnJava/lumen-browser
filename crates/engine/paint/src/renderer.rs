@@ -1894,6 +1894,29 @@ fn emit_border_side(
             let dot_len = width.max(1.0);
             dash_segments(total, dot_len, dot_len)
         }
+        BorderStyle::Double => {
+            // CSS Backgrounds L3 §4.2: two solid lines ~1/3 width each, gap ~1/3.
+            // Width < 3px: no room for gap, fall back to solid.
+            if width < 3.0 {
+                push_fill_quad(out, side_rect, color);
+                return;
+            }
+            let line = (width / 3.0).max(1.0);
+            let (r1, r2) = if horizontal {
+                (
+                    Rect::new(side_rect.x, side_rect.y, side_rect.width, line),
+                    Rect::new(side_rect.x, side_rect.y + width - line, side_rect.width, line),
+                )
+            } else {
+                (
+                    Rect::new(side_rect.x, side_rect.y, line, side_rect.height),
+                    Rect::new(side_rect.x + width - line, side_rect.y, line, side_rect.height),
+                )
+            };
+            push_fill_quad(out, r1, color);
+            push_fill_quad(out, r2, color);
+            return;
+        }
         BorderStyle::Solid | BorderStyle::None => {
             push_fill_quad(out, side_rect, color);
             return;
@@ -2427,6 +2450,99 @@ mod tests {
         // n=(100+2)/6=17 dashes; used=17*4 + 16*2 = 68+32 = 100; leading=0.
         let segs = dash_segments(100.0, 4.0, 2.0);
         assert_eq!(segs.len(), 17);
+    }
+
+    // ── emit_border_side ──────────────────────────────────────────────────
+
+    fn collect_border_quads(
+        side_rect: Rect,
+        horizontal: bool,
+        width: f32,
+        style: BorderStyle,
+    ) -> Vec<Rect> {
+        let color = [1.0f32; 4];
+        let mut verts: Vec<FillVertex> = Vec::new();
+        emit_border_side(&mut verts, side_rect, horizontal, width, color, style);
+        // Each quad = 6 vertices (2 triangles); reconstruct bounding rects.
+        verts
+            .chunks(6)
+            .map(|v| {
+                let xs = v.iter().map(|p| p.pos[0]);
+                let ys = v.iter().map(|p| p.pos[1]);
+                let x0 = xs.clone().fold(f32::INFINITY, f32::min);
+                let x1 = xs.fold(f32::NEG_INFINITY, f32::max);
+                let y0 = ys.clone().fold(f32::INFINITY, f32::min);
+                let y1 = ys.fold(f32::NEG_INFINITY, f32::max);
+                Rect::new(x0, y0, x1 - x0, y1 - y0)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn emit_border_side_solid_is_single_quad() {
+        let r = Rect::new(10.0, 20.0, 100.0, 6.0);
+        let quads = collect_border_quads(r, true, 6.0, BorderStyle::Solid);
+        assert_eq!(quads.len(), 1);
+        assert_eq!(quads[0], r);
+    }
+
+    #[test]
+    fn emit_border_side_dashed_produces_multiple_quads() {
+        // width=4 → dash=8, gap=4; side 100 wide → several segments.
+        let r = Rect::new(0.0, 0.0, 100.0, 4.0);
+        let quads = collect_border_quads(r, true, 4.0, BorderStyle::Dashed);
+        assert!(quads.len() > 1, "dashed must produce multiple segments");
+        for q in &quads {
+            assert_eq!(q.height, 4.0, "all segments must span full border height");
+        }
+    }
+
+    #[test]
+    fn emit_border_side_dotted_square_segments() {
+        // width=4 → dot=4; horizontal side 40 wide → 5 dots.
+        let r = Rect::new(0.0, 0.0, 40.0, 4.0);
+        let quads = collect_border_quads(r, true, 4.0, BorderStyle::Dotted);
+        assert!(quads.len() > 1, "dotted must produce multiple segments");
+        for q in &quads {
+            assert_eq!(q.height, 4.0);
+        }
+    }
+
+    #[test]
+    fn emit_border_side_double_two_quads_horizontal() {
+        // width=9 → line≈3; two lines at top and bottom of the side_rect.
+        let r = Rect::new(0.0, 0.0, 100.0, 9.0);
+        let quads = collect_border_quads(r, true, 9.0, BorderStyle::Double);
+        assert_eq!(quads.len(), 2, "double = two parallel lines");
+        // First line at top edge.
+        assert!((quads[0].y - 0.0).abs() < 1e-3, "first line at y=0");
+        // Second line at bottom edge.
+        let expected_y2 = 9.0 - (9.0 / 3.0_f32).max(1.0);
+        assert!((quads[1].y - expected_y2).abs() < 1e-3, "second line at bottom");
+        // Both lines span full width.
+        assert_eq!(quads[0].width, 100.0);
+        assert_eq!(quads[1].width, 100.0);
+    }
+
+    #[test]
+    fn emit_border_side_double_thin_fallback_to_solid() {
+        // width < 3 → solid fallback (no room for gap).
+        let r = Rect::new(0.0, 0.0, 100.0, 2.0);
+        let quads = collect_border_quads(r, true, 2.0, BorderStyle::Double);
+        assert_eq!(quads.len(), 1, "width<3 must fall back to single solid quad");
+    }
+
+    #[test]
+    fn emit_border_side_double_vertical() {
+        // Vertical double border (left/right side).
+        let r = Rect::new(0.0, 0.0, 9.0, 100.0);
+        let quads = collect_border_quads(r, false, 9.0, BorderStyle::Double);
+        assert_eq!(quads.len(), 2, "double vertical = two parallel lines");
+        assert!((quads[0].x - 0.0).abs() < 1e-3);
+        let expected_x2 = 9.0 - (9.0 / 3.0_f32).max(1.0);
+        assert!((quads[1].x - expected_x2).abs() < 1e-3);
+        assert_eq!(quads[0].height, 100.0);
+        assert_eq!(quads[1].height, 100.0);
     }
 
     #[test]

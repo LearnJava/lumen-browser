@@ -107,8 +107,9 @@ pub enum DisplayCommand {
     /// `width`). `style` ≠ None / Hidden — иначе emit не происходит.
     /// `color` уже разрешён в конкретный `Color` на emission-стороне
     /// (Auto / CurrentColor резолвится в `style.color`).
-    /// Phase 0: renderer рисует только `Solid` (Dashed / Dotted / Auto
-    /// fallback на Solid — как `DrawBorder` делает с Double).
+    /// Phase 0: renderer рисует `Auto` как Solid (UA focus ring без хвоста).
+    /// `Dashed`/`Dotted` реализованы через `emit_outline_side`. `Double`
+    /// маппится на Solid в `parse_outline_style_opt` (нет отдельного variant-а).
     DrawOutline {
         rect: Rect,
         width: f32,
@@ -335,6 +336,7 @@ fn border_style_short(s: BorderStyle) -> &'static str {
         BorderStyle::Solid => "s",
         BorderStyle::Dashed => "da",
         BorderStyle::Dotted => "do",
+        BorderStyle::Double => "db",
     }
 }
 
