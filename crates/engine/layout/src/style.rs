@@ -5517,6 +5517,15 @@ impl Length {
     pub fn resolve_or_zero(&self, em: f32, cb_width: f32, vp: Size) -> f32 {
         self.resolve(em, Some(cb_width), vp).unwrap_or(0.0)
     }
+
+    /// Извлекает пиксельное значение для уже-разрешённых `Px`-значений
+    /// (после layout/cascade). Non-Px варианты → 0.0.
+    pub fn px(&self) -> f32 {
+        match self {
+            Length::Px(v) => *v,
+            _ => 0.0,
+        }
+    }
 }
 
 /// Парсит CSS-длину: число + опциональная единица (`px`, `em`, `rem`, `%`,

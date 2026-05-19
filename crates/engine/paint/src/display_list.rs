@@ -818,20 +818,20 @@ fn background_clip_rect(b: &LayoutBox) -> Rect {
             (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
         ),
         BackgroundClip::ContentBox => Rect::new(
-            b.rect.x + s.border_left_width + s.padding_left,
-            b.rect.y + s.border_top_width + s.padding_top,
+            b.rect.x + s.border_left_width + s.padding_left.px(),
+            b.rect.y + s.border_top_width + s.padding_top.px(),
             (b.rect.width
                 - s.border_left_width
                 - s.border_right_width
-                - s.padding_left
-                - s.padding_right)
-                .max(0.0),
+                - s.padding_left.px()
+                - s.padding_right.px())
+            .max(0.0),
             (b.rect.height
                 - s.border_top_width
                 - s.border_bottom_width
-                - s.padding_top
-                - s.padding_bottom)
-                .max(0.0),
+                - s.padding_top.px()
+                - s.padding_bottom.px())
+            .max(0.0),
         ),
     }
 }
@@ -1008,7 +1008,7 @@ fn emit_outline(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         width: s.outline_width,
         style: s.outline_style,
         color,
-        offset: s.outline_offset,
+        offset: s.outline_offset.px(),
     });
 }
 
