@@ -3576,6 +3576,8 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         PseudoClass::Current => false,
         PseudoClass::Past => false,
         PseudoClass::Future => false,
+        PseudoClass::InRange => matches_in_range(doc, node) == Some(true),
+        PseudoClass::OutOfRange => matches_in_range(doc, node) == Some(false),
         PseudoClass::Unsupported(_) => false,
     }
 }
@@ -4144,6 +4146,65 @@ fn matches_any_link(doc: &Document, node: NodeId) -> bool {
 
 /// `:target` matcher (CSS Selectors L4 §9.6). Возвращает true, если у элемента
 /// есть `id`-атрибут, равный текущему `Document::target()` (URL fragment без
+/// `:in-range` / `:out-of-range` (CSS Selectors L4 §14.5, HTML5 §4.10.21.4).
+///
+/// Возвращает `Some(true)` если value в [min, max], `Some(false)` если вне,
+/// `None` если у элемента нет range-limitations или нет displayed value.
+/// Phase 0: поддерживаются только `type=number` и `type=range`.
+fn matches_in_range(doc: &Document, node: NodeId) -> Option<bool> {
+    let node_ref = doc.get(node);
+    let NodeData::Element { name, .. } = &node_ref.data else {
+        return None;
+    };
+    if name.local.as_str() != "input" {
+        return None;
+    }
+    let t = input_type_lower(doc, node);
+    let supports_numeric = matches!(t.as_str(), "number" | "range");
+    if !supports_numeric {
+        return None;
+    }
+
+    let min_attr = node_ref.get_attr("min").and_then(parse_html_number);
+    let max_attr = node_ref.get_attr("max").and_then(parse_html_number);
+
+    let (min, max) = match t.as_str() {
+        "range" => (min_attr.unwrap_or(0.0), max_attr.unwrap_or(100.0)),
+        _ => {
+            if min_attr.is_none() && max_attr.is_none() {
+                return None;
+            }
+            (min_attr.unwrap_or(f64::NEG_INFINITY), max_attr.unwrap_or(f64::INFINITY))
+        }
+    };
+
+    let value = match node_ref.get_attr("value").and_then(parse_html_number) {
+        Some(v) => v,
+        None => {
+            if t == "range" {
+                // Spec §4.10.5.1.13: default value = min + (max-min)/2, clamped.
+                let mid = min + (max - min) / 2.0;
+                mid.clamp(min, max)
+            } else {
+                return None;
+            }
+        }
+    };
+
+    Some(value >= min && value <= max)
+}
+
+/// Парсит HTML5 «valid floating-point number» (§2.5.5).
+/// Отбрасывает leading `+`, NaN и ±∞ (не допускаются spec-ом).
+fn parse_html_number(s: &str) -> Option<f64> {
+    let trimmed = s.trim();
+    if trimmed.is_empty() || trimmed.starts_with('+') {
+        return None;
+    }
+    let v: f64 = trimmed.parse().ok()?;
+    if v.is_finite() { Some(v) } else { None }
+}
+
 /// `#`). Comparison case-sensitive — HTML id case-sensitive per HTML LS §3.2.6.
 /// Текстовые узлы и не-element-узлы не матчат.
 fn matches_target(doc: &Document, node: NodeId) -> bool {

@@ -193,6 +193,14 @@ pub enum PseudoClass {
     /// visited-state, эквивалент `:is(:link, :visited)`. Pure DOM-based:
     /// `<a>` / `<area>` / `<link>` с `href`-атрибутом.
     AnyLink,
+    /// `:in-range` (CSS Selectors L4 §14.5, HTML5 §4.10.21.4) — `<input>` с
+    /// range-валидацией (`type=number|range`), чьё текущее значение лежит в
+    /// `[min, max]`. Phase 0: «текущее значение» = `value`-атрибут.
+    InRange,
+    /// `:out-of-range` (CSS Selectors L4 §14.5) — input с range-валидацией,
+    /// чьё значение вне `[min, max]`. Дополняет `:in-range`. Элементы без
+    /// range-limitations не матчат ни одну из двух pseudo.
+    OutOfRange,
     /// `:dir(ltr|rtl)` (CSS Selectors L4 §13.2). Single keyword argument
     /// (`ltr` или `rtl`, ASCII case-insensitive). Матчит элемент с
     /// соответствующей directionality, определяемой через `dir`-атрибут
@@ -2611,6 +2619,8 @@ impl<'a> Parser<'a> {
             "link" => PseudoClass::Link,
             "visited" => PseudoClass::Visited,
             "any-link" => PseudoClass::AnyLink,
+            "in-range" => PseudoClass::InRange,
+            "out-of-range" => PseudoClass::OutOfRange,
             "scope" => PseudoClass::Scope,
             "target" => PseudoClass::Target,
             "target-within" => PseudoClass::TargetWithin,
@@ -3571,6 +3581,8 @@ mod tests {
             ("link", PseudoClass::Link),
             ("visited", PseudoClass::Visited),
             ("any-link", PseudoClass::AnyLink),
+            ("in-range", PseudoClass::InRange),
+            ("out-of-range", PseudoClass::OutOfRange),
             ("scope", PseudoClass::Scope),
             ("target", PseudoClass::Target),
             ("target-within", PseudoClass::TargetWithin),
