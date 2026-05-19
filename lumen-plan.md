@@ -11,6 +11,7 @@
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
 - 🔄 DrawBorder dashed/dotted/double [P2] — border-dash-dot-double — 2026-05-19
+- 🔄 SUBSYSTEMS.md: split per-crate + translate to English [P3] — subsystems-split — 2026-05-19
 
 ## Статус реализации
 

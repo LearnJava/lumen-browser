@@ -387,7 +387,7 @@ A dirty `main` worktree blocks all other sessions — git refuses `checkout main
 
 ## Keep implementation status current
 
-Update `lumen-plan.md`, `SUBSYSTEMS.md`, and `CLAUDE.md` **in the same commit** as the implementation — not separately.
+Update `lumen-plan.md`, the relevant `subsystems/<crate>.md`, and `CLAUDE.md` **in the same commit** as the implementation — not separately.
 
 ### `lumen-plan.md`
 
@@ -399,7 +399,7 @@ After implementation: change ⬜ → ✅ (or 🟡 → ✅). If split — use �
 
 On significant milestones update:
 
-- **[SUBSYSTEMS.md](SUBSYSTEMS.md)** — extend the crate section (added to "Done" / removed from "Deferred" / test count).
+- **[subsystems/\<crate\>.md](subsystems/)** — extend the crate section (added to "Done" / removed from "Deferred" / test count).
 - **`lumen-plan.md` → Roadmap** — remove completed items.
 - **[DECISIONS.md](DECISIONS.md)** — new architectural decision (new dep exception, API approach choice).
 - **CLAUDE.md → "Known gotchas"** — if a gotcha is resolved or a new one is found.
@@ -410,7 +410,7 @@ No manual doc update needed for: typos, formatting, minor refactors without API 
 
 ## Subsystem state
 
-Full per-crate state (scope, done, deferred, invariants) — [SUBSYSTEMS.md](SUBSYSTEMS.md). Update on every plan-item commit.
+Per-crate state (scope, done, deferred, invariants) — [SUBSYSTEMS.md](SUBSYSTEMS.md) (index) → `subsystems/<crate>.md`. Update the relevant crate file on every plan-item commit.
 
 ---
 
@@ -433,7 +433,7 @@ Full list with phases — [lumen-plan.md](lumen-plan.md) §12.
 - **Archives in repo root are gitignored** (`/*.zip`, `/*.tar*`). Downloaded files won't accidentally get committed.
 - **Parallel sessions in the same working tree = disaster.** Two sessions doing `git checkout` of different branches causes git to stash one session's work. Recovery via `git stash pop` is fragile. **Solution: mandatory `git worktree`s** (see Worktree isolation above). If you find yourself on a foreign branch — check `git stash list` before running `git restore .`.
 
-When you discover a non-obvious implementation detail in a specific subsystem, add it to [`SUBSYSTEMS.md`](SUBSYSTEMS.md) under the relevant crate section (in English), not here.
+When you discover a non-obvious implementation detail in a specific subsystem, add it to [`subsystems/<crate>.md`](subsystems/) under the relevant crate section (in English), not here.
 
 ---
 

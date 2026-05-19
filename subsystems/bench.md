@@ -1,0 +1,5 @@
+# lumen-bench ✅ (baseline pipeline measurements)
+
+- **Done:** Standalone binary crate with no third-party dependencies. Runs `decode → parse_html → parse_css → layout → paint::build_display_list` on `samples/page.html` + `samples/page.css` + bundled Inter; prints min / median / mean / p95 / max per phase and TOTAL. `LUMEN_BENCH_ITERS` env var overrides iteration count (default 100). 10 warm-up iterations before measurements. `std::hint::black_box` wraps pipeline results — protection against dead-code elimination in LTO release builds. Run: `cargo run -p lumen-bench --release`.
+- **Why:** before this task the plan's performance targets (cold start <300 ms, RAM <100 MB for empty tab) were slogans without a baseline. Now regressions as functionality grows can be tracked — each phase must stay within its budget.
+- **Baseline (dev profile, samples/page.html 667 B HTML + 300 B CSS, 49 DOM nodes, 7 CSS rules, 18 paint commands, on x86_64 CachyOS):** decode ~2 µs, parse_html ~19 µs, parse_css ~13 µs, layout ~48 µs (dominant), paint ~1 µs, TOTAL ~85 µs. Release build should show similar or better numbers (dev already uses opt-level=3 for deps).
