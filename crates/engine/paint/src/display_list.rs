@@ -188,12 +188,13 @@ pub enum DisplayCommand {
     PushOpacity { alpha: f32 },
     /// Закрывает opacity-группу.
     PopOpacity,
-    /// Sprint 0 P2 stub. Открывает blend-группу с указанным режимом
-    /// смешения (CSS Compositing & Blending L1 §5). Все последующие
-    /// команды до парного `PopBlendMode` композитятся через `mode` поверх
-    /// родительского контекста. `BlendMode::Normal` — no-op (стандарт).
-    /// Phase 0: эмиттер не выпускает, renderer игнорирует — реальный
-    /// blend-pipeline это P2 п.4.
+    /// Открывает blend-группу с указанным режимом смешения
+    /// (CSS Compositing & Blending L1 §5). Все последующие команды до
+    /// парного `PopBlendMode` применяются поверх родительского контекста
+    /// через `mode`. `BlendMode::Normal` — стандартный alpha-over (no-op).
+    /// Phase 0: renderer отслеживает стек через `current_blend_mode()`,
+    /// но использует Normal pipeline для всех режимов; реальный pipeline
+    /// switch — P2 1B.4.
     PushBlendMode { mode: BlendMode },
     /// Закрывает blend-группу.
     PopBlendMode,

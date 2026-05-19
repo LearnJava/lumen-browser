@@ -1,5 +1,4 @@
-In progress: 1B.3 PushBlendMode/PopBlendMode pipeline  branch: blend-mode-pipeline
-Next step: blend_mode_stack + current_blend_mode() в renderer.rs:1344
+In progress: —
 
 Next: 1B.4 off-screen opacity rendering    lumen-plan.md:160
 
