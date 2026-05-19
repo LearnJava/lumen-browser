@@ -1,9 +1,9 @@
-In progress: —
+In progress: 1A.3 quirks test coverage  branch: quirks-test-coverage
+Next step: commit integration tests for bgcolor/text hints  lib.rs:8449
 
-Next: 1A.3 quirks test coverage   lumen-plan.md:127
+Next: 1B.1 Length type cascade   lumen-plan.md:130
 
 Queue:
-1A.3 quirks test coverage          lumen-plan.md:127
 1B.1 Length type cascade           lumen-plan.md:130
 1B.2 Color type cascade            lumen-plan.md:131
 4B.1 flex-direction + flex-wrap    lumen-plan.md:138
