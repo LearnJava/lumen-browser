@@ -3549,6 +3549,15 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // Runtime-only: атрибут `popover` декларирует тип, но не открытое
         // состояние. Phase 0 без Popover API runtime — всегда `false`.
         PseudoClass::PopoverOpen => false,
+        // CSS Selectors L4 §11.4 time-dimensional pseudo-classes —
+        // `:current` / `:past` / `:future` matches на active / elapsed /
+        // upcoming моменты в timed-text потоке (WebVTT cue rendering при
+        // воспроизведении видео/аудио). Runtime-only: нужна синхронизация с
+        // media timeline и cue lifecycle. Phase 0 без timed-text runtime
+        // все три всегда `false`.
+        PseudoClass::Current => false,
+        PseudoClass::Past => false,
+        PseudoClass::Future => false,
         PseudoClass::Unsupported(_) => false,
     }
 }

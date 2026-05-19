@@ -266,6 +266,20 @@ pub enum PseudoClass {
     /// определяет, что элемент **может быть** popover-ом, но открытое
     /// состояние — runtime-only.
     PopoverOpen,
+    /// `:current` (CSS Selectors L4 §11.4.1) — element, представляющий
+    /// текущий «момент» в timed-text потоке (например, активный WebVTT cue
+    /// при видео-воспроизведении). Phase 0 без timed-text runtime — всегда
+    /// `false`. Реальная реализация требует синхронизации с media timeline
+    /// и WebVTT cue lifecycle (P3, Phase 3+).
+    Current,
+    /// `:past` (CSS Selectors L4 §11.4.2) — element, представляющий уже
+    /// прошедший момент в timed-text потоке (предшествует `:current`).
+    /// Phase 0 без timed-text runtime — всегда `false`.
+    Past,
+    /// `:future` (CSS Selectors L4 §11.4.3) — element, представляющий
+    /// ещё-не-наступивший момент в timed-text потоке (следует за `:current`).
+    /// Phase 0 без timed-text runtime — всегда `false`.
+    Future,
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
@@ -2604,6 +2618,9 @@ impl<'a> Parser<'a> {
             "fullscreen" => PseudoClass::Fullscreen,
             "modal" => PseudoClass::Modal,
             "popover-open" => PseudoClass::PopoverOpen,
+            "current" => PseudoClass::Current,
+            "past" => PseudoClass::Past,
+            "future" => PseudoClass::Future,
             _ => PseudoClass::Unsupported(name),
         };
         Some(SimpleSelector::PseudoClass(pc))
@@ -3561,6 +3578,9 @@ mod tests {
             ("fullscreen", PseudoClass::Fullscreen),
             ("modal", PseudoClass::Modal),
             ("popover-open", PseudoClass::PopoverOpen),
+            ("current", PseudoClass::Current),
+            ("past", PseudoClass::Past),
+            ("future", PseudoClass::Future),
         ];
         for (name, expected) in cases {
             let s = parse(&format!(":{name} {{}}"));

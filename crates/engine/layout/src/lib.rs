@@ -7923,4 +7923,75 @@ mod tests {
         );
         assert_eq!(c.r, 255);
     }
+
+    // ──────────────── :current / :past / :future (CSS Selectors L4 §11.4) ────────────────
+
+    /// `:current` (§11.4.1) — timed-text «active cue». Phase 0 без timed-text
+    /// runtime никакой элемент не считается current, правило не применяется.
+    #[test]
+    fn current_pseudo_never_matches_in_phase_0() {
+        let c = element_color(
+            "<p>x</p>",
+            "p:current { color: red; }",
+            "p",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    /// `:past` (§11.4.2) — Phase 0 timed-text без runtime → always false.
+    #[test]
+    fn past_pseudo_never_matches_in_phase_0() {
+        let c = element_color(
+            "<p>x</p>",
+            "p:past { color: red; }",
+            "p",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    /// `:future` (§11.4.3) — Phase 0 timed-text без runtime → always false.
+    #[test]
+    fn future_pseudo_never_matches_in_phase_0() {
+        let c = element_color(
+            "<p>x</p>",
+            "p:future { color: red; }",
+            "p",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    /// Time-dim pseudo-classes specificity = class-level (0,1,0). Проверяем,
+    /// что `:not(:current)` матчит все элементы (классическая FOUC/initial-
+    /// state idiom — когда timed-text runtime появится, правило сбросится).
+    #[test]
+    fn not_current_matches_all_elements_in_phase_0() {
+        let c = element_color(
+            "<p>x</p>",
+            "p:not(:current) { color: red; }",
+            "p",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    /// То же для `:not(:past)`.
+    #[test]
+    fn not_past_matches_all_elements_in_phase_0() {
+        let c = element_color(
+            "<p>x</p>",
+            "p:not(:past) { color: red; }",
+            "p",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    /// То же для `:not(:future)`.
+    #[test]
+    fn not_future_matches_all_elements_in_phase_0() {
+        let c = element_color(
+            "<p>x</p>",
+            "p:not(:future) { color: red; }",
+            "p",
+        );
+        assert_eq!(c.r, 255);
+    }
 }
