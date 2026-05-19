@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-_(нет активных резерваций)_
+- 🔄 smooth-scroll для keyboard/wheel/page (rAF-driven анимация scroll_y) [P3] — smooth-scroll — 2026-05-19
 
 ## Статус реализации
 
