@@ -1,6 +1,6 @@
 In progress: —
 
-Next: 1A.2 IE7 line-height quirk   lumen-plan.md:126
+Next: 1A.3 quirks test coverage   lumen-plan.md:127
 
 Queue:
 1A.3 quirks test coverage          lumen-plan.md:127
@@ -17,4 +17,4 @@ Queue:
 5.4  word_boundaries               lumen-plan.md:147
 5.5  bidi_runs                     lumen-plan.md:148
 
-Recent: unitless-length-quirk 2026-05-19
+Recent: ie7-line-height-quirk 2026-05-19

@@ -4,7 +4,7 @@ Block rect=(0.00, 0.00, 800.00, 78.40)
       seg[0] "before"
       line[0]:
         frag[0] x=0.00 "before"
-  Image rect=(0.00, 19.20, 100.00, 40.00) src="logo.png" alt="Lumen logo" w=100.00 h=40.00
+  Image rect=(0.00, 19.20, 100.00, 40.00) src="logo.png" alt="Lumen logo" w=100.00 h=40.00 lh=1.00
   Block rect=(0.00, 59.20, 800.00, 19.20)
     InlineRun rect=(0.00, 59.20, 800.00, 19.20)
       seg[0] "after"

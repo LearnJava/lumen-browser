@@ -123,7 +123,7 @@
 |---|---|---|---|
 | 1A | 🟡 **`[P1]` Quirks-mode application** | Половина legacy-сайтов | — |
 | 1A.1 | ✅ unitless length quirk | `layout/src/style.rs:2945` | — |
-| 1A.2 | ⬜ IE7 line-height quirk | `layout/src/style.rs:4925` | — |
+| 1A.2 | ✅ IE7 line-height quirk | `layout/src/style.rs:5013` | — |
 | 1A.3 | ⬜ quirks test coverage | `layout/src/lib.rs:7550` | — |
 | 1B | ⬜ **`[P1]` Типизированные `Length`/`Color`** | P2 п.3A; P3 CSSOM | — |
 | 1B.1 | ⬜ Length type через все декларации каскада | `layout/src/style.rs:5069` | — |
@@ -325,7 +325,9 @@
 
 - **`unitless-length-quirk`** (CSS Quirks Mode §3.3): `parse_length_q(s, is_quirks)` — в quirks-mode unitless non-zero число принимается как px; в standards-mode отклоняется (кроме `0`). `parse_length(s)` → `parse_length_q(s, true)` для обратной совместимости. Все вызовы в каскаде (`width`/`height`/`margin`/`padding`/`border-*-width`/`border-radius`/`font-size`/`text-indent`/`letter-spacing`/`word-spacing`/`outline-offset`/`vertical-align`) обновлены. 4 unit-теста.
 
-**Осталось:** table cell width quirk (§4.1), IE7 line-height quirk для replaced (§3.2).
+- **`ie7-line-height-quirk`** (CSS Quirks Mode §3.2): `apply_quirks_line_height` в `compute_style` — в quirks-mode replaced-элементы (`img`/`video`/`canvas`/`embed`/`object`/`iframe`/`input`/`textarea`/`select`/`audio`) получают UA-правило `line-height: 1`, блокирующее наследование «normal» и зазор под `<img>` (как IE7). Author CSS поверх — выигрывает. 5 unit-тестов + обновлён snapshot `img_replaced_element`.
+
+**Осталось:** table cell width quirk (§4.1).
 
 #### 2A — Stacking contexts impl
 

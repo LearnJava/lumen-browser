@@ -2936,6 +2936,8 @@ pub fn compute_style(
     // цвет) рендерились с дефолтным шрифтом таблицы, как в IE/Netscape.
     // В Standards / LimitedQuirks не применяется.
     apply_quirks_table_reset(doc, node, &mut style);
+    // CSS Quirks Mode §3.2: replaced-элементы получают line-height: 1 как UA-правило.
+    apply_quirks_line_height(doc, node, &mut style);
 
     // HTML presentational hints (HTML5 §10): для `<img>` атрибуты
     // `width`/`height` задают начальные значения соответствующих CSS-свойств.
@@ -5004,6 +5006,25 @@ fn apply_quirks_table_reset(doc: &Document, node: NodeId, style: &mut ComputedSt
     style.color = Color::BLACK;
     style.text_align = TextAlign::Left;
     style.white_space = WhiteSpace::Normal;
+}
+
+/// CSS Quirks Mode §3.2: в quirks-mode replaced-элементы получают UA-правило
+/// `line-height: 1`, которое блокирует наследование «normal» и убирает зазор
+/// под `<img>` в inline-контексте (так делал IE7). Author CSS поверх — выигрывает.
+fn apply_quirks_line_height(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    if doc.mode() != DocumentMode::Quirks {
+        return;
+    }
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if matches!(
+        name.local.as_str(),
+        "img" | "video" | "canvas" | "embed" | "object"
+            | "iframe" | "input" | "textarea" | "select" | "audio"
+    ) {
+        style.line_height = 1.0;
+    }
 }
 
 /// UA stylesheet для font-weight: `<b>`, `<strong>`, `<th>`, `<h1>`–`<h6>`
@@ -10838,6 +10859,66 @@ mod tests {
         assert_eq!(parse_length_q("10px", false), Some(Length::Px(10.0)));
         assert_eq!(parse_length_q("2em", false), Some(Length::Em(2.0)));
         assert_eq!(parse_length_q("50%", false), Some(Length::Percent(50.0)));
+    }
+
+    // ── IE7 line-height quirk (CSS Quirks Mode §3.2) ─────────────────────
+
+    #[test]
+    fn ie7_line_height_quirk_img_gets_1_in_quirks_mode() {
+        // HTML без DOCTYPE → quirks mode; <img> должен получить line-height: 1.
+        let s = cascade_at("<img>", "", &[0]);
+        assert!(
+            (s.line_height - 1.0).abs() < f32::EPSILON,
+            "quirks <img> line_height={} (ожидалось 1.0)",
+            s.line_height
+        );
+    }
+
+    #[test]
+    fn ie7_line_height_quirk_img_not_applied_in_standards_mode() {
+        // С <!DOCTYPE html> → standards mode; line-height должен остаться normal (1.2).
+        let s = cascade_at("<!DOCTYPE html><img>", "", &[0]);
+        assert!(
+            (s.line_height - 1.2).abs() < f32::EPSILON,
+            "standards <img> line_height={} (ожидалось 1.2)",
+            s.line_height
+        );
+    }
+
+    #[test]
+    fn ie7_line_height_quirk_author_css_overrides() {
+        // Author CSS побеждает UA-правило quirk.
+        let s = cascade_at("<img>", "img { line-height: 2; }", &[0]);
+        assert!(
+            (s.line_height - 2.0).abs() < f32::EPSILON,
+            "quirks <img> с author CSS line_height={} (ожидалось 2.0)",
+            s.line_height
+        );
+    }
+
+    #[test]
+    fn ie7_line_height_quirk_other_replaced_elements() {
+        // Quirk применяется ко всем replaced-элементам.
+        for tag in &["video", "canvas", "embed", "iframe", "input", "textarea", "select"] {
+            let html = format!("<{tag}>");
+            let s = cascade_at(&html, "", &[0]);
+            assert!(
+                (s.line_height - 1.0).abs() < f32::EPSILON,
+                "quirks <{tag}> line_height={} (ожидалось 1.0)",
+                s.line_height
+            );
+        }
+    }
+
+    #[test]
+    fn ie7_line_height_quirk_not_applied_to_block_div() {
+        // <div> — не replaced element; quirk не применяется.
+        let s = cascade_at("<div></div>", "", &[0]);
+        assert!(
+            (s.line_height - 1.2).abs() < f32::EPSILON,
+            "quirks <div> line_height={} (ожидалось 1.2)",
+            s.line_height
+        );
     }
 
     /// Тестовый viewport: квадратный, чтобы vh == vw, vmin == vmax.
