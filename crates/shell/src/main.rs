@@ -28,7 +28,7 @@ use std::sync::Arc;
 use lumen_core::event::Event;
 use lumen_core::ext::EventSink;
 use lumen_core::geom::Size;
-use lumen_dom::{Document, NodeData, NodeId, check_form_gate};
+use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
 use lumen_layout::LayoutBox;
 use lumen_paint::{DisplayList, Renderer};
 use winit::application::ApplicationHandler;
@@ -663,6 +663,9 @@ fn parse_and_layout(
 
     // Гейт отправки форм: Phase 0 — top-level документ не sandboxed.
     check_form_gate(&doc, lumen_core::SandboxFlags::empty());
+
+    // Гейт навигации: Phase 0 — top-level документ не sandboxed.
+    check_navigation_gate(&doc, lumen_core::SandboxFlags::empty());
 
     // Fetch + decode <img src>. Должно идти ДО layout, потому что intrinsic
     // dimensions из декодированного изображения проставляются как HTML
@@ -2261,5 +2264,31 @@ mod tests {
         );
         let count = run_scripts(&doc, lumen_core::SandboxFlags::empty(), &lumen_core::NullJsRuntime);
         assert_eq!(count, 0);
+    }
+
+    // ── navigation gate ──────────────────────────────────────────────────────
+
+    #[test]
+    fn navigation_gate_blocked_by_sandbox_returns_count() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><a href="/page1">link</a><a href="/page2">link2</a></body></html>"#,
+        );
+        assert_eq!(check_navigation_gate(&doc, lumen_core::SandboxFlags::NAVIGATION), 2);
+    }
+
+    #[test]
+    fn navigation_gate_allowed_returns_zero() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><a href="/page1">link</a></body></html>"#,
+        );
+        assert_eq!(check_navigation_gate(&doc, lumen_core::SandboxFlags::empty()), 0);
+    }
+
+    #[test]
+    fn navigation_gate_no_anchors_returns_zero() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><p>no links</p></body></html>"#,
+        );
+        assert_eq!(check_navigation_gate(&doc, lumen_core::SandboxFlags::NAVIGATION), 0);
     }
 }
