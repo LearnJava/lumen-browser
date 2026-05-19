@@ -44,7 +44,12 @@
 //!   trees, чтобы драматически не менять сигнатуру при подключении реального
 //!   compositor pipeline.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
+use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 use lumen_core::geom::Rect;
 use lumen_layout::{PropertyTrees, StackingContextId};
@@ -431,6 +436,69 @@ impl ThreadedCompositorHandle {
     }
 }
 
+// ---------------------------------------------------------------------------
+// CompositorThread — реальный OS-поток с tick-loop (P2 1B.1)
+// ---------------------------------------------------------------------------
+
+/// Интервал опроса pending в Phase 0 (до vsync-интеграции в P2 1B.2).
+/// ~16 ms ≈ 60 fps; заменится condvar/vsync-сигналом в 1B.2.
+const COMPOSITOR_POLL_MS: u64 = 16;
+
+/// Реальный compositor thread: отдельный OS-поток, который в цикле читает
+/// pending из shared state и продвигает его в active.
+///
+/// Жизненный цикл:
+/// - `CompositorThread::spawn(handle)` — запускает поток, возвращает owner.
+/// - Пока owner живёт — поток работает.
+/// - `CompositorThread::shutdown()` — выставляет shutdown-флаг и join-ит поток.
+/// - Drop без явного `shutdown()` — выставляет флаг, но НЕ join-ит.
+///   Join в Drop — блокирующая операция, непредсказуема при раскрутке стека.
+///
+/// Phase 0: tick-loop = poll + sleep(16 ms). В P2 1B.2 sleep заменится
+/// на wakeup по vsync-сигналу.
+pub struct CompositorThread {
+    shutdown: Arc<AtomicBool>,
+    join_handle: Option<JoinHandle<()>>,
+}
+
+impl CompositorThread {
+    /// Запускает compositor thread. `handle` — разделяемый доступ к state
+    /// того же `ThreadedCompositor`, которым владеет main thread.
+    pub fn spawn(handle: ThreadedCompositorHandle) -> Self {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let shutdown_flag = Arc::clone(&shutdown);
+        let join_handle = thread::spawn(move || {
+            compositor_thread_main(handle, shutdown_flag);
+        });
+        Self {
+            shutdown,
+            join_handle: Some(join_handle),
+        }
+    }
+
+    /// Запрашивает завершение потока и блокируется до его выхода.
+    pub fn shutdown(mut self) {
+        self.shutdown.store(true, Ordering::Relaxed);
+        if let Some(h) = self.join_handle.take() {
+            let _ = h.join();
+        }
+    }
+}
+
+impl Drop for CompositorThread {
+    fn drop(&mut self) {
+        // Сигнализируем выход, но не join-им — Drop не место для блокировки.
+        self.shutdown.store(true, Ordering::Relaxed);
+    }
+}
+
+fn compositor_thread_main(handle: ThreadedCompositorHandle, shutdown: Arc<AtomicBool>) {
+    while !shutdown.load(Ordering::Relaxed) {
+        handle.flush_pending();
+        thread::sleep(Duration::from_millis(COMPOSITOR_POLL_MS));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -732,5 +800,45 @@ mod tests {
         let active_bbox = handle.active_tree().unwrap().layer(0).unwrap().bbox();
         // bbox принадлежит одному из commit-ов (валидные значения 10..14).
         assert!(active_bbox.width >= 10.0 && active_bbox.width <= 13.0);
+    }
+
+    // --- CompositorThread: реальный OS-поток ---
+
+    #[test]
+    fn compositor_thread_flushes_pending_asynchronously() {
+        use std::time::{Duration, Instant};
+
+        let mut owner = ThreadedCompositor::new();
+        let handle = owner.handle();
+        let ct = CompositorThread::spawn(handle);
+
+        let bbox = Rect::new(0.0, 0.0, 256.0, 128.0);
+        owner.commit(
+            Arc::new(PropertyTrees::empty()),
+            Arc::new(BasicLayerTree::single_layer(bbox, sample_commands())),
+        );
+
+        // Поток flush-ит раз в ~16 мс; ждём не более 200 мс.
+        let deadline = Instant::now() + Duration::from_millis(200);
+        loop {
+            if owner.active_tree().is_some() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "compositor thread не flush-нул за 200 мс");
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        let active = owner.active_tree().unwrap();
+        assert_eq!(active.layer(0).unwrap().bbox(), bbox);
+        ct.shutdown();
+    }
+
+    #[test]
+    fn compositor_thread_shutdown_is_clean() {
+        let owner = ThreadedCompositor::new();
+        let handle = owner.handle();
+        let ct = CompositorThread::spawn(handle);
+        // shutdown() должен вернуться без паники или дедлока.
+        ct.shutdown();
     }
 }
