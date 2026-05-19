@@ -1,6 +1,7 @@
-In progress: —
+In progress: 1B.2 vsync tick-loop 60fps  branch: vsync-tick-loop
+Next step: VsyncNotifier condvar + notify в commit  paint/src/compositor.rs:443
 
-Next: 1B.2 vsync tick-loop 60fps         lumen-plan.md:158
+Next: 1B.3 PushBlendMode/PopBlendMode    lumen-plan.md:159
 
 Queue:
 1B.3 PushBlendMode/PopBlendMode    lumen-plan.md:159
