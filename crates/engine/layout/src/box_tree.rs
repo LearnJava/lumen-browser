@@ -12,7 +12,7 @@ use lumen_core::geom::{Rect, Size};
 use lumen_css_parser::Stylesheet;
 use lumen_dom::{Document, NodeData, NodeId};
 
-use crate::style::{compute_style, BoxSizing, ComputedStyle, Display, TextAlign};
+use crate::style::{compute_style, BackgroundImage, BoxSizing, ComputedStyle, Display, TextAlign};
 use crate::TextMeasurer;
 
 /// HTML-имя элемента `<img>` для распознавания replaced-боксов в layout.
@@ -85,6 +85,7 @@ pub enum BoxKind {
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let root_style = ComputedStyle::root();
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
+    propagate_canvas_background(doc, &mut root);
     lay_out(&mut root, 0.0, 0.0, viewport.width, None);
     root
 }
@@ -97,8 +98,70 @@ pub fn layout_measured(
 ) -> LayoutBox {
     let root_style = ComputedStyle::root();
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
+    propagate_canvas_background(doc, &mut root);
     lay_out(&mut root, 0.0, 0.0, viewport.width, Some(measurer));
     root
+}
+
+/// CSS Backgrounds L3 §2.11.2 — «The Canvas Background and the Root Element»:
+/// если у root-элемента (`<html>`) нет собственного фона
+/// (`background-color: transparent` И `background-image: none`), фон
+/// `<body>` пропагируется на root box, а у `<body>` обнуляется. Это
+/// покрывает legacy-страницы `body { background: red }`, где иначе фон
+/// рисуется только в пределах body box-а и не достигает viewport-а
+/// сверху / снизу.
+///
+/// Phase 0: переносим только два longhand-а — `background-color` и
+/// `background-image`. Остальные `background-*` longhand-ы у body без
+/// image не имеют визуального эффекта и сейчас не propagated; при
+/// добавлении реального paint pattern fill-а их тоже нужно будет
+/// перенести.
+///
+/// Structure: `doc.root()` — Document-узел; его ребёнок — `<html>`
+/// element. Body — прямой ребёнок `<html>`. SVG / MathML root-ы пока не
+/// учитываются (spec упоминает их отдельно).
+fn propagate_canvas_background(doc: &Document, root: &mut LayoutBox) {
+    let html_idx = root
+        .children
+        .iter()
+        .position(|c| is_html_element_named(doc, c.node, "html"));
+    let Some(html_idx) = html_idx else {
+        return;
+    };
+
+    let html_box = &mut root.children[html_idx];
+    let html_has_bg = html_box.style.background_color.is_some()
+        || !matches!(html_box.style.background_image, BackgroundImage::None);
+    if html_has_bg {
+        return;
+    }
+
+    let body_idx = html_box
+        .children
+        .iter()
+        .position(|c| is_html_element_named(doc, c.node, "body"));
+    let Some(body_idx) = body_idx else {
+        return;
+    };
+
+    let body = &mut html_box.children[body_idx];
+    let body_has_bg = body.style.background_color.is_some()
+        || !matches!(body.style.background_image, BackgroundImage::None);
+    if !body_has_bg {
+        return;
+    }
+
+    let bg_color = body.style.background_color.take();
+    let bg_image = std::mem::replace(&mut body.style.background_image, BackgroundImage::None);
+    html_box.style.background_color = bg_color;
+    html_box.style.background_image = bg_image;
+}
+
+fn is_html_element_named(doc: &Document, id: NodeId, want: &str) -> bool {
+    matches!(
+        doc.get(id).element_name(),
+        Some(q) if q.local.eq_ignore_ascii_case(want)
+    )
 }
 
 /// Является ли DOM-узел inline-контентом (non-whitespace текст или inline-элемент).

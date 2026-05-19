@@ -17,6 +17,7 @@
 
 mod find;
 mod runtime;
+mod scroll_anim;
 mod scrollbar;
 
 use std::error::Error;
@@ -60,7 +61,7 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorIcon, Window, WindowId};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -116,6 +117,8 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
         content_height,
         cursor_position: None,
         scroll_drag: None,
+        scroll_anim: None,
+        last_cursor_icon: None,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -821,6 +824,15 @@ struct Lumen {
     /// начала drag-а — это даёт «закреплённый под пальцем» thumb (стандартный
     /// scrollbar UX).
     scroll_drag: Option<scrollbar::ScrollDrag>,
+    /// Активная smooth-scroll анимация для keyboard / wheel / page-jump /
+    /// find-scroll-to-match. `None` — `scroll_y` стационарен или меняется
+    /// инстантно (drag, reload). При live-анимации `RedrawRequested` тикает
+    /// её через `advance_scroll_anim` и просит ещё один redraw до завершения.
+    scroll_anim: Option<scroll_anim::ScrollAnim>,
+    /// Последний выставленный cursor icon — чтобы при каждом CursorMoved (а это
+    /// сотни событий в секунду при активном движении мыши) не дёргать
+    /// `Window::set_cursor` напрасно. `None` — ещё не выставляли (init).
+    last_cursor_icon: Option<CursorIcon>,
 }
 
 impl Lumen {
@@ -846,6 +858,9 @@ impl Lumen {
                 // Любой активный drag прерывается (content_height другой,
                 // thumb-геометрия пересчитана с нуля).
                 self.scroll_drag = None;
+                // Активная smooth-scroll анимация старой страницы тоже не
+                // имеет смысла — таргет был на старом content_height.
+                self.scroll_anim = None;
                 if let Some(r) = self.renderer.as_mut() {
                     // Старая GPU-cache картинок относится к предыдущей странице
                     // (даже если src совпадает, content мог измениться). Чистим
@@ -987,6 +1002,7 @@ impl ApplicationHandler for Lumen {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_position = Some(position);
+                self.update_cursor_icon();
                 // Активный drag — пересчитать scroll по новой позиции.
                 if let Some(drag) = self.scroll_drag {
                     let dpr = self
@@ -1047,17 +1063,22 @@ impl ApplicationHandler for Lumen {
                         }
                         scrollbar::TrackClick::Above => {
                             // Клик по track выше thumb-а — прыжок на страницу вверх.
-                            self.scroll_by(-page_step(vh));
+                            self.scroll_by_smooth(-page_step(vh));
                         }
                         scrollbar::TrackClick::Below => {
                             // Клик по track ниже thumb-а — прыжок на страницу вниз.
-                            self.scroll_by(page_step(vh));
+                            self.scroll_by_smooth(page_step(vh));
                         }
                         scrollbar::TrackClick::None => {}
                     }
                 } else {
                     // Released — завершаем drag (если он был).
                     self.scroll_drag = None;
+                    // Курсор был «зафиксирован» как Pointer пока тянули
+                    // thumb; теперь пересчитаем по hover-точке текущего
+                    // положения курсора (CursorMoved-event на release сам
+                    // не приходит, поэтому делаем вручную).
+                    self.update_cursor_icon();
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1077,7 +1098,7 @@ impl ApplicationHandler for Lumen {
                     MouseScrollDelta::LineDelta(_, lines) => -lines * 40.0,
                     MouseScrollDelta::PixelDelta(p) => -(p.y as f32) / dpr.max(1e-6),
                 };
-                self.scroll_by(dy_css);
+                self.scroll_by_smooth(dy_css);
             }
             WindowEvent::RedrawRequested => {
                 // HTML §8.1.5.1 «Update the rendering»: перед собственно
@@ -1087,6 +1108,14 @@ impl ApplicationHandler for Lumen {
                 let timestamp_ms =
                     self.epoch.elapsed().as_secs_f64() * 1000.0;
                 self.runtime.run_rendering_step(timestamp_ms);
+
+                // Тик smooth-scroll-анимации. Делаем ДО построения display-list-а,
+                // чтобы page-полоса смещалась уже на новый `scroll_y`. Если
+                // анимация ещё не закончилась — просим следующий redraw, чтобы
+                // тикнуть на следующем кадре (rAF-driven update loop).
+                if self.advance_scroll_anim() {
+                    self.request_redraw();
+                }
 
                 // Page-полоса: исходный display list + highlight-FillRect-ы
                 // перед своими DrawText (когда find открыт). Прокручивается.
@@ -1186,18 +1215,18 @@ impl Lumen {
                 self.find.open();
                 self.request_redraw();
             }
-            KeyCommand::ScrollLineDown => self.scroll_by(LINE_STEP_CSS_PX),
-            KeyCommand::ScrollLineUp => self.scroll_by(-LINE_STEP_CSS_PX),
+            KeyCommand::ScrollLineDown => self.scroll_by_smooth(LINE_STEP_CSS_PX),
+            KeyCommand::ScrollLineUp => self.scroll_by_smooth(-LINE_STEP_CSS_PX),
             KeyCommand::ScrollPageDown => {
                 let vh = self.viewport_height_css();
-                self.scroll_by(page_step(vh));
+                self.scroll_by_smooth(page_step(vh));
             }
             KeyCommand::ScrollPageUp => {
                 let vh = self.viewport_height_css();
-                self.scroll_by(-page_step(vh));
+                self.scroll_by_smooth(-page_step(vh));
             }
-            KeyCommand::ScrollHome => self.scroll_to(0.0),
-            KeyCommand::ScrollEnd => self.scroll_to(f32::INFINITY),
+            KeyCommand::ScrollHome => self.start_smooth_scroll(0.0),
+            KeyCommand::ScrollEnd => self.start_smooth_scroll(f32::INFINITY),
         }
     }
 
@@ -1261,7 +1290,7 @@ impl Lumen {
         };
         let vh = self.viewport_height_css();
         if let Some(target) = find::scroll_to_match(m.rect, vh, self.scroll_y) {
-            self.scroll_to(target);
+            self.start_smooth_scroll(target);
         }
     }
 
@@ -1304,21 +1333,97 @@ impl Lumen {
         (self.content_height - self.viewport_height_css()).max(0.0)
     }
 
-    /// Сдвинуть скролл на относительную дельту в CSS px (положительная — вниз).
-    /// Кламп + request_redraw на изменении.
-    fn scroll_by(&mut self, delta: f32) {
-        let target = self.scroll_y + delta;
-        self.scroll_to(target);
-    }
-
     /// Установить scroll_y в абсолютное значение (после clamping-а). `f32::INFINITY`
     /// = «к самому низу», `0.0` = «вверх». Запрашивает redraw только если значение
     /// действительно изменилось — иначе wheel-spam в самом низу не дёргал бы GPU.
+    ///
+    /// Используется для инстант-путей: drag thumb scrollbar-а. Для
+    /// пользовательских scroll-команд (wheel / keys / page-jump / find) —
+    /// `start_smooth_scroll` / `scroll_by_smooth`.
     fn scroll_to(&mut self, target: f32) {
+        // Инстант-путь cancel-ит активную анимацию — мы только что
+        // *приказали* быть в конкретной точке.
+        self.scroll_anim = None;
         let clamped = clamp_scroll(target, self.max_scroll());
         if (clamped - self.scroll_y).abs() > f32::EPSILON {
             self.scroll_y = clamped;
             self.request_redraw();
+        }
+    }
+
+    /// Запустить smooth-scroll к target Y. Cancel-ит активную анимацию.
+    /// Target клампится. Если target == текущему scroll_y — анимация не
+    /// стартует (и текущая сбрасывается).
+    fn start_smooth_scroll(&mut self, target: f32) {
+        let max = self.max_scroll();
+        let target_clamped = clamp_scroll(target, max);
+        if (target_clamped - self.scroll_y).abs() <= f32::EPSILON {
+            self.scroll_anim = None;
+            return;
+        }
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+        self.scroll_anim = Some(scroll_anim::ScrollAnim {
+            start_y: self.scroll_y,
+            target_y: target_clamped,
+            start_time_ms: now_ms,
+        });
+        self.request_redraw();
+    }
+
+    /// Smooth-вариант `scroll_by`. Если уже идёт анимация — delta
+    /// добавляется к её target-у, а не к текущему scroll_y. Это правильная
+    /// семантика для repeat-input (key-repeat, wheel-spam): каждое
+    /// нажатие дописывает delta к точке назначения, а не дёргает анимацию
+    /// в обратную сторону.
+    fn scroll_by_smooth(&mut self, delta: f32) {
+        let base = self.scroll_anim.as_ref().map_or(self.scroll_y, |a| a.target());
+        self.start_smooth_scroll(base + delta);
+    }
+
+    /// Тик анимации перед `Renderer::render`. Если анимация активна —
+    /// обновляет `scroll_y` по out-cubic easing и возвращает `true`,
+    /// сигнализируя caller-у запросить ещё один redraw. Сбрасывает
+    /// `scroll_anim` по завершении.
+    fn advance_scroll_anim(&mut self) -> bool {
+        let Some(anim) = self.scroll_anim else {
+            return false;
+        };
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+        let (y, done) = anim.sample(now_ms);
+        self.scroll_y = clamp_scroll(y, self.max_scroll());
+        if done {
+            self.scroll_anim = None;
+            false
+        } else {
+            true
+        }
+    }
+
+    /// Пересчитать желаемый `CursorIcon` по текущей позиции курсора и
+    /// при изменении вызвать `Window::set_cursor`. CursorMoved может
+    /// дёргаться сотни раз в секунду — `last_cursor_icon` кэширует
+    /// предыдущее значение, чтобы не делать лишний FFI-вызов в winit.
+    fn update_cursor_icon(&mut self) {
+        let (Some(window), Some(renderer), Some(pos)) =
+            (self.window.as_ref(), self.renderer.as_ref(), self.cursor_position)
+        else {
+            return;
+        };
+        let dpr = (renderer.scale_factor() as f32).max(1e-6);
+        let x_css = (pos.x as f32) / dpr;
+        let y_css = (pos.y as f32) / dpr;
+        let hover = scrollbar::classify_track_click(
+            x_css,
+            y_css,
+            self.scroll_y,
+            self.content_height,
+            self.viewport_width_css(),
+            self.viewport_height_css(),
+        );
+        let desired = cursor_icon_for_hover(hover, self.scroll_drag.is_some());
+        if self.last_cursor_icon != Some(desired) {
+            window.set_cursor(desired);
+            self.last_cursor_icon = Some(desired);
         }
     }
 
@@ -1362,6 +1467,24 @@ const IDLE_BUDGET_MS: f64 = 10.0;
 /// строку из вида, читать длинные тексты комфортнее.
 fn page_step(viewport_height: f32) -> f32 {
     viewport_height * 0.9
+}
+
+/// Pure-fn: какой `CursorIcon` показать по результату hit-теста scrollbar-а
+/// и флагу активного drag-а. `Pointer` сигналит «здесь интерактив»:
+/// - drag активен → `Pointer` независимо от текущей точки (винит шлёт
+///   CursorMoved за пределами окна тоже, и cursor должен «прилипнуть»);
+/// - hover thumb → `Pointer`;
+/// - hover track выше/ниже thumb-а или клик мимо → `Default` (track-click
+///   тоже clickable, но cursor-change на пустом track-е был бы шумным —
+///   стандарт всех браузеров).
+fn cursor_icon_for_hover(hover: scrollbar::TrackClick, drag_active: bool) -> CursorIcon {
+    if drag_active {
+        return CursorIcon::Pointer;
+    }
+    match hover {
+        scrollbar::TrackClick::Thumb => CursorIcon::Pointer,
+        _ => CursorIcon::Default,
+    }
 }
 
 /// Кламп scroll_y в `[0, max]`. NaN-input → 0 (защита от arithmetic errors).
@@ -1851,6 +1974,55 @@ mod tests {
     #[test]
     fn clamp_scroll_nan_defaults_to_zero() {
         assert_eq!(clamp_scroll(f32::NAN, 100.0), 0.0);
+    }
+
+    #[test]
+    fn cursor_icon_thumb_hover_is_pointer() {
+        assert_eq!(
+            cursor_icon_for_hover(scrollbar::TrackClick::Thumb, false),
+            CursorIcon::Pointer
+        );
+    }
+
+    #[test]
+    fn cursor_icon_track_above_is_default() {
+        // Track-click тоже clickable (page-jump), но cursor-change на пустом
+        // track-е был бы шумным — стандарт всех браузеров: только thumb.
+        assert_eq!(
+            cursor_icon_for_hover(scrollbar::TrackClick::Above, false),
+            CursorIcon::Default
+        );
+    }
+
+    #[test]
+    fn cursor_icon_track_below_is_default() {
+        assert_eq!(
+            cursor_icon_for_hover(scrollbar::TrackClick::Below, false),
+            CursorIcon::Default
+        );
+    }
+
+    #[test]
+    fn cursor_icon_off_scrollbar_is_default() {
+        assert_eq!(
+            cursor_icon_for_hover(scrollbar::TrackClick::None, false),
+            CursorIcon::Default
+        );
+    }
+
+    #[test]
+    fn cursor_icon_drag_active_overrides_hover() {
+        // Во время drag-а cursor должен «прилипнуть» к Pointer независимо
+        // от текущей позиции курсора — winit шлёт CursorMoved за пределами
+        // окна, hover-классификатор там вернёт None, но drag-флаг побеждает.
+        assert_eq!(
+            cursor_icon_for_hover(scrollbar::TrackClick::None, true),
+            CursorIcon::Pointer
+        );
+        assert_eq!(
+            cursor_icon_for_hover(scrollbar::TrackClick::Above, true),
+            CursorIcon::Pointer
+        );
     }
 
     #[test]
