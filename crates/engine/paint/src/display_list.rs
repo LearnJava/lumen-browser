@@ -8,9 +8,9 @@
 
 use lumen_core::geom::Rect;
 use lumen_layout::{
-    box_can_own_stacking_context, creates_stacking_context, BackgroundClip, BoxKind, Color,
-    FontStyle, FontWeight, InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode, ObjectFit,
-    ObjectPosition, OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase,
+    box_can_own_stacking_context, creates_stacking_context, BackgroundClip, BorderStyle, BoxKind,
+    Color, FontStyle, FontWeight, InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode,
+    ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase,
     PositionComponent, StackingContextId, StackingTree, TextDecorationStyle,
     TextDecorationThickness, Visibility,
 };
@@ -94,6 +94,11 @@ pub enum DisplayCommand {
         widths: [f32; 4],
         /// Цвета сторон: [top, right, bottom, left].
         colors: [Color; 4],
+        /// Стили сторон: [top, right, bottom, left]. CSS Backgrounds L3 §6.
+        /// `None` обычно фильтруется emit-side через `is_visible()`, в команду
+        /// попадает Solid / Dashed / Dotted (по текущему `BorderStyle` enum).
+        /// Renderer разворачивает Dashed/Dotted в pattern из штрихов / точек.
+        styles: [BorderStyle; 4],
     },
     /// CSS Basic UI L4 §5 — `outline`. Рисуется СНАРУЖИ box-а (в отличие
     /// от border, который часть box-model), не занимает место в layout,
@@ -319,7 +324,20 @@ pub fn fit_image_quad(
 /// Формат (одна команда — одна строка):
 /// - `FillRect (x.xx, y.xx, w.xx, h.xx) #rrggbbaa`
 /// - `DrawBorder (x.xx, y.xx, w.xx, h.xx) w=[t,r,b,l] c=[#top,#right,#bottom,#left]`
+///   плюс `s=[t,r,b,l]` если хоть один стиль ≠ Solid (bw-compat: чистый
+///   Solid-border печатается как раньше, snapshot-ы не ломаются).
 /// - `DrawText (x.xx, y.xx, w.xx, h.xx) "text" fs.xx #rrggbbaa`
+/// Сокращённый префикс `BorderStyle` для snapshot-сериализатора.
+/// None уже фильтруется emit-side, но обрабатываем для устойчивости.
+fn border_style_short(s: BorderStyle) -> &'static str {
+    match s {
+        BorderStyle::None => "n",
+        BorderStyle::Solid => "s",
+        BorderStyle::Dashed => "da",
+        BorderStyle::Dotted => "do",
+    }
+}
+
 pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
     let mut out = String::new();
     for cmd in dl {
@@ -331,12 +349,17 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     color.r, color.g, color.b, color.a,
                 ));
             }
-            DisplayCommand::DrawBorder { rect, widths: [wt, wr, wb, wl], colors: [ct, cr, cb, cl] } => {
+            DisplayCommand::DrawBorder {
+                rect,
+                widths: [wt, wr, wb, wl],
+                colors: [ct, cr, cb, cl],
+                styles: [st, sr, sb, sl],
+            } => {
                 out.push_str(&format!(
                     "DrawBorder ({:.2}, {:.2}, {:.2}, {:.2}) \
                      w=[{:.2},{:.2},{:.2},{:.2}] \
                      c=[#{:02x}{:02x}{:02x}{:02x},#{:02x}{:02x}{:02x}{:02x},\
-                        #{:02x}{:02x}{:02x}{:02x},#{:02x}{:02x}{:02x}{:02x}]\n",
+                        #{:02x}{:02x}{:02x}{:02x},#{:02x}{:02x}{:02x}{:02x}]",
                     rect.x, rect.y, rect.width, rect.height,
                     wt, wr, wb, wl,
                     ct.r, ct.g, ct.b, ct.a,
@@ -344,6 +367,19 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     cb.r, cb.g, cb.b, cb.a,
                     cl.r, cl.g, cl.b, cl.a,
                 ));
+                let any_non_solid = ![*st, *sr, *sb, *sl]
+                    .iter()
+                    .all(|s| matches!(s, BorderStyle::Solid | BorderStyle::None));
+                if any_non_solid {
+                    out.push_str(&format!(
+                        " s=[{},{},{},{}]",
+                        border_style_short(*st),
+                        border_style_short(*sr),
+                        border_style_short(*sb),
+                        border_style_short(*sl),
+                    ));
+                }
+                out.push('\n');
             }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, font_family, font_weight, font_style,
@@ -1039,6 +1075,12 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         s.border_bottom_color.unwrap_or(cur),
                         s.border_left_color.unwrap_or(cur),
                     ],
+                    styles: [
+                        s.border_top_style,
+                        s.border_right_style,
+                        s.border_bottom_style,
+                        s.border_left_style,
+                    ],
                 });
             }
             emit_outline(b, out);
@@ -1111,6 +1153,12 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         s.border_bottom_color.unwrap_or(cur),
                         s.border_left_color.unwrap_or(cur),
                     ],
+                    styles: [
+                        s.border_top_style,
+                        s.border_right_style,
+                        s.border_bottom_style,
+                        s.border_left_style,
+                    ],
                 });
             }
             out.push(DisplayCommand::DrawImage {
@@ -1169,6 +1217,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                             s.border_right_color.unwrap_or(cur),
                             s.border_bottom_color.unwrap_or(cur),
                             s.border_left_color.unwrap_or(cur),
+                        ],
+                        styles: [
+                            s.border_top_style, s.border_right_style,
+                            s.border_bottom_style, s.border_left_style,
                         ],
                     });
                 }
@@ -1254,6 +1306,10 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         s.border_right_color.unwrap_or(cur),
                         s.border_bottom_color.unwrap_or(cur),
                         s.border_left_color.unwrap_or(cur),
+                    ],
+                    styles: [
+                        s.border_top_style, s.border_right_style,
+                        s.border_bottom_style, s.border_left_style,
                     ],
                 });
             }
@@ -2099,11 +2155,96 @@ mod tests {
         let dl = build("<p>x</p>", "p { border: 2px solid red; }");
         let b = borders(&dl);
         assert_eq!(b.len(), 1, "должна быть одна DrawBorder команда");
-        if let DisplayCommand::DrawBorder { widths, colors, .. } = b[0] {
+        if let DisplayCommand::DrawBorder { widths, colors, styles, .. } = b[0] {
             assert!((widths[0] - 2.0).abs() < 0.01, "top width");
             assert!((widths[1] - 2.0).abs() < 0.01, "right width");
             assert_eq!(colors[0].r, 255, "top color — red");
+            assert_eq!(
+                *styles,
+                [
+                    BorderStyle::Solid,
+                    BorderStyle::Solid,
+                    BorderStyle::Solid,
+                    BorderStyle::Solid,
+                ],
+            );
         }
+    }
+
+    #[test]
+    fn border_dashed_styles_propagate_to_command() {
+        let dl = build("<p>x</p>", "p { border: 3px dashed blue; }");
+        let b = borders(&dl);
+        assert_eq!(b.len(), 1);
+        if let DisplayCommand::DrawBorder { styles, .. } = b[0] {
+            assert_eq!(
+                *styles,
+                [
+                    BorderStyle::Dashed,
+                    BorderStyle::Dashed,
+                    BorderStyle::Dashed,
+                    BorderStyle::Dashed,
+                ],
+            );
+        }
+    }
+
+    #[test]
+    fn border_mixed_styles_per_side() {
+        let dl = build(
+            "<p>x</p>",
+            "p { border-top: 2px solid black; \
+                 border-right: 2px dashed black; \
+                 border-bottom: 2px dotted black; \
+                 border-left: 2px solid black; }",
+        );
+        let b = borders(&dl);
+        assert_eq!(b.len(), 1);
+        if let DisplayCommand::DrawBorder { styles, .. } = b[0] {
+            assert_eq!(styles[0], BorderStyle::Solid);
+            assert_eq!(styles[1], BorderStyle::Dashed);
+            assert_eq!(styles[2], BorderStyle::Dotted);
+            assert_eq!(styles[3], BorderStyle::Solid);
+        }
+    }
+
+    #[test]
+    fn serialize_drawborder_solid_omits_styles() {
+        // bw-compat: чистый Solid не печатает `s=[...]` — snapshot-ы
+        // прежней версии остаются валидными.
+        let dl = build("<p>x</p>", "p { border: 2px solid black; }");
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("DrawBorder"));
+        assert!(!s.contains(" s=["), "Solid не печатает s=[...]: {s}");
+    }
+
+    #[test]
+    fn serialize_drawborder_dashed_emits_styles_field() {
+        let dl = build("<p>x</p>", "p { border: 2px dashed black; }");
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("DrawBorder"));
+        assert!(
+            s.contains(" s=[da,da,da,da]"),
+            "Dashed эмитит s=[...]: {s}"
+        );
+    }
+
+    #[test]
+    fn serialize_drawborder_dotted_short_marker() {
+        let dl = build("<p>x</p>", "p { border: 2px dotted black; }");
+        let s = serialize_display_list(&dl);
+        assert!(s.contains(" s=[do,do,do,do]"), "Dotted: {s}");
+    }
+
+    #[test]
+    fn serialize_drawborder_mixed_marks_only_non_solid() {
+        let dl = build(
+            "<p>x</p>",
+            "p { border: 2px solid black; \
+                 border-right-style: dashed; }",
+        );
+        let s = serialize_display_list(&dl);
+        assert!(s.contains(" s=[s,da,s,s]"), "Mixed: {s}");
     }
 
     #[test]

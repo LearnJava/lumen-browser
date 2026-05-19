@@ -29,7 +29,7 @@ use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{Bitmap, Cmap, Font, Head, Hhea, Hmtx, Outline, Rasterizer, SystemFontIndex};
 use lumen_image::{Image, PixelFormat};
-use lumen_layout::{Color, FontStyle, FontWeight, OutlineStyle};
+use lumen_layout::{BorderStyle, Color, FontStyle, FontWeight, OutlineStyle};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
@@ -1084,7 +1084,12 @@ impl Renderer {
                         draw_ops.push(DrawOp::Fill { v_start, v_count });
                     }
                 }
-                DisplayCommand::DrawBorder { rect, widths: [wt, wr, wb, wl], colors: [ct, cr, cb, cl] } => {
+                DisplayCommand::DrawBorder {
+                    rect,
+                    widths: [wt, wr, wb, wl],
+                    colors: [ct, cr, cb, cl],
+                    styles: [st, sr, sb, sl],
+                } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
@@ -1094,17 +1099,49 @@ impl Renderer {
                     }
                     let r = translate_rect_y(*rect, dy);
                     let v_start = fill_vertices.len() as u32;
+                    // CSS Backgrounds L3 §6.3 — рёбра рисуются как
+                    // прямоугольники полной width/height; Phase 0 без
+                    // mitre-углов (углы overlap-ятся как fillRect-ы,
+                    // что нормально пока border-color одинаков).
                     if *wt > 0.0 {
-                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, r.width, *wt), apply_alpha_to_color(color_to_array(ct), alpha));
+                        emit_border_side(
+                            &mut fill_vertices,
+                            Rect::new(r.x, r.y, r.width, *wt),
+                            true,
+                            *wt,
+                            apply_alpha_to_color(color_to_array(ct), alpha),
+                            *st,
+                        );
                     }
                     if *wr > 0.0 {
-                        push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - wr, r.y, *wr, r.height), apply_alpha_to_color(color_to_array(cr), alpha));
+                        emit_border_side(
+                            &mut fill_vertices,
+                            Rect::new(r.x + r.width - wr, r.y, *wr, r.height),
+                            false,
+                            *wr,
+                            apply_alpha_to_color(color_to_array(cr), alpha),
+                            *sr,
+                        );
                     }
                     if *wb > 0.0 {
-                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y + r.height - wb, r.width, *wb), apply_alpha_to_color(color_to_array(cb), alpha));
+                        emit_border_side(
+                            &mut fill_vertices,
+                            Rect::new(r.x, r.y + r.height - wb, r.width, *wb),
+                            true,
+                            *wb,
+                            apply_alpha_to_color(color_to_array(cb), alpha),
+                            *sb,
+                        );
                     }
                     if *wl > 0.0 {
-                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, *wl, r.height), apply_alpha_to_color(color_to_array(cl), alpha));
+                        emit_border_side(
+                            &mut fill_vertices,
+                            Rect::new(r.x, r.y, *wl, r.height),
+                            false,
+                            *wl,
+                            apply_alpha_to_color(color_to_array(cl), alpha),
+                            *sl,
+                        );
                     }
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
@@ -1828,6 +1865,48 @@ pub(crate) fn dash_segments(
         x += period;
     }
     out
+}
+
+/// Рисует одну сторону border (top / right / bottom / left) с учётом
+/// `BorderStyle`. Логика идентична `emit_outline_side` (Solid → один
+/// full-rect, Dashed → pattern `(2w, w)`, Dotted → `(w, w)`), но без
+/// «угловых ears» (border-стороны останавливаются у corner-ов и
+/// overlap-ятся как fill-rect-ы — это нормально пока border-color
+/// одинаков с обеих сторон угла). Phase 0 `BorderStyle::None`
+/// фильтруется emit-side через `is_visible()`, но обрабатываем для
+/// устойчивости.
+fn emit_border_side(
+    out: &mut Vec<FillVertex>,
+    side_rect: Rect,
+    horizontal: bool,
+    width: f32,
+    color: [f32; 4],
+    style: BorderStyle,
+) {
+    let total = if horizontal { side_rect.width } else { side_rect.height };
+    let pattern = match style {
+        BorderStyle::Dashed => {
+            let dash_len = (width * 2.0).max(1.0);
+            let gap_len = width.max(1.0);
+            dash_segments(total, dash_len, gap_len)
+        }
+        BorderStyle::Dotted => {
+            let dot_len = width.max(1.0);
+            dash_segments(total, dot_len, dot_len)
+        }
+        BorderStyle::Solid | BorderStyle::None => {
+            push_fill_quad(out, side_rect, color);
+            return;
+        }
+    };
+    for (offset, len) in pattern {
+        let segment_rect = if horizontal {
+            Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
+        } else {
+            Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
+        };
+        push_fill_quad(out, segment_rect, color);
+    }
 }
 
 /// Рисует одну сторону outline (top / right / bottom / left) с учётом
