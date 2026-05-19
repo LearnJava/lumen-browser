@@ -289,3 +289,27 @@
 - **Внешних зависимостей runtime:** 3 активных (winit, wgpu, SQLite через rusqlite/bundled) + 2 зарезервированных (rustls активирован в lumen-network, JS engine).
 - **Транзитивно через wgpu/winit:** ~200 crates.
 
+---
+
+## Gotchas (implementation details worth knowing)
+
+### lumen-font
+
+- **Composite glyphs** are supported via `Font::glyph_resolved` (max recursion depth 8). Both alignment variants: `Anchor::Offset(dx, dy)` (modern, ARGS_ARE_XY_VALUES=1) and `Anchor::Points { parent, child }` (legacy TrueType pre-1996). Cyrillic uppercase А/В/Е/К/М/Н/О/Р/С/Т/Х (composite via Latin equivalents in Inter) render correctly. Always call `glyph_resolved`, not `glyph` directly.
+- **Multi-size + variation-aware glyph atlas.** Glyphs rasterized at a bin-matched size (`SIZE_BINS = [8, 12, 16, 20, 24, 32, 48, 64]`), display scale = `font_size / size_bin`. Exact bin match → no scaling, crisp text. Cache key: `AtlasKey { face_id, glyph_id, size_bin, coords_hash }` where `coords_hash` is from normalized variation coords. Empty coords → hash=0 (backward-compatible with non-VF pages and snapshot tests).
+- **Font fallback / matcher fully implemented** (CSS Fonts L4 §3.1+§5.2+§5.3). Per-char codepoint cascade: if primary face lacks a glyph, iterate other loaded faces; if none have it, render `.notdef`. **Phase 0 limitation:** cascade only covers already-loaded faces — CJK/emoji won't render unless explicitly listed in CSS. Generic families (`serif`/`sans-serif`/`monospace`) currently skipped during face resolution.
+
+### lumen-paint
+
+- **Tests in `lumen-paint::display_list` and `lumen-paint::atlas`** are unit tests. `renderer.rs` is visual, no auto-tests — verify via `cargo run`. Display list snapshot tests live in `tests/snapshot_tests.rs`.
+
+### lumen-shell
+
+- **HiDPI / DPR partially supported.** Renderer stores `scale_factor` from winit. `ScaleFactorChanged` updates it on-the-fly. **Not yet supported:** layout viewport is hardcoded 1024×720 — `inner_size` not passed to layout, no relayout on `Resized`. Requires structural pipeline refactor (layout runs before window creation) — P1 concern.
+- **Scroll state implemented** (Y-axis, smooth scroll out-cubic 200 ms, scrollbar drag + track-click, find-scroll-to-match, cursor feedback). Limitations: no X-axis, no momentum, no relayout-on-resize.
+- **Pipeline is blocking; window opens only after full load.** `lumen-shell::resumed()` runs synchronously: fetch HTML → parse → collect `<link href>` → fetch each CSS → layout → paint → `window.create()`. On sites with many external CSS files the user sees only the terminal for several seconds. Progressive/streaming rendering is a separate roadmap item.
+
+### lumen-layout
+
+- **`<picture>` / `<img srcset>` integrated in layout, but DPR=1.0 — Phase 0 stub.** `lumen-layout::box_tree::resolve_image_source` calls `pick_picture_source` / `pick_img_source` with `PictureParams { dpr: 1.0, supported_types: None }`. Density candidates (`srcset="… 2x"`) are **never selected** — picker always picks `1x`. Real DPR lives in `Renderer.scale_factor` and is not yet passed to layout. When relayout-on-resize lands, extend `resolve_image_source` with `dpr: f32` and pass it into `PictureParams` — picker API already supports it. Intrinsic dimensions from `<source>` are applied as presentational hints after CSS cascade (only into empty `style.width`/`style.height`). **`<source>` and `<track>` are `display: none`** in the UA stylesheet — previously they generated empty `BoxKind::Block` nodes.
+
