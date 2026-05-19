@@ -1,5 +1,4 @@
-In progress: 1B.1 CompositorThread + spawn loop   branch: compositor-thread
-Next step: CompositorThread struct + tick-loop   paint/src/compositor.rs:277
+In progress: —
 
 Next: 1B.2 vsync tick-loop 60fps         lumen-plan.md:158
 
@@ -13,4 +12,4 @@ Queue:
 3A.4 ColorFloat variant            lumen-plan.md:168  (blocked: P1 1B.1+1B.2)
 3A.5 color space in renderer       lumen-plan.md:169  (blocked: P1 1B.1+1B.2)
 
-Recent: graphic-tests-rework 2026-05-19
+Recent: compositor-thread 2026-05-19 (CompositorThread + tick-loop P2 1B.1)
