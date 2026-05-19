@@ -6,7 +6,7 @@
 //! border-радиусы — позже, по запросу. Координаты — экранные пиксели от
 //! верхнего левого угла окна.
 
-use lumen_core::geom::Rect;
+use lumen_core::geom::{Rect, Size};
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, BackgroundClip, BorderStyle, BoxKind,
     Color, CssColor, FontStyle, FontWeight, InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode,
