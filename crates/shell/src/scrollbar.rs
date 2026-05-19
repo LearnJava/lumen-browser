@@ -1,8 +1,9 @@
 //! Vertical scrollbar в overlay-полосе display list-а: тонкая полоска у
 //! правого края viewport-а, показывает текущую `scroll_y` относительно
-//! `content_height`. Drag-to-scroll: `thumb_hit_test` определяет попадание
-//! курсора по thumb-у, `ScrollDrag` хранит origin-снапшот и через
-//! `scroll_for` отдаёт unclamped `scroll_y` под текущую позицию курсора.
+//! `content_height`. `classify_track_click` — единая точка решения для
+//! MouseDown: thumb / track-выше / track-ниже / мимо; `ScrollDrag` хранит
+//! origin-снапшот и через `scroll_for` отдаёт unclamped `scroll_y` под
+//! текущую позицию курсора (для drag-режима).
 //!
 //! Render-сторона не меняется: scrollbar возвращается как `Vec<DisplayCommand>`,
 //! который вызывающий конкатенирует в overlay-полосу. Overlay в `Renderer::render`
@@ -111,43 +112,64 @@ pub fn thumb_geometry(
     (max_thumb_top * ratio, thumb_h)
 }
 
-/// Проверить, попадает ли точка `(point_x, point_y)` в текущий thumb-rect.
-/// Используется на MouseDown для решения «начинать ли drag». Координаты в
-/// тех же CSS px, что и `build_scrollbar_overlay`. Возвращает `false`, если
-/// scrollbar вообще не отображается (контент короче viewport-а / вырожденный
-/// viewport / NaN-Inf), либо если точка лежит вне track-полосы.
-pub fn thumb_hit_test(
+/// Результат классификации точки клика по scrollbar-у. `Thumb` — стартуем
+/// drag, `Above` / `Below` — делаем page-jump (scroll на ±page_step), `None`
+/// — клик мимо scrollbar-а, обычная обработка дальше.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TrackClick {
+    None,
+    Thumb,
+    Above,
+    Below,
+}
+
+/// Куда попал клик в scrollbar-track: вне / в thumb / выше thumb / ниже thumb.
+///
+/// Единая точка решения для MouseDown: caller сразу знает, стартовать ли
+/// drag (Thumb) или сделать page-jump (Above/Below). Координаты в тех же
+/// CSS px, что и `build_scrollbar_overlay`. NaN-Inf / контент-помещается /
+/// вырожденный viewport / point вне track → `None`.
+pub fn classify_track_click(
     point_x: f32,
     point_y: f32,
     scroll_y: f32,
     content_height: f32,
     viewport_width: f32,
     viewport_height: f32,
-) -> bool {
+) -> TrackClick {
     if !point_x.is_finite() || !point_y.is_finite() {
-        return false;
+        return TrackClick::None;
     }
     if !content_height.is_finite()
         || !viewport_width.is_finite()
         || !viewport_height.is_finite()
         || !scroll_y.is_finite()
     {
-        return false;
+        return TrackClick::None;
     }
     if viewport_height <= 0.0 || viewport_width <= SCROLLBAR_WIDTH {
-        return false;
+        return TrackClick::None;
     }
     if content_height <= viewport_height {
-        return false;
+        return TrackClick::None;
     }
 
     let track_x = viewport_width - SCROLLBAR_WIDTH;
     if point_x < track_x || point_x >= viewport_width {
-        return false;
+        return TrackClick::None;
+    }
+    if point_y < 0.0 || point_y >= viewport_height {
+        return TrackClick::None;
     }
 
     let (thumb_top, thumb_h) = thumb_geometry(scroll_y, content_height, viewport_height);
-    point_y >= thumb_top && point_y < thumb_top + thumb_h
+    if point_y < thumb_top {
+        TrackClick::Above
+    } else if point_y >= thumb_top + thumb_h {
+        TrackClick::Below
+    } else {
+        TrackClick::Thumb
+    }
 }
 
 /// Снапшот состояния на момент начала drag-а: scroll_y страницы и cursor_y
@@ -339,60 +361,6 @@ mod tests {
         assert!(approx_eq(top_end + h_end, viewport));
     }
 
-    // ─── thumb_hit_test ───────────────────────────────────────────────────
-
-    #[test]
-    fn hit_test_inside_thumb() {
-        // viewport 800×600, content 1200. Thumb-h=300, top=0 при scroll=0.
-        // Track x в [792, 800). Точка (796, 100) внутри thumb-а.
-        assert!(thumb_hit_test(796.0, 100.0, 0.0, 1200.0, 800.0, 600.0));
-    }
-
-    #[test]
-    fn hit_test_outside_thumb_vertically() {
-        // Та же конфигурация, точка (796, 400) ниже thumb-а (thumb ends at 300).
-        assert!(!thumb_hit_test(796.0, 400.0, 0.0, 1200.0, 800.0, 600.0));
-    }
-
-    #[test]
-    fn hit_test_outside_track_horizontally() {
-        // viewport_width=800, track_x=792. Точка (700, 100) левее track-а.
-        assert!(!thumb_hit_test(700.0, 100.0, 0.0, 1200.0, 800.0, 600.0));
-        // Точка (800, 100) на правом краю — exclusive, не попадает.
-        assert!(!thumb_hit_test(800.0, 100.0, 0.0, 1200.0, 800.0, 600.0));
-    }
-
-    #[test]
-    fn hit_test_follows_thumb_position() {
-        // Когда scroll прокручен на max, thumb внизу. Точка наверху больше
-        // не попадает; точка внизу — попадает.
-        let content = 1200.0;
-        let viewport = 600.0;
-        let max_scroll = content - viewport;
-        assert!(!thumb_hit_test(796.0, 100.0, max_scroll, content, 800.0, viewport));
-        assert!(thumb_hit_test(796.0, 500.0, max_scroll, content, 800.0, viewport));
-    }
-
-    #[test]
-    fn hit_test_false_when_no_scrollbar() {
-        // Контент помещается — scrollbar скрыт, hit-test всегда false.
-        assert!(!thumb_hit_test(796.0, 100.0, 0.0, 500.0, 800.0, 600.0));
-        assert!(!thumb_hit_test(796.0, 100.0, 0.0, 600.0, 800.0, 600.0));
-    }
-
-    #[test]
-    fn hit_test_false_on_nan() {
-        assert!(!thumb_hit_test(f32::NAN, 100.0, 0.0, 1200.0, 800.0, 600.0));
-        assert!(!thumb_hit_test(796.0, f32::NAN, 0.0, 1200.0, 800.0, 600.0));
-        assert!(!thumb_hit_test(796.0, 100.0, f32::NAN, 1200.0, 800.0, 600.0));
-    }
-
-    #[test]
-    fn hit_test_false_on_degenerate_viewport() {
-        assert!(!thumb_hit_test(796.0, 100.0, 0.0, 1200.0, 800.0, 0.0));
-        assert!(!thumb_hit_test(796.0, 100.0, 0.0, 1200.0, SCROLLBAR_WIDTH, 600.0));
-    }
-
     // ─── ScrollDrag::scroll_for ───────────────────────────────────────────
 
     #[test]
@@ -466,6 +434,98 @@ mod tests {
         // Проверяем точную формулу: (600_000 - 600) / (600 - 24).
         let expected = (600_000.0 - 600.0) / (600.0 - MIN_THUMB_HEIGHT);
         assert!((s - expected).abs() < 0.1);
+    }
+
+    // ─── classify_track_click ─────────────────────────────────────────────
+
+    #[test]
+    fn classify_thumb_hit() {
+        // viewport 800×600, content 1200, scroll=0, thumb_top=0, thumb_h=300.
+        // Точка (796, 100) в thumb-е.
+        assert_eq!(
+            classify_track_click(796.0, 100.0, 0.0, 1200.0, 800.0, 600.0),
+            TrackClick::Thumb
+        );
+    }
+
+    #[test]
+    fn classify_above_thumb() {
+        // scroll прокручен — thumb внизу. Точка (796, 100) на track выше thumb-а.
+        let content = 1200.0;
+        let viewport = 600.0;
+        let max_scroll = content - viewport;
+        assert_eq!(
+            classify_track_click(796.0, 100.0, max_scroll, content, 800.0, viewport),
+            TrackClick::Above
+        );
+    }
+
+    #[test]
+    fn classify_below_thumb() {
+        // scroll=0, thumb сверху (0..300). Точка (796, 500) на track ниже thumb-а.
+        assert_eq!(
+            classify_track_click(796.0, 500.0, 0.0, 1200.0, 800.0, 600.0),
+            TrackClick::Below
+        );
+    }
+
+    #[test]
+    fn classify_outside_track_horizontally() {
+        assert_eq!(
+            classify_track_click(700.0, 100.0, 0.0, 1200.0, 800.0, 600.0),
+            TrackClick::None
+        );
+        // Правый край — exclusive, не track.
+        assert_eq!(
+            classify_track_click(800.0, 100.0, 0.0, 1200.0, 800.0, 600.0),
+            TrackClick::None
+        );
+    }
+
+    #[test]
+    fn classify_outside_viewport_vertically() {
+        // Над верхом и под низом viewport-а — не track.
+        assert_eq!(
+            classify_track_click(796.0, -10.0, 0.0, 1200.0, 800.0, 600.0),
+            TrackClick::None
+        );
+        assert_eq!(
+            classify_track_click(796.0, 700.0, 0.0, 1200.0, 800.0, 600.0),
+            TrackClick::None
+        );
+    }
+
+    #[test]
+    fn classify_none_when_no_scrollbar() {
+        // Контент помещается — scrollbar скрыт, любая точка → None.
+        assert_eq!(
+            classify_track_click(796.0, 100.0, 0.0, 500.0, 800.0, 600.0),
+            TrackClick::None
+        );
+    }
+
+    #[test]
+    fn classify_none_on_nan() {
+        assert_eq!(
+            classify_track_click(f32::NAN, 100.0, 0.0, 1200.0, 800.0, 600.0),
+            TrackClick::None
+        );
+        assert_eq!(
+            classify_track_click(796.0, 100.0, f32::NAN, 1200.0, 800.0, 600.0),
+            TrackClick::None
+        );
+    }
+
+    #[test]
+    fn classify_none_on_degenerate_viewport() {
+        assert_eq!(
+            classify_track_click(796.0, 100.0, 0.0, 1200.0, 800.0, 0.0),
+            TrackClick::None
+        );
+        assert_eq!(
+            classify_track_click(796.0, 100.0, 0.0, 1200.0, SCROLLBAR_WIDTH, 600.0),
+            TrackClick::None
+        );
     }
 
     #[test]
