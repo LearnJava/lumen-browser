@@ -156,7 +156,7 @@
 | 1B.1 | ✅ CompositorThread struct + spawn loop | `paint/src/compositor.rs:277` | — |
 | 1B.2 | ✅ vsync tick-loop 60fps | `paint/src/compositor.rs:277` | — |
 | 1B.3 | ✅ PushBlendMode/PopBlendMode pipeline Phase 0 | `paint/src/renderer.rs:1834` | — |
-| 1B.4 | ⬜ off-screen opacity layer rendering | `paint/src/renderer.rs` | — |
+| 1B.4 | ✅ off-screen opacity layer rendering | `paint/src/renderer.rs` | 2026-05-19 |
 | 1B.5 | ⬜ GPU texture upload for layer snapshots | `paint/src/renderer.rs` | — |
 | 2A | ✅ **`[P1+P2]` Painting order traversal** | — | — |
 | 2B | ✅ **`[P2]` Stacking-aware hit testing** | P3 shell input handler | — |
@@ -378,7 +378,9 @@
 - **`layer-pipeline-clip`** (PushClipRect → wgpu scissor rect): renderer перешёл на ordered `Vec<DrawOp>`; `clip_stack: Vec<Rect>` (intersection с топом, CSS Masking L1 §3); DPR-aware. 18 unit-тестов.
 - **`layer-pipeline-opacity`** (PushOpacity → alpha-multiply, Phase 0): `opacity_stack: Vec<f32>`; `effective_alpha` (product, clamp [0,1]). ImageVertex расширен Float32 `alpha` attribute. Phase 0: overlapping children alpha-blend попарно, не single-pass. 9 unit-тестов.
 
-**Осталось:** compositor.active_tree() в shell (P3), реальный tick-loop с `JoinHandle`, true single-pass off-screen opacity, PushBlendMode pipeline.
+**Осталось:** compositor.active_tree() в shell (P3), реальный tick-loop с `JoinHandle`, PushBlendMode pipeline.
+
+**1B.4 done (2026-05-19):** true single-pass off-screen opacity — render plan (DrawBatch/Composite), OffscreenLayer pool, COMPOSITE_SHADER, multi-pass wgpu pipeline.
 
 #### 2A — Painting order traversal
 

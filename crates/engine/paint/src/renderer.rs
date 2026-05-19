@@ -200,6 +200,35 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+const COMPOSITE_SHADER_SRC: &str = r#"
+@group(0) @binding(0) var t_layer: texture_2d<f32>;
+@group(0) @binding(1) var s_layer: sampler;
+
+struct VIn {
+    @location(0) pos: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) alpha: f32,
+};
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) alpha: f32,
+};
+
+@vertex fn vs_main(in: VIn) -> VOut {
+    var out: VOut;
+    out.clip = vec4<f32>(in.pos, 0.0, 1.0);
+    out.uv = in.uv;
+    out.alpha = in.alpha;
+    return out;
+}
+
+@fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    let c = textureSample(t_layer, s_layer, in.uv);
+    return vec4<f32>(c.rgb, c.a * in.alpha);
+}
+"#;
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct FillVertex {
@@ -220,8 +249,14 @@ struct TextVertex {
 struct ImageVertex {
     pos: [f32; 2],
     uv: [f32; 2],
-    /// Per-vertex alpha-multiplier для PushOpacity (Phase 0 approximation).
-    /// 1.0 — opacity:1 (визуально без изменений), <1.0 — затенение sample.a в шейдере.
+    alpha: f32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CompositeVertex {
+    pos: [f32; 2],
+    uv: [f32; 2],
     alpha: f32,
 }
 
@@ -251,6 +286,16 @@ struct GpuImage {
     // texture держим как поле даже без явного использования — wgpu освобождает
     // GPU-память когда дропается последняя ссылка; bind_group её не держит.
     _texture: wgpu::Texture,
+    width: u32,
+    height: u32,
+}
+
+/// GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
+/// `ensure_layer_textures`; переиспользуется пока размер surface не меняется.
+struct OffscreenLayer {
+    _texture: wgpu::Texture,
+    view: wgpu::TextureView,
+    bind_group: wgpu::BindGroup,
     width: u32,
     height: u32,
 }
@@ -338,6 +383,11 @@ pub struct Renderer {
     fill_pipeline: wgpu::RenderPipeline,
     text_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
+    composite_pipeline: wgpu::RenderPipeline,
+    composite_bgl: wgpu::BindGroupLayout,
+    layer_sampler: wgpu::Sampler,
+    layer_textures: Vec<OffscreenLayer>,
+    surface_format: wgpu::TextureFormat,
 
     uniform_buffer: wgpu::Buffer,
     uniform_bind_group: wgpu::BindGroup,
@@ -715,6 +765,93 @@ impl Renderer {
             cache: None,
         });
 
+        // ── Composite pipeline (opacity layer → parent target) ────────────
+        let composite_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("composite-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let layer_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("layer-sampler"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+        let composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("composite-shader"),
+            source: wgpu::ShaderSource::Wgsl(COMPOSITE_SHADER_SRC.into()),
+        });
+        let composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("composite-layout"),
+            bind_group_layouts: &[&composite_bgl],
+            push_constant_ranges: &[],
+        });
+        let composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("composite-pipeline"),
+            layout: Some(&composite_layout),
+            vertex: wgpu::VertexState {
+                module: &composite_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 16,
+                            shader_location: 2,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &composite_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         let atlas = GlyphAtlas::new(ATLAS_DIM);
 
         Ok(Self {
@@ -733,6 +870,11 @@ impl Renderer {
             image_bgl,
             image_sampler,
             images: HashMap::new(),
+            composite_pipeline,
+            composite_bgl,
+            layer_sampler,
+            layer_textures: Vec::new(),
+            surface_format: format,
             atlas,
             faces: vec![LoadedFace { bytes: font_bytes }],
             face_id_by_path: HashMap::new(),
@@ -946,6 +1088,7 @@ impl Renderer {
             self.config.width = width;
             self.config.height = height;
             self.surface.configure(&self.device, &self.config);
+            self.layer_textures.clear();
         }
     }
 
@@ -967,6 +1110,55 @@ impl Renderer {
     #[must_use]
     pub fn scale_factor(&self) -> f64 {
         self.scale_factor
+    }
+
+    /// Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`.
+    /// Используется shell-ом для relayout при Resized.
+    #[must_use]
+    pub fn viewport_size(&self) -> winit::dpi::LogicalSize<f64> {
+        winit::dpi::PhysicalSize::new(self.config.width, self.config.height)
+            .to_logical(self.scale_factor)
+    }
+
+    fn create_layer_texture(&self, width: u32, height: u32) -> OffscreenLayer {
+        let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("opacity-layer"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: self.surface_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("opacity-layer-bg"),
+            layout: &self.composite_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.layer_sampler),
+                },
+            ],
+        });
+        OffscreenLayer { _texture: texture, view, bind_group, width, height }
+    }
+
+    fn ensure_layer_textures(&mut self, count: usize, width: u32, height: u32) {
+        while self.layer_textures.len() < count {
+            let t = self.create_layer_texture(width, height);
+            self.layer_textures.push(t);
+        }
+        for i in 0..count {
+            if self.layer_textures[i].width != width || self.layer_textures[i].height != height {
+                self.layer_textures[i] = self.create_layer_texture(width, height);
+            }
+        }
     }
 
     /// Рендерит две полосы display list-а одним кадром:
@@ -1042,28 +1234,59 @@ impl Renderer {
         // с топом; PopClip снимает.
         let mut clip_stack: Vec<Rect> = Vec::new();
 
-        // Стек активных opacity-multiplier-ов (CSS Color §3.2). Effective opacity
-        // = product. Phase 0 approximation: применяется к vertex color.a (fill/text)
-        // и к vertex tint (image). Это **не** точная реализация — overlapping
-        // дочерние элементы под одной opacity-группой композитятся попарно вместо
-        // single-pass alpha (для строгой семантики требуется off-screen layer
-        // composite, шаг (c-cont) задачи P2 1B). На одиночных элементах визуально
-        // корректно — это покрывает 80%+ web-страниц Phase 0.
-        let mut opacity_stack: Vec<f32> = Vec::new();
-
         // Стек активных blend-mode-ов (CSS Compositing & Blending L1 §5).
         // Phase 0: stack отслеживается для корректного баланса Push/Pop;
         // рендеринг всегда использует Normal pipeline (ALPHA_BLENDING).
-        // Реальное переключение pipeline по mode — задача P2 1B.4.
+        // Реальное переключение pipeline по mode — задача 1B.5+.
         let mut blend_mode_stack: Vec<BlendMode> = Vec::new();
 
-        // Текущий выставленный scissor (для дедупликации SetScissor-команд).
+        // Render plan: список батчей и composite-переходов.
+        #[derive(Clone, Copy)]
+        enum LoadOpChoice { ClearWhite, ClearTransparent, Load }
+        struct DrawBatchPlan { target_level: usize, load_op: LoadOpChoice, ops_start: usize, ops_end: usize }
+        struct CompositePlan { from_level: usize, comp_v_start: u32 }
+        enum RenderPlanItem { Draw(DrawBatchPlan), Composite(CompositePlan) }
+
+        let mut render_plan: Vec<RenderPlanItem> = Vec::new();
+        let mut composite_vertices: Vec<CompositeVertex> = Vec::new();
+
+        let mut current_level: usize = 0;
+        let mut level_alpha_stack: Vec<f32> = Vec::new();
+        let mut level_first: Vec<bool> = vec![true];
+        let mut batch_start: usize = 0;
+
+        // Текущий выставленный scissor (для дедупликации SetScисsor-команд).
         // None = не выставлен (первый SetScissor нужен в любом случае).
         let mut current_scissor: Option<DeviceScissor> = None;
         let surface_w = self.config.width;
         let surface_h = self.config.height;
 
         let dpr_f32 = self.scale_factor.max(1e-6) as f32;
+
+        macro_rules! flush_batch {
+            () => {{
+                let first = level_first.get(current_level).copied().unwrap_or(false);
+                let load_op = if first {
+                    if current_level == 0 { LoadOpChoice::ClearWhite } else { LoadOpChoice::ClearTransparent }
+                } else {
+                    LoadOpChoice::Load
+                };
+                let has_ops = batch_start < draw_ops.len();
+                if has_ops || first {
+                    render_plan.push(RenderPlanItem::Draw(DrawBatchPlan {
+                        target_level: current_level,
+                        load_op,
+                        ops_start: batch_start,
+                        ops_end: draw_ops.len(),
+                    }));
+                    if current_level < level_first.len() {
+                        level_first[current_level] = false;
+                    }
+                }
+                batch_start = draw_ops.len();
+                current_scissor = None;
+            }}
+        }
 
         let chained = content
             .iter()
@@ -1075,10 +1298,7 @@ impl Renderer {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
-                    let alpha = effective_alpha(&opacity_stack);
-                    if alpha <= 0.0 {
-                        continue;
-                    }
+                    let alpha = 1.0_f32;
                     let v_start = fill_vertices.len() as u32;
                     push_fill_quad(
                         &mut fill_vertices,
@@ -1099,10 +1319,7 @@ impl Renderer {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
-                    let alpha = effective_alpha(&opacity_stack);
-                    if alpha <= 0.0 {
-                        continue;
-                    }
+                    let alpha = 1.0_f32;
                     let r = translate_rect_y(*rect, dy);
                     let v_start = fill_vertices.len() as u32;
                     // CSS Backgrounds L3 §6.3 — рёбра рисуются как
@@ -1175,10 +1392,7 @@ impl Renderer {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
-                    let alpha = effective_alpha(&opacity_stack);
-                    if alpha <= 0.0 {
-                        continue;
-                    }
+                    let alpha = 1.0_f32;
                     let v_start = text_vertices.len() as u32;
                     push_text_glyphs(
                         &mut text_vertices,
@@ -1211,10 +1425,7 @@ impl Renderer {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
-                    let alpha = effective_alpha(&opacity_stack);
-                    if alpha <= 0.0 {
-                        continue;
-                    }
+                    let alpha = 1.0_f32;
                     let r = translate_rect_y(*rect, dy);
                     let inner = Rect::new(
                         r.x - offset,
@@ -1277,10 +1488,7 @@ impl Renderer {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
-                    let alpha = effective_alpha(&opacity_stack);
-                    if alpha <= 0.0 {
-                        continue;
-                    }
+                    let alpha = 1.0_f32;
                     let scrolled = translate_rect_y(*rect, dy);
                     if let Some(gpu) = self.images.get(src) {
                         // CSS Images L3 §5.5: размещаем intrinsic-картинку
@@ -1333,20 +1541,31 @@ impl Renderer {
                 DisplayCommand::PopClip => {
                     clip_stack.pop();
                 }
-                // Opacity stack: Phase 0 approximation — applied как
-                // alpha-multiplier на vertex color вместо настоящего
-                // off-screen-layer compositing. Pop с пустого стека —
-                // защитный no-op (display-list builder обязан балансировать
-                // Push/Pop, но мы устойчивы к unbalanced sequences).
                 DisplayCommand::PushOpacity { alpha } => {
-                    opacity_stack.push(*alpha);
+                    flush_batch!();
+                    level_alpha_stack.push(*alpha);
+                    current_level += 1;
+                    while level_first.len() <= current_level {
+                        level_first.push(true);
+                    }
+                    level_first[current_level] = true;
                 }
                 DisplayCommand::PopOpacity => {
-                    opacity_stack.pop();
+                    if !level_alpha_stack.is_empty() {
+                        flush_batch!();
+                        let layer_alpha = level_alpha_stack.pop().unwrap();
+                        let comp_v_start = composite_vertices.len() as u32;
+                        push_composite_quad(&mut composite_vertices, layer_alpha);
+                        render_plan.push(RenderPlanItem::Composite(CompositePlan {
+                            from_level: current_level,
+                            comp_v_start,
+                        }));
+                        current_level -= 1;
+                    }
                 }
-                // Blend-mode stack tracking. current_blend_mode() возвращает
-                // топ стека; Phase 0 — рендеринг использует Normal pipeline
-                // независимо от mode. Реальный pipeline switch — P2 1B.4.
+                // Blend-mode stack tracking. Phase 0 — рендеринг всегда
+                // использует Normal pipeline (ALPHA_BLENDING).
+                // Реальный pipeline switch — задача 1B.5+.
                 DisplayCommand::PushBlendMode { mode } => {
                     blend_mode_stack.push(*mode);
                 }
@@ -1355,6 +1574,8 @@ impl Renderer {
                 }
             }
         }
+        flush_batch!();
+        let _ = (batch_start, current_scissor); // terminal flush — values not needed after
 
         // ── Atlas upload (если изменился) ─────────────────────────────────
         if self.atlas.dirty() {
@@ -1434,10 +1655,31 @@ impl Renderer {
             self.queue.write_buffer(&buf, 0, as_bytes(&image_vertices));
             Some(buf)
         };
+        let comp_vbuf = if composite_vertices.is_empty() {
+            None
+        } else {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("comp-vbuf"),
+                size: std::mem::size_of_val(composite_vertices.as_slice()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buf, 0, as_bytes(&composite_vertices));
+            Some(buf)
+        };
+
+        // ── Off-screen textures ───────────────────────────────────────────
+        let max_level = render_plan.iter().fold(0usize, |m, item| match item {
+            RenderPlanItem::Draw(b) => m.max(b.target_level),
+            RenderPlanItem::Composite(c) => m.max(c.from_level),
+        });
+        if max_level > 0 {
+            self.ensure_layer_textures(max_level, surface_w, surface_h);
+        }
 
         // ── Frame ─────────────────────────────────────────────────────────
         let frame = self.surface.get_current_texture()?;
-        let view = frame
+        let frame_view = frame
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self
@@ -1445,73 +1687,113 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("encoder"),
             });
-        {
-            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("main-pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    depth_slice: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            // Iterate ordered DrawOp-list. Каждая Set/Draw в нужный момент
-            // в исходном painter's order. set_pipeline/set_bind_group/
-            // set_vertex_buffer на каждый draw — wgpu кэширует state-changes
-            // внутри одного pass-а; для Phase 0 это безопасно (50-500 draw
-            // calls на кадр).
-            for op in &draw_ops {
-                match op {
-                    DrawOp::SetScissor(s) => {
-                        if s.is_empty() {
-                            // Пустой scissor wgpu не примет (panic). Caller
-                            // (sync_scissor_to_stack) уже пропустил все draw
-                            // под этим scissor-ом — SetScissor можно проставить
-                            // на минимальную область, но проще схлопнуть к 1×1
-                            // в углу: всё равно ничего не нарисуется.
-                            pass.set_scissor_rect(0, 0, 1.min(surface_w), 1.min(surface_h));
-                        } else {
-                            pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+
+        macro_rules! run_draw_ops {
+            ($pass:ident, $start:expr, $end:expr) => {
+                for op in &draw_ops[$start..$end] {
+                    match op {
+                        DrawOp::SetScissor(s) => {
+                            if s.is_empty() {
+                                $pass.set_scissor_rect(0, 0, 1.min(surface_w), 1.min(surface_h));
+                            } else {
+                                $pass.set_scissor_rect(s.x, s.y, s.width, s.height);
+                            }
+                        }
+                        DrawOp::Fill { v_start, v_count } => {
+                            if let Some(vb) = &fill_vbuf {
+                                $pass.set_pipeline(&self.fill_pipeline);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_vertex_buffer(0, vb.slice(..));
+                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                            }
+                        }
+                        DrawOp::Text { v_start, v_count } => {
+                            if let Some(vb) = &text_vbuf {
+                                $pass.set_pipeline(&self.text_pipeline);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_bind_group(1, &self.atlas_bind_group, &[]);
+                                $pass.set_vertex_buffer(0, vb.slice(..));
+                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                            }
+                        }
+                        DrawOp::Image { v_start, v_count, image_batch_idx } => {
+                            if let (Some(vb), Some(bind_group)) = (
+                                &image_vbuf,
+                                image_bind_groups.get(*image_batch_idx as usize),
+                            ) {
+                                $pass.set_pipeline(&self.image_pipeline);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_bind_group(1, bind_group, &[]);
+                                $pass.set_vertex_buffer(0, vb.slice(..));
+                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                            }
                         }
                     }
-                    DrawOp::Fill { v_start, v_count } => {
-                        if let Some(vb) = &fill_vbuf {
-                            pass.set_pipeline(&self.fill_pipeline);
-                            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                            pass.set_vertex_buffer(0, vb.slice(..));
-                            pass.draw(*v_start..*v_start + *v_count, 0..1);
+                }
+            };
+        }
+
+        for item in &render_plan {
+            match item {
+                RenderPlanItem::Draw(batch) => {
+                    let target_view = if batch.target_level == 0 {
+                        &frame_view
+                    } else {
+                        &self.layer_textures[batch.target_level - 1].view
+                    };
+                    let load = match batch.load_op {
+                        LoadOpChoice::ClearWhite => wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                        LoadOpChoice::ClearTransparent => {
+                            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT)
                         }
-                    }
-                    DrawOp::Text { v_start, v_count } => {
-                        if let Some(vb) = &text_vbuf {
-                            pass.set_pipeline(&self.text_pipeline);
-                            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                            pass.set_bind_group(1, &self.atlas_bind_group, &[]);
-                            pass.set_vertex_buffer(0, vb.slice(..));
-                            pass.draw(*v_start..*v_start + *v_count, 0..1);
-                        }
-                    }
-                    DrawOp::Image { v_start, v_count, image_batch_idx } => {
-                        if let (Some(vb), Some(bind_group)) = (
-                            &image_vbuf,
-                            image_bind_groups.get(*image_batch_idx as usize),
-                        ) {
-                            pass.set_pipeline(&self.image_pipeline);
-                            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
-                            pass.set_bind_group(1, bind_group, &[]);
-                            pass.set_vertex_buffer(0, vb.slice(..));
-                            pass.draw(*v_start..*v_start + *v_count, 0..1);
-                        }
+                        LoadOpChoice::Load => wgpu::LoadOp::Load,
+                    };
+                    let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("draw-pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: target_view,
+                            resolve_target: None,
+                            depth_slice: None,
+                            ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+                    run_draw_ops!(pass, batch.ops_start, batch.ops_end);
+                }
+                RenderPlanItem::Composite(comp) => {
+                    let target_view = if comp.from_level == 1 {
+                        &frame_view
+                    } else {
+                        &self.layer_textures[comp.from_level - 2].view
+                    };
+                    let src_bg = &self.layer_textures[comp.from_level - 1].bind_group;
+                    if let Some(cvb) = &comp_vbuf {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("composite-pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: target_view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        pass.set_pipeline(&self.composite_pipeline);
+                        pass.set_bind_group(0, src_bg, &[]);
+                        pass.set_vertex_buffer(0, cvb.slice(..));
+                        pass.draw(comp.comp_v_start..comp.comp_v_start + 6, 0..1);
                     }
                 }
             }
         }
+
         self.queue.submit([encoder.finish()]);
         frame.present();
         Ok(())
@@ -1560,6 +1842,17 @@ fn push_image_quad(
         ImageVertex { pos: [x0, y0], uv: [u0, v0], alpha },
         ImageVertex { pos: [x1, y1], uv: [u1, v1], alpha },
         ImageVertex { pos: [x0, y1], uv: [u0, v1], alpha },
+    ]);
+}
+
+fn push_composite_quad(out: &mut Vec<CompositeVertex>, alpha: f32) {
+    out.extend_from_slice(&[
+        CompositeVertex { pos: [-1.0,  1.0], uv: [0.0, 0.0], alpha },
+        CompositeVertex { pos: [ 1.0,  1.0], uv: [1.0, 0.0], alpha },
+        CompositeVertex { pos: [ 1.0, -1.0], uv: [1.0, 1.0], alpha },
+        CompositeVertex { pos: [-1.0,  1.0], uv: [0.0, 0.0], alpha },
+        CompositeVertex { pos: [ 1.0, -1.0], uv: [1.0, 1.0], alpha },
+        CompositeVertex { pos: [-1.0, -1.0], uv: [0.0, 1.0], alpha },
     ]);
 }
 
@@ -1810,22 +2103,6 @@ pub(crate) fn intersect_rects(a: Rect, b: Rect) -> Rect {
     } else {
         Rect::new(x0, y0, x1 - x0, y1 - y0)
     }
-}
-
-/// Накопительная opacity из стека (CSS Color §3.2): произведение всех
-/// текущих `PushOpacity { alpha }`-значений. Пустой стек = 1.0. Каждое
-/// значение clamp-ится в `[0, 1]` для устойчивости (CSS spec уже clamp-ит
-/// на cascade-уровне, но defensive). NaN на любом уровне → 0.0 (полное
-/// затухание — лучше пропустить рисовку, чем нарисовать мусор).
-pub(crate) fn effective_alpha(opacity_stack: &[f32]) -> f32 {
-    let mut product = 1.0_f32;
-    for &a in opacity_stack {
-        if a.is_nan() {
-            return 0.0;
-        }
-        product *= a.clamp(0.0, 1.0);
-    }
-    product
 }
 
 /// Активный blend mode из стека (CSS Compositing & Blending L1 §5): топ стека.
@@ -2328,49 +2605,6 @@ mod tests {
         let stack = vec![Rect::new(2000.0, 2000.0, 100.0, 100.0)];
         let ok = sync_scissor_to_stack(&stack, &mut current, &mut ops, 1.0, 1024, 720);
         assert!(!ok);
-    }
-
-    // ── Opacity stack ─────────────────────────────────────────────────────
-
-    #[test]
-    fn effective_alpha_empty_stack_is_one() {
-        assert_eq!(effective_alpha(&[]), 1.0);
-    }
-
-    #[test]
-    fn effective_alpha_single_value() {
-        assert_eq!(effective_alpha(&[0.5]), 0.5);
-        assert_eq!(effective_alpha(&[1.0]), 1.0);
-        assert_eq!(effective_alpha(&[0.0]), 0.0);
-    }
-
-    #[test]
-    fn effective_alpha_nested_multiply() {
-        // 0.5 × 0.8 = 0.4 (nested opacity).
-        let a = effective_alpha(&[0.5, 0.8]);
-        assert!((a - 0.4).abs() < 1e-6, "got {a}");
-    }
-
-    #[test]
-    fn effective_alpha_three_levels() {
-        // 0.5 × 0.5 × 0.5 = 0.125.
-        let a = effective_alpha(&[0.5, 0.5, 0.5]);
-        assert!((a - 0.125).abs() < 1e-6, "got {a}");
-    }
-
-    #[test]
-    fn effective_alpha_clamps_out_of_range() {
-        // > 1.0 clamped к 1.0; < 0 clamped к 0.
-        assert_eq!(effective_alpha(&[1.5]), 1.0);
-        assert_eq!(effective_alpha(&[-0.5]), 0.0);
-        assert_eq!(effective_alpha(&[2.0, 0.5]), 0.5);
-    }
-
-    #[test]
-    fn effective_alpha_nan_returns_zero() {
-        // NaN — лучше не рисовать (default-safe).
-        assert_eq!(effective_alpha(&[f32::NAN]), 0.0);
-        assert_eq!(effective_alpha(&[0.5, f32::NAN, 0.8]), 0.0);
     }
 
     // ── current_blend_mode ───────────────────────────────────────────────
