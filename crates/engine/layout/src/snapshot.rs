@@ -12,9 +12,41 @@
 use crate::box_tree::{BoxKind, InlineFrag, InlineSegment, LayoutBox};
 use crate::style::{
     BorderStyle, BoxSizing, Color, ComputedStyle, Cursor, Direction, Display, FontStretch,
-    FontStyle, FontVariant, FontWeight, OutlineColor, OutlineStyle, Overflow, TextAlign,
-    TextOverflow, TextTransform, Visibility, WhiteSpace,
+    FontStyle, FontVariant, FontWeight, Length, LengthOrAuto, OutlineColor, OutlineStyle,
+    Overflow, TextAlign, TextOverflow, TextTransform, Visibility, WhiteSpace,
 };
+
+fn fmt_len(l: &Length) -> String {
+    match l {
+        Length::Px(v) => format!("{v:.2}"),
+        Length::Em(v) => format!("{v:.2}em"),
+        Length::Rem(v) => format!("{v:.2}rem"),
+        Length::Percent(v) => format!("{v:.2}%"),
+        Length::Vh(v) => format!("{v:.2}vh"),
+        Length::Vw(v) => format!("{v:.2}vw"),
+        Length::Vmin(v) => format!("{v:.2}vmin"),
+        Length::Vmax(v) => format!("{v:.2}vmax"),
+        Length::Calc(_) => "calc(?)".to_string(),
+    }
+}
+
+fn fmt_loa(l: &LengthOrAuto) -> String {
+    match l {
+        LengthOrAuto::Auto => "auto".to_string(),
+        LengthOrAuto::Length(inner) => fmt_len(inner),
+    }
+}
+
+fn len_is_nonzero(l: &Length) -> bool {
+    !matches!(l, Length::Px(v) if *v == 0.0)
+}
+
+fn loa_is_nonzero(l: &LengthOrAuto) -> bool {
+    match l {
+        LengthOrAuto::Auto => true,
+        LengthOrAuto::Length(inner) => len_is_nonzero(inner),
+    }
+}
 use std::fmt::Write;
 
 /// Корневой entry-point: рекурсивно сериализует всё дерево.
@@ -90,48 +122,54 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
         Display::InlineGrid => out.push_str(" display=inline-grid"),
         Display::InlineBlock => out.push_str(" display=inline-block"),
     }
-    if let Some(w) = s.width {
-        let _ = write!(out, " w={w:.2}");
+    if let Some(w) = &s.width {
+        let _ = write!(out, " w={}", fmt_len(w));
     }
-    if let Some(h) = s.height {
-        let _ = write!(out, " h={h:.2}");
+    if let Some(h) = &s.height {
+        let _ = write!(out, " h={}", fmt_len(h));
     }
-    if let Some(v) = s.min_width {
-        let _ = write!(out, " min-w={v:.2}");
+    if let Some(v) = &s.min_width {
+        let _ = write!(out, " min-w={}", fmt_len(v));
     }
-    if let Some(v) = s.max_width {
-        let _ = write!(out, " max-w={v:.2}");
+    if let Some(v) = &s.max_width {
+        let _ = write!(out, " max-w={}", fmt_len(v));
     }
-    if let Some(v) = s.min_height {
-        let _ = write!(out, " min-h={v:.2}");
+    if let Some(v) = &s.min_height {
+        let _ = write!(out, " min-h={}", fmt_len(v));
     }
-    if let Some(v) = s.max_height {
-        let _ = write!(out, " max-h={v:.2}");
+    if let Some(v) = &s.max_height {
+        let _ = write!(out, " max-h={}", fmt_len(v));
     }
     if matches!(s.box_sizing, BoxSizing::BorderBox) {
         out.push_str(" box-sizing=border-box");
     }
     write_text_style_attrs(out, s);
-    if s.margin_top != 0.0
-        || s.margin_right != 0.0
-        || s.margin_bottom != 0.0
-        || s.margin_left != 0.0
+    if loa_is_nonzero(&s.margin_top)
+        || loa_is_nonzero(&s.margin_right)
+        || loa_is_nonzero(&s.margin_bottom)
+        || loa_is_nonzero(&s.margin_left)
     {
         let _ = write!(
             out,
-            " m=({:.2}, {:.2}, {:.2}, {:.2})",
-            s.margin_top, s.margin_right, s.margin_bottom, s.margin_left
+            " m=({}, {}, {}, {})",
+            fmt_loa(&s.margin_top),
+            fmt_loa(&s.margin_right),
+            fmt_loa(&s.margin_bottom),
+            fmt_loa(&s.margin_left),
         );
     }
-    if s.padding_top != 0.0
-        || s.padding_right != 0.0
-        || s.padding_bottom != 0.0
-        || s.padding_left != 0.0
+    if len_is_nonzero(&s.padding_top)
+        || len_is_nonzero(&s.padding_right)
+        || len_is_nonzero(&s.padding_bottom)
+        || len_is_nonzero(&s.padding_left)
     {
         let _ = write!(
             out,
-            " p=({:.2}, {:.2}, {:.2}, {:.2})",
-            s.padding_top, s.padding_right, s.padding_bottom, s.padding_left
+            " p=({}, {}, {}, {})",
+            fmt_len(&s.padding_top),
+            fmt_len(&s.padding_right),
+            fmt_len(&s.padding_bottom),
+            fmt_len(&s.padding_left),
         );
     }
     match s.text_align {
@@ -239,8 +277,8 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
             let _ = write!(out, " text-transform=capitalize");
         }
     }
-    if s.text_indent.abs() > 0.01 {
-        let _ = write!(out, " text-indent={:.2}", s.text_indent);
+    if len_is_nonzero(&s.text_indent) {
+        let _ = write!(out, " text-indent={}", fmt_len(&s.text_indent));
     }
     if s.letter_spacing.abs() > 0.01 {
         let _ = write!(out, " letter-spacing={:.2}", s.letter_spacing);
@@ -266,8 +304,10 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
             let _ = write!(out, "/{}", outline_color_str(s.outline_color));
         }
     }
-    if s.outline_offset.abs() > 0.01 {
-        let _ = write!(out, " outline-offset={:.2}", s.outline_offset);
+    if let Length::Px(v) = &s.outline_offset {
+        if v.abs() > 0.01 { let _ = write!(out, " outline-offset={v:.2}"); }
+    } else {
+        let _ = write!(out, " outline-offset={:?}", s.outline_offset);
     }
     if let Some(ac) = s.accent_color {
         let _ = write!(out, " accent={}", color_hex(ac));

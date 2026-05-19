@@ -34,15 +34,15 @@ pub use style::{
     parse_css_wide_keyword, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BorderStyle,
-    BoxShadow, BoxSizing, BreakValue, ClipPath, Color, ComputedStyle, Content, ContentItem,
-    CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle, FontVariant,
-    FontWeight, GradientStop, Hyphens, Isolation, IterationCount, ListStylePosition, ListStyleType,
-    MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
-    OverscrollBehavior, PointerEvents, Position, PositionComponent, ScrollBehavior,
-    ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop,
-    ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter, ScrollbarWidth, StepPosition,
-    TextAlign, TextDecorationLine, TextDecorationStyle, TextDecorationThickness,
-    TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
+    BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ComputedStyle, Content,
+    ContentItem, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle,
+    FontVariant, FontWeight, GradientStop, Hyphens, Isolation, IterationCount, Length,
+    LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
+    OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, PointerEvents,
+    Position, PositionComponent, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
+    ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter,
+    ScrollbarWidth, StepPosition, TextAlign, TextDecorationLine, TextDecorationStyle,
+    TextDecorationThickness, TextEmphasisPosition, TextEmphasisShape, TextEmphasisStyle,
     TextOverflow, TextShadow, TextTransform, TimingFunction, TransformFn, UserSelect, Visibility,
     WhiteSpace, WordBreak,
 };
@@ -2320,7 +2320,7 @@ mod tests {
         // даже если font-size в правиле объявлен после padding.
         let root = lay("<p>x</p>", "p { padding: 2em; font-size: 20px; }");
         let p = first_element_child(&root);
-        assert!((p.style.padding_top - 40.0).abs() < 0.01, "got {}", p.style.padding_top);
+        assert_eq!(p.style.padding_top, Length::Em(2.0), "got {:?}", p.style.padding_top);
     }
 
     #[test]
@@ -2331,7 +2331,7 @@ mod tests {
         );
         let div = first_element_child(&root);
         let p = first_element_child(div);
-        assert!((p.style.margin_top - 16.0).abs() < 0.01);
+        assert_eq!(p.style.margin_top, LengthOrAuto::Length(Length::Rem(1.0)));
     }
 
     #[test]
@@ -2352,12 +2352,12 @@ mod tests {
     }
 
     #[test]
-    fn percent_in_margin_is_ignored() {
-        // % в margin требует containing-block-width — пока не реализовано,
-        // должно молча игнорироваться (margin остаётся 0).
+    fn percent_in_margin_stored_typed() {
+        // % в margin хранится как Length::Percent и разрешается при layout,
+        // когда известна ширина containing block.
         let root = lay("<p>x</p>", "p { margin: 50%; }");
         let p = first_element_child(&root);
-        assert_eq!(p.style.margin_top, 0.0);
+        assert_eq!(p.style.margin_top, LengthOrAuto::Length(Length::Percent(50.0)));
     }
 
     // ── Тесты text-align ───────────────────────────────────────────────────
@@ -2615,8 +2615,8 @@ mod tests {
         assert!(p.style.min_width.is_none(), "min-width should not be inherited");
         assert!(p.style.max_height.is_none(), "max-height should not be inherited");
         // У div сам должен быть выставлен.
-        assert_eq!(div.style.min_width, Some(100.0));
-        assert_eq!(div.style.max_height, Some(50.0));
+        assert_eq!(div.style.min_width, Some(Length::Px(100.0)));
+        assert_eq!(div.style.max_height, Some(Length::Px(50.0)));
     }
 
     /// max-width в border-box работает как ограничение всей коробки.
@@ -3136,8 +3136,8 @@ mod tests {
         // 10vw от 800 = 80.
         let root = lay("<p>x</p>", "p { padding: 10vw; }");
         let p = first_element_child(&root);
-        assert!((p.style.padding_top - 80.0).abs() < 0.01);
-        assert!((p.style.padding_left - 80.0).abs() < 0.01);
+        assert_eq!(p.style.padding_top, Length::Vw(10.0));
+        assert_eq!(p.style.padding_left, Length::Vw(10.0));
     }
 
     /// `font-size` через vh влияет на размер шрифта (наследуется в InlineRun).
@@ -3441,15 +3441,15 @@ mod tests {
         // Парсинг + применение к ComputedStyle.
         let root = lay("<p>hello</p>", "p { text-indent: 30px; }");
         let p = first_element_child(&root);
-        assert!((p.style.text_indent - 30.0).abs() < 0.01);
+        assert_eq!(p.style.text_indent, Length::Px(30.0));
     }
 
     #[test]
-    fn text_indent_em_resolves_to_font_size() {
-        // 2em при default fs 16 = 32px.
+    fn text_indent_em_stores_typed() {
+        // text-indent: 2em хранится как Length::Em(2.0); разрешается при layout.
         let root = lay("<p>x</p>", "p { text-indent: 2em; }");
         let p = first_element_child(&root);
-        assert!((p.style.text_indent - 32.0).abs() < 0.01);
+        assert_eq!(p.style.text_indent, Length::Em(2.0));
     }
 
     #[test]
@@ -3460,8 +3460,8 @@ mod tests {
         );
         let div = first_element_child(&root);
         let p = first_element_child(div);
-        assert!((div.style.text_indent - 25.0).abs() < 0.01);
-        assert!((p.style.text_indent - 25.0).abs() < 0.01);
+        assert_eq!(div.style.text_indent, Length::Px(25.0));
+        assert_eq!(p.style.text_indent, Length::Px(25.0));
     }
 
     #[test]
@@ -3519,7 +3519,7 @@ mod tests {
     fn text_indent_default_zero() {
         let root = lay("<p>x</p>", "");
         let p = first_element_child(&root);
-        assert_eq!(p.style.text_indent, 0.0);
+        assert_eq!(p.style.text_indent, Length::Px(0.0));
     }
 
     // ── letter-spacing ──────────────────────────────────────────────────────
@@ -3915,11 +3915,11 @@ mod tests {
     fn outline_offset_positive_and_negative() {
         let p_root = lay("<p>x</p>", "p { outline-offset: 10px; }");
         let p = first_element_child(&p_root);
-        assert!((p.style.outline_offset - 10.0).abs() < 0.01);
+        assert_eq!(p.style.outline_offset, Length::Px(10.0));
 
         let n_root = lay("<p>x</p>", "p { outline-offset: -3px; }");
         let n = first_element_child(&n_root);
-        assert!((n.style.outline_offset - (-3.0)).abs() < 0.01);
+        assert_eq!(n.style.outline_offset, Length::Px(-3.0));
     }
 
     #[test]
@@ -3948,7 +3948,7 @@ mod tests {
         assert_eq!(p.style.outline_used_width(), 0.0, "used=0 при style=none");
         assert_eq!(p.style.outline_style, OutlineStyle::None);
         assert_eq!(p.style.outline_color, OutlineColor::Auto);
-        assert_eq!(p.style.outline_offset, 0.0);
+        assert_eq!(p.style.outline_offset, Length::Px(0.0));
     }
 
     #[test]
@@ -4032,7 +4032,7 @@ mod tests {
         assert!((p.style.outline_width - 4.0).abs() < 0.01);
         // outline-offset — longhand, НЕ часть shorthand `outline`, не
         // сбрасывается (по spec). Проверяем, что offset сохранён.
-        assert!((p.style.outline_offset - 10.0).abs() < 0.01);
+        assert_eq!(p.style.outline_offset, Length::Px(10.0));
     }
 
     #[test]
@@ -6459,43 +6459,43 @@ mod tests {
     fn gap_shorthand_single_value() {
         let root = lay("<p>x</p>", "p { gap: 10px; }");
         let s = first_p_style(&root);
-        assert!((s.row_gap - 10.0).abs() < 0.01);
-        assert!((s.column_gap - 10.0).abs() < 0.01);
+        assert_eq!(s.row_gap, Length::Px(10.0));
+        assert_eq!(s.column_gap, Length::Px(10.0));
     }
 
     #[test]
     fn gap_shorthand_two_values() {
         let root = lay("<p>x</p>", "p { gap: 10px 20px; }");
         let s = first_p_style(&root);
-        assert!((s.row_gap - 10.0).abs() < 0.01);
-        assert!((s.column_gap - 20.0).abs() < 0.01);
+        assert_eq!(s.row_gap, Length::Px(10.0));
+        assert_eq!(s.column_gap, Length::Px(20.0));
     }
 
     #[test]
     fn row_gap_individual() {
         let root = lay("<p>x</p>", "p { row-gap: 15px; }");
-        assert!((first_p_style(&root).row_gap - 15.0).abs() < 0.01);
+        assert_eq!(first_p_style(&root).row_gap, Length::Px(15.0));
     }
 
     #[test]
     fn column_gap_individual() {
         let root = lay("<p>x</p>", "p { column-gap: 25px; }");
-        assert!((first_p_style(&root).column_gap - 25.0).abs() < 0.01);
+        assert_eq!(first_p_style(&root).column_gap, Length::Px(25.0));
     }
 
     #[test]
-    fn gap_em_resolved() {
-        // em разрешается относительно font-size элемента.
+    fn gap_em_stores_typed() {
+        // em хранится как Length::Em и разрешается при layout относительно font-size.
         let root = lay("<p>x</p>", "p { font-size: 20px; gap: 1.5em; }");
         let s = first_p_style(&root);
-        assert!((s.row_gap - 30.0).abs() < 0.01);
+        assert_eq!(s.row_gap, Length::Em(1.5));
     }
 
     #[test]
     fn gap_negative_clamped_to_zero() {
-        // gap не может быть отрицательным.
+        // gap не может быть отрицательным — хранится как Px(0.0).
         let root = lay("<p>x</p>", "p { gap: -5px; }");
-        assert_eq!(first_p_style(&root).row_gap, 0.0);
+        assert_eq!(first_p_style(&root).row_gap, Length::Px(0.0));
     }
 
     #[test]
@@ -6551,7 +6551,7 @@ mod tests {
     #[test]
     fn column_width_length() {
         let root = lay("<p>x</p>", "p { column-width: 200px; }");
-        assert_eq!(first_p_style(&root).column_width, Some(200.0));
+        assert_eq!(first_p_style(&root).column_width, Some(Length::Px(200.0)));
     }
 
     #[test]
@@ -6564,7 +6564,7 @@ mod tests {
     fn columns_shorthand_both() {
         let root = lay("<p>x</p>", "p { columns: 200px 3; }");
         let s = first_p_style(&root);
-        assert_eq!(s.column_width, Some(200.0));
+        assert_eq!(s.column_width, Some(Length::Px(200.0)));
         assert_eq!(s.column_count, Some(3));
     }
 
@@ -6572,7 +6572,7 @@ mod tests {
     fn columns_shorthand_width_only() {
         let root = lay("<p>x</p>", "p { columns: 250px; }");
         let s = first_p_style(&root);
-        assert_eq!(s.column_width, Some(250.0));
+        assert_eq!(s.column_width, Some(Length::Px(250.0)));
         assert_eq!(s.column_count, None);
     }
 
@@ -6653,7 +6653,7 @@ mod tests {
             "<p>x</p>",
             "p { padding: env(safe-area-inset-top, 12px); }",
         );
-        assert!((first_p_style(&root).padding_top - 12.0).abs() < 1e-6);
+        assert_eq!(first_p_style(&root).padding_top, Length::Px(12.0));
     }
 
     #[test]
@@ -6663,7 +6663,7 @@ mod tests {
             "<p>x</p>",
             "p { padding: env(safe-area-inset-top); }",
         );
-        assert!((first_p_style(&root).padding_top - 0.0).abs() < 1e-6);
+        assert_eq!(first_p_style(&root).padding_top, Length::Px(0.0));
     }
 
     #[test]
@@ -6673,17 +6673,19 @@ mod tests {
             "<p>x</p>",
             "p { padding: env(viewport-segment-width 0 0, 25px); }",
         );
-        assert!((first_p_style(&root).padding_top - 25.0).abs() < 1e-6);
+        assert_eq!(first_p_style(&root).padding_top, Length::Px(25.0));
     }
 
     #[test]
     fn env_inside_calc() {
-        // calc(env(...) + 5px) — env разворачивается до calc().
+        // calc(env(...) + 5px) — env разворачивается до calc(); resolve = 15px.
         let root = lay(
             "<p>x</p>",
             "p { padding: calc(env(safe-area-inset-top, 10px) + 5px); }",
         );
-        assert!((first_p_style(&root).padding_top - 15.0).abs() < 1e-6);
+        let vp = Size::new(800.0, 600.0);
+        let v = first_p_style(&root).padding_top.resolve_or_zero(16.0, 0.0, vp);
+        assert!((v - 15.0).abs() < 1e-6, "got {v}");
     }
 
     #[test]
@@ -6693,7 +6695,7 @@ mod tests {
             "<p>x</p>",
             "p { padding: var(--missing, env(safe-area-inset-top, 8px)); }",
         );
-        assert!((first_p_style(&root).padding_top - 8.0).abs() < 1e-6);
+        assert_eq!(first_p_style(&root).padding_top, Length::Px(8.0));
     }
 
     // ──────── CSS Scroll Snap L1 ────────
@@ -7850,9 +7852,9 @@ mod tests {
         );
         let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
         let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
-        assert_eq!(p.style.row_gap, 0.0);
+        assert_eq!(p.style.row_gap, Length::Px(0.0));
         assert_eq!(p.style.aspect_ratio, None);
-        assert!((div.style.row_gap - 20.0).abs() < 0.01);
+        assert_eq!(div.style.row_gap, Length::Px(20.0));
         assert!(div.style.aspect_ratio.is_some());
     }
 
