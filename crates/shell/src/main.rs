@@ -17,6 +17,7 @@
 
 mod find;
 mod runtime;
+mod scrollbar;
 
 use std::error::Error;
 use std::path::PathBuf;
@@ -985,9 +986,9 @@ impl ApplicationHandler for Lumen {
 
                 // Page-полоса: исходный display list + highlight-FillRect-ы
                 // перед своими DrawText (когда find открыт). Прокручивается.
-                // Overlay-полоса: только find-bar — viewport-locked.
-                // Без find — page = self.display_list, overlay пустой.
-                let (page_buf, overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
+                // Overlay-полоса: find-bar + scrollbar — viewport-locked.
+                // Без find — page = self.display_list, overlay = только scrollbar.
+                let (page_buf, mut overlay_buf): (Option<lumen_paint::DisplayList>, lumen_paint::DisplayList) =
                     if self.find.is_open() {
                         let win_size = self.window.as_ref().map_or((1024, 720), |w| {
                             let s = w.inner_size();
@@ -1008,6 +1009,22 @@ impl ApplicationHandler for Lumen {
                     } else {
                         (None, Vec::new())
                     };
+
+                // Scrollbar встаёт перед find-bar в overlay-буфере: рисуется
+                // первым = находится под find-bar-ом в painter's order. Они не
+                // пересекаются по x (bar занимает левее `ww - 12`, scrollbar
+                // справа от `ww - 8`), так что фактического overdraw нет.
+                let scrollbar_cmds = scrollbar::build_scrollbar_overlay(
+                    self.scroll_y,
+                    self.content_height,
+                    self.viewport_width_css(),
+                    self.viewport_height_css(),
+                );
+                if !scrollbar_cmds.is_empty() {
+                    let mut combined = scrollbar_cmds;
+                    combined.append(&mut overlay_buf);
+                    overlay_buf = combined;
+                }
 
                 let scroll_y = self.scroll_y;
                 if let Some(r) = self.renderer.as_mut() {
@@ -1160,6 +1177,20 @@ impl Lumen {
                 phys / dpr
             }
             _ => 720.0,
+        }
+    }
+
+    /// CSS px ширина viewport-а — нужна scrollbar-overlay-у для размещения
+    /// у правого края. Fallback на layout-viewport 1024 px (тот же hardcoded
+    /// размер, что и в pipeline до создания окна).
+    fn viewport_width_css(&self) -> f32 {
+        match (self.window.as_ref(), self.renderer.as_ref()) {
+            (Some(w), Some(r)) => {
+                let phys = w.inner_size().width as f32;
+                let dpr = (r.scale_factor() as f32).max(1e-6);
+                phys / dpr
+            }
+            _ => 1024.0,
         }
     }
 
