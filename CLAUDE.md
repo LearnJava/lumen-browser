@@ -15,7 +15,8 @@ Current phase: **Phase 0 (prototype)**. Goal: open local HTML+CSS and render it 
 | File | Contents |
 |---|---|
 | `README.md` | User-facing: install, commands, what to expect. |
-| `lumen-plan.md` | Design doc (~1200 lines, 22 chapters): principles, scope, architecture, phases. **Header has "Implementation Status" block** — update on every plan item completion. |
+| `STATUS.md` | Current sprint: in-progress tasks, next items per P1/P2/P3, recent merges. **Read this instead of lumen-plan.md for current status.** |
+| `lumen-plan.md` | Full design doc (~1200 lines, 22 chapters): principles, scope, architecture, phases. Read for architecture/history, not daily status. |
 | `CLAUDE.md` | (this file) Conventions and invariants for the assistant. |
 | `samples/page.html` | Test page for pipeline runs. |
 | `assets/fonts/Inter-Regular.ttf` | Bundled font (SIL OFL 1.1). |
@@ -113,12 +114,33 @@ cargo run --example preview -p lumen-font
 cargo run -p lumen-bench --release
 ```
 
-### Cargo output rules (token efficiency)
+### Token efficiency rules
+
+**One task — one session.** Start a new chat for each task. Long sessions accumulate context — every message costs more as the session grows. Use `/compact` if the session grew large but the task isn't finished yet.
+
+**No verification reads after edits.** Don't ask to re-read a file after Edit/Write — the tool reports failure if something went wrong. Verify correctness with `cargo check`, not by re-reading.
+
+**Precise task descriptions upfront.** Before describing a bug or task, grep/read to find the exact location first. Include file:line so the next session doesn't re-search:
+
+```
+crates/engine/layout/src/style.rs:248 — compute_style,
+margin: auto doesn't account for containing block width
+```
+
+**Use `--dump-layout` before reading source.** When diagnosing a layout/paint bug, run the dump and paste the relevant lines into the chat. 5 lines of dump output often replace reading 3-4 source files:
+
+```bash
+cargo run -p lumen-shell -- --dump-layout samples/page.html 2>&1 | grep -A2 "margin\|padding"
+```
+
+**STATUS.md over lumen-plan.md.** `lumen-plan.md` is ~1200 lines (~5k tokens per read). For current-sprint status, read `STATUS.md` (20 lines) instead. Update `STATUS.md` when tasks start/finish; keep `lumen-plan.md` as the full archive.
+
+### Cargo output rules
 
 Always use `-p <crate>`, never `--workspace`.
 
 - **Success** — one line: `cargo check OK`, `Clippy clean`, `All tests passed (23/23)`.
-- **Failure** — only lines starting with `error[` or `error:`. Skip warnings unless they block the build.
+- **Failure** — show each full `error[...]` block (message + file:line + code + help), skip all `warning[...]` blocks entirely.
 
 ### PATH note (Windows + Git Bash)
 
@@ -167,7 +189,12 @@ Current coverage — `graphic_tests/COVERAGE.md`.
 1. **No screenshots in the repo.** `graphic_tests/screenshots/*.png` are work artifacts — do not commit. Only the updated [`BUGS.md`](BUGS.md) goes in.
 2. **A bug is only a visually noticeable artifact.** Non-zero pixels in `NN-diff.png` alone are not a bug. Skip if only visible under pixel-by-pixel inspection.
 3. **Ignore text for now.** Glyph antialiasing will always diverge from Edge — not tracked until a dedicated task. Text-box geometry, padding/margin around text, line-height — that's layout, check as normal.
-4. **Single tracker — `BUGS.md` in the repo root.** New bug: add with the next number (current tail: BUG-022). Known bug reproduced: update date/description, keep status. Fixed: move to "Fixed bugs" section with `FIXED <date>`, **do not delete**. WONTFIX until Phase N+: stays in the file.
+4. **Single tracker — `BUGS.md` in the repo root.** One line per bug, compact format:
+   ```
+   BUG-018 | OPEN  | inline padding wrong on nested divs | layout/src/flow.rs:312
+   BUG-003 | FIXED 2026-05-10 | composite glyphs missing | font/src/parser.rs:201
+   ```
+   New bug: append with next number (current tail: BUG-022). Fixed: change `OPEN` → `FIXED <date>`, do not delete. WONTFIX: stays in file as-is.
 
 ---
 
