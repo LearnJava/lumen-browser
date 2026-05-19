@@ -7811,4 +7811,116 @@ mod tests {
         // В LimitedQuirks bare hex — invalid, как в Standards.
         assert_eq!(p.style.color, Color::BLACK);
     }
+
+    // ──────────────── :fullscreen / :modal / :popover-open (open-state pseudo-classes) ────────────────
+
+    /// `:fullscreen` (Fullscreen API §4.2) — Phase 0 без runtime top-layer
+    /// никакой элемент не считается fullscreen, правило не применяется.
+    #[test]
+    fn fullscreen_pseudo_never_matches_in_phase_0() {
+        let c = element_color(
+            "<div>x</div>",
+            "div:fullscreen { color: red; }",
+            "div",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    /// `:fullscreen` не активируется даже на дочернем элементе с
+    /// контейнером — top-layer state runtime-only.
+    #[test]
+    fn fullscreen_pseudo_never_matches_nested() {
+        let c = element_color(
+            "<div><p>x</p></div>",
+            "p:fullscreen { color: red; }",
+            "p",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    /// `:modal` (CSS Selectors L4 §16.5.2) — Phase 0 без dialog runtime.
+    /// `<dialog open>` НЕ модален: атрибут `open` ставится и через
+    /// `dialog.show()` (non-modal), поэтому простая DOM-проверка не покрыла
+    /// бы spec — matcher всегда `false`.
+    #[test]
+    fn modal_pseudo_never_matches_in_phase_0() {
+        let c = element_color(
+            "<dialog open>x</dialog>",
+            "dialog:modal { color: red; }",
+            "dialog",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    /// `:modal` не активируется и без атрибута `open`.
+    #[test]
+    fn modal_pseudo_never_matches_closed_dialog() {
+        let c = element_color(
+            "<dialog>x</dialog>",
+            "dialog:modal { color: red; }",
+            "dialog",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    /// `:popover-open` (HTML LS §6.12.2) — Phase 0 без Popover API runtime.
+    /// Наличие атрибута `popover` декларирует тип, но не открытое состояние.
+    #[test]
+    fn popover_open_pseudo_never_matches_in_phase_0() {
+        let c = element_color(
+            r#"<div popover="auto">x</div>"#,
+            "div:popover-open { color: red; }",
+            "div",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    /// `:popover-open` не матчит и при отсутствии `popover`-атрибута.
+    #[test]
+    fn popover_open_pseudo_never_matches_non_popover() {
+        let c = element_color(
+            "<div>x</div>",
+            "div:popover-open { color: red; }",
+            "div",
+        );
+        assert_eq!(c.r, 0);
+    }
+
+    /// Specificity открытых-состояния pseudo-классов — class-уровня (0,1,0).
+    /// `:not(:fullscreen)` через always-false означает «всегда true» — это
+    /// удобный FOUC-protection idiom (если когда-нибудь fullscreen runtime
+    /// появится, правило сбросится). Проверяем, что `:not(:fullscreen)`
+    /// действительно матчит обычный element.
+    #[test]
+    fn not_fullscreen_matches_all_elements_in_phase_0() {
+        let c = element_color(
+            "<div>x</div>",
+            "div:not(:fullscreen) { color: red; }",
+            "div",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    /// То же для `:not(:modal)`: элементы не в modal state — все элементы
+    /// в Phase 0.
+    #[test]
+    fn not_modal_matches_all_elements_in_phase_0() {
+        let c = element_color(
+            "<dialog open>x</dialog>",
+            "dialog:not(:modal) { color: red; }",
+            "dialog",
+        );
+        assert_eq!(c.r, 255);
+    }
+
+    /// То же для `:not(:popover-open)`.
+    #[test]
+    fn not_popover_open_matches_all_elements_in_phase_0() {
+        let c = element_color(
+            r#"<div popover="auto">x</div>"#,
+            "div:not(:popover-open) { color: red; }",
+            "div",
+        );
+        assert_eq!(c.r, 255);
+    }
 }

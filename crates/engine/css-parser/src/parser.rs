@@ -245,6 +245,27 @@ pub enum PseudoClass {
     /// `-` → undefined (registry пуст). Когда P3 поднимет registry,
     /// проверка станет: `built-in || registry.has(name)`.
     Defined,
+    /// `:fullscreen` (Fullscreen API spec §4.2 «:fullscreen pseudo-class») —
+    /// матчит элемент, который в данный момент находится в fullscreen-режиме
+    /// (был поднят через `Element.requestFullscreen()`), а также его
+    /// ancestor-ы по top-layer-цепочке. Phase 0 без Fullscreen API runtime —
+    /// всегда `false`. Реальная реализация требует top-layer state в shell-е
+    /// и JS bindings (P3).
+    Fullscreen,
+    /// `:modal` (CSS Selectors L4 §16.5.2) — матчит элемент в modal state.
+    /// В HTML LS это `<dialog>`, открытый через `dialog.showModal()` (но
+    /// **не** `dialog.show()` — non-modal); также элемент в Fullscreen
+    /// API top-layer. Phase 0 без dialog/fullscreen runtime — всегда
+    /// `false` (атрибут `open` сам по себе не делает dialog modal, потому
+    /// нельзя имитировать через pure DOM-check).
+    Modal,
+    /// `:popover-open` (HTML LS §6.12.2 «Popover API») — матчит элемент
+    /// с `popover`-атрибутом в открытом состоянии (после
+    /// `element.showPopover()` или клика по `popovertarget`-кнопке).
+    /// Phase 0 без Popover API runtime — всегда `false`: атрибут `popover`
+    /// определяет, что элемент **может быть** popover-ом, но открытое
+    /// состояние — runtime-only.
+    PopoverOpen,
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
@@ -2580,6 +2601,9 @@ impl<'a> Parser<'a> {
             "target" => PseudoClass::Target,
             "target-within" => PseudoClass::TargetWithin,
             "defined" => PseudoClass::Defined,
+            "fullscreen" => PseudoClass::Fullscreen,
+            "modal" => PseudoClass::Modal,
+            "popover-open" => PseudoClass::PopoverOpen,
             _ => PseudoClass::Unsupported(name),
         };
         Some(SimpleSelector::PseudoClass(pc))
@@ -3534,6 +3558,9 @@ mod tests {
             ("target", PseudoClass::Target),
             ("target-within", PseudoClass::TargetWithin),
             ("defined", PseudoClass::Defined),
+            ("fullscreen", PseudoClass::Fullscreen),
+            ("modal", PseudoClass::Modal),
+            ("popover-open", PseudoClass::PopoverOpen),
         ];
         for (name, expected) in cases {
             let s = parse(&format!(":{name} {{}}"));
