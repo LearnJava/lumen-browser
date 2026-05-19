@@ -7994,4 +7994,114 @@ mod tests {
         );
         assert_eq!(c.r, 255);
     }
+
+    // ─── Canvas background propagation (CSS Backgrounds L3 §2.11.2) ─────
+
+    fn html_and_body(root: &LayoutBox) -> (&LayoutBox, &LayoutBox) {
+        let html = root
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::Block))
+            .expect("html box");
+        let body = html
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::Block))
+            .expect("body box");
+        (html, body)
+    }
+
+    #[test]
+    fn body_bg_propagates_to_html_when_html_has_none() {
+        let root = lay(
+            "<html><body><p>x</p></body></html>",
+            "body { background-color: red; }",
+        );
+        let (html, body) = html_and_body(&root);
+        assert_eq!(
+            html.style.background_color,
+            Some(Color { r: 255, g: 0, b: 0, a: 255 }),
+            "html должен получить фон body"
+        );
+        assert_eq!(
+            body.style.background_color, None,
+            "у body фон обнуляется после propagation"
+        );
+    }
+
+    #[test]
+    fn html_with_own_bg_blocks_propagation() {
+        let root = lay(
+            "<html><body><p>x</p></body></html>",
+            "html { background-color: blue; } body { background-color: red; }",
+        );
+        let (html, body) = html_and_body(&root);
+        assert_eq!(
+            html.style.background_color,
+            Some(Color { r: 0, g: 0, b: 255, a: 255 }),
+            "html сохраняет свой фон"
+        );
+        assert_eq!(
+            body.style.background_color,
+            Some(Color { r: 255, g: 0, b: 0, a: 255 }),
+            "body тоже сохраняет — propagation не сработала"
+        );
+    }
+
+    #[test]
+    fn body_bg_image_propagates_when_html_has_none() {
+        let root = lay(
+            "<html><body><p>x</p></body></html>",
+            "body { background-image: url(\"bg.png\"); }",
+        );
+        let (html, body) = html_and_body(&root);
+        assert!(
+            matches!(html.style.background_image, BackgroundImage::Url(ref s) if s == "bg.png"),
+            "html получает background-image"
+        );
+        assert!(
+            matches!(body.style.background_image, BackgroundImage::None),
+            "у body background-image обнуляется"
+        );
+    }
+
+    #[test]
+    fn html_image_blocks_propagation_even_if_color_empty() {
+        // У html есть background-image (color=None) — propagation НЕ должна
+        // сработать, у body свой фон остаётся.
+        let root = lay(
+            "<html><body><p>x</p></body></html>",
+            "html { background-image: url(\"h.png\"); } body { background-color: red; }",
+        );
+        let (html, body) = html_and_body(&root);
+        assert!(matches!(html.style.background_image, BackgroundImage::Url(_)));
+        assert_eq!(html.style.background_color, None);
+        assert_eq!(
+            body.style.background_color,
+            Some(Color { r: 255, g: 0, b: 0, a: 255 })
+        );
+    }
+
+    #[test]
+    fn no_body_no_propagation() {
+        // `<html>` без `<body>` — propagation noop, ничего не падает.
+        let root = lay("<html><p>x</p></html>", "p { background-color: red; }");
+        // Просто проверка, что layout не паникует и не выставляет фон
+        // случайно: у root-Document-box-а нет background style-а.
+        assert_eq!(root.style.background_color, None);
+    }
+
+    #[test]
+    fn fragment_without_html_skips_propagation() {
+        // Bare-fragment без `<html>`/`<body>` — наш tree builder не
+        // добавляет implicit-ы. propagation должна тихо пропустить.
+        let root = lay("<p>x</p>", "p { background-color: red; }");
+        assert_eq!(root.style.background_color, None);
+        // p сохраняет свой фон (он не body, propagation не трогает).
+        let p = first_element_child(&root);
+        assert_eq!(
+            p.style.background_color,
+            Some(Color { r: 255, g: 0, b: 0, a: 255 })
+        );
+    }
 }
