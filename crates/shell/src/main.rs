@@ -919,15 +919,29 @@ impl ApplicationHandler for Lumen {
         // выполнится на следующем about_to_wait (как и `setTimeout(..., 0)`
         // в браузере).
         let mut steps = 0;
+        let mut reached_idle = true;
         while self.runtime.step() == runtime::StepResult::Ran {
             steps += 1;
             if steps >= 256 {
                 // Защита от runaway: если что-то рекурсивно планирует task в
                 // эту же итерацию, не блокируем UI больше чем на 256 task-ов;
                 // остаток обработается в следующем about_to_wait.
+                reached_idle = false;
                 break;
             }
         }
+
+        // W3C `requestIdleCallback` §3: после дренажа очереди task-ов event-loop
+        // сообщает «idle window». Phase 0 не знает реального бюджета (нет
+        // привязки к vsync), поэтому передаём фиксированные `IDLE_BUDGET_MS`
+        // когда дошли до StepResult::Idle. Если упёрлись в cap=256 — есть ещё
+        // pending tasks, не idle: передаём 0 ms, чтобы сработали только
+        // timeout-callback-и (`request_idle_callback(..., timeout_ms)`).
+        // Без этого вызова registered idle-callback-и не получают шанса
+        // отработать в принципе.
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+        let remaining_ms = if reached_idle { IDLE_BUDGET_MS } else { 0.0 };
+        self.runtime.run_idle_callbacks(remaining_ms, now_ms);
     }
 
     fn window_event(
@@ -1335,6 +1349,13 @@ fn winit_modifiers_state(mods: &Modifiers) -> ModifiersState {
 /// Сколько CSS px скроллим за стрелку (line-step). Эмпирическое значение,
 /// близкое к Firefox/Chromium без smooth-scroll — около 2.5 строк 16-px текста.
 const LINE_STEP_CSS_PX: f32 = 40.0;
+
+/// Бюджет idle-окна для `requestIdleCallback`-ов, передаваемый в
+/// `EventLoop::run_idle_callbacks` на каждом `about_to_wait`. Phase 0 не знает
+/// реального времени до следующего vsync, поэтому используется фиксированный
+/// 10 ms — тот же дефолт, что у Chromium при отсутствии явного measurement-а
+/// idle-окна. Idle-callback-и трактуют это как «успей за ~10 ms».
+const IDLE_BUDGET_MS: f64 = 10.0;
 
 /// PageDown / PageUp / Space — сколько от viewport-а захватываем за нажатие.
 /// Меньше 100% даёт overlap между «страницами»: пользователь не теряет последнюю
