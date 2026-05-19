@@ -39,11 +39,15 @@ Three parallel developers (3 Claude Code sessions, each in its own `git worktree
 
 **If the user says "you are developer N" at session start — find your column below and take tasks marked `[PN]` from the "Roadmap" section in `lumen-plan.md`. If all your tasks are taken (visible via `git branch` + "🔄 In progress" block in `lumen-plan.md`) — ask the user which task to take next.**
 
-| Developer | Domain | Main crates / subsystems |
+Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `font` `encoding` `image` | `network` `storage` `knowledge` `bench`
+
+| Developer | Domain | Crates |
 |---|---|---|
-| **P1** | Frontend engine: source → layout tree | `lumen-html-parser`, `lumen-css-parser`, `lumen-dom`, `lumen-layout`, `lumen-encoding`; form DOM (ValidityState / pseudo-classes), Shadow DOM cascade, accessibility tree **construction**, Web Animations **value interpolation**, print **pagination**, contenteditable **DOM mutations + Selection**, preload-scanner tokenizer mode, **stacking contexts**, **property trees construction**, **push-tokenizer + incremental tree builder**, Quirks-mode |
-| **P2** | Backend rendering: layout tree → pixels | `lumen-font`, `lumen-paint`, `lumen-image`; **compositor thread + property trees + layer tree**, **layer-tree hit testing**, `mix-blend-mode` / `backdrop-filter`, CSS Painting Order, color management (ICC / P3 / Rec2020), `<picture>` / `srcset` (image side), `<img>` GPU upload, Canvas 2D, print **PDF**, font fallback / matcher, WebFonts (WOFF2), variable fonts |
-| **P3** | Runtime + system: everything outside the engine | `lumen-shell`, `lumen-network`, `lumen-storage`, `lumen-knowledge`, `lumen-core::ext`, JS integration (`rquickjs` → `rusty_v8`), `lumen-ai`; **SOP / CORS / mixed-content / iframe-sandbox**, connection pooling + Brotli + Range + keep-alive + HTTP/2, WebSocket / SSE / Fetch, HTTP auth + client certs, OCSP / CT, Safe Browsing, Service Worker, spell-check, **HTML event loop + microtasks + rAF + observers**, JS ↔ DOM bindings, GC, Web Animations **scheduling**, navigation API + bfcache, forms **UI**, IME, find-in-page, DevTools + CDP, accessibility **platform bridges**, permission / download UI, focus mode, scroll + DPR, site isolation, GPU process + sandbox |
+| **P1** | Frontend engine: source → layout tree | `html-parser`, `css-parser`, `dom`, `layout`, `encoding` |
+| **P2** | Backend rendering: layout tree → pixels | `font`, `paint`, `image` |
+| **P3** | Runtime + system: everything outside the engine | `shell`, `network`, `storage`, `knowledge`, `core::ext` |
+
+Full subsystem breakdown per role — [lumen-plan.md](lumen-plan.md) §developer-assignments.
 
 > **Multi-marker subtasks** (`[P1+P2]` etc.) are common due to cross-domain runtime. **First marker = primary owner**; others contribute via review / interface / separate branches. `[P3]` now covers former `[P4]` tasks; historical commits keep `[P4]` unchanged.
 
@@ -127,20 +131,27 @@ crates/engine/layout/src/style.rs:248 — compute_style,
 margin: auto doesn't account for containing block width
 ```
 
-**Use `--dump-layout` before reading source.** When diagnosing a layout/paint bug, run the dump and paste the relevant lines into the chat. 5 lines of dump output often replace reading 3-4 source files:
+**Use dump modes before reading source.** 5 lines of dump output often replace reading 3-4 source files:
 
 ```bash
+# layout bugs (box model, margin, padding, inline flow):
 cargo run -p lumen-shell -- --dump-layout samples/page.html 2>&1 | grep -A2 "margin\|padding"
+
+# paint/rendering bugs (colors, order, display list):
+cargo run -p lumen-shell -- --dump-display-list samples/page.html 2>&1 | grep -A2 "FillRect\|Text"
 ```
 
 **STATUS.md over lumen-plan.md.** `lumen-plan.md` is ~1200 lines (~5k tokens per read). For current-sprint status, read `STATUS.md` (20 lines) instead. Update `STATUS.md` when tasks start/finish; keep `lumen-plan.md` as the full archive.
+
+**Session start protocol.** At the beginning of each session read only: `STATUS.md` + `git branch`. Do not read `lumen-plan.md` unless the task explicitly requires architecture or roadmap details.
 
 ### Cargo output rules
 
 Always use `-p <crate>`, never `--workspace`.
 
 - **Success** — one line: `cargo check OK`, `Clippy clean`, `All tests passed (23/23)`.
-- **Failure** — show each full `error[...]` block (message + file:line + code + help), skip all `warning[...]` blocks entirely.
+- **Build/clippy failure** — show each full `error[...]` block (message + file:line + code + help lines), skip all `warning[...]` blocks entirely.
+- **Test failure** — show test name + first 10 lines of panic output, skip the rest.
 
 ### PATH note (Windows + Git Bash)
 
@@ -171,6 +182,12 @@ python graphic_tests/run.py --continue-on-fail  # diagnostic mode
 ```
 
 Pipeline: build Lumen release (if needed), then for each test — Edge headless + Lumen gdigrab + crop by magenta marker + pixel diff + % threshold. First test exceeding threshold stops the pipeline.
+
+Output is one line per test:
+```
+TEST-03: PASS (0.2%)
+TEST-07: FAIL (18.4%) ← pipeline stopped here
+```
 
 ### Rule: adding a new CSS property
 

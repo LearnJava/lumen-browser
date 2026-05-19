@@ -228,10 +228,9 @@ def ensure_lumen() -> None:
 def run_one(tid: str, html: str, threshold: float, label: str,
             crop_offset: tuple[int, int] | None) -> tuple[bool, tuple[int, int] | None, float]:
     """Возвращает (passed, new_crop_offset, diff_pct)."""
-    print(f'\n=== [{tid}] {label} ===')
     test_path = os.path.join(TESTS_DIR, html)
     if not os.path.exists(test_path):
-        print(f'FAIL: HTML отсутствует: {test_path}')
+        print(f'TEST-{tid}: FAIL (no HTML: {test_path})')
         return False, crop_offset, -1.0
 
     edge_png   = os.path.join(SHOTS, f'{tid}-edge.png')
@@ -239,47 +238,41 @@ def run_one(tid: str, html: str, threshold: float, label: str,
     lumen_crop = os.path.join(SHOTS, f'{tid}-lumen-cropped.png')
     diff_png   = os.path.join(SHOTS, f'{tid}-diff.png')
 
-    # Capture
     capture_edge(test_path, edge_png)
     if not os.path.exists(edge_png):
-        print(f'FAIL: Edge не сохранил скрин для {tid}')
+        print(f'TEST-{tid}: FAIL (Edge screenshot missing)')
         return False, crop_offset, -1.0
 
     rel_html = os.path.relpath(test_path, REPO).replace('\\', '/')
     capture_lumen(rel_html, lumen_raw)
     if not os.path.exists(lumen_raw):
-        print(f'FAIL: gdigrab не сохранил скрин Lumen для {tid}')
+        print(f'TEST-{tid}: FAIL (gdigrab screenshot missing)')
         return False, crop_offset, -1.0
 
-    # Calibration: определяем crop offset
     if tid == '00':
         origin = find_marker_origin(lumen_raw)
         if origin is None:
-            print('FAIL: магента-маркеры не найдены в Lumen-скрине.')
-            print('       Возможно, Lumen не рендерит block + width/height + background-color из class CSS.')
+            print(f'TEST-{tid}: FAIL (magenta marker not found)')
             return False, None, -1.0
         crop_offset = origin
-        print(f'   Магента-маркер найден. Crop offset = {crop_offset}')
 
     if crop_offset is None:
-        print('FAIL: нет crop offset (калибровка не прошла)')
+        print(f'TEST-{tid}: FAIL (no crop offset — calibration failed)')
         return False, None, -1.0
 
-    # Crop + diff
     ffmpeg_crop(lumen_raw, lumen_crop, crop_offset[0], crop_offset[1])
     if not os.path.exists(lumen_crop):
-        print(f'FAIL: ffmpeg crop упал')
+        print(f'TEST-{tid}: FAIL (ffmpeg crop failed)')
         return False, crop_offset, -1.0
     ffmpeg_diff(edge_png, lumen_crop, diff_png)
     if not os.path.exists(diff_png):
-        print(f'FAIL: ffmpeg diff упал')
+        print(f'TEST-{tid}: FAIL (ffmpeg diff failed)')
         return False, crop_offset, -1.0
 
-    # Metric
     pct = diff_percent(diff_png)
-    status = 'PASS' if pct <= threshold else 'FAIL'
-    print(f'   diff = {pct:.2f}%   threshold = {threshold:.1f}%   -> {status}')
-    return pct <= threshold, crop_offset, pct
+    passed = pct <= threshold
+    print(f'TEST-{tid}: {"PASS" if passed else "FAIL"} ({pct:.2f}%)', flush=True)
+    return passed, crop_offset, pct
 
 def main() -> int:
     parser = argparse.ArgumentParser(description='Lumen graphic tests pipeline')
@@ -304,18 +297,11 @@ def main() -> int:
             halted_at = tid
             break
 
-    # Summary
-    print('\n' + '=' * 60)
-    print('SUMMARY')
-    print('=' * 60)
-    for tid, label, passed, pct in results:
-        mark = 'PASS' if passed else 'FAIL'
-        print(f'  [{tid}] {mark}  {pct:6.2f}%   {label}')
     if halted_at:
-        skipped = [t for t in TESTS if t[0] > halted_at]
-        print(f'\nПайплайн ОСТАНОВЛЕН на [{halted_at}]. Пропущено {len(skipped)} тестов.')
+        skipped = len([t for t in TESTS if t[0] > halted_at])
+        print(f'Pipeline stopped at TEST-{halted_at}. {skipped} tests skipped.')
         return 1
-    print('\nВсе тесты пройдены.')
+    print(f'All {len(results)} tests passed.')
     return 0
 
 if __name__ == '__main__':
