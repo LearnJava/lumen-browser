@@ -1,9 +1,10 @@
-In progress: —
+In progress: 1A.1 unitless length quirk  branch: unitless-length-quirk
+Next step: done — ready to merge
 
-Next: 1A.1 unitless length quirk   lumen-plan.md:126
+Next: 1A.2 IE7 line-height quirk   lumen-plan.md:127
 
 Queue:
-1A.2 IE7 line-height quirk         lumen-plan.md:127
+1A.2 IE7 line-height quirk         lumen-plan.md:126
 1A.3 quirks test coverage          lumen-plan.md:128
 1B.1 Length type cascade           lumen-plan.md:130
 1B.2 Color type cascade            lumen-plan.md:131

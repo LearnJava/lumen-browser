@@ -122,7 +122,7 @@
 | # | Задача | impl / Разблокирует | НЕ блокирует |
 |---|---|---|---|
 | 1A | 🟡 **`[P1]` Quirks-mode application** | Половина legacy-сайтов | — |
-| 1A.1 | ⬜ unitless length quirk | `layout/src/style.rs:2945` | — |
+| 1A.1 | ✅ unitless length quirk | `layout/src/style.rs:2945` | — |
 | 1A.2 | ⬜ IE7 line-height quirk | `layout/src/style.rs:4925` | — |
 | 1A.3 | ⬜ quirks test coverage | `layout/src/lib.rs:7550` | — |
 | 1B | ⬜ **`[P1]` Типизированные `Length`/`Color`** | P2 п.3A; P3 CSSOM | — |
@@ -323,7 +323,9 @@
 - **`html-legacy-text-color`** (HTML5 §15.3.6 + §15.3.2): `apply_text_color_presentational_hint` — `<body text="…">` → `body.color`; `<font color="…">` → `color`. Тот же `parse_legacy_color_html_attr`. 12 unit-тестов. `<body link/vlink/alink>` отложены (требуют UA-rules с descendant-selector + `:visited`/`:active`).
 - **`canvas-bg-propagation`** (CSS Backgrounds L3 §2.11.2): `propagate_canvas_background(doc, &mut root)` в `lumen-layout::box_tree` между `build_box` и `lay_out`. Если у `<html>` нет фона, фон `<body>` (`background-color` + `background-image`) переносится на html-box, у body обнуляется. 6 unit-тестов. SVG/MathML root-ы и остальные 6 `background-*` longhand-ов не propagated.
 
-**Осталось:** table cell width quirk (§4.1), IE7 line-height quirk для replaced (§3.2), unitless length quirk вне `<img>` (§3.3).
+- **`unitless-length-quirk`** (CSS Quirks Mode §3.3): `parse_length_q(s, is_quirks)` — в quirks-mode unitless non-zero число принимается как px; в standards-mode отклоняется (кроме `0`). `parse_length(s)` → `parse_length_q(s, true)` для обратной совместимости. Все вызовы в каскаде (`width`/`height`/`margin`/`padding`/`border-*-width`/`border-radius`/`font-size`/`text-indent`/`letter-spacing`/`word-spacing`/`outline-offset`/`vertical-align`) обновлены. 4 unit-теста.
+
+**Осталось:** table cell width quirk (§4.1), IE7 line-height quirk для replaced (§3.2).
 
 #### 2A — Stacking contexts impl
 
