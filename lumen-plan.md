@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-- 🔄 Inset box-shadow rendering [P2] — box-shadow-inset — 2026-05-19
+- 🔄 text-decoration-style: wavy рендеринг [P2] — text-decoration-wavy — 2026-05-19
 
 ## Статус реализации
 
