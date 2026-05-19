@@ -35,7 +35,8 @@ pub use style::{
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ComputedStyle, Content,
-    ContentItem, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle,
+    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch,
+    FontStyle,
     FontVariant, FontWeight, GradientStop, Hyphens, Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, PointerEvents,
@@ -232,8 +233,8 @@ mod tests {
     fn background_color_stored() {
         let root = lay("<p>x</p>", "p { background-color: #ff0000; }");
         let p = first_element_child(&root);
-        assert!(p.style.background_color.is_some());
-        assert_eq!(p.style.background_color.unwrap().r, 255);
+        assert!(matches!(p.style.background_color, Some(CssColor::Rgba(_))));
+        assert!(matches!(p.style.background_color, Some(CssColor::Rgba(Color { r: 255, .. }))));
     }
 
     #[test]
@@ -2657,7 +2658,7 @@ mod tests {
         assert!((p.style.border_left_width - 2.0).abs() < 0.01);
         assert_eq!(p.style.border_top_style, BorderStyle::Solid);
         assert_eq!(p.style.border_bottom_style, BorderStyle::Solid);
-        let top_color = p.style.border_top_color.expect("border-color should be set");
+        let CssColor::Rgba(top_color) = p.style.border_top_color else { panic!("border-color should be set") };
         assert_eq!(top_color.r, 255);
         assert_eq!(top_color.g, 0);
         assert_eq!(top_color.b, 0);
@@ -2692,7 +2693,7 @@ mod tests {
     fn border_color_defaults_to_none() {
         let root = lay("<p>x</p>", "p { border: 1px solid; }");
         let p = first_element_child(&root);
-        assert!(p.style.border_top_color.is_none(), "should be None = currentColor");
+        assert!(matches!(p.style.border_top_color, CssColor::CurrentColor), "should be CurrentColor");
     }
 
     /// `border-top: 3px dashed blue` — только верхняя сторона.
@@ -2702,7 +2703,7 @@ mod tests {
         let p = first_element_child(&root);
         assert!((p.style.border_top_width - 3.0).abs() < 0.01);
         assert_eq!(p.style.border_top_style, BorderStyle::Dashed);
-        let c = p.style.border_top_color.expect("top color set");
+        let CssColor::Rgba(c) = p.style.border_top_color else { panic!("top color set") };
         assert_eq!(c.b, 255);
         // Остальные стороны без изменений.
         assert_eq!(p.style.border_right_width, 0.0);
@@ -4053,7 +4054,7 @@ mod tests {
         let root = lay("<p>x</p>", "");
         let p = first_element_child(&root);
         assert_eq!(p.style.text_emphasis_style, TextEmphasisStyle::None);
-        assert!(p.style.text_emphasis_color.is_none(), "initial = currentColor");
+        assert!(matches!(p.style.text_emphasis_color, CssColor::CurrentColor), "initial = currentColor");
         assert_eq!(
             p.style.text_emphasis_position,
             TextEmphasisPosition::OverRight
@@ -4130,7 +4131,7 @@ mod tests {
     fn text_emphasis_color_explicit_and_currentcolor() {
         let r1 = lay("<p>x</p>", "p { text-emphasis-color: red; }");
         let p1 = first_element_child(&r1);
-        assert_eq!(p1.style.text_emphasis_color.unwrap().r, 255);
+        assert!(matches!(p1.style.text_emphasis_color, CssColor::Rgba(Color { r: 255, .. })));
 
         // Override → currentColor сбрасывает в None.
         let r2 = lay(
@@ -4138,7 +4139,7 @@ mod tests {
             "p { text-emphasis-color: red; text-emphasis-color: currentColor; }",
         );
         let p2 = first_element_child(&r2);
-        assert!(p2.style.text_emphasis_color.is_none());
+        assert!(matches!(p2.style.text_emphasis_color, CssColor::CurrentColor));
     }
 
     #[test]
@@ -4212,7 +4213,7 @@ mod tests {
                 shape: TextEmphasisShape::Dot
             }
         );
-        assert_eq!(p.style.text_emphasis_color.unwrap().b, 255);
+        assert!(matches!(p.style.text_emphasis_color, CssColor::Rgba(Color { b: 255, .. })));
     }
 
     #[test]
@@ -4233,7 +4234,7 @@ mod tests {
             TextEmphasisStyle::None,
             "shorthand без style-токена → initial None"
         );
-        assert_eq!(p.style.text_emphasis_color.unwrap().r, 255);
+        assert!(matches!(p.style.text_emphasis_color, CssColor::Rgba(Color { r: 255, .. })));
         assert_eq!(
             p.style.text_emphasis_position,
             TextEmphasisPosition::UnderLeft,
@@ -4246,7 +4247,7 @@ mod tests {
         let root = lay("<p>x</p>", "p { text-emphasis: none; }");
         let p = first_element_child(&root);
         assert_eq!(p.style.text_emphasis_style, TextEmphasisStyle::None);
-        assert!(p.style.text_emphasis_color.is_none());
+        assert!(matches!(p.style.text_emphasis_color, CssColor::CurrentColor));
     }
 
     #[test]
@@ -5584,7 +5585,7 @@ mod tests {
         let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
         assert_eq!(
             p.style.background_color,
-            Some(Color { r: 0, g: 100, b: 200, a: 255 })
+            Some(CssColor::Rgba(Color { r: 0, g: 100, b: 200, a: 255 }))
         );
     }
 
@@ -8112,7 +8113,7 @@ mod tests {
         );
         let body = first_element_child(&root);
         let p = first_element_child(body);
-        assert_eq!(p.style.background_color, Some(Color { r: 0, g: 255, b: 0, a: 255 }));
+        assert_eq!(p.style.background_color, Some(CssColor::Rgba(Color { r: 0, g: 255, b: 0, a: 255 })));
     }
 
     /// В Quirks 3-hex bare digit-ы тоже парсятся: `f00` → red.
@@ -8138,7 +8139,7 @@ mod tests {
         let p = first_element_child(body);
         assert_eq!(
             p.style.border_top_color,
-            Some(Color { r: 0, g: 0, b: 255, a: 255 }),
+            CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 }),
         );
     }
 
@@ -8364,7 +8365,7 @@ mod tests {
         let (html, body) = html_and_body(&root);
         assert_eq!(
             html.style.background_color,
-            Some(Color { r: 255, g: 0, b: 0, a: 255 }),
+            Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 })),
             "html должен получить фон body"
         );
         assert_eq!(
@@ -8382,12 +8383,12 @@ mod tests {
         let (html, body) = html_and_body(&root);
         assert_eq!(
             html.style.background_color,
-            Some(Color { r: 0, g: 0, b: 255, a: 255 }),
+            Some(CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 })),
             "html сохраняет свой фон"
         );
         assert_eq!(
             body.style.background_color,
-            Some(Color { r: 255, g: 0, b: 0, a: 255 }),
+            Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 })),
             "body тоже сохраняет — propagation не сработала"
         );
     }
@@ -8422,7 +8423,7 @@ mod tests {
         assert_eq!(html.style.background_color, None);
         assert_eq!(
             body.style.background_color,
-            Some(Color { r: 255, g: 0, b: 0, a: 255 })
+            Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }))
         );
     }
 
@@ -8445,7 +8446,7 @@ mod tests {
         let p = first_element_child(&root);
         assert_eq!(
             p.style.background_color,
-            Some(Color { r: 255, g: 0, b: 0, a: 255 })
+            Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }))
         );
     }
 
@@ -8459,7 +8460,7 @@ mod tests {
         let (html, body) = html_and_body(&root);
         assert_eq!(
             html.style.background_color,
-            Some(Color { r: 255, g: 0, b: 0, a: 255 }),
+            Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 })),
             "html должен получить фон из bgcolor после propagation"
         );
         assert_eq!(body.style.background_color, None, "body фон обнуляется после propagation");
@@ -8473,7 +8474,7 @@ mod tests {
         let (html, _body) = html_and_body(&root);
         assert_eq!(
             html.style.background_color,
-            Some(Color { r: 255, g: 0, b: 0, a: 255 }),
+            Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 })),
             "hashless hex bgcolor должен распознаваться"
         );
     }
@@ -8486,7 +8487,7 @@ mod tests {
         let table = first_element_child(body);
         assert_eq!(
             table.style.background_color,
-            Some(Color { r: 0, g: 0, b: 128, a: 255 }),
+            Some(CssColor::Rgba(Color { r: 0, g: 0, b: 128, a: 255 })),
             "bgcolor на table должен задавать background-color"
         );
     }
@@ -8500,7 +8501,7 @@ mod tests {
         let tr = first_element_child(table);
         assert_eq!(
             tr.style.background_color,
-            Some(Color { r: 0, g: 255, b: 0, a: 255 }),
+            Some(CssColor::Rgba(Color { r: 0, g: 255, b: 0, a: 255 })),
             "bgcolor на tr должен задавать background-color"
         );
     }
@@ -8515,7 +8516,7 @@ mod tests {
         let td = first_element_child(tr);
         assert_eq!(
             td.style.background_color,
-            Some(Color { r: 0, g: 0, b: 255, a: 255 }),
+            Some(CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 })),
             "bgcolor на td должен задавать background-color"
         );
     }
@@ -8530,7 +8531,7 @@ mod tests {
         let (html, _body) = html_and_body(&root);
         assert_eq!(
             html.style.background_color,
-            Some(Color { r: 0, g: 0, b: 255, a: 255 }),
+            Some(CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 })),
             "author CSS background-color должен побеждать bgcolor атрибут"
         );
     }
@@ -8552,7 +8553,7 @@ mod tests {
         let (html, _body) = html_and_body(&root);
         assert_eq!(
             html.style.background_color,
-            Some(Color { r: 128, g: 128, b: 0, a: 255 }),
+            Some(CssColor::Rgba(Color { r: 128, g: 128, b: 0, a: 255 })),
             "named color 'olive' должен правильно конвертироваться"
         );
     }

@@ -519,6 +519,29 @@ impl Color {
     };
 }
 
+/// CSS Color L4 §4.2 — типизированное цветовое значение каскада.
+///
+/// `Rgba` — разрешённый конкретный цвет; `CurrentColor` — keyword `currentcolor`,
+/// который разрешается в вычисленное значение `color` элемента при рендеринге.
+/// Позволяет корректно хранить `border-color: currentcolor` и аналогичные
+/// декларации без немедленного обращения к `color`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CssColor {
+    Rgba(Color),
+    CurrentColor,
+}
+
+impl CssColor {
+    /// Разрешает значение: `Rgba` — как есть; `CurrentColor` — использует
+    /// `current_color` элемента (его вычисленный `color`).
+    pub fn resolve(self, current_color: Color) -> Color {
+        match self {
+            CssColor::Rgba(c) => c,
+            CssColor::CurrentColor => current_color,
+        }
+    }
+}
+
 /// Стиль линии CSS border. None = рамка не отображается (как `display: none`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum BorderStyle {
@@ -1165,7 +1188,7 @@ pub struct ComputedStyle {
     /// HTML `dir`-атрибут. См. `Direction` для подробностей.
     pub direction: Direction,
     pub color: Color,
-    pub background_color: Option<Color>,
+    pub background_color: Option<CssColor>,
     pub font_size: f32,
     pub line_height: f32,
     pub font_style: FontStyle,
@@ -1198,11 +1221,11 @@ pub struct ComputedStyle {
     /// отрицательным.
     pub word_spacing: f32,
     pub text_decoration_line: TextDecorationLine,
-    /// CSS Text Decoration L3 §3 — `text-decoration-color`. None означает
-    /// «использовать currentColor» (то есть `style.color` при рендеринге).
-    /// Inherited через каскад (как и `text-decoration-line` в Phase 0 — см.
-    /// decisions log).
-    pub text_decoration_color: Option<Color>,
+    /// CSS Text Decoration L3 §3 — `text-decoration-color`. `CurrentColor`
+    /// означает «использовать style.color при рендеринге» (initial value по
+    /// spec). Inherited через каскад (как и `text-decoration-line` в Phase 0
+    /// — см. decisions log).
+    pub text_decoration_color: CssColor,
     /// CSS Text Decoration L3 §2.2 — `text-decoration-style`. Initial: Solid.
     /// Inherited через каскад (Phase 0; см. doc на [`TextDecorationStyle`]).
     pub text_decoration_style: TextDecorationStyle,
@@ -1214,9 +1237,8 @@ pub struct ComputedStyle {
     /// real rendering поверх каждого глифа — задача P2.
     pub text_emphasis_style: TextEmphasisStyle,
     /// CSS Text Decoration L4 §5.4 — `text-emphasis-color`. Inherited.
-    /// Initial: `None` = currentColor (тот же паттерн, что
-    /// `text_decoration_color`). При рендере резолвится в `style.color`.
-    pub text_emphasis_color: Option<Color>,
+    /// Initial: `CurrentColor` — разрешается в `style.color` при рендере.
+    pub text_emphasis_color: CssColor,
     /// CSS Text Decoration L4 §5.5 — `text-emphasis-position`. Inherited.
     /// Initial: `OverRight` (horizontal writing-mode).
     pub text_emphasis_position: TextEmphasisPosition,
@@ -1253,11 +1275,11 @@ pub struct ComputedStyle {
     pub border_right_style: BorderStyle,
     pub border_bottom_style: BorderStyle,
     pub border_left_style: BorderStyle,
-    /// None = currentColor (используется style.color при рендеринге).
-    pub border_top_color: Option<Color>,
-    pub border_right_color: Option<Color>,
-    pub border_bottom_color: Option<Color>,
-    pub border_left_color: Option<Color>,
+    /// Initial = `CurrentColor` (spec: initial value of border-color IS currentColor).
+    pub border_top_color: CssColor,
+    pub border_right_color: CssColor,
+    pub border_bottom_color: CssColor,
+    pub border_left_color: CssColor,
     pub box_sizing: BoxSizing,
     /// CSS Positioned Layout L3 §3 — `position`. Не наследуется. Default
     /// `Static`. Phase 0 layout не делает позиционирование (offsets top/right/
@@ -1370,8 +1392,8 @@ pub struct ComputedStyle {
     /// CSS Multi-column L1 §4.2 — `column-rule-style`. Default `None`
     /// (без линии — линия рисуется только если style != None и width > 0).
     pub column_rule_style: BorderStyle,
-    /// CSS Multi-column L1 §4.3 — `column-rule-color`. `None` = currentColor.
-    pub column_rule_color: Option<Color>,
+    /// CSS Multi-column L1 §4.3 — `column-rule-color`. Initial = `CurrentColor`.
+    pub column_rule_color: CssColor,
     /// CSS Multi-column L1 §6.1 — `column-span: none | all`. По умолчанию
     /// `None` (False), `Some(true)` = `all` (элемент растягивается через
     /// все колонки). Не наследуется. Phase 0: parse+store.
@@ -2556,11 +2578,11 @@ impl ComputedStyle {
             letter_spacing: 0.0,
             word_spacing: 0.0,
             text_decoration_line: TextDecorationLine::default(),
-            text_decoration_color: None,
+            text_decoration_color: CssColor::CurrentColor,
             text_decoration_style: TextDecorationStyle::Solid,
             text_decoration_thickness: TextDecorationThickness::Auto,
             text_emphasis_style: TextEmphasisStyle::None,
-            text_emphasis_color: None,
+            text_emphasis_color: CssColor::CurrentColor,
             text_emphasis_position: TextEmphasisPosition::OverRight,
             width: None,
             height: None,
@@ -2584,10 +2606,10 @@ impl ComputedStyle {
             border_right_style: BorderStyle::None,
             border_bottom_style: BorderStyle::None,
             border_left_style: BorderStyle::None,
-            border_top_color: None,
-            border_right_color: None,
-            border_bottom_color: None,
-            border_left_color: None,
+            border_top_color: CssColor::CurrentColor,
+            border_right_color: CssColor::CurrentColor,
+            border_bottom_color: CssColor::CurrentColor,
+            border_left_color: CssColor::CurrentColor,
             box_sizing: BoxSizing::ContentBox,
             position: Position::Static,
             z_index: None,
@@ -2622,7 +2644,7 @@ impl ComputedStyle {
             column_width: None,
             column_rule_width: 0.0,
             column_rule_style: BorderStyle::None,
-            column_rule_color: None,
+            column_rule_color: CssColor::CurrentColor,
             column_span_all: false,
             column_fill_balance: false,
             break_before: BreakValue::Auto,
@@ -2759,10 +2781,10 @@ pub fn compute_style(
         border_right_style: BorderStyle::None,
         border_bottom_style: BorderStyle::None,
         border_left_style: BorderStyle::None,
-        border_top_color: None,
-        border_right_color: None,
-        border_bottom_color: None,
-        border_left_color: None,
+        border_top_color: CssColor::CurrentColor,
+        border_right_color: CssColor::CurrentColor,
+        border_bottom_color: CssColor::CurrentColor,
+        border_left_color: CssColor::CurrentColor,
         box_sizing: BoxSizing::ContentBox,
         // CSS Positioned Layout L3 §3 / Compositing L1 — не наследуются.
         position: Position::Static,
@@ -2805,7 +2827,7 @@ pub fn compute_style(
         column_width: None,
         column_rule_width: 0.0,
         column_rule_style: BorderStyle::None,
-        column_rule_color: None,
+        column_rule_color: CssColor::CurrentColor,
         column_span_all: false,
         column_fill_balance: false,
         break_before: BreakValue::Auto,
@@ -4779,7 +4801,7 @@ fn apply_bgcolor_presentational_hint(doc: &Document, node: NodeId, style: &mut C
     if let Some(val) = node_ref.get_attr("bgcolor")
         && let Some(c) = parse_legacy_color_html_attr(val)
     {
-        style.background_color = Some(c);
+        style.background_color = Some(CssColor::Rgba(c));
     }
 }
 
@@ -6263,12 +6285,14 @@ fn apply_declaration(
             }
         }
         "color" => {
-            if let Some(c) = parse_color_legacy(val, is_quirks) {
-                style.color = c;
+            match parse_css_color_legacy(val, is_quirks) {
+                Some(CssColor::Rgba(c)) => style.color = c,
+                Some(CssColor::CurrentColor) => style.color = inherited.color,
+                None => {}
             }
         }
         "background-color" | "background" => {
-            if let Some(c) = parse_color_legacy(val, is_quirks) {
+            if let Some(c) = parse_css_color_legacy(val, is_quirks) {
                 style.background_color = Some(c);
             }
         }
@@ -6775,11 +6799,14 @@ fn apply_declaration(
             style.column_rule_style = parse_border_style_opt(val.trim()).unwrap_or(BorderStyle::None);
         }
         "column-rule-color" => {
-            style.column_rule_color = parse_color_legacy(val.trim(), is_quirks);
+            if let Some(c) = parse_css_color_legacy(val.trim(), is_quirks) {
+                style.column_rule_color = c;
+            }
         }
         "column-rule" => {
             // Shorthand: <width> || <style> || <color>. Любой порядок.
             let mut rest = val.trim().to_string();
+            let mut color_set = false;
             // Color может содержать пробелы (rgba(...)), но в Phase 0 — простой
             // word-by-word проход.
             for tok in val.split_whitespace() {
@@ -6795,8 +6822,9 @@ fn apply_declaration(
                     rest = rest.replacen(tok, "", 1);
                     continue;
                 }
-                if let Some(c) = parse_color_legacy(tok, is_quirks) {
-                    style.column_rule_color = Some(c);
+                if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
+                    style.column_rule_color = c;
+                    color_set = true;
                     rest = rest.replacen(tok, "", 1);
                 }
             }
@@ -6804,10 +6832,10 @@ fn apply_declaration(
             // парсить как цвет.
             let rest = rest.trim();
             if !rest.is_empty()
-                && style.column_rule_color.is_none()
-                && let Some(c) = parse_color_legacy(rest, is_quirks)
+                && !color_set
+                && let Some(c) = parse_css_color_legacy(rest, is_quirks)
             {
-                style.column_rule_color = Some(c);
+                style.column_rule_color = c;
             }
         }
         "column-span" => {
@@ -7482,7 +7510,7 @@ fn apply_declaration(
             // что-то распарсилось.
             if parsed.any_recognized {
                 style.text_decoration_line = parsed.line.unwrap_or_default();
-                style.text_decoration_color = parsed.color;
+                style.text_decoration_color = parsed.color.unwrap_or(CssColor::CurrentColor);
                 style.text_decoration_style = parsed.style.unwrap_or_default();
                 // text-decoration-thickness shorthand-ом не сбрасывается
                 // (исключена из L3 shorthand-а; см. §2.1).
@@ -7495,13 +7523,8 @@ fn apply_declaration(
             }
         }
         "text-decoration-color" => {
-            // `currentcolor` сбрасывает в None — даёт fallback на style.color
-            // при рендеринге. CSS3 не описывает явное «возврат к default»,
-            // но `currentColor` имеет ту же семантику.
-            if val.eq_ignore_ascii_case("currentcolor") {
-                style.text_decoration_color = None;
-            } else if let Some(c) = parse_color_legacy(val, is_quirks) {
-                style.text_decoration_color = Some(c);
+            if let Some(c) = parse_css_color_legacy(val, is_quirks) {
+                style.text_decoration_color = c;
             }
         }
         "text-decoration-style" => {
@@ -7526,13 +7549,8 @@ fn apply_declaration(
             }
         }
         "text-emphasis-color" => {
-            // CSS Text Decoration L4 §5.4. `currentcolor` → None (fallback на
-            // style.color при рендеринге; тот же паттерн, что у
-            // text-decoration-color).
-            if val.eq_ignore_ascii_case("currentcolor") {
-                style.text_emphasis_color = None;
-            } else if let Some(c) = parse_color_legacy(val, is_quirks) {
-                style.text_emphasis_color = Some(c);
+            if let Some(c) = parse_css_color_legacy(val, is_quirks) {
+                style.text_emphasis_color = c;
             }
         }
         "text-emphasis-position" => {
@@ -7577,10 +7595,10 @@ fn apply_declaration(
         }
         "border-color" => {
             let sides = expand_border_4(val);
-            if let Some(c) = parse_color_legacy(sides[0], is_quirks) { style.border_top_color = Some(c); }
-            if let Some(c) = parse_color_legacy(sides[1], is_quirks) { style.border_right_color = Some(c); }
-            if let Some(c) = parse_color_legacy(sides[2], is_quirks) { style.border_bottom_color = Some(c); }
-            if let Some(c) = parse_color_legacy(sides[3], is_quirks) { style.border_left_color = Some(c); }
+            if let Some(c) = parse_css_color_legacy(sides[0], is_quirks) { style.border_top_color = c; }
+            if let Some(c) = parse_css_color_legacy(sides[1], is_quirks) { style.border_right_color = c; }
+            if let Some(c) = parse_css_color_legacy(sides[2], is_quirks) { style.border_bottom_color = c; }
+            if let Some(c) = parse_css_color_legacy(sides[3], is_quirks) { style.border_left_color = c; }
         }
         "border-radius" => {
             // CSS Backgrounds L3 §5.5 shorthand. Поддерживаем только
@@ -7647,10 +7665,10 @@ fn apply_declaration(
         "border-right-style" => style.border_right_style = parse_border_style_kw(val),
         "border-bottom-style" => style.border_bottom_style = parse_border_style_kw(val),
         "border-left-style" => style.border_left_style = parse_border_style_kw(val),
-        "border-top-color" => { if let Some(c) = parse_color_legacy(val, is_quirks) { style.border_top_color = Some(c); } }
-        "border-right-color" => { if let Some(c) = parse_color_legacy(val, is_quirks) { style.border_right_color = Some(c); } }
-        "border-bottom-color" => { if let Some(c) = parse_color_legacy(val, is_quirks) { style.border_bottom_color = Some(c); } }
-        "border-left-color" => { if let Some(c) = parse_color_legacy(val, is_quirks) { style.border_left_color = Some(c); } }
+        "border-top-color" => { if let Some(c) = parse_css_color_legacy(val, is_quirks) { style.border_top_color = c; } }
+        "border-right-color" => { if let Some(c) = parse_css_color_legacy(val, is_quirks) { style.border_right_color = c; } }
+        "border-bottom-color" => { if let Some(c) = parse_css_color_legacy(val, is_quirks) { style.border_bottom_color = c; } }
+        "border-left-color" => { if let Some(c) = parse_css_color_legacy(val, is_quirks) { style.border_left_color = c; } }
         "box-sizing" => {
             style.box_sizing = match val.trim().to_ascii_lowercase().as_str() {
                 "border-box" => BoxSizing::BorderBox,
@@ -7670,7 +7688,7 @@ fn apply_declaration(
 /// значение к initial.
 pub(crate) struct ParsedTextDecorationShorthand {
     pub line: Option<TextDecorationLine>,
-    pub color: Option<Color>,
+    pub color: Option<CssColor>,
     pub style: Option<TextDecorationStyle>,
     pub any_recognized: bool,
 }
@@ -7700,8 +7718,7 @@ fn parse_text_decoration_shorthand_q(val: &str, is_quirks: bool) -> ParsedTextDe
     let mut any_line = false;
     let mut none_seen = false;
     let mut out_style: Option<TextDecorationStyle> = None;
-    let mut color: Option<Color> = None;
-    let mut color_currentcolor = false;
+    let mut color: Option<CssColor> = None;
     let mut any_recognized = false;
     // Цвет может быть многословным: `rgb(0, 0, 0)`, `hsl(0 0% 0% / 1)`, …
     // Соберём «не-линия / не-стиль» токены и попытаемся склеить.
@@ -7755,7 +7772,7 @@ fn parse_text_decoration_shorthand_q(val: &str, is_quirks: bool) -> ParsedTextDe
                 any_recognized = true;
             }
             "currentcolor" => {
-                color_currentcolor = true;
+                color = Some(CssColor::CurrentColor);
                 any_recognized = true;
             }
             _ => residue.push(token),
@@ -7765,26 +7782,20 @@ fn parse_text_decoration_shorthand_q(val: &str, is_quirks: bool) -> ParsedTextDe
         // Попробуем сначала весь residue (на случай color-функции с
         // пробелами: `rgb(0 0 0)` → токены `rgb(0`, `0`, `0)`).
         let joined = residue.join(" ");
-        if let Some(c) = parse_color_legacy(joined.trim(), is_quirks) {
+        if let Some(c) = parse_css_color_legacy(joined.trim(), is_quirks) {
             color = Some(c);
             any_recognized = true;
         } else {
             // Иначе пробуем токен за токеном — для named-color / hex без
             // пробелов внутри.
             for tok in &residue {
-                if let Some(c) = parse_color_legacy(tok, is_quirks) {
+                if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
                     color = Some(c);
                     any_recognized = true;
                     break;
                 }
             }
         }
-    }
-    if color_currentcolor && color.is_none() {
-        // `currentcolor` явно встретился — но это не value «нет цвета»;
-        // у нас представление currentColor = None, поэтому не ставим color
-        // — кто-то снаружи решит, что это сброс. В shorthand `text-decoration`
-        // ничего не делаем (style.text_decoration_color остаётся как есть).
     }
     let line = if any_line {
         if none_seen { Some(TextDecorationLine::default()) } else { Some(out_line) }
@@ -7957,7 +7968,7 @@ fn parse_text_emphasis_position(val: &str) -> Option<TextEmphasisPosition> {
 /// сбрасываются к initial.
 fn apply_text_emphasis_shorthand(style: &mut ComputedStyle, val: &str, is_quirks: bool) {
     style.text_emphasis_style = TextEmphasisStyle::None;
-    style.text_emphasis_color = None;
+    style.text_emphasis_color = CssColor::CurrentColor;
     let trimmed = val.trim();
     if trimmed.is_empty() {
         return;
@@ -7971,23 +7982,22 @@ fn apply_text_emphasis_shorthand(style: &mut ComputedStyle, val: &str, is_quirks
         return;
     }
 
-    let mut color: Option<Color> = None;
-    let mut saw_currentcolor = false;
+    let mut color: Option<CssColor> = None;
     let mut style_tokens: Vec<&str> = Vec::new();
     for tok in trimmed.split_whitespace() {
         if tok.eq_ignore_ascii_case("currentcolor") {
-            if color.is_some() || saw_currentcolor {
+            if color.is_some() {
                 return;
             }
-            saw_currentcolor = true;
+            color = Some(CssColor::CurrentColor);
             continue;
         }
         if parse_text_emphasis_fill(tok).is_some() || parse_text_emphasis_shape(tok).is_some() {
             style_tokens.push(tok);
             continue;
         }
-        if !saw_currentcolor && color.is_none()
-            && let Some(c) = parse_color_legacy(tok, is_quirks)
+        if color.is_none()
+            && let Some(c) = parse_css_color_legacy(tok, is_quirks)
         {
             color = Some(c);
             continue;
@@ -7995,7 +8005,7 @@ fn apply_text_emphasis_shorthand(style: &mut ComputedStyle, val: &str, is_quirks
         return;
     }
 
-    style.text_emphasis_color = if saw_currentcolor { None } else { color };
+    style.text_emphasis_color = color.unwrap_or(CssColor::CurrentColor);
 
     if style_tokens.is_empty() {
         return;
@@ -9707,11 +9717,11 @@ fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32, v
             style.border_right_style = bs;
             style.border_bottom_style = bs;
             style.border_left_style = bs;
-        } else if let Some(c) = parse_color_legacy(tok, is_quirks) {
-            style.border_top_color = Some(c);
-            style.border_right_color = Some(c);
-            style.border_bottom_color = Some(c);
-            style.border_left_color = Some(c);
+        } else if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
+            style.border_top_color = c;
+            style.border_right_color = c;
+            style.border_bottom_color = c;
+            style.border_left_color = c;
         }
     }
 }
@@ -9720,7 +9730,7 @@ fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32, v
 fn apply_border_side_shorthand(
     width: &mut f32,
     bstyle: &mut BorderStyle,
-    color: &mut Option<Color>,
+    color: &mut CssColor,
     val: &str,
     em_basis: f32,
     viewport: Size,
@@ -9731,8 +9741,8 @@ fn apply_border_side_shorthand(
             *width = v;
         } else if is_border_style_kw(tok) {
             *bstyle = parse_border_style_kw(tok);
-        } else if let Some(c) = parse_color_legacy(tok, is_quirks) {
-            *color = Some(c);
+        } else if let Some(c) = parse_css_color_legacy(tok, is_quirks) {
+            *color = c;
         }
     }
 }
@@ -9803,6 +9813,20 @@ fn parse_color_legacy(s: &str, is_quirks: bool) -> Option<Color> {
     }
     let with_hash = format!("#{trimmed}");
     parse_color(&with_hash)
+}
+
+/// Парсит `<color>` + `currentcolor` keyword в `CssColor`.
+///
+/// `currentcolor` — специальное CSS keyword, означающее «использовать
+/// вычисленный `color` элемента при рендеринге». Возвращает
+/// `Some(CssColor::CurrentColor)` для этого случая;
+/// `Some(CssColor::Rgba(...))` для обычных цветов; `None` для невалидных.
+fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Option<CssColor> {
+    let s = s.trim();
+    if s.eq_ignore_ascii_case("currentcolor") {
+        return Some(CssColor::CurrentColor);
+    }
+    parse_color_legacy(s, is_quirks).map(CssColor::Rgba)
 }
 
 /// CSS Color Module Level 3 §4.3 — X11 / SVG named colors. Принимает имя
@@ -11158,14 +11182,14 @@ mod tests {
         // `text-decoration: underline red` — линия + цвет.
         let p = parse_text_decoration_shorthand("underline red");
         assert!(p.line.unwrap().underline);
-        assert_eq!(p.color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+        assert_eq!(p.color, Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 })));
     }
 
     #[test]
     fn text_decoration_color_hex_in_shorthand() {
         let p = parse_text_decoration_shorthand("overline #00ff00");
         assert!(p.line.unwrap().overline);
-        assert_eq!(p.color, Some(Color { r: 0, g: 255, b: 0, a: 255 }));
+        assert_eq!(p.color, Some(CssColor::Rgba(Color { r: 0, g: 255, b: 0, a: 255 })));
     }
 
     #[test]
@@ -11174,21 +11198,21 @@ mod tests {
         // склеиваться обратно.
         let p = parse_text_decoration_shorthand("line-through rgb(0 0 255)");
         assert!(p.line.unwrap().line_through);
-        assert_eq!(p.color, Some(Color { r: 0, g: 0, b: 255, a: 255 }));
+        assert_eq!(p.color, Some(CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 })));
     }
 
     #[test]
     fn text_decoration_color_property_named() {
         // Отдельное свойство text-decoration-color.
         let s = style_for("text-decoration-color: blue");
-        assert_eq!(s.text_decoration_color, Some(Color { r: 0, g: 0, b: 255, a: 255 }));
+        assert_eq!(s.text_decoration_color, CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 }));
     }
 
     #[test]
     fn text_decoration_color_currentcolor_resets() {
         // `currentcolor` сбрасывает text-decoration-color в None.
         let s = style_for("text-decoration-color: red; text-decoration-color: currentcolor");
-        assert_eq!(s.text_decoration_color, None);
+        assert_eq!(s.text_decoration_color, CssColor::CurrentColor);
     }
 
     #[test]
@@ -11200,10 +11224,10 @@ mod tests {
         let root_style = ComputedStyle::root();
         let div = doc.get(doc.root()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
-        assert_eq!(div_style.text_decoration_color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+        assert_eq!(div_style.text_decoration_color, CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }));
         let p = doc.get(div).children[0];
         let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
-        assert_eq!(p_style.text_decoration_color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+        assert_eq!(p_style.text_decoration_color, CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }));
     }
 
     #[test]
@@ -11211,7 +11235,7 @@ mod tests {
         // Полный путь через apply_declaration.
         let s = style_for("text-decoration: underline blue");
         assert!(s.text_decoration_line.underline);
-        assert_eq!(s.text_decoration_color, Some(Color { r: 0, g: 0, b: 255, a: 255 }));
+        assert_eq!(s.text_decoration_color, CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 }));
     }
 
     #[test]
@@ -11219,7 +11243,7 @@ mod tests {
         // По умолчанию text-decoration-color = None → currentColor при
         // рендеринге.
         let s = ComputedStyle::root();
-        assert!(s.text_decoration_color.is_none());
+        assert!(matches!(s.text_decoration_color, CssColor::CurrentColor));
     }
 
     // ── text-decoration-style ──────────────────────────────────────────────
@@ -11265,7 +11289,7 @@ mod tests {
         let s = style_for("text-decoration: underline wavy red");
         assert!(s.text_decoration_line.underline);
         assert_eq!(s.text_decoration_style, TextDecorationStyle::Wavy);
-        assert_eq!(s.text_decoration_color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+        assert_eq!(s.text_decoration_color, CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }));
     }
 
     #[test]
@@ -11418,8 +11442,8 @@ mod tests {
         assert_eq!(s.border_bottom_style, BorderStyle::Solid);
         assert_eq!(s.border_left_style, BorderStyle::Solid);
         let red = Color { r: 255, g: 0, b: 0, a: 255 };
-        assert_eq!(s.border_top_color, Some(red));
-        assert_eq!(s.border_right_color, Some(red));
+        assert_eq!(s.border_top_color, CssColor::Rgba(red));
+        assert_eq!(s.border_right_color, CssColor::Rgba(red));
     }
 
     #[test]
@@ -11442,8 +11466,8 @@ mod tests {
     fn border_color_shorthand() {
         let blue = Color { r: 0, g: 0, b: 255, a: 255 };
         let s = style_for("border-color: blue");
-        assert_eq!(s.border_top_color, Some(blue));
-        assert_eq!(s.border_left_color, Some(blue));
+        assert_eq!(s.border_top_color, CssColor::Rgba(blue));
+        assert_eq!(s.border_left_color, CssColor::Rgba(blue));
     }
 
     #[test]
@@ -11452,7 +11476,7 @@ mod tests {
         assert!((s.border_top_width - 3.0).abs() < 0.01);
         assert_eq!(s.border_top_style, BorderStyle::Dotted);
         let green = Color { r: 0, g: 128, b: 0, a: 255 };
-        assert_eq!(s.border_top_color, Some(green));
+        assert_eq!(s.border_top_color, CssColor::Rgba(green));
         // Остальные стороны — не изменены.
         assert!((s.border_right_width - 0.0).abs() < 0.01);
         assert_eq!(s.border_right_style, BorderStyle::None);
@@ -11469,7 +11493,7 @@ mod tests {
     #[test]
     fn border_no_color_means_none() {
         let s = style_for("border: 2px solid");
-        assert!(s.border_top_color.is_none());
+        assert!(matches!(s.border_top_color, CssColor::CurrentColor));
     }
 
     #[test]
@@ -11699,7 +11723,7 @@ mod tests {
         let s = style_for("--w: 2px; --s: solid; --c: red; border: var(--w) var(--s) var(--c)");
         assert!((s.border_top_width - 2.0).abs() < 0.01);
         assert_eq!(s.border_top_style, BorderStyle::Solid);
-        assert_eq!(s.border_top_color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+        assert_eq!(s.border_top_color, CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }));
     }
 
     #[test]
@@ -13681,7 +13705,7 @@ mod tests {
             "",
             &[0],
         );
-        assert_eq!(s.background_color, Some(Color { r: 255, g: 0, b: 0, a: 255 }));
+        assert_eq!(s.background_color, Some(CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 })));
     }
 
     #[test]
@@ -13738,7 +13762,7 @@ mod tests {
             "",
             &[0],
         );
-        assert_eq!(s.background_color, Some(Color { r: 0, g: 128, b: 0, a: 255 }));
+        assert_eq!(s.background_color, Some(CssColor::Rgba(Color { r: 0, g: 128, b: 0, a: 255 })));
         assert_eq!(s.color, Color { r: 255, g: 255, b: 0, a: 255 });
         assert_eq!(s.padding_top, Length::Px(5.0));
         assert_eq!(s.padding_right, Length::Px(5.0));
@@ -14400,13 +14424,13 @@ mod tests {
     #[test]
     fn bgcolor_hint_body_named() {
         let s = doc_root_child_style("<body bgcolor=\"red\"></body>");
-        assert_eq!(s.background_color, Some(rgba(255, 0, 0, 255)));
+        assert_eq!(s.background_color, Some(CssColor::Rgba(rgba(255, 0, 0, 255))));
     }
 
     #[test]
     fn bgcolor_hint_body_hash() {
         let s = doc_root_child_style("<body bgcolor=\"#00ff00\"></body>");
-        assert_eq!(s.background_color, Some(rgba(0, 255, 0, 255)));
+        assert_eq!(s.background_color, Some(CssColor::Rgba(rgba(0, 255, 0, 255))));
     }
 
     #[test]
@@ -14414,13 +14438,13 @@ mod tests {
         // Главное отличие HTML legacy от CSS quirk: hashless hex принимается
         // без зависимости от document mode.
         let s = doc_root_child_style("<body bgcolor=\"0000ff\"></body>");
-        assert_eq!(s.background_color, Some(rgba(0, 0, 255, 255)));
+        assert_eq!(s.background_color, Some(CssColor::Rgba(rgba(0, 0, 255, 255))));
     }
 
     #[test]
     fn bgcolor_hint_table_named() {
         let s = doc_root_child_style("<table bgcolor=\"yellow\"></table>");
-        assert_eq!(s.background_color, Some(rgba(255, 255, 0, 255)));
+        assert_eq!(s.background_color, Some(CssColor::Rgba(rgba(255, 255, 0, 255))));
     }
 
     #[test]
@@ -14447,7 +14471,7 @@ mod tests {
         let root_style = ComputedStyle::root();
         let body = doc.get(doc.root()).children[0];
         let s = compute_style(&doc, body, &sheet, &root_style, Size::new(800.0, 600.0));
-        assert_eq!(s.background_color, Some(rgba(0, 0, 255, 255)));
+        assert_eq!(s.background_color, Some(CssColor::Rgba(rgba(0, 0, 255, 255))));
     }
 
     #[test]
@@ -14461,7 +14485,7 @@ mod tests {
         let tr = doc.get(table).children[0];
         let td = doc.get(tr).children[0];
         let s = compute_style(&doc, td, &sheet, &root_style, Size::new(800.0, 600.0));
-        assert_eq!(s.background_color, Some(rgba(0xab, 0xcd, 0xef, 255)));
+        assert_eq!(s.background_color, Some(CssColor::Rgba(rgba(0xab, 0xcd, 0xef, 255))));
     }
 
     // ── apply_text_color_presentational_hint integration ─────────────────
