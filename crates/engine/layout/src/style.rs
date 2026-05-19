@@ -2482,6 +2482,23 @@ pub enum FilterFn {
     Sepia(f32),
 }
 
+/// CSS Images L3 §3.4 — единичный `<color-stop>` градиента.
+///
+/// `position == None` означает auto-распределение: при resolve до used-value
+/// auto-stops равномерно разносятся между фиксированными соседями (spec §3.4.3
+/// "Color stop processing"). Здесь типизация специфицированного значения —
+/// auto хранится как `None`, без раскрытия.
+///
+/// Только цвет и позиция (length / percentage). Hint-stops (`<color-stop>,
+/// <length-percentage>, <color-stop>`) — без позиции цвета, чисто
+/// midpoint-маркер — пока не моделируем: они отрабатывают на интерполяции
+/// между соседями и не имеют animation-смысла на уровне per-stop pair.
+#[derive(Debug, Clone, PartialEq)]
+pub struct GradientStop {
+    pub color: Color,
+    pub position: Option<Length>,
+}
+
 impl ComputedStyle {
     /// CSS 2.1 §17.6.1 / Basic UI L4 §5.2 — **used** value `outline-width`
     /// равно 0, если `outline-style` равен `none` (это spec, не аппроксимация).

@@ -20,12 +20,13 @@
 //!
 //! Sprint 0 stub имитирует discrete: всегда step-half, без типизации.
 
-use crate::style::{Color, FilterFn, Length, TransformFn};
+use crate::style::{Color, FilterFn, GradientStop, Length, TransformFn};
 
-/// Анимируемое значение. Phase 0: семь вариантов — Number / Length / Color /
-/// TransformList / FilterList / Discrete (для non-interpolable свойств).
+/// Анимируемое значение. Phase 0: восемь вариантов — Number / Length / Color /
+/// TransformList / FilterList / GradientStops / Discrete (для non-interpolable
+/// свойств).
 ///
-/// Реальный список расширится дальше: GradientStops, Path-data для clip-path,
+/// Реальный список расширится дальше: Path-data для clip-path, shape-функции,
 /// и т.д.
 #[derive(Debug, Clone, PartialEq)]
 pub enum AnimValue {
@@ -43,6 +44,12 @@ pub enum AnimValue {
     /// длинах но prefix-match — недостающую сторону дополняем lacuna
     /// (identity) значениями; иначе — discrete (step-half).
     FilterList(Vec<FilterFn>),
+    /// CSS Images L3 §3.5.1 — список `<color-stop>` градиента (без типа
+    /// градиента — линейный/радиальный/конический держится у потребителя).
+    /// Интерполяция: pairwise lerp цвета и позиции при идентичном числе
+    /// stops и совместимых типах позиций. Любое несовпадение длины или
+    /// unit-а позиции — `None` от helper-а → step-half у caller-а.
+    GradientStops(Vec<GradientStop>),
     /// Дискретное (не-интерполируемое) значение — хранится как ключ:
     /// для interpolation просто step-half.
     Discrete(String),
@@ -124,6 +131,11 @@ impl AnimationInterpolator for LinearInterpolator {
             (AnimValue::FilterList(a), AnimValue::FilterList(b)) => Some(
                 interpolate_filter_list(a, b, t)
                     .map(AnimValue::FilterList)
+                    .unwrap_or_else(|| if t < 0.5 { from.clone() } else { to.clone() }),
+            ),
+            (AnimValue::GradientStops(a), AnimValue::GradientStops(b)) => Some(
+                interpolate_gradient_stops(a, b, t)
+                    .map(AnimValue::GradientStops)
                     .unwrap_or_else(|| if t < 0.5 { from.clone() } else { to.clone() }),
             ),
             _ => {
@@ -281,6 +293,49 @@ fn interpolate_filter_fn_same_kind(a: &FilterFn, b: &FilterFn, t: f32) -> Filter
         (Sepia(a), Sepia(b)) => Sepia(lerp_f32(*a, *b, t)),
         _ => a.clone(),
     }
+}
+
+// ─── Gradient-stops interpolation (CSS Images L3 §3.5.1) ────────────────────
+
+/// Интерполяция списка `<color-stop>` по CSS Images L3 §3.5.1
+/// ("Interpolating Gradients").
+///
+/// Контракт:
+/// - Оба списка пусты — `Some(empty)` (идемпотентная пара).
+/// - Разная длина — `None`: spec требует поэлементного соответствия, иначе
+///   discrete (`step-half` делает caller). Auto-распределение
+///   `position: None` к used-value pre-interpolation — задача resolver-а;
+///   на уровне `AnimValue` считаем, что входы уже сравнимы.
+/// - Совпадение длин — pairwise lerp:
+///   - `color` — линейно в sRGB (как у Color anywhere else в этом модуле).
+///   - `position` — same-unit Length lerp; смешанные unit-ы или
+///     `Some ↔ None` дают `None` от всей функции (consumer переключается
+///     на step-half). Это консервативнее spec-а (он позволяет
+///     pre-resolve auto stops), но не выдаёт визуально ломаных промежутков.
+///   - `position` оба `None` — результат тоже `None` (auto → auto).
+pub(crate) fn interpolate_gradient_stops(
+    from: &[GradientStop],
+    to: &[GradientStop],
+    t: f32,
+) -> Option<Vec<GradientStop>> {
+    if from.is_empty() && to.is_empty() {
+        return Some(Vec::new());
+    }
+    if from.len() != to.len() {
+        return None;
+    }
+
+    let mut out = Vec::with_capacity(from.len());
+    for (a, b) in from.iter().zip(to.iter()) {
+        let color = interpolate_color(a.color, b.color, t);
+        let position = match (&a.position, &b.position) {
+            (None, None) => None,
+            (Some(pa), Some(pb)) => Some(interpolate_length(pa, pb, t)?),
+            _ => return None,
+        };
+        out.push(GradientStop { color, position });
+    }
+    Some(out)
 }
 
 // ─── Transform-list interpolation (CSS Transforms L2 §15) ───────────────────
@@ -1356,6 +1411,167 @@ mod tests {
         let interp = LinearInterpolator;
         let from = AnimValue::FilterList(vec![FilterFn::Invert(0.0)]);
         let to = AnimValue::FilterList(vec![FilterFn::Invert(1.0)]);
+        assert_eq!(interp.interpolate(&from, &to, 0.0), Some(from.clone()));
+        assert_eq!(interp.interpolate(&from, &to, 1.0), Some(to.clone()));
+    }
+
+    // ─── Gradient-stops interpolation ───────────────────────────────────────
+
+    fn stop(r: u8, g: u8, b: u8, pos: Option<Length>) -> GradientStop {
+        GradientStop {
+            color: Color { r, g, b, a: 255 },
+            position: pos,
+        }
+    }
+
+    fn assert_color_close(a: Color, expected: Color) {
+        assert!(
+            a.r.abs_diff(expected.r) <= 1
+                && a.g.abs_diff(expected.g) <= 1
+                && a.b.abs_diff(expected.b) <= 1
+                && a.a.abs_diff(expected.a) <= 1,
+            "color mismatch: got {a:?}, expected {expected:?}"
+        );
+    }
+
+    #[test]
+    fn gradient_stops_empty_pair_returns_empty() {
+        assert_eq!(interpolate_gradient_stops(&[], &[], 0.5), Some(Vec::new()));
+    }
+
+    #[test]
+    fn gradient_stops_mismatched_length_is_none() {
+        let a = vec![stop(255, 0, 0, Some(Length::Percent(0.0)))];
+        let b = vec![
+            stop(255, 0, 0, Some(Length::Percent(0.0))),
+            stop(0, 0, 255, Some(Length::Percent(100.0))),
+        ];
+        assert!(interpolate_gradient_stops(&a, &b, 0.5).is_none());
+    }
+
+    #[test]
+    fn gradient_stops_matched_pair_lerps_color_and_percent() {
+        // red @0% → blue @100%  at t=0.5  →  (128,0,128) @50%.
+        let from = vec![
+            stop(255, 0, 0, Some(Length::Percent(0.0))),
+            stop(0, 0, 255, Some(Length::Percent(100.0))),
+        ];
+        let to = vec![
+            stop(0, 0, 255, Some(Length::Percent(0.0))),
+            stop(255, 0, 0, Some(Length::Percent(100.0))),
+        ];
+        let res = interpolate_gradient_stops(&from, &to, 0.5).expect("some");
+        assert_eq!(res.len(), 2);
+        assert_color_close(res[0].color, Color { r: 128, g: 0, b: 128, a: 255 });
+        assert_color_close(res[1].color, Color { r: 128, g: 0, b: 128, a: 255 });
+        // Percent → Percent на одинаковых endpoints (0%, 100%) — без сдвига.
+        assert_eq!(res[0].position, Some(Length::Percent(0.0)));
+        assert_eq!(res[1].position, Some(Length::Percent(100.0)));
+    }
+
+    #[test]
+    fn gradient_stops_lerps_position_within_same_unit() {
+        // Сдвигаем второй stop с 100% к 50% — на t=0.5 ждём 75%.
+        let from = vec![
+            stop(255, 0, 0, Some(Length::Percent(0.0))),
+            stop(0, 0, 255, Some(Length::Percent(100.0))),
+        ];
+        let to = vec![
+            stop(255, 0, 0, Some(Length::Percent(0.0))),
+            stop(0, 0, 255, Some(Length::Percent(50.0))),
+        ];
+        let res = interpolate_gradient_stops(&from, &to, 0.5).expect("some");
+        assert_eq!(res[1].position, Some(Length::Percent(75.0)));
+    }
+
+    #[test]
+    fn gradient_stops_mixed_units_return_none() {
+        // px ↔ % несовместимы без resolve в used px → step-half у caller-а.
+        let from = vec![stop(255, 0, 0, Some(Length::Px(10.0)))];
+        let to = vec![stop(0, 0, 255, Some(Length::Percent(50.0)))];
+        assert!(interpolate_gradient_stops(&from, &to, 0.5).is_none());
+    }
+
+    #[test]
+    fn gradient_stops_some_to_none_is_none() {
+        // Один stop с фиксированной позицией, второй — auto-распределение:
+        // pair несовместима без pre-resolve, итог — discrete.
+        let from = vec![stop(255, 0, 0, Some(Length::Percent(0.0)))];
+        let to = vec![stop(0, 0, 255, None)];
+        assert!(interpolate_gradient_stops(&from, &to, 0.5).is_none());
+    }
+
+    #[test]
+    fn gradient_stops_both_none_positions_preserved() {
+        // auto → auto — позиция остаётся None, цвет lerp-ится.
+        let from = vec![stop(0, 0, 0, None)];
+        let to = vec![stop(255, 255, 255, None)];
+        let res = interpolate_gradient_stops(&from, &to, 0.5).expect("some");
+        assert_eq!(res[0].position, None);
+        assert_color_close(res[0].color, Color { r: 128, g: 128, b: 128, a: 255 });
+    }
+
+    #[test]
+    fn gradient_stops_endpoints_t_zero_and_one() {
+        // Pixel-positions lerp на endpoints: t=0 ≈ from, t=1 ≈ to.
+        let from = vec![
+            stop(10, 20, 30, Some(Length::Px(0.0))),
+            stop(40, 50, 60, Some(Length::Px(100.0))),
+        ];
+        let to = vec![
+            stop(70, 80, 90, Some(Length::Px(0.0))),
+            stop(100, 110, 120, Some(Length::Px(200.0))),
+        ];
+        let at_zero = interpolate_gradient_stops(&from, &to, 0.0).expect("some");
+        assert_color_close(at_zero[0].color, from[0].color);
+        assert_color_close(at_zero[1].color, from[1].color);
+        assert_eq!(at_zero[1].position, Some(Length::Px(100.0)));
+
+        let at_one = interpolate_gradient_stops(&from, &to, 1.0).expect("some");
+        assert_color_close(at_one[0].color, to[0].color);
+        assert_color_close(at_one[1].color, to[1].color);
+        assert_eq!(at_one[1].position, Some(Length::Px(200.0)));
+    }
+
+    #[test]
+    fn linear_interpolator_gradient_stops_smooth() {
+        let interp = LinearInterpolator;
+        let from = AnimValue::GradientStops(vec![
+            stop(255, 0, 0, Some(Length::Percent(0.0))),
+            stop(0, 0, 255, Some(Length::Percent(100.0))),
+        ]);
+        let to = AnimValue::GradientStops(vec![
+            stop(0, 0, 255, Some(Length::Percent(0.0))),
+            stop(255, 0, 0, Some(Length::Percent(100.0))),
+        ]);
+        match interp.interpolate(&from, &to, 0.5).expect("some") {
+            AnimValue::GradientStops(stops) => {
+                assert_eq!(stops.len(), 2);
+                assert_color_close(stops[0].color, Color { r: 128, g: 0, b: 128, a: 255 });
+                assert_color_close(stops[1].color, Color { r: 128, g: 0, b: 128, a: 255 });
+            }
+            other => panic!("expected GradientStops, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn linear_interpolator_gradient_stops_discrete_on_length_mismatch() {
+        // Разная длина → caller получает step-half клон from/to.
+        let interp = LinearInterpolator;
+        let from = AnimValue::GradientStops(vec![stop(255, 0, 0, Some(Length::Percent(0.0)))]);
+        let to = AnimValue::GradientStops(vec![
+            stop(0, 0, 255, Some(Length::Percent(0.0))),
+            stop(0, 255, 0, Some(Length::Percent(100.0))),
+        ]);
+        assert_eq!(interp.interpolate(&from, &to, 0.3), Some(from.clone()));
+        assert_eq!(interp.interpolate(&from, &to, 0.7), Some(to.clone()));
+    }
+
+    #[test]
+    fn linear_interpolator_gradient_stops_endpoints_exact() {
+        let interp = LinearInterpolator;
+        let from = AnimValue::GradientStops(vec![stop(255, 0, 0, Some(Length::Percent(0.0)))]);
+        let to = AnimValue::GradientStops(vec![stop(0, 0, 255, Some(Length::Percent(100.0)))]);
         assert_eq!(interp.interpolate(&from, &to, 0.0), Some(from.clone()));
         assert_eq!(interp.interpolate(&from, &to, 1.0), Some(to.clone()));
     }

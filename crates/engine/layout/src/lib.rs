@@ -36,7 +36,7 @@ pub use style::{
     BackgroundSize, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, ClipPath, Color, ComputedStyle, Content, ContentItem,
     CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch, FontStyle, FontVariant,
-    FontWeight, Hyphens, Isolation, IterationCount, ListStylePosition, ListStyleType,
+    FontWeight, GradientStop, Hyphens, Isolation, IterationCount, ListStylePosition, ListStyleType,
     MixBlendMode, ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, OverflowWrap,
     OverscrollBehavior, PointerEvents, Position, PositionComponent, ScrollBehavior,
     ScrollSnapAlign, ScrollSnapAlignKeyword, ScrollSnapAxis, ScrollSnapStop,
