@@ -764,6 +764,7 @@ fn emit_text_shadows(
 /// * `ContentBox`: shrink на border + padding.
 /// * `Text` (L4): Phase 0 fallback на `BorderBox` (реальный glyph-mask
 ///   clip требует off-screen alpha-pass, P2 п.4+).
+///
 /// `max(0.0)` страхует от negative-w/h на очень узких box-ах.
 fn background_clip_rect(b: &LayoutBox) -> Rect {
     let s = &b.style;
@@ -2465,27 +2466,25 @@ mod tests {
     fn outline_serializes_with_short_offset_only_when_nonzero() {
         // DrawOutline с offset=0 не выводит `off=…` в сериализацию (как
         // DrawText опускает default-значения).
-        let mut dl = DisplayList::new();
-        dl.push(DisplayCommand::DrawOutline {
+        let dl = vec![DisplayCommand::DrawOutline {
             rect: Rect::new(0.0, 0.0, 100.0, 50.0),
             width: 2.0,
             style: OutlineStyle::Solid,
             color: Color { r: 255, g: 0, b: 0, a: 255 },
             offset: 0.0,
-        });
+        }];
         let s = serialize_display_list(&dl);
         assert!(s.contains("DrawOutline (0.00, 0.00, 100.00, 50.00) w=2.00 s=solid #ff0000ff"));
         assert!(!s.contains("off="));
 
         // Non-zero offset → должен присутствовать.
-        let mut dl2 = DisplayList::new();
-        dl2.push(DisplayCommand::DrawOutline {
+        let dl2 = vec![DisplayCommand::DrawOutline {
             rect: Rect::new(0.0, 0.0, 100.0, 50.0),
             width: 2.0,
             style: OutlineStyle::Solid,
             color: Color { r: 255, g: 0, b: 0, a: 255 },
             offset: 5.0,
-        });
+        }];
         let s2 = serialize_display_list(&dl2);
         assert!(s2.contains("off=5.00"));
     }
