@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 11 display</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #f7fafc; width: 1024px; height: 720px; padding: 24px; }
+    .sep { height: 32px; }
+  </style>
+</head>
+<body>
+  <!-- display:block — each div on its own line, fills available width or declared width -->
+  <div style="display: block; width: 480px; height: 40px; background: #3182ce; margin-bottom: 8px;"></div>
+  <div style="display: block; width: 320px; height: 40px; background: #3182ce; margin-bottom: 8px;"></div>
+  <div style="display: block; width: 600px; height: 40px; background: #3182ce;"></div>
+
+  <div class="sep"></div>
+
+  <!-- display:inline-block — boxes sit side by side, respect explicit width/height -->
+  <div style="display: inline-block; width: 120px; height: 80px; background: #e53e3e; margin-right: 16px;"></div>
+  <div style="display: inline-block; width: 120px; height: 80px; background: #e53e3e; margin-right: 16px;"></div>
+  <div style="display: inline-block; width: 120px; height: 80px; background: #e53e3e; margin-right: 16px;"></div>
+  <div style="display: inline-block; width: 120px; height: 80px; background: #e53e3e; margin-right: 16px;"></div>
+  <div style="display: inline-block; width: 120px; height: 80px; background: #e53e3e;"></div>
+
+  <div class="sep"></div>
+
+  <!-- display:none — 5 boxes, 3rd is absent (no gap, no space) -->
+  <div style="display: inline-block; width: 120px; height: 80px; background: #38a169; margin-right: 16px;"></div>
+  <div style="display: inline-block; width: 120px; height: 80px; background: #38a169; margin-right: 16px;"></div>
+  <div style="display: none;         width: 120px; height: 80px; background: #38a169; margin-right: 16px;"></div>
+  <div style="display: inline-block; width: 120px; height: 80px; background: #38a169; margin-right: 16px;"></div>
+  <div style="display: inline-block; width: 120px; height: 80px; background: #38a169;"></div>
+
+  <div class="sep"></div>
+
+  <!-- inline-block: different heights, vertical-align: top -->
+  <div style="display: inline-block; width: 100px; height: 40px; background: #805ad5; margin-right: 16px; vertical-align: top;"></div>
+  <div style="display: inline-block; width: 100px; height: 80px; background: #805ad5; margin-right: 16px; vertical-align: top;"></div>
+  <div style="display: inline-block; width: 100px; height: 120px; background: #805ad5; margin-right: 16px; vertical-align: top;"></div>
+  <div style="display: inline-block; width: 100px; height: 60px; background: #805ad5; vertical-align: top;"></div>
+</body>
+</html>

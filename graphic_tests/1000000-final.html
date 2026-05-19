@@ -1,0 +1,177 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 1_000_000 ФИНАЛЬНЫЙ ТЕСТ (все свойства)</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    /* тёмный фон вокруг карточки — видна как рамка */
+    body { background: #1a202c; width: 1024px; height: 720px; padding: 50px 62px; }
+
+    /* карточка 900×620 — содержит все тесты */
+    .card {
+      width: 900px; height: 620px;
+      background: #2d3748;
+      border: 2px solid #4a5568;
+      border-radius: 10px;            /* Phase 0: Lumen = квадрат, Edge = скруглён */
+      box-shadow: 0 20px 60px rgba(0,0,0,0.70),
+                  0  0   0  1px rgba(255,255,255,0.04);
+      padding: 16px;
+    }
+
+    /* ─── TOP: цветовая полоса (48px) ─── */
+    .sw { display: inline-block; height: 48px; border-radius: 5px; margin-right: 6px; }
+
+    /* ─── MIDDLE: 3 колонки (530px) ─── */
+    .mid  { height: 530px; font-size: 0; }   /* font-size:0 убирает пробелы между inline-block */
+    .lcol { display: inline-block; vertical-align: top; width: 180px; }
+    .mcol { display: inline-block; vertical-align: top; width: 488px; margin: 0 10px; }
+    .rcol { display: inline-block; vertical-align: top; width: 180px; }
+
+    /* бокс для border-демо */
+    .bx { height: 68px; background: #1a202c; margin-bottom: 8px; }
+
+    /* бокс для shadow-демо */
+    .shbox { height: 48px; background: #fff; border-radius: 4px; margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+<div class="card">
+
+  <!-- ══ TOP: color strip (48px + 10px gap) ══════════════════════════════════ -->
+  <div style="height: 48px; margin-bottom: 10px; font-size: 0;">
+    <div class="sw" style="width: 100px; background: #e53e3e;"></div>
+    <div class="sw" style="width: 100px; background: rgb(49,130,206);"></div>
+    <div class="sw" style="width: 100px; background: hsl(120,45%,45%);"></div>
+    <div class="sw" style="width: 100px; background: #d69e2e;"></div>
+    <div class="sw" style="width: 100px; background: rgba(128,90,213,0.90);"></div>
+    <div class="sw" style="width: 100px; background: tomato;"></div>
+    <div class="sw" style="width: 100px; background: #0af;"></div>
+    <div class="sw" style="width:  58px; background: hsla(300,70%,50%,0.70); margin-right: 0;"></div>
+  </div>
+  <!-- 7×100 + 1×58 + 7×6(gap) = 800px ≤ 868(card inner) -->
+
+  <!-- ══ MIDDLE (530px) ════════════════════════════════════════════════════════ -->
+  <div class="mid">
+
+    <!-- ── LEFT (180px): border showcase ───────────────────────────────────── -->
+    <div class="lcol">
+
+      <!-- uniform border: 1px / 4px / 8px -->
+      <div class="bx" style="border: 1px solid #63b3ed;"></div>
+      <div class="bx" style="border: 4px solid #63b3ed;"></div>
+      <div class="bx" style="border: 8px solid #e53e3e; border-radius: 8px;"></div>
+
+      <!-- per-side colors + mixed widths -->
+      <div class="bx" style="border-top:    8px solid #fc8181;
+                              border-right:  3px solid #f6e05e;
+                              border-bottom: 8px solid #68d391;
+                              border-left:   3px solid #63b3ed;"></div>
+
+      <!-- currentColor — border берёт цвет из color -->
+      <div class="bx" style="color: #ed8936; border: 5px solid;"></div>
+
+      <!-- padding layering: серый ободок = padding, синее = content -->
+      <div style="height: 80px; background: #4a5568;
+                  border: 3px solid #63b3ed; border-radius: 4px; padding: 14px;">
+        <div style="background: #1a202c; width: 100%; height: 100%;"></div>
+      </div>
+
+    </div><!-- /lcol -->
+
+    <!-- ── CENTER (488px): image + effects ──────────────────────────────────── -->
+    <div class="mcol">
+
+      <!-- главное изображение: border + shadow + overflow:hidden + object-fit:cover -->
+      <div style="border: 4px solid #4a5568;
+                  box-shadow: 0 8px 28px rgba(0,0,0,0.65);
+                  overflow: hidden;
+                  height: 218px;
+                  border-radius: 6px;
+                  margin-bottom: 10px;">
+        <img src="../samples/images/agi_illustration.png"
+             style="display: block; width: 100%; height: 100%; object-fit: cover;" alt="">
+      </div>
+
+      <!-- object-fit: 5 режимов (маленькие боксы) -->
+      <div style="font-size: 0; margin-bottom: 10px;">
+        <div style="display:inline-block;width:85px;height:56px;overflow:hidden;
+                    background:#1a202c;border:1px solid #4a5568;margin-right:6px;">
+          <img src="../samples/images/perceptron.png"
+               style="display:block;width:100%;height:100%;object-fit:fill;" alt="">
+        </div>
+        <div style="display:inline-block;width:85px;height:56px;overflow:hidden;
+                    background:#1a202c;border:1px solid #4a5568;margin-right:6px;">
+          <img src="../samples/images/perceptron.png"
+               style="display:block;width:100%;height:100%;object-fit:contain;" alt="">
+        </div>
+        <div style="display:inline-block;width:85px;height:56px;overflow:hidden;
+                    background:#1a202c;border:1px solid #4a5568;margin-right:6px;">
+          <img src="../samples/images/perceptron.png"
+               style="display:block;width:100%;height:100%;object-fit:cover;" alt="">
+        </div>
+        <div style="display:inline-block;width:85px;height:56px;overflow:hidden;
+                    background:#1a202c;border:1px solid #4a5568;margin-right:6px;">
+          <img src="../samples/images/perceptron.png"
+               style="display:block;width:100%;height:100%;object-fit:none;" alt="">
+        </div>
+        <div style="display:inline-block;width:85px;height:56px;overflow:hidden;
+                    background:#1a202c;border:1px solid #4a5568;">
+          <img src="../samples/images/perceptron.png"
+               style="display:block;width:100%;height:100%;object-fit:scale-down;" alt="">
+        </div>
+      </div>
+
+      <!-- overflow:visible(красный) vs overflow:hidden(синий) + opacity 3 уровня -->
+      <div style="font-size: 0; margin-bottom: 10px;">
+        <div style="display:inline-block;width:100px;height:68px;background:#1a202c;
+                    overflow:visible;border:1px solid #4a5568;margin-right:8px;">
+          <div style="width:144px;height:100px;background:rgba(229,62,62,0.75);"></div>
+        </div>
+        <div style="display:inline-block;width:100px;height:68px;background:#1a202c;
+                    overflow:hidden;border:1px solid #4a5568;margin-right:20px;">
+          <div style="width:144px;height:100px;background:rgba(49,130,206,0.75);"></div>
+        </div>
+        <!-- opacity: 0.3 / 0.6 / 1.0 -->
+        <div style="display:inline-block;width:72px;height:68px;background:#38a169;opacity:0.3;margin-right:8px;"></div>
+        <div style="display:inline-block;width:72px;height:68px;background:#38a169;opacity:0.6;margin-right:8px;"></div>
+        <div style="display:inline-block;width:72px;height:68px;background:#38a169;opacity:1.0;"></div>
+      </div>
+
+      <!-- calc: серая полоса = эталон 200px, зелёные = вычисленные выражения -->
+      <div style="background:#718096;height:20px;width:200px;margin-bottom:5px;border-radius:2px;"></div>
+      <div style="background:#38a169;height:20px;width:calc(100px + 100px);margin-bottom:5px;border-radius:2px;"></div>
+      <div style="background:#38a169;height:20px;width:min(200px, 350px);margin-bottom:5px;border-radius:2px;"></div>
+      <div style="background:#38a169;height:20px;width:clamp(100px, 250px, 200px);border-radius:2px;"></div>
+
+    </div><!-- /mcol -->
+
+    <!-- ── RIGHT (180px): outline + shadow + visibility ─────────────────────── -->
+    <div class="rcol">
+
+      <!-- outline: thin / offset+ / offset- -->
+      <div style="height:64px;background:#1a202c;outline:3px solid #e2e8f0;margin-bottom:18px;"></div>
+      <div style="height:64px;background:#1a202c;outline:3px solid #63b3ed;outline-offset:6px;margin-bottom:26px;"></div>
+      <div style="height:64px;background:#1a202c;outline:4px solid #fc8181;outline-offset:-8px;margin-bottom:18px;"></div>
+
+      <!-- box-shadow: hard / blurred / spread-outline -->
+      <div style="background:#f0f4f8;padding:10px;border-radius:6px;margin-bottom:14px;">
+        <div class="shbox" style="box-shadow:  6px  6px  0   0  rgba(0,0,0,0.35);"></div>
+        <div class="shbox" style="box-shadow:  6px  6px 14px 0  rgba(0,0,0,0.35);"></div>
+        <div class="shbox" style="box-shadow:  0    0    0   6px #3182ce; margin-bottom:0;"></div>
+      </div>
+
+      <!-- visibility:hidden — средний бокс невидим, но место сохранено (виден зазор) -->
+      <div style="font-size:0;">
+        <div style="display:inline-block;width:52px;height:36px;background:#38a169;border-radius:3px;"></div>
+        <div style="display:inline-block;width:52px;height:36px;background:#38a169;border-radius:3px;visibility:hidden;"></div>
+        <div style="display:inline-block;width:52px;height:36px;background:#38a169;border-radius:3px;"></div>
+      </div>
+
+    </div><!-- /rcol -->
+
+  </div><!-- /mid -->
+</div><!-- /card -->
+</body>
+</html>

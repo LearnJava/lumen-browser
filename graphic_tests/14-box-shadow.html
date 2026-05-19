@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 14 box-shadow</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #f7fafc; width: 1024px; height: 720px; padding: 24px; }
+    .b { display: inline-block; width: 120px; height: 80px; background: #ffffff;
+         border: 1px solid #e2e8f0; margin: 0 48px 64px 0; vertical-align: top; }
+  </style>
+</head>
+<body>
+  <!-- hard offset shadow -->
+  <div class="b" style="box-shadow: 10px 10px 0 0 rgba(0,0,0,0.35);"></div>
+
+  <!-- blurred shadow -->
+  <div class="b" style="box-shadow: 8px 8px 14px 0 rgba(0,0,0,0.35);"></div>
+
+  <!-- spread + blur -->
+  <div class="b" style="box-shadow: 0 6px 20px 6px rgba(0,0,0,0.25);"></div>
+
+  <!-- upper-left hard shadow -->
+  <div class="b" style="box-shadow: -10px -10px 0 0 rgba(0,0,0,0.35);"></div>
+
+  <!-- spread-only (outline-like) -->
+  <div class="b" style="box-shadow: 0 0 0 8px #3182ce;"></div>
+
+  <!-- colored shadow -->
+  <div class="b" style="box-shadow: 8px 8px 0 0 #e53e3e;"></div>
+
+  <!-- multiple shadows -->
+  <div class="b" style="box-shadow: -6px -6px 0 0 #e53e3e, 6px 6px 0 0 #3182ce;"></div>
+
+  <!-- large offset, soft -->
+  <div class="b" style="box-shadow: 24px 24px 8px 0 rgba(0,0,0,0.20);"></div>
+</body>
+</html>

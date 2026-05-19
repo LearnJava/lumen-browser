@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 15 outline</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #718096; width: 1024px; height: 720px; padding: 24px; }
+    .b { display: inline-block; width: 120px; height: 80px; background: #2d3748;
+         margin: 0 48px 48px 0; vertical-align: top; }
+  </style>
+</head>
+<body>
+  <!-- outline widths -->
+  <div class="b" style="outline: 2px solid #e2e8f0;"></div>
+  <div class="b" style="outline: 5px solid #e2e8f0;"></div>
+  <div class="b" style="outline: 10px solid #e2e8f0;"></div>
+
+  <!-- outline colors -->
+  <div class="b" style="outline: 4px solid #e53e3e;"></div>
+  <div class="b" style="outline: 4px solid #38a169;"></div>
+  <div class="b" style="outline: 4px solid #f6e05e;"></div>
+
+  <!-- outline-offset: positive (gap between box edge and outline) -->
+  <div class="b" style="outline: 3px solid #63b3ed; outline-offset: 8px;"></div>
+
+  <!-- outline-offset: negative (outline drawn inside the box) -->
+  <div class="b" style="outline: 3px solid #fc8181; outline-offset: -8px;"></div>
+
+  <!-- outline doesn't affect layout: 3 boxes, middle has thick outline — positions don't shift -->
+  <div class="b" style="margin: 0 16px 0 0;"></div>
+  <div class="b" style="outline: 12px solid #f6ad55; margin: 0 16px 0 0;"></div>
+  <div class="b" style="margin: 0;"></div>
+</body>
+</html>

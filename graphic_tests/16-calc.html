@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 16 calc</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a202c; width: 1024px; height: 720px; padding: 24px; }
+    /* ref = gray baseline, test = green computed bar */
+    .ref  { height: 28px; background: #718096; margin-bottom: 4px; }
+    .test { height: 28px; background: #38a169; margin-bottom: 4px; }
+    .sep  { height: 24px; }
+  </style>
+</head>
+<body>
+  <!-- group 1: all should equal 200px -->
+  <div class="ref"  style="width: 200px;"></div>
+  <div class="test" style="width: calc(100px + 100px);"></div>
+  <div class="test" style="width: calc(600px / 3);"></div>
+  <div class="test" style="width: calc(50px * 4);"></div>
+  <div class="test" style="width: calc(250px - 50px);"></div>
+
+  <div class="sep"></div>
+
+  <!-- group 2: all should equal 150px -->
+  <div class="ref"  style="width: 150px;"></div>
+  <div class="test" style="width: min(200px, 150px);"></div>
+  <div class="test" style="width: max(80px, 150px);"></div>
+  <div class="test" style="width: clamp(100px, 150px, 300px);"></div>
+  <!-- clamp edge: val below min → returns min=150 -->
+  <div class="test" style="width: clamp(150px, 80px, 300px);"></div>
+
+  <div class="sep"></div>
+
+  <!-- group 3: math functions, various widths -->
+  <!-- sqrt(40000) = 200 -->
+  <div class="test" style="width: calc(sqrt(40000) * 1px);"></div>
+  <!-- cos(0) * 200px = 200px -->
+  <div class="test" style="width: calc(cos(0) * 200px);"></div>
+  <!-- abs(-200px) = 200px -->
+  <div class="test" style="width: calc(abs(-200px));"></div>
+  <!-- hypot(120px,160px) = 200px -->
+  <div class="test" style="width: calc(hypot(120px, 160px));"></div>
+
+  <div class="sep"></div>
+
+  <!-- group 4: nested expressions -->
+  <!-- min(calc(50px+100px), calc(40px*5)) = min(150, 200) = 150 -->
+  <div class="ref"  style="width: 150px;"></div>
+  <div class="test" style="width: min(calc(50px + 100px), calc(40px * 5));"></div>
+  <!-- clamp(100px, calc(30px*5), 200px) = clamp(100,150,200) = 150 -->
+  <div class="test" style="width: clamp(100px, calc(30px * 5), 200px);"></div>
+</body>
+</html>

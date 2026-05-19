@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 04 border width</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a202c; width: 1024px; height: 720px; padding: 24px; }
+    /* content-box so border adds to visual size — difference is clearly visible */
+    .b { display: inline-block; width: 140px; height: 80px; margin: 0 16px 32px 0;
+         background: #2d3748; box-sizing: content-box; border-style: solid; border-color: #63b3ed; }
+  </style>
+</head>
+<body>
+  <!-- uniform border, increasing widths -->
+  <div class="b" style="border-width: 1px;"></div>
+  <div class="b" style="border-width: 2px;"></div>
+  <div class="b" style="border-width: 4px;"></div>
+  <div class="b" style="border-width: 8px;"></div>
+  <div class="b" style="border-width: 16px;"></div>
+
+  <!-- asymmetric per-side widths -->
+  <div class="b" style="border-width: 8px 2px 8px 2px;"></div>
+  <div class="b" style="border-width: 2px 16px 2px 16px;"></div>
+  <div class="b" style="border-width: 1px 4px 8px 16px;"></div>
+  <div class="b" style="border-width: 16px 1px 1px 1px;"></div>
+  <div class="b" style="border-width: 1px 1px 1px 16px;"></div>
+</body>
+</html>

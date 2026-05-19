@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 03 color alpha</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ffffff; width: 1024px; height: 720px; padding: 24px; }
+    .sw { display: inline-block; width: 140px; height: 80px; margin: 0 16px 16px 0; }
+  </style>
+</head>
+<body>
+  <!-- red at 6 alpha levels -->
+  <div class="sw" style="background: rgba(229, 62, 62, 0.10);"></div>
+  <div class="sw" style="background: rgba(229, 62, 62, 0.25);"></div>
+  <div class="sw" style="background: rgba(229, 62, 62, 0.40);"></div>
+  <div class="sw" style="background: rgba(229, 62, 62, 0.60);"></div>
+  <div class="sw" style="background: rgba(229, 62, 62, 0.80);"></div>
+  <div class="sw" style="background: rgba(229, 62, 62, 1.00);"></div>
+
+  <!-- blue at 6 alpha levels -->
+  <div class="sw" style="background: rgba(49, 130, 206, 0.10);"></div>
+  <div class="sw" style="background: rgba(49, 130, 206, 0.25);"></div>
+  <div class="sw" style="background: rgba(49, 130, 206, 0.40);"></div>
+  <div class="sw" style="background: rgba(49, 130, 206, 0.60);"></div>
+  <div class="sw" style="background: rgba(49, 130, 206, 0.80);"></div>
+  <div class="sw" style="background: rgba(49, 130, 206, 1.00);"></div>
+
+  <!-- hsl alpha -->
+  <div class="sw" style="background: hsla(120, 60%, 40%, 0.20);"></div>
+  <div class="sw" style="background: hsla(120, 60%, 40%, 0.50);"></div>
+  <div class="sw" style="background: hsla(120, 60%, 40%, 1.00);"></div>
+
+  <!-- hex alpha: #RRGGBBAA -->
+  <div class="sw" style="background: #805ad540;"></div>
+  <div class="sw" style="background: #805ad5a0;"></div>
+  <div class="sw" style="background: #805ad5ff;"></div>
+</body>
+</html>

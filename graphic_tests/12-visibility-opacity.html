@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 12 visibility + opacity</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ffffff; width: 1024px; height: 720px; padding: 24px; }
+    .box  { display: inline-block; width: 120px; height: 80px; background: #3182ce; margin-right: 16px; }
+    .sep  { height: 40px; }
+    .opbox { display: inline-block; width: 140px; height: 90px; background: #3182ce; margin-right: 16px; }
+  </style>
+</head>
+<body>
+  <!-- visibility: visible vs hidden
+       visible boxes = solid blue; hidden = invisible but takes space (gap remains) -->
+  <div class="box" style="visibility: visible;"></div>
+  <div class="box" style="visibility: hidden;"></div>
+  <div class="box" style="visibility: visible;"></div>
+  <div class="box" style="visibility: hidden;"></div>
+  <div class="box" style="visibility: visible;"></div>
+
+  <div class="sep"></div>
+
+  <!-- opacity: 0.1 → 1.0 — same blue box, increasingly opaque over white body -->
+  <div class="opbox" style="opacity: 0.10;"></div>
+  <div class="opbox" style="opacity: 0.20;"></div>
+  <div class="opbox" style="opacity: 0.40;"></div>
+  <div class="opbox" style="opacity: 0.60;"></div>
+  <div class="opbox" style="opacity: 0.80;"></div>
+  <div class="opbox" style="opacity: 1.00;"></div>
+
+  <div class="sep"></div>
+
+  <!-- opacity on nested content: outer div opacity affects everything inside -->
+  <div style="display: inline-block; opacity: 0.30; margin-right: 24px;">
+    <div style="width: 100px; height: 60px; background: #e53e3e;"></div>
+    <div style="width: 100px; height: 60px; background: #38a169;"></div>
+  </div>
+  <div style="display: inline-block; opacity: 0.60; margin-right: 24px;">
+    <div style="width: 100px; height: 60px; background: #e53e3e;"></div>
+    <div style="width: 100px; height: 60px; background: #38a169;"></div>
+  </div>
+  <div style="display: inline-block; opacity: 1.00;">
+    <div style="width: 100px; height: 60px; background: #e53e3e;"></div>
+    <div style="width: 100px; height: 60px; background: #38a169;"></div>
+  </div>
+</body>
+</html>

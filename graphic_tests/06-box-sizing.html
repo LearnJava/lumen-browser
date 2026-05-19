@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 06 box-sizing</title>
+  <style>
+    * { margin: 0; padding: 0; }
+    body { background: #4a5568; width: 1024px; height: 720px; padding: 24px; }
+    /* Each pair: same width/height/padding/border declaration.
+       content-box (red) grows outward; border-box (blue) stays at declared size. */
+    .cb { background: #e53e3e; border: 8px solid #e2e8f0; box-sizing: content-box; }
+    .bb { background: #3182ce; border: 8px solid #e2e8f0; box-sizing: border-box;  }
+    .gap { height: 24px; }
+    .pair-gap { height: 32px; }
+  </style>
+</head>
+<body>
+  <!-- pair 1: padding:8px border:8px — CB total=(200+16+16)=232px, BB=200px -->
+  <div class="cb" style="width: 200px; height: 48px; padding: 8px;"></div>
+  <div style="height: 4px;"></div>
+  <div class="bb" style="width: 200px; height: 48px; padding: 8px;"></div>
+
+  <div class="pair-gap"></div>
+
+  <!-- pair 2: padding:20px border:8px — CB=(200+40+16)=256px, BB=200px -->
+  <div class="cb" style="width: 200px; height: 48px; padding: 20px;"></div>
+  <div style="height: 4px;"></div>
+  <div class="bb" style="width: 200px; height: 48px; padding: 20px;"></div>
+
+  <div class="pair-gap"></div>
+
+  <!-- pair 3: padding:32px border:8px — CB=(200+64+16)=280px, BB=200px -->
+  <div class="cb" style="width: 200px; height: 56px; padding: 32px;"></div>
+  <div style="height: 4px;"></div>
+  <div class="bb" style="width: 200px; height: 56px; padding: 32px;"></div>
+
+  <div class="pair-gap"></div>
+
+  <!-- pair 4: larger base width — CB=(320+40+16)=376px, BB=320px -->
+  <div class="cb" style="width: 320px; height: 48px; padding: 20px;"></div>
+  <div style="height: 4px;"></div>
+  <div class="bb" style="width: 320px; height: 48px; padding: 20px;"></div>
+</body>
+</html>

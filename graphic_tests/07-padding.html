@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 07 padding</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a202c; width: 1024px; height: 720px; padding: 24px; }
+    /* outer = gray band = the padding area; inner = blue = content area */
+    .outer { display: inline-block; background: #4a5568; margin: 0 16px 16px 0; vertical-align: top; }
+    .inner { background: #3182ce; width: 100px; height: 60px; }
+  </style>
+</head>
+<body>
+  <div class="outer" style="padding: 4px;"><div class="inner"></div></div>
+  <div class="outer" style="padding: 12px;"><div class="inner"></div></div>
+  <div class="outer" style="padding: 24px;"><div class="inner"></div></div>
+  <div class="outer" style="padding: 40px;"><div class="inner"></div></div>
+
+  <div class="outer" style="padding: 4px 24px;"><div class="inner"></div></div>
+  <div class="outer" style="padding: 24px 4px;"><div class="inner"></div></div>
+
+  <div class="outer" style="padding: 8px 16px 32px 48px;"><div class="inner"></div></div>
+  <div class="outer" style="padding: 32px 8px 8px 32px;"><div class="inner"></div></div>
+
+  <!-- padding: 0 — no band at all -->
+  <div class="outer" style="padding: 0;"><div class="inner"></div></div>
+</body>
+</html>

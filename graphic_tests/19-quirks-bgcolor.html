@@ -1,0 +1,41 @@
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 19 quirks bgcolor</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    /* body background comes from bgcolor attribute, not CSS */
+    body { width: 1024px; height: 720px; padding: 24px; }
+    .sw  { display: inline-block; width: 160px; height: 80px; margin: 0 16px 16px 0; }
+    td   { width: 120px; height: 80px; }
+    table { border-collapse: collapse; margin-top: 16px; }
+  </style>
+</head>
+<body bgcolor="#1a2030">
+  <!-- CSS hashless hex — valid only in Quirks mode (no # prefix) -->
+  <div class="sw" style="background: ff4444;"></div>
+  <div class="sw" style="background: 3366cc;"></div>
+  <div class="sw" style="background: 44aa66;"></div>
+  <div class="sw" style="background: ccaa00;"></div>
+  <div class="sw" style="background: aa44cc;"></div>
+
+  <!-- bgcolor attribute on table cells (HTML presentational hint, any mode) -->
+  <table>
+    <tr>
+      <td bgcolor="red"></td>
+      <td bgcolor="#3182ce"></td>
+      <td bgcolor="44aa66"></td>
+      <td bgcolor="tomato"></td>
+      <td bgcolor="#f6ad55"></td>
+    </tr>
+    <tr>
+      <td bgcolor="#e53e3e"></td>
+      <td bgcolor="royalblue"></td>
+      <td bgcolor="#38a169"></td>
+      <!-- legacy parsing: «garbage!» → non-hex chars become 0 → mostly black -->
+      <td bgcolor="garbage!"></td>
+      <td bgcolor="#805ad5"></td>
+    </tr>
+  </table>
+</body>
+</html>

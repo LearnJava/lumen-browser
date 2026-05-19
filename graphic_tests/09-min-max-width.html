@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 09 min-max-width</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a202c; width: 1024px; height: 720px; padding: 24px; }
+    /* ref = gray baseline; test = green constrained bar */
+    .ref  { height: 28px; background: #718096; margin-bottom: 4px; }
+    .test { height: 28px; background: #38a169; margin-bottom: 20px; }
+  </style>
+</head>
+<body>
+  <!-- ref 200px vs width:80px min-width:200px → should match ref -->
+  <div class="ref"  style="width: 200px;"></div>
+  <div class="test" style="width: 80px; min-width: 200px;"></div>
+
+  <!-- ref 300px vs width:500px max-width:300px → should match ref -->
+  <div class="ref"  style="width: 300px;"></div>
+  <div class="test" style="width: 500px; max-width: 300px;"></div>
+
+  <!-- ref 150px vs min-width:150px max-width:100px (min>max → min wins = 150) -->
+  <div class="ref"  style="width: 150px;"></div>
+  <div class="test" style="width: 50px; min-width: 150px; max-width: 100px;"></div>
+
+  <!-- ref 200px vs calc(100px + 100px) → should match ref -->
+  <div class="ref"  style="width: 200px;"></div>
+  <div class="test" style="width: calc(100px + 100px);"></div>
+
+  <!-- ref 200px vs min(300px, 200px) → should match ref -->
+  <div class="ref"  style="width: 200px;"></div>
+  <div class="test" style="width: min(300px, 200px);"></div>
+
+  <!-- ref 200px vs clamp(100px, 250px, 200px) → val=250 capped at max=200 → 200 -->
+  <div class="ref"  style="width: 200px;"></div>
+  <div class="test" style="width: clamp(100px, 250px, 200px);"></div>
+</body>
+</html>
