@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-- 🔄 `:current` / `:past` / `:future` (time-dimensional pseudo-classes) [P1] — time-dim-pseudos — 2026-05-19
+- 🔄 Gradient-stops interpolation (CSS Images L3 §3.5.1) [P1] — gradient-stops-interpolate — 2026-05-19
 
 ## Статус реализации
 
