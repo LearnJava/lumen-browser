@@ -527,6 +527,7 @@ pub enum BorderStyle {
     Solid,
     Dashed,
     Dotted,
+    Double,
 }
 
 impl BorderStyle {
@@ -9352,7 +9353,7 @@ fn parse_box_shorthand(val: &str, em_basis: f32, viewport: Size) -> Option<(f32,
 }
 
 fn is_border_style_kw(s: &str) -> bool {
-    matches!(s.trim(), "none" | "solid" | "dashed" | "dotted")
+    matches!(s.trim(), "none" | "solid" | "dashed" | "dotted" | "double")
 }
 
 fn parse_border_style_kw(s: &str) -> BorderStyle {
@@ -9360,6 +9361,7 @@ fn parse_border_style_kw(s: &str) -> BorderStyle {
         "solid" => BorderStyle::Solid,
         "dashed" => BorderStyle::Dashed,
         "dotted" => BorderStyle::Dotted,
+        "double" => BorderStyle::Double,
         _ => BorderStyle::None,
     }
 }
@@ -9370,6 +9372,7 @@ fn parse_border_style_opt(s: &str) -> Option<BorderStyle> {
         "solid" => Some(BorderStyle::Solid),
         "dashed" => Some(BorderStyle::Dashed),
         "dotted" => Some(BorderStyle::Dotted),
+        "double" => Some(BorderStyle::Double),
         _ => None,
     }
 }
@@ -9396,7 +9399,7 @@ fn parse_outline_style_opt(s: &str) -> Option<OutlineStyle> {
     }
     match parse_border_style_opt(s)? {
         BorderStyle::None => Some(OutlineStyle::None),
-        BorderStyle::Solid => Some(OutlineStyle::Solid),
+        BorderStyle::Solid | BorderStyle::Double => Some(OutlineStyle::Solid),
         BorderStyle::Dashed => Some(OutlineStyle::Dashed),
         BorderStyle::Dotted => Some(OutlineStyle::Dotted),
     }
@@ -11194,6 +11197,24 @@ mod tests {
         assert!(BorderStyle::Solid.is_visible());
         assert!(BorderStyle::Dashed.is_visible());
         assert!(BorderStyle::Dotted.is_visible());
+        assert!(BorderStyle::Double.is_visible());
+    }
+
+    #[test]
+    fn border_style_double_parses() {
+        let s = style_for("border: 6px double red");
+        assert_eq!(s.border_top_style, BorderStyle::Double);
+        assert_eq!(s.border_right_style, BorderStyle::Double);
+        assert_eq!(s.border_bottom_style, BorderStyle::Double);
+        assert_eq!(s.border_left_style, BorderStyle::Double);
+    }
+
+    #[test]
+    fn border_style_double_per_side() {
+        let s = style_for("border-top-style: double; border-bottom-style: double");
+        assert_eq!(s.border_top_style, BorderStyle::Double);
+        assert_eq!(s.border_bottom_style, BorderStyle::Double);
+        assert_eq!(s.border_left_style, BorderStyle::None);
     }
 
     // ── box-sizing parsing ─────────────────────────────────────────────────

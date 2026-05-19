@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 21 border-style dashed/dotted/double</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a202c; width: 1024px; height: 720px; padding: 24px; }
+    .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .b { display: inline-block; width: 180px; height: 80px; margin: 0 16px 32px 0;
+         background: #2d3748; }
+  </style>
+</head>
+<body>
+  <div class="__m"></div>
+
+  <!-- dashed: 2px / 4px / 8px / 16px -->
+  <div class="b" style="border: 2px dashed #63b3ed;"></div>
+  <div class="b" style="border: 4px dashed #63b3ed;"></div>
+  <div class="b" style="border: 8px dashed #68d391;"></div>
+  <div class="b" style="border: 16px dashed #fc8181;"></div>
+
+  <!-- dotted: 2px / 4px / 8px / 16px -->
+  <div class="b" style="border: 2px dotted #f6e05e;"></div>
+  <div class="b" style="border: 4px dotted #f6e05e;"></div>
+  <div class="b" style="border: 8px dotted #ed64a6;"></div>
+  <div class="b" style="border: 16px dotted #ed64a6;"></div>
+
+  <!-- double: 3px / 6px / 9px / 12px / 15px -->
+  <div class="b" style="border: 3px double #90cdf4;"></div>
+  <div class="b" style="border: 6px double #90cdf4;"></div>
+  <div class="b" style="border: 9px double #9ae6b4;"></div>
+  <div class="b" style="border: 12px double #fbd38d;"></div>
+  <div class="b" style="border: 15px double #feb2b2;"></div>
+
+  <!-- per-side mix -->
+  <div class="b" style="border-top: 6px dashed #63b3ed;
+                         border-right: 6px dotted #68d391;
+                         border-bottom: 6px double #f6e05e;
+                         border-left: 6px solid #fc8181;"></div>
+
+  <!-- double thin (<3px) fallback to solid -->
+  <div class="b" style="border: 2px double #90cdf4;"></div>
+</body>
+</html>

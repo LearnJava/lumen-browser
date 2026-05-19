@@ -35,7 +35,8 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 18-images.html | Растровые изображения | 12 | \<img\> PNG/JPEG · CSS width/height · transparent PNG on colored bg |
 | 19-object-fit.html | Вписывание изображения | 9 | object-fit: fill/contain/cover/none/scale-down · object-position |
 | 20-quirks-bgcolor.html | Устаревший bgcolor (Quirks mode) | 15 | CSS hashless hex · bgcolor attr on \<td\> · legacy color parsing |
-| **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~50 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor) · border-radius (Phase 0: квадрат в Lumen, скруглён в Edge) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering |
+| 21-border-style.html | Стили border: dashed/dotted/double | 16 | border-style: dashed · dotted · double (2/4/8/16px) · per-side mix · double thin fallback |
+| **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~53 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (Phase 0: квадрат в Lumen, скруглён в Edge) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering |
 
 ---
 
@@ -54,7 +55,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | border-color per-side | 06 | — |
 | border-color currentColor | 06 | — |
 | border-style: solid | 05, 06 | — |
-| border-style: dashed/dotted/double | — | ❌ если реализованы — не тестируются |
+| border-style: dashed/dotted/double | 21 | — |
 | box-sizing: content-box | 07 | — |
 | box-sizing: border-box | 07 | — |
 | padding (4-value, asymmetric) | 08 | — |
@@ -93,7 +94,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **background-color: currentColor, transparent** — нет отдельного теста (встречается в 06-border-sides через border: solid)
 - **margin-right / margin-bottom** — только left и top в 09
 - **margin collapse** — требует специфичного layout-aware теста
-- **border-style: dashed/dotted/double** — добавить если/когда будет реализовано
+- **border-style: dashed/dotted/double** — покрыто в тесте 21
 - **display: inline** — нет смысла без текста (нулевые размеры)
 - **z-index** — требует `position: absolute/relative` с offset (Phase 0: offsets не применяются)
 - **box-shadow: inset** — не реализовано в paint (требует clip)

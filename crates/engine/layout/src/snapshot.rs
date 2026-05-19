@@ -156,6 +156,7 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
             BorderStyle::Solid => "solid",
             BorderStyle::Dashed => "dashed",
             BorderStyle::Dotted => "dotted",
+            BorderStyle::Double => "double",
         };
         let _ = write!(
             out,
