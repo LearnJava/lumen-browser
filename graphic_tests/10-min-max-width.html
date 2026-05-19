@@ -9,9 +9,11 @@
     /* ref = gray baseline; test = green constrained bar */
     .ref  { height: 28px; background: #718096; margin-bottom: 4px; }
     .test { height: 28px; background: #38a169; margin-bottom: 20px; }
+      .__m { width: 1024px; height: 1px; background: #ff00ff; }
   </style>
 </head>
 <body>
+  <div class="__m"></div>
   <!-- ref 200px vs width:80px min-width:200px → should match ref -->
   <div class="ref"  style="width: 200px;"></div>
   <div class="test" style="width: 80px; min-width: 200px;"></div>

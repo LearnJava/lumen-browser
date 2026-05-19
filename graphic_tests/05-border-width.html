@@ -9,9 +9,11 @@
     /* content-box so border adds to visual size — difference is clearly visible */
     .b { display: inline-block; width: 140px; height: 80px; margin: 0 16px 32px 0;
          background: #2d3748; box-sizing: content-box; border-style: solid; border-color: #63b3ed; }
+      .__m { width: 1024px; height: 1px; background: #ff00ff; }
   </style>
 </head>
 <body>
+  <div class="__m"></div>
   <!-- uniform border, increasing widths -->
   <div class="b" style="border-width: 1px;"></div>
   <div class="b" style="border-width: 2px;"></div>
