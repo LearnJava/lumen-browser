@@ -61,7 +61,7 @@ use winit::dpi::LogicalSize;
 use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorIcon, Window, WindowId};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -118,6 +118,7 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
         cursor_position: None,
         scroll_drag: None,
         scroll_anim: None,
+        last_cursor_icon: None,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -828,6 +829,10 @@ struct Lumen {
     /// инстантно (drag, reload). При live-анимации `RedrawRequested` тикает
     /// её через `advance_scroll_anim` и просит ещё один redraw до завершения.
     scroll_anim: Option<scroll_anim::ScrollAnim>,
+    /// Последний выставленный cursor icon — чтобы при каждом CursorMoved (а это
+    /// сотни событий в секунду при активном движении мыши) не дёргать
+    /// `Window::set_cursor` напрасно. `None` — ещё не выставляли (init).
+    last_cursor_icon: Option<CursorIcon>,
 }
 
 impl Lumen {
@@ -997,6 +1002,7 @@ impl ApplicationHandler for Lumen {
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_position = Some(position);
+                self.update_cursor_icon();
                 // Активный drag — пересчитать scroll по новой позиции.
                 if let Some(drag) = self.scroll_drag {
                     let dpr = self
@@ -1068,6 +1074,11 @@ impl ApplicationHandler for Lumen {
                 } else {
                     // Released — завершаем drag (если он был).
                     self.scroll_drag = None;
+                    // Курсор был «зафиксирован» как Pointer пока тянули
+                    // thumb; теперь пересчитаем по hover-точке текущего
+                    // положения курсора (CursorMoved-event на release сам
+                    // не приходит, поэтому делаем вручную).
+                    self.update_cursor_icon();
                 }
             }
             WindowEvent::MouseWheel { delta, .. } => {
@@ -1388,6 +1399,34 @@ impl Lumen {
         }
     }
 
+    /// Пересчитать желаемый `CursorIcon` по текущей позиции курсора и
+    /// при изменении вызвать `Window::set_cursor`. CursorMoved может
+    /// дёргаться сотни раз в секунду — `last_cursor_icon` кэширует
+    /// предыдущее значение, чтобы не делать лишний FFI-вызов в winit.
+    fn update_cursor_icon(&mut self) {
+        let (Some(window), Some(renderer), Some(pos)) =
+            (self.window.as_ref(), self.renderer.as_ref(), self.cursor_position)
+        else {
+            return;
+        };
+        let dpr = (renderer.scale_factor() as f32).max(1e-6);
+        let x_css = (pos.x as f32) / dpr;
+        let y_css = (pos.y as f32) / dpr;
+        let hover = scrollbar::classify_track_click(
+            x_css,
+            y_css,
+            self.scroll_y,
+            self.content_height,
+            self.viewport_width_css(),
+            self.viewport_height_css(),
+        );
+        let desired = cursor_icon_for_hover(hover, self.scroll_drag.is_some());
+        if self.last_cursor_icon != Some(desired) {
+            window.set_cursor(desired);
+            self.last_cursor_icon = Some(desired);
+        }
+    }
+
     /// Пересчитывает текущий список совпадений по `display_list` и `find.query`.
     /// Возвращает пустой Vec, если bar закрыт или запрос пустой. Используется
     /// и для рендера, и для счётчика `next`/`prev`.
@@ -1428,6 +1467,24 @@ const IDLE_BUDGET_MS: f64 = 10.0;
 /// строку из вида, читать длинные тексты комфортнее.
 fn page_step(viewport_height: f32) -> f32 {
     viewport_height * 0.9
+}
+
+/// Pure-fn: какой `CursorIcon` показать по результату hit-теста scrollbar-а
+/// и флагу активного drag-а. `Pointer` сигналит «здесь интерактив»:
+/// - drag активен → `Pointer` независимо от текущей точки (винит шлёт
+///   CursorMoved за пределами окна тоже, и cursor должен «прилипнуть»);
+/// - hover thumb → `Pointer`;
+/// - hover track выше/ниже thumb-а или клик мимо → `Default` (track-click
+///   тоже clickable, но cursor-change на пустом track-е был бы шумным —
+///   стандарт всех браузеров).
+fn cursor_icon_for_hover(hover: scrollbar::TrackClick, drag_active: bool) -> CursorIcon {
+    if drag_active {
+        return CursorIcon::Pointer;
+    }
+    match hover {
+        scrollbar::TrackClick::Thumb => CursorIcon::Pointer,
+        _ => CursorIcon::Default,
+    }
 }
 
 /// Кламп scroll_y в `[0, max]`. NaN-input → 0 (защита от arithmetic errors).
@@ -1917,6 +1974,55 @@ mod tests {
     #[test]
     fn clamp_scroll_nan_defaults_to_zero() {
         assert_eq!(clamp_scroll(f32::NAN, 100.0), 0.0);
+    }
+
+    #[test]
+    fn cursor_icon_thumb_hover_is_pointer() {
+        assert_eq!(
+            cursor_icon_for_hover(scrollbar::TrackClick::Thumb, false),
+            CursorIcon::Pointer
+        );
+    }
+
+    #[test]
+    fn cursor_icon_track_above_is_default() {
+        // Track-click тоже clickable (page-jump), но cursor-change на пустом
+        // track-е был бы шумным — стандарт всех браузеров: только thumb.
+        assert_eq!(
+            cursor_icon_for_hover(scrollbar::TrackClick::Above, false),
+            CursorIcon::Default
+        );
+    }
+
+    #[test]
+    fn cursor_icon_track_below_is_default() {
+        assert_eq!(
+            cursor_icon_for_hover(scrollbar::TrackClick::Below, false),
+            CursorIcon::Default
+        );
+    }
+
+    #[test]
+    fn cursor_icon_off_scrollbar_is_default() {
+        assert_eq!(
+            cursor_icon_for_hover(scrollbar::TrackClick::None, false),
+            CursorIcon::Default
+        );
+    }
+
+    #[test]
+    fn cursor_icon_drag_active_overrides_hover() {
+        // Во время drag-а cursor должен «прилипнуть» к Pointer независимо
+        // от текущей позиции курсора — winit шлёт CursorMoved за пределами
+        // окна, hover-классификатор там вернёт None, но drag-флаг побеждает.
+        assert_eq!(
+            cursor_icon_for_hover(scrollbar::TrackClick::None, true),
+            CursorIcon::Pointer
+        );
+        assert_eq!(
+            cursor_icon_for_hover(scrollbar::TrackClick::Above, true),
+            CursorIcon::Pointer
+        );
     }
 
     #[test]
