@@ -1,9 +1,9 @@
-In progress: —
+In progress: 1B.1 CompositorThread + spawn loop   branch: compositor-thread
+Next step: CompositorThread struct + tick-loop   paint/src/compositor.rs:277
 
-Next: 1B.1 CompositorThread + spawn loop   lumen-plan.md:157
+Next: 1B.2 vsync tick-loop 60fps         lumen-plan.md:158
 
 Queue:
-1B.2 vsync tick-loop 60fps         lumen-plan.md:158
 1B.3 PushBlendMode/PopBlendMode    lumen-plan.md:159
 1B.4 off-screen opacity rendering  lumen-plan.md:160
 1B.5 GPU texture upload            lumen-plan.md:161
