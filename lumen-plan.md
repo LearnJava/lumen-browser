@@ -178,7 +178,7 @@
 | 2A | 🟡 **`[P3]` SOP/CORS/mixed-content/sandbox** | Публичная сеть | Только network + shell |
 | 2A.1 | ✅ block blockable in HttpClient::fetch | `network/src/lib.rs:1478` | — |
 | 2A.2 | ✅ sandbox_flags on iframe DOM element | `dom/src/lib.rs` | — |
-| 2A.3 | ⬜ script execution gate in shell | `shell/src/main.rs` | — |
+| 2A.3 | ✅ script execution gate in shell | `shell/src/main.rs:752` | — |
 | 2A.4 | ⬜ form submission gate | `dom/src/lib.rs` | — |
 | 2A.5 | ⬜ navigation restriction enforcement | `shell/src/main.rs` | — |
 | 2C | ⬜ **`[P3]` Tab session export/import** | UX | storage + shell |

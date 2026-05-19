@@ -656,6 +656,11 @@ fn parse_and_layout(
     let mut doc = lumen_html_parser::parse(&source);
     let title = extract_title(&doc);
 
+    // Гейт выполнения скриптов: Phase 0 — top-level документ не sandboxed
+    // (SandboxFlags::empty()), поэтому блокировки не будет. NullJsRuntime
+    // возвращает NotImplemented — это ожидаемое поведение до подключения QuickJS.
+    run_scripts(&doc, lumen_core::SandboxFlags::empty(), &lumen_core::NullJsRuntime);
+
     // Fetch + decode <img src>. Должно идти ДО layout, потому что intrinsic
     // dimensions из декодированного изображения проставляются как HTML
     // presentational hints (width/height attribute) и потом подхватываются
@@ -747,6 +752,68 @@ fn extract_style_blocks(doc: &Document) -> String {
     let mut out = String::new();
     walk_style_blocks(doc, doc.root(), &mut out);
     out
+}
+
+fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
+    let node = doc.get(id);
+    if let NodeData::Element { name, .. } = &node.data
+        && name.local == "script"
+    {
+        let mut text = String::new();
+        for &child in &node.children {
+            if let NodeData::Text(s) = &doc.get(child).data {
+                text.push_str(s);
+            }
+        }
+        if !text.trim().is_empty() {
+            out.push(text);
+        }
+        return;
+    }
+    for &child in &node.children {
+        collect_inline_scripts(doc, child, out);
+    }
+}
+
+/// Выполнить inline `<script>` блоки если sandbox позволяет, иначе заблокировать.
+///
+/// `SandboxFlags::SCRIPTS` установлен — скрипты запрещены; функция логирует
+/// количество заблокированных и возвращает 0. Иначе каждый скрипт передаётся
+/// в `runtime.eval()`; в Phase 0 это всегда `NullJsRuntime` → `NotImplemented`.
+/// Возвращает число скриптов, переданных в runtime.
+fn run_scripts(
+    doc: &Document,
+    sandbox: lumen_core::SandboxFlags,
+    runtime: &dyn lumen_core::JsRuntime,
+) -> usize {
+    let mut scripts: Vec<String> = Vec::new();
+    collect_inline_scripts(doc, doc.root(), &mut scripts);
+    if scripts.is_empty() {
+        return 0;
+    }
+    if sandbox.contains(lumen_core::SandboxFlags::SCRIPTS) {
+        eprintln!(
+            "sandbox: заблокировано {} скрипт(ов) (sandbox=scripts)",
+            scripts.len()
+        );
+        return 0;
+    }
+    for src in &scripts {
+        match runtime.eval(src) {
+            Ok(_) => {}
+            Err(lumen_core::JsError::NotImplemented) => {
+                eprintln!(
+                    "script: engine={}, выполнение пропущено ({} байт)",
+                    runtime.engine_name(),
+                    src.len()
+                );
+            }
+            Err(e) => {
+                eprintln!("script error: {e}");
+            }
+        }
+    }
+    scripts.len()
 }
 
 fn walk_style_blocks(doc: &Document, id: NodeId, out: &mut String) {
@@ -2130,5 +2197,66 @@ mod tests {
             keybinding_for(KeyCode::End, ModifiersState::empty()),
             Some(KeyCommand::ScrollEnd),
         );
+    }
+
+    // ── script execution gate ────────────────────────────────────────────────
+
+    #[test]
+    fn collect_inline_scripts_finds_inline() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><head></head><body><script>console.log(1);</script></body></html>"#,
+        );
+        let mut scripts = Vec::new();
+        collect_inline_scripts(&doc, doc.root(), &mut scripts);
+        assert_eq!(scripts.len(), 1);
+        assert!(scripts[0].contains("console.log"));
+    }
+
+    #[test]
+    fn collect_inline_scripts_skips_empty() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><head></head><body><script>   </script></body></html>"#,
+        );
+        let mut scripts = Vec::new();
+        collect_inline_scripts(&doc, doc.root(), &mut scripts);
+        assert!(scripts.is_empty());
+    }
+
+    #[test]
+    fn collect_inline_scripts_multiple() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><script>a=1;</script><script>b=2;</script></body></html>"#,
+        );
+        let mut scripts = Vec::new();
+        collect_inline_scripts(&doc, doc.root(), &mut scripts);
+        assert_eq!(scripts.len(), 2);
+    }
+
+    #[test]
+    fn run_scripts_blocked_by_sandbox() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><script>x=1;</script></body></html>"#,
+        );
+        let count = run_scripts(&doc, lumen_core::SandboxFlags::SCRIPTS, &lumen_core::NullJsRuntime);
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn run_scripts_allowed_calls_runtime() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><body><script>x=1;</script></body></html>"#,
+        );
+        // empty() — без ограничений, скрипты разрешены; NullJsRuntime → NotImplemented
+        let count = run_scripts(&doc, lumen_core::SandboxFlags::empty(), &lumen_core::NullJsRuntime);
+        assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn run_scripts_no_scripts_returns_zero() {
+        let doc = lumen_html_parser::parse(
+            r#"<html><head></head><body><p>no scripts</p></body></html>"#,
+        );
+        let count = run_scripts(&doc, lumen_core::SandboxFlags::empty(), &lumen_core::NullJsRuntime);
+        assert_eq!(count, 0);
     }
 }
