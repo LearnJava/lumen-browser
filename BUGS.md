@@ -16,6 +16,39 @@
 
 ---
 
+## Сводная таблица (grep-friendly)
+
+```
+BUG-002 | OPEN        | layout          | inline padding/border/margin stacks vertically instead of flowing
+BUG-004 | OPEN        | layout          | height on inline elements ignored
+BUG-005 | OPEN        | paint           | <img> inside <span> not rendered
+BUG-006 | OPEN        | layout          | table layout not implemented (td/th render as blocks)
+BUG-007 | OPEN        | layout          | <sub>/<sup>/<small> missing UA styles
+BUG-008 | OPEN        | layout          | <del>/<ins>/<u>/<s> text-decoration missing UA styles
+BUG-009 | OPEN        | layout          | <a> missing UA styles (no blue color, no underline)
+BUG-010 | OPEN        | layout/paint    | <hr> renders nothing
+BUG-011 | OPEN        | layout/paint    | list markers (bullet, numbers) not rendered
+BUG-012 | OPEN        | layout          | <del>/<ins> break inline flow (each on new line)
+BUG-013 | OPEN        | layout          | adjacent <span style="..."> stack vertically without separator
+BUG-014 | OPEN        | image           | JPEG not decoded (PNG only)
+BUG-015 | OPEN        | shell/paint     | broken <img> src shows no alt text
+BUG-016 | OPEN        | css-parser/paint| border-style: only solid works; dashed=solid, double/groove/ridge=none
+BUG-017 | OPEN        | layout/paint    | text-decoration-style ignored (all render as solid)
+BUG-018 | OPEN        | layout          | text-decoration-color ignored (always inherits text color)
+BUG-019 | OPEN        | css-parser/paint| outline not rendered at all
+BUG-020 | OPEN        | layout/paint    | overflow:scroll/auto/hidden treated as visible
+BUG-021 | OPEN        | html-parser     | HTML bgcolor attribute ignored
+BUG-022 | OPEN        | css-parser      | Quirks-mode hashless hex colors not parsed
+BUG-001 | FIXED       | layout          | display:none on inline elements not working
+BUG-003 | FIXED       | layout          | style="" attribute not processed by cascade
+```
+
+> Полные описания, воспроизведение и ссылки на код — в секциях ниже.
+> `grep "OPEN" BUGS.md` — все открытые баги одной командой.
+
+---
+
+
 ## Открытые баги
 
 ### BUG-002 · Inline-элементы с `padding`/`border`/`margin` стакаются вертикально

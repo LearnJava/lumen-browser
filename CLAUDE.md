@@ -143,7 +143,20 @@ cargo run -p lumen-shell -- --dump-layout samples/page.html 2>&1 | grep -A2 "mar
 cargo run -p lumen-shell -- --dump-display-list samples/page.html 2>&1 | grep -A2 "FillRect\|Text"
 ```
 
-**STATUS.md over lumen-plan.md.** `lumen-plan.md` is ~1200 lines (~5k tokens per read). For current-sprint status, read `STATUS.md` (20 lines) instead. Update `STATUS.md` when tasks start/finish; keep `lumen-plan.md` as the full archive.
+**STATUS.md over lumen-plan.md.** `lumen-plan.md` roadmap tables are now compact (one line per task). Full implementation history is in `## История реализации`. For current-sprint status, read `STATUS.md` (20 lines). Do not read `lumen-plan.md` unless the task explicitly requires architecture or roadmap details.
+
+**Grep instead of reading whole files.** Use targeted grep before opening large files:
+
+```bash
+# Open tasks in any crate:
+grep "OPEN" BUGS.md
+
+# Open P1 tasks in roadmap:
+grep "P1.*⬜\|P1.*🟡" lumen-plan.md
+
+# Implementation history for a specific task:
+grep -A 20 "^#### 3A" lumen-plan.md
+```
 
 **Session start protocol.** At the beginning of each session read only: `STATUS.md` + `git branch`. Do not read `lumen-plan.md` unless the task explicitly requires architecture or roadmap details.
 
