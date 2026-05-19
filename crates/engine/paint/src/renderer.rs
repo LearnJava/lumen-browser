@@ -171,11 +171,13 @@ struct Uniforms {
 struct VIn {
     @location(0) pos: vec2<f32>,
     @location(1) uv: vec2<f32>,
+    @location(2) alpha: f32,
 };
 
 struct VOut {
     @builtin(position) clip: vec4<f32>,
     @location(0) uv: vec2<f32>,
+    @location(1) alpha: f32,
 };
 
 @vertex
@@ -187,12 +189,14 @@ fn vs_main(in: VIn) -> VOut {
     var out: VOut;
     out.clip = vec4<f32>(ndc, 0.0, 1.0);
     out.uv = in.uv;
+    out.alpha = in.alpha;
     return out;
 }
 
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
-    return textureSample(image_tex, image_smp, in.uv);
+    let sample = textureSample(image_tex, image_smp, in.uv);
+    return vec4<f32>(sample.rgb, sample.a * in.alpha);
 }
 "#;
 
@@ -216,6 +220,9 @@ struct TextVertex {
 struct ImageVertex {
     pos: [f32; 2],
     uv: [f32; 2],
+    /// Per-vertex alpha-multiplier для PushOpacity (Phase 0 approximation).
+    /// 1.0 — opacity:1 (визуально без изменений), <1.0 — затенение sample.a в шейдере.
+    alpha: f32,
 }
 
 /// Атомарная команда render-pass-а после сборки display list-а. Каждый
@@ -682,6 +689,11 @@ impl Renderer {
                             offset: 8,
                             shader_location: 1,
                         },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 16,
+                            shader_location: 2,
+                        },
                     ],
                 }],
                 compilation_options: Default::default(),
@@ -1030,6 +1042,15 @@ impl Renderer {
         // с топом; PopClip снимает.
         let mut clip_stack: Vec<Rect> = Vec::new();
 
+        // Стек активных opacity-multiplier-ов (CSS Color §3.2). Effective opacity
+        // = product. Phase 0 approximation: применяется к vertex color.a (fill/text)
+        // и к vertex tint (image). Это **не** точная реализация — overlapping
+        // дочерние элементы под одной opacity-группой композитятся попарно вместо
+        // single-pass alpha (для строгой семантики требуется off-screen layer
+        // composite, шаг (c-cont) задачи P2 1B). На одиночных элементах визуально
+        // корректно — это покрывает 80%+ web-страниц Phase 0.
+        let mut opacity_stack: Vec<f32> = Vec::new();
+
         // Текущий выставленный scissor (для дедупликации SetScissor-команд).
         // None = не выставлен (первый SetScissor нужен в любом случае).
         let mut current_scissor: Option<DeviceScissor> = None;
@@ -1048,8 +1069,16 @@ impl Renderer {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
+                    let alpha = effective_alpha(&opacity_stack);
+                    if alpha <= 0.0 {
+                        continue;
+                    }
                     let v_start = fill_vertices.len() as u32;
-                    push_fill_quad(&mut fill_vertices, translate_rect_y(*rect, dy), color_to_array(color));
+                    push_fill_quad(
+                        &mut fill_vertices,
+                        translate_rect_y(*rect, dy),
+                        apply_alpha_to_color(color_to_array(color), alpha),
+                    );
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
                         draw_ops.push(DrawOp::Fill { v_start, v_count });
@@ -1059,19 +1088,23 @@ impl Renderer {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
+                    let alpha = effective_alpha(&opacity_stack);
+                    if alpha <= 0.0 {
+                        continue;
+                    }
                     let r = translate_rect_y(*rect, dy);
                     let v_start = fill_vertices.len() as u32;
                     if *wt > 0.0 {
-                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, r.width, *wt), color_to_array(ct));
+                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, r.width, *wt), apply_alpha_to_color(color_to_array(ct), alpha));
                     }
                     if *wr > 0.0 {
-                        push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - wr, r.y, *wr, r.height), color_to_array(cr));
+                        push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - wr, r.y, *wr, r.height), apply_alpha_to_color(color_to_array(cr), alpha));
                     }
                     if *wb > 0.0 {
-                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y + r.height - wb, r.width, *wb), color_to_array(cb));
+                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y + r.height - wb, r.width, *wb), apply_alpha_to_color(color_to_array(cb), alpha));
                     }
                     if *wl > 0.0 {
-                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, *wl, r.height), color_to_array(cl));
+                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, *wl, r.height), apply_alpha_to_color(color_to_array(cl), alpha));
                     }
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
@@ -1099,13 +1132,17 @@ impl Renderer {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
+                    let alpha = effective_alpha(&opacity_stack);
+                    if alpha <= 0.0 {
+                        continue;
+                    }
                     let v_start = text_vertices.len() as u32;
                     push_text_glyphs(
                         &mut text_vertices,
                         translate_rect_y(*rect, dy),
                         text,
                         *font_size,
-                        color_to_array(color),
+                        apply_alpha_to_color(color_to_array(color), alpha),
                         primary_face_id,
                         &parsed_faces,
                         &mut self.atlas,
@@ -1132,6 +1169,10 @@ impl Renderer {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
+                    let alpha = effective_alpha(&opacity_stack);
+                    if alpha <= 0.0 {
+                        continue;
+                    }
                     let r = translate_rect_y(*rect, dy);
                     let inner = Rect::new(
                         r.x - offset,
@@ -1140,7 +1181,7 @@ impl Renderer {
                         r.height + 2.0 * offset,
                     );
                     let w = *width;
-                    let c = color_to_array(color);
+                    let c = apply_alpha_to_color(color_to_array(color), alpha);
                     let v_start = fill_vertices.len() as u32;
                     push_fill_quad(
                         &mut fill_vertices,
@@ -1177,6 +1218,10 @@ impl Renderer {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
+                    let alpha = effective_alpha(&opacity_stack);
+                    if alpha <= 0.0 {
+                        continue;
+                    }
                     let scrolled = translate_rect_y(*rect, dy);
                     if let Some(gpu) = self.images.get(src) {
                         // CSS Images L3 §5.5: размещаем intrinsic-картинку
@@ -1191,7 +1236,7 @@ impl Renderer {
                             *object_position,
                         ) {
                             let v_start = image_vertices.len() as u32;
-                            push_image_quad(&mut image_vertices, visible, uv_min, uv_max);
+                            push_image_quad(&mut image_vertices, visible, uv_min, uv_max, alpha);
                             let v_count = image_vertices.len() as u32 - v_start;
                             let image_batch_idx = image_bind_groups.len() as u32;
                             image_bind_groups.push(gpu.bind_group.clone());
@@ -1202,7 +1247,11 @@ impl Renderer {
                         // декодер упал / неизвестный формат) — fallback на
                         // серый placeholder, чтобы место в layout-е было видно.
                         let v_start = fill_vertices.len() as u32;
-                        push_fill_quad(&mut fill_vertices, scrolled, [0.85, 0.85, 0.85, 1.0]);
+                        push_fill_quad(
+                            &mut fill_vertices,
+                            scrolled,
+                            apply_alpha_to_color([0.85, 0.85, 0.85, 1.0], alpha),
+                        );
                         let v_count = fill_vertices.len() as u32 - v_start;
                         if v_count > 0 {
                             draw_ops.push(DrawOp::Fill { v_start, v_count });
@@ -1225,13 +1274,21 @@ impl Renderer {
                 DisplayCommand::PopClip => {
                     clip_stack.pop();
                 }
-                // Phase 0 stub-команды: opacity / blend mode. Реальный
-                // off-screen-layer pipeline — задачи P2 1B step (c)-cont
-                // (opacity) и 4 (mix-blend-mode / backdrop-filter).
-                DisplayCommand::PushOpacity { .. }
-                | DisplayCommand::PopOpacity
-                | DisplayCommand::PushBlendMode { .. }
-                | DisplayCommand::PopBlendMode => {}
+                // Opacity stack: Phase 0 approximation — applied как
+                // alpha-multiplier на vertex color вместо настоящего
+                // off-screen-layer compositing. Pop с пустого стека —
+                // защитный no-op (display-list builder обязан балансировать
+                // Push/Pop, но мы устойчивы к unbalanced sequences).
+                DisplayCommand::PushOpacity { alpha } => {
+                    opacity_stack.push(*alpha);
+                }
+                DisplayCommand::PopOpacity => {
+                    opacity_stack.pop();
+                }
+                // Phase 0 stub: blend mode. Off-screen-layer composite pass —
+                // задача P2 1B шаг (c-cont) / P2 4 (mix-blend-mode /
+                // backdrop-filter).
+                DisplayCommand::PushBlendMode { .. } | DisplayCommand::PopBlendMode => {}
             }
         }
 
@@ -1419,7 +1476,13 @@ fn push_fill_quad(out: &mut Vec<FillVertex>, rect: Rect, color: [f32; 4]) {
     ]);
 }
 
-fn push_image_quad(out: &mut Vec<ImageVertex>, rect: Rect, uv_min: [f32; 2], uv_max: [f32; 2]) {
+fn push_image_quad(
+    out: &mut Vec<ImageVertex>,
+    rect: Rect,
+    uv_min: [f32; 2],
+    uv_max: [f32; 2],
+    alpha: f32,
+) {
     let x0 = rect.x;
     let y0 = rect.y;
     let x1 = rect.x + rect.width;
@@ -1427,12 +1490,12 @@ fn push_image_quad(out: &mut Vec<ImageVertex>, rect: Rect, uv_min: [f32; 2], uv_
     let [u0, v0] = uv_min;
     let [u1, v1] = uv_max;
     out.extend_from_slice(&[
-        ImageVertex { pos: [x0, y0], uv: [u0, v0] },
-        ImageVertex { pos: [x1, y0], uv: [u1, v0] },
-        ImageVertex { pos: [x1, y1], uv: [u1, v1] },
-        ImageVertex { pos: [x0, y0], uv: [u0, v0] },
-        ImageVertex { pos: [x1, y1], uv: [u1, v1] },
-        ImageVertex { pos: [x0, y1], uv: [u0, v1] },
+        ImageVertex { pos: [x0, y0], uv: [u0, v0], alpha },
+        ImageVertex { pos: [x1, y0], uv: [u1, v0], alpha },
+        ImageVertex { pos: [x1, y1], uv: [u1, v1], alpha },
+        ImageVertex { pos: [x0, y0], uv: [u0, v0], alpha },
+        ImageVertex { pos: [x1, y1], uv: [u1, v1], alpha },
+        ImageVertex { pos: [x0, y1], uv: [u0, v1], alpha },
     ]);
 }
 
@@ -1683,6 +1746,29 @@ pub(crate) fn intersect_rects(a: Rect, b: Rect) -> Rect {
     } else {
         Rect::new(x0, y0, x1 - x0, y1 - y0)
     }
+}
+
+/// Накопительная opacity из стека (CSS Color §3.2): произведение всех
+/// текущих `PushOpacity { alpha }`-значений. Пустой стек = 1.0. Каждое
+/// значение clamp-ится в `[0, 1]` для устойчивости (CSS spec уже clamp-ит
+/// на cascade-уровне, но defensive). NaN на любом уровне → 0.0 (полное
+/// затухание — лучше пропустить рисовку, чем нарисовать мусор).
+pub(crate) fn effective_alpha(opacity_stack: &[f32]) -> f32 {
+    let mut product = 1.0_f32;
+    for &a in opacity_stack {
+        if a.is_nan() {
+            return 0.0;
+        }
+        product *= a.clamp(0.0, 1.0);
+    }
+    product
+}
+
+/// Применяет alpha-multiplier к RGBA-вершине: `color.a *= alpha`. Используется
+/// для fill / text вершин перед записью в vbuf. `apply_alpha(c, 1.0) == c`
+/// (no-op для opacity:1 — общий путь).
+pub(crate) fn apply_alpha_to_color(color: [f32; 4], alpha: f32) -> [f32; 4] {
+    [color[0], color[1], color[2], color[3] * alpha]
 }
 
 /// Перед draw-командой убедиться, что в `ops` стоит актуальный `SetScissor`
@@ -2020,6 +2106,80 @@ mod tests {
         let stack = vec![Rect::new(2000.0, 2000.0, 100.0, 100.0)];
         let ok = sync_scissor_to_stack(&stack, &mut current, &mut ops, 1.0, 1024, 720);
         assert!(!ok);
+    }
+
+    // ── Opacity stack ─────────────────────────────────────────────────────
+
+    #[test]
+    fn effective_alpha_empty_stack_is_one() {
+        assert_eq!(effective_alpha(&[]), 1.0);
+    }
+
+    #[test]
+    fn effective_alpha_single_value() {
+        assert_eq!(effective_alpha(&[0.5]), 0.5);
+        assert_eq!(effective_alpha(&[1.0]), 1.0);
+        assert_eq!(effective_alpha(&[0.0]), 0.0);
+    }
+
+    #[test]
+    fn effective_alpha_nested_multiply() {
+        // 0.5 × 0.8 = 0.4 (nested opacity).
+        let a = effective_alpha(&[0.5, 0.8]);
+        assert!((a - 0.4).abs() < 1e-6, "got {a}");
+    }
+
+    #[test]
+    fn effective_alpha_three_levels() {
+        // 0.5 × 0.5 × 0.5 = 0.125.
+        let a = effective_alpha(&[0.5, 0.5, 0.5]);
+        assert!((a - 0.125).abs() < 1e-6, "got {a}");
+    }
+
+    #[test]
+    fn effective_alpha_clamps_out_of_range() {
+        // > 1.0 clamped к 1.0; < 0 clamped к 0.
+        assert_eq!(effective_alpha(&[1.5]), 1.0);
+        assert_eq!(effective_alpha(&[-0.5]), 0.0);
+        assert_eq!(effective_alpha(&[2.0, 0.5]), 0.5);
+    }
+
+    #[test]
+    fn effective_alpha_nan_returns_zero() {
+        // NaN — лучше не рисовать (default-safe).
+        assert_eq!(effective_alpha(&[f32::NAN]), 0.0);
+        assert_eq!(effective_alpha(&[0.5, f32::NAN, 0.8]), 0.0);
+    }
+
+    #[test]
+    fn apply_alpha_to_color_identity() {
+        let c = [0.2, 0.3, 0.4, 0.8];
+        assert_eq!(apply_alpha_to_color(c, 1.0), c);
+    }
+
+    #[test]
+    fn apply_alpha_to_color_half() {
+        // Цвет (1, 0.5, 0.25, 0.8), alpha=0.5 → alpha-канал × 0.5 = 0.4.
+        let out = apply_alpha_to_color([1.0, 0.5, 0.25, 0.8], 0.5);
+        assert_eq!(out, [1.0, 0.5, 0.25, 0.4]);
+    }
+
+    #[test]
+    fn apply_alpha_to_color_zero() {
+        // alpha=0 → final-color.a = 0 (полностью прозрачно).
+        let out = apply_alpha_to_color([1.0, 0.5, 0.25, 1.0], 0.0);
+        assert_eq!(out, [1.0, 0.5, 0.25, 0.0]);
+    }
+
+    #[test]
+    fn apply_alpha_to_color_preserves_rgb() {
+        // RGB не трогается (premultiplied alpha — отдельная история; здесь
+        // straight alpha с alpha-blending в pipeline).
+        let out = apply_alpha_to_color([0.123, 0.456, 0.789, 1.0], 0.5);
+        assert_eq!(out[0], 0.123);
+        assert_eq!(out[1], 0.456);
+        assert_eq!(out[2], 0.789);
+        assert_eq!(out[3], 0.5);
     }
 
     #[test]
