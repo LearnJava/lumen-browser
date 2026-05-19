@@ -3055,8 +3055,9 @@ pub fn compute_style(
     // считаются относительно computed font-size этого же элемента, а em для
     // самого font-size — относительно inherited (родительского) font-size.
     let parent_fs = inherited.font_size;
+    let is_quirks = doc.mode() == DocumentMode::Quirks;
     for (_, _, _, _, _, decl) in &matched {
-        apply_font_size(&mut style, decl, parent_fs, viewport);
+        apply_font_size(&mut style, decl, parent_fs, viewport, is_quirks);
     }
 
     // Custom-properties pass: все `--name: value` декларации применяются
@@ -3097,7 +3098,6 @@ pub fn compute_style(
     // `inherited` целиком — для CSS-wide keywords (CSS Cascade L4 §7).
     let em_basis = style.font_size;
     let parent_weight = inherited.font_weight;
-    let is_quirks = doc.mode() == DocumentMode::Quirks;
     for (_, _, _, _, _, decl) in &matched {
         apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, inherited, is_quirks);
     }
@@ -5464,7 +5464,9 @@ impl Length {
 ///
 /// Порядок проверки суффиксов важен: более длинные сначала (`vmin`/`vmax`
 /// перед `vw`/`vh`, `rem` перед `em`).
-pub fn parse_length(s: &str) -> Option<Length> {
+/// CSS Quirks Mode §3.3: в quirks-mode unitless non-zero число принимается
+/// как px; в standards-mode — только `0` валиден без единицы (CSS Values §6).
+fn parse_length_q(s: &str, is_quirks: bool) -> Option<Length> {
     let s = s.trim();
     // CSS Values L4: math-функции calc() / min() / max() / clamp().
     // Если значение начинается с буквы и содержит `(` — обрабатываем как
@@ -5498,7 +5500,12 @@ pub fn parse_length(s: &str) -> Option<Length> {
     if let Some(num) = s.strip_suffix('%') {
         return num.trim().parse::<f32>().ok().map(Length::Percent);
     }
-    s.parse::<f32>().ok().map(Length::Px)
+    let n = s.parse::<f32>().ok()?;
+    if n == 0.0 || is_quirks { Some(Length::Px(n)) } else { None }
+}
+
+pub fn parse_length(s: &str) -> Option<Length> {
+    parse_length_q(s, true)
 }
 
 /// Похоже ли значение на функциональный вызов CSS math-функции?
@@ -6223,7 +6230,7 @@ fn apply_declaration(
             // резолвим к px относительно текущего font-size.
             if let Some(va) = VerticalAlign::parse_keyword(val) {
                 style.vertical_align = va;
-            } else if let Some(len) = parse_length(val) {
+            } else if let Some(len) = parse_length_q(val, is_quirks) {
                 match len {
                     Length::Percent(p) => style.vertical_align = VerticalAlign::Percent(p),
                     other => {
@@ -6261,10 +6268,10 @@ fn apply_declaration(
             apply_text_wrap_shorthand(style, val);
         }
         "width" if val != "auto" => {
-            style.width = parse_length(val).and_then(|l| l.resolve(em_basis, None, viewport));
+            style.width = parse_length_q(val, is_quirks).and_then(|l| l.resolve(em_basis, None, viewport));
         }
         "height" if val != "auto" => {
-            style.height = parse_length(val).and_then(|l| l.resolve(em_basis, None, viewport));
+            style.height = parse_length_q(val, is_quirks).and_then(|l| l.resolve(em_basis, None, viewport));
         }
         // CSS 2.1 §10.4: min-/max- ширина и высота. Отрицательные значения
         // запрещены спецификацией — отбрасываем. `none` для max-* = снять
@@ -6272,22 +6279,22 @@ fn apply_declaration(
         // flex/grid) трактуем как None — Phase 0 без flex/grid, это
         // эквивалентно нулевому минимуму.
         "min-width" if val != "auto" => {
-            style.min_width = parse_length(val)
+            style.min_width = parse_length_q(val, is_quirks)
                 .and_then(|l| l.resolve(em_basis, None, viewport))
                 .filter(|v| *v >= 0.0);
         }
         "max-width" if val != "none" => {
-            style.max_width = parse_length(val)
+            style.max_width = parse_length_q(val, is_quirks)
                 .and_then(|l| l.resolve(em_basis, None, viewport))
                 .filter(|v| *v >= 0.0);
         }
         "min-height" if val != "auto" => {
-            style.min_height = parse_length(val)
+            style.min_height = parse_length_q(val, is_quirks)
                 .and_then(|l| l.resolve(em_basis, None, viewport))
                 .filter(|v| *v >= 0.0);
         }
         "max-height" if val != "none" => {
-            style.max_height = parse_length(val)
+            style.max_height = parse_length_q(val, is_quirks)
                 .and_then(|l| l.resolve(em_basis, None, viewport))
                 .filter(|v| *v >= 0.0);
         }
@@ -6344,7 +6351,7 @@ fn apply_declaration(
             // CSS Text L3 §7.1: <length> | <percentage>. % требует
             // containing-block-width — Phase 0 пока игнорирует, как и в
             // margin/padding. Поддерживаем px/em/rem/vh/vw.
-            if let Some(len) = parse_length(val)
+            if let Some(len) = parse_length_q(val, is_quirks)
                 && let Some(px) = match len {
                     Length::Percent(_) => None,
                     other => other.resolve(em_basis, None, viewport),
@@ -6358,7 +6365,7 @@ fn apply_declaration(
             // отрицательным.
             if val.trim() == "normal" {
                 style.letter_spacing = 0.0;
-            } else if let Some(len) = parse_length(val)
+            } else if let Some(len) = parse_length_q(val, is_quirks)
                 && let Some(px) = match len {
                     Length::Percent(_) => None,
                     other => other.resolve(em_basis, None, viewport),
@@ -6372,7 +6379,7 @@ fn apply_declaration(
             // % требует ширину space-glyph и Phase 0 не считаем.
             if val.trim() == "normal" {
                 style.word_spacing = 0.0;
-            } else if let Some(len) = parse_length(val)
+            } else if let Some(len) = parse_length_q(val, is_quirks)
                 && let Some(px) = match len {
                     Length::Percent(_) => None,
                     other => other.resolve(em_basis, None, viewport),
@@ -6507,7 +6514,7 @@ fn apply_declaration(
                     style.outline_style = s;
                     style_set = true;
                 } else if !width_set
-                    && let Some(w) = parse_line_width(tok, em_basis, viewport)
+                    && let Some(w) = parse_line_width(tok, em_basis, viewport, is_quirks)
                 {
                     style.outline_width = w;
                     width_set = true;
@@ -6520,7 +6527,7 @@ fn apply_declaration(
             }
         }
         "outline-width" => {
-            if let Some(v) = parse_line_width(val, em_basis, viewport) {
+            if let Some(v) = parse_line_width(val, em_basis, viewport, is_quirks) {
                 style.outline_width = v;
             }
         }
@@ -6536,7 +6543,7 @@ fn apply_declaration(
         }
         "outline-offset" => {
             // <length>; отрицательные значения валидны (CSS UI L4 §3.4).
-            if let Some(len) = parse_length(val)
+            if let Some(len) = parse_length_q(val, is_quirks)
                 && let Some(px) = match len {
                     Length::Percent(_) => None,
                     other => other.resolve(em_basis, None, viewport),
@@ -6584,12 +6591,12 @@ fn apply_declaration(
             }
         }
         "row-gap" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.row_gap = px.max(0.0);
             }
         }
         "column-gap" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.column_gap = px.max(0.0);
             }
         }
@@ -6598,9 +6605,9 @@ fn apply_declaration(
             // = row).
             let parts: Vec<&str> = val.split_whitespace().collect();
             if !parts.is_empty() {
-                let row = resolve_box_length(parts[0], em_basis, viewport).map(|v| v.max(0.0));
+                let row = resolve_box_length(parts[0], em_basis, viewport, is_quirks).map(|v| v.max(0.0));
                 let col = if parts.len() >= 2 {
-                    resolve_box_length(parts[1], em_basis, viewport).map(|v| v.max(0.0))
+                    resolve_box_length(parts[1], em_basis, viewport, is_quirks).map(|v| v.max(0.0))
                 } else {
                     row
                 };
@@ -6626,7 +6633,7 @@ fn apply_declaration(
             let trimmed = val.trim();
             if trimmed.eq_ignore_ascii_case("auto") {
                 style.column_width = None;
-            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport)
+            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport, is_quirks)
                 && px >= 0.0
             {
                 style.column_width = Some(px);
@@ -6653,7 +6660,7 @@ fn apply_declaration(
                     had_count = true;
                     continue;
                 }
-                if let Some(px) = resolve_box_length(p, em_basis, viewport)
+                if let Some(px) = resolve_box_length(p, em_basis, viewport, is_quirks)
                     && px >= 0.0
                     && !had_width
                 {
@@ -6668,7 +6675,7 @@ fn apply_declaration(
             }
         }
         "column-rule-width" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.column_rule_width = px.max(0.0);
             }
         }
@@ -6689,7 +6696,7 @@ fn apply_declaration(
                     rest = rest.replacen(tok, "", 1);
                     continue;
                 }
-                if let Some(px) = resolve_box_length(tok, em_basis, viewport)
+                if let Some(px) = resolve_box_length(tok, em_basis, viewport, is_quirks)
                     && px >= 0.0
                 {
                     style.column_rule_width = px;
@@ -6832,12 +6839,12 @@ fn apply_declaration(
                 style.background_size = BackgroundSize::Contain;
             } else {
                 let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                let w = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport));
+                let w = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport, is_quirks));
                 let h = parts.get(1).and_then(|s| {
                     if s.eq_ignore_ascii_case("auto") {
                         None
                     } else {
-                        resolve_box_length(s, em_basis, viewport)
+                        resolve_box_length(s, em_basis, viewport, is_quirks)
                     }
                 });
                 if let Some(w) = w {
@@ -6951,29 +6958,29 @@ fn apply_declaration(
             }
         }
         "scroll-margin-top" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.scroll_margin_top = px;
             }
         }
         "scroll-margin-right" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.scroll_margin_right = px;
             }
         }
         "scroll-margin-bottom" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.scroll_margin_bottom = px;
             }
         }
         "scroll-margin-left" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.scroll_margin_left = px;
             }
         }
         "scroll-margin" => {
             let parts: Vec<f32> = val
                 .split_whitespace()
-                .filter_map(|p| resolve_box_length(p, em_basis, viewport))
+                .filter_map(|p| resolve_box_length(p, em_basis, viewport, is_quirks))
                 .collect();
             let (t, r, b, l) = expand_4_sides(&parts);
             style.scroll_margin_top = t;
@@ -6982,29 +6989,29 @@ fn apply_declaration(
             style.scroll_margin_left = l;
         }
         "scroll-padding-top" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.scroll_padding_top = px;
             }
         }
         "scroll-padding-right" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.scroll_padding_right = px;
             }
         }
         "scroll-padding-bottom" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.scroll_padding_bottom = px;
             }
         }
         "scroll-padding-left" => {
-            if let Some(px) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(px) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.scroll_padding_left = px;
             }
         }
         "scroll-padding" => {
             let parts: Vec<f32> = val
                 .split_whitespace()
-                .filter_map(|p| resolve_box_length(p, em_basis, viewport))
+                .filter_map(|p| resolve_box_length(p, em_basis, viewport, is_quirks))
                 .collect();
             let (t, r, b, l) = expand_4_sides(&parts);
             style.scroll_padding_top = t;
@@ -7038,7 +7045,7 @@ fn apply_declaration(
             let trimmed = val.trim();
             if let Ok(n) = trimmed.parse::<i32>() {
                 style.tab_size = (n.max(0) as f32) * 8.0;
-            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport) {
+            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport, is_quirks) {
                 style.tab_size = px.max(0.0);
             }
         }
@@ -7072,16 +7079,16 @@ fn apply_declaration(
             // Phase 0: парсим 1-3 значения как px. Keywords (center / top /
             // bottom / left / right) пока не поддерживаем.
             let parts: Vec<&str> = val.split_whitespace().collect();
-            let x = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport)).unwrap_or(0.0);
-            let y = parts.get(1).and_then(|s| resolve_box_length(s, em_basis, viewport)).unwrap_or(0.0);
-            let z = parts.get(2).and_then(|s| resolve_box_length(s, em_basis, viewport)).unwrap_or(0.0);
+            let x = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport, is_quirks)).unwrap_or(0.0);
+            let y = parts.get(1).and_then(|s| resolve_box_length(s, em_basis, viewport, is_quirks)).unwrap_or(0.0);
+            let z = parts.get(2).and_then(|s| resolve_box_length(s, em_basis, viewport, is_quirks)).unwrap_or(0.0);
             style.transform_origin = (x, y, z);
         }
         "perspective" => {
             let trimmed = val.trim();
             if trimmed.eq_ignore_ascii_case("none") {
                 style.perspective = None;
-            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport) {
+            } else if let Some(px) = resolve_box_length(trimmed, em_basis, viewport, is_quirks) {
                 style.perspective = if px > 0.0 { Some(px) } else { None };
             }
         }
@@ -7213,12 +7220,12 @@ fn apply_declaration(
                 style.mask_size = BackgroundSize::Contain;
             } else {
                 let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                let w = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport));
+                let w = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport, is_quirks));
                 let h = parts.get(1).and_then(|s| {
                     if s.eq_ignore_ascii_case("auto") {
                         None
                     } else {
-                        resolve_box_length(s, em_basis, viewport)
+                        resolve_box_length(s, em_basis, viewport, is_quirks)
                     }
                 });
                 if let Some(w) = w {
@@ -7349,29 +7356,29 @@ fn apply_declaration(
             }
         }
         "margin" => {
-            if let Some((t, r, b, l)) = parse_box_shorthand(val, em_basis, viewport) {
+            if let Some((t, r, b, l)) = parse_box_shorthand(val, em_basis, viewport, is_quirks) {
                 style.margin_top = t;
                 style.margin_right = r;
                 style.margin_bottom = b;
                 style.margin_left = l;
             }
         }
-        "margin-top" => set_box_length(&mut style.margin_top, val, em_basis, viewport),
-        "margin-right" => set_box_length(&mut style.margin_right, val, em_basis, viewport),
-        "margin-bottom" => set_box_length(&mut style.margin_bottom, val, em_basis, viewport),
-        "margin-left" => set_box_length(&mut style.margin_left, val, em_basis, viewport),
+        "margin-top" => set_box_length(&mut style.margin_top, val, em_basis, viewport, is_quirks),
+        "margin-right" => set_box_length(&mut style.margin_right, val, em_basis, viewport, is_quirks),
+        "margin-bottom" => set_box_length(&mut style.margin_bottom, val, em_basis, viewport, is_quirks),
+        "margin-left" => set_box_length(&mut style.margin_left, val, em_basis, viewport, is_quirks),
         "padding" => {
-            if let Some((t, r, b, l)) = parse_box_shorthand(val, em_basis, viewport) {
+            if let Some((t, r, b, l)) = parse_box_shorthand(val, em_basis, viewport, is_quirks) {
                 style.padding_top = t;
                 style.padding_right = r;
                 style.padding_bottom = b;
                 style.padding_left = l;
             }
         }
-        "padding-top" => set_box_length(&mut style.padding_top, val, em_basis, viewport),
-        "padding-right" => set_box_length(&mut style.padding_right, val, em_basis, viewport),
-        "padding-bottom" => set_box_length(&mut style.padding_bottom, val, em_basis, viewport),
-        "padding-left" => set_box_length(&mut style.padding_left, val, em_basis, viewport),
+        "padding-top" => set_box_length(&mut style.padding_top, val, em_basis, viewport, is_quirks),
+        "padding-right" => set_box_length(&mut style.padding_right, val, em_basis, viewport, is_quirks),
+        "padding-bottom" => set_box_length(&mut style.padding_bottom, val, em_basis, viewport, is_quirks),
+        "padding-left" => set_box_length(&mut style.padding_left, val, em_basis, viewport, is_quirks),
         "text-decoration" => {
             // Shorthand: `<line> || <style> || <color>` в любом порядке (CSS Text
             // Decoration L3 §2.1). Спецификация L3 не включает thickness в
@@ -7464,10 +7471,10 @@ fn apply_declaration(
             &mut style.border_left_color, val, em_basis, viewport, is_quirks),
         "border-width" => {
             let sides = expand_border_4(val);
-            if let Some(v) = resolve_box_length(sides[0], em_basis, viewport) { style.border_top_width = v; }
-            if let Some(v) = resolve_box_length(sides[1], em_basis, viewport) { style.border_right_width = v; }
-            if let Some(v) = resolve_box_length(sides[2], em_basis, viewport) { style.border_bottom_width = v; }
-            if let Some(v) = resolve_box_length(sides[3], em_basis, viewport) { style.border_left_width = v; }
+            if let Some(v) = resolve_box_length(sides[0], em_basis, viewport, is_quirks) { style.border_top_width = v; }
+            if let Some(v) = resolve_box_length(sides[1], em_basis, viewport, is_quirks) { style.border_right_width = v; }
+            if let Some(v) = resolve_box_length(sides[2], em_basis, viewport, is_quirks) { style.border_bottom_width = v; }
+            if let Some(v) = resolve_box_length(sides[3], em_basis, viewport, is_quirks) { style.border_left_width = v; }
         }
         "border-style" => {
             let sides = expand_border_4(val);
@@ -7491,43 +7498,43 @@ fn apply_declaration(
             // берём первую часть до `/`.
             let h_part = val.split('/').next().unwrap_or(val);
             let sides = expand_border_4(h_part);
-            if let Some(v) = resolve_box_length(sides[0], em_basis, viewport) {
+            if let Some(v) = resolve_box_length(sides[0], em_basis, viewport, is_quirks) {
                 style.border_top_left_radius = v.max(0.0);
             }
-            if let Some(v) = resolve_box_length(sides[1], em_basis, viewport) {
+            if let Some(v) = resolve_box_length(sides[1], em_basis, viewport, is_quirks) {
                 style.border_top_right_radius = v.max(0.0);
             }
-            if let Some(v) = resolve_box_length(sides[2], em_basis, viewport) {
+            if let Some(v) = resolve_box_length(sides[2], em_basis, viewport, is_quirks) {
                 style.border_bottom_right_radius = v.max(0.0);
             }
-            if let Some(v) = resolve_box_length(sides[3], em_basis, viewport) {
+            if let Some(v) = resolve_box_length(sides[3], em_basis, viewport, is_quirks) {
                 style.border_bottom_left_radius = v.max(0.0);
             }
         }
         "border-top-left-radius" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.border_top_left_radius = v.max(0.0);
             }
         }
         "border-top-right-radius" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.border_top_right_radius = v.max(0.0);
             }
         }
         "border-bottom-right-radius" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.border_bottom_right_radius = v.max(0.0);
             }
         }
         "border-bottom-left-radius" => {
-            if let Some(v) = resolve_box_length(val, em_basis, viewport) {
+            if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
                 style.border_bottom_left_radius = v.max(0.0);
             }
         }
-        "border-top-width" => set_box_length(&mut style.border_top_width, val, em_basis, viewport),
-        "border-right-width" => set_box_length(&mut style.border_right_width, val, em_basis, viewport),
-        "border-bottom-width" => set_box_length(&mut style.border_bottom_width, val, em_basis, viewport),
-        "border-left-width" => set_box_length(&mut style.border_left_width, val, em_basis, viewport),
+        "border-top-width" => set_box_length(&mut style.border_top_width, val, em_basis, viewport, is_quirks),
+        "border-right-width" => set_box_length(&mut style.border_right_width, val, em_basis, viewport, is_quirks),
+        "border-bottom-width" => set_box_length(&mut style.border_bottom_width, val, em_basis, viewport, is_quirks),
+        "border-left-width" => set_box_length(&mut style.border_left_width, val, em_basis, viewport, is_quirks),
         "border-top-style" => style.border_top_style = parse_border_style_kw(val),
         "border-right-style" => style.border_right_style = parse_border_style_kw(val),
         "border-bottom-style" => style.border_bottom_style = parse_border_style_kw(val),
@@ -9304,6 +9311,7 @@ fn apply_font_size(
     decl: &Declaration,
     parent_fs: f32,
     viewport: Size,
+    is_quirks: bool,
 ) {
     if decl.property != "font-size" {
         return;
@@ -9320,7 +9328,7 @@ fn apply_font_size(
         };
         return;
     }
-    let Some(len) = parse_length(val) else {
+    let Some(len) = parse_length_q(val, is_quirks) else {
         return;
     };
     // Для font-size: em и % считаются от parent_fs; vh/vw/vmin/vmax — от viewport.
@@ -9345,16 +9353,16 @@ fn apply_font_size(
 
 /// Резолвит длину для margin / padding / border. `%` в Phase 0 не поддержан
 /// (нужна containing-block-width), возвращает None.
-fn resolve_box_length(val: &str, em_basis: f32, viewport: Size) -> Option<f32> {
-    let len = parse_length(val)?;
+fn resolve_box_length(val: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> Option<f32> {
+    let len = parse_length_q(val, is_quirks)?;
     match len {
         Length::Percent(_) => None,
         other => other.resolve(em_basis, None, viewport),
     }
 }
 
-fn set_box_length(target: &mut f32, val: &str, em_basis: f32, viewport: Size) {
-    if let Some(v) = resolve_box_length(val, em_basis, viewport) {
+fn set_box_length(target: &mut f32, val: &str, em_basis: f32, viewport: Size, is_quirks: bool) {
+    if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) {
         *target = v;
     }
 }
@@ -9392,10 +9400,10 @@ fn split_box_tokens(val: &str) -> Vec<&str> {
 /// длинами. CSS 2.1 §8.3: 1 → все стороны; 2 → [верт] [гориз];
 /// 3 → [top] [гориз] [bottom]; 4 → [top] [right] [bottom] [left].
 /// `auto` трактуется как 0 (авто-margin centering — отдельная задача).
-fn parse_box_shorthand(val: &str, em_basis: f32, viewport: Size) -> Option<(f32, f32, f32, f32)> {
+fn parse_box_shorthand(val: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> Option<(f32, f32, f32, f32)> {
     let resolve = |s: &str| -> Option<f32> {
         if s == "auto" { return Some(0.0); }
-        resolve_box_length(s, em_basis, viewport)
+        resolve_box_length(s, em_basis, viewport, is_quirks)
     };
     let parts = split_box_tokens(val);
     match parts.as_slice() {
@@ -9441,12 +9449,12 @@ fn parse_border_style_opt(s: &str) -> Option<BorderStyle> {
 /// CSS Backgrounds L3 §4.2 / Basic UI L4 §5.2 — `<line-width>` =
 /// `<length> | thin | medium | thick`. UA convention: thin=1, medium=3,
 /// thick=5 (Chromium/Firefox/WebKit совпадают).
-fn parse_line_width(val: &str, em_basis: f32, viewport: Size) -> Option<f32> {
+fn parse_line_width(val: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> Option<f32> {
     match val.trim() {
         s if s.eq_ignore_ascii_case("thin") => Some(1.0),
         s if s.eq_ignore_ascii_case("medium") => Some(3.0),
         s if s.eq_ignore_ascii_case("thick") => Some(5.0),
-        other => resolve_box_length(other, em_basis, viewport),
+        other => resolve_box_length(other, em_basis, viewport, is_quirks),
     }
 }
 
@@ -9571,7 +9579,7 @@ fn parse_break_value(s: &str) -> Option<BreakValue> {
 fn apply_border_shorthand(style: &mut ComputedStyle, val: &str, em_basis: f32, viewport: Size, is_quirks: bool) {
     let tokens: Vec<&str> = val.split_whitespace().collect();
     for tok in &tokens {
-        if let Some(v) = resolve_box_length(tok, em_basis, viewport) {
+        if let Some(v) = resolve_box_length(tok, em_basis, viewport, is_quirks) {
             style.border_top_width = v;
             style.border_right_width = v;
             style.border_bottom_width = v;
@@ -9602,7 +9610,7 @@ fn apply_border_side_shorthand(
     is_quirks: bool,
 ) {
     for tok in val.split_whitespace() {
-        if let Some(v) = resolve_box_length(tok, em_basis, viewport) {
+        if let Some(v) = resolve_box_length(tok, em_basis, viewport, is_quirks) {
             *width = v;
         } else if is_border_style_kw(tok) {
             *bstyle = parse_border_style_kw(tok);
@@ -10795,6 +10803,41 @@ mod tests {
         // Мусор → None.
         assert_eq!(parse_length("abc"), None);
         assert_eq!(parse_length("px"), None);
+    }
+
+    // ── CSS Quirks Mode §3.3: unitless length quirk ───────────────────────
+
+    #[test]
+    fn unitless_length_quirks_mode_accepts_as_px() {
+        // quirks=true: unitless non-zero → px
+        assert_eq!(parse_length_q("10", true), Some(Length::Px(10.0)));
+        assert_eq!(parse_length_q("1.5", true), Some(Length::Px(1.5)));
+        assert_eq!(parse_length_q("-5", true), Some(Length::Px(-5.0)));
+    }
+
+    #[test]
+    fn unitless_length_standards_mode_rejects_nonzero() {
+        // quirks=false: unitless non-zero → None (CSS Values §6)
+        assert_eq!(parse_length_q("10", false), None);
+        assert_eq!(parse_length_q("1.5", false), None);
+        assert_eq!(parse_length_q("-5", false), None);
+    }
+
+    #[test]
+    fn unitless_zero_always_valid() {
+        // `0` валиден без единицы в обоих режимах (CSS Values §6)
+        assert_eq!(parse_length_q("0", true), Some(Length::Px(0.0)));
+        assert_eq!(parse_length_q("0", false), Some(Length::Px(0.0)));
+        assert_eq!(parse_length_q("0.0", true), Some(Length::Px(0.0)));
+        assert_eq!(parse_length_q("0.0", false), Some(Length::Px(0.0)));
+    }
+
+    #[test]
+    fn unitless_quirk_does_not_affect_dimensioned_values() {
+        // Значения с единицами работают в обоих режимах
+        assert_eq!(parse_length_q("10px", false), Some(Length::Px(10.0)));
+        assert_eq!(parse_length_q("2em", false), Some(Length::Em(2.0)));
+        assert_eq!(parse_length_q("50%", false), Some(Length::Percent(50.0)));
     }
 
     /// Тестовый viewport: квадратный, чтобы vh == vw, vmin == vmax.
