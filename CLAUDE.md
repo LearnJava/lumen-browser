@@ -224,7 +224,8 @@ Current coverage — `graphic_tests/COVERAGE.md`.
 1. **No screenshots in the repo.** `graphic_tests/screenshots/*.png` are work artifacts — do not commit. Only the updated [`BUGS.md`](BUGS.md) goes in.
 2. **A bug is only a visually noticeable artifact.** Non-zero pixels in `NN-diff.png` alone are not a bug. Skip if only visible under pixel-by-pixel inspection.
 3. **Ignore text for now.** Glyph antialiasing will always diverge from Edge — not tracked until a dedicated task. Text-box geometry, padding/margin around text, line-height — that's layout, check as normal.
-4. **Single tracker — `BUGS.md` in the repo root.** One line per bug, compact format:
+4. **Never rewrite test pages to work around engine limitations.** Test pages are the ground truth — they represent correct CSS as Edge renders it. If a test fails, fix the engine, not the test. Simplifying HTML to make a test pass is a false positive: the engine didn't improve, the bar was lowered. The only valid reason to edit a test page is a bug in the test itself (wrong expected output).
+5. **Single tracker — `BUGS.md` in the repo root.** One line per bug, compact format:
    ```
    BUG-018 | OPEN  | inline padding wrong on nested divs | layout/src/flow.rs:312
    BUG-003 | FIXED 2026-05-10 | composite glyphs missing | font/src/parser.rs:201
