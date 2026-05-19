@@ -10,7 +10,7 @@
 
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
-_(нет активных резерваций)_
+- 🔄 Canvas background propagation (CSS Backgrounds L3 §2.11.2 — body→html) [P1] — canvas-bg-propagation — 2026-05-19
 
 ## Статус реализации
 
