@@ -17,7 +17,9 @@ Current phase: **Phase 0 (prototype)**. Goal: open local HTML+CSS and render it 
 | File | Contents |
 |---|---|
 | `README.md` | User-facing: install, commands, what to expect. |
-| `STATUS.md` | Current sprint: in-progress tasks, next items per P1/P2/P3, recent merges. **Read this instead of lumen-plan.md for current status.** |
+| `STATUS-P1.md` | P1 sprint: in-progress task, next items, recent merge. Read at session start if you are P1. |
+| `STATUS-P2.md` | P2 sprint: in-progress task, next items, recent merge. Read at session start if you are P2. |
+| `STATUS-P3.md` | P3 sprint: in-progress task, next items, recent merge. Read at session start if you are P3. |
 | `lumen-plan.md` | Full design doc (~1200 lines, 22 chapters): principles, scope, architecture, phases. Read for architecture/history, not daily status. |
 | `CLAUDE.md` | (this file) Conventions and invariants for the assistant. |
 | `samples/page.html` | Test page for pipeline runs. |
@@ -39,7 +41,7 @@ Exception: Claude memory (`~/.claude/projects/.../memory/`) lives outside the re
 
 Three parallel developers (3 Claude Code sessions, each in its own `git worktree`). Each owns a domain to minimize merge conflicts. Former P4 role (shell + JS + runtime + UI) is merged into P3.
 
-**If the user says "you are developer N" at session start — find your column below and take tasks marked `[PN]` from the "Roadmap" section in `lumen-plan.md`. If all your tasks are taken (visible via `git branch` + "🔄 In progress" block in `lumen-plan.md`) — ask the user which task to take next.**
+**If the user says "you are developer N" at session start — read `STATUS-PN.md` and take the first item from "Next". If "In progress" is set — continue that task. If all your tasks are taken — ask the user which task to take next.**
 
 Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `font` `encoding` `image` | `network` `storage` `knowledge` `bench`
 
@@ -63,10 +65,11 @@ Full subsystem breakdown per role — [lumen-plan.md](lumen-plan.md) §developer
 
 ### Reserving a task
 
-Create a feature branch (`git checkout -b <name>`) → in the **first commit on that branch** add a line to the "🔄 In progress" block in `lumen-plan.md`:
+Create a feature branch (`git checkout -b <name>`) → in the **first commit on that branch** update `STATUS-PN.md`:
 
 ```
-- 🔄 <task name> [PN] — <branch name> — <YYYY-MM-DD>
+In progress: <task name>  branch: <branch-name>
+Next step: <what to do first>  <file.rs:line>
 ```
 
 ---
@@ -143,7 +146,7 @@ cargo run -p lumen-shell -- --dump-layout samples/page.html 2>&1 | grep -A2 "mar
 cargo run -p lumen-shell -- --dump-display-list samples/page.html 2>&1 | grep -A2 "FillRect\|Text"
 ```
 
-**STATUS.md over lumen-plan.md.** `lumen-plan.md` roadmap tables are now compact (one line per task). Full implementation history is in `## История реализации`. For current-sprint status, read `STATUS.md` (20 lines). Do not read `lumen-plan.md` unless the task explicitly requires architecture or roadmap details.
+**STATUS-PN.md over lumen-plan.md.** `lumen-plan.md` roadmap tables are now compact (one line per task). Full implementation history is in `## История реализации`. For current-sprint status, read your `STATUS-PN.md` (~10 lines). Do not read `lumen-plan.md` unless the task explicitly requires architecture or roadmap details.
 
 **Grep instead of reading whole files.** Use targeted grep before opening large files:
 
@@ -158,7 +161,7 @@ grep "P1.*⬜\|P1.*🟡" lumen-plan.md
 grep -A 20 "^#### 3A" lumen-plan.md
 ```
 
-**Session start protocol.** At the beginning of each session read only: `STATUS.md` + `git branch`. Do not read `lumen-plan.md` unless the task explicitly requires architecture or roadmap details.
+**Session start protocol.** At the beginning of each session read only: `STATUS-PN.md` (your developer number) + `git branch`. Do not read `lumen-plan.md` unless the task explicitly requires architecture or roadmap details.
 
 ### Cargo output rules
 
@@ -339,9 +342,9 @@ Branch names: short kebab-case, no prefixes (`text-rendering`, `font-atlas`, `ht
 
 Multiple Claude Code sessions may work simultaneously. To avoid duplicate task pickup:
 
-1. **Before starting** — read `git branch` and the **"🔄 In progress"** block in `lumen-plan.md`. If the branch or task already exists — pick another.
-2. **Reserve a task**: create a feature branch and in the **first commit** add a line to "In progress": `- 🔄 <task name> [PN] — <branch> — <YYYY-MM-DD>`.
-3. **On merge to `main`** — remove the line from "In progress" and update plan status in the merge commit.
+1. **Before starting** — read `STATUS-PN.md` + `git branch`. If "In progress" is already set — that task is taken, pick from "Next" instead.
+2. **Reserve a task**: create a feature branch and in the **first commit** set "In progress" in `STATUS-PN.md` with branch name and next step.
+3. **On merge to `main`** — clear "In progress", move task out of "Next", update "Recent" in `STATUS-PN.md`.
 4. **If work is cancelled** — delete the branch; remove the line in a `cleanup-<name>` branch, merge to main.
 
 #### Worktree isolation — mandatory
