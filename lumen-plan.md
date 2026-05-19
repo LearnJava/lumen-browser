@@ -119,47 +119,88 @@
 
 > Подробности реализации каждой задачи — в [§История реализации](#история-реализации).
 
-| # | Задача | Разблокирует | НЕ блокирует |
+| # | Задача | impl / Разблокирует | НЕ блокирует |
 |---|---|---|---|
-| 1A | 🟡 **`[P1]` Quirks-mode application** на cascade/layout. Осталось: table cell width quirk (§4.1), IE7 line-height quirk (§3.2), unitless length quirk (§3.3). | Половина legacy-сайтов. | Никого. |
-| 1B | ⬜ **`[P1]` Типизированные `Length`/`Color`** во всех декларациях каскада (не строки). | P2 п.3A; P3 CSSOM. | P2/P3 уже видят типы из Sprint 0. |
-| 2A | ✅ **`[P1+P2]` Stacking contexts impl** в layout. | P2 п.2A. | — |
-| 2B | ✅ **`[P2+P1]` Property trees построение** (4 дерева из style+layout). | P2 п.1B. | — |
-| 3A | 🟡 **`[P1+P2+P3]` Web Animations interpolation**. Зависит от п.1B. Осталось: gradient string→`Vec<GradientStop>`, scheduling (P3), compositor offload (P2). | P2 п.3B; P3 scheduling. | Stub компилируется. |
-| ~~3B~~ | ✅ **`[P1+P3]` Push-tokenizer + incremental tree builder**. Осталось: `feed_bytes(&[u8])`. | P3 п.4B. | — |
-| 4A | 🟡 **`[P1+P2]` `<picture>`/`srcset`/`sizes` finishing**. Осталось: IntersectionObserver для `loading="lazy"`. | P3 lazy-loading. | P2 GPU upload. |
-| 4B | ⬜ **`[P1]` CSS Grid + полный Flexbox** в layout. | Адаптивные сайты. | Изолировано. |
-| 5 | ⬜ **`[P1]` ICU4x segmenter + linebreak** через `UnicodeProvider`. | CJK типографика. | Изолировано. |
-| 6+ | ⬜ **`[P1+P3]` Shadow DOM / Accessibility / Forms / contenteditable / Print / GC** (Phase 2-3). | Динамический веб. | После Sprint 0. |
+| 1A | 🟡 **`[P1]` Quirks-mode application** | Половина legacy-сайтов | — |
+| 1A.1 | ⬜ unitless length quirk | `layout/src/style.rs:2945` | — |
+| 1A.2 | ⬜ IE7 line-height quirk | `layout/src/style.rs:4925` | — |
+| 1A.3 | ⬜ quirks test coverage | `layout/src/lib.rs:7550` | — |
+| 1B | ⬜ **`[P1]` Типизированные `Length`/`Color`** | P2 п.3A; P3 CSSOM | — |
+| 1B.1 | ⬜ Length type через все декларации каскада | `layout/src/style.rs:5069` | — |
+| 1B.2 | ⬜ Color type через все декларации каскада | `layout/src/style.rs:494` | — |
+| 2A | ✅ **`[P1+P2]` Stacking contexts impl** | P2 п.2A | — |
+| 2B | ✅ **`[P2+P1]` Property trees построение** | P2 п.1B | — |
+| 3A | 🟡 **`[P1+P2+P3]` Web Animations interpolation** | P2 п.3B; P3 scheduling | Stub компилируется |
+| ~~3B~~ | ✅ **`[P1+P3]` Push-tokenizer + incremental tree builder** | P3 п.4B | — |
+| 4A | 🟡 **`[P1+P2]` `<picture>`/`srcset`/`sizes` finishing** | P3 lazy-loading | P2 GPU upload |
+| 4B | ⬜ **`[P1]` CSS Grid + полный Flexbox** | Адаптивные сайты | — |
+| 4B.1 | ⬜ flex-direction + flex-wrap properties | `layout/src/style.rs:1392` | — |
+| 4B.2 | ⬜ flex-grow + flex-shrink + flex-basis | `layout/src/style.rs:1392` | — |
+| 4B.3 | ⬜ flex item layout pass (main/cross axis) | `layout/src/box_tree.rs:509` | — |
+| 4B.4 | ⬜ flex gap application | `layout/src/box_tree.rs:509` | — |
+| 4B.5 | ⬜ flex wrapping + multi-line | `layout/src/box_tree.rs:509` | — |
+| 5 | ⬜ **`[P1]` ICU4x segmenter + linebreak** | CJK типографика | — |
+| 5.1 | ⬜ ICU4x struct + segmenter init | `core/src/ext.rs` | — |
+| 5.2 | ⬜ line_break_opportunities impl | `core/src/ext.rs` | — |
+| 5.3 | ⬜ grapheme_boundaries impl | `core/src/ext.rs` | — |
+| 5.4 | ⬜ word_boundaries impl | `core/src/ext.rs` | — |
+| 5.5 | ⬜ bidi_runs impl | `core/src/ext.rs` | — |
+| 6+ | ⬜ **`[P1+P3]` Shadow DOM / Accessibility / Forms / GC** (Phase 2-3) | Phase 2-3 | — |
 
 #### Track P2 — Backend rendering
 
-| # | Задача | Разблокирует | НЕ блокирует |
+| # | Задача | impl / Разблокирует | НЕ блокирует |
 |---|---|---|---|
-| ~~1A~~ | ✅ **`[P2]` Font fallback/matcher**. Осталось: eager preload Noto Emoji/CJK. | — | — |
-| 1B | 🟡 **`[P2+P1]` Compositor thread + layer tree**. Осталось: shell-pipeline (P3), реальный tick-loop, off-screen opacity, PushBlendMode. | Off-main-thread scroll; Web Animations offload; GPU process. | P1/P3 работают против stub. |
-| 2A | ✅ **`[P1+P2]` Painting order traversal** (CSS 2.1 Appendix E, 7 фаз). Ожидает shell-интеграции P3. | — | — |
-| 2B | ✅ **`[P2]` Stacking-aware hit testing** (`lumen-paint::hit_test`). | P3 shell input handler. | — |
-| 3A | ⬜ **`[P2]` Color management + Display P3/Rec2020**. Зависит от P1 п.1B. | Фотографии с P3-профилем. | Только `lumen-paint`. |
-| 3B | ⬜ **`[P1+P2+P3]` Web Animations compositor offload** (transform/opacity без main thread). | Smooth-анимации. | Stub компилируется. |
-| 4 | ⬜ **`[P1+P2]` mix-blend-mode/backdrop-filter pipeline** (после п.1B). | Современные UI-эффекты. | Только compositor. |
-| 5+ | ⬜ **Extras**: object-fit/object-position, GPU upload, Canvas 2D, WOFF2, variable fonts, Print PDF. | — | — |
+| ~~1A~~ | ✅ **`[P2]` Font fallback/matcher** | — | — |
+| 1B | 🟡 **`[P2+P1]` Compositor thread + layer tree** | Off-main-thread scroll | P1/P3 работают против stub |
+| 1B.1 | ⬜ CompositorThread struct + spawn loop | `paint/src/compositor.rs:277` | — |
+| 1B.2 | ⬜ vsync tick-loop 60fps | `paint/src/compositor.rs:277` | — |
+| 1B.3 | ⬜ PushBlendMode/PopBlendMode в display list | `paint/src/display_list.rs:196` | — |
+| 1B.4 | ⬜ off-screen opacity layer rendering | `paint/src/renderer.rs` | — |
+| 1B.5 | ⬜ GPU texture upload for layer snapshots | `paint/src/renderer.rs` | — |
+| 2A | ✅ **`[P1+P2]` Painting order traversal** | — | — |
+| 2B | ✅ **`[P2]` Stacking-aware hit testing** | P3 shell input handler | — |
+| 3A | ⬜ **`[P2]` Color management + Display P3/Rec2020** (blocked: P1 1B) | Фотографии с P3-профилем | Только `lumen-paint` |
+| 3A.1 | ⬜ ColorSpace enum in ComputedStyle | `layout/src/style.rs:1159` | — |
+| 3A.2 | ⬜ Display P3 parsing in CSS color functions | `layout/src/style.rs:9919` | — |
+| 3A.3 | ⬜ HDR tone-mapping utilities (sRGB↔P3) | `layout/src/style.rs` | — |
+| 3A.4 | ⬜ ColorFloat variant (f32 channels) | `layout/src/style.rs:494` | — |
+| 3A.5 | ⬜ color space awareness in renderer | `paint/src/renderer.rs` | — |
+| 3B | ⬜ **`[P1+P2+P3]` Web Animations compositor offload** | Smooth-анимации | Stub компилируется |
+| 4 | ⬜ **`[P1+P2]` mix-blend-mode/backdrop-filter pipeline** | Современные UI-эффекты | Только compositor |
+| 5+ | ⬜ **Extras**: object-fit, Canvas 2D, WOFF2, variable fonts, Print PDF | — | — |
 
 #### Track P3 — Runtime + system (объединённый домен — больше треков, но всё параллельно)
 
-| # | Задача | Разблокирует | НЕ блокирует |
+| # | Задача | impl / Разблокирует | НЕ блокирует |
 |---|---|---|---|
-| 1B | ⬜ **`[P3]` rquickjs integration scaffold** (`lumen-js`, `JsRuntime` trait). | Самый большой enabler: Forms, Animations, SWs, DevTools. | Новый крейт. |
-| 2A | 🟡 **`[P3]` SOP/CORS/mixed-content/sandbox**. Осталось: sandbox-application в DOM-загрузчике. | Публичная сеть. | Только network + shell. |
-| 2C | ⬜ **`[P3]` Tab session export/import** (§12.7). | UX. | storage + shell. |
-| 3A | 🟡 **`[P3]` DPR + scroll в shell**. Осталось: relayout-on-resize, горизонтальный scroll, momentum. | 4K + длинные страницы. | shell + paint. |
-| 3B | 🟡 **`[P3]` HTML event loop в Lumen-loop**. Осталось: reload через queue_task, rendering steps ordering, реальные observers. | P1/P2 rAF. | Только `lumen-shell::runtime`. |
-| 4A | ⬜ **`[P3]` JS↔DOM bindings** поверх `lumen-js` (после 1B). | Любая JS-динамика. | Стартует после 1B. |
-| 4B | ⬜ **`[P1+P3]` Streaming pipeline shell-side** (после P1 п.3B). | Первый кадр Habr без задержки. | P3 пока blocking. |
-| 5A | ⬜ **`[P3]` HTTP/2**. | Latency. | Только network. |
-| 5B | ✅ **`[P3]` HTTP Range requests** (single/multi/suffix/If-Range). Осталось: shell-интеграция. | `<video>` seek. | — |
-| 5C | ⬜ **`[P3]` DevTools/CDP минимум** (после 1B). | Debug движка. | — |
-| 6+ | ⬜ **`[P3]` knowledge / Profiles / Focus / IME / WebSockets / bfcache / Navigation / SW / IndexedDB / SpellCheck / Permissions / SiteIsolation / V8 / AI / Bookmarks** (Phase 2-3). | — | — |
+| 1B | ⬜ **`[P3]` rquickjs integration scaffold** | Forms, Animations, SWs, DevTools | Новый крейт |
+| 2A | 🟡 **`[P3]` SOP/CORS/mixed-content/sandbox** | Публичная сеть | Только network + shell |
+| 2A.1 | ⬜ block blockable in HttpClient::fetch | `network/src/lib.rs:1478` | — |
+| 2A.2 | ⬜ sandbox_flags on iframe DOM element | `dom/src/lib.rs` | — |
+| 2A.3 | ⬜ script execution gate in shell | `shell/src/main.rs` | — |
+| 2A.4 | ⬜ form submission gate | `dom/src/lib.rs` | — |
+| 2A.5 | ⬜ navigation restriction enforcement | `shell/src/main.rs` | — |
+| 2C | ⬜ **`[P3]` Tab session export/import** | UX | storage + shell |
+| 3A | 🟡 **`[P3]` DPR + scroll в shell** | 4K + длинные страницы | shell + paint |
+| 3A.1 | ⬜ relayout-on-resize | `shell/src/main.rs` | — |
+| 3A.2 | ⬜ horizontal scroll | `shell/src/main.rs` | — |
+| 3A.3 | ⬜ momentum scroll | `shell/src/main.rs` | — |
+| 3B | 🟡 **`[P3]` HTML event loop в Lumen-loop** | P1/P2 rAF | Только `lumen-shell::runtime` |
+| 3B.1 | ⬜ reload via queue_task | `shell/src/main.rs` | — |
+| 3B.2 | ⬜ rendering steps ordering | `shell/src/main.rs` | — |
+| 3B.3 | ⬜ real observers | `shell/src/main.rs` | — |
+| 4A | ⬜ **`[P3]` JS↔DOM bindings** (после 1B) | Любая JS-динамика | — |
+| 4B | ⬜ **`[P1+P3]` Streaming pipeline shell-side** | Первый кадр без задержки | P3 пока blocking |
+| 4B.1 | ⬜ preload scan call before DOM parse | `shell/src/main.rs:644` | — |
+| 4B.2 | ⬜ preload hint dispatcher | `shell/src/main.rs` | — |
+| 4B.3 | ⬜ preload URL resolution | `shell/src/main.rs` | — |
+| 4B.4 | ⬜ preload fetch deduplication | `shell/src/main.rs` | — |
+| 4B.5 | ⬜ preload priority + EventSink | `shell/src/main.rs` | — |
+| 5A | ⬜ **`[P3]` HTTP/2** | Latency | Только network |
+| 5B | ✅ **`[P3]` HTTP Range requests** | `<video>` seek | — |
+| 5C | ⬜ **`[P3]` DevTools/CDP минимум** (после 1B) | Debug движка | — |
+| 6+ | ⬜ **`[P3]` knowledge / Profiles / Focus / IME / WebSockets / SW / V8 / AI** (Phase 2-3) | — | — |
 
 ---
 

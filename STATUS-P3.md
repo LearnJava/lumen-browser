@@ -1,15 +1,22 @@
 In progress: —
 
-Next:
-mixed-content block blockable in HttpClient::fetch  network/src/lib.rs:1478
-mixed-content sandbox_flags on iframe DOM element   dom/src/lib.rs
-mixed-content script execution gate in shell        shell/src/main.rs
-mixed-content form submission gate                  dom/src/lib.rs
-mixed-content navigation restriction enforcement    shell/src/main.rs
-preload scan call before DOM parse                  shell/src/main.rs:644
-preload hint dispatcher (fetch by type)             shell/src/main.rs
-preload URL resolution against document base        shell/src/main.rs
-preload fetch deduplication (HashSet)               shell/src/main.rs
-preload priority + EventSink reporting              shell/src/main.rs
+Next: 2A.1 block blockable in HttpClient::fetch   lumen-plan.md:180
+
+Queue:
+2A.2 sandbox_flags on iframe       lumen-plan.md:181
+2A.3 script execution gate         lumen-plan.md:182
+2A.4 form submission gate          lumen-plan.md:183
+2A.5 navigation restriction        lumen-plan.md:184
+3A.1 relayout-on-resize            lumen-plan.md:187
+3A.2 horizontal scroll             lumen-plan.md:188
+3A.3 momentum scroll               lumen-plan.md:189
+3B.1 reload via queue_task         lumen-plan.md:191
+3B.2 rendering steps ordering      lumen-plan.md:192
+3B.3 real observers                lumen-plan.md:193
+4B.1 preload scan before parse     lumen-plan.md:196
+4B.2 preload hint dispatcher       lumen-plan.md:197
+4B.3 preload URL resolution        lumen-plan.md:198
+4B.4 preload deduplication         lumen-plan.md:199
+4B.5 preload priority + EventSink  lumen-plan.md:200
 
 Recent: graphic-tests-rework 2026-05-19
