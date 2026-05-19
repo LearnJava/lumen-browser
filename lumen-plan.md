@@ -11,6 +11,7 @@
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
 - 🔄 `:current` / `:past` / `:future` (time-dimensional pseudo-classes) [P1] — time-dim-pseudos — 2026-05-19
+- 🔄 PushOpacity/PopOpacity → alpha-multiply (Phase 0 approximation) [P2] — layer-pipeline-opacity — 2026-05-19
 
 ## Статус реализации
 
