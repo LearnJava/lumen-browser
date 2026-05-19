@@ -328,6 +328,7 @@ pub fn fit_image_quad(
 ///   плюс `s=[t,r,b,l]` если хоть один стиль ≠ Solid (bw-compat: чистый
 ///   Solid-border печатается как раньше, snapshot-ы не ломаются).
 /// - `DrawText (x.xx, y.xx, w.xx, h.xx) "text" fs.xx #rrggbbaa`
+///
 /// Сокращённый префикс `BorderStyle` для snapshot-сериализатора.
 /// None уже фильтруется emit-side, но обрабатываем для устойчивости.
 fn border_style_short(s: BorderStyle) -> &'static str {

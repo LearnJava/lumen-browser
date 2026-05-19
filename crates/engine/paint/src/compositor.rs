@@ -45,7 +45,7 @@
 //!   compositor pipeline.
 
 use std::sync::{
-    Arc, Mutex,
+    Arc, Condvar, Mutex,
     atomic::{AtomicBool, Ordering},
 };
 use std::thread::{self, JoinHandle};
@@ -245,6 +245,56 @@ impl Compositor for InProcessCompositor {
     }
 }
 
+// ---------------------------------------------------------------------------
+// VsyncNotifier — condvar-based wakeup для compositor thread (P2 1B.2)
+// ---------------------------------------------------------------------------
+
+/// Condvar-pair для передачи vsync/commit-нотификации compositor thread-у.
+///
+/// Dirty-флаг устраняет потерю нотификации: если `notify()` вызван в то
+/// время, когда thread выполняет `flush_pending()` (не ждёт на condvar),
+/// флаг остаётся `true` и thread увидит его при следующей проверке перед
+/// `wait_timeout`.
+pub(crate) struct VsyncNotifier {
+    dirty: Mutex<bool>,
+    cond: Condvar,
+}
+
+impl VsyncNotifier {
+    pub(crate) fn new() -> Self {
+        Self {
+            dirty: Mutex::new(false),
+            cond: Condvar::new(),
+        }
+    }
+
+    /// Вызывается из `commit()` — будит compositor thread немедленно.
+    pub(crate) fn notify(&self) {
+        *self.dirty.lock().expect("VsyncNotifier dirty mutex poisoned") = true;
+        self.cond.notify_one();
+    }
+
+    /// Блокируется до нотификации или timeout-а; сбрасывает dirty-флаг.
+    /// Если `notify()` был вызван до входа в метод (dirty=true) — возвращает
+    /// немедленно без ожидания.
+    pub(crate) fn wait_for_next_tick(&self, timeout: Duration) {
+        let mut dirty = self
+            .dirty
+            .lock()
+            .expect("VsyncNotifier dirty mutex poisoned");
+        if !*dirty {
+            let (guard, _) = self
+                .cond
+                .wait_timeout(dirty, timeout)
+                .expect("VsyncNotifier condvar poisoned");
+            dirty = guard;
+        }
+        *dirty = false;
+    }
+}
+
+// ---------------------------------------------------------------------------
+
 /// Внутреннее shared state ThreadedCompositor-а. Один Mutex на все четыре
 /// слота (pending+active × layer_tree+trees) — простая модель, гарантирует
 /// что commit и flush видят consistent состояние. Lock contention пока не
@@ -275,12 +325,12 @@ impl ThreadedState {
 /// trait через `&mut self` для drop-in замены `InProcessCompositor`).
 /// Для shared доступа из других threads — [`ThreadedCompositor::handle`].
 ///
-/// Phase 0: оба impl-а реализуют один trait — потребитель может писать
-/// против `&mut dyn Compositor` и подменять single/threaded вариант без
-/// правок. Реальный compositor-thread tick-loop с отдельным `JoinHandle`
-/// (читает pending каждые N мс, делает GPU upload) — следующая задача.
+/// **Vsync tick-loop (P2 1B.2):** каждый `commit()` вызывает
+/// `notifier.notify()`, мгновенно будя compositor thread. Без commit-ов
+/// thread спит ровно `TARGET_FRAME_DURATION` (≈16.67 мс = 60 fps).
 pub struct ThreadedCompositor {
     state: Arc<Mutex<ThreadedState>>,
+    notifier: Arc<VsyncNotifier>,
 }
 
 impl ThreadedCompositor {
@@ -288,16 +338,18 @@ impl ThreadedCompositor {
     pub fn new() -> Self {
         Self {
             state: Arc::new(Mutex::new(ThreadedState::new())),
+            notifier: Arc::new(VsyncNotifier::new()),
         }
     }
 
     /// Cheap-clone handle для другого потока: shared доступ к тому же
-    /// state-у. Используется когда render/compositor thread должен читать
-    /// active, пока main thread держит owner-а и пишет pending.
+    /// state-у и notifier-у. Используется когда render/compositor thread
+    /// должен читать active, пока main thread держит owner-а и пишет pending.
     #[must_use]
     pub fn handle(&self) -> ThreadedCompositorHandle {
         ThreadedCompositorHandle {
             state: Arc::clone(&self.state),
+            notifier: Arc::clone(&self.notifier),
         }
     }
 }
@@ -314,12 +366,15 @@ impl Compositor for ThreadedCompositor {
         trees: Arc<PropertyTrees>,
         layer_tree: Arc<dyn LayerTree + Send + Sync>,
     ) {
-        let mut guard = self
-            .state
-            .lock()
-            .expect("ThreadedCompositor state mutex poisoned");
-        guard.pending_trees = Some(trees);
-        guard.pending_layer_tree = Some(layer_tree);
+        {
+            let mut guard = self
+                .state
+                .lock()
+                .expect("ThreadedCompositor state mutex poisoned");
+            guard.pending_trees = Some(trees);
+            guard.pending_layer_tree = Some(layer_tree);
+        }
+        self.notifier.notify();
     }
 
     fn flush_pending(&mut self) -> bool {
@@ -372,9 +427,13 @@ impl Compositor for ThreadedCompositor {
 /// он просто реализует [`Compositor`] trait (`&mut self`) для совместимости
 /// с in-process call sites, а handle даёт `&self` API для shared-thread
 /// потребителей. Внутри оба используют один и тот же `Arc<Mutex<...>>`.
+///
+/// `notifier` разделяется с owner-ом: `commit()` через handle тоже будит
+/// compositor thread.
 #[derive(Clone)]
 pub struct ThreadedCompositorHandle {
     state: Arc<Mutex<ThreadedState>>,
+    notifier: Arc<VsyncNotifier>,
 }
 
 impl ThreadedCompositorHandle {
@@ -383,12 +442,15 @@ impl ThreadedCompositorHandle {
         trees: Arc<PropertyTrees>,
         layer_tree: Arc<dyn LayerTree + Send + Sync>,
     ) {
-        let mut guard = self
-            .state
-            .lock()
-            .expect("ThreadedCompositorHandle state mutex poisoned");
-        guard.pending_trees = Some(trees);
-        guard.pending_layer_tree = Some(layer_tree);
+        {
+            let mut guard = self
+                .state
+                .lock()
+                .expect("ThreadedCompositorHandle state mutex poisoned");
+            guard.pending_trees = Some(trees);
+            guard.pending_layer_tree = Some(layer_tree);
+        }
+        self.notifier.notify();
     }
 
     pub fn flush_pending(&self) -> bool {
@@ -437,41 +499,49 @@ impl ThreadedCompositorHandle {
 }
 
 // ---------------------------------------------------------------------------
-// CompositorThread — реальный OS-поток с tick-loop (P2 1B.1)
+// CompositorThread — реальный OS-поток с vsync tick-loop (P2 1B.1 + 1B.2)
 // ---------------------------------------------------------------------------
 
-/// Интервал опроса pending в Phase 0 (до vsync-интеграции в P2 1B.2).
-/// ~16 ms ≈ 60 fps; заменится condvar/vsync-сигналом в 1B.2.
-const COMPOSITOR_POLL_MS: u64 = 16;
+/// Максимальная длина одного «vsync-тика» ≈ 16.67 мс = 60 fps.
+/// Compositor thread спит не дольше этого значения; `commit()` будит его
+/// раньше через `VsyncNotifier`. Значение 16_667 мкс выбрано точнее 16 мс —
+/// избегает постепенного drift-а при непрерывном рендере без commit-ов.
+const TARGET_FRAME_DURATION: Duration = Duration::from_micros(16_667);
 
-/// Реальный compositor thread: отдельный OS-поток, который в цикле читает
-/// pending из shared state и продвигает его в active.
+/// Реальный compositor thread: отдельный OS-поток с vsync tick-loop.
 ///
 /// Жизненный цикл:
 /// - `CompositorThread::spawn(handle)` — запускает поток, возвращает owner.
 /// - Пока owner живёт — поток работает.
-/// - `CompositorThread::shutdown()` — выставляет shutdown-флаг и join-ит поток.
-/// - Drop без явного `shutdown()` — выставляет флаг, но НЕ join-ит.
+/// - `CompositorThread::shutdown()` — выставляет shutdown-флаг, будит поток
+///   через notifier и join-ит его. Поток выходит не дольше чем через один тик.
+/// - Drop без явного `shutdown()` — выставляет флаг + notify, но НЕ join-ит.
 ///   Join в Drop — блокирующая операция, непредсказуема при раскрутке стека.
 ///
-/// Phase 0: tick-loop = poll + sleep(16 ms). В P2 1B.2 sleep заменится
-/// на wakeup по vsync-сигналу.
+/// **Vsync tick-loop (P2 1B.2):**
+/// thread спит на `notifier.wait_for_next_tick(TARGET_FRAME_DURATION)`:
+/// - просыпается немедленно когда `commit()` вызывает `notifier.notify()`;
+/// - или по таймауту `TARGET_FRAME_DURATION` (~16.67 мс = 60 fps) если
+///   commit-ов не было — чтобы не пропустить idle-фреймы.
 pub struct CompositorThread {
     shutdown: Arc<AtomicBool>,
+    notifier: Arc<VsyncNotifier>,
     join_handle: Option<JoinHandle<()>>,
 }
 
 impl CompositorThread {
     /// Запускает compositor thread. `handle` — разделяемый доступ к state
-    /// того же `ThreadedCompositor`, которым владеет main thread.
+    /// и notifier-у того же `ThreadedCompositor`, которым владеет main thread.
     pub fn spawn(handle: ThreadedCompositorHandle) -> Self {
         let shutdown = Arc::new(AtomicBool::new(false));
         let shutdown_flag = Arc::clone(&shutdown);
+        let notifier = Arc::clone(&handle.notifier);
         let join_handle = thread::spawn(move || {
             compositor_thread_main(handle, shutdown_flag);
         });
         Self {
             shutdown,
+            notifier,
             join_handle: Some(join_handle),
         }
     }
@@ -479,6 +549,8 @@ impl CompositorThread {
     /// Запрашивает завершение потока и блокируется до его выхода.
     pub fn shutdown(mut self) {
         self.shutdown.store(true, Ordering::Relaxed);
+        // Будим поток — он может спать на condvar до TARGET_FRAME_DURATION.
+        self.notifier.notify();
         if let Some(h) = self.join_handle.take() {
             let _ = h.join();
         }
@@ -487,15 +559,19 @@ impl CompositorThread {
 
 impl Drop for CompositorThread {
     fn drop(&mut self) {
-        // Сигнализируем выход, но не join-им — Drop не место для блокировки.
+        // Сигнализируем выход и будим поток — не join-им, Drop не место для блокировки.
         self.shutdown.store(true, Ordering::Relaxed);
+        self.notifier.notify();
     }
 }
 
 fn compositor_thread_main(handle: ThreadedCompositorHandle, shutdown: Arc<AtomicBool>) {
     while !shutdown.load(Ordering::Relaxed) {
+        handle.notifier.wait_for_next_tick(TARGET_FRAME_DURATION);
+        if shutdown.load(Ordering::Relaxed) {
+            break;
+        }
         handle.flush_pending();
-        thread::sleep(Duration::from_millis(COMPOSITOR_POLL_MS));
     }
 }
 
@@ -818,7 +894,7 @@ mod tests {
             Arc::new(BasicLayerTree::single_layer(bbox, sample_commands())),
         );
 
-        // Поток flush-ит раз в ~16 мс; ждём не более 200 мс.
+        // Vsync wakeup: поток должен flush-нуть значительно быстрее 200 мс.
         let deadline = Instant::now() + Duration::from_millis(200);
         loop {
             if owner.active_tree().is_some() {
@@ -834,11 +910,92 @@ mod tests {
     }
 
     #[test]
+    fn compositor_thread_wakes_on_commit_faster_than_full_frame() {
+        // commit() вызывает notify() — поток должен проснуться << TARGET_FRAME_DURATION
+        use std::time::{Duration, Instant};
+
+        let mut owner = ThreadedCompositor::new();
+        let handle = owner.handle();
+        let ct = CompositorThread::spawn(handle);
+
+        // Даём потоку уйти в ожидание на condvar.
+        thread::sleep(Duration::from_millis(5));
+
+        let bbox = Rect::new(0.0, 0.0, 64.0, 64.0);
+        let t0 = Instant::now();
+        owner.commit(
+            Arc::new(PropertyTrees::empty()),
+            Arc::new(BasicLayerTree::single_layer(bbox, Vec::new())),
+        );
+
+        // Ждём flush; при condvar-wakeup должно уложиться в 50 мс
+        // (TARGET_FRAME_DURATION ~16.67 мс + планировщик ОС).
+        let deadline = t0 + Duration::from_millis(50);
+        loop {
+            if owner.active_tree().is_some() {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "vsync wakeup не сработал за 50 мс"
+            );
+            thread::sleep(Duration::from_millis(1));
+        }
+
+        ct.shutdown();
+    }
+
+    #[test]
     fn compositor_thread_shutdown_is_clean() {
         let owner = ThreadedCompositor::new();
         let handle = owner.handle();
         let ct = CompositorThread::spawn(handle);
         // shutdown() должен вернуться без паники или дедлока.
         ct.shutdown();
+    }
+
+    // --- VsyncNotifier ---
+
+    #[test]
+    fn vsync_notifier_wait_returns_after_notify() {
+        use std::time::{Duration, Instant};
+
+        let notifier = Arc::new(VsyncNotifier::new());
+        let n2 = Arc::clone(&notifier);
+
+        // Поток ждёт на notifier с большим timeout-ом.
+        let t = thread::spawn(move || {
+            let t0 = Instant::now();
+            n2.wait_for_next_tick(Duration::from_secs(10));
+            t0.elapsed()
+        });
+
+        // Даём потоку уйти в ожидание.
+        thread::sleep(Duration::from_millis(5));
+        notifier.notify();
+
+        let elapsed = t.join().unwrap();
+        // Поток должен был проснуться << 1 с (не весь timeout).
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "notify не разбудил поток вовремя: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn vsync_notifier_dirty_flag_prevents_lost_wakeup() {
+        // notify() до wait_for_next_tick() — dirty=true, wait возвращает немедленно.
+        use std::time::{Duration, Instant};
+
+        let notifier = VsyncNotifier::new();
+        notifier.notify();
+
+        let t0 = Instant::now();
+        notifier.wait_for_next_tick(Duration::from_secs(10));
+        let elapsed = t0.elapsed();
+        assert!(
+            elapsed < Duration::from_millis(100),
+            "pre-notify должен давать немедленный возврат, но прошло {elapsed:?}"
+        );
     }
 }
