@@ -15,6 +15,7 @@ _(none)_
 - [ ] See `lumen-plan.md` → Roadmap [P3] items
 
 ## Recent merges
+- border-dash-dot-double: BorderStyle::Double + dashed/dotted rendering [P2]
 - graphic-tests-rework: magenta marker + blocking pipeline [P2]
 
 ---
