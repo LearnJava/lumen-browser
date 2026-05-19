@@ -17,6 +17,7 @@
 
 mod find;
 mod runtime;
+mod scroll_anim;
 mod scrollbar;
 
 use std::error::Error;
@@ -116,6 +117,7 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
         content_height,
         cursor_position: None,
         scroll_drag: None,
+        scroll_anim: None,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -821,6 +823,11 @@ struct Lumen {
     /// начала drag-а — это даёт «закреплённый под пальцем» thumb (стандартный
     /// scrollbar UX).
     scroll_drag: Option<scrollbar::ScrollDrag>,
+    /// Активная smooth-scroll анимация для keyboard / wheel / page-jump /
+    /// find-scroll-to-match. `None` — `scroll_y` стационарен или меняется
+    /// инстантно (drag, reload). При live-анимации `RedrawRequested` тикает
+    /// её через `advance_scroll_anim` и просит ещё один redraw до завершения.
+    scroll_anim: Option<scroll_anim::ScrollAnim>,
 }
 
 impl Lumen {
@@ -846,6 +853,9 @@ impl Lumen {
                 // Любой активный drag прерывается (content_height другой,
                 // thumb-геометрия пересчитана с нуля).
                 self.scroll_drag = None;
+                // Активная smooth-scroll анимация старой страницы тоже не
+                // имеет смысла — таргет был на старом content_height.
+                self.scroll_anim = None;
                 if let Some(r) = self.renderer.as_mut() {
                     // Старая GPU-cache картинок относится к предыдущей странице
                     // (даже если src совпадает, content мог измениться). Чистим
@@ -1047,11 +1057,11 @@ impl ApplicationHandler for Lumen {
                         }
                         scrollbar::TrackClick::Above => {
                             // Клик по track выше thumb-а — прыжок на страницу вверх.
-                            self.scroll_by(-page_step(vh));
+                            self.scroll_by_smooth(-page_step(vh));
                         }
                         scrollbar::TrackClick::Below => {
                             // Клик по track ниже thumb-а — прыжок на страницу вниз.
-                            self.scroll_by(page_step(vh));
+                            self.scroll_by_smooth(page_step(vh));
                         }
                         scrollbar::TrackClick::None => {}
                     }
@@ -1077,7 +1087,7 @@ impl ApplicationHandler for Lumen {
                     MouseScrollDelta::LineDelta(_, lines) => -lines * 40.0,
                     MouseScrollDelta::PixelDelta(p) => -(p.y as f32) / dpr.max(1e-6),
                 };
-                self.scroll_by(dy_css);
+                self.scroll_by_smooth(dy_css);
             }
             WindowEvent::RedrawRequested => {
                 // HTML §8.1.5.1 «Update the rendering»: перед собственно
@@ -1087,6 +1097,14 @@ impl ApplicationHandler for Lumen {
                 let timestamp_ms =
                     self.epoch.elapsed().as_secs_f64() * 1000.0;
                 self.runtime.run_rendering_step(timestamp_ms);
+
+                // Тик smooth-scroll-анимации. Делаем ДО построения display-list-а,
+                // чтобы page-полоса смещалась уже на новый `scroll_y`. Если
+                // анимация ещё не закончилась — просим следующий redraw, чтобы
+                // тикнуть на следующем кадре (rAF-driven update loop).
+                if self.advance_scroll_anim() {
+                    self.request_redraw();
+                }
 
                 // Page-полоса: исходный display list + highlight-FillRect-ы
                 // перед своими DrawText (когда find открыт). Прокручивается.
@@ -1186,18 +1204,18 @@ impl Lumen {
                 self.find.open();
                 self.request_redraw();
             }
-            KeyCommand::ScrollLineDown => self.scroll_by(LINE_STEP_CSS_PX),
-            KeyCommand::ScrollLineUp => self.scroll_by(-LINE_STEP_CSS_PX),
+            KeyCommand::ScrollLineDown => self.scroll_by_smooth(LINE_STEP_CSS_PX),
+            KeyCommand::ScrollLineUp => self.scroll_by_smooth(-LINE_STEP_CSS_PX),
             KeyCommand::ScrollPageDown => {
                 let vh = self.viewport_height_css();
-                self.scroll_by(page_step(vh));
+                self.scroll_by_smooth(page_step(vh));
             }
             KeyCommand::ScrollPageUp => {
                 let vh = self.viewport_height_css();
-                self.scroll_by(-page_step(vh));
+                self.scroll_by_smooth(-page_step(vh));
             }
-            KeyCommand::ScrollHome => self.scroll_to(0.0),
-            KeyCommand::ScrollEnd => self.scroll_to(f32::INFINITY),
+            KeyCommand::ScrollHome => self.start_smooth_scroll(0.0),
+            KeyCommand::ScrollEnd => self.start_smooth_scroll(f32::INFINITY),
         }
     }
 
@@ -1261,7 +1279,7 @@ impl Lumen {
         };
         let vh = self.viewport_height_css();
         if let Some(target) = find::scroll_to_match(m.rect, vh, self.scroll_y) {
-            self.scroll_to(target);
+            self.start_smooth_scroll(target);
         }
     }
 
@@ -1304,21 +1322,69 @@ impl Lumen {
         (self.content_height - self.viewport_height_css()).max(0.0)
     }
 
-    /// Сдвинуть скролл на относительную дельту в CSS px (положительная — вниз).
-    /// Кламп + request_redraw на изменении.
-    fn scroll_by(&mut self, delta: f32) {
-        let target = self.scroll_y + delta;
-        self.scroll_to(target);
-    }
-
     /// Установить scroll_y в абсолютное значение (после clamping-а). `f32::INFINITY`
     /// = «к самому низу», `0.0` = «вверх». Запрашивает redraw только если значение
     /// действительно изменилось — иначе wheel-spam в самом низу не дёргал бы GPU.
+    ///
+    /// Используется для инстант-путей: drag thumb scrollbar-а. Для
+    /// пользовательских scroll-команд (wheel / keys / page-jump / find) —
+    /// `start_smooth_scroll` / `scroll_by_smooth`.
     fn scroll_to(&mut self, target: f32) {
+        // Инстант-путь cancel-ит активную анимацию — мы только что
+        // *приказали* быть в конкретной точке.
+        self.scroll_anim = None;
         let clamped = clamp_scroll(target, self.max_scroll());
         if (clamped - self.scroll_y).abs() > f32::EPSILON {
             self.scroll_y = clamped;
             self.request_redraw();
+        }
+    }
+
+    /// Запустить smooth-scroll к target Y. Cancel-ит активную анимацию.
+    /// Target клампится. Если target == текущему scroll_y — анимация не
+    /// стартует (и текущая сбрасывается).
+    fn start_smooth_scroll(&mut self, target: f32) {
+        let max = self.max_scroll();
+        let target_clamped = clamp_scroll(target, max);
+        if (target_clamped - self.scroll_y).abs() <= f32::EPSILON {
+            self.scroll_anim = None;
+            return;
+        }
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+        self.scroll_anim = Some(scroll_anim::ScrollAnim {
+            start_y: self.scroll_y,
+            target_y: target_clamped,
+            start_time_ms: now_ms,
+        });
+        self.request_redraw();
+    }
+
+    /// Smooth-вариант `scroll_by`. Если уже идёт анимация — delta
+    /// добавляется к её target-у, а не к текущему scroll_y. Это правильная
+    /// семантика для repeat-input (key-repeat, wheel-spam): каждое
+    /// нажатие дописывает delta к точке назначения, а не дёргает анимацию
+    /// в обратную сторону.
+    fn scroll_by_smooth(&mut self, delta: f32) {
+        let base = self.scroll_anim.as_ref().map_or(self.scroll_y, |a| a.target());
+        self.start_smooth_scroll(base + delta);
+    }
+
+    /// Тик анимации перед `Renderer::render`. Если анимация активна —
+    /// обновляет `scroll_y` по out-cubic easing и возвращает `true`,
+    /// сигнализируя caller-у запросить ещё один redraw. Сбрасывает
+    /// `scroll_anim` по завершении.
+    fn advance_scroll_anim(&mut self) -> bool {
+        let Some(anim) = self.scroll_anim else {
+            return false;
+        };
+        let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
+        let (y, done) = anim.sample(now_ms);
+        self.scroll_y = clamp_scroll(y, self.max_scroll());
+        if done {
+            self.scroll_anim = None;
+            false
+        } else {
+            true
         }
     }
 
