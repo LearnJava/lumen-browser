@@ -1,11 +1,9 @@
-In progress: 1A.1 unitless length quirk  branch: unitless-length-quirk
-Next step: done — ready to merge
+In progress: —
 
-Next: 1A.2 IE7 line-height quirk   lumen-plan.md:127
+Next: 1A.2 IE7 line-height quirk   lumen-plan.md:126
 
 Queue:
-1A.2 IE7 line-height quirk         lumen-plan.md:126
-1A.3 quirks test coverage          lumen-plan.md:128
+1A.3 quirks test coverage          lumen-plan.md:127
 1B.1 Length type cascade           lumen-plan.md:130
 1B.2 Color type cascade            lumen-plan.md:131
 4B.1 flex-direction + flex-wrap    lumen-plan.md:138
@@ -19,4 +17,4 @@ Queue:
 5.4  word_boundaries               lumen-plan.md:147
 5.5  bidi_runs                     lumen-plan.md:148
 
-Recent: graphic-tests-rework 2026-05-19
+Recent: unitless-length-quirk 2026-05-19
