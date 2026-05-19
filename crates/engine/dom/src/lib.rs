@@ -562,6 +562,52 @@ pub fn check_form_gate(doc: &Document, sandbox: SandboxFlags) -> usize {
     0
 }
 
+/// Информация об якорной ссылке (`<a href>`), найденной в документе.
+pub struct AnchorInfo {
+    /// Значение атрибута `href`.
+    pub href: String,
+}
+
+fn collect_anchors(doc: &Document, id: NodeId, out: &mut Vec<AnchorInfo>) {
+    let node = doc.get(id);
+    if node
+        .element_name()
+        .map(|n| n.local.eq_ignore_ascii_case("a"))
+        .unwrap_or(false)
+        && let Some(href) = node.get_attr("href").filter(|h| !h.is_empty())
+    {
+        out.push(AnchorInfo {
+            href: href.to_string(),
+        });
+    }
+    for &child in &node.children.clone() {
+        collect_anchors(doc, child, out);
+    }
+}
+
+/// Гейт навигации по sandbox-флагу HTML §7.6.5.
+///
+/// Если `sandbox` содержит [`SandboxFlags::NAVIGATION`] — навигация
+/// из sandboxed-документа заблокирована; функция логирует число
+/// заблокированных ссылок и возвращает его.
+/// Если флаг не установлен — возвращает 0. В Phase 0 реальной навигации
+/// нет; вызов устанавливает инфраструктуру для будущего NavigationRuntime.
+pub fn check_navigation_gate(doc: &Document, sandbox: SandboxFlags) -> usize {
+    let mut anchors = Vec::new();
+    collect_anchors(doc, doc.root(), &mut anchors);
+    if anchors.is_empty() {
+        return 0;
+    }
+    if sandbox.contains(SandboxFlags::NAVIGATION) {
+        eprintln!(
+            "sandbox: заблокировано {} ссылок(и) (sandbox=navigation)",
+            anchors.len()
+        );
+        return anchors.len();
+    }
+    0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1157,5 +1203,73 @@ mod tests {
     fn check_form_gate_allowed_returns_zero() {
         let doc = build_doc_with_form(Some("/login"), None, &["input"]);
         assert_eq!(check_form_gate(&doc, SandboxFlags::empty()), 0);
+    }
+
+    // ──────── collect_anchors / check_navigation_gate ────────
+
+    fn build_doc_with_anchors(hrefs: &[&str]) -> Document {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let body = doc.create_element(QualName::html("body"));
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        for &href in hrefs {
+            let a = doc.create_element(QualName::html("a"));
+            if let NodeData::Element { attrs, .. } = &mut doc.get_mut(a).data {
+                attrs.push(Attribute {
+                    name: QualName::html("href"),
+                    value: href.to_string(),
+                });
+            }
+            doc.append_child(body, a);
+        }
+        doc
+    }
+
+    #[test]
+    fn collect_anchors_finds_href_links() {
+        let doc = build_doc_with_anchors(&["/page1", "/page2"]);
+        let mut anchors = Vec::new();
+        collect_anchors(&doc, doc.root(), &mut anchors);
+        assert_eq!(anchors.len(), 2);
+        assert_eq!(anchors[0].href, "/page1");
+        assert_eq!(anchors[1].href, "/page2");
+    }
+
+    #[test]
+    fn collect_anchors_skips_empty_href() {
+        let doc = build_doc_with_anchors(&[""]);
+        let mut anchors = Vec::new();
+        collect_anchors(&doc, doc.root(), &mut anchors);
+        assert!(anchors.is_empty());
+    }
+
+    #[test]
+    fn collect_anchors_skips_anchor_without_href() {
+        let mut doc = Document::new();
+        let a = doc.create_element(QualName::html("a"));
+        doc.append_child(doc.root(), a);
+        let mut anchors = Vec::new();
+        collect_anchors(&doc, doc.root(), &mut anchors);
+        assert!(anchors.is_empty());
+    }
+
+    #[test]
+    fn check_navigation_gate_no_anchors_returns_zero() {
+        let doc = Document::new();
+        assert_eq!(check_navigation_gate(&doc, SandboxFlags::empty()), 0);
+        assert_eq!(check_navigation_gate(&doc, SandboxFlags::NAVIGATION), 0);
+    }
+
+    #[test]
+    fn check_navigation_gate_blocked_by_sandbox_returns_count() {
+        let doc = build_doc_with_anchors(&["/a", "/b"]);
+        assert_eq!(check_navigation_gate(&doc, SandboxFlags::NAVIGATION), 2);
+    }
+
+    #[test]
+    fn check_navigation_gate_allowed_returns_zero() {
+        let doc = build_doc_with_anchors(&["/a"]);
+        assert_eq!(check_navigation_gate(&doc, SandboxFlags::empty()), 0);
     }
 }
