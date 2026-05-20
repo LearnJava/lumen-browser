@@ -9117,4 +9117,150 @@ mod tests {
         assert!(urls.contains(&"a.png"));
         assert!(urls.contains(&"b.jpg"));
     }
+
+    // ── CSS Positioned Layout L3 — position: relative / absolute / fixed ──
+
+    /// `position: relative; top: 20px; left: 30px` — визуальный сдвиг относительно
+    /// нормального потока; высота родителя не меняется.
+    #[test]
+    fn position_relative_offset() {
+        let root = lay(
+            "<div class='outer'><div class='inner'>x</div></div>",
+            ".outer { width: 200px; height: 100px; }
+             .inner { position: relative; top: 20px; left: 30px; }",
+        );
+        let outer = first_element_child(&root);
+        let inner = first_element_child(outer);
+        // Нормальная позиция inner без offset: x=0, y=0 (нет margin/padding).
+        // С relative offset: y += 20, x += 30.
+        assert_eq!(inner.rect.x, 30.0, "relative left");
+        assert_eq!(inner.rect.y, 20.0, "relative top");
+        // Родительская высота не изменяется (relative не влияет на flow).
+        assert_eq!(outer.rect.height, 100.0, "outer height unchanged");
+    }
+
+    /// `position: relative; bottom: 10px; right: 15px` — отрицательный сдвиг.
+    #[test]
+    fn position_relative_bottom_right() {
+        let root = lay(
+            "<div class='inner'>x</div>",
+            ".inner { position: relative; bottom: 10px; right: 15px; }",
+        );
+        let inner = first_element_child(&root);
+        // bottom: 10px → y -= 10 (сдвиг вверх)
+        assert_eq!(inner.rect.y, -10.0, "relative bottom moves up");
+        // right: 15px → x -= 15 (сдвиг влево)
+        assert_eq!(inner.rect.x, -15.0, "relative right moves left");
+    }
+
+    /// `position: absolute; top: 10px; left: 20px` внутри positioned parent.
+    /// Абсолютный элемент не участвует в normal flow (высота родителя = 0).
+    #[test]
+    fn position_absolute_top_left() {
+        let root = lay(
+            "<div class='parent'><div class='abs'>x</div></div>",
+            ".parent { position: relative; width: 400px; height: 300px; }
+             .abs    { position: absolute; top: 10px; left: 20px; width: 50px; }",
+        );
+        let parent = first_element_child(&root);
+        let abs_child = first_element_child(parent);
+        // Positioned relative to parent's border-edge box.
+        assert_eq!(abs_child.rect.x, 20.0, "abs left");
+        assert_eq!(abs_child.rect.y, 10.0, "abs top");
+        // Ширина задана явно.
+        assert_eq!(abs_child.rect.width, 50.0, "abs explicit width");
+    }
+
+    /// `position: absolute; bottom: 0; right: 0` — правый нижний угол контейнера.
+    #[test]
+    fn position_absolute_bottom_right() {
+        let root = lay(
+            "<div class='parent'><div class='abs'>x</div></div>",
+            ".parent { position: relative; width: 400px; height: 300px; }
+             .abs    { position: absolute; bottom: 0px; right: 0px; width: 60px; height: 40px; }",
+        );
+        let parent = first_element_child(&root);
+        let abs_child = first_element_child(parent);
+        // right: 0 → right edge of abs = right edge of parent (400)
+        // abs.rect.x = 400 - 0 - 60 = 340
+        assert_eq!(abs_child.rect.x, 340.0, "abs right=0 positions at right edge");
+        // bottom: 0 → bottom edge of abs = bottom edge of parent (300)
+        // abs.rect.y = 300 - 0 - 40 = 260
+        assert_eq!(abs_child.rect.y, 260.0, "abs bottom=0 positions at bottom edge");
+    }
+
+    /// `position: absolute` без explicit containing block — используется viewport.
+    #[test]
+    fn position_absolute_uses_viewport_without_positioned_ancestor() {
+        let root = lay(
+            "<div><div class='abs'>x</div></div>",
+            ".abs { position: absolute; top: 50px; left: 100px; width: 80px; }",
+        );
+        // Родитель static — CB = viewport (800×600)
+        let parent = first_element_child(&root);
+        let abs_child = first_element_child(parent);
+        assert_eq!(abs_child.rect.y, 50.0, "abs top from viewport");
+        assert_eq!(abs_child.rect.x, 100.0, "abs left from viewport");
+    }
+
+    /// Абсолютный элемент не влияет на высоту normal-flow родителя.
+    #[test]
+    fn position_absolute_excluded_from_normal_flow() {
+        let root = lay(
+            "<div class='parent'>
+               <div class='normal' style='height: 40px;'></div>
+               <div class='abs' style='height: 200px;'></div>
+             </div>",
+            ".parent { position: relative; }
+             .abs    { position: absolute; top: 0; left: 0; }",
+        );
+        let parent = first_element_child(&root);
+        // Только normal-flow div (height=40) считается в высоту родителя.
+        assert_eq!(parent.rect.height, 40.0, "abs child excluded from parent height");
+    }
+
+    /// `position: fixed; top: 0; right: 0` — position relative to viewport.
+    #[test]
+    fn position_fixed_relative_to_viewport() {
+        let root = lay(
+            "<div class='parent'><div class='fix'>x</div></div>",
+            ".parent { position: relative; width: 400px; height: 300px; margin: 50px; }
+             .fix    { position: fixed; top: 5px; right: 10px; width: 80px; }",
+        );
+        let parent = first_element_child(&root);
+        let fix_child = first_element_child(parent);
+        // Fixed: CB = viewport (800×600), not parent
+        assert_eq!(fix_child.rect.y, 5.0, "fixed top from viewport");
+        // right: 10 → x = viewport.width - 10 - 80 = 710
+        assert_eq!(fix_child.rect.x, 710.0, "fixed right from viewport");
+    }
+
+    /// `inset` shorthand: `inset: 10px 20px 30px 40px` → top/right/bottom/left.
+    #[test]
+    fn inset_shorthand_four_values() {
+        let root = lay(
+            "<div class='parent'><div class='abs'></div></div>",
+            ".parent { position: relative; width: 400px; height: 300px; }
+             .abs    { position: absolute; inset: 10px 20px 30px 40px; }",
+        );
+        let parent = first_element_child(&root);
+        let abs_child = first_element_child(parent);
+        // top: 10, left: 40
+        assert_eq!(abs_child.rect.y, 10.0, "inset top");
+        assert_eq!(abs_child.rect.x, 40.0, "inset left");
+    }
+
+    /// `position: relative; top: auto; left: auto` — никакого сдвига.
+    #[test]
+    fn position_relative_all_auto_no_offset() {
+        let root = lay(
+            "<div class='outer'><div class='inner'>x</div></div>",
+            ".outer { width: 200px; }
+             .inner { position: relative; top: auto; left: auto; }",
+        );
+        let outer = first_element_child(&root);
+        let inner = first_element_child(outer);
+        assert_eq!(inner.rect.x, 0.0, "no x offset");
+        assert_eq!(inner.rect.y, 0.0, "no y offset");
+    }
 }

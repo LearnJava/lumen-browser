@@ -1,7 +1,8 @@
 In progress: —
+Next step: —
 
-Next: (P1 queue empty — все задачи фазы 0 завершены)
+Next: (P1 Phase 1)
 
 Queue:
 
-Recent: css-grid 2026-05-20, gradient-stops-parser 2026-05-20, ICU4x UnicodeProvider 2026-05-20, flex-wrap 2026-05-20, flex-gap 2026-05-20
+Recent: positioned-layout 2026-05-20, css-grid 2026-05-20, gradient-stops-parser 2026-05-20, ICU4x UnicodeProvider 2026-05-20, flex-wrap 2026-05-20

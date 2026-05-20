@@ -17,7 +17,8 @@ use lumen_html_parser::{
 
 use crate::style::{
     compute_style, AlignValue, BackgroundImage, BoxSizing, ComputedStyle, Display, FlexBasis,
-    FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridTrackSize, Length, LengthOrAuto, TextAlign,
+    FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridTrackSize, Length, LengthOrAuto, Position,
+    TextAlign,
 };
 use crate::TextMeasurer;
 
@@ -202,7 +203,8 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let root_style = ComputedStyle::root();
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
     propagate_canvas_background(doc, &mut root);
-    lay_out(&mut root, 0.0, 0.0, viewport.width, None, viewport);
+    let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
+    lay_out(&mut root, 0.0, 0.0, viewport.width, None, viewport, init_pcb);
     root
 }
 
@@ -215,7 +217,8 @@ pub fn layout_measured(
     let root_style = ComputedStyle::root();
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
     propagate_canvas_background(doc, &mut root);
-    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(measurer), viewport);
+    let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
+    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(measurer), viewport, init_pcb);
     root
 }
 
@@ -578,6 +581,21 @@ fn preferred_inline_block_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
     }
 }
 
+/// Рекурсивно смещает rect всего поддерева на (dx, dy).
+/// Используется при позиционировании абсолютных потомков.
+fn shift_tree(b: &mut LayoutBox, dx: f32, dy: f32) {
+    if dx == 0.0 && dy == 0.0 {
+        return;
+    }
+    b.rect.x += dx;
+    b.rect.y += dy;
+    for child in &mut b.children {
+        shift_tree(child, dx, dy);
+    }
+}
+
+/// `pcb` — rect positioned containing block (ближайший предок с position != static),
+/// используется для layout абсолютно-позиционированных потомков.
 fn lay_out(
     b: &mut LayoutBox,
     start_x: f32,
@@ -585,6 +603,7 @@ fn lay_out(
     available_width: f32,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
+    pcb: Rect,
 ) {
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
@@ -664,6 +683,15 @@ fn lay_out(
         - padding_left - padding_right
         - s.border_left_width - s.border_right_width).max(0.0);
 
+    // pcb для потомков: если текущий элемент positioned — он сам CB для абсолютных детей.
+    // Высота ещё неизвестна, используем 0 — корректируем after layout.
+    let is_positioned = !matches!(s.position, Position::Static);
+    let children_pcb = if is_positioned {
+        Rect::new(b.rect.x, b.rect.y, b.rect.width, 0.0)
+    } else {
+        pcb
+    };
+
     // InlineRun обрабатывается до основного match.
     if let BoxKind::InlineRun { segments, lines } = &mut b.kind {
         if let Some(m) = measurer {
@@ -688,12 +716,17 @@ fn lay_out(
         return;
     }
 
+    // Абсолютно-позиционированные дети: (index, static_x, static_y).
+    // Заполняется внутри Block-flow и обрабатывается после match.
+    let mut abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
+
     match &mut b.kind {
         BoxKind::Block | BoxKind::Image { .. } => {
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
                 let content_height = lay_out_flex(
                     &mut b.children, &s, content_x, content_y, content_width, measurer, viewport,
+                    children_pcb,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
                     && let Some(h) = h_len.resolve(em, Some(cb), viewport)
@@ -715,6 +748,7 @@ fn lay_out(
             if matches!(s.display, Display::Grid | Display::InlineGrid) {
                 let content_height = lay_out_grid(
                     &mut b.children, &s, content_x, content_y, content_width, measurer, viewport,
+                    children_pcb,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
                     && let Some(h) = h_len.resolve(em, Some(cb), viewport)
@@ -738,8 +772,13 @@ fn lay_out(
             // даёт коробку только из padding+border (что для пустой картинки
             // визуально корректно).
             let mut child_y = content_y;
-            for child in &mut b.children {
-                lay_out(child, content_x, child_y, content_width, measurer, viewport);
+            for (i, child) in b.children.iter_mut().enumerate() {
+                if matches!(child.style.position, Position::Absolute | Position::Fixed) {
+                    // Записываем статичную позицию и пропускаем в normal flow.
+                    abs_deferred.push((i, content_x, child_y));
+                    continue;
+                }
+                lay_out(child, content_x, child_y, content_width, measurer, viewport, children_pcb);
                 if matches!(child.kind, BoxKind::Skip) {
                     continue;
                 }
@@ -801,7 +840,7 @@ fn lay_out(
                 } else {
                     content_width
                 };
-                lay_out(child, cur_x, content_y, child_avail, measurer, viewport);
+                lay_out(child, cur_x, content_y, child_avail, measurer, viewport, children_pcb);
                 if matches!(child.kind, BoxKind::Skip) {
                     continue;
                 }
@@ -818,6 +857,99 @@ fn lay_out(
         }
         BoxKind::InlineRun { .. } => unreachable!(),
         BoxKind::Skip => unreachable!(),
+    }
+
+    // CSS Positioned Layout L3 §4 — абсолютное / фиксированное позиционирование.
+    // Деферированные дети (abs_deferred) собраны в Block-ветке выше.
+    // Обрабатываем после finalize b.rect.height, чтобы знать высоту containing block.
+    if !abs_deferred.is_empty() {
+        let my_pcb = if is_positioned {
+            // Padding-edge box (упрощение: border-edge, достаточно для Phase 1).
+            Rect::new(b.rect.x, b.rect.y, b.rect.width, b.rect.height)
+        } else {
+            pcb
+        };
+        lay_out_abs_children(b, &abs_deferred, measurer, viewport, my_pcb);
+    }
+
+    // CSS Positioned Layout L3 §9.4.3 — position: relative — смещение после normal flow.
+    if matches!(s.position, Position::Relative) {
+        let off_x = match &s.left {
+            LengthOrAuto::Length(l) => l.resolve(em, Some(cb), viewport).unwrap_or(0.0),
+            LengthOrAuto::Auto => match &s.right {
+                LengthOrAuto::Length(r) => -(r.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
+                LengthOrAuto::Auto => 0.0,
+            },
+        };
+        let off_y = match &s.top {
+            LengthOrAuto::Length(t) => t.resolve(em, Some(cb), viewport).unwrap_or(0.0),
+            LengthOrAuto::Auto => match &s.bottom {
+                LengthOrAuto::Length(bot) => -(bot.resolve(em, Some(cb), viewport).unwrap_or(0.0)),
+                LengthOrAuto::Auto => 0.0,
+            },
+        };
+        if off_x != 0.0 || off_y != 0.0 {
+            shift_tree(b, off_x, off_y);
+        }
+    }
+}
+
+/// Positions absolutely/fixed-positioned deferred children of `parent`.
+/// Called after parent's height is finalized so `my_pcb` is complete.
+fn lay_out_abs_children(
+    parent: &mut LayoutBox,
+    deferred: &[(usize, f32, f32)],
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    my_pcb: Rect,
+) {
+    for &(idx, static_x, static_y) in deferred {
+        let cs = parent.children[idx].style.clone();
+        let c_em = cs.font_size;
+
+        let cb = if matches!(cs.position, Position::Fixed) {
+            Rect::new(0.0, 0.0, viewport.width, viewport.height)
+        } else {
+            my_pcb
+        };
+
+        let left = cs.left.resolve(c_em, cb.width, viewport);
+        let right = cs.right.resolve(c_em, cb.width, viewport);
+        let top = cs.top.resolve(c_em, cb.height, viewport);
+        let bottom = cs.bottom.resolve(c_em, cb.height, viewport);
+
+        // Доступная ширина для layout абсолютного child.
+        let avail_w = if left.is_some() && right.is_some() && cs.width.is_none() {
+            (cb.width - left.unwrap_or(0.0) - right.unwrap_or(0.0)).max(0.0)
+        } else {
+            cb.width
+        };
+
+        lay_out(&mut parent.children[idx], 0.0, 0.0, avail_w, measurer, viewport, my_pcb);
+
+        let c_ml = cs.margin_left.resolve_or_zero(c_em, cb.width, viewport);
+        let c_mr = cs.margin_right.resolve_or_zero(c_em, cb.width, viewport);
+        let c_mt = cs.margin_top.resolve_or_zero(c_em, cb.height, viewport);
+        let c_mb = cs.margin_bottom.resolve_or_zero(c_em, cb.height, viewport);
+
+        let child = &mut parent.children[idx];
+
+        // Desired border-left edge.
+        let new_x = match (left, right) {
+            (Some(l), _)    => cb.x + l + c_ml,
+            (None, Some(r)) => cb.x + cb.width - r - c_mr - child.rect.width,
+            (None, None)    => static_x + c_ml,
+        };
+        // Desired border-top edge.
+        let new_y = match (top, bottom) {
+            (Some(t), _)    => cb.y + t + c_mt,
+            (None, Some(bv)) => cb.y + cb.height - bv - c_mb - child.rect.height,
+            (None, None)    => static_y + c_mt,
+        };
+
+        let dx = new_x - child.rect.x;
+        let dy = new_y - child.rect.y;
+        shift_tree(child, dx, dy);
     }
 }
 
@@ -841,6 +973,7 @@ fn lay_out_flex(
     content_width: f32,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
+    pcb: Rect,
 ) -> f32 {
     let is_column = matches!(s.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse);
     let is_reverse = matches!(
@@ -883,7 +1016,7 @@ fn lay_out_flex(
     // Step 1 — preliminary layout for intrinsic sizes.
     let cb = content_width;
     for &i in &item_idxs {
-        lay_out(&mut children[i], content_x, content_y, content_width, measurer, viewport);
+        lay_out(&mut children[i], content_x, content_y, content_width, measurer, viewport, pcb);
     }
 
     // Compute hypothetical main sizes for all items (outer = including margins).
@@ -1024,6 +1157,7 @@ fn lay_out_flex(
                     content_width - m_l - m_r,
                     measurer,
                     viewport,
+                    pcb,
                 );
                 main_cursor += outer_main + item_gap + jc_gap;
             } else {
@@ -1036,6 +1170,7 @@ fn lay_out_flex(
                     inner_main,
                     measurer,
                     viewport,
+                    pcb,
                 );
                 main_cursor += outer_main + item_gap + jc_gap;
             }
@@ -1114,6 +1249,7 @@ fn lay_out_flex(
 /// - `align-items` / `justify-items` within cells.
 ///
 /// Returns the total content height of the grid.
+#[allow(clippy::too_many_arguments)]
 fn lay_out_grid(
     children: &mut [LayoutBox],
     s: &ComputedStyle,
@@ -1122,6 +1258,7 @@ fn lay_out_grid(
     content_width: f32,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
+    pcb: Rect,
 ) -> f32 {
     let em = s.font_size;
 
@@ -1352,7 +1489,7 @@ fn lay_out_grid(
             col_widths[c0]
         };
         // Layout at temporary position (y=0) to get intrinsic height.
-        lay_out(&mut children[i], content_x + col_offsets[c0], 0.0, cell_w, measurer, viewport);
+        lay_out(&mut children[i], content_x + col_offsets[c0], 0.0, cell_w, measurer, viewport, pcb);
         // Update auto row heights.
         let r0 = (rs - 1) as usize;
         if r0 < row_heights.len()
@@ -1399,7 +1536,7 @@ fn lay_out_grid(
         let (cs, ce, rs, re) = placements[k];
         if cs == 0 || rs == 0 {
             // Unplaced — stack below grid content.
-            lay_out(&mut children[i], content_x, content_y + y_off, content_width, measurer, viewport);
+            lay_out(&mut children[i], content_x, content_y + y_off, content_width, measurer, viewport, pcb);
             y_off += children[i].rect.height;
             continue;
         }
@@ -1422,7 +1559,7 @@ fn lay_out_grid(
         };
 
         // Re-layout with final cell width.
-        lay_out(&mut children[i], cell_x, cell_y, cell_w, measurer, viewport);
+        lay_out(&mut children[i], cell_x, cell_y, cell_w, measurer, viewport, pcb);
 
         let item = &mut children[i];
         let is = &item.style;
