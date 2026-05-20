@@ -9773,7 +9773,7 @@ fn parse_at_pair(s: &str) -> Option<(f32, f32)> {
 
 /// Парсит `<transform-list>` — последовательность `func(args)` через
 /// whitespace (без запятых). Каждая `func` распознаётся отдельно.
-fn parse_transform_list(s: &str) -> Vec<TransformFn> {
+pub fn parse_transform_list(s: &str) -> Vec<TransformFn> {
     let mut out = Vec::new();
     let bytes = s.as_bytes();
     let mut i = 0usize;
@@ -10889,7 +10889,7 @@ fn expand_border_4(val: &str) -> [&str; 4] {
     }
 }
 
-fn parse_color(s: &str) -> Option<Color> {
+pub fn parse_color(s: &str) -> Option<Color> {
     let s = s.trim();
     if let Some(c) = named_color(&s.to_ascii_lowercase()) {
         return Some(c);

@@ -1,4 +1,5 @@
-In progress: —
+In progress: 3A Web Animations scheduling  branch: web-animations
+Next step: AnimationScheduler::tick  shell/src/animation_scheduler.rs
 
 Next:
 5A HTTP/2                           lumen-plan.md:200

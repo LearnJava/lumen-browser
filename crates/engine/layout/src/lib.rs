@@ -19,7 +19,10 @@ pub mod snapshot;
 pub mod stacking;
 pub mod style;
 
-pub use animation::{AnimValue, AnimationInterpolator, NoopInterpolator};
+pub use animation::{
+    AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
+    LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
+};
 pub use box_tree::{
     collect_image_requests, layout, layout_measured, BoxKind, ImageRequest, InlineFrag,
     InlineSegment, LayoutBox,
@@ -34,7 +37,8 @@ pub use stacking::{
     StackingContext, StackingContextId, StackingTree,
 };
 pub use style::{
-    parse_css_wide_keyword, parse_gradient_stops, AlignValue, AnimationDirection,
+    parse_color, parse_css_wide_keyword, parse_gradient_stops, parse_transform_list,
+    AlignValue, AnimationDirection,
     AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BorderStyle,

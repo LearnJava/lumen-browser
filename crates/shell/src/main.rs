@@ -15,6 +15,7 @@
 //! Внешние CSS: `<link rel="stylesheet" href="...">` загружается с диска или
 //! по сети — в зависимости от того, каким способом загружена страница.
 
+mod animation_scheduler;
 mod find;
 mod momentum_anim;
 mod runtime;
@@ -30,7 +31,7 @@ use std::sync::Arc;
 
 use lumen_core::event::{Event, FetchPriority, SubresourceKind};
 use lumen_core::ext::EventSink;
-use lumen_core::geom::Size;
+use lumen_core::geom::{Rect, Size};
 use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
 use lumen_layout::LayoutBox;
 use lumen_paint::{DisplayList, Renderer};
@@ -121,6 +122,7 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
     };
     let content_height = content_height_of(&initial_page.display_list);
     let content_width = content_width_of(&initial_page.display_list);
+    let initial_layout_box = initial_page.layout_box;
     let mut app = Lumen {
         display_list: initial_page.display_list,
         title: initial_page.title,
@@ -131,6 +133,9 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
         window: None,
         renderer: None,
         runtime: runtime::EventLoop::new(),
+        animation_scheduler: animation_scheduler::AnimationScheduler::new(),
+        anim_frame: None,
+        layout_box: Some(initial_layout_box),
         epoch: std::time::Instant::now(),
         find: find::FindState::default(),
         scroll_y: 0.0,
@@ -367,6 +372,8 @@ struct LoadedPage {
     /// что попадает в `DisplayCommand::DrawImage.src`), чтобы render-side
     /// мог сделать lookup без отдельной нормализации URL.
     images: Vec<(String, lumen_image::Image)>,
+    /// Layout-дерево страницы — используется animation scheduler-ом.
+    layout_box: lumen_layout::LayoutBox,
 }
 
 impl LoadedPage {
@@ -375,6 +382,13 @@ impl LoadedPage {
             display_list: DisplayList::new(),
             title: None,
             images: Vec::new(),
+            layout_box: lumen_layout::LayoutBox {
+                node: NodeId::from_index(0),
+                rect: Rect::ZERO,
+                style: lumen_layout::style::ComputedStyle::root(),
+                kind: lumen_layout::BoxKind::Block,
+                children: Vec::new(),
+            },
         }
     }
 }
@@ -736,12 +750,13 @@ fn parse_and_layout(
 }
 
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
-/// Парсинг HTML/CSS не выполняется — только layout и build_display_list.
-fn relayout_page(src: &LayoutSource, viewport: Size) -> DisplayList {
+/// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
+fn relayout_page(src: &LayoutSource, viewport: Size) -> (DisplayList, lumen_layout::LayoutBox) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let layout = lumen_layout::layout_measured(&src.document, &src.stylesheet, viewport, &measurer);
-    lumen_paint::build_display_list(&layout)
+    let dl = lumen_paint::build_display_list(&layout);
+    (dl, layout)
 }
 
 fn render_bytes(
@@ -761,6 +776,7 @@ fn render_bytes(
         parsed.images.len(),
         parsed.preload_hints.len(),
     );
+    let layout_box = parsed.layout;
     let layout_source = LayoutSource {
         document: parsed.document,
         stylesheet: parsed.stylesheet,
@@ -770,6 +786,7 @@ fn render_bytes(
             display_list,
             title: parsed.title,
             images: parsed.images,
+            layout_box,
         },
         layout_source,
     ))
@@ -1060,6 +1077,16 @@ struct Lumen {
     /// (вызывает rAF-callback-и), на WindowEvent::Resized —
     /// deliver_observer_records(Resize).
     runtime: runtime::EventLoop,
+    /// CSS Animations timeline scheduler — тикается на каждом RedrawRequested.
+    /// Хранит start-time для каждой запущенной анимации и вычисляет
+    /// интерполированные значения. Очищается при load/reload.
+    animation_scheduler: animation_scheduler::AnimationScheduler,
+    /// Последний вычисленный кадр анимаций. `None` — страница не загружена
+    /// или нет активных анимаций.
+    anim_frame: Option<lumen_layout::AnimationFrame>,
+    /// Layout-дерево текущей страницы — нужен scheduler-у для обхода узлов
+    /// и извлечения animation-longhands. Обновляется при load/reload/relayout.
+    layout_box: Option<lumen_layout::LayoutBox>,
     /// Эпоха для rAF-timestamp-ов в миллисекундах от старта shell-а
     /// (DOMHighResTimeStamp — HTML §8.1.5.1: «timestamp passed to callback
     /// should be the current high resolution time»).
@@ -1129,10 +1156,13 @@ impl Lumen {
         let Some(r) = self.renderer.as_ref() else { return };
         let vp_size = r.viewport_size();
         let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
-        let new_dl = relayout_page(src, viewport);
+        let (new_dl, lb) = relayout_page(src, viewport);
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
         self.display_list = new_dl;
+        self.layout_box = Some(lb);
+        self.animation_scheduler.clear();
+        self.anim_frame = None;
         self.scroll_y = clamp_scroll(self.scroll_y, self.max_scroll());
         self.scroll_x = clamp_scroll(self.scroll_x, self.max_scroll_x());
         if let Some(w) = self.window.as_ref() {
@@ -1161,7 +1191,10 @@ impl Lumen {
                 self.content_height = content_height_of(&page.display_list);
                 self.content_width = content_width_of(&page.display_list);
                 self.display_list = page.display_list;
+                self.layout_box = Some(page.layout_box);
                 self.title = page.title;
+                self.animation_scheduler.clear();
+                self.anim_frame = None;
                 // Display list другой → старые match-rect-ы невалидны.
                 // Closing полностью сбрасывает query/active — пользователю
                 // нужно открыть find заново после reload, что естественно.
@@ -1501,6 +1534,21 @@ impl ApplicationHandler for Lumen {
 
                 // Шаг 5: rAF callbacks + microtask checkpoint.
                 self.runtime.run_rendering_step(timestamp_ms);
+
+                // Шаг 5.5: CSS Animations timeline tick.
+                // Вычисляем interpolated values для всех анимированных узлов.
+                // has_active → следующий кадр запрашивается автоматически.
+                if let (Some(lb), Some(src)) = (&self.layout_box, &self.layout_source) {
+                    let frame = self.animation_scheduler.tick(
+                        timestamp_ms,
+                        lb,
+                        &src.stylesheet,
+                    );
+                    if frame.has_active {
+                        self.request_redraw();
+                    }
+                    self.anim_frame = if frame.overrides.is_empty() { None } else { Some(frame) };
+                }
 
                 // Шаг 6: layout invalidation stub. В Phase 0 rAF-callback-и —
                 // только Rust-closures без DOM-мутаций, relayout не нужен.
