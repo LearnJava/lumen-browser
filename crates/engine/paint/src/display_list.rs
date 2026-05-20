@@ -6,7 +6,7 @@
 //! border-радиусы — позже, по запросу. Координаты — экранные пиксели от
 //! верхнего левого угла окна.
 
-use lumen_core::geom::{Rect, Size};
+use lumen_core::geom::Rect;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, BackgroundClip, BorderStyle, BoxKind,
     Color, CssColor, FontStyle, FontWeight, InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode,
@@ -1061,7 +1061,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 return;
             }
             emit_box_shadows(b, out);
-            if let Some(CssColor::Rgba(bg)) = b.style.background_color
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
                 let clip = background_clip_rect(b);
@@ -1139,7 +1139,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 return;
             }
             emit_box_shadows(b, out);
-            if let Some(CssColor::Rgba(bg)) = b.style.background_color
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
                 let clip = background_clip_rect(b);
@@ -1296,7 +1296,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             // Painter's order для replaced element: фон → border → image.
             // background/border у `<img>` валидны по CSS — например, для
             // подложки на время загрузки или рамки вокруг картинки.
-            if let Some(CssColor::Rgba(bg)) = b.style.background_color
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
                 let clip = background_clip_rect(b);

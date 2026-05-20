@@ -519,25 +519,171 @@ impl Color {
     };
 }
 
+/// CSS Color L4 §10 — цветовое пространство для wide-gamut значений.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorSpace {
+    #[default]
+    Srgb,
+    DisplayP3,
+    Rec2020,
+}
+
+/// Wide-gamut цвет с float-каналами [0..1 для in-gamut, за пределами — out-of-gamut].
+/// Используется для `color(display-p3 …)`, `color(rec2020 …)`, `color(srgb …)`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ColorFloat {
+    pub r: f32,
+    pub g: f32,
+    pub b: f32,
+    pub a: f32,
+    pub space: ColorSpace,
+}
+
+impl ColorFloat {
+    /// Конвертирует в sRGB u8, применяя матрицу цветового пространства и гамму.
+    /// Out-of-gamut значения клипируются в [0, 255].
+    pub fn to_srgb_color(self) -> Color {
+        let (lr, lg, lb) = match self.space {
+            ColorSpace::Srgb => {
+                let lr = srgb_gamma_decode(self.r);
+                let lg = srgb_gamma_decode(self.g);
+                let lb = srgb_gamma_decode(self.b);
+                (lr, lg, lb)
+            }
+            ColorSpace::DisplayP3 => {
+                let lr = srgb_gamma_decode(self.r);
+                let lg = srgb_gamma_decode(self.g);
+                let lb = srgb_gamma_decode(self.b);
+                p3_linear_to_srgb_linear(lr, lg, lb)
+            }
+            ColorSpace::Rec2020 => {
+                let lr = rec2020_gamma_decode(self.r);
+                let lg = rec2020_gamma_decode(self.g);
+                let lb = rec2020_gamma_decode(self.b);
+                rec2020_linear_to_srgb_linear(lr, lg, lb)
+            }
+        };
+        Color {
+            r: encode_srgb(lr),
+            g: encode_srgb(lg),
+            b: encode_srgb(lb),
+            a: (self.a.clamp(0.0, 1.0) * 255.0).round() as u8,
+        }
+    }
+
+    /// Линейные sRGB-каналы [0..1] для прямой передачи в GPU без квантизации.
+    pub fn to_linear_srgb(self) -> [f32; 4] {
+        let (lr, lg, lb) = match self.space {
+            ColorSpace::Srgb => {
+                let lr = srgb_gamma_decode(self.r);
+                let lg = srgb_gamma_decode(self.g);
+                let lb = srgb_gamma_decode(self.b);
+                (lr, lg, lb)
+            }
+            ColorSpace::DisplayP3 => {
+                let lr = srgb_gamma_decode(self.r);
+                let lg = srgb_gamma_decode(self.g);
+                let lb = srgb_gamma_decode(self.b);
+                p3_linear_to_srgb_linear(lr, lg, lb)
+            }
+            ColorSpace::Rec2020 => {
+                let lr = rec2020_gamma_decode(self.r);
+                let lg = rec2020_gamma_decode(self.g);
+                let lb = rec2020_gamma_decode(self.b);
+                rec2020_linear_to_srgb_linear(lr, lg, lb)
+            }
+        };
+        [lr, lg, lb, self.a.clamp(0.0, 1.0)]
+    }
+}
+
+/// Display P3 linear → sRGB linear (ICC/CSS Color L4 §10.9 matrix).
+fn p3_linear_to_srgb_linear(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let sr =  1.224_94 * r - 0.224_94 * g;
+    let sg = -0.042_076 * r + 1.042_076 * g;
+    let sb = -0.019_692 * r - 0.078_654 * g + 1.098_346 * b;
+    (sr, sg, sb)
+}
+
+/// Rec2020 linear → sRGB linear (CSS Color L4 §10.9 matrix).
+fn rec2020_linear_to_srgb_linear(r: f32, g: f32, b: f32) -> (f32, f32, f32) {
+    let sr =  1.660_491 * r - 0.587_641 * g - 0.072_85 * b;
+    let sg = -0.124_551 * r + 1.132_9 * g - 0.008_35 * b;
+    let sb = -0.018_151 * r - 0.100_578 * g + 1.118_73 * b;
+    (sr, sg, sb)
+}
+
+/// Декодирование sRGB / Display P3 гаммы → линейный свет.
+fn srgb_gamma_decode(c: f32) -> f32 {
+    if c <= 0.040_45 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// Декодирование Rec2020 гаммы (BT.2020 OETF) → линейный свет.
+fn rec2020_gamma_decode(c: f32) -> f32 {
+    const ALPHA: f32 = 1.099_296_8;
+    const BETA: f32 = 0.018_053_97;
+    if c < 4.5 * BETA {
+        c / 4.5
+    } else {
+        ((c + (ALPHA - 1.0)) / ALPHA).powf(1.0 / 0.45)
+    }
+}
+
 /// CSS Color L4 §4.2 — типизированное цветовое значение каскада.
 ///
 /// `Rgba` — разрешённый конкретный цвет; `CurrentColor` — keyword `currentcolor`,
 /// который разрешается в вычисленное значение `color` элемента при рендеринге.
-/// Позволяет корректно хранить `border-color: currentcolor` и аналогичные
-/// декларации без немедленного обращения к `color`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `Wide` — wide-gamut цвет из `color()` функции (Display P3, Rec2020, sRGB float).
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum CssColor {
     Rgba(Color),
     CurrentColor,
+    Wide(ColorFloat),
 }
 
 impl CssColor {
-    /// Разрешает значение: `Rgba` — как есть; `CurrentColor` — использует
-    /// `current_color` элемента (его вычисленный `color`).
+    /// Разрешает значение в sRGB u8 Color. `Wide` конвертируется через матрицу.
     pub fn resolve(self, current_color: Color) -> Color {
         match self {
             CssColor::Rgba(c) => c,
             CssColor::CurrentColor => current_color,
+            CssColor::Wide(f) => f.to_srgb_color(),
+        }
+    }
+
+    /// Конвертирует в `Color`, минуя `current_color`. `CurrentColor` → `None`.
+    /// Wide-gamut значения конвертируются через матрицу в sRGB u8.
+    pub fn to_color_opt(self) -> Option<Color> {
+        match self {
+            CssColor::Rgba(c) => Some(c),
+            CssColor::Wide(f) => Some(f.to_srgb_color()),
+            CssColor::CurrentColor => None,
+        }
+    }
+
+    /// Линейные sRGB-каналы для прямой передачи в GPU.
+    pub fn resolve_linear(self, current_color: Color) -> [f32; 4] {
+        match self {
+            CssColor::Rgba(c) => [
+                srgb_gamma_decode(c.r as f32 / 255.0),
+                srgb_gamma_decode(c.g as f32 / 255.0),
+                srgb_gamma_decode(c.b as f32 / 255.0),
+                c.a as f32 / 255.0,
+            ],
+            CssColor::CurrentColor => {
+                let c = current_color;
+                [
+                    srgb_gamma_decode(c.r as f32 / 255.0),
+                    srgb_gamma_decode(c.g as f32 / 255.0),
+                    srgb_gamma_decode(c.b as f32 / 255.0),
+                    c.a as f32 / 255.0,
+                ]
+            }
+            CssColor::Wide(f) => f.to_linear_srgb(),
         }
     }
 }
@@ -1188,6 +1334,9 @@ pub struct ComputedStyle {
     /// HTML `dir`-атрибут. См. `Direction` для подробностей.
     pub direction: Direction,
     pub color: Color,
+    /// Цветовое пространство, в котором объявлен `color` (CSS Color L4 §10).
+    /// Используется renderer-ом для точной передачи wide-gamut цветов в GPU.
+    pub color_space: ColorSpace,
     pub background_color: Option<CssColor>,
     pub font_size: f32,
     pub line_height: f32,
@@ -2660,6 +2809,7 @@ impl ComputedStyle {
             text_align: TextAlign::Left,
             direction: Direction::Ltr,
             color: Color::BLACK,
+            color_space: ColorSpace::Srgb,
             background_color: None,
             font_size: 16.0,
             line_height: 1.2,
@@ -2834,6 +2984,7 @@ pub fn compute_style(
         display: default_display(doc, node),
         // Наследуемые свойства (CSS inherited properties).
         color: inherited.color,
+        color_space: inherited.color_space,
         text_align: inherited.text_align,
         direction: inherited.direction,
         font_size: inherited.font_size,
@@ -6394,8 +6545,18 @@ fn apply_declaration(
         }
         "color" => {
             match parse_css_color_legacy(val, is_quirks) {
-                Some(CssColor::Rgba(c)) => style.color = c,
-                Some(CssColor::CurrentColor) => style.color = inherited.color,
+                Some(CssColor::Rgba(c)) => {
+                    style.color = c;
+                    style.color_space = ColorSpace::Srgb;
+                }
+                Some(CssColor::CurrentColor) => {
+                    style.color = inherited.color;
+                    style.color_space = inherited.color_space;
+                }
+                Some(CssColor::Wide(f)) => {
+                    style.color = f.to_srgb_color();
+                    style.color_space = f.space;
+                }
                 None => {}
             }
         }
@@ -10156,7 +10317,51 @@ fn parse_css_color_legacy(s: &str, is_quirks: bool) -> Option<CssColor> {
     if s.eq_ignore_ascii_case("currentcolor") {
         return Some(CssColor::CurrentColor);
     }
+    // CSS Color L4 §10: color() function with predefined color spaces.
+    if let Some(wide) = parse_css_color_fn(s) {
+        return Some(CssColor::Wide(wide));
+    }
     parse_color_legacy(s, is_quirks).map(CssColor::Rgba)
+}
+
+/// CSS Color L4 §10.1 — парсит `color(<space> c1 c2 c3 [/ alpha])`.
+/// Поддерживаемые пространства: `srgb`, `display-p3`, `rec2020`.
+/// Каналы: unitless float или % (100% = 1.0). Слэш — разделитель alpha.
+fn parse_css_color_fn(s: &str) -> Option<ColorFloat> {
+    let lower = s.to_ascii_lowercase();
+    let body = lower.strip_prefix("color(")?.strip_suffix(')')?;
+    // Разбиваем по пробелам и слэшу, пропуская пустые токены.
+    let tokens: Vec<&str> = body.split(|c: char| c.is_whitespace() || c == '/').filter(|t| !t.is_empty()).collect();
+    if tokens.len() < 4 {
+        return None;
+    }
+    let space = match tokens[0] {
+        "srgb" => ColorSpace::Srgb,
+        "display-p3" => ColorSpace::DisplayP3,
+        "rec2020" => ColorSpace::Rec2020,
+        _ => return None,
+    };
+    let r = parse_color_fn_channel(tokens[1])?;
+    let g = parse_color_fn_channel(tokens[2])?;
+    let b = parse_color_fn_channel(tokens[3])?;
+    let a = if tokens.len() >= 5 {
+        parse_color_fn_channel(tokens[4])?.clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+    Some(ColorFloat { r, g, b, a, space })
+}
+
+/// Парсит channel для `color()`: unitless float или процент (100% = 1.0).
+fn parse_color_fn_channel(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        return pct.trim().parse::<f32>().ok().map(|p| p / 100.0);
+    }
+    if s == "none" {
+        return Some(0.0);
+    }
+    s.parse::<f32>().ok()
 }
 
 /// CSS Color Module Level 3 §4.3 — X11 / SVG named colors. Принимает имя
