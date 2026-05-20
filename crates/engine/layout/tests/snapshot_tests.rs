@@ -241,3 +241,64 @@ fn img_replaced_element() {
     );
     assert_snapshot("img_replaced_element", &actual);
 }
+
+// ── Flex layout (4B.3) ───────────────────────────────────────────────────────
+
+#[test]
+fn flex_row_equal_children() {
+    // Flex-grow:1 на трёх детях → каждый получает треть ширины 900px.
+    let actual = build(
+        "<div><div></div><div></div><div></div></div>",
+        "div > div { flex-grow: 1; height: 50px; background: red; } \
+         div { display: flex; width: 900px; height: 100px; }",
+        1000.0,
+    );
+    assert_snapshot("flex_row_equal_children", &actual);
+}
+
+#[test]
+fn flex_row_explicit_basis() {
+    // flex-basis: 100px для двух детей в контейнере 400px → free space = 200px.
+    let actual = build(
+        "<div><div></div><div></div></div>",
+        "div { display: flex; width: 400px; height: 60px; } \
+         div > div { flex-basis: 100px; flex-grow: 1; height: 40px; }",
+        500.0,
+    );
+    assert_snapshot("flex_row_explicit_basis", &actual);
+}
+
+#[test]
+fn flex_column_children() {
+    // flex-direction: column → дети стэкаются вертикально.
+    let actual = build(
+        "<div><div></div><div></div></div>",
+        "div { display: flex; flex-direction: column; width: 200px; } \
+         div > div { height: 30px; background: blue; }",
+        400.0,
+    );
+    assert_snapshot("flex_column_children", &actual);
+}
+
+#[test]
+fn flex_justify_content_center() {
+    // justify-content: center → items сдвинуты к середине.
+    let actual = build(
+        "<div><div></div></div>",
+        "div { display: flex; justify-content: center; width: 400px; } \
+         div > div { width: 100px; height: 50px; }",
+        500.0,
+    );
+    assert_snapshot("flex_justify_content_center", &actual);
+}
+
+#[test]
+fn flex_justify_content_space_between() {
+    let actual = build(
+        "<div><div></div><div></div><div></div></div>",
+        "div { display: flex; justify-content: space-between; width: 600px; height: 50px; } \
+         div > div { width: 100px; height: 50px; }",
+        700.0,
+    );
+    assert_snapshot("flex_justify_content_space_between", &actual);
+}
