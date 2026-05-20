@@ -1,10 +1,8 @@
-In progress: 3A.2 horizontal scroll  branch: horizontal-scroll
-Next step: добавить scroll_x/content_width в Lumen, обновить render()  shell/src/main.rs:921
+In progress: —
 
-Next: 3A.2 horizontal scroll             lumen-plan.md:188
+Next: 3A.3 momentum scroll               lumen-plan.md:189
 
 Queue:
-3A.2 horizontal scroll             lumen-plan.md:188
 3A.3 momentum scroll               lumen-plan.md:189
 3B.1 reload via queue_task         lumen-plan.md:191
 3B.2 rendering steps ordering      lumen-plan.md:192
@@ -15,4 +13,4 @@ Queue:
 4B.4 preload deduplication         lumen-plan.md:199
 4B.5 preload priority + EventSink  lumen-plan.md:200
 
-Recent: relayout-on-resize 2026-05-19
+Recent: horizontal-scroll 2026-05-20

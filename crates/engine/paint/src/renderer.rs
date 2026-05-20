@@ -1314,19 +1314,19 @@ impl Renderer {
 
     /// Рендерит две полосы display list-а одним кадром:
     /// - `content` — основная страница; ко всем `rect`-ам применяется
-    ///   вертикальное смещение `-scroll_y` (CSS px). Так пользователь
+    ///   смещение `(-scroll_x, -scroll_y)` (CSS px). Так пользователь
     ///   «прокручивает» документ под фиксированным viewport-ом.
     /// - `overlay` — UI поверх (find-bar и т.п.); рисуется как есть, без
     ///   scroll-смещения. Делает overlay viewport-locked даже когда страница
     ///   прокручена.
     ///
-    /// `scroll_y ≥ 0`. Negatives caller обязан клампить до 0 (top-bounce
-    ///  нам пока не нужен).
+    /// `scroll_y ≥ 0`, `scroll_x ≥ 0`. Negatives caller обязан клампить до 0.
     pub fn render(
         &mut self,
         content: &[DisplayCommand],
         overlay: &[DisplayCommand],
         scroll_y: f32,
+        scroll_x: f32,
     ) -> Result<(), wgpu::SurfaceError> {
         // Pre-resolve primary face_id для каждой DrawText-команды +
         // lazy-загрузка новых face-ов до сбора вершин. Делается до парсинга
@@ -1441,9 +1441,9 @@ impl Renderer {
 
         let chained = content
             .iter()
-            .map(|c| (c, -scroll_y))
-            .chain(overlay.iter().map(|c| (c, 0.0_f32)));
-        for (cmd, dy) in chained {
+            .map(|c| (c, -scroll_y, -scroll_x))
+            .chain(overlay.iter().map(|c| (c, 0.0_f32, 0.0_f32)));
+        for (cmd, dy, dx) in chained {
             match cmd {
                 DisplayCommand::FillRect { rect, color } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
@@ -1453,7 +1453,7 @@ impl Renderer {
                     let v_start = fill_vertices.len() as u32;
                     push_fill_quad(
                         &mut fill_vertices,
-                        translate_rect_y(*rect, dy),
+                        translate_rect(*rect, dx, dy),
                         apply_alpha_to_color(color_to_array(color), alpha),
                     );
                     let v_count = fill_vertices.len() as u32 - v_start;
@@ -1471,7 +1471,7 @@ impl Renderer {
                         continue;
                     }
                     let alpha = 1.0_f32;
-                    let r = translate_rect_y(*rect, dy);
+                    let r = translate_rect(*rect, dx, dy);
                     let v_start = fill_vertices.len() as u32;
                     // CSS Backgrounds L3 §6.3 — рёбра рисуются как
                     // прямоугольники полной width/height; Phase 0 без
@@ -1547,7 +1547,7 @@ impl Renderer {
                     let v_start = text_vertices.len() as u32;
                     push_text_glyphs(
                         &mut text_vertices,
-                        translate_rect_y(*rect, dy),
+                        translate_rect(*rect, dx, dy),
                         text,
                         *font_size,
                         apply_alpha_to_color(color_to_array(color), alpha),
@@ -1577,7 +1577,7 @@ impl Renderer {
                         continue;
                     }
                     let alpha = 1.0_f32;
-                    let r = translate_rect_y(*rect, dy);
+                    let r = translate_rect(*rect, dx, dy);
                     let inner = Rect::new(
                         r.x - offset,
                         r.y - offset,
@@ -1640,7 +1640,7 @@ impl Renderer {
                         continue;
                     }
                     let alpha = 1.0_f32;
-                    let scrolled = translate_rect_y(*rect, dy);
+                    let scrolled = translate_rect(*rect, dx, dy);
                     if let Some(gpu) = self.images.get(src) {
                         // CSS Images L3 §5.5: размещаем intrinsic-картинку
                         // согласно object-fit / object-position, обрезаем
@@ -1682,7 +1682,7 @@ impl Renderer {
                 // wgpu выставляется лениво — следующая draw-команда вызовет
                 // sync_scissor_to_stack.
                 DisplayCommand::PushClipRect { rect } => {
-                    let scrolled = translate_rect_y(*rect, dy);
+                    let scrolled = translate_rect(*rect, dx, dy);
                     let new = match clip_stack.last() {
                         Some(prev) => intersect_rects(*prev, scrolled),
                         None => scrolled,
@@ -1727,7 +1727,7 @@ impl Renderer {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
-                    let scrolled = translate_rect_y(*rect, dy);
+                    let scrolled = translate_rect(*rect, dx, dy);
                     // Снимок рендерится через image-pipeline: UV всегда [0,0]→[1,1]
                     // (весь снимок без object-fit). Если id не зарегистрирован —
                     // команда молча игнорируется (compositor мог вызвать evict).
@@ -1977,8 +1977,8 @@ impl Renderer {
 /// Сдвиг rect-а по Y (CSS px). Используется в `render` для применения
 /// scroll-offset-а к page-полосе display list-а; overlay-полоса получает
 /// `dy = 0`. Без mutation — Rect: Copy.
-fn translate_rect_y(rect: Rect, dy: f32) -> Rect {
-    Rect::new(rect.x, rect.y + dy, rect.width, rect.height)
+fn translate_rect(rect: Rect, dx: f32, dy: f32) -> Rect {
+    Rect::new(rect.x + dx, rect.y + dy, rect.width, rect.height)
 }
 
 fn push_fill_quad(out: &mut Vec<FillVertex>, rect: Rect, color: [f32; 4]) {
