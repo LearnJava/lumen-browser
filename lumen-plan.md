@@ -361,6 +361,10 @@
 
 **`push-tokenizer`**: `PushTokenizer { feed, end }` поверх pull-Tokenizer-а с `find_safe_split`-эвристикой (учитывает `<!--…-->`, `<!DOCTYPE…>`, `<tag…>`, `&entity;`); `IncrementalTreeBuilder { feed, finish }` с text-node coalescing. Инвариант: pull/push дают побайтово равный `Document`. 44 теста (29 push_tokenizer + 15 incremental_tree_builder). **Осталось:** `feed_bytes(&[u8])` с буферизацией partial UTF-8.
 
+#### UA stylesheet phase 1 (2026-05-20)
+
+**`ua-stylesheet-phase1`**: `apply_ua_text_decoration` (del/s → line-through, ins/u/a[href] → underline), `ua_link_color` (a[href] → #0000ee), `ua_font_size_factor` (small/sub/sup → 0.83 × parent), `ua_vertical_align` (sub → Sub, sup → Super). `default_display` расширен: del/ins/s → Inline. 7 unit-тестов. Исправляет BUG-007/008/009/012.
+
 #### 4A — `<picture>`/`srcset`/`sizes` finishing
 
 - **`media-query-nested-not`**: `MediaClause::Nested` + paren-aware split — L4 nested `(not (...))` / `((...))` в media-condition.

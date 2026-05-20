@@ -71,6 +71,7 @@ pub trait TextMeasurer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::VerticalAlign;
     use lumen_core::geom::Size;
 
     fn lay(html: &str, css: &str) -> LayoutBox {
@@ -9266,5 +9267,93 @@ mod tests {
         let inner = first_element_child(outer);
         assert_eq!(inner.rect.x, 0.0, "no x offset");
         assert_eq!(inner.rect.y, 0.0, "no y offset");
+    }
+
+    // ── UA stylesheet ──────────────────────────────────────────────────────
+
+    fn first_seg_style(p: &LayoutBox) -> ComputedStyle {
+        let run = first_inline_run(p);
+        if let BoxKind::InlineRun { segments, .. } = &run.kind {
+            segments[0].style.clone()
+        } else {
+            panic!("expected InlineRun with segments");
+        }
+    }
+
+    #[test]
+    fn ua_del_text_decoration_line_through() {
+        let root = lay("<p><del>x</del></p>", "");
+        let p = first_element_child(&root);
+        let style = first_seg_style(p);
+        assert!(style.text_decoration_line.line_through, "del → line-through");
+        assert!(!style.text_decoration_line.underline, "del → no underline");
+    }
+
+    #[test]
+    fn ua_s_text_decoration_line_through() {
+        let root = lay("<p><s>x</s></p>", "");
+        let p = first_element_child(&root);
+        let style = first_seg_style(p);
+        assert!(style.text_decoration_line.line_through, "s → line-through");
+    }
+
+    #[test]
+    fn ua_ins_text_decoration_underline() {
+        let root = lay("<p><ins>x</ins></p>", "");
+        let p = first_element_child(&root);
+        let style = first_seg_style(p);
+        assert!(style.text_decoration_line.underline, "ins → underline");
+        assert!(!style.text_decoration_line.line_through, "ins → no line-through");
+    }
+
+    #[test]
+    fn ua_a_href_link_color_and_underline() {
+        let root = lay(r#"<p><a href="http://example.com">link</a></p>"#, "");
+        let p = first_element_child(&root);
+        let style = first_seg_style(p);
+        assert_eq!(
+            style.color,
+            Color { r: 0, g: 0, b: 238, a: 255 },
+            "a[href] → #0000ee"
+        );
+        assert!(style.text_decoration_line.underline, "a[href] → underline");
+    }
+
+    #[test]
+    fn ua_sub_vertical_align_and_font_size() {
+        let root = lay("<p><sub>x</sub></p>", "");
+        let p = first_element_child(&root);
+        let style = first_seg_style(p);
+        assert_eq!(style.vertical_align, VerticalAlign::Sub, "sub → VerticalAlign::Sub");
+        assert!(
+            (style.font_size - 16.0 * 0.83).abs() < 0.01,
+            "sub → 83% font-size, got {}",
+            style.font_size
+        );
+    }
+
+    #[test]
+    fn ua_sup_vertical_align_and_font_size() {
+        let root = lay("<p><sup>x</sup></p>", "");
+        let p = first_element_child(&root);
+        let style = first_seg_style(p);
+        assert_eq!(style.vertical_align, VerticalAlign::Super, "sup → VerticalAlign::Super");
+        assert!(
+            (style.font_size - 16.0 * 0.83).abs() < 0.01,
+            "sup → 83% font-size, got {}",
+            style.font_size
+        );
+    }
+
+    #[test]
+    fn ua_small_font_size() {
+        let root = lay("<p><small>x</small></p>", "");
+        let p = first_element_child(&root);
+        let style = first_seg_style(p);
+        assert!(
+            (style.font_size - 16.0 * 0.83).abs() < 0.01,
+            "small → 83% font-size, got {}",
+            style.font_size
+        );
     }
 }

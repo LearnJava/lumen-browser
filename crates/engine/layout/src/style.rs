@@ -3485,6 +3485,22 @@ pub fn compute_style(
     if let Some(fw) = ua_font_weight(doc, node) {
         style.font_weight = fw;
     }
+    // UA stylesheet: text-decoration для <del>/<s> (line-through),
+    // <ins>/<u>/<a href> (underline). HTML5 §15.3.7.
+    apply_ua_text_decoration(doc, node, &mut style);
+    // UA stylesheet: <a href> → color: #0000ee. HTML5 §15.3.3.
+    if let Some(c) = ua_link_color(doc, node) {
+        style.color = c;
+    }
+    // UA stylesheet: <small>/<sub>/<sup> → font-size: 0.83× parent.
+    // HTML5 §15.3.3. Author font-size перекроет через pre-pass.
+    if let Some(factor) = ua_font_size_factor(doc, node) {
+        style.font_size = inherited.font_size * factor;
+    }
+    // UA stylesheet: <sub>/<sup> → vertical-align. HTML5 §15.3.3.
+    if let Some(va) = ua_vertical_align(doc, node) {
+        style.vertical_align = va;
+    }
 
     // CSS Quirks Mode — Quirks-only UA-rule для `<table>`: сбрасывает
     // font / color / text-align / white-space к initial-values, чтобы
@@ -5091,7 +5107,9 @@ fn default_display(doc: &Document, node: NodeId) -> Display {
         // Inline-уровневые элементы. Phase 0: пока трактуем как block — текст
         // внутри `<a>`/`<span>` будет на своей строке. Это известное ограничение.
         "a" | "span" | "b" | "i" | "em" | "strong" | "code" | "small" | "sub" | "sup"
-        | "label" | "abbr" | "cite" | "q" | "mark" | "u" => Display::Inline,
+        | "label" | "abbr" | "cite" | "q" | "mark" | "u"
+        // HTML §15.3.7: <del>, <ins>, <s> — flow content, UA display = inline.
+        | "del" | "ins" | "s" => Display::Inline,
         _ => Display::Block,
     }
 }
@@ -5280,6 +5298,75 @@ fn ua_font_style(doc: &Document, node: NodeId) -> Option<FontStyle> {
     };
     match name.local.as_str() {
         "em" | "i" | "cite" | "dfn" | "address" | "var" => Some(FontStyle::Italic),
+        _ => None,
+    }
+}
+
+/// UA stylesheet: `text-decoration` для семантических HTML-элементов
+/// (HTML5 §15.3.7 + §15.3.3).
+///
+/// - `<del>`, `<s>` → `line-through`
+/// - `<ins>`, `<u>` → `underline`
+/// - `<a>` (с атрибутом `href`) → `underline`
+///
+/// Устанавливается ДО CSS-каскада, поэтому любое author-правило перекроет.
+/// `<u>` уже в списке inline-элементов — эта функция добавляет ему decoration.
+fn apply_ua_text_decoration(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    match name.local.as_str() {
+        "del" | "s" => {
+            style.text_decoration_line.line_through = true;
+        }
+        "ins" | "u" => {
+            style.text_decoration_line.underline = true;
+        }
+        "a" if doc.get(node).get_attr("href").is_some() => {
+            style.text_decoration_line.underline = true;
+        }
+        _ => {}
+    }
+}
+
+/// UA stylesheet: `color` для `<a href="…">`.
+/// HTML5 §15.3.3: unvisited links → `color: -webkit-link` (обычно #0000ee).
+/// Phase 0 не поддерживает `:visited` — все `<a>` получают link-color.
+/// Возвращает `Some(color)` только если у элемента есть `href` атрибут
+/// (якорные `<a>` без `href` не являются гиперссылками).
+fn ua_link_color(doc: &Document, node: NodeId) -> Option<Color> {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return None;
+    };
+    if name.local.as_str() == "a" && doc.get(node).get_attr("href").is_some() {
+        Some(Color { r: 0, g: 0, b: 238, a: 255 }) // #0000ee
+    } else {
+        None
+    }
+}
+
+/// UA stylesheet: масштаб font-size для `<small>`, `<sub>`, `<sup>`.
+/// HTML5 §15.3.3: font-size: smaller (≈ 0.83× родительского).
+/// Возвращает `Some(factor)` — multiplier к `parent_font_size`.
+fn ua_font_size_factor(doc: &Document, node: NodeId) -> Option<f32> {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return None;
+    };
+    match name.local.as_str() {
+        "small" | "sub" | "sup" => Some(0.83),
+        _ => None,
+    }
+}
+
+/// UA stylesheet: `vertical-align` для `<sub>` и `<sup>`.
+/// HTML5 §15.3.3: sub → Sub, sup → Super.
+fn ua_vertical_align(doc: &Document, node: NodeId) -> Option<VerticalAlign> {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return None;
+    };
+    match name.local.as_str() {
+        "sub" => Some(VerticalAlign::Sub),
+        "sup" => Some(VerticalAlign::Super),
         _ => None,
     }
 }
