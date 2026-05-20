@@ -70,7 +70,7 @@ impl EventSink for StdoutEventSink {
 /// Bundled-шрифт: статический Inter v4.1 Regular (~411 КБ),
 /// SIL OFL 1.1, см. assets/fonts/OFL.txt.
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-use winit::dpi::LogicalSize;
+use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
@@ -1142,7 +1142,7 @@ impl ApplicationHandler for Lumen {
         let attrs = Window::default_attributes()
             .with_title(window_title(self.title.as_deref()))
             .with_inner_size(LogicalSize::new(1024.0, 720.0))
-            .with_maximized(true);
+            .with_position(LogicalPosition::new(0, 0));
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),

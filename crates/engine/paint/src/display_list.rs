@@ -1200,6 +1200,11 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
     match &b.kind {
         BoxKind::Skip => {}
         BoxKind::Block => {
+            // CSS Color L3 §3: opacity < 1.0 creates compositing layer.
+            let has_opacity = b.style.opacity < 1.0; // >0.0 already checked above
+            if has_opacity {
+                out.push(DisplayCommand::PushOpacity { alpha: b.style.opacity });
+            }
             // CSS Display L3 §4 — `visibility: hidden`: self не рисуется
             // (фон/border/outline/shadow), но children обходятся (inherited
             // visibility, но child может вернуть себя через `:visible`).
@@ -1249,6 +1254,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 // (включая children), снаружи bounding-box-а. Phase 0 без
                 // деления paint phases для outline — эмитим в конце box-walk-а.
                 emit_outline(b, out);
+            }
+            if has_opacity {
+                out.push(DisplayCommand::PopOpacity);
             }
         }
         BoxKind::InlineBlockRow => {
