@@ -39,7 +39,8 @@ pub use style::{
     ComputedStyle, Content,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch,
     FontStyle,
-    FontVariant, FontWeight, GradientStop, Hyphens, Isolation, IterationCount, Length,
+    FontVariant, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens,
+    Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, PointerEvents,
     Position, PositionComponent, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
@@ -8812,5 +8813,223 @@ mod tests {
             Color { r: 0, g: 0, b: 255, a: 255 },
             "author CSS должен побеждать font color= атрибут"
         );
+    }
+
+    // --- CSS Grid Layout tests ---
+
+    /// Parse `grid-template-columns: 100px 200px 300px`.
+    #[test]
+    fn grid_parse_fixed_columns() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { display: grid; grid-template-columns: 100px 200px 300px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_template_columns.len(), 3);
+        assert_eq!(div.style.grid_template_columns[0], GridTrackSize::Length(Length::Px(100.0)));
+        assert_eq!(div.style.grid_template_columns[1], GridTrackSize::Length(Length::Px(200.0)));
+        assert_eq!(div.style.grid_template_columns[2], GridTrackSize::Length(Length::Px(300.0)));
+    }
+
+    /// Parse fr units.
+    #[test]
+    fn grid_parse_fr_columns() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { display: grid; grid-template-columns: 1fr 2fr; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_template_columns.len(), 2);
+        assert_eq!(div.style.grid_template_columns[0], GridTrackSize::Fr(1.0));
+        assert_eq!(div.style.grid_template_columns[1], GridTrackSize::Fr(2.0));
+    }
+
+    /// Parse `repeat(3, 100px)` — expands to 3 tracks.
+    #[test]
+    fn grid_parse_repeat() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { display: grid; grid-template-columns: repeat(3, 100px); }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_template_columns.len(), 3);
+        for ts in &div.style.grid_template_columns {
+            assert_eq!(*ts, GridTrackSize::Length(Length::Px(100.0)));
+        }
+    }
+
+    /// Parse `grid-column: 2 / 4`.
+    #[test]
+    fn grid_parse_column_shorthand() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { grid-column: 2 / 4; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_column_start, GridLine::Line(2));
+        assert_eq!(div.style.grid_column_end, GridLine::Line(4));
+    }
+
+    /// Parse `grid-row: 1 / span 2`.
+    #[test]
+    fn grid_parse_row_span() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { grid-row: 1 / span 2; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_row_start, GridLine::Line(1));
+        assert_eq!(div.style.grid_row_end, GridLine::Span(2));
+    }
+
+    /// Two equal fr columns should each get half the container width.
+    #[test]
+    fn grid_two_fr_columns_equal_width() {
+        let root = lay(
+            "<body><div><span></span><span></span></div></body>",
+            "div { display: grid; grid-template-columns: 1fr 1fr; width: 400px; } \
+             span { height: 50px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        let items: Vec<_> = div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect();
+        assert_eq!(items.len(), 2, "должно быть 2 grid-item");
+        assert!((items[0].rect.width - 200.0).abs() < 1.0, "первый item = 200px, получили {}", items[0].rect.width);
+        assert!((items[1].rect.width - 200.0).abs() < 1.0, "второй item = 200px, получили {}", items[1].rect.width);
+        // Second item starts at x=200.
+        assert!((items[1].rect.x - items[0].rect.x - 200.0).abs() < 1.0);
+    }
+
+    /// Fixed 3-column grid: items placed in row order.
+    #[test]
+    fn grid_three_column_auto_placement() {
+        let root = lay(
+            "<body><div><a></a><a></a><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px 100px; width: 300px; } \
+             a { height: 30px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        let items: Vec<_> = div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect();
+        assert_eq!(items.len(), 4);
+        // First 3 items on row 1, 4th on row 2.
+        assert!((items[0].rect.y - items[1].rect.y).abs() < 1.0, "items 0,1 одна строка");
+        assert!((items[1].rect.y - items[2].rect.y).abs() < 1.0, "items 1,2 одна строка");
+        assert!(items[3].rect.y > items[0].rect.y + 1.0, "item 4 на второй строке");
+        // Column positions.
+        assert!(items[0].rect.x < items[1].rect.x, "col 0 < col 1");
+        assert!(items[1].rect.x < items[2].rect.x, "col 1 < col 2");
+    }
+
+    /// Explicit grid-column / grid-row placement.
+    #[test]
+    fn grid_explicit_placement() {
+        let root = lay(
+            "<body><div><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px 100px; \
+                   grid-template-rows: 50px 50px; width: 300px; } \
+             a { grid-column: 3; grid-row: 2; height: 40px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        let item = div.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip)).unwrap();
+        // item at column 3, row 2 → x ≈ 200, y ≈ 50.
+        assert!((item.rect.x - 200.0).abs() < 1.0, "x≈200, got {}", item.rect.x);
+        assert!((item.rect.y - 50.0).abs() < 1.0, "y≈50, got {}", item.rect.y);
+    }
+
+    /// Grid with `gap` between cells.
+    #[test]
+    fn grid_gap_applied() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px; \
+                   column-gap: 20px; width: 220px; } \
+             a { height: 30px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        let items: Vec<_> = div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect();
+        assert_eq!(items.len(), 2);
+        // Second item starts at x ≈ 120 (100px col + 20px gap).
+        assert!((items[1].rect.x - items[0].rect.x - 120.0).abs() < 1.0,
+            "gap: x diff should be 120, got {}", items[1].rect.x - items[0].rect.x);
+    }
+
+    /// `grid-auto-flow: column` places items vertically first.
+    #[test]
+    fn grid_auto_flow_column() {
+        let root = lay(
+            "<body><div><a></a><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-rows: 50px 50px; \
+                   grid-auto-flow: column; width: 300px; } \
+             a { width: 80px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        let items: Vec<_> = div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect();
+        assert_eq!(items.len(), 3);
+        // items 0,1 same column (different y); item 2 in next column.
+        assert!((items[0].rect.x - items[1].rect.x).abs() < 1.0, "items 0,1 same column");
+        assert!(items[2].rect.x > items[0].rect.x + 1.0, "item 2 next column");
+    }
+
+    /// `minmax(50px, 1fr)` — explicit minmax() track.
+    #[test]
+    fn grid_parse_minmax() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { display: grid; grid-template-columns: minmax(50px, 1fr); }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_template_columns.len(), 1);
+        assert!(matches!(div.style.grid_template_columns[0], GridTrackSize::Minmax(_, _)));
+    }
+
+    /// `grid-area` shorthand parses `row-start / col-start / row-end / col-end`.
+    #[test]
+    fn grid_parse_area_shorthand() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { grid-area: 2 / 1 / 4 / 3; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_row_start, GridLine::Line(2));
+        assert_eq!(div.style.grid_column_start, GridLine::Line(1));
+        assert_eq!(div.style.grid_row_end, GridLine::Line(4));
+        assert_eq!(div.style.grid_column_end, GridLine::Line(3));
+    }
+
+    /// `display: grid` container has no height when empty.
+    #[test]
+    fn grid_empty_container_zero_height() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.rect.height, 0.0, "empty grid should have 0 height");
+    }
+
+    /// Auto rows sized by content.
+    #[test]
+    fn grid_auto_row_height_from_content() {
+        let root = lay(
+            "<body><div><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; width: 100px; } \
+             a { height: 80px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        // Container height should accommodate the 80px item.
+        assert!(div.rect.height >= 80.0, "grid height should be ≥80px, got {}", div.rect.height);
     }
 }

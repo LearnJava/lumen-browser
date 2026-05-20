@@ -1732,6 +1732,26 @@ pub struct ComputedStyle {
     /// CSS Flexbox L1 §7.3 — `flex-basis`. Non-inherited. Default `Auto`.
     /// Phase 0: parsing + storage; реальный flex-layout — задача 4B.3.
     pub flex_basis: FlexBasis,
+    /// CSS Grid Layout L1 §7.2 — `grid-template-columns`. Non-inherited.
+    /// Default `[]` (no explicit tracks). Parsed track-list.
+    pub grid_template_columns: Vec<GridTrackSize>,
+    /// CSS Grid Layout L1 §7.2 — `grid-template-rows`. Non-inherited.
+    /// Default `[]` (no explicit tracks). Parsed track-list.
+    pub grid_template_rows: Vec<GridTrackSize>,
+    /// CSS Grid Layout L1 §8.5 — `grid-auto-flow`. Non-inherited. Default `Row`.
+    pub grid_auto_flow: GridAutoFlow,
+    /// CSS Grid Layout L1 §8.6 — `grid-auto-columns`. Non-inherited. Default `Auto`.
+    pub grid_auto_columns: GridTrackSize,
+    /// CSS Grid Layout L1 §8.6 — `grid-auto-rows`. Non-inherited. Default `Auto`.
+    pub grid_auto_rows: GridTrackSize,
+    /// CSS Grid Layout L1 §8.3 — `grid-column-start`. Non-inherited. Default `Auto`.
+    pub grid_column_start: GridLine,
+    /// CSS Grid Layout L1 §8.3 — `grid-column-end`. Non-inherited. Default `Auto`.
+    pub grid_column_end: GridLine,
+    /// CSS Grid Layout L1 §8.3 — `grid-row-start`. Non-inherited. Default `Auto`.
+    pub grid_row_start: GridLine,
+    /// CSS Grid Layout L1 §8.3 — `grid-row-end`. Non-inherited. Default `Auto`.
+    pub grid_row_end: GridLine,
     /// CSS Text Module Level 4 §6.4.1 — `text-wrap-mode`. Inherited.
     /// Default `Wrap`. Phase 0: parsing + storage; реальная связка с
     /// inline-flow line-breaker-ом (когда `Nowrap` подавляет soft wraps
@@ -2473,6 +2493,209 @@ impl FlexBasis {
     }
 }
 
+/// CSS Grid Layout L1 §7.2 — sizing function for a grid track.
+/// Non-inherited. Appears in `grid-template-columns` / `grid-template-rows`
+/// and `grid-auto-columns` / `grid-auto-rows`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum GridTrackSize {
+    /// `auto` — sized by content (min-content as min, max-content as max).
+    #[default]
+    Auto,
+    /// Fixed length (px, em, rem, %).
+    Length(Length),
+    /// `<number>fr` — fractional unit of remaining free space.
+    Fr(f32),
+    /// `min-content` — minimum content size.
+    MinContent,
+    /// `max-content` — maximum content size.
+    MaxContent,
+    /// `minmax(min, max)` — track between min and max sizing functions.
+    Minmax(Box<GridTrackSize>, Box<GridTrackSize>),
+}
+
+impl GridTrackSize {
+    /// Resolve to a concrete pixel size given container width, em, viewport.
+    /// For `fr` and `auto` returns `None` — caller handles those specially.
+    pub fn resolve_fixed(&self, em: f32, cb: f32, viewport: Size) -> Option<f32> {
+        match self {
+            Self::Length(l) => l.resolve(em, Some(cb), viewport),
+            Self::Fr(_) | Self::Auto | Self::MinContent | Self::MaxContent => None,
+            Self::Minmax(min, _max) => min.resolve_fixed(em, cb, viewport),
+        }
+    }
+
+    /// True for fractional tracks.
+    pub fn is_fr(&self) -> bool {
+        matches!(self, Self::Fr(_))
+    }
+
+    /// Extract fr value.
+    pub fn fr(&self) -> Option<f32> {
+        if let Self::Fr(v) = self { Some(*v) } else { None }
+    }
+
+    /// Parse a single track sizing keyword / value (no `repeat()`).
+    fn parse_single(s: &str, is_quirks: bool) -> Option<Self> {
+        let lc = s.trim().to_ascii_lowercase();
+        match lc.as_str() {
+            "auto" => return Some(Self::Auto),
+            "min-content" => return Some(Self::MinContent),
+            "max-content" => return Some(Self::MaxContent),
+            _ => {}
+        }
+        // `<number>fr`
+        if let Some(n) = lc.strip_suffix("fr")
+            && let Ok(v) = n.trim().parse::<f32>()
+        {
+            return Some(Self::Fr(v.max(0.0)));
+        }
+        // `minmax(min, max)`
+        if lc.starts_with("minmax(") && lc.ends_with(')') {
+            let inner = &s.trim()[7..s.trim().len() - 1];
+            if let Some((a, b)) = split_paren_aware_comma(inner) {
+                let min = Self::parse_single(a.trim(), is_quirks)?;
+                let max = Self::parse_single(b.trim(), is_quirks)?;
+                return Some(Self::Minmax(Box::new(min), Box::new(max)));
+            }
+        }
+        // `fit-content(<length>)` — treat as auto for Phase 0
+        if lc.starts_with("fit-content(") {
+            return Some(Self::Auto);
+        }
+        // length / percentage
+        parse_length_q(s.trim(), is_quirks).map(Self::Length)
+    }
+
+    /// Parse a track-list value string into a Vec of GridTrackSize.
+    /// Handles `repeat(N, <track-list>)` by expanding.
+    pub fn parse_track_list(s: &str, is_quirks: bool) -> Vec<Self> {
+        let mut result = Vec::new();
+        for token in split_track_list_tokens(s) {
+            let t = token.trim();
+            let lc = t.to_ascii_lowercase();
+            if lc.starts_with("repeat(") && lc.ends_with(')') {
+                let inner = &t[7..t.len() - 1];
+                if let Some((count_s, rest)) = split_paren_aware_comma(inner)
+                    && let Ok(n) = count_s.trim().parse::<usize>()
+                {
+                    let repeated: Vec<Self> = Self::parse_track_list(rest.trim(), is_quirks);
+                    for _ in 0..n {
+                        result.extend(repeated.iter().cloned());
+                    }
+                }
+            } else if let Some(ts) = Self::parse_single(t, is_quirks) {
+                result.push(ts);
+            }
+        }
+        result
+    }
+}
+
+/// Split a comma inside a track-list token that may contain nested parens.
+fn split_paren_aware_comma(s: &str) -> Option<(&str, &str)> {
+    let mut depth = 0i32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => return Some((&s[..i], &s[i + 1..])),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Tokenize a track-list string into individual track tokens,
+/// respecting parentheses (so `minmax(...)` stays as one token).
+fn split_track_list_tokens(s: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut start = 0;
+    let mut depth = 0i32;
+    let bytes = s.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b' ' | b'\t' | b'\n' if depth == 0 => {
+                let tok = s[start..i].trim();
+                if !tok.is_empty() {
+                    tokens.push(tok);
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = s[start..].trim();
+    if !last.is_empty() {
+        tokens.push(last);
+    }
+    tokens
+}
+
+/// CSS Grid Layout L1 §8.5 — `grid-auto-flow`. Non-inherited.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GridAutoFlow {
+    /// `row` (initial) — fill rows, add new rows as needed.
+    #[default]
+    Row,
+    /// `column` — fill columns, add new columns as needed.
+    Column,
+    /// `row dense` — row flow with dense packing.
+    RowDense,
+    /// `column dense` — column flow with dense packing.
+    ColumnDense,
+}
+
+impl GridAutoFlow {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "row" => Some(Self::Row),
+            "column" => Some(Self::Column),
+            "row dense" | "dense row" => Some(Self::RowDense),
+            "column dense" | "dense column" => Some(Self::ColumnDense),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Grid Layout L1 §8.3 — a grid-line reference for grid-column-start,
+/// grid-column-end, grid-row-start, grid-row-end. Non-inherited.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum GridLine {
+    /// `auto` — automatic placement.
+    #[default]
+    Auto,
+    /// Integer line number (1-based from start, negative from end).
+    Line(i32),
+    /// `span <integer>` — span N tracks.
+    Span(u32),
+}
+
+impl GridLine {
+    pub fn parse(s: &str) -> Option<Self> {
+        let trimmed = s.trim();
+        if trimmed.eq_ignore_ascii_case("auto") {
+            return Some(Self::Auto);
+        }
+        // `span N` or `span`
+        if let Some(rest) = trimmed.to_ascii_lowercase().strip_prefix("span") {
+            let rest = rest.trim();
+            if rest.is_empty() {
+                return Some(Self::Span(1));
+            }
+            if let Ok(n) = rest.parse::<u32>() {
+                return Some(Self::Span(n.max(1)));
+            }
+        }
+        // integer line number
+        if let Ok(n) = trimmed.parse::<i32>() && n != 0 {
+            return Some(Self::Line(n));
+        }
+        None
+    }
+}
+
 /// Одна компонента `object-position`. Length-варианты резолвятся в px
 /// относительно края коробки (positive = от left/top); percentage —
 /// относительно **свободного места** `box_size - content_size` (может быть
@@ -2967,6 +3190,15 @@ impl ComputedStyle {
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: FlexBasis::Auto,
+            grid_template_columns: Vec::new(),
+            grid_template_rows: Vec::new(),
+            grid_auto_flow: GridAutoFlow::Row,
+            grid_auto_columns: GridTrackSize::Auto,
+            grid_auto_rows: GridTrackSize::Auto,
+            grid_column_start: GridLine::Auto,
+            grid_column_end: GridLine::Auto,
+            grid_row_start: GridLine::Auto,
+            grid_row_end: GridLine::Auto,
             text_wrap_mode: TextWrapMode::Wrap,
             text_wrap_style: TextWrapStyle::Auto,
         }
@@ -3171,6 +3403,16 @@ pub fn compute_style(
         flex_grow: 0.0,
         flex_shrink: 1.0,
         flex_basis: FlexBasis::Auto,
+        // CSS Grid Layout L1 — grid properties не наследуются.
+        grid_template_columns: Vec::new(),
+        grid_template_rows: Vec::new(),
+        grid_auto_flow: GridAutoFlow::Row,
+        grid_auto_columns: GridTrackSize::Auto,
+        grid_auto_rows: GridTrackSize::Auto,
+        grid_column_start: GridLine::Auto,
+        grid_column_end: GridLine::Auto,
+        grid_row_start: GridLine::Auto,
+        grid_row_end: GridLine::Auto,
         // CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style inherited.
         text_wrap_mode: inherited.text_wrap_mode,
         text_wrap_style: inherited.text_wrap_style,
@@ -6672,6 +6914,100 @@ fn apply_declaration(
             // CSS Flexbox L1 §7: shorthand flex-grow flex-shrink flex-basis.
             apply_flex_shorthand(style, val, is_quirks);
         }
+        // CSS Grid Layout L1 — container properties.
+        "grid-template-columns" => {
+            if !val.trim().eq_ignore_ascii_case("none") {
+                style.grid_template_columns = GridTrackSize::parse_track_list(val, is_quirks);
+            } else {
+                style.grid_template_columns = Vec::new();
+            }
+        }
+        "grid-template-rows" => {
+            if !val.trim().eq_ignore_ascii_case("none") {
+                style.grid_template_rows = GridTrackSize::parse_track_list(val, is_quirks);
+            } else {
+                style.grid_template_rows = Vec::new();
+            }
+        }
+        "grid-auto-columns" => {
+            if let Some(ts) = GridTrackSize::parse_single(val, is_quirks) {
+                style.grid_auto_columns = ts;
+            }
+        }
+        "grid-auto-rows" => {
+            if let Some(ts) = GridTrackSize::parse_single(val, is_quirks) {
+                style.grid_auto_rows = ts;
+            }
+        }
+        "grid-auto-flow" => {
+            if let Some(v) = GridAutoFlow::parse(val) {
+                style.grid_auto_flow = v;
+            }
+        }
+        "grid-template" => {
+            // CSS Grid L1 §7.4: shorthand for grid-template-rows / -columns / -areas.
+            // Phase 0: treat as "rows / columns" split if `/` present; else columns only.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.grid_template_columns = Vec::new();
+                style.grid_template_rows = Vec::new();
+            } else if let Some(pos) = find_slash(trimmed) {
+                let rows_s = trimmed[..pos].trim();
+                let cols_s = trimmed[pos + 1..].trim();
+                style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
+                style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
+            } else {
+                style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
+            }
+        }
+        "grid" => {
+            // CSS Grid L1 §8.2: shorthand. Phase 0: delegate to grid-template.
+            let trimmed = val.trim();
+            if !trimmed.eq_ignore_ascii_case("none") {
+                // Parse same as grid-template for rows / columns split.
+                if let Some(pos) = find_slash(trimmed) {
+                    let rows_s = trimmed[..pos].trim();
+                    let cols_s = trimmed[pos + 1..].trim();
+                    style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
+                    style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
+                } else {
+                    style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
+                }
+            }
+        }
+        // CSS Grid Layout L1 — item placement properties.
+        "grid-column-start" => {
+            if let Some(v) = GridLine::parse(val) {
+                style.grid_column_start = v;
+            }
+        }
+        "grid-column-end" => {
+            if let Some(v) = GridLine::parse(val) {
+                style.grid_column_end = v;
+            }
+        }
+        "grid-row-start" => {
+            if let Some(v) = GridLine::parse(val) {
+                style.grid_row_start = v;
+            }
+        }
+        "grid-row-end" => {
+            if let Some(v) = GridLine::parse(val) {
+                style.grid_row_end = v;
+            }
+        }
+        "grid-column" => {
+            // `grid-column-start / grid-column-end`
+            apply_grid_line_shorthand(val, &mut style.grid_column_start, &mut style.grid_column_end);
+        }
+        "grid-row" => {
+            // `grid-row-start / grid-row-end`
+            apply_grid_line_shorthand(val, &mut style.grid_row_start, &mut style.grid_row_end);
+        }
+        "grid-area" => {
+            // `row-start / col-start / row-end / col-end`
+            apply_grid_area_shorthand(val, style);
+        }
         "width" => {
             // `auto` = None (сдвигается на контейнер); иначе typed Length.
             if val.trim() == "auto" {
@@ -8499,6 +8835,67 @@ fn apply_flex_shorthand(style: &mut ComputedStyle, val: &str, is_quirks: bool) {
     }
 }
 
+/// Find a `/` that is not inside parentheses.
+fn find_slash(s: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            '/' if depth == 0 => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Parse `grid-column` / `grid-row` shorthand: `<start> / <end>`.
+fn apply_grid_line_shorthand(val: &str, start: &mut GridLine, end: &mut GridLine) {
+    let trimmed = val.trim();
+    if let Some(pos) = trimmed.find('/') {
+        let s = trimmed[..pos].trim();
+        let e = trimmed[pos + 1..].trim();
+        if let Some(v) = GridLine::parse(s) {
+            *start = v;
+        }
+        if let Some(v) = GridLine::parse(e) {
+            *end = v;
+        }
+    } else if let Some(v) = GridLine::parse(trimmed) {
+        *start = v.clone();
+        // end stays Auto per spec when only start provided
+        let _ = end; // keep lint quiet
+    }
+}
+
+/// Parse `grid-area` shorthand: `row-start / col-start / row-end / col-end`.
+fn apply_grid_area_shorthand(val: &str, style: &mut ComputedStyle) {
+    let parts: Vec<&str> = val.split('/').map(str::trim).collect();
+    match parts.as_slice() {
+        [rs] => {
+            if let Some(v) = GridLine::parse(rs) {
+                style.grid_row_start = v;
+            }
+        }
+        [rs, cs] => {
+            if let Some(v) = GridLine::parse(rs) { style.grid_row_start = v; }
+            if let Some(v) = GridLine::parse(cs) { style.grid_column_start = v; }
+        }
+        [rs, cs, re] => {
+            if let Some(v) = GridLine::parse(rs) { style.grid_row_start = v; }
+            if let Some(v) = GridLine::parse(cs) { style.grid_column_start = v; }
+            if let Some(v) = GridLine::parse(re) { style.grid_row_end = v; }
+        }
+        [rs, cs, re, ce] => {
+            if let Some(v) = GridLine::parse(rs) { style.grid_row_start = v; }
+            if let Some(v) = GridLine::parse(cs) { style.grid_column_start = v; }
+            if let Some(v) = GridLine::parse(re) { style.grid_row_end = v; }
+            if let Some(v) = GridLine::parse(ce) { style.grid_column_end = v; }
+        }
+        _ => {}
+    }
+}
+
 /// CSS Cascade L4 §7 — применить CSS-wide keyword к одному свойству.
 ///
 /// Источник значения:
@@ -9041,6 +9438,34 @@ fn apply_css_wide_keyword(
             } else {
                 init.flex_wrap
             };
+        }
+        "grid-template-columns" | "grid-template-rows" | "grid-auto-flow"
+        | "grid-auto-columns" | "grid-auto-rows" | "grid-column-start" | "grid-column-end"
+        | "grid-row-start" | "grid-row-end" | "grid-column" | "grid-row" | "grid-area"
+        | "grid-template" | "grid" => {
+            // None of the grid properties are inherited.
+            if inh_only_inherit {
+                // inherit: copy from parent (non-inherited → initial)
+                style.grid_template_columns = init.grid_template_columns.clone();
+                style.grid_template_rows = init.grid_template_rows.clone();
+                style.grid_auto_flow = init.grid_auto_flow;
+                style.grid_auto_columns = init.grid_auto_columns.clone();
+                style.grid_auto_rows = init.grid_auto_rows.clone();
+                style.grid_column_start = init.grid_column_start.clone();
+                style.grid_column_end = init.grid_column_end.clone();
+                style.grid_row_start = init.grid_row_start.clone();
+                style.grid_row_end = init.grid_row_end.clone();
+            } else {
+                style.grid_template_columns = init.grid_template_columns.clone();
+                style.grid_template_rows = init.grid_template_rows.clone();
+                style.grid_auto_flow = init.grid_auto_flow;
+                style.grid_auto_columns = init.grid_auto_columns.clone();
+                style.grid_auto_rows = init.grid_auto_rows.clone();
+                style.grid_column_start = init.grid_column_start.clone();
+                style.grid_column_end = init.grid_column_end.clone();
+                style.grid_row_start = init.grid_row_start.clone();
+                style.grid_row_end = init.grid_row_end.clone();
+            }
         }
         // Прочие / неизвестные — silent no-op.
         _ => {}
