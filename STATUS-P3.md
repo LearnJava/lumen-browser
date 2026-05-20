@@ -1,9 +1,9 @@
 In progress: —
 
-Next: 3A.3 momentum scroll               lumen-plan.md:189
+Next: 3B.1 reload via queue_task         lumen-plan.md:191
 
 Queue:
-3A.3 momentum scroll               lumen-plan.md:189
+3B.1 reload via queue_task         lumen-plan.md:191
 3B.1 reload via queue_task         lumen-plan.md:191
 3B.2 rendering steps ordering      lumen-plan.md:192
 3B.3 real observers                lumen-plan.md:193
@@ -13,4 +13,4 @@ Queue:
 4B.4 preload deduplication         lumen-plan.md:199
 4B.5 preload priority + EventSink  lumen-plan.md:200
 
-Recent: horizontal-scroll 2026-05-20
+Recent: momentum-scroll 2026-05-20
