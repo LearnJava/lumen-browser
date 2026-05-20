@@ -160,12 +160,12 @@
 | 1B.5 | ✅ GPU texture upload for layer snapshots | `paint/src/renderer.rs` | 2026-05-19 |
 | 2A | ✅ **`[P1+P2]` Painting order traversal** | — | — |
 | 2B | ✅ **`[P2]` Stacking-aware hit testing** | P3 shell input handler | — |
-| 3A | ⬜ **`[P2]` Color management + Display P3/Rec2020** (blocked: P1 1B) | Фотографии с P3-профилем | Только `lumen-paint` |
-| 3A.1 | ⬜ ColorSpace enum in ComputedStyle | `layout/src/style.rs:1159` | — |
-| 3A.2 | ⬜ Display P3 parsing in CSS color functions | `layout/src/style.rs:9919` | — |
-| 3A.3 | ⬜ HDR tone-mapping utilities (sRGB↔P3) | `layout/src/style.rs` | — |
-| 3A.4 | ⬜ ColorFloat variant (f32 channels) | `layout/src/style.rs:494` | — |
-| 3A.5 | ⬜ color space awareness in renderer | `paint/src/renderer.rs` | — |
+| 3A | ✅ **`[P2]` Color management + Display P3/Rec2020** | Фотографии с P3-профилем | Только `lumen-paint` |
+| 3A.1 | ✅ ColorSpace enum in ComputedStyle | `layout/src/style.rs` | 2026-05-20 |
+| 3A.2 | ✅ Display P3 parsing in CSS color functions | `layout/src/style.rs` | 2026-05-20 |
+| 3A.3 | ✅ HDR tone-mapping utilities (sRGB↔P3) | `layout/src/style.rs` | 2026-05-20 |
+| 3A.4 | ✅ ColorFloat variant (f32 channels) | `layout/src/style.rs` | 2026-05-20 |
+| 3A.5 | ✅ color space awareness in renderer | `paint/src/display_list.rs` | 2026-05-20 |
 | 3B | ⬜ **`[P1+P2+P3]` Web Animations compositor offload** | Smooth-анимации | Stub компилируется |
 | 4 | ⬜ **`[P1+P2]` mix-blend-mode/backdrop-filter pipeline** | Современные UI-эффекты | Только compositor |
 | 5+ | ⬜ **Extras**: object-fit, Canvas 2D, WOFF2, variable fonts, Print PDF | — | — |
@@ -389,6 +389,17 @@
 #### 2B — Stacking-aware hit testing
 
 **`stacking-hit-testing`**: `lumen-paint::hit_test(point, &LayoutBox) -> Option<HitTestResult>` — обратный CSS Painting Order traversal с группами positive-z SC (desc по z)/in-flow+auto-0-z (reverse DOM)/negative-z SC (desc по z); фильтры `pointer-events: none`, `display: none`; transform inversion через `Mat4::invert_2d_affine()`. `HitTestResult.path` — ancestor chain. 14 unit-тестов + 9 на Mat4 invert. Phase 0: InlineRun → node = id родителя; только 2D affine.
+
+#### 3A — Color management + Display P3/Rec2020 (2026-05-20)
+
+**`color-management-p3`**: CSS Color L4 §10 wide-gamut pipeline.
+- `ColorSpace` enum (`Srgb | DisplayP3 | Rec2020`) + `ComputedStyle::color_space` (inherited).
+- `ColorFloat { r, g, b, a: f32, space }` — wide-gamut хранение; `to_srgb_color()` через ICC-матрицы; `to_linear_srgb()` для GPU.
+- Конверсионные функции (CSS Color L4 §10.9): `p3_linear_to_srgb_linear`, `rec2020_linear_to_srgb_linear`, `srgb_gamma_decode`, `rec2020_gamma_decode`.
+- `CssColor::Wide(ColorFloat)` — 3-й вариант; `to_color_opt()` + `resolve_linear()` методы.
+- Парсер `parse_css_color_fn`: `color(display-p3 r g b / a)`, `color(srgb …)`, `color(rec2020 …)`. Unitless 0..1 и %.
+- display_list: `background_color` обрабатывает `Wide` через `to_color_opt()` (не пропускает).
+- 16 новых тестов, 1339 total.
 
 ---
 

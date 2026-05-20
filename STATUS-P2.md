@@ -1,8 +1,11 @@
-In progress: 3A color-management  branch: color-management-p3
-Next step: commit and merge
+In progress: —
+
+Next: 3B Web Animations compositor offload  lumen-plan.md:169  (blocked: P1+P3)
 
 Queue:
-(все 3A выполнены в одной ветке)
+3B Web Animations compositor offload    lumen-plan.md:169  (blocked: P1+P3)
+4  mix-blend-mode/backdrop-filter pipeline  lumen-plan.md:170
 
-Recent: gpu-layer-snapshot 2026-05-19 (GPU texture upload for layer snapshots P2 1B.5)
+Recent: color-management-p3 2026-05-20 (3A: ColorSpace, ColorFloat, Display P3/Rec2020)
+        gpu-layer-snapshot 2026-05-19 (GPU texture upload for layer snapshots P2 1B.5)
         offscreen-opacity-1b4 2026-05-19 (off-screen opacity layer rendering P2 1B.4)
