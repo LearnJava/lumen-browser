@@ -132,7 +132,7 @@
 | 2B | ✅ **`[P2+P1]` Property trees построение** | P2 п.1B | — |
 | 3A | 🟡 **`[P1+P2+P3]` Web Animations interpolation** | P2 п.3B; P3 scheduling | P1 done; P2/P3 pending |
 | ~~3B~~ | ✅ **`[P1+P3]` Push-tokenizer + incremental tree builder** | P3 п.4B | — |
-| 4A | 🟡 **`[P1+P2]` `<picture>`/`srcset`/`sizes` finishing** | P3 lazy-loading | P2 GPU upload |
+| 4A | ✅ **`[P1+P2]` `<picture>`/`srcset`/`sizes` finishing** | P3 lazy-loading | — |
 | 4B | 🟡 **`[P1]` CSS Grid + полный Flexbox** | Адаптивные сайты | — |
 | 4B.1 | ✅ flex-direction + flex-wrap properties | `layout/src/style.rs` | — |
 | 4B.2 | ✅ flex-grow + flex-shrink + flex-basis | `layout/src/style.rs` | — |
@@ -360,7 +360,9 @@
 - **`media-query-nested-not`**: `MediaClause::Nested` + paren-aware split — L4 nested `(not (...))` / `((...))` в media-condition.
 - **`picture-srcset-integration`**: `lumen-layout::box_tree::resolve_image_source(doc, img_id, viewport)` — вызывает `pick_picture_source`/`pick_img_source` с DPR=1.0; intrinsic-dims из `<source>` как presentational hint; `<source>`/`<track>` → `Display::None`. 9 unit-тестов.
 
-**Осталось:** IntersectionObserver event source для `loading="lazy"`.
+- **`picture-shell-4a`** (P2): `lumen_layout::collect_image_requests(doc, viewport) -> Vec<ImageRequest>` — публичная функция, использует `resolve_image_source` для каждого `<img>`. `fetch_and_decode_images` в shell принимает viewport и вызывает `collect_image_requests` вместо `collect_img_entries` — ключи в `register_image` совпадают с `DrawImage.src` для srcset/picture. 7 unit-тестов.
+
+**Осталось:** IntersectionObserver event source для `loading="lazy"` (P3).
 
 ---
 
