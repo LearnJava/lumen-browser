@@ -195,7 +195,7 @@
 | 4B.1 | ✅ preload scan call before DOM parse | `shell/src/main.rs:688` | — |
 | 4B.2 | ✅ preload hint dispatcher | `shell/src/main.rs` | — |
 | 4B.3 | ✅ preload URL resolution | `shell/src/main.rs` | — |
-| 4B.4 | ⬜ preload fetch deduplication | `shell/src/main.rs` | — |
+| 4B.4 | ✅ preload fetch deduplication | `shell/src/main.rs` | — |
 | 4B.5 | ⬜ preload priority + EventSink | `shell/src/main.rs` | — |
 | 5A | ⬜ **`[P3]` HTTP/2** | Latency | Только network |
 | 5B | ✅ **`[P3]` HTTP Range requests** | `<video>` seek | — |

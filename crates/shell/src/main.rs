@@ -815,31 +815,28 @@ fn dispatch_preload_hints(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
 ) {
+    use std::collections::HashSet;
     use lumen_html_parser::PreloadHint;
+
+    // Дедупликация по resolved URL: `<link rel="preload stylesheet" href="x.css">`
+    // создаёт два хинта на один URL. Fetch-cache выше тоже поможет, но
+    // лишние события EventSink нежелательны — emit строго одного хинта на URL.
+    let mut seen: HashSet<String> = HashSet::new();
+
     for hint in hints {
-        let event = match hint {
-            PreloadHint::Stylesheet { url } => Event::SubresourceHintFound {
-                url: base.resolve_str(url),
-                kind: SubresourceKind::Stylesheet,
-            },
-            PreloadHint::Script { url } => Event::SubresourceHintFound {
-                url: base.resolve_str(url),
-                kind: SubresourceKind::Script,
-            },
-            PreloadHint::Image { url: Some(url), .. } => Event::SubresourceHintFound {
-                url: base.resolve_str(url),
-                kind: SubresourceKind::Image,
-            },
+        let (resolved_url, kind) = match hint {
+            PreloadHint::Stylesheet { url } =>
+                (base.resolve_str(url), SubresourceKind::Stylesheet),
+            PreloadHint::Script { url } =>
+                (base.resolve_str(url), SubresourceKind::Script),
+            PreloadHint::Image { url: Some(url), .. } =>
+                (base.resolve_str(url), SubresourceKind::Image),
             // srcset содержит список URL — резолвинг каждого кандидата
             // откладывается до picker-а; эмитим srcset-строку как-есть.
-            PreloadHint::Image { url: None, srcset: Some(s), .. } => Event::SubresourceHintFound {
-                url: s.clone(),
-                kind: SubresourceKind::Image,
-            },
-            PreloadHint::SourceSet { srcset, .. } => Event::SubresourceHintFound {
-                url: srcset.clone(),
-                kind: SubresourceKind::Image,
-            },
+            PreloadHint::Image { url: None, srcset: Some(s), .. } =>
+                (s.clone(), SubresourceKind::Image),
+            PreloadHint::SourceSet { srcset, .. } =>
+                (srcset.clone(), SubresourceKind::Image),
             PreloadHint::Preload { url, as_kind } => {
                 let kind = match as_kind.as_deref() {
                     Some("font") => SubresourceKind::Font,
@@ -848,16 +845,17 @@ fn dispatch_preload_hints(
                     Some("style") => SubresourceKind::Stylesheet,
                     _ => SubresourceKind::Other { as_kind: as_kind.clone() },
                 };
-                Event::SubresourceHintFound { url: base.resolve_str(url), kind }
+                (base.resolve_str(url), kind)
             }
             // Preconnect URL — origin, не содержит path — резолвинг тривиален.
-            PreloadHint::Preconnect { url, dns_only } => Event::SubresourceHintFound {
-                url: base.resolve_str(url),
-                kind: SubresourceKind::Preconnect { dns_only: *dns_only },
-            },
+            PreloadHint::Preconnect { url, dns_only } =>
+                (base.resolve_str(url), SubresourceKind::Preconnect { dns_only: *dns_only }),
             PreloadHint::Image { url: None, srcset: None, .. } => continue,
         };
-        sink.emit(&event);
+        // Дедупликация: первый хинт на данный URL побеждает.
+        if seen.insert(resolved_url.clone()) {
+            sink.emit(&Event::SubresourceHintFound { url: resolved_url, kind });
+        }
     }
 }
 
@@ -2094,6 +2092,42 @@ mod tests {
         let Event::SubresourceHintFound { url: url2, kind: kind2 } = &events[1] else { panic!() };
         assert_eq!(url2, "https://cdn.example.com/lib.js");
         assert_eq!(*kind2, SubresourceKind::Script);
+    }
+
+    #[test]
+    fn dispatch_preload_hints_deduplicates_same_url() {
+        use lumen_html_parser::PreloadHint;
+        use std::sync::{Arc, Mutex};
+
+        struct CollectingSink(Mutex<Vec<Event>>);
+        impl EventSink for CollectingSink {
+            fn emit(&self, e: &Event) {
+                self.0.lock().unwrap().push(e.clone());
+            }
+        }
+
+        let sink: Arc<dyn EventSink> =
+            Arc::new(CollectingSink(Mutex::new(Vec::new())));
+        let base = ResourceBase::Url("https://example.com/".to_owned());
+        // rel="preload stylesheet" создаёт два хинта на один href
+        let hints = vec![
+            PreloadHint::Preload { url: "style.css".into(), as_kind: Some("style".into()) },
+            PreloadHint::Stylesheet { url: "style.css".into() },
+            PreloadHint::Stylesheet { url: "other.css".into() },
+        ];
+
+        dispatch_preload_hints(&hints, &base, &sink);
+
+        let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        let events = unsafe { (*sink_any).0.lock().unwrap() };
+        // style.css появляется дважды — должен emit-иться один раз
+        assert_eq!(events.len(), 2, "expected 2 unique urls, got {}", events.len());
+        let urls: Vec<_> = events.iter().map(|e| {
+            let Event::SubresourceHintFound { url, .. } = e else { panic!() };
+            url.as_str()
+        }).collect();
+        assert!(urls.contains(&"https://example.com/style.css"));
+        assert!(urls.contains(&"https://example.com/other.css"));
     }
 
     #[test]
