@@ -1,6 +1,7 @@
-In progress: —
+In progress: positioned-layout  branch: positioned-layout
+Next step: добавить top/right/bottom/left в ComputedStyle  crates/engine/layout/src/style.rs
 
-Next: (P1 queue empty — все задачи фазы 0 завершены)
+Next: (P1 Phase 1)
 
 Queue:
 
