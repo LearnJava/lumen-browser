@@ -21,9 +21,11 @@ mod runtime;
 mod scroll_anim;
 mod scrollbar;
 
+use std::cell::Cell;
 use std::error::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::rc::Rc;
 use std::sync::Arc;
 
 use lumen_core::event::Event;
@@ -128,6 +130,7 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
         touchpad_vel_time_ms: 0.0,
         last_cursor_icon: None,
         layout_source,
+        pending_reload: Rc::new(Cell::new(false)),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -974,6 +977,10 @@ struct Lumen {
     /// DOM + stylesheet для relayout без повторного fetch/parse. Обновляется
     /// при каждом load/reload. `None` — страница не загружена (Empty source).
     layout_source: Option<LayoutSource>,
+    /// Флаг «нужно reload после текущего about_to_wait». Устанавливается
+    /// closure-ом внутри queue_task — это единственный способ сообщить
+    /// Lumen-у из task-closure (которая `+ 'static` и не владеет `&mut self`).
+    pending_reload: Rc<Cell<bool>>,
 }
 
 impl Lumen {
@@ -1127,6 +1134,13 @@ impl ApplicationHandler for Lumen {
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
         let remaining_ms = if reached_idle { IDLE_BUDGET_MS } else { 0.0 };
         self.runtime.run_idle_callbacks(remaining_ms, now_ms);
+
+        // Пост-дренажный check: reload, запланированный через queue_task
+        // (UserInteraction source), исполняется после microtask checkpoint.
+        // `take` атомарно сбрасывает флаг, чтобы reload вызвался только раз.
+        if self.pending_reload.take() {
+            self.reload();
+        }
     }
 
     fn window_event(
@@ -1441,7 +1455,19 @@ impl Lumen {
             return;
         }
         match cmd {
-            KeyCommand::Reload => self.reload(),
+            KeyCommand::Reload => {
+                // HTML §8.1.4 «Event loop»: пользовательские действия (reload)
+                // планируются через UserInteraction task source, а не вызываются
+                // напрямую. `pending_reload` — флаг-мост: closure-задача может
+                // быть `+ 'static`, Lumen — нет; Cell позволяет из замыкания
+                // установить флаг, который `about_to_wait` проверяет и вызывает
+                // `reload()` после дренажа очереди.
+                let flag = Rc::clone(&self.pending_reload);
+                self.runtime.handle().queue_task(
+                    runtime::TaskSource::UserInteraction,
+                    move || { flag.set(true); },
+                );
+            }
             KeyCommand::Exit => event_loop.exit(),
             KeyCommand::FindOpen => {
                 self.find.open();
