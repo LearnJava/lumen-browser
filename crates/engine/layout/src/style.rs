@@ -349,6 +349,18 @@ impl Default for FontWeight {
     fn default() -> Self { Self::NORMAL }
 }
 
+/// CSS Fonts L4 §7 — одна запись `font-variation-settings`.
+///
+/// `tag` — четырёхбайтный OpenType axis tag (например `b"wght"`, `b"wdth"`).
+/// `value` — user-space значение из CSS (до нормализации fvar/avar).
+/// Нормализация выполняется в renderer-е, который имеет доступ к таблицам
+/// шрифта. `normal` → пустой Vec; renderer применяет default-instance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontVariationSetting {
+    pub tag: [u8; 4],
+    pub value: f32,
+}
+
 /// Набор активных линий `text-decoration` для элемента.
 ///
 /// CSS3 разделяет shorthand `text-decoration` на `-line`, `-style`, `-color`;
@@ -1354,6 +1366,10 @@ pub struct ComputedStyle {
     /// `fantasy`, `system-ui`) сохраняются в этом же списке как обычные строки.
     /// Пустой Vec = inherited / default.
     pub font_family: Vec<String>,
+    /// CSS Fonts L4 §7 — `font-variation-settings`. Inherited.
+    /// Initial: пустой Vec (эквивалентно `normal`). Renderer нормализует
+    /// через fvar + avar при растеризации глифов.
+    pub font_variation_settings: Vec<FontVariationSetting>,
     pub text_transform: TextTransform,
     pub white_space: WhiteSpace,
     /// CSS Text L3 §7.1: отступ перед первой строкой inline-content.
@@ -3045,6 +3061,7 @@ impl ComputedStyle {
             font_variant: FontVariant::Normal,
             font_stretch: FontStretch::NORMAL,
             font_family: Vec::new(),
+            font_variation_settings: Vec::new(),
             text_transform: TextTransform::None,
             white_space: WhiteSpace::Normal,
             text_indent: Length::Px(0.0),
@@ -3234,6 +3251,7 @@ pub fn compute_style(
         font_variant: inherited.font_variant,
         font_stretch: inherited.font_stretch,
         font_family: inherited.font_family.clone(),
+        font_variation_settings: inherited.font_variation_settings.clone(),
         text_transform: inherited.text_transform,
         white_space: inherited.white_space,
         text_indent: inherited.text_indent.clone(),
@@ -5640,6 +5658,47 @@ pub fn parse_font_family(val: &str) -> Vec<String> {
     out
 }
 
+/// Парсит CSS `font-variation-settings` (CSS Fonts L4 §7).
+///
+/// Синтаксис: `normal | [<string> <number>]#`
+/// Пример: `"wght" 600, "wdth" 80`
+///
+/// Возвращает `None` при синтаксической ошибке (CSS cascading игнорирует
+/// невалидные объявления). `normal` → `Some(Vec::new())`.
+pub fn parse_font_variation_settings(val: &str) -> Option<Vec<FontVariationSetting>> {
+    let val = val.trim();
+    if val.eq_ignore_ascii_case("normal") {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    for token_pair in val.split(',') {
+        let pair = token_pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        // Первый токен — quoted 4-char tag
+        let (tag_str, rest) = if let Some(stripped) = pair.strip_prefix('"') {
+            let end = stripped.find('"')?;
+            (&stripped[..end], stripped[end + 1..].trim())
+        } else if let Some(stripped) = pair.strip_prefix('\'') {
+            let end = stripped.find('\'')?;
+            (&stripped[..end], stripped[end + 1..].trim())
+        } else {
+            return None;
+        };
+        // Tag должен быть ровно 4 ASCII символа
+        if tag_str.len() != 4 || !tag_str.is_ascii() {
+            return None;
+        }
+        let tag_bytes = tag_str.as_bytes();
+        let tag: [u8; 4] = [tag_bytes[0], tag_bytes[1], tag_bytes[2], tag_bytes[3]];
+        // Следующий токен — число
+        let value: f32 = rest.parse().ok()?;
+        out.push(FontVariationSetting { tag, value });
+    }
+    Some(out)
+}
+
 /// Парсит CSS `font-weight`. Поддерживает:
 ///   - `normal` → 400, `bold` → 700;
 ///   - численные `100`..`900` (или любое число 1..1000 — Variable Fonts);
@@ -7098,6 +7157,11 @@ fn apply_declaration(
             let list = parse_font_family(val);
             if !list.is_empty() {
                 style.font_family = list;
+            }
+        }
+        "font-variation-settings" => {
+            if let Some(v) = parse_font_variation_settings(val) {
+                style.font_variation_settings = v;
             }
         }
         "font-variant" | "font-variant-caps" => {
@@ -8986,6 +9050,13 @@ fn apply_css_wide_keyword(
                 inherited.font_family.clone()
             } else {
                 init.font_family.clone()
+            };
+        }
+        "font-variation-settings" => {
+            style.font_variation_settings = if inh {
+                inherited.font_variation_settings.clone()
+            } else {
+                init.font_variation_settings.clone()
             };
         }
         "text-align" => {
@@ -16109,5 +16180,94 @@ mod tests {
         assert_eq!(s.flex_grow, 2.0);
         assert_eq!(s.flex_shrink, 1.0);
         assert_eq!(s.flex_basis, FlexBasis::Length(Length::Px(100.0)));
+    }
+
+    // --- font-variation-settings ---
+
+    #[test]
+    fn font_variation_settings_normal_is_empty() {
+        // `normal` → пустой Vec (default-instance, без deltas)
+        let result = parse_font_variation_settings("normal");
+        assert_eq!(result, Some(vec![]));
+    }
+
+    #[test]
+    fn font_variation_settings_single_axis() {
+        let result = parse_font_variation_settings("\"wght\" 600");
+        assert_eq!(result, Some(vec![
+            FontVariationSetting { tag: *b"wght", value: 600.0 }
+        ]));
+    }
+
+    #[test]
+    fn font_variation_settings_multiple_axes() {
+        let result = parse_font_variation_settings("\"wght\" 700, \"wdth\" 80");
+        assert_eq!(result, Some(vec![
+            FontVariationSetting { tag: *b"wght", value: 700.0 },
+            FontVariationSetting { tag: *b"wdth", value: 80.0 },
+        ]));
+    }
+
+    #[test]
+    fn font_variation_settings_invalid_tag_ignored() {
+        // Невалидный (не 4 символа) → None, объявление игнорируется
+        assert_eq!(parse_font_variation_settings("\"wg\" 600"), None);
+        assert_eq!(parse_font_variation_settings("\"wghtt\" 600"), None);
+    }
+
+    #[test]
+    fn font_variation_settings_initial_is_empty() {
+        // Без объявления = initial = пустой Vec
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert!(s.font_variation_settings.is_empty());
+    }
+
+    #[test]
+    fn font_variation_settings_applied() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { font-variation-settings: \"wght\" 900; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.font_variation_settings, vec![
+            FontVariationSetting { tag: *b"wght", value: 900.0 }
+        ]);
+    }
+
+    #[test]
+    fn font_variation_settings_inherited() {
+        // Свойство наследуется от родителя к потомку
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { font-variation-settings: \"wght\" 800; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(span_style.font_variation_settings, vec![
+            FontVariationSetting { tag: *b"wght", value: 800.0 }
+        ]);
+    }
+
+    #[test]
+    fn font_variation_settings_child_overrides_parent() {
+        // Потомок может переопределить наследуемое значение
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { font-variation-settings: \"wght\" 800; } \
+             span { font-variation-settings: \"wght\" 400; }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(span_style.font_variation_settings, vec![
+            FontVariationSetting { tag: *b"wght", value: 400.0 }
+        ]);
     }
 }

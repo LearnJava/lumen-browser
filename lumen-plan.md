@@ -295,7 +295,7 @@
 - **`[P1+P3]` `<contenteditable>` + Input Events Level 2 + Selection / Range API.** **P1** — DOM mutations + Selection / Range типы + `beforeinput` / `input`; **P3** — input dispatch (key + IME + drag-drop + paste), undo/redo stack в shell.
 - **`[P3]` Service Worker runtime.** Fetch interception, push delivery, background sync, cache strategies. **P3** — и backend (fetch hook + storage), и JS worker context + lifecycle + `clients` API (бывший P4 объединён).
 - **`[P3]` Spell check** через **provisional `hunspell-rs`** за `SpellChecker` от Sprint 0. Squiggly underline в render, context menu suggestions. Русский словарь — часть «русский first-class».
-- **`[P2]` Variable fonts axes runtime.** `font-variation-settings`, interpolation по wght / wdth / slnt axes.
+- **✅ `[P2]` Variable fonts axes runtime.** `font-variation-settings` CSS Fonts L4 §7 — cascade в lumen-layout (`FontVariationSetting { tag: [u8;4], value: f32 }`, inherited, `parse_font_variation_settings`), DrawText.font_variation_axes, normalization через fvar+avar в renderer.
 - **`[P2]` Color management + Display P3 / Rec2020 / ICC profiles.** Для `<canvas>` / `<img>` / CSS `color()` функций (CSS Color L4).
 - **`[P1+P2+P3]` Print pipeline runtime.** **P1** — pagination algorithm; **P2** — PDF rendering из display list; **P3** — print preview UI.
 - **`[P1+P3]` GC integration JS ↔ DOM (cycle collector).** **P1** — DOM-side wrapper hooks + lifecycle для трекинга cross-references; **P3** — JS engine integration + cycle collector algorithm + рабочий API на стыке.

@@ -132,24 +132,11 @@ pub enum DisplayCommand {
         font_weight: FontWeight,
         /// `font-style`. По умолчанию Normal.
         font_style: FontStyle,
-        /// Variable Fonts L1 — per-axis **normalized** variation coordinates
-        /// (`[-1.0, 1.0]` per axis, длина = `Font::fvar().axis_count`
-        /// выбранного face-а). Пустой Vec = default-instance (как если бы
-        /// `font-variation-settings: normal`); никаких deltas не применяется,
-        /// растеризация эквивалентна pre-variable-fonts поведению.
-        ///
-        /// Layer responsibility: P1 cascade `font-variation-settings`
-        /// формирует userspace `(tag, value)`-список, **затем нормализует**
-        /// в этот вектор через `fvar.axes` clamping + `avar.normalize`
-        /// перед эмиссией DrawText. Renderer (P2) использует его как
-        /// (a) аргумент `Font::glyph_resolved_with_coords`, (b) часть atlas
-        /// cache key через `AtlasKey::hash_coords` — без этого variant glyph
-        /// перезаписывал бы default-instance в multi-size atlas.
-        ///
-        /// Phase 0: P1 cascade пока не реализован — все text-emission
-        /// сайты эмитят empty Vec (default-instance), пути renderer-а
-        /// short-circuit-ятся. Это interface-first hook для P1.
-        font_variation_coords: Vec<f32>,
+        /// CSS Fonts L4 §7 — user-space variation axes из `font-variation-settings`.
+        /// Пары `(tag, value)` в user units — нормализация через fvar+avar
+        /// выполняется в renderer-е, который имеет доступ к шрифтовым таблицам.
+        /// Пустой Vec = `normal` (default-instance без variation deltas).
+        font_variation_axes: Vec<([u8; 4], f32)>,
     },
     /// Растровое изображение из `<img>`. `rect` — итоговая коробка после
     /// расчёта по CSS (width/height + HTML presentational hints), `src` —
@@ -393,7 +380,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, font_family, font_weight, font_style,
-                font_variation_coords,
+                font_variation_axes,
             } => {
                 out.push_str(&format!(
                     "DrawText ({:.2}, {:.2}, {:.2}, {:.2}) {:?} {:.2} #{:02x}{:02x}{:02x}{:02x}",
@@ -422,13 +409,14 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                         FontStyle::Normal => "",
                     });
                 }
-                if !font_variation_coords.is_empty() {
+                if !font_variation_axes.is_empty() {
                     out.push_str(" var=[");
-                    for (i, &c) in font_variation_coords.iter().enumerate() {
+                    for (i, (tag, val)) in font_variation_axes.iter().enumerate() {
                         if i > 0 {
                             out.push(',');
                         }
-                        out.push_str(&format!("{c:.3}"));
+                        let tag_str = std::str::from_utf8(tag).unwrap_or("????");
+                        out.push_str(&format!("{tag_str:?}={val}"));
                     }
                     out.push(']');
                 }
@@ -805,7 +793,8 @@ fn emit_text_shadows(
             font_family: frag.style.font_family.clone(),
             font_weight: frag.style.font_weight,
             font_style: frag.style.font_style,
-            font_variation_coords: Vec::new(),
+            font_variation_axes: frag.style.font_variation_settings
+                .iter().map(|s| (s.tag, s.value)).collect(),
         });
     }
 }
@@ -1124,10 +1113,8 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         font_family: frag.style.font_family.clone(),
                         font_weight: frag.style.font_weight,
                         font_style: frag.style.font_style,
-                        // P1 cascade `font-variation-settings` пока не
-                        // реализован — emit default-instance (empty Vec).
-                        // Renderer short-circuit-ит на pre-VF путь.
-                        font_variation_coords: Vec::new(),
+                        font_variation_axes: frag.style.font_variation_settings
+                            .iter().map(|s| (s.tag, s.value)).collect(),
                     });
                     push_text_decoration(out, b.rect.x, line_y, frag);
                 }
@@ -1279,10 +1266,8 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         font_family: frag.style.font_family.clone(),
                         font_weight: frag.style.font_weight,
                         font_style: frag.style.font_style,
-                        // P1 cascade `font-variation-settings` пока не
-                        // реализован — emit default-instance (empty Vec).
-                        // Renderer short-circuit-ит на pre-VF путь.
-                        font_variation_coords: Vec::new(),
+                        font_variation_axes: frag.style.font_variation_settings
+                            .iter().map(|s| (s.tag, s.value)).collect(),
                     });
                     push_text_decoration(out, b.rect.x, line_y, frag);
                 }
