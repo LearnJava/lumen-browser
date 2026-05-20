@@ -1,0 +1,19 @@
+[package]
+name = "lumen-js"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen JS runtime: QuickJS implementation of the JsRuntime trait"
+
+[dependencies]
+lumen-core = { workspace = true }
+# lumen-dom: needed for JS↔DOM bindings (task 4A). Not a new external dep —
+# already in the workspace. lumen-js is the natural owner of DOM/JS bridge code.
+lumen-dom = { workspace = true }
+# Permanent #5 (§5): JS engine. QuickJS for Phase 0–1; rusty_v8 planned for v1.0+.
+# Rationale: writing a JS engine from scratch is not in scope for Lumen.
+rquickjs = "0.11"
+
+[dev-dependencies]

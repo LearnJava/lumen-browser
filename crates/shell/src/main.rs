@@ -15,6 +15,7 @@
 //! Внешние CSS: `<link rel="stylesheet" href="...">` загружается с диска или
 //! по сети — в зависимости от того, каким способом загружена страница.
 
+mod animation_scheduler;
 mod find;
 mod momentum_anim;
 mod runtime;
@@ -28,9 +29,9 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use lumen_core::event::{Event, SubresourceKind};
+use lumen_core::event::{Event, FetchPriority, SubresourceKind};
 use lumen_core::ext::EventSink;
-use lumen_core::geom::Size;
+use lumen_core::geom::{Rect, Size};
 use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
 use lumen_layout::LayoutBox;
 use lumen_paint::{DisplayList, Renderer};
@@ -50,7 +51,7 @@ impl EventSink for StdoutEventSink {
             Event::RequestStarted { url, .. } => eprintln!("→ GET {url}"),
             Event::RequestCompleted { url, status, .. } => eprintln!("← {status} {url}"),
             Event::RequestBlocked { url, reason, .. } => eprintln!("✗ {url} ({reason})"),
-            Event::SubresourceHintFound { url, kind } => {
+            Event::SubresourceHintFound { url, kind, priority } => {
                 let label = match kind {
                     SubresourceKind::Stylesheet => "css",
                     SubresourceKind::Script => "js",
@@ -60,7 +61,12 @@ impl EventSink for StdoutEventSink {
                     SubresourceKind::Preconnect { dns_only: false } => "preconnect",
                     SubresourceKind::Other { .. } => "preload",
                 };
-                eprintln!("⤷ preload {label} {url}");
+                let prio = match priority {
+                    FetchPriority::High => "high",
+                    FetchPriority::Medium => "medium",
+                    FetchPriority::Low => "low",
+                };
+                eprintln!("⤷ preload {label} [{prio}] {url}");
             }
             _ => {}
         }
@@ -116,6 +122,7 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
     };
     let content_height = content_height_of(&initial_page.display_list);
     let content_width = content_width_of(&initial_page.display_list);
+    let initial_layout_box = initial_page.layout_box;
     let mut app = Lumen {
         display_list: initial_page.display_list,
         title: initial_page.title,
@@ -126,6 +133,9 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
         window: None,
         renderer: None,
         runtime: runtime::EventLoop::new(),
+        animation_scheduler: animation_scheduler::AnimationScheduler::new(),
+        anim_frame: None,
+        layout_box: Some(initial_layout_box),
         epoch: std::time::Instant::now(),
         find: find::FindState::default(),
         scroll_y: 0.0,
@@ -362,6 +372,8 @@ struct LoadedPage {
     /// что попадает в `DisplayCommand::DrawImage.src`), чтобы render-side
     /// мог сделать lookup без отдельной нормализации URL.
     images: Vec<(String, lumen_image::Image)>,
+    /// Layout-дерево страницы — используется animation scheduler-ом.
+    layout_box: lumen_layout::LayoutBox,
 }
 
 impl LoadedPage {
@@ -370,6 +382,13 @@ impl LoadedPage {
             display_list: DisplayList::new(),
             title: None,
             images: Vec::new(),
+            layout_box: lumen_layout::LayoutBox {
+                node: NodeId::from_index(0),
+                rect: Rect::ZERO,
+                style: lumen_layout::style::ComputedStyle::root(),
+                kind: lumen_layout::BoxKind::Block,
+                children: Vec::new(),
+            },
         }
     }
 }
@@ -472,6 +491,16 @@ impl ResourceBase {
             }
         }
     }
+
+    /// Резолвить `href` относительно base и вернуть строковое представление.
+    /// Для `File` base — абсолютный путь; для `Url` base — абсолютный URL.
+    /// Используется в preload-dispatcher, где нужна строка (не `ResolvedResource`).
+    fn resolve_str(&self, href: &str) -> String {
+        match self.resolve(href) {
+            ResolvedResource::File(p) => p.to_string_lossy().into_owned(),
+            ResolvedResource::Url(u) => u,
+        }
+    }
 }
 
 enum ResolvedResource {
@@ -545,83 +574,50 @@ fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>) {
 
 // ── Загрузка <img src> ───────────────────────────────────────────────────────
 
-/// Обходит DOM, для каждого `<img>` с непустым `src` скачивает байты, декодирует
-/// через `lumen_image::decode` (PNG/JPEG dispatch по сигнатуре) и собирает
-/// результаты в `Vec<(raw_src, Image)>`.
+/// Обходит DOM через `lumen_layout::collect_image_requests` — picker учитывает
+/// `<picture>`/`srcset`/`sizes`, поэтому ключ совпадает с тем, что layout
+/// эмитит в `DisplayCommand::DrawImage.src`. Для каждого запроса скачивает
+/// байты и декодирует через `lumen_image::decode` (PNG/JPEG dispatch).
 ///
-/// Побочный эффект: для тех `<img>`, у которых **не задан ни width, ни height**
-/// атрибут, проставляет оба из декодированного изображения. Это HTML5 §10
-/// «mapped attributes» — author CSS затем перекроет, если захочет. Если хоть
-/// один из атрибутов уже задан author-ом, не лезем (предполагаем, что author
-/// знает, что делает — например, форсирует aspect-ratio).
-///
-/// Ключ в результирующем Vec — raw href из `src` attribute, не resolved URL.
-/// Это совпадает с тем, что хранит `BoxKind::Image { src, alt }` после layout,
-/// поэтому `Renderer::register_image` будет видеть тот же ключ, который придёт
-/// в `DisplayCommand::DrawImage.src` при рендеринге.
+/// Побочный эффект: для `<img>` без явных `width`/`height` проставляет
+/// intrinsic dimensions из декодированного изображения (HTML5 §10 mapped
+/// attributes). Author CSS затем перекроет при необходимости.
 fn fetch_and_decode_images(
     doc: &mut Document,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
+    viewport: lumen_core::geom::Size,
 ) -> Vec<(String, lumen_image::Image)> {
-    let mut entries: Vec<(NodeId, String, bool, bool)> = Vec::new();
-    collect_img_entries(doc, doc.root(), &mut entries);
+    let requests = lumen_layout::collect_image_requests(doc, viewport);
 
     let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
-    for (node_id, src, has_w, has_h) in entries {
-        let bytes = match fetch_image_bytes(&src, base, sink) {
+    for req in requests {
+        let bytes = match fetch_image_bytes(&req.url, base, sink) {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("Пропуск картинки {src}: {e}");
+                eprintln!("Пропуск картинки {}: {e}", req.url);
                 continue;
             }
         };
         let image = match lumen_image::decode(&bytes) {
             Ok(i) => i,
             Err(e) => {
-                eprintln!("Не декодируется {src}: {e}");
+                eprintln!("Не декодируется {}: {e}", req.url);
                 continue;
             }
         };
 
-        if !has_w && !has_h {
-            apply_intrinsic_size(doc, node_id, image.width, image.height);
+        if !req.has_explicit_width && !req.has_explicit_height {
+            apply_intrinsic_size(doc, req.node_id, image.width, image.height);
         }
 
         eprintln!(
-            "Загружена картинка: {src} ({}×{}, {:?})",
-            image.width, image.height, image.format
+            "Загружена картинка: {} ({}×{}, {:?})",
+            req.url, image.width, image.height, image.format
         );
-        out.push((src, image));
+        out.push((req.url, image));
     }
     out
-}
-
-fn collect_img_entries(
-    doc: &Document,
-    id: NodeId,
-    out: &mut Vec<(NodeId, String, bool, bool)>,
-) {
-    let node = doc.get(id);
-    if let NodeData::Element { name, attrs } = &node.data
-        && name.local == "img"
-    {
-        let src = attrs
-            .iter()
-            .find(|a| a.name.local.eq_ignore_ascii_case("src"))
-            .map(|a| a.value.clone())
-            .unwrap_or_default();
-        if !src.is_empty() {
-            let has_w = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("width"));
-            let has_h = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("height"));
-            out.push((id, src, has_w, has_h));
-        }
-        // <img> — void элемент, у него не бывает children, выходим.
-        return;
-    }
-    for &child in &node.children {
-        collect_img_entries(doc, child, out);
-    }
 }
 
 fn fetch_image_bytes(
@@ -707,15 +703,14 @@ fn parse_and_layout(
     // §13.2.6.4.7). В Phase 0 загрузка блокирующая, но порядок вызовов
     // уже корректный — streaming pipeline подхватит его без переделки.
     let preload_hints = lumen_html_parser::scan_preload_hints(&source);
-    dispatch_preload_hints(&preload_hints, sink);
+    dispatch_preload_hints(&preload_hints, base, sink);
 
     let mut doc = lumen_html_parser::parse(&source);
     let title = extract_title(&doc);
 
-    // Гейт выполнения скриптов: Phase 0 — top-level документ не sandboxed
-    // (SandboxFlags::empty()), поэтому блокировки не будет. NullJsRuntime
-    // возвращает NotImplemented — это ожидаемое поведение до подключения QuickJS.
-    run_scripts(&doc, lumen_core::SandboxFlags::empty(), &lumen_core::NullJsRuntime);
+    // Гейт выполнения скриптов: top-level документ не sandboxed.
+    // QuickJS + install_dom дают скриптам полный доступ к DOM-дереву.
+    doc = run_scripts_with_dom(doc, lumen_core::SandboxFlags::empty());
 
     // Гейт отправки форм: Phase 0 — top-level документ не sandboxed.
     check_form_gate(&doc, lumen_core::SandboxFlags::empty());
@@ -728,7 +723,7 @@ fn parse_and_layout(
     // presentational hints (width/height attribute) и потом подхватываются
     // style cascade. Errors silently пропускаются — битая картинка не валит
     // всю страницу, layout нарисует серый placeholder.
-    let images = fetch_and_decode_images(&mut doc, base, sink);
+    let images = fetch_and_decode_images(&mut doc, base, sink, viewport);
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let mut css = extract_style_blocks(&doc);
@@ -755,12 +750,13 @@ fn parse_and_layout(
 }
 
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
-/// Парсинг HTML/CSS не выполняется — только layout и build_display_list.
-fn relayout_page(src: &LayoutSource, viewport: Size) -> DisplayList {
+/// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
+fn relayout_page(src: &LayoutSource, viewport: Size) -> (DisplayList, lumen_layout::LayoutBox) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let layout = lumen_layout::layout_measured(&src.document, &src.stylesheet, viewport, &measurer);
-    lumen_paint::build_display_list(&layout)
+    let dl = lumen_paint::build_display_list(&layout);
+    (dl, layout)
 }
 
 fn render_bytes(
@@ -780,6 +776,7 @@ fn render_bytes(
         parsed.images.len(),
         parsed.preload_hints.len(),
     );
+    let layout_box = parsed.layout;
     let layout_source = LayoutSource {
         document: parsed.document,
         stylesheet: parsed.stylesheet,
@@ -789,43 +786,44 @@ fn render_bytes(
             display_list,
             title: parsed.title,
             images: parsed.images,
+            layout_box,
         },
         layout_source,
     ))
 }
 
-/// Найти первый `<title>` в дереве и склеить его текстовые дети.
-///
-/// HTML5 разрешает только один `<title>` в `<head>`, но мы lenient-парсер —
 /// Отправить preload-хинты в EventSink.
 ///
-/// Каждый `PreloadHint` преобразуется в `Event::SubresourceHintFound`.
-/// URL — сырой (ещё не разрешён относительно base); резолв — задача 4B.3.
+/// Каждый `PreloadHint` резолвится относительно `base` (4B.3) и
+/// преобразуется в `Event::SubresourceHintFound { url, kind, priority }`.
+/// Хинты сортируются по убыванию приоритета (High → Medium → Low), чтобы
+/// самые критичные ресурсы стартовали первыми (полезно при HTTP/2).
+/// `srcset`-строки эмитятся как-есть (multi-URL формат — задача picker-а).
 /// В Phase 0 sink логирует в stderr; в будущем запустит fetch через HttpClient.
-fn dispatch_preload_hints(hints: &[lumen_html_parser::PreloadHint], sink: &Arc<dyn EventSink>) {
+fn dispatch_preload_hints(
+    hints: &[lumen_html_parser::PreloadHint],
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+) {
+    use std::collections::HashSet;
     use lumen_html_parser::PreloadHint;
+
+    // Первый проход: резолв URL + вычисление kind.
+    let mut resolved: Vec<(String, SubresourceKind)> = Vec::with_capacity(hints.len());
     for hint in hints {
-        let event = match hint {
-            PreloadHint::Stylesheet { url } => Event::SubresourceHintFound {
-                url: url.clone(),
-                kind: SubresourceKind::Stylesheet,
-            },
-            PreloadHint::Script { url } => Event::SubresourceHintFound {
-                url: url.clone(),
-                kind: SubresourceKind::Script,
-            },
-            PreloadHint::Image { url: Some(url), .. } => Event::SubresourceHintFound {
-                url: url.clone(),
-                kind: SubresourceKind::Image,
-            },
-            PreloadHint::Image { url: None, srcset: Some(s), .. } => Event::SubresourceHintFound {
-                url: s.clone(),
-                kind: SubresourceKind::Image,
-            },
-            PreloadHint::SourceSet { srcset, .. } => Event::SubresourceHintFound {
-                url: srcset.clone(),
-                kind: SubresourceKind::Image,
-            },
+        let pair = match hint {
+            PreloadHint::Stylesheet { url } =>
+                (base.resolve_str(url), SubresourceKind::Stylesheet),
+            PreloadHint::Script { url } =>
+                (base.resolve_str(url), SubresourceKind::Script),
+            PreloadHint::Image { url: Some(url), .. } =>
+                (base.resolve_str(url), SubresourceKind::Image),
+            // srcset содержит список URL — резолвинг каждого кандидата
+            // откладывается до picker-а; эмитим srcset-строку как-есть.
+            PreloadHint::Image { url: None, srcset: Some(s), .. } =>
+                (s.clone(), SubresourceKind::Image),
+            PreloadHint::SourceSet { srcset, .. } =>
+                (srcset.clone(), SubresourceKind::Image),
             PreloadHint::Preload { url, as_kind } => {
                 let kind = match as_kind.as_deref() {
                     Some("font") => SubresourceKind::Font,
@@ -834,18 +832,33 @@ fn dispatch_preload_hints(hints: &[lumen_html_parser::PreloadHint], sink: &Arc<d
                     Some("style") => SubresourceKind::Stylesheet,
                     _ => SubresourceKind::Other { as_kind: as_kind.clone() },
                 };
-                Event::SubresourceHintFound { url: url.clone(), kind }
+                (base.resolve_str(url), kind)
             }
-            PreloadHint::Preconnect { url, dns_only } => Event::SubresourceHintFound {
-                url: url.clone(),
-                kind: SubresourceKind::Preconnect { dns_only: *dns_only },
-            },
+            // Preconnect URL — origin, не содержит path — резолвинг тривиален.
+            PreloadHint::Preconnect { url, dns_only } =>
+                (base.resolve_str(url), SubresourceKind::Preconnect { dns_only: *dns_only }),
             PreloadHint::Image { url: None, srcset: None, .. } => continue,
         };
-        sink.emit(&event);
+        resolved.push(pair);
+    }
+
+    // Stable-sort по приоритету: High первыми. Stable сохраняет source-order
+    // внутри одного уровня приоритета (важно для HTTP/2 multiplexing).
+    resolved.sort_by_key(|(_, k)| FetchPriority::for_kind(k));
+
+    // Дедупликация + emit. Первый (наиболее приоритетный) хинт на URL побеждает.
+    let mut seen: HashSet<String> = HashSet::new();
+    for (url, kind) in resolved {
+        if seen.insert(url.clone()) {
+            let priority = FetchPriority::for_kind(&kind);
+            sink.emit(&Event::SubresourceHintFound { url, kind, priority });
+        }
     }
 }
 
+/// Найти первый `<title>` в дереве и склеить его текстовые дети.
+///
+/// HTML5 разрешает только один `<title>` в `<head>`, но мы lenient-парсер —
 /// берём первый встречный. Энтити уже декодированы tokenizer-ом (RCDATA-режим).
 fn extract_title(doc: &Document) -> Option<String> {
     let mut buf = String::new();
@@ -905,12 +918,83 @@ fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
     }
 }
 
+/// Выполнить inline `<script>` блоки с DOM-доступом (QuickJS + install_dom).
+///
+/// Принимает `doc` по значению, оборачивает в `Arc<Mutex<>>` на время выполнения
+/// скриптов, возвращает `Document` обратно. При `quickjs` feature отключён —
+/// использует NullJsRuntime (скрипты пропускаются с логом NotImplemented).
+fn run_scripts_with_dom(doc: Document, sandbox: lumen_core::SandboxFlags) -> Document {
+    let mut scripts: Vec<String> = Vec::new();
+    collect_inline_scripts(&doc, doc.root(), &mut scripts);
+
+    if scripts.is_empty() {
+        return doc;
+    }
+    if sandbox.contains(lumen_core::SandboxFlags::SCRIPTS) {
+        eprintln!(
+            "sandbox: заблокировано {} скрипт(ов) (sandbox=scripts)",
+            scripts.len()
+        );
+        return doc;
+    }
+
+    #[cfg(feature = "quickjs")]
+    {
+        use std::sync::Mutex;
+        let doc_arc = Arc::new(Mutex::new(doc));
+        match lumen_js::QuickJsRuntime::new() {
+            Ok(rt) => {
+                if let Err(e) = rt.install_dom(doc_arc.clone()) {
+                    eprintln!("JS DOM init failed: {e}");
+                }
+                for src in &scripts {
+                    match rt.eval(src) {
+                        Ok(_) => {}
+                        Err(lumen_core::JsError::NotImplemented) => {
+                            eprintln!(
+                                "script: engine=quickjs, выполнение пропущено ({} байт)",
+                                src.len()
+                            );
+                        }
+                        Err(e) => eprintln!("script error: {e}"),
+                    }
+                }
+                drop(rt); // освобождаем Arc-клоны в замыканиях QuickJS
+            }
+            Err(e) => eprintln!("QuickJS init failed: {e}"),
+        }
+        return Arc::try_unwrap(doc_arc)
+            .expect("Arc still held after drop(rt)")
+            .into_inner()
+            .unwrap();
+    }
+
+    #[cfg(not(feature = "quickjs"))]
+    {
+        use lumen_core::ext::JsRuntime as _;
+        for src in &scripts {
+            match lumen_core::NullJsRuntime.eval(src) {
+                Ok(_) => {}
+                Err(lumen_core::JsError::NotImplemented) => {
+                    eprintln!(
+                        "script: engine=null, выполнение пропущено ({} байт)",
+                        src.len()
+                    );
+                }
+                Err(e) => eprintln!("script error: {e}"),
+            }
+        }
+        doc
+    }
+}
+
 /// Выполнить inline `<script>` блоки если sandbox позволяет, иначе заблокировать.
 ///
 /// `SandboxFlags::SCRIPTS` установлен — скрипты запрещены; функция логирует
 /// количество заблокированных и возвращает 0. Иначе каждый скрипт передаётся
-/// в `runtime.eval()`; в Phase 0 это всегда `NullJsRuntime` → `NotImplemented`.
+/// в `runtime.eval()`; без feature `quickjs` это NullJsRuntime → `NotImplemented`.
 /// Возвращает число скриптов, переданных в runtime.
+#[cfg(test)]
 fn run_scripts(
     doc: &Document,
     sandbox: lumen_core::SandboxFlags,
@@ -993,6 +1077,16 @@ struct Lumen {
     /// (вызывает rAF-callback-и), на WindowEvent::Resized —
     /// deliver_observer_records(Resize).
     runtime: runtime::EventLoop,
+    /// CSS Animations timeline scheduler — тикается на каждом RedrawRequested.
+    /// Хранит start-time для каждой запущенной анимации и вычисляет
+    /// интерполированные значения. Очищается при load/reload.
+    animation_scheduler: animation_scheduler::AnimationScheduler,
+    /// Последний вычисленный кадр анимаций. `None` — страница не загружена
+    /// или нет активных анимаций.
+    anim_frame: Option<lumen_layout::AnimationFrame>,
+    /// Layout-дерево текущей страницы — нужен scheduler-у для обхода узлов
+    /// и извлечения animation-longhands. Обновляется при load/reload/relayout.
+    layout_box: Option<lumen_layout::LayoutBox>,
     /// Эпоха для rAF-timestamp-ов в миллисекундах от старта shell-а
     /// (DOMHighResTimeStamp — HTML §8.1.5.1: «timestamp passed to callback
     /// should be the current high resolution time»).
@@ -1062,10 +1156,13 @@ impl Lumen {
         let Some(r) = self.renderer.as_ref() else { return };
         let vp_size = r.viewport_size();
         let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
-        let new_dl = relayout_page(src, viewport);
+        let (new_dl, lb) = relayout_page(src, viewport);
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
         self.display_list = new_dl;
+        self.layout_box = Some(lb);
+        self.animation_scheduler.clear();
+        self.anim_frame = None;
         self.scroll_y = clamp_scroll(self.scroll_y, self.max_scroll());
         self.scroll_x = clamp_scroll(self.scroll_x, self.max_scroll_x());
         if let Some(w) = self.window.as_ref() {
@@ -1094,7 +1191,10 @@ impl Lumen {
                 self.content_height = content_height_of(&page.display_list);
                 self.content_width = content_width_of(&page.display_list);
                 self.display_list = page.display_list;
+                self.layout_box = Some(page.layout_box);
                 self.title = page.title;
+                self.animation_scheduler.clear();
+                self.anim_frame = None;
                 // Display list другой → старые match-rect-ы невалидны.
                 // Closing полностью сбрасывает query/active — пользователю
                 // нужно открыть find заново после reload, что естественно.
@@ -1434,6 +1534,21 @@ impl ApplicationHandler for Lumen {
 
                 // Шаг 5: rAF callbacks + microtask checkpoint.
                 self.runtime.run_rendering_step(timestamp_ms);
+
+                // Шаг 5.5: CSS Animations timeline tick.
+                // Вычисляем interpolated values для всех анимированных узлов.
+                // has_active → следующий кадр запрашивается автоматически.
+                if let (Some(lb), Some(src)) = (&self.layout_box, &self.layout_source) {
+                    let frame = self.animation_scheduler.tick(
+                        timestamp_ms,
+                        lb,
+                        &src.stylesheet,
+                    );
+                    if frame.has_active {
+                        self.request_redraw();
+                    }
+                    self.anim_frame = if frame.overrides.is_empty() { None } else { Some(frame) };
+                }
 
                 // Шаг 6: layout invalidation stub. В Phase 0 rAF-callback-и —
                 // только Rust-closures без DOM-мутаций, relayout не нужен.
@@ -2015,6 +2130,139 @@ mod tests {
             ResolvedResource::Url(u) => assert_eq!(u, "https://cdn.example.com/style.css"),
             ResolvedResource::File(_) => panic!("expected Url"),
         }
+    }
+
+    #[test]
+    fn resolve_str_url_base_relative() {
+        let base = ResourceBase::Url("https://example.com/path/page.html".to_owned());
+        assert_eq!(
+            base.resolve_str("style.css"),
+            "https://example.com/path/style.css"
+        );
+    }
+
+    #[test]
+    fn resolve_str_url_base_absolute_passthrough() {
+        let base = ResourceBase::Url("https://example.com/page.html".to_owned());
+        assert_eq!(
+            base.resolve_str("https://cdn.example.com/lib.js"),
+            "https://cdn.example.com/lib.js"
+        );
+    }
+
+    #[test]
+    fn resolve_str_file_base_yields_path_string() {
+        let base = ResourceBase::File(PathBuf::from("/home/user/page.html"));
+        let result = base.resolve_str("style.css");
+        assert!(result.ends_with("style.css"), "got: {result}");
+    }
+
+    #[test]
+    fn dispatch_preload_hints_emits_events() {
+        use lumen_core::event::SubresourceKind;
+        use lumen_html_parser::PreloadHint;
+        use std::sync::{Arc, Mutex};
+
+        struct CollectingSink(Mutex<Vec<Event>>);
+        impl EventSink for CollectingSink {
+            fn emit(&self, e: &Event) {
+                self.0.lock().unwrap().push(e.clone());
+            }
+        }
+
+        let sink: Arc<dyn EventSink> =
+            Arc::new(CollectingSink(Mutex::new(Vec::new())));
+        let base = ResourceBase::Url("https://example.com/".to_owned());
+        let hints = vec![
+            PreloadHint::Stylesheet { url: "reset.css".into() },
+            PreloadHint::Script { url: "https://cdn.example.com/lib.js".into() },
+        ];
+
+        dispatch_preload_hints(&hints, &base, &sink);
+
+        let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        let events = unsafe { (*sink_any).0.lock().unwrap() };
+        assert_eq!(events.len(), 2);
+
+        // CSS (High) сортируется перед JS (Medium) независимо от source-order
+        let Event::SubresourceHintFound { url, kind, priority } = &events[0] else { panic!() };
+        assert_eq!(url, "https://example.com/reset.css");
+        assert_eq!(*kind, SubresourceKind::Stylesheet);
+        assert_eq!(*priority, FetchPriority::High);
+
+        let Event::SubresourceHintFound { url: url2, kind: kind2, priority: p2 } = &events[1] else { panic!() };
+        assert_eq!(url2, "https://cdn.example.com/lib.js");
+        assert_eq!(*kind2, SubresourceKind::Script);
+        assert_eq!(*p2, FetchPriority::Medium);
+    }
+
+    #[test]
+    fn dispatch_preload_hints_deduplicates_same_url() {
+        use lumen_html_parser::PreloadHint;
+        use std::sync::{Arc, Mutex};
+
+        struct CollectingSink(Mutex<Vec<Event>>);
+        impl EventSink for CollectingSink {
+            fn emit(&self, e: &Event) {
+                self.0.lock().unwrap().push(e.clone());
+            }
+        }
+
+        let sink: Arc<dyn EventSink> =
+            Arc::new(CollectingSink(Mutex::new(Vec::new())));
+        let base = ResourceBase::Url("https://example.com/".to_owned());
+        // rel="preload stylesheet" создаёт два хинта на один href
+        let hints = vec![
+            PreloadHint::Preload { url: "style.css".into(), as_kind: Some("style".into()) },
+            PreloadHint::Stylesheet { url: "style.css".into() },
+            PreloadHint::Stylesheet { url: "other.css".into() },
+        ];
+
+        dispatch_preload_hints(&hints, &base, &sink);
+
+        let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        let events = unsafe { (*sink_any).0.lock().unwrap() };
+        // style.css появляется дважды — должен emit-иться один раз
+        assert_eq!(events.len(), 2, "expected 2 unique urls, got {}", events.len());
+        let urls: Vec<_> = events.iter().map(|e| {
+            let Event::SubresourceHintFound { url, .. } = e else { panic!() };
+            url.as_str()
+        }).collect();
+        assert!(urls.contains(&"https://example.com/style.css"));
+        assert!(urls.contains(&"https://example.com/other.css"));
+    }
+
+    #[test]
+    fn dispatch_preload_hints_sorts_by_priority() {
+        use lumen_html_parser::PreloadHint;
+        use std::sync::{Arc, Mutex};
+
+        struct CollectingSink(Mutex<Vec<Event>>);
+        impl EventSink for CollectingSink {
+            fn emit(&self, e: &Event) { self.0.lock().unwrap().push(e.clone()); }
+        }
+
+        let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(Mutex::new(Vec::new())));
+        let base = ResourceBase::Url("https://example.com/".to_owned());
+        // Source-order: img (Low) → script (Medium) → css (High)
+        let hints = vec![
+            PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None },
+            PreloadHint::Script { url: "app.js".into() },
+            PreloadHint::Stylesheet { url: "main.css".into() },
+        ];
+
+        dispatch_preload_hints(&hints, &base, &sink);
+
+        let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        let events = unsafe { (*sink_any).0.lock().unwrap() };
+        assert_eq!(events.len(), 3);
+
+        // После сортировки: css(High) → js(Medium) → img(Low)
+        let priorities: Vec<_> = events.iter().map(|e| {
+            let Event::SubresourceHintFound { priority, .. } = e else { panic!() };
+            *priority
+        }).collect();
+        assert_eq!(priorities, vec![FetchPriority::High, FetchPriority::Medium, FetchPriority::Low]);
     }
 
     #[test]

@@ -1,10 +1,8 @@
-In progress: —
+In progress: 3A Web Animations scheduling  branch: web-animations
+Next step: AnimationScheduler::tick  shell/src/animation_scheduler.rs
 
-Next: 4B.3 preload URL resolution     lumen-plan.md:197
+Next:
+5A HTTP/2                           lumen-plan.md:200
+5C DevTools/CDP минимум             lumen-plan.md:202
 
-Queue:
-4B.3 preload URL resolution        lumen-plan.md:197
-4B.4 preload deduplication         lumen-plan.md:198
-4B.5 preload priority + EventSink  lumen-plan.md:199
-
-Recent: preload-hint-dispatcher 2026-05-20
+Recent: js-dom-bindings 2026-05-20

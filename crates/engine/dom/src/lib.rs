@@ -11,6 +11,10 @@ impl NodeId {
     pub fn index(self) -> usize {
         self.0 as usize
     }
+
+    pub fn from_index(i: usize) -> Self {
+        NodeId(i as u32)
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

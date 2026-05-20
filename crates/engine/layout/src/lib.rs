@@ -19,8 +19,14 @@ pub mod snapshot;
 pub mod stacking;
 pub mod style;
 
-pub use animation::{AnimValue, AnimationInterpolator, NoopInterpolator};
-pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
+pub use animation::{
+    AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
+    LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
+};
+pub use box_tree::{
+    collect_image_requests, layout, layout_measured, BoxKind, ImageRequest, InlineFrag,
+    InlineSegment, LayoutBox,
+};
 pub use property_trees::{
     ClipNode, ClipTree, EffectNode, EffectTree, Mat4, PropertyTreeNodeId, PropertyTrees,
     ScrollNode, ScrollTree, TransformNode, TransformTree,
@@ -31,14 +37,17 @@ pub use stacking::{
     StackingContext, StackingContextId, StackingTree,
 };
 pub use style::{
-    parse_css_wide_keyword, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
+    parse_color, parse_css_wide_keyword, parse_gradient_stops, parse_transform_list,
+    AlignValue, AnimationDirection,
+    AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat, ColorSpace,
     ComputedStyle, Content,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch,
     FontStyle,
-    FontVariant, FontWeight, GradientStop, Hyphens, Isolation, IterationCount, Length,
+    FontVariant, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens,
+    Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, PointerEvents,
     Position, PositionComponent, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
@@ -7716,6 +7725,123 @@ mod tests {
         }
     }
 
+    // ── parse_gradient_stops ──────────────────────────────────────────────────
+
+    #[test]
+    fn gradient_stops_empty_string_returns_empty() {
+        assert_eq!(parse_gradient_stops(""), vec![]);
+    }
+
+    #[test]
+    fn gradient_stops_no_parens_returns_empty() {
+        assert_eq!(parse_gradient_stops("linear-gradient"), vec![]);
+    }
+
+    #[test]
+    fn gradient_stops_two_named_colors_no_position() {
+        let stops = parse_gradient_stops("linear-gradient(red, blue)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[0].position, None);
+        assert_eq!(stops[1].color, Color { r: 0, g: 0, b: 255, a: 255 });
+        assert_eq!(stops[1].position, None);
+    }
+
+    #[test]
+    fn gradient_stops_to_right_direction_skipped() {
+        let stops = parse_gradient_stops("linear-gradient(to right, red, blue)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[1].color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn gradient_stops_angle_direction_skipped() {
+        let stops = parse_gradient_stops("linear-gradient(45deg, red 0%, blue 100%)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].position, Some(Length::Percent(0.0)));
+        assert_eq!(stops[1].position, Some(Length::Percent(100.0)));
+    }
+
+    #[test]
+    fn gradient_stops_percent_positions_parsed() {
+        let stops = parse_gradient_stops("linear-gradient(red 0%, green 50%, blue 100%)");
+        assert_eq!(stops.len(), 3);
+        assert_eq!(stops[0].position, Some(Length::Percent(0.0)));
+        assert_eq!(stops[1].position, Some(Length::Percent(50.0)));
+        assert_eq!(stops[2].position, Some(Length::Percent(100.0)));
+    }
+
+    #[test]
+    fn gradient_stops_px_positions_parsed() {
+        let stops = parse_gradient_stops("linear-gradient(red 0px, blue 200px)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].position, Some(Length::Px(0.0)));
+        assert_eq!(stops[1].position, Some(Length::Px(200.0)));
+    }
+
+    #[test]
+    fn gradient_stops_hex_color_with_percent() {
+        let stops = parse_gradient_stops("linear-gradient(#ff0000 20%, #0000ff 80%)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[0].position, Some(Length::Percent(20.0)));
+    }
+
+    #[test]
+    fn gradient_stops_rgba_function_color() {
+        let stops = parse_gradient_stops("linear-gradient(rgba(255,0,0,1) 0%, rgba(0,0,255,1) 100%)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[1].color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn gradient_stops_two_position_stop_expands() {
+        // `red 20% 60%` → two stops: red@20% and red@60%
+        let stops = parse_gradient_stops("linear-gradient(red 20% 60%, blue)");
+        assert_eq!(stops.len(), 3);
+        assert_eq!(stops[0].position, Some(Length::Percent(20.0)));
+        assert_eq!(stops[1].position, Some(Length::Percent(60.0)));
+        assert_eq!(stops[1].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[2].color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn gradient_stops_color_hint_skipped() {
+        // `50%` between stops is a color hint — no color → skipped
+        let stops = parse_gradient_stops("linear-gradient(red 0%, 50%, blue 100%)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[1].color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn gradient_stops_radial_shape_skipped() {
+        let stops =
+            parse_gradient_stops("radial-gradient(circle at 50% 50%, white, black)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 255, b: 255, a: 255 });
+        assert_eq!(stops[1].color, Color { r: 0, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn gradient_stops_repeating_linear() {
+        let stops =
+            parse_gradient_stops("repeating-linear-gradient(red 0px, blue 10px)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[0].position, Some(Length::Px(0.0)));
+        assert_eq!(stops[1].position, Some(Length::Px(10.0)));
+    }
+
+    #[test]
+    fn gradient_stops_zero_unitless_is_px_zero() {
+        let stops = parse_gradient_stops("linear-gradient(red 0, blue 100%)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].position, Some(Length::Px(0.0)));
+    }
+
     #[test]
     fn background_repeat_values() {
         for (s, expected) in [
@@ -8694,5 +8820,451 @@ mod tests {
             Color { r: 0, g: 0, b: 255, a: 255 },
             "author CSS должен побеждать font color= атрибут"
         );
+    }
+
+    // --- CSS Grid Layout tests ---
+
+    /// Parse `grid-template-columns: 100px 200px 300px`.
+    #[test]
+    fn grid_parse_fixed_columns() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { display: grid; grid-template-columns: 100px 200px 300px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_template_columns.len(), 3);
+        assert_eq!(div.style.grid_template_columns[0], GridTrackSize::Length(Length::Px(100.0)));
+        assert_eq!(div.style.grid_template_columns[1], GridTrackSize::Length(Length::Px(200.0)));
+        assert_eq!(div.style.grid_template_columns[2], GridTrackSize::Length(Length::Px(300.0)));
+    }
+
+    /// Parse fr units.
+    #[test]
+    fn grid_parse_fr_columns() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { display: grid; grid-template-columns: 1fr 2fr; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_template_columns.len(), 2);
+        assert_eq!(div.style.grid_template_columns[0], GridTrackSize::Fr(1.0));
+        assert_eq!(div.style.grid_template_columns[1], GridTrackSize::Fr(2.0));
+    }
+
+    /// Parse `repeat(3, 100px)` — expands to 3 tracks.
+    #[test]
+    fn grid_parse_repeat() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { display: grid; grid-template-columns: repeat(3, 100px); }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_template_columns.len(), 3);
+        for ts in &div.style.grid_template_columns {
+            assert_eq!(*ts, GridTrackSize::Length(Length::Px(100.0)));
+        }
+    }
+
+    /// Parse `grid-column: 2 / 4`.
+    #[test]
+    fn grid_parse_column_shorthand() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { grid-column: 2 / 4; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_column_start, GridLine::Line(2));
+        assert_eq!(div.style.grid_column_end, GridLine::Line(4));
+    }
+
+    /// Parse `grid-row: 1 / span 2`.
+    #[test]
+    fn grid_parse_row_span() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { grid-row: 1 / span 2; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_row_start, GridLine::Line(1));
+        assert_eq!(div.style.grid_row_end, GridLine::Span(2));
+    }
+
+    /// Two equal fr columns should each get half the container width.
+    #[test]
+    fn grid_two_fr_columns_equal_width() {
+        let root = lay(
+            "<body><div><span></span><span></span></div></body>",
+            "div { display: grid; grid-template-columns: 1fr 1fr; width: 400px; } \
+             span { height: 50px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        let items: Vec<_> = div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect();
+        assert_eq!(items.len(), 2, "должно быть 2 grid-item");
+        assert!((items[0].rect.width - 200.0).abs() < 1.0, "первый item = 200px, получили {}", items[0].rect.width);
+        assert!((items[1].rect.width - 200.0).abs() < 1.0, "второй item = 200px, получили {}", items[1].rect.width);
+        // Second item starts at x=200.
+        assert!((items[1].rect.x - items[0].rect.x - 200.0).abs() < 1.0);
+    }
+
+    /// Fixed 3-column grid: items placed in row order.
+    #[test]
+    fn grid_three_column_auto_placement() {
+        let root = lay(
+            "<body><div><a></a><a></a><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px 100px; width: 300px; } \
+             a { height: 30px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        let items: Vec<_> = div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect();
+        assert_eq!(items.len(), 4);
+        // First 3 items on row 1, 4th on row 2.
+        assert!((items[0].rect.y - items[1].rect.y).abs() < 1.0, "items 0,1 одна строка");
+        assert!((items[1].rect.y - items[2].rect.y).abs() < 1.0, "items 1,2 одна строка");
+        assert!(items[3].rect.y > items[0].rect.y + 1.0, "item 4 на второй строке");
+        // Column positions.
+        assert!(items[0].rect.x < items[1].rect.x, "col 0 < col 1");
+        assert!(items[1].rect.x < items[2].rect.x, "col 1 < col 2");
+    }
+
+    /// Explicit grid-column / grid-row placement.
+    #[test]
+    fn grid_explicit_placement() {
+        let root = lay(
+            "<body><div><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px 100px; \
+                   grid-template-rows: 50px 50px; width: 300px; } \
+             a { grid-column: 3; grid-row: 2; height: 40px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        let item = div.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip)).unwrap();
+        // item at column 3, row 2 → x ≈ 200, y ≈ 50.
+        assert!((item.rect.x - 200.0).abs() < 1.0, "x≈200, got {}", item.rect.x);
+        assert!((item.rect.y - 50.0).abs() < 1.0, "y≈50, got {}", item.rect.y);
+    }
+
+    /// Grid with `gap` between cells.
+    #[test]
+    fn grid_gap_applied() {
+        let root = lay(
+            "<body><div><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px; \
+                   column-gap: 20px; width: 220px; } \
+             a { height: 30px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        let items: Vec<_> = div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect();
+        assert_eq!(items.len(), 2);
+        // Second item starts at x ≈ 120 (100px col + 20px gap).
+        assert!((items[1].rect.x - items[0].rect.x - 120.0).abs() < 1.0,
+            "gap: x diff should be 120, got {}", items[1].rect.x - items[0].rect.x);
+    }
+
+    /// `grid-auto-flow: column` places items vertically first.
+    #[test]
+    fn grid_auto_flow_column() {
+        let root = lay(
+            "<body><div><a></a><a></a><a></a></div></body>",
+            "div { display: grid; grid-template-rows: 50px 50px; \
+                   grid-auto-flow: column; width: 300px; } \
+             a { width: 80px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        let items: Vec<_> = div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect();
+        assert_eq!(items.len(), 3);
+        // items 0,1 same column (different y); item 2 in next column.
+        assert!((items[0].rect.x - items[1].rect.x).abs() < 1.0, "items 0,1 same column");
+        assert!(items[2].rect.x > items[0].rect.x + 1.0, "item 2 next column");
+    }
+
+    /// `minmax(50px, 1fr)` — explicit minmax() track.
+    #[test]
+    fn grid_parse_minmax() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { display: grid; grid-template-columns: minmax(50px, 1fr); }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_template_columns.len(), 1);
+        assert!(matches!(div.style.grid_template_columns[0], GridTrackSize::Minmax(_, _)));
+    }
+
+    /// `grid-area` shorthand parses `row-start / col-start / row-end / col-end`.
+    #[test]
+    fn grid_parse_area_shorthand() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { grid-area: 2 / 1 / 4 / 3; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_row_start, GridLine::Line(2));
+        assert_eq!(div.style.grid_column_start, GridLine::Line(1));
+        assert_eq!(div.style.grid_row_end, GridLine::Line(4));
+        assert_eq!(div.style.grid_column_end, GridLine::Line(3));
+    }
+
+    /// `display: grid` container has no height when empty.
+    #[test]
+    fn grid_empty_container_zero_height() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { display: grid; grid-template-columns: 100px 100px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.rect.height, 0.0, "empty grid should have 0 height");
+    }
+
+    /// Auto rows sized by content.
+    #[test]
+    fn grid_auto_row_height_from_content() {
+        let root = lay(
+            "<body><div><a></a></div></body>",
+            "div { display: grid; grid-template-columns: 100px; width: 100px; } \
+             a { height: 80px; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        // Container height should accommodate the 80px item.
+        assert!(div.rect.height >= 80.0, "grid height should be ≥80px, got {}", div.rect.height);
+    }
+
+    // ── collect_image_requests ────────────────────────────────────────────────
+
+    fn vp() -> Size {
+        Size::new(800.0, 600.0)
+    }
+
+    /// Обычный `<img src>` → один запрос с тем же URL.
+    #[test]
+    fn collect_plain_img_src() {
+        let doc = lumen_html_parser::parse(r#"<body><img src="photo.jpg"></body>"#);
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].url, "photo.jpg");
+        assert!(!reqs[0].has_explicit_width);
+        assert!(!reqs[0].has_explicit_height);
+    }
+
+    /// `<img src width height>` → has_explicit_width/height == true.
+    #[test]
+    fn collect_img_with_explicit_dims() {
+        let doc = lumen_html_parser::parse(
+            r#"<body><img src="a.png" width="100" height="50"></body>"#,
+        );
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 1);
+        assert!(reqs[0].has_explicit_width);
+        assert!(reqs[0].has_explicit_height);
+    }
+
+    /// Пустой `src` → запрос не включается.
+    #[test]
+    fn collect_img_empty_src_skipped() {
+        let doc = lumen_html_parser::parse(r#"<body><img src=""></body>"#);
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 0);
+    }
+
+    /// `<img>` без `src` → запрос не включается.
+    #[test]
+    fn collect_img_no_src_skipped() {
+        let doc = lumen_html_parser::parse(r#"<body><img alt="no src"></body>"#);
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 0);
+    }
+
+    /// `<img srcset="a.png 1x, b.png 2x">` → DPR=1.0 → первый кандидат.
+    #[test]
+    fn collect_img_srcset_picks_first_at_dpr1() {
+        let doc = lumen_html_parser::parse(
+            r#"<body><img srcset="a.png 1x, b.png 2x" src="fallback.png"></body>"#,
+        );
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 1);
+        // DPR=1.0 → picker выберет "a.png 1x"
+        assert_eq!(reqs[0].url, "a.png");
+    }
+
+    /// `<picture><source srcset="hd.webp"><img src="sd.jpg"></picture>` →
+    /// picker выбирает source-кандидата.
+    #[test]
+    fn collect_picture_source_wins_over_img_src() {
+        let doc = lumen_html_parser::parse(
+            r#"<body><picture><source srcset="hd.webp"><img src="sd.jpg"></picture></body>"#,
+        );
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].url, "hd.webp");
+    }
+
+    /// Несколько `<img>` → несколько запросов.
+    #[test]
+    fn collect_multiple_images() {
+        let doc = lumen_html_parser::parse(
+            r#"<body><img src="a.png"><img src="b.jpg"></body>"#,
+        );
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 2);
+        let urls: Vec<&str> = reqs.iter().map(|r| r.url.as_str()).collect();
+        assert!(urls.contains(&"a.png"));
+        assert!(urls.contains(&"b.jpg"));
+    }
+
+    // ── CSS Positioned Layout L3 — position: relative / absolute / fixed ──
+
+    /// `position: relative; top: 20px; left: 30px` — визуальный сдвиг относительно
+    /// нормального потока; высота родителя не меняется.
+    #[test]
+    fn position_relative_offset() {
+        let root = lay(
+            "<div class='outer'><div class='inner'>x</div></div>",
+            ".outer { width: 200px; height: 100px; }
+             .inner { position: relative; top: 20px; left: 30px; }",
+        );
+        let outer = first_element_child(&root);
+        let inner = first_element_child(outer);
+        // Нормальная позиция inner без offset: x=0, y=0 (нет margin/padding).
+        // С relative offset: y += 20, x += 30.
+        assert_eq!(inner.rect.x, 30.0, "relative left");
+        assert_eq!(inner.rect.y, 20.0, "relative top");
+        // Родительская высота не изменяется (relative не влияет на flow).
+        assert_eq!(outer.rect.height, 100.0, "outer height unchanged");
+    }
+
+    /// `position: relative; bottom: 10px; right: 15px` — отрицательный сдвиг.
+    #[test]
+    fn position_relative_bottom_right() {
+        let root = lay(
+            "<div class='inner'>x</div>",
+            ".inner { position: relative; bottom: 10px; right: 15px; }",
+        );
+        let inner = first_element_child(&root);
+        // bottom: 10px → y -= 10 (сдвиг вверх)
+        assert_eq!(inner.rect.y, -10.0, "relative bottom moves up");
+        // right: 15px → x -= 15 (сдвиг влево)
+        assert_eq!(inner.rect.x, -15.0, "relative right moves left");
+    }
+
+    /// `position: absolute; top: 10px; left: 20px` внутри positioned parent.
+    /// Абсолютный элемент не участвует в normal flow (высота родителя = 0).
+    #[test]
+    fn position_absolute_top_left() {
+        let root = lay(
+            "<div class='parent'><div class='abs'>x</div></div>",
+            ".parent { position: relative; width: 400px; height: 300px; }
+             .abs    { position: absolute; top: 10px; left: 20px; width: 50px; }",
+        );
+        let parent = first_element_child(&root);
+        let abs_child = first_element_child(parent);
+        // Positioned relative to parent's border-edge box.
+        assert_eq!(abs_child.rect.x, 20.0, "abs left");
+        assert_eq!(abs_child.rect.y, 10.0, "abs top");
+        // Ширина задана явно.
+        assert_eq!(abs_child.rect.width, 50.0, "abs explicit width");
+    }
+
+    /// `position: absolute; bottom: 0; right: 0` — правый нижний угол контейнера.
+    #[test]
+    fn position_absolute_bottom_right() {
+        let root = lay(
+            "<div class='parent'><div class='abs'>x</div></div>",
+            ".parent { position: relative; width: 400px; height: 300px; }
+             .abs    { position: absolute; bottom: 0px; right: 0px; width: 60px; height: 40px; }",
+        );
+        let parent = first_element_child(&root);
+        let abs_child = first_element_child(parent);
+        // right: 0 → right edge of abs = right edge of parent (400)
+        // abs.rect.x = 400 - 0 - 60 = 340
+        assert_eq!(abs_child.rect.x, 340.0, "abs right=0 positions at right edge");
+        // bottom: 0 → bottom edge of abs = bottom edge of parent (300)
+        // abs.rect.y = 300 - 0 - 40 = 260
+        assert_eq!(abs_child.rect.y, 260.0, "abs bottom=0 positions at bottom edge");
+    }
+
+    /// `position: absolute` без explicit containing block — используется viewport.
+    #[test]
+    fn position_absolute_uses_viewport_without_positioned_ancestor() {
+        let root = lay(
+            "<div><div class='abs'>x</div></div>",
+            ".abs { position: absolute; top: 50px; left: 100px; width: 80px; }",
+        );
+        // Родитель static — CB = viewport (800×600)
+        let parent = first_element_child(&root);
+        let abs_child = first_element_child(parent);
+        assert_eq!(abs_child.rect.y, 50.0, "abs top from viewport");
+        assert_eq!(abs_child.rect.x, 100.0, "abs left from viewport");
+    }
+
+    /// Абсолютный элемент не влияет на высоту normal-flow родителя.
+    #[test]
+    fn position_absolute_excluded_from_normal_flow() {
+        let root = lay(
+            "<div class='parent'>
+               <div class='normal' style='height: 40px;'></div>
+               <div class='abs' style='height: 200px;'></div>
+             </div>",
+            ".parent { position: relative; }
+             .abs    { position: absolute; top: 0; left: 0; }",
+        );
+        let parent = first_element_child(&root);
+        // Только normal-flow div (height=40) считается в высоту родителя.
+        assert_eq!(parent.rect.height, 40.0, "abs child excluded from parent height");
+    }
+
+    /// `position: fixed; top: 0; right: 0` — position relative to viewport.
+    #[test]
+    fn position_fixed_relative_to_viewport() {
+        let root = lay(
+            "<div class='parent'><div class='fix'>x</div></div>",
+            ".parent { position: relative; width: 400px; height: 300px; margin: 50px; }
+             .fix    { position: fixed; top: 5px; right: 10px; width: 80px; }",
+        );
+        let parent = first_element_child(&root);
+        let fix_child = first_element_child(parent);
+        // Fixed: CB = viewport (800×600), not parent
+        assert_eq!(fix_child.rect.y, 5.0, "fixed top from viewport");
+        // right: 10 → x = viewport.width - 10 - 80 = 710
+        assert_eq!(fix_child.rect.x, 710.0, "fixed right from viewport");
+    }
+
+    /// `inset` shorthand: `inset: 10px 20px 30px 40px` → top/right/bottom/left.
+    #[test]
+    fn inset_shorthand_four_values() {
+        let root = lay(
+            "<div class='parent'><div class='abs'></div></div>",
+            ".parent { position: relative; width: 400px; height: 300px; }
+             .abs    { position: absolute; inset: 10px 20px 30px 40px; }",
+        );
+        let parent = first_element_child(&root);
+        let abs_child = first_element_child(parent);
+        // top: 10, left: 40
+        assert_eq!(abs_child.rect.y, 10.0, "inset top");
+        assert_eq!(abs_child.rect.x, 40.0, "inset left");
+    }
+
+    /// `position: relative; top: auto; left: auto` — никакого сдвига.
+    #[test]
+    fn position_relative_all_auto_no_offset() {
+        let root = lay(
+            "<div class='outer'><div class='inner'>x</div></div>",
+            ".outer { width: 200px; }
+             .inner { position: relative; top: auto; left: auto; }",
+        );
+        let outer = first_element_child(&root);
+        let inner = first_element_child(outer);
+        assert_eq!(inner.rect.x, 0.0, "no x offset");
+        assert_eq!(inner.rect.y, 0.0, "no y offset");
     }
 }

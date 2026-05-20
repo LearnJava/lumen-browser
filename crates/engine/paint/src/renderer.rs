@@ -229,6 +229,201 @@ struct VOut {
 }
 "#;
 
+/// CSS Compositing & Blending L1 §8 blend shader.
+/// Bindings: 0=t_src (offscreen element), 1=t_dst (copy of parent layer),
+/// 2=sampler (shared), 3=blend_mode uniform (u32, padded to 16 bytes).
+/// Blend mode u32 mapping: 0=Normal, 1=Multiply, 2=Screen, 3=Overlay,
+/// 4=Darken, 5=Lighten, 6=ColorDodge, 7=ColorBurn, 8=HardLight, 9=SoftLight,
+/// 10=Difference, 11=Exclusion, 12=Hue, 13=Saturation, 14=Color,
+/// 15=Luminosity, 16=PlusLighter.
+/// Output is written as pre-composited RGBA (REPLACE blend state).
+const BLEND_SHADER_SRC: &str = r#"
+@group(0) @binding(0) var t_src: texture_2d<f32>;
+@group(0) @binding(1) var t_dst: texture_2d<f32>;
+@group(0) @binding(2) var s_layer: sampler;
+
+struct BlendUniform {
+    mode: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+};
+@group(0) @binding(3) var<uniform> u: BlendUniform;
+
+struct VIn {
+    @location(0) pos: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) alpha: f32,
+};
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex fn vs_main(in: VIn) -> VOut {
+    var out: VOut;
+    out.clip = vec4<f32>(in.pos, 0.0, 1.0);
+    out.uv = in.uv;
+    return out;
+}
+
+// ── Luminance / Saturation helpers (non-separable modes) ──────────────
+fn lum(c: vec3<f32>) -> f32 {
+    return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
+}
+
+fn clip_color(c: vec3<f32>) -> vec3<f32> {
+    let l = lum(c);
+    let n = min(c.r, min(c.g, c.b));
+    let x = max(c.r, max(c.g, c.b));
+    var result = c;
+    if n < 0.0 {
+        result = l + (c - l) * l / (l - n);
+    }
+    let l2 = lum(result);
+    let x2 = max(result.r, max(result.g, result.b));
+    if x2 > 1.0 {
+        result = l2 + (result - l2) * (1.0 - l2) / (x2 - l2);
+    }
+    return result;
+}
+
+fn set_lum(c: vec3<f32>, l: f32) -> vec3<f32> {
+    let d = l - lum(c);
+    return clip_color(c + d);
+}
+
+fn sat(c: vec3<f32>) -> f32 {
+    return max(c.r, max(c.g, c.b)) - min(c.r, min(c.g, c.b));
+}
+
+fn set_sat(c: vec3<f32>, s: f32) -> vec3<f32> {
+    // Sort components to find min/mid/max indices.
+    var result = c;
+    // Use if-chains to set min/mid/max channels.
+    var cmin: f32; var cmid: f32; var cmax: f32;
+    var imin: i32; var imid: i32; var imax: i32;
+    let cv = array<f32, 3>(c.r, c.g, c.b);
+    // Find indices of min, mid, max by sorting.
+    if cv[0] <= cv[1] && cv[0] <= cv[2] {
+        imin = 0;
+        if cv[1] <= cv[2] { imid = 1; imax = 2; } else { imid = 2; imax = 1; }
+    } else if cv[1] <= cv[0] && cv[1] <= cv[2] {
+        imin = 1;
+        if cv[0] <= cv[2] { imid = 0; imax = 2; } else { imid = 2; imax = 0; }
+    } else {
+        imin = 2;
+        if cv[0] <= cv[1] { imid = 0; imax = 1; } else { imid = 1; imax = 0; }
+    }
+    cmin = cv[imin]; cmid = cv[imid]; cmax = cv[imax];
+    var rmin: f32; var rmid: f32; var rmax: f32;
+    if cmax > cmin {
+        rmid = (cmid - cmin) * s / (cmax - cmin);
+        rmax = s;
+    } else {
+        rmid = 0.0;
+        rmax = 0.0;
+    }
+    rmin = 0.0;
+    // Reconstruct result in original channel order.
+    var arr = array<f32, 3>(0.0, 0.0, 0.0);
+    arr[imin] = rmin;
+    arr[imid] = rmid;
+    arr[imax] = rmax;
+    return vec3<f32>(arr[0], arr[1], arr[2]);
+}
+
+// ── Separable blend functions B(Cs, Cd) ───────────────────────────────
+fn blend_channel(mode: u32, cs: f32, cd: f32) -> f32 {
+    if mode == 1u { // Multiply
+        return cs * cd;
+    } else if mode == 2u { // Screen
+        return cs + cd - cs * cd;
+    } else if mode == 3u { // Overlay
+        if cd <= 0.5 { return 2.0 * cs * cd; }
+        else { return 1.0 - 2.0 * (1.0 - cs) * (1.0 - cd); }
+    } else if mode == 4u { // Darken
+        return min(cs, cd);
+    } else if mode == 5u { // Lighten
+        return max(cs, cd);
+    } else if mode == 6u { // ColorDodge
+        if cd == 0.0 { return 0.0; }
+        else if cs == 1.0 { return 1.0; }
+        else { return min(1.0, cd / (1.0 - cs)); }
+    } else if mode == 7u { // ColorBurn
+        if cd == 1.0 { return 1.0; }
+        else if cs == 0.0 { return 0.0; }
+        else { return 1.0 - min(1.0, (1.0 - cd) / cs); }
+    } else if mode == 8u { // HardLight — Overlay with Cs/Cd swapped
+        if cs <= 0.5 { return 2.0 * cs * cd; }
+        else { return 1.0 - 2.0 * (1.0 - cs) * (1.0 - cd); }
+    } else if mode == 9u { // SoftLight
+        if cs <= 0.5 {
+            return cd - (1.0 - 2.0 * cs) * cd * (1.0 - cd);
+        } else {
+            var d: f32;
+            if cd <= 0.25 {
+                d = ((16.0 * cd - 12.0) * cd + 4.0) * cd;
+            } else {
+                d = sqrt(cd);
+            }
+            return cd + (2.0 * cs - 1.0) * (d - cd);
+        }
+    } else if mode == 10u { // Difference
+        return abs(cd - cs);
+    } else if mode == 11u { // Exclusion
+        return cs + cd - 2.0 * cs * cd;
+    } else if mode == 16u { // PlusLighter
+        return min(1.0, cs + cd);
+    }
+    // Normal (0) or unknown — alpha-over handled by compositor formula
+    return cs;
+}
+
+// ── CSS Compositing L1 §8 general compositing formula ─────────────────
+// Co = αs × B(Cs, Cd) + αs × Cd × (1 - αd) + Cd × (1 - αs)
+// αo = αs + αd × (1 - αs)
+@fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    let src = textureSample(t_src, s_layer, in.uv);
+    let dst = textureSample(t_dst, s_layer, in.uv);
+    let mode = u.mode;
+
+    // Un-premultiply for blending (wgpu stores straight alpha in offscreen layers).
+    var cs = src.rgb;
+    var cd = dst.rgb;
+    let as_ = src.a;
+    let ad = dst.a;
+
+    var blended: vec3<f32>;
+
+    // Non-separable modes operate on full RGB vector.
+    if mode == 12u { // Hue: hue of src, sat+lum of dst
+        blended = set_lum(set_sat(cs, sat(cd)), lum(cd));
+    } else if mode == 13u { // Saturation: sat of src, hue+lum of dst
+        blended = set_lum(set_sat(cd, sat(cs)), lum(cd));
+    } else if mode == 14u { // Color: hue+sat of src, lum of dst
+        blended = set_lum(cs, lum(cd));
+    } else if mode == 15u { // Luminosity: lum of src, hue+sat of dst
+        blended = set_lum(cd, lum(cs));
+    } else {
+        // Separable modes — apply per channel.
+        blended = vec3<f32>(
+            blend_channel(mode, cs.r, cd.r),
+            blend_channel(mode, cs.g, cd.g),
+            blend_channel(mode, cs.b, cd.b),
+        );
+    }
+
+    // Full CSS Compositing L1 §8 formula.
+    let ao = as_ + ad * (1.0 - as_);
+    let co = as_ * blended + as_ * cd * (1.0 - ad) + cd * (1.0 - as_);
+    if ao <= 0.0 {
+        return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+    }
+    return vec4<f32>(co, ao);
+}
+"#;
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct FillVertex {
@@ -292,8 +487,10 @@ struct GpuImage {
 
 /// GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
 /// `ensure_layer_textures`; переиспользуется пока размер surface не меняется.
+/// `texture` хранится pub чтобы можно было использовать в
+/// `encoder.copy_texture_to_texture` для blend-mode compositing.
 struct OffscreenLayer {
-    _texture: wgpu::Texture,
+    texture: wgpu::Texture,
     view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
     width: u32,
@@ -430,6 +627,10 @@ pub struct Renderer {
     image_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
     composite_bgl: wgpu::BindGroupLayout,
+    blend_pipeline: wgpu::RenderPipeline,
+    blend_bgl: wgpu::BindGroupLayout,
+    blend_mode_uniform: wgpu::Buffer,
+    scratch_layer: Option<OffscreenLayer>,
     layer_sampler: wgpu::Sampler,
     layer_textures: Vec<OffscreenLayer>,
     surface_format: wgpu::TextureFormat,
@@ -900,6 +1101,111 @@ impl Renderer {
             cache: None,
         });
 
+        // ── Blend pipeline (CSS Compositing L1 §8 — two-texture blend) ─────
+        // 4 bindings: t_src(0), t_dst(1), sampler(2), blend_mode uniform(3).
+        let blend_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blend-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let blend_mode_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("blend-mode-uniform"),
+            size: 16, // u32 mode + 3 × u32 padding = 16 bytes
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let blend_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("blend-shader"),
+            source: wgpu::ShaderSource::Wgsl(BLEND_SHADER_SRC.into()),
+        });
+        let blend_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blend-layout"),
+            bind_group_layouts: &[&blend_bgl],
+            push_constant_ranges: &[],
+        });
+        // REPLACE blend state: shader implements full CSS compositing formula.
+        let blend_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("blend-pipeline"),
+            layout: Some(&blend_layout),
+            vertex: wgpu::VertexState {
+                module: &blend_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 16,
+                            shader_location: 2,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blend_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         let atlas = GlyphAtlas::new(ATLAS_DIM);
 
         Ok(Self {
@@ -921,6 +1227,10 @@ impl Renderer {
             layer_snapshots: HashMap::new(),
             composite_pipeline,
             composite_bgl,
+            blend_pipeline,
+            blend_bgl,
+            blend_mode_uniform,
+            scratch_layer: None,
             layer_sampler,
             layer_textures: Vec::new(),
             surface_format: format,
@@ -1279,7 +1589,10 @@ impl Renderer {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: self.surface_format,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            // COPY_SRC needed for encoder.copy_texture_to_texture in blend compositing.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -1297,7 +1610,48 @@ impl Renderer {
                 },
             ],
         });
-        OffscreenLayer { _texture: texture, view, bind_group, width, height }
+        OffscreenLayer { texture, view, bind_group, width, height }
+    }
+
+    /// Создаёт или пересоздаёт `scratch_layer` нужного размера.
+    /// Scratch layer используется как destination-copy при blend compositing:
+    /// GPU копирует содержимое parent layer туда, shader читает оба текстуры
+    /// (src + dst) и вычисляет CSS Compositing L1 §8 формулу.
+    fn ensure_scratch_layer(&mut self, width: u32, height: u32) {
+        let needs_create = self
+            .scratch_layer
+            .as_ref()
+            .is_none_or(|s| s.width != width || s.height != height);
+        if needs_create {
+            let texture = self.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("blend-scratch-layer"),
+                size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: self.surface_format,
+                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+            // scratch_layer bind_group uses composite_bgl (t_src slot) for simplicity;
+            // the actual blend bind group is created on-the-fly during composite execution.
+            let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("blend-scratch-bg"),
+                layout: &self.composite_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.layer_sampler),
+                    },
+                ],
+            });
+            self.scratch_layer = Some(OffscreenLayer { texture, view, bind_group, width, height });
+        }
     }
 
     fn ensure_layer_textures(&mut self, count: usize, width: u32, height: u32) {
@@ -1395,7 +1749,7 @@ impl Renderer {
         #[derive(Clone, Copy)]
         enum LoadOpChoice { ClearWhite, ClearTransparent, Load }
         struct DrawBatchPlan { target_level: usize, load_op: LoadOpChoice, ops_start: usize, ops_end: usize }
-        struct CompositePlan { from_level: usize, comp_v_start: u32 }
+        struct CompositePlan { from_level: usize, comp_v_start: u32, mode: BlendMode }
         enum RenderPlanItem { Draw(DrawBatchPlan), Composite(CompositePlan) }
 
         let mut render_plan: Vec<RenderPlanItem> = Vec::new();
@@ -1403,6 +1757,8 @@ impl Renderer {
 
         let mut current_level: usize = 0;
         let mut level_alpha_stack: Vec<f32> = Vec::new();
+        // Tracks blend mode per opened offscreen level (for non-Normal PushBlendMode).
+        let mut level_blend_mode_stack: Vec<BlendMode> = Vec::new();
         let mut level_first: Vec<bool> = vec![true];
         let mut batch_start: usize = 0;
 
@@ -1530,7 +1886,7 @@ impl Renderer {
                     font_family: _,
                     font_weight: _,
                     font_style: _,
-                    font_variation_coords,
+                    font_variation_axes,
                 } => {
                     let primary_face_id = text_face_iter.next().unwrap_or(0);
                     if parsed_faces
@@ -1555,7 +1911,7 @@ impl Renderer {
                         &parsed_faces,
                         &mut self.atlas,
                         &mut self.cached_glyphs,
-                        font_variation_coords,
+                        font_variation_axes,
                     );
                     let v_count = text_vertices.len() as u32 - v_start;
                     if v_count > 0 {
@@ -1710,18 +2066,40 @@ impl Renderer {
                         render_plan.push(RenderPlanItem::Composite(CompositePlan {
                             from_level: current_level,
                             comp_v_start,
+                            mode: BlendMode::Normal,
                         }));
                         current_level -= 1;
                     }
                 }
-                // Blend-mode stack tracking. Phase 0 — рендеринг всегда
-                // использует Normal pipeline (ALPHA_BLENDING).
-                // Реальный pipeline switch — задача 1B.5+.
+                // CSS Compositing & Blending L1 §5 — mix-blend-mode compositing.
+                // Non-Normal mode: push offscreen level + track blend mode.
+                // Normal mode: no offscreen layer needed (pass-through).
                 DisplayCommand::PushBlendMode { mode } => {
                     blend_mode_stack.push(*mode);
+                    if *mode != BlendMode::Normal {
+                        flush_batch!();
+                        level_blend_mode_stack.push(*mode);
+                        current_level += 1;
+                        while level_first.len() <= current_level {
+                            level_first.push(true);
+                        }
+                        level_first[current_level] = true;
+                    }
                 }
                 DisplayCommand::PopBlendMode => {
                     blend_mode_stack.pop();
+                    if let Some(mode) = level_blend_mode_stack.pop() {
+                        flush_batch!();
+                        let comp_v_start = composite_vertices.len() as u32;
+                        // alpha=1.0: blend shader handles all compositing math.
+                        push_composite_quad(&mut composite_vertices, 1.0);
+                        render_plan.push(RenderPlanItem::Composite(CompositePlan {
+                            from_level: current_level,
+                            comp_v_start,
+                            mode,
+                        }));
+                        current_level -= 1;
+                    }
                 }
                 DisplayCommand::DrawLayerSnapshot { id, rect, alpha } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
@@ -1843,6 +2221,7 @@ impl Renderer {
         };
 
         // ── Off-screen textures ───────────────────────────────────────────
+        // Blend composites (mode != Normal) also need from_level offscreen layers.
         let max_level = render_plan.iter().fold(0usize, |m, item| match item {
             RenderPlanItem::Draw(b) => m.max(b.target_level),
             RenderPlanItem::Composite(c) => m.max(c.from_level),
@@ -1937,32 +2316,103 @@ impl Renderer {
                     run_draw_ops!(pass, batch.ops_start, batch.ops_end);
                 }
                 RenderPlanItem::Composite(comp) => {
-                    let target_view = if comp.from_level == 1 {
-                        &frame_view
-                    } else {
-                        &self.layer_textures[comp.from_level - 2].view
-                    };
-                    let src_bg = &self.layer_textures[comp.from_level - 1].bind_group;
                     if let Some(cvb) = &comp_vbuf {
-                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("composite-pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: target_view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                        });
-                        pass.set_pipeline(&self.composite_pipeline);
-                        pass.set_bind_group(0, src_bg, &[]);
-                        pass.set_vertex_buffer(0, cvb.slice(..));
-                        pass.draw(comp.comp_v_start..comp.comp_v_start + 6, 0..1);
+                        // Blend path: non-Normal mode AND parent layer exists.
+                        if comp.mode != BlendMode::Normal && comp.from_level > 1 {
+                            // Ensure scratch layer before borrowing layer_textures immutably.
+                            let dst_layer_idx = comp.from_level - 2;
+                            let dst_w = self.layer_textures[dst_layer_idx].width;
+                            let dst_h = self.layer_textures[dst_layer_idx].height;
+                            self.ensure_scratch_layer(dst_w, dst_h);
+                            // Copy dst (parent layer) into scratch before overwriting it.
+                            let dst_tex_copy = self.layer_textures[dst_layer_idx].texture.as_image_copy();
+                            let scratch_copy = self.scratch_layer.as_ref().unwrap().texture.as_image_copy();
+                            encoder.copy_texture_to_texture(
+                                dst_tex_copy,
+                                scratch_copy,
+                                wgpu::Extent3d { width: dst_w, height: dst_h, depth_or_array_layers: 1 },
+                            );
+                            // Write blend mode uniform (u32 mode + 3× u32 padding = 16 bytes).
+                            let mode_u32 = blend_mode_to_u32(comp.mode);
+                            let uniform_data: [u32; 4] = [mode_u32, 0, 0, 0];
+                            self.queue.write_buffer(
+                                &self.blend_mode_uniform,
+                                0,
+                                as_bytes(uniform_data.as_slice()),
+                            );
+                            // Create per-frame blend bind group (src + scratch + sampler + uniform).
+                            let src_view = &self.layer_textures[comp.from_level - 1].view;
+                            let scratch_view = &self.scratch_layer.as_ref().unwrap().view;
+                            let target_view = &self.layer_textures[comp.from_level - 2].view;
+                            let blend_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                                label: Some("blend-bg"),
+                                layout: &self.blend_bgl,
+                                entries: &[
+                                    wgpu::BindGroupEntry {
+                                        binding: 0,
+                                        resource: wgpu::BindingResource::TextureView(src_view),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 1,
+                                        resource: wgpu::BindingResource::TextureView(scratch_view),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 2,
+                                        resource: wgpu::BindingResource::Sampler(&self.layer_sampler),
+                                    },
+                                    wgpu::BindGroupEntry {
+                                        binding: 3,
+                                        resource: self.blend_mode_uniform.as_entire_binding(),
+                                    },
+                                ],
+                            });
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("blend-pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: target_view,
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            pass.set_pipeline(&self.blend_pipeline);
+                            pass.set_bind_group(0, &blend_bg, &[]);
+                            pass.set_vertex_buffer(0, cvb.slice(..));
+                            pass.draw(comp.comp_v_start..comp.comp_v_start + 6, 0..1);
+                        } else {
+                            // Normal alpha-blend path (opacity compositing or Normal blend mode).
+                            let target_view = if comp.from_level == 1 {
+                                &frame_view
+                            } else {
+                                &self.layer_textures[comp.from_level - 2].view
+                            };
+                            let src_bg = &self.layer_textures[comp.from_level - 1].bind_group;
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("composite-pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: target_view,
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            pass.set_pipeline(&self.composite_pipeline);
+                            pass.set_bind_group(0, src_bg, &[]);
+                            pass.set_vertex_buffer(0, cvb.slice(..));
+                            pass.draw(comp.comp_v_start..comp.comp_v_start + 6, 0..1);
+                        }
                     }
                 }
             }
@@ -2061,6 +2511,41 @@ fn convert_to_rgba(image: &Image) -> Vec<u8> {
     out
 }
 
+/// CSS Fonts L4 §7 + OpenType spec — нормализует user-space variation axes
+/// в per-fvar-axis normalized coords `[-1.0, 1.0]`, затем применяет avar.
+///
+/// Возвращает пустой Vec для non-variable fonts (нет таблицы `fvar`) или
+/// если `axes` пустой — renderer тогда использует default-instance.
+fn normalize_variation_axes(face: &ParsedFace<'_>, axes: &[([u8; 4], f32)]) -> Vec<f32> {
+    if axes.is_empty() {
+        return Vec::new();
+    }
+    let fvar = match face.font.fvar() {
+        Ok(f) if f.is_variable() => f,
+        _ => return Vec::new(),
+    };
+    let avar = face.font.avar().unwrap_or_default();
+    let mut coords = Vec::with_capacity(fvar.axes.len());
+    for (axis_idx, axis) in fvar.axes.iter().enumerate() {
+        let user_val = axes
+            .iter()
+            .find(|(tag, _)| tag == &axis.tag)
+            .map_or(axis.default, |(_, v)| *v);
+        let clamped = axis.clamp(user_val);
+        let linear = if (clamped - axis.default).abs() < f32::EPSILON {
+            0.0
+        } else if clamped < axis.default {
+            let range = axis.default - axis.min;
+            if range < f32::EPSILON { 0.0 } else { (clamped - axis.default) / range }
+        } else {
+            let range = axis.max - axis.default;
+            if range < f32::EPSILON { 0.0 } else { (clamped - axis.default) / range }
+        };
+        coords.push(avar.normalize(axis_idx, linear));
+    }
+    coords
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_text_glyphs(
     out: &mut Vec<TextVertex>,
@@ -2072,7 +2557,7 @@ fn push_text_glyphs(
     parsed: &[Option<ParsedFace<'_>>],
     atlas: &mut GlyphAtlas,
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
-    font_variation_coords: &[f32],
+    font_variation_axes: &[([u8; 4], f32)],
 ) {
     // Multi-size atlas: подбираем bin под font_size, растеризируем глифы
     // на этом bin. Display масштаб = font_size / size_bin — если font_size
@@ -2093,6 +2578,9 @@ fn push_text_glyphs(
     // Per-char cache на длительность одного DrawText: одни и те же символы
     // в строке («the the the») не нужно пробовать через все face-ы каждый раз.
     let mut char_face_cache: HashMap<char, (usize, u16)> = HashMap::new();
+    // Normalized variation coords per face_id — лениво вычисляется при первом
+    // обращении к данному face. Нормализация требует fvar+avar из шрифта.
+    let mut norm_coords_cache: HashMap<usize, Vec<f32>> = HashMap::new();
 
     let mut cursor_x = rect.x;
     for ch in text.chars() {
@@ -2103,6 +2591,9 @@ fn push_text_glyphs(
             .as_ref()
             .expect("pick_face_for_codepoint вернул face_id с valid parsed face");
         let advance_scale = font_size / face.head.units_per_em as f32;
+        let coords = norm_coords_cache
+            .entry(face_id)
+            .or_insert_with(|| normalize_variation_axes(face, font_variation_axes));
         let cached_glyph = ensure_glyph(
             cached,
             atlas,
@@ -2112,7 +2603,7 @@ fn push_text_glyphs(
             face_id,
             glyph_id,
             size_bin,
-            font_variation_coords,
+            coords,
         );
 
         if let Some(g) = cached_glyph {
@@ -2281,11 +2772,34 @@ pub(crate) fn intersect_rects(a: Rect, b: Rect) -> Rect {
 
 /// Активный blend mode из стека (CSS Compositing & Blending L1 §5): топ стека.
 /// Пустой стек = `BlendMode::Normal` (стандарт; источник без blend-group).
-/// Phase 0: renderer использует Normal pipeline независимо от возвращаемого
-/// значения; функция готовит инфраструктуру для переключения pipeline в 1B.4.
 #[allow(dead_code)]
 pub(crate) fn current_blend_mode(blend_mode_stack: &[BlendMode]) -> BlendMode {
     blend_mode_stack.last().copied().unwrap_or(BlendMode::Normal)
+}
+
+/// Маппинг `BlendMode` в u32 для WGSL-uniform `blend_mode` в `BLEND_SHADER_SRC`.
+/// Значение 0 (Normal) в теории не должно попасть в blend-pipeline (guard
+/// `mode != Normal` в compositing path), но обработано как identity для устойчивости.
+pub(crate) fn blend_mode_to_u32(mode: BlendMode) -> u32 {
+    match mode {
+        BlendMode::Normal      => 0,
+        BlendMode::Multiply    => 1,
+        BlendMode::Screen      => 2,
+        BlendMode::Overlay     => 3,
+        BlendMode::Darken      => 4,
+        BlendMode::Lighten     => 5,
+        BlendMode::ColorDodge  => 6,
+        BlendMode::ColorBurn   => 7,
+        BlendMode::HardLight   => 8,
+        BlendMode::SoftLight   => 9,
+        BlendMode::Difference  => 10,
+        BlendMode::Exclusion   => 11,
+        BlendMode::Hue         => 12,
+        BlendMode::Saturation  => 13,
+        BlendMode::Color       => 14,
+        BlendMode::Luminosity  => 15,
+        BlendMode::PlusLighter => 16,
+    }
 }
 
 /// Применяет alpha-multiplier к RGBA-вершине: `color.a *= alpha`. Используется
@@ -3038,5 +3552,91 @@ mod tests {
             ops[0],
             DrawOp::SetScissor(s) if s == DeviceScissor { x: 100, y: 100, width: 200, height: 200 }
         ));
+    }
+
+    // ── blend_mode_to_u32 ────────────────────────────────────────────────
+
+    #[test]
+    fn blend_mode_to_u32_correct_values() {
+        // Значения должны совпадать с маппингом в BLEND_SHADER_SRC.
+        assert_eq!(blend_mode_to_u32(BlendMode::Normal),      0);
+        assert_eq!(blend_mode_to_u32(BlendMode::Multiply),    1);
+        assert_eq!(blend_mode_to_u32(BlendMode::Screen),      2);
+        assert_eq!(blend_mode_to_u32(BlendMode::Overlay),     3);
+        assert_eq!(blend_mode_to_u32(BlendMode::Darken),      4);
+        assert_eq!(blend_mode_to_u32(BlendMode::Lighten),     5);
+        assert_eq!(blend_mode_to_u32(BlendMode::ColorDodge),  6);
+        assert_eq!(blend_mode_to_u32(BlendMode::ColorBurn),   7);
+        assert_eq!(blend_mode_to_u32(BlendMode::HardLight),   8);
+        assert_eq!(blend_mode_to_u32(BlendMode::SoftLight),   9);
+        assert_eq!(blend_mode_to_u32(BlendMode::Difference),  10);
+        assert_eq!(blend_mode_to_u32(BlendMode::Exclusion),   11);
+        assert_eq!(blend_mode_to_u32(BlendMode::Hue),         12);
+        assert_eq!(blend_mode_to_u32(BlendMode::Saturation),  13);
+        assert_eq!(blend_mode_to_u32(BlendMode::Color),       14);
+        assert_eq!(blend_mode_to_u32(BlendMode::Luminosity),  15);
+        assert_eq!(blend_mode_to_u32(BlendMode::PlusLighter), 16);
+    }
+
+    // ── Render plan: PushBlendMode / PopBlendMode level logic ────────────
+
+    /// Симулирует логику render-planning без GPU: применяет список команд
+    /// к level + blend_mode стекам, проверяет итоговый уровень.
+    fn sim_blend_level(cmds: &[DisplayCommand]) -> (usize, Vec<BlendMode>) {
+        let mut current_level: usize = 0;
+        let mut blend_mode_stack: Vec<BlendMode> = Vec::new();
+        let mut level_blend_mode_stack: Vec<BlendMode> = Vec::new();
+        for cmd in cmds {
+            match cmd {
+                DisplayCommand::PushBlendMode { mode } => {
+                    blend_mode_stack.push(*mode);
+                    if *mode != BlendMode::Normal {
+                        level_blend_mode_stack.push(*mode);
+                        current_level += 1;
+                    }
+                }
+                DisplayCommand::PopBlendMode => {
+                    blend_mode_stack.pop();
+                    if level_blend_mode_stack.pop().is_some() {
+                        current_level -= 1;
+                    }
+                }
+                _ => {}
+            }
+        }
+        (current_level, blend_mode_stack)
+    }
+
+    #[test]
+    fn push_blend_mode_normal_does_not_create_new_level() {
+        // PushBlendMode { Normal } — level остаётся 0.
+        let cmds = vec![
+            DisplayCommand::PushBlendMode { mode: BlendMode::Normal },
+        ];
+        let (level, stack) = sim_blend_level(&cmds);
+        assert_eq!(level, 0, "Normal blend mode не должен открывать offscreen level");
+        assert_eq!(stack, vec![BlendMode::Normal]);
+    }
+
+    #[test]
+    fn push_blend_mode_non_normal_creates_new_level() {
+        // PushBlendMode { Multiply } — level становится 1.
+        let cmds = vec![
+            DisplayCommand::PushBlendMode { mode: BlendMode::Multiply },
+        ];
+        let (level, _) = sim_blend_level(&cmds);
+        assert_eq!(level, 1, "не-Normal blend mode должен открывать offscreen level");
+    }
+
+    #[test]
+    fn pop_blend_mode_restores_level() {
+        // Push/Pop пары: level возвращается в 0.
+        let cmds = vec![
+            DisplayCommand::PushBlendMode { mode: BlendMode::Screen },
+            DisplayCommand::PopBlendMode,
+        ];
+        let (level, stack) = sim_blend_level(&cmds);
+        assert_eq!(level, 0, "после PopBlendMode level должен вернуться в 0");
+        assert!(stack.is_empty(), "blend_mode_stack должен быть пуст после Pop");
     }
 }

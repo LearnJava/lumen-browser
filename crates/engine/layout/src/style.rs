@@ -349,6 +349,18 @@ impl Default for FontWeight {
     fn default() -> Self { Self::NORMAL }
 }
 
+/// CSS Fonts L4 §7 — одна запись `font-variation-settings`.
+///
+/// `tag` — четырёхбайтный OpenType axis tag (например `b"wght"`, `b"wdth"`).
+/// `value` — user-space значение из CSS (до нормализации fvar/avar).
+/// Нормализация выполняется в renderer-е, который имеет доступ к таблицам
+/// шрифта. `normal` → пустой Vec; renderer применяет default-instance.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FontVariationSetting {
+    pub tag: [u8; 4],
+    pub value: f32,
+}
+
 /// Набор активных линий `text-decoration` для элемента.
 ///
 /// CSS3 разделяет shorthand `text-decoration` на `-line`, `-style`, `-color`;
@@ -1354,6 +1366,10 @@ pub struct ComputedStyle {
     /// `fantasy`, `system-ui`) сохраняются в этом же списке как обычные строки.
     /// Пустой Vec = inherited / default.
     pub font_family: Vec<String>,
+    /// CSS Fonts L4 §7 — `font-variation-settings`. Inherited.
+    /// Initial: пустой Vec (эквивалентно `normal`). Renderer нормализует
+    /// через fvar + avar при растеризации глифов.
+    pub font_variation_settings: Vec<FontVariationSetting>,
     pub text_transform: TextTransform,
     pub white_space: WhiteSpace,
     /// CSS Text L3 §7.1: отступ перед первой строкой inline-content.
@@ -1430,11 +1446,15 @@ pub struct ComputedStyle {
     pub border_bottom_color: CssColor,
     pub border_left_color: CssColor,
     pub box_sizing: BoxSizing,
-    /// CSS Positioned Layout L3 §3 — `position`. Не наследуется. Default
-    /// `Static`. Phase 0 layout не делает позиционирование (offsets top/right/
-    /// bottom/left парсятся, но не применяются) — поле используется для
-    /// определения stacking context (§9.10) и для будущего позиционирования.
+    /// CSS Positioned Layout L3 §3 — `position`. Не наследуется.
+    /// Default `Static`. Используется для stacking context (§9.10) и layout.
     pub position: Position,
+    /// CSS Positioned Layout L3 §4 — inset properties. Не наследуются.
+    /// `auto` = не задано (участвует в shrink-to-fit или оставляет edge на месте).
+    pub top: LengthOrAuto,
+    pub right: LengthOrAuto,
+    pub bottom: LengthOrAuto,
+    pub left: LengthOrAuto,
     /// CSS Positioned Layout L3 §9.3 — `z-index: auto | <integer>`. Не
     /// наследуется. `None` = `auto` (stacking context создаётся только если
     /// другие триггеры в §9.10 совпали). `Some(n)` = явный integer; для
@@ -1732,6 +1752,26 @@ pub struct ComputedStyle {
     /// CSS Flexbox L1 §7.3 — `flex-basis`. Non-inherited. Default `Auto`.
     /// Phase 0: parsing + storage; реальный flex-layout — задача 4B.3.
     pub flex_basis: FlexBasis,
+    /// CSS Grid Layout L1 §7.2 — `grid-template-columns`. Non-inherited.
+    /// Default `[]` (no explicit tracks). Parsed track-list.
+    pub grid_template_columns: Vec<GridTrackSize>,
+    /// CSS Grid Layout L1 §7.2 — `grid-template-rows`. Non-inherited.
+    /// Default `[]` (no explicit tracks). Parsed track-list.
+    pub grid_template_rows: Vec<GridTrackSize>,
+    /// CSS Grid Layout L1 §8.5 — `grid-auto-flow`. Non-inherited. Default `Row`.
+    pub grid_auto_flow: GridAutoFlow,
+    /// CSS Grid Layout L1 §8.6 — `grid-auto-columns`. Non-inherited. Default `Auto`.
+    pub grid_auto_columns: GridTrackSize,
+    /// CSS Grid Layout L1 §8.6 — `grid-auto-rows`. Non-inherited. Default `Auto`.
+    pub grid_auto_rows: GridTrackSize,
+    /// CSS Grid Layout L1 §8.3 — `grid-column-start`. Non-inherited. Default `Auto`.
+    pub grid_column_start: GridLine,
+    /// CSS Grid Layout L1 §8.3 — `grid-column-end`. Non-inherited. Default `Auto`.
+    pub grid_column_end: GridLine,
+    /// CSS Grid Layout L1 §8.3 — `grid-row-start`. Non-inherited. Default `Auto`.
+    pub grid_row_start: GridLine,
+    /// CSS Grid Layout L1 §8.3 — `grid-row-end`. Non-inherited. Default `Auto`.
+    pub grid_row_end: GridLine,
     /// CSS Text Module Level 4 §6.4.1 — `text-wrap-mode`. Inherited.
     /// Default `Wrap`. Phase 0: parsing + storage; реальная связка с
     /// inline-flow line-breaker-ом (когда `Nowrap` подавляет soft wraps
@@ -2473,6 +2513,209 @@ impl FlexBasis {
     }
 }
 
+/// CSS Grid Layout L1 §7.2 — sizing function for a grid track.
+/// Non-inherited. Appears in `grid-template-columns` / `grid-template-rows`
+/// and `grid-auto-columns` / `grid-auto-rows`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum GridTrackSize {
+    /// `auto` — sized by content (min-content as min, max-content as max).
+    #[default]
+    Auto,
+    /// Fixed length (px, em, rem, %).
+    Length(Length),
+    /// `<number>fr` — fractional unit of remaining free space.
+    Fr(f32),
+    /// `min-content` — minimum content size.
+    MinContent,
+    /// `max-content` — maximum content size.
+    MaxContent,
+    /// `minmax(min, max)` — track between min and max sizing functions.
+    Minmax(Box<GridTrackSize>, Box<GridTrackSize>),
+}
+
+impl GridTrackSize {
+    /// Resolve to a concrete pixel size given container width, em, viewport.
+    /// For `fr` and `auto` returns `None` — caller handles those specially.
+    pub fn resolve_fixed(&self, em: f32, cb: f32, viewport: Size) -> Option<f32> {
+        match self {
+            Self::Length(l) => l.resolve(em, Some(cb), viewport),
+            Self::Fr(_) | Self::Auto | Self::MinContent | Self::MaxContent => None,
+            Self::Minmax(min, _max) => min.resolve_fixed(em, cb, viewport),
+        }
+    }
+
+    /// True for fractional tracks.
+    pub fn is_fr(&self) -> bool {
+        matches!(self, Self::Fr(_))
+    }
+
+    /// Extract fr value.
+    pub fn fr(&self) -> Option<f32> {
+        if let Self::Fr(v) = self { Some(*v) } else { None }
+    }
+
+    /// Parse a single track sizing keyword / value (no `repeat()`).
+    fn parse_single(s: &str, is_quirks: bool) -> Option<Self> {
+        let lc = s.trim().to_ascii_lowercase();
+        match lc.as_str() {
+            "auto" => return Some(Self::Auto),
+            "min-content" => return Some(Self::MinContent),
+            "max-content" => return Some(Self::MaxContent),
+            _ => {}
+        }
+        // `<number>fr`
+        if let Some(n) = lc.strip_suffix("fr")
+            && let Ok(v) = n.trim().parse::<f32>()
+        {
+            return Some(Self::Fr(v.max(0.0)));
+        }
+        // `minmax(min, max)`
+        if lc.starts_with("minmax(") && lc.ends_with(')') {
+            let inner = &s.trim()[7..s.trim().len() - 1];
+            if let Some((a, b)) = split_paren_aware_comma(inner) {
+                let min = Self::parse_single(a.trim(), is_quirks)?;
+                let max = Self::parse_single(b.trim(), is_quirks)?;
+                return Some(Self::Minmax(Box::new(min), Box::new(max)));
+            }
+        }
+        // `fit-content(<length>)` — treat as auto for Phase 0
+        if lc.starts_with("fit-content(") {
+            return Some(Self::Auto);
+        }
+        // length / percentage
+        parse_length_q(s.trim(), is_quirks).map(Self::Length)
+    }
+
+    /// Parse a track-list value string into a Vec of GridTrackSize.
+    /// Handles `repeat(N, <track-list>)` by expanding.
+    pub fn parse_track_list(s: &str, is_quirks: bool) -> Vec<Self> {
+        let mut result = Vec::new();
+        for token in split_track_list_tokens(s) {
+            let t = token.trim();
+            let lc = t.to_ascii_lowercase();
+            if lc.starts_with("repeat(") && lc.ends_with(')') {
+                let inner = &t[7..t.len() - 1];
+                if let Some((count_s, rest)) = split_paren_aware_comma(inner)
+                    && let Ok(n) = count_s.trim().parse::<usize>()
+                {
+                    let repeated: Vec<Self> = Self::parse_track_list(rest.trim(), is_quirks);
+                    for _ in 0..n {
+                        result.extend(repeated.iter().cloned());
+                    }
+                }
+            } else if let Some(ts) = Self::parse_single(t, is_quirks) {
+                result.push(ts);
+            }
+        }
+        result
+    }
+}
+
+/// Split a comma inside a track-list token that may contain nested parens.
+fn split_paren_aware_comma(s: &str) -> Option<(&str, &str)> {
+    let mut depth = 0i32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            ',' if depth == 0 => return Some((&s[..i], &s[i + 1..])),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Tokenize a track-list string into individual track tokens,
+/// respecting parentheses (so `minmax(...)` stays as one token).
+fn split_track_list_tokens(s: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let mut start = 0;
+    let mut depth = 0i32;
+    let bytes = s.as_bytes();
+    for (i, &b) in bytes.iter().enumerate() {
+        match b {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            b' ' | b'\t' | b'\n' if depth == 0 => {
+                let tok = s[start..i].trim();
+                if !tok.is_empty() {
+                    tokens.push(tok);
+                }
+                start = i + 1;
+            }
+            _ => {}
+        }
+    }
+    let last = s[start..].trim();
+    if !last.is_empty() {
+        tokens.push(last);
+    }
+    tokens
+}
+
+/// CSS Grid Layout L1 §8.5 — `grid-auto-flow`. Non-inherited.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum GridAutoFlow {
+    /// `row` (initial) — fill rows, add new rows as needed.
+    #[default]
+    Row,
+    /// `column` — fill columns, add new columns as needed.
+    Column,
+    /// `row dense` — row flow with dense packing.
+    RowDense,
+    /// `column dense` — column flow with dense packing.
+    ColumnDense,
+}
+
+impl GridAutoFlow {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "row" => Some(Self::Row),
+            "column" => Some(Self::Column),
+            "row dense" | "dense row" => Some(Self::RowDense),
+            "column dense" | "dense column" => Some(Self::ColumnDense),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Grid Layout L1 §8.3 — a grid-line reference for grid-column-start,
+/// grid-column-end, grid-row-start, grid-row-end. Non-inherited.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub enum GridLine {
+    /// `auto` — automatic placement.
+    #[default]
+    Auto,
+    /// Integer line number (1-based from start, negative from end).
+    Line(i32),
+    /// `span <integer>` — span N tracks.
+    Span(u32),
+}
+
+impl GridLine {
+    pub fn parse(s: &str) -> Option<Self> {
+        let trimmed = s.trim();
+        if trimmed.eq_ignore_ascii_case("auto") {
+            return Some(Self::Auto);
+        }
+        // `span N` or `span`
+        if let Some(rest) = trimmed.to_ascii_lowercase().strip_prefix("span") {
+            let rest = rest.trim();
+            if rest.is_empty() {
+                return Some(Self::Span(1));
+            }
+            if let Ok(n) = rest.parse::<u32>() {
+                return Some(Self::Span(n.max(1)));
+            }
+        }
+        // integer line number
+        if let Ok(n) = trimmed.parse::<i32>() && n != 0 {
+            return Some(Self::Line(n));
+        }
+        None
+    }
+}
+
 /// Одна компонента `object-position`. Length-варианты резолвятся в px
 /// относительно края коробки (positive = от left/top); percentage —
 /// относительно **свободного места** `box_size - content_size` (может быть
@@ -2818,6 +3061,7 @@ impl ComputedStyle {
             font_variant: FontVariant::Normal,
             font_stretch: FontStretch::NORMAL,
             font_family: Vec::new(),
+            font_variation_settings: Vec::new(),
             text_transform: TextTransform::None,
             white_space: WhiteSpace::Normal,
             text_indent: Length::Px(0.0),
@@ -2858,6 +3102,10 @@ impl ComputedStyle {
             border_left_color: CssColor::CurrentColor,
             box_sizing: BoxSizing::ContentBox,
             position: Position::Static,
+            top: LengthOrAuto::Auto,
+            right: LengthOrAuto::Auto,
+            bottom: LengthOrAuto::Auto,
+            left: LengthOrAuto::Auto,
             z_index: None,
             isolation: Isolation::Auto,
             mix_blend_mode: MixBlendMode::Normal,
@@ -2967,6 +3215,15 @@ impl ComputedStyle {
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: FlexBasis::Auto,
+            grid_template_columns: Vec::new(),
+            grid_template_rows: Vec::new(),
+            grid_auto_flow: GridAutoFlow::Row,
+            grid_auto_columns: GridTrackSize::Auto,
+            grid_auto_rows: GridTrackSize::Auto,
+            grid_column_start: GridLine::Auto,
+            grid_column_end: GridLine::Auto,
+            grid_row_start: GridLine::Auto,
+            grid_row_end: GridLine::Auto,
             text_wrap_mode: TextWrapMode::Wrap,
             text_wrap_style: TextWrapStyle::Auto,
         }
@@ -2994,6 +3251,7 @@ pub fn compute_style(
         font_variant: inherited.font_variant,
         font_stretch: inherited.font_stretch,
         font_family: inherited.font_family.clone(),
+        font_variation_settings: inherited.font_variation_settings.clone(),
         text_transform: inherited.text_transform,
         white_space: inherited.white_space,
         text_indent: inherited.text_indent.clone(),
@@ -3040,6 +3298,10 @@ pub fn compute_style(
         box_sizing: BoxSizing::ContentBox,
         // CSS Positioned Layout L3 §3 / Compositing L1 — не наследуются.
         position: Position::Static,
+        top: LengthOrAuto::Auto,
+        right: LengthOrAuto::Auto,
+        bottom: LengthOrAuto::Auto,
+        left: LengthOrAuto::Auto,
         z_index: None,
         isolation: Isolation::Auto,
         mix_blend_mode: MixBlendMode::Normal,
@@ -3171,6 +3433,16 @@ pub fn compute_style(
         flex_grow: 0.0,
         flex_shrink: 1.0,
         flex_basis: FlexBasis::Auto,
+        // CSS Grid Layout L1 — grid properties не наследуются.
+        grid_template_columns: Vec::new(),
+        grid_template_rows: Vec::new(),
+        grid_auto_flow: GridAutoFlow::Row,
+        grid_auto_columns: GridTrackSize::Auto,
+        grid_auto_rows: GridTrackSize::Auto,
+        grid_column_start: GridLine::Auto,
+        grid_column_end: GridLine::Auto,
+        grid_row_start: GridLine::Auto,
+        grid_row_end: GridLine::Auto,
         // CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style inherited.
         text_wrap_mode: inherited.text_wrap_mode,
         text_wrap_style: inherited.text_wrap_style,
@@ -5386,6 +5658,47 @@ pub fn parse_font_family(val: &str) -> Vec<String> {
     out
 }
 
+/// Парсит CSS `font-variation-settings` (CSS Fonts L4 §7).
+///
+/// Синтаксис: `normal | [<string> <number>]#`
+/// Пример: `"wght" 600, "wdth" 80`
+///
+/// Возвращает `None` при синтаксической ошибке (CSS cascading игнорирует
+/// невалидные объявления). `normal` → `Some(Vec::new())`.
+pub fn parse_font_variation_settings(val: &str) -> Option<Vec<FontVariationSetting>> {
+    let val = val.trim();
+    if val.eq_ignore_ascii_case("normal") {
+        return Some(Vec::new());
+    }
+    let mut out = Vec::new();
+    for token_pair in val.split(',') {
+        let pair = token_pair.trim();
+        if pair.is_empty() {
+            continue;
+        }
+        // Первый токен — quoted 4-char tag
+        let (tag_str, rest) = if let Some(stripped) = pair.strip_prefix('"') {
+            let end = stripped.find('"')?;
+            (&stripped[..end], stripped[end + 1..].trim())
+        } else if let Some(stripped) = pair.strip_prefix('\'') {
+            let end = stripped.find('\'')?;
+            (&stripped[..end], stripped[end + 1..].trim())
+        } else {
+            return None;
+        };
+        // Tag должен быть ровно 4 ASCII символа
+        if tag_str.len() != 4 || !tag_str.is_ascii() {
+            return None;
+        }
+        let tag_bytes = tag_str.as_bytes();
+        let tag: [u8; 4] = [tag_bytes[0], tag_bytes[1], tag_bytes[2], tag_bytes[3]];
+        // Следующий токен — число
+        let value: f32 = rest.parse().ok()?;
+        out.push(FontVariationSetting { tag, value });
+    }
+    Some(out)
+}
+
 /// Парсит CSS `font-weight`. Поддерживает:
 ///   - `normal` → 400, `bold` → 700;
 ///   - численные `100`..`900` (или любое число 1..1000 — Variable Fonts);
@@ -6672,6 +6985,100 @@ fn apply_declaration(
             // CSS Flexbox L1 §7: shorthand flex-grow flex-shrink flex-basis.
             apply_flex_shorthand(style, val, is_quirks);
         }
+        // CSS Grid Layout L1 — container properties.
+        "grid-template-columns" => {
+            if !val.trim().eq_ignore_ascii_case("none") {
+                style.grid_template_columns = GridTrackSize::parse_track_list(val, is_quirks);
+            } else {
+                style.grid_template_columns = Vec::new();
+            }
+        }
+        "grid-template-rows" => {
+            if !val.trim().eq_ignore_ascii_case("none") {
+                style.grid_template_rows = GridTrackSize::parse_track_list(val, is_quirks);
+            } else {
+                style.grid_template_rows = Vec::new();
+            }
+        }
+        "grid-auto-columns" => {
+            if let Some(ts) = GridTrackSize::parse_single(val, is_quirks) {
+                style.grid_auto_columns = ts;
+            }
+        }
+        "grid-auto-rows" => {
+            if let Some(ts) = GridTrackSize::parse_single(val, is_quirks) {
+                style.grid_auto_rows = ts;
+            }
+        }
+        "grid-auto-flow" => {
+            if let Some(v) = GridAutoFlow::parse(val) {
+                style.grid_auto_flow = v;
+            }
+        }
+        "grid-template" => {
+            // CSS Grid L1 §7.4: shorthand for grid-template-rows / -columns / -areas.
+            // Phase 0: treat as "rows / columns" split if `/` present; else columns only.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.grid_template_columns = Vec::new();
+                style.grid_template_rows = Vec::new();
+            } else if let Some(pos) = find_slash(trimmed) {
+                let rows_s = trimmed[..pos].trim();
+                let cols_s = trimmed[pos + 1..].trim();
+                style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
+                style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
+            } else {
+                style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
+            }
+        }
+        "grid" => {
+            // CSS Grid L1 §8.2: shorthand. Phase 0: delegate to grid-template.
+            let trimmed = val.trim();
+            if !trimmed.eq_ignore_ascii_case("none") {
+                // Parse same as grid-template for rows / columns split.
+                if let Some(pos) = find_slash(trimmed) {
+                    let rows_s = trimmed[..pos].trim();
+                    let cols_s = trimmed[pos + 1..].trim();
+                    style.grid_template_rows = GridTrackSize::parse_track_list(rows_s, is_quirks);
+                    style.grid_template_columns = GridTrackSize::parse_track_list(cols_s, is_quirks);
+                } else {
+                    style.grid_template_columns = GridTrackSize::parse_track_list(trimmed, is_quirks);
+                }
+            }
+        }
+        // CSS Grid Layout L1 — item placement properties.
+        "grid-column-start" => {
+            if let Some(v) = GridLine::parse(val) {
+                style.grid_column_start = v;
+            }
+        }
+        "grid-column-end" => {
+            if let Some(v) = GridLine::parse(val) {
+                style.grid_column_end = v;
+            }
+        }
+        "grid-row-start" => {
+            if let Some(v) = GridLine::parse(val) {
+                style.grid_row_start = v;
+            }
+        }
+        "grid-row-end" => {
+            if let Some(v) = GridLine::parse(val) {
+                style.grid_row_end = v;
+            }
+        }
+        "grid-column" => {
+            // `grid-column-start / grid-column-end`
+            apply_grid_line_shorthand(val, &mut style.grid_column_start, &mut style.grid_column_end);
+        }
+        "grid-row" => {
+            // `grid-row-start / grid-row-end`
+            apply_grid_line_shorthand(val, &mut style.grid_row_start, &mut style.grid_row_end);
+        }
+        "grid-area" => {
+            // `row-start / col-start / row-end / col-end`
+            apply_grid_area_shorthand(val, style);
+        }
         "width" => {
             // `auto` = None (сдвигается на контейнер); иначе typed Length.
             if val.trim() == "auto" {
@@ -6750,6 +7157,11 @@ fn apply_declaration(
             let list = parse_font_family(val);
             if !list.is_empty() {
                 style.font_family = list;
+            }
+        }
+        "font-variation-settings" => {
+            if let Some(v) = parse_font_variation_settings(val) {
+                style.font_variation_settings = v;
             }
         }
         "font-variant" | "font-variant-caps" => {
@@ -7334,6 +7746,25 @@ fn apply_declaration(
             if let Some(v) = Position::parse(val) {
                 style.position = v;
             }
+        }
+        "top" => set_margin_side(&mut style.top, val, is_quirks),
+        "right" => set_margin_side(&mut style.right, val, is_quirks),
+        "bottom" => set_margin_side(&mut style.bottom, val, is_quirks),
+        "left" => set_margin_side(&mut style.left, val, is_quirks),
+        "inset" => {
+            // CSS Logical Properties L1 §8.2.1 — inset shorthand (1-4 values).
+            let tokens = split_box_tokens(val);
+            let (t, r, b, l) = match tokens.as_slice() {
+                [a] => (a, a, a, a),
+                [a, b] => (a, b, b, a),
+                [a, b, c] => (a, b, c, b),
+                [a, b, c, d] => (a, b, c, d),
+                _ => return,
+            };
+            set_margin_side(&mut style.top, t, is_quirks);
+            set_margin_side(&mut style.right, r, is_quirks);
+            set_margin_side(&mut style.bottom, b, is_quirks);
+            set_margin_side(&mut style.left, l, is_quirks);
         }
         "z-index" => {
             // CSS Positioned Layout L3 §9.3 — `auto | <integer>`.
@@ -8499,6 +8930,67 @@ fn apply_flex_shorthand(style: &mut ComputedStyle, val: &str, is_quirks: bool) {
     }
 }
 
+/// Find a `/` that is not inside parentheses.
+fn find_slash(s: &str) -> Option<usize> {
+    let mut depth = 0i32;
+    for (i, c) in s.char_indices() {
+        match c {
+            '(' => depth += 1,
+            ')' => depth -= 1,
+            '/' if depth == 0 => return Some(i),
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Parse `grid-column` / `grid-row` shorthand: `<start> / <end>`.
+fn apply_grid_line_shorthand(val: &str, start: &mut GridLine, end: &mut GridLine) {
+    let trimmed = val.trim();
+    if let Some(pos) = trimmed.find('/') {
+        let s = trimmed[..pos].trim();
+        let e = trimmed[pos + 1..].trim();
+        if let Some(v) = GridLine::parse(s) {
+            *start = v;
+        }
+        if let Some(v) = GridLine::parse(e) {
+            *end = v;
+        }
+    } else if let Some(v) = GridLine::parse(trimmed) {
+        *start = v.clone();
+        // end stays Auto per spec when only start provided
+        let _ = end; // keep lint quiet
+    }
+}
+
+/// Parse `grid-area` shorthand: `row-start / col-start / row-end / col-end`.
+fn apply_grid_area_shorthand(val: &str, style: &mut ComputedStyle) {
+    let parts: Vec<&str> = val.split('/').map(str::trim).collect();
+    match parts.as_slice() {
+        [rs] => {
+            if let Some(v) = GridLine::parse(rs) {
+                style.grid_row_start = v;
+            }
+        }
+        [rs, cs] => {
+            if let Some(v) = GridLine::parse(rs) { style.grid_row_start = v; }
+            if let Some(v) = GridLine::parse(cs) { style.grid_column_start = v; }
+        }
+        [rs, cs, re] => {
+            if let Some(v) = GridLine::parse(rs) { style.grid_row_start = v; }
+            if let Some(v) = GridLine::parse(cs) { style.grid_column_start = v; }
+            if let Some(v) = GridLine::parse(re) { style.grid_row_end = v; }
+        }
+        [rs, cs, re, ce] => {
+            if let Some(v) = GridLine::parse(rs) { style.grid_row_start = v; }
+            if let Some(v) = GridLine::parse(cs) { style.grid_column_start = v; }
+            if let Some(v) = GridLine::parse(re) { style.grid_row_end = v; }
+            if let Some(v) = GridLine::parse(ce) { style.grid_column_end = v; }
+        }
+        _ => {}
+    }
+}
+
 /// CSS Cascade L4 §7 — применить CSS-wide keyword к одному свойству.
 ///
 /// Источник значения:
@@ -8558,6 +9050,13 @@ fn apply_css_wide_keyword(
                 inherited.font_family.clone()
             } else {
                 init.font_family.clone()
+            };
+        }
+        "font-variation-settings" => {
+            style.font_variation_settings = if inh {
+                inherited.font_variation_settings.clone()
+            } else {
+                init.font_variation_settings.clone()
             };
         }
         "text-align" => {
@@ -8901,6 +9400,24 @@ fn apply_css_wide_keyword(
         "position" => {
             style.position = if inh_only_inherit { inherited.position } else { init.position };
         }
+        "top" => {
+            style.top = if inh_only_inherit { inherited.top.clone() } else { init.top.clone() };
+        }
+        "right" => {
+            style.right = if inh_only_inherit { inherited.right.clone() } else { init.right.clone() };
+        }
+        "bottom" => {
+            style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() };
+        }
+        "left" => {
+            style.left = if inh_only_inherit { inherited.left.clone() } else { init.left.clone() };
+        }
+        "inset" => {
+            style.top = if inh_only_inherit { inherited.top.clone() } else { init.top.clone() };
+            style.right = if inh_only_inherit { inherited.right.clone() } else { init.right.clone() };
+            style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() };
+            style.left = if inh_only_inherit { inherited.left.clone() } else { init.left.clone() };
+        }
         "z-index" => {
             style.z_index = if inh_only_inherit { inherited.z_index } else { init.z_index };
         }
@@ -9041,6 +9558,34 @@ fn apply_css_wide_keyword(
             } else {
                 init.flex_wrap
             };
+        }
+        "grid-template-columns" | "grid-template-rows" | "grid-auto-flow"
+        | "grid-auto-columns" | "grid-auto-rows" | "grid-column-start" | "grid-column-end"
+        | "grid-row-start" | "grid-row-end" | "grid-column" | "grid-row" | "grid-area"
+        | "grid-template" | "grid" => {
+            // None of the grid properties are inherited.
+            if inh_only_inherit {
+                // inherit: copy from parent (non-inherited → initial)
+                style.grid_template_columns = init.grid_template_columns.clone();
+                style.grid_template_rows = init.grid_template_rows.clone();
+                style.grid_auto_flow = init.grid_auto_flow;
+                style.grid_auto_columns = init.grid_auto_columns.clone();
+                style.grid_auto_rows = init.grid_auto_rows.clone();
+                style.grid_column_start = init.grid_column_start.clone();
+                style.grid_column_end = init.grid_column_end.clone();
+                style.grid_row_start = init.grid_row_start.clone();
+                style.grid_row_end = init.grid_row_end.clone();
+            } else {
+                style.grid_template_columns = init.grid_template_columns.clone();
+                style.grid_template_rows = init.grid_template_rows.clone();
+                style.grid_auto_flow = init.grid_auto_flow;
+                style.grid_auto_columns = init.grid_auto_columns.clone();
+                style.grid_auto_rows = init.grid_auto_rows.clone();
+                style.grid_column_start = init.grid_column_start.clone();
+                style.grid_column_end = init.grid_column_end.clone();
+                style.grid_row_start = init.grid_row_start.clone();
+                style.grid_row_end = init.grid_row_end.clone();
+            }
         }
         // Прочие / неизвестные — silent no-op.
         _ => {}
@@ -9228,7 +9773,7 @@ fn parse_at_pair(s: &str) -> Option<(f32, f32)> {
 
 /// Парсит `<transform-list>` — последовательность `func(args)` через
 /// whitespace (без запятых). Каждая `func` распознаётся отдельно.
-fn parse_transform_list(s: &str) -> Vec<TransformFn> {
+pub fn parse_transform_list(s: &str) -> Vec<TransformFn> {
     let mut out = Vec::new();
     let bytes = s.as_bytes();
     let mut i = 0usize;
@@ -9829,6 +10374,91 @@ fn is_gradient_function(s: &str) -> bool {
         || s.starts_with("repeating-conic-gradient(")
 }
 
+/// Whitespace tokenizer that treats `(...)` as an opaque unit.
+/// Used to split a gradient color-stop segment into `<color>` and
+/// optional `<length-percentage>` parts without breaking color functions
+/// like `rgba(0, 128, 0, 0.5)`.
+fn paren_whitespace_tokens(s: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    let mut depth = 0i32;
+    for c in s.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                buf.push(c);
+            }
+            ')' => {
+                depth -= 1;
+                buf.push(c);
+            }
+            w if w.is_whitespace() && depth == 0 => {
+                let t = buf.trim().to_string();
+                if !t.is_empty() {
+                    tokens.push(t);
+                }
+                buf.clear();
+            }
+            _ => buf.push(c),
+        }
+    }
+    let t = buf.trim().to_string();
+    if !t.is_empty() {
+        tokens.push(t);
+    }
+    tokens
+}
+
+/// CSS Images L3 §3.3 — parses color stops from a CSS gradient string.
+///
+/// Accepts `linear-gradient(...)`, `radial-gradient(...)`,
+/// `conic-gradient(...)` and their `repeating-` variants.
+///
+/// The leading direction / angle / shape argument (e.g. `to right`,
+/// `45deg`, `circle at 50%`) is detected by the absence of a parseable
+/// `<color>` and silently skipped. Color hints (bare `<length-percentage>`
+/// without a color) are also skipped. Two-position stops (`red 20% 40%`)
+/// expand to two `GradientStop`s per CSS Images L4 §3.4.
+pub fn parse_gradient_stops(s: &str) -> Vec<GradientStop> {
+    let s = s.trim();
+    let Some(open) = s.find('(') else {
+        return vec![];
+    };
+    let rest = &s[open + 1..];
+    let Some(close) = rest.rfind(')') else {
+        return vec![];
+    };
+    let inner = rest[..close].trim();
+
+    let segments = split_top_level_commas(inner);
+    let mut stops: Vec<GradientStop> = Vec::new();
+
+    for seg in &segments {
+        let tokens = paren_whitespace_tokens(seg.trim());
+        if tokens.is_empty() {
+            continue;
+        }
+        // Locate the first token that parses as a CSS color.
+        // Segments without any color are direction/angle specifiers or
+        // color hints — both are skipped.
+        let Some(ci) = tokens.iter().position(|t| parse_color(t).is_some()) else {
+            continue;
+        };
+        let color = parse_color(&tokens[ci]).unwrap();
+
+        // CSS Images L3/L4: `<color> [ <length-percentage>{1,2} ]?`
+        let pos1 = tokens.get(ci + 1).and_then(|t| parse_length_q(t, false));
+        let pos2 = tokens.get(ci + 2).and_then(|t| parse_length_q(t, false));
+
+        stops.push(GradientStop { color, position: pos1 });
+        if pos2.is_some() {
+            stops.push(GradientStop { color, position: pos2 });
+        }
+    }
+
+    stops
+}
+
 /// CSS Sizing L4 §6.1 — парсит `<ratio>`: либо одно положительное
 /// число (трактуется как W:1), либо `W / H` пара. Phase 0 не
 /// поддерживает `auto <ratio>` форму (она бы хранилась как fallback,
@@ -10259,7 +10889,7 @@ fn expand_border_4(val: &str) -> [&str; 4] {
     }
 }
 
-fn parse_color(s: &str) -> Option<Color> {
+pub fn parse_color(s: &str) -> Option<Color> {
     let s = s.trim();
     if let Some(c) = named_color(&s.to_ascii_lowercase()) {
         return Some(c);
@@ -15550,5 +16180,94 @@ mod tests {
         assert_eq!(s.flex_grow, 2.0);
         assert_eq!(s.flex_shrink, 1.0);
         assert_eq!(s.flex_basis, FlexBasis::Length(Length::Px(100.0)));
+    }
+
+    // --- font-variation-settings ---
+
+    #[test]
+    fn font_variation_settings_normal_is_empty() {
+        // `normal` → пустой Vec (default-instance, без deltas)
+        let result = parse_font_variation_settings("normal");
+        assert_eq!(result, Some(vec![]));
+    }
+
+    #[test]
+    fn font_variation_settings_single_axis() {
+        let result = parse_font_variation_settings("\"wght\" 600");
+        assert_eq!(result, Some(vec![
+            FontVariationSetting { tag: *b"wght", value: 600.0 }
+        ]));
+    }
+
+    #[test]
+    fn font_variation_settings_multiple_axes() {
+        let result = parse_font_variation_settings("\"wght\" 700, \"wdth\" 80");
+        assert_eq!(result, Some(vec![
+            FontVariationSetting { tag: *b"wght", value: 700.0 },
+            FontVariationSetting { tag: *b"wdth", value: 80.0 },
+        ]));
+    }
+
+    #[test]
+    fn font_variation_settings_invalid_tag_ignored() {
+        // Невалидный (не 4 символа) → None, объявление игнорируется
+        assert_eq!(parse_font_variation_settings("\"wg\" 600"), None);
+        assert_eq!(parse_font_variation_settings("\"wghtt\" 600"), None);
+    }
+
+    #[test]
+    fn font_variation_settings_initial_is_empty() {
+        // Без объявления = initial = пустой Vec
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert!(s.font_variation_settings.is_empty());
+    }
+
+    #[test]
+    fn font_variation_settings_applied() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { font-variation-settings: \"wght\" 900; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.font_variation_settings, vec![
+            FontVariationSetting { tag: *b"wght", value: 900.0 }
+        ]);
+    }
+
+    #[test]
+    fn font_variation_settings_inherited() {
+        // Свойство наследуется от родителя к потомку
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { font-variation-settings: \"wght\" 800; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(span_style.font_variation_settings, vec![
+            FontVariationSetting { tag: *b"wght", value: 800.0 }
+        ]);
+    }
+
+    #[test]
+    fn font_variation_settings_child_overrides_parent() {
+        // Потомок может переопределить наследуемое значение
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { font-variation-settings: \"wght\" 800; } \
+             span { font-variation-settings: \"wght\" 400; }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(span_style.font_variation_settings, vec![
+            FontVariationSetting { tag: *b"wght", value: 400.0 }
+        ]);
     }
 }

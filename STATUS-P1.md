@@ -1,13 +1,8 @@
-In progress: 4B.5 flex wrapping + multi-line  branch: flex-wrap
-Next step: коммит готов, merge в main
+In progress: —
+Next step: —
 
-Next: 5.1 ICU4x struct + init
+Next: (P1 Phase 1)
 
 Queue:
-5.1  ICU4x struct + init           lumen-plan.md:144
-5.2  line_break_opportunities      lumen-plan.md:145
-5.3  grapheme_boundaries           lumen-plan.md:146
-5.4  word_boundaries               lumen-plan.md:147
-5.5  bidi_runs                     lumen-plan.md:148
 
-Recent: flex-gap 2026-05-20, flex-item-layout 2026-05-20, flex-grow-shrink 2026-05-20
+Recent: positioned-layout 2026-05-20, css-grid 2026-05-20, gradient-stops-parser 2026-05-20, ICU4x UnicodeProvider 2026-05-20, flex-wrap 2026-05-20
