@@ -187,7 +187,7 @@
 | 3A.2 | ✅ horizontal scroll | `shell/src/main.rs` | — |
 | 3A.3 | ✅ momentum scroll | `shell/src/main.rs` | — |
 | 3B | 🟡 **`[P3]` HTML event loop в Lumen-loop** | P1/P2 rAF | Только `lumen-shell::runtime` |
-| 3B.1 | ⬜ reload via queue_task | `shell/src/main.rs` | — |
+| 3B.1 | ✅ reload via queue_task | `shell/src/main.rs` | — |
 | 3B.2 | ⬜ rendering steps ordering | `shell/src/main.rs` | — |
 | 3B.3 | ⬜ real observers | `shell/src/main.rs` | — |
 | 4A | ⬜ **`[P3]` JS↔DOM bindings** (после 1B) | Любая JS-динамика | — |

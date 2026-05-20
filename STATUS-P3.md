@@ -1,7 +1,6 @@
-In progress: 3B.1 reload via queue_task  branch: reload-via-queue-task
-Next step: pending_reload Rc<Cell<bool>>, queue_task в handle_key, check в about_to_wait
+In progress: —
 
-Next: 3B.1 reload via queue_task         lumen-plan.md:191
+Next: 3B.2 rendering steps ordering      lumen-plan.md:192
 
 Queue:
 3B.2 rendering steps ordering      lumen-plan.md:192
@@ -14,4 +13,4 @@ Queue:
 4B.4 preload deduplication         lumen-plan.md:199
 4B.5 preload priority + EventSink  lumen-plan.md:200
 
-Recent: momentum-scroll 2026-05-20
+Recent: reload-via-queue-task 2026-05-20
