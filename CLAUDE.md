@@ -20,6 +20,7 @@ Current phase: **Phase 0 (prototype)**. Goal: open local HTML+CSS and render it 
 | `STATUS-P1.md` | P1 sprint: in-progress task, next items, recent merge. Read at session start if you are P1. |
 | `STATUS-P2.md` | P2 sprint: in-progress task, next items, recent merge. Read at session start if you are P2. |
 | `STATUS-P3.md` | P3 sprint: in-progress task, next items, recent merge. Read at session start if you are P3. |
+| `STATUS-P4.md` | P4 sprint: CSS spec compliance. Read at session start if you are P4. |
 | `lumen-plan.md` | Full design doc (~1200 lines, 22 chapters): principles, scope, architecture, phases. Read for architecture/history, not daily status. |
 | `CLAUDE.md` | (this file) Conventions and invariants for the assistant. |
 | `samples/page.html` | Test page for pipeline runs. |
@@ -39,7 +40,7 @@ Exception: Claude memory (`~/.claude/projects/.../memory/`) lives outside the re
 
 ## Developer assignments
 
-Three parallel developers (3 Claude Code sessions, each in its own `git worktree`). Each owns a domain to minimize merge conflicts. Former P4 role (shell + JS + runtime + UI) is merged into P3.
+Four parallel developers (4 Claude Code sessions, each in its own `git worktree`). Each owns a domain to minimize merge conflicts. Former P4 role (shell + JS + runtime + UI) is merged into P3. New P4 role covers CSS spec compliance.
 
 **If the user says "you are developer N" at session start — read `STATUS-PN.md` and take the first item from "Next". If "In progress" is set — continue that task. If all your tasks are taken — ask the user which task to take next.**
 
@@ -50,10 +51,13 @@ Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `fo
 | **P1** | Frontend engine: source → layout tree | `html-parser`, `css-parser`, `dom`, `layout`, `encoding` |
 | **P2** | Backend rendering: layout tree → pixels | `font`, `paint`, `image` |
 | **P3** | Runtime + system: everything outside the engine | `shell`, `network`, `storage`, `knowledge`, `core::ext` |
+| **P4** | CSS spec compliance: promote 🟡→✅, add ⬜→🟡 per CSS 2026 | `layout` (style.rs), `paint` (display_list.rs) — cross-domain, coordinate with P1/P2 |
 
 Full subsystem breakdown per role — [lumen-plan.md](lumen-plan.md) §developer-assignments.
 
 > **Multi-marker subtasks** (`[P1+P2]` etc.) are common due to cross-domain runtime. **First marker = primary owner**; others contribute via review / interface / separate branches. `[P3]` now covers former `[P4]` tasks; historical commits keep `[P4]` unchanged.
+>
+> **P4 coordination rule:** before touching `style.rs` — check `STATUS-P1.md`; before touching `display_list.rs` / `renderer.rs` — leave a note in the commit message for P2. Merge to `main` after each property to minimize divergence.
 
 ### Collaboration rules
 
