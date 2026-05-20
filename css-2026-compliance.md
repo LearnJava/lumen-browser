@@ -238,7 +238,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | `text-decoration-line` | ✅ underline / overline / line-through |
 | `text-decoration-color` | ✅ |
 | `text-decoration-style` | ✅ solid / dashed / dotted / wavy / double |
-| `text-decoration-thickness` | 🟡 stored; not applied in paint |
+| `text-decoration-thickness` | ✅ | `resolve_decoration_thickness()` in `display_list.rs`; auto/from-font=7%·em, length=px, pct=frac·em |
 | `text-shadow` | ✅ |
 | `text-underline-position` | ⬜ |
 
@@ -317,7 +317,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | Property | Status |
 |---|---|
 | `position: static` | ✅ |
-| `position: relative` | 🟡 stored; offset not applied |
+| `position: relative` | ✅ | `shift_tree` in `box_tree.rs` applies left/top/right/bottom after normal flow |
 | `position: absolute` | 🟡 stored; OOF layout not implemented |
 | `position: fixed` | 🟡 stored |
 | `position: sticky` | 🟡 stored |
@@ -348,7 +348,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 |---|---|
 | `scroll-behavior` | 🟡 parsed |
 | `overscroll-behavior` | 🟡 parsed |
-| `text-overflow` | 🟡 parsed; ellipsis not painted |
+| `text-overflow` | ✅ | `ellipsis`: PushClipRect + "…" DrawText via `emit_inline_run` |
 
 ### CSS Sizing Level 4
 | Property | Status |

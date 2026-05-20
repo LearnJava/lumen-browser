@@ -12,7 +12,7 @@ use lumen_layout::{
     Color, CssColor, FontStyle, FontWeight, InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode,
     ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase,
     PositionComponent, StackingContextId, StackingTree, TextDecorationStyle,
-    TextDecorationThickness, Visibility,
+    TextDecorationThickness, TextOverflow, Visibility,
 };
 
 /// CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
@@ -640,6 +640,112 @@ fn overflow_clips(o: Overflow) -> bool {
     )
 }
 
+/// Em-fraction for approximating U+2026 HORIZONTAL ELLIPSIS advance width.
+/// Empirically derived from Inter Regular; the outer overflow:hidden clip
+/// prevents pixel bleed if the renderer's actual advance differs slightly.
+const ELLIPSIS_EM: f32 = 0.65;
+
+/// Emits shadow + DrawText + decorations for every visible frag in `line`.
+fn emit_text_frags(
+    line: &[InlineFrag],
+    container_x: f32,
+    container_width: f32,
+    line_y: f32,
+    line_h: f32,
+    out: &mut Vec<DisplayCommand>,
+) {
+    for frag in line {
+        if !matches!(frag.style.visibility, Visibility::Visible) {
+            continue;
+        }
+        let base_rect = Rect::new(container_x + frag.x, line_y, container_width, line_h);
+        emit_text_shadows(out, base_rect, line_h, frag);
+        out.push(DisplayCommand::DrawText {
+            rect: base_rect,
+            text: frag.text.clone(),
+            font_size: frag.style.font_size,
+            color: frag.style.color,
+            font_family: frag.style.font_family.clone(),
+            font_weight: frag.style.font_weight,
+            font_style: frag.style.font_style,
+            font_variation_axes: frag
+                .style
+                .font_variation_settings
+                .iter()
+                .map(|a| (a.tag, a.value))
+                .collect(),
+        });
+        push_text_decoration(out, container_x, line_y, frag);
+    }
+}
+
+/// Renders all lines of a [`BoxKind::InlineRun`].
+///
+/// When `text-overflow: ellipsis` (CSS UI L4 §3) is active on the box style
+/// AND a line's text extends past `b.rect.width`, the line is rendered with:
+/// 1. A [`DisplayCommand::PushClipRect`] narrowed by the ellipsis glyph width.
+/// 2. Normal text emission inside the clip.
+/// 3. [`DisplayCommand::PopClip`].
+/// 4. A [`DisplayCommand::DrawText`] "…" at the clip boundary.
+///
+/// Requires `overflow_x != visible` on the box (CSS UI L4 §3 precondition).
+/// The parent block's overflow:hidden clip ensures no pixel escapes the container.
+fn emit_inline_run(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<DisplayCommand>) {
+    let line_h = b.style.font_size * b.style.line_height;
+    let wants_ellipsis = matches!(b.style.text_overflow, TextOverflow::Ellipsis)
+        && overflow_clips(b.style.overflow_x);
+
+    for (line_idx, line) in lines.iter().enumerate() {
+        let line_y = b.rect.y + line_idx as f32 * line_h;
+
+        // Phase 1: inline frag backgrounds (under text).
+        for frag in line.iter() {
+            if !matches!(frag.style.visibility, Visibility::Visible) {
+                continue;
+            }
+            emit_inline_frag_box(out, b.rect.x, line_y, line_h, frag);
+        }
+
+        // Detect text-overflow: find first visible frag that extends past container.
+        let overflow_frag = if wants_ellipsis {
+            line.iter().find(|f| {
+                matches!(f.style.visibility, Visibility::Visible)
+                    && f.x + f.width > b.rect.width
+            })
+        } else {
+            None
+        };
+
+        // Phase 2: text — with or without ellipsis clip.
+        if let Some(ef) = overflow_frag {
+            let ew = ef.style.font_size * ELLIPSIS_EM;
+            let clip_w = (b.rect.width - ew).max(0.0);
+            out.push(DisplayCommand::PushClipRect {
+                rect: Rect::new(b.rect.x, line_y, clip_w, line_h),
+            });
+            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, out);
+            out.push(DisplayCommand::PopClip);
+            out.push(DisplayCommand::DrawText {
+                rect: Rect::new(b.rect.x + clip_w, line_y, ew, line_h),
+                text: "\u{2026}".to_string(),
+                font_size: ef.style.font_size,
+                color: ef.style.color,
+                font_family: ef.style.font_family.clone(),
+                font_weight: ef.style.font_weight,
+                font_style: ef.style.font_style,
+                font_variation_axes: ef
+                    .style
+                    .font_variation_settings
+                    .iter()
+                    .map(|a| (a.tag, a.value))
+                    .collect(),
+            });
+        } else {
+            emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, out);
+        }
+    }
+}
+
 /// Собирает layer-effect триггеры одного box-а в pair (pre, post).
 /// Push-команды складываются в `pre` в порядке, парные `Pop` в `post` —
 /// в обратном порядке (LIFO). Возвращает пустые векторы для боксов без
@@ -767,6 +873,71 @@ fn fill_buckets(
 /// behind it», что в painter's order означает обратный обход
 /// (последний рисуется первым, первый — последним за основным
 /// текстом). Phase 0 — без `blur`: тень = тот же текст со смещением
+/// Рисует фон и рамку inline-элемента для одного `InlineFrag`.
+///
+/// `container_x` — левый край InlineRun-бокса.
+/// `frag.x` — смещение текста от container_x (уже учитывает padding_left + border_left).
+/// Фон рисуется от border-box левого края до border-box правого края.
+fn emit_inline_frag_box(
+    out: &mut Vec<DisplayCommand>,
+    container_x: f32,
+    line_y: f32,
+    line_h: f32,
+    frag: &InlineFrag,
+) {
+    if !frag.is_element_box {
+        return;
+    }
+    let s = &frag.style;
+    let bl = s.border_left_width;
+    let br = s.border_right_width;
+    let bt = s.border_top_width;
+    let bb = s.border_bottom_width;
+
+    // Border-box left edge = text_x - padding_left - border_left.
+    let box_x = container_x + frag.x - frag.padding_left - bl;
+    // Border-box width = border_left + padding_left + text + padding_right + border_right.
+    let box_w = bl + frag.padding_left + frag.width + frag.padding_right + br;
+    let box_h = line_h;
+    let box_y = line_y;
+
+    // Background (CSS Backgrounds L3: painted over padding+border area).
+    if let Some(CssColor::Rgba(bg)) = s.background_color
+        && bg.a > 0
+        && box_w > 0.0
+    {
+        out.push(DisplayCommand::FillRect {
+            rect: Rect::new(box_x, box_y, box_w, box_h),
+            color: bg,
+        });
+    }
+
+    // Border.
+    let has_border = s.border_top_style.is_visible()
+        || s.border_right_style.is_visible()
+        || s.border_bottom_style.is_visible()
+        || s.border_left_style.is_visible();
+    if has_border && box_w > 0.0 {
+        let cur = s.color;
+        out.push(DisplayCommand::DrawBorder {
+            rect: Rect::new(box_x, box_y, box_w, box_h),
+            widths: [bt, br, bb, bl],
+            colors: [
+                s.border_top_color.resolve(cur),
+                s.border_right_color.resolve(cur),
+                s.border_bottom_color.resolve(cur),
+                s.border_left_color.resolve(cur),
+            ],
+            styles: [
+                s.border_top_style,
+                s.border_right_style,
+                s.border_bottom_style,
+                s.border_left_style,
+            ],
+        });
+    }
+}
+
 /// (offset_x, offset_y) и shadow.color (None → currentColor =
 /// frag.style.color).
 fn emit_text_shadows(
@@ -1091,34 +1262,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             emit_outline(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
-            let line_h = b.style.font_size * b.style.line_height;
-            for (line_idx, line) in lines.iter().enumerate() {
-                let line_y = b.rect.y + line_idx as f32 * line_h;
-                for frag in line {
-                    // Per-frag visibility (inline element может иметь свой,
-                    // отличный от parent-а — `<span visibility:visible>` внутри
-                    // `<div visibility:hidden>`).
-                    if !matches!(frag.style.visibility, Visibility::Visible) {
-                        continue;
-                    }
-                    let base_rect = Rect::new(b.rect.x + frag.x, line_y, b.rect.width, line_h);
-                    // text-shadow (CSS Text Decoration L3 §6) рисуется ДО
-                    // основного текста — painter's order: first shadow on top.
-                    emit_text_shadows(out, base_rect, line_h, frag);
-                    out.push(DisplayCommand::DrawText {
-                        rect: base_rect,
-                        text: frag.text.clone(),
-                        font_size: frag.style.font_size,
-                        color: frag.style.color,
-                        font_family: frag.style.font_family.clone(),
-                        font_weight: frag.style.font_weight,
-                        font_style: frag.style.font_style,
-                        font_variation_axes: frag.style.font_variation_settings
-                            .iter().map(|s| (s.tag, s.value)).collect(),
-                    });
-                    push_text_decoration(out, b.rect.x, line_y, frag);
-                }
-            }
+            emit_inline_run(b, lines, out);
         }
         BoxKind::InlineBlockRow | BoxKind::InlineSpace => {}
         BoxKind::Image { src, alt } => {
@@ -1255,32 +1399,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
         }
         BoxKind::InlineSpace => {}
         BoxKind::InlineRun { lines, .. } => {
-            let line_h = b.style.font_size * b.style.line_height;
-            for (line_idx, line) in lines.iter().enumerate() {
-                let line_y = b.rect.y + line_idx as f32 * line_h;
-                for frag in line {
-                    // Per-frag visibility (см. emit_box_self).
-                    if !matches!(frag.style.visibility, Visibility::Visible) {
-                        continue;
-                    }
-                    let base_rect = Rect::new(b.rect.x + frag.x, line_y, b.rect.width, line_h);
-                    // text-shadow (CSS Text Decoration L3 §6) рисуется ДО
-                    // основного текста — painter's order: first shadow on top.
-                    emit_text_shadows(out, base_rect, line_h, frag);
-                    out.push(DisplayCommand::DrawText {
-                        rect: base_rect,
-                        text: frag.text.clone(),
-                        font_size: frag.style.font_size,
-                        color: frag.style.color,
-                        font_family: frag.style.font_family.clone(),
-                        font_weight: frag.style.font_weight,
-                        font_style: frag.style.font_style,
-                        font_variation_axes: frag.style.font_variation_settings
-                            .iter().map(|s| (s.tag, s.value)).collect(),
-                    });
-                    push_text_decoration(out, b.rect.x, line_y, frag);
-                }
-            }
+            emit_inline_run(b, lines, out);
         }
         BoxKind::Image { src, alt } => {
             // visibility:hidden на `<img>` пропускает всё (no children).
