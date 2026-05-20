@@ -156,17 +156,37 @@ pub struct LayoutBox {
 pub struct InlineSegment {
     pub text: String,
     pub style: ComputedStyle,
+    /// Resolved px space before this segment's first word:
+    /// margin_left + border_left_width + padding_left of the inline element.
+    pub pre_space: f32,
+    /// Resolved px space after this segment's last word:
+    /// padding_right + border_right_width + margin_right of the inline element.
+    pub post_space: f32,
+    /// True when this segment comes from inside an inline element box
+    /// (not anonymous text directly in a block container). Used by the painter
+    /// to know whether to draw the element's own background/border.
+    pub is_element_box: bool,
 }
 
 /// Позиционированный текстовый фрагмент в строке (после layout).
-/// `x` — смещение от левого края inline-контейнера, `width` — ширина текста
-/// фрагмента в пикселях (нужна для text-align и подрисовки text-decoration).
+/// `x` — смещение от левого края inline-контейнера до начала ТЕКСТА
+/// (после border+padding inline-элемента слева).
+/// `width` — ширина текста фрагмента в пикселях.
+/// `padding_left` / `padding_right` — разрешённые px padding-а inline-элемента
+/// для этого фрагмента (ненулевые только для первого/последнего слова сегмента).
 #[derive(Debug, Clone)]
 pub struct InlineFrag {
     pub x: f32,
     pub width: f32,
     pub text: String,
     pub style: ComputedStyle,
+    /// Resolved padding_left of this frag's inline box start (0 if not a box start).
+    pub padding_left: f32,
+    /// Resolved padding_right of this frag's inline box end (0 if not a box end).
+    pub padding_right: f32,
+    /// True when this frag comes from an inline element box (not anonymous text).
+    /// Used by the painter to draw element background/border.
+    pub is_element_box: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -396,7 +416,13 @@ fn collect_inline_segments(
             // text-transform применяется здесь, до wrapping и paint —
             // measurer считает ширину уже после преобразования.
             let text = inherited.text_transform.apply(s);
-            out.push(InlineSegment { text, style: inherited.clone() });
+            out.push(InlineSegment {
+                text,
+                style: inherited.clone(),
+                pre_space: 0.0,
+                post_space: 0.0,
+                is_element_box: false,
+            });
         }
         NodeData::Text(_) => {}
         NodeData::Element { .. } => {
@@ -404,9 +430,28 @@ fn collect_inline_segments(
             if s.display == Display::None {
                 return;
             }
+            // Compute horizontal inline box model: margin + border + padding.
+            // Use em=font_size, cb=0 (% padding on inline elements is uncommon).
+            let em = s.font_size;
+            let pre = s.margin_left.resolve_or_zero(em, 0.0, viewport)
+                + s.border_left_width
+                + s.padding_left.resolve_or_zero(em, 0.0, viewport);
+            let post = s.padding_right.resolve_or_zero(em, 0.0, viewport)
+                + s.border_right_width
+                + s.margin_right.resolve_or_zero(em, 0.0, viewport);
+            let start = out.len();
             let children: Vec<NodeId> = doc.get(id).children.clone();
             for child_id in children {
                 collect_inline_segments(doc, sheet, child_id, &s, viewport, out);
+            }
+            let added = out.len() - start;
+            // Mark all segments from this element as element boxes.
+            for seg in &mut out[start..start + added] {
+                seg.is_element_box = true;
+            }
+            if added > 0 && (pre > 0.0 || post > 0.0) {
+                out[start].pre_space += pre;
+                out[start + added - 1].post_space += post;
             }
         }
         _ => {}
@@ -737,7 +782,7 @@ fn lay_out(
                 content_width
             };
             let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport);
-            *lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, m);
+            *lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m);
             if s.text_align != TextAlign::Left {
                 align_lines(lines, content_width, s.text_align);
             }
@@ -1757,82 +1802,104 @@ fn resolve_grid_line_end(line: &GridLine, start: u32, n_tracks: u32) -> u32 {
     }
 }
 
-/// Разбивает потоковые сегменты на строки, объединяя слова с одинаковым стилем.
+/// Разбивает потоковые сегменты на строки.
 ///
-/// Алгоритм: жадный word-wrap (как в CSS normal flow). Слова одного стиля
-/// на одной строке сливаются в один `InlineFrag` — это даёт один DrawText
-/// на стилевой пробег, как ожидает рендерер.
+/// Алгоритм: жадный word-wrap. Слова одного стиля на одной строке сливаются
+/// в один `InlineFrag`. Сегменты обрабатываются по одному, чтобы учитывать
+/// `pre_space` / `post_space` (inline box model: margin + border + padding).
 fn wrap_inline_run(
     segments: &[InlineSegment],
     max_width: f32,
     container_font_size: f32,
     text_indent: f32,
+    viewport: Size,
     m: &dyn TextMeasurer,
 ) -> Vec<Vec<InlineFrag>> {
     let space_w = m.char_width(' ', container_font_size);
 
-    // Токенизируем все сегменты в пары (слово, стиль).
-    let tagged: Vec<(String, &ComputedStyle)> = segments
-        .iter()
-        .flat_map(|seg| seg.text.split_whitespace().map(move |w| (w.to_string(), &seg.style)))
-        .collect();
-
-    if tagged.is_empty() {
-        return vec![];
-    }
-
     let mut result: Vec<Vec<InlineFrag>> = Vec::new();
     let mut current_line: Vec<InlineFrag> = Vec::new();
-    // CSS Text L3 §7.1: text-indent добавляется только к первой строке.
-    // На последующих строках начинаем с 0.
+    // CSS Text L3 §7.1: text-indent только на первой строке.
     let mut current_x = text_indent;
 
-    for (word, style) in &tagged {
-        // letter-spacing: между каждой парой символов в слове + на word
-        // boundary. word-spacing: только на word boundary (CSS Text L3
-        // §11.2-3).
+    for seg in segments {
+        let words: Vec<&str> = seg.text.split_whitespace().collect();
+        if words.is_empty() {
+            continue;
+        }
+        let style = &seg.style;
+        let em = style.font_size;
         let ls = style.letter_spacing;
         let ws = style.word_spacing;
-        let word_w: f32 = word
-            .chars()
-            .map(|c| m.char_width(c, style.font_size) + ls)
-            .sum::<f32>()
-            - if word.is_empty() { 0.0 } else { ls }; // последний symbol не добавляет ls справа
-        let gap_with_ls = space_w + ls + ws;
+        let inter_word = space_w + ls + ws;
 
-        // Перенос: слово не влезает (но первое слово строки добавляем всегда).
-        if !current_line.is_empty() && current_x + gap_with_ls + word_w > max_width {
-            result.push(std::mem::take(&mut current_line));
-            current_x = 0.0;
-        }
+        // Resolved padding for this segment's inline box (for paint use).
+        let pad_l = style.padding_left.resolve_or_zero(em, max_width, viewport);
+        let pad_r = style.padding_right.resolve_or_zero(em, max_width, viewport);
 
-        let gap = if current_line.is_empty() { 0.0 } else { gap_with_ls };
-        let frag_x = current_x + gap;
+        let n = words.len();
+        for (wi, word) in words.iter().enumerate() {
+            let is_seg_first = wi == 0;
+            let is_seg_last = wi == n - 1;
 
-        // Если стиль визуально эквивалентен предыдущему фрагменту — сливаем.
-        let merged = if let Some(last) = current_line.last_mut() {
-            if last.style.text_rendering_eq(style) {
-                last.text.push(' ');
-                last.text.push_str(word);
-                last.width += gap_with_ls + word_w;
-                true
+            // Space that the inline box model contributes at the word boundaries.
+            let pre = if is_seg_first { seg.pre_space } else { 0.0 };
+            let post = if is_seg_last { seg.post_space } else { 0.0 };
+
+            let word_w: f32 = word
+                .chars()
+                .map(|c| m.char_width(c, style.font_size) + ls)
+                .sum::<f32>()
+                - if word.is_empty() { 0.0 } else { ls };
+
+            let gap = if current_line.is_empty() { 0.0 } else { inter_word };
+
+            // Wrap: слово не влезает (но первое слово строки добавляем всегда).
+            if !current_line.is_empty() && current_x + gap + pre + word_w > max_width {
+                result.push(std::mem::take(&mut current_line));
+                current_x = 0.0;
+            }
+
+            let line_gap = if current_line.is_empty() { 0.0 } else { inter_word };
+            current_x += line_gap + pre;
+            let frag_x = current_x;
+
+            // Слияние: только когда нет pre/post space у данного слова
+            // и предыдущий фраг тоже не заканчивается inline-box-ом.
+            let no_box = pre == 0.0 && post == 0.0;
+            let merged = if no_box {
+                if let Some(last) = current_line.last_mut() {
+                    if last.style.text_rendering_eq(style) && last.padding_right == 0.0 {
+                        last.text.push(' ');
+                        last.text.push_str(word);
+                        last.width += inter_word + word_w;
+                        current_x += word_w;
+                        true
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                }
             } else {
                 false
+            };
+
+            if !merged {
+                current_line.push(InlineFrag {
+                    x: frag_x,
+                    width: word_w,
+                    text: word.to_string(),
+                    style: style.clone(),
+                    padding_left: if is_seg_first { pad_l } else { 0.0 },
+                    padding_right: if is_seg_last { pad_r } else { 0.0 },
+                    is_element_box: seg.is_element_box,
+                });
+                current_x += word_w;
             }
-        } else {
-            false
-        };
 
-        if !merged {
-            current_line.push(InlineFrag {
-                x: frag_x,
-                width: word_w,
-                text: word.clone(),
-                style: (*style).clone(),
-            });
+            current_x += post;
         }
-
-        current_x = frag_x + word_w;
     }
 
     if !current_line.is_empty() {
@@ -1893,6 +1960,9 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 width: 0.0,
                 text,
                 style: seg.style.clone(),
+                padding_left: 0.0,
+                padding_right: 0.0,
+                is_element_box: seg.is_element_box,
             });
         }
     }

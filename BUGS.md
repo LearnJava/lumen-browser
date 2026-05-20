@@ -19,7 +19,7 @@ BUG-016 | FIXED 2026-05-20 | css-parser/paint| border-style: dashed/double now w
 BUG-019 | FIXED 2026-05-20 | css-parser/paint| outline not rendered at all
 BUG-030 | FIXED 2026-05-20 | layout          | IFC: no whitespace gap between inline-block siblings (CSS §4.1.2)
 BUG-031 | FIXED 2026-05-20 | layout          | IFC: missing strut descent causes rows to be ~4px too short
-BUG-002 | OPEN             | layout          | inline padding/border/margin stacks vertically instead of flowing
+BUG-002 | FIXED 2026-05-20 | layout/paint    | inline padding/border/margin stacks vertically instead of flowing
 BUG-004 | OPEN             | layout          | height on inline elements ignored
 BUG-005 | OPEN             | paint           | <img> inside <span> not rendered
 BUG-007 | OPEN             | layout          | <sub>/<sup>/<small> missing UA styles
