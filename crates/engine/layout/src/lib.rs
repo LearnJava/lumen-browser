@@ -28,8 +28,8 @@ pub use box_tree::{
     InlineSegment, LayoutBox,
 };
 pub use property_trees::{
-    ClipNode, ClipTree, EffectNode, EffectTree, Mat4, PropertyTreeNodeId, PropertyTrees,
-    ScrollNode, ScrollTree, TransformNode, TransformTree,
+    compute_local_transform, forward_box_transform, ClipNode, ClipTree, EffectNode, EffectTree,
+    Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
 pub use snapshot::serialize_layout_tree;
 pub use stacking::{

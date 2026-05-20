@@ -2008,6 +2008,8 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PopOpacity
             | DisplayCommand::PushBlendMode { .. }
             | DisplayCommand::PopBlendMode
+            | DisplayCommand::PushTransform { .. }
+            | DisplayCommand::PopTransform
             | DisplayCommand::DrawLayerSnapshot { .. } => continue,
         };
         let bottom = r.y + r.height;
@@ -2036,6 +2038,8 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PopOpacity
             | DisplayCommand::PushBlendMode { .. }
             | DisplayCommand::PopBlendMode
+            | DisplayCommand::PushTransform { .. }
+            | DisplayCommand::PopTransform
             | DisplayCommand::DrawLayerSnapshot { .. } => continue,
         };
         let right = r.x + r.width;
