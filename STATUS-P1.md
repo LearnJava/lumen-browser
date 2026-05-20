@@ -1,9 +1,9 @@
-In progress: —
+In progress: 4B.1 flex-direction + flex-wrap  branch: flex-direction-wrap
+Next step: коммит готов, merge в main
 
-Next: 4B.1 flex-direction + flex-wrap   lumen-plan.md:138
+Next: 4B.2 flex-grow/shrink/basis
 
 Queue:
-4B.1 flex-direction + flex-wrap    lumen-plan.md:138
 4B.2 flex-grow/shrink/basis        lumen-plan.md:139
 4B.3 flex item layout pass         lumen-plan.md:140
 4B.4 flex gap                      lumen-plan.md:141
