@@ -694,10 +694,10 @@ fn parse_and_layout(
     let mut doc = lumen_html_parser::parse(&source);
     let title = extract_title(&doc);
 
-    // Гейт выполнения скриптов: Phase 0 — top-level документ не sandboxed
-    // (SandboxFlags::empty()), поэтому блокировки не будет. NullJsRuntime
-    // возвращает NotImplemented — это ожидаемое поведение до подключения QuickJS.
-    run_scripts(&doc, lumen_core::SandboxFlags::empty(), &lumen_core::NullJsRuntime);
+    // Гейт выполнения скриптов: top-level документ не sandboxed.
+    // С feature `quickjs` используется QuickJsRuntime; без — NullJsRuntime.
+    let js_runtime = make_js_runtime();
+    run_scripts(&doc, lumen_core::SandboxFlags::empty(), &*js_runtime);
 
     // Гейт отправки форм: Phase 0 — top-level документ не sandboxed.
     check_form_gate(&doc, lumen_core::SandboxFlags::empty());
@@ -902,11 +902,26 @@ fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
     }
 }
 
+/// Создать JS runtime: QuickJsRuntime при сборке с feature `quickjs`,
+/// иначе NullJsRuntime.
+fn make_js_runtime() -> Box<dyn lumen_core::JsRuntime> {
+    #[cfg(feature = "quickjs")]
+    {
+        match lumen_js::QuickJsRuntime::new() {
+            Ok(rt) => return Box::new(rt),
+            Err(e) => {
+                eprintln!("QuickJS init failed: {e}; falling back to NullJsRuntime");
+            }
+        }
+    }
+    Box::new(lumen_core::NullJsRuntime)
+}
+
 /// Выполнить inline `<script>` блоки если sandbox позволяет, иначе заблокировать.
 ///
 /// `SandboxFlags::SCRIPTS` установлен — скрипты запрещены; функция логирует
 /// количество заблокированных и возвращает 0. Иначе каждый скрипт передаётся
-/// в `runtime.eval()`; в Phase 0 это всегда `NullJsRuntime` → `NotImplemented`.
+/// в `runtime.eval()`; без feature `quickjs` это NullJsRuntime → `NotImplemented`.
 /// Возвращает число скриптов, переданных в runtime.
 fn run_scripts(
     doc: &Document,

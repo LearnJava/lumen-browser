@@ -11,8 +11,14 @@ description = "Lumen browser shell: UI process and entry point"
 name = "lumen"
 path = "src/main.rs"
 
+[features]
+# Enable QuickJS JavaScript engine (rquickjs). Without this feature the shell
+# falls back to NullJsRuntime which silently ignores all inline scripts.
+quickjs = ["dep:lumen-js"]
+
 [dependencies]
 lumen-core.workspace = true
+lumen-js = { workspace = true, optional = true }
 lumen-network.workspace = true
 lumen-html-parser.workspace = true
 lumen-css-parser.workspace = true
