@@ -20,6 +20,35 @@ pub enum SubresourceKind {
     Other { as_kind: Option<String> },
 }
 
+/// Приоритет выборки subresource-а. Отражает HTML Living Standard §17.2.3
+/// «Priority» и Fetch Standard §2.2 «request priority».
+///
+/// Числовое значение (`as u8`) используется для сортировки: High < Medium < Low
+/// (меньшее число = более приоритетный).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum FetchPriority {
+    /// Блокируют рендер или критичны для first paint:
+    /// CSS-файлы, шрифты, `<link rel="preconnect">`.
+    High = 0,
+    /// Полезны, но не блокируют рендер: скрипты без defer/async.
+    Medium = 1,
+    /// Не критичны для first paint: изображения, srcset, generic preload.
+    Low = 2,
+}
+
+impl FetchPriority {
+    /// Приоритет по типу subresource (Fetch Standard §2.2).
+    pub fn for_kind(kind: &SubresourceKind) -> Self {
+        match kind {
+            SubresourceKind::Stylesheet
+            | SubresourceKind::Font
+            | SubresourceKind::Preconnect { .. } => FetchPriority::High,
+            SubresourceKind::Script => FetchPriority::Medium,
+            SubresourceKind::Image | SubresourceKind::Other { .. } => FetchPriority::Low,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Event {
     TabCreated { tab_id: TabId },
@@ -30,7 +59,11 @@ pub enum Event {
     RequestCompleted { tab_id: TabId, url: Url, status: u16 },
     RequestBlocked { tab_id: TabId, url: Url, reason: String },
     /// Preload-сканер обнаружил subresource-ссылку до DOM-парсинга
-    /// (HTML LS §13.2.6.4.7). `url` — сырая строка из атрибута (`href`/`src`),
-    /// ещё не разрешённая относительно base (это делает 4B.3).
-    SubresourceHintFound { url: String, kind: SubresourceKind },
+    /// (HTML LS §13.2.6.4.7). `url` — абсолютный URL (резолвится 4B.3).
+    /// `priority` — рекомендованный fetch-приоритет (Fetch Standard §2.2).
+    SubresourceHintFound {
+        url: String,
+        kind: SubresourceKind,
+        priority: FetchPriority,
+    },
 }
