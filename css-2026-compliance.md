@@ -238,7 +238,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | `text-decoration-line` | ✅ underline / overline / line-through |
 | `text-decoration-color` | ✅ |
 | `text-decoration-style` | ✅ solid / dashed / dotted / wavy / double |
-| `text-decoration-thickness` | 🟡 stored; not applied in paint |
+| `text-decoration-thickness` | ✅ | `resolve_decoration_thickness()` in `display_list.rs`; auto/from-font=7%·em, length=px, pct=frac·em |
 | `text-shadow` | ✅ |
 | `text-underline-position` | ⬜ |
 

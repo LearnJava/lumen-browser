@@ -1,11 +1,8 @@
-In progress: text-overflow ellipsis render  branch: text-overflow
-Next step: emit_inline_run helper in display_list.rs
+In progress: —
 
-Next: text-decoration-thickness 🟡→✅     css-2026-compliance.md (already impl'd)
+Next: position: relative offsets 🟡→✅   css-2026-compliance.md (already impl'd)
 
 Queue (🟡→✅, paint/layout wire-up, no new parsing needed):
-  text-overflow: ellipsis              display_list.rs — clip text run, emit "…"
-  text-decoration-thickness            display_list.rs — pass resolved px to DrawText
   position: relative offsets           box_tree.rs — apply top/left/right/bottom after layout
   background-image url()               display_list.rs + renderer.rs (coordinate P2)
   transform matrix                     display_list.rs — emit DrawTransform (coordinate P2)
@@ -24,4 +21,4 @@ Coordination rules:
   — Spec links: https://www.w3.org/TR/css-align-3/ etc.
   — Compliance tracker: css-2026-compliance.md
 
-Recent: —
+Recent: text-overflow 2026-05-20, text-decoration-thickness 2026-05-20

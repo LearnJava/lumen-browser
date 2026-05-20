@@ -219,3 +219,33 @@ fn text_overflow_ellipsis_requires_overflow_hidden() {
     );
     assert!(!actual.contains('\u{2026}'), "ellipsis must not appear without overflow:hidden");
 }
+
+// ── text-decoration-thickness ────────────────────────────────────────────────
+
+/// text-decoration-thickness: 5px → underline FillRect height = 5.00.
+/// Verifies that resolve_decoration_thickness() applies the Length variant.
+#[test]
+fn text_decoration_thickness_custom_length() {
+    let actual = build_measured(
+        "<span>underline</span>",
+        "span { text-decoration: underline; text-decoration-thickness: 5px; color: red; }",
+        800.0,
+    );
+    // Underline is a FillRect; height field should be "5.00" for 5px thickness.
+    assert!(actual.contains("FillRect"), "underline must produce a FillRect");
+    assert!(actual.contains("5.00"), "5px thickness must appear in FillRect dimensions");
+}
+
+/// text-decoration-thickness: auto → default thickness ≈ 7% of font-size ≥ 1px.
+/// At default 16px font-size: 16 * 0.07 = 1.12px → rounds to 1.12.
+#[test]
+fn text_decoration_thickness_auto_uses_em_fraction() {
+    let actual = build_measured(
+        "<span>x</span>",
+        "span { text-decoration: underline; text-decoration-thickness: auto; }",
+        800.0,
+    );
+    assert!(actual.contains("FillRect"), "underline must produce a FillRect");
+    // 16px * 0.07 = 1.12; check thickness is not 5px (i.e., not using wrong branch).
+    assert!(!actual.contains("5.00"), "auto thickness must not be 5px");
+}
