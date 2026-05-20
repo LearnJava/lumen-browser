@@ -1,4 +1,5 @@
-In progress: —
+In progress: 3A.2 horizontal scroll  branch: horizontal-scroll
+Next step: добавить scroll_x/content_width в Lumen, обновить render()  shell/src/main.rs:921
 
 Next: 3A.2 horizontal scroll             lumen-plan.md:188
 
