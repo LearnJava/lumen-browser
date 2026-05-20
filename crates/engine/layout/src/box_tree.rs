@@ -195,6 +195,10 @@ pub enum BoxKind {
         src: String,
         alt: String,
     },
+    /// Схлопнутый межэлементный пробел в InlineBlockRow.
+    /// Не рисуется; участвует только как горизонтальный gap между
+    /// inline-block соседями (CSS white-space collapsing §4.1.2).
+    InlineSpace,
     /// Не участвует в layout (whitespace, комментарий, doctype, display:none).
     Skip,
 }
@@ -480,6 +484,9 @@ fn build_box(
                 // Результат: InlineRun (чистый текст) или InlineBlockRow (смешанный).
                 let mut row_items: Vec<LayoutBox> = Vec::new();
                 let mut pending: Vec<InlineSegment> = Vec::new();
+                // CSS §4.1.2 white-space collapsing: whitespace between
+                // inline-level siblings collapses to a single space.
+                let mut had_ws = false;
 
                 loop {
                     if i >= dom_children.len() {
@@ -488,6 +495,7 @@ fn build_box(
                     let cid = dom_children[i];
                     match &doc.get(cid).data {
                         NodeData::Text(s) if s.chars().all(char::is_whitespace) => {
+                            had_ws = true;
                             i += 1;
                             continue;
                         }
@@ -499,6 +507,7 @@ fn build_box(
                     }
                     if is_inline_content(doc, sheet, cid, &style, viewport) {
                         collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending);
+                        had_ws = false;
                         i += 1;
                     } else if is_inline_block(doc, sheet, cid, &style, viewport) {
                         if !pending.is_empty() {
@@ -508,7 +517,18 @@ fn build_box(
                                 std::mem::take(&mut pending),
                             ));
                         }
+                        // Whitespace between inline-blocks → collapsed space gap.
+                        if had_ws && !row_items.is_empty() {
+                            row_items.push(LayoutBox {
+                                node: id,
+                                rect: Rect::ZERO,
+                                style: anon_style(&style),
+                                kind: BoxKind::InlineSpace,
+                                children: vec![],
+                            });
+                        }
                         row_items.push(build_box(doc, sheet, cid, &style, viewport));
+                        had_ws = false;
                         i += 1;
                     } else {
                         break;
@@ -848,6 +868,10 @@ fn lay_out(
             // Фаза 2: применяем вертикальное выравнивание внутри каждой строки.
             //
             // rows: (row_y, row_max_h, Vec<child_index>)
+            // IFC strut (CSS §10.8): descent шрифта родителя добавляется к
+            // высоте каждой строки, так как baseline пустых inline-block
+            // совпадает с нижним краем margin-box, а descent опускается ниже.
+            let strut_descent = measurer.map_or(0.0, |m| m.descent_px(b.style.font_size));
             let mut rows: Vec<(f32, f32, Vec<usize>)> = Vec::new();
             let mut cur_x = content_x;
             let mut cur_y = content_y;
@@ -857,6 +881,12 @@ fn lay_out(
             let mut total_h: f32 = 0.0;
 
             for i in 0..b.children.len() {
+                // InlineSpace: collapsed whitespace gap — advance cur_x only.
+                if matches!(b.children[i].kind, BoxKind::InlineSpace) {
+                    let space_w = measurer.map_or(0.0, |m| m.char_width(' ', b.style.font_size));
+                    cur_x += space_w;
+                    continue;
+                }
                 let is_run = matches!(b.children[i].kind, BoxKind::InlineRun { .. });
                 let child_avail = if is_run {
                     (content_width - (cur_x - content_x)).max(0.0)
@@ -875,9 +905,12 @@ fn lay_out(
                 let child_full_h = child_mt + b.children[i].rect.height + child_mb;
 
                 if !is_run && child_right > content_x + content_width && cur_x > content_x {
+                    // Строка завершена: row_max_h — высота контента (для vertical-align),
+                    // row_spacing = row_max_h + strut_descent — для cur_y (IFC strut).
+                    let row_spacing = row_max_h + strut_descent;
                     rows.push((row_y, row_max_h, std::mem::take(&mut cur_row)));
-                    total_h += row_max_h;
-                    cur_y += row_max_h;
+                    total_h += row_spacing;
+                    cur_y += row_spacing;
                     row_y = cur_y;
                     cur_x = content_x;
                     row_max_h = 0.0;
@@ -890,7 +923,7 @@ fn lay_out(
             if !cur_row.is_empty() {
                 rows.push((row_y, row_max_h, cur_row));
             }
-            b.rect.height = total_h + row_max_h;
+            b.rect.height = total_h + row_max_h + strut_descent;
 
             // Фаза 2: vertical-align. Для пустых inline-block элементов
             // baseline = нижний край margin-box (CSS 2.1 §10.8.1), поэтому
@@ -921,6 +954,7 @@ fn lay_out(
             }
         }
         BoxKind::InlineRun { .. } => unreachable!(),
+        BoxKind::InlineSpace => unreachable!(),
         BoxKind::Skip => unreachable!(),
     }
 
