@@ -1120,7 +1120,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 }
             }
         }
-        BoxKind::InlineBlockRow => {}
+        BoxKind::InlineBlockRow | BoxKind::InlineSpace => {}
         BoxKind::Image { src, alt } => {
             if !is_paint_visible(b) {
                 return;
@@ -1253,6 +1253,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 walk(child, out);
             }
         }
+        BoxKind::InlineSpace => {}
         BoxKind::InlineRun { lines, .. } => {
             let line_h = b.style.font_size * b.style.line_height;
             for (line_idx, line) in lines.iter().enumerate() {

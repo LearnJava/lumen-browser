@@ -62,6 +62,7 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
         BoxKind::Block => "Block",
         BoxKind::InlineRun { .. } => "InlineRun",
         BoxKind::InlineBlockRow => "InlineBlockRow",
+        BoxKind::InlineSpace => "InlineSpace",
         BoxKind::Image { .. } => "Image",
         BoxKind::Skip => "Skip",
     };

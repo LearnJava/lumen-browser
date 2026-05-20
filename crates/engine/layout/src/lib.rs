@@ -66,6 +66,13 @@ pub trait TextMeasurer {
     /// Ширина символа `ch` при размере шрифта `font_size_px` пикселей.
     /// Возвращает 0.0 для неизвестных символов.
     fn char_width(&self, ch: char, font_size_px: f32) -> f32;
+
+    /// Descent шрифта в пикселях при размере `font_size_px`.
+    /// Используется для IFC strut: определяет, насколько линия строки
+    /// опускается ниже baseline при baseline-выравнивании.
+    fn descent_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.2
+    }
 }
 
 #[cfg(test)]
