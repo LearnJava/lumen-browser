@@ -1,6 +1,9 @@
+pub mod dom;
+
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue};
+use lumen_dom::Document;
 use rquickjs::{Array, Context, Ctx, FromJs, Function, IntoJs, Object, Runtime, Type, Value};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// QuickJS-based JS runtime via `rquickjs`.
 ///
@@ -28,6 +31,18 @@ impl QuickJsRuntime {
         let ctx = Context::full(&rt).map_err(|e| JsError::Runtime(e.to_string()))?;
         Ok(Self {
             inner: Mutex::new(Inner { _rt: rt, ctx }),
+        })
+    }
+
+    /// Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+    /// this runtime.  Must be called before running any user scripts that access
+    /// the DOM.  The `doc` Arc is captured by the registered native functions;
+    /// drop the runtime (via `drop(runtime)`) before calling
+    /// `Arc::try_unwrap(doc)` to recover the document after script execution.
+    pub fn install_dom(&self, doc: Arc<Mutex<Document>>) -> JsResult<()> {
+        let guard = self.inner.lock().unwrap();
+        guard.ctx.with(|ctx| {
+            dom::install_dom_api(&ctx, doc).map_err(|e| rq_err(&ctx, e))
         })
     }
 }

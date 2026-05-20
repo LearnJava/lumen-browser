@@ -695,9 +695,8 @@ fn parse_and_layout(
     let title = extract_title(&doc);
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.
-    // С feature `quickjs` используется QuickJsRuntime; без — NullJsRuntime.
-    let js_runtime = make_js_runtime();
-    run_scripts(&doc, lumen_core::SandboxFlags::empty(), &*js_runtime);
+    // QuickJS + install_dom дают скриптам полный доступ к DOM-дереву.
+    doc = run_scripts_with_dom(doc, lumen_core::SandboxFlags::empty());
 
     // Гейт отправки форм: Phase 0 — top-level документ не sandboxed.
     check_form_gate(&doc, lumen_core::SandboxFlags::empty());
@@ -902,19 +901,74 @@ fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
     }
 }
 
-/// Создать JS runtime: QuickJsRuntime при сборке с feature `quickjs`,
-/// иначе NullJsRuntime.
-fn make_js_runtime() -> Box<dyn lumen_core::JsRuntime> {
+/// Выполнить inline `<script>` блоки с DOM-доступом (QuickJS + install_dom).
+///
+/// Принимает `doc` по значению, оборачивает в `Arc<Mutex<>>` на время выполнения
+/// скриптов, возвращает `Document` обратно. При `quickjs` feature отключён —
+/// использует NullJsRuntime (скрипты пропускаются с логом NotImplemented).
+fn run_scripts_with_dom(doc: Document, sandbox: lumen_core::SandboxFlags) -> Document {
+    let mut scripts: Vec<String> = Vec::new();
+    collect_inline_scripts(&doc, doc.root(), &mut scripts);
+
+    if scripts.is_empty() {
+        return doc;
+    }
+    if sandbox.contains(lumen_core::SandboxFlags::SCRIPTS) {
+        eprintln!(
+            "sandbox: заблокировано {} скрипт(ов) (sandbox=scripts)",
+            scripts.len()
+        );
+        return doc;
+    }
+
     #[cfg(feature = "quickjs")]
     {
+        use std::sync::Mutex;
+        let doc_arc = Arc::new(Mutex::new(doc));
         match lumen_js::QuickJsRuntime::new() {
-            Ok(rt) => return Box::new(rt),
-            Err(e) => {
-                eprintln!("QuickJS init failed: {e}; falling back to NullJsRuntime");
+            Ok(rt) => {
+                if let Err(e) = rt.install_dom(doc_arc.clone()) {
+                    eprintln!("JS DOM init failed: {e}");
+                }
+                for src in &scripts {
+                    match rt.eval(src) {
+                        Ok(_) => {}
+                        Err(lumen_core::JsError::NotImplemented) => {
+                            eprintln!(
+                                "script: engine=quickjs, выполнение пропущено ({} байт)",
+                                src.len()
+                            );
+                        }
+                        Err(e) => eprintln!("script error: {e}"),
+                    }
+                }
+                drop(rt); // освобождаем Arc-клоны в замыканиях QuickJS
+            }
+            Err(e) => eprintln!("QuickJS init failed: {e}"),
+        }
+        return Arc::try_unwrap(doc_arc)
+            .expect("Arc still held after drop(rt)")
+            .into_inner()
+            .unwrap();
+    }
+
+    #[cfg(not(feature = "quickjs"))]
+    {
+        use lumen_core::ext::JsRuntime as _;
+        for src in &scripts {
+            match lumen_core::NullJsRuntime.eval(src) {
+                Ok(_) => {}
+                Err(lumen_core::JsError::NotImplemented) => {
+                    eprintln!(
+                        "script: engine=null, выполнение пропущено ({} байт)",
+                        src.len()
+                    );
+                }
+                Err(e) => eprintln!("script error: {e}"),
             }
         }
+        doc
     }
-    Box::new(lumen_core::NullJsRuntime)
 }
 
 /// Выполнить inline `<script>` блоки если sandbox позволяет, иначе заблокировать.
@@ -923,6 +977,7 @@ fn make_js_runtime() -> Box<dyn lumen_core::JsRuntime> {
 /// количество заблокированных и возвращает 0. Иначе каждый скрипт передаётся
 /// в `runtime.eval()`; без feature `quickjs` это NullJsRuntime → `NotImplemented`.
 /// Возвращает число скриптов, переданных в runtime.
+#[cfg(test)]
 fn run_scripts(
     doc: &Document,
     sandbox: lumen_core::SandboxFlags,
