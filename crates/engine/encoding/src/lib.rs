@@ -24,10 +24,12 @@ mod decoder;
 mod detect;
 mod ext_impl;
 mod tables;
+pub mod unicode_provider;
 
 pub use decoder::{decode, decode_to_string};
 pub use detect::{detect, sniff_meta_charset};
 pub use ext_impl::HeuristicDetector;
+pub use unicode_provider::Icu4xUnicodeProvider;
 
 /// Поддерживаемые в Phase 0 кодировки.
 ///
