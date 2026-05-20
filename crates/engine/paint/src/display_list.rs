@@ -767,6 +767,71 @@ fn fill_buckets(
 /// behind it», что в painter's order означает обратный обход
 /// (последний рисуется первым, первый — последним за основным
 /// текстом). Phase 0 — без `blur`: тень = тот же текст со смещением
+/// Рисует фон и рамку inline-элемента для одного `InlineFrag`.
+///
+/// `container_x` — левый край InlineRun-бокса.
+/// `frag.x` — смещение текста от container_x (уже учитывает padding_left + border_left).
+/// Фон рисуется от border-box левого края до border-box правого края.
+fn emit_inline_frag_box(
+    out: &mut Vec<DisplayCommand>,
+    container_x: f32,
+    line_y: f32,
+    line_h: f32,
+    frag: &InlineFrag,
+) {
+    if !frag.is_element_box {
+        return;
+    }
+    let s = &frag.style;
+    let bl = s.border_left_width;
+    let br = s.border_right_width;
+    let bt = s.border_top_width;
+    let bb = s.border_bottom_width;
+
+    // Border-box left edge = text_x - padding_left - border_left.
+    let box_x = container_x + frag.x - frag.padding_left - bl;
+    // Border-box width = border_left + padding_left + text + padding_right + border_right.
+    let box_w = bl + frag.padding_left + frag.width + frag.padding_right + br;
+    let box_h = line_h;
+    let box_y = line_y;
+
+    // Background (CSS Backgrounds L3: painted over padding+border area).
+    if let Some(CssColor::Rgba(bg)) = s.background_color
+        && bg.a > 0
+        && box_w > 0.0
+    {
+        out.push(DisplayCommand::FillRect {
+            rect: Rect::new(box_x, box_y, box_w, box_h),
+            color: bg,
+        });
+    }
+
+    // Border.
+    let has_border = s.border_top_style.is_visible()
+        || s.border_right_style.is_visible()
+        || s.border_bottom_style.is_visible()
+        || s.border_left_style.is_visible();
+    if has_border && box_w > 0.0 {
+        let cur = s.color;
+        out.push(DisplayCommand::DrawBorder {
+            rect: Rect::new(box_x, box_y, box_w, box_h),
+            widths: [bt, br, bb, bl],
+            colors: [
+                s.border_top_color.resolve(cur),
+                s.border_right_color.resolve(cur),
+                s.border_bottom_color.resolve(cur),
+                s.border_left_color.resolve(cur),
+            ],
+            styles: [
+                s.border_top_style,
+                s.border_right_style,
+                s.border_bottom_style,
+                s.border_left_style,
+            ],
+        });
+    }
+}
+
 /// (offset_x, offset_y) и shadow.color (None → currentColor =
 /// frag.style.color).
 fn emit_text_shadows(
@@ -1094,6 +1159,14 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             let line_h = b.style.font_size * b.style.line_height;
             for (line_idx, line) in lines.iter().enumerate() {
                 let line_y = b.rect.y + line_idx as f32 * line_h;
+                // Фаза 1: фон и рамки inline-элементов (под текстом).
+                for frag in line.iter() {
+                    if !matches!(frag.style.visibility, Visibility::Visible) {
+                        continue;
+                    }
+                    emit_inline_frag_box(out, b.rect.x, line_y, line_h, frag);
+                }
+                // Фаза 2: текст.
                 for frag in line {
                     // Per-frag visibility (inline element может иметь свой,
                     // отличный от parent-а — `<span visibility:visible>` внутри
@@ -1258,6 +1331,14 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             let line_h = b.style.font_size * b.style.line_height;
             for (line_idx, line) in lines.iter().enumerate() {
                 let line_y = b.rect.y + line_idx as f32 * line_h;
+                // Фаза 1: фон и рамки inline-элементов (под текстом).
+                for frag in line.iter() {
+                    if !matches!(frag.style.visibility, Visibility::Visible) {
+                        continue;
+                    }
+                    emit_inline_frag_box(out, b.rect.x, line_y, line_h, frag);
+                }
+                // Фаза 2: текст.
                 for frag in line {
                     // Per-frag visibility (см. emit_box_self).
                     if !matches!(frag.style.visibility, Visibility::Visible) {
