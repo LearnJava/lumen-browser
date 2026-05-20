@@ -17,7 +17,7 @@ use lumen_html_parser::{
 
 use crate::style::{
     compute_style, AlignValue, BackgroundImage, BoxSizing, ComputedStyle, Display, FlexBasis,
-    FlexDirection, Length, LengthOrAuto, TextAlign,
+    FlexDirection, FlexWrap, Length, LengthOrAuto, TextAlign,
 };
 use crate::TextMeasurer;
 
@@ -766,6 +766,8 @@ fn lay_out_flex(
         s.flex_direction,
         FlexDirection::RowReverse | FlexDirection::ColumnReverse
     );
+    let is_wrap = matches!(s.flex_wrap, FlexWrap::Wrap | FlexWrap::WrapReverse);
+    let is_wrap_reverse = matches!(s.flex_wrap, FlexWrap::WrapReverse);
 
     // Indices of non-Skip children (actual flex items).
     let item_idxs: Vec<usize> = children
@@ -784,25 +786,27 @@ fn lay_out_flex(
 
     // CSS Box Alignment §8: gap is fixed space between items, subtracted before flex-grow/shrink.
     let em = s.font_size;
+    // item_gap: gap between items along the main axis.
+    // cross_gap: gap between flex lines along the cross axis (wrap only).
     let item_gap = if is_column {
         s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)
     } else {
         s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)
     };
-    let n_items = item_idxs.len();
-    let total_gap = if n_items > 1 { item_gap * (n_items - 1) as f32 } else { 0.0 };
+    let cross_gap = if is_column {
+        s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)
+    } else {
+        s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)
+    };
 
-    // Step 1 — compute hypothetical main sizes.
-    // Do a preliminary layout for each item to get intrinsic sizes.
+    // Step 1 — preliminary layout for intrinsic sizes.
+    let cb = content_width;
     for &i in &item_idxs {
-        let item = &mut children[i];
-        lay_out(item, content_x, content_y, content_width, measurer, viewport);
+        lay_out(&mut children[i], content_x, content_y, content_width, measurer, viewport);
     }
 
-    let cb = content_width;
-
-    // hyp_mains[k] = total outer main-axis span of item k (including item's margins).
-    let mut hyp_mains: Vec<f32> = item_idxs
+    // Compute hypothetical main sizes for all items (outer = including margins).
+    let all_hyp: Vec<f32> = item_idxs
         .iter()
         .map(|&i| {
             let item = &children[i];
@@ -812,178 +816,208 @@ fn lay_out_flex(
             let m_r = is.margin_right.resolve_or_zero(iem, cb, viewport);
             let m_t = is.margin_top.resolve_or_zero(iem, cb, viewport);
             let m_b = is.margin_bottom.resolve_or_zero(iem, cb, viewport);
-
             match &is.flex_basis {
                 FlexBasis::Auto | FlexBasis::Content => {
-                    // Use result of preliminary layout.
-                    if is_column {
-                        item.rect.height + m_t + m_b
-                    } else {
-                        item.rect.width + m_l + m_r
-                    }
+                    if is_column { item.rect.height + m_t + m_b } else { item.rect.width + m_l + m_r }
                 }
                 FlexBasis::Length(l) => {
                     let base = l.resolve(iem, Some(cb), viewport).unwrap_or(0.0).max(0.0);
-                    if is_column {
-                        base + m_t + m_b
-                    } else {
-                        base + m_l + m_r
-                    }
+                    if is_column { base + m_t + m_b } else { base + m_l + m_r }
                 }
             }
         })
         .collect();
 
-    // Step 2 — distribute free space (flex-grow / flex-shrink).
-    let total_hyp: f32 = hyp_mains.iter().sum();
-    let free_space = if is_column { 0.0 } else { container_main - total_hyp - total_gap };
-
-    if free_space > 0.0 {
-        let total_grow: f32 = item_idxs.iter().map(|&i| children[i].style.flex_grow).sum();
-        if total_grow > 0.0 {
-            for (k, &i) in item_idxs.iter().enumerate() {
-                let grow = children[i].style.flex_grow;
-                hyp_mains[k] += free_space * (grow / total_grow);
-            }
-        }
-    } else if free_space < 0.0 {
-        // Weighted shrink: weight = shrink_factor * hypothetical_main.
-        let weights: Vec<f32> = item_idxs
-            .iter()
-            .enumerate()
-            .map(|(k, &i)| children[i].style.flex_shrink * hyp_mains[k])
-            .collect();
-        let total_weight: f32 = weights.iter().sum();
-        if total_weight > 0.0 {
-            for (k, _) in item_idxs.iter().enumerate() {
-                hyp_mains[k] = (hyp_mains[k] + free_space * (weights[k] / total_weight)).max(0.0);
-            }
-        }
-    }
-
-    // Step 3 — justify-content: compute start offset and gap between items.
-    let n = item_idxs.len();
-    let resolved_main: f32 = hyp_mains.iter().sum();
-    let remaining = if is_column { 0.0 } else { (content_width - resolved_main - total_gap).max(0.0) };
-
-    let (jc_start, jc_gap) = match s.justify_content {
-        AlignValue::End => (remaining, 0.0),
-        AlignValue::Center => (remaining / 2.0, 0.0),
-        AlignValue::SpaceBetween => {
-            if n <= 1 {
-                (0.0, 0.0)
+    // Step 2 — break items into flex lines.
+    // Wrap only applies to row direction (column wrapping requires known container height, Phase 0: skip).
+    let lines: Vec<Vec<usize>> = if is_wrap && !is_column && container_main > 0.0 {
+        let mut lines: Vec<Vec<usize>> = Vec::new();
+        let mut cur_line: Vec<usize> = Vec::new();
+        let mut cur_main = 0.0_f32;
+        for (k, &item_main) in all_hyp.iter().enumerate() {
+            let gap = if cur_line.is_empty() { 0.0 } else { item_gap };
+            if !cur_line.is_empty() && cur_main + gap + item_main > container_main {
+                lines.push(cur_line);
+                cur_line = vec![k];
+                cur_main = item_main;
             } else {
-                (0.0, remaining / (n - 1) as f32)
+                cur_line.push(k);
+                cur_main += gap + item_main;
             }
         }
-        AlignValue::SpaceAround => {
-            let per = remaining / n as f32;
-            (per / 2.0, per)
+        if !cur_line.is_empty() {
+            lines.push(cur_line);
         }
-        AlignValue::SpaceEvenly => {
-            let per = remaining / (n + 1) as f32;
-            (per, per)
-        }
-        _ => (0.0, 0.0), // Start / Auto / Normal
-    };
-
-    // Step 4 — final layout with resolved sizes.
-    // Order items (reverse if needed).
-    let ordered_keys: Vec<usize> = if is_reverse {
-        (0..n).rev().collect()
+        lines
     } else {
-        (0..n).collect()
+        vec![(0..item_idxs.len()).collect()]
     };
 
-    let mut main_cursor = jc_start;
+    // Step 3–5: process each line (grow/shrink, justify, position, align).
+    // cross_cursor tracks the current cross-axis offset across lines.
+    let mut cross_cursor = 0.0_f32;
 
-    for &k in &ordered_keys {
-        let i = item_idxs[k];
-        let outer_main = hyp_mains[k];
-        let item_s = children[i].style.clone();
-        let iem = item_s.font_size;
-        let m_l = item_s.margin_left.resolve_or_zero(iem, cb, viewport);
-        let m_r = item_s.margin_right.resolve_or_zero(iem, cb, viewport);
-        let m_t = item_s.margin_top.resolve_or_zero(iem, cb, viewport);
-        let m_b = item_s.margin_bottom.resolve_or_zero(iem, cb, viewport);
+    let n_lines = lines.len();
+    let ordered_line_idxs: Vec<usize> = if is_wrap_reverse {
+        (0..n_lines).rev().collect()
+    } else {
+        (0..n_lines).collect()
+    };
 
-        if is_column {
-            let inner_main = (outer_main - m_t - m_b).max(0.0);
-            children[i].style.height = Some(Length::Px(inner_main));
-            lay_out(
-                &mut children[i],
-                content_x + m_l,
-                content_y + main_cursor + m_t,
-                content_width - m_l - m_r,
-                measurer,
-                viewport,
-            );
-            main_cursor += outer_main + item_gap + jc_gap;
-        } else {
-            let inner_main = (outer_main - m_l - m_r).max(0.0);
-            children[i].style.width = Some(Length::Px(inner_main));
-            lay_out(
-                &mut children[i],
-                content_x + main_cursor + m_l,
-                content_y + m_t,
-                inner_main,
-                measurer,
-                viewport,
-            );
-            main_cursor += outer_main + item_gap + jc_gap;
-        }
-    }
+    for li in &ordered_line_idxs {
+        let line_keys = &lines[*li]; // keys into item_idxs
+        let n = line_keys.len();
 
-    // Step 5 — align-items on the cross axis.
-    // Row: cross axis = height.  Column: cross axis = width (auto = stretch).
-    if !is_column {
-        let cross_max: f32 = item_idxs
-            .iter()
-            .map(|&i| children[i].rect.height)
-            .fold(0.0_f32, f32::max);
+        // Per-line hyp mains (mutable for grow/shrink).
+        let mut hyp_mains: Vec<f32> = line_keys.iter().map(|&k| all_hyp[k]).collect();
 
-        for &i in &item_idxs {
-            let item = &mut children[i];
-            let is = &item.style;
-            let iem = is.font_size;
-            let m_t = is.margin_top.resolve_or_zero(iem, cb, viewport);
-            let m_b = is.margin_bottom.resolve_or_zero(iem, cb, viewport);
+        // Free space after gaps.
+        let line_gap_total = if n > 1 { item_gap * (n - 1) as f32 } else { 0.0 };
+        let total_hyp: f32 = hyp_mains.iter().sum();
+        let free_space = if is_column { 0.0 } else { container_main - total_hyp - line_gap_total };
 
-            let align = if matches!(is.align_self, AlignValue::Auto) {
-                s.align_items
-            } else {
-                is.align_self
-            };
-
-            let outer_cross = item.rect.height + m_t + m_b;
-            match align {
-                AlignValue::End => {
-                    item.rect.y = content_y + cross_max - outer_cross + m_t;
+        if free_space > 0.0 {
+            let total_grow: f32 = line_keys.iter().map(|&k| children[item_idxs[k]].style.flex_grow).sum();
+            if total_grow > 0.0 {
+                for (j, &k) in line_keys.iter().enumerate() {
+                    let grow = children[item_idxs[k]].style.flex_grow;
+                    hyp_mains[j] += free_space * (grow / total_grow);
                 }
-                AlignValue::Center => {
-                    item.rect.y = content_y + m_t + (cross_max - outer_cross) / 2.0;
-                }
-                AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
-                    // Stretch: override item height to fill cross axis.
-                    let stretch_h = (cross_max - m_t - m_b).max(item.rect.height);
-                    if item.rect.height < stretch_h {
-                        item.rect.height = stretch_h;
-                    }
-                    item.rect.y = content_y + m_t;
-                }
-                _ => {
-                    // Start / Baseline etc.: leave at content_y + m_t.
-                    item.rect.y = content_y + m_t;
+            }
+        } else if free_space < 0.0 {
+            let weights: Vec<f32> = line_keys
+                .iter()
+                .enumerate()
+                .map(|(j, &k)| children[item_idxs[k]].style.flex_shrink * hyp_mains[j])
+                .collect();
+            let total_weight: f32 = weights.iter().sum();
+            if total_weight > 0.0 {
+                for j in 0..n {
+                    hyp_mains[j] = (hyp_mains[j] + free_space * (weights[j] / total_weight)).max(0.0);
                 }
             }
         }
 
-        // Container content height = max cross size.
-        return cross_max;
+        // Justify-content within the line.
+        let resolved_main: f32 = hyp_mains.iter().sum();
+        let remaining = if is_column { 0.0 } else { (container_main - resolved_main - line_gap_total).max(0.0) };
+        let (jc_start, jc_gap) = match s.justify_content {
+            AlignValue::End => (remaining, 0.0),
+            AlignValue::Center => (remaining / 2.0, 0.0),
+            AlignValue::SpaceBetween => {
+                if n <= 1 { (0.0, 0.0) } else { (0.0, remaining / (n - 1) as f32) }
+            }
+            AlignValue::SpaceAround => {
+                let per = remaining / n as f32;
+                (per / 2.0, per)
+            }
+            AlignValue::SpaceEvenly => {
+                let per = remaining / (n + 1) as f32;
+                (per, per)
+            }
+            _ => (0.0, 0.0),
+        };
+
+        // Final layout: position items along main axis.
+        let ordered_keys: Vec<usize> = if is_reverse { (0..n).rev().collect() } else { (0..n).collect() };
+        let mut main_cursor = jc_start;
+
+        for &j in &ordered_keys {
+            let k = line_keys[j];
+            let i = item_idxs[k];
+            let outer_main = hyp_mains[j];
+            let item_s = children[i].style.clone();
+            let iem = item_s.font_size;
+            let m_l = item_s.margin_left.resolve_or_zero(iem, cb, viewport);
+            let m_r = item_s.margin_right.resolve_or_zero(iem, cb, viewport);
+            let m_t = item_s.margin_top.resolve_or_zero(iem, cb, viewport);
+            let m_b = item_s.margin_bottom.resolve_or_zero(iem, cb, viewport);
+
+            if is_column {
+                let inner_main = (outer_main - m_t - m_b).max(0.0);
+                children[i].style.height = Some(Length::Px(inner_main));
+                lay_out(
+                    &mut children[i],
+                    content_x + m_l,
+                    content_y + main_cursor + m_t,
+                    content_width - m_l - m_r,
+                    measurer,
+                    viewport,
+                );
+                main_cursor += outer_main + item_gap + jc_gap;
+            } else {
+                let inner_main = (outer_main - m_l - m_r).max(0.0);
+                children[i].style.width = Some(Length::Px(inner_main));
+                lay_out(
+                    &mut children[i],
+                    content_x + main_cursor + m_l,
+                    content_y + cross_cursor + m_t,
+                    inner_main,
+                    measurer,
+                    viewport,
+                );
+                main_cursor += outer_main + item_gap + jc_gap;
+            }
+        }
+
+        // Align-items on cross axis for this line.
+        let line_cross: f32 = if is_column {
+            0.0 // column cross axis (width) not handled in wrap Phase 0
+        } else {
+            line_keys.iter().map(|&k| children[item_idxs[k]].rect.height).fold(0.0_f32, f32::max)
+        };
+
+        if !is_column {
+            for &k in line_keys {
+                let i = item_idxs[k];
+                let item = &mut children[i];
+                let is = &item.style;
+                let iem = is.font_size;
+                let m_t = is.margin_top.resolve_or_zero(iem, cb, viewport);
+                let m_b = is.margin_bottom.resolve_or_zero(iem, cb, viewport);
+                let align = if matches!(is.align_self, AlignValue::Auto) { s.align_items } else { is.align_self };
+                let outer_cross = item.rect.height + m_t + m_b;
+                match align {
+                    AlignValue::End => {
+                        item.rect.y = content_y + cross_cursor + line_cross - outer_cross + m_t;
+                    }
+                    AlignValue::Center => {
+                        item.rect.y = content_y + cross_cursor + m_t + (line_cross - outer_cross) / 2.0;
+                    }
+                    AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
+                        let stretch_h = (line_cross - m_t - m_b).max(item.rect.height);
+                        if item.rect.height < stretch_h {
+                            item.rect.height = stretch_h;
+                        }
+                        item.rect.y = content_y + cross_cursor + m_t;
+                    }
+                    _ => {
+                        item.rect.y = content_y + cross_cursor + m_t;
+                    }
+                }
+            }
+        }
+
+        cross_cursor += line_cross + cross_gap;
     }
 
-    // Column: content height = sum of item outer heights.
-    main_cursor
+    // Remove trailing gap from cross_cursor.
+    let total_cross = if n_lines > 1 {
+        cross_cursor - cross_gap
+    } else {
+        cross_cursor
+    };
+
+    if is_column {
+        // Column: return main-axis height (main_cursor from last line).
+        // Re-compute from stored item positions.
+        item_idxs
+            .iter()
+            .map(|&i| children[i].rect.y + children[i].rect.height - content_y)
+            .fold(0.0_f32, f32::max)
+    } else {
+        total_cross
+    }
 }
 
 /// Разбивает потоковые сегменты на строки, объединяя слова с одинаковым стилем.
