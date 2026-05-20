@@ -133,12 +133,14 @@
 | 3A | 🟡 **`[P1+P2+P3]` Web Animations interpolation** | P2 п.3B; P3 scheduling | P1 done; P2/P3 pending |
 | ~~3B~~ | ✅ **`[P1+P3]` Push-tokenizer + incremental tree builder** | P3 п.4B | — |
 | 4A | 🟡 **`[P1+P2]` `<picture>`/`srcset`/`sizes` finishing** | P3 lazy-loading | P2 GPU upload |
-| 4B | 🟡 **`[P1]` CSS Grid + полный Flexbox** | Адаптивные сайты | — |
+| 4B | ✅ **`[P1]` CSS Grid + полный Flexbox** | Адаптивные сайты | 2026-05-20 |
 | 4B.1 | ✅ flex-direction + flex-wrap properties | `layout/src/style.rs` | — |
 | 4B.2 | ✅ flex-grow + flex-shrink + flex-basis | `layout/src/style.rs` | — |
 | 4B.3 | ✅ flex item layout pass (main/cross axis) | `layout/src/box_tree.rs` | — |
 | 4B.4 | ✅ flex gap application | `layout/src/box_tree.rs:509` | — |
 | 4B.5 | ✅ flex wrapping + multi-line | `layout/src/box_tree.rs:509` | — |
+| 4B.6 | ✅ CSS Grid properties (GridTrackSize/GridLine/GridAutoFlow) | `layout/src/style.rs` | — |
+| 4B.7 | ✅ CSS Grid layout (lay_out_grid + blockify) | `layout/src/box_tree.rs` | — |
 | 5 | ✅ **`[P1]` ICU4x segmenter + linebreak** | CJK типографика | — |
 | 5.1 | ✅ ICU4x struct + segmenter init | `encoding/src/unicode_provider.rs` | — |
 | 5.2 | ✅ line_break_opportunities impl | `encoding/src/unicode_provider.rs` | — |
@@ -361,6 +363,14 @@
 - **`picture-srcset-integration`**: `lumen-layout::box_tree::resolve_image_source(doc, img_id, viewport)` — вызывает `pick_picture_source`/`pick_img_source` с DPR=1.0; intrinsic-dims из `<source>` как presentational hint; `<source>`/`<track>` → `Display::None`. 9 unit-тестов.
 
 **Осталось:** IntersectionObserver event source для `loading="lazy"`.
+
+#### 4B.6-7 — CSS Grid layout (2026-05-20)
+
+- **`grid-properties`**: `GridTrackSize` (Auto/Length/Fr/MinContent/MaxContent/Minmax), `GridLine` (Auto/Line(i32)/Span(u32)), `GridAutoFlow` (Row/Column/RowDense/ColumnDense). `ComputedStyle` расширен 9 полями: `grid_template_columns`, `grid_template_rows`, `grid_auto_flow`, `grid_auto_columns`, `grid_auto_rows`, `grid_column_start`, `grid_column_end`, `grid_row_start`, `grid_row_end`.
+- **Парсеры**: `GridTrackSize::parse_track_list` — whitespace-tokenize с paren-aware depth для `minmax()/repeat()/fit-content()`; `repeat(N, ...)` разворачивается inline; `<Nfr>` fr-units. `GridLine::parse` — auto/span/integer. Shorthand-ы: `grid-column`, `grid-row`, `grid-area` (4-компонентный row/col/row-end/col-end), `grid-template` (slash-split), `grid` (alias к template).
+- **`lay_out_grid`**: Phase-0 реализация CSS Grid L1 §12. Явная расстановка (integer line-числа + span N), auto-placement (row и column flow, scan-forward без dense). Fr-раздача (`free_space / total_fr`). Auto-строки — по max-content детей. align-items / justify-items внутри ячеек. gap (column-gap / row-gap).
+- **blockify**: прямые дети grid/flex-контейнеров собираются индивидуальными `build_box()` без обёртки в `InlineRun` — CSS Grid L1 §6 «Item Blockification».
+- 12 unit-тестов. Итого: 1367 тестов.
 
 ---
 

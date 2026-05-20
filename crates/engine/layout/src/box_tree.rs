@@ -17,7 +17,7 @@ use lumen_html_parser::{
 
 use crate::style::{
     compute_style, AlignValue, BackgroundImage, BoxSizing, ComputedStyle, Display, FlexBasis,
-    FlexDirection, FlexWrap, Length, LengthOrAuto, TextAlign,
+    FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridTrackSize, Length, LengthOrAuto, TextAlign,
 };
 use crate::TextMeasurer;
 
@@ -405,6 +405,21 @@ fn build_box(
     let mut children = Vec::new();
     if matches!(kind, BoxKind::Block) {
         let dom_children: Vec<NodeId> = doc.get(id).children.clone();
+        // CSS Grid L1 §6: all direct children of a grid/flex container are
+        // "blockified" — they participate as individual items, not wrapped in
+        // InlineRun. Skip the inline-collection logic for these containers.
+        let is_item_container = matches!(
+            style.display,
+            Display::Grid | Display::InlineGrid | Display::Flex | Display::InlineFlex
+        );
+        if is_item_container {
+            for child_id in dom_children {
+                let child_box = build_box(doc, sheet, child_id, &style, viewport);
+                if !matches!(child_box.kind, BoxKind::Skip) {
+                    children.push(child_box);
+                }
+            }
+        } else {
         let mut i = 0;
         while i < dom_children.len() {
             let child_id = dom_children[i];
@@ -467,6 +482,7 @@ fn build_box(
                 i += 1;
             }
         }
+        } // end else (non-item-container)
     }
 
     LayoutBox {
@@ -633,6 +649,27 @@ fn lay_out(
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
                 let content_height = lay_out_flex(
+                    &mut b.children, &s, content_x, content_y, content_width, measurer, viewport,
+                );
+                b.rect.height = if let Some(h_len) = &s.height
+                    && let Some(h) = h_len.resolve(em, Some(cb), viewport)
+                {
+                    match s.box_sizing {
+                        BoxSizing::ContentBox => {
+                            (h + padding_top + padding_bottom
+                                + s.border_top_width + s.border_bottom_width).max(0.0)
+                        }
+                        BoxSizing::BorderBox => h.max(0.0),
+                    }
+                } else {
+                    content_height + padding_top + padding_bottom
+                        + s.border_top_width + s.border_bottom_width
+                };
+                return;
+            }
+            // Grid containers dispatch to lay_out_grid before block-flow.
+            if matches!(s.display, Display::Grid | Display::InlineGrid) {
+                let content_height = lay_out_grid(
                     &mut b.children, &s, content_x, content_y, content_width, measurer, viewport,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
@@ -1017,6 +1054,426 @@ fn lay_out_flex(
             .fold(0.0_f32, f32::max)
     } else {
         total_cross
+    }
+}
+
+/// CSS Grid Layout Level 1 — grid container layout.
+///
+/// Implements a Phase-0 subset of the grid layout algorithm (CSS Grid L1 §12):
+///
+/// - Explicit track lists (grid-template-columns / rows) with px, fr, auto.
+/// - `repeat(N, size)` expansion.
+/// - `minmax(min, max)` — min side used for sizing.
+/// - Integer line numbers (positive only), `span N`, and `auto` placement.
+/// - `grid-auto-flow: row | column` (no dense packing).
+/// - `gap` / `column-gap` / `row-gap` between cells.
+/// - `align-items` / `justify-items` within cells.
+///
+/// Returns the total content height of the grid.
+fn lay_out_grid(
+    children: &mut [LayoutBox],
+    s: &ComputedStyle,
+    content_x: f32,
+    content_y: f32,
+    content_width: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
+    let em = s.font_size;
+
+    // Indices of actual items (non-Skip).
+    let item_idxs: Vec<usize> = children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip))
+        .map(|(i, _)| i)
+        .collect();
+
+    if item_idxs.is_empty() {
+        return 0.0;
+    }
+
+    // Gap between tracks.
+    let col_gap = s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0);
+    let row_gap = s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0);
+
+    // Determine explicit track counts.
+    let n_explicit_cols = s.grid_template_columns.len().max(1);
+
+    // --- Step 1: Resolve placements for every item ---
+    // placement: (col_start, col_end, row_start, row_end) all 1-based inclusive/exclusive.
+    let mut placements: Vec<(u32, u32, u32, u32)> = vec![(0, 0, 0, 0); item_idxs.len()];
+
+    let row_flow = !matches!(s.grid_auto_flow, GridAutoFlow::Column | GridAutoFlow::ColumnDense);
+
+    // Pass 1: items with fully explicit placements.
+    for (k, &i) in item_idxs.iter().enumerate() {
+        let is = &children[i].style;
+        let cs = resolve_grid_line(&is.grid_column_start, n_explicit_cols as u32);
+        let ce = resolve_grid_line_end(&is.grid_column_end, cs, n_explicit_cols as u32);
+        let rs = resolve_grid_line(&is.grid_row_start, 0);
+        let re = resolve_grid_line_end(&is.grid_row_end, rs, 0);
+
+        if cs != 0 && rs != 0 {
+            // Fully explicit: both axes known.
+            placements[k] = (cs, ce, rs, re);
+        } else if cs != 0 {
+            // Column fixed, row auto.
+            placements[k] = (cs, ce, 0, 0);
+        } else if rs != 0 {
+            // Row fixed, column auto.
+            placements[k] = (0, 0, rs, re);
+        }
+        // both auto: handled in pass 2
+    }
+
+    // Pass 2: auto-place remaining items.
+    // Simple auto-placement: scan in row order, fill left-to-right then wrap.
+    let mut cursor_row: u32 = 1;
+    let mut cursor_col: u32 = 1;
+
+    for (k, _) in item_idxs.iter().enumerate() {
+        let (cs, ce, rs, re) = placements[k];
+        if cs != 0 && rs != 0 {
+            continue; // already placed
+        }
+
+        // Determine span
+        let col_span = if ce > cs { ce - cs } else { 1 };
+        let row_span = if re > rs { re - rs } else { 1 };
+
+        if row_flow {
+            // If column is fixed, row needs auto-placement.
+            let fixed_cs = if cs != 0 { cs } else { 0 };
+            let fixed_ce = if cs != 0 { ce } else { 0 };
+
+            // Find next empty cell starting at cursor.
+            loop {
+                let try_col = if fixed_cs != 0 { fixed_cs } else { cursor_col };
+                let try_ce = if fixed_cs != 0 { fixed_ce } else { try_col + col_span };
+                // Check if this cell overlaps any already-placed item in the same row.
+                let overlaps = (0..k).any(|j| {
+                    let (ocs, oce, ors, ore) = placements[j];
+                    ocs != 0 && ors != 0
+                        && cursor_row < ore && cursor_row + row_span > ors
+                        && try_col < oce && try_ce > ocs
+                });
+
+                if !overlaps && (try_ce - 1) <= n_explicit_cols as u32 || n_explicit_cols == 1 {
+                    placements[k] = (try_col, try_ce, cursor_row, cursor_row + row_span);
+                    // Advance cursor.
+                    cursor_col = try_ce;
+                    if cursor_col > n_explicit_cols as u32 {
+                        cursor_col = 1;
+                        cursor_row += 1;
+                    }
+                    break;
+                }
+                // Try next column.
+                if fixed_cs != 0 {
+                    // Column is fixed, just advance row.
+                    cursor_row += 1;
+                    cursor_col = 1;
+                } else {
+                    cursor_col += 1;
+                    if cursor_col > n_explicit_cols as u32 {
+                        cursor_col = 1;
+                        cursor_row += 1;
+                    }
+                }
+            }
+        } else {
+            // Column flow: fill top-to-bottom, wrap into next column.
+            let n_explicit_rows = s.grid_template_rows.len().max(1) as u32;
+            let fixed_rs = if rs != 0 { rs } else { 0 };
+            let fixed_re = if rs != 0 { re } else { 0 };
+
+            loop {
+                let try_row = if fixed_rs != 0 { fixed_rs } else { cursor_row };
+                let try_re = if fixed_rs != 0 { fixed_re } else { try_row + row_span };
+
+                let overlaps = (0..k).any(|j| {
+                    let (ocs, oce, ors, ore) = placements[j];
+                    ocs != 0 && ors != 0
+                        && cursor_col < oce && cursor_col + col_span > ocs
+                        && try_row < ore && try_re > ors
+                });
+
+                if !overlaps && (try_re - 1) <= n_explicit_rows || n_explicit_rows == 1 {
+                    placements[k] = (cursor_col, cursor_col + col_span, try_row, try_re);
+                    cursor_row = try_re;
+                    if cursor_row > n_explicit_rows {
+                        cursor_row = 1;
+                        cursor_col += 1;
+                    }
+                    break;
+                }
+                if fixed_rs != 0 {
+                    cursor_col += 1;
+                    cursor_row = 1;
+                } else {
+                    cursor_row += 1;
+                    if cursor_row > n_explicit_rows {
+                        cursor_row = 1;
+                        cursor_col += 1;
+                    }
+                }
+            }
+        }
+    }
+
+    // --- Step 2: Determine total grid dimensions ---
+    let n_cols = placements.iter().map(|&(_, ce, _, _)| ce.saturating_sub(1)).max().unwrap_or(1)
+        .max(n_explicit_cols as u32);
+    let n_rows = placements.iter().map(|&(_, _, _, re)| re.saturating_sub(1)).max().unwrap_or(1);
+
+    // --- Step 3: Compute column widths ---
+    // Compute fixed column widths.
+    let mut col_widths: Vec<f32> = (0..n_cols)
+        .map(|c| {
+            let ts = grid_track(c, &s.grid_template_columns, &s.grid_auto_columns);
+            match ts {
+                GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
+                GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
+                _ => 0.0, // fr / auto resolved later
+            }
+        })
+        .collect();
+
+    // Total gap between columns.
+    let total_col_gap = if n_cols > 1 { col_gap * (n_cols - 1) as f32 } else { 0.0 };
+    let fixed_col_total: f32 = col_widths.iter().sum::<f32>() + total_col_gap;
+    let free_col = (content_width - fixed_col_total).max(0.0);
+
+    // Distribute fr among column tracks.
+    let total_fr: f32 = (0..n_cols)
+        .map(|c| grid_track(c, &s.grid_template_columns, &s.grid_auto_columns).fr().unwrap_or(0.0))
+        .sum();
+    let auto_col_count = (0..n_cols)
+        .filter(|&c| matches!(
+            grid_track(c, &s.grid_template_columns, &s.grid_auto_columns),
+            GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent
+        ))
+        .count();
+
+    // For auto columns, divide remaining free space equally (after fr).
+    let fr_width = if total_fr > 0.0 { free_col / total_fr } else { 0.0 };
+    let auto_col_width = if auto_col_count > 0 && total_fr == 0.0 {
+        free_col / auto_col_count as f32
+    } else {
+        0.0
+    };
+
+    for c in 0..n_cols {
+        match grid_track(c, &s.grid_template_columns, &s.grid_auto_columns) {
+            GridTrackSize::Fr(f) => col_widths[c as usize] = (f * fr_width).max(0.0),
+            GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent => {
+                col_widths[c as usize] = auto_col_width;
+            }
+            _ => {}
+        }
+    }
+
+    // Column start offsets.
+    let mut col_offsets: Vec<f32> = Vec::with_capacity(n_cols as usize);
+    let mut x_off = 0.0_f32;
+    for c in 0..n_cols {
+        col_offsets.push(x_off);
+        x_off += col_widths[c as usize] + if c < n_cols - 1 { col_gap } else { 0.0 };
+    }
+
+    // --- Step 4: Layout items to measure row heights ---
+    // Explicit row heights.
+    let mut row_heights: Vec<f32> = (0..n_rows)
+        .map(|r| {
+            match grid_track(r, &s.grid_template_rows, &s.grid_auto_rows) {
+                GridTrackSize::Length(l) => l.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0),
+                GridTrackSize::Minmax(min, _) => min.resolve_fixed(em, content_width, viewport).unwrap_or(0.0),
+                _ => 0.0,
+            }
+        })
+        .collect();
+
+    // Layout each item in its cell to determine content height.
+    for (k, &i) in item_idxs.iter().enumerate() {
+        let (cs, ce, rs, _re) = placements[k];
+        if cs == 0 || rs == 0 {
+            continue; // unplaced (should not happen after auto-placement)
+        }
+        let c0 = (cs - 1).min(n_cols - 1) as usize;
+        let c1 = (ce - 1).min(n_cols) as usize;
+        let cell_w: f32 = if c1 > c0 {
+            col_widths[c0..c1].iter().sum::<f32>() + col_gap * (c1 - c0 - 1) as f32
+        } else {
+            col_widths[c0]
+        };
+        // Layout at temporary position (y=0) to get intrinsic height.
+        lay_out(&mut children[i], content_x + col_offsets[c0], 0.0, cell_w, measurer, viewport);
+        // Update auto row heights.
+        let r0 = (rs - 1) as usize;
+        if r0 < row_heights.len()
+            && matches!(
+                grid_track(r0 as u32, &s.grid_template_rows, &s.grid_auto_rows),
+                GridTrackSize::Auto | GridTrackSize::MinContent | GridTrackSize::MaxContent | GridTrackSize::Fr(_)
+            )
+        {
+            let item_h = children[i].rect.height;
+            if item_h > row_heights[r0] {
+                row_heights[r0] = item_h;
+            }
+        }
+    }
+
+    // Resolve fr row heights.
+    let total_row_gap = if n_rows > 1 { row_gap * (n_rows - 1) as f32 } else { 0.0 };
+    let fixed_row_total: f32 = row_heights.iter().sum::<f32>() + total_row_gap;
+    // If container has explicit height, distribute fr rows from it.
+    let container_h = s.height.as_ref().and_then(|h| h.resolve(em, Some(content_width), viewport));
+    let free_row = container_h.map(|h| (h - fixed_row_total).max(0.0)).unwrap_or(0.0);
+    let total_row_fr: f32 = (0..n_rows)
+        .map(|r| grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr().unwrap_or(0.0))
+        .sum();
+    if total_row_fr > 0.0 && free_row > 0.0 {
+        let fr_h = free_row / total_row_fr;
+        for r in 0..n_rows {
+            if let Some(f) = grid_track(r, &s.grid_template_rows, &s.grid_auto_rows).fr() {
+                row_heights[r as usize] = (f * fr_h).max(row_heights[r as usize]);
+            }
+        }
+    }
+
+    // Row top offsets.
+    let mut row_offsets: Vec<f32> = Vec::with_capacity(n_rows as usize);
+    let mut y_off = 0.0_f32;
+    for r in 0..n_rows {
+        row_offsets.push(y_off);
+        y_off += row_heights[r as usize] + if r < n_rows - 1 { row_gap } else { 0.0 };
+    }
+
+    // --- Step 5: Final positioning pass ---
+    for (k, &i) in item_idxs.iter().enumerate() {
+        let (cs, ce, rs, re) = placements[k];
+        if cs == 0 || rs == 0 {
+            // Unplaced — stack below grid content.
+            lay_out(&mut children[i], content_x, content_y + y_off, content_width, measurer, viewport);
+            y_off += children[i].rect.height;
+            continue;
+        }
+        let c0 = (cs - 1).min(n_cols - 1) as usize;
+        let c1 = (ce - 1).min(n_cols) as usize;
+        let r0 = (rs - 1).min(n_rows - 1) as usize;
+        let r1 = (re - 1).min(n_rows) as usize;
+
+        let cell_x = content_x + col_offsets[c0];
+        let cell_y = content_y + row_offsets[r0];
+        let cell_w: f32 = if c1 > c0 {
+            col_widths[c0..c1].iter().sum::<f32>() + col_gap * (c1 - c0 - 1) as f32
+        } else {
+            col_widths[c0]
+        };
+        let cell_h: f32 = if r1 > r0 {
+            row_heights[r0..r1].iter().sum::<f32>() + row_gap * (r1 - r0 - 1) as f32
+        } else {
+            row_heights[r0]
+        };
+
+        // Re-layout with final cell width.
+        lay_out(&mut children[i], cell_x, cell_y, cell_w, measurer, viewport);
+
+        let item = &mut children[i];
+        let is = &item.style;
+        let iem = is.font_size;
+        let m_t = is.margin_top.resolve_or_zero(iem, content_width, viewport);
+        let m_b = is.margin_bottom.resolve_or_zero(iem, content_width, viewport);
+        let m_l = is.margin_left.resolve_or_zero(iem, content_width, viewport);
+        let m_r = is.margin_right.resolve_or_zero(iem, content_width, viewport);
+
+        // align-items (cross / block axis within cell).
+        let align = if matches!(is.align_self, AlignValue::Auto) { s.align_items } else { is.align_self };
+        let item_outer_h = item.rect.height + m_t + m_b;
+        match align {
+            AlignValue::End => {
+                item.rect.y = cell_y + cell_h - item.rect.height - m_b;
+            }
+            AlignValue::Center => {
+                item.rect.y = cell_y + (cell_h - item_outer_h) / 2.0 + m_t;
+            }
+            AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
+                if item.rect.height < cell_h - m_t - m_b {
+                    item.rect.height = (cell_h - m_t - m_b).max(item.rect.height);
+                }
+                item.rect.y = cell_y + m_t;
+            }
+            _ => {
+                item.rect.y = cell_y + m_t;
+            }
+        }
+
+        // justify-items (inline axis within cell).
+        let justify = if matches!(is.justify_self, AlignValue::Auto) { s.justify_items } else { is.justify_self };
+        let item_outer_w = item.rect.width + m_l + m_r;
+        match justify {
+            AlignValue::End => {
+                item.rect.x = cell_x + cell_w - item.rect.width - m_r;
+            }
+            AlignValue::Center => {
+                item.rect.x = cell_x + (cell_w - item_outer_w) / 2.0 + m_l;
+            }
+            AlignValue::Stretch | AlignValue::Auto | AlignValue::Normal => {
+                item.rect.x = cell_x + m_l;
+            }
+            _ => {
+                item.rect.x = cell_x + m_l;
+            }
+        }
+    }
+
+    y_off
+}
+
+/// Return the track size for track index `idx` (0-based) from a template list,
+/// falling back to `auto_track` for implicit tracks beyond the template.
+fn grid_track<'a>(idx: u32, template: &'a [GridTrackSize], auto_track: &'a GridTrackSize) -> &'a GridTrackSize {
+    template.get(idx as usize).unwrap_or(auto_track)
+}
+
+/// Resolve a `GridLine` to a 1-based track number, or 0 if auto.
+fn resolve_grid_line(line: &GridLine, n_tracks: u32) -> u32 {
+    match line {
+        GridLine::Auto => 0,
+        GridLine::Line(n) => {
+            if *n > 0 {
+                *n as u32
+            } else if n_tracks > 0 {
+                // Negative line numbers count from the end.
+                (n_tracks as i32 + 1 + n).max(1) as u32
+            } else {
+                1
+            }
+        }
+        GridLine::Span(_) => 0, // span on start — auto
+    }
+}
+
+/// Resolve a grid-line end given start position and span.
+fn resolve_grid_line_end(line: &GridLine, start: u32, n_tracks: u32) -> u32 {
+    match line {
+        GridLine::Auto => {
+            if start > 0 { start + 1 } else { 0 }
+        }
+        GridLine::Line(n) => {
+            if *n > 0 {
+                (*n as u32).max(start + 1)
+            } else if n_tracks > 0 {
+                let abs = (n_tracks as i32 + 1 + n).max(1) as u32;
+                abs.max(start + 1)
+            } else {
+                start + 1
+            }
+        }
+        GridLine::Span(n) => {
+            if start > 0 { start + n } else { 0 }
+        }
     }
 }
 
