@@ -203,7 +203,13 @@
 | 4B.3 | ✅ preload URL resolution | `shell/src/main.rs` | — |
 | 4B.4 | ✅ preload fetch deduplication | `shell/src/main.rs` | — |
 | 4B.5 | ✅ preload priority + EventSink | `shell/src/main.rs` | — |
-| 5A | ⬜ **`[P3]` HTTP/2** | Latency | Только network |
+| 5A | 🟡 **`[P3]` HTTP/2** | Latency | Только network |
+| 5A.1 | ✅ ALPN h2 negotiation | `network/src/lib.rs` | h2 → Err placeholder, http/1.1 fallback |
+| 5A.2 | ⬜ Frame codec (RFC 9113 §6) | `network/src/h2/frame.rs` | parse/serialize 10 frame-типов |
+| 5A.3 | ⬜ HPACK (RFC 7541) | `network/src/h2/hpack.rs` | static+dynamic table, Huffman, integer enc |
+| 5A.4 | ⬜ Connection + single GET | `network/src/h2/conn.rs` | preface, SETTINGS, один stream |
+| 5A.5 | ⬜ Pool multiplexing | `network/src/h2/pool.rs` | concurrent streams в одном conn |
+| 5A.6 | ⬜ Flow control + WINDOW_UPDATE | `network/src/h2/flow.rs` | connection + stream windows |
 | 5B | ✅ **`[P3]` HTTP Range requests** | `<video>` seek | — |
 | 5C | ⬜ **`[P3]` DevTools/CDP минимум** (после 1B) | Debug движка | — |
 | 6+ | ⬜ **`[P3]` knowledge / Profiles / Focus / IME / WebSockets / SW / V8 / AI** (Phase 2-3) | — | — |

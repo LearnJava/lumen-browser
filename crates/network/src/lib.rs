@@ -5,7 +5,9 @@
 //! **HTTP/1.1 keep-alive + connection pool** (переиспользование TCP/TLS
 //! между запросами к одному origin-у), retry-on-stale при попытке писать
 //! в закрытое сервером idle-соединение.
-//! Не поддерживает: HTTP/2, кэширование, аутентификацию.
+//! TLS handshake негоциирует ALPN `[h2, http/1.1]`; HTTP/2 пока возвращает
+//! placeholder-ошибку (5A.1 — клиентский H2-стек в 5A.2–5A.6).
+//! Не поддерживает: HTTP/2 wire-protocol, кэширование, аутентификацию.
 //!
 //! URL парсится в `lumen_core::url::Url` — никакого собственного парсера здесь
 //! не держим. Из `Url` берём scheme, host (Punycode для DNS/TLS/Host header
@@ -485,22 +487,60 @@ fn connect(
         return Ok(Connection::new(RawStream::Plain(tcp)));
     }
 
-    let mut root_store = rustls::RootCertStore::empty();
-    root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-
-    let config = rustls::ClientConfig::builder()
-        .with_root_certificates(root_store)
-        .with_no_client_auth();
-
     let server_name = ServerName::try_from(host.to_owned())
         .map_err(|e| Error::Network(format!("invalid hostname '{host}': {e}")))?;
 
-    let conn = ClientConnection::new(Arc::new(config), server_name)
+    let mut conn = ClientConnection::new(default_tls_config(), server_name)
         .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+
+    // Завершаем handshake до отправки данных — иначе ALPN protocol неизвестен,
+    // а нам нужно знать версию (HTTP/1.1 vs HTTP/2) до формирования request bytes.
+    let mut tcp = tcp;
+    conn.complete_io(&mut tcp)
+        .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
+    check_negotiated_alpn(conn.alpn_protocol())?;
 
     Ok(Connection::new(RawStream::Tls(Box::new(
         rustls::StreamOwned::new(conn, tcp),
     ))))
+}
+
+/// TLS-конфиг для HTTPS-соединений. Кэшируется глобально, чтобы не
+/// перепарсивать webpki-roots на каждый connect. ALPN-протоколы заявлены
+/// в порядке предпочтения сервера: `h2` сильнее `http/1.1`.
+fn default_tls_config() -> Arc<rustls::ClientConfig> {
+    use std::sync::OnceLock;
+    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let mut root_store = rustls::RootCertStore::empty();
+            root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+            let mut cfg = rustls::ClientConfig::builder()
+                .with_root_certificates(root_store)
+                .with_no_client_auth();
+            cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+            Arc::new(cfg)
+        })
+        .clone()
+}
+
+/// Проверка, что выбранный сервером по ALPN протокол нам по силам.
+/// `Some(b"http/1.1")` или `None` (ALPN не использован) — продолжаем.
+/// `Some(b"h2")` — сервер согласился на HTTP/2, но клиент пока не умеет;
+/// клиентский HTTP/2-стек реализуется в 5A.2–5A.6.
+/// Любой другой ALPN — нарушение протокола (мы заявили только h2/http/1.1),
+/// rustls должен такое сам отвергать, но defensive-проверка дешёвая.
+fn check_negotiated_alpn(alpn: Option<&[u8]>) -> Result<()> {
+    match alpn {
+        None | Some(b"http/1.1") => Ok(()),
+        Some(b"h2") => Err(Error::Network(
+            "HTTP/2 negotiated via ALPN, but client not implemented yet".to_string(),
+        )),
+        Some(other) => Err(Error::Network(format!(
+            "unexpected ALPN protocol: {:?}",
+            String::from_utf8_lossy(other),
+        ))),
+    }
 }
 
 // ── Pool integration ─────────────────────────────────────────────────────────
@@ -1512,6 +1552,59 @@ impl NetworkTransport for HttpClient {
 mod tests {
     use super::*;
     use lumen_core::ext::{HttpAuthChallenge, HttpCredentials};
+
+    // ── ALPN (5A.1) ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn default_tls_config_advertises_h2_then_http11() {
+        // Server должен выбрать h2 (если умеет); fallback — http/1.1.
+        // Порядок ALPN-protocols в ClientHello — клиентское предпочтение.
+        let cfg = default_tls_config();
+        assert_eq!(
+            cfg.alpn_protocols,
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()],
+        );
+    }
+
+    #[test]
+    fn default_tls_config_is_cached() {
+        // Та же Arc должна возвращаться при повторных вызовах — иначе webpki-roots
+        // парсится на каждый connect (порядка сотни сертификатов).
+        let a = default_tls_config();
+        let b = default_tls_config();
+        assert!(Arc::ptr_eq(&a, &b));
+    }
+
+    #[test]
+    fn check_alpn_accepts_http11() {
+        check_negotiated_alpn(Some(b"http/1.1")).expect("http/1.1 must be supported");
+    }
+
+    #[test]
+    fn check_alpn_accepts_no_alpn() {
+        // RFC 7301: сервер вправе не выбрать ALPN-протокол. Тогда падаем на
+        // дефолтный HTTP/1.1 — это нормально.
+        check_negotiated_alpn(None).expect("absent ALPN must be supported");
+    }
+
+    #[test]
+    fn check_alpn_rejects_h2_with_placeholder() {
+        let err = check_negotiated_alpn(Some(b"h2")).unwrap_err();
+        let msg = format!("{err:?}");
+        assert!(
+            msg.contains("HTTP/2") && msg.contains("not implemented"),
+            "unexpected message: {msg}"
+        );
+    }
+
+    #[test]
+    fn check_alpn_rejects_unknown_proto() {
+        // Любой другой ALPN (например h3, spdy/3.1) — сервер не должен
+        // его выбирать, мы такого не заявляли. На всякий случай trip-wire:
+        // когда мы добавим h3 в Accept-список, надо явно расширить матчер.
+        let err = check_negotiated_alpn(Some(b"h3")).unwrap_err();
+        assert!(format!("{err:?}").contains("unexpected ALPN"));
+    }
 
     #[test]
     fn require_http_scheme_http_default_port() {
