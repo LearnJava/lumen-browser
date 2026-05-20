@@ -472,6 +472,16 @@ impl ResourceBase {
             }
         }
     }
+
+    /// Резолвить `href` относительно base и вернуть строковое представление.
+    /// Для `File` base — абсолютный путь; для `Url` base — абсолютный URL.
+    /// Используется в preload-dispatcher, где нужна строка (не `ResolvedResource`).
+    fn resolve_str(&self, href: &str) -> String {
+        match self.resolve(href) {
+            ResolvedResource::File(p) => p.to_string_lossy().into_owned(),
+            ResolvedResource::Url(u) => u,
+        }
+    }
 }
 
 enum ResolvedResource {
@@ -707,7 +717,7 @@ fn parse_and_layout(
     // §13.2.6.4.7). В Phase 0 загрузка блокирующая, но порядок вызовов
     // уже корректный — streaming pipeline подхватит его без переделки.
     let preload_hints = lumen_html_parser::scan_preload_hints(&source);
-    dispatch_preload_hints(&preload_hints, sink);
+    dispatch_preload_hints(&preload_hints, base, sink);
 
     let mut doc = lumen_html_parser::parse(&source);
     let title = extract_title(&doc);
@@ -794,30 +804,34 @@ fn render_bytes(
     ))
 }
 
-/// Найти первый `<title>` в дереве и склеить его текстовые дети.
-///
-/// HTML5 разрешает только один `<title>` в `<head>`, но мы lenient-парсер —
 /// Отправить preload-хинты в EventSink.
 ///
-/// Каждый `PreloadHint` преобразуется в `Event::SubresourceHintFound`.
-/// URL — сырой (ещё не разрешён относительно base); резолв — задача 4B.3.
+/// Каждый `PreloadHint` резолвится относительно `base` (4B.3) и
+/// преобразуется в `Event::SubresourceHintFound { url, kind }`.
+/// `srcset`-строки эмитятся как-есть (multi-URL формат — задача picker-а).
 /// В Phase 0 sink логирует в stderr; в будущем запустит fetch через HttpClient.
-fn dispatch_preload_hints(hints: &[lumen_html_parser::PreloadHint], sink: &Arc<dyn EventSink>) {
+fn dispatch_preload_hints(
+    hints: &[lumen_html_parser::PreloadHint],
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+) {
     use lumen_html_parser::PreloadHint;
     for hint in hints {
         let event = match hint {
             PreloadHint::Stylesheet { url } => Event::SubresourceHintFound {
-                url: url.clone(),
+                url: base.resolve_str(url),
                 kind: SubresourceKind::Stylesheet,
             },
             PreloadHint::Script { url } => Event::SubresourceHintFound {
-                url: url.clone(),
+                url: base.resolve_str(url),
                 kind: SubresourceKind::Script,
             },
             PreloadHint::Image { url: Some(url), .. } => Event::SubresourceHintFound {
-                url: url.clone(),
+                url: base.resolve_str(url),
                 kind: SubresourceKind::Image,
             },
+            // srcset содержит список URL — резолвинг каждого кандидата
+            // откладывается до picker-а; эмитим srcset-строку как-есть.
             PreloadHint::Image { url: None, srcset: Some(s), .. } => Event::SubresourceHintFound {
                 url: s.clone(),
                 kind: SubresourceKind::Image,
@@ -834,10 +848,11 @@ fn dispatch_preload_hints(hints: &[lumen_html_parser::PreloadHint], sink: &Arc<d
                     Some("style") => SubresourceKind::Stylesheet,
                     _ => SubresourceKind::Other { as_kind: as_kind.clone() },
                 };
-                Event::SubresourceHintFound { url: url.clone(), kind }
+                Event::SubresourceHintFound { url: base.resolve_str(url), kind }
             }
+            // Preconnect URL — origin, не содержит path — резолвинг тривиален.
             PreloadHint::Preconnect { url, dns_only } => Event::SubresourceHintFound {
-                url: url.clone(),
+                url: base.resolve_str(url),
                 kind: SubresourceKind::Preconnect { dns_only: *dns_only },
             },
             PreloadHint::Image { url: None, srcset: None, .. } => continue,
@@ -846,6 +861,9 @@ fn dispatch_preload_hints(hints: &[lumen_html_parser::PreloadHint], sink: &Arc<d
     }
 }
 
+/// Найти первый `<title>` в дереве и склеить его текстовые дети.
+///
+/// HTML5 разрешает только один `<title>` в `<head>`, но мы lenient-парсер —
 /// берём первый встречный. Энтити уже декодированы tokenizer-ом (RCDATA-режим).
 fn extract_title(doc: &Document) -> Option<String> {
     let mut buf = String::new();
@@ -2015,6 +2033,67 @@ mod tests {
             ResolvedResource::Url(u) => assert_eq!(u, "https://cdn.example.com/style.css"),
             ResolvedResource::File(_) => panic!("expected Url"),
         }
+    }
+
+    #[test]
+    fn resolve_str_url_base_relative() {
+        let base = ResourceBase::Url("https://example.com/path/page.html".to_owned());
+        assert_eq!(
+            base.resolve_str("style.css"),
+            "https://example.com/path/style.css"
+        );
+    }
+
+    #[test]
+    fn resolve_str_url_base_absolute_passthrough() {
+        let base = ResourceBase::Url("https://example.com/page.html".to_owned());
+        assert_eq!(
+            base.resolve_str("https://cdn.example.com/lib.js"),
+            "https://cdn.example.com/lib.js"
+        );
+    }
+
+    #[test]
+    fn resolve_str_file_base_yields_path_string() {
+        let base = ResourceBase::File(PathBuf::from("/home/user/page.html"));
+        let result = base.resolve_str("style.css");
+        assert!(result.ends_with("style.css"), "got: {result}");
+    }
+
+    #[test]
+    fn dispatch_preload_hints_emits_events() {
+        use lumen_core::event::SubresourceKind;
+        use lumen_html_parser::PreloadHint;
+        use std::sync::{Arc, Mutex};
+
+        struct CollectingSink(Mutex<Vec<Event>>);
+        impl EventSink for CollectingSink {
+            fn emit(&self, e: &Event) {
+                self.0.lock().unwrap().push(e.clone());
+            }
+        }
+
+        let sink: Arc<dyn EventSink> =
+            Arc::new(CollectingSink(Mutex::new(Vec::new())));
+        let base = ResourceBase::Url("https://example.com/".to_owned());
+        let hints = vec![
+            PreloadHint::Stylesheet { url: "reset.css".into() },
+            PreloadHint::Script { url: "https://cdn.example.com/lib.js".into() },
+        ];
+
+        dispatch_preload_hints(&hints, &base, &sink);
+
+        let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        let events = unsafe { (*sink_any).0.lock().unwrap() };
+        assert_eq!(events.len(), 2);
+
+        let Event::SubresourceHintFound { url, kind } = &events[0] else { panic!() };
+        assert_eq!(url, "https://example.com/reset.css");
+        assert_eq!(*kind, SubresourceKind::Stylesheet);
+
+        let Event::SubresourceHintFound { url: url2, kind: kind2 } = &events[1] else { panic!() };
+        assert_eq!(url2, "https://cdn.example.com/lib.js");
+        assert_eq!(*kind2, SubresourceKind::Script);
     }
 
     #[test]
