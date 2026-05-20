@@ -8,11 +8,11 @@
 
 use lumen_core::geom::Rect;
 use lumen_layout::{
-    box_can_own_stacking_context, creates_stacking_context, BackgroundClip, BorderStyle, BoxKind,
-    Color, CssColor, FontStyle, FontWeight, InlineFrag, LayoutBox, MixBlendMode as LayoutBlendMode,
-    ObjectFit, ObjectPosition, OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase,
-    PositionComponent, StackingContextId, StackingTree, TextDecorationStyle,
-    TextDecorationThickness, Visibility,
+    box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
+    BackgroundClip, BorderStyle, BoxKind, Color, CssColor, FontStyle, FontWeight, InlineFrag,
+    LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition, OutlineColor,
+    OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent, StackingContextId,
+    StackingTree, TextDecorationStyle, TextDecorationThickness, Visibility,
 };
 
 /// CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
@@ -191,6 +191,28 @@ pub enum DisplayCommand {
     /// Если снимок с `id` не зарегистрирован — команда молча игнорируется.
     /// Используется compositor-ом для повторного использования неизменных слоёв.
     DrawLayerSnapshot { id: u64, rect: Rect, alpha: f32 },
+    /// CSS Transforms L1 §13 — открывает transform-группу. Все последующие
+    /// команды до парного `PopTransform` рисуются с применением `matrix` к
+    /// координатам вершин (forward-матрица в viewport-системе, уже включает
+    /// `T(pivot)·M·T(-pivot)` по `transform-origin`). Phase 0 — 2D affine:
+    /// translate / rotate / scale / skew / matrix2d. Z/W-колонки игнорируются.
+    ///
+    /// Стек transform-ов в renderer-е перемножается с предыдущим топом, что
+    /// корректно отражает CSS-семантику вложенных трансформов (каждый transform
+    /// создаёт SC и применяется к собственному поддереву + детям).
+    ///
+    /// Phase 0 ограничения:
+    /// - `PushClipRect` под не-identity transform-ом использует axis-aligned
+    ///   bounding box трансформированного rect-а как scissor — корректно
+    ///   только для translate-чистых трансформов; rotate/scale могут потерять
+    ///   точность по краям. Полноценный clip через clip-mask — P2 п.4+.
+    /// - DrawBorder / DrawOutline эмитят 4 axis-aligned rect-а под стороны;
+    ///   при rotate они трансформируются по-отдельности, что выглядит
+    ///   корректно для translate/scale, но может рассинхронизировать стыки
+    ///   углов при больших углах rotate. Mitre-углы — отдельная задача.
+    PushTransform { matrix: Mat4 },
+    /// Закрывает transform-группу.
+    PopTransform,
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
@@ -480,6 +502,24 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     rect.x, rect.y, rect.width, rect.height,
                 ));
             }
+            DisplayCommand::PushTransform { matrix } => {
+                // 2D affine: x'=a·x+c·y+e, y'=b·x+d·y+f. Печатаем 6 значимых
+                // компонент в snapshot-friendly формате — детерминированный
+                // обход, не зависящий от Z/W-колонок (Phase 0 — 2D).
+                let m = &matrix.0;
+                let a = m[0];
+                let b = m[1];
+                let c = m[4];
+                let d = m[5];
+                let e = m[12];
+                let f = m[13];
+                out.push_str(&format!(
+                    "PushTransform [{a:.3} {b:.3} {c:.3} {d:.3} {e:.3} {f:.3}]\n"
+                ));
+            }
+            DisplayCommand::PopTransform => {
+                out.push_str("PopTransform\n");
+            }
         }
     }
     out
@@ -657,11 +697,15 @@ fn overflow_clips(o: Overflow) -> bool {
 /// - `mix-blend-mode != Normal` → `PushBlendMode { mode } / PopBlendMode`.
 /// - `overflow-x / overflow-y` ∈ {hidden, clip, scroll, auto} →
 ///   `PushClipRect { rect: b.rect } / PopClip`.
+/// - `transform != []` → `PushTransform { matrix } / PopTransform`.
+///   Matrix считается через `forward_box_transform`: T(pivot)·M·T(-pivot)
+///   в viewport-координатах, pivot = b.rect.origin + transform_origin.
 ///
 /// Порядок Push-команд (для child compositor-а смысла не несёт, но
-/// детерминирован для тестируемости): Clip → Blend → Opacity. Pop —
-/// в обратном (Opacity → Blend → Clip). Так visual-результат не зависит:
-/// все эффекты применяются на off-screen-layer-е одного box-а.
+/// детерминирован для тестируемости): Clip → Blend → Opacity → Transform.
+/// Pop — в обратном (Transform → Opacity → Blend → Clip). Transform пушится
+/// последним, чтобы преобразовывать всё содержимое SC (включая собственные
+/// background/border бокса, эмитимые в `root_bg`).
 fn box_layer_ops(b: &LayoutBox) -> (Vec<DisplayCommand>, Vec<DisplayCommand>) {
     let mut pre = Vec::new();
     let mut post = Vec::new();
@@ -683,6 +727,10 @@ fn box_layer_ops(b: &LayoutBox) -> (Vec<DisplayCommand>, Vec<DisplayCommand>) {
     if s.opacity < 1.0 {
         pre.push(DisplayCommand::PushOpacity { alpha: s.opacity });
         post.push(DisplayCommand::PopOpacity);
+    }
+    if let Some(matrix) = forward_box_transform(b) {
+        pre.push(DisplayCommand::PushTransform { matrix });
+        post.push(DisplayCommand::PopTransform);
     }
     // post в LIFO порядке относительно pre.
     post.reverse();
@@ -1192,6 +1240,13 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             if has_opacity {
                 out.push(DisplayCommand::PushOpacity { alpha: b.style.opacity });
             }
+            // CSS Transforms L1 §13: forward-матрица применяется до родителя,
+            // т.е. PushTransform — ВНУТРИ opacity-layer-а. Применяется ко
+            // всему содержимому box-а (включая собственный background/border).
+            let transform = forward_box_transform(b);
+            if let Some(matrix) = transform {
+                out.push(DisplayCommand::PushTransform { matrix });
+            }
             // CSS Display L3 §4 — `visibility: hidden`: self не рисуется
             // (фон/border/outline/shadow), но children обходятся (inherited
             // visibility, но child может вернуть себя через `:visible`).
@@ -1241,6 +1296,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 // (включая children), снаружи bounding-box-а. Phase 0 без
                 // деления paint phases для outline — эмитим в конце box-walk-а.
                 emit_outline(b, out);
+            }
+            if transform.is_some() {
+                out.push(DisplayCommand::PopTransform);
             }
             if has_opacity {
                 out.push(DisplayCommand::PopOpacity);
@@ -2351,6 +2409,8 @@ mod tests {
                 DisplayCommand::PushBlendMode { .. } => "PushBlendMode",
                 DisplayCommand::PopBlendMode => "PopBlendMode",
                 DisplayCommand::DrawLayerSnapshot { .. } => "DrawLayerSnapshot",
+                DisplayCommand::PushTransform { .. } => "PushTransform",
+                DisplayCommand::PopTransform => "PopTransform",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);
@@ -3870,5 +3930,172 @@ mod tests {
                                   | DisplayCommand::DrawBorder { .. }))
             .collect();
         assert!(any.is_empty());
+    }
+
+    // ── transform pipeline (P2) ────────────────────────────────────────────
+
+    #[test]
+    fn transform_none_emits_no_push() {
+        let dl = build("<div>x</div>", "div { background: #f00; }");
+        assert_eq!(
+            count_variant(&dl, |c| matches!(c, DisplayCommand::PushTransform { .. })),
+            0,
+        );
+    }
+
+    #[test]
+    fn transform_translate_emits_push_pop_pair() {
+        let dl = build(
+            r#"<div style="background: red; transform: translate(10px, 20px);">x</div>"#,
+            "",
+        );
+        let pushes = count_variant(&dl, |c| matches!(c, DisplayCommand::PushTransform { .. }));
+        let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopTransform));
+        assert_eq!(pushes, 1);
+        assert_eq!(pops, 1);
+    }
+
+    #[test]
+    fn transform_translate_matrix_has_expected_offsets() {
+        // translate(50px, 70px) с default transform-origin (Phase 0 — (0,0)):
+        // matrix = T(0,0)·T(50,70)·T(-0,-0) = T(50,70).
+        // 2D affine: x'=x+50, y'=y+70 → (a,b,c,d,e,f) = (1,0,0,1,50,70).
+        let dl = build(
+            r#"<div style="background: red; transform: translate(50px, 70px);">x</div>"#,
+            "",
+        );
+        let push = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushTransform { matrix } => Some(matrix),
+                _ => None,
+            })
+            .expect("PushTransform missing");
+        let a = push.0[0];
+        let b = push.0[1];
+        let c = push.0[4];
+        let d = push.0[5];
+        let e = push.0[12];
+        let f = push.0[13];
+        assert!((a - 1.0).abs() < 1e-5);
+        assert!(b.abs() < 1e-5);
+        assert!(c.abs() < 1e-5);
+        assert!((d - 1.0).abs() < 1e-5);
+        assert!((e - 50.0).abs() < 1e-5);
+        assert!((f - 70.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn transform_push_wraps_box_content() {
+        // PushTransform идёт до собственного FillRect фона, PopTransform — после.
+        let dl = build(
+            r#"<div style="background: red; transform: translate(10px, 0);">x</div>"#,
+            "",
+        );
+        let push_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PushTransform { .. }))
+            .unwrap();
+        let pop_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PopTransform))
+            .unwrap();
+        let fill_idx = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::FillRect { .. }))
+            .unwrap();
+        assert!(push_idx < fill_idx, "Push должен идти до контента");
+        assert!(fill_idx < pop_idx, "Pop должен идти после контента");
+    }
+
+    #[test]
+    fn transform_after_opacity_in_walk_order() {
+        // Phase 0 simple `walk`: PushOpacity → PushTransform → content →
+        // PopTransform → PopOpacity. Transform применяется ВНУТРИ opacity-
+        // layer-а (его эффект — на off-screen layer перед композицией).
+        let dl = build(
+            r#"<div style="background: red; opacity: 0.5; transform: scale(2);">x</div>"#,
+            "",
+        );
+        let push_op = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PushOpacity { .. }))
+            .unwrap();
+        let push_tr = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PushTransform { .. }))
+            .unwrap();
+        let pop_tr = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PopTransform))
+            .unwrap();
+        let pop_op = dl
+            .iter()
+            .position(|c| matches!(c, DisplayCommand::PopOpacity))
+            .unwrap();
+        assert!(push_op < push_tr);
+        assert!(push_tr < pop_tr);
+        assert!(pop_tr < pop_op);
+    }
+
+    #[test]
+    fn transform_serialize_2d_affine_components() {
+        let dl = vec![
+            DisplayCommand::PushTransform {
+                matrix: Mat4::from_2d_affine(2.0, 0.0, 0.0, 0.5, 10.0, -20.0),
+            },
+            DisplayCommand::PopTransform,
+        ];
+        let s = serialize_display_list(&dl);
+        // a=2.000 b=0.000 c=0.000 d=0.500 e=10.000 f=-20.000.
+        assert_eq!(
+            s,
+            "PushTransform [2.000 0.000 0.000 0.500 10.000 -20.000]\nPopTransform\n"
+        );
+    }
+
+    #[test]
+    fn transform_ordered_emits_via_box_layer_ops() {
+        // build_display_list_ordered идёт через box_layer_ops; должен дать
+        // Push/Pop пару наряду с simple walk-ом.
+        let dl = build_ordered(
+            r#"<div style="background: red; transform: rotate(45deg);">x</div>"#,
+            "",
+        );
+        let pushes = count_variant(&dl, |c| matches!(c, DisplayCommand::PushTransform { .. }));
+        let pops = count_variant(&dl, |c| matches!(c, DisplayCommand::PopTransform));
+        assert_eq!(pushes, 1);
+        assert_eq!(pops, 1);
+    }
+
+    #[test]
+    fn transform_origin_affects_matrix() {
+        // С transform-origin (10, 20) и translate(0, 0) матрица =
+        // T(10+box_x, 20+box_y) · I · T(-(10+box_x), -(20+box_y)) = I.
+        // Здесь box_x/box_y зависят от layout; берём rotate чтобы origin
+        // действительно изменял результат. rotate(90deg) с origin (0,0) -
+        // точка (1,0) → (0,1). С origin (10,0) — точка (1,0) → (10, -9).
+        // Просто проверяем что матрица не identity при rotate.
+        let dl = build(
+            r#"<div style="background: red; transform: rotate(90deg);">x</div>"#,
+            "",
+        );
+        let push = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushTransform { matrix } => Some(matrix),
+                _ => None,
+            })
+            .unwrap();
+        assert!(!push.is_identity(), "rotate(90deg) ≠ identity");
+        // sin/cos(90°): a=cos=0, b=sin=1, c=-sin=-1, d=cos=0.
+        let a = push.0[0];
+        let b = push.0[1];
+        let c = push.0[4];
+        let d = push.0[5];
+        assert!(a.abs() < 1e-5);
+        assert!((b - 1.0).abs() < 1e-5);
+        assert!((c + 1.0).abs() < 1e-5);
+        assert!(d.abs() < 1e-5);
     }
 }

@@ -29,7 +29,7 @@ use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{Bitmap, Cmap, Font, Head, Hhea, Hmtx, Outline, Rasterizer, SystemFontIndex};
 use lumen_image::{Image, PixelFormat};
-use lumen_layout::{BorderStyle, Color, FontStyle, FontWeight, OutlineStyle};
+use lumen_layout::{BorderStyle, Color, FontStyle, FontWeight, Mat4, OutlineStyle};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
@@ -1745,6 +1745,15 @@ impl Renderer {
         // Реальное переключение pipeline по mode — задача 1B.5+.
         let mut blend_mode_stack: Vec<BlendMode> = Vec::new();
 
+        // CSS Transforms L1 §13 — стек активных forward-матриц. Каждый элемент
+        // хранит АККУМУЛИРОВАННОЕ произведение (родитель · self), т.е. на топе
+        // лежит матрица, готовая к прямому применению к viewport-координатам
+        // вершин. На PushTransform — `top.multiply(&new)` (multiplication
+        // справа моделирует «применить self до родителя» в column-major
+        // конвенции, что соответствует CSS «inner transform applied first»).
+        // На PopTransform — сбрасываем топ.
+        let mut transform_stack: Vec<Mat4> = Vec::new();
+
         // Render plan: список батчей и composite-переходов.
         #[derive(Clone, Copy)]
         enum LoadOpChoice { ClearWhite, ClearTransparent, Load }
@@ -1812,6 +1821,9 @@ impl Renderer {
                         translate_rect(*rect, dx, dy),
                         apply_alpha_to_color(color_to_array(color), alpha),
                     );
+                    if let Some(m) = transform_stack.last() {
+                        apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                    }
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
                         draw_ops.push(DrawOp::Fill { v_start, v_count });
@@ -1873,6 +1885,9 @@ impl Renderer {
                             *sl,
                         );
                     }
+                    if let Some(m) = transform_stack.last() {
+                        apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                    }
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
                         draw_ops.push(DrawOp::Fill { v_start, v_count });
@@ -1913,6 +1928,9 @@ impl Renderer {
                         &mut self.cached_glyphs,
                         font_variation_axes,
                     );
+                    if let Some(m) = transform_stack.last() {
+                        apply_affine_to_verts(&mut text_vertices[v_start as usize..], m);
+                    }
                     let v_count = text_vertices.len() as u32 - v_start;
                     if v_count > 0 {
                         draw_ops.push(DrawOp::Text { v_start, v_count });
@@ -1980,6 +1998,9 @@ impl Renderer {
                         c,
                         *style,
                     );
+                    if let Some(m) = transform_stack.last() {
+                        apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                    }
                     let v_count = fill_vertices.len() as u32 - v_start;
                     if v_count > 0 {
                         draw_ops.push(DrawOp::Fill { v_start, v_count });
@@ -2011,6 +2032,12 @@ impl Renderer {
                         ) {
                             let v_start = image_vertices.len() as u32;
                             push_image_quad(&mut image_vertices, visible, uv_min, uv_max, alpha);
+                            if let Some(m) = transform_stack.last() {
+                                apply_affine_to_verts(
+                                    &mut image_vertices[v_start as usize..],
+                                    m,
+                                );
+                            }
                             let v_count = image_vertices.len() as u32 - v_start;
                             let image_batch_idx = image_bind_groups.len() as u32;
                             image_bind_groups.push(gpu.bind_group.clone());
@@ -2026,6 +2053,9 @@ impl Renderer {
                             scrolled,
                             apply_alpha_to_color([0.85, 0.85, 0.85, 1.0], alpha),
                         );
+                        if let Some(m) = transform_stack.last() {
+                            apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                        }
                         let v_count = fill_vertices.len() as u32 - v_start;
                         if v_count > 0 {
                             draw_ops.push(DrawOp::Fill { v_start, v_count });
@@ -2118,11 +2148,29 @@ impl Renderer {
                             [1.0, 1.0],
                             *alpha,
                         );
+                        if let Some(m) = transform_stack.last() {
+                            apply_affine_to_verts(&mut image_vertices[v_start as usize..], m);
+                        }
                         let v_count = image_vertices.len() as u32 - v_start;
                         let image_batch_idx = image_bind_groups.len() as u32;
                         image_bind_groups.push(snap.bind_group.clone());
                         draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
                     }
+                }
+                // CSS Transforms L1 §13 — пушим matrix умноженную на текущий
+                // топ (накопление транcформов вложенных боксов). Топ-матрица
+                // применяется ко всем последующим вершинам до парного
+                // PopTransform. Сам Push/Pop не флашит batch — transform
+                // CPU-side применяется к вершинам, не меняет GPU-pipeline.
+                DisplayCommand::PushTransform { matrix } => {
+                    let accumulated = match transform_stack.last() {
+                        Some(prev) => prev.multiply(matrix),
+                        None => *matrix,
+                    };
+                    transform_stack.push(accumulated);
+                }
+                DisplayCommand::PopTransform => {
+                    transform_stack.pop();
                 }
             }
         }
@@ -2429,6 +2477,46 @@ impl Renderer {
 /// `dy = 0`. Без mutation — Rect: Copy.
 fn translate_rect(rect: Rect, dx: f32, dy: f32) -> Rect {
     Rect::new(rect.x + dx, rect.y + dy, rect.width, rect.height)
+}
+
+/// Применяет 2D-аффинную матрицу к `pos` вершинам в диапазоне `verts`.
+/// CSS Transforms L1 §13 forward-применение: каждая вершина (x,y) переходит
+/// в (a·x+c·y+e, b·x+d·y+f), где a..f — 6 компонент 2D affine части Mat4.
+/// Z/W колонки игнорируются (Phase 0 — только 2D трансформы).
+///
+/// Каждый из FillVertex / TextVertex / ImageVertex имеет одинаковый layout
+/// в начале (`pos: [f32; 2]`); функция параметризована типом V и читает
+/// только `pos`-смещение через trait `VertexPos`.
+trait VertexPos {
+    fn pos_mut(&mut self) -> &mut [f32; 2];
+}
+
+impl VertexPos for FillVertex {
+    fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
+}
+
+impl VertexPos for TextVertex {
+    fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
+}
+
+impl VertexPos for ImageVertex {
+    fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
+}
+
+fn apply_affine_to_verts<V: VertexPos>(verts: &mut [V], m: &Mat4) {
+    let a = m.0[0];
+    let b = m.0[1];
+    let c = m.0[4];
+    let d = m.0[5];
+    let e = m.0[12];
+    let f = m.0[13];
+    for v in verts {
+        let p = v.pos_mut();
+        let x = p[0];
+        let y = p[1];
+        p[0] = a * x + c * y + e;
+        p[1] = b * x + d * y + f;
+    }
 }
 
 fn push_fill_quad(out: &mut Vec<FillVertex>, rect: Rect, color: [f32; 4]) {
