@@ -21,6 +21,65 @@
 //! Sprint 0 stub имитирует discrete: всегда step-half, без типизации.
 
 use crate::style::{Color, FilterFn, GradientStop, Length, TransformFn};
+use lumen_css_parser::Declaration;
+use lumen_dom::NodeId;
+use std::collections::HashMap;
+
+// ─── P3 п.3A: scheduling types ──────────────────────────────────────────────
+
+/// Sparse animated values for one element — scheduler output per node per frame.
+/// P2 compositor reads `opacity` and `transform` to apply them without relayout.
+#[derive(Debug, Clone, Default)]
+pub struct AnimatedStyle {
+    pub opacity: Option<f32>,
+    pub transform: Option<Vec<TransformFn>>,
+    pub color: Option<Color>,
+    pub background_color: Option<Color>,
+}
+
+/// Output of `AnimationScheduler::tick` — per-node animated values for one frame.
+/// `has_active` drives the `request_redraw` loop in the shell.
+#[derive(Debug, Default)]
+pub struct AnimationFrame {
+    /// Node-level style overrides for this frame.
+    pub overrides: HashMap<NodeId, AnimatedStyle>,
+    /// True if at least one animation is still in its active period.
+    pub has_active: bool,
+}
+
+/// Sparse style extracted from one `@keyframes` frame's declarations.
+/// Only the commonly animated properties are populated.
+#[derive(Debug, Clone, Default)]
+pub struct KeyframeStyle {
+    pub opacity: Option<f32>,
+    pub transform: Option<Vec<TransformFn>>,
+    pub color: Option<Color>,
+    pub background_color: Option<Color>,
+}
+
+/// Parse the `declarations` of one `@keyframes` frame into a [`KeyframeStyle`].
+/// Only CSS Animations commonly animated properties are extracted.
+pub fn parse_keyframe_style(declarations: &[Declaration]) -> KeyframeStyle {
+    let mut ks = KeyframeStyle::default();
+    for decl in declarations {
+        match decl.property.as_str() {
+            "opacity" => {
+                ks.opacity = decl.value.trim().parse::<f32>().ok().map(|v| v.clamp(0.0, 1.0));
+            }
+            "transform" => {
+                ks.transform = Some(crate::style::parse_transform_list(decl.value.as_str()));
+            }
+            "color" => {
+                ks.color = crate::style::parse_color(decl.value.as_str());
+            }
+            "background-color" => {
+                ks.background_color = crate::style::parse_color(decl.value.as_str());
+            }
+            _ => {}
+        }
+    }
+    ks
+}
 
 /// Анимируемое значение. Phase 0: восемь вариантов — Number / Length / Color /
 /// TransformList / FilterList / GradientStops / Discrete (для non-interpolable
