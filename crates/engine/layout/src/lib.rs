@@ -22,13 +22,15 @@ pub mod style;
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
+    CompositorAnimFrame, CompositorOverride,
 };
 pub use box_tree::{
     collect_background_image_requests, collect_image_requests, layout, layout_measured, BoxKind,
     ImageRequest, InlineFrag, InlineSegment, LayoutBox,
 };
 pub use property_trees::{
-    compute_local_transform, forward_box_transform, ClipNode, ClipTree, EffectNode, EffectTree,
+    compute_local_transform, forward_box_transform, transform_fns_to_matrix,
+    ClipNode, ClipTree, EffectNode, EffectTree,
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
 pub use snapshot::serialize_layout_tree;

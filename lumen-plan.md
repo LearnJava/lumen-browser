@@ -131,7 +131,7 @@
 | 1B.2 | ✅ Color type через все декларации каскада | `layout/src/style.rs` | 2026-05-19 |
 | 2A | ✅ **`[P1+P2]` Stacking contexts impl** | P2 п.2A | — |
 | 2B | ✅ **`[P2+P1]` Property trees построение** | P2 п.1B | — |
-| 3A | 🟡 **`[P1+P2+P3]` Web Animations interpolation** | P2 п.3B; P3 scheduling | P1 done; P2/P3 pending |
+| 3A | ✅ **`[P1+P2+P3]` Web Animations interpolation** | P2 п.3B; P3 scheduling | 2026-05-20 |
 | ~~3B~~ | ✅ **`[P1+P3]` Push-tokenizer + incremental tree builder** | P3 п.4B | — |
 | 4A | ✅ **`[P1+P2]` `<picture>`/`srcset`/`sizes` finishing** | P3 lazy-loading | — |
 | 4B | ✅ **`[P1]` CSS Grid + полный Flexbox** | Адаптивные сайты | 2026-05-20 |
@@ -173,7 +173,12 @@
 | 3A.3 | ✅ HDR tone-mapping utilities (sRGB↔P3) | `layout/src/style.rs` | 2026-05-20 |
 | 3A.4 | ✅ ColorFloat variant (f32 channels) | `layout/src/style.rs` | 2026-05-20 |
 | 3A.5 | ✅ color space awareness in renderer | `paint/src/display_list.rs` | 2026-05-20 |
-| 3B | ⬜ **`[P1+P2+P3]` Web Animations compositor offload** | Smooth-анимации | Stub компилируется |
+| 3B | ✅ **`[P1+P2+P3]` Web Animations compositor offload** | Smooth-анимации | 2026-05-20 |
+| 3B.1 | ✅ CompositorAnimFrame + CompositorOverride types | `layout/src/animation.rs` | 2026-05-20 |
+| 3B.2 | ✅ AnimationFrame::to_compositor_frame() | `layout/src/animation.rs` | 2026-05-20 |
+| 3B.3 | ✅ transform_fns_to_matrix helper | `layout/src/property_trees.rs` | 2026-05-20 |
+| 3B.4 | ✅ build_display_list_with_anim + walk_with_anim | `paint/src/display_list.rs` | 2026-05-20 |
+| 3B.5 | ✅ shell wires anim_frame → DL rebuild without relayout | `shell/src/main.rs` | 2026-05-20 |
 | 4 | ✅ **`[P1+P2]` mix-blend-mode/backdrop-filter pipeline** | Современные UI-эффекты | 2026-05-20 |
 | 4.5 | ✅ **`[P2]` Transform pipeline (DisplayCommand + renderer)** | P4 transform matrix | 2026-05-20 |
 | 4.5.1 | ✅ PushTransform/PopTransform DisplayCommand | `paint/src/display_list.rs` | 2026-05-20 |

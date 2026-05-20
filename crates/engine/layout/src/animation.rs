@@ -47,6 +47,60 @@ pub struct AnimationFrame {
     pub has_active: bool,
 }
 
+impl AnimationFrame {
+    /// Extract only compositor-offloadable properties (opacity, transform).
+    ///
+    /// opacity and transform can be applied by patching the display list during
+    /// paint without relayout. color/background-color require full relayout and
+    /// stay in the caller's AnimationFrame for that path.
+    pub fn to_compositor_frame(&self) -> CompositorAnimFrame {
+        let mut frame = CompositorAnimFrame {
+            has_active: self.has_active,
+            overrides: HashMap::new(),
+        };
+        for (&node, style) in &self.overrides {
+            if style.opacity.is_some() || style.transform.is_some() {
+                frame.overrides.insert(node, CompositorOverride {
+                    opacity: style.opacity,
+                    transform: style.transform.clone(),
+                });
+            }
+        }
+        frame
+    }
+}
+
+/// Compositor-offloadable overrides for one element.
+///
+/// Only opacity and transform: these are applied as display-list patches
+/// (PushOpacity / PushTransform) without relayout. color/background-color
+/// require relayout and live in AnimatedStyle instead.
+#[derive(Debug, Clone, Default)]
+pub struct CompositorOverride {
+    pub opacity: Option<f32>,
+    pub transform: Option<Vec<TransformFn>>,
+}
+
+/// Per-frame compositor overrides — output of `AnimationFrame::to_compositor_frame`.
+///
+/// Passed to `build_display_list_with_anim` in lumen-paint to patch PushOpacity /
+/// PushTransform commands per node without relayout.
+#[derive(Debug, Default)]
+pub struct CompositorAnimFrame {
+    pub overrides: HashMap<NodeId, CompositorOverride>,
+    pub has_active: bool,
+}
+
+impl CompositorAnimFrame {
+    pub fn is_empty(&self) -> bool {
+        self.overrides.is_empty()
+    }
+
+    pub fn get(&self, node: NodeId) -> Option<&CompositorOverride> {
+        self.overrides.get(&node)
+    }
+}
+
 /// Sparse style extracted from one `@keyframes` frame's declarations.
 /// Only the commonly animated properties are populated.
 #[derive(Debug, Clone, Default)]

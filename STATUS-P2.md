@@ -1,9 +1,8 @@
 In progress: —
 
-Next: 3B Web Animations compositor offload  lumen-plan.md:169  (blocked: P1+P3)
+Next: (P2 Phase 2+)
 
 Queue:
-3B Web Animations compositor offload    lumen-plan.md:169  (blocked: P1+P3)
 
 Recent: transform-pipeline 2026-05-20 (PushTransform/PopTransform DisplayCommand + renderer-stack 2D affine — разблокирует P4 transform matrix, 8 tests)
         font-variation-css 2026-05-20 (font-variation-settings CSS Fonts L4 §7 — cascade+renderer normalization, 8 tests)

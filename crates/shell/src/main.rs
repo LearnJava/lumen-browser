@@ -34,7 +34,7 @@ use lumen_core::ext::EventSink;
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
 use lumen_layout::LayoutBox;
-use lumen_paint::{DisplayList, Renderer};
+use lumen_paint::{build_display_list_with_anim, DisplayList, Renderer};
 use winit::application::ApplicationHandler;
 
 /// EventSink, который печатает сетевые события в stdout — это и есть
@@ -1642,11 +1642,28 @@ impl ApplicationHandler for Lumen {
                     overlay_buf = combined;
                 }
 
+                // Compositor offload: если есть активные анимации с opacity/transform —
+                // пересобираем display list из layout_box с overrides, минуя relayout.
+                // color/background-color остаются в anim_frame на будущее (требуют relayout).
+                let anim_dl: Option<lumen_paint::DisplayList> =
+                    if let (Some(frame), Some(lb)) = (&self.anim_frame, &self.layout_box) {
+                        let comp = frame.to_compositor_frame();
+                        if !comp.is_empty() {
+                            Some(build_display_list_with_anim(lb, Some(&comp)))
+                        } else {
+                            None
+                        }
+                    } else {
+                        None
+                    };
+
                 let scroll_y = self.scroll_y;
                 let scroll_x = self.scroll_x;
                 if let Some(r) = self.renderer.as_mut() {
-                    let page: &[lumen_paint::DisplayCommand] = page_buf
+                    // Priority: animated DL > find-highlighted DL > base DL.
+                    let page: &[lumen_paint::DisplayCommand] = anim_dl
                         .as_deref()
+                        .or(page_buf.as_deref())
                         .unwrap_or(&self.display_list);
                     if let Err(err) = r.render(page, &overlay_buf, scroll_y, scroll_x) {
                         eprintln!("Ошибка рендера: {err:?}");
