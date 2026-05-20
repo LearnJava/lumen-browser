@@ -121,10 +121,11 @@
 
 | # | Задача | impl / Разблокирует | НЕ блокирует |
 |---|---|---|---|
-| 1A | 🟡 **`[P1]` Quirks-mode application** | Половина legacy-сайтов | — |
+| 1A | ✅ **`[P1]` Quirks-mode application** | Половина legacy-сайтов | 2026-05-20 |
 | 1A.1 | ✅ unitless length quirk | `layout/src/style.rs:2945` | — |
 | 1A.2 | ✅ IE7 line-height quirk | `layout/src/style.rs:5013` | — |
 | 1A.3 | ✅ quirks test coverage | `layout/src/lib.rs:8449` | — |
+| 1A.4 | ✅ HTML pres. hints: `<font size/face>`, `img hspace/vspace/border`, `align` | `layout/src/style.rs:5482` | 2026-05-20 |
 | 1B | ✅ **`[P1]` Типизированные `Length`/`Color`** | P2 п.3A; P3 CSSOM | — |
 | 1B.1 | ✅ Length type через все декларации каскада | `layout/src/style.rs` | 2026-05-19 |
 | 1B.2 | ✅ Color type через все декларации каскада | `layout/src/style.rs` | 2026-05-19 |

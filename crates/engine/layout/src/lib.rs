@@ -8909,6 +8909,225 @@ mod tests {
         );
     }
 
+    // ── HTML presentational hints: <font size/face>, img hspace/vspace/border, align ──
+
+    /// `<font size="3">` → font-size 16px (medium).
+    #[test]
+    fn font_size_attr_medium() {
+        let root = lay("<body><font size=\"3\">x</font></body>", "");
+        let body = first_element_child(&root);
+        let font = first_element_child(body);
+        assert_eq!(
+            font.style.font_size, 16.0,
+            "<font size=3> должен задавать font-size 16px"
+        );
+    }
+
+    /// `<font size="1">` → font-size 10px (xx-small).
+    #[test]
+    fn font_size_attr_xxsmall() {
+        let root = lay("<body><font size=\"1\">x</font></body>", "");
+        let body = first_element_child(&root);
+        let font = first_element_child(body);
+        assert_eq!(
+            font.style.font_size, 10.0,
+            "<font size=1> должен задавать font-size 10px"
+        );
+    }
+
+    /// `<font size="7">` → font-size 48px (xxx-large).
+    #[test]
+    fn font_size_attr_xxxlarge() {
+        let root = lay("<body><font size=\"7\">x</font></body>", "");
+        let body = first_element_child(&root);
+        let font = first_element_child(body);
+        assert_eq!(
+            font.style.font_size, 48.0,
+            "<font size=7> должен задавать font-size 48px"
+        );
+    }
+
+    /// `<font size="+2">` → base 3 + 2 = 5 → 24px.
+    #[test]
+    fn font_size_attr_relative_plus() {
+        let root = lay("<body><font size=\"+2\">x</font></body>", "");
+        let body = first_element_child(&root);
+        let font = first_element_child(body);
+        assert_eq!(
+            font.style.font_size, 24.0,
+            "<font size=+2> должен задавать font-size 24px"
+        );
+    }
+
+    /// `<font size="-1">` → base 3 - 1 = 2 → 13px.
+    #[test]
+    fn font_size_attr_relative_minus() {
+        let root = lay("<body><font size=\"-1\">x</font></body>", "");
+        let body = first_element_child(&root);
+        let font = first_element_child(body);
+        assert_eq!(
+            font.style.font_size, 13.0,
+            "<font size=-1> должен задавать font-size 13px"
+        );
+    }
+
+    /// `<font size="99">` clamps to 7 → 48px.
+    #[test]
+    fn font_size_attr_clamp_max() {
+        let root = lay("<body><font size=\"99\">x</font></body>", "");
+        let body = first_element_child(&root);
+        let font = first_element_child(body);
+        assert_eq!(
+            font.style.font_size, 48.0,
+            "<font size=99> должен клэмпироваться к 48px"
+        );
+    }
+
+    /// Author CSS `font-size` побеждает `<font size>` hint.
+    #[test]
+    fn author_css_overrides_font_size_hint() {
+        let root = lay(
+            "<body><font size=\"7\">x</font></body>",
+            "font { font-size: 20px; }",
+        );
+        let body = first_element_child(&root);
+        let font = first_element_child(body);
+        assert_eq!(
+            font.style.font_size, 20.0,
+            "author CSS font-size должен побеждать font size= атрибут"
+        );
+    }
+
+    /// `<font face="Arial, sans-serif">` → font-family.
+    #[test]
+    fn font_face_attr_sets_font_family() {
+        let root = lay("<body><font face=\"Arial, sans-serif\">x</font></body>", "");
+        let body = first_element_child(&root);
+        let font = first_element_child(body);
+        assert!(
+            font.style.font_family.contains(&"Arial".to_string()),
+            "<font face=> должен задавать font-family"
+        );
+    }
+
+    /// `<img hspace="10">` → margin-left и margin-right по 10px.
+    #[test]
+    fn img_hspace_attr_sets_margins() {
+        let root = lay(r#"<img src="x.png" hspace="10">"#, "");
+        let img = first_image_child(&root);
+        assert_eq!(
+            img.style.margin_left,
+            LengthOrAuto::Length(Length::Px(10.0)),
+            "img hspace должен задавать margin-left 10px"
+        );
+        assert_eq!(
+            img.style.margin_right,
+            LengthOrAuto::Length(Length::Px(10.0)),
+            "img hspace должен задавать margin-right 10px"
+        );
+    }
+
+    /// `<img vspace="8">` → margin-top и margin-bottom по 8px.
+    #[test]
+    fn img_vspace_attr_sets_margins() {
+        let root = lay(r#"<img src="x.png" vspace="8">"#, "");
+        let img = first_image_child(&root);
+        assert_eq!(
+            img.style.margin_top,
+            LengthOrAuto::Length(Length::Px(8.0)),
+            "img vspace должен задавать margin-top 8px"
+        );
+        assert_eq!(
+            img.style.margin_bottom,
+            LengthOrAuto::Length(Length::Px(8.0)),
+            "img vspace должен задавать margin-bottom 8px"
+        );
+    }
+
+    /// `<img border="2">` → все 4 border-width 2px + style=solid.
+    #[test]
+    fn img_border_attr_sets_border() {
+        let root = lay(r#"<img src="x.png" border="2">"#, "");
+        let img = first_image_child(&root);
+        assert_eq!(img.style.border_top_width, 2.0, "img border должен задавать border-top-width 2px");
+        assert_eq!(img.style.border_right_width, 2.0);
+        assert_eq!(img.style.border_bottom_width, 2.0);
+        assert_eq!(img.style.border_left_width, 2.0);
+        assert_eq!(
+            img.style.border_top_style,
+            crate::style::BorderStyle::Solid,
+            "img border>0 должен задавать border-style solid"
+        );
+    }
+
+    /// `<img border="0">` → нулевые border-width, style=none (no-op).
+    #[test]
+    fn img_border_zero_no_style() {
+        let root = lay(r#"<img src="x.png" border="0">"#, "");
+        let img = first_image_child(&root);
+        assert_eq!(img.style.border_top_width, 0.0);
+        assert_eq!(
+            img.style.border_top_style,
+            crate::style::BorderStyle::None,
+            "img border=0 не должен задавать border-style"
+        );
+    }
+
+    /// `<div align="center">` → text-align: center.
+    #[test]
+    fn div_align_center_attr() {
+        let root = lay("<body><div align=\"center\">x</div></body>", "");
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(
+            div.style.text_align,
+            crate::style::TextAlign::Center,
+            "div align=center должен задавать text-align: center"
+        );
+    }
+
+    /// `<p align="right">` → text-align: right.
+    #[test]
+    fn p_align_right_attr() {
+        let root = lay("<body><p align=\"right\">x</p></body>", "");
+        let body = first_element_child(&root);
+        let p = first_element_child(body);
+        assert_eq!(
+            p.style.text_align,
+            crate::style::TextAlign::Right,
+            "p align=right должен задавать text-align: right"
+        );
+    }
+
+    /// `<h1 align="middle">` → text-align: center (middle = center alias).
+    #[test]
+    fn h1_align_middle_is_center() {
+        let root = lay("<body><h1 align=\"middle\">x</h1></body>", "");
+        let body = first_element_child(&root);
+        let h1 = first_element_child(body);
+        assert_eq!(
+            h1.style.text_align,
+            crate::style::TextAlign::Center,
+            "align=middle должен давать text-align: center"
+        );
+    }
+
+    /// Author CSS `text-align` побеждает `align` атрибут.
+    #[test]
+    fn author_css_overrides_align_hint() {
+        let root = lay(
+            "<body><div align=\"center\">x</div></body>",
+            "div { text-align: right; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(
+            div.style.text_align,
+            crate::style::TextAlign::Right,
+            "author CSS text-align должен побеждать align= атрибут"
+        );
+    }
+
     // --- CSS Grid Layout tests ---
 
     /// Parse `grid-template-columns: 100px 200px 300px`.

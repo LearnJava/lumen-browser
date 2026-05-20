@@ -3536,6 +3536,12 @@ pub fn compute_style(
     // матчится в Phase 0, `:visited`/`:active` без runtime — no-op.
     apply_text_color_presentational_hint(doc, node, &mut style);
 
+    // HTML5 §15.3.2: `<font size>` → font-size; `<font face>` → font-family.
+    apply_font_element_presentational_hints(doc, node, &mut style);
+
+    // HTML5 §15.3.3: `align` на блочных элементах → text-align.
+    apply_align_presentational_hint(doc, node, &mut style);
+
     // CSS Cascade L4 §6.4.3 — inline style: парсим HTML-атрибут `style=""`
     // и кладём его декларации в отдельный буфер. Они подключаются к каскаду
     // через дополнительный sort-bit `is_inline` (ниже): внутри одного origin
@@ -5372,13 +5378,9 @@ fn ua_vertical_align(doc: &Document, node: NodeId) -> Option<VerticalAlign> {
     }
 }
 
-/// Применяет HTML presentational hints для `<img>`: атрибуты `width` и
-/// `height` парсятся как unitless целые пиксели и пишутся в `style.width` /
-/// `style.height`. Любое author-CSS правило в каскаде ниже перекроет
-/// атрибут — это и есть смысл «presentational hint»: атрибут эквивалентен
-/// UA-стилю с specificity 0, который проигрывает любой author-декларации
-/// (HTML5 §10 «Mapped attributes»). Невалидные значения (отрицательные,
-/// нечисловые, с единицами) HTML5 spec предписывает игнорировать.
+/// Применяет HTML presentational hints для `<img>`: `width`/`height`,
+/// `hspace`/`vspace` (→ margin), `border` (→ border-width + style=solid).
+/// HTML5 §15.3.9. Author CSS поверх — выигрывает.
 fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     let NodeData::Element { name, .. } = &doc.get(node).data else {
         return;
@@ -5392,6 +5394,28 @@ fn apply_image_presentational_hints(doc: &Document, node: NodeId, style: &mut Co
     }
     if let Some(h) = node_ref.get_attr("height").and_then(parse_html_dimension) {
         style.height = Some(Length::Px(h));
+    }
+    // HTML5 §15.3.9: hspace → margin-left/right, vspace → margin-top/bottom.
+    if let Some(h) = node_ref.get_attr("hspace").and_then(parse_html_dimension) {
+        style.margin_left = LengthOrAuto::Length(Length::Px(h));
+        style.margin_right = LengthOrAuto::Length(Length::Px(h));
+    }
+    if let Some(v) = node_ref.get_attr("vspace").and_then(parse_html_dimension) {
+        style.margin_top = LengthOrAuto::Length(Length::Px(v));
+        style.margin_bottom = LengthOrAuto::Length(Length::Px(v));
+    }
+    // HTML5 §15.3.9.1: border attr → all 4 border-widths; border>0 → style=solid.
+    if let Some(b) = node_ref.get_attr("border").and_then(parse_html_dimension) {
+        style.border_top_width = b;
+        style.border_right_width = b;
+        style.border_bottom_width = b;
+        style.border_left_width = b;
+        if b > 0.0 {
+            style.border_top_style = BorderStyle::Solid;
+            style.border_right_style = BorderStyle::Solid;
+            style.border_bottom_style = BorderStyle::Solid;
+            style.border_left_style = BorderStyle::Solid;
+        }
     }
 }
 
@@ -5459,6 +5483,97 @@ fn apply_text_color_presentational_hint(
         && let Some(c) = parse_legacy_color_html_attr(val)
     {
         style.color = c;
+    }
+}
+
+/// HTML5 §15.3.2: `<font size="N">` → абсолютный font-size; `<font face="…">` → font-family.
+///
+/// Значения `size` 1–7 отображаются на CSS absolute-size keywords (medium = 16px):
+/// 1→10px 2→13px 3→16px 4→18px 5→24px 6→32px 7→48px.
+/// Относительные (`+2`, `-1`) прибавляются к базе 3, затем клэмпируются в [1,7].
+/// Hint применяется ДО CSS-каскада, поэтому author font-size/font-family перекроет.
+fn apply_font_element_presentational_hints(
+    doc: &Document,
+    node: NodeId,
+    style: &mut ComputedStyle,
+) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if name.local.as_str() != "font" {
+        return;
+    }
+    let node_ref = doc.get(node);
+
+    // `size` attribute → font-size.
+    if let Some(val) = node_ref.get_attr("size") {
+        let val = val.trim();
+        let size_num: Option<i32> = if let Some(rel) = val.strip_prefix('+') {
+            rel.parse::<i32>().ok().map(|d| 3 + d)
+        } else if let Some(rel) = val.strip_prefix('-') {
+            rel.parse::<i32>().ok().map(|d| 3 - d)
+        } else {
+            val.parse::<i32>().ok()
+        };
+        if let Some(n) = size_num {
+            // Clamp to [1, 7] then map to absolute px per HTML5 §15.3.2.
+            let px: f32 = match n.clamp(1, 7) {
+                1 => 10.0,
+                2 => 13.0,
+                3 => 16.0,
+                4 => 18.0,
+                5 => 24.0,
+                6 => 32.0,
+                _ => 48.0, // 7
+            };
+            style.font_size = px;
+        }
+    }
+
+    // `face` attribute → font-family.
+    if let Some(val) = node_ref.get_attr("face") {
+        let families = parse_font_family(val);
+        if !families.is_empty() {
+            style.font_family = families;
+        }
+    }
+}
+
+/// HTML5 §15.3.3: атрибут `align` на блочных элементах → CSS `text-align`.
+///
+/// Применяется к: div, p, h1–h6, blockquote, address, dt, dd, caption.
+/// Значения: left→Left, right→Right, center/middle→Center, justify→Justify.
+/// Hint применяется ДО CSS-каскада, author text-align перекроет.
+fn apply_align_presentational_hint(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if !matches!(
+        name.local.as_str(),
+        "div" | "p"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "blockquote"
+            | "address"
+            | "dt"
+            | "dd"
+            | "caption"
+    ) {
+        return;
+    }
+    let node_ref = doc.get(node);
+    if let Some(val) = node_ref.get_attr("align") {
+        let ta = match val.trim().to_ascii_lowercase().as_str() {
+            "left" => TextAlign::Left,
+            "right" => TextAlign::Right,
+            "center" | "middle" => TextAlign::Center,
+            _ => return,
+        };
+        style.text_align = ta;
     }
 }
 
