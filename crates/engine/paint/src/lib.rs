@@ -22,8 +22,8 @@ pub use compositor::{
     LayerTree, ThreadedCompositor, ThreadedCompositorHandle,
 };
 pub use display_list::{
-    build_display_list, build_display_list_ordered, serialize_display_list, BlendMode,
-    DisplayCommand, DisplayList,
+    build_display_list, build_display_list_ordered, build_display_list_with_anim,
+    serialize_display_list, BlendMode, DisplayCommand, DisplayList,
 };
 pub use hit_test::{hit_test, HitTestResult};
 pub use renderer::{ImageRegisterError, Renderer, SnapshotUploadError};

@@ -499,6 +499,43 @@ pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
     }
 }
 
+/// Build the forward transform matrix from a list of TransformFn with a pivot point.
+///
+/// Used by the animation compositor path to convert an animated `Vec<TransformFn>`
+/// into a `Mat4` with the same pivot semantics as `forward_box_transform`.
+/// Returns `None` for an empty list (no transform needed).
+#[must_use]
+pub fn transform_fns_to_matrix(fns: &[TransformFn], pivot_x: f32, pivot_y: f32) -> Option<Mat4> {
+    if fns.is_empty() {
+        return None;
+    }
+    let mut m = Mat4::IDENTITY;
+    for f in fns {
+        let step = match *f {
+            TransformFn::Translate(x, y) => Mat4::translation_2d(x, y),
+            TransformFn::TranslateX(x) => Mat4::translation_2d(x, 0.0),
+            TransformFn::TranslateY(y) => Mat4::translation_2d(0.0, y),
+            TransformFn::Rotate(theta) => Mat4::rotate_2d(theta),
+            TransformFn::Scale(sx, sy) => Mat4::scale_2d(sx, sy),
+            TransformFn::ScaleX(sx) => Mat4::scale_2d(sx, 1.0),
+            TransformFn::ScaleY(sy) => Mat4::scale_2d(1.0, sy),
+            TransformFn::SkewX(a) => Mat4::skew_x(a),
+            TransformFn::SkewY(a) => Mat4::skew_y(a),
+            TransformFn::Matrix([a, b, c, d, e, f_]) => Mat4::from_2d_affine(a, b, c, d, e, f_),
+        };
+        m = m.multiply(&step);
+    }
+    if pivot_x == 0.0 && pivot_y == 0.0 {
+        Some(m)
+    } else {
+        Some(
+            Mat4::translation_2d(pivot_x, pivot_y)
+                .multiply(&m)
+                .multiply(&Mat4::translation_2d(-pivot_x, -pivot_y)),
+        )
+    }
+}
+
 fn overflow_creates_scroll(o: Overflow) -> bool {
     !matches!(o, Overflow::Visible)
 }

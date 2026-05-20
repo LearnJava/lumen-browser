@@ -9,6 +9,7 @@
 use lumen_core::geom::Rect;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
+    transform_fns_to_matrix, CompositorAnimFrame,
     BackgroundClip, BorderStyle, BoxKind, Color, CssColor, FontStyle, FontWeight, InlineFrag,
     LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition, OutlineColor,
     OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent, StackingContextId,
@@ -560,6 +561,24 @@ fn blend_mode_name(m: BlendMode) -> &'static str {
 pub fn build_display_list(root: &LayoutBox) -> DisplayList {
     let mut list = Vec::new();
     walk(root, &mut list);
+    list
+}
+
+/// Like `build_display_list` but applies compositor animation overrides per node.
+///
+/// For each node that has an entry in `anim`, opacity and/or transform values
+/// from the override replace the style's values in the emitted PushOpacity /
+/// PushTransform commands. Layout geometry (rect, padding, children) is unchanged —
+/// this avoids a full relayout while still producing correct frames.
+///
+/// Pass `None` (or an empty frame) to fall back to the same output as
+/// `build_display_list`.
+pub fn build_display_list_with_anim(
+    root: &LayoutBox,
+    anim: Option<&CompositorAnimFrame>,
+) -> DisplayList {
+    let mut list = Vec::new();
+    walk_with_anim(root, anim, &mut list);
     list
 }
 
@@ -1697,6 +1716,117 @@ fn emit_wavy_line(
             color,
         });
         cx += step;
+    }
+}
+
+/// Like `walk` but applies `CompositorAnimFrame` overrides for opacity and transform.
+///
+/// When a node has an animated opacity or transform, the overridden values replace
+/// the style values in the emitted Push* commands. All other paint (FillRect, DrawText,
+/// borders, shadows) uses the base style unchanged.
+fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut DisplayList) {
+    let ov = anim.and_then(|a| a.get(b.node));
+
+    // Determine effective opacity: animated override wins over style.
+    let effective_opacity = ov.and_then(|o| o.opacity).unwrap_or(b.style.opacity);
+
+    // Skip completely invisible subtrees (same rule as walk, but uses effective opacity).
+    if effective_opacity == 0.0 && b.style.opacity == 0.0 {
+        // Both animated and static are zero — nothing to paint.
+        if !is_opacity_subtree_painted(b) {
+            return;
+        }
+    } else if effective_opacity == 0.0 {
+        // Animated to zero — skip this subtree.
+        return;
+    } else if !is_opacity_subtree_painted(b) && ov.and_then(|o| o.opacity).is_none() {
+        // Base style opacity is 0 and no anim override — skip.
+        return;
+    }
+
+    match &b.kind {
+        BoxKind::Skip => {}
+        BoxKind::Block => {
+            let has_opacity = effective_opacity < 1.0;
+            if has_opacity {
+                out.push(DisplayCommand::PushOpacity { alpha: effective_opacity });
+            }
+
+            // Determine effective transform: animated override wins over style.
+            let transform = if let Some(fns) = ov.and_then(|o| o.transform.as_deref()) {
+                let (ox, oy, _) = b.style.transform_origin;
+                transform_fns_to_matrix(fns, b.rect.x + ox, b.rect.y + oy)
+            } else {
+                forward_box_transform(b)
+            };
+            if let Some(matrix) = transform {
+                out.push(DisplayCommand::PushTransform { matrix });
+            }
+
+            let self_visible = is_paint_visible(b);
+            if self_visible {
+                emit_box_shadows(b, out);
+                if let Some(CssColor::Rgba(bg)) = b.style.background_color
+                    && bg.a > 0
+                {
+                    let clip = background_clip_rect(b);
+                    if clip.width > 0.0 && clip.height > 0.0 {
+                        out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                    }
+                }
+                emit_inset_box_shadows(b, out);
+                let s = &b.style;
+                let has_border = s.border_top_style.is_visible()
+                    || s.border_right_style.is_visible()
+                    || s.border_bottom_style.is_visible()
+                    || s.border_left_style.is_visible();
+                if has_border {
+                    let cur = s.color;
+                    out.push(DisplayCommand::DrawBorder {
+                        rect: b.rect,
+                        widths: [
+                            s.border_top_width, s.border_right_width,
+                            s.border_bottom_width, s.border_left_width,
+                        ],
+                        colors: [
+                            s.border_top_color.resolve(cur),
+                            s.border_right_color.resolve(cur),
+                            s.border_bottom_color.resolve(cur),
+                            s.border_left_color.resolve(cur),
+                        ],
+                        styles: [
+                            s.border_top_style, s.border_right_style,
+                            s.border_bottom_style, s.border_left_style,
+                        ],
+                    });
+                }
+            }
+            for child in &b.children {
+                walk_with_anim(child, anim, out);
+            }
+            if self_visible {
+                emit_outline(b, out);
+            }
+            if transform.is_some() {
+                out.push(DisplayCommand::PopTransform);
+            }
+            if has_opacity {
+                out.push(DisplayCommand::PopOpacity);
+            }
+        }
+        BoxKind::InlineBlockRow => {
+            for child in &b.children {
+                walk_with_anim(child, anim, out);
+            }
+        }
+        BoxKind::InlineSpace => {}
+        BoxKind::InlineRun { lines, .. } => {
+            emit_inline_run(b, lines, out);
+        }
+        // Image and other kinds: no compositor-offloadable properties, delegate to walk.
+        _ => {
+            walk(b, out);
+        }
     }
 }
 
@@ -4217,5 +4347,90 @@ mod tests {
         assert!((b - 1.0).abs() < 1e-5);
         assert!((c + 1.0).abs() < 1e-5);
         assert!(d.abs() < 1e-5);
+    }
+
+    // ─── build_display_list_with_anim ────────────────────────────────────────
+
+    use lumen_layout::{CompositorAnimFrame, CompositorOverride};
+    use lumen_dom::NodeId;
+    use std::collections::HashMap;
+
+    fn build_anim(html: &str, css: &str, overrides: HashMap<NodeId, CompositorOverride>) -> DisplayList {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let frame = CompositorAnimFrame { overrides, has_active: true };
+        build_display_list_with_anim(&tree, Some(&frame))
+    }
+
+    #[test]
+    fn anim_no_overrides_same_as_base() {
+        let html = r#"<div style="background:red;width:100px;height:50px"></div>"#;
+        let base = build(html, "");
+        let anim = build_anim(html, "", HashMap::new());
+        assert_eq!(base.len(), anim.len(), "empty overrides: same DL length");
+    }
+
+    #[test]
+    fn anim_none_frame_same_as_base() {
+        let html = r#"<div style="background:blue;width:80px;height:40px"></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let base = build_display_list(&tree);
+        let with_none = build_display_list_with_anim(&tree, None);
+        assert_eq!(base.len(), with_none.len());
+    }
+
+    #[test]
+    fn anim_opacity_override_emits_push_opacity() {
+        // A div without opacity in style — no PushOpacity in base DL.
+        let html = r#"<div style="background:green;width:100px;height:50px"></div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+
+        let base = build_display_list(&tree);
+        let has_push_base = base.iter().any(|c| matches!(c, DisplayCommand::PushOpacity { .. }));
+        assert!(!has_push_base, "base DL should have no PushOpacity");
+
+        // Override opacity=0.5 for the body node (root).
+        let node = tree.node;
+        let mut overrides = HashMap::new();
+        overrides.insert(node, CompositorOverride { opacity: Some(0.5), transform: None });
+        let frame = CompositorAnimFrame { overrides, has_active: true };
+        let anim_dl = build_display_list_with_anim(&tree, Some(&frame));
+
+        let push_count = anim_dl.iter().filter(|c| matches!(c, DisplayCommand::PushOpacity { .. })).count();
+        let pop_count = anim_dl.iter().filter(|c| matches!(c, DisplayCommand::PopOpacity)).count();
+        assert_eq!(push_count, 1, "should emit one PushOpacity for the animated node");
+        assert_eq!(pop_count, 1, "PushOpacity/PopOpacity must be balanced");
+
+        if let Some(DisplayCommand::PushOpacity { alpha }) = anim_dl.iter().find(|c| matches!(c, DisplayCommand::PushOpacity { .. })) {
+            assert!((*alpha - 0.5).abs() < 1e-5, "opacity should be 0.5, got {alpha}");
+        }
+    }
+
+    #[test]
+    fn anim_push_pop_balanced() {
+        // Any DL produced by with_anim must have balanced Push/Pop pairs.
+        let html = r#"<div style="background:red;width:200px;height:100px">
+            <div style="background:blue;width:100px;height:50px"></div>
+        </div>"#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let tree = lumen_layout::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let node = tree.node;
+        let mut overrides = HashMap::new();
+        overrides.insert(node, CompositorOverride { opacity: Some(0.7), transform: None });
+        let frame = CompositorAnimFrame { overrides, has_active: true };
+        let dl = build_display_list_with_anim(&tree, Some(&frame));
+
+        let push_op = dl.iter().filter(|c| matches!(c, DisplayCommand::PushOpacity { .. })).count();
+        let pop_op = dl.iter().filter(|c| matches!(c, DisplayCommand::PopOpacity)).count();
+        let push_tx = dl.iter().filter(|c| matches!(c, DisplayCommand::PushTransform { .. })).count();
+        let pop_tx = dl.iter().filter(|c| matches!(c, DisplayCommand::PopTransform)).count();
+        assert_eq!(push_op, pop_op, "PushOpacity/PopOpacity must balance");
+        assert_eq!(push_tx, pop_tx, "PushTransform/PopTransform must balance");
     }
 }
