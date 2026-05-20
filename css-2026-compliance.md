@@ -348,7 +348,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 |---|---|
 | `scroll-behavior` | 🟡 parsed |
 | `overscroll-behavior` | 🟡 parsed |
-| `text-overflow` | 🟡 parsed; ellipsis not painted |
+| `text-overflow` | ✅ | clip (default) and ellipsis; truncation in layout via TextMeasurer |
 
 ### CSS Sizing Level 4
 | Property | Status |

@@ -17,8 +17,8 @@ use lumen_html_parser::{
 
 use crate::style::{
     compute_style, AlignValue, BackgroundImage, BoxSizing, ComputedStyle, Display, FlexBasis,
-    FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridTrackSize, Length, LengthOrAuto, Position,
-    TextAlign, VerticalAlign,
+    FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridTrackSize, Length, LengthOrAuto, Overflow,
+    Position, TextAlign, TextOverflow, VerticalAlign,
 };
 use crate::TextMeasurer;
 
@@ -720,6 +720,12 @@ fn lay_out(
             *lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, m);
             if s.text_align != TextAlign::Left {
                 align_lines(lines, content_width, s.text_align);
+            }
+            // CSS UI L4 §10.1: text-overflow: ellipsis требует overflow != visible.
+            if s.text_overflow == TextOverflow::Ellipsis
+                && (s.overflow_x != Overflow::Visible || s.overflow_y != Overflow::Visible)
+            {
+                apply_text_overflow_ellipsis(lines, content_width, s.font_size, m);
             }
         } else {
             *lines = one_line_fallback(segments);
@@ -1863,4 +1869,75 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
         }
     }
     if frags.is_empty() { vec![] } else { vec![frags] }
+}
+
+/// CSS UI L4 §10.1 — усекает фрагменты строк, выходящих за `max_width`,
+/// добавляя символ «…» (U+2026). Вызывается только когда `text-overflow:
+/// ellipsis` И `overflow` создаёт clip.
+fn apply_text_overflow_ellipsis(
+    lines: &mut [Vec<InlineFrag>],
+    max_width: f32,
+    font_size: f32,
+    m: &dyn TextMeasurer,
+) {
+    let ellipsis = '\u{2026}'; // …
+    let ellipsis_w = m.char_width(ellipsis, font_size);
+
+    for line in lines.iter_mut() {
+        let line_end = line.last().map(|f| f.x + f.width).unwrap_or(0.0);
+        if line_end <= max_width {
+            continue;
+        }
+
+        // Максимальная ширина для текстового контента перед «…».
+        let budget = (max_width - ellipsis_w).max(0.0);
+
+        // Ищем первый фрагмент, чьё начало выходит за budget.
+        let cut = line.iter().position(|f| f.x > budget);
+
+        match cut {
+            Some(0) => {
+                // Первый фрагмент уже за budget — показываем только «…».
+                line[0].text = ellipsis.to_string();
+                line[0].width = ellipsis_w;
+                line.truncate(1);
+            }
+            Some(fi) => {
+                // Усекаем фрагмент fi-1, удаляем fi и далее.
+                let avail = budget - line[fi - 1].x;
+                truncate_frag_with_ellipsis(&mut line[fi - 1], avail, font_size, m, ellipsis, ellipsis_w);
+                line.truncate(fi);
+            }
+            None => {
+                // Все фрагменты начинаются в пределах budget, но последний
+                // выходит за max_width — усекаем его.
+                let last = line.len() - 1;
+                let avail = budget - line[last].x;
+                truncate_frag_with_ellipsis(&mut line[last], avail, font_size, m, ellipsis, ellipsis_w);
+            }
+        }
+    }
+}
+
+fn truncate_frag_with_ellipsis(
+    frag: &mut InlineFrag,
+    avail: f32,
+    font_size: f32,
+    m: &dyn TextMeasurer,
+    ellipsis: char,
+    ellipsis_w: f32,
+) {
+    let mut buf = String::new();
+    let mut w = 0.0_f32;
+    for ch in frag.text.chars() {
+        let cw = m.char_width(ch, font_size);
+        if w + cw > avail {
+            break;
+        }
+        buf.push(ch);
+        w += cw;
+    }
+    buf.push(ellipsis);
+    frag.text = buf;
+    frag.width = w + ellipsis_w;
 }

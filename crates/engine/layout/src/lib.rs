@@ -4860,6 +4860,85 @@ mod tests {
         assert_eq!(p.style.text_overflow, TextOverflow::Clip);
     }
 
+    /// overflow:hidden + text-overflow:ellipsis + nowrap → длинный текст
+    /// усекается, последний символ фрагмента — «…».
+    #[test]
+    fn text_overflow_ellipsis_truncates_overflowing_line() {
+        // Fixed8: 8 px/char. "Hello World" = 11 chars = 88 px. Box = 64 px.
+        // budget = 64 - 8(«…») = 56 px → влезает 7 chars "Hello W".
+        // overflow и text-overflow — на одном элементе (p), чей стиль
+        // наследует InlineRun.
+        let root = lay_measured(
+            "<p>Hello World</p>",
+            "p { width: 64px; overflow: hidden; \
+               white-space: nowrap; text-overflow: ellipsis; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let run = &p.children[0];
+        let crate::BoxKind::InlineRun { lines, .. } = &run.kind else {
+            panic!("expected InlineRun");
+        };
+        let line = &lines[0];
+        assert_eq!(line.len(), 1, "один фрагмент после усечения");
+        assert!(
+            line[0].text.ends_with('\u{2026}'),
+            "текст должен оканчиваться на «…», got {:?}",
+            line[0].text
+        );
+        assert!(
+            line[0].width <= 64.0,
+            "ширина фрагмента должна влезать в контейнер: {}",
+            line[0].width
+        );
+    }
+
+    /// overflow:visible + text-overflow:ellipsis → усечения нет
+    /// (spec: text-overflow не действует без overflow clip).
+    #[test]
+    fn text_overflow_ellipsis_no_effect_without_overflow_clip() {
+        let root = lay_measured(
+            "<p>Hello World</p>",
+            "p { width: 64px; overflow: visible; \
+               white-space: nowrap; text-overflow: ellipsis; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let run = &p.children[0];
+        let crate::BoxKind::InlineRun { lines, .. } = &run.kind else {
+            panic!("expected InlineRun");
+        };
+        let line = &lines[0];
+        let text: String = line.iter().map(|f| f.text.as_str()).collect();
+        assert!(
+            !text.contains('\u{2026}'),
+            "без overflow clip усечения быть не должно, got {text:?}"
+        );
+    }
+
+    /// text-overflow:clip (default) → даже при overflow:hidden текст не усекается
+    /// с «…»; clip происходит на уровне paint, не layout.
+    #[test]
+    fn text_overflow_clip_no_ellipsis() {
+        let root = lay_measured(
+            "<p>Hello World</p>",
+            "p { width: 64px; overflow: hidden; \
+               white-space: nowrap; text-overflow: clip; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let run = &p.children[0];
+        let crate::BoxKind::InlineRun { lines, .. } = &run.kind else {
+            panic!("expected InlineRun");
+        };
+        let line = &lines[0];
+        let text: String = line.iter().map(|f| f.text.as_str()).collect();
+        assert!(
+            !text.contains('\u{2026}'),
+            "text-overflow:clip не должен добавлять «…», got {text:?}"
+        );
+    }
+
     // ── selector matching: back-tracking edge cases ─────────────────────────
 
     /// `div div p` — двойной descendant. Должен матчить, когда есть два
