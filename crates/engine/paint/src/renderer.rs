@@ -2131,6 +2131,32 @@ impl Renderer {
                         current_level -= 1;
                     }
                 }
+                // CSS Backgrounds L3 §3.10 — background-image: url(...). Phase 0
+                // упрощения (см. doc-комментарий у DisplayCommand::DrawBackgroundImage):
+                // картинка растягивается на весь rect, UV всегда [0,0]→[1,1].
+                // background-size / position / repeat — TODO для P2/P4. Если картинка
+                // не зарегистрирована в `self.images` — команда no-op (background-color
+                // уже эмитнут отдельным FillRect-ом, placeholder не нужен).
+                DisplayCommand::DrawBackgroundImage { rect, src } => {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
+                    let scrolled = translate_rect(*rect, dx, dy);
+                    if let Some(gpu) = self.images.get(src) {
+                        let v_start = image_vertices.len() as u32;
+                        push_image_quad(
+                            &mut image_vertices,
+                            scrolled,
+                            [0.0, 0.0],
+                            [1.0, 1.0],
+                            1.0,
+                        );
+                        let v_count = image_vertices.len() as u32 - v_start;
+                        let image_batch_idx = image_bind_groups.len() as u32;
+                        image_bind_groups.push(gpu.bind_group.clone());
+                        draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
+                    }
+                }
                 DisplayCommand::DrawLayerSnapshot { id, rect, alpha } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;

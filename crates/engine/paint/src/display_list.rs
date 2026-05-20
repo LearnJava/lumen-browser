@@ -8,8 +8,8 @@
 
 use lumen_core::geom::Rect;
 use lumen_layout::{
-    box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
-    BackgroundClip, BorderStyle, BoxKind, Color, CssColor, FontStyle, FontWeight, InlineFrag,
+    box_can_own_stacking_context, creates_stacking_context, forward_box_transform, BackgroundClip,
+    BackgroundImage, BorderStyle, BoxKind, Color, CssColor, FontStyle, FontWeight, InlineFrag,
     LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition, OutlineColor,
     OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent, StackingContextId,
     StackingTree, TextDecorationStyle, TextDecorationThickness, TextOverflow, Visibility,
@@ -156,6 +156,28 @@ pub enum DisplayCommand {
         alt: String,
         object_fit: ObjectFit,
         object_position: ObjectPosition,
+    },
+    /// CSS Backgrounds L3 §3.10 — `background-image: url(...)`. `rect` —
+    /// background-painting area из [`background_clip_rect`] (учитывает
+    /// `background-clip`: border-box / padding-box / content-box). `src` —
+    /// URL картинки, тот же ключ, что shell кладёт в `Renderer::register_image`.
+    ///
+    /// Эмиттер выпускает ТОЛЬКО для `BackgroundImage::Url(_)` (gradient-ы
+    /// парсятся, но Phase 0 не растрит — см. `style.background_image`).
+    /// Порядок: после `FillRect` для background-color, до border (CSS
+    /// Backgrounds L3 §3.10 — painting order: bg-color → bg-image → border).
+    ///
+    /// Phase 0 ограничения (renderer Stretches картинку на весь `rect`):
+    /// * `background-size` игнорируется (де-факто `100% 100%`).
+    /// * `background-position` / `background-origin` игнорируются (0,0).
+    /// * `background-repeat` игнорируется (картинка не тайлится).
+    /// * `background-attachment: fixed` не поддерживается (rect скроллится).
+    ///
+    /// Если картинка не зарегистрирована в GPU-cache — команда визуально
+    /// no-op (background-color уже эмитнут отдельным FillRect).
+    DrawBackgroundImage {
+        rect: Rect,
+        src: String,
     },
     /// Sprint 0 P2 stub. Открывает rect-клип: все последующие команды до
     /// парного `PopClip` рисуются только в пределах `rect`. Используется
@@ -474,6 +496,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     ));
                 }
                 out.push('\n');
+            }
+            DisplayCommand::DrawBackgroundImage { rect, src } => {
+                out.push_str(&format!(
+                    "DrawBackgroundImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?}\n",
+                    rect.x, rect.y, rect.width, rect.height,
+                ));
             }
             DisplayCommand::PushClipRect { rect } => {
                 out.push_str(&format!(
@@ -1056,6 +1084,26 @@ fn background_clip_rect(b: &LayoutBox) -> Rect {
     }
 }
 
+/// CSS Backgrounds L3 §3.10 — эмитит `background-image: url(...)` поверх
+/// background-color и под border-ом (см. painter's order). Gradient-вариант
+/// `BackgroundImage::Gradient` Phase 0 не растрит — парсер сохранил строку,
+/// renderer её игнорирует до отдельной задачи.
+///
+/// Использует [`background_clip_rect`] для определения области рисования —
+/// идентично тому, как тот же clip применяется к background-color FillRect-у.
+/// Пустой rect (width/height ≤ 0) — no-op: GPU всё равно отбракует, а
+/// сэкономим память display list-а.
+fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox) {
+    if let BackgroundImage::Url(src) = &b.style.background_image
+        && !src.is_empty()
+    {
+        let clip = background_clip_rect(b);
+        if clip.width > 0.0 && clip.height > 0.0 {
+            out.push(DisplayCommand::DrawBackgroundImage { rect: clip, src: src.clone() });
+        }
+    }
+}
+
 /// Эмитит outset box-shadow ПЕРЕД background (painter's order по CSS
 /// Backgrounds L3 §4.6 — shadow «cast … behind the element», то есть
 /// под background-color). Phase 0:
@@ -1277,6 +1325,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                 }
             }
+            emit_background_image(out, b);
             emit_inset_box_shadows(b, out);
             let s = &b.style;
             let has_border = s.border_top_style.is_visible()
@@ -1326,6 +1375,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                 }
             }
+            emit_background_image(out, b);
             emit_inset_box_shadows(b, out);
             let s = &b.style;
             let has_border = s.border_top_style.is_visible()
@@ -1405,6 +1455,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                     }
                 }
+                emit_background_image(out, b);
                 emit_inset_box_shadows(b, out);
                 let s = &b.style;
                 let has_border = s.border_top_style.is_visible()
@@ -1464,7 +1515,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             if !is_paint_visible(b) {
                 return;
             }
-            // Painter's order для replaced element: фон → border → image.
+            // Painter's order для replaced element: фон → bg-image → border → <img>.
             // background/border у `<img>` валидны по CSS — например, для
             // подложки на время загрузки или рамки вокруг картинки.
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
@@ -1475,6 +1526,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                     out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                 }
             }
+            emit_background_image(out, b);
             let s = &b.style;
             let has_border = s.border_top_style.is_visible()
                 || s.border_right_style.is_visible()
@@ -2521,6 +2573,7 @@ mod tests {
                 DisplayCommand::DrawBorder { .. } => "DrawBorder",
                 DisplayCommand::DrawOutline { .. } => "DrawOutline",
                 DisplayCommand::DrawImage { .. } => "DrawImage",
+                DisplayCommand::DrawBackgroundImage { .. } => "DrawBackgroundImage",
                 DisplayCommand::DrawText { .. } => "DrawText",
                 DisplayCommand::PushClipRect { .. } => "PushClipRect",
                 DisplayCommand::PopClip => "PopClip",
@@ -2546,6 +2599,113 @@ mod tests {
         assert!(s.contains("DrawImage"), "must contain DrawImage line");
         assert!(s.contains(r#"src="photo.jpg""#), "must contain src");
         assert!(s.contains(r#"alt="A photo""#), "must contain alt");
+    }
+
+    // ── Тесты background-image url() / DrawBackgroundImage ─────────────────
+
+    fn bg_images(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBackgroundImage { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn block_background_image_url_emits_draw_background_image() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 80px; height: 40px; background-image: url(bg.png); }",
+        );
+        let bgs = bg_images(&dl);
+        assert_eq!(bgs.len(), 1, "должна быть одна команда DrawBackgroundImage");
+        if let DisplayCommand::DrawBackgroundImage { rect, src } = bgs[0] {
+            assert_eq!(src, "bg.png");
+            assert!((rect.width - 80.0).abs() < 0.1, "rect.width={}", rect.width);
+            assert!((rect.height - 40.0).abs() < 0.1, "rect.height={}", rect.height);
+        }
+    }
+
+    #[test]
+    fn background_image_none_emits_nothing() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 50px; height: 20px; background-image: none; }",
+        );
+        assert!(bg_images(&dl).is_empty());
+    }
+
+    #[test]
+    fn background_image_default_emits_nothing() {
+        // initial value `none` (CSS Backgrounds L3 §3.10): отсутствие свойства
+        // не должно эмитить DrawBackgroundImage.
+        let dl = build("<div>x</div>", "div { width: 50px; height: 20px; }");
+        assert!(bg_images(&dl).is_empty());
+    }
+
+    #[test]
+    fn background_image_gradient_not_painted() {
+        // Phase 0: gradient парсится, но не растрит — DrawBackgroundImage
+        // эмитится только для BackgroundImage::Url.
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 50px; height: 20px; \
+             background-image: linear-gradient(red, blue); }",
+        );
+        assert!(bg_images(&dl).is_empty());
+    }
+
+    #[test]
+    fn background_image_paints_after_color_before_border() {
+        // CSS Backgrounds L3 §3.10 — painting order: bg-color → bg-image → border.
+        let dl = build(
+            "<div></div>",
+            "div { width: 60px; height: 30px; \
+             background-color: red; background-image: url(b.png); \
+             border: 2px solid blue; }",
+        );
+        let kinds: Vec<&str> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillRect { .. } => Some("FillRect"),
+                DisplayCommand::DrawBackgroundImage { .. } => Some("DrawBackgroundImage"),
+                DisplayCommand::DrawBorder { .. } => Some("DrawBorder"),
+                _ => None,
+            })
+            .collect();
+        // Allow surrounding commands; check relative order of the three.
+        let fill = kinds.iter().position(|k| *k == "FillRect").expect("FillRect emitted");
+        let bg = kinds.iter().position(|k| *k == "DrawBackgroundImage").expect("bg-image emitted");
+        let border = kinds.iter().position(|k| *k == "DrawBorder").expect("border emitted");
+        assert!(fill < bg, "bg-color must precede bg-image (kinds={kinds:?})");
+        assert!(bg < border, "bg-image must precede border (kinds={kinds:?})");
+    }
+
+    #[test]
+    fn background_image_serialize_includes_src() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 40px; height: 10px; background-image: url(\"hero.jpg\"); }",
+        );
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("DrawBackgroundImage"), "should contain DrawBackgroundImage line");
+        assert!(s.contains(r#"src="hero.jpg""#), "should contain quoted src");
+    }
+
+    #[test]
+    fn background_image_respects_background_clip_padding_box() {
+        // background-clip: padding-box ужимает rect под border на каждой стороне.
+        // box-sizing по умолчанию content-box: width=100 — это контент,
+        // полная коробка с border 5×2 = 110×70. PaddingBox shrink → 100×60.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; background-image: url(x.png); \
+             border: 5px solid red; background-clip: padding-box; }",
+        );
+        let bgs = bg_images(&dl);
+        assert_eq!(bgs.len(), 1);
+        if let DisplayCommand::DrawBackgroundImage { rect, .. } = bgs[0] {
+            assert!((rect.width - 100.0).abs() < 0.1, "got {}", rect.width);
+            assert!((rect.height - 60.0).abs() < 0.1, "got {}", rect.height);
+        }
     }
 
     #[test]

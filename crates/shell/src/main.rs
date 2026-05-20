@@ -737,6 +737,16 @@ fn parse_and_layout(
         .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
 
     let layout = lumen_layout::layout_measured(&doc, &sheet, viewport, &measurer);
+
+    // CSS Backgrounds L3 §3.10 — собираем `background-image: url(...)` уже
+    // после layout-а (картинки фона не влияют на расчёт коробок). Декодируем
+    // и добавляем к `images` тем же ключом, что эмиттер кладёт в
+    // `DisplayCommand::DrawBackgroundImage.src`.
+    let mut images = images;
+    for (src, image) in fetch_and_decode_background_images(&layout, base, sink) {
+        images.push((src, image));
+    }
+
     let rule_count = sheet.rules.len();
     Ok(ParsedPage {
         document: doc,
@@ -747,6 +757,42 @@ fn parse_and_layout(
         images,
         preload_hints,
     })
+}
+
+/// Скачивает и декодирует все `background-image: url(...)` из готового
+/// layout-дерева. Дубликаты URL фильтруются на стороне layout
+/// (`collect_background_image_requests`). Ошибки скачивания / декодирования
+/// логируются в stderr — battle-tested fail-soft: битая bg-картинка не валит
+/// страницу, renderer всё равно отобразит background-color поверх.
+fn fetch_and_decode_background_images(
+    layout: &LayoutBox,
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+) -> Vec<(String, lumen_image::Image)> {
+    let urls = lumen_layout::collect_background_image_requests(layout);
+    let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
+    for url in urls {
+        let bytes = match fetch_image_bytes(&url, base, sink) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("Пропуск bg-картинки {url}: {e}");
+                continue;
+            }
+        };
+        let image = match lumen_image::decode(&bytes) {
+            Ok(i) => i,
+            Err(e) => {
+                eprintln!("Не декодируется bg-картинка {url}: {e}");
+                continue;
+            }
+        };
+        eprintln!(
+            "Загружена bg-картинка: {url} ({}×{}, {:?})",
+            image.width, image.height, image.format
+        );
+        out.push((url, image));
+    }
+    out
 }
 
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
@@ -2001,6 +2047,7 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawBorder { rect, .. }
             | DisplayCommand::DrawText { rect, .. }
             | DisplayCommand::DrawImage { rect, .. }
+            | DisplayCommand::DrawBackgroundImage { rect, .. }
             | DisplayCommand::DrawOutline { rect, .. }
             | DisplayCommand::PushClipRect { rect, .. } => rect,
             DisplayCommand::PopClip
@@ -2031,6 +2078,7 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawBorder { rect, .. }
             | DisplayCommand::DrawText { rect, .. }
             | DisplayCommand::DrawImage { rect, .. }
+            | DisplayCommand::DrawBackgroundImage { rect, .. }
             | DisplayCommand::DrawOutline { rect, .. }
             | DisplayCommand::PushClipRect { rect, .. } => rect,
             DisplayCommand::PopClip
