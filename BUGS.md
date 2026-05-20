@@ -25,7 +25,7 @@ BUG-005 | OPEN             | paint           | <img> inside <span> not rendered
 BUG-007 | OPEN             | layout          | <sub>/<sup>/<small> missing UA styles
 BUG-008 | OPEN             | layout          | <del>/<ins>/<u>/<s> text-decoration missing UA styles
 BUG-009 | OPEN             | layout          | <a> missing UA styles (no blue color, no underline)
-BUG-010 | OPEN             | layout/paint    | <hr> renders nothing
+BUG-010 | FIXED 2026-05-20 | layout          | <hr> renders nothing
 BUG-011 | OPEN             | layout/paint    | list markers (bullet, numbers) not rendered
 BUG-012 | OPEN             | layout          | <del>/<ins> break inline flow (each on new line)
 BUG-013 | OPEN             | layout          | adjacent <span style="..."> stack vertically without separator
