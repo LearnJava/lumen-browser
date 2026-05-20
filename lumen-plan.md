@@ -167,7 +167,7 @@
 | 3A.4 | ✅ ColorFloat variant (f32 channels) | `layout/src/style.rs` | 2026-05-20 |
 | 3A.5 | ✅ color space awareness in renderer | `paint/src/display_list.rs` | 2026-05-20 |
 | 3B | ⬜ **`[P1+P2+P3]` Web Animations compositor offload** | Smooth-анимации | Stub компилируется |
-| 4 | ⬜ **`[P1+P2]` mix-blend-mode/backdrop-filter pipeline** | Современные UI-эффекты | Только compositor |
+| 4 | ✅ **`[P1+P2]` mix-blend-mode/backdrop-filter pipeline** | Современные UI-эффекты | 2026-05-20 |
 | 5+ | ⬜ **Extras**: object-fit, Canvas 2D, WOFF2, variable fonts, Print PDF | — | — |
 
 #### Track P3 — Runtime + system (объединённый домен — больше треков, но всё параллельно)
@@ -391,6 +391,18 @@
 #### 2B — Stacking-aware hit testing
 
 **`stacking-hit-testing`**: `lumen-paint::hit_test(point, &LayoutBox) -> Option<HitTestResult>` — обратный CSS Painting Order traversal с группами positive-z SC (desc по z)/in-flow+auto-0-z (reverse DOM)/negative-z SC (desc по z); фильтры `pointer-events: none`, `display: none`; transform inversion через `Mat4::invert_2d_affine()`. `HitTestResult.path` — ancestor chain. 14 unit-тестов + 9 на Mat4 invert. Phase 0: InlineRun → node = id родителя; только 2D affine.
+
+#### 4 — mix-blend-mode GPU pipeline (2026-05-20)
+
+**`blend-mode-pipeline-p2`**: CSS Compositing & Blending L1 §8 — 17 blend modes в wgpu.
+- `BLEND_SHADER_SRC` (WGSL): два текстурных входа (`t_src` + `t_dst`), uniform u32 `blend_mode`; формула §8: `Co = αs·B(Cs,Cd) + αs·Cd·(1-αd) + Cd·(1-αs)`; 12 separable-режимов + 4 non-separable (Hue/Sat/Color/Lum).
+- `OffscreenLayer.texture` — COPY\_SRC добавлен; `ensure_scratch_layer()` — COPY\_DST + TEXTURE\_BINDING.
+- `CompositePlan::mode: BlendMode`; при non-Normal рендер-план создаёт отдельный уровень; Composite path: `copy_texture_to_texture` → write uniform → render blend\_pipeline.
+- Деградация для level==1 (surface): нет COPY\_SRC на swapchain → fallback normal alpha-blend.
+- Render planning: `PushBlendMode(non-Normal)` → новый уровень + `level_blend_mode_stack`; `PopBlendMode` → `Composite { mode }`; Normal → pass-through без offscreen.
+- 3 новых теста, 253 total в lumen-paint.
+
+---
 
 #### 3A — Color management + Display P3/Rec2020 (2026-05-20)
 
