@@ -1,4 +1,5 @@
-In progress: —
+In progress: transform pipeline (unblocks P4 transform matrix)  branch: transform-pipeline
+Next step: DisplayCommand::PushTransform/PopTransform + emit + renderer-stack  paint/src/display_list.rs
 
 Next: 3B Web Animations compositor offload  lumen-plan.md:169  (blocked: P1+P3)
 

@@ -420,8 +420,13 @@ fn box_can_own_property_node(b: &LayoutBox) -> bool {
 
 /// Вычислить локальную transform-матрицу элемента. CSS Transforms L1 §13:
 /// итог = T(origin) · M · T(-origin), где `M` — произведение функций
-/// `transform` слева направо.
-fn compute_local_transform(fns: &[TransformFn], origin: (f32, f32, f32)) -> Mat4 {
+/// `transform` слева направо. `origin` — локальные координаты pivot-а в
+/// CSS px относительно начала бокса.
+///
+/// Используется property tree builder-ом (`walk`), а также paint-стороной
+/// для эмиссии `DisplayCommand::PushTransform` и hit-тестом (косвенно через
+/// `forward_box_transform`).
+pub fn compute_local_transform(fns: &[TransformFn], origin: (f32, f32, f32)) -> Mat4 {
     let mut m = Mat4::IDENTITY;
     for f in fns {
         let step = match *f {
@@ -446,6 +451,52 @@ fn compute_local_transform(fns: &[TransformFn], origin: (f32, f32, f32)) -> Mat4
     Mat4::translation_2d(ox, oy)
         .multiply(&m)
         .multiply(&Mat4::translation_2d(-ox, -oy))
+}
+
+/// Forward-матрица бокса в viewport-координатах. CSS Transforms L1 §13:
+/// pivot задан в локальных px бокса, а трансформация применяется в той же
+/// системе координат, в которой лежит `b.rect` (обычно viewport). Поэтому
+/// итоговая матрица — `T(pivot_viewport) · M · T(-pivot_viewport)`, где
+/// `pivot_viewport = b.rect.{x,y} + transform_origin`.
+///
+/// Возвращает `None`, если transform-список пуст (бокс не трансформирован —
+/// caller должен трактовать как identity без эмиссии Push/Pop).
+///
+/// Симметрично `hit_test::invert_box_transform`, но возвращает прямую
+/// матрицу (forward), а не обратную.
+#[must_use]
+pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
+    if b.style.transform.is_empty() {
+        return None;
+    }
+    let (ox, oy, _) = b.style.transform_origin;
+    let pivot_x = b.rect.x + ox;
+    let pivot_y = b.rect.y + oy;
+    let mut m = Mat4::IDENTITY;
+    for f in &b.style.transform {
+        let step = match *f {
+            TransformFn::Translate(x, y) => Mat4::translation_2d(x, y),
+            TransformFn::TranslateX(x) => Mat4::translation_2d(x, 0.0),
+            TransformFn::TranslateY(y) => Mat4::translation_2d(0.0, y),
+            TransformFn::Rotate(theta) => Mat4::rotate_2d(theta),
+            TransformFn::Scale(sx, sy) => Mat4::scale_2d(sx, sy),
+            TransformFn::ScaleX(sx) => Mat4::scale_2d(sx, 1.0),
+            TransformFn::ScaleY(sy) => Mat4::scale_2d(1.0, sy),
+            TransformFn::SkewX(a) => Mat4::skew_x(a),
+            TransformFn::SkewY(a) => Mat4::skew_y(a),
+            TransformFn::Matrix([a, b_, c, d, e, f]) => Mat4::from_2d_affine(a, b_, c, d, e, f),
+        };
+        m = m.multiply(&step);
+    }
+    if pivot_x == 0.0 && pivot_y == 0.0 {
+        Some(m)
+    } else {
+        Some(
+            Mat4::translation_2d(pivot_x, pivot_y)
+                .multiply(&m)
+                .multiply(&Mat4::translation_2d(-pivot_x, -pivot_y)),
+        )
+    }
 }
 
 fn overflow_creates_scroll(o: Overflow) -> bool {
