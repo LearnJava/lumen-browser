@@ -1886,7 +1886,7 @@ impl Renderer {
                     font_family: _,
                     font_weight: _,
                     font_style: _,
-                    font_variation_coords,
+                    font_variation_axes,
                 } => {
                     let primary_face_id = text_face_iter.next().unwrap_or(0);
                     if parsed_faces
@@ -1911,7 +1911,7 @@ impl Renderer {
                         &parsed_faces,
                         &mut self.atlas,
                         &mut self.cached_glyphs,
-                        font_variation_coords,
+                        font_variation_axes,
                     );
                     let v_count = text_vertices.len() as u32 - v_start;
                     if v_count > 0 {
@@ -2511,6 +2511,41 @@ fn convert_to_rgba(image: &Image) -> Vec<u8> {
     out
 }
 
+/// CSS Fonts L4 §7 + OpenType spec — нормализует user-space variation axes
+/// в per-fvar-axis normalized coords `[-1.0, 1.0]`, затем применяет avar.
+///
+/// Возвращает пустой Vec для non-variable fonts (нет таблицы `fvar`) или
+/// если `axes` пустой — renderer тогда использует default-instance.
+fn normalize_variation_axes(face: &ParsedFace<'_>, axes: &[([u8; 4], f32)]) -> Vec<f32> {
+    if axes.is_empty() {
+        return Vec::new();
+    }
+    let fvar = match face.font.fvar() {
+        Ok(f) if f.is_variable() => f,
+        _ => return Vec::new(),
+    };
+    let avar = face.font.avar().unwrap_or_default();
+    let mut coords = Vec::with_capacity(fvar.axes.len());
+    for (axis_idx, axis) in fvar.axes.iter().enumerate() {
+        let user_val = axes
+            .iter()
+            .find(|(tag, _)| tag == &axis.tag)
+            .map_or(axis.default, |(_, v)| *v);
+        let clamped = axis.clamp(user_val);
+        let linear = if (clamped - axis.default).abs() < f32::EPSILON {
+            0.0
+        } else if clamped < axis.default {
+            let range = axis.default - axis.min;
+            if range < f32::EPSILON { 0.0 } else { (clamped - axis.default) / range }
+        } else {
+            let range = axis.max - axis.default;
+            if range < f32::EPSILON { 0.0 } else { (clamped - axis.default) / range }
+        };
+        coords.push(avar.normalize(axis_idx, linear));
+    }
+    coords
+}
+
 #[allow(clippy::too_many_arguments)]
 fn push_text_glyphs(
     out: &mut Vec<TextVertex>,
@@ -2522,7 +2557,7 @@ fn push_text_glyphs(
     parsed: &[Option<ParsedFace<'_>>],
     atlas: &mut GlyphAtlas,
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
-    font_variation_coords: &[f32],
+    font_variation_axes: &[([u8; 4], f32)],
 ) {
     // Multi-size atlas: подбираем bin под font_size, растеризируем глифы
     // на этом bin. Display масштаб = font_size / size_bin — если font_size
@@ -2543,6 +2578,9 @@ fn push_text_glyphs(
     // Per-char cache на длительность одного DrawText: одни и те же символы
     // в строке («the the the») не нужно пробовать через все face-ы каждый раз.
     let mut char_face_cache: HashMap<char, (usize, u16)> = HashMap::new();
+    // Normalized variation coords per face_id — лениво вычисляется при первом
+    // обращении к данному face. Нормализация требует fvar+avar из шрифта.
+    let mut norm_coords_cache: HashMap<usize, Vec<f32>> = HashMap::new();
 
     let mut cursor_x = rect.x;
     for ch in text.chars() {
@@ -2553,6 +2591,9 @@ fn push_text_glyphs(
             .as_ref()
             .expect("pick_face_for_codepoint вернул face_id с valid parsed face");
         let advance_scale = font_size / face.head.units_per_em as f32;
+        let coords = norm_coords_cache
+            .entry(face_id)
+            .or_insert_with(|| normalize_variation_axes(face, font_variation_axes));
         let cached_glyph = ensure_glyph(
             cached,
             atlas,
@@ -2562,7 +2603,7 @@ fn push_text_glyphs(
             face_id,
             glyph_id,
             size_bin,
-            font_variation_coords,
+            coords,
         );
 
         if let Some(g) = cached_glyph {
