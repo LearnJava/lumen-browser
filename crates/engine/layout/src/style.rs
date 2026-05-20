@@ -1430,11 +1430,15 @@ pub struct ComputedStyle {
     pub border_bottom_color: CssColor,
     pub border_left_color: CssColor,
     pub box_sizing: BoxSizing,
-    /// CSS Positioned Layout L3 §3 — `position`. Не наследуется. Default
-    /// `Static`. Phase 0 layout не делает позиционирование (offsets top/right/
-    /// bottom/left парсятся, но не применяются) — поле используется для
-    /// определения stacking context (§9.10) и для будущего позиционирования.
+    /// CSS Positioned Layout L3 §3 — `position`. Не наследуется.
+    /// Default `Static`. Используется для stacking context (§9.10) и layout.
     pub position: Position,
+    /// CSS Positioned Layout L3 §4 — inset properties. Не наследуются.
+    /// `auto` = не задано (участвует в shrink-to-fit или оставляет edge на месте).
+    pub top: LengthOrAuto,
+    pub right: LengthOrAuto,
+    pub bottom: LengthOrAuto,
+    pub left: LengthOrAuto,
     /// CSS Positioned Layout L3 §9.3 — `z-index: auto | <integer>`. Не
     /// наследуется. `None` = `auto` (stacking context создаётся только если
     /// другие триггеры в §9.10 совпали). `Some(n)` = явный integer; для
@@ -3081,6 +3085,10 @@ impl ComputedStyle {
             border_left_color: CssColor::CurrentColor,
             box_sizing: BoxSizing::ContentBox,
             position: Position::Static,
+            top: LengthOrAuto::Auto,
+            right: LengthOrAuto::Auto,
+            bottom: LengthOrAuto::Auto,
+            left: LengthOrAuto::Auto,
             z_index: None,
             isolation: Isolation::Auto,
             mix_blend_mode: MixBlendMode::Normal,
@@ -3272,6 +3280,10 @@ pub fn compute_style(
         box_sizing: BoxSizing::ContentBox,
         // CSS Positioned Layout L3 §3 / Compositing L1 — не наследуются.
         position: Position::Static,
+        top: LengthOrAuto::Auto,
+        right: LengthOrAuto::Auto,
+        bottom: LengthOrAuto::Auto,
+        left: LengthOrAuto::Auto,
         z_index: None,
         isolation: Isolation::Auto,
         mix_blend_mode: MixBlendMode::Normal,
@@ -7671,6 +7683,25 @@ fn apply_declaration(
                 style.position = v;
             }
         }
+        "top" => set_margin_side(&mut style.top, val, is_quirks),
+        "right" => set_margin_side(&mut style.right, val, is_quirks),
+        "bottom" => set_margin_side(&mut style.bottom, val, is_quirks),
+        "left" => set_margin_side(&mut style.left, val, is_quirks),
+        "inset" => {
+            // CSS Logical Properties L1 §8.2.1 — inset shorthand (1-4 values).
+            let tokens = split_box_tokens(val);
+            let (t, r, b, l) = match tokens.as_slice() {
+                [a] => (a, a, a, a),
+                [a, b] => (a, b, b, a),
+                [a, b, c] => (a, b, c, b),
+                [a, b, c, d] => (a, b, c, d),
+                _ => return,
+            };
+            set_margin_side(&mut style.top, t, is_quirks);
+            set_margin_side(&mut style.right, r, is_quirks);
+            set_margin_side(&mut style.bottom, b, is_quirks);
+            set_margin_side(&mut style.left, l, is_quirks);
+        }
         "z-index" => {
             // CSS Positioned Layout L3 §9.3 — `auto | <integer>`.
             // `auto` → None (stacking context зависит от других триггеров);
@@ -9297,6 +9328,24 @@ fn apply_css_wide_keyword(
         // CSS Positioned Layout / Compositing — non-inherited.
         "position" => {
             style.position = if inh_only_inherit { inherited.position } else { init.position };
+        }
+        "top" => {
+            style.top = if inh_only_inherit { inherited.top.clone() } else { init.top.clone() };
+        }
+        "right" => {
+            style.right = if inh_only_inherit { inherited.right.clone() } else { init.right.clone() };
+        }
+        "bottom" => {
+            style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() };
+        }
+        "left" => {
+            style.left = if inh_only_inherit { inherited.left.clone() } else { init.left.clone() };
+        }
+        "inset" => {
+            style.top = if inh_only_inherit { inherited.top.clone() } else { init.top.clone() };
+            style.right = if inh_only_inherit { inherited.right.clone() } else { init.right.clone() };
+            style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() };
+            style.left = if inh_only_inherit { inherited.left.clone() } else { init.left.clone() };
         }
         "z-index" => {
             style.z_index = if inh_only_inherit { inherited.z_index } else { init.z_index };
