@@ -17,7 +17,7 @@ use lumen_html_parser::{
 
 use crate::style::{
     compute_style, AlignValue, BackgroundImage, BoxSizing, ComputedStyle, Display, FlexBasis,
-    FlexDirection, FlexWrap, Length, LengthOrAuto, TextAlign,
+    FlexDirection, FlexWrap, Length, LengthOrAuto, TextAlign, VerticalAlign,
 };
 use crate::TextMeasurer;
 
@@ -523,6 +523,14 @@ fn preferred_inline_block_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
     }
 }
 
+/// Рекурсивно смещает rect.y всего поддерева на dy (для vertical-align).
+fn shift_y_box(b: &mut LayoutBox, dy: f32) {
+    b.rect.y += dy;
+    for child in &mut b.children {
+        shift_y_box(child, dy);
+    }
+}
+
 fn lay_out(
     b: &mut LayoutBox,
     start_x: f32,
@@ -713,50 +721,84 @@ fn lay_out(
             }
         }
         BoxKind::InlineBlockRow => {
-            // Горизонтальный layout с переносом строк (CSS 2.1 §9.4.3).
-            // Алгоритм: укладываем детей слева направо; если ребёнок не
-            // помещается в оставшееся место текущей строки (и строка не пуста)
-            // — переносим на следующую строку.
+            // Двухфазный горизонтальный layout с переносом строк и
+            // vertical-align (CSS 2.1 §9.4.3 + §10.8).
+            //
+            // Фаза 1: расставляем детей по X, группируем в строки.
+            // Фаза 2: применяем вертикальное выравнивание внутри каждой строки.
+            //
+            // rows: (row_y, row_max_h, Vec<child_index>)
+            let mut rows: Vec<(f32, f32, Vec<usize>)> = Vec::new();
             let mut cur_x = content_x;
             let mut cur_y = content_y;
             let mut row_max_h: f32 = 0.0;
+            let mut row_y = cur_y;
+            let mut cur_row: Vec<usize> = Vec::new();
             let mut total_h: f32 = 0.0;
-            for child in &mut b.children {
-                let is_run = matches!(child.kind, BoxKind::InlineRun { .. });
+
+            for i in 0..b.children.len() {
+                let is_run = matches!(b.children[i].kind, BoxKind::InlineRun { .. });
                 let child_avail = if is_run {
                     (content_width - (cur_x - content_x)).max(0.0)
                 } else {
                     content_width
                 };
-                // Первый проход: раскладываем чтобы узнать ширину.
-                lay_out(child, cur_x, cur_y, child_avail, measurer, viewport);
-                if matches!(child.kind, BoxKind::Skip) {
+                lay_out(&mut b.children[i], cur_x, cur_y, child_avail, measurer, viewport);
+                if matches!(b.children[i].kind, BoxKind::Skip) {
                     continue;
                 }
-                let c_em = child.style.font_size;
-                let child_mr = child.style.margin_right.resolve_or_zero(c_em, content_width, viewport);
-                let child_mt = child.style.margin_top.resolve_or_zero(c_em, content_width, viewport);
-                let child_mb = child.style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
-                // Правый край ребёнка с учётом margin-right.
-                let child_right = child.rect.x + child.rect.width + child_mr;
-                let child_full_h = child_mt + child.rect.height + child_mb;
-                // Перенос: если ребёнок выходит за правую границу контента
-                // и строка уже не пустая — начинаем новую строку.
-                if !is_run
-                    && child_right > content_x + content_width
-                    && cur_x > content_x
-                {
-                    cur_y += row_max_h;
+                let c_em = b.children[i].style.font_size;
+                let child_mr = b.children[i].style.margin_right.resolve_or_zero(c_em, content_width, viewport);
+                let child_mt = b.children[i].style.margin_top.resolve_or_zero(c_em, content_width, viewport);
+                let child_mb = b.children[i].style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
+                let child_right = b.children[i].rect.x + b.children[i].rect.width + child_mr;
+                let child_full_h = child_mt + b.children[i].rect.height + child_mb;
+
+                if !is_run && child_right > content_x + content_width && cur_x > content_x {
+                    rows.push((row_y, row_max_h, std::mem::take(&mut cur_row)));
                     total_h += row_max_h;
+                    cur_y += row_max_h;
+                    row_y = cur_y;
                     cur_x = content_x;
                     row_max_h = 0.0;
-                    // Повторный layout на новой строке.
-                    lay_out(child, cur_x, cur_y, content_width, measurer, viewport);
+                    lay_out(&mut b.children[i], cur_x, cur_y, content_width, measurer, viewport);
                 }
-                cur_x = child.rect.x + child.rect.width + child_mr;
+                cur_row.push(i);
+                cur_x = b.children[i].rect.x + b.children[i].rect.width + child_mr;
                 row_max_h = row_max_h.max(child_full_h);
             }
+            if !cur_row.is_empty() {
+                rows.push((row_y, row_max_h, cur_row));
+            }
             b.rect.height = total_h + row_max_h;
+
+            // Фаза 2: vertical-align. Для пустых inline-block элементов
+            // baseline = нижний край margin-box (CSS 2.1 §10.8.1), поэтому
+            // Baseline обрабатывается так же как Bottom.
+            let mut adjustments: Vec<(usize, f32)> = Vec::new();
+            for (_, row_h, child_idxs) in &rows {
+                for &idx in child_idxs {
+                    let child = &b.children[idx];
+                    let c_em = child.style.font_size;
+                    let child_mt = child.style.margin_top.resolve_or_zero(c_em, content_width, viewport);
+                    let child_mb = child.style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
+                    let child_full_h = child_mt + child.rect.height + child_mb;
+                    let dy = match child.style.vertical_align {
+                        VerticalAlign::Bottom | VerticalAlign::TextBottom | VerticalAlign::Baseline => {
+                            row_h - child_full_h
+                        }
+                        VerticalAlign::Top | VerticalAlign::TextTop => 0.0,
+                        VerticalAlign::Middle => (row_h - child_full_h) / 2.0,
+                        _ => 0.0,
+                    };
+                    if dy > 0.001 {
+                        adjustments.push((idx, dy));
+                    }
+                }
+            }
+            for (idx, dy) in adjustments {
+                shift_y_box(&mut b.children[idx], dy);
+            }
         }
         BoxKind::InlineRun { .. } => unreachable!(),
         BoxKind::Skip => unreachable!(),
