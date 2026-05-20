@@ -1339,26 +1339,34 @@ impl ApplicationHandler for Lumen {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // HTML §8.1.5.1 «Update the rendering»: перед собственно
-                // отрисовкой выполняем rAF-callback-и с текущим timestamp-ом.
-                // Callback-и (когда подключим JS) могут поменять DOM/style;
-                // здесь они лишь Rust closure, но точка диспатча уже стоит.
+                // HTML §8.1.5.1 «Update the rendering» — правильный порядок:
+                //   1. style flush        (не реализован, нет CSS-invalidation)
+                //   2. layout             (не реализован, нет DOM-мутаций)
+                //   3. scroll             ← advance_scroll_anim + advance_momentum
+                //   4. ResizeObserver     (выполняется на Resized-событии, не здесь)
+                //   5. rAF callbacks      ← run_rendering_step
+                //   6. layout invalidation (stub: если rAF изменил DOM — relayout)
+                //   7. paint              ← r.render(...)
+                //
+                // Scroll обновляется ДО rAF, чтобы callback-и читали актуальный
+                // scroll_y/scroll_x (важно когда подключим scroll-events в JS).
                 let timestamp_ms =
                     self.epoch.elapsed().as_secs_f64() * 1000.0;
-                self.runtime.run_rendering_step(timestamp_ms);
 
-                // Тик smooth-scroll-анимации. Делаем ДО построения display-list-а.
+                // Шаг 3: scroll update.
                 if self.advance_scroll_anim() {
                     self.request_redraw();
                 }
-
-                // Тик momentum scroll. Запускается после TouchPhase::Ended тачпада.
-                // Конкурирует с scroll_anim: если пользователь начал keyboard/wheel
-                // scroll во время momentum — scroll_anim перекрывает (momentum тикает
-                // отдельно через scroll_x/scroll_y напрямую без smooth-anim).
                 if self.advance_momentum(timestamp_ms) {
                     self.request_redraw();
                 }
+
+                // Шаг 5: rAF callbacks + microtask checkpoint.
+                self.runtime.run_rendering_step(timestamp_ms);
+
+                // Шаг 6: layout invalidation stub. В Phase 0 rAF-callback-и —
+                // только Rust-closures без DOM-мутаций, relayout не нужен.
+                // При подключении QuickJS здесь появится `if layout_dirty { self.relayout(); }`.
 
                 // Page-полоса: исходный display list + highlight-FillRect-ы
                 // перед своими DrawText (когда find открыт). Прокручивается.

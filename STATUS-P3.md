@@ -1,7 +1,6 @@
-In progress: 3B.2 rendering steps ordering  branch: rendering-steps-ordering
-Next step: scroll update → rAF → paint в RedrawRequested  shell/src/main.rs:1335
+In progress: —
 
-Next: 3B.2 rendering steps ordering      lumen-plan.md:192
+Next: 3B.3 real observers                lumen-plan.md:193
 
 Queue:
 3B.3 real observers                lumen-plan.md:193
@@ -14,4 +13,4 @@ Queue:
 4B.4 preload deduplication         lumen-plan.md:199
 4B.5 preload priority + EventSink  lumen-plan.md:200
 
-Recent: reload-via-queue-task 2026-05-20
+Recent: rendering-steps-ordering 2026-05-20
