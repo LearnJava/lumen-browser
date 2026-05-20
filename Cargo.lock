@@ -1096,6 +1096,7 @@ name = "lumen-js"
 version = "0.0.1"
 dependencies = [
  "lumen-core",
+ "lumen-dom",
  "rquickjs",
 ]
 
