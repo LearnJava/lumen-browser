@@ -1,6 +1,7 @@
-In progress: —
+In progress: text-decoration-thickness 🟡→✅  branch: text-decoration-thickness
+Next step: update css-2026-compliance.md + add paint test
 
-Next: text-overflow ellipsis render     css-2026-compliance.md (🟡→✅)
+Next: position: relative offsets 🟡→✅   css-2026-compliance.md (already impl'd)
 
 Queue (🟡→✅, paint/layout wire-up, no new parsing needed):
   text-overflow: ellipsis              display_list.rs — clip text run, emit "…"
