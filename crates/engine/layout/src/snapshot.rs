@@ -210,6 +210,7 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
             let c = |cc: CssColor| match cc {
                 CssColor::Rgba(col) => color_hex(col),
                 CssColor::CurrentColor => "currentColor".into(),
+                CssColor::Wide(f) => color_hex(f.to_srgb_color()),
             };
             let _ = write!(
                 out,

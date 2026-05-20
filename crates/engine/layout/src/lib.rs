@@ -34,7 +34,8 @@ pub use style::{
     parse_css_wide_keyword, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BorderStyle,
-    BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ComputedStyle, Content,
+    BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat, ColorSpace,
+    ComputedStyle, Content,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch,
     FontStyle,
     FontVariant, FontWeight, GradientStop, Hyphens, Isolation, IterationCount, Length,
@@ -235,6 +236,59 @@ mod tests {
         let p = first_element_child(&root);
         assert!(matches!(p.style.background_color, Some(CssColor::Rgba(_))));
         assert!(matches!(p.style.background_color, Some(CssColor::Rgba(Color { r: 255, .. }))));
+    }
+
+    #[test]
+    fn color_fn_display_p3_parsed_as_wide() {
+        let root = lay("<p>x</p>", "p { background-color: color(display-p3 1 0 0); }");
+        let p = first_element_child(&root);
+        assert!(
+            matches!(p.style.background_color, Some(CssColor::Wide(f)) if f.space == ColorSpace::DisplayP3),
+            "display-p3 should parse to CssColor::Wide with DisplayP3 space"
+        );
+    }
+
+    #[test]
+    fn color_fn_srgb_parsed_as_wide() {
+        let root = lay("<p>x</p>", "p { background-color: color(srgb 0.5 0.5 0.5); }");
+        let p = first_element_child(&root);
+        assert!(
+            matches!(p.style.background_color, Some(CssColor::Wide(f)) if f.space == ColorSpace::Srgb),
+            "srgb should parse to CssColor::Wide with Srgb space"
+        );
+    }
+
+    #[test]
+    fn color_fn_rec2020_parsed_as_wide() {
+        let root = lay("<p>x</p>", "p { background-color: color(rec2020 0.3 0.6 0.9); }");
+        let p = first_element_child(&root);
+        assert!(
+            matches!(p.style.background_color, Some(CssColor::Wide(f)) if f.space == ColorSpace::Rec2020),
+            "rec2020 should parse to CssColor::Wide with Rec2020 space"
+        );
+    }
+
+    #[test]
+    fn color_fn_display_p3_with_alpha() {
+        let root = lay("<p>x</p>", "p { background-color: color(display-p3 1 0 0 / 0.5); }");
+        let p = first_element_child(&root);
+        if let Some(CssColor::Wide(f)) = p.style.background_color {
+            assert!((f.r - 1.0).abs() < 0.001);
+            assert!(f.g.abs() < 0.001);
+            assert!(f.b.abs() < 0.001);
+            assert!((f.a - 0.5).abs() < 0.001);
+        } else {
+            panic!("expected Wide color with alpha");
+        }
+    }
+
+    #[test]
+    fn color_fn_display_p3_to_srgb_red() {
+        // display-p3 red (1 0 0) → sRGB: P3-red выходит за gamut sRGB.
+        let f = ColorFloat { r: 1.0, g: 0.0, b: 0.0, a: 1.0, space: ColorSpace::DisplayP3 };
+        let c = f.to_srgb_color();
+        assert!(c.r > 200, "r={}", c.r);
+        assert_eq!(c.a, 255);
     }
 
     #[test]
