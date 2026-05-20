@@ -341,3 +341,58 @@ fn flex_gap_with_grow() {
     );
     assert_snapshot("flex_gap_with_grow", &actual);
 }
+
+// ── Flex wrap (4B.5) ─────────────────────────────────────────────────────────
+
+#[test]
+fn flex_wrap_two_lines() {
+    // 3 × 200px items in 500px container with flex-wrap: wrap
+    // Line 1: items 1+2 (400px total < 500px, item 3 doesn't fit: 400+200=600 > 500)
+    // Line 2: item 3
+    let actual = build(
+        "<div><div></div><div></div><div></div></div>",
+        "div { display: flex; flex-wrap: wrap; width: 500px; } \
+         div > div { width: 200px; height: 40px; }",
+        600.0,
+    );
+    assert_snapshot("flex_wrap_two_lines", &actual);
+}
+
+#[test]
+fn flex_wrap_reverse() {
+    // Same as above but wrap-reverse: line 2 appears at top, line 1 at bottom
+    let actual = build(
+        "<div><div></div><div></div><div></div></div>",
+        "div { display: flex; flex-wrap: wrap-reverse; width: 500px; } \
+         div > div { width: 200px; height: 40px; }",
+        600.0,
+    );
+    assert_snapshot("flex_wrap_reverse", &actual);
+}
+
+#[test]
+fn flex_wrap_with_row_gap() {
+    // 3 items wrapping onto 2 lines with row-gap: 10px between lines
+    let actual = build(
+        "<div><div></div><div></div><div></div></div>",
+        "div { display: flex; flex-wrap: wrap; width: 500px; row-gap: 10px; } \
+         div > div { width: 200px; height: 40px; }",
+        600.0,
+    );
+    assert_snapshot("flex_wrap_with_row_gap", &actual);
+}
+
+#[test]
+fn flex_wrap_grow_per_line() {
+    // 3 items (basis=120px each) with flex-grow:1 in 300px container.
+    // Line 1: items 1+2 = 240px < 300, item 3 doesn't fit (240+120=360>300).
+    //   free_space = 300-240 = 60px; each of 2 items grows by 30 → 150px each.
+    // Line 2: item 3 alone, grows to fill whole 300px.
+    let actual = build(
+        "<div><div></div><div></div><div></div></div>",
+        "div { display: flex; flex-wrap: wrap; width: 300px; } \
+         div > div { flex-grow: 1; width: 120px; height: 50px; }",
+        400.0,
+    );
+    assert_snapshot("flex_wrap_grow_per_line", &actual);
+}
