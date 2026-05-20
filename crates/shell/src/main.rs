@@ -28,7 +28,7 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use lumen_core::event::{Event, SubresourceKind};
+use lumen_core::event::{Event, FetchPriority, SubresourceKind};
 use lumen_core::ext::EventSink;
 use lumen_core::geom::Size;
 use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
@@ -50,7 +50,7 @@ impl EventSink for StdoutEventSink {
             Event::RequestStarted { url, .. } => eprintln!("→ GET {url}"),
             Event::RequestCompleted { url, status, .. } => eprintln!("← {status} {url}"),
             Event::RequestBlocked { url, reason, .. } => eprintln!("✗ {url} ({reason})"),
-            Event::SubresourceHintFound { url, kind } => {
+            Event::SubresourceHintFound { url, kind, priority } => {
                 let label = match kind {
                     SubresourceKind::Stylesheet => "css",
                     SubresourceKind::Script => "js",
@@ -60,7 +60,12 @@ impl EventSink for StdoutEventSink {
                     SubresourceKind::Preconnect { dns_only: false } => "preconnect",
                     SubresourceKind::Other { .. } => "preload",
                 };
-                eprintln!("⤷ preload {label} {url}");
+                let prio = match priority {
+                    FetchPriority::High => "high",
+                    FetchPriority::Medium => "medium",
+                    FetchPriority::Low => "low",
+                };
+                eprintln!("⤷ preload {label} [{prio}] {url}");
             }
             _ => {}
         }
@@ -807,7 +812,9 @@ fn render_bytes(
 /// Отправить preload-хинты в EventSink.
 ///
 /// Каждый `PreloadHint` резолвится относительно `base` (4B.3) и
-/// преобразуется в `Event::SubresourceHintFound { url, kind }`.
+/// преобразуется в `Event::SubresourceHintFound { url, kind, priority }`.
+/// Хинты сортируются по убыванию приоритета (High → Medium → Low), чтобы
+/// самые критичные ресурсы стартовали первыми (полезно при HTTP/2).
 /// `srcset`-строки эмитятся как-есть (multi-URL формат — задача picker-а).
 /// В Phase 0 sink логирует в stderr; в будущем запустит fetch через HttpClient.
 fn dispatch_preload_hints(
@@ -818,13 +825,10 @@ fn dispatch_preload_hints(
     use std::collections::HashSet;
     use lumen_html_parser::PreloadHint;
 
-    // Дедупликация по resolved URL: `<link rel="preload stylesheet" href="x.css">`
-    // создаёт два хинта на один URL. Fetch-cache выше тоже поможет, но
-    // лишние события EventSink нежелательны — emit строго одного хинта на URL.
-    let mut seen: HashSet<String> = HashSet::new();
-
+    // Первый проход: резолв URL + вычисление kind.
+    let mut resolved: Vec<(String, SubresourceKind)> = Vec::with_capacity(hints.len());
     for hint in hints {
-        let (resolved_url, kind) = match hint {
+        let pair = match hint {
             PreloadHint::Stylesheet { url } =>
                 (base.resolve_str(url), SubresourceKind::Stylesheet),
             PreloadHint::Script { url } =>
@@ -852,9 +856,19 @@ fn dispatch_preload_hints(
                 (base.resolve_str(url), SubresourceKind::Preconnect { dns_only: *dns_only }),
             PreloadHint::Image { url: None, srcset: None, .. } => continue,
         };
-        // Дедупликация: первый хинт на данный URL побеждает.
-        if seen.insert(resolved_url.clone()) {
-            sink.emit(&Event::SubresourceHintFound { url: resolved_url, kind });
+        resolved.push(pair);
+    }
+
+    // Stable-sort по приоритету: High первыми. Stable сохраняет source-order
+    // внутри одного уровня приоритета (важно для HTTP/2 multiplexing).
+    resolved.sort_by_key(|(_, k)| FetchPriority::for_kind(k));
+
+    // Дедупликация + emit. Первый (наиболее приоритетный) хинт на URL побеждает.
+    let mut seen: HashSet<String> = HashSet::new();
+    for (url, kind) in resolved {
+        if seen.insert(url.clone()) {
+            let priority = FetchPriority::for_kind(&kind);
+            sink.emit(&Event::SubresourceHintFound { url, kind, priority });
         }
     }
 }
@@ -2085,13 +2099,16 @@ mod tests {
         let events = unsafe { (*sink_any).0.lock().unwrap() };
         assert_eq!(events.len(), 2);
 
-        let Event::SubresourceHintFound { url, kind } = &events[0] else { panic!() };
+        // CSS (High) сортируется перед JS (Medium) независимо от source-order
+        let Event::SubresourceHintFound { url, kind, priority } = &events[0] else { panic!() };
         assert_eq!(url, "https://example.com/reset.css");
         assert_eq!(*kind, SubresourceKind::Stylesheet);
+        assert_eq!(*priority, FetchPriority::High);
 
-        let Event::SubresourceHintFound { url: url2, kind: kind2 } = &events[1] else { panic!() };
+        let Event::SubresourceHintFound { url: url2, kind: kind2, priority: p2 } = &events[1] else { panic!() };
         assert_eq!(url2, "https://cdn.example.com/lib.js");
         assert_eq!(*kind2, SubresourceKind::Script);
+        assert_eq!(*p2, FetchPriority::Medium);
     }
 
     #[test]
@@ -2128,6 +2145,39 @@ mod tests {
         }).collect();
         assert!(urls.contains(&"https://example.com/style.css"));
         assert!(urls.contains(&"https://example.com/other.css"));
+    }
+
+    #[test]
+    fn dispatch_preload_hints_sorts_by_priority() {
+        use lumen_html_parser::PreloadHint;
+        use std::sync::{Arc, Mutex};
+
+        struct CollectingSink(Mutex<Vec<Event>>);
+        impl EventSink for CollectingSink {
+            fn emit(&self, e: &Event) { self.0.lock().unwrap().push(e.clone()); }
+        }
+
+        let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(Mutex::new(Vec::new())));
+        let base = ResourceBase::Url("https://example.com/".to_owned());
+        // Source-order: img (Low) → script (Medium) → css (High)
+        let hints = vec![
+            PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None },
+            PreloadHint::Script { url: "app.js".into() },
+            PreloadHint::Stylesheet { url: "main.css".into() },
+        ];
+
+        dispatch_preload_hints(&hints, &base, &sink);
+
+        let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        let events = unsafe { (*sink_any).0.lock().unwrap() };
+        assert_eq!(events.len(), 3);
+
+        // После сортировки: css(High) → js(Medium) → img(Low)
+        let priorities: Vec<_> = events.iter().map(|e| {
+            let Event::SubresourceHintFound { priority, .. } = e else { panic!() };
+            *priority
+        }).collect();
+        assert_eq!(priorities, vec![FetchPriority::High, FetchPriority::Medium, FetchPriority::Low]);
     }
 
     #[test]

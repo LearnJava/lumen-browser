@@ -1,8 +1,10 @@
 In progress: —
 
-Next: 4B.5 preload priority + EventSink     lumen-plan.md:199
+Next: 4A JS↔DOM bindings     lumen-plan.md:193
 
 Queue:
-4B.5 preload priority + EventSink  lumen-plan.md:199
+4A JS↔DOM bindings             lumen-plan.md:193
+5A HTTP/2                      lumen-plan.md:200
+5C DevTools/CDP минимум        lumen-plan.md:202
 
-Recent: preload-deduplication 2026-05-20
+Recent: preload-priority-eventsink 2026-05-20
