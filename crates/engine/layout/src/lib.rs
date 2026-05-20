@@ -20,7 +20,10 @@ pub mod stacking;
 pub mod style;
 
 pub use animation::{AnimValue, AnimationInterpolator, NoopInterpolator};
-pub use box_tree::{layout, layout_measured, BoxKind, InlineFrag, InlineSegment, LayoutBox};
+pub use box_tree::{
+    collect_image_requests, layout, layout_measured, BoxKind, ImageRequest, InlineFrag,
+    InlineSegment, LayoutBox,
+};
 pub use property_trees::{
     ClipNode, ClipTree, EffectNode, EffectTree, Mat4, PropertyTreeNodeId, PropertyTrees,
     ScrollNode, ScrollTree, TransformNode, TransformTree,
@@ -8812,5 +8815,87 @@ mod tests {
             Color { r: 0, g: 0, b: 255, a: 255 },
             "author CSS должен побеждать font color= атрибут"
         );
+    }
+
+    // ── collect_image_requests ────────────────────────────────────────────────
+
+    fn vp() -> Size {
+        Size::new(800.0, 600.0)
+    }
+
+    /// Обычный `<img src>` → один запрос с тем же URL.
+    #[test]
+    fn collect_plain_img_src() {
+        let doc = lumen_html_parser::parse(r#"<body><img src="photo.jpg"></body>"#);
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].url, "photo.jpg");
+        assert!(!reqs[0].has_explicit_width);
+        assert!(!reqs[0].has_explicit_height);
+    }
+
+    /// `<img src width height>` → has_explicit_width/height == true.
+    #[test]
+    fn collect_img_with_explicit_dims() {
+        let doc = lumen_html_parser::parse(
+            r#"<body><img src="a.png" width="100" height="50"></body>"#,
+        );
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 1);
+        assert!(reqs[0].has_explicit_width);
+        assert!(reqs[0].has_explicit_height);
+    }
+
+    /// Пустой `src` → запрос не включается.
+    #[test]
+    fn collect_img_empty_src_skipped() {
+        let doc = lumen_html_parser::parse(r#"<body><img src=""></body>"#);
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 0);
+    }
+
+    /// `<img>` без `src` → запрос не включается.
+    #[test]
+    fn collect_img_no_src_skipped() {
+        let doc = lumen_html_parser::parse(r#"<body><img alt="no src"></body>"#);
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 0);
+    }
+
+    /// `<img srcset="a.png 1x, b.png 2x">` → DPR=1.0 → первый кандидат.
+    #[test]
+    fn collect_img_srcset_picks_first_at_dpr1() {
+        let doc = lumen_html_parser::parse(
+            r#"<body><img srcset="a.png 1x, b.png 2x" src="fallback.png"></body>"#,
+        );
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 1);
+        // DPR=1.0 → picker выберет "a.png 1x"
+        assert_eq!(reqs[0].url, "a.png");
+    }
+
+    /// `<picture><source srcset="hd.webp"><img src="sd.jpg"></picture>` →
+    /// picker выбирает source-кандидата.
+    #[test]
+    fn collect_picture_source_wins_over_img_src() {
+        let doc = lumen_html_parser::parse(
+            r#"<body><picture><source srcset="hd.webp"><img src="sd.jpg"></picture></body>"#,
+        );
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].url, "hd.webp");
+    }
+
+    /// Несколько `<img>` → несколько запросов.
+    #[test]
+    fn collect_multiple_images() {
+        let doc = lumen_html_parser::parse(
+            r#"<body><img src="a.png"><img src="b.jpg"></body>"#,
+        );
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 2);
+        let urls: Vec<&str> = reqs.iter().map(|r| r.url.as_str()).collect();
+        assert!(urls.contains(&"a.png"));
+        assert!(urls.contains(&"b.jpg"));
     }
 }

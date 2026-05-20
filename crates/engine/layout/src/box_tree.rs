@@ -51,6 +51,50 @@ struct ImageSource {
     intrinsic_height: Option<u32>,
 }
 
+/// Запрос на предзагрузку изображения: URL после picking-а по
+/// `<picture>`/`srcset`/`sizes` плюс признаки явного задания размеров
+/// author-ом (нужны shell для `apply_intrinsic_size`).
+pub struct ImageRequest {
+    pub node_id: NodeId,
+    pub url: String,
+    pub has_explicit_width: bool,
+    pub has_explicit_height: bool,
+}
+
+/// Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов.
+/// URL выбирается через тот же picker, что layout использует при построении
+/// `BoxKind::Image { src }` — гарантирует совпадение ключей в
+/// `Renderer::register_image` и `DisplayCommand::DrawImage.src`.
+pub fn collect_image_requests(doc: &Document, viewport: Size) -> Vec<ImageRequest> {
+    let mut out = Vec::new();
+    collect_requests_inner(doc, doc.root(), viewport, &mut out);
+    out
+}
+
+fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut Vec<ImageRequest>) {
+    let node = doc.get(id);
+    if let NodeData::Element { name, attrs } = &node.data
+        && name.local == "img"
+    {
+        let has_explicit_width = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("width"));
+        let has_explicit_height =
+            attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("height"));
+        let source = resolve_image_source(doc, id, viewport);
+        if !source.url.is_empty() {
+            out.push(ImageRequest {
+                node_id: id,
+                url: source.url,
+                has_explicit_width,
+                has_explicit_height,
+            });
+        }
+        return; // void element — нет children
+    }
+    for &child in &node.children {
+        collect_requests_inner(doc, child, viewport, out);
+    }
+}
+
 /// Выбрать источник для `<img>`-элемента с учётом окружающего контекста:
 ///  1. Если parent — `<picture>`, прогоняем picture-picker
 ///     (выбирает `<source>` или fallback на `<img>` по `media`/`type`/

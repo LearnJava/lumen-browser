@@ -560,83 +560,50 @@ fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>) {
 
 // ── Загрузка <img src> ───────────────────────────────────────────────────────
 
-/// Обходит DOM, для каждого `<img>` с непустым `src` скачивает байты, декодирует
-/// через `lumen_image::decode` (PNG/JPEG dispatch по сигнатуре) и собирает
-/// результаты в `Vec<(raw_src, Image)>`.
+/// Обходит DOM через `lumen_layout::collect_image_requests` — picker учитывает
+/// `<picture>`/`srcset`/`sizes`, поэтому ключ совпадает с тем, что layout
+/// эмитит в `DisplayCommand::DrawImage.src`. Для каждого запроса скачивает
+/// байты и декодирует через `lumen_image::decode` (PNG/JPEG dispatch).
 ///
-/// Побочный эффект: для тех `<img>`, у которых **не задан ни width, ни height**
-/// атрибут, проставляет оба из декодированного изображения. Это HTML5 §10
-/// «mapped attributes» — author CSS затем перекроет, если захочет. Если хоть
-/// один из атрибутов уже задан author-ом, не лезем (предполагаем, что author
-/// знает, что делает — например, форсирует aspect-ratio).
-///
-/// Ключ в результирующем Vec — raw href из `src` attribute, не resolved URL.
-/// Это совпадает с тем, что хранит `BoxKind::Image { src, alt }` после layout,
-/// поэтому `Renderer::register_image` будет видеть тот же ключ, который придёт
-/// в `DisplayCommand::DrawImage.src` при рендеринге.
+/// Побочный эффект: для `<img>` без явных `width`/`height` проставляет
+/// intrinsic dimensions из декодированного изображения (HTML5 §10 mapped
+/// attributes). Author CSS затем перекроет при необходимости.
 fn fetch_and_decode_images(
     doc: &mut Document,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
+    viewport: lumen_core::geom::Size,
 ) -> Vec<(String, lumen_image::Image)> {
-    let mut entries: Vec<(NodeId, String, bool, bool)> = Vec::new();
-    collect_img_entries(doc, doc.root(), &mut entries);
+    let requests = lumen_layout::collect_image_requests(doc, viewport);
 
     let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
-    for (node_id, src, has_w, has_h) in entries {
-        let bytes = match fetch_image_bytes(&src, base, sink) {
+    for req in requests {
+        let bytes = match fetch_image_bytes(&req.url, base, sink) {
             Ok(b) => b,
             Err(e) => {
-                eprintln!("Пропуск картинки {src}: {e}");
+                eprintln!("Пропуск картинки {}: {e}", req.url);
                 continue;
             }
         };
         let image = match lumen_image::decode(&bytes) {
             Ok(i) => i,
             Err(e) => {
-                eprintln!("Не декодируется {src}: {e}");
+                eprintln!("Не декодируется {}: {e}", req.url);
                 continue;
             }
         };
 
-        if !has_w && !has_h {
-            apply_intrinsic_size(doc, node_id, image.width, image.height);
+        if !req.has_explicit_width && !req.has_explicit_height {
+            apply_intrinsic_size(doc, req.node_id, image.width, image.height);
         }
 
         eprintln!(
-            "Загружена картинка: {src} ({}×{}, {:?})",
-            image.width, image.height, image.format
+            "Загружена картинка: {} ({}×{}, {:?})",
+            req.url, image.width, image.height, image.format
         );
-        out.push((src, image));
+        out.push((req.url, image));
     }
     out
-}
-
-fn collect_img_entries(
-    doc: &Document,
-    id: NodeId,
-    out: &mut Vec<(NodeId, String, bool, bool)>,
-) {
-    let node = doc.get(id);
-    if let NodeData::Element { name, attrs } = &node.data
-        && name.local == "img"
-    {
-        let src = attrs
-            .iter()
-            .find(|a| a.name.local.eq_ignore_ascii_case("src"))
-            .map(|a| a.value.clone())
-            .unwrap_or_default();
-        if !src.is_empty() {
-            let has_w = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("width"));
-            let has_h = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("height"));
-            out.push((id, src, has_w, has_h));
-        }
-        // <img> — void элемент, у него не бывает children, выходим.
-        return;
-    }
-    for &child in &node.children {
-        collect_img_entries(doc, child, out);
-    }
 }
 
 fn fetch_image_bytes(
@@ -743,7 +710,7 @@ fn parse_and_layout(
     // presentational hints (width/height attribute) и потом подхватываются
     // style cascade. Errors silently пропускаются — битая картинка не валит
     // всю страницу, layout нарисует серый placeholder.
-    let images = fetch_and_decode_images(&mut doc, base, sink);
+    let images = fetch_and_decode_images(&mut doc, base, sink, viewport);
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
     let mut css = extract_style_blocks(&doc);

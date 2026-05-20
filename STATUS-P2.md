@@ -1,4 +1,5 @@
-In progress: —
+In progress: 4A picture/srcset shell integration  branch: picture-shell-4a
+Next step: collect_image_requests in box_tree.rs  crates/engine/layout/src/box_tree.rs:98
 
 Next: 3B Web Animations compositor offload  lumen-plan.md:169  (blocked: P1+P3)
 
