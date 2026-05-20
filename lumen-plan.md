@@ -133,8 +133,8 @@
 | 3A | 🟡 **`[P1+P2+P3]` Web Animations interpolation** | P2 п.3B; P3 scheduling | Stub компилируется |
 | ~~3B~~ | ✅ **`[P1+P3]` Push-tokenizer + incremental tree builder** | P3 п.4B | — |
 | 4A | 🟡 **`[P1+P2]` `<picture>`/`srcset`/`sizes` finishing** | P3 lazy-loading | P2 GPU upload |
-| 4B | ⬜ **`[P1]` CSS Grid + полный Flexbox** | Адаптивные сайты | — |
-| 4B.1 | ⬜ flex-direction + flex-wrap properties | `layout/src/style.rs:1392` | — |
+| 4B | 🟡 **`[P1]` CSS Grid + полный Flexbox** | Адаптивные сайты | — |
+| 4B.1 | ✅ flex-direction + flex-wrap properties | `layout/src/style.rs` | — |
 | 4B.2 | ⬜ flex-grow + flex-shrink + flex-basis | `layout/src/style.rs:1392` | — |
 | 4B.3 | ⬜ flex item layout pass (main/cross axis) | `layout/src/box_tree.rs:509` | — |
 | 4B.4 | ⬜ flex gap application | `layout/src/box_tree.rs:509` | — |

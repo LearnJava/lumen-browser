@@ -1568,6 +1568,12 @@ pub struct ComputedStyle {
     /// в `lumen-paint` (linear vs nearest-neighbour для `<img>` и background)
     /// — отдельная задача с согласованием P2.
     pub image_rendering: ImageRendering,
+    /// CSS Flexbox L1 §5.1 — `flex-direction`. Non-inherited. Default `Row`.
+    /// Phase 0: parsing + storage; реальный flex-layout — задача 4B.3.
+    pub flex_direction: FlexDirection,
+    /// CSS Flexbox L1 §5.2 — `flex-wrap`. Non-inherited. Default `Nowrap`.
+    /// Phase 0: parsing + storage; реальный multi-line flex — задача 4B.5.
+    pub flex_wrap: FlexWrap,
     /// CSS Text Module Level 4 §6.4.1 — `text-wrap-mode`. Inherited.
     /// Default `Wrap`. Phase 0: parsing + storage; реальная связка с
     /// inline-flow line-breaker-ом (когда `Nowrap` подавляет soft wraps
@@ -2228,6 +2234,61 @@ impl TextWrapStyle {
     }
 }
 
+/// CSS Flexbox L1 §5.1 — `flex-direction`. Non-inherited.
+///
+/// Задаёт направление главной оси flex-контейнера. Phase 0: parsing + storage;
+/// реальный flex-layout pass — задача 4B.3.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FlexDirection {
+    /// `row` (initial) — горизонтально, слева направо.
+    #[default]
+    Row,
+    /// `row-reverse` — горизонтально, справа налево.
+    RowReverse,
+    /// `column` — вертикально, сверху вниз.
+    Column,
+    /// `column-reverse` — вертикально, снизу вверх.
+    ColumnReverse,
+}
+
+impl FlexDirection {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "row" => Some(Self::Row),
+            "row-reverse" => Some(Self::RowReverse),
+            "column" => Some(Self::Column),
+            "column-reverse" => Some(Self::ColumnReverse),
+            _ => None,
+        }
+    }
+}
+
+/// CSS Flexbox L1 §5.2 — `flex-wrap`. Non-inherited.
+///
+/// Разрешает или запрещает перенос flex-элементов на новые строки/столбцы.
+/// Phase 0: parsing + storage; реальный multi-line flex — задача 4B.5.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FlexWrap {
+    /// `nowrap` (initial) — все элементы в одну строку.
+    #[default]
+    Nowrap,
+    /// `wrap` — перенос вперёд (вниз или вправо).
+    Wrap,
+    /// `wrap-reverse` — перенос назад.
+    WrapReverse,
+}
+
+impl FlexWrap {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "nowrap" => Some(Self::Nowrap),
+            "wrap" => Some(Self::Wrap),
+            "wrap-reverse" => Some(Self::WrapReverse),
+            _ => None,
+        }
+    }
+}
+
 /// Одна компонента `object-position`. Length-варианты резолвятся в px
 /// относительно края коробки (positive = от left/top); percentage —
 /// относительно **свободного места** `box_size - content_size` (может быть
@@ -2716,6 +2777,8 @@ impl ComputedStyle {
             object_position: ObjectPosition::default(),
             vertical_align: VerticalAlign::Baseline,
             image_rendering: ImageRendering::Auto,
+            flex_direction: FlexDirection::Row,
+            flex_wrap: FlexWrap::Nowrap,
             text_wrap_mode: TextWrapMode::Wrap,
             text_wrap_style: TextWrapStyle::Auto,
         }
@@ -2912,6 +2975,9 @@ pub fn compute_style(
         vertical_align: VerticalAlign::Baseline,
         // CSS Images L3 §6.1 — image-rendering inherited.
         image_rendering: inherited.image_rendering,
+        // CSS Flexbox L1 §5 — flex-direction / flex-wrap не наследуются.
+        flex_direction: FlexDirection::Row,
+        flex_wrap: FlexWrap::Nowrap,
         // CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style inherited.
         text_wrap_mode: inherited.text_wrap_mode,
         text_wrap_style: inherited.text_wrap_style,
@@ -6361,6 +6427,22 @@ fn apply_declaration(
             // указанные. См. CSS Cascade L4 §3.1 для семантики shorthand reset.
             apply_text_wrap_shorthand(style, val);
         }
+        "flex-direction" => {
+            // CSS Flexbox L1 §5.1: row | row-reverse | column | column-reverse.
+            if let Some(v) = FlexDirection::parse(val) {
+                style.flex_direction = v;
+            }
+        }
+        "flex-wrap" => {
+            // CSS Flexbox L1 §5.2: nowrap | wrap | wrap-reverse.
+            if let Some(v) = FlexWrap::parse(val) {
+                style.flex_wrap = v;
+            }
+        }
+        "flex-flow" => {
+            // CSS Flexbox L1 §5.3: shorthand flex-direction || flex-wrap.
+            apply_flex_flow_shorthand(style, val);
+        }
         "width" => {
             // `auto` = None (сдвигается на контейнер); иначе typed Length.
             if val.trim() == "auto" {
@@ -8058,6 +8140,41 @@ fn apply_text_wrap_shorthand(style: &mut ComputedStyle, val: &str) {
     }
 }
 
+/// CSS Flexbox L1 §5.3 — `flex-flow` shorthand.
+///
+/// Грамматика: `<'flex-direction'> || <'flex-wrap'>`. Сбрасывает обе
+/// longhand-компоненты к initial-value и применяет распознанные токены.
+fn apply_flex_flow_shorthand(style: &mut ComputedStyle, val: &str) {
+    style.flex_direction = FlexDirection::Row;
+    style.flex_wrap = FlexWrap::Nowrap;
+
+    let mut dir: Option<FlexDirection> = None;
+    let mut wrap: Option<FlexWrap> = None;
+    for tok in val.split_whitespace() {
+        if let Some(d) = FlexDirection::parse(tok) {
+            if dir.is_some() {
+                return;
+            }
+            dir = Some(d);
+            continue;
+        }
+        if let Some(w) = FlexWrap::parse(tok) {
+            if wrap.is_some() {
+                return;
+            }
+            wrap = Some(w);
+            continue;
+        }
+        return;
+    }
+    if let Some(d) = dir {
+        style.flex_direction = d;
+    }
+    if let Some(w) = wrap {
+        style.flex_wrap = w;
+    }
+}
+
 /// CSS Cascade L4 §7 — применить CSS-wide keyword к одному свойству.
 ///
 /// Источник значения:
@@ -8549,6 +8666,33 @@ fn apply_css_wide_keyword(
                 inherited.text_wrap_style
             } else {
                 init.text_wrap_style
+            };
+        }
+        // CSS Flexbox L1 §5 — flex-direction / flex-wrap non-inherited.
+        "flex-direction" => {
+            style.flex_direction = if inh_only_inherit {
+                inherited.flex_direction
+            } else {
+                init.flex_direction
+            };
+        }
+        "flex-wrap" => {
+            style.flex_wrap = if inh_only_inherit {
+                inherited.flex_wrap
+            } else {
+                init.flex_wrap
+            };
+        }
+        "flex-flow" => {
+            style.flex_direction = if inh_only_inherit {
+                inherited.flex_direction
+            } else {
+                init.flex_direction
+            };
+            style.flex_wrap = if inh_only_inherit {
+                inherited.flex_wrap
+            } else {
+                init.flex_wrap
             };
         }
         // Прочие / неизвестные — silent no-op.
@@ -14688,5 +14832,146 @@ mod tests {
             compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
         assert_eq!(my_card_style.display, Display::None);
         assert_ne!(div_style.display, Display::None);
+    }
+
+    // ── flex-direction ────────────────────────────────────────────────────
+
+    #[test]
+    fn flex_direction_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_direction, FlexDirection::Row);
+    }
+
+    #[test]
+    fn flex_direction_values() {
+        let cases = [
+            ("row", FlexDirection::Row),
+            ("row-reverse", FlexDirection::RowReverse),
+            ("column", FlexDirection::Column),
+            ("column-reverse", FlexDirection::ColumnReverse),
+        ];
+        for (css_val, expected) in cases {
+            let doc = lumen_html_parser::parse("<div></div>");
+            let sheet =
+                lumen_css_parser::parse(&format!("div {{ flex-direction: {css_val}; }}"));
+            let root = ComputedStyle::root();
+            let node = doc.get(doc.root()).children[0];
+            let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+            assert_eq!(s.flex_direction, expected, "flex-direction: {css_val}");
+        }
+    }
+
+    #[test]
+    fn flex_direction_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { flex-direction: column; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.flex_direction, FlexDirection::Column);
+        assert_eq!(span_style.flex_direction, FlexDirection::Row); // initial, не наследуется
+    }
+
+    #[test]
+    fn flex_direction_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex-direction: diagonal; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_direction, FlexDirection::Row);
+    }
+
+    // ── flex-wrap ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn flex_wrap_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_wrap, FlexWrap::Nowrap);
+    }
+
+    #[test]
+    fn flex_wrap_values() {
+        let cases = [
+            ("nowrap", FlexWrap::Nowrap),
+            ("wrap", FlexWrap::Wrap),
+            ("wrap-reverse", FlexWrap::WrapReverse),
+        ];
+        for (css_val, expected) in cases {
+            let doc = lumen_html_parser::parse("<div></div>");
+            let sheet = lumen_css_parser::parse(&format!("div {{ flex-wrap: {css_val}; }}"));
+            let root = ComputedStyle::root();
+            let node = doc.get(doc.root()).children[0];
+            let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+            assert_eq!(s.flex_wrap, expected, "flex-wrap: {css_val}");
+        }
+    }
+
+    #[test]
+    fn flex_wrap_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { flex-wrap: wrap; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.flex_wrap, FlexWrap::Wrap);
+        assert_eq!(span_style.flex_wrap, FlexWrap::Nowrap); // initial, не наследуется
+    }
+
+    #[test]
+    fn flex_wrap_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex-wrap: yes; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_wrap, FlexWrap::Nowrap);
+    }
+
+    // ── flex-flow shorthand ───────────────────────────────────────────────
+
+    #[test]
+    fn flex_flow_shorthand() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex-flow: column wrap; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_direction, FlexDirection::Column);
+        assert_eq!(s.flex_wrap, FlexWrap::Wrap);
+    }
+
+    #[test]
+    fn flex_flow_shorthand_direction_only() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex-flow: row-reverse; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_direction, FlexDirection::RowReverse);
+        assert_eq!(s.flex_wrap, FlexWrap::Nowrap); // reset to initial
+    }
+
+    #[test]
+    fn flex_flow_shorthand_wrap_only() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex-flow: wrap-reverse; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_direction, FlexDirection::Row); // reset to initial
+        assert_eq!(s.flex_wrap, FlexWrap::WrapReverse);
     }
 }
