@@ -348,7 +348,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 |---|---|
 | `scroll-behavior` | 🟡 parsed |
 | `overscroll-behavior` | 🟡 parsed |
-| `text-overflow` | 🟡 parsed; ellipsis not painted |
+| `text-overflow` | ✅ | `ellipsis`: PushClipRect + "…" DrawText via `emit_inline_run` |
 
 ### CSS Sizing Level 4
 | Property | Status |

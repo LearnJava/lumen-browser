@@ -179,3 +179,43 @@ fn layer_snapshot_full_alpha_is_opaque() {
     assert!(s.contains("alpha=1.000"), "must contain alpha");
     assert!(s.contains("DrawLayerSnapshot"), "must contain command name");
 }
+
+// ── text-overflow: ellipsis ──────────────────────────────────────────────────
+
+/// "HelloWorld" = 10 chars * 8px = 80px > 60px container.
+/// overflow:hidden + text-overflow:ellipsis → narrow PushClipRect + "…" DrawText.
+#[test]
+fn text_overflow_ellipsis_clips_overflowing_line() {
+    let actual = build_measured(
+        "<div>HelloWorld</div>",
+        "div { width: 60px; overflow: hidden; text-overflow: ellipsis; }",
+        800.0,
+    );
+    assert!(actual.contains('\u{2026}'), "ellipsis char must be emitted");
+    let pop_pos = actual.find("PopClip").expect("PopClip must appear");
+    let ell_pos = actual.find('\u{2026}').expect("ellipsis DrawText must appear");
+    assert!(pop_pos < ell_pos, "PopClip must precede ellipsis DrawText");
+    assert!(actual.contains("PushClipRect"), "narrow clip must be emitted");
+}
+
+/// "Hi" = 2 * 8px = 16px < 60px — no overflow, no ellipsis, no extra clip.
+#[test]
+fn text_overflow_ellipsis_no_clip_when_text_fits() {
+    let actual = build_measured(
+        "<div>Hi</div>",
+        "div { width: 60px; overflow: hidden; text-overflow: ellipsis; }",
+        800.0,
+    );
+    assert!(!actual.contains('\u{2026}'), "no ellipsis when text fits in container");
+}
+
+/// Without overflow:hidden, text-overflow:ellipsis must not trigger.
+#[test]
+fn text_overflow_ellipsis_requires_overflow_hidden() {
+    let actual = build_measured(
+        "<div>HelloWorld</div>",
+        "div { width: 60px; text-overflow: ellipsis; }",
+        800.0,
+    );
+    assert!(!actual.contains('\u{2026}'), "ellipsis must not appear without overflow:hidden");
+}
