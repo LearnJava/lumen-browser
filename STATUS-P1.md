@@ -1,6 +1,5 @@
-In progress: —
-
-Next: (P1 queue empty — см. lumen-plan.md §16 для следующей фазы)
+In progress: 4B.6-7 CSS Grid layout  branch: css-grid
+Next step: GridTrackSize/GridLine/GridAutoFlow types + lay_out_grid  layout/src/style.rs:2474
 
 Queue:
 
