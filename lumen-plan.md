@@ -174,6 +174,10 @@
 | 3A.5 | ✅ color space awareness in renderer | `paint/src/display_list.rs` | 2026-05-20 |
 | 3B | ⬜ **`[P1+P2+P3]` Web Animations compositor offload** | Smooth-анимации | Stub компилируется |
 | 4 | ✅ **`[P1+P2]` mix-blend-mode/backdrop-filter pipeline** | Современные UI-эффекты | 2026-05-20 |
+| 4.5 | ✅ **`[P2]` Transform pipeline (DisplayCommand + renderer)** | P4 transform matrix | 2026-05-20 |
+| 4.5.1 | ✅ PushTransform/PopTransform DisplayCommand | `paint/src/display_list.rs` | 2026-05-20 |
+| 4.5.2 | ✅ forward_box_transform публичный из layout | `layout/src/property_trees.rs` | 2026-05-20 |
+| 4.5.3 | ✅ transform_stack + CPU-side vertex transformation | `paint/src/renderer.rs` | 2026-05-20 |
 | 5+ | ⬜ **Extras**: object-fit, Canvas 2D, WOFF2, variable fonts, Print PDF | — | — |
 
 #### Track P3 — Runtime + system (объединённый домен — больше треков, но всё параллельно)
