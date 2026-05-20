@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: UA stylesheet phase 1  branch: ua-stylesheet-phase1
+Next step: add UA text-decoration / font-size / vertical-align / color  style.rs:5080
 
 Next: (P1 Phase 1)
 
