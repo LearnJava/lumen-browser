@@ -34,6 +34,7 @@ mod cors;
 mod dns;
 mod doh;
 mod dot;
+pub mod h2;
 mod hsts;
 mod mixed_content;
 mod origin;
