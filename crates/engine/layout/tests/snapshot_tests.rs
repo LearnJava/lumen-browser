@@ -396,3 +396,40 @@ fn flex_wrap_grow_per_line() {
     );
     assert_snapshot("flex_wrap_grow_per_line", &actual);
 }
+
+// ── position: relative ───────────────────────────────────────────────────────
+
+/// position:relative left:20px shifts the block 20px right from its normal-flow origin.
+#[test]
+fn position_relative_left_offset() {
+    let actual = build(
+        "<div></div>",
+        "div { position: relative; left: 20px; width: 50px; height: 10px; }",
+        800.0,
+    );
+    // After shift_tree: div rect.x = 20 (offset from normal-flow x=0).
+    assert!(actual.contains("x=20.00") || actual.contains("(20.00,"), "left:20px must shift rect.x to 20");
+}
+
+/// position:relative top:15px shifts the block 15px down from its normal-flow origin.
+#[test]
+fn position_relative_top_offset() {
+    let actual = build(
+        "<div></div>",
+        "div { position: relative; top: 15px; width: 50px; height: 10px; }",
+        800.0,
+    );
+    assert!(actual.contains("y=15.00") || actual.contains(", 15.00,"), "top:15px must shift rect.y");
+}
+
+/// position:static (default) produces no offset — baseline check.
+#[test]
+fn position_static_no_offset() {
+    let actual = build(
+        "<div></div>",
+        "div { width: 50px; height: 10px; }",
+        800.0,
+    );
+    // Should NOT contain any x=20.00 or similar
+    assert!(!actual.contains("x=20.00"), "static position must not shift rect");
+}
