@@ -16,6 +16,7 @@
 //! по сети — в зависимости от того, каким способом загружена страница.
 
 mod find;
+mod momentum_anim;
 mod runtime;
 mod scroll_anim;
 mod scrollbar;
@@ -58,7 +59,7 @@ impl EventSink for StdoutEventSink {
 /// SIL OFL 1.1, см. assets/fonts/OFL.txt.
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 use winit::dpi::LogicalSize;
-use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, WindowEvent};
+use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorIcon, Window, WindowId};
@@ -122,6 +123,9 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
         cursor_position: None,
         scroll_drag: None,
         scroll_anim: None,
+        momentum_anim: None,
+        touchpad_vel: (0.0, 0.0),
+        touchpad_vel_time_ms: 0.0,
         last_cursor_icon: None,
         layout_source,
     };
@@ -953,6 +957,16 @@ struct Lumen {
     /// инстантно (drag, reload). При live-анимации `RedrawRequested` тикает
     /// её через `advance_scroll_anim` и просит ещё один redraw до завершения.
     scroll_anim: Option<scroll_anim::ScrollAnim>,
+    /// Momentum (kinetic) scroll: запускается при `TouchPhase::Ended` с
+    /// ненулевой скоростью от тачпада. Тикается через `advance_momentum`
+    /// в `RedrawRequested`. `None` — нет активной инерции.
+    momentum_anim: Option<momentum_anim::MomentumAnim>,
+    /// Мгновенная скорость тачпада от последних `PixelDelta`-событий
+    /// (CSS px / ms). Обновляется EWMA-фильтром. Используется при
+    /// `TouchPhase::Ended` для запуска `momentum_anim`.
+    touchpad_vel: (f32, f32),
+    /// Timestamp последнего `PixelDelta`-события для расчёта dt в EWMA.
+    touchpad_vel_time_ms: f64,
     /// Последний выставленный cursor icon — чтобы при каждом CursorMoved (а это
     /// сотни событий в секунду при активном движении мыши) не дёргать
     /// `Window::set_cursor` напрасно. `None` — ещё не выставляли (init).
@@ -1013,9 +1027,10 @@ impl Lumen {
                 // Любой активный drag прерывается (content_height другой,
                 // thumb-геометрия пересчитана с нуля).
                 self.scroll_drag = None;
-                // Активная smooth-scroll анимация старой страницы тоже не
-                // имеет смысла — таргет был на старом content_height.
+                // Активные анимации старой страницы сбрасываем.
                 self.scroll_anim = None;
+                self.momentum_anim = None;
+                self.touchpad_vel = (0.0, 0.0);
                 if let Some(r) = self.renderer.as_mut() {
                     // Старая GPU-cache картинок относится к предыдущей странице
                     // (даже если src совпадает, content мог измениться). Чистим
@@ -1234,35 +1249,80 @@ impl ApplicationHandler for Lumen {
                     self.update_cursor_icon();
                 }
             }
-            WindowEvent::MouseWheel { delta, .. } => {
+            WindowEvent::MouseWheel { delta, phase, .. } => {
                 // winit отдаёт два типа дельты:
-                // - LineDelta(cols, lines): количество «столбцов/строк» (notch ≈ 1.0).
-                //   Множим на line-step ≈ 40 CSS px — близко к Firefox/Chromium.
-                // - PixelDelta({x, y}): уже в device-пикселях (touchpad). Делим на DPR.
+                // - LineDelta(cols, lines): mouse wheel notch, нет momentum.
+                // - PixelDelta({x, y}): тачпад, device px, делим на DPR.
+                //   Отслеживаем velocity для momentum при TouchPhase::Ended.
                 // Y: winit y > 0 — wheel up → scroll_y -= delta.
                 // X: winit x > 0 — wheel left → scroll_x -= delta.
-                // Shift+вертикальный wheel → горизонтальный скролл (стандарт браузеров).
+                // Shift+вертикальный wheel → горизонтальный скролл.
                 let dpr = self
                     .renderer
                     .as_ref()
                     .map_or(1.0_f32, |r| r.scale_factor() as f32);
                 let shift = self.modifiers.shift_key();
-                let (dx_css, dy_css) = match delta {
+                match delta {
                     MouseScrollDelta::LineDelta(cols, lines) => {
+                        // Mouse wheel: дискретные тики, momentum не нужен.
+                        self.momentum_anim = None;
+                        self.touchpad_vel = (0.0, 0.0);
                         let dx = -cols * 40.0;
                         let dy = -lines * 40.0;
-                        if shift { (dy, 0.0) } else { (dx, dy) }
+                        let (dx_css, dy_css) = if shift { (dy, 0.0) } else { (dx, dy) };
+                        if dx_css != 0.0 { self.scroll_x_by(dx_css); }
+                        self.scroll_by_smooth(dy_css);
                     }
                     MouseScrollDelta::PixelDelta(p) => {
-                        let dx = -(p.x as f32) / dpr.max(1e-6);
-                        let dy = -(p.y as f32) / dpr.max(1e-6);
-                        if shift { (dy, 0.0) } else { (dx, dy) }
+                        let raw_x = -(p.x as f32) / dpr.max(1e-6);
+                        let raw_y = -(p.y as f32) / dpr.max(1e-6);
+                        let (dx_css, dy_css) = if shift { (raw_y, 0.0) } else { (raw_x, raw_y) };
+
+                        match phase {
+                            TouchPhase::Ended | TouchPhase::Cancelled => {
+                                // Палец снят: запускаем momentum если есть
+                                // скорость (фаза Ended) или сбрасываем (Cancelled).
+                                if phase == TouchPhase::Ended {
+                                    let (vx, vy) = self.touchpad_vel;
+                                    if vx.abs() + vy.abs() >= momentum_anim::MIN_VELOCITY_PX_MS {
+                                        let now = self.epoch.elapsed().as_secs_f64() * 1000.0;
+                                        self.momentum_anim =
+                                            Some(momentum_anim::MomentumAnim::new(vy, vx, now));
+                                        self.request_redraw();
+                                    }
+                                }
+                                self.touchpad_vel = (0.0, 0.0);
+                            }
+                            TouchPhase::Started => {
+                                // Новый жест: сбросить momentum и velocity.
+                                self.momentum_anim = None;
+                                self.touchpad_vel = (0.0, 0.0);
+                                let now = self.epoch.elapsed().as_secs_f64() * 1000.0;
+                                self.touchpad_vel_time_ms = now;
+                                if dx_css != 0.0 { self.scroll_x_by(dx_css); }
+                                self.scroll_by_smooth(dy_css);
+                            }
+                            TouchPhase::Moved => {
+                                // Палец движется: обновляем scroll и velocity (EWMA).
+                                let now = self.epoch.elapsed().as_secs_f64() * 1000.0;
+                                let dt = (now - self.touchpad_vel_time_ms).max(1.0);
+                                self.touchpad_vel_time_ms = now;
+                                // EWMA alpha = 0.6: быстро следует за движением,
+                                // сглаживает дрожание.
+                                const ALPHA: f32 = 0.6;
+                                let inst_x = dx_css / dt as f32;
+                                let inst_y = dy_css / dt as f32;
+                                let (vx, vy) = self.touchpad_vel;
+                                self.touchpad_vel = (
+                                    ALPHA * inst_x + (1.0 - ALPHA) * vx,
+                                    ALPHA * inst_y + (1.0 - ALPHA) * vy,
+                                );
+                                if dx_css != 0.0 { self.scroll_x_by(dx_css); }
+                                self.scroll_by_smooth(dy_css);
+                            }
+                        }
                     }
-                };
-                if dx_css != 0.0 {
-                    self.scroll_x_by(dx_css);
                 }
-                self.scroll_by_smooth(dy_css);
             }
             WindowEvent::RedrawRequested => {
                 // HTML §8.1.5.1 «Update the rendering»: перед собственно
@@ -1273,11 +1333,16 @@ impl ApplicationHandler for Lumen {
                     self.epoch.elapsed().as_secs_f64() * 1000.0;
                 self.runtime.run_rendering_step(timestamp_ms);
 
-                // Тик smooth-scroll-анимации. Делаем ДО построения display-list-а,
-                // чтобы page-полоса смещалась уже на новый `scroll_y`. Если
-                // анимация ещё не закончилась — просим следующий redraw, чтобы
-                // тикнуть на следующем кадре (rAF-driven update loop).
+                // Тик smooth-scroll-анимации. Делаем ДО построения display-list-а.
                 if self.advance_scroll_anim() {
+                    self.request_redraw();
+                }
+
+                // Тик momentum scroll. Запускается после TouchPhase::Ended тачпада.
+                // Конкурирует с scroll_anim: если пользователь начал keyboard/wheel
+                // scroll во время momentum — scroll_anim перекрывает (momentum тикает
+                // отдельно через scroll_x/scroll_y напрямую без smooth-anim).
+                if self.advance_momentum(timestamp_ms) {
                     self.request_redraw();
                 }
 
@@ -1576,6 +1641,33 @@ impl Lumen {
         self.scroll_y = clamp_scroll(y, self.max_scroll());
         if done {
             self.scroll_anim = None;
+            false
+        } else {
+            true
+        }
+    }
+
+    /// Тик momentum-анимации. Обновляет `scroll_y` / `scroll_x` напрямую
+    /// (без smooth-scroll анимации). Возвращает `true` пока анимация жива.
+    fn advance_momentum(&mut self, now_ms: f64) -> bool {
+        let Some(ref mut anim) = self.momentum_anim else {
+            return false;
+        };
+        let (dy, dx, done) = anim.advance(now_ms);
+        if dy != 0.0 {
+            let new_y = clamp_scroll(self.scroll_y + dy, self.max_scroll());
+            if (new_y - self.scroll_y).abs() > f32::EPSILON {
+                self.scroll_y = new_y;
+            }
+        }
+        if dx != 0.0 {
+            let new_x = clamp_scroll(self.scroll_x + dx, self.max_scroll_x());
+            if (new_x - self.scroll_x).abs() > f32::EPSILON {
+                self.scroll_x = new_x;
+            }
+        }
+        if done {
+            self.momentum_anim = None;
             false
         } else {
             true

@@ -185,7 +185,7 @@
 | 3A | 🟡 **`[P3]` DPR + scroll в shell** | 4K + длинные страницы | shell + paint |
 | 3A.1 | ✅ relayout-on-resize | `shell/src/main.rs` | — |
 | 3A.2 | ✅ horizontal scroll | `shell/src/main.rs` | — |
-| 3A.3 | ⬜ momentum scroll | `shell/src/main.rs` | — |
+| 3A.3 | ✅ momentum scroll | `shell/src/main.rs` | — |
 | 3B | 🟡 **`[P3]` HTML event loop в Lumen-loop** | P1/P2 rAF | Только `lumen-shell::runtime` |
 | 3B.1 | ⬜ reload via queue_task | `shell/src/main.rs` | — |
 | 3B.2 | ⬜ rendering steps ordering | `shell/src/main.rs` | — |
