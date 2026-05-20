@@ -3485,6 +3485,7 @@ pub fn compute_style(
     if let Some(fw) = ua_font_weight(doc, node) {
         style.font_weight = fw;
     }
+    apply_ua_hr_style(doc, node, &mut style);
 
     // CSS Quirks Mode — Quirks-only UA-rule для `<table>`: сбрасывает
     // font / color / text-align / white-space к initial-values, чтобы
@@ -5595,6 +5596,26 @@ fn ua_font_weight(doc: &Document, node: NodeId) -> Option<FontWeight> {
         }
         _ => None,
     }
+}
+
+/// UA stylesheet для `<hr>` (HTML5 §15.3.7 / Rendering §14.6).
+///
+/// Браузеры рендерят `<hr>` как 1px-линию через border-top с авто-маргинами.
+/// Author CSS может перекрыть любое из этих значений.
+fn apply_ua_hr_style(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if name.local.as_str() != "hr" {
+        return;
+    }
+    style.border_top_width = 1.0;
+    style.border_top_style = BorderStyle::Solid;
+    style.border_top_color = CssColor::Rgba(Color { r: 118, g: 118, b: 118, a: 255 });
+    style.margin_top = LengthOrAuto::Length(Length::Em(0.5));
+    style.margin_bottom = LengthOrAuto::Length(Length::Em(0.5));
+    style.margin_left = LengthOrAuto::Auto;
+    style.margin_right = LengthOrAuto::Auto;
 }
 
 /// Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
