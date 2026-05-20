@@ -193,7 +193,7 @@
 | 4A | ⬜ **`[P3]` JS↔DOM bindings** (после 1B) | Любая JS-динамика | — |
 | 4B | ⬜ **`[P1+P3]` Streaming pipeline shell-side** | Первый кадр без задержки | P3 пока blocking |
 | 4B.1 | ✅ preload scan call before DOM parse | `shell/src/main.rs:688` | — |
-| 4B.2 | ⬜ preload hint dispatcher | `shell/src/main.rs` | — |
+| 4B.2 | ✅ preload hint dispatcher | `shell/src/main.rs` | — |
 | 4B.3 | ⬜ preload URL resolution | `shell/src/main.rs` | — |
 | 4B.4 | ⬜ preload fetch deduplication | `shell/src/main.rs` | — |
 | 4B.5 | ⬜ preload priority + EventSink | `shell/src/main.rs` | — |

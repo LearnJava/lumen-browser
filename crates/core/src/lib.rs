@@ -21,7 +21,7 @@ pub mod url;
 
 pub use capability::{Capability, CapabilityToken};
 pub use error::{Error, Result};
-pub use event::{Event, TabId};
+pub use event::{Event, SubresourceKind, TabId};
 pub use ext::{
     match_face, EventSink, FaceRecord, FontProvider, FontStyle, JsError, JsResult, JsRuntime,
     JsValue, NoopEventSink, NullJsRuntime,

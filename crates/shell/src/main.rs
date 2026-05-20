@@ -28,7 +28,7 @@ use std::process::ExitCode;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use lumen_core::event::Event;
+use lumen_core::event::{Event, SubresourceKind};
 use lumen_core::ext::EventSink;
 use lumen_core::geom::Size;
 use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
@@ -50,8 +50,18 @@ impl EventSink for StdoutEventSink {
             Event::RequestStarted { url, .. } => eprintln!("→ GET {url}"),
             Event::RequestCompleted { url, status, .. } => eprintln!("← {status} {url}"),
             Event::RequestBlocked { url, reason, .. } => eprintln!("✗ {url} ({reason})"),
-            // Прочие события (TabCreated, Navigation, …) в Phase 0 не emit-ятся,
-            // print не нужен.
+            Event::SubresourceHintFound { url, kind } => {
+                let label = match kind {
+                    SubresourceKind::Stylesheet => "css",
+                    SubresourceKind::Script => "js",
+                    SubresourceKind::Image => "img",
+                    SubresourceKind::Font => "font",
+                    SubresourceKind::Preconnect { dns_only: true } => "dns-prefetch",
+                    SubresourceKind::Preconnect { dns_only: false } => "preconnect",
+                    SubresourceKind::Other { .. } => "preload",
+                };
+                eprintln!("⤷ preload {label} {url}");
+            }
             _ => {}
         }
     }
@@ -697,9 +707,7 @@ fn parse_and_layout(
     // §13.2.6.4.7). В Phase 0 загрузка блокирующая, но порядок вызовов
     // уже корректный — streaming pipeline подхватит его без переделки.
     let preload_hints = lumen_html_parser::scan_preload_hints(&source);
-    if !preload_hints.is_empty() {
-        eprintln!("Preload-хинтов: {}", preload_hints.len());
-    }
+    dispatch_preload_hints(&preload_hints, sink);
 
     let mut doc = lumen_html_parser::parse(&source);
     let title = extract_title(&doc);
@@ -789,6 +797,55 @@ fn render_bytes(
 /// Найти первый `<title>` в дереве и склеить его текстовые дети.
 ///
 /// HTML5 разрешает только один `<title>` в `<head>`, но мы lenient-парсер —
+/// Отправить preload-хинты в EventSink.
+///
+/// Каждый `PreloadHint` преобразуется в `Event::SubresourceHintFound`.
+/// URL — сырой (ещё не разрешён относительно base); резолв — задача 4B.3.
+/// В Phase 0 sink логирует в stderr; в будущем запустит fetch через HttpClient.
+fn dispatch_preload_hints(hints: &[lumen_html_parser::PreloadHint], sink: &Arc<dyn EventSink>) {
+    use lumen_html_parser::PreloadHint;
+    for hint in hints {
+        let event = match hint {
+            PreloadHint::Stylesheet { url } => Event::SubresourceHintFound {
+                url: url.clone(),
+                kind: SubresourceKind::Stylesheet,
+            },
+            PreloadHint::Script { url } => Event::SubresourceHintFound {
+                url: url.clone(),
+                kind: SubresourceKind::Script,
+            },
+            PreloadHint::Image { url: Some(url), .. } => Event::SubresourceHintFound {
+                url: url.clone(),
+                kind: SubresourceKind::Image,
+            },
+            PreloadHint::Image { url: None, srcset: Some(s), .. } => Event::SubresourceHintFound {
+                url: s.clone(),
+                kind: SubresourceKind::Image,
+            },
+            PreloadHint::SourceSet { srcset, .. } => Event::SubresourceHintFound {
+                url: srcset.clone(),
+                kind: SubresourceKind::Image,
+            },
+            PreloadHint::Preload { url, as_kind } => {
+                let kind = match as_kind.as_deref() {
+                    Some("font") => SubresourceKind::Font,
+                    Some("image") => SubresourceKind::Image,
+                    Some("script") => SubresourceKind::Script,
+                    Some("style") => SubresourceKind::Stylesheet,
+                    _ => SubresourceKind::Other { as_kind: as_kind.clone() },
+                };
+                Event::SubresourceHintFound { url: url.clone(), kind }
+            }
+            PreloadHint::Preconnect { url, dns_only } => Event::SubresourceHintFound {
+                url: url.clone(),
+                kind: SubresourceKind::Preconnect { dns_only: *dns_only },
+            },
+            PreloadHint::Image { url: None, srcset: None, .. } => continue,
+        };
+        sink.emit(&event);
+    }
+}
+
 /// берём первый встречный. Энтити уже декодированы tokenizer-ом (RCDATA-режим).
 fn extract_title(doc: &Document) -> Option<String> {
     let mut buf = String::new();
