@@ -130,7 +130,7 @@
 | 1B.2 | ✅ Color type через все декларации каскада | `layout/src/style.rs` | 2026-05-19 |
 | 2A | ✅ **`[P1+P2]` Stacking contexts impl** | P2 п.2A | — |
 | 2B | ✅ **`[P2+P1]` Property trees построение** | P2 п.1B | — |
-| 3A | 🟡 **`[P1+P2+P3]` Web Animations interpolation** | P2 п.3B; P3 scheduling | Stub компилируется |
+| 3A | 🟡 **`[P1+P2+P3]` Web Animations interpolation** | P2 п.3B; P3 scheduling | P1 done; P2/P3 pending |
 | ~~3B~~ | ✅ **`[P1+P3]` Push-tokenizer + incremental tree builder** | P3 п.4B | — |
 | 4A | 🟡 **`[P1+P2]` `<picture>`/`srcset`/`sizes` finishing** | P3 lazy-loading | P2 GPU upload |
 | 4B | 🟡 **`[P1]` CSS Grid + полный Flexbox** | Адаптивные сайты | — |
@@ -347,7 +347,9 @@
 - **`filter-list-interpolate`** (CSS Filter Effects L1 §6): `AnimValue::FilterList` + `interpolate_filter_list` с identity-padding для коротких списков. 15 unit-тестов.
 - **`gradient-stops-interpolate`** (CSS Images L3 §3.5.1): `GradientStop { color, position }` + `interpolate_gradient_stops` (pairwise lerp цвета sRGB + позиции). 11 unit-тестов.
 
-Итого: 157 тестов на animation/transition. **Осталось:** gradient string→`Vec<GradientStop>` в style.rs (часть §1B), integration в scheduling (P3), compositor offload (P2).
+- **`gradient-stops-parser`** (CSS Images L3 §3.3): `pub fn parse_gradient_stops(s: &str) -> Vec<GradientStop>` + `paren_whitespace_tokens` helper — извлекает color stops из любой gradient-строки (linear/radial/conic + repeating). Стратегия: top-level comma split → paren-aware whitespace tokenize → первый token без `parse_color` пропускается (direction/hint); два позиции у одного stop → expand в два stop. 13 unit-тестов (итого 170 тестов на animation/transition+gradient).
+
+Итого: 170 тестов. **P1 часть 3A завершена.** Осталось (другие разработчики): integration в scheduling (P3), compositor offload (P2).
 
 #### 3B — Push-tokenizer + incremental tree builder
 

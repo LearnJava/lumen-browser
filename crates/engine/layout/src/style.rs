@@ -9829,6 +9829,91 @@ fn is_gradient_function(s: &str) -> bool {
         || s.starts_with("repeating-conic-gradient(")
 }
 
+/// Whitespace tokenizer that treats `(...)` as an opaque unit.
+/// Used to split a gradient color-stop segment into `<color>` and
+/// optional `<length-percentage>` parts without breaking color functions
+/// like `rgba(0, 128, 0, 0.5)`.
+fn paren_whitespace_tokens(s: &str) -> Vec<String> {
+    let mut tokens: Vec<String> = Vec::new();
+    let mut buf = String::new();
+    let mut depth = 0i32;
+    for c in s.chars() {
+        match c {
+            '(' => {
+                depth += 1;
+                buf.push(c);
+            }
+            ')' => {
+                depth -= 1;
+                buf.push(c);
+            }
+            w if w.is_whitespace() && depth == 0 => {
+                let t = buf.trim().to_string();
+                if !t.is_empty() {
+                    tokens.push(t);
+                }
+                buf.clear();
+            }
+            _ => buf.push(c),
+        }
+    }
+    let t = buf.trim().to_string();
+    if !t.is_empty() {
+        tokens.push(t);
+    }
+    tokens
+}
+
+/// CSS Images L3 §3.3 — parses color stops from a CSS gradient string.
+///
+/// Accepts `linear-gradient(...)`, `radial-gradient(...)`,
+/// `conic-gradient(...)` and their `repeating-` variants.
+///
+/// The leading direction / angle / shape argument (e.g. `to right`,
+/// `45deg`, `circle at 50%`) is detected by the absence of a parseable
+/// `<color>` and silently skipped. Color hints (bare `<length-percentage>`
+/// without a color) are also skipped. Two-position stops (`red 20% 40%`)
+/// expand to two `GradientStop`s per CSS Images L4 §3.4.
+pub fn parse_gradient_stops(s: &str) -> Vec<GradientStop> {
+    let s = s.trim();
+    let Some(open) = s.find('(') else {
+        return vec![];
+    };
+    let rest = &s[open + 1..];
+    let Some(close) = rest.rfind(')') else {
+        return vec![];
+    };
+    let inner = rest[..close].trim();
+
+    let segments = split_top_level_commas(inner);
+    let mut stops: Vec<GradientStop> = Vec::new();
+
+    for seg in &segments {
+        let tokens = paren_whitespace_tokens(seg.trim());
+        if tokens.is_empty() {
+            continue;
+        }
+        // Locate the first token that parses as a CSS color.
+        // Segments without any color are direction/angle specifiers or
+        // color hints — both are skipped.
+        let Some(ci) = tokens.iter().position(|t| parse_color(t).is_some()) else {
+            continue;
+        };
+        let color = parse_color(&tokens[ci]).unwrap();
+
+        // CSS Images L3/L4: `<color> [ <length-percentage>{1,2} ]?`
+        let pos1 = tokens.get(ci + 1).and_then(|t| parse_length_q(t, false));
+        let pos2 = tokens.get(ci + 2).and_then(|t| parse_length_q(t, false));
+
+        stops.push(GradientStop { color, position: pos1 });
+        if pos2.is_some() {
+            stops.push(GradientStop { color, position: pos2 });
+        }
+    }
+
+    stops
+}
+
 /// CSS Sizing L4 §6.1 — парсит `<ratio>`: либо одно положительное
 /// число (трактуется как W:1), либо `W / H` пара. Phase 0 не
 /// поддерживает `auto <ratio>` форму (она бы хранилась как fallback,
