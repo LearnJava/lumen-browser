@@ -1,6 +1,7 @@
-In progress: —
+In progress: position: relative offsets 🟡→✅  branch: position-relative
+Next step: update css-2026-compliance.md + add layout test
 
-Next: text-overflow ellipsis render     css-2026-compliance.md (🟡→✅)
+Next: background-image url()            display_list.rs + renderer.rs (coordinate P2)
 
 Queue (🟡→✅, paint/layout wire-up, no new parsing needed):
   text-overflow: ellipsis              display_list.rs — clip text run, emit "…"

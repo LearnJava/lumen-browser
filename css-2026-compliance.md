@@ -317,7 +317,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | Property | Status |
 |---|---|
 | `position: static` | ✅ |
-| `position: relative` | 🟡 stored; offset not applied |
+| `position: relative` | ✅ | `shift_tree` in `box_tree.rs` applies left/top/right/bottom after normal flow |
 | `position: absolute` | 🟡 stored; OOF layout not implemented |
 | `position: fixed` | 🟡 stored |
 | `position: sticky` | 🟡 stored |
