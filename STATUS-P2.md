@@ -1,4 +1,5 @@
-In progress: —
+In progress: font-variation-settings CSS Fonts L4 §7  branch: font-variation-css
+Next step: add FontVariationSetting struct + ComputedStyle field  style.rs
 
 Next: 3B Web Animations compositor offload  lumen-plan.md:169  (blocked: P1+P3)
 
