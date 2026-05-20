@@ -1,4 +1,5 @@
-In progress: —
+In progress: 3A.3 momentum scroll  branch: momentum-scroll
+Next step: MomentumAnim struct + velocity tracking + TouchPhase::Ended  shell/src/momentum_anim.rs
 
 Next: 3A.3 momentum scroll               lumen-plan.md:189
 
