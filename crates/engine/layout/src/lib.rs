@@ -24,8 +24,8 @@ pub use animation::{
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
 };
 pub use box_tree::{
-    collect_image_requests, layout, layout_measured, BoxKind, ImageRequest, InlineFrag,
-    InlineSegment, LayoutBox,
+    collect_background_image_requests, collect_image_requests, layout, layout_measured, BoxKind,
+    ImageRequest, InlineFrag, InlineSegment, LayoutBox,
 };
 pub use property_trees::{
     ClipNode, ClipTree, EffectNode, EffectTree, Mat4, PropertyTreeNodeId, PropertyTrees,
@@ -9207,6 +9207,72 @@ mod tests {
         let urls: Vec<&str> = reqs.iter().map(|r| r.url.as_str()).collect();
         assert!(urls.contains(&"a.png"));
         assert!(urls.contains(&"b.jpg"));
+    }
+
+    // ── collect_background_image_requests ────────────────────────────────────
+
+    fn layout_with(html: &str, css: &str) -> LayoutBox {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        layout(&doc, &sheet, vp())
+    }
+
+    /// `background-image: url(...)` на блоке → один URL в результате.
+    #[test]
+    fn collect_bg_image_single_block() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: url(bg.png); }",
+        );
+        let urls = collect_background_image_requests(&root);
+        assert_eq!(urls, vec!["bg.png".to_string()]);
+    }
+
+    /// `background-image: none` (initial) → пустой результат.
+    #[test]
+    fn collect_bg_image_none_skipped() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; background-image: none; }",
+        );
+        assert!(collect_background_image_requests(&root).is_empty());
+    }
+
+    /// Gradient-вариант не учитывается (Phase 0 не растрит).
+    #[test]
+    fn collect_bg_image_gradient_skipped() {
+        let root = layout_with(
+            "<body><div></div></body>",
+            "div { width: 50px; height: 50px; \
+             background-image: linear-gradient(red, blue); }",
+        );
+        assert!(collect_background_image_requests(&root).is_empty());
+    }
+
+    /// Дубликаты URL фильтруются.
+    #[test]
+    fn collect_bg_image_dedupes() {
+        let root = layout_with(
+            "<body><div></div><div></div><div></div></body>",
+            "div { width: 10px; height: 10px; background-image: url(same.png); }",
+        );
+        let urls = collect_background_image_requests(&root);
+        assert_eq!(urls.len(), 1, "three divs same URL → один запрос, got {urls:?}");
+        assert_eq!(urls[0], "same.png");
+    }
+
+    /// Разные URL → собираются в порядке обхода.
+    #[test]
+    fn collect_bg_image_multiple_distinct() {
+        let root = layout_with(
+            r#"<body><div class="a"></div><div class="b"></div></body>"#,
+            ".a { width: 10px; height: 10px; background-image: url(a.png); } \
+             .b { width: 10px; height: 10px; background-image: url(b.png); }",
+        );
+        let urls = collect_background_image_requests(&root);
+        assert_eq!(urls.len(), 2);
+        assert!(urls.contains(&"a.png".to_string()));
+        assert!(urls.contains(&"b.png".to_string()));
     }
 
     // ── CSS Positioned Layout L3 — position: relative / absolute / fixed ──

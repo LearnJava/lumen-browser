@@ -68,7 +68,7 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | Property | Status | Notes |
 |---|---|---|
 | `background-color` | ✅ | |
-| `background-image` | 🟡 | `url()` and linear/radial gradient parsed; not painted |
+| `background-image` | 🟡 | `url()` painted (stretch to box); gradients parsed but not painted |
 | `background-repeat` | 🟡 | parsed |
 | `background-position` | 🟡 | parsed |
 | `background-size` | 🟡 | parsed |

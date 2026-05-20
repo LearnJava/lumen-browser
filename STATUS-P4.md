@@ -1,9 +1,8 @@
 In progress: —
 
-Next: background-image url()            display_list.rs + renderer.rs (coordinate P2)
+Next: transform matrix                  display_list.rs — emit DrawTransform (coordinate P2)
 
 Queue (🟡→✅, paint/layout wire-up, no new parsing needed):
-  background-image url()               display_list.rs + renderer.rs (coordinate P2)
   transform matrix                     display_list.rs — emit DrawTransform (coordinate P2)
 
 Queue (⬜→🟡, new parse+store only, no paint):
@@ -20,4 +19,4 @@ Coordination rules:
   — Spec links: https://www.w3.org/TR/css-align-3/ etc.
   — Compliance tracker: css-2026-compliance.md
 
-Recent: text-overflow 2026-05-20, text-decoration-thickness 2026-05-20, position-relative 2026-05-20
+Recent: background-image-url 2026-05-20 (DrawBackgroundImage paint pipeline + collect_background_image_requests + shell fetch, 12 tests), text-overflow 2026-05-20, text-decoration-thickness 2026-05-20

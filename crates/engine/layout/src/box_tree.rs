@@ -72,6 +72,38 @@ pub fn collect_image_requests(doc: &Document, viewport: Size) -> Vec<ImageReques
     out
 }
 
+/// Обходит готовое layout-дерево и возвращает уникальные URL-ы из
+/// `background-image: url(...)` (CSS Backgrounds L3 §3.10) — те же ключи,
+/// что эмиттер кладёт в `DisplayCommand::DrawBackgroundImage.src`.
+///
+/// Background-image не участвует в расчёте размеров, поэтому собирается
+/// уже после layout — shell вызывает функцию между layout-ом и paint-ом,
+/// дозагружает байты и регистрирует через `Renderer::register_image`.
+///
+/// Возвращает `Vec<String>` (а не `Vec<ImageRequest>`): для background-image
+/// нет node-anchored intrinsic-size hint-ов (CSS Backgrounds L3 §3.9 говорит
+/// о `background-size` в стилях, intrinsic-размер картинки в layout не
+/// влияет). Дубликаты отфильтрованы — одна и та же картинка на разных
+/// элементах загружается один раз.
+#[must_use]
+pub fn collect_background_image_requests(root: &LayoutBox) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    collect_bg_image_inner(root, &mut out);
+    out
+}
+
+fn collect_bg_image_inner(b: &LayoutBox, out: &mut Vec<String>) {
+    if let BackgroundImage::Url(src) = &b.style.background_image
+        && !src.is_empty()
+        && !out.iter().any(|u| u == src)
+    {
+        out.push(src.clone());
+    }
+    for child in &b.children {
+        collect_bg_image_inner(child, out);
+    }
+}
+
 fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut Vec<ImageRequest>) {
     let node = doc.get(id);
     if let NodeData::Element { name, attrs } = &node.data
