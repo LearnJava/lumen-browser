@@ -1574,6 +1574,15 @@ pub struct ComputedStyle {
     /// CSS Flexbox L1 §5.2 — `flex-wrap`. Non-inherited. Default `Nowrap`.
     /// Phase 0: parsing + storage; реальный multi-line flex — задача 4B.5.
     pub flex_wrap: FlexWrap,
+    /// CSS Flexbox L1 §7.1 — `flex-grow`. Non-inherited. Default `0`.
+    /// Phase 0: parsing + storage; реальный flex-layout — задача 4B.3.
+    pub flex_grow: f32,
+    /// CSS Flexbox L1 §7.2 — `flex-shrink`. Non-inherited. Default `1`.
+    /// Phase 0: parsing + storage; реальный flex-layout — задача 4B.3.
+    pub flex_shrink: f32,
+    /// CSS Flexbox L1 §7.3 — `flex-basis`. Non-inherited. Default `Auto`.
+    /// Phase 0: parsing + storage; реальный flex-layout — задача 4B.3.
+    pub flex_basis: FlexBasis,
     /// CSS Text Module Level 4 §6.4.1 — `text-wrap-mode`. Inherited.
     /// Default `Wrap`. Phase 0: parsing + storage; реальная связка с
     /// inline-flow line-breaker-ом (когда `Nowrap` подавляет soft wraps
@@ -2289,6 +2298,32 @@ impl FlexWrap {
     }
 }
 
+/// CSS Flexbox L1 §7.3 — `flex-basis`. Non-inherited.
+///
+/// Размер flex-элемента вдоль главной оси до применения grow/shrink.
+/// Phase 0: parsing + storage; реальный flex-layout — задача 4B.3.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum FlexBasis {
+    /// `auto` (initial) — использовать width/height элемента.
+    #[default]
+    Auto,
+    /// `content` — intrinsic content-size (CSS Flexbox L1 §7.3.2).
+    Content,
+    /// Explicit length/percentage.
+    Length(Length),
+}
+
+impl FlexBasis {
+    pub fn parse(s: &str, is_quirks: bool) -> Option<Self> {
+        let trimmed = s.trim();
+        match trimmed.to_ascii_lowercase().as_str() {
+            "auto" => Some(Self::Auto),
+            "content" => Some(Self::Content),
+            _ => parse_length_q(trimmed, is_quirks).map(Self::Length),
+        }
+    }
+}
+
 /// Одна компонента `object-position`. Length-варианты резолвятся в px
 /// относительно края коробки (positive = от left/top); percentage —
 /// относительно **свободного места** `box_size - content_size` (может быть
@@ -2779,6 +2814,9 @@ impl ComputedStyle {
             image_rendering: ImageRendering::Auto,
             flex_direction: FlexDirection::Row,
             flex_wrap: FlexWrap::Nowrap,
+            flex_grow: 0.0,
+            flex_shrink: 1.0,
+            flex_basis: FlexBasis::Auto,
             text_wrap_mode: TextWrapMode::Wrap,
             text_wrap_style: TextWrapStyle::Auto,
         }
@@ -2978,6 +3016,10 @@ pub fn compute_style(
         // CSS Flexbox L1 §5 — flex-direction / flex-wrap не наследуются.
         flex_direction: FlexDirection::Row,
         flex_wrap: FlexWrap::Nowrap,
+        // CSS Flexbox L1 §7 — flex-grow / flex-shrink / flex-basis не наследуются.
+        flex_grow: 0.0,
+        flex_shrink: 1.0,
+        flex_basis: FlexBasis::Auto,
         // CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style inherited.
         text_wrap_mode: inherited.text_wrap_mode,
         text_wrap_style: inherited.text_wrap_style,
@@ -6443,6 +6485,32 @@ fn apply_declaration(
             // CSS Flexbox L1 §5.3: shorthand flex-direction || flex-wrap.
             apply_flex_flow_shorthand(style, val);
         }
+        "flex-grow" => {
+            // CSS Flexbox L1 §7.1: <number> ≥ 0. Отрицательные — invalid.
+            if let Ok(n) = val.trim().parse::<f32>()
+                && n >= 0.0
+            {
+                style.flex_grow = n;
+            }
+        }
+        "flex-shrink" => {
+            // CSS Flexbox L1 §7.2: <number> ≥ 0. Отрицательные — invalid.
+            if let Ok(n) = val.trim().parse::<f32>()
+                && n >= 0.0
+            {
+                style.flex_shrink = n;
+            }
+        }
+        "flex-basis" => {
+            // CSS Flexbox L1 §7.3: auto | content | <length>.
+            if let Some(v) = FlexBasis::parse(val, is_quirks) {
+                style.flex_basis = v;
+            }
+        }
+        "flex" => {
+            // CSS Flexbox L1 §7: shorthand flex-grow flex-shrink flex-basis.
+            apply_flex_shorthand(style, val, is_quirks);
+        }
         "width" => {
             // `auto` = None (сдвигается на контейнер); иначе typed Length.
             if val.trim() == "auto" {
@@ -8175,6 +8243,101 @@ fn apply_flex_flow_shorthand(style: &mut ComputedStyle, val: &str) {
     }
 }
 
+/// CSS Flexbox L1 §7 — `flex` shorthand.
+///
+/// Грамматика: `none | auto | [ <'flex-grow'> <'flex-shrink'>? || <'flex-basis'> ]`.
+/// Специальные ключевые слова:
+/// - `none` → `0 0 auto`
+/// - `auto` → `1 1 auto`
+/// - одно `<number>` → flex-grow; flex-shrink=1; flex-basis=0 (не auto!)
+/// - два `<number>` → flex-grow flex-shrink; flex-basis=0
+/// - `<number> <length>` → flex-grow 1 flex-basis
+/// - `<number> <number> <length|auto|content>` → полная форма
+///
+/// Shorthand всегда сбрасывает все три longhand-а перед применением.
+fn apply_flex_shorthand(style: &mut ComputedStyle, val: &str, is_quirks: bool) {
+    // Shorthand reset: spec §7 «when flex is given a single value, the
+    // other components are set to their initial values for the shorthand»:
+    // flex-grow=1, flex-shrink=1, flex-basis=0 (NB: not `auto`!).
+    // We reset to these "shorthand defaults" and then apply tokens.
+    style.flex_grow = 1.0;
+    style.flex_shrink = 1.0;
+    style.flex_basis = FlexBasis::Length(Length::Px(0.0));
+
+    let trimmed = val.trim();
+    // Special keyword forms.
+    match trimmed.to_ascii_lowercase().as_str() {
+        "none" => {
+            style.flex_grow = 0.0;
+            style.flex_shrink = 0.0;
+            style.flex_basis = FlexBasis::Auto;
+            return;
+        }
+        "auto" => {
+            style.flex_grow = 1.0;
+            style.flex_shrink = 1.0;
+            style.flex_basis = FlexBasis::Auto;
+            return;
+        }
+        _ => {}
+    }
+
+    // Tokenized form: up to 3 tokens.
+    let tokens: Vec<&str> = trimmed.split_whitespace().collect();
+    if tokens.is_empty() {
+        return;
+    }
+
+    // Try to classify each token as number or length/keyword.
+    let mut numbers: Vec<f32> = Vec::new();
+    let mut basis: Option<FlexBasis> = None;
+
+    for tok in &tokens {
+        if let Ok(n) = tok.parse::<f32>() {
+            if n >= 0.0 {
+                numbers.push(n);
+            } else {
+                return; // invalid
+            }
+        } else if let Some(b) = FlexBasis::parse(tok, is_quirks) {
+            if basis.is_some() {
+                return; // duplicate
+            }
+            basis = Some(b);
+        } else {
+            return; // unrecognized token
+        }
+    }
+
+    match (numbers.len(), basis) {
+        (1, None) => {
+            // flex: <number> → grow=N, shrink=1, basis=0
+            style.flex_grow = numbers[0];
+        }
+        (2, None) => {
+            // flex: <number> <number> → grow shrink, basis=0
+            style.flex_grow = numbers[0];
+            style.flex_shrink = numbers[1];
+        }
+        (1, Some(b)) => {
+            // flex: <number> <basis> → grow=N, shrink=1, basis=b
+            style.flex_grow = numbers[0];
+            style.flex_basis = b;
+        }
+        (2, Some(b)) => {
+            // flex: <grow> <shrink> <basis>
+            style.flex_grow = numbers[0];
+            style.flex_shrink = numbers[1];
+            style.flex_basis = b;
+        }
+        (0, Some(b)) => {
+            // flex: <basis> only (e.g. flex: 100px)
+            style.flex_basis = b;
+        }
+        _ => {} // invalid combinations ignored
+    }
+}
+
 /// CSS Cascade L4 §7 — применить CSS-wide keyword к одному свойству.
 ///
 /// Источник значения:
@@ -8666,6 +8829,29 @@ fn apply_css_wide_keyword(
                 inherited.text_wrap_style
             } else {
                 init.text_wrap_style
+            };
+        }
+        // CSS Flexbox L1 §7 — flex-grow / flex-shrink / flex-basis non-inherited.
+        "flex-grow" => {
+            style.flex_grow = if inh_only_inherit { inherited.flex_grow } else { init.flex_grow };
+        }
+        "flex-shrink" => {
+            style.flex_shrink = if inh_only_inherit { inherited.flex_shrink } else { init.flex_shrink };
+        }
+        "flex-basis" => {
+            style.flex_basis = if inh_only_inherit {
+                inherited.flex_basis.clone()
+            } else {
+                init.flex_basis.clone()
+            };
+        }
+        "flex" => {
+            style.flex_grow = if inh_only_inherit { inherited.flex_grow } else { init.flex_grow };
+            style.flex_shrink = if inh_only_inherit { inherited.flex_shrink } else { init.flex_shrink };
+            style.flex_basis = if inh_only_inherit {
+                inherited.flex_basis.clone()
+            } else {
+                init.flex_basis.clone()
             };
         }
         // CSS Flexbox L1 §5 — flex-direction / flex-wrap non-inherited.
@@ -14973,5 +15159,191 @@ mod tests {
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_direction, FlexDirection::Row); // reset to initial
         assert_eq!(s.flex_wrap, FlexWrap::WrapReverse);
+    }
+
+    // ── flex-grow ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn flex_grow_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_grow, 0.0);
+    }
+
+    #[test]
+    fn flex_grow_value() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex-grow: 2.5; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_grow, 2.5);
+    }
+
+    #[test]
+    fn flex_grow_negative_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex-grow: -1; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_grow, 0.0); // initial, negative rejected
+    }
+
+    #[test]
+    fn flex_grow_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { flex-grow: 3; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let span = doc.get(div).children[0];
+        let div_s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span_s = compute_style(&doc, span, &sheet, &div_s, Size::new(800.0, 600.0));
+        assert_eq!(div_s.flex_grow, 3.0);
+        assert_eq!(span_s.flex_grow, 0.0); // initial, не наследуется
+    }
+
+    // ── flex-shrink ───────────────────────────────────────────────────────
+
+    #[test]
+    fn flex_shrink_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_shrink, 1.0);
+    }
+
+    #[test]
+    fn flex_shrink_zero() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex-shrink: 0; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_shrink, 0.0);
+    }
+
+    #[test]
+    fn flex_shrink_negative_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex-shrink: -0.5; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_shrink, 1.0); // initial
+    }
+
+    #[test]
+    fn flex_shrink_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { flex-shrink: 4; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let span = doc.get(div).children[0];
+        let div_s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span_s = compute_style(&doc, span, &sheet, &div_s, Size::new(800.0, 600.0));
+        assert_eq!(div_s.flex_shrink, 4.0);
+        assert_eq!(span_s.flex_shrink, 1.0); // initial
+    }
+
+    // ── flex-basis ────────────────────────────────────────────────────────
+
+    #[test]
+    fn flex_basis_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_basis, FlexBasis::Auto);
+    }
+
+    #[test]
+    fn flex_basis_content() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex-basis: content; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_basis, FlexBasis::Content);
+    }
+
+    #[test]
+    fn flex_basis_px() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex-basis: 120px; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_basis, FlexBasis::Length(Length::Px(120.0)));
+    }
+
+    #[test]
+    fn flex_basis_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { flex-basis: 50px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let span = doc.get(div).children[0];
+        let div_s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span_s = compute_style(&doc, span, &sheet, &div_s, Size::new(800.0, 600.0));
+        assert_eq!(div_s.flex_basis, FlexBasis::Length(Length::Px(50.0)));
+        assert_eq!(span_s.flex_basis, FlexBasis::Auto); // initial
+    }
+
+    // ── flex shorthand ────────────────────────────────────────────────────
+
+    #[test]
+    fn flex_shorthand_none() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex: none; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_grow, 0.0);
+        assert_eq!(s.flex_shrink, 0.0);
+        assert_eq!(s.flex_basis, FlexBasis::Auto);
+    }
+
+    #[test]
+    fn flex_shorthand_auto() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex: auto; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_grow, 1.0);
+        assert_eq!(s.flex_shrink, 1.0);
+        assert_eq!(s.flex_basis, FlexBasis::Auto);
+    }
+
+    #[test]
+    fn flex_shorthand_single_number() {
+        // flex: N → grow=N, shrink=1, basis=0
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex: 3; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_grow, 3.0);
+        assert_eq!(s.flex_shrink, 1.0);
+        assert_eq!(s.flex_basis, FlexBasis::Length(Length::Px(0.0)));
+    }
+
+    #[test]
+    fn flex_shorthand_three_values() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { flex: 2 1 100px; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.flex_grow, 2.0);
+        assert_eq!(s.flex_shrink, 1.0);
+        assert_eq!(s.flex_basis, FlexBasis::Length(Length::Px(100.0)));
     }
 }
