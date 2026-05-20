@@ -16,6 +16,7 @@ Updated with every plan-item commit. For ground truth — `git log --oneline` + 
 | lumen-font | 🟡 TTF + variable fonts runtime | [subsystems/font.md](subsystems/font.md) |
 | lumen-encoding | 🟡 detector + CyrillicDecoders + UTF-16 | [subsystems/encoding.md](subsystems/encoding.md) |
 | lumen-image | 🟡 PNG + JPEG baseline/progressive | [subsystems/image.md](subsystems/image.md) |
+| lumen-js | ✅ QuickJS runtime via rquickjs 0.11 | [subsystems/js.md](subsystems/js.md) |
 | lumen-storage | ✅ SQLite + cookies + history + … | [subsystems/storage.md](subsystems/storage.md) |
 | lumen-knowledge | 🟡 FTS5 history + notes + read-later | [subsystems/knowledge.md](subsystems/knowledge.md) |
 | lumen-network | ✅ HTTP/1.1 + HTTPS + CORS + auth | [subsystems/network.md](subsystems/network.md) |

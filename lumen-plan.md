@@ -44,7 +44,7 @@
 - ✅ Permanent #2: `wgpu` (GPU API) — за `RenderBackend` — активирован в `lumen-paint`
 - ✅ Permanent #3: `rustls` + `webpki-roots` (TLS / crypto + Mozilla CA bundle) — за `TlsBackend` — активирован в `lumen-network`
 - ✅ Permanent #4: SQLite (`rusqlite` с `bundled`) — за `StorageBackend` + `KnowledgeStore` — активирован в `lumen-storage` и `lumen-knowledge`
-- ⬜ Permanent #5: JS engine (`rquickjs` → `rusty_v8`) — за `JsRuntime` — пока не подключён
+- ✅ Permanent #5: JS engine (`rquickjs` v0.11 → `rusty_v8` v1.0+) — за `JsRuntime` — активирован в `lumen-js` (Phase 0: eval/globals/call; shell feature `quickjs`; 2026-05-20)
 - 🟡 Provisional (2 подключено: `brotli-decompressor` в `lumen-network` через `BrotliContentDecoder` за `ContentDecoder`; **`psl`** в `lumen-storage` через `PslProvider` за `PublicSuffixList` — RFC 6265bis §5.5 cookies + Safe Browsing host-suffix). Ожидают подключения: image decoders (JPEG/WebP/GIF), `icu4x`, `ruzstd`, `idna`, `hyphenation`, `woff2`, `hunspell-rs`/`spellbook`, `quinn`. Каждый — за trait в `lumen-core::ext`, подключается по мере того, как фаза реально упирается в задачу. Полная таблица + graduation criteria — в §5.
 
 ### Точки расширения (trait-ы из `lumen-core::ext`)
@@ -174,7 +174,7 @@
 
 | # | Задача | impl / Разблокирует | НЕ блокирует |
 |---|---|---|---|
-| 1B | ⬜ **`[P3]` rquickjs integration scaffold** | Forms, Animations, SWs, DevTools | Новый крейт |
+| 1B | ✅ **`[P3]` rquickjs integration scaffold** | Forms, Animations, SWs, DevTools | `crates/js/` |
 | 2A | 🟡 **`[P3]` SOP/CORS/mixed-content/sandbox** | Публичная сеть | Только network + shell |
 | 2A.1 | ✅ block blockable in HttpClient::fetch | `network/src/lib.rs:1478` | — |
 | 2A.2 | ✅ sandbox_flags on iframe DOM element | `dom/src/lib.rs` | — |
@@ -445,6 +445,16 @@
 Framework + winit-integration + task source priorities + requestIdleCallback + `run_idle_callbacks` в about_to_wait готовы (`lumen-shell::runtime`). about_to_wait → step()×N (cap 256) → run_idle_callbacks(`IDLE_BUDGET_MS=10.0`); Resized → deliver_observer_records(Resize); RedrawRequested → run_rendering_step(timestamp_ms) перед render(); `TaskQueue` обходит `TaskSource::PRIORITY_ORDER` на pop.
 
 **Осталось:** reload через queue_task, правильный ordering rendering steps stage (style→layout→paint), `scheduler.postTask`, PerformanceObserver, реальные triggers observers.
+
+#### 1B — rquickjs integration scaffold
+
+Новый крейт `lumen-js` (Permanent #5 §5): реализует `JsRuntime` trait через `rquickjs` v0.11 (QuickJS).
+
+- **`QuickJsRuntime`**: `eval(script)` → `JsResult<JsValue>`, `set_global`, `get_global`, `call_function`. Внутри `Mutex<Inner { _rt: Runtime, ctx: Context }>` для `Send+Sync`. `Function::call` в 0.11 требует фиксированных `IntoArgs`-кортежей — `call_function` использует eval-workaround через временный глобал `__lum_args__` и `fn.apply(null, __lum_args__)`.
+- **Конвертация JsValue↔Value**: null/undefined, bool, int/float, string, array (рекурсивно), object (итерация через `props::<String, Value>()`).
+- **Обработка ошибок**: `Error::Exception` → `ctx.catch()` + `.message` property fallback → string coerce → «JS exception».
+- **shell**: feature `quickjs` → `make_js_runtime()` возвращает `Box<dyn JsRuntime>` с `QuickJsRuntime`; без feature — `NullJsRuntime`.
+- **16 тестов**: eval (number/string/bool/null/array/object/error/syntax), set/get global, call_function (с/без args), round-trip array/bool, engine_name, Send+Sync.
 
 #### 5B — HTTP Range requests
 
