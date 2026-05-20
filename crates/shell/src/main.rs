@@ -667,6 +667,9 @@ struct ParsedPage {
     rule_count: usize,
     /// Декодированные изображения, найденные при обходе DOM. См. [`LoadedPage::images`].
     images: Vec<(String, lumen_image::Image)>,
+    /// Subresource-хинты, найденные preload-сканером ДО DOM-парсинга.
+    /// Source-order: первые хинты важнее (их fetch стартует первым).
+    preload_hints: Vec<lumen_html_parser::PreloadHint>,
 }
 
 /// Источник для повторного layout без повторной загрузки/парсинга.
@@ -688,6 +691,15 @@ fn parse_and_layout(
     let encoding = lumen_encoding::detect(bytes, content_type);
     let source = lumen_encoding::decode(encoding, bytes);
     eprintln!("Кодировка: {}", encoding.name());
+
+    // Preload-сканер запускается ДО DOM-парсинга, чтобы shell мог начать
+    // загружать subresource-ы параллельно с tree construction (HTML LS
+    // §13.2.6.4.7). В Phase 0 загрузка блокирующая, но порядок вызовов
+    // уже корректный — streaming pipeline подхватит его без переделки.
+    let preload_hints = lumen_html_parser::scan_preload_hints(&source);
+    if !preload_hints.is_empty() {
+        eprintln!("Preload-хинтов: {}", preload_hints.len());
+    }
 
     let mut doc = lumen_html_parser::parse(&source);
     let title = extract_title(&doc);
@@ -730,6 +742,7 @@ fn parse_and_layout(
         title,
         rule_count,
         images,
+        preload_hints,
     })
 }
 
@@ -752,11 +765,12 @@ fn render_bytes(
     let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport)?;
     let display_list = lumen_paint::build_display_list(&parsed.layout);
     println!(
-        "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок",
+        "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
         parsed.document.len(),
         parsed.rule_count,
         display_list.len(),
         parsed.images.len(),
+        parsed.preload_hints.len(),
     );
     let layout_source = LayoutSource {
         document: parsed.document,
