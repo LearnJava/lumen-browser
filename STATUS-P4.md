@@ -1,6 +1,7 @@
-In progress: —
+In progress: text-overflow ellipsis render  branch: text-overflow
+Next step: emit_inline_run helper in display_list.rs
 
-Next: text-overflow ellipsis render     css-2026-compliance.md (🟡→✅)
+Next: text-decoration-thickness 🟡→✅     css-2026-compliance.md (already impl'd)
 
 Queue (🟡→✅, paint/layout wire-up, no new parsing needed):
   text-overflow: ellipsis              display_list.rs — clip text run, emit "…"
