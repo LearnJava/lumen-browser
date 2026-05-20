@@ -1,9 +1,10 @@
-In progress: —
+In progress: 3B.1 reload via queue_task  branch: reload-via-queue-task
+Next step: pending_reload Rc<Cell<bool>>, queue_task в handle_key, check в about_to_wait
 
 Next: 3B.1 reload via queue_task         lumen-plan.md:191
 
 Queue:
-3B.1 reload via queue_task         lumen-plan.md:191
+3B.2 rendering steps ordering      lumen-plan.md:192
 3B.1 reload via queue_task         lumen-plan.md:191
 3B.2 rendering steps ordering      lumen-plan.md:192
 3B.3 real observers                lumen-plan.md:193
