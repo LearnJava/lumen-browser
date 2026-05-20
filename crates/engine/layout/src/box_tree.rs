@@ -424,11 +424,16 @@ fn build_box(
                         break;
                     }
                     let cid = dom_children[i];
-                    if let NodeData::Text(s) = &doc.get(cid).data
-                        && s.chars().all(char::is_whitespace)
-                    {
-                        i += 1;
-                        continue;
+                    match &doc.get(cid).data {
+                        NodeData::Text(s) if s.chars().all(char::is_whitespace) => {
+                            i += 1;
+                            continue;
+                        }
+                        NodeData::Comment(_) | NodeData::Doctype { .. } => {
+                            i += 1;
+                            continue;
+                        }
+                        _ => {}
                     }
                     if is_inline_content(doc, sheet, cid, &style, viewport) {
                         collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending);
@@ -708,32 +713,50 @@ fn lay_out(
             }
         }
         BoxKind::InlineBlockRow => {
-            // Горизонтальный layout: inline-block боксы + InlineRun-ы в одном потоке.
-            // InlineRun получает оставшуюся ширину (после предшествующих inline-block).
-            // Inline-block дети используют полную ширину контейнера для CSS-auto.
+            // Горизонтальный layout с переносом строк (CSS 2.1 §9.4.3).
+            // Алгоритм: укладываем детей слева направо; если ребёнок не
+            // помещается в оставшееся место текущей строки (и строка не пуста)
+            // — переносим на следующую строку.
             let mut cur_x = content_x;
-            let mut max_h: f32 = 0.0;
+            let mut cur_y = content_y;
+            let mut row_max_h: f32 = 0.0;
+            let mut total_h: f32 = 0.0;
             for child in &mut b.children {
-                let child_avail = if matches!(child.kind, BoxKind::InlineRun { .. }) {
-                    // Оставшаяся ширина после уже разложенных inline-block детей.
+                let is_run = matches!(child.kind, BoxKind::InlineRun { .. });
+                let child_avail = if is_run {
                     (content_width - (cur_x - content_x)).max(0.0)
                 } else {
                     content_width
                 };
-                lay_out(child, cur_x, content_y, child_avail, measurer, viewport);
+                // Первый проход: раскладываем чтобы узнать ширину.
+                lay_out(child, cur_x, cur_y, child_avail, measurer, viewport);
                 if matches!(child.kind, BoxKind::Skip) {
                     continue;
                 }
-                // child margins resolved against parent content_width (cb for child).
                 let c_em = child.style.font_size;
                 let child_mr = child.style.margin_right.resolve_or_zero(c_em, content_width, viewport);
                 let child_mt = child.style.margin_top.resolve_or_zero(c_em, content_width, viewport);
                 let child_mb = child.style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
-                cur_x = child.rect.x + child.rect.width + child_mr;
+                // Правый край ребёнка с учётом margin-right.
+                let child_right = child.rect.x + child.rect.width + child_mr;
                 let child_full_h = child_mt + child.rect.height + child_mb;
-                max_h = max_h.max(child_full_h);
+                // Перенос: если ребёнок выходит за правую границу контента
+                // и строка уже не пустая — начинаем новую строку.
+                if !is_run
+                    && child_right > content_x + content_width
+                    && cur_x > content_x
+                {
+                    cur_y += row_max_h;
+                    total_h += row_max_h;
+                    cur_x = content_x;
+                    row_max_h = 0.0;
+                    // Повторный layout на новой строке.
+                    lay_out(child, cur_x, cur_y, content_width, measurer, viewport);
+                }
+                cur_x = child.rect.x + child.rect.width + child_mr;
+                row_max_h = row_max_h.max(child_full_h);
             }
-            b.rect.height = max_h;
+            b.rect.height = total_h + row_max_h;
         }
         BoxKind::InlineRun { .. } => unreachable!(),
         BoxKind::Skip => unreachable!(),

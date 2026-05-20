@@ -1141,8 +1141,7 @@ impl ApplicationHandler for Lumen {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attrs = Window::default_attributes()
             .with_title(window_title(self.title.as_deref()))
-            .with_inner_size(LogicalSize::new(1024.0, 720.0))
-            .with_maximized(true);
+            .with_inner_size(LogicalSize::new(1024.0, 720.0));
 
         let window = match event_loop.create_window(attrs) {
             Ok(w) => Arc::new(w),
