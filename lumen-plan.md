@@ -204,7 +204,7 @@
 | 4B.4 | ✅ preload fetch deduplication | `shell/src/main.rs` | — |
 | 4B.5 | ✅ preload priority + EventSink | `shell/src/main.rs` | — |
 | 5A | 🟡 **`[P3]` HTTP/2** | Latency | Только network |
-| 5A.1 | 🟡 ALPN h2 negotiation | `network/src/lib.rs` | h2 → Err placeholder, http/1.1 fallback |
+| 5A.1 | ✅ ALPN h2 negotiation | `network/src/lib.rs` | h2 → Err placeholder, http/1.1 fallback |
 | 5A.2 | ⬜ Frame codec (RFC 9113 §6) | `network/src/h2/frame.rs` | parse/serialize 10 frame-типов |
 | 5A.3 | ⬜ HPACK (RFC 7541) | `network/src/h2/hpack.rs` | static+dynamic table, Huffman, integer enc |
 | 5A.4 | ⬜ Connection + single GET | `network/src/h2/conn.rs` | preface, SETTINGS, один stream |
