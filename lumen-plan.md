@@ -139,12 +139,12 @@
 | 4B.3 | ✅ flex item layout pass (main/cross axis) | `layout/src/box_tree.rs` | — |
 | 4B.4 | ✅ flex gap application | `layout/src/box_tree.rs:509` | — |
 | 4B.5 | ✅ flex wrapping + multi-line | `layout/src/box_tree.rs:509` | — |
-| 5 | ⬜ **`[P1]` ICU4x segmenter + linebreak** | CJK типографика | — |
-| 5.1 | ⬜ ICU4x struct + segmenter init | `core/src/ext.rs` | — |
-| 5.2 | ⬜ line_break_opportunities impl | `core/src/ext.rs` | — |
-| 5.3 | ⬜ grapheme_boundaries impl | `core/src/ext.rs` | — |
-| 5.4 | ⬜ word_boundaries impl | `core/src/ext.rs` | — |
-| 5.5 | ⬜ bidi_runs impl | `core/src/ext.rs` | — |
+| 5 | ✅ **`[P1]` ICU4x segmenter + linebreak** | CJK типографика | — |
+| 5.1 | ✅ ICU4x struct + segmenter init | `encoding/src/unicode_provider.rs` | — |
+| 5.2 | ✅ line_break_opportunities impl | `encoding/src/unicode_provider.rs` | — |
+| 5.3 | ✅ grapheme_boundaries impl | `encoding/src/unicode_provider.rs` | — |
+| 5.4 | ✅ word_boundaries impl | `encoding/src/unicode_provider.rs` | — |
+| 5.5 | ✅ bidi_runs impl | `encoding/src/unicode_provider.rs` | — |
 | 6+ | ⬜ **`[P1+P3]` Shadow DOM / Accessibility / Forms / GC** (Phase 2-3) | Phase 2-3 | — |
 
 #### Track P2 — Backend rendering
