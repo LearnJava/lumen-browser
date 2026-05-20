@@ -1,0 +1,5 @@
+Block rect=(0.00, 0.00, 1000.00, 100.00)
+  Block rect=(0.00, 0.00, 900.00, 100.00) display=flex w=900.00 h=100.00
+    Block rect=(0.00, 0.00, 300.00, 50.00) bg=#ff0000ff display=flex w=300.00 h=50.00
+    Block rect=(300.00, 0.00, 300.00, 50.00) bg=#ff0000ff display=flex w=300.00 h=50.00
+    Block rect=(600.00, 0.00, 300.00, 50.00) bg=#ff0000ff display=flex w=300.00 h=50.00
