@@ -31,7 +31,8 @@ pub use stacking::{
     StackingContext, StackingContextId, StackingTree,
 };
 pub use style::{
-    parse_css_wide_keyword, AlignValue, AnimationDirection, AnimationFillMode, AnimationPlayState,
+    parse_css_wide_keyword, parse_gradient_stops, AlignValue, AnimationDirection,
+    AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat, ColorSpace,
@@ -7714,6 +7715,123 @@ mod tests {
             BackgroundImage::Gradient(s) => assert!(s.contains("linear-gradient")),
             _ => panic!("expected Gradient"),
         }
+    }
+
+    // ── parse_gradient_stops ──────────────────────────────────────────────────
+
+    #[test]
+    fn gradient_stops_empty_string_returns_empty() {
+        assert_eq!(parse_gradient_stops(""), vec![]);
+    }
+
+    #[test]
+    fn gradient_stops_no_parens_returns_empty() {
+        assert_eq!(parse_gradient_stops("linear-gradient"), vec![]);
+    }
+
+    #[test]
+    fn gradient_stops_two_named_colors_no_position() {
+        let stops = parse_gradient_stops("linear-gradient(red, blue)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[0].position, None);
+        assert_eq!(stops[1].color, Color { r: 0, g: 0, b: 255, a: 255 });
+        assert_eq!(stops[1].position, None);
+    }
+
+    #[test]
+    fn gradient_stops_to_right_direction_skipped() {
+        let stops = parse_gradient_stops("linear-gradient(to right, red, blue)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[1].color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn gradient_stops_angle_direction_skipped() {
+        let stops = parse_gradient_stops("linear-gradient(45deg, red 0%, blue 100%)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].position, Some(Length::Percent(0.0)));
+        assert_eq!(stops[1].position, Some(Length::Percent(100.0)));
+    }
+
+    #[test]
+    fn gradient_stops_percent_positions_parsed() {
+        let stops = parse_gradient_stops("linear-gradient(red 0%, green 50%, blue 100%)");
+        assert_eq!(stops.len(), 3);
+        assert_eq!(stops[0].position, Some(Length::Percent(0.0)));
+        assert_eq!(stops[1].position, Some(Length::Percent(50.0)));
+        assert_eq!(stops[2].position, Some(Length::Percent(100.0)));
+    }
+
+    #[test]
+    fn gradient_stops_px_positions_parsed() {
+        let stops = parse_gradient_stops("linear-gradient(red 0px, blue 200px)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].position, Some(Length::Px(0.0)));
+        assert_eq!(stops[1].position, Some(Length::Px(200.0)));
+    }
+
+    #[test]
+    fn gradient_stops_hex_color_with_percent() {
+        let stops = parse_gradient_stops("linear-gradient(#ff0000 20%, #0000ff 80%)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[0].position, Some(Length::Percent(20.0)));
+    }
+
+    #[test]
+    fn gradient_stops_rgba_function_color() {
+        let stops = parse_gradient_stops("linear-gradient(rgba(255,0,0,1) 0%, rgba(0,0,255,1) 100%)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[1].color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn gradient_stops_two_position_stop_expands() {
+        // `red 20% 60%` → two stops: red@20% and red@60%
+        let stops = parse_gradient_stops("linear-gradient(red 20% 60%, blue)");
+        assert_eq!(stops.len(), 3);
+        assert_eq!(stops[0].position, Some(Length::Percent(20.0)));
+        assert_eq!(stops[1].position, Some(Length::Percent(60.0)));
+        assert_eq!(stops[1].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[2].color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn gradient_stops_color_hint_skipped() {
+        // `50%` between stops is a color hint — no color → skipped
+        let stops = parse_gradient_stops("linear-gradient(red 0%, 50%, blue 100%)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[1].color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn gradient_stops_radial_shape_skipped() {
+        let stops =
+            parse_gradient_stops("radial-gradient(circle at 50% 50%, white, black)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 255, b: 255, a: 255 });
+        assert_eq!(stops[1].color, Color { r: 0, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn gradient_stops_repeating_linear() {
+        let stops =
+            parse_gradient_stops("repeating-linear-gradient(red 0px, blue 10px)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].color, Color { r: 255, g: 0, b: 0, a: 255 });
+        assert_eq!(stops[0].position, Some(Length::Px(0.0)));
+        assert_eq!(stops[1].position, Some(Length::Px(10.0)));
+    }
+
+    #[test]
+    fn gradient_stops_zero_unitless_is_px_zero() {
+        let stops = parse_gradient_stops("linear-gradient(red 0, blue 100%)");
+        assert_eq!(stops.len(), 2);
+        assert_eq!(stops[0].position, Some(Length::Px(0.0)));
     }
 
     #[test]
