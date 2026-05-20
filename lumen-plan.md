@@ -137,7 +137,7 @@
 | 4B.1 | ✅ flex-direction + flex-wrap properties | `layout/src/style.rs` | — |
 | 4B.2 | ✅ flex-grow + flex-shrink + flex-basis | `layout/src/style.rs` | — |
 | 4B.3 | ✅ flex item layout pass (main/cross axis) | `layout/src/box_tree.rs` | — |
-| 4B.4 | ⬜ flex gap application | `layout/src/box_tree.rs:509` | — |
+| 4B.4 | ✅ flex gap application | `layout/src/box_tree.rs:509` | — |
 | 4B.5 | ⬜ flex wrapping + multi-line | `layout/src/box_tree.rs:509` | — |
 | 5 | ⬜ **`[P1]` ICU4x segmenter + linebreak** | CJK типографика | — |
 | 5.1 | ⬜ ICU4x struct + segmenter init | `core/src/ext.rs` | — |

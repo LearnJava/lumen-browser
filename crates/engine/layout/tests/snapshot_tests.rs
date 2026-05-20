@@ -302,3 +302,42 @@ fn flex_justify_content_space_between() {
     );
     assert_snapshot("flex_justify_content_space_between", &actual);
 }
+
+#[test]
+fn flex_row_gap() {
+    // 3 × 100px items in 500px container with column-gap: 50px → items at x=0,150,300
+    // free_space = 500 - 300 (items) - 100 (2×50 gap) = 100, no flex-grow → items use initial sizes
+    let actual = build(
+        "<div><div></div><div></div><div></div></div>",
+        "div { display: flex; column-gap: 50px; width: 500px; height: 50px; } \
+         div > div { width: 100px; height: 50px; }",
+        600.0,
+    );
+    assert_snapshot("flex_row_gap", &actual);
+}
+
+#[test]
+fn flex_column_gap() {
+    // 3 items stacked in column with row-gap: 20px
+    let actual = build(
+        "<div><div></div><div></div><div></div></div>",
+        "div { display: flex; flex-direction: column; row-gap: 20px; width: 100px; } \
+         div > div { width: 100px; height: 30px; }",
+        200.0,
+    );
+    assert_snapshot("flex_column_gap", &actual);
+}
+
+#[test]
+fn flex_gap_with_grow() {
+    // 2 items with gap: 20px and flex-grow: 1 each in 200px container
+    // available for grow = 200 - 0 (items have 0 initial width via flex shorthand) - 20 (gap) = 180
+    // each item gets 90px
+    let actual = build(
+        "<div><div></div><div></div></div>",
+        "div { display: flex; gap: 20px; width: 200px; height: 50px; } \
+         div > div { flex: 1; height: 50px; }",
+        300.0,
+    );
+    assert_snapshot("flex_gap_with_grow", &actual);
+}

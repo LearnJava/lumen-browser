@@ -782,6 +782,16 @@ fn lay_out_flex(
     // Container main size (for row: width; for column: 0 = auto, computed from items).
     let container_main = if is_column { 0.0 } else { content_width };
 
+    // CSS Box Alignment §8: gap is fixed space between items, subtracted before flex-grow/shrink.
+    let em = s.font_size;
+    let item_gap = if is_column {
+        s.row_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)
+    } else {
+        s.column_gap.resolve(em, Some(content_width), viewport).unwrap_or(0.0).max(0.0)
+    };
+    let n_items = item_idxs.len();
+    let total_gap = if n_items > 1 { item_gap * (n_items - 1) as f32 } else { 0.0 };
+
     // Step 1 — compute hypothetical main sizes.
     // Do a preliminary layout for each item to get intrinsic sizes.
     for &i in &item_idxs {
@@ -826,7 +836,7 @@ fn lay_out_flex(
 
     // Step 2 — distribute free space (flex-grow / flex-shrink).
     let total_hyp: f32 = hyp_mains.iter().sum();
-    let free_space = if is_column { 0.0 } else { container_main - total_hyp };
+    let free_space = if is_column { 0.0 } else { container_main - total_hyp - total_gap };
 
     if free_space > 0.0 {
         let total_grow: f32 = item_idxs.iter().map(|&i| children[i].style.flex_grow).sum();
@@ -854,7 +864,7 @@ fn lay_out_flex(
     // Step 3 — justify-content: compute start offset and gap between items.
     let n = item_idxs.len();
     let resolved_main: f32 = hyp_mains.iter().sum();
-    let remaining = if is_column { 0.0 } else { (content_width - resolved_main).max(0.0) };
+    let remaining = if is_column { 0.0 } else { (content_width - resolved_main - total_gap).max(0.0) };
 
     let (jc_start, jc_gap) = match s.justify_content {
         AlignValue::End => (remaining, 0.0),
@@ -908,7 +918,7 @@ fn lay_out_flex(
                 measurer,
                 viewport,
             );
-            main_cursor += outer_main + jc_gap;
+            main_cursor += outer_main + item_gap + jc_gap;
         } else {
             let inner_main = (outer_main - m_l - m_r).max(0.0);
             children[i].style.width = Some(Length::Px(inner_main));
@@ -920,7 +930,7 @@ fn lay_out_flex(
                 measurer,
                 viewport,
             );
-            main_cursor += outer_main + jc_gap;
+            main_cursor += outer_main + item_gap + jc_gap;
         }
     }
 
