@@ -45,6 +45,8 @@ pub struct FontMeasurer<'a> {
     hmtx: Hmtx<'a>,
     cmap: Cmap<'a>,
     units_per_em: u16,
+    /// Абсолютное значение hhea.descent (descent < 0 по конвенции OpenType).
+    descent_units: u16,
 }
 
 impl<'a> FontMeasurer<'a> {
@@ -53,7 +55,9 @@ impl<'a> FontMeasurer<'a> {
         let head = font.head()?;
         let hmtx = font.hmtx()?;
         let cmap = font.cmap()?;
-        Ok(Self { hmtx, cmap, units_per_em: head.units_per_em })
+        let hhea = font.hhea()?;
+        let descent_units = hhea.descent.unsigned_abs();
+        Ok(Self { hmtx, cmap, units_per_em: head.units_per_em, descent_units })
     }
 }
 
@@ -65,5 +69,9 @@ impl<'a> TextMeasurer for FontMeasurer<'a> {
             // Fallback для неизвестных глифов: ~0.5em
             None => font_size_px * 0.5,
         }
+    }
+
+    fn descent_px(&self, font_size_px: f32) -> f32 {
+        self.descent_units as f32 * font_size_px / self.units_per_em as f32
     }
 }

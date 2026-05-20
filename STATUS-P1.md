@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: fix-ifc-whitespace-strut  branch: fix-ifc-whitespace-strut
+Next step: commit + merge → check graphic tests
 
 Next: (P1 Phase 1)
 
