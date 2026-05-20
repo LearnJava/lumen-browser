@@ -15,8 +15,24 @@
 ```
 BUG-001 | FIXED 2026-05-15 | layout          | display:none on inline elements not working
 BUG-003 | FIXED 2026-05-15 | layout          | style="" attribute not processed by cascade
+BUG-016 | FIXED 2026-05-20 | css-parser/paint| border-style: dashed/double now work; dotted still square (→ BUG-029)
+BUG-019 | FIXED 2026-05-20 | css-parser/paint| outline not rendered at all
 BUG-030 | FIXED 2026-05-20 | layout          | IFC: no whitespace gap between inline-block siblings (CSS §4.1.2)
 BUG-031 | FIXED 2026-05-20 | layout          | IFC: missing strut descent causes rows to be ~4px too short
+BUG-002 | OPEN             | layout          | inline padding/border/margin stacks vertically instead of flowing
+BUG-004 | OPEN             | layout          | height on inline elements ignored
+BUG-005 | OPEN             | paint           | <img> inside <span> not rendered
+BUG-007 | OPEN             | layout          | <sub>/<sup>/<small> missing UA styles
+BUG-008 | OPEN             | layout          | <del>/<ins>/<u>/<s> text-decoration missing UA styles
+BUG-009 | OPEN             | layout          | <a> missing UA styles (no blue color, no underline)
+BUG-010 | OPEN             | layout/paint    | <hr> renders nothing
+BUG-011 | OPEN             | layout/paint    | list markers (bullet, numbers) not rendered
+BUG-012 | OPEN             | layout          | <del>/<ins> break inline flow (each on new line)
+BUG-013 | OPEN             | layout          | adjacent <span style="..."> stack vertically without separator
+BUG-014 | OPEN             | image           | JPEG not decoded (PNG only)
+BUG-015 | OPEN             | shell/paint     | broken <img> src shows no alt text
+BUG-017 | OPEN             | layout/paint    | text-decoration-style ignored (all render as solid)
+BUG-018 | OPEN             | layout          | text-decoration-color ignored (always inherits text color)
 BUG-023 | OPEN  REGRESSION | paint           | opacity property broken (was FIXED 2026-05-19, regression after)
 BUG-024 | OPEN             | layout          | box-sizing: content-box — border not added to outer size
 BUG-025 | OPEN             | layout          | max-height does not clamp block height
