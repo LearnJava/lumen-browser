@@ -1,4 +1,5 @@
-In progress: —
+In progress: vertical-align inline y-offset  branch: vertical-align
+Next step: add y_offset to InlineFrag, apply_inline_vertical_align  box_tree.rs:236
 
 Next (Wave 1 — unblock P1/P2):
 vertical-align inline y-offset (🟡→✅)        style.rs + box_tree.rs       ~1h
