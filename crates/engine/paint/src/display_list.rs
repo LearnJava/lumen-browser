@@ -1404,7 +1404,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     }
     match &b.kind {
         BoxKind::Skip => {}
-        BoxKind::Block => {
+        BoxKind::Block | BoxKind::TableRow => {
             if !is_paint_visible(b) {
                 return;
             }
@@ -1553,19 +1553,6 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             });
             emit_outline(b, out);
         }
-        BoxKind::TableRow => {
-            if !is_paint_visible(b) {
-                return;
-            }
-            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
-                && bg.a > 0
-            {
-                let clip = background_clip_rect(b);
-                if clip.width > 0.0 && clip.height > 0.0 {
-                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
-                }
-            }
-        }
     }
 }
 
@@ -1579,7 +1566,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
     }
     match &b.kind {
         BoxKind::Skip => {}
-        BoxKind::Block => {
+        BoxKind::Block | BoxKind::TableRow => {
             // CSS Color L3 §3: opacity < 1.0 creates compositing layer.
             let has_opacity = b.style.opacity < 1.0; // >0.0 already checked above
             if has_opacity {
@@ -1782,20 +1769,6 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 object_position: b.style.object_position,
             });
             emit_outline(b, out);
-        }
-        BoxKind::TableRow => {
-            // Table row: paint own background behind cells, then recurse.
-            if let Some(CssColor::Rgba(bg)) = b.style.background_color
-                && bg.a > 0
-            {
-                let clip = background_clip_rect(b);
-                if clip.width > 0.0 && clip.height > 0.0 {
-                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
-                }
-            }
-            for child in &b.children {
-                walk(child, out);
-            }
         }
     }
 }
