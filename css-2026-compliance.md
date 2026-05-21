@@ -202,7 +202,7 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | Property | Status |
 |---|---|
 | `break-before`, `break-after`, `break-inside` | 🟡 parsed |
-| `orphans`, `widows` | ⬜ |
+| `orphans`, `widows` | 🟡 parsed | parse + store; real fragmentation hints — deferred (requires paged-media layout) |
 
 ### CSS Box Alignment Level 3
 Implemented for flex containers. Grid not applicable (grid not implemented).

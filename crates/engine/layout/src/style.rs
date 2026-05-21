@@ -1789,6 +1789,15 @@ pub struct ComputedStyle {
     /// наследуется. Phase 0: parsing + storage; реальное применение (truncate
     /// inline-flow после N-й строки и добавить ellipsis) — отдельная задача.
     pub line_clamp: Option<u32>,
+    /// CSS Fragmentation L3 §3.3 — `orphans`: минимальное число строк в конце
+    /// фрагмента перед page/column break (сколько строк должно остаться «внизу»
+    /// после разрыва). Inherited. Initial: 2. Phase 0: parsing + storage;
+    /// реальная фрагментация — отдельная задача.
+    pub orphans: u32,
+    /// CSS Fragmentation L3 §3.3 — `widows`: минимальное число строк в начале
+    /// фрагмента после page/column break (сколько строк должно перенестись
+    /// «наверх» нового фрагмента). Inherited. Initial: 2. Phase 0: parsing + storage.
+    pub widows: u32,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -3232,6 +3241,8 @@ impl ComputedStyle {
             text_wrap_mode: TextWrapMode::Wrap,
             text_wrap_style: TextWrapStyle::Auto,
             line_clamp: None,
+            orphans: 2,
+            widows: 2,
         }
     }
 }
@@ -3454,6 +3465,9 @@ pub fn compute_style(
         text_wrap_style: inherited.text_wrap_style,
         // CSS Overflow L4 — line-clamp не наследуется. Initial = none.
         line_clamp: None,
+        // CSS Fragmentation L3 §3.3 — orphans / widows наследуются. Initial = 2.
+        orphans: inherited.orphans,
+        widows: inherited.widows,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -7889,6 +7903,22 @@ fn apply_declaration(
                 style.break_inside = v;
             }
         }
+        "orphans" => {
+            // CSS Fragmentation L3 §3.3: <integer> >= 1. Inherited.
+            if let Ok(n) = val.trim().parse::<u32>()
+                && n >= 1
+            {
+                style.orphans = n;
+            }
+        }
+        "widows" => {
+            // CSS Fragmentation L3 §3.3: <integer> >= 1. Inherited.
+            if let Ok(n) = val.trim().parse::<u32>()
+                && n >= 1
+            {
+                style.widows = n;
+            }
+        }
         "aspect-ratio" => {
             // CSS Sizing L4 §6.1: `auto | <ratio>`. <ratio> = number или
             // `W / H`. Phase 0 игнорирует `auto <ratio>` форму
@@ -9810,6 +9840,13 @@ fn apply_css_wide_keyword(
             } else {
                 init.text_wrap_style
             };
+        }
+        // CSS Fragmentation L3 §3.3 — orphans / widows inherited.
+        "orphans" => {
+            style.orphans = if inh { inherited.orphans } else { init.orphans };
+        }
+        "widows" => {
+            style.widows = if inh { inherited.widows } else { init.widows };
         }
         // CSS Flexbox L1 §7 — flex-grow / flex-shrink / flex-basis non-inherited.
         "flex-grow" => {
@@ -16716,5 +16753,92 @@ mod tests {
         let div = doc.get(doc.root()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.line_clamp, None);
+    }
+
+    #[test]
+    fn orphans_initial_value() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.orphans, 2);
+    }
+
+    #[test]
+    fn widows_initial_value() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.widows, 2);
+    }
+
+    #[test]
+    fn orphans_explicit_value() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { orphans: 4; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.orphans, 4);
+    }
+
+    #[test]
+    fn widows_explicit_value() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { widows: 3; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.widows, 3);
+    }
+
+    #[test]
+    fn orphans_inherited() {
+        let doc = lumen_html_parser::parse("<div><p></p></div>");
+        let sheet = lumen_css_parser::parse("div { orphans: 5; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.orphans, 5);
+        assert_eq!(p_style.orphans, 5);
+    }
+
+    #[test]
+    fn widows_inherited() {
+        let doc = lumen_html_parser::parse("<div><p></p></div>");
+        let sheet = lumen_css_parser::parse("div { widows: 6; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let p = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.widows, 6);
+        assert_eq!(p_style.widows, 6);
+    }
+
+    #[test]
+    fn orphans_zero_rejected() {
+        // 0 не является валидным значением (<integer> >= 1).
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { orphans: 0; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.orphans, 2);
+    }
+
+    #[test]
+    fn widows_zero_rejected() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { widows: 0; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.widows, 2);
     }
 }
