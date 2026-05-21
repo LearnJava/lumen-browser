@@ -20,8 +20,11 @@
 //!
 //! Sprint 0 stub имитирует discrete: всегда step-half, без типизации.
 
-use crate::style::{Color, FilterFn, GradientStop, Length, TransformFn};
-use lumen_css_parser::Declaration;
+use crate::style::{
+    AnimationDirection, AnimationFillMode, AnimationPlayState, Color, ComputedStyle, FilterFn,
+    GradientStop, IterationCount, Length, TimingFunction, TransformFn,
+};
+use lumen_css_parser::{Declaration, KeyframesRule, Stylesheet};
 use lumen_dom::NodeId;
 use std::collections::HashMap;
 
@@ -690,6 +693,332 @@ fn interpolate_decomposed(from: Decomposed2D, to: Decomposed2D, t: f32) -> Decom
         scale_y: lerp_f32(from.scale_y, to.scale_y, t),
         skew: lerp_f32(from.skew, to.skew, t),
         rotation: from.rotation + diff * t,
+    }
+}
+
+// ─── AnimationScheduler ─────────────────────────────────────────────────────
+
+/// CSS Animations L1 §3 — scheduler that maps `@keyframes` to interpolated
+/// `AnimatedStyle` values for each active animation on each frame tick.
+///
+/// Lifecycle:
+/// 1. Call [`AnimationScheduler::sync`] after relayout to register/update
+///    which animations are active for a node.
+/// 2. Call [`AnimationScheduler::tick`] each frame to get `AnimationFrame`
+///    that P2 compositor applies (opacity / transform without relayout).
+#[derive(Debug, Default)]
+pub struct AnimationScheduler {
+    /// (NodeId, animation-list-index) → wall-clock start time in seconds.
+    start_times: HashMap<(NodeId, usize), f32>,
+}
+
+impl AnimationScheduler {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register or refresh animations for `node` based on its computed style.
+    ///
+    /// New animations receive `now` as their start time. Existing animations
+    /// keep their original start time (so they don't restart on unrelated
+    /// relayouts). Animations whose name is `"none"` or that are absent from
+    /// the new style are removed.
+    pub fn sync(&mut self, node: NodeId, style: &ComputedStyle, now: f32) {
+        // Remove stale entries for this node.
+        self.start_times.retain(|(n, idx), _| {
+            if *n != node {
+                return true;
+            }
+            style
+                .animation_names
+                .get(*idx)
+                .is_some_and(|name| !name.is_empty() && name != "none")
+        });
+        // Register newly appearing animations.
+        for (idx, name) in style.animation_names.iter().enumerate() {
+            if name.is_empty() || name == "none" {
+                continue;
+            }
+            self.start_times.entry((node, idx)).or_insert(now);
+        }
+    }
+
+    /// Remove all animation state for `node` (e.g. when the node is removed from the DOM).
+    pub fn remove_node(&mut self, node: NodeId) {
+        self.start_times.retain(|(n, _), _| *n != node);
+    }
+
+    /// Compute per-node animated style overrides for the current frame.
+    ///
+    /// `style_getter` returns the `ComputedStyle` for a `NodeId` so the
+    /// scheduler can read `animation_*` properties. `sheet` is the current
+    /// stylesheet (provides `@keyframes` rules). `now` is wall-clock time in
+    /// seconds.
+    pub fn tick(
+        &self,
+        sheet: &Stylesheet,
+        style_getter: impl Fn(NodeId) -> Option<ComputedStyle>,
+        now: f32,
+    ) -> AnimationFrame {
+        let mut frame = AnimationFrame::default();
+
+        for (&(node, anim_idx), &start_time) in &self.start_times {
+            let Some(style) = style_getter(node) else {
+                continue;
+            };
+            let Some(ks) =
+                compute_animation_value(anim_idx, &style, sheet, start_time, now)
+            else {
+                continue;
+            };
+            let entry = frame.overrides.entry(node).or_default();
+            if let Some(op) = ks.opacity {
+                entry.opacity = Some(op);
+            }
+            if let Some(tr) = ks.transform {
+                entry.transform = Some(tr);
+            }
+            if let Some(c) = ks.color {
+                entry.color = Some(c);
+            }
+            if let Some(bg) = ks.background_color {
+                entry.background_color = Some(bg);
+            }
+            frame.has_active = true;
+        }
+
+        frame
+    }
+}
+
+/// Compute the interpolated `KeyframeStyle` for a single animation at `now`.
+/// Returns `None` when the animation is not in its active period (finished and
+/// no fill-mode, or paused, or duration=0).
+fn compute_animation_value(
+    anim_idx: usize,
+    style: &ComputedStyle,
+    sheet: &Stylesheet,
+    start_time: f32,
+    now: f32,
+) -> Option<KeyframeStyle> {
+    let name = cyclic_get(&style.animation_names, anim_idx)?;
+    if name.is_empty() || name == "none" {
+        return None;
+    }
+
+    let duration = cyclic_get(&style.animation_durations, anim_idx)
+        .copied()
+        .unwrap_or(0.0);
+    if duration <= 0.0 {
+        return None;
+    }
+
+    let delay = cyclic_get(&style.animation_delays, anim_idx)
+        .copied()
+        .unwrap_or(0.0);
+    let timing_fn = cyclic_get(&style.animation_timing_functions, anim_idx)
+        .cloned()
+        .unwrap_or_else(TimingFunction::default);
+    let iter_count = cyclic_get(&style.animation_iteration_counts, anim_idx)
+        .cloned()
+        .unwrap_or_default();
+    let direction = cyclic_get(&style.animation_directions, anim_idx)
+        .cloned()
+        .unwrap_or_default();
+    let fill_mode = cyclic_get(&style.animation_fill_modes, anim_idx)
+        .cloned()
+        .unwrap_or_default();
+    let play_state = cyclic_get(&style.animation_play_states, anim_idx)
+        .cloned()
+        .unwrap_or_default();
+
+    if matches!(play_state, AnimationPlayState::Paused) {
+        return None;
+    }
+
+    let kf = sheet.keyframes.iter().find(|k| k.name == *name)?;
+
+    let elapsed = now - start_time - delay;
+
+    if elapsed < 0.0 {
+        // Still in delay: apply first keyframe if fill-mode includes backwards.
+        if matches!(
+            fill_mode,
+            AnimationFillMode::Backwards | AnimationFillMode::Both
+        ) {
+            return keyframe_at(kf, 0.0, &timing_fn, &direction);
+        }
+        return None;
+    }
+
+    let max_iters = match iter_count {
+        IterationCount::Infinite => f32::INFINITY,
+        IterationCount::Finite(n) => n,
+    };
+    let total = duration * max_iters;
+
+    if elapsed >= total {
+        // Animation has ended: apply last keyframe if fill-mode includes forwards.
+        if matches!(
+            fill_mode,
+            AnimationFillMode::Forwards | AnimationFillMode::Both
+        ) {
+            return keyframe_at(kf, 1.0, &timing_fn, &direction);
+        }
+        return None;
+    }
+
+    // Current iteration progress [0, 1].
+    let iter_floor = (elapsed / duration).floor();
+    let local = elapsed - iter_floor * duration;
+    let raw_t = (local / duration).clamp(0.0, 1.0);
+
+    // Apply animation-direction (CSS Animations L1 §3.6).
+    let is_odd = (iter_floor as u64) % 2 == 1;
+    let directed_t = match direction {
+        AnimationDirection::Normal => raw_t,
+        AnimationDirection::Reverse => 1.0 - raw_t,
+        AnimationDirection::Alternate => {
+            if is_odd { 1.0 - raw_t } else { raw_t }
+        }
+        AnimationDirection::AlternateReverse => {
+            if is_odd { raw_t } else { 1.0 - raw_t }
+        }
+    };
+
+    let eased_t = timing_fn.progress(directed_t);
+    keyframe_interpolate(kf, eased_t)
+}
+
+/// Returns the `KeyframeStyle` at overall animation progress `t ∈ [0, 1]`,
+/// after applying `timing_fn` and `direction` to the global t.
+/// (Used for fill-mode endpoints where we want the rendered value at the
+/// boundary with timing and direction already baked in.)
+fn keyframe_at(
+    kf: &KeyframesRule,
+    t: f32,
+    timing_fn: &TimingFunction,
+    direction: &AnimationDirection,
+) -> Option<KeyframeStyle> {
+    // For fill-mode boundaries we keep t = 0.0 or 1.0 without easing, as per
+    // CSS Animations L1 §4.5: "The initial value (0%) keyframe at fill backwards,
+    // final value (100%) at fill forwards."
+    let _ = (timing_fn, direction);
+    keyframe_interpolate(kf, t)
+}
+
+/// Find the two surrounding `@keyframes` stops for progress `t ∈ [0, 1]` and
+/// interpolate them using [`LinearInterpolator`].
+fn keyframe_interpolate(kf: &KeyframesRule, t: f32) -> Option<KeyframeStyle> {
+    if kf.frames.is_empty() {
+        return None;
+    }
+
+    // Sort by offset ascending.
+    let mut sorted: Vec<&lumen_css_parser::Keyframe> = kf.frames.iter().collect();
+    sorted.sort_by(|a, b| a.offset.partial_cmp(&b.offset).unwrap_or(std::cmp::Ordering::Equal));
+
+    // Surrounding frames.
+    let from_frame = sorted.iter().rev().find(|f| f.offset <= t).copied()
+        .unwrap_or(sorted[0]);
+    let to_frame = sorted.iter().find(|f| f.offset >= t).copied()
+        .unwrap_or_else(|| sorted[sorted.len() - 1]);
+
+    let from_ks = parse_keyframe_style(&from_frame.declarations);
+    let to_ks = parse_keyframe_style(&to_frame.declarations);
+
+    // Local t between the two surrounding stops.
+    let span = to_frame.offset - from_frame.offset;
+    let local_t = if span > f32::EPSILON {
+        ((t - from_frame.offset) / span).clamp(0.0, 1.0)
+    } else {
+        1.0
+    };
+
+    let interp = LinearInterpolator;
+    Some(KeyframeStyle {
+        opacity: interp_optional_f32(from_ks.opacity, to_ks.opacity, local_t, &interp),
+        transform: interp_optional_transform(
+            from_ks.transform.as_deref(),
+            to_ks.transform.as_deref(),
+            local_t,
+            &interp,
+        ),
+        color: interp_optional_color(from_ks.color, to_ks.color, local_t, &interp),
+        background_color: interp_optional_color(
+            from_ks.background_color,
+            to_ks.background_color,
+            local_t,
+            &interp,
+        ),
+    })
+}
+
+fn interp_optional_f32(
+    from: Option<f32>,
+    to: Option<f32>,
+    t: f32,
+    interp: &impl AnimationInterpolator,
+) -> Option<f32> {
+    match (from, to) {
+        (Some(f), Some(t_val)) => interp
+            .interpolate(&AnimValue::Number(f), &AnimValue::Number(t_val), t)
+            .and_then(|v| if let AnimValue::Number(n) = v { Some(n) } else { None }),
+        (Some(f), None) => Some(f),
+        (None, Some(t_val)) => Some(t_val),
+        (None, None) => None,
+    }
+}
+
+fn interp_optional_color(
+    from: Option<Color>,
+    to: Option<Color>,
+    t: f32,
+    interp: &impl AnimationInterpolator,
+) -> Option<Color> {
+    match (from, to) {
+        (Some(f), Some(t_val)) => interp
+            .interpolate(&AnimValue::Color(f), &AnimValue::Color(t_val), t)
+            .and_then(|v| if let AnimValue::Color(c) = v { Some(c) } else { None }),
+        (Some(f), None) => Some(f),
+        (None, Some(t_val)) => Some(t_val),
+        (None, None) => None,
+    }
+}
+
+fn interp_optional_transform(
+    from: Option<&[TransformFn]>,
+    to: Option<&[TransformFn]>,
+    t: f32,
+    interp: &impl AnimationInterpolator,
+) -> Option<Vec<TransformFn>> {
+    match (from, to) {
+        (Some(f), Some(t_val)) => interp
+            .interpolate(
+                &AnimValue::TransformList(f.to_vec()),
+                &AnimValue::TransformList(t_val.to_vec()),
+                t,
+            )
+            .and_then(|v| {
+                if let AnimValue::TransformList(tr) = v {
+                    Some(tr)
+                } else {
+                    None
+                }
+            }),
+        (Some(f), None) => Some(f.to_vec()),
+        (None, Some(t_val)) => Some(t_val.to_vec()),
+        (None, None) => None,
+    }
+}
+
+/// Cyclically access list element at `idx`, reusing if `idx >= list.len()`.
+/// Returns `None` only when list is empty.
+fn cyclic_get<T>(list: &[T], idx: usize) -> Option<&T> {
+    if list.is_empty() {
+        None
+    } else {
+        list.get(idx % list.len())
     }
 }
 
@@ -1687,5 +2016,144 @@ mod tests {
         let to = AnimValue::GradientStops(vec![stop(0, 0, 255, Some(Length::Percent(100.0)))]);
         assert_eq!(interp.interpolate(&from, &to, 0.0), Some(from.clone()));
         assert_eq!(interp.interpolate(&from, &to, 1.0), Some(to.clone()));
+    }
+
+    // ─────── AnimationScheduler ───────
+
+    fn make_style_with_anim(name: &str, duration: f32) -> ComputedStyle {
+        let mut s = ComputedStyle::root();
+        s.animation_names = vec![name.to_string()];
+        s.animation_durations = vec![duration];
+        s.animation_timing_functions = vec![crate::style::TimingFunction::Linear];
+        s
+    }
+
+    fn make_sheet_opacity(name: &str) -> lumen_css_parser::Stylesheet {
+        let css = format!(
+            "@keyframes {name} {{ \
+                from {{ opacity: 0; }} \
+                to   {{ opacity: 1; }} \
+            }}"
+        );
+        lumen_css_parser::parse(&css)
+    }
+
+    #[test]
+    fn scheduler_sync_registers_animation() {
+        let mut sched = AnimationScheduler::new();
+        let node = lumen_dom::NodeId::from_index(1usize);
+        let style = make_style_with_anim("slide", 1.0);
+        sched.sync(node, &style, 0.0);
+        assert_eq!(sched.start_times.len(), 1);
+        assert!(sched.start_times.contains_key(&(node, 0)));
+    }
+
+    #[test]
+    fn scheduler_sync_none_not_registered() {
+        let mut sched = AnimationScheduler::new();
+        let node = lumen_dom::NodeId::from_index(1usize);
+        let style = make_style_with_anim("none", 1.0);
+        sched.sync(node, &style, 0.0);
+        assert!(sched.start_times.is_empty());
+    }
+
+    #[test]
+    fn scheduler_sync_does_not_reset_existing() {
+        let mut sched = AnimationScheduler::new();
+        let node = lumen_dom::NodeId::from_index(1usize);
+        let style = make_style_with_anim("fade", 1.0);
+        sched.sync(node, &style, 0.0);
+        // Sync again at t=5 — start time must stay at 0.0.
+        sched.sync(node, &style, 5.0);
+        assert_eq!(*sched.start_times.get(&(node, 0)).unwrap(), 0.0);
+    }
+
+    #[test]
+    fn scheduler_remove_node_clears_all_entries() {
+        let mut sched = AnimationScheduler::new();
+        let node = lumen_dom::NodeId::from_index(1usize);
+        let mut style = make_style_with_anim("a", 1.0);
+        style.animation_names.push("b".to_string());
+        style.animation_durations.push(2.0);
+        sched.sync(node, &style, 0.0);
+        assert_eq!(sched.start_times.len(), 2);
+        sched.remove_node(node);
+        assert!(sched.start_times.is_empty());
+    }
+
+    #[test]
+    fn scheduler_tick_no_keyframes_empty_frame() {
+        let mut sched = AnimationScheduler::new();
+        let node = lumen_dom::NodeId::from_index(1usize);
+        let style = make_style_with_anim("unknown", 1.0);
+        sched.sync(node, &style, 0.0);
+        let sheet = lumen_css_parser::Stylesheet::default();
+        let frame = sched.tick(&sheet, |_| Some(make_style_with_anim("unknown", 1.0)), 0.5);
+        assert!(!frame.has_active);
+        assert!(frame.overrides.is_empty());
+    }
+
+    #[test]
+    fn scheduler_tick_opacity_midpoint() {
+        let mut sched = AnimationScheduler::new();
+        let node = lumen_dom::NodeId::from_index(2usize);
+        let style = make_style_with_anim("fade", 1.0);
+        sched.sync(node, &style, 0.0);
+        let sheet = make_sheet_opacity("fade");
+        // At t=0.5s the animation is half-way through → opacity ≈ 0.5.
+        let frame = sched.tick(&sheet, |_| Some(make_style_with_anim("fade", 1.0)), 0.5);
+        assert!(frame.has_active);
+        let entry = frame.overrides.get(&node).expect("node should have overrides");
+        let op = entry.opacity.expect("opacity should be set");
+        assert!((op - 0.5).abs() < 0.01, "expected ~0.5, got {op}");
+    }
+
+    #[test]
+    fn scheduler_tick_opacity_at_start() {
+        let mut sched = AnimationScheduler::new();
+        let node = lumen_dom::NodeId::from_index(3usize);
+        let style = make_style_with_anim("fade", 2.0);
+        sched.sync(node, &style, 0.0);
+        let sheet = make_sheet_opacity("fade");
+        let frame = sched.tick(&sheet, |_| Some(make_style_with_anim("fade", 2.0)), 0.0);
+        assert!(frame.has_active);
+        let op = frame.overrides[&node].opacity.unwrap();
+        assert!(op < 0.05, "expected ~0.0 at start, got {op}");
+    }
+
+    #[test]
+    fn scheduler_tick_opacity_after_end_no_fill() {
+        let mut sched = AnimationScheduler::new();
+        let node = lumen_dom::NodeId::from_index(4usize);
+        let style = make_style_with_anim("fade", 1.0);
+        sched.sync(node, &style, 0.0);
+        let sheet = make_sheet_opacity("fade");
+        // t=2.0 > duration=1.0, no fill-mode → animation ended, no override.
+        let frame = sched.tick(&sheet, |_| Some(make_style_with_anim("fade", 1.0)), 2.0);
+        assert!(!frame.has_active);
+        assert!(frame.overrides.is_empty());
+    }
+
+    #[test]
+    fn scheduler_tick_direction_reverse() {
+        let mut sched = AnimationScheduler::new();
+        let node = lumen_dom::NodeId::from_index(5usize);
+        let mut style = make_style_with_anim("fade", 1.0);
+        style.animation_directions = vec![crate::style::AnimationDirection::Reverse];
+        sched.sync(node, &style, 0.0);
+        let sheet = make_sheet_opacity("fade");
+        let frame = sched.tick(
+            &sheet,
+            move |_| {
+                let mut s = make_style_with_anim("fade", 1.0);
+                s.animation_directions = vec![crate::style::AnimationDirection::Reverse];
+                Some(s)
+            },
+            0.25,
+        );
+        assert!(frame.has_active);
+        // Reverse: at t=0.25 raw → effective t=0.75 → opacity≈0.75 (from 0→1, reversed).
+        let op = frame.overrides[&node].opacity.unwrap();
+        assert!((op - 0.75).abs() < 0.02, "expected ~0.75, got {op}");
     }
 }
