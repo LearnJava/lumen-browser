@@ -1,6 +1,5 @@
-In progress: —
-
-Next step: —
+In progress: aspect-ratio  branch: aspect-ratio
+Next step: enforce aspect-ratio in lay_out (box_tree.rs) when height is auto
 
 Next: (P1 Phase 1)
 
