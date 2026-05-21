@@ -6473,8 +6473,34 @@ fn parse_length_q(s: &str, is_quirks: bool) -> Option<Length> {
     if let Some(num) = s.strip_suffix("rem") {
         return num.trim().parse::<f32>().ok().map(Length::Rem);
     }
+    // ── Font-relative units ──────────────────────────────────────────────────
+    // `ch` = advance width of '0' glyph; Phase 0 approximation: 0.5em.
+    // `ex` = x-height; Phase 0 approximation: 0.5em.
+    // `cap` = cap-height; Phase 0 approximation: 0.7em.
+    // `lh` = computed line-height; Phase 0 approximation: 1.2em.
+    if let Some(num) = s.strip_suffix("ch") {
+        return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.5));
+    }
+    if let Some(num) = s.strip_suffix("ex") {
+        return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.5));
+    }
+    if let Some(num) = s.strip_suffix("cap") {
+        return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 0.7));
+    }
+    if let Some(num) = s.strip_suffix("lh") {
+        return num.trim().parse::<f32>().ok().map(|n| Length::Em(n * 1.2));
+    }
     if let Some(num) = s.strip_suffix("em") {
         return num.trim().parse::<f32>().ok().map(Length::Em);
+    }
+    // ── Viewport units — longer suffixes before shorter to avoid partial match ─
+    // `vmin`/`svmin`/… must precede `in`; `vmax` before `ax` (no conflict
+    // but kept together for clarity). `svh`/`dvh` before `vh`, etc.
+    if let Some(num) = s.strip_suffix("svmin").or_else(|| s.strip_suffix("dvmin")).or_else(|| s.strip_suffix("lvmin")) {
+        return num.trim().parse::<f32>().ok().map(Length::Vmin);
+    }
+    if let Some(num) = s.strip_suffix("svmax").or_else(|| s.strip_suffix("dvmax")).or_else(|| s.strip_suffix("lvmax")) {
+        return num.trim().parse::<f32>().ok().map(Length::Vmax);
     }
     if let Some(num) = s.strip_suffix("vmin") {
         return num.trim().parse::<f32>().ok().map(Length::Vmin);
@@ -6482,11 +6508,41 @@ fn parse_length_q(s: &str, is_quirks: bool) -> Option<Length> {
     if let Some(num) = s.strip_suffix("vmax") {
         return num.trim().parse::<f32>().ok().map(Length::Vmax);
     }
+    // ── Small/Large/Dynamic viewport units (CSS Values L4 §7.8) ─────────────
+    // Phase 0: fixed viewport → svh/dvh/lvh = vh, svw/dvw/lvw = vw.
+    if let Some(num) = s.strip_suffix("svh").or_else(|| s.strip_suffix("dvh")).or_else(|| s.strip_suffix("lvh")) {
+        return num.trim().parse::<f32>().ok().map(Length::Vh);
+    }
+    if let Some(num) = s.strip_suffix("svw").or_else(|| s.strip_suffix("dvw")).or_else(|| s.strip_suffix("lvw")) {
+        return num.trim().parse::<f32>().ok().map(Length::Vw);
+    }
     if let Some(num) = s.strip_suffix("vh") {
         return num.trim().parse::<f32>().ok().map(Length::Vh);
     }
     if let Some(num) = s.strip_suffix("vw") {
         return num.trim().parse::<f32>().ok().map(Length::Vw);
+    }
+    // ── Absolute units → px at parse time (CSS Values L3 §5.2) ──────────────
+    // Reference: 1in = 96px, 1pt = 1/72in = 4/3px, 1pc = 12pt = 16px,
+    // 1cm = 96/2.54px ≈ 37.7953px, 1mm = 1/10cm, 1Q = 1/4mm.
+    // `in` comes after `vmin` (already handled above) to avoid partial match.
+    if let Some(num) = s.strip_suffix("pt") {
+        return num.trim().parse::<f32>().ok().map(|n| Length::Px(n * 4.0 / 3.0));
+    }
+    if let Some(num) = s.strip_suffix("pc") {
+        return num.trim().parse::<f32>().ok().map(|n| Length::Px(n * 16.0));
+    }
+    if let Some(num) = s.strip_suffix("in") {
+        return num.trim().parse::<f32>().ok().map(|n| Length::Px(n * 96.0));
+    }
+    if let Some(num) = s.strip_suffix("cm") {
+        return num.trim().parse::<f32>().ok().map(|n| Length::Px(n * 96.0 / 2.54));
+    }
+    if let Some(num) = s.strip_suffix("mm") {
+        return num.trim().parse::<f32>().ok().map(|n| Length::Px(n * 96.0 / 25.4));
+    }
+    if let Some(num) = s.strip_suffix('Q').or_else(|| s.strip_suffix('q')) {
+        return num.trim().parse::<f32>().ok().map(|n| Length::Px(n * 96.0 / 101.6));
     }
     if let Some(num) = s.strip_suffix('%') {
         return num.trim().parse::<f32>().ok().map(Length::Percent);
@@ -6893,12 +6949,34 @@ fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
     }
     let length = match unit {
         "px" => Length::Px(value),
-        "em" => Length::Em(value),
-        "rem" => Length::Rem(value),
+        "em" | "rem" | "ch" | "ex" | "cap" | "lh" => {
+            // Font-relative units: rem uses root size; ch/ex/cap/lh are
+            // approximated as em-fractions (Phase 0, no font metrics API).
+            let factor = match unit {
+                "rem" => { return Some(CalcNode::Length(Length::Rem(value))); }
+                "ch" | "ex" => 0.5,
+                "cap" => 0.7,
+                "lh" => 1.2,
+                _ => 1.0,
+            };
+            Length::Em(value * factor)
+        }
         "vh" => Length::Vh(value),
         "vw" => Length::Vw(value),
         "vmin" => Length::Vmin(value),
         "vmax" => Length::Vmax(value),
+        // Small/Large/Dynamic viewport units → same as vh/vw/vmin/vmax (Phase 0).
+        "svh" | "dvh" | "lvh" => Length::Vh(value),
+        "svw" | "dvw" | "lvw" => Length::Vw(value),
+        "svmin" | "dvmin" | "lvmin" => Length::Vmin(value),
+        "svmax" | "dvmax" | "lvmax" => Length::Vmax(value),
+        // Absolute units → px (CSS Values L3 §5.2, 96dpi reference pixel).
+        "pt" => Length::Px(value * 4.0 / 3.0),
+        "pc" => Length::Px(value * 16.0),
+        "in" => Length::Px(value * 96.0),
+        "cm" => Length::Px(value * 96.0 / 2.54),
+        "mm" => Length::Px(value * 96.0 / 25.4),
+        "q"  => Length::Px(value * 96.0 / 101.6),
         "%" => Length::Percent(value),
         _ => return None,
     };
@@ -13730,8 +13808,10 @@ mod tests {
 
     #[test]
     fn calc_unknown_unit_invalid() {
-        // pt не поддерживаем в Phase 0 → парсер вернёт None.
-        assert!(parse_length("calc(10pt + 5px)").is_none());
+        // `xyz` — completely unknown unit → None.
+        assert!(parse_length("calc(10xyz + 5px)").is_none());
+        // `pt` is now supported — calc with pt returns a Calc node.
+        assert!(parse_length("calc(10pt + 5px)").is_some());
     }
 
     #[test]
@@ -17260,5 +17340,91 @@ mod tests {
         let div = doc.get(doc.root()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_underline_position, TextUnderlinePosition::Auto);
+    }
+
+    // ──────────── CSS Units ────────────
+
+    #[test]
+    fn pt_converts_to_px() {
+        // 12pt = 12 * 4/3 = 16px
+        let s = cascade_at("<div>", "div { width: 12pt; }", &[0]);
+        assert_eq!(s.width, Some(Length::Px(16.0)));
+    }
+
+    #[test]
+    fn pc_converts_to_px() {
+        // 1pc = 16px
+        let s = cascade_at("<div>", "div { width: 1pc; }", &[0]);
+        assert_eq!(s.width, Some(Length::Px(16.0)));
+    }
+
+    #[test]
+    fn in_converts_to_px() {
+        // 1in = 96px
+        let s = cascade_at("<div>", "div { width: 1in; }", &[0]);
+        assert_eq!(s.width, Some(Length::Px(96.0)));
+    }
+
+    #[test]
+    fn cm_converts_to_px() {
+        // 2.54cm = 1in = 96px
+        let s = cascade_at("<div>", "div { width: 2.54cm; }", &[0]);
+        let w = s.width.unwrap();
+        if let Length::Px(v) = w { assert!((v - 96.0).abs() < 0.1, "v={v}"); }
+        else { panic!("expected Px, got {w:?}"); }
+    }
+
+    #[test]
+    fn mm_converts_to_px() {
+        // 25.4mm = 1in = 96px
+        let s = cascade_at("<div>", "div { width: 25.4mm; }", &[0]);
+        let w = s.width.unwrap();
+        if let Length::Px(v) = w { assert!((v - 96.0).abs() < 0.5, "v={v}"); }
+        else { panic!("expected Px, got {w:?}"); }
+    }
+
+    #[test]
+    fn ch_approximated_as_half_em() {
+        // 2ch ≈ 1em. At default font-size 16px: 2ch = 16px → stored as Em(1.0).
+        let s = cascade_at("<div>", "div { width: 2ch; }", &[0]);
+        assert_eq!(s.width, Some(Length::Em(1.0)));
+    }
+
+    #[test]
+    fn ex_approximated_as_half_em() {
+        let s = cascade_at("<div>", "div { width: 4ex; }", &[0]);
+        assert_eq!(s.width, Some(Length::Em(2.0)));
+    }
+
+    #[test]
+    fn svh_same_as_vh() {
+        let a = cascade_at("<div>", "div { height: 50svh; }", &[0]);
+        let b = cascade_at("<div>", "div { height: 50vh; }", &[0]);
+        assert_eq!(a.height, b.height);
+    }
+
+    #[test]
+    fn dvw_same_as_vw() {
+        let a = cascade_at("<div>", "div { width: 30dvw; }", &[0]);
+        let b = cascade_at("<div>", "div { width: 30vw; }", &[0]);
+        assert_eq!(a.width, b.width);
+    }
+
+    #[test]
+    fn calc_with_pt_unit() {
+        // calc(12pt) = 16px
+        let s = cascade_at("<div>", "div { width: calc(12pt); }", &[0]);
+        let w = s.width.unwrap();
+        if let Length::Calc(_) = &w {
+            // Calc node stored — resolves at layout time, not checked here.
+        } else {
+            panic!("expected Calc, got {w:?}");
+        }
+    }
+
+    #[test]
+    fn calc_with_svh_unit() {
+        let s = cascade_at("<div>", "div { height: calc(50svh); }", &[0]);
+        assert!(matches!(s.height, Some(Length::Calc(_))));
     }
 }
