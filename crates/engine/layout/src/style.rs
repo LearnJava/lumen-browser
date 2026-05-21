@@ -1916,6 +1916,18 @@ pub struct ComputedStyle {
     /// фрагмента после page/column break (сколько строк должно перенестись
     /// «наверх» нового фрагмента). Inherited. Initial: 2. Phase 0: parsing + storage.
     pub widows: u32,
+    /// CSS Containment L3 §3 — `contain`. NOT inherited. Initial: `NONE`.
+    /// Phase 0: parse + store; containment enforcement in layout/paint — deferred.
+    pub contain: ContainFlags,
+    /// CSS Containment L3 §4 — `content-visibility`. NOT inherited. Initial: `Visible`.
+    /// Phase 0: parse + store; skip-content optimization — deferred.
+    pub content_visibility: ContentVisibility,
+    /// CSS Container Queries L1 §3.1 — `container-type`. NOT inherited. Initial: `Normal`.
+    /// Phase 0: parse + store; @container query matching — deferred.
+    pub container_type: ContainerType,
+    /// CSS Container Queries L1 §3.2 — `container-name`. NOT inherited. Initial: empty.
+    /// `none` = empty vec. Each name is a `<custom-ident>`.
+    pub container_name: Vec<String>,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -2242,6 +2254,42 @@ pub enum Resize {
     Vertical,
     Block,
     Inline,
+}
+
+/// CSS Containment L3 §3 — `contain` property.
+/// Bitflags: bit0=size, bit1=inline-size, bit2=layout, bit3=style, bit4=paint.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ContainFlags(pub u8);
+
+impl ContainFlags {
+    pub const NONE: Self = Self(0);
+    pub const SIZE: Self = Self(1 << 0);
+    pub const INLINE_SIZE: Self = Self(1 << 1);
+    pub const LAYOUT: Self = Self(1 << 2);
+    pub const STYLE: Self = Self(1 << 3);
+    pub const PAINT: Self = Self(1 << 4);
+    /// `strict` = size + layout + style + paint
+    pub const STRICT: Self = Self(1 | (1 << 2) | (1 << 3) | (1 << 4));
+    /// `content` = layout + style + paint
+    pub const CONTENT: Self = Self((1 << 2) | (1 << 3) | (1 << 4));
+}
+
+/// CSS Containment L3 §4 — `content-visibility`. NOT inherited. Initial: `Visible`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ContentVisibility {
+    #[default]
+    Visible,
+    Auto,
+    Hidden,
+}
+
+/// CSS Container Queries L1 §3.1 — `container-type`. NOT inherited. Initial: `Normal`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ContainerType {
+    #[default]
+    Normal,
+    Size,
+    InlineSize,
 }
 
 /// CSS UI L4 §6.2 — `user-select`. Inherited.
@@ -3429,6 +3477,10 @@ impl ComputedStyle {
             line_clamp: None,
             orphans: 2,
             widows: 2,
+            contain: ContainFlags::NONE,
+            content_visibility: ContentVisibility::Visible,
+            container_type: ContainerType::Normal,
+            container_name: Vec::new(),
         }
     }
 }
@@ -3664,6 +3716,11 @@ pub fn compute_style(
         // CSS Fragmentation L3 §3.3 — orphans / widows наследуются. Initial = 2.
         orphans: inherited.orphans,
         widows: inherited.widows,
+        // CSS Containment L3 — не наследуются. Initial values.
+        contain: ContainFlags::NONE,
+        content_visibility: ContentVisibility::Visible,
+        container_type: ContainerType::Normal,
+        container_name: Vec::new(),
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -8519,6 +8576,75 @@ fn apply_declaration(
                 _ => Appearance::Compat,
             };
         }
+        "contain" => {
+            let v = val.trim();
+            style.contain = if v.eq_ignore_ascii_case("none") {
+                ContainFlags::NONE
+            } else if v.eq_ignore_ascii_case("strict") {
+                ContainFlags::STRICT
+            } else if v.eq_ignore_ascii_case("content") {
+                ContainFlags::CONTENT
+            } else {
+                let mut f = ContainFlags::NONE;
+                for kw in v.split_whitespace() {
+                    match kw {
+                        "size" => f.0 |= ContainFlags::SIZE.0,
+                        "inline-size" => f.0 |= ContainFlags::INLINE_SIZE.0,
+                        "layout" => f.0 |= ContainFlags::LAYOUT.0,
+                        "style" => f.0 |= ContainFlags::STYLE.0,
+                        "paint" => f.0 |= ContainFlags::PAINT.0,
+                        _ => {}
+                    }
+                }
+                f
+            };
+        }
+        "content-visibility" => {
+            style.content_visibility = match val.trim() {
+                "visible" => ContentVisibility::Visible,
+                "auto" => ContentVisibility::Auto,
+                "hidden" => ContentVisibility::Hidden,
+                _ => style.content_visibility,
+            };
+        }
+        "container-type" => {
+            style.container_type = match val.trim() {
+                "normal" => ContainerType::Normal,
+                "size" => ContainerType::Size,
+                "inline-size" => ContainerType::InlineSize,
+                _ => style.container_type,
+            };
+        }
+        "container-name" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("none") {
+                style.container_name = Vec::new();
+            } else {
+                style.container_name = v
+                    .split_whitespace()
+                    .map(|s| s.to_string())
+                    .collect();
+            }
+        }
+        "container" => {
+            // Shorthand: <name> [ / <type> ]?
+            let mut parts = val.trim().splitn(2, '/');
+            let name_part = parts.next().unwrap_or("").trim();
+            let type_part = parts.next().unwrap_or("normal").trim();
+            if name_part.eq_ignore_ascii_case("none") {
+                style.container_name = Vec::new();
+            } else {
+                style.container_name = name_part
+                    .split_whitespace()
+                    .map(|s| s.to_string())
+                    .collect();
+            }
+            style.container_type = match type_part {
+                "size" => ContainerType::Size,
+                "inline-size" => ContainerType::InlineSize,
+                _ => ContainerType::Normal,
+            };
+        }
         "user-select" => {
             if let Some(v) = UserSelect::parse(val) {
                 style.user_select = v;
@@ -10034,6 +10160,30 @@ fn apply_css_wide_keyword(
         }
         "appearance" | "-webkit-appearance" | "-moz-appearance" => {
             style.appearance = if inh_only_inherit { inherited.appearance } else { init.appearance };
+        }
+        "contain" => {
+            style.contain = if inh_only_inherit { inherited.contain } else { init.contain };
+        }
+        "content-visibility" => {
+            style.content_visibility = if inh_only_inherit {
+                inherited.content_visibility
+            } else {
+                init.content_visibility
+            };
+        }
+        "container-type" => {
+            style.container_type = if inh_only_inherit {
+                inherited.container_type
+            } else {
+                init.container_type
+            };
+        }
+        "container-name" | "container" => {
+            style.container_name = if inh_only_inherit {
+                inherited.container_name.clone()
+            } else {
+                init.container_name.clone()
+            };
         }
         "forced-color-adjust" => {
             style.forced_color_adjust = if inh_only_inherit {
@@ -18267,5 +18417,139 @@ mod tests {
         let div = doc.get(doc.root()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.display, Display::Block);
+    }
+
+    // --- contain ---
+
+    #[test]
+    fn contain_none() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.contain, ContainFlags::NONE);
+    }
+
+    #[test]
+    fn contain_strict() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain: strict; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.contain, ContainFlags::STRICT);
+    }
+
+    #[test]
+    fn contain_keywords_combined() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { contain: layout paint; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let expected = ContainFlags(ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0);
+        assert_eq!(style.contain, expected);
+    }
+
+    #[test]
+    fn contain_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { contain: content; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.contain, ContainFlags::CONTENT);
+        assert_eq!(span_style.contain, ContainFlags::NONE);
+    }
+
+    // --- content-visibility ---
+
+    #[test]
+    fn content_visibility_hidden() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { content-visibility: hidden; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.content_visibility, ContentVisibility::Hidden);
+    }
+
+    #[test]
+    fn content_visibility_auto() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { content-visibility: auto; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.content_visibility, ContentVisibility::Auto);
+    }
+
+    #[test]
+    fn content_visibility_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.content_visibility, ContentVisibility::Visible);
+    }
+
+    #[test]
+    fn content_visibility_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { content-visibility: hidden; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.content_visibility, ContentVisibility::Hidden);
+        assert_eq!(span_style.content_visibility, ContentVisibility::Visible);
+    }
+
+    // --- container-type ---
+
+    #[test]
+    fn container_type_inline_size() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { container-type: inline-size; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.container_type, ContainerType::InlineSize);
+    }
+
+    #[test]
+    fn container_type_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.container_type, ContainerType::Normal);
+    }
+
+    #[test]
+    fn container_name_parsed() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { container-name: sidebar; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.container_name, vec!["sidebar"]);
+    }
+
+    #[test]
+    fn container_shorthand() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { container: sidebar / inline-size; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.container_name, vec!["sidebar"]);
+        assert_eq!(style.container_type, ContainerType::InlineSize);
     }
 }

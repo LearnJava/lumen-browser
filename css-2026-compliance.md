@@ -386,6 +386,18 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | `touch-action` | 🟡 | parsed/stored (auto/none/pan-x/pan-y/pan-left/pan-right/pan-up/pan-down/pinch-zoom/manipulation) |
 | `appearance` / `-webkit-appearance` | 🟡 | parsed/stored (auto/none/compat) |
 
+### CSS Containment Level 3
+| Property | Status | Notes |
+|---|---|---|
+| `contain` | 🟡 | parsed/stored as `ContainFlags` bitfield (none/strict/content/size/inline-size/layout/style/paint combinations); containment enforcement — deferred |
+| `content-visibility` | 🟡 | parsed/stored (visible/auto/hidden); skip-content optimization — deferred |
+
+### CSS Container Queries Level 1
+| Property | Status | Notes |
+|---|---|---|
+| `container-type` | 🟡 | parsed/stored (normal/size/inline-size); @container query matching — deferred |
+| `container-name` | 🟡 | parsed/stored as `Vec<String>` of `<custom-ident>`; `container` shorthand supported |
+
 ---
 
 ## Summary by module
@@ -413,3 +425,5 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | CSS Scroll Snap L1 | — | parse-only | — |
 | CSS Masking L1 | — | parse-only | — |
 | CSS Lists L3 | — | parse-only | rendering |
+| CSS Containment L3 | — | parse+store (contain, content-visibility) | layout/paint enforcement |
+| CSS Container Queries L1 | — | parse+store (container-type, container-name) | @container matching |
