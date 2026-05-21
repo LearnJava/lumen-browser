@@ -34,6 +34,7 @@ pub mod push_subscriptions;
 pub mod referrer_policy;
 pub mod safe_browsing;
 pub mod search_history;
+pub mod session_export;
 pub mod search_providers;
 pub mod service_workers;
 pub mod site_engagement;
@@ -75,6 +76,8 @@ pub use service_workers::{ServiceWorkerRegistration, ServiceWorkers, UpdateViaCa
 pub use site_engagement::{SiteEngagement, SiteEngagementStore};
 pub use sqlite_store::SqliteStorage;
 pub use store::InMemoryStorage;
+pub use session_export::{active_tab, from_json as session_from_json, to_json as session_to_json,
+    ExportedTab, SessionFile};
 pub use tab_sessions::{SessionSnapshot, TabSession, TabSessions};
 pub use web_manifest::{WebManifest, WebManifests};
 pub use workspaces::{Workspace, Workspaces};

@@ -22,6 +22,9 @@ Thumbs.db
 # Скачать: https://www.gyan.dev/ffmpeg/builds/ (full build, 2022-09-15)
 /utils/ffmpeg.exe
 
+# Автосохранённая сессия — рабочий артефакт, не для репо.
+*.lsession
+
 # Графические тесты: рабочие скрины (Edge-эталон, Lumen-захват, diff) — не коммитим.
 # См. CLAUDE.md → «Графические тесты», правило №1.
 /graphic_tests/screenshots/
