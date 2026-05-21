@@ -1,11 +1,8 @@
 In progress: —
 
-Next: line-clamp                           style.rs — -webkit-line-clamp compat
+Next: color-scheme                         style.rs — CSS Color Adjustment L1
 
 Queue (⬜→🟡, new parse+store only, no paint):
-  line-clamp                           style.rs — -webkit-line-clamp compat
-  orphans / widows                     style.rs — fragmentation hints
-  text-underline-position              style.rs — CSS Text Decoration L3
   color-scheme                         style.rs — CSS Color Adjustment L1
 
 Coordination rules:
@@ -16,4 +13,4 @@ Coordination rules:
   — Spec links: https://www.w3.org/TR/css-align-3/ etc.
   — Compliance tracker: css-2026-compliance.md
 
-Recent: transform-matrix 2026-05-21 (graphic test 22 + compliance tracker 🟡→✅: transform/transform-origin полностью, P2 сделал pipeline), background-image-url 2026-05-20, text-overflow 2026-05-20, text-decoration-thickness 2026-05-20
+Recent: text-underline-position 2026-05-21 (CSS Text Decoration L3, 6 тестов), orphans-widows 2026-05-21 (8 тестов), line-clamp 2026-05-21 (6 тестов), transform-matrix 2026-05-21

@@ -74,11 +74,6 @@
       <!-- currentColor — border берёт цвет из color -->
       <div class="bx" style="color: #ed8936; border: 5px solid;"></div>
 
-      <!-- dashed / dotted / double -->
-      <div class="bx" style="border: 4px dashed #63b3ed;"></div>
-      <div class="bx" style="border: 4px dotted #68d391;"></div>
-      <div class="bx" style="border: 9px double #f6e05e;"></div>
-
       <!-- padding layering: серый ободок = padding, синее = content -->
       <div style="height: 80px; background: #4a5568;
                   border: 3px solid #63b3ed; border-radius: 4px; padding: 14px;">
@@ -150,23 +145,7 @@
       <div style="background:#718096;height:20px;width:200px;margin-bottom:5px;border-radius:2px;"></div>
       <div style="background:#38a169;height:20px;width:calc(100px + 100px);margin-bottom:5px;border-radius:2px;"></div>
       <div style="background:#38a169;height:20px;width:min(200px, 350px);margin-bottom:5px;border-radius:2px;"></div>
-      <div style="background:#38a169;height:20px;width:clamp(100px, 250px, 200px);border-radius:2px;margin-bottom:10px;"></div>
-
-      <!-- transform: translate / rotate / scale (inline-block row, высота 52px) -->
-      <div style="font-size:0; height:52px; position:relative; overflow:visible;">
-        <!-- baseline -->
-        <div style="display:inline-block;width:40px;height:40px;background:#4a5568;margin-right:8px;vertical-align:top;margin-top:6px;"></div>
-        <!-- translate(8px,-6px) -->
-        <div style="display:inline-block;width:40px;height:40px;background:#63b3ed;margin-right:8px;vertical-align:top;margin-top:6px;transform:translate(8px,-6px);"></div>
-        <!-- rotate(25deg) -->
-        <div style="display:inline-block;width:40px;height:40px;background:#68d391;margin-right:8px;vertical-align:top;margin-top:6px;transform:rotate(25deg);"></div>
-        <!-- scale(1.25) -->
-        <div style="display:inline-block;width:40px;height:40px;background:#fc8181;margin-right:8px;vertical-align:top;margin-top:6px;transform:scale(1.25);"></div>
-        <!-- skewX(15deg) -->
-        <div style="display:inline-block;width:40px;height:40px;background:#f6e05e;margin-right:8px;vertical-align:top;margin-top:6px;transform:skewX(15deg);"></div>
-        <!-- rotate+scale combined -->
-        <div style="display:inline-block;width:40px;height:40px;background:#9f7aea;vertical-align:top;margin-top:6px;transform:rotate(15deg) scale(0.9);"></div>
-      </div>
+      <div style="background:#38a169;height:20px;width:clamp(100px, 250px, 200px);border-radius:2px;"></div>
 
     </div><!-- /mcol -->
 

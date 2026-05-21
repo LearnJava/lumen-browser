@@ -11,6 +11,8 @@ Workflow:
 """
 from __future__ import annotations
 import argparse
+import ctypes
+import ctypes.wintypes
 import io
 import os
 import struct
@@ -120,6 +122,30 @@ def read_png(path: str) -> tuple[int, int, int, bytes]:
         prev = out
     return width, height, bpp, bytes(pixels)
 
+# --- Window management ---
+
+def _bring_pid_to_front(pid: int) -> None:
+    """Bring the main visible window of the given PID to the foreground (Windows)."""
+    user32 = ctypes.windll.user32
+    EnumProc = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.wintypes.HWND, ctypes.wintypes.LPARAM)
+    found: list[ctypes.wintypes.HWND] = []
+
+    def _cb(hwnd: ctypes.wintypes.HWND, _: ctypes.wintypes.LPARAM) -> bool:
+        proc_id = ctypes.wintypes.DWORD(0)
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(proc_id))
+        if proc_id.value == pid and user32.IsWindowVisible(hwnd):
+            found.append(hwnd)
+            return False
+        return True
+
+    user32.EnumWindows(EnumProc(_cb), 0)
+    if found:
+        hwnd = found[0]
+        # Alt-key trick to bypass Windows foreground-lock
+        ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)  # VK_MENU down
+        user32.SetForegroundWindow(hwnd)
+        ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)  # VK_MENU up
+
 # --- Capture helpers ---
 
 def capture_edge(html_path: str, out_png: str) -> None:
@@ -135,6 +161,8 @@ def capture_lumen(html_relpath: str, out_png: str) -> None:
     proc = subprocess.Popen([LUMEN, html_relpath], cwd=REPO,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(LUMEN_WAIT_SEC)
+    _bring_pid_to_front(proc.pid)
+    time.sleep(0.2)  # brief pause for window compositor to repaint
     subprocess.run(
         [FFMPEG, '-f', 'gdigrab', '-i', 'desktop',
          '-vframes', '1', '-update', '1', out_png, '-y'],
@@ -166,39 +194,63 @@ MAG = (240, 20, 240)  # порог: R>240, G<20, B>240 — pure magenta с до�
 def is_magenta(p: bytes, idx: int) -> bool:
     return p[idx] > MAG[0] and p[idx+1] < MAG[1] and p[idx+2] > MAG[2]
 
-def find_marker_origin(png_path: str) -> tuple[int, int] | None:
-    """Ищем верхний-левый угол магента-маркера в desktop snapshot.
+def _longest_run(seq: list[bool]) -> tuple[int, int]:
+    """Return (run_length, run_start) of the longest True-run in seq."""
+    best_len = best_start = 0
+    run_start = -1
+    run_len = 0
+    for i, v in enumerate(seq):
+        if v:
+            if run_start == -1:
+                run_start = i
+            run_len += 1
+            if run_len > best_len:
+                best_len = run_len
+                best_start = run_start
+        else:
+            run_start = -1
+            run_len = 0
+    return best_len, best_start
 
-    Возвращает (origin_x, origin_y) — точка, куда нужно сдвинуть crop.
-    Метод: первая строка сверху, в которой есть непрерывный run магенты ≥ 1000 px.
-    Затем проверяем, что в (origin_y + 719) есть тот же магента-маркер (нижняя полоска)."""
+
+def find_marker_origin(png_path: str) -> tuple[int, int] | None:
+    """Ищем верхний-левый угол магента-рамки в desktop snapshot.
+
+    Возвращает (origin_x, origin_y) — точка кропа.
+
+    Primary: горизонтальное сканирование (верхняя граница, run >= 1000 px),
+    затем верификация нижней строки.
+    Fallback: вертикальное сканирование (левый столбец, run >= VIEWPORT_H/2),
+    затем верификация правого столбца.
+    """
     w, h, bpp, p = read_png(png_path)
 
+    # --- Primary: horizontal scan (top border row) ---
     for y in range(h):
-        run_start = -1
-        run_len = 0
-        best_start = -1
-        best_len = 0
-        for x in range(w):
-            if is_magenta(p, y*w*bpp + x*bpp):
-                if run_start == -1: run_start = x
-                run_len += 1
-                if run_len > best_len:
-                    best_len = run_len
-                    best_start = run_start
-            else:
-                run_start = -1
-                run_len = 0
+        row_mag = [is_magenta(p, y*w*bpp + x*bpp) for x in range(w)]
+        best_len, best_start = _longest_run(row_mag)
         if best_len >= 1000:
-            # Проверяем нижнюю полоску
             bot_y = y + VIEWPORT_H - 1
-            if bot_y >= h: return None
-            bot_count = 0
-            for x in range(best_start, best_start + best_len):
-                if is_magenta(p, bot_y*w*bpp + x*bpp):
-                    bot_count += 1
+            if bot_y >= h:
+                continue
+            bot_count = sum(1 for x in range(best_start, best_start + best_len)
+                            if is_magenta(p, bot_y*w*bpp + x*bpp))
             if bot_count >= best_len * 0.9:
                 return (best_start, y)
+
+    # --- Fallback: vertical scan (left border column) ---
+    for x in range(w):
+        col_mag = [is_magenta(p, y*w*bpp + x*bpp) for y in range(h)]
+        best_len, best_start = _longest_run(col_mag)
+        if best_len >= VIEWPORT_H // 2:
+            right_x = x + VIEWPORT_W - 1
+            if right_x >= w:
+                continue
+            right_count = sum(1 for y in range(best_start, best_start + best_len)
+                              if is_magenta(p, y*w*bpp + right_x*bpp))
+            if right_count >= best_len * 0.9:
+                return (x, best_start)
+
     return None
 
 # --- Diff metric ---
