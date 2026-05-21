@@ -1,9 +1,7 @@
-In progress: —
-Next step: —
+In progress: Navigation API: history.pushState/popstate  branch: navigation-api
+Next step: HistoryState + primitives в dom.rs, history/window в JS shim  crates/js/src/dom.rs
 
 Next (Wave 2):
-Navigation API: history.pushState/popstate    shell/ + dom/                ~2h
-Navigation API: history.pushState/popstate    shell/ + dom/                ~2h
 
 Queue (Wave 3+):
 Server-Sent Events (text/event-stream)                       ~1h
