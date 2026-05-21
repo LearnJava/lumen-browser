@@ -3852,6 +3852,9 @@ pub fn compute_style(
         style.vertical_align = va;
     }
     apply_ua_hr_style(doc, node, &mut style);
+    // UA stylesheet: form controls — display, intrinsic dimensions, border.
+    // HTML5 §15.5. Author CSS поверх перекроет.
+    apply_ua_form_controls(doc, node, &mut style);
 
     // CSS Quirks Mode — Quirks-only UA-rule для `<table>`: сбрасывает
     // font / color / text-align / white-space к initial-values, чтобы
@@ -6236,6 +6239,67 @@ fn apply_ua_hr_style(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
     style.margin_bottom = LengthOrAuto::Length(Length::Em(0.5));
     style.margin_left = LengthOrAuto::Auto;
     style.margin_right = LengthOrAuto::Auto;
+}
+
+/// UA stylesheet для HTML form controls (HTML5 §15.5 «Rendering»).
+///
+/// Применяется ДО CSS-каскада — любой author-rule перекрывает.
+/// - `<input type=hidden>` → `display: none`
+/// - `<input type=checkbox|radio>` → 13×13 px
+/// - `<input>` (остальные) → 174×21 px
+/// - `<button>` → height 21 px
+/// - `<textarea>` → 200×48 px
+/// - `<select>` → height 21 px
+/// - Все кроме hidden → border: 1px solid #767676
+fn apply_ua_form_controls(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else { return; };
+    match name.local.as_str() {
+        "input" => {
+            let ty = doc
+                .get(node)
+                .get_attr("type")
+                .map(|s| s.to_ascii_lowercase())
+                .unwrap_or_else(|| "text".to_string());
+            match ty.trim() {
+                "hidden" => {
+                    style.display = Display::None;
+                    return;
+                }
+                "checkbox" | "radio" => {
+                    style.width = Some(Length::Px(13.0));
+                    style.height = Some(Length::Px(13.0));
+                }
+                _ => {
+                    style.width = Some(Length::Px(174.0));
+                    style.height = Some(Length::Px(21.0));
+                }
+            }
+        }
+        "button" => {
+            style.height = Some(Length::Px(21.0));
+        }
+        "textarea" => {
+            style.width = Some(Length::Px(200.0));
+            style.height = Some(Length::Px(48.0));
+        }
+        "select" => {
+            style.height = Some(Length::Px(21.0));
+        }
+        _ => return,
+    }
+    let gray = CssColor::Rgba(Color { r: 118, g: 118, b: 118, a: 255 });
+    style.border_top_width = 1.0;
+    style.border_right_width = 1.0;
+    style.border_bottom_width = 1.0;
+    style.border_left_width = 1.0;
+    style.border_top_style = BorderStyle::Solid;
+    style.border_right_style = BorderStyle::Solid;
+    style.border_bottom_style = BorderStyle::Solid;
+    style.border_left_style = BorderStyle::Solid;
+    style.border_top_color = gray;
+    style.border_right_color = gray;
+    style.border_bottom_color = gray;
+    style.border_left_color = gray;
 }
 
 /// Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
@@ -18934,6 +18998,86 @@ mod tests {
         let div = doc.get(doc.root()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_orientation, TextOrientation::Sideways);
+    }
+
+    // ── form controls UA stylesheet ──────────────────────────────────────────
+
+    #[test]
+    fn form_input_ua_width_height() {
+        let doc = lumen_html_parser::parse("<input type=\"text\">");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.width, Some(Length::Px(174.0)));
+        assert_eq!(style.height, Some(Length::Px(21.0)));
+        assert_eq!(style.border_top_width, 1.0);
+    }
+
+    #[test]
+    fn form_input_hidden_display_none() {
+        let doc = lumen_html_parser::parse("<input type=\"hidden\">");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.display, Display::None);
+    }
+
+    #[test]
+    fn form_input_checkbox_size() {
+        let doc = lumen_html_parser::parse("<input type=\"checkbox\">");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.width, Some(Length::Px(13.0)));
+        assert_eq!(style.height, Some(Length::Px(13.0)));
+    }
+
+    #[test]
+    fn form_textarea_ua_dimensions() {
+        let doc = lumen_html_parser::parse("<textarea></textarea>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let ta = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, ta, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.width, Some(Length::Px(200.0)));
+        assert_eq!(style.height, Some(Length::Px(48.0)));
+        assert_eq!(style.border_top_width, 1.0);
+    }
+
+    #[test]
+    fn form_button_ua_height() {
+        let doc = lumen_html_parser::parse("<button>OK</button>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let btn = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, btn, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.height, Some(Length::Px(21.0)));
+        assert_eq!(style.border_top_width, 1.0);
+    }
+
+    #[test]
+    fn form_select_ua_height() {
+        let doc = lumen_html_parser::parse("<select></select>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let sel = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, sel, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.height, Some(Length::Px(21.0)));
+        assert_eq!(style.border_top_width, 1.0);
+    }
+
+    #[test]
+    fn form_author_overrides_ua() {
+        let doc = lumen_html_parser::parse("<input type=\"text\">");
+        let sheet = lumen_css_parser::parse("input { width: 300px; height: 40px; }");
+        let root = ComputedStyle::root();
+        let input = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.width, Some(Length::Px(300.0)));
+        assert_eq!(style.height, Some(Length::Px(40.0)));
     }
 
     #[test]

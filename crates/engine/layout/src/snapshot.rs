@@ -64,6 +64,7 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
         BoxKind::InlineBlockRow => "InlineBlockRow",
         BoxKind::InlineSpace => "InlineSpace",
         BoxKind::Image { .. } => "Image",
+        BoxKind::FormControl { .. } => "FormControl",
         BoxKind::Skip => "Skip",
     };
     let _ = write!(
