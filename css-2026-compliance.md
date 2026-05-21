@@ -292,7 +292,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | `animation-fill-mode` | 🟡 parsed |
 | `animation-play-state` | 🟡 parsed |
 | `animation` | 🟡 parsed |
-| `@keyframes` | 🟡 parsed; scheduler not implemented |
+| `@keyframes` | 🟡 parsed; `AnimationScheduler::sync+tick` wires @keyframes → `AnimatedStyle` per node; P2 compositor integration pending |
 
 ### CSS Will Change Level 1
 | Property | Status |
