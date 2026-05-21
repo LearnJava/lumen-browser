@@ -136,6 +136,101 @@ pub fn sha256_hex(input: &[u8]) -> String {
     hex_lower(&sha256(input))
 }
 
+/// SHA-1 хеш произвольных байт по FIPS 180-3.
+///
+/// Возвращает 20-байтовый digest. Используется **только** для WebSocket
+/// handshake (RFC 6455 §4.1: Sec-WebSocket-Accept = base64(sha1(key+GUID))).
+/// Для security-критичных применений (KDF, MAC, подписи) использовать rustls.
+#[must_use]
+pub fn sha1(input: &[u8]) -> [u8; 20] {
+    let mut h: [u32; 5] = [
+        0x6745_2301, 0xEFCD_AB89, 0x98BA_DCFE, 0x1032_5476, 0xC3D2_E1F0,
+    ];
+
+    let bit_len = (input.len() as u64).wrapping_mul(8);
+    let mut padded = input.to_vec();
+    padded.push(0x80);
+    while padded.len() % 64 != 56 {
+        padded.push(0);
+    }
+    padded.extend_from_slice(&bit_len.to_be_bytes());
+
+    for chunk in padded.chunks(64) {
+        let mut w = [0u32; 80];
+        for j in 0..16 {
+            w[j] = u32::from_be_bytes([
+                chunk[j * 4],
+                chunk[j * 4 + 1],
+                chunk[j * 4 + 2],
+                chunk[j * 4 + 3],
+            ]);
+        }
+        for j in 16..80 {
+            w[j] = (w[j - 3] ^ w[j - 8] ^ w[j - 14] ^ w[j - 16]).rotate_left(1);
+        }
+        let [mut a, mut b, mut c, mut d, mut e] = [h[0], h[1], h[2], h[3], h[4]];
+        for (j, &wj) in w.iter().enumerate() {
+            let (f, k): (u32, u32) = match j {
+                0..=19 => ((b & c) | (!b & d), 0x5A82_7999),
+                20..=39 => (b ^ c ^ d, 0x6ED9_EBA1),
+                40..=59 => ((b & c) | (b & d) | (c & d), 0x8F1B_BCDC),
+                _ => (b ^ c ^ d, 0xCA62_C1D6),
+            };
+            let temp = a
+                .rotate_left(5)
+                .wrapping_add(f)
+                .wrapping_add(e)
+                .wrapping_add(k)
+                .wrapping_add(wj);
+            e = d;
+            d = c;
+            c = b.rotate_left(30);
+            b = a;
+            a = temp;
+        }
+        h[0] = h[0].wrapping_add(a);
+        h[1] = h[1].wrapping_add(b);
+        h[2] = h[2].wrapping_add(c);
+        h[3] = h[3].wrapping_add(d);
+        h[4] = h[4].wrapping_add(e);
+    }
+
+    let mut out = [0u8; 20];
+    for (i, word) in h.iter().enumerate() {
+        out[i * 4..(i + 1) * 4].copy_from_slice(&word.to_be_bytes());
+    }
+    out
+}
+
+/// Кодировать байты в Base64 по RFC 4648 §4 (стандартный алфавит, padding '=').
+#[must_use]
+pub fn base64_encode(bytes: &[u8]) -> String {
+    const TABLE: &[u8; 64] =
+        b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let b0 = chunk[0] as u32;
+        let b1 = chunk.get(1).copied().unwrap_or(0) as u32;
+        let b2 = chunk.get(2).copied().unwrap_or(0) as u32;
+        let n = (b0 << 16) | (b1 << 8) | b2;
+        out.push(TABLE[((n >> 18) & 63) as usize] as char);
+        out.push(TABLE[((n >> 12) & 63) as usize] as char);
+        out.push(if chunk.len() > 1 { TABLE[((n >> 6) & 63) as usize] as char } else { '=' });
+        out.push(if chunk.len() > 2 { TABLE[(n & 63) as usize] as char } else { '=' });
+    }
+    out
+}
+
+/// `base64_encode(&sha1(key + WS_GUID))` — WebSocket Sec-WebSocket-Accept (RFC 6455 §4.1).
+pub const WS_GUID: &str = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11";
+
+#[must_use]
+pub fn ws_accept_key(client_key: &str) -> String {
+    let mut input = client_key.as_bytes().to_vec();
+    input.extend_from_slice(WS_GUID.as_bytes());
+    base64_encode(&sha1(&input))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +274,54 @@ mod tests {
     #[test]
     fn hex_lower_empty_input() {
         assert_eq!(hex_lower(&[]), "");
+    }
+
+    #[test]
+    fn sha1_empty_string_fips_180_3() {
+        assert_eq!(
+            hex_lower(&sha1(b"")),
+            "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+        );
+    }
+
+    #[test]
+    fn sha1_abc_fips_180_3() {
+        assert_eq!(
+            hex_lower(&sha1(b"abc")),
+            "a9993e364706816aba3e25717850c26c9cd0d89d"
+        );
+    }
+
+    #[test]
+    fn sha1_56_byte_two_block_fips_180_3() {
+        assert_eq!(
+            hex_lower(&sha1(b"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")),
+            "84983e441c3bd26ebaae4aa1f95129e5e54670f1"
+        );
+    }
+
+    #[test]
+    fn sha1_returns_20_bytes() {
+        assert_eq!(sha1(b"anything").len(), 20);
+    }
+
+    #[test]
+    fn base64_encode_rfc4648_test_vectors() {
+        assert_eq!(base64_encode(b""), "");
+        assert_eq!(base64_encode(b"f"), "Zg==");
+        assert_eq!(base64_encode(b"fo"), "Zm8=");
+        assert_eq!(base64_encode(b"foo"), "Zm9v");
+        assert_eq!(base64_encode(b"foob"), "Zm9vYg==");
+        assert_eq!(base64_encode(b"fooba"), "Zm9vYmE=");
+        assert_eq!(base64_encode(b"foobar"), "Zm9vYmFy");
+    }
+
+    #[test]
+    fn ws_accept_key_rfc6455_example() {
+        // RFC 6455 §1.3 пример handshake
+        assert_eq!(
+            ws_accept_key("dGhlIHNhbXBsZSBub25jZQ=="),
+            "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="
+        );
     }
 }

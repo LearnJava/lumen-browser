@@ -1,0 +1,11 @@
+[package]
+name = "lumen-devtools"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen DevTools server: WebSocket + CDP минимум (5C)"
+
+[dependencies]
+lumen-core.workspace = true

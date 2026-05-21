@@ -221,7 +221,7 @@
 | 5A.5 | ✅ Pool multiplexing | `network/src/h2/pool.rs` | H2Pool acquire/release/evict, интеграция в fetch_single |
 | 5A.6 | ✅ Flow control + WINDOW_UPDATE | `network/src/h2/conn.rs` | WINDOW_UPDATE после каждого DATA, +3 теста |
 | 5B | ✅ **`[P3]` HTTP Range requests** | `<video>` seek | — |
-| 5C | ⬜ **`[P3]` DevTools/CDP минимум** (после 1B) | Debug движка | — |
+| 5C | ✅ **`[P3]` DevTools/CDP минимум** | Debug движка | `crates/devtools/` | WS сервер + Browser.getVersion + DOM.getDocument stub + --devtools-port |
 | 6+ | ⬜ **`[P3]` knowledge / Profiles / Focus / IME / WebSockets / SW / V8 / AI** (Phase 2-3) | — | — |
 
 ---

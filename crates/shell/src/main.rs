@@ -7,6 +7,7 @@
 //! - `lumen --dump-source <path-or-url>` — печать декодированного HTML в stdout.
 //! - `lumen --dump-layout <path-or-url>` — печать layout-дерева в stdout.
 //! - `lumen --dump-display-list <path-or-url>` — печать display list в stdout.
+//! - `lumen --devtools-port <N>` — запустить DevTools WebSocket сервер на порту N.
 //!
 //! Dump-режимы не создают окна и не инициализируют wgpu — pipeline прогоняется
 //! до нужной фазы, результат сериализуется и пишется в stdout. Полезно для CI
@@ -31,6 +32,7 @@ use std::sync::Arc;
 
 use lumen_core::event::{Event, FetchPriority, SubresourceKind};
 use lumen_core::ext::EventSink;
+use lumen_devtools::DevToolsServer;
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
 use lumen_layout::LayoutBox;
@@ -84,7 +86,15 @@ use winit::window::{CursorIcon, Window, WindowId};
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let cli = match parse_cli(&args) {
+    let (devtools_port, rest_args) = match extract_devtools_port(&args) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("Ошибка аргументов: {err}");
+            print_usage();
+            return ExitCode::FAILURE;
+        }
+    };
+    let cli = match parse_cli(&rest_args) {
         Ok(m) => m,
         Err(err) => {
             eprintln!("Ошибка аргументов: {err}");
@@ -92,6 +102,13 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+
+    if let Some(port) = devtools_port
+        && let Err(e) = DevToolsServer::spawn(port)
+    {
+        eprintln!("Ошибка запуска DevTools на порту {port}: {e}");
+        return ExitCode::FAILURE;
+    }
 
     let event_sink: Arc<dyn EventSink> = Arc::new(StdoutEventSink);
 
@@ -206,6 +223,25 @@ fn print_usage() {
     eprintln!("  lumen --dump-source <path-or-url>        — декодированный HTML в stdout");
     eprintln!("  lumen --dump-layout <path-or-url>        — layout-дерево в stdout");
     eprintln!("  lumen --dump-display-list <path-or-url>  — display list в stdout");
+    eprintln!("  [--devtools-port <N>]                    — DevTools WS сервер (любой режим)");
+}
+
+/// Извлечь `--devtools-port N` из аргументов, вернуть (port, остальные аргументы).
+fn extract_devtools_port(args: &[String]) -> Result<(Option<u16>, Vec<String>), String> {
+    let mut port: Option<u16> = None;
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--devtools-port" {
+            i += 1;
+            let s = args.get(i).ok_or("--devtools-port требует номер порта")?;
+            port = Some(s.parse::<u16>().map_err(|_| format!("неверный порт: {s}"))?);
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+    Ok((port, rest))
 }
 
 /// Источник страницы. Запоминается в `Lumen`, чтобы reload (F5/Ctrl+R) мог
