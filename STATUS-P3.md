@@ -1,10 +1,9 @@
-In progress: —
-Next step: —
+In progress: JS bindings — events, classList, style object  branch: js-bindings
+Next step: extend WEB_API_SHIM in crates/js/src/dom.rs: Event ctor, DOMTokenList, CSSStyleDeclaration
 
 Next (Wave 2):
 
 Queue (Wave 3+):
-JS bindings: events, classList, style object                 ~3h
 Service Worker scaffold: fetch interception                  ~3h
 Forms UI: native pickers, validation tooltip                 ~2h  depends on P1 ValidityState
 IME composition events                                       ~2h
