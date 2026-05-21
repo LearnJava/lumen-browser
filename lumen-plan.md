@@ -197,7 +197,7 @@
 | 2A.3 | ✅ script execution gate in shell | `shell/src/main.rs:752` | — |
 | 2A.4 | ✅ form submission gate | `dom/src/lib.rs` | — |
 | 2A.5 | ✅ navigation restriction enforcement | `dom/src/lib.rs` + `shell/src/main.rs` | — |
-| 2C | ⬜ **`[P3]` Tab session export/import** | UX | storage + shell |
+| 2C | ✅ **`[P3]` Tab session export/import** | UX | `storage/src/session_export.rs` | JSON v1, --import-session, auto-save на close, 12 тестов |
 | 3A | 🟡 **`[P3]` DPR + scroll в shell** | 4K + длинные страницы | shell + paint |
 | 3A.1 | ✅ relayout-on-resize | `shell/src/main.rs` | — |
 | 3A.2 | ✅ horizontal scroll | `shell/src/main.rs` | — |
