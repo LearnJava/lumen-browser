@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: Server-Sent Events (text/event-stream)  branch: sse-parser
+Next step: SseParser в crates/network/src/sse.rs + EventSource stub в dom.rs
 
 Next (Wave 2):
 
