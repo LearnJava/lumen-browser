@@ -1,7 +1,8 @@
-In progress: —
+In progress: BUG-023 analysis  branch: bug023-analysis
+Next step: commit analysis + merge
 
 Next: (P2 Phase 2+)
-BUG-023 opacity sub-pixel deviation ~2%
+— all current tasks complete —
 
 Queue:
 
