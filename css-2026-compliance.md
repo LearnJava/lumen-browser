@@ -178,7 +178,7 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 ### CSS Color Adjustment Level 1
 | Property | Status |
 |---|---|
-| `color-scheme` | ⬜ |
+| `color-scheme` | 🟡 | parsed/stored (normal/light/dark/light dark/dark light/only light/only dark); UA theme switching — P2 |
 | `forced-color-adjust` | ⬜ |
 
 ---
