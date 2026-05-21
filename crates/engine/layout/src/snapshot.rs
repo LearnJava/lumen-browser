@@ -122,6 +122,19 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
         Display::Grid => out.push_str(" display=grid"),
         Display::InlineGrid => out.push_str(" display=inline-grid"),
         Display::InlineBlock => out.push_str(" display=inline-block"),
+        Display::FlowRoot => out.push_str(" display=flow-root"),
+        Display::Contents => out.push_str(" display=contents"),
+        Display::Table => out.push_str(" display=table"),
+        Display::InlineTable => out.push_str(" display=inline-table"),
+        Display::TableRowGroup => out.push_str(" display=table-row-group"),
+        Display::TableHeaderGroup => out.push_str(" display=table-header-group"),
+        Display::TableFooterGroup => out.push_str(" display=table-footer-group"),
+        Display::TableRow => out.push_str(" display=table-row"),
+        Display::TableColumnGroup => out.push_str(" display=table-column-group"),
+        Display::TableColumn => out.push_str(" display=table-column"),
+        Display::TableCell => out.push_str(" display=table-cell"),
+        Display::TableCaption => out.push_str(" display=table-caption"),
+        Display::ListItem => out.push_str(" display=list-item"),
     }
     if let Some(w) = &s.width {
         let _ = write!(out, " w={}", fmt_len(w));

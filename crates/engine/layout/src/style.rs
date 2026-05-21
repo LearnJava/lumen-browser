@@ -45,6 +45,24 @@ pub enum Display {
     /// formatting context (имеет собственные width/height/padding/border).
     /// В layout собирается в `BoxKind::InlineBlockRow`.
     InlineBlock,
+    /// CSS Display L3 — `display: flow-root`. Creates a BFC; treated as Block in layout.
+    FlowRoot,
+    /// CSS Display L3 — `display: contents`. Box itself generates no box;
+    /// children participate in parent formatting context. Treated as Block (deferred).
+    Contents,
+    /// CSS 2.1 table display types — parsed/stored; table layout deferred.
+    Table,
+    InlineTable,
+    TableRowGroup,
+    TableHeaderGroup,
+    TableFooterGroup,
+    TableRow,
+    TableColumnGroup,
+    TableColumn,
+    TableCell,
+    TableCaption,
+    /// CSS 2.1 — `display: list-item`. Generates principal block + marker box.
+    ListItem,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -5321,6 +5339,18 @@ fn default_display(doc: &Document, node: NodeId) -> Display {
         | "label" | "abbr" | "cite" | "q" | "mark" | "u"
         // HTML §15.3.7: <del>, <ins>, <s> — flow content, UA display = inline.
         | "del" | "ins" | "s" => Display::Inline,
+        // CSS 2.1 table model — UA default display values per HTML spec.
+        "table" => Display::Table,
+        "caption" => Display::TableCaption,
+        "colgroup" => Display::TableColumnGroup,
+        "col" => Display::TableColumn,
+        "thead" => Display::TableHeaderGroup,
+        "tbody" => Display::TableRowGroup,
+        "tfoot" => Display::TableFooterGroup,
+        "tr" => Display::TableRow,
+        "td" | "th" => Display::TableCell,
+        // CSS 2.1 — list-item UA default.
+        "li" => Display::ListItem,
         _ => Display::Block,
     }
 }
@@ -7391,6 +7421,19 @@ fn apply_declaration(
                 "grid" => Display::Grid,
                 "inline-grid" => Display::InlineGrid,
                 "inline-block" => Display::InlineBlock,
+                "flow-root" => Display::FlowRoot,
+                "contents" => Display::Contents,
+                "table" => Display::Table,
+                "inline-table" => Display::InlineTable,
+                "table-row-group" => Display::TableRowGroup,
+                "table-header-group" => Display::TableHeaderGroup,
+                "table-footer-group" => Display::TableFooterGroup,
+                "table-row" => Display::TableRow,
+                "table-column-group" => Display::TableColumnGroup,
+                "table-column" => Display::TableColumn,
+                "table-cell" => Display::TableCell,
+                "table-caption" => Display::TableCaption,
+                "list-item" => Display::ListItem,
                 _ => style.display,
             };
         }
@@ -18142,5 +18185,87 @@ mod tests {
         let div = doc.get(doc.root()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.appearance, Appearance::None);
+    }
+
+    // --- Display extended values ---
+
+    #[test]
+    fn display_flow_root() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { display: flow-root; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.display, Display::FlowRoot);
+    }
+
+    #[test]
+    fn display_contents() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { display: contents; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.display, Display::Contents);
+    }
+
+    #[test]
+    fn display_table_parsed() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { display: table; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.display, Display::Table);
+    }
+
+    #[test]
+    fn display_table_cell_parsed() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { display: table-cell; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.display, Display::TableCell);
+    }
+
+    #[test]
+    fn display_list_item_parsed() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { display: list-item; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.display, Display::ListItem);
+    }
+
+    #[test]
+    fn display_ua_table_element() {
+        let doc = lumen_html_parser::parse("<table></table>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let table = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, table, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.display, Display::Table);
+    }
+
+    #[test]
+    fn display_ua_li_element() {
+        let doc = lumen_html_parser::parse("<li></li>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let li = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, li, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.display, Display::ListItem);
+    }
+
+    #[test]
+    fn display_invalid_keeps_current() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { display: bogus-value; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.display, Display::Block);
     }
 }
