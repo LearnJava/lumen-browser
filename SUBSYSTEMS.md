@@ -21,5 +21,6 @@ Updated with every plan-item commit. For ground truth — `git log --oneline` + 
 | lumen-knowledge | 🟡 FTS5 history + notes + read-later | [subsystems/knowledge.md](subsystems/knowledge.md) |
 | lumen-network | ✅ HTTP/1.1 + HTTPS + CORS + auth | [subsystems/network.md](subsystems/network.md) |
 | lumen-shell | 🟡 window + render + event loop | [subsystems/shell.md](subsystems/shell.md) |
+| lumen-devtools | ✅ WebSocket + CDP минимум | [subsystems/devtools.md](subsystems/devtools.md) |
 | lumen-bench | ✅ pipeline benchmark | [subsystems/bench.md](subsystems/bench.md) |
 | Infrastructure | workspace + test counts + dep policy | [subsystems/infra.md](subsystems/infra.md) |
