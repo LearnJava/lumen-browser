@@ -32,9 +32,8 @@
 //! ## Out of scope (deferred)
 //!
 //! - Concurrent streams (5A.5 pool multiplexing).
-//! - Full outbound flow control — we only track the receive window to
-//!   maintain correctness; sending WINDOW_UPDATE for DATA we consumed is
-//!   deferred to 5A.6.
+//! - Send-side flow control (outbound window tracking) — Phase 0 issues only
+//!   GET requests with no request body, so send-window management is not needed.
 
 use std::io::{Read, Write};
 
@@ -83,6 +82,9 @@ pub struct H2Conn<S: Read + Write> {
     remote_init_window: u32,
     /// Next client-initiated stream ID (odd, starts at 1; RFC 9113 §5.1.1).
     next_stream_id: u32,
+    /// Our connection-level receive window (bytes the server may still send before
+    /// we send WINDOW_UPDATE). RFC 9113 §6.9 — starts at INITIAL_WINDOW.
+    conn_recv_window: u32,
 }
 
 impl<S: Read + Write> H2Conn<S> {
@@ -110,6 +112,7 @@ impl<S: Read + Write> H2Conn<S> {
             remote_max_frame: MAX_FRAME_PAYLOAD_DEFAULT,
             remote_init_window: INITIAL_WINDOW,
             next_stream_id: 1,
+            conn_recv_window: INITIAL_WINDOW,
         };
 
         conn.await_server_settings()?;
@@ -205,6 +208,13 @@ impl<S: Read + Write> H2Conn<S> {
     /// `extra_headers` — additional request headers as `(name, value)` byte
     /// slices (lowercase names, no pseudo-headers — the caller must not add
     /// `:method` / `:path` / `:scheme` / `:authority` here).
+    ///
+    /// ## Flow control (RFC 9113 §6.9)
+    ///
+    /// After each DATA frame we immediately send WINDOW_UPDATE for both the
+    /// connection (stream 0) and the request stream, restoring exactly the
+    /// number of bytes consumed. This prevents the server from stalling on
+    /// large responses that exceed the default 65 535-byte window.
     pub fn fetch(
         &mut self,
         method: &str,
@@ -297,9 +307,26 @@ impl<S: Read + Write> H2Conn<S> {
                     end_stream: es,
                     data,
                 } if stream_id == sid => {
+                    let consumed = data.len() as u32;
                     body.extend_from_slice(&data);
                     if es {
                         end_stream = true;
+                    }
+                    // RFC 9113 §6.9: restore receive windows so the server can
+                    // keep sending without stalling on large bodies.
+                    if consumed > 0 {
+                        // Connection-level window (stream_id = 0).
+                        self.conn_recv_window =
+                            self.conn_recv_window.saturating_sub(consumed);
+                        self.send_frame(&Frame::WindowUpdate {
+                            stream_id: 0,
+                            increment: consumed,
+                        })?;
+                        // Stream-level window.
+                        self.send_frame(&Frame::WindowUpdate {
+                            stream_id: sid,
+                            increment: consumed,
+                        })?;
                     }
                 }
 
@@ -668,5 +695,134 @@ mod tests {
             .unwrap();
         assert_eq!((s1, b1.as_slice()), (200, b"first".as_slice()));
         assert_eq!((s2, b2.as_slice()), (200, b"second".as_slice()));
+    }
+
+    // ── Flow control (5A.6) ───────────────────────────────────────────────
+
+    /// Collect all WINDOW_UPDATE frames from a byte buffer; returns
+    /// `(stream_id, increment)` pairs in order.
+    ///
+    /// Skips the client connection preface magic (24 non-frame bytes) that
+    /// the client writes before any frames during `H2Conn::connect`.
+    fn collect_window_updates(buf: &[u8]) -> Vec<(u32, u32)> {
+        use crate::h2::frame::MAX_FRAME_PAYLOAD_DEFAULT;
+        let start = if buf.starts_with(CLIENT_PREFACE_MAGIC) {
+            CLIENT_PREFACE_MAGIC.len()
+        } else {
+            0
+        };
+        let mut result = Vec::new();
+        let mut pos = start;
+        while pos < buf.len() {
+            match Frame::parse(&buf[pos..], MAX_FRAME_PAYLOAD_DEFAULT) {
+                Ok(Some((Frame::WindowUpdate { stream_id, increment }, consumed))) => {
+                    result.push((stream_id, increment));
+                    pos += consumed;
+                }
+                Ok(Some((_, consumed))) => {
+                    pos += consumed;
+                }
+                _ => break,
+            }
+        }
+        result
+    }
+
+    #[test]
+    fn fetch_with_body_sends_window_update_for_data() {
+        // Server sends a DATA frame with 11 bytes.
+        let body_data = b"hello world";
+        let resp = encode_response_200(1, body_data);
+        let mut conn = make_connected_conn(resp);
+        let (status, _, body) = conn
+            .fetch("GET", "https", "example.com", "/", &[])
+            .unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(body, body_data);
+
+        // Client MUST have sent WINDOW_UPDATE for connection (stream 0) and
+        // stream 1 with increment = 11 (bytes consumed from DATA).
+        let written = conn.stream.written();
+        let updates = collect_window_updates(written);
+        assert!(
+            updates
+                .iter()
+                .any(|&(sid, inc)| sid == 0 && inc == body_data.len() as u32),
+            "missing connection-level WINDOW_UPDATE; found: {updates:?}"
+        );
+        assert!(
+            updates
+                .iter()
+                .any(|&(sid, inc)| sid == 1 && inc == body_data.len() as u32),
+            "missing stream-level WINDOW_UPDATE; found: {updates:?}"
+        );
+    }
+
+    #[test]
+    fn fetch_empty_body_sends_no_window_update() {
+        // END_STREAM on HEADERS, no DATA frames → no DATA consumed → no WINDOW_UPDATE.
+        let resp = encode_response_200(1, b"");
+        let mut conn = make_connected_conn(resp);
+        conn.fetch("GET", "https", "example.com", "/", &[])
+            .unwrap();
+
+        let written = conn.stream.written();
+        let updates = collect_window_updates(written);
+        assert!(
+            updates.is_empty(),
+            "unexpected WINDOW_UPDATE for empty body: {updates:?}"
+        );
+    }
+
+    #[test]
+    fn fetch_multi_data_frames_sends_window_update_per_frame() {
+        // Two DATA frames (5 bytes + 6 bytes) — we should get WINDOW_UPDATE
+        // after each, restoring the exact amount consumed.
+        let mut resp_bytes = Vec::new();
+        use crate::h2::hpack::Encoder;
+        // HEADERS first (no END_STREAM yet).
+        let block = Encoder::new().encode(&[(b":status", b"200")]);
+        Frame::Headers {
+            stream_id: 1,
+            end_stream: false,
+            end_headers: true,
+            priority: None,
+            block_fragment: block,
+        }
+        .encode(&mut resp_bytes)
+        .unwrap();
+        // First DATA chunk.
+        Frame::Data {
+            stream_id: 1,
+            end_stream: false,
+            data: b"hello".to_vec(),
+        }
+        .encode(&mut resp_bytes)
+        .unwrap();
+        // Second DATA chunk with END_STREAM.
+        Frame::Data {
+            stream_id: 1,
+            end_stream: true,
+            data: b" world".to_vec(),
+        }
+        .encode(&mut resp_bytes)
+        .unwrap();
+
+        let mut conn = make_connected_conn(resp_bytes);
+        let (status, _, body) = conn
+            .fetch("GET", "https", "example.com", "/", &[])
+            .unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(body, b"hello world");
+
+        // Expect WINDOW_UPDATE for (stream=0, inc=5), (stream=1, inc=5),
+        // (stream=0, inc=6), (stream=1, inc=6) — two pairs, one per chunk.
+        let written = conn.stream.written();
+        let updates = collect_window_updates(written);
+        let conn_updates: Vec<u32> = updates.iter().filter(|&&(sid, _)| sid == 0).map(|&(_, inc)| inc).collect();
+        let stream_updates: Vec<u32> = updates.iter().filter(|&&(sid, _)| sid == 1).map(|&(_, inc)| inc).collect();
+        assert_eq!(conn_updates.iter().sum::<u32>(), 11, "conn increments: {conn_updates:?}");
+        assert_eq!(stream_updates.iter().sum::<u32>(), 11, "stream increments: {stream_updates:?}");
+        assert!(conn_updates.contains(&5) && conn_updates.contains(&6), "{conn_updates:?}");
     }
 }
