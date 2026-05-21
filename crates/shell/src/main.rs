@@ -2471,7 +2471,10 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawOutline { rect, .. }
             | DisplayCommand::DrawLinearGradient { rect, .. }
             | DisplayCommand::DrawRadialGradient { rect, .. }
-            | DisplayCommand::PushClipRect { rect, .. } => rect,
+            | DisplayCommand::PushClipRect { rect, .. }
+            | DisplayCommand::PushMaskImage { rect, .. }
+            | DisplayCommand::PushMaskLinearGradient { rect, .. }
+            | DisplayCommand::PushMaskRadialGradient { rect, .. } => rect,
             DisplayCommand::PopClip
             | DisplayCommand::PushOpacity { .. }
             | DisplayCommand::PopOpacity
@@ -2479,6 +2482,7 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PopBlendMode
             | DisplayCommand::PushTransform { .. }
             | DisplayCommand::PopTransform
+            | DisplayCommand::PopMask
             | DisplayCommand::DrawLayerSnapshot { .. } => continue,
         };
         let bottom = r.y + r.height;
@@ -2504,7 +2508,10 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawOutline { rect, .. }
             | DisplayCommand::DrawLinearGradient { rect, .. }
             | DisplayCommand::DrawRadialGradient { rect, .. }
-            | DisplayCommand::PushClipRect { rect, .. } => rect,
+            | DisplayCommand::PushClipRect { rect, .. }
+            | DisplayCommand::PushMaskImage { rect, .. }
+            | DisplayCommand::PushMaskLinearGradient { rect, .. }
+            | DisplayCommand::PushMaskRadialGradient { rect, .. } => rect,
             DisplayCommand::PopClip
             | DisplayCommand::PushOpacity { .. }
             | DisplayCommand::PopOpacity
@@ -2512,6 +2519,7 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PopBlendMode
             | DisplayCommand::PushTransform { .. }
             | DisplayCommand::PopTransform
+            | DisplayCommand::PopMask
             | DisplayCommand::DrawLayerSnapshot { .. } => continue,
         };
         let right = r.x + r.width;

@@ -248,6 +248,42 @@ pub enum DisplayCommand {
     /// Если снимок с `id` не зарегистрирован — команда молча игнорируется.
     /// Используется compositor-ом для повторного использования неизменных слоёв.
     DrawLayerSnapshot { id: u64, rect: Rect, alpha: f32 },
+    /// CSS Masking L1 §4 — открывает mask-группу для URL-изображения.
+    /// Содержимое элемента (включая детей) рендерится в offscreen-слой;
+    /// `PopMask` применяет mask-image как alpha-маску (channel: alpha).
+    /// `src` — тот же ключ, что `Renderer::register_image`. `size`/`repeat` —
+    /// аналогично `DrawBackgroundImage`. `position` — `mask-position` (Phase 0:
+    /// фиксирован в `0% 0%`, т.к. свойство не парсится). Если изображение не
+    /// зарегистрировано в GPU-cache — PopMask composites с alpha=1.0 (без маски).
+    PushMaskImage {
+        rect: Rect,
+        src: String,
+        size: BackgroundSize,
+        position: ObjectPosition,
+        repeat: BackgroundRepeat,
+        image_rendering: ImageRendering,
+    },
+    /// CSS Masking L1 §4 — linear-gradient mask. Offscreen содержимое
+    /// composites с alpha, управляемым градиентом.
+    /// Phase 0: renderer открывает offscreen-слой; PopMask composites
+    /// используя stops для вычисления alpha (gradient direction = angle_deg).
+    PushMaskLinearGradient {
+        rect: Rect,
+        angle_deg: f32,
+        stops: Vec<GradientStop>,
+        repeating: bool,
+    },
+    /// CSS Masking L1 §4 — radial-gradient mask.
+    PushMaskRadialGradient {
+        rect: Rect,
+        center_x_pct: f32,
+        center_y_pct: f32,
+        stops: Vec<GradientStop>,
+        repeating: bool,
+    },
+    /// Закрывает mask-группу, открытую ближайшим `PushMask*`. Composites
+    /// offscreen-слой с alpha, определённой соответствующим PushMask*.
+    PopMask,
     /// CSS Transforms L1 §13 — открывает transform-группу. Все последующие
     /// команды до парного `PopTransform` рисуются с применением `matrix` к
     /// координатам вершин (forward-матрица в viewport-системе, уже включает
@@ -595,6 +631,27 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::PopTransform => {
                 out.push_str("PopTransform\n");
+            }
+            DisplayCommand::PushMaskImage { rect, src, size, repeat, .. } => {
+                out.push_str(&format!(
+                    "PushMaskImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?} size={size:?} repeat={repeat:?}\n",
+                    rect.x, rect.y, rect.width, rect.height,
+                ));
+            }
+            DisplayCommand::PushMaskLinearGradient { rect, angle_deg, stops, repeating } => {
+                out.push_str(&format!(
+                    "PushMaskLinearGradient ({:.2}, {:.2}, {:.2}, {:.2}) angle={angle_deg:.1} stops={} repeating={repeating}\n",
+                    rect.x, rect.y, rect.width, rect.height, stops.len(),
+                ));
+            }
+            DisplayCommand::PushMaskRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+                out.push_str(&format!(
+                    "PushMaskRadialGradient ({:.2}, {:.2}, {:.2}, {:.2}) center=({:.2},{:.2}) stops={} repeating={repeating}\n",
+                    rect.x, rect.y, rect.width, rect.height, center_x_pct, center_y_pct, stops.len(),
+                ));
+            }
+            DisplayCommand::PopMask => {
+                out.push_str("PopMask\n");
             }
         }
     }
@@ -1208,6 +1265,48 @@ fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox) {
     }
 }
 
+/// CSS Masking L1 §4 — эмитит PushMask* перед элементом + его детьми.
+/// Возвращает `true` если команда была эмитирована (нужен парный PopMask).
+/// `rect` = border-box элемента (mask painting area).
+fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
+    let rect = b.rect;
+    match &b.style.mask_image {
+        BackgroundImage::Url(src) if !src.is_empty() => {
+            out.push(DisplayCommand::PushMaskImage {
+                rect,
+                src: src.clone(),
+                size: b.style.mask_size,
+                position: ObjectPosition::background_initial(),
+                repeat: b.style.mask_repeat,
+                image_rendering: b.style.image_rendering,
+            });
+            true
+        }
+        BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, stops, repeating }) => {
+            out.push(DisplayCommand::PushMaskLinearGradient {
+                rect,
+                angle_deg: *angle_deg,
+                stops: stops.clone(),
+                repeating: *repeating,
+            });
+            true
+        }
+        BackgroundImage::Gradient(ParsedGradient::Radial {
+            center_x_pct, center_y_pct, stops, repeating
+        }) => {
+            out.push(DisplayCommand::PushMaskRadialGradient {
+                rect,
+                center_x_pct: *center_x_pct,
+                center_y_pct: *center_y_pct,
+                stops: stops.clone(),
+                repeating: *repeating,
+            });
+            true
+        }
+        _ => false,
+    }
+}
+
 /// Эмитит outset box-shadow ПЕРЕД background (painter's order по CSS
 /// Backgrounds L3 §4.6 — shadow «cast … behind the element», то есть
 /// под background-color). Phase 0:
@@ -1580,6 +1679,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
     match &b.kind {
         BoxKind::Skip => {}
         BoxKind::Block | BoxKind::TableRow => {
+            // CSS Masking L1 §4: mask-image wraps the entire element (opacity+transform+content).
+            // Emitted outermost so the mask applies to the fully composited element.
+            let has_mask = emit_push_mask(out, b);
             // CSS Color L3 §3: opacity < 1.0 creates compositing layer.
             let has_opacity = b.style.opacity < 1.0; // >0.0 already checked above
             if has_opacity {
@@ -1674,6 +1776,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             }
             if has_opacity {
                 out.push(DisplayCommand::PopOpacity);
+            }
+            if has_mask {
+                out.push(DisplayCommand::PopMask);
             }
         }
         BoxKind::FormControl { .. } => {
@@ -2915,6 +3020,10 @@ mod tests {
                 DisplayCommand::PopTransform => "PopTransform",
                 DisplayCommand::DrawLinearGradient { .. } => "DrawLinearGradient",
                 DisplayCommand::DrawRadialGradient { .. } => "DrawRadialGradient",
+                DisplayCommand::PushMaskImage { .. } => "PushMaskImage",
+                DisplayCommand::PushMaskLinearGradient { .. } => "PushMaskLinearGradient",
+                DisplayCommand::PushMaskRadialGradient { .. } => "PushMaskRadialGradient",
+                DisplayCommand::PopMask => "PopMask",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);

@@ -256,8 +256,8 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | Property | Status |
 |---|---|
 | `clip-path` | 🟡 parsed (basic shapes); clipping not applied in paint |
-| `mask-image` | 🟡 parsed |
-| `mask-repeat`, `mask-size` | 🟡 parsed |
+| `mask-image` | 🟡 display list + renderer (URL: GPU alpha-mask via mask_composite_pipeline; gradient: Phase 0 fallback at full opacity) |
+| `mask-repeat`, `mask-size` | 🟡 parsed + wired (URL mask tiling via PopMask composite pass; gradient masks pending) |
 
 ### CSS Text Emphasis (Level 4 / Text Decoration Level 4)
 | Property | Status |
