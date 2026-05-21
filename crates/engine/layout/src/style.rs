@@ -1686,6 +1686,9 @@ pub struct ComputedStyle {
     pub pointer_events: PointerEvents,
     /// CSS UI L4 §6.2 — `user-select`. Inherited (по спеке).
     pub user_select: UserSelect,
+    /// CSS Basic UI L4 §6 — `resize`. NOT inherited. Initial: `None`.
+    /// Phase 0: parse + store; drag-resize UI — задача P3/UI.
+    pub resize: Resize,
     /// CSS Overflow L3 — `scroll-behavior`. Inherited.
     pub scroll_behavior: ScrollBehavior,
     /// CSS Scroll Snap L1 §3.1 — `scroll-snap-type`. Не наследуется.
@@ -1720,6 +1723,9 @@ pub struct ComputedStyle {
     /// CSS Text L3 §5.1 — `word-break: normal | keep-all | break-all |
     /// break-word`. Inherited. Default `Normal`.
     pub word_break: WordBreak,
+    /// CSS Text L3 §5.2 — `line-break`. Inherited. Initial: `Auto`.
+    /// Phase 0: parse + store; CJK line-breaking — отдельная задача.
+    pub line_break: LineBreak,
     /// CSS Text L3 §6 — `hyphens: none | manual | auto`. Inherited.
     /// Default `Manual`.
     pub hyphens: Hyphens,
@@ -2056,6 +2062,19 @@ impl OverflowWrap {
     }
 }
 
+/// CSS Text L3 §5.2 — `line-break`. Inherited. Initial: `Auto`.
+/// Управляет строгостью правил переноса CJK-текста по пробелам.
+/// Phase 0: parse + store; реальный CJK-wrap — отдельная задача.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum LineBreak {
+    #[default]
+    Auto,
+    Loose,
+    Normal,
+    Strict,
+    Anywhere,
+}
+
 /// CSS Text L3 §5.1 — `word-break`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum WordBreak {
@@ -2136,6 +2155,21 @@ impl PointerEvents {
             _ => None,
         }
     }
+}
+
+/// CSS Basic UI L4 §6 — `resize`. NOT inherited. Initial: `None`.
+/// Позволяет пользователю изменять размер элемента мышью.
+/// Phase 0: parse + store; реальный drag-resize — задача P3/UI.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Resize {
+    /// `none` — resize запрещён.
+    #[default]
+    None,
+    Both,
+    Horizontal,
+    Vertical,
+    Block,
+    Inline,
 }
 
 /// CSS UI L4 §6.2 — `user-select`. Inherited.
@@ -3249,6 +3283,7 @@ impl ComputedStyle {
             will_change: Vec::new(),
             pointer_events: PointerEvents::Auto,
             user_select: UserSelect::Auto,
+            resize: Resize::None,
             scroll_behavior: ScrollBehavior::Auto,
             // CSS Scroll Snap / Overscroll defaults.
             scroll_snap_type: ScrollSnapType::default(),
@@ -3269,6 +3304,7 @@ impl ComputedStyle {
             caret_color: None,  // `auto`.
             overflow_wrap: OverflowWrap::Normal,
             word_break: WordBreak::Normal,
+            line_break: LineBreak::Auto,
             hyphens: Hyphens::Manual,
             transform_origin: (0.0, 0.0, 0.0),
             perspective: None,
@@ -3464,6 +3500,7 @@ pub fn compute_style(
         pointer_events: PointerEvents::Auto,
         // User Select / Scroll Behavior — наследуются.
         user_select: inherited.user_select,
+        resize: Resize::None,
         scroll_behavior: inherited.scroll_behavior,
         // Scroll Snap / Overscroll — не наследуются, defaults.
         scroll_snap_type: ScrollSnapType::default(),
@@ -3484,6 +3521,7 @@ pub fn compute_style(
         caret_color: inherited.caret_color,
         overflow_wrap: inherited.overflow_wrap,
         word_break: inherited.word_break,
+        line_break: inherited.line_break,
         hyphens: inherited.hyphens,
         // CSS Transforms transform-origin + perspective — не наследуются.
         transform_origin: (0.0, 0.0, 0.0),
@@ -8337,6 +8375,17 @@ fn apply_declaration(
                 style.user_select = v;
             }
         }
+        "resize" => {
+            style.resize = match val.trim() {
+                "none" => Resize::None,
+                "both" => Resize::Both,
+                "horizontal" => Resize::Horizontal,
+                "vertical" => Resize::Vertical,
+                "block" => Resize::Block,
+                "inline" => Resize::Inline,
+                _ => style.resize,
+            };
+        }
         "scroll-behavior" => {
             if let Some(v) = ScrollBehavior::parse(val) {
                 style.scroll_behavior = v;
@@ -8470,6 +8519,16 @@ fn apply_declaration(
             if let Some(v) = WordBreak::parse(val) {
                 style.word_break = v;
             }
+        }
+        "line-break" => {
+            style.line_break = match val.trim() {
+                "auto" => LineBreak::Auto,
+                "loose" => LineBreak::Loose,
+                "normal" => LineBreak::Normal,
+                "strict" => LineBreak::Strict,
+                "anywhere" => LineBreak::Anywhere,
+                _ => style.line_break,
+            };
         }
         "hyphens" => {
             if let Some(v) = Hyphens::parse(val) {
@@ -9806,8 +9865,14 @@ fn apply_css_wide_keyword(
         "color-scheme" => {
             style.color_scheme = if inh { inherited.color_scheme } else { init.color_scheme };
         }
+        "line-break" => {
+            style.line_break = if inh { inherited.line_break } else { init.line_break };
+        }
 
         // ──────── Non-inherited properties ────────
+        "resize" => {
+            style.resize = if inh_only_inherit { inherited.resize } else { init.resize };
+        }
         "forced-color-adjust" => {
             style.forced_color_adjust = if inh_only_inherit {
                 inherited.forced_color_adjust
@@ -17710,5 +17775,118 @@ mod tests {
         let div = doc.get(doc.root()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.order, 0);
+    }
+
+    // ── resize ────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn resize_initial_none() {
+        let style = ComputedStyle::root();
+        assert_eq!(style.resize, Resize::None);
+    }
+
+    #[test]
+    fn resize_both() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { resize: both; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.resize, Resize::Both);
+    }
+
+    #[test]
+    fn resize_horizontal_vertical() {
+        let doc = lumen_html_parser::parse("<span></span><em></em>");
+        let hs = lumen_css_parser::parse("span { resize: horizontal; }");
+        let vs = lumen_css_parser::parse("em { resize: vertical; }");
+        let root = ComputedStyle::root();
+        let span = doc.get(doc.root()).children[0];
+        let em = doc.get(doc.root()).children[1];
+        let h = compute_style(&doc, span, &hs, &root, Size::new(800.0, 600.0));
+        let v = compute_style(&doc, em, &vs, &root, Size::new(800.0, 600.0));
+        assert_eq!(h.resize, Resize::Horizontal);
+        assert_eq!(v.resize, Resize::Vertical);
+    }
+
+    #[test]
+    fn resize_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { resize: both; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.resize, Resize::Both);
+        assert_eq!(span_style.resize, Resize::None);
+    }
+
+    #[test]
+    fn resize_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { resize: all; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.resize, Resize::None);
+    }
+
+    // ── line-break ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn line_break_initial_auto() {
+        let style = ComputedStyle::root();
+        assert_eq!(style.line_break, LineBreak::Auto);
+    }
+
+    #[test]
+    fn line_break_strict() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { line-break: strict; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.line_break, LineBreak::Strict);
+    }
+
+    #[test]
+    fn line_break_all_values() {
+        for (css, expected) in [
+            ("loose", LineBreak::Loose),
+            ("normal", LineBreak::Normal),
+            ("strict", LineBreak::Strict),
+            ("anywhere", LineBreak::Anywhere),
+        ] {
+            let doc = lumen_html_parser::parse("<div></div>");
+            let sheet = lumen_css_parser::parse(&format!("div {{ line-break: {css}; }}"));
+            let root = ComputedStyle::root();
+            let div = doc.get(doc.root()).children[0];
+            let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+            assert_eq!(style.line_break, expected, "css={css}");
+        }
+    }
+
+    #[test]
+    fn line_break_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { line-break: strict; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.line_break, LineBreak::Strict);
+        assert_eq!(span_style.line_break, LineBreak::Strict);
+    }
+
+    #[test]
+    fn line_break_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { line-break: always; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.line_break, LineBreak::Auto);
     }
 }
