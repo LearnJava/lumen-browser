@@ -240,7 +240,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | `text-decoration-style` | ✅ solid / dashed / dotted / wavy / double |
 | `text-decoration-thickness` | ✅ | `resolve_decoration_thickness()` in `display_list.rs`; auto/from-font=7%·em, length=px, pct=frac·em |
 | `text-shadow` | ✅ |
-| `text-underline-position` | ⬜ |
+| `text-underline-position` | 🟡 parsed | auto / from-font / under / left / right; real offset in underline paint — P2 task |
 
 ### CSS Masking Level 1
 | Property | Status |

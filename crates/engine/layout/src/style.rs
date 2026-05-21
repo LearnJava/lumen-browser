@@ -502,6 +502,26 @@ impl TextEmphasisPosition {
     }
 }
 
+/// CSS Text Decoration L3 §6.1 / L4 §5.1 — `text-underline-position`.
+/// Управляет вертикальным положением underline относительно baseline.
+/// Inherited. Initial: `Auto`.
+/// Phase 0: parse + store; real offset calculation при underline paint — P2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum TextUnderlinePosition {
+    /// UA выбирает оптимальное положение (обычно под baseline).
+    #[default]
+    Auto,
+    /// Underline выровнен по шрифтовым метрикам (underline-position из OS/2).
+    FromFont,
+    /// Underline рисуется строго под текстом (под всеми нижними выносными
+    /// символов, alphabetic baseline).
+    Under,
+    /// Для vertical writing-mode: underline рисуется с левой стороны.
+    Left,
+    /// Для vertical writing-mode: underline рисуется с правой стороны.
+    Right,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
     pub r: u8,
@@ -1407,6 +1427,10 @@ pub struct ComputedStyle {
     /// CSS Text Decoration L4 §5.5 — `text-emphasis-position`. Inherited.
     /// Initial: `OverRight` (horizontal writing-mode).
     pub text_emphasis_position: TextEmphasisPosition,
+    /// CSS Text Decoration L3 §6.1 / L4 §5.1 — `text-underline-position`.
+    /// Inherited. Initial: `Auto`. Phase 0: parse + store; реальный offset
+    /// при рисовании underline — задача P2.
+    pub text_underline_position: TextUnderlinePosition,
     /// Явная ширина (CSS `width`). `None` = auto. Typed `Length`; `%`
     /// резолвится при layout с known cb_width.
     pub width: Option<Length>,
@@ -3088,6 +3112,7 @@ impl ComputedStyle {
             text_emphasis_style: TextEmphasisStyle::None,
             text_emphasis_color: CssColor::CurrentColor,
             text_emphasis_position: TextEmphasisPosition::OverRight,
+            text_underline_position: TextUnderlinePosition::Auto,
             width: None,
             height: None,
             min_width: None,
@@ -3281,6 +3306,7 @@ pub fn compute_style(
         text_emphasis_style: inherited.text_emphasis_style.clone(),
         text_emphasis_color: inherited.text_emphasis_color,
         text_emphasis_position: inherited.text_emphasis_position,
+        text_underline_position: inherited.text_underline_position,
         accent_color: inherited.accent_color,
         // CSS Variables L1: все custom properties inherited.
         custom_props: inherited.custom_props.clone(),
@@ -8630,6 +8656,19 @@ fn apply_declaration(
                 style.text_emphasis_position = p;
             }
         }
+        "text-underline-position" => {
+            // CSS Text Decoration L3 §6.1 / L4 §5.1.
+            // Значения: auto | from-font | under | left | right.
+            // Phase 0: однословный keyword — комбинации (under left) игнорируем.
+            style.text_underline_position = match val.trim() {
+                "auto" => TextUnderlinePosition::Auto,
+                "from-font" => TextUnderlinePosition::FromFont,
+                "under" => TextUnderlinePosition::Under,
+                "left" => TextUnderlinePosition::Left,
+                "right" => TextUnderlinePosition::Right,
+                _ => style.text_underline_position,
+            };
+        }
         "text-emphasis" => {
             // CSS Text Decoration L4 §5.6 — shorthand для -style и -color
             // (НЕ включает -position по spec). Сбрасывает обе longhand-ы в
@@ -9477,6 +9516,13 @@ fn apply_css_wide_keyword(
                 inherited.text_emphasis_position
             } else {
                 init.text_emphasis_position
+            };
+        }
+        "text-underline-position" => {
+            style.text_underline_position = if inh {
+                inherited.text_underline_position
+            } else {
+                init.text_underline_position
             };
         }
         "text-shadow" => {
@@ -16840,5 +16886,72 @@ mod tests {
         let div = doc.get(doc.root()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.widows, 2);
+    }
+
+    #[test]
+    fn text_underline_position_initial_auto() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.text_underline_position, TextUnderlinePosition::Auto);
+    }
+
+    #[test]
+    fn text_underline_position_from_font() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-underline-position: from-font; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.text_underline_position, TextUnderlinePosition::FromFont);
+    }
+
+    #[test]
+    fn text_underline_position_under() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-underline-position: under; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.text_underline_position, TextUnderlinePosition::Under);
+    }
+
+    #[test]
+    fn text_underline_position_left_right() {
+        let doc = lumen_html_parser::parse("<span></span><em></em>");
+        let left_sheet = lumen_css_parser::parse("span { text-underline-position: left; }");
+        let right_sheet = lumen_css_parser::parse("em { text-underline-position: right; }");
+        let root = ComputedStyle::root();
+        let span = doc.get(doc.root()).children[0];
+        let em = doc.get(doc.root()).children[1];
+        let left_style = compute_style(&doc, span, &left_sheet, &root, Size::new(800.0, 600.0));
+        let right_style = compute_style(&doc, em, &right_sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(left_style.text_underline_position, TextUnderlinePosition::Left);
+        assert_eq!(right_style.text_underline_position, TextUnderlinePosition::Right);
+    }
+
+    #[test]
+    fn text_underline_position_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { text-underline-position: under; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.text_underline_position, TextUnderlinePosition::Under);
+        assert_eq!(span_style.text_underline_position, TextUnderlinePosition::Under);
+    }
+
+    #[test]
+    fn text_underline_position_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-underline-position: banana; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.text_underline_position, TextUnderlinePosition::Auto);
     }
 }
