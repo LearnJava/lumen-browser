@@ -40,7 +40,7 @@ BUG-025 | OPEN             | layout          | max-height does not clamp block h
 BUG-026 | OPEN             | layout/paint    | <img> CSS/HTML width+height ignored — renders at natural size
 BUG-028 | OPEN  [P3]       | shell           | relayout-on-resize + maximized window triggers BUG-027
 BUG-029 | FIXED 2026-05-21 | paint           | border-style: dotted renders square dots instead of circles
-BUG-020 | OPEN             | layout/paint    | overflow: scroll/auto/hidden treated as visible
+BUG-020 | FIXED 2026-05-21 | paint           | overflow: hidden/scroll/auto clip not applied (walk() missing PushClipRect)
 BUG-006 | OPEN  WONTFIX P1 | layout          | table layout not implemented (td/th render as blocks)
 BUG-021 | OPEN             | html-parser     | HTML bgcolor attribute ignored
 BUG-022 | OPEN             | css-parser      | Quirks-mode hashless hex colors not parsed
