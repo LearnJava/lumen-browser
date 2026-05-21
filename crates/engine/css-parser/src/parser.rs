@@ -730,10 +730,18 @@ pub struct FontFaceRule {
     pub weight: Option<String>,
     /// `font-style: normal | italic | oblique`. `None` = default.
     pub style: Option<String>,
+    /// `font-stretch: condensed | expanded | 75% 125% ...` — сырая строка. `None` = default (normal).
+    pub stretch: Option<String>,
     /// `font-display: auto | block | swap | fallback | optional`. `None` = default (auto).
     pub display: Option<String>,
     /// `unicode-range: U+0000-FFFF, U+10000-1FFFF` — сырая строка.
     pub unicode_range: Option<String>,
+    /// `font-variant: small-caps | ...` — CSS Fonts L3/L4 §7. Сырая строка.
+    pub variant: Option<String>,
+    /// `font-feature-settings: "liga" 1, "kern" 0` — CSS Fonts L3 §6. Сырая строка.
+    pub feature_settings: Option<String>,
+    /// `font-variation-settings: "wght" 400, "ital" 1` — CSS Fonts L4 §6 (variable fonts). Сырая строка.
+    pub variation_settings: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1670,7 +1678,8 @@ impl<'a> Parser<'a> {
 
     /// Парсит тело `@font-face { ... }` — обычный block declarations,
     /// но с font-face-specific descriptors (font-family / src / weight /
-    /// style / display / unicode-range). Прочие имена игнорируются.
+    /// style / stretch / display / unicode-range / variant /
+    /// feature-settings / variation-settings). Прочие имена игнорируются.
     fn parse_font_face_body(&mut self) -> Option<FontFaceRule> {
         self.skip_ws_and_comments();
         if self.peek() != Some('{') {
@@ -1684,8 +1693,12 @@ impl<'a> Parser<'a> {
         let mut src_str: Option<String> = None;
         let mut weight: Option<String> = None;
         let mut style: Option<String> = None;
+        let mut stretch: Option<String> = None;
         let mut display: Option<String> = None;
         let mut unicode_range: Option<String> = None;
+        let mut variant: Option<String> = None;
+        let mut feature_settings: Option<String> = None;
+        let mut variation_settings: Option<String> = None;
 
         for d in &declarations {
             let prop = d.property.to_ascii_lowercase();
@@ -1697,8 +1710,12 @@ impl<'a> Parser<'a> {
                 "src" => src_str = Some(d.value.clone()),
                 "font-weight" => weight = Some(d.value.trim().to_string()),
                 "font-style" => style = Some(d.value.trim().to_string()),
+                "font-stretch" => stretch = Some(d.value.trim().to_string()),
                 "font-display" => display = Some(d.value.trim().to_string()),
                 "unicode-range" => unicode_range = Some(d.value.trim().to_string()),
+                "font-variant" => variant = Some(d.value.trim().to_string()),
+                "font-feature-settings" => feature_settings = Some(d.value.trim().to_string()),
+                "font-variation-settings" => variation_settings = Some(d.value.trim().to_string()),
                 _ => {}
             }
         }
@@ -1711,8 +1728,12 @@ impl<'a> Parser<'a> {
             sources,
             weight,
             style,
+            stretch,
             display,
             unicode_range,
+            variant,
+            feature_settings,
+            variation_settings,
         })
     }
 
@@ -4874,6 +4895,102 @@ mod tests {
             @font-face { font-family: "Гранит"; src: url("granit.woff2"); }
         "#);
         assert_eq!(s.font_faces[0].family, "Гранит");
+    }
+
+    #[test]
+    fn at_font_face_stretch_descriptor() {
+        let s = parse(r#"
+            @font-face {
+                font-family: "Condensed";
+                src: url("cond.woff2");
+                font-stretch: condensed;
+            }
+        "#);
+        assert_eq!(s.font_faces[0].stretch, Some("condensed".to_string()));
+    }
+
+    #[test]
+    fn at_font_face_stretch_range() {
+        // CSS Fonts L4: font-stretch принимает два значения (диапазон).
+        let s = parse(r#"
+            @font-face {
+                font-family: "VarFont";
+                src: url("var.woff2");
+                font-stretch: 75% 125%;
+            }
+        "#);
+        assert_eq!(s.font_faces[0].stretch, Some("75% 125%".to_string()));
+    }
+
+    #[test]
+    fn at_font_face_variant_descriptor() {
+        let s = parse(r#"
+            @font-face {
+                font-family: "SmallCaps";
+                src: url("sc.woff2");
+                font-variant: small-caps;
+            }
+        "#);
+        assert_eq!(s.font_faces[0].variant, Some("small-caps".to_string()));
+    }
+
+    #[test]
+    fn at_font_face_feature_settings_descriptor() {
+        let s = parse(r#"
+            @font-face {
+                font-family: "Ligatured";
+                src: url("lig.woff2");
+                font-feature-settings: "liga" 1, "kern" 0;
+            }
+        "#);
+        assert_eq!(
+            s.font_faces[0].feature_settings,
+            Some(r#""liga" 1, "kern" 0"#.to_string())
+        );
+    }
+
+    #[test]
+    fn at_font_face_variation_settings_descriptor() {
+        let s = parse(r#"
+            @font-face {
+                font-family: "Variable";
+                src: url("variable.woff2");
+                font-variation-settings: "wght" 400, "ital" 1;
+            }
+        "#);
+        assert_eq!(
+            s.font_faces[0].variation_settings,
+            Some(r#""wght" 400, "ital" 1"#.to_string())
+        );
+    }
+
+    #[test]
+    fn at_font_face_all_l4_descriptors() {
+        // Полный набор CSS Fonts L4 дескрипторов в одном правиле.
+        let s = parse(r#"
+            @font-face {
+                font-family: "FullSpec";
+                src: url("full.woff2") format("woff2");
+                font-weight: 100 900;
+                font-style: oblique 20deg 50deg;
+                font-stretch: 75% 125%;
+                font-display: swap;
+                unicode-range: U+0000-007F;
+                font-variant: small-caps;
+                font-feature-settings: "liga" 1;
+                font-variation-settings: "wght" 700;
+            }
+        "#);
+        let f = &s.font_faces[0];
+        assert_eq!(f.family, "FullSpec");
+        assert_eq!(f.weight, Some("100 900".to_string()));
+        assert_eq!(f.style, Some("oblique 20deg 50deg".to_string()));
+        assert_eq!(f.stretch, Some("75% 125%".to_string()));
+        assert_eq!(f.display, Some("swap".to_string()));
+        assert_eq!(f.unicode_range, Some("U+0000-007F".to_string()));
+        assert_eq!(f.variant, Some("small-caps".to_string()));
+        assert_eq!(f.feature_settings, Some("\"liga\" 1".to_string()));
+        assert_eq!(f.variation_settings, Some("\"wght\" 700".to_string()));
     }
 
     #[test]
