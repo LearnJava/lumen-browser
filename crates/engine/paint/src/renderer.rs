@@ -468,6 +468,55 @@ fn blend_channel(mode: u32, cs: f32, cd: f32) -> f32 {
 }
 "#;
 
+/// CSS Masking L1 §4 — mask composite shader.
+/// Group 0: viewport uniform (shared with fill/image pipelines).
+/// Group 1: t_layer (offscreen element content), t_mask (mask image), s_layer.
+///
+/// Fragment output: content_sample.rgba * mask_sample.alpha — mask-mode: alpha.
+/// `pos` (pixel space) is converted to NDC the same way as fill/image shaders.
+/// `uv_layer` = pos / viewport (auto-derived in vertex shader; not a separate attribute).
+/// `uv_mask` = UV within the mask image tile (0..1 per tile instance).
+const MASK_COMPOSITE_SHADER_SRC: &str = r#"
+struct Uniforms {
+    viewport: vec2<f32>,
+};
+@group(0) @binding(0) var<uniform> u: Uniforms;
+
+@group(1) @binding(0) var t_layer: texture_2d<f32>;
+@group(1) @binding(1) var t_mask:  texture_2d<f32>;
+@group(1) @binding(2) var s_layer: sampler;
+
+struct VIn {
+    @location(0) pos:     vec2<f32>,
+    @location(1) uv_mask: vec2<f32>,
+};
+struct VOut {
+    @builtin(position) clip:     vec4<f32>,
+    @location(0)       uv_layer: vec2<f32>,
+    @location(1)       uv_mask:  vec2<f32>,
+};
+
+@vertex fn vs_main(in: VIn) -> VOut {
+    var o: VOut;
+    o.clip     = vec4<f32>(
+        in.pos.x / u.viewport.x * 2.0 - 1.0,
+        1.0 - in.pos.y / u.viewport.y * 2.0,
+        0.0, 1.0,
+    );
+    // uv_layer: sample the offscreen content layer at the same pixel position.
+    o.uv_layer = in.pos / u.viewport;
+    o.uv_mask  = in.uv_mask;
+    return o;
+}
+
+@fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    let c = textureSample(t_layer, s_layer, in.uv_layer);
+    let m = textureSample(t_mask,  s_layer, in.uv_mask);
+    // mask-mode: alpha — CSS Masking L1 §6.2 default for raster images.
+    return vec4<f32>(c.rgb, c.a * m.a);
+}
+"#;
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct FillVertex {
@@ -508,6 +557,17 @@ struct CompositeVertex {
     alpha: f32,
 }
 
+/// CSS Masking L1 §4 — вершина mask-composite пайплайна.
+/// `pos` — pixel-space (convert to NDC via viewport uniform).
+/// `uv_mask` — UV [0,1]×[0,1] в пределах одной плитки mask-изображения.
+/// `uv_layer` вычисляется в вершинном шейдере из `pos / viewport`.
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct MaskVertex {
+    pos: [f32; 2],
+    uv_mask: [f32; 2],
+}
+
 /// Атомарная команда render-pass-а после сборки display list-а. Каждый
 /// DisplayCommand → один (рисующий) DrawOp; PushClipRect/PopClip → отдельные
 /// SetScissor (если scissor реально меняется). Render-pass проходит список
@@ -535,8 +595,10 @@ struct GpuImage {
     bind_group_linear: wgpu::BindGroup,
     /// Nearest-neighbor filtered bind group — used for pixelated/crisp-edges.
     bind_group_nearest: wgpu::BindGroup,
-    // texture держим как поле даже без явного использования — wgpu освобождает
-    // GPU-память когда дропается последняя ссылка; bind_group её не держит.
+    /// Texture view (needed for mask-composite bind group creation in render loop).
+    view: wgpu::TextureView,
+    // texture держим как поле — wgpu освобождает GPU-память когда дропается
+    // последняя ссылка; bind_group её не держит.
     _texture: wgpu::Texture,
     width: u32,
     height: u32,
@@ -688,6 +750,10 @@ pub struct Renderer {
     blend_pipeline: wgpu::RenderPipeline,
     blend_bgl: wgpu::BindGroupLayout,
     blend_mode_uniform: wgpu::Buffer,
+    /// CSS Masking L1 §4 — mask composite pipeline + bind group layout.
+    /// Used by PopMask to composite the offscreen layer using a mask image.
+    mask_composite_bgl: wgpu::BindGroupLayout,
+    mask_composite_pipeline: wgpu::RenderPipeline,
     scratch_layer: Option<OffscreenLayer>,
     layer_sampler: wgpu::Sampler,
     layer_textures: Vec<OffscreenLayer>,
@@ -1334,6 +1400,91 @@ impl Renderer {
             cache: None,
         });
 
+        // ── Mask composite pipeline ──────────────────────────────────────────
+        // CSS Masking L1 §4: two-texture composite (content layer + mask image).
+        // Group 0 = viewport uniform (reuses uniform_bgl).
+        // Group 1 = { t_layer, t_mask, s_layer }.
+        let mask_composite_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("mask-composite-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let mask_composite_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("mask-composite-layout"),
+            bind_group_layouts: &[&uniform_bgl, &mask_composite_bgl],
+            push_constant_ranges: &[],
+        });
+        let mask_composite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("mask-composite-shader"),
+            source: wgpu::ShaderSource::Wgsl(MASK_COMPOSITE_SHADER_SRC.into()),
+        });
+        let mask_composite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mask-composite-pipeline"),
+            layout: Some(&mask_composite_layout),
+            vertex: wgpu::VertexState {
+                module: &mask_composite_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<MaskVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mask_composite_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         let atlas = GlyphAtlas::new(ATLAS_DIM);
 
         Ok(Self {
@@ -1361,6 +1512,8 @@ impl Renderer {
             blend_pipeline,
             blend_bgl,
             blend_mode_uniform,
+            mask_composite_bgl,
+            mask_composite_pipeline,
             scratch_layer: None,
             layer_sampler,
             layer_textures: Vec::new(),
@@ -1603,7 +1756,7 @@ impl Renderer {
         };
         let bind_group_linear = make_bg(&self.image_sampler);
         let bind_group_nearest = make_bg(&self.image_sampler_nearest);
-        GpuImage { bind_group_linear, bind_group_nearest, _texture: texture, width, height }
+        GpuImage { bind_group_linear, bind_group_nearest, view, _texture: texture, width, height }
     }
 
     /// Снимает регистрацию изображения. После этого `DrawImage` для `src`
@@ -1955,10 +2108,35 @@ impl Renderer {
         enum LoadOpChoice { ClearWhite, ClearTransparent, Load }
         struct DrawBatchPlan { target_level: usize, load_op: LoadOpChoice, ops_start: usize, ops_end: usize }
         struct CompositePlan { from_level: usize, comp_v_start: u32, mode: BlendMode }
-        enum RenderPlanItem { Draw(DrawBatchPlan), Composite(CompositePlan) }
+        // CSS Masking L1 §4: mask composite plan. `from_level` = offscreen level
+        // with element content; `mask_src` = key in self.images (mask image).
+        // `mask_v_start..mask_v_end` indexes into `mask_vertices`.
+        struct MaskCompositePlan {
+            from_level: usize,
+            mask_v_start: u32,
+            mask_v_end: u32,
+            mask_src: Option<String>, // None → gradient mask Phase 0 fallback (alpha=1.0)
+        }
+        enum RenderPlanItem {
+            Draw(DrawBatchPlan),
+            Composite(CompositePlan),
+            MaskComposite(MaskCompositePlan),
+        }
 
         let mut render_plan: Vec<RenderPlanItem> = Vec::new();
         let mut composite_vertices: Vec<CompositeVertex> = Vec::new();
+        // Accumulated vertex data for mask composite passes.
+        let mut mask_vertices: Vec<MaskVertex> = Vec::new();
+        // Stack of PushMask params: (mask_src, size, position, repeat, rect, nearest).
+        // Pushed by PushMask*, popped by PopMask.
+        struct MaskPushInfo {
+            src: Option<String>,
+            size: BackgroundSize,
+            position: ObjectPosition,
+            repeat: BackgroundRepeat,
+            rect: Rect,
+        }
+        let mut mask_params_stack: Vec<MaskPushInfo> = Vec::new();
 
         let mut current_level: usize = 0;
         let mut level_alpha_stack: Vec<f32> = Vec::new();
@@ -2524,6 +2702,139 @@ impl Renderer {
                 DisplayCommand::PopTransform => {
                     transform_stack.pop();
                 }
+                // CSS Masking L1 §4 — PushMask*: open an offscreen layer for the element,
+                // and record mask params so PopMask can composite with the mask.
+                DisplayCommand::PushMaskImage { rect, src, size, position, repeat, .. } => {
+                    flush_batch!();
+                    mask_params_stack.push(MaskPushInfo {
+                        src: Some(src.clone()),
+                        size: *size,
+                        position: *position,
+                        repeat: *repeat,
+                        rect: translate_rect(*rect, dx, dy),
+                    });
+                    current_level += 1;
+                    while level_first.len() <= current_level {
+                        level_first.push(true);
+                    }
+                    level_first[current_level] = true;
+                }
+                DisplayCommand::PushMaskLinearGradient { rect, .. }
+                | DisplayCommand::PushMaskRadialGradient { rect, .. } => {
+                    flush_batch!();
+                    // Gradient masks: Phase 0 fallback — open offscreen level,
+                    // PopMask composites at alpha=1.0 (no actual gradient masking).
+                    mask_params_stack.push(MaskPushInfo {
+                        src: None,
+                        size: BackgroundSize::Auto,
+                        position: ObjectPosition::background_initial(),
+                        repeat: BackgroundRepeat::NoRepeat,
+                        rect: translate_rect(*rect, dx, dy),
+                    });
+                    current_level += 1;
+                    while level_first.len() <= current_level {
+                        level_first.push(true);
+                    }
+                    level_first[current_level] = true;
+                }
+                DisplayCommand::PopMask => {
+                    flush_batch!();
+                    let Some(info) = mask_params_stack.pop() else { continue };
+                    let mv_start = mask_vertices.len() as u32;
+                    let mask_src = if let Some(src) = &info.src {
+                        // Build mask tile quads — same tiling logic as DrawBackgroundImage.
+                        if let Some(gpu) = self.images.get(src) {
+                            let img_w = gpu.width as f32;
+                            let img_h = gpu.height as f32;
+                            if img_w > 0.0 && img_h > 0.0 {
+                                let area = info.rect;
+                                let (tile_w, tile_h) = match info.size {
+                                    BackgroundSize::Auto => (img_w, img_h),
+                                    BackgroundSize::Cover => {
+                                        let s = (area.width / img_w).max(area.height / img_h);
+                                        (img_w * s, img_h * s)
+                                    }
+                                    BackgroundSize::Contain => {
+                                        let s = (area.width / img_w).min(area.height / img_h);
+                                        (img_w * s, img_h * s)
+                                    }
+                                    BackgroundSize::Length(w, h) => {
+                                        let tw = w.max(1.0);
+                                        let th = h.unwrap_or_else(|| img_h * (tw / img_w)).max(1.0);
+                                        (tw, th)
+                                    }
+                                };
+                                let off_x = match info.position.x {
+                                    PositionComponent::Px(px) => px,
+                                    PositionComponent::Percent(p) => (area.width - tile_w) * p,
+                                };
+                                let off_y = match info.position.y {
+                                    PositionComponent::Px(py) => py,
+                                    PositionComponent::Percent(p) => (area.height - tile_h) * p,
+                                };
+                                let tile_x0 = area.x + off_x;
+                                let tile_y0 = area.y + off_y;
+                                let (tile_x_start, repeat_x, repeat_y) = match info.repeat {
+                                    BackgroundRepeat::NoRepeat => (tile_x0, false, false),
+                                    BackgroundRepeat::RepeatX => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
+                                    BackgroundRepeat::RepeatY => (tile_x0, false, true),
+                                    BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
+                                        (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+                                    }
+                                };
+                                let tile_y_start = if repeat_y {
+                                    tile_y0 - (off_y / tile_h).ceil() * tile_h
+                                } else {
+                                    tile_y0
+                                };
+                                let x_end = area.x + area.width;
+                                let y_end = area.y + area.height;
+                                let mut ty = tile_y_start;
+                                loop {
+                                    if ty >= y_end { break; }
+                                    let mut tx = tile_x_start;
+                                    loop {
+                                        if tx >= x_end { break; }
+                                        let cx = tx.max(area.x);
+                                        let cy = ty.max(area.y);
+                                        let cx1 = (tx + tile_w).min(x_end);
+                                        let cy1 = (ty + tile_h).min(y_end);
+                                        if cx < cx1 && cy < cy1 {
+                                            let u0 = (cx - tx) / tile_w;
+                                            let v0 = (cy - ty) / tile_h;
+                                            let u1 = (cx1 - tx) / tile_w;
+                                            let v1 = (cy1 - ty) / tile_h;
+                                            // Two triangles for the tile quad.
+                                            mask_vertices.extend_from_slice(&[
+                                                MaskVertex { pos: [cx,  cy ], uv_mask: [u0, v0] },
+                                                MaskVertex { pos: [cx1, cy ], uv_mask: [u1, v0] },
+                                                MaskVertex { pos: [cx1, cy1], uv_mask: [u1, v1] },
+                                                MaskVertex { pos: [cx,  cy ], uv_mask: [u0, v0] },
+                                                MaskVertex { pos: [cx1, cy1], uv_mask: [u1, v1] },
+                                                MaskVertex { pos: [cx,  cy1], uv_mask: [u0, v1] },
+                                            ]);
+                                        }
+                                        if !repeat_x { break; }
+                                        tx += tile_w;
+                                    }
+                                    if !repeat_y { break; }
+                                    ty += tile_h;
+                                }
+                            }
+                        }
+                        Some(src.clone())
+                    } else {
+                        None
+                    };
+                    let mv_end = mask_vertices.len() as u32;
+                    render_plan.push(RenderPlanItem::MaskComposite(MaskCompositePlan {
+                        from_level: current_level,
+                        mask_v_start: mv_start,
+                        mask_v_end: mv_end,
+                        mask_src,
+                    }));
+                    current_level -= 1;
+                }
             }
         }
         flush_batch!();
@@ -2631,12 +2942,25 @@ impl Renderer {
             self.queue.write_buffer(&buf, 0, as_bytes(&composite_vertices));
             Some(buf)
         };
+        let mask_vbuf = if mask_vertices.is_empty() {
+            None
+        } else {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("mask-vbuf"),
+                size: std::mem::size_of_val(mask_vertices.as_slice()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buf, 0, as_bytes(&mask_vertices));
+            Some(buf)
+        };
 
         // ── Off-screen textures ───────────────────────────────────────────
         // Blend composites (mode != Normal) also need from_level offscreen layers.
         let max_level = render_plan.iter().fold(0usize, |m, item| match item {
             RenderPlanItem::Draw(b) => m.max(b.target_level),
             RenderPlanItem::Composite(c) => m.max(c.from_level),
+            RenderPlanItem::MaskComposite(c) => m.max(c.from_level),
         });
         if max_level > 0 {
             self.ensure_layer_textures(max_level, surface_w, surface_h);
@@ -2833,6 +3157,109 @@ impl Renderer {
                             pass.set_vertex_buffer(0, cvb.slice(..));
                             pass.draw(comp.comp_v_start..comp.comp_v_start + 6, 0..1);
                         }
+                    }
+                }
+                // CSS Masking L1 §4 — mask composite.
+                // Composites the offscreen element layer onto the parent using the
+                // mask image as an alpha multiplier (mask-mode: alpha).
+                RenderPlanItem::MaskComposite(comp) => {
+                    let target_view = if comp.from_level == 1 {
+                        &frame_view
+                    } else if comp.from_level >= 2 {
+                        &self.layer_textures[comp.from_level - 2].view
+                    } else {
+                        continue;
+                    };
+                    let content_layer_view = &self.layer_textures[comp.from_level - 1].view;
+
+                    // Try to get the mask image GPU texture.
+                    let mask_gpu = comp.mask_src.as_ref().and_then(|src| self.images.get(src));
+
+                    if let (Some(mvb), Some(mask_gpu)) = (&mask_vbuf, mask_gpu) {
+                        // Build per-frame bind group: content layer + mask image + sampler.
+                        let mask_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("mask-composite-bg"),
+                            layout: &self.mask_composite_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry {
+                                    binding: 0,
+                                    resource: wgpu::BindingResource::TextureView(content_layer_view),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 1,
+                                    resource: wgpu::BindingResource::TextureView(&mask_gpu.view),
+                                },
+                                wgpu::BindGroupEntry {
+                                    binding: 2,
+                                    resource: wgpu::BindingResource::Sampler(&self.layer_sampler),
+                                },
+                            ],
+                        });
+                        let v_count = comp.mask_v_end - comp.mask_v_start;
+                        if v_count > 0 {
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("mask-composite-pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: target_view,
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Load,
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            pass.set_pipeline(&self.mask_composite_pipeline);
+                            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                            pass.set_bind_group(1, &mask_bg, &[]);
+                            pass.set_vertex_buffer(0, mvb.slice(..));
+                            pass.draw(comp.mask_v_start..comp.mask_v_end, 0..1);
+                        }
+                    } else {
+                        // Mask image not registered or gradient mask (Phase 0 fallback):
+                        // composite the content layer at full opacity.
+                        let src_bg = &self.layer_textures[comp.from_level - 1].bind_group;
+                        // Push a fullscreen quad with alpha=1.0 for the fallback composite.
+                        // We use the existing composite pipeline directly here.
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("mask-fallback-pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: target_view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        // Need a small fullscreen-quad vertex buffer just for this fallback.
+                        // Allocate it on the fly (rare path — only when mask image missing).
+                        let fallback_verts: [CompositeVertex; 6] = [
+                            CompositeVertex { pos: [-1.0,  1.0], uv: [0.0, 0.0], alpha: 1.0 },
+                            CompositeVertex { pos: [ 1.0,  1.0], uv: [1.0, 0.0], alpha: 1.0 },
+                            CompositeVertex { pos: [ 1.0, -1.0], uv: [1.0, 1.0], alpha: 1.0 },
+                            CompositeVertex { pos: [-1.0,  1.0], uv: [0.0, 0.0], alpha: 1.0 },
+                            CompositeVertex { pos: [ 1.0, -1.0], uv: [1.0, 1.0], alpha: 1.0 },
+                            CompositeVertex { pos: [-1.0, -1.0], uv: [0.0, 1.0], alpha: 1.0 },
+                        ];
+                        let fallback_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("mask-fallback-vbuf"),
+                            size: std::mem::size_of_val(&fallback_verts) as u64,
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        self.queue.write_buffer(&fallback_buf, 0, as_bytes(fallback_verts.as_slice()));
+                        pass.set_pipeline(&self.composite_pipeline);
+                        pass.set_bind_group(0, src_bg, &[]);
+                        pass.set_vertex_buffer(0, fallback_buf.slice(..));
+                        pass.draw(0..6, 0..1);
                     }
                 }
             }

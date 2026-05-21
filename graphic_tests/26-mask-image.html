@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — mask-image</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #111; width: 1022px; height: 718px; margin: 1px; overflow: hidden; }
+
+    .row { display: flex; gap: 30px; padding: 40px; }
+
+    /* Box with linear-gradient mask: gradient from opaque black to transparent.
+       Phase 0: mask renders as no-op (full opacity), box shows solid color. */
+    .mask-linear {
+      width: 200px; height: 200px;
+      background: #e63946;
+      mask-image: linear-gradient(to bottom, black, transparent);
+    }
+
+    /* Box with radial-gradient mask.
+       Phase 0: renders as full opacity (gradient mask is a Phase 0 stub). */
+    .mask-radial {
+      width: 200px; height: 200px;
+      background: #2a9d8f;
+      mask-image: radial-gradient(circle, black 40%, transparent 70%);
+    }
+
+    /* Box without mask (control): should look identical to mask boxes in Phase 0 */
+    .no-mask {
+      width: 200px; height: 200px;
+      background: #e9c46a;
+    }
+  </style>
+</head>
+<body>
+  <div class="__f">
+    <div class="row">
+      <div class="mask-linear"></div>
+      <div class="mask-radial"></div>
+      <div class="no-mask"></div>
+    </div>
+  </div>
+</body>
+</html>

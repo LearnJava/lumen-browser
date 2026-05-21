@@ -1,4 +1,4 @@
-In progress: —
+In progress: mask-image/repeat/size → rendering  branch: mask-image-rendering
 
 Next (Wave 1 — unblock P1/P2):
 

@@ -67,6 +67,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('23', '23-pseudo-elements.html', 1.0, '::before / ::after block-level generation'),
     ('24', '24-vertical-align.html',  1.5, 'vertical-align inline y-offset + inline-block positioning'),
     ('25', '25-table-layout.html',    1.0, 'table layout: cells horizontal, rows vertical'),
+    ('26', '26-mask-image.html',       2.0, 'mask-image: linear/radial gradient mask (Phase 0 fallback = no-op)'),
 ]
 
 # --- PNG reader (stdlib only) ---
