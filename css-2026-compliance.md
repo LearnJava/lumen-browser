@@ -99,7 +99,7 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | `font-variant` | 🟡 small-caps parsed |
 | `font-stretch` | 🟡 stored; not applied by font matcher |
 | `font` (shorthand) | ✅ |
-| `@font-face` | ⬜ |
+| `@font-face` | 🟡 family/src/weight/style/stretch/display/unicode-range/variant/feature-settings/variation-settings parsed; no fetch/font-loading yet |
 
 ### CSS Transforms Level 1
 | Property | Status |
@@ -432,7 +432,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | CSS Text L3 | ✅ most | hyphens, tab, line-break | — |
 | CSS Text Decoration L3 | ✅ most | thickness | underline-position |
 | CSS Backgrounds L3 | ✅ (color/border/shadow) | image/clip layers | — |
-| CSS Fonts L3/L4 | ✅ (size/weight/style) | stretch/variant | @font-face |
+| CSS Fonts L3/L4 | ✅ (size/weight/style) | stretch/variant | @font-face parse✅ no fetch |
 | CSS Compositing L1 | ✅ opacity | blend-mode/isolation | — |
 | CSS Images L3 | ✅ object-fit/position | image-rendering | — |
 | CSS Transforms L1 | — | parse-only | paint apply |

@@ -24,8 +24,8 @@
 - **CSS Counters:** `counter-reset` / `counter-increment` parsed into `Vec<(String, i32)>`. Phase 0: parsing + storage; real counter scoping — separate task.
 - **CSS Variables L1 (`--name` declarations):** parser requires no special grammar — `--main-color: red;` is a regular declaration. Substitution `var()` is done in layout. `!important` for custom properties works via same `extract_important`.
 - **CSS `@layer` (CSS Cascade L5 §6.4):** `Stylesheet.layer_order: Vec<String>` stores cascade-priority of layer names, `Stylesheet.layers: Vec<LayerRule { name, rules }>`. Phase 0: parsing + storage only; cascade-integration — separate task.
-- **CSS `@font-face` (CSS Fonts L4 §4):** `Stylesheet.font_faces: Vec<FontFaceRule>`. Phase 0: parsing.
+- **CSS `@font-face` (CSS Fonts L4 §4):** `Stylesheet.font_faces: Vec<FontFaceRule>`. Phase 0: full descriptor parsing — family, src (url/local + format hints), weight, style, stretch, display, unicode-range, variant, feature-settings, variation-settings. No fetch/loading yet (shell task). 6 new tests added (229 total).
 - **CSS `@import url(...)` (CSS Cascade L4 §6.5):** `Stylesheet.imports: Vec<ImportRule>`. Parser only extracts URL — fetch and incorporation into cascade — consumer task (shell).
 - **CSS Properties and Values L1 §1.1 `@property`:** `Stylesheet { rules, properties }` — alongside regular rules stores `Vec<PropertyRule { name, syntax, inherits, initial_value }>`. Other @-rules syntactically skipped as before.
 - **Deferred:** namespace prefix in selectors, typed declaration values (length / color / calc — types stored in layout, not parser), `:checked` / `:indeterminate` / `:default` / `:in-range` / `:out-of-range` (require runtime form-state).
-- 99 tests.
+- 229 tests.

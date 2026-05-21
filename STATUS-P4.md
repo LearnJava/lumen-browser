@@ -1,7 +1,6 @@
 In progress: —
 
 Next (Wave 1 — unblock P1/P2):
-@font-face rule parsing (⬜→🟡)               css-parser/src/parser.rs     ~2h  unblocks P2 font loading
 content + ::before/::after generation (🟡→✅) style.rs + display_list.rs   ~3h  unblocks P1 pseudo layout
 vertical-align inline y-offset (🟡→✅)        style.rs + box_tree.rs       ~1h
 
@@ -35,4 +34,4 @@ Coordination rules:
   — Merge to main after each property (keep divergence small)
   — Compliance tracker: css-2026-compliance.md
 
-Recent: fix-tests-garbled 2026-05-21, css-shapes + motion-path 2026-05-21, writing-mode 2026-05-21, backdrop-filter + print-color-adjust + font-size-adjust 2026-05-21, color-scheme 2026-05-21, text-underline-position 2026-05-21, orphans-widows 2026-05-21, line-clamp 2026-05-21, transform-matrix 2026-05-21, display-ext 2026-05-21, containment + container-queries 2026-05-21, text-align-last + touch-action + appearance 2026-05-21, forced-color-adjust 2026-05-21, resize + line-break 2026-05-21
+Recent: @font-face L4 descriptors 2026-05-21, fix-tests-garbled 2026-05-21, css-shapes + motion-path 2026-05-21, writing-mode 2026-05-21, backdrop-filter + print-color-adjust + font-size-adjust 2026-05-21, color-scheme 2026-05-21, text-underline-position 2026-05-21, orphans-widows 2026-05-21, line-clamp 2026-05-21, transform-matrix 2026-05-21, display-ext 2026-05-21, containment + container-queries 2026-05-21, text-align-last + touch-action + appearance 2026-05-21, forced-color-adjust 2026-05-21, resize + line-break 2026-05-21
