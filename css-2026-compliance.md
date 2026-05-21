@@ -350,6 +350,11 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | `overscroll-behavior` | 🟡 parsed |
 | `text-overflow` | ✅ | clip (default) and ellipsis; truncation in layout via TextMeasurer |
 
+### CSS Overflow Level 4
+| Property | Status | Notes |
+|---|---|---|
+| `-webkit-line-clamp` / `line-clamp` | 🟡 parsed | parse + store; visual truncation after N lines — deferred |
+
 ### CSS Sizing Level 4
 | Property | Status |
 |---|---|
