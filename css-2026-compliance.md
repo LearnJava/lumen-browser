@@ -340,7 +340,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 ### CSS Nesting Level 1
 | Feature | Status |
 |---|---|
-| `&` selector nesting | ⬜ |
+| `&` selector nesting | ✅ | parse-time expansion: `& sel`, `& > sel`, `& + sel`, `& ~ sel`, `&.cls` + multi-parent + deep nesting |
 
 ### CSS Logical Properties Level 1
 | Property | Status |
@@ -406,7 +406,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | CSS Positioned Layout L3 | ✅ static | others parse-only | OOF layout |
 | CSS Grid L1/L2 | — | — | ⬜ not started |
 | CSS Logical Properties L1 | ✅ parse+store (LTR) | — | full RTL/vertical |
-| CSS Nesting L1 | — | — | ⬜ not started |
+| CSS Nesting L1 | ✅ | — | — |
 | CSS Multi-column L1 | — | parse-only | layout |
 | CSS Scroll Snap L1 | — | parse-only | — |
 | CSS Masking L1 | — | parse-only | — |

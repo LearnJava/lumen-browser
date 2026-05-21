@@ -1498,8 +1498,9 @@ impl<'a> Parser<'a> {
                 },
                 Some(_) => {
                     let before = self.pos;
-                    if let Some(rule) = self.parse_rule() {
+                    if let Some((rule, nested)) = self.parse_rule() {
                         rules.push(rule);
+                        rules.extend(nested); // CSS Nesting L1: flat-expanded nested rules
                     } else if self.pos == before {
                         // Защита от бесконечного цикла: parse_rule не сдвинул
                         // позицию — принудительно проглатываем один символ.
@@ -1652,8 +1653,9 @@ impl<'a> Parser<'a> {
                         }
                         Some(_) => {
                             let before = self.pos;
-                            if let Some(rule) = self.parse_rule() {
+                            if let Some((rule, nested)) = self.parse_rule() {
                                 rules.push(rule);
+                                rules.extend(nested);
                             } else if self.pos == before {
                                 self.consume();
                             }
@@ -1812,8 +1814,9 @@ impl<'a> Parser<'a> {
                 }
                 Some(_) => {
                     let before = self.pos;
-                    if let Some(rule) = self.parse_rule() {
+                    if let Some((rule, nested)) = self.parse_rule() {
                         rules.push(rule);
+                        rules.extend(nested);
                     } else if self.pos == before {
                         self.consume();
                     }
@@ -1862,8 +1865,9 @@ impl<'a> Parser<'a> {
                 }
                 Some(_) => {
                     let before = self.pos;
-                    if let Some(rule) = self.parse_rule() {
+                    if let Some((rule, nested)) = self.parse_rule() {
                         rules.push(rule);
+                        rules.extend(nested);
                     } else if self.pos == before {
                         self.consume();
                     }
@@ -2057,8 +2061,9 @@ impl<'a> Parser<'a> {
                 }
                 Some(_) => {
                     let before = self.pos;
-                    if let Some(rule) = self.parse_rule() {
+                    if let Some((rule, nested)) = self.parse_rule() {
                         rules.push(rule);
+                        rules.extend(nested);
                     } else if self.pos == before {
                         self.consume();
                     }
@@ -2117,8 +2122,9 @@ impl<'a> Parser<'a> {
                 }
                 Some(_) => {
                     let before = self.pos;
-                    if let Some(rule) = self.parse_rule() {
+                    if let Some((rule, nested)) = self.parse_rule() {
                         rules.push(rule);
+                        rules.extend(nested);
                     } else if self.pos == before {
                         self.consume();
                     }
@@ -2166,8 +2172,9 @@ impl<'a> Parser<'a> {
                 }
                 Some(_) => {
                     let before = self.pos;
-                    if let Some(rule) = self.parse_rule() {
+                    if let Some((rule, nested)) = self.parse_rule() {
                         rules.push(rule);
+                        rules.extend(nested);
                     } else if self.pos == before {
                         self.consume();
                     }
@@ -2309,13 +2316,11 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_rule(&mut self) -> Option<Rule> {
+    fn parse_rule(&mut self) -> Option<(Rule, Vec<Rule>)> {
         let start = self.pos;
         let selectors = self.parse_selector_list();
         self.skip_ws_and_comments();
         if selectors.is_empty() || self.peek() != Some('{') {
-            // Не удалось разобрать селекторы — пропустим до конца блока,
-            // чтобы не зациклиться.
             if self.pos == start {
                 self.consume();
             }
@@ -2323,11 +2328,86 @@ impl<'a> Parser<'a> {
             return None;
         }
         self.consume(); // '{'
-        let declarations = self.parse_declaration_block();
-        Some(Rule {
-            selectors,
-            declarations,
-        })
+        let (declarations, nested) = self.parse_declaration_block_with_nesting(&selectors);
+        Some((Rule { selectors, declarations }, nested))
+    }
+
+    /// CSS Nesting L1 §3 — parse declaration block that may contain `& { }` nested rules.
+    /// Returns (declarations, flattened nested rules with expanded selectors).
+    fn parse_declaration_block_with_nesting(
+        &mut self,
+        parent_sels: &[ComplexSelector],
+    ) -> (Vec<Declaration>, Vec<Rule>) {
+        let mut decls = Vec::new();
+        let mut nested: Vec<Rule> = Vec::new();
+        loop {
+            self.skip_ws_and_comments();
+            match self.peek() {
+                None => break,
+                Some('}') => {
+                    self.consume();
+                    break;
+                }
+                Some(';') => {
+                    self.consume();
+                    continue;
+                }
+                Some('&') => {
+                    // Nested rule starting with nesting selector `&`.
+                    let expanded = self.parse_nested_rule_amp(parent_sels);
+                    nested.extend(expanded);
+                }
+                _ => match self.parse_declaration() {
+                    Some(d) => decls.push(d),
+                    None => self.recover_to_decl_boundary(),
+                },
+            }
+        }
+        (decls, nested)
+    }
+
+    /// Parse `& [combinator] selector-list { declarations }` and expand into flat rules.
+    /// The `&` has already been peeked but not consumed.
+    fn parse_nested_rule_amp(&mut self, parent_sels: &[ComplexSelector]) -> Vec<Rule> {
+        self.consume(); // consume '&'
+        let had_ws = self.skip_ws_and_comments_track();
+        // Determine if there's an explicit combinator after &.
+        let combinator: Option<Combinator> = match self.peek() {
+            Some('>') => { self.consume(); self.skip_ws_and_comments(); Some(Combinator::Child) }
+            Some('+') => { self.consume(); self.skip_ws_and_comments(); Some(Combinator::NextSibling) }
+            Some('~') => { self.consume(); self.skip_ws_and_comments(); Some(Combinator::LaterSibling) }
+            Some('{') => None, // bare `& { }` — same element as parent
+            _ if had_ws => Some(Combinator::Descendant),
+            _ => None, // `&.class` / `&[attr]` / `&#id` — compound join
+        };
+        // Parse the selector list that follows (may be empty for bare `& { }`).
+        let nested_sels: Vec<ComplexSelector> = if self.peek() == Some('{') {
+            vec![] // bare `& { }` — same element
+        } else {
+            let s = self.parse_selector_list();
+            if s.is_empty() {
+                self.recover_to_block_end();
+                return vec![];
+            }
+            s
+        };
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.recover_to_block_end();
+            return vec![];
+        }
+        self.consume(); // '{'
+        // Expand: combine each parent selector with each nested selector.
+        let expanded_sels = if nested_sels.is_empty() {
+            parent_sels.to_vec() // bare `& { }` = same as parent
+        } else {
+            expand_nesting(parent_sels, combinator, &nested_sels)
+        };
+        let (declarations, sub_nested) =
+            self.parse_declaration_block_with_nesting(&expanded_sels);
+        let mut result = vec![Rule { selectors: expanded_sels, declarations }];
+        result.extend(sub_nested);
+        result
     }
 
     fn recover_to_block_end(&mut self) {
@@ -3086,6 +3166,41 @@ fn parse_nth_spec_str(s: &str) -> Option<NthSpec> {
     } else {
         Some(NthSpec { a: 0, b: s.parse().ok()? })
     }
+}
+
+/// CSS Nesting L1 §3 — expand `& (combinator) nested` into concrete selectors.
+///
+/// `combinator = None`  → compound join (e.g. `&.foo` → `parent.foo`)
+/// `combinator = Some(c)` → `parent c nested` (e.g. `& span` → `parent descendant span`)
+fn expand_nesting(
+    parents: &[ComplexSelector],
+    combinator: Option<Combinator>,
+    nested: &[ComplexSelector],
+) -> Vec<ComplexSelector> {
+    let mut result = Vec::new();
+    for parent in parents {
+        for n in nested {
+            let expanded = match combinator {
+                None => {
+                    // `&.foo` → merge parent head with nested head, keep tails.
+                    let mut head = parent.head.clone();
+                    head.parts.extend_from_slice(&n.head.parts);
+                    let mut tail = parent.tail.clone();
+                    tail.extend_from_slice(&n.tail);
+                    ComplexSelector { head, tail }
+                }
+                Some(comb) => {
+                    // `& span` → parent + (comb, nested_head) + nested_tail
+                    let mut tail = parent.tail.clone();
+                    tail.push((comb, n.head.clone()));
+                    tail.extend_from_slice(&n.tail);
+                    ComplexSelector { head: parent.head.clone(), tail }
+                }
+            };
+            result.push(expanded);
+        }
+    }
+    result
 }
 
 #[cfg(test)]
@@ -5385,5 +5500,108 @@ mod tests {
         assert_eq!(decls.len(), 2);
         assert_eq!(decls[0].value, r#"url("a;b.png")"#);
         assert_eq!(decls[1].value, "'hi; there'");
+    }
+
+    // --- CSS Nesting L1 ---
+
+    fn two(a: SimpleSelector, comb: Combinator, b: SimpleSelector) -> ComplexSelector {
+        ComplexSelector {
+            head: CompoundSelector { parts: vec![a] },
+            tail: vec![(comb, CompoundSelector { parts: vec![b] })],
+        }
+    }
+
+    #[test]
+    fn nesting_descendant_simple() {
+        // `div { color: red; & span { color: blue; } }` →
+        // 2 rules: div { color: red } and div span { color: blue }
+        let s = parse("div { color: red; & span { color: blue; } }");
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.rules[0].selectors, vec![one(SimpleSelector::Type("div".into()))]);
+        assert_eq!(s.rules[0].declarations[0].property, "color");
+        assert_eq!(s.rules[0].declarations[0].value, "red");
+        assert_eq!(
+            s.rules[1].selectors,
+            vec![two(SimpleSelector::Type("div".into()), Combinator::Descendant, SimpleSelector::Type("span".into()))]
+        );
+        assert_eq!(s.rules[1].declarations[0].property, "color");
+        assert_eq!(s.rules[1].declarations[0].value, "blue");
+    }
+
+    #[test]
+    fn nesting_child_combinator() {
+        // `ul { & > li { list-style: none; } }`
+        let s = parse("ul { & > li { list-style: none; } }");
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(
+            s.rules[1].selectors,
+            vec![two(SimpleSelector::Type("ul".into()), Combinator::Child, SimpleSelector::Type("li".into()))]
+        );
+        assert_eq!(s.rules[1].declarations[0].property, "list-style");
+    }
+
+    #[test]
+    fn nesting_compound_join() {
+        // `div { &.active { color: red; } }` → `div.active { color: red; }`
+        let s = parse("div { &.active { color: red; } }");
+        assert_eq!(s.rules.len(), 2);
+        let sel = &s.rules[1].selectors[0];
+        assert_eq!(sel.head.parts, vec![
+            SimpleSelector::Type("div".into()),
+            SimpleSelector::Class("active".into()),
+        ]);
+        assert!(sel.tail.is_empty());
+    }
+
+    #[test]
+    fn nesting_bare_amp() {
+        // `div { & { color: red; } }` → `div { color: red; }` (same element)
+        let s = parse("div { color: blue; & { color: red; } }");
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.rules[1].selectors, vec![one(SimpleSelector::Type("div".into()))]);
+        assert_eq!(s.rules[1].declarations[0].value, "red");
+    }
+
+    #[test]
+    fn nesting_multiple_parent_selectors() {
+        // `h1, h2 { & span { color: red; } }` → `h1 span` and `h2 span`
+        let s = parse("h1, h2 { & span { color: red; } }");
+        assert_eq!(s.rules.len(), 2);
+        let nested_sels = &s.rules[1].selectors;
+        assert_eq!(nested_sels.len(), 2);
+        assert_eq!(
+            nested_sels[0],
+            two(SimpleSelector::Type("h1".into()), Combinator::Descendant, SimpleSelector::Type("span".into()))
+        );
+        assert_eq!(
+            nested_sels[1],
+            two(SimpleSelector::Type("h2".into()), Combinator::Descendant, SimpleSelector::Type("span".into()))
+        );
+    }
+
+    #[test]
+    fn nesting_deep_two_levels() {
+        // `div { & p { & em { color: red; } } }` → 3 rules: div, div p, div p em
+        let s = parse("div { & p { & em { color: red; } } }");
+        assert_eq!(s.rules.len(), 3);
+        // div p em
+        let sel = &s.rules[2].selectors[0];
+        assert_eq!(sel.head.parts, vec![SimpleSelector::Type("div".into())]);
+        assert_eq!(sel.tail.len(), 2);
+        assert_eq!(sel.tail[0].0, Combinator::Descendant);
+        assert_eq!(sel.tail[0].1.parts, vec![SimpleSelector::Type("p".into())]);
+        assert_eq!(sel.tail[1].0, Combinator::Descendant);
+        assert_eq!(sel.tail[1].1.parts, vec![SimpleSelector::Type("em".into())]);
+    }
+
+    #[test]
+    fn nesting_declarations_not_mixed_with_nested() {
+        // Declarations and nested rules don't interfere
+        let s = parse("p { margin: 0; & b { font-weight: bold; } padding: 5px; }");
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.rules[0].declarations.len(), 2); // margin + padding
+        assert_eq!(s.rules[0].declarations[0].property, "margin");
+        assert_eq!(s.rules[0].declarations[1].property, "padding");
+        assert_eq!(s.rules[1].declarations[0].property, "font-weight");
     }
 }
