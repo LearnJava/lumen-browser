@@ -1,9 +1,7 @@
-In progress: —
+In progress: transform matrix  branch: transform-matrix
+Next step: create 22-transform.html graphic test + update compliance tracker
 
-Next: transform matrix                  display_list.rs — emit DrawTransform (coordinate P2)
-
-Queue (🟡→✅, paint/layout wire-up, no new parsing needed):
-  transform matrix                     display_list.rs — emit DrawTransform (coordinate P2)
+Next: line-clamp                           style.rs — -webkit-line-clamp compat
 
 Queue (⬜→🟡, new parse+store only, no paint):
   line-clamp                           style.rs — -webkit-line-clamp compat
