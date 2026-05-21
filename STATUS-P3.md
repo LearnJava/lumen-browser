@@ -2,8 +2,6 @@ In progress: —
 Next step: —
 
 Next (Wave 2):
-Navigation API: history.pushState/popstate    shell/ + dom/                ~2h
-Navigation API: history.pushState/popstate    shell/ + dom/                ~2h
 
 Queue (Wave 3+):
 Server-Sent Events (text/event-stream)                       ~1h
@@ -13,4 +11,4 @@ Forms UI: native pickers, validation tooltip                 ~2h  depends on P1 
 IME composition events                                       ~2h
 bfcache: DOM+JS snapshot                                     ~3h
 
-Recent: websockets-rfc6455 2026-05-21, streaming-pipeline 2026-05-21, sop-enforcement 2026-05-21, session-export 2026-05-21, devtools 2026-05-21
+Recent: navigation-api 2026-05-21, websockets-rfc6455 2026-05-21, streaming-pipeline 2026-05-21, sop-enforcement 2026-05-21, session-export 2026-05-21
