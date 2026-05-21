@@ -153,7 +153,7 @@ def capture_edge(html_path: str, out_png: str) -> None:
     subprocess.run(
         [EDGE, '--headless', f'--screenshot={out_png}',
          f'--window-size={VIEWPORT_W},{VIEWPORT_H}', url],
-        capture_output=True, timeout=30,
+        capture_output=True, timeout=60,
     )
 
 def capture_lumen(html_relpath: str, out_png: str) -> None:
@@ -354,6 +354,10 @@ def main() -> int:
     if halted_at:
         skipped = len([t for t in TESTS if t[0] > halted_at])
         print(f'Pipeline stopped at TEST-{halted_at}. {skipped} tests skipped.')
+        return 1
+    failed = [r for r in results if not r[2]]
+    if failed:
+        print(f'{len(failed)}/{len(results)} tests FAILED: ' + ', '.join(r[0] for r in failed))
         return 1
     print(f'All {len(results)} tests passed.')
     return 0

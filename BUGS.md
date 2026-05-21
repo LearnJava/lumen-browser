@@ -44,6 +44,39 @@ BUG-020 | OPEN             | layout/paint    | overflow: scroll/auto/hidden trea
 BUG-006 | OPEN  WONTFIX P1 | layout          | table layout not implemented (td/th render as blocks)
 BUG-021 | OPEN             | html-parser     | HTML bgcolor attribute ignored
 BUG-022 | OPEN             | css-parser      | Quirks-mode hashless hex colors not parsed
+BUG-032 | OPEN             | paint/image     | object-fit regression 16%→86% after img-in-span fix (b54734b)
+```
+
+---
+
+## Прогон 2026-05-21 (graphic_tests, --continue-on-fail, порог 1%)
+
+Инфраструктура: foreground-window fix (Alt-trick), Edge timeout 60s, калибровка по периметру.
+
+```
+TEST-00: PASS  0.00%   calibration
+TEST-01: PASS  0.00%   sanity                 ← было 38.98% — foreground fix устранил смещение
+TEST-02: FAIL  2.35%   color-named            ← sub-pixel антиалиасинг
+TEST-03: FAIL  2.06%   color-formats          ← sub-pixel антиалиасинг
+TEST-04: FAIL  2.35%   color-alpha            ← rgba edge rendering
+TEST-05: FAIL  3.89%   border-width           ← sub-pixel рендеринг границы
+TEST-06: FAIL  5.95%   border-sides           ← BUG-024 (box-sizing)
+TEST-07: FAIL  8.60%   box-sizing             ← BUG-024
+TEST-08: FAIL  4.45%   padding                ← padding + sub-pixel
+TEST-09: FAIL  1.95%   margin                 ← margin edge
+TEST-10: FAIL  3.52%   min-max-width          ← min/max width clamping
+TEST-11: FAIL 17.54%   min-max-height         ← BUG-025
+TEST-12: FAIL 13.23%   display                ← BUG-025 + display modes
+TEST-13: FAIL  2.20%   visibility-opacity     ← BUG-023
+TEST-14: FAIL 10.41%   overflow               ← BUG-020
+TEST-15: FAIL  3.87%   box-shadow
+TEST-16: FAIL  5.40%   outline                ← BUG-024 геометрия
+TEST-17: FAIL  3.52%   calc
+TEST-18: FAIL 14.58%   images                 ← BUG-026 (было 14.68%)
+TEST-19: FAIL 86.02%   object-fit             ← BUG-032 РЕГРЕССИЯ (было 16.14% до b54734b)
+TEST-20: FAIL 30.49%   quirks-bgcolor         ← BUG-021 + BUG-022
+TEST-21: FAIL  5.28%   border-style
+TEST-22: FAIL 13.31%   CSS transform          ← первый прогон
 ```
 
 ---
