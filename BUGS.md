@@ -41,7 +41,7 @@ BUG-026 | OPEN             | layout/paint    | <img> CSS/HTML width+height ignor
 BUG-028 | OPEN  [P3]       | shell           | relayout-on-resize + maximized window triggers BUG-027
 BUG-029 | FIXED 2026-05-21 | paint           | border-style: dotted renders square dots instead of circles
 BUG-020 | OPEN             | paint/layout    | overflow: scroll/auto — scrollbar UI не рендерится; hidden clip частично работает
-BUG-006 | OPEN  WONTFIX P1 | layout          | table layout not implemented (td/th render as blocks)
+BUG-006 | FIXED 2026-05-21 | layout          | table layout not implemented (td/th render as blocks)
 BUG-021 | OPEN             | html-parser     | HTML bgcolor attribute ignored
 BUG-022 | OPEN             | css-parser      | Quirks-mode hashless hex colors not parsed
 BUG-032 | OPEN             | paint/image     | object-fit image quality ~16%: GPU bilinear without mipmaps for large downscales
