@@ -39,7 +39,8 @@ pub use stacking::{
     StackingContext, StackingContextId, StackingTree,
 };
 pub use style::{
-    parse_color, parse_css_wide_keyword, parse_gradient_stops, parse_transform_list,
+    parse_background_gradient, parse_color, parse_css_wide_keyword, parse_gradient_stops,
+    parse_transform_list,
     AlignValue, AnimationDirection,
     AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundOrigin, BackgroundRepeat,
@@ -51,7 +52,8 @@ pub use style::{
     FontVariant, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens,
     Isolation, IterationCount, Length,
     LengthOrAuto, ListStylePosition, ListStyleType, MixBlendMode, ObjectFit, ObjectPosition,
-    OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, PointerEvents,
+    OutlineColor, OutlineStyle, Overflow, OverflowWrap, OverscrollBehavior, ParsedGradient,
+    PointerEvents,
     Position, PositionComponent, ScrollBehavior, ScrollSnapAlign, ScrollSnapAlignKeyword,
     ScrollSnapAxis, ScrollSnapStop, ScrollSnapStrictness, ScrollSnapType, ScrollbarGutter,
     ScrollbarWidth, StepPosition, TextAlign, TextDecorationLine, TextDecorationStyle,
@@ -7803,14 +7805,18 @@ mod tests {
     }
 
     #[test]
-    fn background_image_gradient_kept_as_string() {
+    fn background_image_gradient_parsed_linear() {
+        use crate::style::ParsedGradient;
         let root = lay(
             "<p>x</p>",
             "p { background-image: linear-gradient(to right, red, blue); }",
         );
         match &first_p_style(&root).background_image {
-            BackgroundImage::Gradient(s) => assert!(s.contains("linear-gradient")),
-            _ => panic!("expected Gradient"),
+            BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, stops, .. }) => {
+                assert!((angle_deg - 90.0).abs() < 0.1, "expected 90° for 'to right'");
+                assert_eq!(stops.len(), 2);
+            }
+            other => panic!("expected ParsedGradient::Linear, got {other:?}"),
         }
     }
 

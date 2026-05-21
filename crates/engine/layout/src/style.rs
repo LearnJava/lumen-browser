@@ -2488,6 +2488,35 @@ impl ScrollBehavior {
     }
 }
 
+/// CSS Images L3 §3.3 — parsed linear or radial gradient.
+///
+/// Stored instead of the raw CSS string once `parse_background_gradient`
+/// has tokenised the gradient function. `Unknown` is kept as fallback for
+/// conic / unsupported variants so they round-trip without information loss.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ParsedGradient {
+    /// `linear-gradient(angle, stop, ...)` — angle in CSS degrees measured
+    /// clockwise from "to top" (0° = top, 90° = right, 180° = bottom).
+    Linear {
+        /// Gradient line angle in CSS degrees (0° = to top, 90° = to right).
+        angle_deg: f32,
+        stops: Vec<GradientStop>,
+        /// True when the original function was `repeating-linear-gradient`.
+        repeating: bool,
+    },
+    /// `radial-gradient(...)` — elliptical gradient centred at `(cx, cy)`.
+    Radial {
+        /// Centre as fraction of box width/height ([0, 1] = [left/top, right/bottom]).
+        center_x_pct: f32,
+        center_y_pct: f32,
+        stops: Vec<GradientStop>,
+        /// True when the original function was `repeating-radial-gradient`.
+        repeating: bool,
+    },
+    /// Fallback for `conic-gradient` and any future gradient not yet rendered.
+    Unknown(String),
+}
+
 /// CSS Backgrounds L3 §3.1 — `background-image` value.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum BackgroundImage {
@@ -2496,9 +2525,9 @@ pub enum BackgroundImage {
     /// `url("path")` — внешний image-ресурс. Хранится без resolve
     /// относительно base-href.
     Url(String),
-    /// `linear-gradient(...)`, `radial-gradient(...)`, `conic-gradient(...)`
-    /// и их `repeating-` варианты. Phase 0 хранится сырая строка.
-    Gradient(String),
+    /// Parsed gradient. Phase 0 renders linear/radial; conic is stored as
+    /// `ParsedGradient::Unknown` and skipped by the painter.
+    Gradient(ParsedGradient),
 }
 
 /// CSS Backgrounds L3 §3.4 — `background-repeat`.
@@ -8858,8 +8887,7 @@ fn apply_declaration(
             } else if let Some(url) = parse_url_value(trimmed) {
                 style.background_image = BackgroundImage::Url(url);
             } else if is_gradient_function(trimmed) {
-                // Gradients хранятся сырой строкой — типизация отложена.
-                style.background_image = BackgroundImage::Gradient(trimmed.to_string());
+                style.background_image = BackgroundImage::Gradient(parse_background_gradient(trimmed));
             }
         }
         "background-repeat" => {
@@ -9421,7 +9449,7 @@ fn apply_declaration(
             } else if let Some(u) = parse_url_value(trimmed) {
                 style.mask_image = BackgroundImage::Url(u);
             } else if is_gradient_function(trimmed) {
-                style.mask_image = BackgroundImage::Gradient(trimmed.to_string());
+                style.mask_image = BackgroundImage::Gradient(parse_background_gradient(trimmed));
             }
         }
         "mask-repeat" => {
@@ -12083,6 +12111,135 @@ fn paren_whitespace_tokens(s: &str) -> Vec<String> {
 /// Accepts `linear-gradient(...)`, `radial-gradient(...)`,
 /// `conic-gradient(...)` and their `repeating-` variants.
 ///
+/// Parse a CSS gradient function string into a [`ParsedGradient`].
+///
+/// Recognises `linear-gradient`, `repeating-linear-gradient`,
+/// `radial-gradient`, `repeating-radial-gradient`. Anything else
+/// (e.g. `conic-gradient`) is returned as `ParsedGradient::Unknown`.
+pub fn parse_background_gradient(s: &str) -> ParsedGradient {
+    let s = s.trim();
+    let lower = s.to_ascii_lowercase();
+
+    let (repeating_linear, repeating_radial) = (
+        lower.starts_with("repeating-linear-gradient"),
+        lower.starts_with("repeating-radial-gradient"),
+    );
+    let is_linear = lower.starts_with("linear-gradient") || repeating_linear;
+    let is_radial = lower.starts_with("radial-gradient") || repeating_radial;
+
+    if !is_linear && !is_radial {
+        return ParsedGradient::Unknown(s.to_string());
+    }
+
+    // Extract the argument string inside the outermost parens.
+    let Some(open) = s.find('(') else {
+        return ParsedGradient::Unknown(s.to_string());
+    };
+    let rest = &s[open + 1..];
+    let Some(close) = rest.rfind(')') else {
+        return ParsedGradient::Unknown(s.to_string());
+    };
+    let inner = rest[..close].trim();
+
+    let segments = split_top_level_commas(inner);
+
+    if is_linear {
+        // The first segment may be an angle / "to <side>" direction.
+        let angle_deg = parse_linear_gradient_angle(segments.first().map(|s| s.trim()).unwrap_or(""));
+        let stops = parse_gradient_stops(s);
+        ParsedGradient::Linear { angle_deg, stops, repeating: repeating_linear }
+    } else {
+        // Radial: look for `at <x> <y>` in the first segment.
+        let (cx, cy) = parse_radial_gradient_center(segments.first().map(|s| s.trim()).unwrap_or(""));
+        let stops = parse_gradient_stops(s);
+        ParsedGradient::Radial { center_x_pct: cx, center_y_pct: cy, stops, repeating: repeating_radial }
+    }
+}
+
+/// Parse the direction/angle portion of a `linear-gradient`.
+/// Returns the angle in CSS degrees (0° = to top, 90° = to right,
+/// 180° = to bottom, 270° = to left).
+fn parse_linear_gradient_angle(first_seg: &str) -> f32 {
+    let s = first_seg.trim().to_ascii_lowercase();
+
+    // "to <side>" keywords.
+    if s.starts_with("to ") {
+        return match s.trim_start_matches("to ").trim() {
+            "top" => 0.0,
+            "right" => 90.0,
+            "bottom" => 180.0,
+            "left" => 270.0,
+            "top right" | "right top" => 45.0,
+            "bottom right" | "right bottom" => 135.0,
+            "bottom left" | "left bottom" => 225.0,
+            "top left" | "left top" => 315.0,
+            _ => 180.0, // fallback: to bottom
+        };
+    }
+
+    // Explicit angle unit.
+    if let Some(deg) = s.strip_suffix("deg").and_then(|v| v.trim().parse::<f32>().ok()) {
+        return deg;
+    }
+    if let Some(turn) = s.strip_suffix("turn").and_then(|v| v.trim().parse::<f32>().ok()) {
+        return turn * 360.0;
+    }
+    if let Some(rad) = s.strip_suffix("rad").and_then(|v| v.trim().parse::<f32>().ok()) {
+        return rad * 180.0 / std::f32::consts::PI;
+    }
+    if let Some(grad) = s.strip_suffix("grad").and_then(|v| v.trim().parse::<f32>().ok()) {
+        return grad * 0.9; // 400 grad = 360 deg
+    }
+
+    // No recognised angle — default is "to bottom" per CSS spec.
+    180.0
+}
+
+/// Parse `[circle|ellipse] [size] [at <x> <y>]` from the first segment of a
+/// `radial-gradient`. Returns `(center_x, center_y)` as fractions [0, 1].
+fn parse_radial_gradient_center(first_seg: &str) -> (f32, f32) {
+    let s = first_seg.trim().to_ascii_lowercase();
+    if let Some(at_idx) = s.find(" at ") {
+        let pos = s[at_idx + 4..].trim();
+        let parts: Vec<&str> = pos.split_whitespace().collect();
+        let cx = parse_pct_or_keyword_x(parts.first().copied().unwrap_or("50%"));
+        let cy = parse_pct_or_keyword_y(parts.get(1).copied().unwrap_or("50%"));
+        return (cx, cy);
+    }
+    // Default centre = 50% 50%.
+    (0.5, 0.5)
+}
+
+fn parse_pct_or_keyword_x(s: &str) -> f32 {
+    match s {
+        "left" => 0.0,
+        "center" => 0.5,
+        "right" => 1.0,
+        _ => {
+            if let Some(p) = s.strip_suffix('%').and_then(|v| v.parse::<f32>().ok()) {
+                p / 100.0
+            } else {
+                0.5
+            }
+        }
+    }
+}
+
+fn parse_pct_or_keyword_y(s: &str) -> f32 {
+    match s {
+        "top" => 0.0,
+        "center" => 0.5,
+        "bottom" => 1.0,
+        _ => {
+            if let Some(p) = s.strip_suffix('%').and_then(|v| v.parse::<f32>().ok()) {
+                p / 100.0
+            } else {
+                0.5
+            }
+        }
+    }
+}
+
 /// The leading direction / angle / shape argument (e.g. `to right`,
 /// `45deg`, `circle at 50%`) is detected by the absence of a parseable
 /// `<color>` and silently skipped. Color hints (bare `<length-percentage>`

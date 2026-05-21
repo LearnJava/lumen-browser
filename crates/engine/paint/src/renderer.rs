@@ -2356,6 +2356,37 @@ impl Renderer {
                         draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
                     }
                 }
+                // Phase 0 gradient stubs — render as solid fill with the average
+                // stop color until P2 implements a proper GPU gradient pipeline.
+                DisplayCommand::DrawLinearGradient { rect, stops, .. }
+                | DisplayCommand::DrawRadialGradient { rect, stops, .. } => {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
+                    if stops.is_empty() {
+                        continue;
+                    }
+                    // Average RGBA of all stops as Phase 0 approximation.
+                    let n = stops.len() as f32;
+                    let r = stops.iter().map(|s| s.color.r as f32).sum::<f32>() / n;
+                    let g = stops.iter().map(|s| s.color.g as f32).sum::<f32>() / n;
+                    let b = stops.iter().map(|s| s.color.b as f32).sum::<f32>() / n;
+                    let a = stops.iter().map(|s| s.color.a as f32).sum::<f32>() / n;
+                    let scrolled = translate_rect(*rect, dx, dy);
+                    let v_start = fill_vertices.len() as u32;
+                    push_fill_quad(
+                        &mut fill_vertices,
+                        scrolled,
+                        [r / 255.0, g / 255.0, b / 255.0, a / 255.0],
+                    );
+                    if let Some(m) = transform_stack.last() {
+                        apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                    }
+                    let v_count = fill_vertices.len() as u32 - v_start;
+                    if v_count > 0 {
+                        draw_ops.push(DrawOp::Fill { v_start, v_count });
+                    }
+                }
                 DisplayCommand::DrawLayerSnapshot { id, rect, alpha } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;

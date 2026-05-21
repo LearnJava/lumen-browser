@@ -74,7 +74,7 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | Property | Status | Notes |
 |---|---|---|
 | `background-color` | ✅ | |
-| `background-image` | 🟡 | `url()` painted (stretch to box); gradients parsed but not painted |
+| `background-image` | 🟡 | `url()` painted; `linear-gradient`/`radial-gradient` emit DrawLinearGradient/DrawRadialGradient; P2 renders as avg-stop fill pending GPU gradient pipeline |
 | `background-repeat` | 🟡 | parsed |
 | `background-position` | 🟡 | parsed |
 | `background-size` | 🟡 | parsed |

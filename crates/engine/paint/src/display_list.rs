@@ -11,6 +11,7 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame,
     BackgroundClip, BackgroundImage, BorderStyle, BoxKind, Color, CssColor, FontStyle, FontWeight,
+    GradientStop, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent,
     StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness, TextOverflow,
@@ -180,6 +181,35 @@ pub enum DisplayCommand {
     DrawBackgroundImage {
         rect: Rect,
         src: String,
+    },
+    /// CSS Images L3 §3.3 — `linear-gradient(angle, stop, ...)`.
+    ///
+    /// `angle_deg` — CSS-convention degrees (0° = to top, 90° = to right,
+    /// 180° = to bottom, 270° = to left). Renderer converts to a gradient
+    /// line and samples stops linearly (or repeats when `repeating = true`).
+    ///
+    /// Emitted by `emit_background_image` for `BackgroundImage::Gradient(
+    /// ParsedGradient::Linear { … })`. P2 renderer implements the actual
+    /// GPU-side gradient fill. Coordinate: after FillRect (bg-color), before
+    /// border per CSS Backgrounds L3 §3.10 painting order.
+    DrawLinearGradient {
+        rect: Rect,
+        /// CSS degrees clockwise from "to top".
+        angle_deg: f32,
+        stops: Vec<GradientStop>,
+        repeating: bool,
+    },
+    /// CSS Images L3 §3.3 — `radial-gradient(...)`.
+    ///
+    /// Elliptical gradient centred at `(center_x_pct, center_y_pct)` in
+    /// box-relative coordinates ([0,1] = [left/top, right/bottom]).
+    /// Renderer maps stops along the radius to the box extents.
+    DrawRadialGradient {
+        rect: Rect,
+        center_x_pct: f32,
+        center_y_pct: f32,
+        stops: Vec<GradientStop>,
+        repeating: bool,
     },
     /// Sprint 0 P2 stub. Открывает rect-клип: все последующие команды до
     /// парного `PopClip` рисуются только в пределах `rect`. Используется
@@ -503,6 +533,18 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                 out.push_str(&format!(
                     "DrawBackgroundImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?}\n",
                     rect.x, rect.y, rect.width, rect.height,
+                ));
+            }
+            DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
+                out.push_str(&format!(
+                    "DrawLinearGradient ({:.2}, {:.2}, {:.2}, {:.2}) angle={angle_deg:.1}deg stops={} repeating={repeating}\n",
+                    rect.x, rect.y, rect.width, rect.height, stops.len(),
+                ));
+            }
+            DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+                out.push_str(&format!(
+                    "DrawRadialGradient ({:.2}, {:.2}, {:.2}, {:.2}) center=({center_x_pct:.2},{center_y_pct:.2}) stops={} repeating={repeating}\n",
+                    rect.x, rect.y, rect.width, rect.height, stops.len(),
                 ));
             }
             DisplayCommand::PushClipRect { rect } => {
@@ -1116,23 +1158,41 @@ fn background_clip_rect(b: &LayoutBox) -> Rect {
     }
 }
 
-/// CSS Backgrounds L3 §3.10 — эмитит `background-image: url(...)` поверх
-/// background-color и под border-ом (см. painter's order). Gradient-вариант
-/// `BackgroundImage::Gradient` Phase 0 не растрит — парсер сохранил строку,
-/// renderer её игнорирует до отдельной задачи.
+/// CSS Backgrounds L3 §3.10 — эмитит background-image команды поверх
+/// background-color и под border-ом (painter's order). Поддерживает:
+/// * `Url` → `DrawBackgroundImage`
+/// * `Gradient(Linear)` → `DrawLinearGradient`
+/// * `Gradient(Radial)` → `DrawRadialGradient`
+/// * `Gradient(Unknown)` — no-op (conic/unsupported, Phase 0)
 ///
-/// Использует [`background_clip_rect`] для определения области рисования —
-/// идентично тому, как тот же clip применяется к background-color FillRect-у.
-/// Пустой rect (width/height ≤ 0) — no-op: GPU всё равно отбракует, а
-/// сэкономим память display list-а.
+/// Пустой rect (width/height ≤ 0) — no-op: GPU отбракует, экономим память.
 fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox) {
-    if let BackgroundImage::Url(src) = &b.style.background_image
-        && !src.is_empty()
-    {
-        let clip = background_clip_rect(b);
-        if clip.width > 0.0 && clip.height > 0.0 {
+    let clip = background_clip_rect(b);
+    if clip.width <= 0.0 || clip.height <= 0.0 {
+        return;
+    }
+    match &b.style.background_image {
+        BackgroundImage::Url(src) if !src.is_empty() => {
             out.push(DisplayCommand::DrawBackgroundImage { rect: clip, src: src.clone() });
         }
+        BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, stops, repeating }) => {
+            out.push(DisplayCommand::DrawLinearGradient {
+                rect: clip,
+                angle_deg: *angle_deg,
+                stops: stops.clone(),
+                repeating: *repeating,
+            });
+        }
+        BackgroundImage::Gradient(ParsedGradient::Radial { center_x_pct, center_y_pct, stops, repeating }) => {
+            out.push(DisplayCommand::DrawRadialGradient {
+                rect: clip,
+                center_x_pct: *center_x_pct,
+                center_y_pct: *center_y_pct,
+                stops: stops.clone(),
+                repeating: *repeating,
+            });
+        }
+        _ => {}
     }
 }
 
@@ -2839,6 +2899,8 @@ mod tests {
                 DisplayCommand::DrawLayerSnapshot { .. } => "DrawLayerSnapshot",
                 DisplayCommand::PushTransform { .. } => "PushTransform",
                 DisplayCommand::PopTransform => "PopTransform",
+                DisplayCommand::DrawLinearGradient { .. } => "DrawLinearGradient",
+                DisplayCommand::DrawRadialGradient { .. } => "DrawRadialGradient",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);
@@ -2897,15 +2959,77 @@ mod tests {
     }
 
     #[test]
-    fn background_image_gradient_not_painted() {
-        // Phase 0: gradient парсится, но не растрит — DrawBackgroundImage
-        // эмитится только для BackgroundImage::Url.
+    fn background_image_linear_gradient_emits_draw_linear_gradient() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 50px; height: 20px; \
+             background-image: linear-gradient(to right, red, blue); }",
+        );
+        let grads: Vec<&DisplayCommand> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawLinearGradient { .. }))
+            .collect();
+        assert_eq!(grads.len(), 1, "expected DrawLinearGradient");
+        if let DisplayCommand::DrawLinearGradient { angle_deg, stops, repeating, .. } = grads[0] {
+            assert!((angle_deg - 90.0).abs() < 0.1, "expected 90° for 'to right', got {angle_deg}");
+            assert_eq!(stops.len(), 2);
+            assert!(!repeating);
+        }
+    }
+
+    #[test]
+    fn background_image_radial_gradient_emits_draw_radial_gradient() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 50px; height: 20px; \
+             background-image: radial-gradient(circle at 50% 50%, red, blue); }",
+        );
+        let grads: Vec<&DisplayCommand> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawRadialGradient { .. }))
+            .collect();
+        assert_eq!(grads.len(), 1, "expected DrawRadialGradient");
+        if let DisplayCommand::DrawRadialGradient { center_x_pct, center_y_pct, stops, .. } = grads[0] {
+            assert!((center_x_pct - 0.5).abs() < 0.01);
+            assert!((center_y_pct - 0.5).abs() < 0.01);
+            assert_eq!(stops.len(), 2);
+        }
+    }
+
+    #[test]
+    fn background_image_repeating_linear_gradient() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 50px; height: 20px; \
+             background-image: repeating-linear-gradient(45deg, red, blue); }",
+        );
+        let grads: Vec<&DisplayCommand> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawLinearGradient { .. }))
+            .collect();
+        assert_eq!(grads.len(), 1, "expected DrawLinearGradient for repeating");
+        if let DisplayCommand::DrawLinearGradient { angle_deg, repeating, .. } = grads[0] {
+            assert!((angle_deg - 45.0).abs() < 0.1);
+            assert!(*repeating);
+        }
+    }
+
+    #[test]
+    fn background_image_linear_gradient_default_angle_is_to_bottom() {
+        // No direction specified → default is "to bottom" = 180°.
         let dl = build(
             "<div>x</div>",
             "div { width: 50px; height: 20px; \
              background-image: linear-gradient(red, blue); }",
         );
-        assert!(bg_images(&dl).is_empty());
+        let grads: Vec<&DisplayCommand> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawLinearGradient { .. }))
+            .collect();
+        assert_eq!(grads.len(), 1);
+        if let DisplayCommand::DrawLinearGradient { angle_deg, .. } = grads[0] {
+            assert!((angle_deg - 180.0).abs() < 0.1, "expected 180° default, got {angle_deg}");
+        }
     }
 
     #[test]
