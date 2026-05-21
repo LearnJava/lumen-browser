@@ -74,4 +74,12 @@ pub enum Event {
     WebSocketClosed { tab_id: TabId, url: Url, code: Option<u16>, reason: String },
     /// Ошибка транспортного слоя (до или после открытия).
     WebSocketError { tab_id: TabId, url: Url, message: String },
+    /// HTML Living Standard §9.2: SSE-соединение установлено (200 OK, text/event-stream).
+    SseConnected { tab_id: TabId, url: Url },
+    /// Получено SSE-событие от сервера.
+    SseMessage { tab_id: TabId, url: Url, event_type: String, data: String, id: Option<String> },
+    /// SSE-соединение закрыто (штатно или по ошибке транспорта).
+    SseClosed { tab_id: TabId, url: Url, reason: String },
+    /// Транспортная ошибка SSE (до/после connect, до reconnect).
+    SseError { tab_id: TabId, url: Url, message: String },
 }

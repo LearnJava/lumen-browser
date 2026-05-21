@@ -1043,6 +1043,57 @@ pub trait WebSocketProvider: Send + Sync {
     ) -> Result<Box<dyn WebSocketSession>>;
 }
 
+// ============================================================================
+// HTML Living Standard §9.2 — Server-Sent Events (EventSource).
+// ============================================================================
+
+/// Полностью разобранное SSE-событие (HTML Living Standard §9.2.6).
+///
+/// Общий тип для `lumen_core::ext::SseSession` и `lumen_network::sse::SseParser` —
+/// вынесен в core, чтобы trait-границы не создавали циклических зависимостей.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SseEvent {
+    /// Тип события — `"message"` по умолчанию, переопределяется полем `event:`.
+    pub event_type: String,
+    /// Данные события — строки из `data:` объединяются через `\n`, хвостовой `\n` снят.
+    pub data: String,
+    /// Last event ID (из поля `id:`, сохраняется между событиями).
+    pub id: Option<String>,
+    /// Время переподключения в мс (из поля `retry:`), если сервер прислал.
+    pub retry_ms: Option<u64>,
+}
+
+/// Открытое SSE-соединение (EventSource). Блокирующий интерфейс.
+///
+/// Владеет HTTP-стримом к SSE-эндпоинту. Переподключение при потере соединения
+/// выполняется внутри: клиент видит непрерывный поток событий.
+/// Не `Sync` — соединение принадлежит одной вкладке.
+pub trait SseSession: Send {
+    /// Получить следующее событие. Блокирует до получения данных или ошибки.
+    ///
+    /// `Ok(Some(event))` — событие получено.
+    /// `Ok(None)` — сервер закрыл поток штатно.
+    /// `Err(...)` — транспортная ошибка; переподключение не помогло.
+    fn next_event(&mut self) -> Result<Option<SseEvent>>;
+
+    /// Закрыть соединение и остановить переподключение.
+    fn close(&mut self);
+}
+
+/// Фабрика SSE-соединений. Реализуется `lumen-network::HttpClient`.
+///
+/// URL должен использовать схему `http://` или `https://`.
+/// Ошибка возвращается, если хост недоступен, статус ≠ 200 или
+/// Content-Type ≠ `text/event-stream`.
+pub trait SseProvider: Send + Sync {
+    fn connect_sse(
+        &self,
+        url: &Url,
+        tab_id: crate::event::TabId,
+        sink: std::sync::Arc<dyn EventSink>,
+    ) -> Result<Box<dyn SseSession>>;
+}
+
 // Точки расширения, спроектированные, но без интерфейса до Phase 1+.
 //
 // Trait-ы для трёх оставшихся «разрешённых exceptions» из §5 (внешние

@@ -24,7 +24,8 @@ use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, TabId};
 use lumen_core::ext::{
     ContentDecoder, DnsResolver, EventSink, HstsEnforcement, HttpAuthScheme,
-    HttpCredentialProvider, NetworkTransport, RequestFilter, WebSocketProvider, WebSocketSession,
+    HttpCredentialProvider, NetworkTransport, RequestFilter, SseProvider, SseSession,
+    WebSocketProvider, WebSocketSession,
 };
 use lumen_core::url::Url;
 
@@ -1690,6 +1691,18 @@ impl WebSocketProvider for HttpClient {
             tab_id,
         )?;
         Ok(Box::new(ws))
+    }
+}
+
+impl SseProvider for HttpClient {
+    fn connect_sse(
+        &self,
+        url: &Url,
+        tab_id: TabId,
+        sink: Arc<dyn EventSink>,
+    ) -> Result<Box<dyn SseSession>> {
+        let es = sse::EventSource::connect(url, Arc::clone(&self.resolver), sink, tab_id)?;
+        Ok(Box::new(es))
     }
 }
 
