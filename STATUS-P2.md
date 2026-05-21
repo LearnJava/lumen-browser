@@ -1,5 +1,5 @@
-In progress: BUG-023 analysis  branch: bug023-analysis
-Next step: commit analysis + merge
+In progress: BUG-020 overflow clip  branch: overflow-clip
+Next step: add PushClipRect in walk() for overflow_clips() boxes
 
 Next: (P2 Phase 2+)
 — all current tasks complete —
