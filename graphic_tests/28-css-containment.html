@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #0d1117; width: 1022px; height: 718px; margin: 1px; padding: 30px; overflow: hidden; box-sizing: border-box; }
+
+  .row { display: flex; gap: 20px; margin-bottom: 20px; }
+
+  /* --- contain: size --- */
+  .c-size {
+    contain: size;
+    background: #1f6feb;
+    border: 2px solid #388bfd;
+    width: 200px;
+    /* NO explicit height — contain:size → auto height = 0 */
+  }
+  .c-size-inner {
+    background: #58a6ff;
+    height: 80px;
+    width: 160px;
+  }
+
+  /* --- contain: paint --- */
+  .c-paint {
+    contain: paint;
+    background: #238636;
+    border: 2px solid #2ea043;
+    width: 200px;
+    height: 100px;
+    /* Children that overflow are clipped to border box */
+  }
+  .c-paint-overflow {
+    background: #3fb950;
+    width: 250px;  /* exceeds 200px container — must be clipped */
+    height: 40px;
+    margin-top: 30px;
+  }
+
+  /* --- contain: layout --- */
+  .c-layout {
+    contain: layout;
+    background: #b45309;
+    border: 2px solid #d97706;
+    width: 200px;
+    height: 100px;
+  }
+  .c-layout-inner {
+    background: #f59e0b;
+    width: 120px;
+    height: 50px;
+  }
+
+  /* --- contain: strict (size+layout+paint) --- */
+  .c-strict {
+    contain: strict;
+    background: #7c3aed;
+    border: 2px solid #a78bfa;
+    width: 200px;
+    /* contain:size → height=0 even with children */
+  }
+  .c-strict-inner {
+    background: #c4b5fd;
+    height: 60px;
+    width: 160px;
+  }
+
+  /* Baseline: no containment */
+  .c-none {
+    background: #374151;
+    border: 2px solid #6b7280;
+    width: 200px;
+  }
+  .c-none-inner {
+    background: #9ca3af;
+    height: 80px;
+    width: 160px;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="row">
+    <!-- Baseline: no contain -->
+    <div>
+      <div class="c-none">
+        <div class="c-none-inner"></div>
+      </div>
+    </div>
+
+    <!-- contain: size → height=0, child invisible -->
+    <div>
+      <div class="c-size">
+        <div class="c-size-inner"></div>
+      </div>
+    </div>
+
+    <!-- contain: paint → overflow child clipped -->
+    <div>
+      <div class="c-paint">
+        <div class="c-paint-overflow"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row">
+    <!-- contain: layout → independent BFC -->
+    <div>
+      <div class="c-layout">
+        <div class="c-layout-inner"></div>
+      </div>
+    </div>
+
+    <!-- contain: strict → size+layout+paint combined -->
+    <div>
+      <div class="c-strict">
+        <div class="c-strict-inner"></div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

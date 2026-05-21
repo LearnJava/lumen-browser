@@ -238,6 +238,19 @@
     <div style="width:90px;height:24px;background:linear-gradient(to right,#f5a623 60%,#16213e 60%);border:1px solid #f5a623"></div>
   </div>
 
+  <!-- CSS Containment: contain:size (height=0) · contain:paint (clip) · baseline -->
+  <div style="margin-top:8px;display:flex;gap:6px;align-items:flex-start">
+    <div style="width:70px;background:#374151;border:1px solid #6b7280">
+      <div style="background:#9ca3af;height:30px;width:55px"></div>
+    </div>
+    <div style="contain:size;width:70px;background:#1f6feb;border:1px solid #388bfd">
+      <div style="background:#58a6ff;height:30px;width:55px"></div>
+    </div>
+    <div style="contain:paint;width:70px;height:30px;background:#238636;border:1px solid #2ea043;overflow:visible">
+      <div style="background:#3fb950;height:20px;width:90px;margin-top:5px"></div>
+    </div>
+  </div>
+
 </div><!-- /card -->
 </body>
 </html>

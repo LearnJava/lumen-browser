@@ -16,10 +16,10 @@ use lumen_html_parser::{
 };
 
 use crate::style::{
-    compute_pseudo_element_style, compute_style, AlignValue, BackgroundImage, BoxSizing, Content,
-    ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap,
-    GridAutoFlow, GridLine, GridTrackSize, Length, LengthOrAuto, Overflow, Position, TextAlign,
-    TextOverflow, VerticalAlign,
+    compute_pseudo_element_style, compute_style, AlignValue, BackgroundImage, BoxSizing,
+    ContainFlags, Content, ContentItem, ComputedStyle, Direction, Display, FlexBasis,
+    FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridTrackSize, Length, LengthOrAuto,
+    Overflow, Position, TextAlign, TextOverflow, VerticalAlign,
 };
 use crate::TextMeasurer;
 
@@ -999,9 +999,12 @@ fn lay_out(
         - s.border_left_width - s.border_right_width).max(0.0);
 
     // pcb для потомков: если текущий элемент positioned — он сам CB для абсолютных детей.
+    // CSS Containment L3: contain:layout и contain:paint тоже устанавливают containing block.
     // Высота ещё неизвестна, используем 0 — корректируем after layout.
     let is_positioned = !matches!(s.position, Position::Static);
-    let children_pcb = if is_positioned {
+    let contain_establishes_cb = s.contain.0
+        & (ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0 | ContainFlags::STRICT.0) != 0;
+    let children_pcb = if is_positioned || contain_establishes_cb {
         Rect::new(b.rect.x, b.rect.y, b.rect.width, 0.0)
     } else {
         pcb
@@ -1067,8 +1070,8 @@ fn lay_out(
                 {
                     (b.rect.width * ah / aw).max(0.0)
                 } else {
-                    content_height + padding_top + padding_bottom
-                        + s.border_top_width + s.border_bottom_width
+                    let ch = if s.contain.0 & ContainFlags::SIZE.0 != 0 { 0.0 } else { content_height };
+                    ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
                 };
                 return;
             }
@@ -1096,8 +1099,8 @@ fn lay_out(
                 {
                     (b.rect.width * ah / aw).max(0.0)
                 } else {
-                    content_height + padding_top + padding_bottom
-                        + s.border_top_width + s.border_bottom_width
+                    let ch = if s.contain.0 & ContainFlags::SIZE.0 != 0 { 0.0 } else { content_height };
+                    ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
                 };
                 return;
             }
@@ -1169,8 +1172,10 @@ fn lay_out(
                 // Phase 0: ratio applied in border-box space.
                 (b.rect.width * ah / aw).max(0.0)
             } else {
-                content_height + padding_top + padding_bottom
-                    + s.border_top_width + s.border_bottom_width
+                // CSS Containment L3 §3.3: contain:size suppresses children contribution
+                // to auto height — intrinsic height = 0.
+                let ch = if s.contain.0 & ContainFlags::SIZE.0 != 0 { 0.0 } else { content_height };
+                ch + padding_top + padding_bottom + s.border_top_width + s.border_bottom_width
             };
             // CSS 2.1 §10.4: clamp [min-height, max-height]. Симметрия с
             // width: max сначала, потом min → «min побеждает max». Content

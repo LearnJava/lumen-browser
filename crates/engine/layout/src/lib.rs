@@ -46,7 +46,7 @@ pub use style::{
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat, ColorSpace,
-    ComputedStyle, Content,
+    ContainFlags, ComputedStyle, Content,
     ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch,
     FontStyle,
     FontVariant, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
@@ -5424,6 +5424,57 @@ mod tests {
         } else {
             panic!("expected InlineRun");
         }
+    }
+
+    // ── CSS Containment L3 enforcement ──────────────────────────────────────
+
+    /// contain:size → auto height = 0 (children don't contribute).
+    #[test]
+    fn contain_size_suppresses_auto_height() {
+        let root = lay_measured(
+            "<div><p>child</p></div>",
+            "div { contain: size; } p { height: 50px; }",
+            200.0,
+        );
+        let div = first_element_child(&root);
+        // Explicit p height = 50px, but div has contain:size → div height = 0
+        // (only padding+border, which are both 0 here).
+        assert_eq!(div.rect.height, 0.0, "contain:size → auto height must be 0, got {}", div.rect.height);
+    }
+
+    /// contain:size with explicit height — explicit wins, children still don't contribute.
+    #[test]
+    fn contain_size_explicit_height_wins() {
+        let root = lay_measured(
+            "<div><p>child</p></div>",
+            "div { contain: size; height: 80px; } p { height: 100px; }",
+            200.0,
+        );
+        let div = first_element_child(&root);
+        assert!((div.rect.height - 80.0).abs() < 0.5, "contain:size with explicit height=80, got {}", div.rect.height);
+    }
+
+    /// contain:layout parses and stores correctly.
+    #[test]
+    fn contain_layout_stores_flag() {
+        let root = lay("<div></div>", "div { contain: layout; }");
+        let div = first_element_child(&root);
+        assert!(
+            div.style.contain.0 & ContainFlags::LAYOUT.0 != 0,
+            "contain:layout flag not set"
+        );
+    }
+
+    /// contain:strict = size + layout + style + paint → auto height = 0.
+    #[test]
+    fn contain_strict_suppresses_auto_height() {
+        let root = lay_measured(
+            "<div><p>text</p></div>",
+            "div { contain: strict; } p { height: 60px; }",
+            200.0,
+        );
+        let div = first_element_child(&root);
+        assert_eq!(div.rect.height, 0.0, "contain:strict → auto height must be 0, got {}", div.rect.height);
     }
 
     // ── <img> replaced element ───────────────────────────────────────────
