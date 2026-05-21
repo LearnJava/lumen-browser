@@ -198,6 +198,11 @@ pub struct InlineSegment {
     /// (not anonymous text directly in a block container). Used by the painter
     /// to know whether to draw the element's own background/border.
     pub is_element_box: bool,
+    /// Non-None when this segment is an inline-replaced `<img>`. Contains the
+    /// resolved image URL. `text` holds the alt attribute.
+    pub img_src: Option<String>,
+    /// Pre-computed pixel width for image segments (0.0 for text segments).
+    pub img_width: f32,
 }
 
 /// Позиционированный текстовый фрагмент в строке (после layout).
@@ -219,6 +224,9 @@ pub struct InlineFrag {
     /// True when this frag comes from an inline element box (not anonymous text).
     /// Used by the painter to draw element background/border.
     pub is_element_box: bool,
+    /// Non-None when this frag represents an inline-replaced `<img>`.
+    /// `text` holds the alt attribute; `width` is the rendered pixel width.
+    pub img_src: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -454,12 +462,41 @@ fn collect_inline_segments(
                 pre_space: 0.0,
                 post_space: 0.0,
                 is_element_box: false,
+                img_src: None,
+                img_width: 0.0,
             });
         }
         NodeData::Text(_) => {}
         NodeData::Element { .. } => {
             let s = compute_style(doc, id, sheet, inherited, viewport);
             if s.display == Display::None {
+                return;
+            }
+            // Inline-replaced image: emit as a fixed-width, non-breakable segment.
+            if is_image_element(doc, id) {
+                let src = resolve_image_source(doc, id, viewport);
+                let em = s.font_size;
+                let w = s.width
+                    .as_ref()
+                    .and_then(|l| l.resolve(em, None, viewport))
+                    .or_else(|| src.intrinsic_width.map(|v| v as f32))
+                    .unwrap_or(em * 2.0);
+                let pre = s.margin_left.resolve_or_zero(em, 0.0, viewport)
+                    + s.border_left_width
+                    + s.padding_left.resolve_or_zero(em, 0.0, viewport);
+                let post = s.padding_right.resolve_or_zero(em, 0.0, viewport)
+                    + s.border_right_width
+                    + s.margin_right.resolve_or_zero(em, 0.0, viewport);
+                let alt = doc.get(id).get_attr("alt").unwrap_or("").to_string();
+                out.push(InlineSegment {
+                    text: alt,
+                    style: s,
+                    pre_space: pre,
+                    post_space: post,
+                    is_element_box: true,
+                    img_src: Some(src.url),
+                    img_width: w,
+                });
                 return;
             }
             // Compute horizontal inline box model: margin + border + padding.
@@ -1861,6 +1898,33 @@ fn wrap_inline_run(
     let mut current_x = text_indent;
 
     for seg in segments {
+        // Image segments are fixed-width, non-breakable inline replaced elements.
+        if let Some(img_src) = &seg.img_src {
+            let img_w = seg.img_width;
+            let gap = if current_line.is_empty() { 0.0 } else { space_w };
+            if !current_line.is_empty() && current_x + gap + seg.pre_space + img_w > max_width {
+                result.push(std::mem::take(&mut current_line));
+                current_x = 0.0;
+            }
+            let line_gap = if current_line.is_empty() { 0.0 } else { space_w };
+            current_x += line_gap + seg.pre_space;
+            let em = seg.style.font_size;
+            let pad_l = seg.style.padding_left.resolve_or_zero(em, max_width, viewport);
+            let pad_r = seg.style.padding_right.resolve_or_zero(em, max_width, viewport);
+            current_line.push(InlineFrag {
+                x: current_x,
+                width: img_w,
+                text: seg.text.clone(),
+                style: seg.style.clone(),
+                padding_left: pad_l,
+                padding_right: pad_r,
+                is_element_box: true,
+                img_src: Some(img_src.clone()),
+            });
+            current_x += img_w + seg.post_space;
+            continue;
+        }
+
         let words: Vec<&str> = seg.text.split_whitespace().collect();
         if words.is_empty() {
             continue;
@@ -1932,6 +1996,7 @@ fn wrap_inline_run(
                     padding_left: if is_seg_first { pad_l } else { 0.0 },
                     padding_right: if is_seg_last { pad_r } else { 0.0 },
                     is_element_box: seg.is_element_box,
+                    img_src: None,
                 });
                 current_x += word_w;
             }
@@ -1977,12 +2042,26 @@ fn align_lines(
 fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
     let mut frags: Vec<InlineFrag> = Vec::new();
     for seg in segments {
+        // Image segment: emit with pre-computed width, don't merge with text.
+        if let Some(img_src) = &seg.img_src {
+            frags.push(InlineFrag {
+                x: 0.0,
+                width: seg.img_width,
+                text: seg.text.clone(),
+                style: seg.style.clone(),
+                padding_left: 0.0,
+                padding_right: 0.0,
+                is_element_box: true,
+                img_src: Some(img_src.clone()),
+            });
+            continue;
+        }
         let text: String = seg.text.split_whitespace().collect::<Vec<_>>().join(" ");
         if text.is_empty() {
             continue;
         }
         let merged = if let Some(last) = frags.last_mut() {
-            if last.style.text_rendering_eq(&seg.style) {
+            if last.style.text_rendering_eq(&seg.style) && last.img_src.is_none() {
                 last.text.push(' ');
                 last.text.push_str(&text);
                 true
@@ -2001,6 +2080,7 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 padding_left: 0.0,
                 padding_right: 0.0,
                 is_element_box: seg.is_element_box,
+                img_src: None,
             });
         }
     }
