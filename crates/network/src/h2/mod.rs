@@ -14,5 +14,6 @@
 //! frames through [`frame::Frame::encode`]; HPACK consumes/produces field block
 //! fragments carried inside HEADERS/CONTINUATION/PUSH_PROMISE.
 
+pub mod conn;
 pub mod frame;
 pub mod hpack;

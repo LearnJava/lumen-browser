@@ -138,6 +138,9 @@ impl Write for RawStream {
 pub(crate) struct Connection {
     reader: BufReader<RawStream>,
     closed: bool,
+    /// True when ALPN negotiated HTTP/2. The connection cannot be used for
+    /// HTTP/1.1; `fetch_single` hands the raw stream to the H2 driver.
+    is_h2: bool,
 }
 
 impl Connection {
@@ -145,7 +148,14 @@ impl Connection {
         Self {
             reader: BufReader::new(stream),
             closed: false,
+            is_h2: false,
         }
+    }
+
+    /// Unwrap the inner stream. Only valid before any reads have been performed
+    /// (fresh connection, BufReader buffer is empty).
+    fn into_stream(self) -> RawStream {
+        self.reader.into_inner()
     }
 
     /// Записать HTTP-запрос в stream. Используется `Connection: keep-alive`
@@ -499,11 +509,11 @@ fn connect(
     let mut tcp = tcp;
     conn.complete_io(&mut tcp)
         .map_err(|e| Error::Network(format!("TLS handshake: {e}")))?;
-    check_negotiated_alpn(conn.alpn_protocol())?;
+    let is_h2 = check_negotiated_alpn(conn.alpn_protocol())?;
 
-    Ok(Connection::new(RawStream::Tls(Box::new(
-        rustls::StreamOwned::new(conn, tcp),
-    ))))
+    let mut c = Connection::new(RawStream::Tls(Box::new(rustls::StreamOwned::new(conn, tcp))));
+    c.is_h2 = is_h2;
+    Ok(c)
 }
 
 /// TLS-конфиг для HTTPS-соединений. Кэшируется глобально, чтобы не
@@ -525,18 +535,13 @@ fn default_tls_config() -> Arc<rustls::ClientConfig> {
         .clone()
 }
 
-/// Проверка, что выбранный сервером по ALPN протокол нам по силам.
-/// `Some(b"http/1.1")` или `None` (ALPN не использован) — продолжаем.
-/// `Some(b"h2")` — сервер согласился на HTTP/2, но клиент пока не умеет;
-/// клиентский HTTP/2-стек реализуется в 5A.2–5A.6.
-/// Любой другой ALPN — нарушение протокола (мы заявили только h2/http/1.1),
-/// rustls должен такое сам отвергать, но defensive-проверка дешёвая.
-fn check_negotiated_alpn(alpn: Option<&[u8]>) -> Result<()> {
+/// Проверить ALPN-протокол, выбранный сервером.
+/// Возвращает `true` если согласован HTTP/2, `false` для HTTP/1.1 или без ALPN.
+/// Любой другой ALPN — ошибка (rustls должен был отклонить, но defensive).
+fn check_negotiated_alpn(alpn: Option<&[u8]>) -> Result<bool> {
     match alpn {
-        None | Some(b"http/1.1") => Ok(()),
-        Some(b"h2") => Err(Error::Network(
-            "HTTP/2 negotiated via ALPN, but client not implemented yet".to_string(),
-        )),
+        None | Some(b"http/1.1") => Ok(false),
+        Some(b"h2") => Ok(true),
         Some(other) => Err(Error::Network(format!(
             "unexpected ALPN protocol: {:?}",
             String::from_utf8_lossy(other),
@@ -614,6 +619,13 @@ fn fetch_single(
 
     // Попытка 2 (или 1, если пул был пуст): свежий connect.
     let conn = connect(host, port, is_tls, resolver)?;
+
+    // HTTP/2: пул не используется в 5A.4 (pool multiplexing — 5A.5).
+    if conn.is_h2 {
+        let scheme = if is_tls { "https" } else { "http" };
+        return h2_do_request(conn, scheme, request_host_header, request_path, extra_headers);
+    }
+
     let (resp, conn) = do_request(
         conn,
         method,
@@ -629,6 +641,52 @@ fn fetch_single(
         pool.release(key, conn);
     }
     Ok(resp)
+}
+
+/// Выполнить один HTTP/2 запрос по уже установленному соединению.
+/// Пул не используется — H2 pool multiplexing отложен до 5A.5.
+fn h2_do_request(
+    conn: Connection,
+    scheme: &str,
+    authority: &str,
+    path: &str,
+    extra_headers: &str,
+) -> Result<Response> {
+    use h2::conn::H2Conn;
+    let stream = conn.into_stream();
+    let mut h2 = H2Conn::connect(stream)?;
+
+    // Преобразуем строку extra_headers формата "Key: Val\r\n..." в срезы байт.
+    let parsed_extra = parse_extra_headers_str(extra_headers);
+    let extra_refs: Vec<(&[u8], &[u8])> = parsed_extra
+        .iter()
+        .map(|(k, v)| (k.as_slice(), v.as_slice()))
+        .collect();
+
+    let (status, headers, body) = h2.fetch("GET", scheme, authority, path, &extra_refs)?;
+    Ok(Response {
+        status,
+        headers,
+        body,
+    })
+}
+
+/// Разобрать строку вида `"Key: Value\r\nKey2: Value2\r\n"` в вектор пар байт.
+fn parse_extra_headers_str(s: &str) -> Vec<(Vec<u8>, Vec<u8>)> {
+    let mut out = Vec::new();
+    for line in s.split("\r\n") {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        if let Some((k, v)) = line.split_once(':') {
+            out.push((
+                k.trim().to_ascii_lowercase().into_bytes(),
+                v.trim().as_bytes().to_vec(),
+            ));
+        }
+    }
+    out
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1578,31 +1636,21 @@ mod tests {
 
     #[test]
     fn check_alpn_accepts_http11() {
-        check_negotiated_alpn(Some(b"http/1.1")).expect("http/1.1 must be supported");
+        assert!(!check_negotiated_alpn(Some(b"http/1.1")).unwrap());
     }
 
     #[test]
     fn check_alpn_accepts_no_alpn() {
-        // RFC 7301: сервер вправе не выбрать ALPN-протокол. Тогда падаем на
-        // дефолтный HTTP/1.1 — это нормально.
-        check_negotiated_alpn(None).expect("absent ALPN must be supported");
+        assert!(!check_negotiated_alpn(None).unwrap());
     }
 
     #[test]
-    fn check_alpn_rejects_h2_with_placeholder() {
-        let err = check_negotiated_alpn(Some(b"h2")).unwrap_err();
-        let msg = format!("{err:?}");
-        assert!(
-            msg.contains("HTTP/2") && msg.contains("not implemented"),
-            "unexpected message: {msg}"
-        );
+    fn check_alpn_accepts_h2() {
+        assert!(check_negotiated_alpn(Some(b"h2")).unwrap());
     }
 
     #[test]
     fn check_alpn_rejects_unknown_proto() {
-        // Любой другой ALPN (например h3, spdy/3.1) — сервер не должен
-        // его выбирать, мы такого не заявляли. На всякий случай trip-wire:
-        // когда мы добавим h3 в Accept-список, надо явно расширить матчер.
         let err = check_negotiated_alpn(Some(b"h3")).unwrap_err();
         assert!(format!("{err:?}").contains("unexpected ALPN"));
     }
