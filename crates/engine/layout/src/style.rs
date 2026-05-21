@@ -1937,6 +1937,12 @@ pub struct ComputedStyle {
     /// CSS Fonts L5 §4 — `font-size-adjust`. Inherited. Initial: `None`.
     /// Phase 0: parse + store; real x-height based font-size scaling — deferred.
     pub font_size_adjust: FontSizeAdjust,
+    /// CSS Writing Modes L3 §2.1 — `writing-mode`. Inherited. Initial: `HorizontalTb`.
+    /// Phase 0: parse + store; vertical layout — deferred.
+    pub writing_mode: WritingMode,
+    /// CSS Writing Modes L3 §6.5 — `text-orientation`. Inherited. Initial: `Mixed`.
+    /// Phase 0: parse + store; glyph rotation — deferred.
+    pub text_orientation: TextOrientation,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -2316,6 +2322,35 @@ pub enum FontSizeAdjust {
     None,
     Auto,
     Value(f32),
+}
+
+/// CSS Writing Modes L3 §2.1 — `writing-mode`. Inherited. Initial: `HorizontalTb`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum WritingMode {
+    /// `horizontal-tb` — left-to-right horizontal, top-to-bottom block.
+    #[default]
+    HorizontalTb,
+    /// `vertical-rl` — top-to-bottom vertical, right-to-left block.
+    VerticalRl,
+    /// `vertical-lr` — top-to-bottom vertical, left-to-right block.
+    VerticalLr,
+    /// `sideways-rl` — same as vertical-rl but glyphs rotated 90° CW.
+    SidewaysRl,
+    /// `sideways-lr` — same as vertical-lr but glyphs rotated 90° CCW.
+    SidewaysLr,
+}
+
+/// CSS Writing Modes L3 §6.5 — `text-orientation`. Inherited. Initial: `Mixed`.
+/// Only meaningful in vertical writing modes.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextOrientation {
+    /// `mixed` — rotate CJK upright, rotate others 90° CW.
+    #[default]
+    Mixed,
+    /// `upright` — all glyphs upright; implies `direction: ltr`.
+    Upright,
+    /// `sideways` — all glyphs rotated 90° CW (like vertical-rl inline).
+    Sideways,
 }
 
 /// CSS UI L4 §6.2 — `user-select`. Inherited.
@@ -3510,6 +3545,8 @@ impl ComputedStyle {
             backdrop_filter: Vec::new(),
             print_color_adjust: PrintColorAdjust::Economy,
             font_size_adjust: FontSizeAdjust::None,
+            writing_mode: WritingMode::HorizontalTb,
+            text_orientation: TextOrientation::Mixed,
         }
     }
 }
@@ -3756,6 +3793,9 @@ pub fn compute_style(
         print_color_adjust: PrintColorAdjust::Economy,
         // CSS Fonts L5 §4 — font-size-adjust inherited.
         font_size_adjust: inherited.font_size_adjust,
+        // CSS Writing Modes L3 — оба inherited.
+        writing_mode: inherited.writing_mode,
+        text_orientation: inherited.text_orientation,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -8707,6 +8747,29 @@ fn apply_declaration(
                 _ => ContainerType::Normal,
             };
         }
+        "writing-mode" => {
+            style.writing_mode = match val.trim() {
+                "horizontal-tb" => WritingMode::HorizontalTb,
+                "vertical-rl" => WritingMode::VerticalRl,
+                "vertical-lr" => WritingMode::VerticalLr,
+                "sideways-rl" => WritingMode::SidewaysRl,
+                "sideways-lr" => WritingMode::SidewaysLr,
+                // Legacy SVG aliases (CSS Writing Modes L3 §2.1 note).
+                "lr" | "lr-tb" => WritingMode::HorizontalTb,
+                "rl" | "rl-tb" => WritingMode::HorizontalTb,
+                "tb" | "tb-rl" => WritingMode::VerticalRl,
+                "tb-lr" => WritingMode::VerticalLr,
+                _ => style.writing_mode,
+            };
+        }
+        "text-orientation" => {
+            style.text_orientation = match val.trim() {
+                "mixed" => TextOrientation::Mixed,
+                "upright" => TextOrientation::Upright,
+                "sideways" | "sideways-right" => TextOrientation::Sideways,
+                _ => style.text_orientation,
+            };
+        }
         "user-select" => {
             if let Some(v) = UserSelect::parse(val) {
                 style.user_select = v;
@@ -10273,6 +10336,20 @@ fn apply_css_wide_keyword(
                 inherited.forced_color_adjust
             } else {
                 init.forced_color_adjust
+            };
+        }
+        "writing-mode" => {
+            style.writing_mode = if inh_only_inherit {
+                inherited.writing_mode
+            } else {
+                init.writing_mode
+            };
+        }
+        "text-orientation" => {
+            style.text_orientation = if inh_only_inherit {
+                inherited.text_orientation
+            } else {
+                init.text_orientation
             };
         }
         "display" => {
@@ -18770,5 +18847,105 @@ mod tests {
         let div = doc.get(doc.root()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.font_size_adjust, FontSizeAdjust::Auto);
+    }
+
+    // ── writing-mode ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn writing_mode_initial_horizontal_tb() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.writing_mode, WritingMode::HorizontalTb);
+    }
+
+    #[test]
+    fn writing_mode_vertical_rl() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.writing_mode, WritingMode::VerticalRl);
+    }
+
+    #[test]
+    fn writing_mode_vertical_lr() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { writing-mode: vertical-lr; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.writing_mode, WritingMode::VerticalLr);
+    }
+
+    #[test]
+    fn writing_mode_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.writing_mode, WritingMode::VerticalRl);
+        assert_eq!(span_style.writing_mode, WritingMode::VerticalRl);
+    }
+
+    #[test]
+    fn writing_mode_legacy_tb_rl_alias() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { writing-mode: tb-rl; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.writing_mode, WritingMode::VerticalRl);
+    }
+
+    // ── text-orientation ──────────────────────────────────────────────────────
+
+    #[test]
+    fn text_orientation_initial_mixed() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.text_orientation, TextOrientation::Mixed);
+    }
+
+    #[test]
+    fn text_orientation_upright() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-orientation: upright; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.text_orientation, TextOrientation::Upright);
+    }
+
+    #[test]
+    fn text_orientation_sideways() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-orientation: sideways; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.text_orientation, TextOrientation::Sideways);
+    }
+
+    #[test]
+    fn text_orientation_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; text-orientation: upright; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.text_orientation, TextOrientation::Upright);
+        assert_eq!(span_style.text_orientation, TextOrientation::Upright);
     }
 }
