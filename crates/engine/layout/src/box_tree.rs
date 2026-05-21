@@ -891,6 +891,10 @@ fn lay_out(
                         }
                         BoxSizing::BorderBox => h.max(0.0),
                     }
+                } else if let Some((aw, ah)) = s.aspect_ratio
+                    && aw > 0.0 && ah > 0.0
+                {
+                    (b.rect.width * ah / aw).max(0.0)
                 } else {
                     content_height + padding_top + padding_bottom
                         + s.border_top_width + s.border_bottom_width
@@ -913,6 +917,10 @@ fn lay_out(
                         }
                         BoxSizing::BorderBox => h.max(0.0),
                     }
+                } else if let Some((aw, ah)) = s.aspect_ratio
+                    && aw > 0.0 && ah > 0.0
+                {
+                    (b.rect.width * ah / aw).max(0.0)
                 } else {
                     content_height + padding_top + padding_bottom
                         + s.border_top_width + s.border_bottom_width
@@ -956,6 +964,12 @@ fn lay_out(
                     content_height + padding_top + padding_bottom
                         + s.border_top_width + s.border_bottom_width
                 }
+            } else if let Some((aw, ah)) = s.aspect_ratio
+                && aw > 0.0 && ah > 0.0
+            {
+                // CSS Sizing L4 §6.1: height auto + aspect-ratio → derive from width.
+                // Phase 0: ratio applied in border-box space.
+                (b.rect.width * ah / aw).max(0.0)
             } else {
                 content_height + padding_top + padding_bottom
                     + s.border_top_width + s.border_bottom_width
@@ -2158,4 +2172,61 @@ fn truncate_frag_with_ellipsis(
     buf.push(ellipsis);
     frag.text = buf;
     frag.width = w + ellipsis_w;
+}
+
+#[cfg(test)]
+mod tests {
+    use lumen_core::geom::Size;
+
+    fn layout_div(css: &str, viewport_w: f32, viewport_h: f32) -> super::LayoutBox {
+        let html = "<div></div>";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(viewport_w, viewport_h));
+        // html box > body box > div box
+        fn find_empty_block(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            for child in &b.children {
+                if matches!(child.kind, super::BoxKind::Block) && child.children.is_empty() {
+                    return Some(child);
+                }
+                if let Some(found) = find_empty_block(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        find_empty_block(&root).cloned().expect("empty Block not found in layout tree")
+    }
+
+    #[test]
+    fn aspect_ratio_height_from_width() {
+        // width: 200px, aspect-ratio: 2/1 → height should be 100px border-box
+        let div = layout_div("div { width: 200px; aspect-ratio: 2/1; }", 800.0, 600.0);
+        assert_eq!(div.rect.width, 200.0);
+        assert_eq!(div.rect.height, 100.0);
+    }
+
+    #[test]
+    fn aspect_ratio_16_9() {
+        // width: 160px, aspect-ratio: 16/9 → height = 160 * 9/16 = 90px
+        let div = layout_div("div { width: 160px; aspect-ratio: 16/9; }", 800.0, 600.0);
+        assert_eq!(div.rect.width, 160.0);
+        assert!((div.rect.height - 90.0).abs() < 0.5, "height={}", div.rect.height);
+    }
+
+    #[test]
+    fn aspect_ratio_explicit_height_wins() {
+        // Explicit height overrides aspect-ratio.
+        let div = layout_div("div { width: 200px; height: 50px; aspect-ratio: 2/1; }", 800.0, 600.0);
+        assert_eq!(div.rect.width, 200.0);
+        assert_eq!(div.rect.height, 50.0);
+    }
+
+    #[test]
+    fn aspect_ratio_no_height_without_ratio() {
+        // Without aspect-ratio, height collapses to 0 for empty div.
+        let div = layout_div("div { width: 200px; }", 800.0, 600.0);
+        assert_eq!(div.rect.width, 200.0);
+        assert_eq!(div.rect.height, 0.0);
+    }
 }

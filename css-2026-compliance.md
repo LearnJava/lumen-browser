@@ -304,7 +304,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | Property | Status |
 |---|---|
 | `box-sizing` | ✅ |
-| `aspect-ratio` | 🟡 parsed; not enforced in layout |
+| `aspect-ratio` | ✅ enforced in block/flex/grid layout (border-box, height auto only) |
 
 ### CSS Transforms Level 2
 | Property | Status |
@@ -364,7 +364,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 ### CSS Sizing Level 4
 | Property | Status |
 |---|---|
-| `aspect-ratio` | 🟡 parsed |
+| `aspect-ratio` | ✅ enforced in block/flex/grid layout (border-box, height auto only) |
 
 ### CSS Images Level 3
 | Property | Status |
