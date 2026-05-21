@@ -32,8 +32,9 @@ use std::sync::Arc;
 
 use lumen_core::event::{Event, FetchPriority, SubresourceKind};
 use lumen_core::ext::EventSink;
-use lumen_devtools::DevToolsServer;
 use lumen_core::geom::{Rect, Size};
+use lumen_devtools::DevToolsServer;
+use lumen_storage::session_export::{self, ExportedTab, SessionFile};
 use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
 use lumen_layout::LayoutBox;
 use lumen_paint::{build_display_list_with_anim, DisplayList, Renderer};
@@ -94,6 +95,13 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let (import_session, rest_args) = match extract_import_session(&rest_args) {
+        Ok(r) => r,
+        Err(err) => {
+            eprintln!("Ошибка --import-session: {err}");
+            return ExitCode::FAILURE;
+        }
+    };
     let cli = match parse_cli(&rest_args) {
         Ok(m) => m,
         Err(err) => {
@@ -112,13 +120,23 @@ fn main() -> ExitCode {
 
     let event_sink: Arc<dyn EventSink> = Arc::new(StdoutEventSink);
 
+    // --import-session переопределяет источник страницы и начальный scroll.
+    let (cli, initial_scroll) = match import_session {
+        Some((session_source, scroll)) => (CliMode::OpenWindow(session_source), scroll),
+        None => (cli, (0.0_f32, 0.0_f32)),
+    };
+
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
-        CliMode::OpenWindow(source) => run_window_mode(source, event_sink),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, initial_scroll),
     }
 }
 
-fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCode {
+fn run_window_mode(
+    source: PageSource,
+    event_sink: Arc<dyn EventSink>,
+    initial_scroll: (f32, f32),
+) -> ExitCode {
     println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
 
     let initial_viewport = Size::new(1024.0, 720.0);
@@ -155,8 +173,8 @@ fn run_window_mode(source: PageSource, event_sink: Arc<dyn EventSink>) -> ExitCo
         layout_box: Some(initial_layout_box),
         epoch: std::time::Instant::now(),
         find: find::FindState::default(),
-        scroll_y: 0.0,
-        scroll_x: 0.0,
+        scroll_y: initial_scroll.1.min(content_height),
+        scroll_x: initial_scroll.0.min(content_width),
         content_height,
         content_width,
         cursor_position: None,
@@ -224,6 +242,40 @@ fn print_usage() {
     eprintln!("  lumen --dump-layout <path-or-url>        — layout-дерево в stdout");
     eprintln!("  lumen --dump-display-list <path-or-url>  — display list в stdout");
     eprintln!("  [--devtools-port <N>]                    — DevTools WS сервер (любой режим)");
+    eprintln!("  --import-session <file.lsession>         — восстановить сессию из файла");
+}
+
+/// Результат разбора `--import-session`: (source, (scroll_x, scroll_y)).
+type ImportedSession = (PageSource, (f32, f32));
+
+/// Извлечь `--import-session <file>` из аргументов.
+///
+/// Возвращает (Some((source, (scroll_x, scroll_y))), остальные аргументы)
+/// или (None, аргументы) если флаг не указан.
+fn extract_import_session(
+    args: &[String],
+) -> Result<(Option<ImportedSession>, Vec<String>), String> {
+    let mut session: Option<(PageSource, (f32, f32))> = None;
+    let mut rest = Vec::new();
+    let mut i = 0;
+    while i < args.len() {
+        if args[i] == "--import-session" {
+            i += 1;
+            let path = args.get(i).ok_or("--import-session требует путь к файлу")?;
+            let json = std::fs::read_to_string(path)
+                .map_err(|e| format!("не удалось прочитать {path}: {e}"))?;
+            let file = session_export::from_json(&json)
+                .map_err(|e| format!("ошибка разбора сессии {path}: {e}"))?;
+            let tab = session_export::active_tab(&file)
+                .ok_or_else(|| format!("сессия {path} не содержит вкладок"))?;
+            let source = PageSource::from_arg(Some(&tab.url));
+            session = Some((source, (tab.scroll_x, tab.scroll_y)));
+        } else {
+            rest.push(args[i].clone());
+        }
+        i += 1;
+    }
+    Ok((session, rest))
 }
 
 /// Извлечь `--devtools-port N` из аргументов, вернуть (port, остальные аргументы).
@@ -1403,7 +1455,10 @@ impl ApplicationHandler for Lumen {
         event: WindowEvent,
     ) {
         match event {
-            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::CloseRequested => {
+                self.save_session_on_close();
+                event_loop.exit();
+            }
             WindowEvent::Resized(size) => {
                 if let Some(r) = self.renderer.as_mut() {
                     r.resize(size.width, size.height);
@@ -2035,6 +2090,35 @@ impl Lumen {
             return Vec::new();
         };
         find::find_matches(&self.display_list, self.find.query(), &measurer)
+    }
+
+    /// Сохранить текущую вкладку в `last_session.lsession` при закрытии окна.
+    ///
+    /// Silent — ошибки записи не ломают выход. Не сохраняет Empty-страницу.
+    fn save_session_on_close(&self) {
+        let url = match &self.source {
+            PageSource::Empty => return,
+            PageSource::File(p) => p.display().to_string(),
+            PageSource::Url(u) => u.clone(),
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs() as i64;
+        let file = SessionFile {
+            version: 1,
+            name: format!("auto-save {now}"),
+            created_at: now,
+            tabs: vec![ExportedTab {
+                url,
+                title: self.title.clone().unwrap_or_default(),
+                scroll_x: self.scroll_x,
+                scroll_y: self.scroll_y,
+                is_active: true,
+            }],
+        };
+        let json = session_export::to_json(&file);
+        let _ = std::fs::write("last_session.lsession", json.as_bytes());
     }
 }
 

@@ -1166,6 +1166,7 @@ dependencies = [
  "lumen-layout",
  "lumen-network",
  "lumen-paint",
+ "lumen-storage",
  "winit",
 ]
 
