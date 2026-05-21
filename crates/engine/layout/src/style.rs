@@ -8917,6 +8917,28 @@ fn apply_declaration(
                 _ => ContainerType::Normal,
             };
         }
+        "writing-mode" => {
+            style.writing_mode = match val.trim() {
+                "horizontal-tb" => WritingMode::HorizontalTb,
+                "vertical-rl" => WritingMode::VerticalRl,
+                "vertical-lr" => WritingMode::VerticalLr,
+                "sideways-rl" => WritingMode::SidewaysRl,
+                "sideways-lr" => WritingMode::SidewaysLr,
+                "lr" | "lr-tb" => WritingMode::HorizontalTb,
+                "rl" | "rl-tb" => WritingMode::HorizontalTb,
+                "tb" | "tb-rl" => WritingMode::VerticalRl,
+                "tb-lr" => WritingMode::VerticalLr,
+                _ => style.writing_mode,
+            };
+        }
+        "text-orientation" => {
+            style.text_orientation = match val.trim() {
+                "mixed" => TextOrientation::Mixed,
+                "upright" => TextOrientation::Upright,
+                "sideways" | "sideways-right" => TextOrientation::Sideways,
+                _ => style.text_orientation,
+            };
+        }
         "user-select" => {
             if let Some(v) = UserSelect::parse(val) {
                 style.user_select = v;
@@ -10412,6 +10434,16 @@ fn apply_css_wide_keyword(
         }
         "cursor" => {
             style.cursor = if inh { inherited.cursor } else { init.cursor };
+        }
+        "writing-mode" => {
+            style.writing_mode = if inh { inherited.writing_mode } else { init.writing_mode };
+        }
+        "text-orientation" => {
+            style.text_orientation = if inh {
+                inherited.text_orientation
+            } else {
+                init.text_orientation
+            };
         }
         "accent-color" => {
             style.accent_color = if inh { inherited.accent_color } else { init.accent_color };
@@ -19015,9 +19047,6 @@ mod tests {
 
     #[test]
     fn writing_mode_initial_horizontal_tb() {
-    // CSS Shapes L1 — shape-outside
-    #[test]
-    fn shape_outside_none_initial() {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
@@ -19050,23 +19079,6 @@ mod tests {
     fn writing_mode_inherited() {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; }");
-        assert_eq!(style.shape_outside, ShapeOutside::None);
-    }
-
-    #[test]
-    fn shape_outside_value() {
-        let doc = lumen_html_parser::parse("<div></div>");
-        let sheet = lumen_css_parser::parse("div { shape-outside: circle(50%); }");
-        let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        assert_eq!(style.shape_outside, ShapeOutside::Value("circle(50%)".to_string()));
-    }
-
-    #[test]
-    fn shape_outside_not_inherited() {
-        let doc = lumen_html_parser::parse("<div><span></span></div>");
-        let sheet = lumen_css_parser::parse("div { shape-outside: circle(50%); }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.root()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
@@ -19090,23 +19102,6 @@ mod tests {
 
     #[test]
     fn text_orientation_initial_mixed() {
-        assert_eq!(div_style.shape_outside, ShapeOutside::Value("circle(50%)".to_string()));
-        assert_eq!(span_style.shape_outside, ShapeOutside::None);
-    }
-
-    #[test]
-    fn shape_outside_invalid_ignored() {
-        let doc = lumen_html_parser::parse("<div></div>");
-        let sheet = lumen_css_parser::parse("div { shape-outside: none; }");
-        let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
-        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        assert_eq!(style.shape_outside, ShapeOutside::None);
-    }
-
-    // CSS Shapes L1 — shape-margin
-    #[test]
-    fn shape_margin_initial() {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
@@ -19133,6 +19128,19 @@ mod tests {
         let div = doc.get(doc.root()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_orientation, TextOrientation::Sideways);
+    }
+
+    #[test]
+    fn text_orientation_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; text-orientation: upright; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.text_orientation, TextOrientation::Upright);
+        assert_eq!(span_style.text_orientation, TextOrientation::Upright);
     }
 
     // ── form controls UA stylesheet ──────────────────────────────────────────
@@ -19215,10 +19223,58 @@ mod tests {
         assert_eq!(style.height, Some(Length::Px(40.0)));
     }
 
+    // CSS Shapes L1 — shape-outside
     #[test]
-    fn text_orientation_inherited() {
+    fn shape_outside_none_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.shape_outside, ShapeOutside::None);
+    }
+
+    #[test]
+    fn shape_outside_value() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { shape-outside: circle(50%); }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.shape_outside, ShapeOutside::Value("circle(50%)".to_string()));
+    }
+
+    #[test]
+    fn shape_outside_not_inherited() {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
-        let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; text-orientation: upright; }");
+        let sheet = lumen_css_parser::parse("div { shape-outside: circle(50%); }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.shape_outside, ShapeOutside::Value("circle(50%)".to_string()));
+        assert_eq!(span_style.shape_outside, ShapeOutside::None);
+    }
+
+    #[test]
+    fn shape_outside_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { shape-outside: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.shape_outside, ShapeOutside::None);
+    }
+
+    // CSS Shapes L1 — shape-margin
+    #[test]
+    fn shape_margin_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.shape_margin, Length::Px(0.0));
     }
 
@@ -19241,8 +19297,6 @@ mod tests {
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
-        assert_eq!(div_style.text_orientation, TextOrientation::Upright);
-        assert_eq!(span_style.text_orientation, TextOrientation::Upright);
         assert_eq!(div_style.shape_margin, Length::Px(5.0));
         assert_eq!(span_style.shape_margin, Length::Px(0.0));
     }
