@@ -58,6 +58,7 @@ pub use mixed_content::{
     block_reason as mixed_content_block_reason, classify_subresource_request,
 };
 pub use origin::{Origin, OriginError};
+pub use h2::pool::H2Pool;
 pub use pool::ConnectionPool;
 pub use range::{
     ContentRange, MultiRangeResponse, RangePart, RangeRequest, RangeResponse, RangeSpec,
@@ -571,6 +572,7 @@ fn is_stale_error(err: &Error) -> bool {
 #[allow(clippy::too_many_arguments)]
 fn fetch_single(
     pool: &ConnectionPool,
+    h2_pool: Option<&H2Pool>,
     resolver: &dyn DnsResolver,
     host: &str,
     port: u16,
@@ -589,6 +591,26 @@ fn fetch_single(
         port,
         is_tls,
     };
+
+    // HTTP/2 pool: try reusing an existing H2 connection for this origin.
+    if let Some(h2p) = h2_pool {
+        let h2_key = pool::PoolKey { host: host.to_owned(), port, is_tls };
+        if let Some(h2_conn) = h2p.acquire(&h2_key) {
+            let scheme = if is_tls { "https" } else { "http" };
+            match h2_do_request_conn(h2_conn, scheme, request_host_header, request_path, extra_headers) {
+                Ok((resp, h2_conn)) => {
+                    h2p.release(h2_key, h2_conn);
+                    return Ok(resp);
+                }
+                Err(e) if is_stale_error(&e) => {
+                    // H2 conn went stale (server sent GOAWAY or closed socket).
+                    // Evict and fall through to fresh connect below.
+                    h2p.evict(&pool::PoolKey { host: host.to_owned(), port, is_tls });
+                }
+                Err(e) => return Err(e),
+            }
+        }
+    }
 
     // Попытка 1: используем pooled connection, если он есть.
     if let Some(pooled) = pool.acquire(&key) {
@@ -620,10 +642,10 @@ fn fetch_single(
     // Попытка 2 (или 1, если пул был пуст): свежий connect.
     let conn = connect(host, port, is_tls, resolver)?;
 
-    // HTTP/2: пул не используется в 5A.4 (pool multiplexing — 5A.5).
+    // HTTP/2: establish fresh H2Conn, use it, then store back in h2_pool.
     if conn.is_h2 {
         let scheme = if is_tls { "https" } else { "http" };
-        return h2_do_request(conn, scheme, request_host_header, request_path, extra_headers);
+        return h2_do_request(conn, scheme, request_host_header, request_path, extra_headers, h2_pool, host, port, is_tls);
     }
 
     let (resp, conn) = do_request(
@@ -643,20 +665,24 @@ fn fetch_single(
     Ok(resp)
 }
 
-/// Выполнить один HTTP/2 запрос по уже установленному соединению.
-/// Пул не используется — H2 pool multiplexing отложен до 5A.5.
+/// Выполнить один HTTP/2 запрос, открыв свежее соединение. После успешного
+/// ответа соединение возвращается в `h2_pool` (если передан).
+#[allow(clippy::too_many_arguments)]
 fn h2_do_request(
     conn: Connection,
     scheme: &str,
     authority: &str,
     path: &str,
     extra_headers: &str,
+    h2_pool: Option<&H2Pool>,
+    host: &str,
+    port: u16,
+    is_tls: bool,
 ) -> Result<Response> {
     use h2::conn::H2Conn;
     let stream = conn.into_stream();
     let mut h2 = H2Conn::connect(stream)?;
 
-    // Преобразуем строку extra_headers формата "Key: Val\r\n..." в срезы байт.
     let parsed_extra = parse_extra_headers_str(extra_headers);
     let extra_refs: Vec<(&[u8], &[u8])> = parsed_extra
         .iter()
@@ -664,11 +690,32 @@ fn h2_do_request(
         .collect();
 
     let (status, headers, body) = h2.fetch("GET", scheme, authority, path, &extra_refs)?;
-    Ok(Response {
-        status,
-        headers,
-        body,
-    })
+
+    if let Some(h2p) = h2_pool {
+        let key = pool::PoolKey { host: host.to_owned(), port, is_tls };
+        h2p.release(key, h2);
+    }
+
+    Ok(Response { status, headers, body })
+}
+
+/// Выполнить HTTP/2 запрос через уже существующее `H2Conn`. Возвращает
+/// `(Response, H2Conn)` — caller решает, вернуть ли conn в пул.
+fn h2_do_request_conn(
+    mut h2: h2::conn::H2Conn<RawStream>,
+    scheme: &str,
+    authority: &str,
+    path: &str,
+    extra_headers: &str,
+) -> Result<(Response, h2::conn::H2Conn<RawStream>)> {
+    let parsed_extra = parse_extra_headers_str(extra_headers);
+    let extra_refs: Vec<(&[u8], &[u8])> = parsed_extra
+        .iter()
+        .map(|(k, v)| (k.as_slice(), v.as_slice()))
+        .collect();
+
+    let (status, headers, body) = h2.fetch("GET", scheme, authority, path, &extra_refs)?;
+    Ok((Response { status, headers, body }, h2))
 }
 
 /// Разобрать строку вида `"Key: Value\r\nKey2: Value2\r\n"` в вектор пар байт.
@@ -807,6 +854,7 @@ fn fetch_with_redirect(
     url: &Url,
     hops_left: u8,
     pool: &ConnectionPool,
+    h2_pool: Option<&H2Pool>,
     resolver: &dyn DnsResolver,
     sink: Option<&dyn EventSink>,
     filter: Option<&dyn RequestFilter>,
@@ -930,6 +978,7 @@ fn fetch_with_redirect(
             let preflight_extra = build_preflight_extra_headers(&cors_req);
             let preflight_resp = fetch_single(
                 pool,
+                h2_pool,
                 resolver,
                 &host_ascii,
                 port,
@@ -997,6 +1046,7 @@ fn fetch_with_redirect(
 
         let mut resp = fetch_single(
             pool,
+            h2_pool,
             resolver,
             &host_ascii,
             port,
@@ -1076,6 +1126,7 @@ fn fetch_with_redirect(
                     &next,
                     hops_left - 1,
                     pool,
+                    h2_pool,
                     resolver,
                     sink,
                     filter,
@@ -1147,6 +1198,7 @@ pub struct HttpClient {
     sink: Option<Arc<dyn EventSink>>,
     filter: Option<Arc<dyn RequestFilter>>,
     pool: Arc<ConnectionPool>,
+    h2_pool: Option<Arc<H2Pool>>,
     resolver: Arc<dyn DnsResolver>,
     hsts: Option<Arc<dyn HstsEnforcement>>,
     credentials: Option<Arc<dyn HttpCredentialProvider>>,
@@ -1162,6 +1214,7 @@ impl HttpClient {
             sink: None,
             filter: None,
             pool: Arc::new(ConnectionPool::new()),
+            h2_pool: None,
             resolver: Arc::new(SystemDnsResolver),
             hsts: None,
             credentials: None,
@@ -1196,6 +1249,16 @@ impl HttpClient {
     #[must_use]
     pub fn with_pool(mut self, pool: Arc<ConnectionPool>) -> Self {
         self.pool = pool;
+        self
+    }
+
+    /// Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
+    /// соединения открываются заново на каждый запрос. С подключённым пулом
+    /// соединение переиспользуется: последовательные запросы к одному origin-у
+    /// идут по одному TLS/TCP-сокету, stream ID монотонно растёт (1, 3, 5...).
+    #[must_use]
+    pub fn with_h2_pool(mut self, pool: Arc<H2Pool>) -> Self {
+        self.h2_pool = Some(pool);
         self
     }
 
@@ -1394,6 +1457,7 @@ impl HttpClient {
             &target,
             5,
             &self.pool,
+            self.h2_pool.as_deref(),
             self.resolver.as_ref(),
             self.sink.as_deref(),
             self.filter.as_deref(),
@@ -1423,6 +1487,7 @@ impl HttpClient {
             url,
             5,
             &self.pool,
+            self.h2_pool.as_deref(),
             self.resolver.as_ref(),
             self.sink.as_deref(),
             self.filter.as_deref(),
@@ -1486,6 +1551,7 @@ impl HttpClient {
             url,
             5,
             &self.pool,
+            self.h2_pool.as_deref(),
             self.resolver.as_ref(),
             self.sink.as_deref(),
             self.filter.as_deref(),
@@ -1556,6 +1622,7 @@ impl HttpClient {
             url,
             5,
             &self.pool,
+            self.h2_pool.as_deref(),
             self.resolver.as_ref(),
             self.sink.as_deref(),
             self.filter.as_deref(),
@@ -1587,6 +1654,7 @@ impl NetworkTransport for HttpClient {
             url,
             5,
             &self.pool,
+            self.h2_pool.as_deref(),
             self.resolver.as_ref(),
             self.sink.as_deref(),
             self.filter.as_deref(),
@@ -1828,6 +1896,29 @@ mod tests {
         let _c = HttpClient::new();
         let _c = HttpClient::default();
         let _c = HttpClient::new().with_tab(TabId(42));
+    }
+
+    // ── H2Pool (5A.5) ────────────────────────────────────────────────────────
+
+    #[test]
+    fn http_client_with_h2_pool_builder() {
+        // with_h2_pool() подключает пул без паники; обычные HTTP/1.1 запросы
+        // не затрагиваются (pool просто не выдаёт entries для новых origin-ов).
+        let pool = Arc::new(H2Pool::new());
+        let client = HttpClient::new().with_h2_pool(pool.clone());
+        // Пул пока пустой — acquire вернёт None, client уйдёт в обычный connect.
+        // Без реального HTTP/2 сервера мы только проверяем, что API компилируется.
+        let _ = client;
+    }
+
+    #[test]
+    fn h2_pool_shared_between_clients() {
+        // Один Arc<H2Pool> можно подключить к нескольким клиентам (как ConnectionPool).
+        let pool = Arc::new(H2Pool::new());
+        let _c1 = HttpClient::new().with_h2_pool(Arc::clone(&pool));
+        let _c2 = HttpClient::new().with_h2_pool(Arc::clone(&pool));
+        // Обе Arc-и ссылаются на одну структуру.
+        assert_eq!(Arc::strong_count(&pool), 3);
     }
 
     /// Однократный mock-сервер: каждое соединение обслуживается **отдельно**,

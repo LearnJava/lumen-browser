@@ -218,7 +218,7 @@
 | 5A.2 | ✅ Frame codec (RFC 9113 §6) | `network/src/h2/frame.rs` | 10 типов + Unknown, padding strip, +46 тестов |
 | 5A.3 | ✅ HPACK (RFC 7541) | `network/src/h2/hpack.rs` | static+dynamic table, Huffman, integer enc, +24 тестов (RFC C.3/C.4 vectors) |
 | 5A.4 | ✅ Connection + single GET | `network/src/h2/conn.rs` | preface, SETTINGS, один stream, +11 тестов |
-| 5A.5 | ⬜ Pool multiplexing | `network/src/h2/pool.rs` | concurrent streams в одном conn |
+| 5A.5 | ✅ Pool multiplexing | `network/src/h2/pool.rs` | H2Pool acquire/release/evict, интеграция в fetch_single |
 | 5A.6 | ⬜ Flow control + WINDOW_UPDATE | `network/src/h2/flow.rs` | connection + stream windows |
 | 5B | ✅ **`[P3]` HTTP Range requests** | `<video>` seek | — |
 | 5C | ⬜ **`[P3]` DevTools/CDP минимум** (после 1B) | Debug движка | — |
