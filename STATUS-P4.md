@@ -1,4 +1,4 @@
-In progress: —
+In progress: cursor → OS cursor wire-up  branch: cursor-wireup
 
 Next (Wave 1 — unblock P1/P2):
 

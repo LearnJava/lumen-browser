@@ -39,8 +39,8 @@
 use lumen_core::geom::{Point, Rect};
 use lumen_dom::NodeId;
 use lumen_layout::{
-    box_can_own_stacking_context, creates_stacking_context, BoxKind, Display, LayoutBox, Mat4,
-    PointerEvents, TransformFn,
+    box_can_own_stacking_context, creates_stacking_context, BoxKind, Cursor, Display, LayoutBox,
+    Mat4, PointerEvents, TransformFn,
 };
 
 /// Результат hit-теста.
@@ -56,6 +56,8 @@ pub struct HitTestResult {
     /// layout-дерева (документа). Используется event dispatch-ом для bubble
     /// stage без повторного walk-а.
     pub path: Vec<NodeId>,
+    /// CSS `cursor` значение hit-узла — для wire-up к OS cursor.
+    pub cursor: Cursor,
 }
 
 /// Hit-тест точки в viewport-координатах. `root` — layout-дерево из
@@ -144,6 +146,7 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
         node: b.node,
         local_point: child_point,
         path: vec![b.node],
+        cursor: b.style.cursor,
     })
 }
 
