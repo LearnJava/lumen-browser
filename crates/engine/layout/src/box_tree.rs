@@ -17,9 +17,9 @@ use lumen_html_parser::{
 
 use crate::style::{
     compute_pseudo_element_style, compute_style, AlignValue, BackgroundImage, BoxSizing, Content,
-    ContentItem, ComputedStyle, Display, FlexBasis, FlexDirection, FlexWrap, GridAutoFlow,
-    GridLine, GridTrackSize, Length, LengthOrAuto, Overflow, Position, TextAlign, TextOverflow,
-    VerticalAlign,
+    ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap,
+    GridAutoFlow, GridLine, GridTrackSize, Length, LengthOrAuto, Overflow, Position, TextAlign,
+    TextOverflow, VerticalAlign,
 };
 use crate::TextMeasurer;
 
@@ -1020,9 +1020,7 @@ fn lay_out(
             };
             let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport);
             *lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m);
-            if s.text_align != TextAlign::Left {
-                align_lines(lines, content_width, s.text_align);
-            }
+            align_lines(lines, content_width, s.text_align, s.direction);
             let line_h = s.font_size * s.line_height;
             apply_inline_vertical_align(lines, line_h);
             // CSS UI L4 §10.1: text-overflow: ellipsis требует overflow != visible.
@@ -2454,24 +2452,46 @@ fn wrap_inline_run(
     result
 }
 
-/// Сдвигает фрагменты каждой строки вправо для center/right выравнивания.
-/// Для Left — no-op.
+/// Сдвигает фрагменты каждой строки по text-align + direction.
+/// `Start`/`End` разрешаются в Left/Right по direction (CSS Text L3 §7.1).
+/// Для RTL фрагменты зеркалируются относительно content_width.
 fn align_lines(
     lines: &mut [Vec<InlineFrag>],
     content_width: f32,
     text_align: TextAlign,
+    direction: Direction,
 ) {
+    let is_rtl = direction == Direction::Rtl;
+    // Resolve Start/End to physical Left/Right.
+    let physical = match text_align {
+        TextAlign::Start => if is_rtl { TextAlign::Right } else { TextAlign::Left },
+        TextAlign::End   => if is_rtl { TextAlign::Left  } else { TextAlign::Right },
+        other => other,
+    };
     for line in lines.iter_mut() {
         let Some(last) = line.last() else { continue };
         let line_width = last.x + last.width;
-        let offset = match text_align {
-            TextAlign::Center => ((content_width - line_width) / 2.0).max(0.0),
-            TextAlign::Right => (content_width - line_width).max(0.0),
-            TextAlign::Left => 0.0,
-        };
-        if offset > 0.0 {
+        if is_rtl {
+            // Mirror positions within the line block, then align the block.
+            // `right_gap` = space to the right of the mirrored line block.
+            let right_gap = match physical {
+                TextAlign::Right  => (content_width - line_width).max(0.0),
+                TextAlign::Center => ((content_width - line_width) / 2.0).max(0.0),
+                _                 => 0.0, // Left / flush-left for RTL end
+            };
             for frag in line.iter_mut() {
-                frag.x += offset;
+                frag.x = line_width - (frag.x + frag.width) + right_gap;
+            }
+        } else {
+            let offset = match physical {
+                TextAlign::Center => ((content_width - line_width) / 2.0).max(0.0),
+                TextAlign::Right  => (content_width - line_width).max(0.0),
+                _                 => 0.0,
+            };
+            if offset > 0.0 {
+                for frag in line.iter_mut() {
+                    frag.x += offset;
+                }
             }
         }
     }
