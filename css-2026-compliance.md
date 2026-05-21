@@ -46,6 +46,12 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | Feature | Status |
 |---|---|
 | `px`, `em`, `rem`, `%`, `vw`, `vh` | ✅ |
+| `vmin`, `vmax` | ✅ |
+| `pt`, `pc`, `in`, `cm`, `mm`, `Q` | ✅ parsed → px (96dpi reference pixel) |
+| `ch`, `ex` | ✅ approximated as 0.5em (Phase 0, no font metrics API) |
+| `cap`, `lh` | ✅ approximated as 0.7em / 1.2em (Phase 0) |
+| `svh`, `svw`, `dvh`, `dvw`, `lvh`, `lvw` | ✅ = vh/vw (Phase 0 fixed viewport) |
+| `svmin`/`dvmin`/`lvmin`, `svmax`/`dvmax`/`lvmax` | ✅ = vmin/vmax (Phase 0) |
 | `calc()` | ✅ |
 | `min()`, `max()`, `clamp()` | ✅ |
 | `currentColor` | ✅ |
