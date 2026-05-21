@@ -1821,7 +1821,6 @@ pub struct ComputedStyle {
     pub flex_basis: FlexBasis,
     /// CSS Flexbox L1 §5.4 — `order`. Non-inherited. Initial: `0`.
     /// Управляет порядком отображения flex-элементов внутри контейнера.
-    /// Phase 0: parse + store; реальная сортировка при layout — задача 4B.8.
     pub order: i32,
     /// CSS Grid Layout L1 §7.2 — `grid-template-columns`. Non-inherited.
     /// Default `[]` (no explicit tracks). Parsed track-list.
@@ -7471,14 +7470,15 @@ fn apply_declaration(
                 style.flex_basis = v;
             }
         }
-        "flex" => {
-            // CSS Flexbox L1 §7: shorthand flex-grow flex-shrink flex-basis.
-            apply_flex_shorthand(style, val, is_quirks);
-        }
         "order" => {
+            // CSS Flexbox L1 §4: <integer>. Non-inherited. Initial: 0.
             if let Ok(n) = val.trim().parse::<i32>() {
                 style.order = n;
             }
+        }
+        "flex" => {
+            // CSS Flexbox L1 §7: shorthand flex-grow flex-shrink flex-basis.
+            apply_flex_shorthand(style, val, is_quirks);
         }
         // CSS Grid Layout L1 — container properties.
         "grid-template-columns" => {
@@ -10269,6 +10269,9 @@ fn apply_css_wide_keyword(
                 init.flex_basis.clone()
             };
         }
+        "order" => {
+            style.order = if inh_only_inherit { inherited.order } else { init.order };
+        }
         "flex" => {
             style.flex_grow = if inh_only_inherit { inherited.flex_grow } else { init.flex_grow };
             style.flex_shrink = if inh_only_inherit { inherited.flex_shrink } else { init.flex_shrink };
@@ -10277,9 +10280,6 @@ fn apply_css_wide_keyword(
             } else {
                 init.flex_basis.clone()
             };
-        }
-        "order" => {
-            style.order = if inh_only_inherit { inherited.order } else { init.order };
         }
         // CSS Flexbox L1 §5 — flex-direction / flex-wrap non-inherited.
         "flex-direction" => {
