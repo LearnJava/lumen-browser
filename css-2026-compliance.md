@@ -186,6 +186,7 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 |---|---|
 | `color-scheme` | 🟡 | parsed/stored (normal/light/dark/light dark/dark light/only light/only dark); UA theme switching — P2 |
 | `forced-color-adjust` | 🟡 | parsed/stored (auto/none/preserve-parent-color); Forced Colors Mode application — P2 |
+| `print-color-adjust` / `color-adjust` | 🟡 | parsed/stored (economy/exact); `color-adjust` legacy alias handled; print rendering — deferred |
 
 ---
 
@@ -303,6 +304,11 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 |---|---|
 | `filter` | 🟡 parsed (blur/brightness/contrast/grayscale/etc.); not applied in paint |
 
+### Filter Effects Level 2
+| Property | Status | Notes |
+|---|---|---|
+| `backdrop-filter` | 🟡 | parsed/stored (same FilterFn list as `filter`); backdrop compositing — P2 task |
+
 ### CSS Box Sizing Level 3
 | Property | Status |
 |---|---|
@@ -338,6 +344,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 |---|---|
 | `font-variant-caps` | 🟡 parsed |
 | `font-stretch` (% values) | 🟡 parsed |
+| `font-size-adjust` | 🟡 | parsed/stored (none/auto/<number>); actual x-height based scaling — deferred (requires font metrics) |
 
 ### CSS Nesting Level 1
 | Feature | Status |

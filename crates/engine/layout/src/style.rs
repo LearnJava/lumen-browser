@@ -1928,6 +1928,15 @@ pub struct ComputedStyle {
     /// CSS Container Queries L1 §3.2 — `container-name`. NOT inherited. Initial: empty.
     /// `none` = empty vec. Each name is a `<custom-ident>`.
     pub container_name: Vec<String>,
+    /// CSS Filter Effects L2 §2 — `backdrop-filter`. NOT inherited. Initial: empty Vec (none).
+    /// Same filter functions as `filter`. Phase 0: parse + store; backdrop blur in paint — deferred.
+    pub backdrop_filter: Vec<FilterFn>,
+    /// CSS Color Adjustment L1 §5 — `print-color-adjust`. NOT inherited. Initial: `Economy`.
+    /// Phase 0: parse + store; print rendering path — deferred.
+    pub print_color_adjust: PrintColorAdjust,
+    /// CSS Fonts L5 §4 — `font-size-adjust`. Inherited. Initial: `None`.
+    /// Phase 0: parse + store; real x-height based font-size scaling — deferred.
+    pub font_size_adjust: FontSizeAdjust,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -2290,6 +2299,23 @@ pub enum ContainerType {
     Normal,
     Size,
     InlineSize,
+}
+
+/// CSS Color Adjustment L1 §5 — `print-color-adjust`. NOT inherited. Initial: `Economy`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum PrintColorAdjust {
+    #[default]
+    Economy,
+    Exact,
+}
+
+/// CSS Fonts L5 §4 — `font-size-adjust`. Inherited. Initial: `None`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum FontSizeAdjust {
+    #[default]
+    None,
+    Auto,
+    Value(f32),
 }
 
 /// CSS UI L4 §6.2 — `user-select`. Inherited.
@@ -3481,6 +3507,9 @@ impl ComputedStyle {
             content_visibility: ContentVisibility::Visible,
             container_type: ContainerType::Normal,
             container_name: Vec::new(),
+            backdrop_filter: Vec::new(),
+            print_color_adjust: PrintColorAdjust::Economy,
+            font_size_adjust: FontSizeAdjust::None,
         }
     }
 }
@@ -3721,6 +3750,12 @@ pub fn compute_style(
         content_visibility: ContentVisibility::Visible,
         container_type: ContainerType::Normal,
         container_name: Vec::new(),
+        // CSS Filter Effects L2 — backdrop-filter не наследуется.
+        backdrop_filter: Vec::new(),
+        // CSS Color Adjustment L1 §5 — print-color-adjust не наследуется.
+        print_color_adjust: PrintColorAdjust::Economy,
+        // CSS Fonts L5 §4 — font-size-adjust inherited.
+        font_size_adjust: inherited.font_size_adjust,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -8134,6 +8169,33 @@ fn apply_declaration(
                 style.filter = parse_filter_list(trimmed);
             }
         }
+        "backdrop-filter" => {
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.backdrop_filter = Vec::new();
+            } else {
+                style.backdrop_filter = parse_filter_list(trimmed);
+            }
+        }
+        "print-color-adjust" | "color-adjust" => {
+            style.print_color_adjust = match val.trim() {
+                "economy" => PrintColorAdjust::Economy,
+                "exact" => PrintColorAdjust::Exact,
+                _ => style.print_color_adjust,
+            };
+        }
+        "font-size-adjust" => {
+            let v = val.trim();
+            style.font_size_adjust = if v.eq_ignore_ascii_case("none") {
+                FontSizeAdjust::None
+            } else if v.eq_ignore_ascii_case("auto") {
+                FontSizeAdjust::Auto
+            } else if let Ok(n) = v.parse::<f32>() {
+                if n > 0.0 { FontSizeAdjust::Value(n) } else { FontSizeAdjust::None }
+            } else {
+                style.font_size_adjust
+            };
+        }
         "row-gap" => {
             // Typed Length — % = % cb_height, резолвится при layout.
             // Отрицательные значения запрещены (CSS Multi-column §3.4).
@@ -10183,6 +10245,27 @@ fn apply_css_wide_keyword(
                 inherited.container_name.clone()
             } else {
                 init.container_name.clone()
+            };
+        }
+        "backdrop-filter" => {
+            style.backdrop_filter = if inh_only_inherit {
+                inherited.backdrop_filter.clone()
+            } else {
+                init.backdrop_filter.clone()
+            };
+        }
+        "print-color-adjust" | "color-adjust" => {
+            style.print_color_adjust = if inh_only_inherit {
+                inherited.print_color_adjust
+            } else {
+                init.print_color_adjust
+            };
+        }
+        "font-size-adjust" => {
+            style.font_size_adjust = if inh_only_inherit {
+                inherited.font_size_adjust
+            } else {
+                init.font_size_adjust
             };
         }
         "forced-color-adjust" => {
@@ -18551,5 +18634,141 @@ mod tests {
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.container_name, vec!["sidebar"]);
         assert_eq!(style.container_type, ContainerType::InlineSize);
+    }
+
+    // --- backdrop-filter ---
+
+    #[test]
+    fn backdrop_filter_blur() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { backdrop-filter: blur(4px); }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert!(!style.backdrop_filter.is_empty());
+        assert!(matches!(style.backdrop_filter[0], FilterFn::Blur(_)));
+    }
+
+    #[test]
+    fn backdrop_filter_none() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { backdrop-filter: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert!(style.backdrop_filter.is_empty());
+    }
+
+    #[test]
+    fn backdrop_filter_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert!(style.backdrop_filter.is_empty());
+    }
+
+    #[test]
+    fn backdrop_filter_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { backdrop-filter: blur(4px); }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert!(!div_style.backdrop_filter.is_empty());
+        assert!(span_style.backdrop_filter.is_empty());
+    }
+
+    // --- print-color-adjust ---
+
+    #[test]
+    fn print_color_adjust_exact() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { print-color-adjust: exact; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.print_color_adjust, PrintColorAdjust::Exact);
+    }
+
+    #[test]
+    fn print_color_adjust_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.print_color_adjust, PrintColorAdjust::Economy);
+    }
+
+    #[test]
+    fn print_color_adjust_legacy_alias() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { color-adjust: exact; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.print_color_adjust, PrintColorAdjust::Exact);
+    }
+
+    #[test]
+    fn print_color_adjust_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { print-color-adjust: exact; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.print_color_adjust, PrintColorAdjust::Exact);
+        assert_eq!(span_style.print_color_adjust, PrintColorAdjust::Economy);
+    }
+
+    // --- font-size-adjust ---
+
+    #[test]
+    fn font_size_adjust_value() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { font-size-adjust: 0.5; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.font_size_adjust, FontSizeAdjust::Value(0.5));
+    }
+
+    #[test]
+    fn font_size_adjust_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.font_size_adjust, FontSizeAdjust::None);
+    }
+
+    #[test]
+    fn font_size_adjust_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { font-size-adjust: 0.47; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.font_size_adjust, FontSizeAdjust::Value(0.47));
+        assert_eq!(span_style.font_size_adjust, FontSizeAdjust::Value(0.47));
+    }
+
+    #[test]
+    fn font_size_adjust_auto() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { font-size-adjust: auto; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.font_size_adjust, FontSizeAdjust::Auto);
     }
 }
