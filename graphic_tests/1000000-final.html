@@ -174,6 +174,20 @@
     </div><!-- /rcol -->
 
   </div><!-- /mid -->
+
+  <!-- ── ::before / ::after demo ──────────────────────────────────────────── -->
+  <style>
+    .pe-row { margin-top: 12px; margin-left: 24px; }
+    .pe-box { width: 120px; height: 30px; background: #2d3748; display: inline-block; vertical-align: top; margin-right: 8px; }
+    .pe-box::before { content: " "; display: block; width: 120px; height: 12px; background: #e63946; }
+    .pe-box::after  { content: " "; display: block; width: 120px; height: 12px; background: #2a9d8f; }
+  </style>
+  <div class="pe-row">
+    <div class="pe-box"></div>
+    <div class="pe-box"></div>
+    <div class="pe-box"></div>
+  </div>
+
 </div><!-- /card -->
 </body>
 </html>

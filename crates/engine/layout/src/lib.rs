@@ -9729,4 +9729,146 @@ mod tests {
             style.font_size
         );
     }
+
+    // ──────── ::before / ::after pseudo-element generation ──────────────────
+
+    fn first_seg_text(b: &LayoutBox) -> String {
+        match &b.kind {
+            BoxKind::InlineRun { segments, .. } => {
+                segments.first().map(|s| s.text.clone()).unwrap_or_default()
+            }
+            _ => String::new(),
+        }
+    }
+
+    #[test]
+    fn before_pseudo_string_content() {
+        // ::before content вставляется как первый сегмент InlineRun.
+        let root = lay("<p>Hello</p>", r#"p::before { content: ">> "; }"#);
+        let p = first_element_child(&root);
+        assert!(!p.children.is_empty(), "p must have children");
+        let first = &p.children[0];
+        assert!(
+            matches!(first.kind, BoxKind::InlineRun { .. }),
+            "first child must be InlineRun, got {:?}",
+            std::mem::discriminant(&first.kind)
+        );
+        let text = first_seg_text(first);
+        assert!(
+            text.starts_with(">> "),
+            "::before text should start with '>> ', got {:?}",
+            text
+        );
+    }
+
+    #[test]
+    fn after_pseudo_string_content() {
+        // ::after content вставляется как последний сегмент InlineRun.
+        let root = lay("<p>Hello</p>", r#"p::after { content: " <<"; }"#);
+        let p = first_element_child(&root);
+        assert!(!p.children.is_empty(), "p must have children");
+        let last = p.children.last().unwrap();
+        assert!(
+            matches!(last.kind, BoxKind::InlineRun { .. }),
+            "last child must be InlineRun"
+        );
+        if let BoxKind::InlineRun { segments, .. } = &last.kind {
+            let last_seg = segments.last().unwrap();
+            assert!(
+                last_seg.text.ends_with(" <<"),
+                "::after text should end with ' <<', got {:?}",
+                last_seg.text
+            );
+        }
+    }
+
+    #[test]
+    fn before_and_after_together() {
+        // ::before и ::after оба применяются.
+        let root = lay(
+            "<p>X</p>",
+            r#"p::before { content: "["; } p::after { content: "]"; }"#,
+        );
+        let p = first_element_child(&root);
+        // The p should have at least one InlineRun with all text.
+        let all_text: String = p
+            .children
+            .iter()
+            .flat_map(|c| {
+                if let BoxKind::InlineRun { segments, .. } = &c.kind {
+                    segments.iter().map(|s| s.text.clone()).collect::<Vec<_>>()
+                } else {
+                    vec![]
+                }
+            })
+            .collect();
+        assert!(
+            all_text.contains('[') && all_text.contains(']'),
+            "expected '[' and ']' in inline text, got {:?}",
+            all_text
+        );
+    }
+
+    #[test]
+    fn before_content_none_generates_nothing() {
+        // content: none → псевдоэлемент не генерируется.
+        let root = lay("<p>X</p>", "p::before { content: none; }");
+        let p = first_element_child(&root);
+        // Только один InlineRun с текстом "X", без ::before.
+        let inline_texts: Vec<String> = p
+            .children
+            .iter()
+            .flat_map(|c| {
+                if let BoxKind::InlineRun { segments, .. } = &c.kind {
+                    segments.iter().map(|s| s.text.clone()).collect::<Vec<_>>()
+                } else {
+                    vec![]
+                }
+            })
+            .collect();
+        assert!(
+            inline_texts.iter().all(|t| !t.is_empty()),
+            "no empty texts expected"
+        );
+        // Нет текста кроме "X".
+        let all = inline_texts.join("");
+        assert_eq!(all.trim(), "X", "got {:?}", all);
+    }
+
+    #[test]
+    fn before_pseudo_inherits_parent_color() {
+        // ::before наследует color от родителя.
+        let root = lay(
+            "<p>X</p>",
+            r#"p { color: red; } p::before { content: "•"; }"#,
+        );
+        let p = first_element_child(&root);
+        // Первый InlineRun содержит сегмент от ::before.
+        let first_run = p.children.iter().find(|c| matches!(c.kind, BoxKind::InlineRun { .. }));
+        let Some(run) = first_run else {
+            panic!("no InlineRun found");
+        };
+        if let BoxKind::InlineRun { segments, .. } = &run.kind {
+            let before_seg = segments.iter().find(|s| s.text == "•");
+            let Some(seg) = before_seg else {
+                panic!("no segment with '•' found");
+            };
+            // red = Color { r: 255, g: 0, b: 0, a: 255 }. Проверяем r > 0, g == 0.
+            assert!(
+                seg.style.color.r > 0 && seg.style.color.g == 0,
+                "::before should inherit red color, got {:?}",
+                seg.style.color
+            );
+        }
+    }
+
+    #[test]
+    fn before_pseudo_no_rules_no_box() {
+        // Если нет правил для ::before — ничего не генерируется.
+        let root = lay("<p>Hello</p>", "p { color: blue; }");
+        let p = first_element_child(&root);
+        // Только один InlineRun с "Hello".
+        assert_eq!(p.children.len(), 1, "expected 1 child (InlineRun)");
+        assert!(matches!(p.children[0].kind, BoxKind::InlineRun { .. }));
+    }
 }

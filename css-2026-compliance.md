@@ -34,7 +34,7 @@ Legend: ✅ implemented & rendered · 🟡 parsed/stored, not rendered · ⬜ no
 | `cursor` | 🟡 | stored; shell does not yet switch OS cursor |
 | `direction` | 🟡 | stored; bidi layout not applied |
 | `vertical-align` | 🟡 | parsed; inline y-offset not applied |
-| `content` | 🟡 | parsed (string/counter/attr/url); pseudo-elements not generated |
+| `content` | 🟡 | string content generated for `::before`/`::after` block containers; `attr()`/`counter()` — deferred |
 | `counter-reset` | 🟡 | parsed |
 | `counter-increment` | 🟡 | parsed |
 | `table-*` | ⬜ | table layout not implemented |
@@ -326,7 +326,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 |---|---|
 | `list-style-*` | 🟡 parsed |
 | `counter-reset`, `counter-increment` | 🟡 parsed |
-| `content` | 🟡 parsed |
+| `content` | 🟡 string generation for `::before`/`::after` block containers; attr()/counter() — deferred |
 
 ### CSS Positioned Layout Level 3
 | Property | Status |

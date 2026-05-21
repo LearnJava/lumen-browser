@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — ::before / ::after</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a1a2e; width: 1024px; height: 720px; }
+    .__m { width: 1024px; height: 1px; background: #ff00ff; }
+
+    /* ::before block-level colored bar */
+    .row { margin-top: 40px; margin-left: 40px; }
+
+    .box-before::before {
+      content: " ";
+      display: block;
+      width: 200px;
+      height: 60px;
+      background: #e63946;
+    }
+    .box-before {
+      width: 200px;
+      height: 60px;
+      background: #457b9d;
+    }
+
+    /* ::after block-level colored bar */
+    .box-after {
+      width: 200px;
+      height: 60px;
+      background: #2a9d8f;
+      margin-top: 16px;
+    }
+    .box-after::after {
+      content: " ";
+      display: block;
+      width: 200px;
+      height: 60px;
+      background: #e9c46a;
+    }
+
+    /* Both before and after */
+    .box-both {
+      width: 200px;
+      height: 60px;
+      background: #264653;
+      margin-top: 16px;
+    }
+    .box-both::before {
+      content: " ";
+      display: block;
+      width: 200px;
+      height: 40px;
+      background: #f4a261;
+    }
+    .box-both::after {
+      content: " ";
+      display: block;
+      width: 200px;
+      height: 40px;
+      background: #e76f51;
+    }
+
+    /* ::before with different width — verifies box model */
+    .box-narrow::before {
+      content: " ";
+      display: block;
+      width: 80px;
+      height: 60px;
+      background: #a8dadc;
+    }
+    .box-narrow {
+      width: 200px;
+      height: 60px;
+      background: #1d3557;
+      margin-top: 16px;
+    }
+  </style>
+</head>
+<body>
+  <div class="__m"></div>
+  <div class="row">
+    <div class="box-before"></div>
+    <div class="box-after"></div>
+    <div class="box-both"></div>
+    <div class="box-narrow"></div>
+  </div>
+</body>
+</html>
