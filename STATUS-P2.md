@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: image-third-party (zune-jpeg + zune-png замена)  branch: image-third-party
+Next step: merge → main
 
 Next (Wave 1):
 BUG-017+018  text-decoration-style+color      display_list.rs/renderer.rs  ~1h
