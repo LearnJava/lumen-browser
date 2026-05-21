@@ -1022,6 +1022,169 @@ fn cyclic_get<T>(list: &[T], idx: usize) -> Option<&T> {
     }
 }
 
+// ─── CSS Transitions L1 §2 — TransitionScheduler ────────────────────────────
+
+/// State for one active property transition on one element.
+#[derive(Debug, Clone)]
+struct TransitionState {
+    from: AnimValue,
+    to: AnimValue,
+    start_time: f32,
+    duration: f32,
+    delay: f32,
+    timing_fn: TimingFunction,
+}
+
+/// CSS Transitions L1 §2 — detects property value changes and interpolates
+/// them over the transition duration.
+///
+/// Unlike `AnimationScheduler` (which uses `@keyframes` and runs on a timer),
+/// transitions are *reactive*: they start when a computed property value
+/// changes. Call `sync()` after each relayout that may change computed styles.
+///
+/// Phase 0 animatable properties: `opacity`, `color`, `background-color`,
+/// `transform`. `transition-property: all` checks all four.
+#[derive(Debug, Default)]
+pub struct TransitionScheduler {
+    /// Active transitions keyed by `(node, css-property-name)`.
+    active: HashMap<(NodeId, String), TransitionState>,
+}
+
+impl TransitionScheduler {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Detect value changes between `old` and `new` style for properties listed
+    /// in `new.transition_properties` and start (or update) transitions.
+    pub fn sync(&mut self, node: NodeId, old: &ComputedStyle, new: &ComputedStyle, now: f32) {
+        if new.transition_properties.is_empty() {
+            return;
+        }
+        let check_all = new
+            .transition_properties
+            .iter()
+            .any(|p| p.eq_ignore_ascii_case("all"));
+
+        type PropExtractor = (&'static str, fn(&ComputedStyle) -> AnimValue);
+        // Table of Phase-0 animatable properties and how to extract AnimValue.
+        let animatable: [PropExtractor; 4] = [
+            ("opacity", |s| AnimValue::Number(s.opacity)),
+            ("color", |s| AnimValue::Color(s.color)),
+            ("background-color", |s| {
+                AnimValue::Color(
+                    s.background_color
+                        .map_or(Color::TRANSPARENT, |c| c.resolve(s.color)),
+                )
+            }),
+            ("transform", |s| AnimValue::TransformList(s.transform.clone())),
+        ];
+
+        for (prop_idx, (prop_name, extract)) in animatable.iter().enumerate() {
+            let is_listed = check_all
+                || new
+                    .transition_properties
+                    .iter()
+                    .any(|p| p.eq_ignore_ascii_case(prop_name));
+            if !is_listed {
+                continue;
+            }
+
+            let dur = cyclic_get(&new.transition_durations, prop_idx)
+                .copied()
+                .unwrap_or(0.0);
+            if dur <= 0.0 {
+                self.active.remove(&(node, prop_name.to_string()));
+                continue;
+            }
+
+            let from_val = extract(old);
+            let to_val = extract(new);
+            if from_val == to_val {
+                continue;
+            }
+
+            let delay = cyclic_get(&new.transition_delays, prop_idx)
+                .copied()
+                .unwrap_or(0.0);
+            let timing_fn = cyclic_get(&new.transition_timing_functions, prop_idx)
+                .cloned()
+                .unwrap_or_else(TimingFunction::default);
+
+            self.active.insert(
+                (node, prop_name.to_string()),
+                TransitionState {
+                    from: from_val,
+                    to: to_val,
+                    start_time: now,
+                    duration: dur,
+                    delay,
+                    timing_fn,
+                },
+            );
+        }
+    }
+
+    /// Remove all transition state for `node` (called when node leaves DOM).
+    pub fn remove_node(&mut self, node: NodeId) {
+        self.active.retain(|(n, _), _| *n != node);
+    }
+
+    /// Compute interpolated style overrides for the current frame.
+    /// Completed transitions are removed.
+    pub fn tick(&mut self, now: f32) -> AnimationFrame {
+        let mut frame = AnimationFrame::default();
+        let interp = LinearInterpolator;
+
+        self.active.retain(|(node, prop), state| {
+            let elapsed = now - state.start_time - state.delay;
+            if elapsed < 0.0 {
+                // Still in delay period — keep active, no override yet.
+                frame.has_active = true;
+                return true;
+            }
+            if elapsed >= state.duration {
+                // Transition complete — remove.
+                return false;
+            }
+
+            let raw_t = (elapsed / state.duration).clamp(0.0, 1.0);
+            let eased_t = state.timing_fn.progress(raw_t);
+
+            if let Some(val) = interp.interpolate(&state.from, &state.to, eased_t) {
+                let entry = frame.overrides.entry(*node).or_default();
+                match prop.as_str() {
+                    "opacity" => {
+                        if let AnimValue::Number(n) = val {
+                            entry.opacity = Some(n);
+                        }
+                    }
+                    "color" => {
+                        if let AnimValue::Color(c) = val {
+                            entry.color = Some(c);
+                        }
+                    }
+                    "background-color" => {
+                        if let AnimValue::Color(c) = val {
+                            entry.background_color = Some(c);
+                        }
+                    }
+                    "transform" => {
+                        if let AnimValue::TransformList(tr) = val {
+                            entry.transform = Some(tr);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            frame.has_active = true;
+            true
+        });
+
+        frame
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2155,5 +2318,87 @@ mod tests {
         // Reverse: at t=0.25 raw → effective t=0.75 → opacity≈0.75 (from 0→1, reversed).
         let op = frame.overrides[&node].opacity.unwrap();
         assert!((op - 0.75).abs() < 0.02, "expected ~0.75, got {op}");
+    }
+
+    // ─────── TransitionScheduler ───────
+
+    fn make_opacity_transition_style(opacity: f32, duration: f32) -> ComputedStyle {
+        let mut s = ComputedStyle::root();
+        s.opacity = opacity;
+        s.transition_properties = vec!["opacity".to_string()];
+        s.transition_durations = vec![duration];
+        s.transition_timing_functions = vec![crate::style::TimingFunction::Linear];
+        s
+    }
+
+    #[test]
+    fn transition_scheduler_sync_registers_on_change() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(10usize);
+        let old = make_opacity_transition_style(0.0, 1.0);
+        let new = make_opacity_transition_style(1.0, 1.0);
+        sched.sync(node, &old, &new, 0.0);
+        assert_eq!(sched.active.len(), 1);
+    }
+
+    #[test]
+    fn transition_scheduler_sync_skips_unchanged() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(11usize);
+        let style = make_opacity_transition_style(0.5, 1.0);
+        sched.sync(node, &style, &style, 0.0);
+        assert!(sched.active.is_empty());
+    }
+
+    #[test]
+    fn transition_scheduler_tick_midpoint() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(12usize);
+        let old = make_opacity_transition_style(0.0, 1.0);
+        let new = make_opacity_transition_style(1.0, 1.0);
+        sched.sync(node, &old, &new, 0.0);
+        let frame = sched.tick(0.5);
+        assert!(frame.has_active);
+        let op = frame.overrides[&node].opacity.unwrap();
+        assert!((op - 0.5).abs() < 0.01, "expected ~0.5, got {op}");
+    }
+
+    #[test]
+    fn transition_scheduler_tick_after_end_removes_entry() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(13usize);
+        let old = make_opacity_transition_style(0.0, 1.0);
+        let new = make_opacity_transition_style(1.0, 1.0);
+        sched.sync(node, &old, &new, 0.0);
+        let frame = sched.tick(2.0); // past duration=1.0
+        assert!(!frame.has_active);
+        assert!(frame.overrides.is_empty());
+        assert!(sched.active.is_empty());
+    }
+
+    #[test]
+    fn transition_scheduler_remove_node_clears_state() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(14usize);
+        let old = make_opacity_transition_style(0.0, 1.0);
+        let new = make_opacity_transition_style(1.0, 1.0);
+        sched.sync(node, &old, &new, 0.0);
+        sched.remove_node(node);
+        assert!(sched.active.is_empty());
+    }
+
+    #[test]
+    fn transition_scheduler_delay_no_override_yet() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(15usize);
+        let mut old = make_opacity_transition_style(0.0, 1.0);
+        old.transition_delays = vec![0.5];
+        let mut new = make_opacity_transition_style(1.0, 1.0);
+        new.transition_delays = vec![0.5];
+        sched.sync(node, &old, &new, 0.0);
+        // At t=0.3 we are still inside the delay — no override.
+        let frame = sched.tick(0.3);
+        assert!(frame.has_active);
+        assert!(!frame.overrides.contains_key(&node));
     }
 }

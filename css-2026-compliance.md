@@ -274,10 +274,10 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 ### CSS Transitions Level 1
 | Property | Status |
 |---|---|
-| `transition-property` | 🟡 parsed |
-| `transition-duration` | 🟡 parsed |
-| `transition-delay` | 🟡 parsed |
-| `transition-timing-function` | 🟡 parsed |
+| `transition-property` | 🟡 parsed; `TransitionScheduler::sync+tick` wires opacity/color/background-color/transform; P2 compositor integration pending |
+| `transition-duration` | 🟡 parsed; used by TransitionScheduler |
+| `transition-delay` | 🟡 parsed; used by TransitionScheduler |
+| `transition-timing-function` | 🟡 parsed; used by TransitionScheduler |
 | `transition` | 🟡 parsed |
 
 ### CSS Animations Level 1
