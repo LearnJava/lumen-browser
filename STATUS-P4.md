@@ -1,9 +1,11 @@
-In progress: —
+In progress: animation wire-up: @keyframes → interpolator  branch: animation-wireup
+Next step: AnimationScheduler::sync + tick in animation.rs
 
 Next (Wave 1 — unblock P1/P2):
 
 Next (Wave 2 — unblock P2 animations):
-animation wire-up: @keyframes → interpolator  style.rs + animation.rs      ~3h  unblocks P2 scheduler
+transition wire-up: property → interpolation  style.rs                     ~2h  unblocks P2 engine
+background-image gradients (linear/radial)    style.rs + display_list.rs   ~3h
 transition wire-up: property → interpolation  style.rs                     ~2h  unblocks P2 engine
 background-image gradients (linear/radial)    style.rs + display_list.rs   ~3h
 
