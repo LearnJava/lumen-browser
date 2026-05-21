@@ -12,7 +12,7 @@ use lumen_layout::{
     transform_fns_to_matrix, CompositorAnimFrame,
     BackgroundClip, BackgroundImage, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
     Color, CssColor, FontStyle, FontWeight,
-    GradientStop, ParsedGradient,
+    GradientStop, ImageRendering, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent,
     StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness, TextOverflow,
@@ -160,6 +160,7 @@ pub enum DisplayCommand {
         alt: String,
         object_fit: ObjectFit,
         object_position: ObjectPosition,
+        image_rendering: ImageRendering,
     },
     /// CSS Backgrounds L3 §3.10 — `background-image: url(...)`. `rect` —
     /// background-painting area из [`background_clip_rect`] (учитывает
@@ -182,6 +183,7 @@ pub enum DisplayCommand {
         size: BackgroundSize,
         position: ObjectPosition,
         repeat: BackgroundRepeat,
+        image_rendering: ImageRendering,
     },
     /// CSS Images L3 §3.3 — `linear-gradient(angle, stop, ...)`.
     ///
@@ -513,7 +515,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                 }
                 out.push('\n');
             }
-            DisplayCommand::DrawImage { rect, src, alt, object_fit, object_position } => {
+            DisplayCommand::DrawImage { rect, src, alt, object_fit, object_position, .. } => {
                 out.push_str(&format!(
                     "DrawImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?} alt={alt:?}",
                     rect.x, rect.y, rect.width, rect.height,
@@ -530,7 +532,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                 }
                 out.push('\n');
             }
-            DisplayCommand::DrawBackgroundImage { rect, src, size, position, repeat } => {
+            DisplayCommand::DrawBackgroundImage { rect, src, size, position, repeat, .. } => {
                 out.push_str(&format!(
                     "DrawBackgroundImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?} size={size:?} pos=({:?},{:?}) repeat={repeat:?}\n",
                     rect.x, rect.y, rect.width, rect.height,
@@ -799,6 +801,7 @@ fn emit_text_frags(
                 alt: frag.text.clone(),
                 object_fit: frag.style.object_fit,
                 object_position: frag.style.object_position,
+                image_rendering: frag.style.image_rendering,
             });
             continue;
         }
@@ -1181,6 +1184,7 @@ fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox) {
                 size: b.style.background_size,
                 position: b.style.background_position,
                 repeat: b.style.background_repeat,
+                image_rendering: b.style.image_rendering,
             });
         }
         BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, stops, repeating }) => {
@@ -1558,6 +1562,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 alt: alt.clone(),
                 object_fit: b.style.object_fit,
                 object_position: b.style.object_position,
+                image_rendering: b.style.image_rendering,
             });
             emit_outline(b, out);
         }
@@ -1775,6 +1780,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 alt: alt.clone(),
                 object_fit: b.style.object_fit,
                 object_position: b.style.object_position,
+                image_rendering: b.style.image_rendering,
             });
             emit_outline(b, out);
         }
@@ -3279,6 +3285,7 @@ mod tests {
                 x: PositionComponent::Px(10.0),
                 y: PositionComponent::Percent(0.0),
             },
+            image_rendering: ImageRendering::Auto,
         }];
         let s = serialize_display_list(&dl);
         assert!(s.contains("fit=cover"), "{s}");
@@ -3293,6 +3300,7 @@ mod tests {
             alt: String::new(),
             object_fit: ObjectFit::Fill,
             object_position: ObjectPosition::default(),
+            image_rendering: ImageRendering::Auto,
         }];
         let s = serialize_display_list(&dl);
         assert!(!s.contains("fit="), "{s}");

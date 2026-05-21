@@ -1514,7 +1514,7 @@ fn lay_out_multicol_children(
     let total_h: f32 = flow_idxs.iter().map(|&i| outer_h[i]).sum();
     let target_h = (total_h / n_cols as f32).ceil().max(1.0);
     // Count-based per-column cap for balanced distribution when heights are equal/zero.
-    let per_col_cap = (flow_idxs.len() + n_cols as usize - 1) / n_cols as usize;
+    let per_col_cap = flow_idxs.len().div_ceil(n_cols as usize);
 
     // Greedy column assignment (height + count guard).
     let mut child_col = vec![0usize; children.len()];

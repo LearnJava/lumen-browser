@@ -29,7 +29,7 @@ use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{Bitmap, Cmap, Font, Head, Hhea, Hmtx, Outline, Rasterizer, SystemFontIndex};
 use lumen_image::{Image, PixelFormat};
-use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FontStyle, FontWeight, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
+use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FontStyle, FontWeight, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
@@ -531,7 +531,10 @@ enum DrawOp {
 /// `object-fit` / `object-position` на стадии рендеринга.
 #[derive(Clone)]
 struct GpuImage {
-    bind_group: wgpu::BindGroup,
+    /// Linear (bilinear) filtered bind group — default for auto/smooth.
+    bind_group_linear: wgpu::BindGroup,
+    /// Nearest-neighbor filtered bind group — used for pixelated/crisp-edges.
+    bind_group_nearest: wgpu::BindGroup,
     // texture держим как поле даже без явного использования — wgpu освобождает
     // GPU-память когда дропается последняя ссылка; bind_group её не держит.
     _texture: wgpu::Texture,
@@ -698,6 +701,7 @@ pub struct Renderer {
 
     image_bgl: wgpu::BindGroupLayout,
     image_sampler: wgpu::Sampler,
+    image_sampler_nearest: wgpu::Sampler,
     /// Декодированные изображения в CPU-памяти. Хранятся для on-demand
     /// ресайза под конкретный layout-размер (CPU bilinear resize).
     raw_images: HashMap<String, Image>,
@@ -1064,9 +1068,19 @@ impl Renderer {
             ],
         });
         let image_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            label: Some("image-sampler"),
+            label: Some("image-sampler-linear"),
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            ..Default::default()
+        });
+        let image_sampler_nearest = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("image-sampler-nearest"),
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
             mipmap_filter: wgpu::FilterMode::Nearest,
             address_mode_u: wgpu::AddressMode::ClampToEdge,
             address_mode_v: wgpu::AddressMode::ClampToEdge,
@@ -1338,6 +1352,7 @@ impl Renderer {
             atlas_bind_group,
             image_bgl,
             image_sampler,
+            image_sampler_nearest,
             raw_images: HashMap::new(),
             images: HashMap::new(),
             layer_snapshots: HashMap::new(),
@@ -1570,21 +1585,25 @@ impl Renderer {
             wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("image-bg"),
-            layout: &self.image_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.image_sampler),
-                },
-            ],
-        });
-        GpuImage { bind_group, _texture: texture, width, height }
+        let make_bg = |sampler: &wgpu::Sampler| {
+            self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("image-bg"),
+                layout: &self.image_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(sampler),
+                    },
+                ],
+            })
+        };
+        let bind_group_linear = make_bg(&self.image_sampler);
+        let bind_group_nearest = make_bg(&self.image_sampler_nearest);
+        GpuImage { bind_group_linear, bind_group_nearest, _texture: texture, width, height }
     }
 
     /// Снимает регистрацию изображения. После этого `DrawImage` для `src`
@@ -2209,6 +2228,7 @@ impl Renderer {
                     alt: _,
                     object_fit,
                     object_position,
+                    image_rendering,
                 } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
@@ -2239,7 +2259,12 @@ impl Renderer {
                             }
                             let v_count = image_vertices.len() as u32 - v_start;
                             let image_batch_idx = image_bind_groups.len() as u32;
-                            image_bind_groups.push(gpu.bind_group.clone());
+                            let bg = if matches!(image_rendering, ImageRendering::Pixelated | ImageRendering::CrispEdges) {
+                                gpu.bind_group_nearest.clone()
+                            } else {
+                                gpu.bind_group_linear.clone()
+                            };
+                            image_bind_groups.push(bg);
                             draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
                         }
                     } else {
@@ -2331,7 +2356,7 @@ impl Renderer {
                     }
                 }
                 // CSS Backgrounds L3 §3.3/3.4/3.5 — background-size/position/repeat.
-                DisplayCommand::DrawBackgroundImage { rect, src, size, position, repeat } => {
+                DisplayCommand::DrawBackgroundImage { rect, src, size, position, repeat, image_rendering } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
@@ -2387,7 +2412,12 @@ impl Renderer {
 
                     let v_start = image_vertices.len() as u32;
                     let image_batch_idx = image_bind_groups.len() as u32;
-                    image_bind_groups.push(gpu.bind_group.clone());
+                    let bg = if matches!(image_rendering, ImageRendering::Pixelated | ImageRendering::CrispEdges) {
+                        gpu.bind_group_nearest.clone()
+                    } else {
+                        gpu.bind_group_linear.clone()
+                    };
+                    image_bind_groups.push(bg);
 
                     let x_end = area.x + area.width;
                     let y_end = area.y + area.height;
