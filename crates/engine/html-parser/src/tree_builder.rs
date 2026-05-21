@@ -72,6 +72,12 @@ impl IncrementalTreeBuilder {
         }
     }
 
+    /// Возвращает ссылку на текущее состояние DOM — для промежуточных
+    /// layout-ов во время streaming. Дерево может быть незакрытым.
+    pub fn as_doc(&self) -> &Document {
+        &self.doc
+    }
+
     /// Финализирует ввод. Хвост push-tokenizer-а токенизируется как
     /// при EOF, оставшиеся токены применяются к DOM, выставляется
     /// fallback `DocumentMode::Quirks` если ни одного DOCTYPE не было.

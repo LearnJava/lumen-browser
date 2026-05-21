@@ -40,6 +40,26 @@ use lumen_layout::LayoutBox;
 use lumen_paint::{build_display_list_with_anim, DisplayList, Renderer};
 use winit::application::ApplicationHandler;
 
+/// Событие от background-потока загрузки страницы в event loop.
+///
+/// Загрузка разбита на три фазы: (1) chunks декодированного HTML для
+/// инкрементального парсинга и промежуточных кадров; (2) `LoadDone` —
+/// все байты доступны, запускаем полный pipeline (CSS + изображения);
+/// (3) `LoadError` — ошибка fetch, показываем сообщение.
+enum LoadEvent {
+    /// Очередной chunk декодированного HTML.
+    HtmlChunk(String),
+    /// Все байты получены — для финального полного pipeline.
+    LoadDone(RawPage),
+    /// Ошибка при загрузке страницы.
+    LoadError(String),
+}
+
+/// Размер одного HTML-chunk при разбивке для инкрементального парсинга.
+const STREAM_CHUNK_BYTES: usize = 8 * 1024;
+/// Минимальный интервал между промежуточными кадрами при streaming (мс).
+const STREAM_PAINT_INTERVAL_MS: u128 = 150;
+
 /// EventSink, который печатает сетевые события в stdout — это и есть
 /// «network log» Phase 0, реализующий принцип №4 «каждый исходящий байт
 /// виден». Позже заменится на структурированный UI-логгер.
@@ -81,7 +101,7 @@ impl EventSink for StdoutEventSink {
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
@@ -139,29 +159,20 @@ fn run_window_mode(
 ) -> ExitCode {
     println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
 
-    let initial_viewport = Size::new(1024.0, 720.0);
-    let (initial_page, layout_source) = match source.load(event_sink.clone(), initial_viewport) {
-        Ok(r) => r,
-        Err(err) => {
-            eprintln!("Ошибка загрузки {}: {err}", source.describe());
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let event_loop = match EventLoop::new() {
+    // Streaming pipeline: окно создаётся немедленно, загрузка стартует
+    // после `resumed` в background-потоке. До прихода данных рисуем пустую страницу.
+    let event_loop = match EventLoop::<LoadEvent>::with_user_event().build() {
         Ok(el) => el,
         Err(err) => {
             eprintln!("Не удалось создать event loop: {err}");
             return ExitCode::FAILURE;
         }
     };
-    let content_height = content_height_of(&initial_page.display_list);
-    let content_width = content_width_of(&initial_page.display_list);
-    let initial_layout_box = initial_page.layout_box;
+    let load_proxy = event_loop.create_proxy();
     let mut app = Lumen {
-        display_list: initial_page.display_list,
-        title: initial_page.title,
-        pending_images: initial_page.images,
+        display_list: Vec::new(),
+        title: None,
+        pending_images: Vec::new(),
         source,
         event_sink,
         modifiers: ModifiersState::empty(),
@@ -170,13 +181,13 @@ fn run_window_mode(
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
         anim_frame: None,
-        layout_box: Some(initial_layout_box),
+        layout_box: None,
         epoch: std::time::Instant::now(),
         find: find::FindState::default(),
-        scroll_y: initial_scroll.1.min(content_height),
-        scroll_x: initial_scroll.0.min(content_width),
-        content_height,
-        content_width,
+        scroll_y: initial_scroll.1,
+        scroll_x: initial_scroll.0,
+        content_height: 0.0,
+        content_width: 0.0,
         cursor_position: None,
         scroll_drag: None,
         scroll_anim: None,
@@ -184,8 +195,11 @@ fn run_window_mode(
         touchpad_vel: (0.0, 0.0),
         touchpad_vel_time_ms: 0.0,
         last_cursor_icon: None,
-        layout_source,
+        layout_source: None,
         pending_reload: Rc::new(Cell::new(false)),
+        load_proxy,
+        stream_builder: None,
+        stream_last_paint: std::time::Instant::now(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -1328,6 +1342,13 @@ struct Lumen {
     /// closure-ом внутри queue_task — это единственный способ сообщить
     /// Lumen-у из task-closure (которая `+ 'static` и не владеет `&mut self`).
     pending_reload: Rc<Cell<bool>>,
+    /// Proxy для отправки LoadEvent из background-потока загрузки в event loop.
+    load_proxy: EventLoopProxy<LoadEvent>,
+    /// Инкрементальный HTML-парсер — активен во время streaming load.
+    /// `None` до первого HtmlChunk или после LoadDone/LoadError.
+    stream_builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
+    /// Момент последнего промежуточного кадра при streaming — для throttling.
+    stream_last_paint: std::time::Instant,
 }
 
 impl Lumen {
@@ -1417,9 +1438,119 @@ impl Lumen {
             }
         }
     }
+
+    /// Запустить background-поток загрузки текущего `source`.
+    ///
+    /// Поток fetches байты, декодирует в UTF-8, разбивает на
+    /// STREAM_CHUNK_BYTES-кусочки и шлёт `LoadEvent::HtmlChunk` через proxy.
+    /// По завершении — `LoadEvent::LoadDone(raw)` для финального pipeline.
+    /// При ошибке — `LoadEvent::LoadError`.
+    fn start_streaming_load(&self) {
+        if matches!(self.source, PageSource::Empty) {
+            return;
+        }
+        let source = self.source.clone();
+        let sink = self.event_sink.clone();
+        let proxy = self.load_proxy.clone();
+
+        std::thread::spawn(move || {
+            let raw = match source.load_bytes(sink) {
+                Ok(r) => r,
+                Err(e) => {
+                    let _ = proxy.send_event(LoadEvent::LoadError(e.to_string()));
+                    return;
+                }
+            };
+            let encoding = lumen_encoding::detect(&raw.bytes, raw.content_type);
+            let html = lumen_encoding::decode(encoding, &raw.bytes);
+            eprintln!("Кодировка: {}", encoding.name());
+
+            // Разбить строку на chunk-и, не разрывая UTF-8 code-points.
+            let bytes = html.as_bytes();
+            let mut pos = 0;
+            while pos < bytes.len() {
+                let mut end = (pos + STREAM_CHUNK_BYTES).min(bytes.len());
+                // Отступить назад до начала code-point (continuation bytes = 0x80..=0xBF).
+                while end < bytes.len() && (bytes[end] & 0xC0) == 0x80 {
+                    end -= 1;
+                }
+                let chunk = html[pos..end].to_owned();
+                if proxy.send_event(LoadEvent::HtmlChunk(chunk)).is_err() {
+                    return; // event loop завершён
+                }
+                pos = end;
+            }
+            let _ = proxy.send_event(LoadEvent::LoadDone(raw));
+        });
+    }
+
+    /// Обновить display list на основе снапшота частичного DOM (без CSS).
+    /// Используется для промежуточных кадров во время streaming.
+    fn paint_partial_dom(&mut self, doc: &lumen_dom::Document) {
+        let Some(renderer) = self.renderer.as_ref() else { return };
+        let vp_size = renderer.viewport_size();
+        let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
+
+        let font = match lumen_font::Font::parse(INTER_FONT) {
+            Ok(f) => f,
+            Err(_) => return,
+        };
+        let measurer = match lumen_paint::FontMeasurer::new(&font) {
+            Ok(m) => m,
+            Err(_) => return,
+        };
+
+        let empty_sheet = lumen_css_parser::Stylesheet::default();
+        let layout = lumen_layout::layout_measured(doc, &empty_sheet, viewport, &measurer);
+        let dl = lumen_paint::build_display_list(&layout);
+
+        self.content_height = content_height_of(&dl);
+        self.content_width = content_width_of(&dl);
+        self.display_list = dl;
+        self.layout_box = Some(layout);
+
+        if let Some(w) = self.window.as_ref() {
+            w.request_redraw();
+        }
+    }
+
+    /// Применить результат полного pipeline (fetch + parse + CSS + images).
+    /// Используется и при streaming `LoadDone`, и может быть переиспользован
+    /// в будущем для других путей загрузки.
+    fn apply_loaded_page(&mut self, page: LoadedPage, new_layout_source: Option<LayoutSource>) {
+        self.layout_source = new_layout_source;
+        self.content_height = content_height_of(&page.display_list);
+        self.content_width = content_width_of(&page.display_list);
+        self.display_list = page.display_list;
+        self.layout_box = Some(page.layout_box);
+        self.title = page.title;
+        self.animation_scheduler.clear();
+        self.anim_frame = None;
+        self.find.close();
+        self.scroll_y = 0.0;
+        self.scroll_x = 0.0;
+        self.scroll_drag = None;
+        self.scroll_anim = None;
+        self.momentum_anim = None;
+        self.touchpad_vel = (0.0, 0.0);
+        if let Some(r) = self.renderer.as_mut() {
+            r.clear_images();
+            for (src, image) in &page.images {
+                if let Err(err) = r.register_image(src.clone(), image) {
+                    eprintln!("Картинка {src} не зарегистрирована: {err}");
+                }
+            }
+        } else {
+            self.pending_images = page.images;
+        }
+        if let Some(w) = self.window.as_ref() {
+            w.set_title(&window_title(self.title.as_deref()));
+            w.request_redraw();
+        }
+    }
 }
 
-impl ApplicationHandler for Lumen {
+impl ApplicationHandler<LoadEvent> for Lumen {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let attrs = Window::default_attributes()
             .with_title(window_title(self.title.as_deref()))
@@ -1454,6 +1585,49 @@ impl ApplicationHandler for Lumen {
 
         self.window = Some(window);
         self.renderer = Some(renderer);
+
+        // Запустить background-загрузку сразу после создания окна —
+        // первый кадр (пустой) уже виден, пока идёт fetch/parse.
+        self.start_streaming_load();
+    }
+
+    fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: LoadEvent) {
+        match event {
+            LoadEvent::HtmlChunk(chunk) => {
+                let builder = self.stream_builder
+                    .get_or_insert_with(lumen_html_parser::IncrementalTreeBuilder::new);
+                builder.feed(&chunk);
+                if self.stream_last_paint.elapsed().as_millis() >= STREAM_PAINT_INTERVAL_MS {
+                    // Клонируем снапшот для layout — builder остаётся живым.
+                    let doc_snap = builder.as_doc().clone();
+                    self.paint_partial_dom(&doc_snap);
+                    self.stream_last_paint = std::time::Instant::now();
+                }
+            }
+            LoadEvent::LoadDone(raw) => {
+                eprintln!("Streaming завершён, финальный pipeline");
+                self.stream_builder = None;
+                let viewport = self.renderer.as_ref().map_or_else(
+                    || Size::new(1024.0, 720.0),
+                    |r| {
+                        let s = r.viewport_size();
+                        Size::new(s.width as f32, s.height as f32)
+                    },
+                );
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport) {
+                    Ok((page, new_layout_source)) => {
+                        self.apply_loaded_page(page, Some(new_layout_source));
+                    }
+                    Err(e) => {
+                        eprintln!("Ошибка финального render {}: {e}", self.source.describe());
+                    }
+                }
+            }
+            LoadEvent::LoadError(msg) => {
+                eprintln!("Ошибка загрузки {}: {msg}", self.source.describe());
+                self.stream_builder = None;
+            }
+        }
     }
 
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
