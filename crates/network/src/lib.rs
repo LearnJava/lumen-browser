@@ -41,6 +41,7 @@ mod origin;
 mod pool;
 mod range;
 mod sandbox;
+pub mod sse;
 pub(crate) mod websocket;
 pub use auth::StaticCredentialProvider;
 pub use brotli::BrotliContentDecoder;
