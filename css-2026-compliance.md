@@ -141,7 +141,7 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | `align-self` | ✅ | |
 | `align-content` | ✅ | multi-line; flex-start / flex-end / center / space-between / space-around / stretch |
 | `gap`, `row-gap`, `column-gap` | ✅ | |
-| `order` | ⬜ | not implemented |
+| `order` | 🟡 | parsed/stored (`<integer>`); flex-item reordering at layout — deferred (4B.8) |
 
 ### CSS Basic User Interface Level 3
 | Property | Status |
