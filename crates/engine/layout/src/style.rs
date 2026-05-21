@@ -522,6 +522,29 @@ pub enum TextUnderlinePosition {
     Right,
 }
 
+/// CSS Color Adjustment L1 §3 — `color-scheme`. Inherited. Initial: `Normal`.
+/// Подсказывает UA, какую цветовую тему поддерживает элемент.
+/// Phase 0: parse + store; реальное переключение системных цветов / UA-тем
+/// (`Canvas`, `ButtonFace` и т.д.) — отдельная задача с согласованием P2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ColorScheme {
+    /// `normal` — элемент не заявляет предпочтений; UA выбирает самостоятельно.
+    #[default]
+    Normal,
+    /// `light` — элемент поддерживает светлую тему.
+    Light,
+    /// `dark` — элемент поддерживает тёмную тему.
+    Dark,
+    /// `light dark` — оба; предпочтение light.
+    LightDark,
+    /// `dark light` — оба; предпочтение dark.
+    DarkLight,
+    /// `only light` — только светлая тема, без авто-инверсии UA.
+    OnlyLight,
+    /// `only dark` — только тёмная тема.
+    OnlyDark,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Color {
     pub r: u8,
@@ -1538,6 +1561,9 @@ pub struct ComputedStyle {
     /// Inherited. В Phase 0 layout только хранит — real применение появится
     /// вместе с form-widget рендерингом.
     pub accent_color: Option<Color>,
+    /// CSS Color Adjustment L1 §3 — `color-scheme`. Inherited. Initial: `Normal`.
+    /// Phase 0: parse + store; реальное переключение SystemColor / UA-тем — P2.
+    pub color_scheme: ColorScheme,
     /// CSS Variables L1 — custom properties (`--name`). Все custom properties
     /// inherited (спека: `all custom properties are inherited by default`).
     /// Ключ — полное имя с ведущими `--`, значение — сырой текст из source.
@@ -3165,6 +3191,7 @@ impl ComputedStyle {
             outline_color: OutlineColor::Auto,
             outline_offset: Length::Px(0.0),
             accent_color: None,
+            color_scheme: ColorScheme::Normal,
             custom_props: HashMap::new(),
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
@@ -3308,6 +3335,7 @@ pub fn compute_style(
         text_emphasis_position: inherited.text_emphasis_position,
         text_underline_position: inherited.text_underline_position,
         accent_color: inherited.accent_color,
+        color_scheme: inherited.color_scheme,
         // CSS Variables L1: все custom properties inherited.
         custom_props: inherited.custom_props.clone(),
         // Ненаследуемые — сброс.
@@ -7215,6 +7243,29 @@ fn apply_declaration(
                 style.accent_color = Some(c);
             }
         }
+        "color-scheme" => {
+            // CSS Color Adjustment L1 §3: normal | [ light | dark ]+ && only?
+            let v = val.trim();
+            let only = v.contains("only");
+            let has_light = v.contains("light");
+            let has_dark = v.contains("dark");
+            style.color_scheme = match (v, only, has_light, has_dark) {
+                ("normal", _, _, _) => ColorScheme::Normal,
+                (_, true, true, false) => ColorScheme::OnlyLight,
+                (_, true, false, true) => ColorScheme::OnlyDark,
+                (_, false, true, false) => ColorScheme::Light,
+                (_, false, false, true) => ColorScheme::Dark,
+                (_, false, true, true) => {
+                    // "light dark" vs "dark light" — first keyword wins
+                    if v.find("light") < v.find("dark") {
+                        ColorScheme::LightDark
+                    } else {
+                        ColorScheme::DarkLight
+                    }
+                }
+                _ => style.color_scheme,
+            };
+        }
         "object-fit" => {
             if let Some(of) = ObjectFit::parse(val) {
                 style.object_fit = of;
@@ -9634,6 +9685,9 @@ fn apply_css_wide_keyword(
         }
         "accent-color" => {
             style.accent_color = if inh { inherited.accent_color } else { init.accent_color };
+        }
+        "color-scheme" => {
+            style.color_scheme = if inh { inherited.color_scheme } else { init.color_scheme };
         }
 
         // ──────── Non-inherited properties ────────
@@ -17260,5 +17314,84 @@ mod tests {
         let div = doc.get(doc.root()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_underline_position, TextUnderlinePosition::Auto);
+    }
+
+    // ── color-scheme ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn color_scheme_initial_normal() {
+        let style = ComputedStyle::root();
+        assert_eq!(style.color_scheme, ColorScheme::Normal);
+    }
+
+    #[test]
+    fn color_scheme_light() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { color-scheme: light; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.color_scheme, ColorScheme::Light);
+    }
+
+    #[test]
+    fn color_scheme_dark() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { color-scheme: dark; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.color_scheme, ColorScheme::Dark);
+    }
+
+    #[test]
+    fn color_scheme_light_dark_order() {
+        let doc = lumen_html_parser::parse("<span></span><em></em>");
+        let ld_sheet = lumen_css_parser::parse("span { color-scheme: light dark; }");
+        let dl_sheet = lumen_css_parser::parse("em { color-scheme: dark light; }");
+        let root = ComputedStyle::root();
+        let span = doc.get(doc.root()).children[0];
+        let em = doc.get(doc.root()).children[1];
+        let ld = compute_style(&doc, span, &ld_sheet, &root, Size::new(800.0, 600.0));
+        let dl = compute_style(&doc, em, &dl_sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(ld.color_scheme, ColorScheme::LightDark);
+        assert_eq!(dl.color_scheme, ColorScheme::DarkLight);
+    }
+
+    #[test]
+    fn color_scheme_only_variants() {
+        let doc = lumen_html_parser::parse("<span></span><em></em>");
+        let ol_sheet = lumen_css_parser::parse("span { color-scheme: only light; }");
+        let od_sheet = lumen_css_parser::parse("em { color-scheme: only dark; }");
+        let root = ComputedStyle::root();
+        let span = doc.get(doc.root()).children[0];
+        let em = doc.get(doc.root()).children[1];
+        let ol = compute_style(&doc, span, &ol_sheet, &root, Size::new(800.0, 600.0));
+        let od = compute_style(&doc, em, &od_sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(ol.color_scheme, ColorScheme::OnlyLight);
+        assert_eq!(od.color_scheme, ColorScheme::OnlyDark);
+    }
+
+    #[test]
+    fn color_scheme_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { color-scheme: dark; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.color_scheme, ColorScheme::Dark);
+        assert_eq!(span_style.color_scheme, ColorScheme::Dark);
+    }
+
+    #[test]
+    fn color_scheme_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { color-scheme: rainbow; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.color_scheme, ColorScheme::Normal);
     }
 }
