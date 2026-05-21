@@ -522,6 +522,20 @@ pub enum TextUnderlinePosition {
     Right,
 }
 
+/// CSS Color Adjustment L1 §4 — `forced-color-adjust`. NOT inherited. Initial: `Auto`.
+/// Позволяет автору отказаться от принудительной цветовой настройки UA (Forced Colors Mode).
+/// Phase 0: parse + store; применение при принудительных цветах — P2.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ForcedColorAdjust {
+    /// `auto` — UA может применять принудительные цвета.
+    #[default]
+    Auto,
+    /// `none` — элемент сохраняет авторские цвета.
+    None,
+    /// `preserve-parent-color` — унаследовать у родителя.
+    PreserveParentColor,
+}
+
 /// CSS Color Adjustment L1 §3 — `color-scheme`. Inherited. Initial: `Normal`.
 /// Подсказывает UA, какую цветовую тему поддерживает элемент.
 /// Phase 0: parse + store; реальное переключение системных цветов / UA-тем
@@ -1564,6 +1578,9 @@ pub struct ComputedStyle {
     /// CSS Color Adjustment L1 §3 — `color-scheme`. Inherited. Initial: `Normal`.
     /// Phase 0: parse + store; реальное переключение SystemColor / UA-тем — P2.
     pub color_scheme: ColorScheme,
+    /// CSS Color Adjustment L1 §4 — `forced-color-adjust`. NOT inherited. Initial: `Auto`.
+    /// Phase 0: parse + store; применение при Forced Colors Mode — P2.
+    pub forced_color_adjust: ForcedColorAdjust,
     /// CSS Variables L1 — custom properties (`--name`). Все custom properties
     /// inherited (спека: `all custom properties are inherited by default`).
     /// Ключ — полное имя с ведущими `--`, значение — сырой текст из source.
@@ -3192,6 +3209,7 @@ impl ComputedStyle {
             outline_offset: Length::Px(0.0),
             accent_color: None,
             color_scheme: ColorScheme::Normal,
+            forced_color_adjust: ForcedColorAdjust::Auto,
             custom_props: HashMap::new(),
             counter_reset: Vec::new(),
             counter_increment: Vec::new(),
@@ -3336,6 +3354,8 @@ pub fn compute_style(
         text_underline_position: inherited.text_underline_position,
         accent_color: inherited.accent_color,
         color_scheme: inherited.color_scheme,
+        // CSS Color Adjustment L1 §4: forced-color-adjust is NOT inherited — reset.
+        forced_color_adjust: ForcedColorAdjust::Auto,
         // CSS Variables L1: все custom properties inherited.
         custom_props: inherited.custom_props.clone(),
         // Ненаследуемые — сброс.
@@ -7344,6 +7364,14 @@ fn apply_declaration(
                 _ => style.color_scheme,
             };
         }
+        "forced-color-adjust" => {
+            style.forced_color_adjust = match val.trim() {
+                "auto" => ForcedColorAdjust::Auto,
+                "none" => ForcedColorAdjust::None,
+                "preserve-parent-color" => ForcedColorAdjust::PreserveParentColor,
+                _ => style.forced_color_adjust,
+            };
+        }
         "object-fit" => {
             if let Some(of) = ObjectFit::parse(val) {
                 style.object_fit = of;
@@ -9769,6 +9797,13 @@ fn apply_css_wide_keyword(
         }
 
         // ──────── Non-inherited properties ────────
+        "forced-color-adjust" => {
+            style.forced_color_adjust = if inh_only_inherit {
+                inherited.forced_color_adjust
+            } else {
+                init.forced_color_adjust
+            };
+        }
         "display" => {
             style.display = if inh_only_inherit { inherited.display } else { init.display };
         }
@@ -17559,5 +17594,56 @@ mod tests {
     fn calc_with_svh_unit() {
         let s = cascade_at("<div>", "div { height: calc(50svh); }", &[0]);
         assert!(matches!(s.height, Some(Length::Calc(_))));
+    }
+
+    // ── forced-color-adjust ───────────────────────────────────────────────────
+
+    #[test]
+    fn forced_color_adjust_initial_auto() {
+        let style = ComputedStyle::root();
+        assert_eq!(style.forced_color_adjust, ForcedColorAdjust::Auto);
+    }
+
+    #[test]
+    fn forced_color_adjust_none() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { forced-color-adjust: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.forced_color_adjust, ForcedColorAdjust::None);
+    }
+
+    #[test]
+    fn forced_color_adjust_preserve_parent_color() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { forced-color-adjust: preserve-parent-color; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.forced_color_adjust, ForcedColorAdjust::PreserveParentColor);
+    }
+
+    #[test]
+    fn forced_color_adjust_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { forced-color-adjust: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.forced_color_adjust, ForcedColorAdjust::None);
+        assert_eq!(span_style.forced_color_adjust, ForcedColorAdjust::Auto);
+    }
+
+    #[test]
+    fn forced_color_adjust_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { forced-color-adjust: always; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.forced_color_adjust, ForcedColorAdjust::Auto);
     }
 }

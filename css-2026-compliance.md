@@ -185,7 +185,7 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | Property | Status |
 |---|---|
 | `color-scheme` | 🟡 | parsed/stored (normal/light/dark/light dark/dark light/only light/only dark); UA theme switching — P2 |
-| `forced-color-adjust` | ⬜ |
+| `forced-color-adjust` | 🟡 | parsed/stored (auto/none/preserve-parent-color); Forced Colors Mode application — P2 |
 
 ---
 
