@@ -1,8 +1,8 @@
-In progress: —
-Next step: —
+In progress: SOP enforcement in shell  branch: sop-enforcement
+Next step: ResourceBase::build_subresource_client  shell/src/main.rs:559
 
 Next (Wave 1):
-Mixed-content enforcement in HttpClient       network/src/lib.rs           ~1h
+Mixed-content enforcement in HttpClient       network/src/lib.rs           ~1h  DONE
 SOP enforcement in shell                      shell/src/main.rs            ~1h
 Streaming pipeline: chunked parse + render    shell/src/main.rs            ~2h
 
