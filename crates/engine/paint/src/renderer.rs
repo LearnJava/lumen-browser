@@ -29,11 +29,12 @@ use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{Bitmap, Cmap, Font, Head, Hhea, Hmtx, Outline, Rasterizer, SystemFontIndex};
 use lumen_image::{Image, PixelFormat};
-use lumen_layout::{BorderStyle, Color, FontStyle, FontWeight, Mat4, OutlineStyle};
+use lumen_layout::{BorderStyle, Color, FontStyle, FontWeight, Mat4, ObjectFit, ObjectPosition, OutlineStyle};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
-use crate::display_list::{fit_image_quad, BlendMode};
+use crate::display_list::{fit_image_quad, fit_image_rect, BlendMode};
+use lumen_image::resize_bilinear;
 use crate::DisplayCommand;
 
 /// Размер атласа в пикселях (квадратный). Поднят с 512 до 1024 под
@@ -697,8 +698,11 @@ pub struct Renderer {
 
     image_bgl: wgpu::BindGroupLayout,
     image_sampler: wgpu::Sampler,
-    /// Cache декодированных картинок per-src. Заполняется через
-    /// [`Renderer::register_image`] из shell-уровня (после fetch+decode).
+    /// Декодированные изображения в CPU-памяти. Хранятся для on-demand
+    /// ресайза под конкретный layout-размер (CPU bilinear resize).
+    raw_images: HashMap<String, Image>,
+    /// Cache GPU-текстур: ключ `"src"` (оригинал) или `"src@WxH"` (ресайз).
+    /// Заполняется через [`Renderer::register_image`] и лениво при DrawImage.
     images: HashMap<String, GpuImage>,
     /// Cache GPU-снимков слоёв per-id. Заполняется compositor-ом через
     /// [`Renderer::upload_layer_snapshot`] для кеширования неизменных слоёв.
@@ -1334,6 +1338,7 @@ impl Renderer {
             atlas_bind_group,
             image_bgl,
             image_sampler,
+            raw_images: HashMap::new(),
             images: HashMap::new(),
             layer_snapshots: HashMap::new(),
             composite_pipeline,
@@ -1471,15 +1476,75 @@ impl Renderer {
                 max: max_dim,
             });
         }
-        let rgba = convert_to_rgba(image);
 
+        // Храним декодированный образ для on-demand resize при DrawImage.
+        self.raw_images.insert(src.clone(), image.clone());
+
+        // Загружаем оригинал в GPU (без resize — используется только когда
+        // layout-size == intrinsic-size, т.е. для object-fit:none / scale-down
+        // на маленьких картинках).
+        let rgba = convert_to_rgba(image);
+        let gi = self.make_gpu_image_entry(&rgba, image.width, image.height);
+        self.images.insert(src, gi);
+        Ok(())
+    }
+
+    /// Вычисляет GPU-ключ без мутации — только `&self`. Используется внутри
+    /// render-цикла, где `parsed_faces` держит `&self.faces`.
+    /// Предполагается, что нужная текстура уже создана через `ensure_image_gpu_key`.
+    fn compute_image_gpu_key(&self, src: &str, box_rect: Rect, fit: ObjectFit, pos: ObjectPosition) -> String {
+        self.raw_images.get(src).map(|raw| {
+            let placed = fit_image_rect(box_rect, (raw.width, raw.height), fit, pos);
+            let tw = placed.width.round().max(1.0) as u32;
+            let th = placed.height.round().max(1.0) as u32;
+            if tw != raw.width || th != raw.height {
+                format!("{src}@{tw}x{th}")
+            } else {
+                src.to_owned()
+            }
+        }).unwrap_or_else(|| src.to_owned())
+    }
+
+    /// Обеспечивает наличие GPU-текстуры для `src` при отображении в `box_rect`.
+    ///
+    /// Если `placed`-размер (после object-fit) совпадает с intrinsic — ключ = `src`,
+    /// текстура уже есть из `register_image`. Иначе создаёт CPU-bilinear ресайз до
+    /// placed-размера, кеширует под `"src@WxH"`. Вызывать до render-цикла.
+    fn ensure_image_gpu_key(
+        &mut self,
+        src: &str,
+        box_rect: Rect,
+        fit: ObjectFit,
+        pos: ObjectPosition,
+    ) {
+        let resize_target = self.raw_images.get(src).map(|raw| {
+            let placed = fit_image_rect(box_rect, (raw.width, raw.height), fit, pos);
+            let tw = placed.width.round().max(1.0) as u32;
+            let th = placed.height.round().max(1.0) as u32;
+            (raw.width, raw.height, tw, th)
+        });
+
+        if let Some((iw, ih, tw, th)) = resize_target
+            && (tw != iw || th != ih)
+        {
+            let gpu_key = format!("{src}@{tw}x{th}");
+            if !self.images.contains_key(&gpu_key)
+                && let Some(raw) = self.raw_images.get(src).cloned()
+            {
+                let resized = resize_bilinear(&raw, tw, th);
+                let rgba = convert_to_rgba(&resized);
+                let gi = self.make_gpu_image_entry(&rgba, tw, th);
+                self.images.insert(gpu_key, gi);
+            }
+        }
+    }
+
+    /// Создаёт `GpuImage` из RGBA8-буфера заданного размера.
+    /// `&self` достаточно — мутировать нужно только `images`, это делает caller.
+    fn make_gpu_image_entry(&self, rgba: &[u8], width: u32, height: u32) -> GpuImage {
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("lumen-image-texture"),
-            size: wgpu::Extent3d {
-                width: image.width,
-                height: image.height,
-                depth_or_array_layers: 1,
-            },
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -1496,17 +1561,13 @@ impl Renderer {
                 origin: wgpu::Origin3d::ZERO,
                 aspect: wgpu::TextureAspect::All,
             },
-            &rgba,
+            rgba,
             wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(image.width * 4),
-                rows_per_image: Some(image.height),
+                bytes_per_row: Some(width * 4),
+                rows_per_image: Some(height),
             },
-            wgpu::Extent3d {
-                width: image.width,
-                height: image.height,
-                depth_or_array_layers: 1,
-            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
         );
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
         let bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1523,27 +1584,22 @@ impl Renderer {
                 },
             ],
         });
-        self.images.insert(
-            src,
-            GpuImage {
-                bind_group,
-                _texture: texture,
-                width: image.width,
-                height: image.height,
-            },
-        );
-        Ok(())
+        GpuImage { bind_group, _texture: texture, width, height }
     }
 
     /// Снимает регистрацию изображения. После этого `DrawImage` для `src`
     /// снова рисует placeholder fill-quad.
     pub fn unregister_image(&mut self, src: &str) {
-        self.images.remove(src);
+        self.raw_images.remove(src);
+        // Удаляем оригинал и все кешированные ресайзы ("src@WxH").
+        let prefix = format!("{src}@");
+        self.images.retain(|k, _| k != src && !k.starts_with(&prefix));
     }
 
     /// Снимает регистрацию всех картинок (например, при переходе на новую
     /// страницу). GPU-память освобождается при drop-е `GpuImage.texture`.
     pub fn clear_images(&mut self) {
+        self.raw_images.clear();
         self.images.clear();
     }
 
@@ -1812,6 +1868,15 @@ impl Renderer {
             }
         }
         let mut text_face_iter = text_face_ids.into_iter();
+
+        // PRE-PASS: создаём CPU-ресайз текстуры для DrawImage до того, как
+        // parsed_faces займёт &self.faces. Scroll offset не влияет на SIZE
+        // (только на position), поэтому используем rect напрямую.
+        for cmd in content.iter().chain(overlay.iter()) {
+            if let DisplayCommand::DrawImage { rect, src, object_fit, object_position, .. } = cmd {
+                self.ensure_image_gpu_key(src, *rect, *object_fit, *object_position);
+            }
+        }
 
         // Распарсиваем все loaded faces один раз за кадр. Это нужно для
         // codepoint-cascade: per-char смотрим, есть ли глиф в primary
@@ -2150,17 +2215,19 @@ impl Renderer {
                     }
                     let alpha = 1.0_f32;
                     let scrolled = translate_rect(*rect, dx, dy);
-                    if let Some(gpu) = self.images.get(src) {
-                        // CSS Images L3 §5.5: размещаем intrinsic-картинку
-                        // согласно object-fit / object-position, обрезаем
-                        // по box через UV-crop (без отдельной scissor-стадии).
-                        // Пустое пересечение (полностью за пределами box) —
-                        // пропускаем quad, placeholder тоже не рисуем.
+                    let fit = *object_fit;
+                    let pos = *object_position;
+
+                    // Вычисляем GPU-ключ (текстура уже создана в pre-pass).
+                    // GPU делает 1:1 сэмплинг по CPU-bilinear scaled текстуре →
+                    // pixel-perfect совпадение с браузерами на одном железе.
+                    let gpu_key = self.compute_image_gpu_key(src, scrolled, fit, pos);
+                    if let Some(gpu) = self.images.get(&gpu_key) {
                         if let Some((visible, uv_min, uv_max)) = fit_image_quad(
                             scrolled,
                             (gpu.width, gpu.height),
-                            *object_fit,
-                            *object_position,
+                            fit,
+                            pos,
                         ) {
                             let v_start = image_vertices.len() as u32;
                             push_image_quad(&mut image_vertices, visible, uv_min, uv_max, alpha);

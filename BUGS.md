@@ -44,7 +44,7 @@ BUG-020 | FIXED 2026-05-21 | paint           | overflow: hidden/scroll/auto clip
 BUG-006 | OPEN  WONTFIX P1 | layout          | table layout not implemented (td/th render as blocks)
 BUG-021 | OPEN             | html-parser     | HTML bgcolor attribute ignored
 BUG-022 | OPEN             | css-parser      | Quirks-mode hashless hex colors not parsed
-BUG-032 | OPEN             | paint/image     | object-fit regression 16%→86% after img-in-span fix (b54734b)
+BUG-032 | OPEN             | paint/image     | object-fit image quality ~16%: GPU bilinear without mipmaps for large downscales
 ```
 
 ---
@@ -73,7 +73,7 @@ TEST-15: FAIL  3.87%   box-shadow
 TEST-16: FAIL  5.40%   outline                ← BUG-024 геометрия
 TEST-17: FAIL  3.52%   calc
 TEST-18: FAIL 14.58%   images                 ← BUG-026 (было 14.68%)
-TEST-19: FAIL 86.02%   object-fit             ← BUG-032 РЕГРЕССИЯ (было 16.14% до b54734b)
+TEST-19: FAIL 16.54%   object-fit             ← BUG-032 (86% было ложным — устаревший бинарник; реальный baseline 16%)
 TEST-20: FAIL 30.49%   quirks-bgcolor         ← BUG-021 + BUG-022
 TEST-21: FAIL  5.28%   border-style
 TEST-22: FAIL 13.31%   CSS transform          ← первый прогон
@@ -271,6 +271,52 @@ TEST-20: `<body bgcolor="#1a2030">` даёт белый фон вместо тё
 **Компонент:** `lumen-css-parser`
 
 TEST-20: `bgcolor="44aa66"` не распознаётся как `#44aa66` в quirks-mode.
+
+---
+
+### BUG-032 · Качество масштабирования изображений: ~16% расхождение с Edge
+
+**Статус:** OPEN  
+**Компонент:** `lumen-paint`, `lumen-image`
+
+TEST-19 (object-fit), TEST-18 (images): пиксельная разница ~16% при большом коэффициенте уменьшения (~4.7x, 852×725 → 180×120).
+
+#### Что сделано (2026-05-21)
+
+1. **CPU-side bilinear resize** — реализован в `lumen-image/src/lib.rs`:
+   - `Image::to_rgba8()` — конвертация любого формата в RGBA8
+   - `pub fn resize_bilinear(src: &Image, dst_w: u32, dst_h: u32) -> Image` — 4-tap bilnear с half-pixel offset
+   - В `renderer.rs` добавлен pre-pass перед render loop: для каждого `DrawImage` вызывается `ensure_image_gpu_key()`, которая создаёт CPU-ресайзированную текстуру и кеширует под ключом `"src@WxH"`.
+   - Разделение на `compute_image_gpu_key(&self)` (иммутабельный) + `ensure_image_gpu_key(&mut self)` (мутабельный pre-pass) обязательно — иначе borrow-checker блокирует (в render loop `parsed_faces: Vec<Option<ParsedFace<'_>>>` держит `&self.faces`).
+
+2. **Результат:** минимальное улучшение: TEST-18 14.68% → 14.44%, TEST-19 16.14% → 16.54% (шум, не улучшение).
+
+#### Почему не помогло
+
+CPU bilinear ≈ GPU bilinear — оба делают 4-выборки. При коэффициенте уменьшения 4.7x область покрытия одного выходного пикселя = 4.7×4.7 = ~22 исходных пикселей, из которых bilinear учитывает лишь 4. Антиалиасинг не обеспечивается.
+
+Edge/Chrome используют **Skia**, который при downscale применяет **Lanczos-3** (или area averaging) — усредняет все пиксели в области покрытия. Поэтому разные браузеры дают одинаковый результат: они используют одну библиотеку (Skia).
+
+Дополнительная причина: текстуры загружаются как `Rgba8Unorm` (linear), хотя PNG-файлы хранят sRGB. Блендинг в linear-пространстве при правильных финальных значениях дал бы совпадение, но sRGB→linear конвертация при загрузке не выполняется → цветовые ошибки ~2-5%.
+
+#### Что нужно сделать
+
+1. **[Приоритет 1] Area averaging (box filter) для downscale:**
+   ```rust
+   // Заменить resize_bilinear на resize_area_avg для случаев (dst < src)
+   pub fn resize_area_avg(src: &Image, dst_w: u32, dst_h: u32) -> Image;
+   // Алгоритм: для каждого dst-пикселя вычислить float-прямоугольник в src-координатах,
+   // усреднить все целые пиксели + частичные веса по краям.
+   ```
+   Ожидаемый результат: совпадение с Edge ~2-4% (только sRGB-девиация останется).
+
+2. **[Приоритет 2] sRGB при загрузке текстур:**  
+   Изменить формат текстуры с `Rgba8Unorm` на `Rgba8UnormSrgb` в `renderer.rs` → wgpu автоматически конвертирует sRGB→linear при sampling. Требует также перевода surface в sRGB (`TextureFormat::Bgra8UnormSrgb`). Запланировано на Phase 3+.
+
+#### Файлы
+
+- `crates/engine/image/src/lib.rs` — `to_rgba8()`, `resize_bilinear()`
+- `crates/engine/paint/src/renderer.rs` — pre-pass, `ensure_image_gpu_key()`, `compute_image_gpu_key()`, `make_gpu_image_entry()`
 
 ---
 

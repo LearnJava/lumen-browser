@@ -265,6 +265,27 @@ def diff_percent(png_path: str, channel_threshold: int = 16) -> float:
             bad += 1
     return 100.0 * bad / total
 
+# --- Crop offset persistence ---
+
+_CROP_OFFSET_FILE = os.path.join(os.path.dirname(__file__), 'screenshots', 'crop_offset.txt')
+
+def _save_crop_offset(offset: tuple[int, int]) -> None:
+    os.makedirs(os.path.dirname(_CROP_OFFSET_FILE), exist_ok=True)
+    with open(_CROP_OFFSET_FILE, 'w') as f:
+        f.write(f'{offset[0]},{offset[1]}\n')
+
+def _load_crop_offset() -> tuple[int, int] | None:
+    if not os.path.exists(_CROP_OFFSET_FILE):
+        return None
+    with open(_CROP_OFFSET_FILE) as f:
+        parts = f.read().strip().split(',')
+    if len(parts) != 2:
+        return None
+    try:
+        return (int(parts[0]), int(parts[1]))
+    except ValueError:
+        return None
+
 # --- Pipeline ---
 
 def ensure_lumen() -> None:
@@ -309,9 +330,12 @@ def run_one(tid: str, html: str, threshold: float, label: str,
             print(f'TEST-{tid}: FAIL (magenta marker not found)')
             return False, None, -1.0
         crop_offset = origin
+        _save_crop_offset(crop_offset)
 
     if crop_offset is None:
-        print(f'TEST-{tid}: FAIL (no crop offset — calibration failed)')
+        crop_offset = _load_crop_offset()
+    if crop_offset is None:
+        print(f'TEST-{tid}: FAIL (no crop offset — run TEST-00 first)')
         return False, None, -1.0
 
     ffmpeg_crop(lumen_raw, lumen_crop, crop_offset[0], crop_offset[1])
