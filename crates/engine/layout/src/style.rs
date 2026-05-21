@@ -1819,6 +1819,10 @@ pub struct ComputedStyle {
     /// CSS Flexbox L1 §7.3 — `flex-basis`. Non-inherited. Default `Auto`.
     /// Phase 0: parsing + storage; реальный flex-layout — задача 4B.3.
     pub flex_basis: FlexBasis,
+    /// CSS Flexbox L1 §5.4 — `order`. Non-inherited. Initial: `0`.
+    /// Управляет порядком отображения flex-элементов внутри контейнера.
+    /// Phase 0: parse + store; реальная сортировка при layout — задача 4B.8.
+    pub order: i32,
     /// CSS Grid Layout L1 §7.2 — `grid-template-columns`. Non-inherited.
     /// Default `[]` (no explicit tracks). Parsed track-list.
     pub grid_template_columns: Vec<GridTrackSize>,
@@ -3299,6 +3303,7 @@ impl ComputedStyle {
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: FlexBasis::Auto,
+            order: 0,
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
             grid_auto_flow: GridAutoFlow::Row,
@@ -3524,6 +3529,7 @@ pub fn compute_style(
         flex_grow: 0.0,
         flex_shrink: 1.0,
         flex_basis: FlexBasis::Auto,
+        order: 0,
         // CSS Grid Layout L1 — grid properties не наследуются.
         grid_template_columns: Vec::new(),
         grid_template_rows: Vec::new(),
@@ -7469,6 +7475,11 @@ fn apply_declaration(
             // CSS Flexbox L1 §7: shorthand flex-grow flex-shrink flex-basis.
             apply_flex_shorthand(style, val, is_quirks);
         }
+        "order" => {
+            if let Ok(n) = val.trim().parse::<i32>() {
+                style.order = n;
+            }
+        }
         // CSS Grid Layout L1 — container properties.
         "grid-template-columns" => {
             if !val.trim().eq_ignore_ascii_case("none") {
@@ -10266,6 +10277,9 @@ fn apply_css_wide_keyword(
             } else {
                 init.flex_basis.clone()
             };
+        }
+        "order" => {
+            style.order = if inh_only_inherit { inherited.order } else { init.order };
         }
         // CSS Flexbox L1 §5 — flex-direction / flex-wrap non-inherited.
         "flex-direction" => {
@@ -17645,5 +17659,56 @@ mod tests {
         let div = doc.get(doc.root()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.forced_color_adjust, ForcedColorAdjust::Auto);
+    }
+
+    // ── order ─────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn order_initial_zero() {
+        let style = ComputedStyle::root();
+        assert_eq!(style.order, 0);
+    }
+
+    #[test]
+    fn order_positive() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { order: 3; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.order, 3);
+    }
+
+    #[test]
+    fn order_negative() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { order: -1; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.order, -1);
+    }
+
+    #[test]
+    fn order_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { order: 5; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.order, 5);
+        assert_eq!(span_style.order, 0);
+    }
+
+    #[test]
+    fn order_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { order: auto; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.order, 0);
     }
 }
