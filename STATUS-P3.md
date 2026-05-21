@@ -1,10 +1,5 @@
-In progress: Streaming pipeline: chunked parse + render  branch: streaming-pipeline
-Next step: commit, then update lumen-plan.md + subsystems/shell.md  shell/src/main.rs
-
-Next (Wave 1):
-Mixed-content enforcement in HttpClient       network/src/lib.rs           ~1h  DONE
-SOP enforcement in shell                      shell/src/main.rs            ~1h  DONE
-Streaming pipeline: chunked parse + render    shell/src/main.rs            ~2h  🟡
+In progress: —
+Next step: —
 
 Next (Wave 2):
 WebSockets (RFC 6455): upgrade + frames       network/                     ~3h
@@ -18,4 +13,4 @@ Forms UI: native pickers, validation tooltip                 ~2h  depends on P1 
 IME composition events                                       ~2h
 bfcache: DOM+JS snapshot                                     ~3h
 
-Recent: sop-enforcement 2026-05-21, session-export 2026-05-21, devtools 2026-05-21, h2-flow 2026-05-21, h2-pool 2026-05-21, h2-conn 2026-05-21
+Recent: streaming-pipeline 2026-05-21, sop-enforcement 2026-05-21, session-export 2026-05-21, devtools 2026-05-21, h2-flow 2026-05-21
