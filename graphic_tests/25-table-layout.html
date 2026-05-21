@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Lumen — 25 table layout</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+  .__f { background: #0f172a; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
+
+  table { border-collapse: collapse; border-spacing: 0; }
+  td { padding: 0; border: 0; }
+
+  /* Test 1: 4 auto-ширины; table.width=440px → каждая 110px */
+  .t1 { width: 440px; margin-bottom: 16px; }
+  .t1 td { height: 80px; }
+
+  /* Test 2: явные ширины 5 ячеек (60+120+80+100+80=440px) */
+  .t2 { margin-bottom: 16px; }
+  .t2 td { height: 80px; }
+
+  /* Test 3: 3 строки × 4 ячейки 100×60 — rows stack vertically */
+  .t3 td { width: 100px; height: 60px; }
+</style>
+</head>
+<body>
+  <div class="__f">
+
+    <!-- Test 1: 4 авто-ячейки, table width 440px → 110px каждая -->
+    <table class="t1">
+      <tr>
+        <td style="background:#e63946"></td>
+        <td style="background:#f4a261"></td>
+        <td style="background:#2a9d8f"></td>
+        <td style="background:#457b9d"></td>
+      </tr>
+    </table>
+
+    <!-- Test 2: явные ширины ячеек -->
+    <table class="t2">
+      <tr>
+        <td style="width:60px;  background:#e9c46a"></td>
+        <td style="width:120px; background:#264653"></td>
+        <td style="width:80px;  background:#e76f51"></td>
+        <td style="width:100px; background:#2a9d8f"></td>
+        <td style="width:80px;  background:#a8dadc"></td>
+      </tr>
+    </table>
+
+    <!-- Test 3: 3×4 grid, строки стакаются вертикально -->
+    <table class="t3">
+      <tr>
+        <td style="background:#c1121f"></td>
+        <td style="background:#e63946"></td>
+        <td style="background:#f4a261"></td>
+        <td style="background:#e9c46a"></td>
+      </tr>
+      <tr>
+        <td style="background:#264653"></td>
+        <td style="background:#2a9d8f"></td>
+        <td style="background:#457b9d"></td>
+        <td style="background:#a8dadc"></td>
+      </tr>
+      <tr>
+        <td style="background:#1d3557"></td>
+        <td style="background:#6a994e"></td>
+        <td style="background:#a7c957"></td>
+        <td style="background:#f4d03f"></td>
+      </tr>
+    </table>
+
+  </div>
+</body>
+</html>
