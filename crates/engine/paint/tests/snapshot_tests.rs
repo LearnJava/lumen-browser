@@ -194,7 +194,8 @@ fn layer_snapshot_full_alpha_is_opaque() {
 // ── text-overflow: ellipsis ──────────────────────────────────────────────────
 
 /// "HelloWorld" = 10 chars * 8px = 80px > 60px container.
-/// overflow:hidden + text-overflow:ellipsis → narrow PushClipRect + "…" DrawText.
+/// overflow:hidden + text-overflow:ellipsis: layout truncates to "HelloW…",
+/// block walk emits PushClipRect around the InlineRun child.
 #[test]
 fn text_overflow_ellipsis_clips_overflowing_line() {
     let actual = build_measured(
@@ -203,10 +204,12 @@ fn text_overflow_ellipsis_clips_overflowing_line() {
         800.0,
     );
     assert!(actual.contains('\u{2026}'), "ellipsis char must be emitted");
+    assert!(actual.contains("PushClipRect"), "overflow:hidden must emit PushClipRect");
+    let push_pos = actual.find("PushClipRect").expect("PushClipRect must appear");
+    let ell_pos = actual.find('\u{2026}').expect("ellipsis char must appear");
     let pop_pos = actual.find("PopClip").expect("PopClip must appear");
-    let ell_pos = actual.find('\u{2026}').expect("ellipsis DrawText must appear");
-    assert!(pop_pos < ell_pos, "PopClip must precede ellipsis DrawText");
-    assert!(actual.contains("PushClipRect"), "narrow clip must be emitted");
+    assert!(push_pos < ell_pos, "PushClipRect must precede ellipsis");
+    assert!(ell_pos < pop_pos, "PopClip must follow ellipsis");
 }
 
 /// "Hi" = 2 * 8px = 16px < 60px — no overflow, no ellipsis, no extra clip.
@@ -259,4 +262,73 @@ fn text_decoration_thickness_auto_uses_em_fraction() {
     assert!(actual.contains("FillRect"), "underline must produce a FillRect");
     // 16px * 0.07 = 1.12; check thickness is not 5px (i.e., not using wrong branch).
     assert!(!actual.contains("5.00"), "auto thickness must not be 5px");
+}
+
+// ── overflow: hidden clip ─────────────────────────────────────────────────────
+
+/// overflow: hidden on a block emits PushClipRect / child / PopClip.
+/// Child's FillRect must appear between the two clip commands.
+#[test]
+fn overflow_hidden_clips_children() {
+    // Container 160×100; child 220×140 — overflows in both axes.
+    let actual = build(
+        r#"<div style="width:160px;height:100px;overflow:hidden;background:#0000ff">
+             <div style="width:220px;height:140px;background:#ff0000"></div>
+           </div>"#,
+        "",
+        800.0,
+    );
+    let push_pos = actual.find("PushClipRect").expect("overflow:hidden → PushClipRect");
+    let pop_pos = actual.find("PopClip").expect("overflow:hidden → PopClip");
+    // Child red rect appears between push and pop.
+    let red_pos = actual.find("ff0000").expect("child background must be in DL");
+    assert!(push_pos < red_pos, "PushClipRect must precede child");
+    assert!(red_pos < pop_pos, "PopClip must follow child");
+    // Clip rect width = 160px (no border on container).
+    assert!(actual.contains("160.00"), "clip rect width must equal container width");
+}
+
+/// overflow: visible (default) must NOT emit any PushClipRect.
+#[test]
+fn overflow_visible_no_clip() {
+    let actual = build(
+        r#"<div style="width:160px;height:100px;overflow:visible">
+             <div style="width:220px;height:140px;background:red"></div>
+           </div>"#,
+        "",
+        800.0,
+    );
+    // text-overflow ellipsis path also emits PushClipRect, but there's no text here.
+    assert!(!actual.contains("PushClipRect"), "overflow:visible must not clip");
+}
+
+/// overflow-x: hidden, overflow-y: visible → clip rect width = container width,
+/// height sentinel = 2 000 000 (very large, unconstrained axis).
+#[test]
+fn overflow_x_hidden_y_visible_x_only_clip() {
+    let actual = build(
+        r#"<div style="width:160px;height:100px;overflow-x:hidden;overflow-y:visible">
+             <div style="width:220px;height:140px;background:blue"></div>
+           </div>"#,
+        "",
+        800.0,
+    );
+    assert!(actual.contains("PushClipRect"), "overflow-x:hidden → PushClipRect");
+    // The sentinel for the unconstrained axis is 2 000 000.
+    assert!(actual.contains("2000000.00"), "unconstrained y uses large sentinel");
+}
+
+/// overflow-x: visible, overflow-y: hidden → clip rect height = container height,
+/// width sentinel = 2 000 000.
+#[test]
+fn overflow_y_hidden_x_visible_y_only_clip() {
+    let actual = build(
+        r#"<div style="width:160px;height:100px;overflow-x:visible;overflow-y:hidden">
+             <div style="width:220px;height:140px;background:green"></div>
+           </div>"#,
+        "",
+        800.0,
+    );
+    assert!(actual.contains("PushClipRect"), "overflow-y:hidden → PushClipRect");
+    assert!(actual.contains("2000000.00"), "unconstrained x uses large sentinel");
 }

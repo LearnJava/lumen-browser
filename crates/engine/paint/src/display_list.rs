@@ -1514,8 +1514,34 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                     });
                 }
             }
+            // CSS Overflow L3 §3.2: overflow: hidden/scroll/auto/clip clips
+            // descendant content to the padding-box edge. Per-axis: only the
+            // clipping axis is constrained; the unconstrained axis uses a large
+            // sentinel so the GPU scissor doesn't cut off content in that
+            // direction (the renderer clamps to surface bounds automatically).
+            let clip_x = overflow_clips(b.style.overflow_x);
+            let clip_y = overflow_clips(b.style.overflow_y);
+            let has_overflow_clip = clip_x || clip_y;
+            if has_overflow_clip {
+                const BIG: f32 = 1_000_000.0;
+                let s = &b.style;
+                let px = b.rect.x + s.border_left_width;
+                let py = b.rect.y + s.border_top_width;
+                let pw = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
+                let ph = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
+                let cr = Rect::new(
+                    if clip_x { px } else { -BIG },
+                    if clip_y { py } else { -BIG },
+                    if clip_x { pw } else { 2.0 * BIG },
+                    if clip_y { ph } else { 2.0 * BIG },
+                );
+                out.push(DisplayCommand::PushClipRect { rect: cr });
+            }
             for child in &b.children {
                 walk(child, out);
+            }
+            if has_overflow_clip {
+                out.push(DisplayCommand::PopClip);
             }
             if self_visible {
                 // CSS Basic UI L4 §5: outline рисуется поверх контента box-а
