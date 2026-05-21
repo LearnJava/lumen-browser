@@ -30,7 +30,7 @@ BUG-005 | FIXED 2026-05-21 | layout+paint    | <img> inside <span> not rendered
 BUG-010 | FIXED 2026-05-20 | layout          | <hr> renders nothing
 BUG-011 | OPEN             | layout/paint    | list markers (bullet, numbers) not rendered
 BUG-013 | OPEN             | layout          | adjacent <span style="..."> stack vertically without separator
-BUG-014 | OPEN             | image           | JPEG not decoded (PNG only)
+BUG-014 | FIXED 2026-05-21 | image           | JPEG not decoded (PNG only)
 BUG-015 | OPEN             | shell/paint     | broken <img> src shows no alt text
 BUG-017 | OPEN             | layout/paint    | text-decoration-style ignored (all render as solid)
 BUG-018 | OPEN             | layout          | text-decoration-color ignored (always inherits text color)

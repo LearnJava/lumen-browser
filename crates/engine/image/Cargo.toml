@@ -9,3 +9,6 @@ description = "Lumen: декодер растровых изображений (
 
 [dependencies]
 lumen-core.workspace = true
+zune-jpeg = "0.5"
+zune-png = "0.5"
+zune-core = "0.5"
