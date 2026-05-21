@@ -150,7 +150,7 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | `outline` | ✅ |
 | `outline-offset` | ✅ |
 | `cursor` | 🟡 parsed; OS cursor not switched |
-| `resize` | ⬜ |
+| `resize` | 🟡 | parsed/stored (none/both/horizontal/vertical/block/inline); drag-resize UI — P3 task |
 
 ### CSS Counter Styles Level 3
 `list-style-type` values are parsed. Counter rendering itself — 🟡.
@@ -233,7 +233,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | `white-space` | ✅ | normal / nowrap / pre / pre-wrap / pre-line |
 | `overflow-wrap` / `word-wrap` | ✅ | |
 | `word-break` | ✅ | |
-| `line-break` | ⬜ |
+| `line-break` | 🟡 | parsed/stored (auto/loose/normal/strict/anywhere); CJK line-break — deferred |
 | `hyphens` | 🟡 parsed; no hyphenation engine |
 | `tab-size` | 🟡 parsed; tab rendering partial |
 | `text-transform` | ✅ | uppercase / lowercase / capitalize |
@@ -390,7 +390,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | CSS Level 2 core (box model, display, color) | ✅ | partial | table layout |
 | CSS Flexbox L1 | ✅ | — | — |
 | CSS Box Alignment L3 | ✅ (flex) | grid/block | — |
-| CSS Text L3 | ✅ most | hyphens, tab | line-break |
+| CSS Text L3 | ✅ most | hyphens, tab, line-break | — |
 | CSS Text Decoration L3 | ✅ most | thickness | underline-position |
 | CSS Backgrounds L3 | ✅ (color/border/shadow) | image/clip layers | — |
 | CSS Fonts L3/L4 | ✅ (size/weight/style) | stretch/variant | @font-face |
