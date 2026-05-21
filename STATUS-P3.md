@@ -1,4 +1,4 @@
-In progress: 5A.3 HPACK (RFC 7541)  branch: hpack
+In progress: —
 Next step: —
 
 Next:
@@ -7,4 +7,4 @@ Next:
 5A.6 HTTP/2 flow control           lumen-plan.md:212
 5C DevTools/CDP минимум             lumen-plan.md:214
 
-Recent: http2-frame-codec 2026-05-20, http2-alpn 2026-05-20
+Recent: hpack 2026-05-21, http2-frame-codec 2026-05-20, http2-alpn 2026-05-20
