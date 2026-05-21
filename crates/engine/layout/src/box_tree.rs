@@ -285,6 +285,10 @@ pub enum BoxKind {
     FormControl {
         kind: FormControlKind,
     },
+    /// CSS 2.1 §17 — строка таблицы (`display: table-row`). Дочерние
+    /// боксы — ячейки (`display: table-cell`), которые раскладываются
+    /// горизонтально слева направо. Высота строки = max высота ячейки.
+    TableRow,
     /// Схлопнутый межэлементный пробел в InlineBlockRow.
     /// Не рисуется; участвует только как горизонтальный gap между
     /// inline-block соседями (CSS white-space collapsing §4.1.2).
@@ -696,6 +700,8 @@ fn build_box(
                     _ => FormControlKind::Input,
                 };
                 BoxKind::FormControl { kind }
+            } else if matches!(style.display, Display::TableRow) {
+                BoxKind::TableRow
             } else {
                 BoxKind::Block
             }
@@ -703,7 +709,7 @@ fn build_box(
     };
 
     let mut children = Vec::new();
-    if matches!(kind, BoxKind::Block | BoxKind::FormControl { .. }) {
+    if matches!(kind, BoxKind::Block | BoxKind::FormControl { .. } | BoxKind::TableRow) {
         let dom_children: Vec<NodeId> = doc.get(id).children.clone();
         // CSS Grid L1 §6: all direct children of a grid/flex container are
         // "blockified" — they participate as individual items, not wrapped in
@@ -711,6 +717,7 @@ fn build_box(
         let is_item_container = matches!(
             style.display,
             Display::Grid | Display::InlineGrid | Display::Flex | Display::InlineFlex
+                | Display::TableRow
         );
         if is_item_container {
             for child_id in dom_children {
@@ -849,14 +856,26 @@ fn preferred_inline_block_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
         };
         return Some(outer.max(0.0));
     }
-    let max_child = b
-        .children
-        .iter()
-        .filter_map(|c| preferred_inline_block_width(c, viewport))
-        .fold(0.0_f32, f32::max);
-    if max_child > 0.0 {
+    // InlineBlockRow — горизонтальный поток: суммируем ширины детей + их margins.
+    // Остальные боксы (Block, Image и т.д.) — вертикальный поток: берём max.
+    let content_w = if matches!(b.kind, BoxKind::InlineBlockRow) {
+        let sum: f32 = b.children.iter().map(|c| {
+            let cw = preferred_inline_block_width(c, viewport).unwrap_or(0.0);
+            let cem = c.style.font_size;
+            let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+            let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+            cw + ml + mr
+        }).sum();
+        sum
+    } else {
+        b.children
+            .iter()
+            .filter_map(|c| preferred_inline_block_width(c, viewport))
+            .fold(0.0_f32, f32::max)
+    };
+    if content_w > 0.0 {
         Some(
-            (max_child + pl + pr
+            (content_w + pl + pr
                 + s.border_left_width + s.border_right_width)
                 .max(0.0),
         )
@@ -1234,6 +1253,24 @@ fn lay_out(
                 shift_y_box(&mut b.children[idx], dy);
             }
         }
+        BoxKind::TableRow => {
+            // CSS 2.1 §17.5 — table row: ячейки раскладываются горизонтально.
+            let row_h = lay_out_table_row(
+                b, content_x, content_y, content_width, measurer, viewport, children_pcb,
+            );
+            b.rect.height = if let Some(h_len) = &s.height
+                && let Some(h) = h_len.resolve(em, Some(cb), viewport)
+            {
+                match s.box_sizing {
+                    BoxSizing::ContentBox => (h + padding_top + padding_bottom
+                        + s.border_top_width + s.border_bottom_width).max(0.0),
+                    BoxSizing::BorderBox => h.max(0.0),
+                }
+            } else {
+                row_h + padding_top + padding_bottom
+                    + s.border_top_width + s.border_bottom_width
+            };
+        }
         BoxKind::InlineRun { .. } => unreachable!(),
         BoxKind::InlineSpace => unreachable!(),
         BoxKind::Skip => unreachable!(),
@@ -1272,6 +1309,93 @@ fn lay_out(
             shift_tree(b, off_x, off_y);
         }
     }
+}
+
+/// CSS 2.1 §17.5 — simplified automatic table layout for a single row.
+///
+/// Алгоритм:
+/// 1. Ячейки с явным CSS `width` используют его (content-box/border-box).
+/// 2. Оставшаяся ширина делится поровну между ячейками без явной ширины.
+/// 3. После layout все ячейки выравниваются по максимальной высоте строки.
+///
+/// Возвращает высоту строки (content height, без padding/border родителя).
+fn lay_out_table_row(
+    b: &mut LayoutBox,
+    content_x: f32,
+    content_y: f32,
+    content_width: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+) -> f32 {
+    let cell_idxs: Vec<usize> = b
+        .children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip))
+        .map(|(i, _)| i)
+        .collect();
+
+    let n = cell_idxs.len();
+    if n == 0 {
+        return 0.0;
+    }
+
+    // Шаг 1: определяем явные ширины ячеек.
+    let mut explicit_w: Vec<Option<f32>> = Vec::with_capacity(n);
+    let mut total_explicit = 0.0_f32;
+    let mut auto_count: usize = 0;
+
+    for &i in &cell_idxs {
+        let c = &b.children[i];
+        let em = c.style.font_size;
+        if let Some(w_len) = &c.style.width
+            && let Some(w) = w_len.resolve(em, Some(content_width), viewport)
+        {
+            // Приводим к border-box, чтобы суммировать с другими ячейками.
+            let border_w = match c.style.box_sizing {
+                BoxSizing::ContentBox => {
+                    let pl = c.style.padding_left.resolve_or_zero(em, content_width, viewport);
+                    let pr = c.style.padding_right.resolve_or_zero(em, content_width, viewport);
+                    w + pl + pr + c.style.border_left_width + c.style.border_right_width
+                }
+                BoxSizing::BorderBox => w,
+            };
+            explicit_w.push(Some(border_w));
+            total_explicit += border_w;
+            continue;
+        }
+        explicit_w.push(None);
+        auto_count += 1;
+    }
+
+    let auto_share = if auto_count > 0 {
+        ((content_width - total_explicit) / auto_count as f32).max(0.0)
+    } else {
+        0.0
+    };
+
+    // Шаг 2: раскладываем ячейки горизонтально.
+    let mut cur_x = content_x;
+    for (j, &i) in cell_idxs.iter().enumerate() {
+        let avail = explicit_w[j].unwrap_or(auto_share);
+        lay_out(&mut b.children[i], cur_x, content_y, avail, measurer, viewport, pcb);
+        let c = &b.children[i];
+        let c_em = c.style.font_size;
+        let mr = c.style.margin_right.resolve_or_zero(c_em, content_width, viewport);
+        cur_x = c.rect.x + c.rect.width + mr;
+    }
+
+    // Шаг 3: нормализуем высоту — все ячейки = max высота строки.
+    let row_h = cell_idxs
+        .iter()
+        .map(|&i| b.children[i].rect.height)
+        .fold(0.0_f32, f32::max);
+    for &i in &cell_idxs {
+        b.children[i].rect.height = row_h;
+    }
+
+    row_h
 }
 
 /// Positions absolutely/fixed-positioned deferred children of `parent`.

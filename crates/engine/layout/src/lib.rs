@@ -111,7 +111,13 @@ mod tests {
     }
 
     fn first_element_child(b: &LayoutBox) -> &LayoutBox {
-        first_block_child(b)
+        b.children
+            .iter()
+            .find(|c| matches!(
+                c.kind,
+                BoxKind::Block | BoxKind::FormControl { .. } | BoxKind::TableRow
+            ))
+            .expect("expected at least one element child")
     }
 
     #[test]
@@ -8291,7 +8297,11 @@ mod tests {
         // Идём вглубь, пока не найдём td.
         fn find_td(b: &LayoutBox) -> Option<&LayoutBox> {
             for c in &b.children {
-                if matches!(&c.kind, BoxKind::Block) {
+                if matches!(&c.kind, BoxKind::TableRow) {
+                    if let Some(td) = find_td(c) {
+                        return Some(td);
+                    }
+                } else if matches!(&c.kind, BoxKind::Block) {
                     if let Some(td) = find_td(c) {
                         return Some(td);
                     }
@@ -8788,6 +8798,61 @@ mod tests {
             Some(CssColor::Rgba(Color { r: 0, g: 0, b: 255, a: 255 })),
             "bgcolor на td должен задавать background-color"
         );
+    }
+
+    // ── table layout (BUG-006) ────────────────────────────────────────────────
+
+    /// Ячейки таблицы должны раскладываться горизонтально, не вертикально.
+    #[test]
+    fn table_cells_layout_horizontally() {
+        let root = lay(
+            "<body><table><tr>\
+               <td style=\"width:100px;height:50px\"></td>\
+               <td style=\"width:200px;height:50px\"></td>\
+             </tr></table></body>",
+            "body,table,tr,td { margin:0; padding:0; border:0 }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        let tr = first_element_child(table);
+        assert!(
+            matches!(tr.kind, BoxKind::TableRow),
+            "<tr> должен иметь BoxKind::TableRow"
+        );
+        let cells: Vec<_> = tr
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, BoxKind::Block))
+            .collect();
+        assert_eq!(cells.len(), 2, "должно быть 2 ячейки");
+        // Первая ячейка: x=0, w=100
+        assert!((cells[0].rect.x - 0.0).abs() < 0.01, "первая ячейка x=0, получено {}", cells[0].rect.x);
+        assert!((cells[0].rect.width - 100.0).abs() < 0.01, "первая ячейка w=100");
+        // Вторая ячейка: x=100, w=200
+        assert!((cells[1].rect.x - 100.0).abs() < 0.01, "вторая ячейка x=100, получено {}", cells[1].rect.x);
+        assert!((cells[1].rect.width - 200.0).abs() < 0.01, "вторая ячейка w=200");
+        // Высота строки = max(50, 50) = 50
+        assert!((tr.rect.height - 50.0).abs() < 0.01, "высота строки 50px");
+    }
+
+    /// Строки таблицы стакаются вертикально (block-flow для `<table>`).
+    #[test]
+    fn table_rows_stack_vertically() {
+        let root = lay(
+            "<body><table><tr><td style=\"width:100px;height:40px\"></td></tr>\
+                         <tr><td style=\"width:100px;height:60px\"></td></tr></table></body>",
+            "body,table,tr,td { margin:0; padding:0; border:0 }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        let rows: Vec<_> = table
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, BoxKind::TableRow))
+            .collect();
+        assert_eq!(rows.len(), 2, "должно быть 2 строки");
+        assert!((rows[0].rect.y - 0.0).abs() < 0.01, "первая строка y=0");
+        assert!((rows[1].rect.y - 40.0).abs() < 0.01, "вторая строка y=40, получено {}", rows[1].rect.y);
     }
 
     /// Author CSS `background-color` выигрывает у presentational hint `bgcolor`.
