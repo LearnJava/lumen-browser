@@ -1,10 +1,9 @@
-In progress: —
-Next step: —
+In progress: Server-Sent Events — EventSource client  branch: sse-client
+Next step: SseEvent→core, SseSession/SseProvider traits, EventSource streaming client
 
 Next (Wave 2):
 
 Queue (Wave 3+):
-Server-Sent Events (text/event-stream)                       ~1h
 JS bindings: events, classList, style object                 ~3h
 Service Worker scaffold: fetch interception                  ~3h
 Forms UI: native pickers, validation tooltip                 ~2h  depends on P1 ValidityState
