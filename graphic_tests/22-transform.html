@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 22 CSS transform</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a202c; width: 1024px; height: 720px; padding: 24px; }
+    .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .row { height: 120px; margin-bottom: 16px; font-size: 0; }
+    .cell { display: inline-block; width: 120px; height: 100px; margin-right: 16px;
+            background: #2d3748; border: 1px solid #4a5568; position: relative; overflow: visible; }
+    .box { width: 60px; height: 60px; position: absolute; top: 20px; left: 30px; }
+  </style>
+</head>
+<body>
+  <div class="__m"></div>
+
+  <!-- Row 1: translate -->
+  <div class="row">
+    <!-- baseline — no transform -->
+    <div class="cell">
+      <div class="box" style="background: #4a5568;"></div>
+    </div>
+    <!-- translate(20px, 10px) -->
+    <div class="cell">
+      <div class="box" style="background: #63b3ed; transform: translate(20px, 10px);"></div>
+    </div>
+    <!-- translateX(30px) -->
+    <div class="cell">
+      <div class="box" style="background: #4299e1; transform: translateX(30px);"></div>
+    </div>
+    <!-- translateY(-15px) -->
+    <div class="cell">
+      <div class="box" style="background: #3182ce; transform: translateY(-15px);"></div>
+    </div>
+    <!-- translate(-20px, 20px) -->
+    <div class="cell">
+      <div class="box" style="background: #2b6cb0; transform: translate(-20px, 20px);"></div>
+    </div>
+    <!-- translate(0, 0) — identity -->
+    <div class="cell">
+      <div class="box" style="background: #2c5282; transform: translate(0px, 0px);"></div>
+    </div>
+  </div>
+
+  <!-- Row 2: rotate -->
+  <div class="row">
+    <!-- rotate(0deg) -->
+    <div class="cell">
+      <div class="box" style="background: #4a5568;"></div>
+    </div>
+    <!-- rotate(15deg) -->
+    <div class="cell">
+      <div class="box" style="background: #68d391; transform: rotate(15deg);"></div>
+    </div>
+    <!-- rotate(45deg) -->
+    <div class="cell">
+      <div class="box" style="background: #48bb78; transform: rotate(45deg);"></div>
+    </div>
+    <!-- rotate(90deg) -->
+    <div class="cell">
+      <div class="box" style="background: #38a169; transform: rotate(90deg);"></div>
+    </div>
+    <!-- rotate(-30deg) -->
+    <div class="cell">
+      <div class="box" style="background: #2f855a; transform: rotate(-30deg);"></div>
+    </div>
+    <!-- rotate(180deg) -->
+    <div class="cell">
+      <div class="box" style="background: #276749; transform: rotate(180deg);"></div>
+    </div>
+  </div>
+
+  <!-- Row 3: scale -->
+  <div class="row">
+    <!-- scale(1) -->
+    <div class="cell">
+      <div class="box" style="background: #4a5568;"></div>
+    </div>
+    <!-- scale(1.5) -->
+    <div class="cell">
+      <div class="box" style="background: #fc8181; transform: scale(1.5);"></div>
+    </div>
+    <!-- scale(0.5) -->
+    <div class="cell">
+      <div class="box" style="background: #f56565; transform: scale(0.5);"></div>
+    </div>
+    <!-- scaleX(2) -->
+    <div class="cell">
+      <div class="box" style="background: #e53e3e; transform: scaleX(2);"></div>
+    </div>
+    <!-- scaleY(2) -->
+    <div class="cell">
+      <div class="box" style="background: #c53030; transform: scaleY(2);"></div>
+    </div>
+    <!-- scale(0.8, 1.3) -->
+    <div class="cell">
+      <div class="box" style="background: #9b2c2c; transform: scale(0.8, 1.3);"></div>
+    </div>
+  </div>
+
+  <!-- Row 4: skew + matrix + combined -->
+  <div class="row">
+    <!-- skewX(20deg) -->
+    <div class="cell">
+      <div class="box" style="background: #f6e05e; transform: skewX(20deg);"></div>
+    </div>
+    <!-- skewY(20deg) -->
+    <div class="cell">
+      <div class="box" style="background: #ecc94b; transform: skewY(20deg);"></div>
+    </div>
+    <!-- matrix(1,0.3,0,1,0,0) — shear -->
+    <div class="cell">
+      <div class="box" style="background: #d69e2e; transform: matrix(1, 0.3, 0, 1, 0, 0);"></div>
+    </div>
+    <!-- translate + rotate combined -->
+    <div class="cell">
+      <div class="box" style="background: #ed64a6; transform: translate(10px, -10px) rotate(30deg);"></div>
+    </div>
+    <!-- rotate + scale combined -->
+    <div class="cell">
+      <div class="box" style="background: #d53f8c; transform: rotate(45deg) scale(1.2);"></div>
+    </div>
+    <!-- transform-origin top-left (0,0) + rotate -->
+    <div class="cell">
+      <div class="box" style="background: #b83280; transform-origin: 0 0; transform: rotate(20deg);"></div>
+    </div>
+  </div>
+
+  <!-- Row 5: transform-origin variations with rotate(45deg) -->
+  <div class="row" style="height: 100px; margin-bottom: 0;">
+    <!-- transform-origin: 50% 50% (default) -->
+    <div class="cell" style="height: 80px;">
+      <div class="box" style="background: #9f7aea; transform: rotate(45deg);"></div>
+    </div>
+    <!-- transform-origin: 0 0 (top-left) -->
+    <div class="cell" style="height: 80px;">
+      <div class="box" style="background: #805ad5; transform-origin: 0 0; transform: rotate(45deg);"></div>
+    </div>
+    <!-- transform-origin: 100% 0 (top-right) -->
+    <div class="cell" style="height: 80px;">
+      <div class="box" style="background: #6b46c1; transform-origin: 100% 0; transform: rotate(45deg);"></div>
+    </div>
+    <!-- transform-origin: 0 100% (bottom-left) -->
+    <div class="cell" style="height: 80px;">
+      <div class="box" style="background: #553c9a; transform-origin: 0 100%; transform: rotate(45deg);"></div>
+    </div>
+    <!-- translate + scale + rotate (3 functions) -->
+    <div class="cell" style="height: 80px;">
+      <div class="box" style="background: #44337a; transform: translate(5px, 5px) scale(0.9) rotate(20deg);"></div>
+    </div>
+    <!-- scale(0) — hidden -->
+    <div class="cell" style="height: 80px;">
+      <div class="box" style="background: #fc8181; transform: scale(0);"></div>
+    </div>
+  </div>
+
+</body>
+</html>

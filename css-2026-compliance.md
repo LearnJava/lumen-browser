@@ -98,8 +98,8 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 ### CSS Transforms Level 1
 | Property | Status |
 |---|---|
-| `transform` | 🟡 parsed (matrix/translate/rotate/scale/skew); paint not applied |
-| `transform-origin` | 🟡 parsed |
+| `transform` | ✅ translate/translateX/Y · rotate · scale/X/Y · skewX/Y · matrix() · combined; PushTransform/PopTransform in display list; transform-stack in renderer |
+| `transform-origin` | ✅ px values; pivot applied via T(origin)·M·T(-origin) |
 
 ### CSS Compositing and Blending Level 1
 | Property | Status |
