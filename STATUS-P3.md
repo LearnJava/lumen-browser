@@ -1,8 +1,8 @@
-In progress: —
-Next step: —
+In progress: WebSockets (RFC 6455)  branch: websockets-rfc6455
+Next step: frame codec + upgrade handshake  crates/network/src/websocket/
 
 Next (Wave 2):
-WebSockets (RFC 6455): upgrade + frames       network/                     ~3h
+Navigation API: history.pushState/popstate    shell/ + dom/                ~2h
 Navigation API: history.pushState/popstate    shell/ + dom/                ~2h
 
 Queue (Wave 3+):
