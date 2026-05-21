@@ -1,14 +1,22 @@
 In progress: —
 Next step: —
 
-Next: (P2 Phase 2+)
-— all current tasks complete —
+Next (Wave 1):
+BUG-017+018  text-decoration-style+color      display_list.rs/renderer.rs  ~1h
+BUG-014      JPEG decoder integration         image/src/lib.rs + paint     ~2h
+BUG-032      mipmap for large downscale       renderer.rs                  ~2h
 
-Queue:
+Next (Wave 2, after P4 finishes @font-face parse):
+@font-face loading: fetch URL + font register font/ + shell                ~3h  depends on P4 @font-face
+CSS filter pipeline (blur, grayscale, etc.)   renderer.rs                  ~2h
+mix-blend-mode wgpu blend states              renderer.rs                  ~2h
 
-Recent: overflow-clip 2026-05-21 (BUG-020: overflow:hidden/scroll/auto PushClipRect в walk(), per-axis clip с BIG sentinel, 4 новых теста)
-        img-in-span 2026-05-21 (BUG-005: <img> inside <span> inline replaced element — InlineSegment/InlineFrag img_src+img_width, DrawImage in emit_text_frags)
-        dotted-circles 2026-05-21 (BUG-029: border-style dotted SDF circle shader — CircleVertex, circle_pipeline, CIRCLE_SHADER_SRC)
-        transform-pipeline 2026-05-20 (PushTransform/PopTransform DisplayCommand + renderer-stack 2D affine — разблокирует P4 transform matrix, 8 tests)
-        font-variation-css 2026-05-20 (font-variation-settings CSS Fonts L4 §7 — cascade+renderer normalization, 8 tests)
-        picture-shell-4a 2026-05-20 (4A P2: collect_image_requests — srcset/picture picking для shell, 7 tests)
+Queue (Wave 3+):
+Animation scheduler (@keyframes frame loop)                  ~2h  depends on P4 animation wire-up
+Transition engine (smooth interpolation)                     ~2h  depends on P4 transition wire-up
+clip-path rendering (inset, circle, polygon)                 ~2h
+WOFF2 decoder                                                ~2h
+Multi-column layout rendering                                ~2h  depends on P4 multi-column
+Canvas 2D basic context                                      ~3h
+
+Recent: overflow-clip 2026-05-21, img-in-span 2026-05-21, dotted-circles 2026-05-21, image-cpu-resize 2026-05-21, bug023-analysis 2026-05-21, transform-pipeline 2026-05-20
