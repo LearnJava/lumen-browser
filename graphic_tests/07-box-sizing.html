@@ -5,18 +5,18 @@
   <title>Lumen — 06 box-sizing</title>
   <style>
     * { margin: 0; padding: 0; }
-    body { background: #4a5568; width: 1024px; height: 720px; padding: 24px; }
+    body { background: #ff00ff;  width: 1024px; height: 720px; overflow: hidden;  }
     /* Each pair: same width/height/padding/border declaration.
        content-box (red) grows outward; border-box (blue) stays at declared size. */
     .cb { background: #e53e3e; border: 8px solid #e2e8f0; box-sizing: content-box; }
     .bb { background: #3182ce; border: 8px solid #e2e8f0; box-sizing: border-box;  }
     .gap { height: 24px; }
     .pair-gap { height: 32px; }
-      .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .__f { background: #4a5568; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
   </style>
 </head>
 <body>
-  <div class="__m"></div>
+  <div class="__f">
   <!-- pair 1: padding:8px border:8px — CB total=(200+16+16)=232px, BB=200px -->
   <div class="cb" style="width: 200px; height: 48px; padding: 8px;"></div>
   <div style="height: 4px;"></div>
@@ -42,5 +42,6 @@
   <div class="cb" style="width: 320px; height: 48px; padding: 20px;"></div>
   <div style="height: 4px;"></div>
   <div class="bb" style="width: 320px; height: 48px; padding: 20px;"></div>
+  </div>
 </body>
 </html>

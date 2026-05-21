@@ -5,18 +5,18 @@
   <title>Lumen — 13 overflow</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #1a202c; width: 1024px; height: 720px; padding: 24px; }
+    body { background: #ff00ff;  width: 1024px; height: 720px; overflow: hidden;  }
     /* each demo lives in a 460px column so overflow doesn't bleed into the next demo */
     .col { display: inline-block; width: 460px; vertical-align: top; margin-bottom: 40px; }
     /* container box */
     .ct { width: 160px; height: 100px; background: #2d3748; }
     /* overflowing child (larger than container) */
     .ch { width: 220px; height: 140px; }
-      .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
   </style>
 </head>
 <body>
-  <div class="__m"></div>
+  <div class="__f">
   <!-- overflow: visible (default) — child bleeds right and down -->
   <div class="col">
     <div class="ct" style="overflow: visible;">
@@ -43,6 +43,7 @@
     <div class="ct" style="overflow-x: visible; overflow-y: hidden;">
       <div class="ch" style="background: rgba(128,90,213,0.85);"></div>
     </div>
+  </div>
   </div>
 </body>
 </html>

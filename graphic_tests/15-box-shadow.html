@@ -5,14 +5,14 @@
   <title>Lumen — 14 box-shadow</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #f7fafc; width: 1024px; height: 720px; padding: 24px; }
+    body { background: #ff00ff;  width: 1024px; height: 720px; overflow: hidden;  }
     .b { display: inline-block; width: 120px; height: 80px; background: #ffffff;
          border: 1px solid #e2e8f0; margin: 0 48px 64px 0; vertical-align: top; }
-      .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .__f { background: #f7fafc; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
   </style>
 </head>
 <body>
-  <div class="__m"></div>
+  <div class="__f">
   <!-- hard offset shadow -->
   <div class="b" style="box-shadow: 10px 10px 0 0 rgba(0,0,0,0.35);"></div>
 
@@ -36,5 +36,6 @@
 
   <!-- large offset, soft -->
   <div class="b" style="box-shadow: 24px 24px 8px 0 rgba(0,0,0,0.20);"></div>
+  </div>
 </body>
 </html>

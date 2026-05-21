@@ -5,15 +5,15 @@
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
     /* body background comes from bgcolor attribute, not CSS */
-    body { width: 1024px; height: 720px; padding: 24px; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden;  }
     .sw  { display: inline-block; width: 160px; height: 80px; margin: 0 16px 16px 0; }
     td   { width: 120px; height: 80px; }
     table { border-collapse: collapse; margin-top: 16px; }
-      .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .__f { background: #1a2030; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
   </style>
 </head>
 <body bgcolor="#1a2030">
-  <div class="__m"></div>
+  <div class="__f">
   <!-- CSS hashless hex — valid only in Quirks mode (no # prefix) -->
   <div class="sw" style="background: ff4444;"></div>
   <div class="sw" style="background: 3366cc;"></div>
@@ -39,5 +39,6 @@
       <td bgcolor="#805ad5"></td>
     </tr>
   </table>
+  </div>
 </body>
 </html>

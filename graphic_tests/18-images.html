@@ -5,14 +5,14 @@
   <title>Lumen — 17 images</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #2d3748; width: 1024px; height: 720px; padding: 24px; }
+    body { background: #ff00ff;  width: 1024px; height: 720px; overflow: hidden;  }
     .cell { display: inline-block; vertical-align: top; margin: 0 16px 16px 0; }
     .frame { background: #0d1520; padding: 3px; }
-      .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .__f { background: #2d3748; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
   </style>
 </head>
 <body>
-  <div class="__m"></div>
+  <div class="__f">
   <!-- row 1: three PNGs at 200×150 -->
   <div class="cell"><div class="frame">
     <img src="../samples/images/agi_illustration.png" width="200" height="150" alt="">
@@ -51,5 +51,6 @@
   <div class="cell"><div class="frame" style="background: #3182ce;">
     <img src="../samples/images/sad_brain.png" width="160" height="120" alt="">
   </div></div>
+  </div>
 </body>
 </html>

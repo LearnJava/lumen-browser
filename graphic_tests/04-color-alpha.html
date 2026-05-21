@@ -5,13 +5,13 @@
   <title>Lumen — 03 color alpha</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #ffffff; width: 1024px; height: 720px; padding: 24px; }
+    body { background: #ff00ff;  width: 1024px; height: 720px; overflow: hidden;  }
     .sw { display: inline-block; width: 140px; height: 80px; margin: 0 16px 16px 0; }
-      .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
   </style>
 </head>
 <body>
-  <div class="__m"></div>
+  <div class="__f">
   <!-- red at 6 alpha levels -->
   <div class="sw" style="background: rgba(229, 62, 62, 0.10);"></div>
   <div class="sw" style="background: rgba(229, 62, 62, 0.25);"></div>
@@ -37,5 +37,6 @@
   <div class="sw" style="background: #805ad540;"></div>
   <div class="sw" style="background: #805ad5a0;"></div>
   <div class="sw" style="background: #805ad5ff;"></div>
+  </div>
 </body>
 </html>

@@ -5,15 +5,15 @@
   <title>Lumen — 07 padding</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #1a202c; width: 1024px; height: 720px; padding: 24px; }
+    body { background: #ff00ff;  width: 1024px; height: 720px; overflow: hidden;  }
     /* outer = gray band = the padding area; inner = blue = content area */
     .outer { display: inline-block; background: #4a5568; margin: 0 16px 16px 0; vertical-align: top; }
     .inner { background: #3182ce; width: 100px; height: 60px; }
-      .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
   </style>
 </head>
 <body>
-  <div class="__m"></div>
+  <div class="__f">
   <div class="outer" style="padding: 4px;"><div class="inner"></div></div>
   <div class="outer" style="padding: 12px;"><div class="inner"></div></div>
   <div class="outer" style="padding: 24px;"><div class="inner"></div></div>
@@ -27,5 +27,6 @@
 
   <!-- padding: 0 — no band at all -->
   <div class="outer" style="padding: 0;"><div class="inner"></div></div>
+  </div>
 </body>
 </html>

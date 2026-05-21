@@ -40,12 +40,66 @@ BUG-025 | OPEN             | layout          | max-height does not clamp block h
 BUG-026 | OPEN             | layout/paint    | <img> CSS/HTML width+height ignored — renders at natural size
 BUG-028 | OPEN  [P3]       | shell           | relayout-on-resize + maximized window triggers BUG-027
 BUG-029 | FIXED 2026-05-21 | paint           | border-style: dotted renders square dots instead of circles
-BUG-020 | FIXED 2026-05-21 | paint           | overflow: hidden/scroll/auto clip not applied (walk() missing PushClipRect)
+BUG-020 | OPEN             | paint/layout    | overflow: scroll/auto — scrollbar UI не рендерится; hidden clip частично работает
 BUG-006 | OPEN  WONTFIX P1 | layout          | table layout not implemented (td/th render as blocks)
 BUG-021 | OPEN             | html-parser     | HTML bgcolor attribute ignored
 BUG-022 | OPEN             | css-parser      | Quirks-mode hashless hex colors not parsed
 BUG-032 | OPEN             | paint/image     | object-fit image quality ~16%: GPU bilinear without mipmaps for large downscales
+BUG-033 | OPEN             | paint           | box-shadow: нет Gaussian blur — рендерится solid прямоугольник вместо размытой тени
+BUG-034 | OPEN             | layout          | CSS transform не реализован — translate/rotate/scale/skew/matrix игнорируются
+BUG-035 | OPEN             | layout          | ::before/::after pseudo-elements не генерируются в box_tree (реализация частичная)
 ```
+
+---
+
+## Прогон 2026-05-21 v2 (graphic_tests, --continue-on-fail, порог 1%)
+
+Инфраструктура: полная 1px магента-рамка (body #ff00ff + .__f wrapper), overflow:hidden на body.
+Устранены ложные срабатывания от Edge-scrollbar: 10 тестов перешли FAIL→PASS.
+
+```
+TEST-00: PASS  0.00%   calibration
+TEST-01: PASS  0.00%   sanity
+TEST-02: PASS  0.39%   color-named
+TEST-03: PASS  0.11%   color-formats
+TEST-04: PASS  0.39%   color-alpha
+TEST-05: PASS  0.37%   border-width
+TEST-06: FAIL  2.43%   border-sides       ← BUG-024 (box-sizing) + BUG-020 overflow
+TEST-07: FAIL  6.56%   box-sizing         ← BUG-024
+TEST-08: PASS  0.93%   padding
+TEST-09: PASS  0.00%   margin
+TEST-10: PASS  0.00%   min-max-width
+TEST-11: FAIL 14.02%   min-max-height     ← BUG-025
+TEST-12: FAIL 11.27%   display            ← BUG-025 + display modes
+TEST-13: PASS  0.24%   visibility-opacity
+TEST-14: FAIL  6.89%   overflow           ← BUG-020 (scrollbar UI отсутствует)
+TEST-15: FAIL  1.92%   box-shadow         ← BUG-033 (solid тень, нет blur)
+TEST-16: FAIL  1.88%   outline            ← sub-pixel геометрия
+TEST-17: PASS  0.00%   calc
+TEST-18: FAIL 11.06%   images             ← BUG-026
+TEST-19: FAIL 12.62%   object-fit         ← BUG-032
+TEST-20: FAIL 27.84%   quirks-bgcolor     ← BUG-021 + BUG-022
+TEST-21: FAIL  1.77%   border-style       ← BUG-029 частично исправлен, ещё >1%
+TEST-22: FAIL  8.39%   CSS transform      ← BUG-034 (transform не реализован)
+TEST-23: FAIL  5.97%   pseudo-elements    ← BUG-035 (::before/::after не рендерятся)
+```
+
+**Сравнение с предыдущим прогоном (v1, старая .__m полоска):**
+
+| Тест | Было | Стало | |
+|---|---|---|---|
+| TEST-01 sanity | 0.00% | 0.00% | = |
+| TEST-02 color-named | 2.35% FAIL | 0.39% PASS | ▼ ложный FAIL устранён |
+| TEST-03 color-formats | 2.06% FAIL | 0.11% PASS | ▼ |
+| TEST-04 color-alpha | 2.35% FAIL | 0.39% PASS | ▼ |
+| TEST-05 border-width | 3.89% FAIL | 0.37% PASS | ▼ |
+| TEST-08 padding | 4.45% FAIL | 0.93% PASS | ▼ |
+| TEST-09 margin | 1.95% FAIL | 0.00% PASS | ▼ |
+| TEST-10 min-max-width | 3.52% FAIL | 0.00% PASS | ▼ |
+| TEST-13 opacity | 2.20% FAIL | 0.24% PASS | ▼ |
+| TEST-17 calc | 3.52% FAIL | 0.00% PASS | ▼ |
+
+Все улучшения — устранение ложных FAIL от Edge scrollbar (3.52% = 15px scrollbar × 2 стороны).
 
 ---
 

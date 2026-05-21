@@ -5,14 +5,14 @@
   <title>Lumen — 21 border-style dashed/dotted/double</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #1a202c; width: 1024px; height: 720px; padding: 24px; }
-    .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    body { background: #ff00ff;  width: 1024px; height: 720px; overflow: hidden;  }
+    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
     .b { display: inline-block; width: 180px; height: 80px; margin: 0 16px 32px 0;
          background: #2d3748; }
   </style>
 </head>
 <body>
-  <div class="__m"></div>
+  <div class="__f">
 
   <!-- dashed: 2px / 4px / 8px / 16px -->
   <div class="b" style="border: 2px dashed #63b3ed;"></div>
@@ -41,5 +41,6 @@
 
   <!-- double thin (<3px) fallback to solid -->
   <div class="b" style="border: 2px double #90cdf4;"></div>
+  </div>
 </body>
 </html>

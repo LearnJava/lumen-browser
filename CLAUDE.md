@@ -193,7 +193,21 @@ Not needed in cmd / PowerShell — PATH is correct there.
 
 **00-calibration.html** — required first test: magenta stripes (`#ff00ff`) 1024 px wide at top and bottom of body. Used to detect crop offset in the Lumen desktop screenshot.
 
-**Magenta marker in all tests.** Each test page 01–20 starts with `<div class="__m"></div>` (1024×1 magenta) as the first child of body. Anchor for crop offset — regardless of where winit placed the window. Shifts content 1 px down identically in Edge and Lumen, keeping diffs valid. Trigger phrases: "find bugs from screenshots", "run graphic_tests".
+**Magenta frame in all tests.** Each test page 01+ uses a 1px magenta frame around the full 1024×720 viewport. Pattern:
+
+```html
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f { background: <PAGE_BG>; width: 1022px; height: 718px; margin: 1px; padding: <PADDING>; overflow: hidden; }
+</style>
+<body>
+  <div class="__f">
+    <!-- all content here -->
+  </div>
+</body>
+```
+
+The 1px magenta body background shows through `.__f`'s margins on all 4 sides. Crop offset comes from TEST-00 (calibration), not from this frame. Trigger phrases: "find bugs from screenshots", "run graphic_tests".
 
 ### Running
 
@@ -218,7 +232,7 @@ In the **same commit** as the implementation:
 1. Add object(s) to the relevant test in series `02–20` (or create a new file if not covered).
 2. Add a demo to `graphic_tests/1000000-final.html`.
 3. Update `graphic_tests/COVERAGE.md` — add a row for the property.
-4. If creating a new test file — add `<div class="__m"></div>` as first body child and `.__m { width: 1024px; height: 1px; background: #ff00ff; }` in `<style>`.
+4. If creating a new test file — use the magenta frame pattern: `body { background: #ff00ff; }` + `.__f` wrapper div with `margin: 1px; width: 1022px; height: 718px; background: <PAGE_BG>;`. See "Magenta frame in all tests" above.
 5. Add an entry to `TESTS` in `graphic_tests/run.py`.
 
 Current coverage — `graphic_tests/COVERAGE.md`.

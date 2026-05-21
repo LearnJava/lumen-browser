@@ -5,13 +5,13 @@
   <title>Lumen — 02 color formats</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #ffffff; width: 1024px; height: 720px; padding: 24px; }
+    body { background: #ff00ff;  width: 1024px; height: 720px; overflow: hidden;  }
     .sw { display: inline-block; width: 200px; height: 100px; margin: 0 16px 16px 0; }
-      .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
   </style>
 </head>
 <body>
-  <div class="__m"></div>
+  <div class="__f">
   <!-- named -->
   <div class="sw" style="background: tomato;"></div>
   <!-- #RGB -->
@@ -32,5 +32,6 @@
   <div class="sw" style="background: hsl(200, 100%, 40%);"></div>
   <!-- hsla() -->
   <div class="sw" style="background: hsla(300, 70%, 50%, 0.7);"></div>
+  </div>
 </body>
 </html>
