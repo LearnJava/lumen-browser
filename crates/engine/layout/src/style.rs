@@ -4094,6 +4094,195 @@ pub fn compute_style(
     style
 }
 
+// ── Pseudo-element style matching ───────────────────────────────────────────
+
+/// Проверяет, является ли `complex` правилом для псевдоэлемента `pseudo`
+/// (например "before" для `::before`) на элементе `node`.
+/// Если да — возвращает specificity исходного (полного) селектора.
+/// Алгоритм: последний compound должен содержать `PseudoElement(pseudo)`;
+/// остаток селектора (после удаления этой части) проверяется через
+/// существующий `matches_complex`.
+fn matches_complex_for_pseudo(
+    complex: &ComplexSelector,
+    pseudo: &str,
+    doc: &Document,
+    node: NodeId,
+) -> Option<Specificity> {
+    let last = complex.tail.last().map(|(_, c)| c).unwrap_or(&complex.head);
+    if !last.parts.iter().any(|p| {
+        matches!(p, SimpleSelector::PseudoElement(n) if n.eq_ignore_ascii_case(pseudo))
+    }) {
+        return None;
+    }
+    // Строим модифицированный последний compound без PseudoElement.
+    let stripped = CompoundSelector {
+        parts: last.parts.iter()
+            .filter(|p| !matches!(p, SimpleSelector::PseudoElement(_)))
+            .cloned()
+            .collect(),
+    };
+    // Собираем модифицированный ComplexSelector.
+    let modified = if complex.tail.is_empty() {
+        ComplexSelector { head: stripped, tail: vec![] }
+    } else {
+        let mut tail = complex.tail.clone();
+        tail.last_mut().unwrap().1 = stripped;
+        ComplexSelector { head: complex.head.clone(), tail }
+    };
+    if matches_complex(&modified, doc, node) {
+        Some(complex.specificity())
+    } else {
+        None
+    }
+}
+
+/// Вычисляет стиль для псевдоэлемента `::before` или `::after` элемента `node`.
+///
+/// `pseudo` — "before" или "after" (без "::").
+///
+/// Возвращает `None` если:
+/// - нет CSS-правил для данного псевдоэлемента на этом узле, или
+/// - вычисленный `content` равен `none` / `normal`.
+pub fn compute_pseudo_element_style(
+    doc: &Document,
+    node: NodeId,
+    pseudo: &str,
+    sheet: &Stylesheet,
+    parent: &ComputedStyle,
+    viewport: Size,
+) -> Option<ComputedStyle> {
+    if !matches!(doc.get(node).data, NodeData::Element { .. }) {
+        return None;
+    }
+
+    // Pseudo-elements inherit from their originating element.
+    // Start from root() (all fields at initial values) then override inherited properties.
+    // CSS Pseudo-elements L4 §4: default display = inline.
+    let mut style = ComputedStyle::root();
+    style.display = Display::Inline;
+    style.content = Content::Normal;
+    // Inherited properties — copy from parent.
+    style.color = parent.color;
+    style.color_space = parent.color_space;
+    style.text_align = parent.text_align;
+    style.direction = parent.direction;
+    style.font_size = parent.font_size;
+    style.line_height = parent.line_height;
+    style.font_style = parent.font_style;
+    style.font_weight = parent.font_weight;
+    style.font_variant = parent.font_variant;
+    style.font_stretch = parent.font_stretch;
+    style.font_family = parent.font_family.clone();
+    style.font_variation_settings = parent.font_variation_settings.clone();
+    style.text_transform = parent.text_transform;
+    style.white_space = parent.white_space;
+    style.text_indent = parent.text_indent.clone();
+    style.letter_spacing = parent.letter_spacing;
+    style.word_spacing = parent.word_spacing;
+    style.text_decoration_line = parent.text_decoration_line;
+    style.text_decoration_color = parent.text_decoration_color;
+    style.text_decoration_style = parent.text_decoration_style;
+    style.text_decoration_thickness = parent.text_decoration_thickness;
+    style.text_emphasis_style = parent.text_emphasis_style.clone();
+    style.text_emphasis_color = parent.text_emphasis_color;
+    style.text_emphasis_position = parent.text_emphasis_position;
+    style.text_underline_position = parent.text_underline_position;
+    style.accent_color = parent.accent_color;
+    style.color_scheme = parent.color_scheme;
+    style.custom_props = parent.custom_props.clone();
+    style.visibility = parent.visibility;
+    style.cursor = parent.cursor;
+    style.text_shadow = parent.text_shadow.clone();
+    style.user_select = parent.user_select;
+    style.scroll_behavior = parent.scroll_behavior;
+    style.tab_size = parent.tab_size;
+    style.caret_color = parent.caret_color;
+    style.overflow_wrap = parent.overflow_wrap;
+    style.word_break = parent.word_break;
+    style.line_break = parent.line_break;
+    style.hyphens = parent.hyphens;
+    style.list_style_type = parent.list_style_type;
+    style.list_style_position = parent.list_style_position;
+    style.list_style_image = parent.list_style_image.clone();
+    style.orphans = parent.orphans;
+    style.widows = parent.widows;
+    style.scrollbar_width = parent.scrollbar_width;
+    style.scrollbar_color = parent.scrollbar_color;
+    style.image_rendering = parent.image_rendering;
+    style.writing_mode = parent.writing_mode;
+    style.text_orientation = parent.text_orientation;
+    style.font_size_adjust = parent.font_size_adjust;
+    style.text_wrap_mode = parent.text_wrap_mode;
+    style.text_wrap_style = parent.text_wrap_style;
+
+    // Собираем matching declarations из всех правил.
+    let mut matched: Vec<(bool, Specificity, usize, usize, &Declaration)> = Vec::new();
+    for (rule_idx, rule) in sheet.rules.iter().enumerate() {
+        let mut best: Option<Specificity> = None;
+        for complex in &rule.selectors {
+            if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
+                best = Some(match best {
+                    Some(prev) if prev >= spec => prev,
+                    _ => spec,
+                });
+            }
+        }
+        if let Some(spec) = best {
+            for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                matched.push((decl.important, spec, rule_idx, decl_idx, decl));
+            }
+        }
+    }
+
+    let media_ctx = media_context_from_viewport(viewport);
+    let mut next_rule_idx = sheet.rules.len();
+    for media in &sheet.media_rules {
+        if !media.query.matches(&media_ctx) {
+            next_rule_idx += media.rules.len();
+            continue;
+        }
+        for rule in &media.rules {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if let Some(spec) = matches_complex_for_pseudo(complex, pseudo, doc, node) {
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    matched.push((decl.important, spec, next_rule_idx, decl_idx, decl));
+                }
+            }
+            next_rule_idx += 1;
+        }
+    }
+
+    if matched.is_empty() {
+        return None;
+    }
+
+    matched.sort_by_key(|&(imp, spec, rule_idx, decl_idx, _)| (imp, spec, rule_idx, decl_idx));
+
+    let parent_fs = parent.font_size;
+    let is_quirks = doc.mode() == DocumentMode::Quirks;
+    for (_, _, _, _, decl) in &matched {
+        apply_font_size(&mut style, decl, parent_fs, viewport, is_quirks);
+    }
+    let em_basis = style.font_size;
+    let parent_weight = parent.font_weight;
+    for (_, _, _, _, decl) in &matched {
+        apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, parent, is_quirks);
+    }
+
+    match &style.content {
+        Content::Items(_) => Some(style),
+        _ => None,
+    }
+}
+
 /// CSS Properties and Values L1 §1.1: для каждого зарегистрированного
 /// custom property, у которого нет значения в `custom_props`, подставляет
 /// `initial-value` (если он указан). Невызов для `inherits: true` имени

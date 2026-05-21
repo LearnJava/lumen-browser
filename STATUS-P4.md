@@ -1,4 +1,5 @@
-In progress: —
+In progress: content + ::before/::after generation  branch: pseudo-elements
+Next step: compute_pseudo_element_style() + build_box injection  style.rs:4262 / box_tree.rs:558
 
 Next (Wave 1 — unblock P1/P2):
 content + ::before/::after generation (🟡→✅) style.rs + display_list.rs   ~3h  unblocks P1 pseudo layout

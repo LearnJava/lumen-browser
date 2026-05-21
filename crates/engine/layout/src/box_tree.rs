@@ -16,9 +16,10 @@ use lumen_html_parser::{
 };
 
 use crate::style::{
-    compute_style, AlignValue, BackgroundImage, BoxSizing, ComputedStyle, Display, FlexBasis,
-    FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridTrackSize, Length, LengthOrAuto, Overflow,
-    Position, TextAlign, TextOverflow, VerticalAlign,
+    compute_pseudo_element_style, compute_style, AlignValue, BackgroundImage, BoxSizing, Content,
+    ContentItem, ComputedStyle, Display, FlexBasis, FlexDirection, FlexWrap, GridAutoFlow,
+    GridLine, GridTrackSize, Length, LengthOrAuto, Overflow, Position, TextAlign, TextOverflow,
+    VerticalAlign,
 };
 use crate::TextMeasurer;
 
@@ -555,6 +556,99 @@ fn collect_inline_segments(
     }
 }
 
+/// Injects a pseudo-element box (::before or ::after) into the children list.
+///
+/// `is_before = true` → prepend; `false` → append.
+/// Inline pseudo-elements are merged into the adjacent InlineRun when possible.
+/// Block pseudo-elements are inserted as separate Block boxes.
+fn inject_pseudo(
+    parent_id: NodeId,
+    children: &mut Vec<LayoutBox>,
+    ps: Option<ComputedStyle>,
+    is_before: bool,
+) {
+    let Some(ps) = ps else { return };
+    match ps.display {
+        Display::Inline
+        | Display::InlineFlex
+        | Display::InlineGrid
+        | Display::InlineBlock => {
+            let segs = content_to_inline_segments(&ps);
+            if segs.is_empty() {
+                return;
+            }
+            if is_before {
+                match children.first_mut() {
+                    Some(LayoutBox { kind: BoxKind::InlineRun { segments, .. }, .. }) => {
+                        let mut new_segs = segs;
+                        new_segs.extend(std::mem::take(segments));
+                        *segments = new_segs;
+                    }
+                    _ => children.insert(0, anon_inline_run(parent_id, &ps, segs)),
+                }
+            } else {
+                match children.last_mut() {
+                    Some(LayoutBox { kind: BoxKind::InlineRun { segments, .. }, .. }) => {
+                        segments.extend(segs);
+                    }
+                    _ => children.push(anon_inline_run(parent_id, &ps, segs)),
+                }
+            }
+        }
+        _ => {
+            // Block-level pseudo-element.
+            let inner_segs = content_to_inline_segments(&ps);
+            let inner = if inner_segs.is_empty() {
+                vec![]
+            } else {
+                vec![anon_inline_run(parent_id, &ps, inner_segs)]
+            };
+            let b = LayoutBox {
+                node: parent_id,
+                rect: Rect::ZERO,
+                style: ps,
+                kind: BoxKind::Block,
+                children: inner,
+            };
+            if is_before {
+                children.insert(0, b);
+            } else {
+                children.push(b);
+            }
+        }
+    }
+}
+
+/// Extracts text from `Content::Items` and returns it as a single `InlineSegment`.
+/// Only `ContentItem::String` is handled in Phase 0; other variants are skipped.
+fn content_to_inline_segments(style: &ComputedStyle) -> Vec<InlineSegment> {
+    let Content::Items(items) = &style.content else {
+        return vec![];
+    };
+    let text: String = items
+        .iter()
+        .filter_map(|item| {
+            if let ContentItem::String(s) = item {
+                Some(s.as_str())
+            } else {
+                None
+            }
+        })
+        .collect();
+    if text.is_empty() {
+        return vec![];
+    }
+    vec![InlineSegment {
+        text,
+        style: style.clone(),
+        pre_space: 0.0,
+        post_space: 0.0,
+        is_element_box: false,
+        img_src: None,
+        img_width: 0.0,
+    }]
+}
+
 fn build_box(
     doc: &Document,
     sheet: &Stylesheet,
@@ -706,6 +800,16 @@ fn build_box(
                 children.push(build_box(doc, sheet, child_id, &style, viewport));
                 i += 1;
             }
+        }
+        // CSS Pseudo-elements L4 §4 — inject ::before / ::after for block-flow.
+        // Only for Block (not FormControl, not flex/grid item containers).
+        if matches!(kind, BoxKind::Block) {
+            let before_ps =
+                compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport);
+            let after_ps =
+                compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport);
+            inject_pseudo(id, &mut children, before_ps, true);
+            inject_pseudo(id, &mut children, after_ps, false);
         }
         } // end else (non-item-container)
     }
