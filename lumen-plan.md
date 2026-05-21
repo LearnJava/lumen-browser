@@ -216,7 +216,7 @@
 | 5A | 🟡 **`[P3]` HTTP/2** | Latency | Только network |
 | 5A.1 | ✅ ALPN h2 negotiation | `network/src/lib.rs` | h2 → Err placeholder, http/1.1 fallback |
 | 5A.2 | ✅ Frame codec (RFC 9113 §6) | `network/src/h2/frame.rs` | 10 типов + Unknown, padding strip, +46 тестов |
-| 5A.3 | ⬜ HPACK (RFC 7541) | `network/src/h2/hpack.rs` | static+dynamic table, Huffman, integer enc |
+| 5A.3 | ✅ HPACK (RFC 7541) | `network/src/h2/hpack.rs` | static+dynamic table, Huffman, integer enc, +24 тестов (RFC C.3/C.4 vectors) |
 | 5A.4 | ⬜ Connection + single GET | `network/src/h2/conn.rs` | preface, SETTINGS, один stream |
 | 5A.5 | ⬜ Pool multiplexing | `network/src/h2/pool.rs` | concurrent streams в одном conn |
 | 5A.6 | ⬜ Flow control + WINDOW_UPDATE | `network/src/h2/flow.rs` | connection + stream windows |

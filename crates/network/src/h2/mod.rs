@@ -15,3 +15,4 @@
 //! fragments carried inside HEADERS/CONTINUATION/PUSH_PROMISE.
 
 pub mod frame;
+pub mod hpack;
