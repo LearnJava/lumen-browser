@@ -199,10 +199,12 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | `inline-block` | ✅ |
 | `flex` | ✅ |
 | `none` | ✅ |
-| `grid` | ⬜ |
-| `flow-root` | ⬜ |
-| `contents` | ⬜ |
-| `table` family | ⬜ |
+| `grid` | 🟡 | parsed/stored; real grid layout — deferred (4B.6-7) |
+| `inline-grid` | 🟡 | parsed/stored |
+| `flow-root` | 🟡 | parsed/stored; treated as Block in layout |
+| `contents` | 🟡 | parsed/stored; box-generation semantics — deferred |
+| `list-item` | 🟡 | parsed/stored; marker box — deferred |
+| `table` family (`table`, `inline-table`, `table-row-group`, `table-header-group`, `table-footer-group`, `table-row`, `table-column-group`, `table-column`, `table-cell`, `table-caption`) | 🟡 | parsed/stored; UA defaults for `<table>`, `<tr>`, `<td>` etc.; table layout — deferred |
 
 ### CSS Fragmentation Level 3
 | Property | Status |
@@ -404,7 +406,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | CSS Transitions L1 | — | parse-only | engine |
 | CSS Filters L1 | — | parse-only | paint apply |
 | CSS Positioned Layout L3 | ✅ static | others parse-only | OOF layout |
-| CSS Grid L1/L2 | — | — | ⬜ not started |
+| CSS Grid L1/L2 | — | parse+store (grid/inline-grid) | layout algorithm |
 | CSS Logical Properties L1 | ✅ parse+store (LTR) | — | full RTL/vertical |
 | CSS Nesting L1 | — | — | ⬜ not started |
 | CSS Multi-column L1 | — | parse-only | layout |
