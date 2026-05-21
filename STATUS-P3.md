@@ -1,5 +1,5 @@
-In progress: JS bindings — events, classList, style object  branch: js-bindings
-Next step: extend WEB_API_SHIM in crates/js/src/dom.rs: Event ctor, DOMTokenList, CSSStyleDeclaration
+In progress: —
+Next step: —
 
 Next (Wave 2):
 
@@ -9,4 +9,4 @@ Forms UI: native pickers, validation tooltip                 ~2h  depends on P1 
 IME composition events                                       ~2h
 bfcache: DOM+JS snapshot                                     ~3h
 
-Recent: sse-client 2026-05-22, sse-parser 2026-05-21, navigation-api 2026-05-21, websockets-rfc6455 2026-05-21, streaming-pipeline 2026-05-21, sop-enforcement 2026-05-21
+Recent: js-bindings 2026-05-22, sse-client 2026-05-22, sse-parser 2026-05-21, navigation-api 2026-05-21, websockets-rfc6455 2026-05-21, streaming-pipeline 2026-05-21
