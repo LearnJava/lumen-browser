@@ -1,10 +1,10 @@
-In progress: —
-Next step: —
+In progress: Streaming pipeline: chunked parse + render  branch: streaming-pipeline
+Next step: commit, then update lumen-plan.md + subsystems/shell.md  shell/src/main.rs
 
 Next (Wave 1):
 Mixed-content enforcement in HttpClient       network/src/lib.rs           ~1h  DONE
 SOP enforcement in shell                      shell/src/main.rs            ~1h  DONE
-Streaming pipeline: chunked parse + render    shell/src/main.rs            ~2h
+Streaming pipeline: chunked parse + render    shell/src/main.rs            ~2h  🟡
 
 Next (Wave 2):
 WebSockets (RFC 6455): upgrade + frames       network/                     ~3h

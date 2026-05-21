@@ -207,7 +207,7 @@
 | 3B.2 | ✅ rendering steps ordering | `shell/src/main.rs` | — |
 | 3B.3 | ✅ real observers | `shell/src/main.rs` | — |
 | 4A | ✅ **`[P3]` JS↔DOM bindings** (после 1B) | Любая JS-динамика | Phase 0: getElementById/querySelector/textContent/setAttribute/createElement/appendChild |
-| 4B | ⬜ **`[P1+P3]` Streaming pipeline shell-side** | Первый кадр без задержки | P3 пока blocking |
+| 4B | 🟡 **`[P1+P3]` Streaming pipeline shell-side** | Первый кадр без задержки | EventLoop\<LoadEvent\>: окно сразу, HTML chunks через EventLoopProxy, IncrementalTreeBuilder, промежуточные кадры каждые 150 мс |
 | 4B.1 | ✅ preload scan call before DOM parse | `shell/src/main.rs:688` | — |
 | 4B.2 | ✅ preload hint dispatcher | `shell/src/main.rs` | — |
 | 4B.3 | ✅ preload URL resolution | `shell/src/main.rs` | — |
