@@ -39,7 +39,8 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 22-transform.html | CSS transform | 30 | transform: translate · translateX/Y · rotate · scale · scaleX/Y · skewX · skewY · matrix() · combined · transform-origin (4 variants) |
 | 23-pseudo-elements.html | ::before / ::after block generation | 4 | ::before display:block · ::after display:block · both on one element · ::before с другой шириной |
 | 24-vertical-align.html | vertical-align | 6 | inline-block: top/middle/bottom · inline span: super/middle/sub (frag y-offset + bg) |
-| **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~58 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (Phase 0: квадрат в Lumen, скруглён в Edge) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) |
+| 25-table-layout.html | Table layout | 19 | display:table — горизонтальный layout ячеек · auto-width distribution · явные ширины · несколько строк (вертикальное стакование) |
+| **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~66 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (Phase 0: квадрат в Lumen, скруглён в Edge) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) |
 
 ---
 
@@ -89,6 +90,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | object-fit (5 режимов) | 19 | — |
 | object-position | 19 | — |
 | legacy bgcolor / hashless hex | 20 | — |
+| display: table (table layout) | 25 | colspan/rowspan не реализованы · border-spacing не реализован |
 | transform: translate(x,y) / translateX / translateY | 22 | — |
 | transform: rotate(deg) | 22 | — |
 | transform: scale(x,y) / scaleX / scaleY | 22 | — |
