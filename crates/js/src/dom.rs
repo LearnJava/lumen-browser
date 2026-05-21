@@ -644,6 +644,28 @@ var history = {
     },
 };
 
+function EventSource(url) {
+    this.url = String(url || '');
+    this.readyState = 0;
+    this.onopen = null;
+    this.onmessage = null;
+    this.onerror = null;
+    this._listeners = {};
+}
+EventSource.prototype.addEventListener = function(type, fn) {
+    if (!this._listeners[type]) this._listeners[type] = [];
+    this._listeners[type].push(fn);
+};
+EventSource.prototype.removeEventListener = function(type, fn) {
+    if (!this._listeners[type]) return;
+    var idx = this._listeners[type].indexOf(fn);
+    if (idx >= 0) this._listeners[type].splice(idx, 1);
+};
+EventSource.prototype.close = function() { this.readyState = 2; };
+EventSource.CONNECTING = 0;
+EventSource.OPEN = 1;
+EventSource.CLOSED = 2;
+
 var window = {
     history: history,
     onpopstate: null,
@@ -657,6 +679,7 @@ var window = {
     clearTimeout: clearTimeout,
     clearInterval: clearInterval,
     requestAnimationFrame: requestAnimationFrame,
+    EventSource: EventSource,
     document: document,
     console: console,
     addEventListener: function(type, fn) {
