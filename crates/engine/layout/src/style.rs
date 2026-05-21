@@ -3542,6 +3542,10 @@ pub fn compute_style(
     // HTML5 §15.3.3: `align` на блочных элементах → text-align.
     apply_align_presentational_hint(doc, node, &mut style);
 
+    // CSS Quirks Mode §4.1 + HTML5 §14.3.9: `width`/`height` attr на
+    // `<td>`/`<th>`/`<table>`. В quirks-mode width ячейки → min-width.
+    apply_table_cell_width_hint(doc, node, &mut style);
+
     // CSS Cascade L4 §6.4.3 — inline style: парсим HTML-атрибут `style=""`
     // и кладём его декларации в отдельный буфер. Они подключаются к каскаду
     // через дополнительный sort-bit `is_inline` (ниже): внутри одного origin
@@ -5574,6 +5578,58 @@ fn apply_align_presentational_hint(doc: &Document, node: NodeId, style: &mut Com
             _ => return,
         };
         style.text_align = ta;
+    }
+}
+
+/// CSS Quirks Mode §4.1 + HTML5 §14.3.9: `width`/`height` presentational
+/// hints для ячеек таблицы (`<td>`, `<th>`) и самого `<table>`.
+///
+/// `<table width="N">` → `width: Npx` (оба режима).
+/// `<td width="N">` / `<th width="N">`:
+///   - Standards mode → `width: Npx`
+///   - Quirks mode → `min-width: Npx` (CSS Quirks §4.1: ячейка не
+///     может быть *уже* указанного, но расширяться разрешено — table
+///     layout не перегрузит ячейку по ширине)
+///
+/// `<td height="N">` / `<th height="N">` / `<table height="N">` → `height: Npx`
+/// без quirks-вариации (HTML5 §14.3.9.1).
+///
+/// Процентные значения (`"50%"`) поддерживаются через `Length::Percent`.
+fn apply_table_cell_width_hint(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    let tag = name.local.as_str();
+    let is_cell = matches!(tag, "td" | "th");
+    let is_table = tag == "table";
+    if !is_cell && !is_table {
+        return;
+    }
+    let node_ref = doc.get(node);
+    if let Some(len) = node_ref.get_attr("width").and_then(parse_html_length_attr) {
+        if is_cell && doc.mode() == DocumentMode::Quirks {
+            // CSS Quirks §4.1: width attr на ячейке → min-width, не width.
+            style.min_width = Some(len);
+        } else {
+            style.width = Some(len);
+        }
+    }
+    if let Some(len) = node_ref.get_attr("height").and_then(parse_html_length_attr) {
+        style.height = Some(len);
+    }
+}
+
+/// Парсит HTML dimension-атрибут как `Length`.
+///
+/// `"200"` → `Length::Px(200.0)`, `"50%"` → `Length::Percent(50.0)`.
+/// Мусор после цифр игнорируется (HTML5 §2.4.4.5).
+fn parse_html_length_attr(s: &str) -> Option<Length> {
+    let s = s.trim();
+    if let Some(pct) = s.strip_suffix('%') {
+        let digits: String = pct.chars().take_while(|c| c.is_ascii_digit()).collect();
+        digits.parse::<u32>().ok().map(|n| Length::Percent(n as f32))
+    } else {
+        parse_html_dimension(s).map(Length::Px)
     }
 }
 
@@ -16492,5 +16548,87 @@ mod tests {
         assert_eq!(span_style.font_variation_settings, vec![
             FontVariationSetting { tag: *b"wght", value: 400.0 }
         ]);
+    }
+
+    // ── table cell width quirk (CSS Quirks Mode §4.1) ─────────────────────
+
+    #[test]
+    fn td_width_attr_quirks_mode_sets_min_width() {
+        // Без DOCTYPE → quirks mode; CSS Quirks §4.1: width attr → min-width.
+        let s = cascade_at("<table><tr><td width=\"200\">", "", &[0, 0, 0]);
+        assert_eq!(s.width, None);
+        assert_eq!(s.min_width, Some(Length::Px(200.0)));
+    }
+
+    #[test]
+    fn td_width_attr_standards_mode_sets_width() {
+        // <!DOCTYPE html> → standards mode; width attr → CSS width.
+        // DOCTYPE добавляется как Document.children[0], поэтому <table> — [1].
+        let s = cascade_at("<!DOCTYPE html><table><tr><td width=\"200\">", "", &[1, 0, 0]);
+        assert_eq!(s.width, Some(Length::Px(200.0)));
+        assert_eq!(s.min_width, None);
+    }
+
+    #[test]
+    fn th_width_attr_quirks_mode_sets_min_width() {
+        // <th> аналогично <td> — тот же quirk.
+        let s = cascade_at("<table><tr><th width=\"120\">", "", &[0, 0, 0]);
+        assert_eq!(s.width, None);
+        assert_eq!(s.min_width, Some(Length::Px(120.0)));
+    }
+
+    #[test]
+    fn td_width_attr_percent_quirks_mode_sets_min_width_percent() {
+        // Процентное значение тоже обрабатывается.
+        let s = cascade_at("<table><tr><td width=\"50%\">", "", &[0, 0, 0]);
+        assert_eq!(s.width, None);
+        assert_eq!(s.min_width, Some(Length::Percent(50.0)));
+    }
+
+    #[test]
+    fn table_width_attr_sets_width_in_quirks_mode() {
+        // <table width="..."> → CSS width (quirk только для td/th).
+        let s = cascade_at("<table width=\"800\"><tr><td>", "", &[0]);
+        assert_eq!(s.width, Some(Length::Px(800.0)));
+    }
+
+    #[test]
+    fn table_width_attr_sets_width_in_standards_mode() {
+        // DOCTYPE → standards mode; <table> теперь Document.children[1].
+        let s = cascade_at("<!DOCTYPE html><table width=\"800\"><tr><td>", "", &[1]);
+        assert_eq!(s.width, Some(Length::Px(800.0)));
+    }
+
+    #[test]
+    fn td_height_attr_sets_height_quirks_mode() {
+        // height attr → CSS height без quirks-варианта.
+        let s = cascade_at("<table><tr><td height=\"50\">", "", &[0, 0, 0]);
+        assert_eq!(s.height, Some(Length::Px(50.0)));
+    }
+
+    #[test]
+    fn td_height_attr_sets_height_standards_mode() {
+        let s = cascade_at("<!DOCTYPE html><table><tr><td height=\"50\">", "", &[1, 0, 0]);
+        assert_eq!(s.height, Some(Length::Px(50.0)));
+    }
+
+    #[test]
+    fn td_width_author_css_overrides_quirks_hint() {
+        // Author CSS width перекрывает min-width presentational hint.
+        let s = cascade_at(
+            "<table><tr><td width=\"200\">",
+            "td { width: 300px; }",
+            &[0, 0, 0],
+        );
+        // Author CSS устанавливает width; hint установил min_width.
+        assert_eq!(s.width, Some(Length::Px(300.0)));
+        assert_eq!(s.min_width, Some(Length::Px(200.0)));
+    }
+
+    #[test]
+    fn non_table_elements_not_affected_by_width_hint() {
+        // div с width атрибутом — не presentational hint (div — не td/th/table).
+        let s = cascade_at("<div width=\"200\">", "", &[0]);
+        assert_eq!(s.width, None);
     }
 }
