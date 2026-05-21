@@ -5,16 +5,16 @@
   <title>Lumen — 10 min-max-height</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #1a202c; width: 1024px; height: 720px; padding: 24px; }
+    body { background: #ff00ff;  width: 1024px; height: 720px;  }
     /* Each pair: ref column (gray) + constrained column (green), side by side */
     .pair { display: inline-block; margin: 0 40px 24px 0; vertical-align: bottom; }
     .ref  { display: inline-block; width: 60px; background: #718096; margin-right: 8px; vertical-align: bottom; }
     .test { display: inline-block; width: 60px; background: #38a169; vertical-align: bottom; }
-      .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
   </style>
 </head>
 <body>
-  <div class="__m"></div>
+  <div class="__f">
   <!-- height:40px min-height:100px → 100px, matches ref 100px -->
   <div class="pair">
     <div class="ref"  style="height: 100px;"></div>
@@ -49,6 +49,7 @@
   <div class="pair">
     <div class="ref"  style="height: 140px;"></div>
     <div class="test" style="height: 200px; max-height: 140px;"></div>
+  </div>
   </div>
 </body>
 </html>

@@ -5,15 +5,15 @@
   <title>Lumen — 09 min-max-width</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #1a202c; width: 1024px; height: 720px; padding: 24px; }
+    body { background: #ff00ff;  width: 1024px; height: 720px;  }
     /* ref = gray baseline; test = green constrained bar */
     .ref  { height: 28px; background: #718096; margin-bottom: 4px; }
     .test { height: 28px; background: #38a169; margin-bottom: 20px; }
-      .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
   </style>
 </head>
 <body>
-  <div class="__m"></div>
+  <div class="__f">
   <!-- ref 200px vs width:80px min-width:200px → should match ref -->
   <div class="ref"  style="width: 200px;"></div>
   <div class="test" style="width: 80px; min-width: 200px;"></div>
@@ -37,5 +37,6 @@
   <!-- ref 200px vs clamp(100px, 250px, 200px) → val=250 capped at max=200 → 200 -->
   <div class="ref"  style="width: 200px;"></div>
   <div class="test" style="width: clamp(100px, 250px, 200px);"></div>
+  </div>
 </body>
 </html>

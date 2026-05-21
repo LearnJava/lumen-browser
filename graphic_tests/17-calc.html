@@ -5,16 +5,16 @@
   <title>Lumen — 16 calc</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #1a202c; width: 1024px; height: 720px; padding: 24px; }
+    body { background: #ff00ff;  width: 1024px; height: 720px;  }
     /* ref = gray baseline, test = green computed bar */
     .ref  { height: 28px; background: #718096; margin-bottom: 4px; }
     .test { height: 28px; background: #38a169; margin-bottom: 4px; }
     .sep  { height: 24px; }
-      .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
   </style>
 </head>
 <body>
-  <div class="__m"></div>
+  <div class="__f">
   <!-- group 1: all should equal 200px -->
   <div class="ref"  style="width: 200px;"></div>
   <div class="test" style="width: calc(100px + 100px);"></div>
@@ -52,5 +52,6 @@
   <div class="test" style="width: min(calc(50px + 100px), calc(40px * 5));"></div>
   <!-- clamp(100px, calc(30px*5), 200px) = clamp(100,150,200) = 150 -->
   <div class="test" style="width: clamp(100px, calc(30px * 5), 200px);"></div>
+  </div>
 </body>
 </html>

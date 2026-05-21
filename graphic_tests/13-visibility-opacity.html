@@ -5,15 +5,15 @@
   <title>Lumen — 12 visibility + opacity</title>
   <style>
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { background: #ffffff; width: 1024px; height: 720px; padding: 24px; }
+    body { background: #ff00ff;  width: 1024px; height: 720px;  }
     .box  { display: inline-block; width: 120px; height: 80px; background: #3182ce; margin-right: 16px; }
     .sep  { height: 40px; }
     .opbox { display: inline-block; width: 140px; height: 90px; background: #3182ce; margin-right: 16px; }
-      .__m { width: 1024px; height: 1px; background: #ff00ff; }
+    .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
   </style>
 </head>
 <body>
-  <div class="__m"></div>
+  <div class="__f">
   <!-- visibility: visible vs hidden
        visible boxes = solid blue; hidden = invisible but takes space (gap remains) -->
   <div class="box" style="visibility: visible;"></div>
@@ -46,6 +46,7 @@
   <div style="display: inline-block; opacity: 1.00;">
     <div style="width: 100px; height: 60px; background: #e53e3e;"></div>
     <div style="width: 100px; height: 60px; background: #38a169;"></div>
+  </div>
   </div>
 </body>
 </html>
