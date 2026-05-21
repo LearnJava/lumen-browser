@@ -1121,23 +1121,31 @@ fn lay_out(
             } else {
                 None
             };
-            let mut child_y = content_y;
-            for (i, child) in b.children.iter_mut().enumerate() {
-                if matches!(child.style.position, Position::Absolute | Position::Fixed) {
-                    // Записываем статичную позицию и пропускаем в normal flow.
-                    abs_deferred.push((i, content_x, child_y));
-                    continue;
+            let content_height = if (s.column_count.is_some() || s.column_width.is_some())
+                && !b.children.is_empty()
+            {
+                lay_out_multicol_children(
+                    &mut b.children,
+                    content_x, content_y, content_width,
+                    &s, em, measurer, viewport, children_pcb,
+                )
+            } else {
+                let mut child_y = content_y;
+                for (i, child) in b.children.iter_mut().enumerate() {
+                    if matches!(child.style.position, Position::Absolute | Position::Fixed) {
+                        abs_deferred.push((i, content_x, child_y));
+                        continue;
+                    }
+                    lay_out(child, content_x, child_y, content_width, children_available_height, measurer, viewport, children_pcb);
+                    if matches!(child.kind, BoxKind::Skip) {
+                        continue;
+                    }
+                    let child_mb = child.style.margin_bottom.resolve_or_zero(
+                        child.style.font_size, content_width, viewport);
+                    child_y = child.rect.y + child.rect.height + child_mb;
                 }
-                lay_out(child, content_x, child_y, content_width, children_available_height, measurer, viewport, children_pcb);
-                if matches!(child.kind, BoxKind::Skip) {
-                    continue;
-                }
-                // child margins resolved against parent content_width (= cb_width for child).
-                let child_mb = child.style.margin_bottom.resolve_or_zero(
-                    child.style.font_size, content_width, viewport);
-                child_y = child.rect.y + child.rect.height + child_mb;
-            }
-            let content_height = (child_y - content_y).max(0.0);
+                (child_y - content_y).max(0.0)
+            };
             // Явная высота (CSS height: Npx) перекрывает auto-высоту по содержимому.
             // box-sizing работает симметрично width: content-box прибавляет
             // padding+border, border-box оставляет h как итоговую высоту.
@@ -1425,6 +1433,120 @@ fn lay_out_table_row(
     }
 
     row_h
+}
+
+/// CSS Multi-column Layout L1 — lays out `children` into N columns.
+/// Returns content height (max column height, without padding/border).
+#[allow(clippy::too_many_arguments)]
+fn lay_out_multicol_children(
+    children: &mut [LayoutBox],
+    content_x: f32,
+    content_y: f32,
+    content_width: f32,
+    s: &ComputedStyle,
+    em: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+) -> f32 {
+    let cb = content_width;
+    let col_gap = s.column_gap.resolve_or_zero(em, cb, viewport).max(0.0);
+
+    // Compute column count from column-count / column-width.
+    let n_cols: u32 = match (s.column_count, &s.column_width) {
+        (Some(n), Some(w_len)) => {
+            if let Some(w) = w_len.resolve(em, Some(cb), viewport) {
+                let n_from_w = ((content_width + col_gap) / (w + col_gap)).floor() as u32;
+                n.min(n_from_w).max(1)
+            } else {
+                n.max(1)
+            }
+        }
+        (Some(n), None) => n.max(1),
+        (None, Some(w_len)) => {
+            if let Some(w) = w_len.resolve(em, Some(cb), viewport)
+                && w > 0.0
+            {
+                ((content_width + col_gap) / (w + col_gap)).floor() as u32
+            } else {
+                1
+            }
+        }
+        (None, None) => 1,
+    }.max(1);
+
+    let col_w = ((content_width - col_gap * (n_cols - 1) as f32) / n_cols as f32).max(0.0);
+
+    // Collect flow (non-abs) child indices.
+    let flow_idxs: Vec<usize> = children
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| !matches!(c.style.position, Position::Absolute | Position::Fixed))
+        .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip))
+        .map(|(i, _)| i)
+        .collect();
+
+    if flow_idxs.is_empty() {
+        return 0.0;
+    }
+
+    // First pass at (0, 0) to measure intrinsic heights.
+    for &i in &flow_idxs {
+        lay_out(&mut children[i], 0.0, 0.0, col_w, None, measurer, viewport, pcb);
+    }
+
+    // Outer height of each child = margin_top + rect.height + margin_bottom.
+    let outer_h: Vec<f32> = children
+        .iter()
+        .enumerate()
+        .map(|(i, c)| {
+            if flow_idxs.contains(&i) {
+                let mt = c.style.margin_top.resolve_or_zero(c.style.font_size, col_w, viewport);
+                let mb = c.style.margin_bottom.resolve_or_zero(c.style.font_size, col_w, viewport);
+                mt + c.rect.height + mb
+            } else {
+                0.0
+            }
+        })
+        .collect();
+
+    // Target column height for balanced distribution.
+    let total_h: f32 = flow_idxs.iter().map(|&i| outer_h[i]).sum();
+    let target_h = (total_h / n_cols as f32).ceil().max(1.0);
+    // Count-based per-column cap for balanced distribution when heights are equal/zero.
+    let per_col_cap = (flow_idxs.len() + n_cols as usize - 1) / n_cols as usize;
+
+    // Greedy column assignment (height + count guard).
+    let mut child_col = vec![0usize; children.len()];
+    let mut col_fill = vec![0.0f32; n_cols as usize];
+    let mut col_count = vec![0usize; n_cols as usize];
+    let mut cur_col = 0usize;
+    for &i in &flow_idxs {
+        let height_overflow = col_fill[cur_col] + outer_h[i] > target_h && outer_h[i] > 0.0;
+        let count_overflow = col_count[cur_col] >= per_col_cap;
+        if cur_col + 1 < n_cols as usize && (height_overflow || count_overflow) {
+            cur_col += 1;
+        }
+        child_col[i] = cur_col;
+        col_fill[cur_col] += outer_h[i];
+        col_count[cur_col] += 1;
+    }
+
+    // Second pass: final positioning.
+    let mut col_y = vec![content_y; n_cols as usize];
+    for &i in &flow_idxs {
+        let col = child_col[i];
+        let col_x = content_x + col as f32 * (col_w + col_gap);
+        lay_out(&mut children[i], col_x, col_y[col], col_w, None, measurer, viewport, pcb);
+        let mb = children[i]
+            .style
+            .margin_bottom
+            .resolve_or_zero(children[i].style.font_size, col_w, viewport);
+        col_y[col] = children[i].rect.y + children[i].rect.height + mb;
+    }
+
+    // Content height = tallest column.
+    col_y.iter().map(|&cy| cy - content_y).fold(0.0f32, f32::max)
 }
 
 /// Positions absolutely/fixed-positioned deferred children of `parent`.

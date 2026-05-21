@@ -117,13 +117,13 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 ### CSS Multi-column Layout Level 1
 | Property | Status |
 |---|---|
-| `column-count` | 🟡 parsed |
-| `column-width` | 🟡 parsed |
-| `columns` | 🟡 parsed |
-| `column-gap` | ✅ for flex; 🟡 multi-column not implemented |
-| `column-rule-*` | 🟡 parsed |
-| `column-span` | 🟡 parsed |
-| `column-fill` | 🟡 parsed |
+| `column-count` | ✅ | N equal columns; used with column-width as max cap |
+| `column-width` | ✅ | computes N = floor((avail + gap) / (width + gap)) |
+| `columns` | ✅ | shorthand resolved |
+| `column-gap` | ✅ | spacing between columns (was ✅ for flex; now also multi-col) |
+| `column-rule-*` | 🟡 parsed; column rule rendering — deferred |
+| `column-span` | 🟡 parsed; spanning not implemented |
+| `column-fill` | 🟡 parsed; balanced layout is default |
 
 ### CSS Flexible Box Layout Level 1 ← **primary**
 | Property | Status | Notes |
@@ -443,7 +443,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | CSS Grid L1/L2 | — | parse+store (grid/inline-grid) | layout algorithm |
 | CSS Logical Properties L1 | ✅ parse+store (LTR) | — | full RTL/vertical |
 | CSS Nesting L1 | ✅ | — | — |
-| CSS Multi-column L1 | — | parse-only | layout |
+| CSS Multi-column L1 | ✅ count/width/gap | column-rule/span | — |
 | CSS Scroll Snap L1 | — | parse-only | — |
 | CSS Masking L1 | — | parse-only | — |
 | CSS Lists L3 | — | parse-only | rendering |
