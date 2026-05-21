@@ -1,9 +1,9 @@
-In progress: SOP enforcement in shell  branch: sop-enforcement
-Next step: ResourceBase::build_subresource_client  shell/src/main.rs:559
+In progress: —
+Next step: —
 
 Next (Wave 1):
 Mixed-content enforcement in HttpClient       network/src/lib.rs           ~1h  DONE
-SOP enforcement in shell                      shell/src/main.rs            ~1h
+SOP enforcement in shell                      shell/src/main.rs            ~1h  DONE
 Streaming pipeline: chunked parse + render    shell/src/main.rs            ~2h
 
 Next (Wave 2):
@@ -18,4 +18,4 @@ Forms UI: native pickers, validation tooltip                 ~2h  depends on P1 
 IME composition events                                       ~2h
 bfcache: DOM+JS snapshot                                     ~3h
 
-Recent: session-export 2026-05-21, devtools 2026-05-21, h2-flow 2026-05-21, h2-pool 2026-05-21, h2-conn 2026-05-21, hpack 2026-05-21
+Recent: sop-enforcement 2026-05-21, session-export 2026-05-21, devtools 2026-05-21, h2-flow 2026-05-21, h2-pool 2026-05-21, h2-conn 2026-05-21
