@@ -1,6 +1,5 @@
-In progress: —
-
-Next step: —
+In progress: quirks-table-cell-width  branch: quirks-table-cell-width
+Next step: commit + merge to main
 
 Next: (P1 Phase 1)
 

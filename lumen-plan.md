@@ -349,7 +349,7 @@
 
 - **`ie7-line-height-quirk`** (CSS Quirks Mode §3.2): `apply_quirks_line_height` в `compute_style` — в quirks-mode replaced-элементы (`img`/`video`/`canvas`/`embed`/`object`/`iframe`/`input`/`textarea`/`select`/`audio`) получают UA-правило `line-height: 1`, блокирующее наследование «normal» и зазор под `<img>` (как IE7). Author CSS поверх — выигрывает. 5 unit-тестов + обновлён snapshot `img_replaced_element`.
 
-**Осталось:** table cell width quirk (§4.1).
+- **`table-cell-width-quirk`** (CSS Quirks Mode §4.1 + HTML5 §14.3.9): `apply_table_cell_width_hint` + `parse_html_length_attr` — `<td>/<th> width="N"` в quirks-mode → `min-width: Npx` (не width; ячейка не сужается ниже указанного, но может расшириться); в standards-mode → `width: Npx`. `<table> width="N"` → `width: Npx` в обоих режимах. `height` attr на td/th/table → `height: Npx` без quirks-варианта. Поддержка `%`-значений (`Length::Percent`). 10 unit-тестов.
 
 #### 2A — Stacking contexts impl
 
