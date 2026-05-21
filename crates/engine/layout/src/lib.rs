@@ -10045,4 +10045,41 @@ mod tests {
             frag.y_offset
         );
     }
+
+    // ── Multi-column layout ──────────────────────────────────────────────────
+
+    #[test]
+    fn multicol_column_count_divides_width() {
+        // column-count: 3 + column-gap: 10px → each column = (300 - 20) / 3 = 93.33px.
+        let root = lay_measured(
+            "<div id='c'><div></div><div></div><div></div></div>",
+            "#c { width: 300px; column-count: 3; column-gap: 10px; }",
+            800.0,
+        );
+        let container = first_element_child(&root);
+        assert_eq!(container.children.len(), 3);
+        let col_w = container.children[0].rect.width;
+        assert!((col_w - 93.33).abs() < 0.1, "col_w={col_w}");
+        // All three children should be in different columns (x differs).
+        let x0 = container.children[0].rect.x;
+        let x1 = container.children[1].rect.x;
+        let x2 = container.children[2].rect.x;
+        assert!(x1 > x0, "child1.x={x1} should be right of child0.x={x0}");
+        assert!(x2 > x1, "child2.x={x2} should be right of child1.x={x1}");
+    }
+
+    #[test]
+    fn multicol_no_repeat_width_when_no_column_props() {
+        // Without column-count / column-width, block flow is unchanged.
+        let root = lay_measured(
+            "<div id='c'><div id='a'></div><div id='b'></div></div>",
+            "#c { width: 300px; } #a { height: 20px; } #b { height: 20px; }",
+            800.0,
+        );
+        let container = first_element_child(&root);
+        let ch0 = &container.children[0];
+        let ch1 = &container.children[1];
+        assert_eq!(ch0.rect.x, ch1.rect.x, "children should share same x in normal flow");
+        assert!(ch1.rect.y > ch0.rect.y, "b should be below a");
+    }
 }
