@@ -505,9 +505,186 @@ fn remove_attribute(doc: &mut Document, id: NodeId, name: &str) {
 const WEB_API_SHIM: &str = "
 function _lumen_u2n(v) { return v !== undefined ? v : null; }
 
+// ── Event / CustomEvent constructors ─────────────────────────────────────────
+
+function Event(type, init) {
+    this.type             = String(type || '');
+    this.bubbles          = !!(init && init.bubbles);
+    this.cancelable       = !!(init && init.cancelable);
+    this.defaultPrevented = false;
+    this.target           = null;
+    this.currentTarget    = null;
+    this.timeStamp        = Date.now ? Date.now() : 0;
+    this._stopImmediate   = false;
+}
+Event.prototype.preventDefault = function() {
+    if (this.cancelable) this.defaultPrevented = true;
+};
+Event.prototype.stopPropagation = function() {};
+Event.prototype.stopImmediatePropagation = function() { this._stopImmediate = true; };
+
+function CustomEvent(type, init) {
+    Event.call(this, type, init);
+    this.detail = (init && init.detail !== undefined) ? init.detail : null;
+}
+CustomEvent.prototype = Object.create(Event.prototype);
+CustomEvent.prototype.constructor = CustomEvent;
+
+// ── Per-element event listener store ─────────────────────────────────────────
+// Key: String(nid) + ':' + type  →  Array of handler functions.
+
+var _lumen_listeners = {};
+
+function _lumen_add_listener(nid, type, fn) {
+    if (typeof fn !== 'function') return;
+    var key = String(nid) + ':' + String(type);
+    if (!_lumen_listeners[key]) _lumen_listeners[key] = [];
+    _lumen_listeners[key].push(fn);
+}
+function _lumen_rm_listener(nid, type, fn) {
+    var key = String(nid) + ':' + String(type);
+    var arr = _lumen_listeners[key];
+    if (!arr) return;
+    var idx = arr.indexOf(fn);
+    if (idx >= 0) arr.splice(idx, 1);
+}
+function _lumen_dispatch(nid, event) {
+    var key = String(nid) + ':' + event.type;
+    var arr = _lumen_listeners[key];
+    if (!arr || arr.length === 0) return !event.defaultPrevented;
+    var copy = arr.slice(); // snapshot in case a handler mutates the list
+    for (var i = 0; i < copy.length; i++) {
+        try { copy[i].call(null, event); } catch(e) {}
+        if (event._stopImmediate) break;
+    }
+    return !event.defaultPrevented;
+}
+
+// ── DOMTokenList (classList) ──────────────────────────────────────────────────
+
+function _lumen_make_class_list(nid) {
+    function getArr() {
+        var c = _lumen_get_attr(nid, 'class');
+        return (c && c.length > 0)
+            ? c.split(/\\s+/).filter(function(t) { return t.length > 0; })
+            : [];
+    }
+    function setArr(arr) { _lumen_set_attr(nid, 'class', arr.join(' ')); }
+    var cl = {
+        contains: function(cls) { return getArr().indexOf(String(cls)) >= 0; },
+        add: function() {
+            var arr = getArr();
+            for (var i = 0; i < arguments.length; i++) {
+                var cls = String(arguments[i]);
+                if (arr.indexOf(cls) < 0) arr.push(cls);
+            }
+            setArr(arr);
+        },
+        remove: function() {
+            var arr = getArr();
+            for (var i = 0; i < arguments.length; i++) {
+                var cls = String(arguments[i]);
+                var idx = arr.indexOf(cls);
+                if (idx >= 0) arr.splice(idx, 1);
+            }
+            setArr(arr);
+        },
+        toggle: function(cls, force) {
+            cls = String(cls);
+            var arr = getArr();
+            var idx = arr.indexOf(cls);
+            if (force !== undefined) {
+                if (force && idx < 0)   { arr.push(cls); setArr(arr); return true; }
+                if (!force && idx >= 0) { arr.splice(idx, 1); setArr(arr); return false; }
+                return !!force;
+            }
+            if (idx >= 0) { arr.splice(idx, 1); setArr(arr); return false; }
+            arr.push(cls); setArr(arr); return true;
+        },
+        replace: function(oldCls, newCls) {
+            var arr = getArr();
+            var idx = arr.indexOf(String(oldCls));
+            if (idx < 0) return false;
+            arr[idx] = String(newCls); setArr(arr); return true;
+        },
+        item: function(i) { var arr = getArr(); return arr[i] !== undefined ? arr[i] : null; },
+        forEach: function(fn, thisArg) { getArr().forEach(fn, thisArg); },
+        toString: function() { return getArr().join(' '); },
+    };
+    Object.defineProperty(cl, 'length', {
+        get: function() { return getArr().length; },
+        enumerable: true, configurable: true,
+    });
+    return cl;
+}
+
+// ── CSSStyleDeclaration (inline style) ───────────────────────────────────────
+
+function _lumen_parse_style(s) {
+    var obj = {};
+    if (!s) return obj;
+    s.split(';').forEach(function(decl) {
+        var idx = decl.indexOf(':');
+        if (idx < 0) return;
+        var prop = decl.slice(0, idx).trim();
+        var val  = decl.slice(idx + 1).trim();
+        if (prop) obj[prop] = val;
+    });
+    return obj;
+}
+function _lumen_serialize_style(obj) {
+    return Object.keys(obj).map(function(k) { return k + ': ' + obj[k]; }).join('; ');
+}
+function _lumen_camel_to_kebab(prop) {
+    return prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
+}
+
+function _lumen_make_style(nid) {
+    function getParsed() {
+        var s = _lumen_get_attr(nid, 'style');
+        return _lumen_parse_style(s !== undefined ? s : '');
+    }
+    function setParsed(obj) { _lumen_set_attr(nid, 'style', _lumen_serialize_style(obj)); }
+    var handler = {
+        getPropertyValue: function(prop) {
+            return getParsed()[_lumen_camel_to_kebab(String(prop))] || '';
+        },
+        setProperty: function(prop, val) {
+            var obj = getParsed();
+            obj[_lumen_camel_to_kebab(String(prop))] = String(val);
+            setParsed(obj);
+        },
+        removeProperty: function(prop) {
+            var obj = getParsed();
+            var key = _lumen_camel_to_kebab(String(prop));
+            var old = obj[key] || '';
+            delete obj[key]; setParsed(obj); return old;
+        },
+    };
+    Object.defineProperty(handler, 'cssText', {
+        get: function() { var s = _lumen_get_attr(nid, 'style'); return s !== undefined ? s : ''; },
+        set: function(v) { _lumen_set_attr(nid, 'style', String(v)); },
+        enumerable: true, configurable: true,
+    });
+    return new Proxy(handler, {
+        get: function(target, prop) {
+            if (prop in target) return target[prop];
+            return target.getPropertyValue(_lumen_camel_to_kebab(String(prop)));
+        },
+        set: function(target, prop, value) {
+            if (prop in target) { target[prop] = value; return true; }
+            target.setProperty(_lumen_camel_to_kebab(String(prop)), value);
+            return true;
+        },
+    });
+}
+
+// ── Element factory ───────────────────────────────────────────────────────────
+
 function _lumen_make_element(nid) {
     if (nid === null || nid === undefined) return null;
-    var _style = { setProperty: function() {} };
+    var _classList = _lumen_make_class_list(nid);
+    var _style     = _lumen_make_style(nid);
     var _obj = {
         __nid__: nid,
         get tagName()        { return _lumen_get_tag_name(nid); },
@@ -517,11 +694,12 @@ function _lumen_make_element(nid) {
         set id(v)            { _lumen_set_attr(nid, 'id', String(v)); },
         get className()      { var v = _lumen_u2n(_lumen_get_attr(nid, 'class')); return v !== null ? v : ''; },
         set className(v)     { _lumen_set_attr(nid, 'class', String(v)); },
+        get classList()      { return _classList; },
+        get style()          { return _style; },
         get textContent()    { return _lumen_get_text_content(nid); },
         set textContent(v)   { _lumen_set_text_content(nid, String(v)); },
         get innerHTML()      { return _lumen_get_inner_html(nid); },
         set innerHTML(v)     { _lumen_set_inner_html(nid, String(v)); },
-        get style()          { return _style; },
         getAttribute:    function(n)    { return _lumen_u2n(_lumen_get_attr(nid, String(n))); },
         setAttribute:    function(n, v) { _lumen_set_attr(nid, String(n), String(v)); },
         removeAttribute: function(n)    { _lumen_remove_attr(nid, String(n)); },
@@ -534,10 +712,35 @@ function _lumen_make_element(nid) {
             if (c && c.__nid__ !== undefined) _lumen_remove_child(nid, c.__nid__);
             return c;
         },
-        querySelector:    function() { return null; },
-        querySelectorAll: function() { return []; },
-        addEventListener: function() {},
-        removeEventListener: function() {},
+        querySelector:    function(sel) {
+            var n = _lumen_u2n(_lumen_query_selector(String(sel)));
+            return n !== null ? _lumen_make_element(n) : null;
+        },
+        querySelectorAll: function(sel) {
+            return _lumen_query_selector_all(String(sel)).map(_lumen_make_element);
+        },
+        matches: function(sel) {
+            // Phase 0: query the DOM and check if the result matches this nid.
+            var n = _lumen_u2n(_lumen_query_selector(String(sel)));
+            return n !== null && n === nid;
+        },
+        addEventListener:    function(type, fn) { _lumen_add_listener(nid, type, fn); },
+        removeEventListener: function(type, fn) { _lumen_rm_listener(nid, type, fn); },
+        dispatchEvent:       function(evt) {
+            if (!evt) return true;
+            evt.target = this; evt.currentTarget = this;
+            return _lumen_dispatch(nid, evt);
+        },
+        closest: function(sel) {
+            var cur = nid;
+            while (cur !== undefined && cur !== null) {
+                var n = _lumen_u2n(_lumen_query_selector(String(sel)));
+                if (n !== null && n === cur) return _lumen_make_element(cur);
+                var pid = _lumen_u2n(_lumen_get_parent(cur));
+                cur = pid !== null ? pid : null;
+            }
+            return null;
+        },
     };
     Object.defineProperty(_obj, 'parentElement', {
         get: function() {
@@ -1084,5 +1287,280 @@ mod tests {
         // handler fires once (on first back), then is removed
         let result = rt.eval("count").unwrap();
         assert_eq!(result, lumen_core::JsValue::Number(1.0));
+    }
+
+    // ── classList ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn classlist_contains_true() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('.highlight').classList.contains('highlight')")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn classlist_contains_false() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('.highlight').classList.contains('missing')")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn classlist_add_and_contains() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("document.getElementById('main').classList.add('active');").unwrap();
+        let result = rt
+            .eval("document.getElementById('main').classList.contains('active')")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn classlist_remove() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "document.querySelector('.highlight').classList.remove('highlight');",
+        )
+        .unwrap();
+        let result = rt
+            .eval("document.querySelector('.highlight') === null")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn classlist_toggle_adds_when_absent() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.getElementById('main').classList.toggle('open')")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+        let has = rt
+            .eval("document.getElementById('main').classList.contains('open')")
+            .unwrap();
+        assert_eq!(has, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn classlist_toggle_removes_when_present() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("document.querySelector('.highlight').classList.toggle('highlight');").unwrap();
+        let has = rt
+            .eval("document.querySelector('.highlight') === null")
+            .unwrap();
+        assert_eq!(has, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn classlist_replace() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "document.querySelector('.highlight').classList.replace('highlight', 'selected');",
+        )
+        .unwrap();
+        let old = rt
+            .eval("document.querySelector('.highlight') === null")
+            .unwrap();
+        assert_eq!(old, lumen_core::JsValue::Bool(true));
+        let new = rt
+            .eval("document.querySelector('.selected') !== null")
+            .unwrap();
+        assert_eq!(new, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn classlist_length() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('.highlight').classList.length")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn classlist_to_string() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("document.querySelector('.highlight').classList.toString()")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::String("highlight".into()));
+    }
+
+    // ── style / CSSStyleDeclaration ──────────────────────────────────────────
+
+    #[test]
+    fn style_set_and_get_property() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("document.getElementById('main').style.setProperty('color', 'red');")
+            .unwrap();
+        let result = rt
+            .eval("document.getElementById('main').style.getPropertyValue('color')")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::String("red".into()));
+    }
+
+    #[test]
+    fn style_assignment_via_property_name() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("document.getElementById('main').style.color = 'blue';")
+            .unwrap();
+        let result = rt
+            .eval("document.getElementById('main').style.color")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::String("blue".into()));
+    }
+
+    #[test]
+    fn style_camel_case_to_kebab() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("document.getElementById('main').style.backgroundColor = 'green';")
+            .unwrap();
+        let result = rt
+            .eval("document.getElementById('main').style.getPropertyValue('background-color')")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::String("green".into()));
+    }
+
+    #[test]
+    fn style_remove_property() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var el = document.getElementById('main'); \
+             el.style.color = 'red'; \
+             el.style.removeProperty('color');",
+        )
+        .unwrap();
+        let result = rt
+            .eval("document.getElementById('main').style.getPropertyValue('color')")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::String("".into()));
+    }
+
+    #[test]
+    fn style_css_text_roundtrip() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "document.getElementById('main').style.cssText = 'color: red; font-size: 12px';",
+        )
+        .unwrap();
+        let color = rt
+            .eval("document.getElementById('main').style.getPropertyValue('color')")
+            .unwrap();
+        assert_eq!(color, lumen_core::JsValue::String("red".into()));
+        let size = rt
+            .eval("document.getElementById('main').style.getPropertyValue('font-size')")
+            .unwrap();
+        assert_eq!(size, lumen_core::JsValue::String("12px".into()));
+    }
+
+    // ── addEventListener / dispatchEvent on elements ─────────────────────────
+
+    #[test]
+    fn element_add_event_listener_and_dispatch() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var received = null; \
+                 var el = document.getElementById('main'); \
+                 el.addEventListener('click', function(e) { received = e.type; }); \
+                 el.dispatchEvent(new Event('click')); \
+                 received",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::String("click".into()));
+    }
+
+    #[test]
+    fn element_remove_event_listener_stops_dispatch() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var count = 0; \
+                 var el = document.getElementById('main'); \
+                 function h() { count++; } \
+                 el.addEventListener('click', h); \
+                 el.dispatchEvent(new Event('click')); \
+                 el.removeEventListener('click', h); \
+                 el.dispatchEvent(new Event('click')); \
+                 count",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn custom_event_detail_accessible_in_handler() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var got = null; \
+                 var el = document.getElementById('main'); \
+                 el.addEventListener('myevent', function(e) { got = e.detail; }); \
+                 el.dispatchEvent(new CustomEvent('myevent', { detail: 42 })); \
+                 got",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(42.0));
+    }
+
+    #[test]
+    fn event_prevent_default() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var el = document.getElementById('main'); \
+                 el.addEventListener('submit', function(e) { e.preventDefault(); }); \
+                 var ev = new Event('submit', { cancelable: true }); \
+                 var ret = el.dispatchEvent(ev); \
+                 ret",
+            )
+            .unwrap();
+        // dispatchEvent returns false when defaultPrevented
+        assert_eq!(result, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn stop_immediate_propagation_stops_subsequent_listeners() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                "var calls = 0; \
+                 var el = document.getElementById('main'); \
+                 el.addEventListener('x', function(e) { calls++; e.stopImmediatePropagation(); }); \
+                 el.addEventListener('x', function(e) { calls++; }); \
+                 el.dispatchEvent(new Event('x')); \
+                 calls",
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(1.0));
+    }
+
+    // ── Event / CustomEvent constructors ─────────────────────────────────────
+
+    #[test]
+    fn event_constructor_sets_type() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval("new Event('load').type").unwrap();
+        assert_eq!(result, lumen_core::JsValue::String("load".into()));
+    }
+
+    #[test]
+    fn event_bubbles_cancelable_defaults_false() {
+        let rt = runtime_with_dom(make_doc());
+        let bubbles = rt.eval("new Event('x').bubbles").unwrap();
+        assert_eq!(bubbles, lumen_core::JsValue::Bool(false));
+        let cancelable = rt.eval("new Event('x').cancelable").unwrap();
+        assert_eq!(cancelable, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn custom_event_detail_null_by_default() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval("new CustomEvent('x').detail === null").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
 }
