@@ -9871,4 +9871,114 @@ mod tests {
         assert_eq!(p.children.len(), 1, "expected 1 child (InlineRun)");
         assert!(matches!(p.children[0].kind, BoxKind::InlineRun { .. }));
     }
+
+    fn first_inline_run_frag(b: &LayoutBox) -> &InlineFrag {
+        let run = b
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }))
+            .expect("expected InlineRun child");
+        match &run.kind {
+            BoxKind::InlineRun { lines, .. } => &lines[0][0],
+            _ => unreachable!(),
+        }
+    }
+
+    #[test]
+    fn vertical_align_baseline_y_offset_zero() {
+        // baseline (default) — y_offset == 0 для текста.
+        let root = lay_measured("<p>Hello</p>", "", 800.0);
+        let p = first_element_child(&root);
+        let frag = first_inline_run_frag(p);
+        assert!(
+            frag.y_offset.abs() < 0.001,
+            "baseline y_offset must be 0, got {}",
+            frag.y_offset
+        );
+    }
+
+    #[test]
+    fn vertical_align_middle_y_offset() {
+        // middle → (line_h - font_size) / 2.
+        let root = lay_measured(
+            "<p><span>Hi</span></p>",
+            "span { vertical-align: middle; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let frag = first_inline_run_frag(p);
+        let font_size = frag.style.font_size;
+        let line_h = font_size * frag.style.line_height;
+        let expected = ((line_h - font_size) / 2.0).max(0.0);
+        assert!(
+            (frag.y_offset - expected).abs() < 0.01,
+            "middle y_offset: expected {}, got {}",
+            expected,
+            frag.y_offset
+        );
+    }
+
+    #[test]
+    fn vertical_align_bottom_y_offset() {
+        // bottom → line_h - font_size.
+        let root = lay_measured(
+            "<p><span>Hi</span></p>",
+            "span { vertical-align: bottom; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let frag = first_inline_run_frag(p);
+        let font_size = frag.style.font_size;
+        let line_h = font_size * frag.style.line_height;
+        let expected = (line_h - font_size).max(0.0);
+        assert!(
+            (frag.y_offset - expected).abs() < 0.01,
+            "bottom y_offset: expected {}, got {}",
+            expected,
+            frag.y_offset
+        );
+    }
+
+    #[test]
+    fn vertical_align_length_shifts_up() {
+        // vertical-align: 8px → y_offset = -8.0 (позитивная длина CSS = вверх = отрицательный y).
+        let root = lay_measured(
+            "<p><span>Hi</span></p>",
+            "span { vertical-align: 8px; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let frag = first_inline_run_frag(p);
+        assert!(
+            (frag.y_offset - (-8.0_f32)).abs() < 0.01,
+            "length 8px y_offset: expected -8.0, got {}",
+            frag.y_offset
+        );
+    }
+
+    #[test]
+    fn vertical_align_super_negative_y_offset() {
+        // super → y_offset < 0 (сдвиг вверх).
+        let root = lay_measured("<p><sup>note</sup></p>", "", 800.0);
+        let p = first_element_child(&root);
+        let frag = first_inline_run_frag(p);
+        assert!(
+            frag.y_offset < 0.0,
+            "super y_offset must be negative, got {}",
+            frag.y_offset
+        );
+    }
+
+    #[test]
+    fn vertical_align_sub_positive_y_offset() {
+        // sub → y_offset > 0 (сдвиг вниз).
+        let root = lay_measured("<p><sub>note</sub></p>", "", 800.0);
+        let p = first_element_child(&root);
+        let frag = first_inline_run_frag(p);
+        assert!(
+            frag.y_offset > 0.0,
+            "sub y_offset must be positive, got {}",
+            frag.y_offset
+        );
+    }
 }

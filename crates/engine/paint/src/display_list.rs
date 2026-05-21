@@ -746,10 +746,11 @@ fn emit_text_frags(
         if !matches!(frag.style.visibility, Visibility::Visible) {
             continue;
         }
+        let frag_y = line_y + frag.y_offset;
         // Inline-replaced image: emit DrawImage, skip text rendering.
         if let Some(src) = &frag.img_src {
             out.push(DisplayCommand::DrawImage {
-                rect: Rect::new(container_x + frag.x, line_y, frag.width, line_h),
+                rect: Rect::new(container_x + frag.x, frag_y, frag.width, line_h),
                 src: src.clone(),
                 alt: frag.text.clone(),
                 object_fit: frag.style.object_fit,
@@ -757,7 +758,7 @@ fn emit_text_frags(
             });
             continue;
         }
-        let base_rect = Rect::new(container_x + frag.x, line_y, container_width, line_h);
+        let base_rect = Rect::new(container_x + frag.x, frag_y, container_width, line_h);
         emit_text_shadows(out, base_rect, line_h, frag);
         out.push(DisplayCommand::DrawText {
             rect: base_rect,
@@ -774,7 +775,7 @@ fn emit_text_frags(
                 .map(|a| (a.tag, a.value))
                 .collect(),
         });
-        push_text_decoration(out, container_x, line_y, frag);
+        push_text_decoration(out, container_x, frag_y, frag);
     }
 }
 
@@ -802,7 +803,7 @@ fn emit_inline_run(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<Displ
             if !matches!(frag.style.visibility, Visibility::Visible) {
                 continue;
             }
-            emit_inline_frag_box(out, b.rect.x, line_y, line_h, frag);
+            emit_inline_frag_box(out, b.rect.x, line_y + frag.y_offset, line_h, frag);
         }
 
         // Detect text-overflow: find first visible frag that extends past container.

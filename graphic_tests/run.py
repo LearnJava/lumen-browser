@@ -65,6 +65,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('21', '21-border-style.html',   1.0, 'border-style dashed/dotted/double'),
     ('22', '22-transform.html',      1.5, 'CSS transform translate/rotate/scale/skew/matrix'),
     ('23', '23-pseudo-elements.html', 1.0, '::before / ::after block-level generation'),
+    ('24', '24-vertical-align.html',  1.5, 'vertical-align inline y-offset + inline-block positioning'),
 ]
 
 # --- PNG reader (stdlib only) ---

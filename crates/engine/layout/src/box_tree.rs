@@ -236,6 +236,8 @@ pub struct InlineSegment {
 pub struct InlineFrag {
     pub x: f32,
     pub width: f32,
+    /// Vertical offset within the line box (CSS vertical-align). Positive = down.
+    pub y_offset: f32,
     pub text: String,
     pub style: ComputedStyle,
     /// Resolved padding_left of this frag's inline box start (0 if not a box start).
@@ -998,6 +1000,8 @@ fn lay_out(
             if s.text_align != TextAlign::Left {
                 align_lines(lines, content_width, s.text_align);
             }
+            let line_h = s.font_size * s.line_height;
+            apply_inline_vertical_align(lines, line_h);
             // CSS UI L4 §10.1: text-overflow: ellipsis требует overflow != visible.
             if s.text_overflow == TextOverflow::Ellipsis
                 && (s.overflow_x != Overflow::Visible || s.overflow_y != Overflow::Visible)
@@ -2072,6 +2076,7 @@ fn wrap_inline_run(
             let pad_r = seg.style.padding_right.resolve_or_zero(em, max_width, viewport);
             current_line.push(InlineFrag {
                 x: current_x,
+                y_offset: 0.0,
                 width: img_w,
                 text: seg.text.clone(),
                 style: seg.style.clone(),
@@ -2149,6 +2154,7 @@ fn wrap_inline_run(
             if !merged {
                 current_line.push(InlineFrag {
                     x: frag_x,
+                    y_offset: 0.0,
                     width: word_w,
                     text: word.to_string(),
                     style: style.clone(),
@@ -2194,6 +2200,30 @@ fn align_lines(
     }
 }
 
+/// CSS 2.1 §10.8 — применяет вертикальное выравнивание к inline-фрагментам.
+/// Записывает `y_offset` (смещение от верхнего края line-box, вниз — положительное).
+/// `line_h` = font_size * line_height контейнера.
+fn apply_inline_vertical_align(lines: &mut [Vec<InlineFrag>], line_h: f32) {
+    for line in lines.iter_mut() {
+        for frag in line.iter_mut() {
+            // frag_h: approximation of frag's rendered height ≈ its font-size.
+            let frag_h = frag.style.font_size;
+            frag.y_offset = match frag.style.vertical_align {
+                VerticalAlign::Baseline => 0.0,
+                VerticalAlign::Top | VerticalAlign::TextTop => 0.0,
+                VerticalAlign::Bottom | VerticalAlign::TextBottom => (line_h - frag_h).max(0.0),
+                VerticalAlign::Middle => ((line_h - frag_h) / 2.0).max(0.0),
+                // sub/super: relative shift from baseline (~0.8 * frag_h from frag top).
+                VerticalAlign::Sub => frag_h * 0.15,
+                VerticalAlign::Super => -(frag_h * 0.35),
+                // CSS: positive length = shift up (above baseline) → negative screen y.
+                VerticalAlign::Length(px) => -px,
+                VerticalAlign::Percent(p) => -(p / 100.0 * line_h),
+            };
+        }
+    }
+}
+
 /// Без измерителя: помещаем всё в одну строку. Ширина каждого фрагмента
 /// без шрифтовых метрик неизвестна — оставляем 0.0; text-decoration в этом
 /// режиме не рисуется. layout() для финального рендеринга всё равно ходит
@@ -2205,6 +2235,7 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
         if let Some(img_src) = &seg.img_src {
             frags.push(InlineFrag {
                 x: 0.0,
+                y_offset: 0.0,
                 width: seg.img_width,
                 text: seg.text.clone(),
                 style: seg.style.clone(),
@@ -2233,6 +2264,7 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
         if !merged {
             frags.push(InlineFrag {
                 x: 0.0,
+                y_offset: 0.0,
                 width: 0.0,
                 text,
                 style: seg.style.clone(),
