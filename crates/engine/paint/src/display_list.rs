@@ -1393,6 +1393,52 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             emit_inline_run(b, lines, out);
         }
         BoxKind::InlineBlockRow | BoxKind::InlineSpace => {}
+        BoxKind::FormControl { .. } => {
+            if !is_paint_visible(b) {
+                return;
+            }
+            emit_box_shadows(b, out);
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                let clip = background_clip_rect(b);
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
+            }
+            emit_background_image(out, b);
+            emit_inset_box_shadows(b, out);
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width,
+                        s.border_right_width,
+                        s.border_bottom_width,
+                        s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style,
+                        s.border_right_style,
+                        s.border_bottom_style,
+                        s.border_left_style,
+                    ],
+                });
+            }
+            emit_outline(b, out);
+        }
         BoxKind::Image { src, alt } => {
             if !is_paint_visible(b) {
                 return;
@@ -1555,6 +1601,46 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             if has_opacity {
                 out.push(DisplayCommand::PopOpacity);
             }
+        }
+        BoxKind::FormControl { .. } => {
+            // Replaced element: background + border box (Phase 0, no content).
+            if !is_paint_visible(b) {
+                return;
+            }
+            if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                let clip = background_clip_rect(b);
+                if clip.width > 0.0 && clip.height > 0.0 {
+                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                }
+            }
+            let s = &b.style;
+            let has_border = s.border_top_style.is_visible()
+                || s.border_right_style.is_visible()
+                || s.border_bottom_style.is_visible()
+                || s.border_left_style.is_visible();
+            if has_border {
+                let cur = s.color;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [
+                        s.border_top_width, s.border_right_width,
+                        s.border_bottom_width, s.border_left_width,
+                    ],
+                    colors: [
+                        s.border_top_color.resolve(cur),
+                        s.border_right_color.resolve(cur),
+                        s.border_bottom_color.resolve(cur),
+                        s.border_left_color.resolve(cur),
+                    ],
+                    styles: [
+                        s.border_top_style, s.border_right_style,
+                        s.border_bottom_style, s.border_left_style,
+                    ],
+                });
+            }
+            emit_outline(b, out);
         }
         BoxKind::InlineBlockRow => {
             // Анонимный контейнер: нет фона/бордера собственного.

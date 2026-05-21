@@ -415,7 +415,7 @@ impl PropertyTrees {
 /// «настоящие» layout-боксы (Block / Image), привязанные к DOM-элементу,
 /// могут владеть property-tree-узлами. Анонимные InlineRun-ы пропускаются.
 fn box_can_own_property_node(b: &LayoutBox) -> bool {
-    matches!(b.kind, BoxKind::Block | BoxKind::Image { .. })
+    matches!(b.kind, BoxKind::Block | BoxKind::Image { .. } | BoxKind::FormControl { .. })
 }
 
 /// Вычислить локальную transform-матрицу элемента. CSS Transforms L1 §13:

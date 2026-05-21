@@ -42,6 +42,26 @@ fn is_picture_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// Вид form control — используется в `BoxKind::FormControl` для будущих
+/// paint-специализаций (фокус-рамка, placeholder, стрелка select и т.д.).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormControlKind {
+    Input,
+    Button,
+    Select,
+    Textarea,
+}
+
+/// Является ли DOM-узел HTML form control-ом.
+/// Tag-name хранится lower-case (HTML5 tree-builder).
+fn is_form_control_element(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. }
+            if matches!(name.local.as_str(), "input" | "button" | "select" | "textarea")
+    )
+}
+
 /// Финальный URL картинки + author-объявленные intrinsic dimensions.
 /// Заполняется `resolve_image_source` ниже — это адаптер `PickedSource`
 /// из `lumen-html-parser`, плюс legacy-fallback на голый `src`-атрибут
@@ -255,6 +275,13 @@ pub enum BoxKind {
         src: String,
         alt: String,
     },
+    /// Replaced element: HTML form control (`<input>`, `<button>`, `<select>`,
+    /// `<textarea>`). Phase 0: block-level replaced. Размеры берутся из
+    /// `style.width`/`style.height` (UA defaults из `apply_ua_form_controls`).
+    /// `kind` зарезервирован для paint-специализаций в следующих фазах.
+    FormControl {
+        kind: FormControlKind,
+    },
     /// Схлопнутый межэлементный пробел в InlineBlockRow.
     /// Не рисуется; участвует только как горизонтальный gap между
     /// inline-block соседями (CSS white-space collapsing §4.1.2).
@@ -363,7 +390,7 @@ fn is_inline_content(
     match &doc.get(id).data {
         NodeData::Text(s) => !s.chars().all(char::is_whitespace),
         NodeData::Element { .. } => {
-            if is_image_element(doc, id) {
+            if is_image_element(doc, id) || is_form_control_element(doc, id) {
                 return false;
             }
             // Inline-семантика: чистый `inline` или его flex/grid-варианты.
@@ -391,6 +418,7 @@ fn is_inline_block(
         &doc.get(id).data,
         NodeData::Element { .. }
         if !is_image_element(doc, id)
+            && !is_form_control_element(doc, id)
             && compute_style(doc, id, sheet, inherited, viewport).display
                 == Display::InlineBlock
     )
@@ -561,6 +589,17 @@ fn build_box(
                     style.height = Some(Length::Px(h as f32));
                 }
                 BoxKind::Image { src: src.url, alt }
+            } else if is_form_control_element(doc, id) {
+                let kind = match &doc.get(id).data {
+                    NodeData::Element { name, .. } => match name.local.as_str() {
+                        "button"   => FormControlKind::Button,
+                        "select"   => FormControlKind::Select,
+                        "textarea" => FormControlKind::Textarea,
+                        _          => FormControlKind::Input,
+                    },
+                    _ => FormControlKind::Input,
+                };
+                BoxKind::FormControl { kind }
             } else {
                 BoxKind::Block
             }
@@ -568,7 +607,7 @@ fn build_box(
     };
 
     let mut children = Vec::new();
-    if matches!(kind, BoxKind::Block) {
+    if matches!(kind, BoxKind::Block | BoxKind::FormControl { .. }) {
         let dom_children: Vec<NodeId> = doc.get(id).children.clone();
         // CSS Grid L1 §6: all direct children of a grid/flex container are
         // "blockified" — they participate as individual items, not wrapped in
@@ -776,7 +815,7 @@ fn lay_out(
     // Replaced element (Image): auto-ширина = intrinsic (0 в Phase 0, без
     // декодированных пикселей). Это CSS 2.1 §10.3.2 — replaced-боксы
     // НЕ растягиваются на весь контейнер при отсутствии width.
-    let is_replaced = matches!(b.kind, BoxKind::Image { .. });
+    let is_replaced = matches!(b.kind, BoxKind::Image { .. } | BoxKind::FormControl { .. });
     b.rect.width = if is_replaced {
         0.0
     } else {
@@ -874,7 +913,7 @@ fn lay_out(
     let mut abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
 
     match &mut b.kind {
-        BoxKind::Block | BoxKind::Image { .. } => {
+        BoxKind::Block | BoxKind::Image { .. } | BoxKind::FormControl { .. } => {
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
                 let content_height = lay_out_flex(

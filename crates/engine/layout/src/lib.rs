@@ -106,7 +106,7 @@ mod tests {
     fn first_block_child(b: &LayoutBox) -> &LayoutBox {
         b.children
             .iter()
-            .find(|c| matches!(c.kind, BoxKind::Block))
+            .find(|c| matches!(c.kind, BoxKind::Block | BoxKind::FormControl { .. }))
             .expect("expected at least one block child")
     }
 
