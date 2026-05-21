@@ -74,10 +74,10 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | Property | Status | Notes |
 |---|---|---|
 | `background-color` | ✅ | |
-| `background-image` | 🟡 | `url()` painted; `linear-gradient`/`radial-gradient` emit DrawLinearGradient/DrawRadialGradient; P2 renders as avg-stop fill pending GPU gradient pipeline |
-| `background-repeat` | 🟡 | parsed |
-| `background-position` | 🟡 | parsed |
-| `background-size` | 🟡 | parsed |
+| `background-image` | 🟡 | `url()` painted with repeat/position/size; `linear-gradient`/`radial-gradient` emit DrawLinearGradient/DrawRadialGradient; P2 renders as avg-stop fill pending GPU gradient pipeline |
+| `background-repeat` | ✅ | repeat/no-repeat/repeat-x/repeat-y applied; round/space ≈ repeat |
+| `background-position` | ✅ | px and % offsets applied to tile origin |
+| `background-size` | ✅ | auto/cover/contain/length; cover and contain require intrinsic image dimensions |
 | `background-attachment` | 🟡 | parsed |
 | `background-origin` | 🟡 | parsed |
 | `background-clip` | 🟡 | parsed |
@@ -431,7 +431,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | CSS Box Alignment L3 | ✅ (flex) | grid/block | — |
 | CSS Text L3 | ✅ most | hyphens, tab, line-break | — |
 | CSS Text Decoration L3 | ✅ most | thickness | underline-position |
-| CSS Backgrounds L3 | ✅ (color/border/shadow) | image/clip layers | — |
+| CSS Backgrounds L3 | ✅ (color/border/shadow/repeat/position/size) | clip/origin/attachment layers | — |
 | CSS Fonts L3/L4 | ✅ (size/weight/style) | stretch/variant | @font-face parse✅ no fetch |
 | CSS Compositing L1 | ✅ opacity | blend-mode/isolation | — |
 | CSS Images L3 | ✅ object-fit/position | image-rendering | — |

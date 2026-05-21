@@ -35,7 +35,7 @@ BUG-015 | OPEN             | shell/paint     | broken <img> src shows no alt tex
 BUG-017 | OPEN             | layout/paint    | text-decoration-style ignored (all render as solid)
 BUG-018 | OPEN             | layout          | text-decoration-color ignored (always inherits text color)
 BUG-023 | OPEN             | layout+paint    | opacity deviation 2.20% — compositing correct; root: InlineBlockRow baseline + no edge-AA
-BUG-024 | OPEN             | layout          | box-sizing: content-box — border not added to outer size
+BUG-024 | FIXED 2026-05-21 | layout          | box-sizing: content-box — border not added to outer size; height% resolved against width
 BUG-025 | OPEN             | layout          | max-height does not clamp block height
 BUG-026 | OPEN             | layout/paint    | <img> CSS/HTML width+height ignored — renders at natural size
 BUG-028 | OPEN  [P3]       | shell           | relayout-on-resize + maximized window triggers BUG-027
@@ -48,6 +48,42 @@ BUG-032 | OPEN             | paint/image     | object-fit image quality ~16%: GP
 BUG-033 | OPEN             | paint           | box-shadow: нет Gaussian blur — рендерится solid прямоугольник вместо размытой тени
 BUG-034 | OPEN             | layout          | CSS transform не реализован — translate/rotate/scale/skew/matrix игнорируются
 BUG-035 | OPEN             | layout          | ::before/::after pseudo-elements не генерируются в box_tree (реализация частичная)
+```
+
+---
+
+## Прогон 2026-05-21 v3 (graphic_tests, --continue-on-fail, порог 1%)
+
+BUG-024 FIXED: height% теперь резолвится против высоты containing block, а не ширины. TEST-06 и TEST-07 перешли в PASS.
+TableRow добавлен в paint (display_list.rs), TEST-25 PASS.
+
+```
+TEST-00: PASS  0.00%   calibration
+TEST-01: PASS  0.00%   sanity
+TEST-02: PASS  0.39%   color-named
+TEST-03: PASS  0.11%   color-formats
+TEST-04: PASS  0.39%   color-alpha
+TEST-05: PASS  0.37%   border-width
+TEST-06: PASS  0.26%   border-sides       ← BUG-024 FIXED
+TEST-07: PASS  0.70%   box-sizing         ← BUG-024 FIXED
+TEST-08: PASS  0.93%   padding
+TEST-09: PASS  0.00%   margin
+TEST-10: PASS  0.00%   min-max-width
+TEST-11: FAIL 13.77%   min-max-height     ← BUG-025
+TEST-12: FAIL 11.27%   display            ← BUG-025 + display modes
+TEST-13: PASS  0.24%   visibility-opacity
+TEST-14: FAIL  2.68%   overflow           ← BUG-020
+TEST-15: FAIL  1.92%   box-shadow         ← BUG-033
+TEST-16: FAIL  1.88%   outline            ← sub-pixel геометрия
+TEST-17: PASS  0.00%   calc
+TEST-18: FAIL 10.77%   images             ← BUG-026
+TEST-19: FAIL 13.00%   object-fit         ← BUG-032
+TEST-20: FAIL  8.68%   quirks-bgcolor     ← BUG-021 + BUG-022
+TEST-21: FAIL  1.75%   border-style       ← остаточный BUG-029
+TEST-22: FAIL  9.79%   CSS transform      ← BUG-034
+TEST-23: PASS  0.00%   pseudo-elements
+TEST-24: PASS  1.10%   vertical-align
+TEST-25: PASS  0.00%   table-layout       ← TableRow paint FIXED
 ```
 
 ---

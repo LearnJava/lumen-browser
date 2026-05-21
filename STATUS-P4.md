@@ -1,4 +1,4 @@
-In progress: —
+In progress: background-repeat/position/size wire-up  branch: bg-repeat-position-size
 
 Next (Wave 1 — unblock P1/P2):
 
@@ -7,7 +7,6 @@ Next (Wave 2 — unblock P2 animations):
 Queue (Wave 3+):
 CSS Containment enforcement (contain flags)                  ~2h
 Container Queries @container matching                        ~3h  depends on containment
-background-repeat/position/size (🟡→✅)                      ~2h
 multi-column column-count/width → boxes                      ~2h  unblocks P2 multi-col
 direction + bidi layout wire-up                              ~2h
 image-rendering → GPU sampling                               ~1h

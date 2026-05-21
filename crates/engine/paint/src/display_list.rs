@@ -10,7 +10,8 @@ use lumen_core::geom::Rect;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame,
-    BackgroundClip, BackgroundImage, BorderStyle, BoxKind, Color, CssColor, FontStyle, FontWeight,
+    BackgroundClip, BackgroundImage, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
+    Color, CssColor, FontStyle, FontWeight,
     GradientStop, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent,
@@ -170,17 +171,17 @@ pub enum DisplayCommand {
     /// Порядок: после `FillRect` для background-color, до border (CSS
     /// Backgrounds L3 §3.10 — painting order: bg-color → bg-image → border).
     ///
-    /// Phase 0 ограничения (renderer Stretches картинку на весь `rect`):
-    /// * `background-size` игнорируется (де-факто `100% 100%`).
-    /// * `background-position` / `background-origin` игнорируются (0,0).
-    /// * `background-repeat` игнорируется (картинка не тайлится).
-    /// * `background-attachment: fixed` не поддерживается (rect скроллится).
+    /// `rect` = background positioning area (background-clip box).
+    /// `size`, `position`, `repeat` — CSS Backgrounds L3 §3.3/3.4/3.5.
     ///
     /// Если картинка не зарегистрирована в GPU-cache — команда визуально
     /// no-op (background-color уже эмитнут отдельным FillRect).
     DrawBackgroundImage {
         rect: Rect,
         src: String,
+        size: BackgroundSize,
+        position: ObjectPosition,
+        repeat: BackgroundRepeat,
     },
     /// CSS Images L3 §3.3 — `linear-gradient(angle, stop, ...)`.
     ///
@@ -529,10 +530,11 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                 }
                 out.push('\n');
             }
-            DisplayCommand::DrawBackgroundImage { rect, src } => {
+            DisplayCommand::DrawBackgroundImage { rect, src, size, position, repeat } => {
                 out.push_str(&format!(
-                    "DrawBackgroundImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?}\n",
+                    "DrawBackgroundImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?} size={size:?} pos=({:?},{:?}) repeat={repeat:?}\n",
                     rect.x, rect.y, rect.width, rect.height,
+                    position.x, position.y,
                 ));
             }
             DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
@@ -1173,7 +1175,13 @@ fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox) {
     }
     match &b.style.background_image {
         BackgroundImage::Url(src) if !src.is_empty() => {
-            out.push(DisplayCommand::DrawBackgroundImage { rect: clip, src: src.clone() });
+            out.push(DisplayCommand::DrawBackgroundImage {
+                rect: clip,
+                src: src.clone(),
+                size: b.style.background_size,
+                position: b.style.background_position,
+                repeat: b.style.background_repeat,
+            });
         }
         BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, stops, repeating }) => {
             out.push(DisplayCommand::DrawLinearGradient {
@@ -2934,7 +2942,7 @@ mod tests {
         );
         let bgs = bg_images(&dl);
         assert_eq!(bgs.len(), 1, "должна быть одна команда DrawBackgroundImage");
-        if let DisplayCommand::DrawBackgroundImage { rect, src } = bgs[0] {
+        if let DisplayCommand::DrawBackgroundImage { rect, src, .. } = bgs[0] {
             assert_eq!(src, "bg.png");
             assert!((rect.width - 80.0).abs() < 0.1, "rect.width={}", rect.width);
             assert!((rect.height - 40.0).abs() < 0.1, "rect.height={}", rect.height);

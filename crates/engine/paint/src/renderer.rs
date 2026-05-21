@@ -29,7 +29,7 @@ use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{Bitmap, Cmap, Font, Head, Hhea, Hmtx, Outline, Rasterizer, SystemFontIndex};
 use lumen_image::{Image, PixelFormat};
-use lumen_layout::{BorderStyle, Color, FontStyle, FontWeight, Mat4, ObjectFit, ObjectPosition, OutlineStyle};
+use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FontStyle, FontWeight, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
@@ -2330,29 +2330,95 @@ impl Renderer {
                         current_level -= 1;
                     }
                 }
-                // CSS Backgrounds L3 §3.10 — background-image: url(...). Phase 0
-                // упрощения (см. doc-комментарий у DisplayCommand::DrawBackgroundImage):
-                // картинка растягивается на весь rect, UV всегда [0,0]→[1,1].
-                // background-size / position / repeat — TODO для P2/P4. Если картинка
-                // не зарегистрирована в `self.images` — команда no-op (background-color
-                // уже эмитнут отдельным FillRect-ом, placeholder не нужен).
-                DisplayCommand::DrawBackgroundImage { rect, src } => {
+                // CSS Backgrounds L3 §3.3/3.4/3.5 — background-size/position/repeat.
+                DisplayCommand::DrawBackgroundImage { rect, src, size, position, repeat } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
-                    let scrolled = translate_rect(*rect, dx, dy);
-                    if let Some(gpu) = self.images.get(src) {
-                        let v_start = image_vertices.len() as u32;
-                        push_image_quad(
-                            &mut image_vertices,
-                            scrolled,
-                            [0.0, 0.0],
-                            [1.0, 1.0],
-                            1.0,
-                        );
-                        let v_count = image_vertices.len() as u32 - v_start;
-                        let image_batch_idx = image_bind_groups.len() as u32;
-                        image_bind_groups.push(gpu.bind_group.clone());
+                    let area = translate_rect(*rect, dx, dy);
+                    let Some(gpu) = self.images.get(src) else { continue };
+                    let img_w = gpu.width as f32;
+                    let img_h = gpu.height as f32;
+                    if img_w <= 0.0 || img_h <= 0.0 { continue; }
+
+                    // Compute tile dimensions from background-size.
+                    let (tile_w, tile_h) = match size {
+                        BackgroundSize::Auto => (img_w, img_h),
+                        BackgroundSize::Cover => {
+                            let s = (area.width / img_w).max(area.height / img_h);
+                            (img_w * s, img_h * s)
+                        }
+                        BackgroundSize::Contain => {
+                            let s = (area.width / img_w).min(area.height / img_h);
+                            (img_w * s, img_h * s)
+                        }
+                        BackgroundSize::Length(w, h) => {
+                            let tw = w.max(1.0);
+                            let th = h.unwrap_or_else(|| img_h * (tw / img_w)).max(1.0);
+                            (tw, th)
+                        }
+                    };
+
+                    // Compute first tile origin from background-position.
+                    let off_x = match position.x {
+                        PositionComponent::Px(px) => px,
+                        PositionComponent::Percent(p) => (area.width - tile_w) * p,
+                    };
+                    let off_y = match position.y {
+                        PositionComponent::Px(py) => py,
+                        PositionComponent::Percent(p) => (area.height - tile_h) * p,
+                    };
+                    let tile_x0 = area.x + off_x;
+                    let tile_y0 = area.y + off_y;
+
+                    let (tile_x_start, repeat_x, repeat_y) = match repeat {
+                        BackgroundRepeat::NoRepeat => (tile_x0, false, false),
+                        BackgroundRepeat::RepeatX  => (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, false),
+                        BackgroundRepeat::RepeatY  => (tile_x0, false, true),
+                        BackgroundRepeat::Repeat | BackgroundRepeat::Round | BackgroundRepeat::Space => {
+                            (tile_x0 - (off_x / tile_w).ceil() * tile_w, true, true)
+                        }
+                    };
+                    let tile_y_start = if repeat_y {
+                        tile_y0 - (off_y / tile_h).ceil() * tile_h
+                    } else {
+                        tile_y0
+                    };
+
+                    let v_start = image_vertices.len() as u32;
+                    let image_batch_idx = image_bind_groups.len() as u32;
+                    image_bind_groups.push(gpu.bind_group.clone());
+
+                    let x_end = area.x + area.width;
+                    let y_end = area.y + area.height;
+                    let mut ty = tile_y_start;
+                    loop {
+                        if ty >= y_end { break; }
+                        let mut tx = tile_x_start;
+                        loop {
+                            if tx >= x_end { break; }
+                            // Clip tile to background area; compute partial UVs.
+                            let cx = tx.max(area.x);
+                            let cy = ty.max(area.y);
+                            let cx1 = (tx + tile_w).min(x_end);
+                            let cy1 = (ty + tile_h).min(y_end);
+                            if cx < cx1 && cy < cy1 {
+                                let u0 = (cx - tx) / tile_w;
+                                let v0 = (cy - ty) / tile_h;
+                                let u1 = (cx1 - tx) / tile_w;
+                                let v1 = (cy1 - ty) / tile_h;
+                                push_image_quad(&mut image_vertices,
+                                    Rect::new(cx, cy, cx1 - cx, cy1 - cy),
+                                    [u0, v0], [u1, v1], 1.0);
+                            }
+                            if !repeat_x { break; }
+                            tx += tile_w;
+                        }
+                        if !repeat_y { break; }
+                        ty += tile_h;
+                    }
+                    let v_count = image_vertices.len() as u32 - v_start;
+                    if v_count > 0 {
                         draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
                     }
                 }
