@@ -1,8 +1,7 @@
-In progress: BUG-029 dotted-circles  branch: dotted-circles
-Next step: CIRCLE_SHADER_SRC + CircleVertex + emit_border_side Dotted  paint/src/renderer.rs:2977
+In progress: BUG-005 img-in-span  branch: img-in-span
+Next step: clippy + merge
 
 Next: (P2 Phase 2+)
-BUG-005 img внутри span не рендерится
 BUG-023 opacity sub-pixel deviation ~2%
 
 Queue:

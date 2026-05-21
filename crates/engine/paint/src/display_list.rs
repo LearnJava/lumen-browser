@@ -746,6 +746,17 @@ fn emit_text_frags(
         if !matches!(frag.style.visibility, Visibility::Visible) {
             continue;
         }
+        // Inline-replaced image: emit DrawImage, skip text rendering.
+        if let Some(src) = &frag.img_src {
+            out.push(DisplayCommand::DrawImage {
+                rect: Rect::new(container_x + frag.x, line_y, frag.width, line_h),
+                src: src.clone(),
+                alt: frag.text.clone(),
+                object_fit: frag.style.object_fit,
+                object_position: frag.style.object_position,
+            });
+            continue;
+        }
         let base_rect = Rect::new(container_x + frag.x, line_y, container_width, line_h);
         emit_text_shadows(out, base_rect, line_h, frag);
         out.push(DisplayCommand::DrawText {

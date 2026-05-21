@@ -134,6 +134,17 @@ fn img_with_background_and_border() {
     assert_snapshot("img_with_background_and_border", &actual);
 }
 
+#[test]
+fn img_inside_span() {
+    // <img> inside <span> must produce DrawImage in inline flow (BUG-005).
+    let actual = build(
+        r#"<span><img src="inline.png" alt="icon" width="32" height="32"></span>"#,
+        "",
+        800.0,
+    );
+    assert_snapshot("img_inside_span", &actual);
+}
+
 // ── DrawLayerSnapshot serialization ─────────────────────────────────────────
 
 #[test]
