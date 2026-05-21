@@ -12,6 +12,74 @@ use std::sync::{Arc, Mutex};
 use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
 use rquickjs::{Ctx, Function, Result as QjResult};
 
+// ─── history state ───────────────────────────────────────────────────────────
+
+struct HistoryEntry {
+    state_json: String,
+    url: String,
+}
+
+struct HistoryState {
+    entries: Vec<HistoryEntry>,
+    current: usize,
+}
+
+impl HistoryState {
+    fn new() -> Self {
+        Self {
+            entries: vec![HistoryEntry {
+                state_json: "null".into(),
+                url: String::new(),
+            }],
+            current: 0,
+        }
+    }
+
+    fn push(&mut self, state_json: String, url: String) {
+        self.entries.truncate(self.current + 1);
+        self.entries.push(HistoryEntry { state_json, url });
+        self.current = self.entries.len() - 1;
+    }
+
+    fn replace(&mut self, state_json: String, url: String) {
+        if let Some(e) = self.entries.get_mut(self.current) {
+            e.state_json = state_json;
+            e.url = url;
+        }
+    }
+
+    // Returns false when delta is 0 (Phase 0: reload not implemented) or out of bounds.
+    fn go(&mut self, delta: i32) -> bool {
+        if delta == 0 {
+            return false;
+        }
+        let new_idx = self.current as i64 + i64::from(delta);
+        if new_idx < 0 || new_idx >= self.entries.len() as i64 {
+            return false;
+        }
+        self.current = new_idx as usize;
+        true
+    }
+
+    fn state_json(&self) -> &str {
+        self.entries
+            .get(self.current)
+            .map(|e| e.state_json.as_str())
+            .unwrap_or("null")
+    }
+
+    fn url(&self) -> &str {
+        self.entries
+            .get(self.current)
+            .map(|e| e.url.as_str())
+            .unwrap_or("")
+    }
+
+    fn length(&self) -> u32 {
+        self.entries.len() as u32
+    }
+}
+
 // ─── public entry point ───────────────────────────────────────────────────────
 
 /// Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`.
@@ -259,6 +327,47 @@ fn install_primitives(ctx: &Ctx<'_>, doc: Arc<Mutex<Document>>) -> QjResult<()> 
         );
     }
 
+    // ── history ──────────────────────────────────────────────────────────────
+    {
+        let hist = Arc::new(Mutex::new(HistoryState::new()));
+
+        let h = Arc::clone(&hist);
+        reg!(
+            "_lumen_history_push",
+            move |state_json: String, url: String| {
+                h.lock().unwrap().push(state_json, url);
+            }
+        );
+
+        let h = Arc::clone(&hist);
+        reg!(
+            "_lumen_history_replace",
+            move |state_json: String, url: String| {
+                h.lock().unwrap().replace(state_json, url);
+            }
+        );
+
+        let h = Arc::clone(&hist);
+        reg!("_lumen_history_go", move |delta: i32| -> bool {
+            h.lock().unwrap().go(delta)
+        });
+
+        let h = Arc::clone(&hist);
+        reg!("_lumen_history_length", move || -> u32 {
+            h.lock().unwrap().length()
+        });
+
+        let h = Arc::clone(&hist);
+        reg!("_lumen_history_state_json", move || -> String {
+            h.lock().unwrap().state_json().to_string()
+        });
+
+        let h = Arc::clone(&hist);
+        reg!("_lumen_history_url", move || -> String {
+            h.lock().unwrap().url().to_string()
+        });
+    }
+
     Ok(())
 }
 
@@ -497,6 +606,72 @@ var setInterval = function()   { return 0; };
 var clearTimeout  = function() {};
 var clearInterval = function() {};
 var requestAnimationFrame = function() { return 0; };
+
+var _popstate_listeners = [];
+
+var history = {
+    get length()  { return _lumen_history_length(); },
+    get state()   {
+        try { return JSON.parse(_lumen_history_state_json()); } catch(e) { return null; }
+    },
+    pushState:    function(state, title, url) {
+        _lumen_history_push(
+            JSON.stringify(state !== undefined ? state : null),
+            String(url || '')
+        );
+    },
+    replaceState: function(state, title, url) {
+        _lumen_history_replace(
+            JSON.stringify(state !== undefined ? state : null),
+            String(url || '')
+        );
+    },
+    back:    function() { history.go(-1); },
+    forward: function() { history.go(1); },
+    go: function(delta) {
+        var ok = _lumen_history_go((delta | 0));
+        if (ok) {
+            var s;
+            try { s = JSON.parse(_lumen_history_state_json()); } catch(e) { s = null; }
+            var ev = { type: 'popstate', state: s };
+            if (typeof window.onpopstate === 'function') {
+                try { window.onpopstate(ev); } catch(e) {}
+            }
+            for (var i = 0; i < _popstate_listeners.length; i++) {
+                try { _popstate_listeners[i](ev); } catch(e) {}
+            }
+        }
+    },
+};
+
+var window = {
+    history: history,
+    onpopstate: null,
+    location: location,
+    navigator: navigator,
+    alert: alert,
+    confirm: confirm,
+    prompt: prompt,
+    setTimeout: setTimeout,
+    setInterval: setInterval,
+    clearTimeout: clearTimeout,
+    clearInterval: clearInterval,
+    requestAnimationFrame: requestAnimationFrame,
+    document: document,
+    console: console,
+    addEventListener: function(type, fn) {
+        if (type === 'popstate' && typeof fn === 'function') {
+            _popstate_listeners.push(fn);
+        }
+    },
+    removeEventListener: function(type, fn) {
+        if (type === 'popstate') {
+            var idx = _popstate_listeners.indexOf(fn);
+            if (idx >= 0) _popstate_listeners.splice(idx, 1);
+        }
+    },
+    dispatchEvent: function() { return true; },
+};
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -739,6 +914,152 @@ mod tests {
                  x",
             )
             .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn history_initial_length_is_one() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval("history.length").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn history_initial_state_is_null() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval("history.state === null").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn history_push_state_increments_length() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("history.pushState({page: 1}, '', '/page1');").unwrap();
+        rt.eval("history.pushState({page: 2}, '', '/page2');").unwrap();
+        let result = rt.eval("history.length").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(3.0));
+    }
+
+    #[test]
+    fn history_state_after_push_returns_state() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("history.pushState({x: 42}, '', '/p');").unwrap();
+        let result = rt.eval("history.state.x").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(42.0));
+    }
+
+    #[test]
+    fn history_replace_state_keeps_length() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("history.pushState({n: 1}, '', '/a');").unwrap();
+        rt.eval("history.replaceState({n: 99}, '', '/a2');").unwrap();
+        let len = rt.eval("history.length").unwrap();
+        assert_eq!(len, lumen_core::JsValue::Number(2.0));
+        let state = rt.eval("history.state.n").unwrap();
+        assert_eq!(state, lumen_core::JsValue::Number(99.0));
+    }
+
+    #[test]
+    fn history_back_fires_popstate_with_previous_state() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var events = []; \
+             window.addEventListener('popstate', function(e) { events.push(e.state); }); \
+             history.pushState({page: 1}, '', '/p1'); \
+             history.pushState({page: 2}, '', '/p2'); \
+             history.back();",
+        )
+        .unwrap();
+        let len = rt.eval("events.length").unwrap();
+        assert_eq!(len, lumen_core::JsValue::Number(1.0));
+        let page = rt.eval("events[0].page").unwrap();
+        assert_eq!(page, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn history_forward_after_back() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "history.pushState({n: 1}, '', '/p1'); \
+             history.pushState({n: 2}, '', '/p2'); \
+             history.back();",
+        )
+        .unwrap();
+        let state_after_back = rt.eval("history.state.n").unwrap();
+        assert_eq!(state_after_back, lumen_core::JsValue::Number(1.0));
+
+        rt.eval("history.forward();").unwrap();
+        let state_after_fwd = rt.eval("history.state.n").unwrap();
+        assert_eq!(state_after_fwd, lumen_core::JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn history_go_beyond_bounds_does_not_fire_popstate() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var fired = false; \
+             window.addEventListener('popstate', function() { fired = true; }); \
+             history.go(-5);",
+        )
+        .unwrap();
+        let result = rt.eval("fired").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn window_onpopstate_fires_on_back() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var captured = null; \
+             window.onpopstate = function(e) { captured = e.state; }; \
+             history.pushState({v: 7}, '', '/p'); \
+             history.back();",
+        )
+        .unwrap();
+        let result = rt.eval("captured === null").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true)); // initial state is null
+    }
+
+    #[test]
+    fn history_push_drops_forward_entries() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "history.pushState({n: 1}, '', '/p1'); \
+             history.pushState({n: 2}, '', '/p2'); \
+             history.back(); \
+             history.pushState({n: 3}, '', '/p3');",
+        )
+        .unwrap();
+        // After back + push, forward entries are dropped: entries = [init, {n:1}, {n:3}]
+        let len = rt.eval("history.length").unwrap();
+        assert_eq!(len, lumen_core::JsValue::Number(3.0));
+        let state = rt.eval("history.state.n").unwrap();
+        assert_eq!(state, lumen_core::JsValue::Number(3.0));
+    }
+
+    #[test]
+    fn window_object_exposes_history() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval("window.history === history").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn window_remove_event_listener_stops_popstate() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var count = 0; \
+             function handler(e) { count++; } \
+             window.addEventListener('popstate', handler); \
+             history.pushState({}, '', '/p'); \
+             history.back(); \
+             window.removeEventListener('popstate', handler); \
+             history.forward(); \
+             history.back();",
+        )
+        .unwrap();
+        // handler fires once (on first back), then is removed
+        let result = rt.eval("count").unwrap();
         assert_eq!(result, lumen_core::JsValue::Number(1.0));
     }
 }
