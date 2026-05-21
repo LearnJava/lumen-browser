@@ -159,7 +159,7 @@
 | # | Задача | impl / Разблокирует | НЕ блокирует |
 |---|---|---|---|
 | ~~1A~~ | ✅ **`[P2]` Font fallback/matcher** | — | — |
-| 1B | 🟡 **`[P2+P1]` Compositor thread + layer tree** | Off-main-thread scroll | P1/P3 работают против stub |
+| 1B | ✅ **`[P2+P1]` Compositor thread + layer tree** | Off-main-thread scroll | shell-интеграция active_tree() — P3 |
 | 1B.1 | ✅ CompositorThread struct + spawn loop | `paint/src/compositor.rs:277` | — |
 | 1B.2 | ✅ vsync tick-loop 60fps | `paint/src/compositor.rs:277` | — |
 | 1B.3 | ✅ PushBlendMode/PopBlendMode pipeline Phase 0 | `paint/src/renderer.rs:1834` | — |
