@@ -38,6 +38,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 21-border-style.html | Стили border: dashed/dotted/double | 16 | border-style: dashed · dotted · double (2/4/8/16px) · per-side mix · double thin fallback |
 | 22-transform.html | CSS transform | 30 | transform: translate · translateX/Y · rotate · scale · scaleX/Y · skewX · skewY · matrix() · combined · transform-origin (4 variants) |
 | 23-pseudo-elements.html | ::before / ::after block generation | 4 | ::before display:block · ::after display:block · both on one element · ::before с другой шириной |
+| 24-vertical-align.html | vertical-align | 6 | inline-block: top/middle/bottom · inline span: super/middle/sub (frag y-offset + bg) |
 | **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~58 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (Phase 0: квадрат в Lumen, скруглён в Edge) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) |
 
 ---
@@ -97,6 +98,8 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | transform-origin | 22 | % values (50% 50% default works; explicit % not tested) |
 | ::before (display:block, content) | 23 | inline ::before (text injection) |
 | ::after (display:block, content) | 23 | inline ::after (text injection) |
+| vertical-align: top / middle / bottom (inline-block) | 24 | — |
+| vertical-align: super / sub / middle (inline text y-offset) | 24 | length/percent (text-only, no visual without font) |
 
 ---
 

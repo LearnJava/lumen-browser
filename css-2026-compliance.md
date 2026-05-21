@@ -33,7 +33,7 @@ Legend: ✅ implemented & rendered · 🟡 parsed/stored, not rendered · ⬜ no
 | `list-style` | 🟡 | shorthand parsed |
 | `cursor` | 🟡 | stored; shell does not yet switch OS cursor |
 | `direction` | 🟡 | stored; bidi layout not applied |
-| `vertical-align` | 🟡 | parsed; inline y-offset not applied |
+| `vertical-align` | ✅ | baseline/top/middle/bottom/sub/super/length/percent applied as per-frag y_offset in InlineFrag |
 | `content` | 🟡 | string content generated for `::before`/`::after` block containers; `attr()`/`counter()` — deferred |
 | `counter-reset` | 🟡 | parsed |
 | `counter-increment` | 🟡 | parsed |

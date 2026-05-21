@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #fff; }
+  .__m { width: 1024px; height: 1px; background: #ff00ff; }
+
+  /* Test 1: inline-block vertical-align top / bottom / middle */
+  .row1 {
+    width: 400px;
+    height: 120px;
+    background: #eee;
+    margin: 20px;
+    white-space: nowrap;
+  }
+  .ib { display: inline-block; width: 80px; }
+  .top    { vertical-align: top;    height: 100px; background: #e63946; }
+  .middle { vertical-align: middle; height:  60px; background: #2a9d8f; }
+  .bottom { vertical-align: bottom; height:  40px; background: #457b9d; }
+
+  /* Test 2: vertical-align on inline elements — y-offset applied to frag background */
+  .row2 {
+    width: 600px;
+    height: 80px;
+    background: #f0f0f0;
+    margin: 20px;
+    font-size: 24px;
+    line-height: 2;
+  }
+  .v-super { vertical-align: super;  background: #f4a261; font-size: 14px; }
+  .v-sub   { vertical-align: sub;    background: #a8dadc; font-size: 14px; }
+  .v-mid   { vertical-align: middle; background: #6a994e; font-size: 16px; }
+</style>
+</head>
+<body>
+  <div class="__m"></div>
+
+  <!-- Test 1: inline-block positions -->
+  <div class="row1">
+    <div class="ib top"></div>
+    <div class="ib middle"></div>
+    <div class="ib bottom"></div>
+  </div>
+
+  <!-- Test 2: inline element y-offset -->
+  <div class="row2">
+    <span class="v-super">SUP</span><span class="v-mid">MID</span><span class="v-sub">SUB</span>
+  </div>
+</body>
+</html>
