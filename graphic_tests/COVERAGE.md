@@ -36,7 +36,8 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 19-object-fit.html | Вписывание изображения | 9 | object-fit: fill/contain/cover/none/scale-down · object-position |
 | 20-quirks-bgcolor.html | Устаревший bgcolor (Quirks mode) | 15 | CSS hashless hex · bgcolor attr on \<td\> · legacy color parsing |
 | 21-border-style.html | Стили border: dashed/dotted/double | 16 | border-style: dashed · dotted · double (2/4/8/16px) · per-side mix · double thin fallback |
-| **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~53 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (Phase 0: квадрат в Lumen, скруглён в Edge) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering |
+| 22-transform.html | CSS transform | 30 | transform: translate · translateX/Y · rotate · scale · scaleX/Y · skewX · skewY · matrix() · combined · transform-origin (4 variants) |
+| **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~58 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (Phase 0: квадрат в Lumen, скруглён в Edge) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) |
 
 ---
 
@@ -86,6 +87,13 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | object-fit (5 режимов) | 19 | — |
 | object-position | 19 | — |
 | legacy bgcolor / hashless hex | 20 | — |
+| transform: translate(x,y) / translateX / translateY | 22 | — |
+| transform: rotate(deg) | 22 | — |
+| transform: scale(x,y) / scaleX / scaleY | 22 | — |
+| transform: skewX / skewY | 22 | — |
+| transform: matrix(a,b,c,d,e,f) | 22 | — |
+| transform: combined (multiple functions) | 22 | — |
+| transform-origin | 22 | % values (50% 50% default works; explicit % not tested) |
 
 ---
 
@@ -100,4 +108,5 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **box-shadow: inset** — не реализовано в paint (требует clip)
 - **border-radius** — парсируется, но углы остаются прямыми (Phase 0)
 - **background-image** (gradient, url) — parse only (Phase 0)
-- **transform / filter / clip-path** — parse only (Phase 0)
+- **transform** — ✅ полностью реализован (translate/rotate/scale/skew/matrix + transform-origin), тест 22
+- **filter / clip-path** — parse only (Phase 0)

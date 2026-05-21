@@ -1,5 +1,4 @@
-In progress: transform matrix  branch: transform-matrix
-Next step: create 22-transform.html graphic test + update compliance tracker
+In progress: —
 
 Next: line-clamp                           style.rs — -webkit-line-clamp compat
 
@@ -17,4 +16,4 @@ Coordination rules:
   — Spec links: https://www.w3.org/TR/css-align-3/ etc.
   — Compliance tracker: css-2026-compliance.md
 
-Recent: background-image-url 2026-05-20 (DrawBackgroundImage paint pipeline + collect_background_image_requests + shell fetch, 12 tests), text-overflow 2026-05-20, text-decoration-thickness 2026-05-20
+Recent: transform-matrix 2026-05-21 (graphic test 22 + compliance tracker 🟡→✅: transform/transform-origin полностью, P2 сделал pipeline), background-image-url 2026-05-20, text-overflow 2026-05-20, text-decoration-thickness 2026-05-20
