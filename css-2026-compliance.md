@@ -178,8 +178,17 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 ### CSS Grid Layout Level 1 / Level 2
 | Property | Status |
 |---|---|
-| `display: grid` | ⬜ not implemented |
-| All `grid-*` properties | ⬜ |
+| `display: grid` | 🟡 parsed/stored; `lay_out_grid` in `box_tree.rs` — fr/auto algorithm Phase 0 stub |
+| `grid-template-columns`, `grid-template-rows` | 🟡 parsed |
+| `grid-auto-flow`, `grid-auto-columns`, `grid-auto-rows` | 🟡 parsed |
+| `grid-column-start/end`, `grid-row-start/end` | 🟡 parsed |
+| `grid-column`, `grid-row`, `grid-area`, `grid-template`, `grid` | 🟡 parsed/stored |
+
+### CSS Writing Modes Level 3
+| Property | Status |
+|---|---|
+| `writing-mode` | 🟡 parsed/stored (horizontal-tb / vertical-rl / vertical-lr / sideways-rl / sideways-lr + SVG legacy aliases); vertical layout — deferred |
+| `text-orientation` | 🟡 parsed/stored (mixed / upright / sideways); glyph rotation — deferred |
 
 ### CSS Color Adjustment Level 1
 | Property | Status |
@@ -427,3 +436,4 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | CSS Lists L3 | — | parse-only | rendering |
 | CSS Containment L3 | — | parse+store (contain, content-visibility) | layout/paint enforcement |
 | CSS Container Queries L1 | — | parse+store (container-type, container-name) | @container matching |
+| CSS Writing Modes L3 | — | parse+store (writing-mode, text-orientation) | vertical layout, glyph rotation |
