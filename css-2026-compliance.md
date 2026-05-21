@@ -338,10 +338,10 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 ### CSS Logical Properties Level 1
 | Property | Status |
 |---|---|
-| `inset-inline-*`, `inset-block-*` | ⬜ |
-| `margin-inline-*`, `margin-block-*` | ⬜ |
-| `padding-inline-*`, `padding-block-*` | ⬜ |
-| `border-inline-*`, `border-block-*` | ⬜ |
+| `inset-inline-*`, `inset-block-*` | ✅ parse+store (LTR) |
+| `margin-inline-*`, `margin-block-*` | ✅ parse+store (LTR) |
+| `padding-inline-*`, `padding-block-*` | ✅ parse+store (LTR) |
+| `border-inline-*`, `border-block-*` | ✅ parse+store (LTR) |
 
 ### CSS Overflow Scrolling
 | Property | Status |
@@ -396,7 +396,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | CSS Filters L1 | — | parse-only | paint apply |
 | CSS Positioned Layout L3 | ✅ static | others parse-only | OOF layout |
 | CSS Grid L1/L2 | — | — | ⬜ not started |
-| CSS Logical Properties L1 | — | — | ⬜ not started |
+| CSS Logical Properties L1 | ✅ parse+store (LTR) | — | full RTL/vertical |
 | CSS Nesting L1 | — | — | ⬜ not started |
 | CSS Multi-column L1 | — | parse-only | layout |
 | CSS Scroll Snap L1 | — | parse-only | — |

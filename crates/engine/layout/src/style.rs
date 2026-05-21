@@ -8095,6 +8095,23 @@ fn apply_declaration(
             set_margin_side(&mut style.bottom, b, is_quirks);
             set_margin_side(&mut style.left, l, is_quirks);
         }
+        // CSS Logical Properties L1 §8.2 — inset-inline-* / inset-block-*.
+        "inset-inline-start" => set_margin_side(&mut style.left, val, is_quirks),
+        "inset-inline-end"   => set_margin_side(&mut style.right, val, is_quirks),
+        "inset-block-start"  => set_margin_side(&mut style.top, val, is_quirks),
+        "inset-block-end"    => set_margin_side(&mut style.bottom, val, is_quirks),
+        "inset-inline" => {
+            let toks = split_box_tokens(val);
+            let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
+            set_margin_side(&mut style.left, s, is_quirks);
+            set_margin_side(&mut style.right, e, is_quirks);
+        }
+        "inset-block" => {
+            let toks = split_box_tokens(val);
+            let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
+            set_margin_side(&mut style.top, s, is_quirks);
+            set_margin_side(&mut style.bottom, e, is_quirks);
+        }
         "z-index" => {
             // CSS Positioned Layout L3 §9.3 — `auto | <integer>`.
             // `auto` → None (stacking context зависит от других триггеров);
@@ -8558,6 +8575,25 @@ fn apply_declaration(
         "margin-right" => set_margin_side(&mut style.margin_right, val, is_quirks),
         "margin-bottom" => set_margin_side(&mut style.margin_bottom, val, is_quirks),
         "margin-left" => set_margin_side(&mut style.margin_left, val, is_quirks),
+        // CSS Logical Properties L1 §6.1 — margin-inline-* / margin-block-*.
+        // Phase 0: LTR horizontal → inline-start=left, inline-end=right,
+        //          block-start=top, block-end=bottom.
+        "margin-inline-start" => set_margin_side(&mut style.margin_left, val, is_quirks),
+        "margin-inline-end"   => set_margin_side(&mut style.margin_right, val, is_quirks),
+        "margin-block-start"  => set_margin_side(&mut style.margin_top, val, is_quirks),
+        "margin-block-end"    => set_margin_side(&mut style.margin_bottom, val, is_quirks),
+        "margin-inline" => {
+            let toks = split_box_tokens(val);
+            let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
+            set_margin_side(&mut style.margin_left, s, is_quirks);
+            set_margin_side(&mut style.margin_right, e, is_quirks);
+        }
+        "margin-block" => {
+            let toks = split_box_tokens(val);
+            let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
+            set_margin_side(&mut style.margin_top, s, is_quirks);
+            set_margin_side(&mut style.margin_bottom, e, is_quirks);
+        }
         "padding" => {
             if let Some((t, r, b, l)) = parse_padding_shorthand(val, is_quirks) {
                 style.padding_top = t;
@@ -8570,6 +8606,23 @@ fn apply_declaration(
         "padding-right" => set_padding_side(&mut style.padding_right, val, is_quirks),
         "padding-bottom" => set_padding_side(&mut style.padding_bottom, val, is_quirks),
         "padding-left" => set_padding_side(&mut style.padding_left, val, is_quirks),
+        // CSS Logical Properties L1 §6.2 — padding-inline-* / padding-block-*.
+        "padding-inline-start" => set_padding_side(&mut style.padding_left, val, is_quirks),
+        "padding-inline-end"   => set_padding_side(&mut style.padding_right, val, is_quirks),
+        "padding-block-start"  => set_padding_side(&mut style.padding_top, val, is_quirks),
+        "padding-block-end"    => set_padding_side(&mut style.padding_bottom, val, is_quirks),
+        "padding-inline" => {
+            let toks = split_box_tokens(val);
+            let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
+            set_padding_side(&mut style.padding_left, s, is_quirks);
+            set_padding_side(&mut style.padding_right, e, is_quirks);
+        }
+        "padding-block" => {
+            let toks = split_box_tokens(val);
+            let (s, e) = match toks.as_slice() { [a] => (a, a), [a, b] => (a, b), _ => return };
+            set_padding_side(&mut style.padding_top, s, is_quirks);
+            set_padding_side(&mut style.padding_bottom, e, is_quirks);
+        }
         "text-decoration" => {
             // Shorthand: `<line> || <style> || <color>` в любом порядке (CSS Text
             // Decoration L3 §2.1). Спецификация L3 не включает thickness в
@@ -8650,6 +8703,47 @@ fn apply_declaration(
         "border-left" => apply_border_side_shorthand(
             &mut style.border_left_width, &mut style.border_left_style,
             &mut style.border_left_color, val, em_basis, viewport, is_quirks),
+        // CSS Logical Properties L1 §6.3 — border-inline-* / border-block-*.
+        "border-inline-start" => apply_border_side_shorthand(
+            &mut style.border_left_width, &mut style.border_left_style,
+            &mut style.border_left_color, val, em_basis, viewport, is_quirks),
+        "border-inline-end" => apply_border_side_shorthand(
+            &mut style.border_right_width, &mut style.border_right_style,
+            &mut style.border_right_color, val, em_basis, viewport, is_quirks),
+        "border-block-start" => apply_border_side_shorthand(
+            &mut style.border_top_width, &mut style.border_top_style,
+            &mut style.border_top_color, val, em_basis, viewport, is_quirks),
+        "border-block-end" => apply_border_side_shorthand(
+            &mut style.border_bottom_width, &mut style.border_bottom_style,
+            &mut style.border_bottom_color, val, em_basis, viewport, is_quirks),
+        "border-inline" => {
+            apply_border_side_shorthand(
+                &mut style.border_left_width, &mut style.border_left_style,
+                &mut style.border_left_color, val, em_basis, viewport, is_quirks);
+            apply_border_side_shorthand(
+                &mut style.border_right_width, &mut style.border_right_style,
+                &mut style.border_right_color, val, em_basis, viewport, is_quirks);
+        }
+        "border-block" => {
+            apply_border_side_shorthand(
+                &mut style.border_top_width, &mut style.border_top_style,
+                &mut style.border_top_color, val, em_basis, viewport, is_quirks);
+            apply_border_side_shorthand(
+                &mut style.border_bottom_width, &mut style.border_bottom_style,
+                &mut style.border_bottom_color, val, em_basis, viewport, is_quirks);
+        }
+        "border-inline-start-width" => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_left_width = v; } }
+        "border-inline-end-width"   => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_right_width = v; } }
+        "border-block-start-width"  => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_top_width = v; } }
+        "border-block-end-width"    => { if let Some(v) = resolve_box_length(val, em_basis, viewport, is_quirks) { style.border_bottom_width = v; } }
+        "border-inline-start-style" => style.border_left_style = parse_border_style_kw(val),
+        "border-inline-end-style"   => style.border_right_style = parse_border_style_kw(val),
+        "border-block-start-style"  => style.border_top_style = parse_border_style_kw(val),
+        "border-block-end-style"    => style.border_bottom_style = parse_border_style_kw(val),
+        "border-inline-start-color" => { if let Some(c) = parse_css_color_legacy(val, is_quirks) { style.border_left_color = c; } }
+        "border-inline-end-color"   => { if let Some(c) = parse_css_color_legacy(val, is_quirks) { style.border_right_color = c; } }
+        "border-block-start-color"  => { if let Some(c) = parse_css_color_legacy(val, is_quirks) { style.border_top_color = c; } }
+        "border-block-end-color"    => { if let Some(c) = parse_css_color_legacy(val, is_quirks) { style.border_bottom_color = c; } }
         "border-width" => {
             let sides = expand_border_4(val);
             if let Some(v) = resolve_box_length(sides[0], em_basis, viewport, is_quirks) { style.border_top_width = v; }
@@ -9524,6 +9618,20 @@ fn apply_css_wide_keyword(
             style.margin_bottom = src.margin_bottom.clone();
             style.margin_left = src.margin_left.clone();
         }
+        "margin-inline-start" => style.margin_left = if inh_only_inherit { inherited.margin_left.clone() } else { init.margin_left.clone() },
+        "margin-inline-end"   => style.margin_right = if inh_only_inherit { inherited.margin_right.clone() } else { init.margin_right.clone() },
+        "margin-block-start"  => style.margin_top = if inh_only_inherit { inherited.margin_top.clone() } else { init.margin_top.clone() },
+        "margin-block-end"    => style.margin_bottom = if inh_only_inherit { inherited.margin_bottom.clone() } else { init.margin_bottom.clone() },
+        "margin-inline" => {
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.margin_left = src.margin_left.clone();
+            style.margin_right = src.margin_right.clone();
+        }
+        "margin-block" => {
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.margin_top = src.margin_top.clone();
+            style.margin_bottom = src.margin_bottom.clone();
+        }
         "padding-top" => style.padding_top = if inh_only_inherit { inherited.padding_top.clone() } else { init.padding_top.clone() },
         "padding-right" => style.padding_right = if inh_only_inherit { inherited.padding_right.clone() } else { init.padding_right.clone() },
         "padding-bottom" => style.padding_bottom = if inh_only_inherit { inherited.padding_bottom.clone() } else { init.padding_bottom.clone() },
@@ -9534,6 +9642,20 @@ fn apply_css_wide_keyword(
             style.padding_right = src.padding_right.clone();
             style.padding_bottom = src.padding_bottom.clone();
             style.padding_left = src.padding_left.clone();
+        }
+        "padding-inline-start" => style.padding_left = if inh_only_inherit { inherited.padding_left.clone() } else { init.padding_left.clone() },
+        "padding-inline-end"   => style.padding_right = if inh_only_inherit { inherited.padding_right.clone() } else { init.padding_right.clone() },
+        "padding-block-start"  => style.padding_top = if inh_only_inherit { inherited.padding_top.clone() } else { init.padding_top.clone() },
+        "padding-block-end"    => style.padding_bottom = if inh_only_inherit { inherited.padding_bottom.clone() } else { init.padding_bottom.clone() },
+        "padding-inline" => {
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.padding_left = src.padding_left.clone();
+            style.padding_right = src.padding_right.clone();
+        }
+        "padding-block" => {
+            let src = if inh_only_inherit { inherited } else { &init };
+            style.padding_top = src.padding_top.clone();
+            style.padding_bottom = src.padding_bottom.clone();
         }
         "box-sizing" => {
             style.box_sizing = if inh_only_inherit { inherited.box_sizing } else { init.box_sizing };
@@ -9678,6 +9800,55 @@ fn apply_css_wide_keyword(
             style.border_left_style = if inh_only_inherit { inherited.border_left_style } else { init.border_left_style };
             style.border_left_color = if inh_only_inherit { inherited.border_left_color } else { init.border_left_color };
         }
+        // CSS Logical Properties L1 §6.3 — border-inline-* / border-block-* CSS-wide.
+        "border-inline-start" => {
+            style.border_left_width = if inh_only_inherit { inherited.border_left_width } else { init.border_left_width };
+            style.border_left_style = if inh_only_inherit { inherited.border_left_style } else { init.border_left_style };
+            style.border_left_color = if inh_only_inherit { inherited.border_left_color } else { init.border_left_color };
+        }
+        "border-inline-end" => {
+            style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init.border_right_width };
+            style.border_right_style = if inh_only_inherit { inherited.border_right_style } else { init.border_right_style };
+            style.border_right_color = if inh_only_inherit { inherited.border_right_color } else { init.border_right_color };
+        }
+        "border-block-start" => {
+            style.border_top_width = if inh_only_inherit { inherited.border_top_width } else { init.border_top_width };
+            style.border_top_style = if inh_only_inherit { inherited.border_top_style } else { init.border_top_style };
+            style.border_top_color = if inh_only_inherit { inherited.border_top_color } else { init.border_top_color };
+        }
+        "border-block-end" => {
+            style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init.border_bottom_width };
+            style.border_bottom_style = if inh_only_inherit { inherited.border_bottom_style } else { init.border_bottom_style };
+            style.border_bottom_color = if inh_only_inherit { inherited.border_bottom_color } else { init.border_bottom_color };
+        }
+        "border-inline" => {
+            style.border_left_width  = if inh_only_inherit { inherited.border_left_width  } else { init.border_left_width  };
+            style.border_left_style  = if inh_only_inherit { inherited.border_left_style  } else { init.border_left_style  };
+            style.border_left_color  = if inh_only_inherit { inherited.border_left_color  } else { init.border_left_color  };
+            style.border_right_width = if inh_only_inherit { inherited.border_right_width } else { init.border_right_width };
+            style.border_right_style = if inh_only_inherit { inherited.border_right_style } else { init.border_right_style };
+            style.border_right_color = if inh_only_inherit { inherited.border_right_color } else { init.border_right_color };
+        }
+        "border-block" => {
+            style.border_top_width    = if inh_only_inherit { inherited.border_top_width    } else { init.border_top_width    };
+            style.border_top_style    = if inh_only_inherit { inherited.border_top_style    } else { init.border_top_style    };
+            style.border_top_color    = if inh_only_inherit { inherited.border_top_color    } else { init.border_top_color    };
+            style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init.border_bottom_width };
+            style.border_bottom_style = if inh_only_inherit { inherited.border_bottom_style } else { init.border_bottom_style };
+            style.border_bottom_color = if inh_only_inherit { inherited.border_bottom_color } else { init.border_bottom_color };
+        }
+        "border-inline-start-width" => style.border_left_width   = if inh_only_inherit { inherited.border_left_width   } else { init.border_left_width   },
+        "border-inline-end-width"   => style.border_right_width  = if inh_only_inherit { inherited.border_right_width  } else { init.border_right_width  },
+        "border-block-start-width"  => style.border_top_width    = if inh_only_inherit { inherited.border_top_width    } else { init.border_top_width    },
+        "border-block-end-width"    => style.border_bottom_width = if inh_only_inherit { inherited.border_bottom_width } else { init.border_bottom_width },
+        "border-inline-start-style" => style.border_left_style   = if inh_only_inherit { inherited.border_left_style   } else { init.border_left_style   },
+        "border-inline-end-style"   => style.border_right_style  = if inh_only_inherit { inherited.border_right_style  } else { init.border_right_style  },
+        "border-block-start-style"  => style.border_top_style    = if inh_only_inherit { inherited.border_top_style    } else { init.border_top_style    },
+        "border-block-end-style"    => style.border_bottom_style = if inh_only_inherit { inherited.border_bottom_style } else { init.border_bottom_style },
+        "border-inline-start-color" => style.border_left_color   = if inh_only_inherit { inherited.border_left_color   } else { init.border_left_color   },
+        "border-inline-end-color"   => style.border_right_color  = if inh_only_inherit { inherited.border_right_color  } else { init.border_right_color  },
+        "border-block-start-color"  => style.border_top_color    = if inh_only_inherit { inherited.border_top_color    } else { init.border_top_color    },
+        "border-block-end-color"    => style.border_bottom_color = if inh_only_inherit { inherited.border_bottom_color } else { init.border_bottom_color },
         // border-radius (CSS Backgrounds L3 §5) — 4 угла.
         "border-top-left-radius" => {
             style.border_top_left_radius = if inh_only_inherit { inherited.border_top_left_radius } else { init.border_top_left_radius };
@@ -9749,6 +9920,18 @@ fn apply_css_wide_keyword(
             style.right = if inh_only_inherit { inherited.right.clone() } else { init.right.clone() };
             style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() };
             style.left = if inh_only_inherit { inherited.left.clone() } else { init.left.clone() };
+        }
+        "inset-inline-start" => style.left   = if inh_only_inherit { inherited.left.clone()   } else { init.left.clone()   },
+        "inset-inline-end"   => style.right  = if inh_only_inherit { inherited.right.clone()  } else { init.right.clone()  },
+        "inset-block-start"  => style.top    = if inh_only_inherit { inherited.top.clone()    } else { init.top.clone()    },
+        "inset-block-end"    => style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() },
+        "inset-inline" => {
+            style.left  = if inh_only_inherit { inherited.left.clone()  } else { init.left.clone()  };
+            style.right = if inh_only_inherit { inherited.right.clone() } else { init.right.clone() };
+        }
+        "inset-block" => {
+            style.top    = if inh_only_inherit { inherited.top.clone()    } else { init.top.clone()    };
+            style.bottom = if inh_only_inherit { inherited.bottom.clone() } else { init.bottom.clone() };
         }
         "z-index" => {
             style.z_index = if inh_only_inherit { inherited.z_index } else { init.z_index };
@@ -16840,5 +17023,129 @@ mod tests {
         let div = doc.get(doc.root()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.widows, 2);
+    }
+
+    // ──────────── CSS Logical Properties L1 ────────────
+
+    #[test]
+    fn margin_inline_start_maps_to_margin_left() {
+        let s = cascade_at("<div>", "div { margin-inline-start: 10px; }", &[0]);
+        assert_eq!(s.margin_left, LengthOrAuto::Length(Length::Px(10.0)));
+    }
+
+    #[test]
+    fn margin_inline_end_maps_to_margin_right() {
+        let s = cascade_at("<div>", "div { margin-inline-end: 20px; }", &[0]);
+        assert_eq!(s.margin_right, LengthOrAuto::Length(Length::Px(20.0)));
+    }
+
+    #[test]
+    fn margin_block_start_maps_to_margin_top() {
+        let s = cascade_at("<div>", "div { margin-block-start: 5px; }", &[0]);
+        assert_eq!(s.margin_top, LengthOrAuto::Length(Length::Px(5.0)));
+    }
+
+    #[test]
+    fn margin_block_end_maps_to_margin_bottom() {
+        let s = cascade_at("<div>", "div { margin-block-end: 15px; }", &[0]);
+        assert_eq!(s.margin_bottom, LengthOrAuto::Length(Length::Px(15.0)));
+    }
+
+    #[test]
+    fn margin_inline_shorthand_two_values() {
+        let s = cascade_at("<div>", "div { margin-inline: 8px 12px; }", &[0]);
+        assert_eq!(s.margin_left,  LengthOrAuto::Length(Length::Px(8.0)));
+        assert_eq!(s.margin_right, LengthOrAuto::Length(Length::Px(12.0)));
+    }
+
+    #[test]
+    fn margin_block_shorthand_one_value() {
+        let s = cascade_at("<div>", "div { margin-block: 6px; }", &[0]);
+        assert_eq!(s.margin_top,    LengthOrAuto::Length(Length::Px(6.0)));
+        assert_eq!(s.margin_bottom, LengthOrAuto::Length(Length::Px(6.0)));
+    }
+
+    #[test]
+    fn padding_inline_start_maps_to_padding_left() {
+        let s = cascade_at("<div>", "div { padding-inline-start: 10px; }", &[0]);
+        assert_eq!(s.padding_left, Length::Px(10.0));
+    }
+
+    #[test]
+    fn padding_inline_end_maps_to_padding_right() {
+        let s = cascade_at("<div>", "div { padding-inline-end: 20px; }", &[0]);
+        assert_eq!(s.padding_right, Length::Px(20.0));
+    }
+
+    #[test]
+    fn padding_block_shorthand_two_values() {
+        let s = cascade_at("<div>", "div { padding-block: 4px 8px; }", &[0]);
+        assert_eq!(s.padding_top,    Length::Px(4.0));
+        assert_eq!(s.padding_bottom, Length::Px(8.0));
+    }
+
+    #[test]
+    fn padding_inline_shorthand_one_value() {
+        let s = cascade_at("<div>", "div { padding-inline: 7px; }", &[0]);
+        assert_eq!(s.padding_left,  Length::Px(7.0));
+        assert_eq!(s.padding_right, Length::Px(7.0));
+    }
+
+    #[test]
+    fn inset_inline_start_maps_to_left() {
+        let s = cascade_at("<div>", "div { position: absolute; inset-inline-start: 5px; }", &[0]);
+        assert_eq!(s.left, LengthOrAuto::Length(Length::Px(5.0)));
+    }
+
+    #[test]
+    fn inset_block_end_maps_to_bottom() {
+        let s = cascade_at("<div>", "div { position: absolute; inset-block-end: 3px; }", &[0]);
+        assert_eq!(s.bottom, LengthOrAuto::Length(Length::Px(3.0)));
+    }
+
+    #[test]
+    fn inset_inline_shorthand() {
+        let s = cascade_at("<div>", "div { position: absolute; inset-inline: 2px 4px; }", &[0]);
+        assert_eq!(s.left,  LengthOrAuto::Length(Length::Px(2.0)));
+        assert_eq!(s.right, LengthOrAuto::Length(Length::Px(4.0)));
+    }
+
+    #[test]
+    fn inset_block_shorthand() {
+        let s = cascade_at("<div>", "div { position: absolute; inset-block: 1px; }", &[0]);
+        assert_eq!(s.top,    LengthOrAuto::Length(Length::Px(1.0)));
+        assert_eq!(s.bottom, LengthOrAuto::Length(Length::Px(1.0)));
+    }
+
+    #[test]
+    fn border_inline_start_maps_to_border_left() {
+        let s = cascade_at("<div>", "div { border-inline-start: 3px solid red; }", &[0]);
+        assert_eq!(s.border_left_style, BorderStyle::Solid);
+        assert!((s.border_left_width - 3.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn border_block_end_maps_to_border_bottom() {
+        let s = cascade_at("<div>", "div { border-block-end: 2px dashed blue; }", &[0]);
+        assert_eq!(s.border_bottom_style, BorderStyle::Dashed);
+        assert!((s.border_bottom_width - 2.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn border_inline_start_width_longhand() {
+        let s = cascade_at("<div>", "div { border-inline-start-width: 5px; }", &[0]);
+        assert!((s.border_left_width - 5.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn border_block_start_style_longhand() {
+        let s = cascade_at("<div>", "div { border-block-start-style: dotted; }", &[0]);
+        assert_eq!(s.border_top_style, BorderStyle::Dotted);
+    }
+
+    #[test]
+    fn border_inline_end_color_longhand() {
+        let s = cascade_at("<div>", "div { border-inline-end-color: #ff0000; }", &[0]);
+        assert_eq!(s.border_right_color, CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }));
     }
 }
