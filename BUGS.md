@@ -34,7 +34,7 @@ BUG-014 | OPEN             | image           | JPEG not decoded (PNG only)
 BUG-015 | OPEN             | shell/paint     | broken <img> src shows no alt text
 BUG-017 | OPEN             | layout/paint    | text-decoration-style ignored (all render as solid)
 BUG-018 | OPEN             | layout          | text-decoration-color ignored (always inherits text color)
-BUG-023 | OPEN             | paint           | opacity sub-pixel deviation ~2% (улучшилось с 16% после IFC-фиксов)
+BUG-023 | OPEN             | layout+paint    | opacity deviation 2.20% — compositing correct; root: InlineBlockRow baseline + no edge-AA
 BUG-024 | OPEN             | layout          | box-sizing: content-box — border not added to outer size
 BUG-025 | OPEN             | layout          | max-height does not clamp block height
 BUG-026 | OPEN             | layout/paint    | <img> CSS/HTML width+height ignored — renders at natural size
@@ -192,12 +192,16 @@ Block-элемент с `width: 400px` берёт 100% ширины viewport. П
 
 ---
 
-### BUG-023 · opacity игнорируется (РЕГРЕССИЯ)
+### BUG-023 · opacity sub-pixel deviation
 
-**Статус:** OPEN (REGRESSION — было FIXED коммитом `356ba0d`, ветка `offscreen-opacity-1b4`)  
-**Компонент:** `lumen-paint`
+**Статус:** OPEN (deviation 2.20% > 1% threshold; opacity compositing correct)  
+**Компонент:** `lumen-paint` + `lumen-layout`
 
-TEST-13: 6 боксов с opacity 0.1–1.0 в Edge дают градиент прозрачности. В Lumen все одинаковый сплошной цвет. Нужно найти что сломало фикс после мержа.
+Opacity compositing математически корректен: `PushOpacity`/`PopOpacity` + off-screen layer composite shader (`c.rgb * in.alpha + white * (1 - in.alpha)`). TEST-13 (2.20%) не хуже TEST-02 color-named (2.35%) без opacity — т.е. opacity не добавляет ошибку.
+
+Оставшиеся 2.2%: (1) ~0.6% — InlineBlockRow добавляет 3.86px descender-зону из-за font-baseline strut, смещая opacity-боксы относительно Edge; (2) ~1.6% — edge antialiasing: Edge сглаживает рёбра, Lumen нет.
+
+**Для снижения ниже 1%:** P1-фикс InlineBlockRow baseline height + edge antialiasing в renderer (MSAA). Точечным фиксом в P2 не решается.
 
 ---
 
