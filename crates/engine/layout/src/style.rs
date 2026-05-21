@@ -1784,6 +1784,11 @@ pub struct ComputedStyle {
     /// и Unicode line-break tables — отложено до интеграции `UnicodeProvider`
     /// (provisional `icu4x`, P1 п.5).
     pub text_wrap_style: TextWrapStyle,
+    /// CSS Overflow L4 / compat `-webkit-line-clamp` — максимальное число
+    /// строк до обрезки текста. `None` = `none` (нет ограничения). Не
+    /// наследуется. Phase 0: parsing + storage; реальное применение (truncate
+    /// inline-flow после N-й строки и добавить ellipsis) — отдельная задача.
+    pub line_clamp: Option<u32>,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -3226,6 +3231,7 @@ impl ComputedStyle {
             grid_row_end: GridLine::Auto,
             text_wrap_mode: TextWrapMode::Wrap,
             text_wrap_style: TextWrapStyle::Auto,
+            line_clamp: None,
         }
     }
 }
@@ -3446,6 +3452,8 @@ pub fn compute_style(
         // CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style inherited.
         text_wrap_mode: inherited.text_wrap_mode,
         text_wrap_style: inherited.text_wrap_style,
+        // CSS Overflow L4 — line-clamp не наследуется. Initial = none.
+        line_clamp: None,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -7563,6 +7571,18 @@ fn apply_declaration(
                 _ => style.text_overflow,
             };
         }
+        "-webkit-line-clamp" | "line-clamp" => {
+            // CSS Overflow L4 §13.4 / compat -webkit-line-clamp.
+            // Значения: `none` → None; <integer> > 0 → Some(n).
+            let v = val.trim();
+            style.line_clamp = if v == "none" {
+                None
+            } else if let Ok(n) = v.parse::<u32>() {
+                if n > 0 { Some(n) } else { None }
+            } else {
+                style.line_clamp
+            };
+        }
         "cursor" => {
             // CSS UI L4 §8.1: список url(), затем обязательный keyword.
             // url(...) пока не поддерживаем — берём ПОСЛЕДНИЙ
@@ -9508,6 +9528,9 @@ fn apply_css_wide_keyword(
         }
         "text-overflow" => {
             style.text_overflow = if inh_only_inherit { inherited.text_overflow } else { init.text_overflow };
+        }
+        "-webkit-line-clamp" | "line-clamp" => {
+            style.line_clamp = if inh_only_inherit { inherited.line_clamp } else { init.line_clamp };
         }
         "box-shadow" => {
             style.box_shadow = if inh_only_inherit {
@@ -16630,5 +16653,68 @@ mod tests {
         // div с width атрибутом — не presentational hint (div — не td/th/table).
         let s = cascade_at("<div width=\"200\">", "", &[0]);
         assert_eq!(s.width, None);
+    }
+
+    #[test]
+    fn line_clamp_integer_value() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { -webkit-line-clamp: 3; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.line_clamp, Some(3));
+    }
+
+    #[test]
+    fn line_clamp_standard_property() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { line-clamp: 5; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.line_clamp, Some(5));
+    }
+
+    #[test]
+    fn line_clamp_initial_value_is_none() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.line_clamp, None);
+    }
+
+    #[test]
+    fn line_clamp_none_keyword() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { -webkit-line-clamp: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.line_clamp, None);
+    }
+
+    #[test]
+    fn line_clamp_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { -webkit-line-clamp: 2; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.line_clamp, Some(2));
+        assert_eq!(span_style.line_clamp, None);
+    }
+
+    #[test]
+    fn line_clamp_zero_is_none() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { -webkit-line-clamp: 0; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.line_clamp, None);
     }
 }
