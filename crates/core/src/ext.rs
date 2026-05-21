@@ -996,6 +996,53 @@ impl HyphenationProvider for NullHyphenationProvider {
     }
 }
 
+// ============================================================================
+// RFC 6455 WebSocket — точка расширения для WS/WSS-соединений.
+// ============================================================================
+
+/// Сообщение, полученное от WebSocket-сервера (RFC 6455 §5.6).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WsMessage {
+    /// Текстовый фрейм (opcode 0x1), payload — UTF-8.
+    Text(String),
+    /// Бинарный фрейм (opcode 0x2).
+    Binary(Vec<u8>),
+    /// Ping-фрейм (opcode 0x9). Браузер должен ответить Pong.
+    Ping(Vec<u8>),
+    /// Pong-фрейм (opcode 0xA) — ответ на Ping или unsolicited keepalive.
+    Pong(Vec<u8>),
+    /// Close-фрейм (opcode 0x8). `code` — RFC 6455 §7.4 status code.
+    Close { code: Option<u16>, reason: String },
+}
+
+/// Открытое WebSocket-соединение. Объект владеет TCP/TLS-стримом.
+/// Не `Sync` — соединение не делится между потоками, оно принадлежит
+/// одной вкладке.
+pub trait WebSocketSession: Send {
+    /// Отправить текстовое сообщение (один фрейм, fin=1).
+    fn send_text(&mut self, text: &str) -> Result<()>;
+    /// Отправить бинарное сообщение (один фрейм, fin=1).
+    fn send_binary(&mut self, data: &[u8]) -> Result<()>;
+    /// Получить следующее сообщение. Блокирует до прихода данных или ошибки.
+    /// Фрагментированные сообщения собираются внутри (RFC 6455 §5.4).
+    fn recv(&mut self) -> Result<WsMessage>;
+    /// Инициировать закрытие: отправить Close-фрейм с кодом и причиной.
+    fn close(&mut self, code: u16, reason: &str) -> Result<()>;
+}
+
+/// Фабрика WebSocket-соединений. Реализуется `lumen-network::HttpClient`.
+///
+/// URL должен использовать схему `ws://` или `wss://`. Ошибка возвращается,
+/// если хост недоступен, TLS-handshake провалился или сервер не вернул 101.
+pub trait WebSocketProvider: Send + Sync {
+    fn connect_ws(
+        &self,
+        url: &Url,
+        tab_id: crate::event::TabId,
+        sink: std::sync::Arc<dyn EventSink>,
+    ) -> Result<Box<dyn WebSocketSession>>;
+}
+
 // Точки расширения, спроектированные, но без интерфейса до Phase 1+.
 //
 // Trait-ы для трёх оставшихся «разрешённых exceptions» из §5 (внешние

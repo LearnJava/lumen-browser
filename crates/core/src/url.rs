@@ -286,8 +286,8 @@ fn split_at_any<'a>(s: &'a str, chars: &[char]) -> (&'a str, &'a str) {
 
 fn default_port(scheme: &str) -> Option<u16> {
     match scheme {
-        "http" => Some(80),
-        "https" => Some(443),
+        "http" | "ws"  => Some(80),
+        "https" | "wss" => Some(443),
         _ => None,
     }
 }

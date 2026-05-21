@@ -66,4 +66,12 @@ pub enum Event {
         kind: SubresourceKind,
         priority: FetchPriority,
     },
+    /// RFC 6455 §1.3: handshake завершён, соединение открыто.
+    WebSocketConnected { tab_id: TabId, url: Url },
+    /// Получено сообщение от сервера (текст или бинарные данные).
+    WebSocketMessage { tab_id: TabId, url: Url, is_binary: bool, len: usize },
+    /// Соединение закрыто (либо нормально, либо по ошибке).
+    WebSocketClosed { tab_id: TabId, url: Url, code: Option<u16>, reason: String },
+    /// Ошибка транспортного слоя (до или после открытия).
+    WebSocketError { tab_id: TabId, url: Url, message: String },
 }

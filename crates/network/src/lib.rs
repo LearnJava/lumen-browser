@@ -24,7 +24,7 @@ use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, TabId};
 use lumen_core::ext::{
     ContentDecoder, DnsResolver, EventSink, HstsEnforcement, HttpAuthScheme,
-    HttpCredentialProvider, NetworkTransport, RequestFilter,
+    HttpCredentialProvider, NetworkTransport, RequestFilter, WebSocketProvider, WebSocketSession,
 };
 use lumen_core::url::Url;
 
@@ -41,6 +41,7 @@ mod origin;
 mod pool;
 mod range;
 mod sandbox;
+pub(crate) mod websocket;
 pub use auth::StaticCredentialProvider;
 pub use brotli::BrotliContentDecoder;
 pub use cors::{
@@ -1670,6 +1671,24 @@ impl NetworkTransport for HttpClient {
             None,
         )
         .map(|resp| resp.body)
+    }
+}
+
+impl WebSocketProvider for HttpClient {
+    fn connect_ws(
+        &self,
+        url: &Url,
+        tab_id: TabId,
+        sink: Arc<dyn EventSink>,
+    ) -> Result<Box<dyn WebSocketSession>> {
+        let ws = websocket::WebSocket::connect(
+            url,
+            self.resolver.as_ref(),
+            self.hsts.as_deref(),
+            sink,
+            tab_id,
+        )?;
+        Ok(Box::new(ws))
     }
 }
 
