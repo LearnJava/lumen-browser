@@ -405,6 +405,21 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | `container-type` | 🟡 | parsed/stored (normal/size/inline-size); @container query matching — deferred |
 | `container-name` | 🟡 | parsed/stored as `Vec<String>` of `<custom-ident>`; `container` shorthand supported |
 
+### CSS Shapes Level 1
+| Property | Status | Notes |
+|---|---|---|
+| `shape-outside` | 🟡 | parsed/stored as raw string (basic-shape/url/box); shape layout offset — deferred |
+| `shape-margin` | 🟡 | parsed/stored (non-negative length/percentage) |
+| `shape-image-threshold` | 🟡 | parsed/stored (0.0–1.0 clamped); image alpha extraction — deferred |
+
+### CSS Motion Path Level 1
+| Property | Status | Notes |
+|---|---|---|
+| `offset-path` | 🟡 | parsed/stored as raw string (path()/ray()/url()); motion layout — deferred |
+| `offset-distance` | 🟡 | parsed/stored (length/percentage along path) |
+| `offset-rotate` | 🟡 | parsed/stored (auto/reverse/`<angle>`/`auto <angle>`) |
+| `offset-anchor` | 🟡 | parsed/stored using ObjectPosition (auto → None) |
+
 ---
 
 ## Summary by module
@@ -434,3 +449,5 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | CSS Lists L3 | — | parse-only | rendering |
 | CSS Containment L3 | — | parse+store (contain, content-visibility) | layout/paint enforcement |
 | CSS Container Queries L1 | — | parse+store (container-type, container-name) | @container matching |
+| CSS Shapes L1 | — | parse+store (shape-outside/margin/threshold) | float shape offset |
+| CSS Motion Path L1 | — | parse+store (offset-path/distance/rotate/anchor) | path layout |
