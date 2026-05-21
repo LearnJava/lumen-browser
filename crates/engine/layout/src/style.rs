@@ -55,6 +55,21 @@ pub enum TextAlign {
     Right,
 }
 
+/// CSS Text L3 §7.2 — `text-align-last`. NOT inherited. Initial: `Auto`.
+/// Выравнивание последней (или единственной) строки блока.
+/// Phase 0: parse + store; применение при line layout — деferred.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TextAlignLast {
+    #[default]
+    Auto,
+    Start,
+    End,
+    Left,
+    Right,
+    Center,
+    Justify,
+}
+
 /// CSS Writing Modes L3 §2.1 — `direction: ltr | rtl`. Inherited.
 ///
 /// Базовое направление потока inline-контента. В Phase 0 layout только
@@ -1398,6 +1413,9 @@ pub fn parse_css_wide_keyword(value: &str) -> Option<CssWideKeyword> {
 pub struct ComputedStyle {
     pub display: Display,
     pub text_align: TextAlign,
+    /// CSS Text L3 §7.2 — `text-align-last`. NOT inherited. Initial: `Auto`.
+    /// Phase 0: parse + store; применение при line layout — deferred.
+    pub text_align_last: TextAlignLast,
     /// CSS Writing Modes L3 §2.1 — направление inline-потока. Inherited.
     /// В Phase 0 layout/paint его пока не применяют — задел под bidi и
     /// HTML `dir`-атрибут. См. `Direction` для подробностей.
@@ -1684,6 +1702,12 @@ pub struct ComputedStyle {
     pub will_change: Vec<String>,
     /// CSS Pointer Events L1. Default `auto`. Не наследуется.
     pub pointer_events: PointerEvents,
+    /// CSS Pointer Events L3 / Touch Events — `touch-action`. NOT inherited. Initial: `Auto`.
+    /// Phase 0: parse + store; обработка touch-жестов — P3 task.
+    pub touch_action: TouchAction,
+    /// CSS Basic UI L4 §5 — `appearance`. NOT inherited. Initial: `Auto`.
+    /// Phase 0: parse + store; form-widget styling — P2/P3 task.
+    pub appearance: Appearance,
     /// CSS UI L4 §6.2 — `user-select`. Inherited (по спеке).
     pub user_select: UserSelect,
     /// CSS Basic UI L4 §6 — `resize`. NOT inherited. Initial: `None`.
@@ -2122,6 +2146,37 @@ impl Hyphens {
             _ => None,
         }
     }
+}
+
+/// CSS Pointer Events L3 / Touch Events — `touch-action`. NOT inherited. Initial: `Auto`.
+/// Указывает, какими жестами UA управляет самостоятельно (pan/zoom).
+/// Phase 0: parse + store; реальная обработка touch-жестов — P3 task.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum TouchAction {
+    #[default]
+    Auto,
+    None,
+    PanX,
+    PanLeft,
+    PanRight,
+    PanY,
+    PanUp,
+    PanDown,
+    PinchZoom,
+    Manipulation,
+}
+
+/// CSS Basic UI L4 §5 — `appearance`. NOT inherited. Initial: `Auto`.
+/// Контролирует отображение элемента согласно UA-теме (форм-виджеты).
+/// Phase 0: parse + store; реальная стилизация форм-виджетов — P2/P3 task.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Appearance {
+    #[default]
+    Auto,
+    None,
+    /// `menulist-button` / `searchfield` / `textfield` / `button` и прочие
+    /// platform-специфичные значения — хранятся как Compat.
+    Compat,
 }
 
 /// CSS Pointer Events L1. Default `auto`.
@@ -3168,6 +3223,7 @@ impl ComputedStyle {
         Self {
             display: Display::Block,
             text_align: TextAlign::Left,
+            text_align_last: TextAlignLast::Auto,
             direction: Direction::Ltr,
             color: Color::BLACK,
             color_space: ColorSpace::Srgb,
@@ -3281,6 +3337,8 @@ impl ComputedStyle {
             background_position: ObjectPosition::background_initial(),
             will_change: Vec::new(),
             pointer_events: PointerEvents::Auto,
+            touch_action: TouchAction::Auto,
+            appearance: Appearance::Auto,
             user_select: UserSelect::Auto,
             resize: Resize::None,
             scroll_behavior: ScrollBehavior::Auto,
@@ -3497,6 +3555,9 @@ pub fn compute_style(
         // Will Change / Pointer Events — не наследуются.
         will_change: Vec::new(),
         pointer_events: PointerEvents::Auto,
+        touch_action: TouchAction::Auto,
+        appearance: Appearance::Auto,
+        text_align_last: TextAlignLast::Auto,
         // User Select / Scroll Behavior — наследуются.
         user_select: inherited.user_select,
         resize: Resize::None,
@@ -7341,6 +7402,18 @@ fn apply_declaration(
                 _ => style.text_align,
             };
         }
+        "text-align-last" => {
+            style.text_align_last = match val.trim() {
+                "auto" => TextAlignLast::Auto,
+                "start" => TextAlignLast::Start,
+                "end" => TextAlignLast::End,
+                "left" => TextAlignLast::Left,
+                "right" => TextAlignLast::Right,
+                "center" => TextAlignLast::Center,
+                "justify" => TextAlignLast::Justify,
+                _ => style.text_align_last,
+            };
+        }
         "direction" => {
             // CSS Writing Modes L3 §2.1. Keyword-ы case-insensitive по
             // правилам CSS («property keyword values are ASCII case-
@@ -8369,6 +8442,39 @@ fn apply_declaration(
             if let Some(v) = PointerEvents::parse(val) {
                 style.pointer_events = v;
             }
+        }
+        "touch-action" => {
+            let v = val.trim();
+            style.touch_action = if v.contains("manipulation") {
+                TouchAction::Manipulation
+            } else if v == "none" {
+                TouchAction::None
+            } else if v == "auto" {
+                TouchAction::Auto
+            } else if v.contains("pan-left") {
+                TouchAction::PanLeft
+            } else if v.contains("pan-right") {
+                TouchAction::PanRight
+            } else if v.contains("pan-x") {
+                TouchAction::PanX
+            } else if v.contains("pan-up") {
+                TouchAction::PanUp
+            } else if v.contains("pan-down") {
+                TouchAction::PanDown
+            } else if v.contains("pan-y") {
+                TouchAction::PanY
+            } else if v.contains("pinch-zoom") {
+                TouchAction::PinchZoom
+            } else {
+                style.touch_action
+            };
+        }
+        "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+            style.appearance = match val.trim() {
+                "auto" => Appearance::Auto,
+                "none" => Appearance::None,
+                _ => Appearance::Compat,
+            };
         }
         "user-select" => {
             if let Some(v) = UserSelect::parse(val) {
@@ -9751,6 +9857,13 @@ fn apply_css_wide_keyword(
         "text-align" => {
             style.text_align = if inh { inherited.text_align } else { init.text_align };
         }
+        "text-align-last" => {
+            style.text_align_last = if inh_only_inherit {
+                inherited.text_align_last
+            } else {
+                init.text_align_last
+            };
+        }
         "direction" => {
             style.direction = if inh { inherited.direction } else { init.direction };
         }
@@ -9872,6 +9985,12 @@ fn apply_css_wide_keyword(
         // ──────── Non-inherited properties ────────
         "resize" => {
             style.resize = if inh_only_inherit { inherited.resize } else { init.resize };
+        }
+        "touch-action" => {
+            style.touch_action = if inh_only_inherit { inherited.touch_action } else { init.touch_action };
+        }
+        "appearance" | "-webkit-appearance" | "-moz-appearance" => {
+            style.appearance = if inh_only_inherit { inherited.appearance } else { init.appearance };
         }
         "forced-color-adjust" => {
             style.forced_color_adjust = if inh_only_inherit {
@@ -17888,5 +18007,140 @@ mod tests {
         let div = doc.get(doc.root()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.line_break, LineBreak::Auto);
+    }
+
+    // --- text-align-last ---
+
+    #[test]
+    fn text_align_last_basic() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-align-last: justify; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.text_align_last, TextAlignLast::Justify);
+    }
+
+    #[test]
+    fn text_align_last_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.text_align_last, TextAlignLast::Auto);
+    }
+
+    #[test]
+    fn text_align_last_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { text-align-last: right; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.text_align_last, TextAlignLast::Right);
+        assert_eq!(span_style.text_align_last, TextAlignLast::Auto);
+    }
+
+    #[test]
+    fn text_align_last_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { text-align-last: bogus; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.text_align_last, TextAlignLast::Auto);
+    }
+
+    // --- touch-action ---
+
+    #[test]
+    fn touch_action_basic() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { touch-action: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.touch_action, TouchAction::None);
+    }
+
+    #[test]
+    fn touch_action_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.touch_action, TouchAction::Auto);
+    }
+
+    #[test]
+    fn touch_action_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { touch-action: manipulation; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.touch_action, TouchAction::Manipulation);
+        assert_eq!(span_style.touch_action, TouchAction::Auto);
+    }
+
+    #[test]
+    fn touch_action_pan_values() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { touch-action: pan-y; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.touch_action, TouchAction::PanY);
+    }
+
+    // --- appearance ---
+
+    #[test]
+    fn appearance_basic() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { appearance: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.appearance, Appearance::None);
+    }
+
+    #[test]
+    fn appearance_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.appearance, Appearance::Auto);
+    }
+
+    #[test]
+    fn appearance_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { appearance: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.appearance, Appearance::None);
+        assert_eq!(span_style.appearance, Appearance::Auto);
+    }
+
+    #[test]
+    fn appearance_webkit_prefix() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { -webkit-appearance: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.appearance, Appearance::None);
     }
 }

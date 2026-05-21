@@ -227,6 +227,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | Property | Status | Notes |
 |---|---|---|
 | `text-align` | ✅ | left / right / center / justify |
+| `text-align-last` | 🟡 | parsed/stored (auto/start/end/left/right/center/justify); applies to last line |
 | `text-indent` | ✅ | |
 | `letter-spacing` | ✅ | |
 | `word-spacing` | ✅ | |
@@ -380,6 +381,8 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | `caret-color` | 🟡 parsed |
 | `accent-color` | 🟡 parsed |
 | `pointer-events` | 🟡 parsed |
+| `touch-action` | 🟡 | parsed/stored (auto/none/pan-x/pan-y/pan-left/pan-right/pan-up/pan-down/pinch-zoom/manipulation) |
+| `appearance` / `-webkit-appearance` | 🟡 | parsed/stored (auto/none/compat) |
 
 ---
 
