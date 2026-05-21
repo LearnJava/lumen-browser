@@ -5358,6 +5358,74 @@ mod tests {
         assert_eq!(p.style.direction, Direction::Rtl);
     }
 
+    /// text-align: start в RTL → правый край (start = right для RTL).
+    /// "ab" = 16px в контейнере 100px; правый край = 100-16 = 84px.
+    #[test]
+    fn text_align_start_rtl_flushes_right() {
+        let root = lay_measured(
+            "<p>ab</p>",
+            "p { direction: rtl; text-align: start; }",
+            100.0,
+        );
+        let p = first_element_child(&root);
+        let run = first_inline_run(p);
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(!lines.is_empty());
+            // В RTL-зеркале первый фрагмент в LTR-порядке переходит на правую сторону.
+            // Последний фраг должен оканчиваться у content_width=100.
+            let last = lines[0].last().unwrap();
+            let right_edge = last.x + last.width;
+            assert!(
+                (right_edge - 100.0).abs() < 0.5,
+                "expected right edge ≈ 100, got {right_edge}",
+            );
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    /// text-align: end в RTL → левый край (end = left для RTL).
+    /// "ab" = 16px в контейнере 100px; левый край первого фрагмента = 0.
+    #[test]
+    fn text_align_end_rtl_flushes_left() {
+        let root = lay_measured(
+            "<p>ab</p>",
+            "p { direction: rtl; text-align: end; }",
+            100.0,
+        );
+        let p = first_element_child(&root);
+        let run = first_inline_run(p);
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(!lines.is_empty());
+            // В RTL + left align первый (левый) фраг начинается с x=0.
+            let min_x = lines[0].iter().map(|f| f.x).fold(f32::INFINITY, f32::min);
+            assert!(
+                min_x.abs() < 0.5,
+                "expected leftmost frag x ≈ 0, got {min_x}",
+            );
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    /// text-align: start в LTR → левый край (start = left для LTR, нет смещения).
+    #[test]
+    fn text_align_start_ltr_flushes_left() {
+        let root = lay_measured(
+            "<p>ab</p>",
+            "p { direction: ltr; text-align: start; }",
+            100.0,
+        );
+        let p = first_element_child(&root);
+        let run = first_inline_run(p);
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(!lines.is_empty());
+            assert!((lines[0][0].x - 0.0).abs() < 0.01, "expected x=0, got {}", lines[0][0].x);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
     // ── <img> replaced element ───────────────────────────────────────────
 
     fn first_image_child(b: &LayoutBox) -> &LayoutBox {
@@ -8237,7 +8305,7 @@ mod tests {
         assert_eq!(table.style.font_style, FontStyle::Normal);
     }
 
-    /// В Quirks text-align у `<table>` сбрасывается к Left.
+    /// В Quirks text-align у `<table>` сбрасывается к initial (Start).
     #[test]
     fn quirks_table_text_align_resets_to_left() {
         let root = lay(
@@ -8247,7 +8315,7 @@ mod tests {
         let body = first_element_child(&root);
         let table = first_element_child(body);
         assert_eq!(body.style.text_align, TextAlign::Center);
-        assert_eq!(table.style.text_align, TextAlign::Left);
+        assert_eq!(table.style.text_align, TextAlign::Start);
     }
 
     /// В Quirks white-space у `<table>` сбрасывается к Normal.

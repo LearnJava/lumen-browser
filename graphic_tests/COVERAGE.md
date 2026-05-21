@@ -41,6 +41,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 24-vertical-align.html | vertical-align | 6 | inline-block: top/middle/bottom · inline span: super/middle/sub (frag y-offset + bg) |
 | 25-table-layout.html | Table layout | 19 | display:table — горизонтальный layout ячеек · auto-width distribution · явные ширины · несколько строк (вертикальное стакование) |
 | 26-mask-image.html | mask-image | 3 | linear-gradient mask · radial-gradient mask · control (no mask). Phase 0: gradient masks fallback to full-opacity |
+| 27-direction-rtl.html | direction | 6 | LTR start (left) · RTL start (right) · RTL end (left) · alignment gradient bands |
 | **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~66 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (Phase 0: квадрат в Lumen, скруглён в Edge) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) |
 
 ---

@@ -190,6 +190,8 @@ fn write_style_attrs(out: &mut String, s: &ComputedStyle) {
     }
     match s.text_align {
         TextAlign::Left => {}
+        TextAlign::Start => {}
+        TextAlign::End => out.push_str(" text-align=end"),
         TextAlign::Center => out.push_str(" text-align=center"),
         TextAlign::Right => out.push_str(" text-align=right"),
     }

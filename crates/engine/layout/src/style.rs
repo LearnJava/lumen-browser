@@ -67,7 +67,12 @@ pub enum Display {
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum TextAlign {
+    /// CSS `start`: left in LTR context, right in RTL context.
+    /// This is the CSS-spec initial value (resolves at layout time via `direction`).
     #[default]
+    Start,
+    /// CSS `end`: right in LTR context, left in RTL context.
+    End,
     Left,
     Center,
     Right,
@@ -3414,7 +3419,7 @@ impl ComputedStyle {
     pub fn root() -> Self {
         Self {
             display: Display::Block,
-            text_align: TextAlign::Left,
+            text_align: TextAlign::Start,
             text_align_last: TextAlignLast::Auto,
             direction: Direction::Ltr,
             color: Color::BLACK,
@@ -6453,7 +6458,7 @@ fn apply_quirks_table_reset(doc: &Document, node: NodeId, style: &mut ComputedSt
     style.font_weight = FontWeight::NORMAL;
     style.font_stretch = FontStretch::NORMAL;
     style.color = Color::BLACK;
-    style.text_align = TextAlign::Left;
+    style.text_align = TextAlign::Start;
     style.white_space = WhiteSpace::Normal;
 }
 
@@ -7904,6 +7909,8 @@ fn apply_declaration(
         }
         "text-align" => {
             style.text_align = match val {
+                "start" => TextAlign::Start,
+                "end" => TextAlign::End,
                 "left" => TextAlign::Left,
                 "center" => TextAlign::Center,
                 "right" => TextAlign::Right,

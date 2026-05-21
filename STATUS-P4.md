@@ -1,4 +1,4 @@
-In progress: mask-image/repeat/size → rendering  branch: mask-image-rendering
+In progress: direction + bidi layout wire-up  branch: direction-bidi
 
 Next (Wave 1 — unblock P1/P2):
 

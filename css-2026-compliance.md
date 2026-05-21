@@ -32,7 +32,7 @@ Legend: ✅ implemented & rendered · 🟡 parsed/stored, not rendered · ⬜ no
 | `list-style-image` | 🟡 | parsed |
 | `list-style` | 🟡 | shorthand parsed |
 | `cursor` | 🟡 | stored; shell does not yet switch OS cursor |
-| `direction` | 🟡 | stored; bidi layout not applied |
+| `direction` | 🟡 | stored + RTL inline layout: Start/End resolve, fragment mirroring via align_lines; full UBA deferred |
 | `vertical-align` | ✅ | baseline/top/middle/bottom/sub/super/length/percent applied as per-frag y_offset in InlineFrag |
 | `content` | 🟡 | string content generated for `::before`/`::after` block containers; `attr()`/`counter()` — deferred |
 | `counter-reset` | 🟡 | parsed |
@@ -229,7 +229,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 ### CSS Text Level 3
 | Property | Status | Notes |
 |---|---|---|
-| `text-align` | ✅ | left / right / center / justify |
+| `text-align` | ✅ | start / end / left / right / center; Start/End resolve per direction (CSS Text L3 §7.1) |
 | `text-align-last` | 🟡 | parsed/stored (auto/start/end/left/right/center/justify); applies to last line |
 | `text-indent` | ✅ | |
 | `letter-spacing` | ✅ | |

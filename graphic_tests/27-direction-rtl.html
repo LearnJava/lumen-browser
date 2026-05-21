@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #1a1a2e; width: 1022px; height: 718px; margin: 1px; padding: 40px; overflow: hidden; box-sizing: border-box; }
+
+  /* Three rows: LTR left, RTL right, RTL center */
+  .row { height: 160px; margin-bottom: 20px; display: flex; gap: 20px; }
+
+  /* LTR baseline: blue bar left-aligned */
+  .ltr-box {
+    width: 280px; height: 140px;
+    background: #16213e;
+    border: 2px solid #0f3460;
+    position: relative;
+  }
+  .bar {
+    height: 30px;
+    background: #4a90d9;
+    position: absolute;
+    top: 50px;
+  }
+  .bar-ltr { left: 0; width: 60%; }
+
+  /* RTL: bar right-aligned (text-align: start + direction: rtl → right) */
+  .rtl-box {
+    width: 280px; height: 140px;
+    background: #16213e;
+    border: 2px solid #e94560;
+    position: relative;
+  }
+  .bar-rtl-start { right: 0; width: 60%; background: #e94560; }
+  .bar-rtl-end   { left: 0;  width: 60%; background: #f5a623; }
+  .bar-rtl-center { left: 20%; width: 60%; background: #7ed321; }
+
+  /* Labels */
+  .label {
+    font-size: 13px;
+    color: #cccccc;
+    text-align: center;
+    margin-top: 4px;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="row">
+    <!-- LTR, text-align: start → left aligned bar -->
+    <div>
+      <div class="ltr-box">
+        <div class="bar bar-ltr"></div>
+      </div>
+      <div class="label">LTR start (left)</div>
+    </div>
+
+    <!-- RTL, text-align: start → right aligned bar -->
+    <div>
+      <div class="rtl-box">
+        <div class="bar bar-rtl-start"></div>
+      </div>
+      <div class="label">RTL start (right)</div>
+    </div>
+
+    <!-- RTL, text-align: end → left aligned bar -->
+    <div>
+      <div class="rtl-box">
+        <div class="bar bar-rtl-end"></div>
+      </div>
+      <div class="label">RTL end (left)</div>
+    </div>
+  </div>
+
+  <!-- Visual indicator: three colored bands showing LTR/RTL alignment directions -->
+  <div style="display: flex; gap: 8px; margin-top: 20px;">
+    <!-- LTR band: grows from left -->
+    <div style="flex: 1; height: 60px; background: linear-gradient(to right, #4a90d9 60%, #16213e 60%); border: 1px solid #0f3460;"></div>
+    <!-- RTL-start band: grows from right -->
+    <div style="flex: 1; height: 60px; background: linear-gradient(to left, #e94560 60%, #16213e 60%); border: 1px solid #e94560;"></div>
+    <!-- RTL-end band: grows from left (same as LTR-start) -->
+    <div style="flex: 1; height: 60px; background: linear-gradient(to right, #f5a623 60%, #16213e 60%); border: 1px solid #f5a623;"></div>
+  </div>
+</div>
+</body>
+</html>
