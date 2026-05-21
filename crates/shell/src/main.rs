@@ -589,6 +589,34 @@ impl ResourceBase {
             ResolvedResource::Url(u) => u,
         }
     }
+
+    /// Извлечь Origin страницы, если base — URL (не файл).
+    fn origin(&self) -> Option<lumen_network::Origin> {
+        if let ResourceBase::Url(base_url) = self
+            && let Ok(url) = lumen_core::url::Url::parse(base_url)
+        {
+            return lumen_network::Origin::from_url(&url).ok();
+        }
+        None
+    }
+
+    /// Построить `HttpClient` для загрузки подресурсов. Если страница загружена
+    /// по HTTPS, подключает mixed-content enforcement (SpecDefault по W3C Mixed
+    /// Content spec). Caller выбирает `RequestDestination` и вызывает
+    /// `fetch_subresource`, а не `fetch`.
+    fn http_client_for_subresource(
+        &self,
+        sink: Arc<dyn EventSink>,
+    ) -> lumen_network::HttpClient {
+        use lumen_network::{HttpClient, MixedContentMode};
+        let client = HttpClient::new().with_sink(sink);
+        if let Some(origin) = self.origin()
+            && origin.is_potentially_trustworthy()
+        {
+            return client.with_mixed_content_policy(origin, MixedContentMode::SpecDefault);
+        }
+        client
+    }
 }
 
 enum ResolvedResource {
@@ -614,12 +642,31 @@ fn load_linked_stylesheets(doc: &Document, base: &ResourceBase, sink: &Arc<dyn E
                 Err(e) => eprintln!("Пропуск CSS {}: {e}", path.display()),
             },
             ResolvedResource::Url(url) => {
-                use lumen_core::ext::NetworkTransport;
+                use lumen_core::event::{Event, TabId};
                 use lumen_core::url::Url;
-                use lumen_network::HttpClient;
+                use lumen_network::{Origin, RequestDestination};
 
-                let client = HttpClient::new().with_sink(sink.clone());
-                match Url::parse(&url).and_then(|u| client.fetch(&u)) {
+                let sub_url = match Url::parse(&url) {
+                    Ok(u) => u,
+                    Err(e) => { eprintln!("Пропуск CSS {url}: {e}"); continue; }
+                };
+
+                // SOP: cross-origin stylesheets blocked without CORS in Phase 0.
+                // Same-origin и file-base — пропускают проверку.
+                if let Some(page_origin) = base.origin()
+                    && let Ok(sub_origin) = Origin::from_url(&sub_url)
+                    && !page_origin.same_origin(&sub_origin)
+                {
+                    sink.emit(&Event::RequestBlocked {
+                        tab_id: TabId(0),
+                        url: sub_url,
+                        reason: "sop: cross-origin stylesheet".to_owned(),
+                    });
+                    continue;
+                }
+
+                let client = base.http_client_for_subresource(sink.clone());
+                match client.fetch_subresource(&sub_url, RequestDestination::Style) {
                     Ok(bytes) => {
                         let content = String::from_utf8_lossy(&bytes);
                         css.push_str(&content);
@@ -718,13 +765,14 @@ fn fetch_image_bytes(
             format!("file://{} {e}", path.display()).into()
         }),
         ResolvedResource::Url(url) => {
-            use lumen_core::ext::NetworkTransport;
             use lumen_core::url::Url;
-            use lumen_network::HttpClient;
+            use lumen_network::RequestDestination;
 
-            let client = HttpClient::new().with_sink(sink.clone());
+            // Images are loaded in no-cors mode: cross-origin allowed, but
+            // mixed-content enforcement still applies for HTTPS pages.
             let lumen_url = Url::parse(&url)?;
-            Ok(client.fetch(&lumen_url)?)
+            let client = base.http_client_for_subresource(sink.clone());
+            Ok(client.fetch_subresource(&lumen_url, RequestDestination::Image)?)
         }
     }
 }
