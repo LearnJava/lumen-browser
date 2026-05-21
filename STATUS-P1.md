@@ -1,5 +1,6 @@
-In progress: table-layout  branch: table-layout
-Next step: merge to main after commit
+In progress: —
+
+Next step: —
 
 Next (Wave 1):
 BUG-024  box-sizing content-box border        box_tree.rs    ~1h
