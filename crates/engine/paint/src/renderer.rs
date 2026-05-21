@@ -118,6 +118,49 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// SDF-круг: UV (-1..1) из центра; фрагменты за радиусом 1.0 discarded.
+/// Anti-aliasing через smoothstep(0.9, 1.0, dist).
+const CIRCLE_SHADER_SRC: &str = r#"
+struct Uniforms {
+    viewport: vec2<f32>,
+};
+
+@group(0) @binding(0) var<uniform> u: Uniforms;
+
+struct VIn {
+    @location(0) pos: vec2<f32>,
+    @location(1) uv:  vec2<f32>,
+    @location(2) color: vec4<f32>,
+};
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) color: vec4<f32>,
+};
+
+@vertex
+fn vs_main(in: VIn) -> VOut {
+    let ndc = vec2<f32>(
+        in.pos.x / u.viewport.x * 2.0 - 1.0,
+        1.0 - in.pos.y / u.viewport.y * 2.0,
+    );
+    var out: VOut;
+    out.clip = vec4<f32>(ndc, 0.0, 1.0);
+    out.uv = in.uv;
+    out.color = in.color;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    let dist = length(in.uv);
+    let alpha = 1.0 - smoothstep(0.8, 1.0, dist);
+    if alpha <= 0.0 { discard; }
+    return vec4<f32>(in.color.rgb, in.color.a * alpha);
+}
+"#;
+
 const TEXT_SHADER_SRC: &str = r#"
 struct Uniforms {
     viewport: vec2<f32>,
@@ -447,6 +490,15 @@ struct ImageVertex {
     alpha: f32,
 }
 
+/// Вершина для SDF-круга. `uv` — нормализованные координаты (-1..1) от центра.
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CircleVertex {
+    pos: [f32; 2],
+    uv: [f32; 2],
+    color: [f32; 4],
+}
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct CompositeVertex {
@@ -465,6 +517,7 @@ struct CompositeVertex {
 enum DrawOp {
     SetScissor(DeviceScissor),
     Fill { v_start: u32, v_count: u32 },
+    Circle { v_start: u32, v_count: u32 },
     Text { v_start: u32, v_count: u32 },
     Image { v_start: u32, v_count: u32, image_batch_idx: u32 },
 }
@@ -623,6 +676,7 @@ pub struct Renderer {
     scale_factor: f64,
 
     fill_pipeline: wgpu::RenderPipeline,
+    circle_pipeline: wgpu::RenderPipeline,
     text_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
@@ -856,6 +910,62 @@ impl Renderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &fill_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // ── Circle pipeline ───────────────────────────────────────────────
+        let circle_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("circle-shader"),
+            source: wgpu::ShaderSource::Wgsl(CIRCLE_SHADER_SRC.into()),
+        });
+        let circle_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("circle-layout"),
+            bind_group_layouts: &[&uniform_bgl],
+            push_constant_ranges: &[],
+        });
+        let circle_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("circle-pipeline"),
+            layout: Some(&circle_layout),
+            vertex: wgpu::VertexState {
+                module: &circle_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CircleVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 16,
+                            shader_location: 2,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &circle_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -1215,6 +1325,7 @@ impl Renderer {
             config,
             scale_factor,
             fill_pipeline,
+            circle_pipeline,
             text_pipeline,
             image_pipeline,
             uniform_buffer,
@@ -1721,6 +1832,7 @@ impl Renderer {
 
         // ── Сбор вершин ────────────────────────────────────────────────────
         let mut fill_vertices: Vec<FillVertex> = Vec::new();
+        let mut circle_vertices: Vec<CircleVertex> = Vec::new();
         let mut text_vertices: Vec<TextVertex> = Vec::new();
         let mut image_vertices: Vec<ImageVertex> = Vec::new();
         // Bind groups для image draw-ов в порядке появления. DrawOp::Image
@@ -1840,7 +1952,8 @@ impl Renderer {
                     }
                     let alpha = 1.0_f32;
                     let r = translate_rect(*rect, dx, dy);
-                    let v_start = fill_vertices.len() as u32;
+                    let fill_v_start = fill_vertices.len() as u32;
+                    let circle_v_start = circle_vertices.len() as u32;
                     // CSS Backgrounds L3 §6.3 — рёбра рисуются как
                     // прямоугольники полной width/height; Phase 0 без
                     // mitre-углов (углы overlap-ятся как fillRect-ы,
@@ -1848,6 +1961,7 @@ impl Renderer {
                     if *wt > 0.0 {
                         emit_border_side(
                             &mut fill_vertices,
+                            &mut circle_vertices,
                             Rect::new(r.x, r.y, r.width, *wt),
                             true,
                             *wt,
@@ -1858,6 +1972,7 @@ impl Renderer {
                     if *wr > 0.0 {
                         emit_border_side(
                             &mut fill_vertices,
+                            &mut circle_vertices,
                             Rect::new(r.x + r.width - wr, r.y, *wr, r.height),
                             false,
                             *wr,
@@ -1868,6 +1983,7 @@ impl Renderer {
                     if *wb > 0.0 {
                         emit_border_side(
                             &mut fill_vertices,
+                            &mut circle_vertices,
                             Rect::new(r.x, r.y + r.height - wb, r.width, *wb),
                             true,
                             *wb,
@@ -1878,6 +1994,7 @@ impl Renderer {
                     if *wl > 0.0 {
                         emit_border_side(
                             &mut fill_vertices,
+                            &mut circle_vertices,
                             Rect::new(r.x, r.y, *wl, r.height),
                             false,
                             *wl,
@@ -1886,11 +2003,16 @@ impl Renderer {
                         );
                     }
                     if let Some(m) = transform_stack.last() {
-                        apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                        apply_affine_to_verts(&mut fill_vertices[fill_v_start as usize..], m);
+                        apply_affine_to_circle_verts(&mut circle_vertices[circle_v_start as usize..], m);
                     }
-                    let v_count = fill_vertices.len() as u32 - v_start;
-                    if v_count > 0 {
-                        draw_ops.push(DrawOp::Fill { v_start, v_count });
+                    let fill_v_count = fill_vertices.len() as u32 - fill_v_start;
+                    if fill_v_count > 0 {
+                        draw_ops.push(DrawOp::Fill { v_start: fill_v_start, v_count: fill_v_count });
+                    }
+                    let circle_v_count = circle_vertices.len() as u32 - circle_v_start;
+                    if circle_v_count > 0 {
+                        draw_ops.push(DrawOp::Circle { v_start: circle_v_start, v_count: circle_v_count });
                     }
                 }
                 DisplayCommand::DrawText {
@@ -1960,10 +2082,12 @@ impl Renderer {
                     );
                     let w = *width;
                     let c = apply_alpha_to_color(color_to_array(color), alpha);
-                    let v_start = fill_vertices.len() as u32;
+                    let fill_v_start = fill_vertices.len() as u32;
+                    let circle_v_start = circle_vertices.len() as u32;
                     // Top stripe (с "ear" по углам слева/справа).
                     emit_outline_side(
                         &mut fill_vertices,
+                        &mut circle_vertices,
                         Rect::new(inner.x - w, inner.y - w, inner.width + 2.0 * w, w),
                         true,
                         w,
@@ -1973,6 +2097,7 @@ impl Renderer {
                     // Bottom stripe (тоже с углами).
                     emit_outline_side(
                         &mut fill_vertices,
+                        &mut circle_vertices,
                         Rect::new(inner.x - w, inner.y + inner.height, inner.width + 2.0 * w, w),
                         true,
                         w,
@@ -1983,6 +2108,7 @@ impl Renderer {
                     // без углов — они уже в top/bottom).
                     emit_outline_side(
                         &mut fill_vertices,
+                        &mut circle_vertices,
                         Rect::new(inner.x - w, inner.y, w, inner.height),
                         false,
                         w,
@@ -1992,6 +2118,7 @@ impl Renderer {
                     // Right stripe.
                     emit_outline_side(
                         &mut fill_vertices,
+                        &mut circle_vertices,
                         Rect::new(inner.x + inner.width, inner.y, w, inner.height),
                         false,
                         w,
@@ -1999,11 +2126,16 @@ impl Renderer {
                         *style,
                     );
                     if let Some(m) = transform_stack.last() {
-                        apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                        apply_affine_to_verts(&mut fill_vertices[fill_v_start as usize..], m);
+                        apply_affine_to_circle_verts(&mut circle_vertices[circle_v_start as usize..], m);
                     }
-                    let v_count = fill_vertices.len() as u32 - v_start;
-                    if v_count > 0 {
-                        draw_ops.push(DrawOp::Fill { v_start, v_count });
+                    let fill_v_count = fill_vertices.len() as u32 - fill_v_start;
+                    if fill_v_count > 0 {
+                        draw_ops.push(DrawOp::Fill { v_start: fill_v_start, v_count: fill_v_count });
+                    }
+                    let circle_v_count = circle_vertices.len() as u32 - circle_v_start;
+                    if circle_v_count > 0 {
+                        draw_ops.push(DrawOp::Circle { v_start: circle_v_start, v_count: circle_v_count });
                     }
                 }
                 DisplayCommand::DrawImage {
@@ -2257,6 +2389,18 @@ impl Renderer {
             self.queue.write_buffer(&buf, 0, as_bytes(&fill_vertices));
             Some(buf)
         };
+        let circle_vbuf = if circle_vertices.is_empty() {
+            None
+        } else {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("circle-vbuf"),
+                size: std::mem::size_of_val(circle_vertices.as_slice()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buf, 0, as_bytes(&circle_vertices));
+            Some(buf)
+        };
         let text_vbuf = if text_vertices.is_empty() {
             None
         } else {
@@ -2329,6 +2473,14 @@ impl Renderer {
                         DrawOp::Fill { v_start, v_count } => {
                             if let Some(vb) = &fill_vbuf {
                                 $pass.set_pipeline(&self.fill_pipeline);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_vertex_buffer(0, vb.slice(..));
+                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                            }
+                        }
+                        DrawOp::Circle { v_start, v_count } => {
+                            if let Some(vb) = &circle_vbuf {
+                                $pass.set_pipeline(&self.circle_pipeline);
                                 $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
                                 $pass.draw(*v_start..*v_start + *v_count, 0..1);
@@ -2529,6 +2681,10 @@ impl VertexPos for ImageVertex {
     fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
 }
 
+impl VertexPos for CircleVertex {
+    fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
+}
+
 fn apply_affine_to_verts<V: VertexPos>(verts: &mut [V], m: &Mat4) {
     let a = m.0[0];
     let b = m.0[1];
@@ -2543,6 +2699,30 @@ fn apply_affine_to_verts<V: VertexPos>(verts: &mut [V], m: &Mat4) {
         p[0] = a * x + c * y + e;
         p[1] = b * x + d * y + f;
     }
+}
+
+/// Эмитирует квад для SDF-круга. UV (-1..1) передаются шейдеру
+/// для discard-а за пределами окружности.
+fn push_circle_quad(out: &mut Vec<CircleVertex>, rect: Rect, color: [f32; 4]) {
+    let x0 = rect.x;
+    let y0 = rect.y;
+    let x1 = rect.x + rect.width;
+    let y1 = rect.y + rect.height;
+    out.extend_from_slice(&[
+        CircleVertex { pos: [x0, y0], uv: [-1.0, -1.0], color },
+        CircleVertex { pos: [x1, y0], uv: [ 1.0, -1.0], color },
+        CircleVertex { pos: [x1, y1], uv: [ 1.0,  1.0], color },
+        CircleVertex { pos: [x0, y0], uv: [-1.0, -1.0], color },
+        CircleVertex { pos: [x1, y1], uv: [ 1.0,  1.0], color },
+        CircleVertex { pos: [x0, y1], uv: [-1.0,  1.0], color },
+    ]);
+}
+
+/// Применяет 2D аффинное преобразование к pos-полям CircleVertex.
+/// UV-координаты не затрагиваются — они описывают относительную позицию
+/// внутри квада, а не мировые координаты.
+fn apply_affine_to_circle_verts(verts: &mut [CircleVertex], m: &Mat4) {
+    apply_affine_to_verts(verts, m);
 }
 
 fn push_fill_quad(out: &mut Vec<FillVertex>, rect: Rect, color: [f32; 4]) {
@@ -2976,6 +3156,7 @@ pub(crate) fn dash_segments(
 /// устойчивости.
 fn emit_border_side(
     out: &mut Vec<FillVertex>,
+    circle_out: &mut Vec<CircleVertex>,
     side_rect: Rect,
     horizontal: bool,
     width: f32,
@@ -2983,15 +3164,30 @@ fn emit_border_side(
     style: BorderStyle,
 ) {
     let total = if horizontal { side_rect.width } else { side_rect.height };
-    let pattern = match style {
+    match style {
         BorderStyle::Dashed => {
             let dash_len = (width * 2.0).max(1.0);
             let gap_len = width.max(1.0);
-            dash_segments(total, dash_len, gap_len)
+            for (offset, len) in dash_segments(total, dash_len, gap_len) {
+                let seg = if horizontal {
+                    Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
+                } else {
+                    Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
+                };
+                push_fill_quad(out, seg, color);
+            }
         }
         BorderStyle::Dotted => {
+            // CSS Backgrounds L3 §4.5: dots are round (circles).
             let dot_len = width.max(1.0);
-            dash_segments(total, dot_len, dot_len)
+            for (offset, len) in dash_segments(total, dot_len, dot_len) {
+                let seg = if horizontal {
+                    Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
+                } else {
+                    Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
+                };
+                push_circle_quad(circle_out, seg, color);
+            }
         }
         BorderStyle::Double => {
             // CSS Backgrounds L3 §4.2: two solid lines ~1/3 width each, gap ~1/3.
@@ -3014,20 +3210,10 @@ fn emit_border_side(
             };
             push_fill_quad(out, r1, color);
             push_fill_quad(out, r2, color);
-            return;
         }
         BorderStyle::Solid | BorderStyle::None => {
             push_fill_quad(out, side_rect, color);
-            return;
         }
-    };
-    for (offset, len) in pattern {
-        let segment_rect = if horizontal {
-            Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
-        } else {
-            Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
-        };
-        push_fill_quad(out, segment_rect, color);
     }
 }
 
@@ -3038,6 +3224,7 @@ fn emit_border_side(
 /// один full-rect; для Dashed — pattern `(2w, w)`; для Dotted — `(w, w)`.
 fn emit_outline_side(
     out: &mut Vec<FillVertex>,
+    circle_out: &mut Vec<CircleVertex>,
     side_rect: Rect,
     horizontal: bool,
     width: f32,
@@ -3045,30 +3232,34 @@ fn emit_outline_side(
     style: OutlineStyle,
 ) {
     let total = if horizontal { side_rect.width } else { side_rect.height };
-    let pattern = match style {
+    match style {
         OutlineStyle::Dashed => {
             let dash_len = (width * 2.0).max(1.0);
             let gap_len = width.max(1.0);
-            dash_segments(total, dash_len, gap_len)
+            for (offset, len) in dash_segments(total, dash_len, gap_len) {
+                let seg = if horizontal {
+                    Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
+                } else {
+                    Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
+                };
+                push_fill_quad(out, seg, color);
+            }
         }
         OutlineStyle::Dotted => {
             let dot_len = width.max(1.0);
-            dash_segments(total, dot_len, dot_len)
+            for (offset, len) in dash_segments(total, dot_len, dot_len) {
+                let seg = if horizontal {
+                    Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
+                } else {
+                    Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
+                };
+                push_circle_quad(circle_out, seg, color);
+            }
         }
-        // Solid / Auto / None — full-length rect. None обычно не доходит
-        // до emit (фильтр на стороне build_display_list), но мы устойчивы.
+        // Solid / Auto / None — full-length rect.
         OutlineStyle::Solid | OutlineStyle::Auto | OutlineStyle::None => {
             push_fill_quad(out, side_rect, color);
-            return;
         }
-    };
-    for (offset, len) in pattern {
-        let segment_rect = if horizontal {
-            Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
-        } else {
-            Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
-        };
-        push_fill_quad(out, segment_rect, color);
     }
 }
 
@@ -3553,17 +3744,41 @@ mod tests {
 
     // ── emit_border_side ──────────────────────────────────────────────────
 
-    fn collect_border_quads(
+    fn collect_border_fill_quads(
         side_rect: Rect,
         horizontal: bool,
         width: f32,
         style: BorderStyle,
     ) -> Vec<Rect> {
         let color = [1.0f32; 4];
-        let mut verts: Vec<FillVertex> = Vec::new();
-        emit_border_side(&mut verts, side_rect, horizontal, width, color, style);
-        // Each quad = 6 vertices (2 triangles); reconstruct bounding rects.
-        verts
+        let mut fill_verts: Vec<FillVertex> = Vec::new();
+        let mut circle_verts: Vec<CircleVertex> = Vec::new();
+        emit_border_side(&mut fill_verts, &mut circle_verts, side_rect, horizontal, width, color, style);
+        fill_verts
+            .chunks(6)
+            .map(|v| {
+                let xs = v.iter().map(|p| p.pos[0]);
+                let ys = v.iter().map(|p| p.pos[1]);
+                let x0 = xs.clone().fold(f32::INFINITY, f32::min);
+                let x1 = xs.fold(f32::NEG_INFINITY, f32::max);
+                let y0 = ys.clone().fold(f32::INFINITY, f32::min);
+                let y1 = ys.fold(f32::NEG_INFINITY, f32::max);
+                Rect::new(x0, y0, x1 - x0, y1 - y0)
+            })
+            .collect()
+    }
+
+    fn collect_border_circle_quads(
+        side_rect: Rect,
+        horizontal: bool,
+        width: f32,
+        style: BorderStyle,
+    ) -> Vec<Rect> {
+        let color = [1.0f32; 4];
+        let mut fill_verts: Vec<FillVertex> = Vec::new();
+        let mut circle_verts: Vec<CircleVertex> = Vec::new();
+        emit_border_side(&mut fill_verts, &mut circle_verts, side_rect, horizontal, width, color, style);
+        circle_verts
             .chunks(6)
             .map(|v| {
                 let xs = v.iter().map(|p| p.pos[0]);
@@ -3580,7 +3795,7 @@ mod tests {
     #[test]
     fn emit_border_side_solid_is_single_quad() {
         let r = Rect::new(10.0, 20.0, 100.0, 6.0);
-        let quads = collect_border_quads(r, true, 6.0, BorderStyle::Solid);
+        let quads = collect_border_fill_quads(r, true, 6.0, BorderStyle::Solid);
         assert_eq!(quads.len(), 1);
         assert_eq!(quads[0], r);
     }
@@ -3589,7 +3804,7 @@ mod tests {
     fn emit_border_side_dashed_produces_multiple_quads() {
         // width=4 → dash=8, gap=4; side 100 wide → several segments.
         let r = Rect::new(0.0, 0.0, 100.0, 4.0);
-        let quads = collect_border_quads(r, true, 4.0, BorderStyle::Dashed);
+        let quads = collect_border_fill_quads(r, true, 4.0, BorderStyle::Dashed);
         assert!(quads.len() > 1, "dashed must produce multiple segments");
         for q in &quads {
             assert_eq!(q.height, 4.0, "all segments must span full border height");
@@ -3597,12 +3812,15 @@ mod tests {
     }
 
     #[test]
-    fn emit_border_side_dotted_square_segments() {
+    fn emit_border_side_dotted_circle_segments() {
+        // Dotted → SDF-circles (circle_verts), not fill quads.
         // width=4 → dot=4; horizontal side 40 wide → 5 dots.
         let r = Rect::new(0.0, 0.0, 40.0, 4.0);
-        let quads = collect_border_quads(r, true, 4.0, BorderStyle::Dotted);
-        assert!(quads.len() > 1, "dotted must produce multiple segments");
-        for q in &quads {
+        let fill_quads = collect_border_fill_quads(r, true, 4.0, BorderStyle::Dotted);
+        let circle_quads = collect_border_circle_quads(r, true, 4.0, BorderStyle::Dotted);
+        assert_eq!(fill_quads.len(), 0, "dotted must NOT produce fill quads");
+        assert!(circle_quads.len() > 1, "dotted must produce circle quads");
+        for q in &circle_quads {
             assert_eq!(q.height, 4.0);
         }
     }
@@ -3611,7 +3829,7 @@ mod tests {
     fn emit_border_side_double_two_quads_horizontal() {
         // width=9 → line≈3; two lines at top and bottom of the side_rect.
         let r = Rect::new(0.0, 0.0, 100.0, 9.0);
-        let quads = collect_border_quads(r, true, 9.0, BorderStyle::Double);
+        let quads = collect_border_fill_quads(r, true, 9.0, BorderStyle::Double);
         assert_eq!(quads.len(), 2, "double = two parallel lines");
         // First line at top edge.
         assert!((quads[0].y - 0.0).abs() < 1e-3, "first line at y=0");
@@ -3627,7 +3845,7 @@ mod tests {
     fn emit_border_side_double_thin_fallback_to_solid() {
         // width < 3 → solid fallback (no room for gap).
         let r = Rect::new(0.0, 0.0, 100.0, 2.0);
-        let quads = collect_border_quads(r, true, 2.0, BorderStyle::Double);
+        let quads = collect_border_fill_quads(r, true, 2.0, BorderStyle::Double);
         assert_eq!(quads.len(), 1, "width<3 must fall back to single solid quad");
     }
 
@@ -3635,7 +3853,7 @@ mod tests {
     fn emit_border_side_double_vertical() {
         // Vertical double border (left/right side).
         let r = Rect::new(0.0, 0.0, 9.0, 100.0);
-        let quads = collect_border_quads(r, false, 9.0, BorderStyle::Double);
+        let quads = collect_border_fill_quads(r, false, 9.0, BorderStyle::Double);
         assert_eq!(quads.len(), 2, "double vertical = two parallel lines");
         assert!((quads[0].x - 0.0).abs() < 1e-3);
         let expected_x2 = 9.0 - (9.0 / 3.0_f32).max(1.0);
