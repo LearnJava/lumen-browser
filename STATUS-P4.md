@@ -1,7 +1,7 @@
-In progress: —
+In progress: @font-face rule parsing (⬜→🟡)  branch: font-face-descriptors
+Next step: add font-stretch/variant/feature-settings/variation-settings to FontFaceRule  crates/engine/css-parser/src/parser.rs:723
 
 Next (Wave 1 — unblock P1/P2):
-@font-face rule parsing (⬜→🟡)               css-parser/src/parser.rs     ~2h  unblocks P2 font loading
 content + ::before/::after generation (🟡→✅) style.rs + display_list.rs   ~3h  unblocks P1 pseudo layout
 vertical-align inline y-offset (🟡→✅)        style.rs + box_tree.rs       ~1h
 
