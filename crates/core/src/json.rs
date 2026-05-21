@@ -98,6 +98,64 @@ impl std::fmt::Display for JsonError {
 
 impl std::error::Error for JsonError {}
 
+impl std::fmt::Display for JsonValue {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Null => f.write_str("null"),
+            Self::Bool(b) => f.write_str(if *b { "true" } else { "false" }),
+            Self::Number(n) => {
+                if n.is_finite() {
+                    if *n == n.trunc() && n.abs() < 1e15 {
+                        write!(f, "{}", *n as i64)
+                    } else {
+                        write!(f, "{n}")
+                    }
+                } else {
+                    f.write_str("null")
+                }
+            }
+            Self::String(s) => {
+                f.write_str("\"")?;
+                for ch in s.chars() {
+                    match ch {
+                        '"' => f.write_str("\\\"")?,
+                        '\\' => f.write_str("\\\\")?,
+                        '\x08' => f.write_str("\\b")?,
+                        '\x0C' => f.write_str("\\f")?,
+                        '\n' => f.write_str("\\n")?,
+                        '\r' => f.write_str("\\r")?,
+                        '\t' => f.write_str("\\t")?,
+                        c if (c as u32) < 0x20 => write!(f, "\\u{:04x}", c as u32)?,
+                        c => write!(f, "{c}")?,
+                    }
+                }
+                f.write_str("\"")
+            }
+            Self::Array(arr) => {
+                f.write_str("[")?;
+                for (i, v) in arr.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(",")?;
+                    }
+                    write!(f, "{v}")?;
+                }
+                f.write_str("]")
+            }
+            Self::Object(obj) => {
+                f.write_str("{")?;
+                for (i, (k, v)) in obj.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(",")?;
+                    }
+                    write!(f, "\"{k}\":")?;
+                    write!(f, "{v}")?;
+                }
+                f.write_str("}")
+            }
+        }
+    }
+}
+
 pub type JsonResult<T> = std::result::Result<T, JsonError>;
 
 pub fn parse(text: &str) -> JsonResult<JsonValue> {

@@ -18,6 +18,7 @@ quickjs = ["dep:lumen-js"]
 
 [dependencies]
 lumen-core.workspace = true
+lumen-devtools.workspace = true
 lumen-js = { workspace = true, optional = true }
 lumen-network.workspace = true
 lumen-html-parser.workspace = true
