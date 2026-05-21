@@ -32,12 +32,13 @@ use std::sync::Arc;
 
 use lumen_core::event::{Event, FetchPriority, SubresourceKind};
 use lumen_core::ext::EventSink;
-use lumen_core::geom::{Rect, Size};
+use lumen_core::geom::{Point, Rect, Size};
 use lumen_devtools::DevToolsServer;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
 use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
 use lumen_layout::LayoutBox;
-use lumen_paint::{build_display_list_with_anim, DisplayList, Renderer};
+use lumen_paint::{build_display_list_with_anim, hit_test, DisplayList, Renderer};
+use lumen_layout::Cursor as CssCursor;
 use winit::application::ApplicationHandler;
 
 /// Событие от background-потока загрузки страницы в event loop.
@@ -2283,6 +2284,8 @@ impl Lumen {
         let dpr = (renderer.scale_factor() as f32).max(1e-6);
         let x_css = (pos.x as f32) / dpr;
         let y_css = (pos.y as f32) / dpr;
+
+        // Scrollbar takes highest priority.
         let hover = scrollbar::classify_track_click(
             x_css,
             y_css,
@@ -2291,7 +2294,22 @@ impl Lumen {
             self.viewport_width_css(),
             self.viewport_height_css(),
         );
-        let desired = cursor_icon_for_hover(hover, self.scroll_drag.is_some());
+        let scrollbar_icon = cursor_icon_for_hover(hover, self.scroll_drag.is_some());
+
+        let desired = if scrollbar_icon != CursorIcon::Default {
+            scrollbar_icon
+        } else if let Some(lb) = &self.layout_box {
+            // Hit-test layout tree in page coordinates (viewport + scroll offset).
+            let page_x = x_css + self.scroll_x;
+            let page_y = y_css + self.scroll_y;
+            match hit_test(Point::new(page_x, page_y), lb) {
+                Some(result) => css_cursor_to_winit(result.cursor),
+                None => CursorIcon::Default,
+            }
+        } else {
+            CursorIcon::Default
+        };
+
         if self.last_cursor_icon != Some(desired) {
             window.set_cursor(desired);
             self.last_cursor_icon = Some(desired);
@@ -2387,6 +2405,49 @@ fn cursor_icon_for_hover(hover: scrollbar::TrackClick, drag_active: bool) -> Cur
     }
 }
 
+/// Конвертирует CSS `cursor` keyword в winit `CursorIcon`.
+/// `Auto` → `Default` (UA-решение для Phase 0); `None` → `Default` (winit не
+/// поддерживает «скрытый курсор» через CursorIcon — нужен отдельный API).
+fn css_cursor_to_winit(c: CssCursor) -> CursorIcon {
+    match c {
+        CssCursor::Auto | CssCursor::Default => CursorIcon::Default,
+        CssCursor::None => CursorIcon::Default,
+        CssCursor::ContextMenu => CursorIcon::ContextMenu,
+        CssCursor::Help => CursorIcon::Help,
+        CssCursor::Pointer => CursorIcon::Pointer,
+        CssCursor::Progress => CursorIcon::Progress,
+        CssCursor::Wait => CursorIcon::Wait,
+        CssCursor::Cell => CursorIcon::Cell,
+        CssCursor::Crosshair => CursorIcon::Crosshair,
+        CssCursor::Text => CursorIcon::Text,
+        CssCursor::VerticalText => CursorIcon::VerticalText,
+        CssCursor::Alias => CursorIcon::Alias,
+        CssCursor::Copy => CursorIcon::Copy,
+        CssCursor::Move => CursorIcon::Move,
+        CssCursor::NoDrop => CursorIcon::NoDrop,
+        CssCursor::NotAllowed => CursorIcon::NotAllowed,
+        CssCursor::Grab => CursorIcon::Grab,
+        CssCursor::Grabbing => CursorIcon::Grabbing,
+        CssCursor::AllScroll => CursorIcon::AllScroll,
+        CssCursor::ColResize => CursorIcon::ColResize,
+        CssCursor::RowResize => CursorIcon::RowResize,
+        CssCursor::NResize => CursorIcon::NResize,
+        CssCursor::EResize => CursorIcon::EResize,
+        CssCursor::SResize => CursorIcon::SResize,
+        CssCursor::WResize => CursorIcon::WResize,
+        CssCursor::NeResize => CursorIcon::NeResize,
+        CssCursor::NwResize => CursorIcon::NwResize,
+        CssCursor::SeResize => CursorIcon::SeResize,
+        CssCursor::SwResize => CursorIcon::SwResize,
+        CssCursor::EwResize => CursorIcon::EwResize,
+        CssCursor::NsResize => CursorIcon::NsResize,
+        CssCursor::NeswResize => CursorIcon::NeswResize,
+        CssCursor::NwseResize => CursorIcon::NwseResize,
+        CssCursor::ZoomIn => CursorIcon::ZoomIn,
+        CssCursor::ZoomOut => CursorIcon::ZoomOut,
+    }
+}
+
 /// Кламп scroll_y в `[0, max]`. NaN-input → 0 (защита от arithmetic errors).
 fn clamp_scroll(target: f32, max: f32) -> f32 {
     if target.is_nan() {
@@ -2408,6 +2469,8 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawImage { rect, .. }
             | DisplayCommand::DrawBackgroundImage { rect, .. }
             | DisplayCommand::DrawOutline { rect, .. }
+            | DisplayCommand::DrawLinearGradient { rect, .. }
+            | DisplayCommand::DrawRadialGradient { rect, .. }
             | DisplayCommand::PushClipRect { rect, .. } => rect,
             DisplayCommand::PopClip
             | DisplayCommand::PushOpacity { .. }
@@ -2439,6 +2502,8 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawImage { rect, .. }
             | DisplayCommand::DrawBackgroundImage { rect, .. }
             | DisplayCommand::DrawOutline { rect, .. }
+            | DisplayCommand::DrawLinearGradient { rect, .. }
+            | DisplayCommand::DrawRadialGradient { rect, .. }
             | DisplayCommand::PushClipRect { rect, .. } => rect,
             DisplayCommand::PopClip
             | DisplayCommand::PushOpacity { .. }
