@@ -105,13 +105,6 @@ mod tests {
         layout_measured(&doc, &sheet, Size::new(width, 600.0), &Fixed8)
     }
 
-    fn first_block_child(b: &LayoutBox) -> &LayoutBox {
-        b.children
-            .iter()
-            .find(|c| matches!(c.kind, BoxKind::Block | BoxKind::FormControl { .. }))
-            .expect("expected at least one block child")
-    }
-
     fn first_element_child(b: &LayoutBox) -> &LayoutBox {
         b.children
             .iter()

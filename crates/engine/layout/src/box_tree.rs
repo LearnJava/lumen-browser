@@ -302,7 +302,7 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    lay_out(&mut root, 0.0, 0.0, viewport.width, None, viewport, init_pcb);
+    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), None, viewport, init_pcb);
     root
 }
 
@@ -316,7 +316,7 @@ pub fn layout_measured(
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(measurer), viewport, init_pcb);
+    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb);
     root
 }
 
@@ -852,7 +852,7 @@ fn preferred_inline_block_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
         let outer = match s.box_sizing {
             BoxSizing::ContentBox => w + pl + pr
                 + s.border_left_width + s.border_right_width,
-            BoxSizing::BorderBox => w,
+            BoxSizing::BorderBox => w.max(pl + pr + s.border_left_width + s.border_right_width),
         };
         return Some(outer.max(0.0));
     }
@@ -907,11 +907,15 @@ fn shift_tree(b: &mut LayoutBox, dx: f32, dy: f32) {
 
 /// `pcb` — rect positioned containing block (ближайший предок с position != static),
 /// используется для layout абсолютно-позиционированных потомков.
+#[allow(clippy::too_many_arguments)]
 fn lay_out(
     b: &mut LayoutBox,
     start_x: f32,
     start_y: f32,
     available_width: f32,
+    // CSS 2.1 §10.5: definite content height of the containing block, or None if auto.
+    // None means percentage heights on children compute to 'auto'.
+    available_height: Option<f32>,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
@@ -956,7 +960,7 @@ fn lay_out(
         b.rect.width = match s.box_sizing {
             BoxSizing::ContentBox => (w + padding_left + padding_right
                 + s.border_left_width + s.border_right_width).max(0.0),
-            BoxSizing::BorderBox => w.max(0.0),
+            BoxSizing::BorderBox => w.max(padding_left + padding_right + s.border_left_width + s.border_right_width),
         };
     }
     // CSS 2.1 §10.4: tentative width → clamp в [min-width, max-width].
@@ -1048,14 +1052,17 @@ fn lay_out(
                     children_pcb,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
-                    && let Some(h) = h_len.resolve(em, Some(cb), viewport)
+                    && let Some(h) = h_len.resolve(em, available_height, viewport)
                 {
                     match s.box_sizing {
                         BoxSizing::ContentBox => {
                             (h + padding_top + padding_bottom
                                 + s.border_top_width + s.border_bottom_width).max(0.0)
                         }
-                        BoxSizing::BorderBox => h.max(0.0),
+                        BoxSizing::BorderBox => h.max(
+                            padding_top + padding_bottom
+                                + s.border_top_width + s.border_bottom_width,
+                        ),
                     }
                 } else if let Some((aw, ah)) = s.aspect_ratio
                     && aw > 0.0 && ah > 0.0
@@ -1074,14 +1081,17 @@ fn lay_out(
                     children_pcb,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
-                    && let Some(h) = h_len.resolve(em, Some(cb), viewport)
+                    && let Some(h) = h_len.resolve(em, available_height, viewport)
                 {
                     match s.box_sizing {
                         BoxSizing::ContentBox => {
                             (h + padding_top + padding_bottom
                                 + s.border_top_width + s.border_bottom_width).max(0.0)
                         }
-                        BoxSizing::BorderBox => h.max(0.0),
+                        BoxSizing::BorderBox => h.max(
+                            padding_top + padding_bottom
+                                + s.border_top_width + s.border_bottom_width,
+                        ),
                     }
                 } else if let Some((aw, ah)) = s.aspect_ratio
                     && aw > 0.0 && ah > 0.0
@@ -1098,6 +1108,19 @@ fn lay_out(
             // не дублировался. content_height = 0 для Image без явной высоты
             // даёт коробку только из padding+border (что для пустой картинки
             // визуально корректно).
+            // CSS 2.1 §10.5: definite content height for children's height percentage resolution.
+            // Only available when this element itself has an explicit height.
+            let children_available_height: Option<f32> = if let Some(h_len) = &s.height
+                && let Some(h) = h_len.resolve(em, available_height, viewport)
+            {
+                Some(match s.box_sizing {
+                    BoxSizing::ContentBox => h,
+                    BoxSizing::BorderBox => (h - padding_top - padding_bottom
+                        - s.border_top_width - s.border_bottom_width).max(0.0),
+                })
+            } else {
+                None
+            };
             let mut child_y = content_y;
             for (i, child) in b.children.iter_mut().enumerate() {
                 if matches!(child.style.position, Position::Absolute | Position::Fixed) {
@@ -1105,7 +1128,7 @@ fn lay_out(
                     abs_deferred.push((i, content_x, child_y));
                     continue;
                 }
-                lay_out(child, content_x, child_y, content_width, measurer, viewport, children_pcb);
+                lay_out(child, content_x, child_y, content_width, children_available_height, measurer, viewport, children_pcb);
                 if matches!(child.kind, BoxKind::Skip) {
                     continue;
                 }
@@ -1119,12 +1142,15 @@ fn lay_out(
             // box-sizing работает симметрично width: content-box прибавляет
             // padding+border, border-box оставляет h как итоговую высоту.
             b.rect.height = if let Some(h_len) = &s.height {
-                if let Some(h) = h_len.resolve(em, Some(cb), viewport) {
+                if let Some(h) = h_len.resolve(em, available_height, viewport) {
                     match s.box_sizing {
                         BoxSizing::ContentBox => h
                             + padding_top + padding_bottom
                             + s.border_top_width + s.border_bottom_width,
-                        BoxSizing::BorderBox => h.max(0.0),
+                        BoxSizing::BorderBox => h.max(
+                            padding_top + padding_bottom
+                                + s.border_top_width + s.border_bottom_width,
+                        ),
                     }
                 } else {
                     content_height + padding_top + padding_bottom
@@ -1150,12 +1176,12 @@ fn lay_out(
                 BoxSizing::BorderBox => v,
             };
             if let Some(max_len) = &s.max_height
-                && let Some(max_h) = max_len.resolve(em, Some(cb), viewport)
+                && let Some(max_h) = max_len.resolve(em, available_height, viewport)
             {
                 b.rect.height = b.rect.height.min(outer_vert(max_h).max(0.0));
             }
             if let Some(min_len) = &s.min_height
-                && let Some(min_h) = min_len.resolve(em, Some(cb), viewport)
+                && let Some(min_h) = min_len.resolve(em, available_height, viewport)
             {
                 b.rect.height = b.rect.height.max(outer_vert(min_h.max(0.0)));
             }
@@ -1193,7 +1219,7 @@ fn lay_out(
                 } else {
                     content_width
                 };
-                lay_out(&mut b.children[i], cur_x, cur_y, child_avail, measurer, viewport, children_pcb);
+                lay_out(&mut b.children[i], cur_x, cur_y, child_avail, None, measurer, viewport, children_pcb);
                 if matches!(b.children[i].kind, BoxKind::Skip) {
                     continue;
                 }
@@ -1214,7 +1240,7 @@ fn lay_out(
                     row_y = cur_y;
                     cur_x = content_x;
                     row_max_h = 0.0;
-                    lay_out(&mut b.children[i], cur_x, cur_y, content_width, measurer, viewport, children_pcb);
+                    lay_out(&mut b.children[i], cur_x, cur_y, content_width, None, measurer, viewport, children_pcb);
                 }
                 cur_row.push(i);
                 cur_x = b.children[i].rect.x + b.children[i].rect.width + child_mr;
@@ -1259,12 +1285,15 @@ fn lay_out(
                 b, content_x, content_y, content_width, measurer, viewport, children_pcb,
             );
             b.rect.height = if let Some(h_len) = &s.height
-                && let Some(h) = h_len.resolve(em, Some(cb), viewport)
+                && let Some(h) = h_len.resolve(em, available_height, viewport)
             {
                 match s.box_sizing {
                     BoxSizing::ContentBox => (h + padding_top + padding_bottom
                         + s.border_top_width + s.border_bottom_width).max(0.0),
-                    BoxSizing::BorderBox => h.max(0.0),
+                    BoxSizing::BorderBox => h.max(
+                        padding_top + padding_bottom
+                            + s.border_top_width + s.border_bottom_width,
+                    ),
                 }
             } else {
                 row_h + padding_top + padding_bottom
@@ -1379,7 +1408,7 @@ fn lay_out_table_row(
     let mut cur_x = content_x;
     for (j, &i) in cell_idxs.iter().enumerate() {
         let avail = explicit_w[j].unwrap_or(auto_share);
-        lay_out(&mut b.children[i], cur_x, content_y, avail, measurer, viewport, pcb);
+        lay_out(&mut b.children[i], cur_x, content_y, avail, None, measurer, viewport, pcb);
         let c = &b.children[i];
         let c_em = c.style.font_size;
         let mr = c.style.margin_right.resolve_or_zero(c_em, content_width, viewport);
@@ -1429,7 +1458,7 @@ fn lay_out_abs_children(
             cb.width
         };
 
-        lay_out(&mut parent.children[idx], 0.0, 0.0, avail_w, measurer, viewport, my_pcb);
+        lay_out(&mut parent.children[idx], 0.0, 0.0, avail_w, None, measurer, viewport, my_pcb);
 
         let c_ml = cs.margin_left.resolve_or_zero(c_em, cb.width, viewport);
         let c_mr = cs.margin_right.resolve_or_zero(c_em, cb.width, viewport);
@@ -1522,7 +1551,7 @@ fn lay_out_flex(
     // Step 1 — preliminary layout for intrinsic sizes.
     let cb = content_width;
     for &i in &item_idxs {
-        lay_out(&mut children[i], content_x, content_y, content_width, measurer, viewport, pcb);
+        lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb);
     }
 
     // Compute hypothetical main sizes for all items (outer = including margins).
@@ -1661,6 +1690,7 @@ fn lay_out_flex(
                     content_x + m_l,
                     content_y + main_cursor + m_t,
                     content_width - m_l - m_r,
+                    None,
                     measurer,
                     viewport,
                     pcb,
@@ -1674,6 +1704,7 @@ fn lay_out_flex(
                     content_x + main_cursor + m_l,
                     content_y + cross_cursor + m_t,
                     inner_main,
+                    None,
                     measurer,
                     viewport,
                     pcb,
@@ -1995,7 +2026,7 @@ fn lay_out_grid(
             col_widths[c0]
         };
         // Layout at temporary position (y=0) to get intrinsic height.
-        lay_out(&mut children[i], content_x + col_offsets[c0], 0.0, cell_w, measurer, viewport, pcb);
+        lay_out(&mut children[i], content_x + col_offsets[c0], 0.0, cell_w, None, measurer, viewport, pcb);
         // Update auto row heights.
         let r0 = (rs - 1) as usize;
         if r0 < row_heights.len()
@@ -2042,7 +2073,7 @@ fn lay_out_grid(
         let (cs, ce, rs, re) = placements[k];
         if cs == 0 || rs == 0 {
             // Unplaced — stack below grid content.
-            lay_out(&mut children[i], content_x, content_y + y_off, content_width, measurer, viewport, pcb);
+            lay_out(&mut children[i], content_x, content_y + y_off, content_width, None, measurer, viewport, pcb);
             y_off += children[i].rect.height;
             continue;
         }
@@ -2065,7 +2096,7 @@ fn lay_out_grid(
         };
 
         // Re-layout with final cell width.
-        lay_out(&mut children[i], cell_x, cell_y, cell_w, measurer, viewport, pcb);
+        lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb);
 
         let item = &mut children[i];
         let is = &item.style;
