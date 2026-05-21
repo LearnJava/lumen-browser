@@ -11,7 +11,7 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame,
     BackgroundClip, BackgroundImage, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
-    Color, CssColor, FontStyle, FontWeight,
+    Color, ContainFlags, CssColor, FontStyle, FontWeight,
     GradientStop, ImageRendering, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent,
@@ -984,7 +984,9 @@ fn box_layer_ops(b: &LayoutBox) -> (Vec<DisplayCommand>, Vec<DisplayCommand>) {
     }
     let s = &b.style;
 
-    if overflow_clips(s.overflow_x) || overflow_clips(s.overflow_y) {
+    // CSS Containment L3 §3.5: contain:paint clips content to border box.
+    let paint_contain = s.contain.0 & ContainFlags::PAINT.0 != 0;
+    if overflow_clips(s.overflow_x) || overflow_clips(s.overflow_y) || paint_contain {
         pre.push(DisplayCommand::PushClipRect { rect: b.rect });
         post.push(DisplayCommand::PopClip);
     }

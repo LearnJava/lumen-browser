@@ -396,7 +396,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 ### CSS Containment Level 3
 | Property | Status | Notes |
 |---|---|---|
-| `contain` | 🟡 | parsed/stored as `ContainFlags` bitfield (none/strict/content/size/inline-size/layout/style/paint combinations); containment enforcement — deferred |
+| `contain` | 🟡 | parsed/stored + enforced: `size`→auto height=0, `paint`→PushClipRect (border-box clip), `layout`/`paint`→establishes containing block for abs-pos descendants; `style`/inline-size — Phase 1 |
 | `content-visibility` | 🟡 | parsed/stored (visible/auto/hidden); skip-content optimization — deferred |
 
 ### CSS Container Queries Level 1
@@ -447,7 +447,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | CSS Scroll Snap L1 | — | parse-only | — |
 | CSS Masking L1 | — | parse-only | — |
 | CSS Lists L3 | — | parse-only | rendering |
-| CSS Containment L3 | — | parse+store (contain, content-visibility) | layout/paint enforcement |
+| CSS Containment L3 | — | size/layout/paint enforced | style/inline-size Phase 1 |
 | CSS Container Queries L1 | — | parse+store (container-type, container-name) | @container matching |
 | CSS Shapes L1 | — | parse+store (shape-outside/margin/threshold) | float shape offset |
 | CSS Motion Path L1 | — | parse+store (offset-path/distance/rotate/anchor) | path layout |
