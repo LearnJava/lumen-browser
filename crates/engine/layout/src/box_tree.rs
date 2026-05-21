@@ -1203,12 +1203,14 @@ fn lay_out_flex(
     let is_wrap_reverse = matches!(s.flex_wrap, FlexWrap::WrapReverse);
 
     // Indices of non-Skip children (actual flex items).
-    let item_idxs: Vec<usize> = children
+    let mut item_idxs: Vec<usize> = children
         .iter()
         .enumerate()
         .filter(|(_, c)| !matches!(c.kind, BoxKind::Skip))
         .map(|(i, _)| i)
         .collect();
+    // CSS Flexbox L1 §4 — stable sort by `order` (same-order items keep source order).
+    item_idxs.sort_by_key(|&i| children[i].style.order);
 
     if item_idxs.is_empty() {
         return 0.0;

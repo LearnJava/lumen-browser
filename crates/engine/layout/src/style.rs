@@ -1802,6 +1802,9 @@ pub struct ComputedStyle {
     /// CSS Flexbox L1 §7.3 — `flex-basis`. Non-inherited. Default `Auto`.
     /// Phase 0: parsing + storage; реальный flex-layout — задача 4B.3.
     pub flex_basis: FlexBasis,
+    /// CSS Flexbox L1 §4 — `order`. Non-inherited. Default `0`.
+    /// Controls rendering order of flex items independently of source order.
+    pub order: i32,
     /// CSS Grid Layout L1 §7.2 — `grid-template-columns`. Non-inherited.
     /// Default `[]` (no explicit tracks). Parsed track-list.
     pub grid_template_columns: Vec<GridTrackSize>,
@@ -3281,6 +3284,7 @@ impl ComputedStyle {
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: FlexBasis::Auto,
+            order: 0,
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
             grid_auto_flow: GridAutoFlow::Row,
@@ -3504,6 +3508,8 @@ pub fn compute_style(
         flex_grow: 0.0,
         flex_shrink: 1.0,
         flex_basis: FlexBasis::Auto,
+        // CSS Flexbox L1 §4 — order не наследуется.
+        order: 0,
         // CSS Grid Layout L1 — grid properties не наследуются.
         grid_template_columns: Vec::new(),
         grid_template_rows: Vec::new(),
@@ -7437,6 +7443,12 @@ fn apply_declaration(
                 style.flex_basis = v;
             }
         }
+        "order" => {
+            // CSS Flexbox L1 §4: <integer>. Non-inherited. Initial: 0.
+            if let Ok(n) = val.trim().parse::<i32>() {
+                style.order = n;
+            }
+        }
         "flex" => {
             // CSS Flexbox L1 §7: shorthand flex-grow flex-shrink flex-basis.
             apply_flex_shorthand(style, val, is_quirks);
@@ -10222,6 +10234,9 @@ fn apply_css_wide_keyword(
             } else {
                 init.flex_basis.clone()
             };
+        }
+        "order" => {
+            style.order = if inh_only_inherit { inherited.order } else { init.order };
         }
         "flex" => {
             style.flex_grow = if inh_only_inherit { inherited.flex_grow } else { init.flex_grow };
@@ -16882,6 +16897,61 @@ mod tests {
         assert_eq!(s.flex_grow, 2.0);
         assert_eq!(s.flex_shrink, 1.0);
         assert_eq!(s.flex_basis, FlexBasis::Length(Length::Px(100.0)));
+    }
+
+    // --- order ---
+
+    #[test]
+    fn order_initial_is_zero() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.order, 0);
+    }
+
+    #[test]
+    fn order_positive() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { order: 3; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.order, 3);
+    }
+
+    #[test]
+    fn order_negative() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { order: -2; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.order, -2);
+    }
+
+    #[test]
+    fn order_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { order: 5; }");
+        let root = ComputedStyle::root();
+        let div_node = doc.get(doc.root()).children[0];
+        let span_node = doc.get(div_node).children[0];
+        let div_s = compute_style(&doc, div_node, &sheet, &root, Size::new(800.0, 600.0));
+        let span_s = compute_style(&doc, span_node, &sheet, &div_s, Size::new(800.0, 600.0));
+        assert_eq!(div_s.order, 5);
+        assert_eq!(span_s.order, 0); // initial, не наследуется
+    }
+
+    #[test]
+    fn order_invalid_float_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { order: 1.5; }");
+        let root = ComputedStyle::root();
+        let node = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.order, 0); // float не валиден, initial
     }
 
     // --- font-variation-settings ---

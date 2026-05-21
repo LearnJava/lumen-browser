@@ -141,7 +141,7 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | `align-self` | ✅ | |
 | `align-content` | ✅ | multi-line; flex-start / flex-end / center / space-between / space-around / stretch |
 | `gap`, `row-gap`, `column-gap` | ✅ | |
-| `order` | ⬜ | not implemented |
+| `order` | ✅ | integer; sorts flex items by order value (stable sort) |
 
 ### CSS Basic User Interface Level 3
 | Property | Status |
@@ -388,7 +388,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | Module | ✅ | 🟡 | ⬜ |
 |---|---|---|---|
 | CSS Level 2 core (box model, display, color) | ✅ | partial | table layout |
-| CSS Flexbox L1 | ✅ | — | `order` |
+| CSS Flexbox L1 | ✅ | — | — |
 | CSS Box Alignment L3 | ✅ (flex) | grid/block | — |
 | CSS Text L3 | ✅ most | hyphens, tab | line-break |
 | CSS Text Decoration L3 | ✅ most | thickness | underline-position |
