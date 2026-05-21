@@ -381,7 +381,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 |---|---|
 | `object-fit` | ✅ |
 | `object-position` | ✅ |
-| `image-rendering` | 🟡 parsed |
+| `image-rendering` | ✅ | auto/smooth → bilinear sampler; pixelated/crisp-edges → nearest sampler; per-image bind groups in GPU renderer |
 
 ### CSS UI Level 4 extras
 | Property | Status |
@@ -434,7 +434,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | CSS Backgrounds L3 | ✅ (color/border/shadow/repeat/position/size) | clip/origin/attachment layers | — |
 | CSS Fonts L3/L4 | ✅ (size/weight/style) | stretch/variant | @font-face parse✅ no fetch |
 | CSS Compositing L1 | ✅ opacity | blend-mode/isolation | — |
-| CSS Images L3 | ✅ object-fit/position | image-rendering | — |
+| CSS Images L3 | ✅ object-fit/position/image-rendering | — | — |
 | CSS Transforms L1 | — | parse-only | paint apply |
 | CSS Animations L1 | — | parse-only | scheduler |
 | CSS Transitions L1 | — | parse-only | engine |
