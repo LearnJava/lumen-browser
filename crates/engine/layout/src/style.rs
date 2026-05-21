@@ -1943,6 +1943,22 @@ pub struct ComputedStyle {
     /// CSS Writing Modes L3 §6.5 — `text-orientation`. Inherited. Initial: `Mixed`.
     /// Phase 0: parse + store; glyph rotation — deferred.
     pub text_orientation: TextOrientation,
+    /// CSS Shapes L1 §3 — `shape-outside`. NOT inherited. Initial: `None`.
+    /// Phase 0: parse + store; float-wrap shape application — deferred.
+    pub shape_outside: ShapeOutside,
+    /// CSS Shapes L1 §4 — `shape-margin: <length-percentage>`. NOT inherited. Initial: 0.
+    pub shape_margin: Length,
+    /// CSS Shapes L1 §5 — `shape-image-threshold: <number>`. NOT inherited. Initial: 0.0.
+    pub shape_image_threshold: f32,
+    /// CSS Motion Path L1 §3 — `offset-path`. NOT inherited. Initial: `None` (no motion path).
+    /// Phase 0: parse + store; path-based motion animation — deferred.
+    pub offset_path: Option<String>,
+    /// CSS Motion Path L1 §3 — `offset-distance: <length-percentage>`. NOT inherited. Initial: `0`.
+    pub offset_distance: Length,
+    /// CSS Motion Path L1 §3 — `offset-rotate`. NOT inherited. Initial: `Auto`.
+    pub offset_rotate: OffsetRotate,
+    /// CSS Motion Path L1 §3 — `offset-anchor`: auto | `<position>`. NOT inherited. Initial: `Auto` (None).
+    pub offset_anchor: Option<ObjectPosition>,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -2305,6 +2321,26 @@ pub enum ContainerType {
     Normal,
     Size,
     InlineSize,
+}
+
+/// CSS Shapes L1 §3 — `shape-outside` value. NOT inherited. Initial: `None`.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub enum ShapeOutside {
+    #[default]
+    None,
+    /// `<basic-shape>` or `<url>` or `<box-value>` — stored as raw string for Phase 0.
+    Value(String),
+}
+
+/// CSS Motion Path L1 §3 — `offset-rotate`. NOT inherited. Initial: `Auto`.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub enum OffsetRotate {
+    #[default]
+    Auto,
+    /// `auto <angle>` — auto direction plus a fixed rotation offset.
+    AutoAngle(f32),
+    Reverse,
+    Angle(f32),
 }
 
 /// CSS Color Adjustment L1 §5 — `print-color-adjust`. NOT inherited. Initial: `Economy`.
@@ -3547,6 +3583,13 @@ impl ComputedStyle {
             font_size_adjust: FontSizeAdjust::None,
             writing_mode: WritingMode::HorizontalTb,
             text_orientation: TextOrientation::Mixed,
+            shape_outside: ShapeOutside::None,
+            shape_margin: Length::Px(0.0),
+            shape_image_threshold: 0.0,
+            offset_path: None,
+            offset_distance: Length::Px(0.0),
+            offset_rotate: OffsetRotate::Auto,
+            offset_anchor: None,
         }
     }
 }
@@ -3796,6 +3839,14 @@ pub fn compute_style(
         // CSS Writing Modes L3 — оба inherited.
         writing_mode: inherited.writing_mode,
         text_orientation: inherited.text_orientation,
+        // CSS Shapes L1 / Motion Path — не наследуются. Initial values.
+        shape_outside: ShapeOutside::None,
+        shape_margin: Length::Px(0.0),
+        shape_image_threshold: 0.0,
+        offset_path: None,
+        offset_distance: Length::Px(0.0),
+        offset_rotate: OffsetRotate::Auto,
+        offset_anchor: None,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -8236,6 +8287,61 @@ fn apply_declaration(
                 style.font_size_adjust
             };
         }
+        "shape-outside" => {
+            style.shape_outside = match val.trim() {
+                "none" => ShapeOutside::None,
+                v => ShapeOutside::Value(v.to_string()),
+            };
+        }
+        "shape-margin" => {
+            if let Some(len) = parse_length_q(val, is_quirks)
+                && !matches!(&len, Length::Px(v) if *v < 0.0)
+            {
+                style.shape_margin = len;
+            }
+        }
+        "shape-image-threshold" => {
+            if let Ok(n) = val.trim().parse::<f32>() {
+                style.shape_image_threshold = n.clamp(0.0, 1.0);
+            }
+        }
+        "offset-path" => {
+            style.offset_path = match val.trim() {
+                "none" => None,
+                v => Some(v.to_string()),
+            };
+        }
+        "offset-distance" => {
+            if let Some(len) = parse_length_q(val, is_quirks) {
+                style.offset_distance = len;
+            }
+        }
+        "offset-rotate" => {
+            let v = val.trim();
+            style.offset_rotate = if v.eq_ignore_ascii_case("auto") {
+                OffsetRotate::Auto
+            } else if v.eq_ignore_ascii_case("reverse") {
+                OffsetRotate::Reverse
+            } else if let Some(angle) = parse_angle_to_radians(v) {
+                OffsetRotate::Angle(angle)
+            } else if let Some(rest) = v.strip_prefix("auto ") {
+                if let Some(angle) = parse_angle_to_radians(rest.trim()) {
+                    OffsetRotate::AutoAngle(angle)
+                } else {
+                    style.offset_rotate
+                }
+            } else {
+                style.offset_rotate
+            };
+        }
+        "offset-anchor" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("auto") {
+                style.offset_anchor = None;
+            } else if let Some(pos) = ObjectPosition::parse(v, em_basis, viewport) {
+                style.offset_anchor = Some(pos);
+            }
+        }
         "row-gap" => {
             // Typed Length — % = % cb_height, резолвится при layout.
             // Отрицательные значения запрещены (CSS Multi-column §3.4).
@@ -8745,29 +8851,6 @@ fn apply_declaration(
                 "size" => ContainerType::Size,
                 "inline-size" => ContainerType::InlineSize,
                 _ => ContainerType::Normal,
-            };
-        }
-        "writing-mode" => {
-            style.writing_mode = match val.trim() {
-                "horizontal-tb" => WritingMode::HorizontalTb,
-                "vertical-rl" => WritingMode::VerticalRl,
-                "vertical-lr" => WritingMode::VerticalLr,
-                "sideways-rl" => WritingMode::SidewaysRl,
-                "sideways-lr" => WritingMode::SidewaysLr,
-                // Legacy SVG aliases (CSS Writing Modes L3 §2.1 note).
-                "lr" | "lr-tb" => WritingMode::HorizontalTb,
-                "rl" | "rl-tb" => WritingMode::HorizontalTb,
-                "tb" | "tb-rl" => WritingMode::VerticalRl,
-                "tb-lr" => WritingMode::VerticalLr,
-                _ => style.writing_mode,
-            };
-        }
-        "text-orientation" => {
-            style.text_orientation = match val.trim() {
-                "mixed" => TextOrientation::Mixed,
-                "upright" => TextOrientation::Upright,
-                "sideways" | "sideways-right" => TextOrientation::Sideways,
-                _ => style.text_orientation,
             };
         }
         "user-select" => {
@@ -10331,25 +10414,40 @@ fn apply_css_wide_keyword(
                 init.font_size_adjust
             };
         }
+        "shape-outside" => {
+            style.shape_outside = if inh_only_inherit {
+                inherited.shape_outside.clone()
+            } else {
+                init.shape_outside.clone()
+            };
+        }
+        "shape-margin" => {
+            style.shape_margin = if inh_only_inherit { inherited.shape_margin.clone() } else { init.shape_margin.clone() };
+        }
+        "shape-image-threshold" => {
+            style.shape_image_threshold = if inh_only_inherit { inherited.shape_image_threshold } else { init.shape_image_threshold };
+        }
+        "offset-path" => {
+            style.offset_path = if inh_only_inherit {
+                inherited.offset_path.clone()
+            } else {
+                init.offset_path.clone()
+            };
+        }
+        "offset-distance" => {
+            style.offset_distance = if inh_only_inherit { inherited.offset_distance.clone() } else { init.offset_distance.clone() };
+        }
+        "offset-rotate" => {
+            style.offset_rotate = if inh_only_inherit { inherited.offset_rotate } else { init.offset_rotate };
+        }
+        "offset-anchor" => {
+            style.offset_anchor = if inh_only_inherit { inherited.offset_anchor } else { init.offset_anchor };
+        }
         "forced-color-adjust" => {
             style.forced_color_adjust = if inh_only_inherit {
                 inherited.forced_color_adjust
             } else {
                 init.forced_color_adjust
-            };
-        }
-        "writing-mode" => {
-            style.writing_mode = if inh_only_inherit {
-                inherited.writing_mode
-            } else {
-                init.writing_mode
-            };
-        }
-        "text-orientation" => {
-            style.text_orientation = if inh_only_inherit {
-                inherited.text_orientation
-            } else {
-                init.text_orientation
             };
         }
         "display" => {
@@ -18853,6 +18951,9 @@ mod tests {
 
     #[test]
     fn writing_mode_initial_horizontal_tb() {
+    // CSS Shapes L1 — shape-outside
+    #[test]
+    fn shape_outside_none_initial() {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
@@ -18885,6 +18986,23 @@ mod tests {
     fn writing_mode_inherited() {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; }");
+        assert_eq!(style.shape_outside, ShapeOutside::None);
+    }
+
+    #[test]
+    fn shape_outside_value() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { shape-outside: circle(50%); }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.shape_outside, ShapeOutside::Value("circle(50%)".to_string()));
+    }
+
+    #[test]
+    fn shape_outside_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { shape-outside: circle(50%); }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.root()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
@@ -18908,6 +19026,23 @@ mod tests {
 
     #[test]
     fn text_orientation_initial_mixed() {
+        assert_eq!(div_style.shape_outside, ShapeOutside::Value("circle(50%)".to_string()));
+        assert_eq!(span_style.shape_outside, ShapeOutside::None);
+    }
+
+    #[test]
+    fn shape_outside_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { shape-outside: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.shape_outside, ShapeOutside::None);
+    }
+
+    // CSS Shapes L1 — shape-margin
+    #[test]
+    fn shape_margin_initial() {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
@@ -18940,6 +19075,23 @@ mod tests {
     fn text_orientation_inherited() {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; text-orientation: upright; }");
+        assert_eq!(style.shape_margin, Length::Px(0.0));
+    }
+
+    #[test]
+    fn shape_margin_px() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { shape-margin: 10px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.shape_margin, Length::Px(10.0));
+    }
+
+    #[test]
+    fn shape_margin_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { shape-margin: 5px; }");
         let root = ComputedStyle::root();
         let div = doc.get(doc.root()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
@@ -18947,5 +19099,242 @@ mod tests {
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
         assert_eq!(div_style.text_orientation, TextOrientation::Upright);
         assert_eq!(span_style.text_orientation, TextOrientation::Upright);
+        assert_eq!(div_style.shape_margin, Length::Px(5.0));
+        assert_eq!(span_style.shape_margin, Length::Px(0.0));
+    }
+
+    #[test]
+    fn shape_margin_negative_clamped() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { shape-margin: -5px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        // Negative shape-margin is invalid per spec — ignored.
+        assert_eq!(style.shape_margin, Length::Px(0.0));
+    }
+
+    // CSS Shapes L1 — shape-image-threshold
+    #[test]
+    fn shape_image_threshold_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert!((style.shape_image_threshold - 0.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn shape_image_threshold_value() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { shape-image-threshold: 0.5; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert!((style.shape_image_threshold - 0.5).abs() < 1e-5);
+    }
+
+    #[test]
+    fn shape_image_threshold_clamped() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { shape-image-threshold: 1.5; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert!((style.shape_image_threshold - 1.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn shape_image_threshold_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { shape-image-threshold: 0.8; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert!((div_style.shape_image_threshold - 0.8).abs() < 1e-5);
+        assert!((span_style.shape_image_threshold - 0.0).abs() < f32::EPSILON);
+    }
+
+    // CSS Motion Path L1 — offset-path
+    #[test]
+    fn offset_path_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.offset_path, None);
+    }
+
+    #[test]
+    fn offset_path_value() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(r#"div { offset-path: path("M 0 0 L 100 100"); }"#);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert!(style.offset_path.is_some());
+    }
+
+    #[test]
+    fn offset_path_none_resets() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse(r#"div { offset-path: none; }"#);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.offset_path, None);
+    }
+
+    #[test]
+    fn offset_path_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse(r#"div { offset-path: path("M0 0 L100 0"); }"#);
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert!(div_style.offset_path.is_some());
+        assert_eq!(span_style.offset_path, None);
+    }
+
+    // CSS Motion Path L1 — offset-distance
+    #[test]
+    fn offset_distance_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.offset_distance, Length::Px(0.0));
+    }
+
+    #[test]
+    fn offset_distance_px() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { offset-distance: 50px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.offset_distance, Length::Px(50.0));
+    }
+
+    #[test]
+    fn offset_distance_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { offset-distance: 20px; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.offset_distance, Length::Px(20.0));
+        assert_eq!(span_style.offset_distance, Length::Px(0.0));
+    }
+
+    #[test]
+    fn offset_distance_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { offset-distance: bogus; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.offset_distance, Length::Px(0.0));
+    }
+
+    // CSS Motion Path L1 — offset-rotate
+    #[test]
+    fn offset_rotate_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.offset_rotate, OffsetRotate::Auto);
+    }
+
+    #[test]
+    fn offset_rotate_reverse() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { offset-rotate: reverse; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.offset_rotate, OffsetRotate::Reverse);
+    }
+
+    #[test]
+    fn offset_rotate_angle() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { offset-rotate: 90deg; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        if let OffsetRotate::Angle(rad) = style.offset_rotate {
+            assert!((rad - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
+        } else {
+            panic!("expected OffsetRotate::Angle");
+        }
+    }
+
+    #[test]
+    fn offset_rotate_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { offset-rotate: reverse; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.offset_rotate, OffsetRotate::Reverse);
+        assert_eq!(span_style.offset_rotate, OffsetRotate::Auto);
+    }
+
+    // CSS Motion Path L1 — offset-anchor
+    #[test]
+    fn offset_anchor_initial() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.offset_anchor, None);
+    }
+
+    #[test]
+    fn offset_anchor_auto() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { offset-anchor: auto; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.offset_anchor, None);
+    }
+
+    #[test]
+    fn offset_anchor_not_inherited() {
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { offset-anchor: 50% 50%; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span = doc.get(div).children[0];
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert!(div_style.offset_anchor.is_some());
+        assert_eq!(span_style.offset_anchor, None);
+    }
+
+    #[test]
+    fn offset_anchor_invalid_ignored() {
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { offset-anchor: bogus; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(style.offset_anchor, None);
     }
 }

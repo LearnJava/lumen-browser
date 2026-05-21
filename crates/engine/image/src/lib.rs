@@ -103,6 +103,89 @@ pub struct Image {
     pub data: Vec<u8>,
 }
 
+impl Image {
+    /// Возвращает пиксели в формате RGBA8 (4 байта на пиксель).
+    /// Если формат уже `Rgba8` — копирует буфер без преобразования.
+    #[must_use]
+    pub fn to_rgba8(&self) -> Vec<u8> {
+        let pixel_count = self.width as usize * self.height as usize;
+        let mut out = Vec::with_capacity(pixel_count * 4);
+        match self.format {
+            PixelFormat::Gray8 => {
+                for &g in &self.data {
+                    out.extend_from_slice(&[g, g, g, 255]);
+                }
+            }
+            PixelFormat::GrayAlpha8 => {
+                for pair in self.data.chunks_exact(2) {
+                    out.extend_from_slice(&[pair[0], pair[0], pair[0], pair[1]]);
+                }
+            }
+            PixelFormat::Rgb8 => {
+                for t in self.data.chunks_exact(3) {
+                    out.extend_from_slice(&[t[0], t[1], t[2], 255]);
+                }
+            }
+            PixelFormat::Rgba8 => {
+                out.extend_from_slice(&self.data);
+            }
+        }
+        out
+    }
+}
+
+/// Масштабирует `src` до `(dst_w × dst_h)` билинейной интерполяцией.
+///
+/// Возвращает новый [`Image`] в формате [`PixelFormat::Rgba8`].
+/// Если `dst_w` или `dst_h` равны нулю, подставляется 1 (deg fallback).
+/// Маппинг центров пикселей (браузерная конвенция):
+/// выходной пиксель `(dx, dy)` соответствует источнику
+/// `(dx + 0.5) * src_w / dst_w - 0.5`.
+#[must_use]
+pub fn resize_bilinear(src: &Image, dst_w: u32, dst_h: u32) -> Image {
+    let dst_w = dst_w.max(1);
+    let dst_h = dst_h.max(1);
+
+    let src_rgba = src.to_rgba8();
+    let sw = src.width as usize;
+    let sh = src.height as usize;
+    let dw = dst_w as usize;
+    let dh = dst_h as usize;
+
+    let mut out = vec![0u8; dw * dh * 4];
+
+    for dy in 0..dh {
+        for dx in 0..dw {
+            let sx = (dx as f32 + 0.5) * sw as f32 / dw as f32 - 0.5;
+            let sy = (dy as f32 + 0.5) * sh as f32 / dh as f32 - 0.5;
+
+            let x0 = (sx.floor() as i32).clamp(0, sw as i32 - 1) as usize;
+            let y0 = (sy.floor() as i32).clamp(0, sh as i32 - 1) as usize;
+            let x1 = (x0 + 1).min(sw - 1);
+            let y1 = (y0 + 1).min(sh - 1);
+
+            let fx = sx - sx.floor();
+            let fy = sy - sy.floor();
+
+            let p00 = (y0 * sw + x0) * 4;
+            let p10 = (y0 * sw + x1) * 4;
+            let p01 = (y1 * sw + x0) * 4;
+            let p11 = (y1 * sw + x1) * 4;
+
+            let o = (dy * dw + dx) * 4;
+            for c in 0..4usize {
+                let v = src_rgba[p00 + c] as f32 * (1.0 - fx) * (1.0 - fy)
+                    + src_rgba[p10 + c] as f32 * fx * (1.0 - fy)
+                    + src_rgba[p01 + c] as f32 * (1.0 - fx) * fy
+                    + src_rgba[p11 + c] as f32 * fx * fy;
+                out[o + c] = v.round() as u8;
+            }
+        }
+    }
+
+    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out }
+}
+
 /// Формат пикселя декодированного изображения. Все варианты — 8 бит на канал.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelFormat {
