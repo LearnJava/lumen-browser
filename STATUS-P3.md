@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: 2C Tab session export/import  branch: session-export
+Next step: session_export.rs in lumen-storage  crates/storage/src/session_export.rs
 
 Next:
 —
