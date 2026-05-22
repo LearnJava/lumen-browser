@@ -1094,6 +1094,29 @@ pub trait SseProvider: Send + Sync {
     ) -> Result<Box<dyn SseSession>>;
 }
 
+// ============================================================================
+// Service Worker fetch interception (HTML Living Standard §10.2.2).
+// ============================================================================
+
+/// Перехватчик fetch-запросов уровня Service Worker.
+///
+/// Вызывается `HttpClient`-ом до открытия TCP-соединения. Возврат
+/// `Some(body)` означает «SW обслужил из кэша, сеть не нужна»;
+/// `None` — нет подходящего SW или кэш не содержит ответа, fetch
+/// уходит в сеть штатно.
+///
+/// Реализация — `lumen-storage::ServiceWorkerInterceptor` (SQLite-backed
+/// CacheStorage). Trait-граница позволяет lumen-network не зависеть от
+/// lumen-storage напрямую. `InMemoryFetchInterceptor` в lumen-network
+/// служит заглушкой для тестов без SQLite.
+///
+/// `origin` — ASCII-origin запрашивающей страницы (`"https://example.com"`);
+/// нужен для origin-partitioning кэша (разные страницы — разные кэши).
+pub trait FetchInterceptor: Send + Sync {
+    /// Перехватить запрос. Возвращает тело ответа из кэша или `None`.
+    fn intercept(&self, url: &Url, origin: &str) -> Option<Vec<u8>>;
+}
+
 // Точки расширения, спроектированные, но без интерфейса до Phase 1+.
 //
 // Trait-ы для трёх оставшихся «разрешённых exceptions» из §5 (внешние
