@@ -292,7 +292,7 @@
 
 #### Phase 2 (Interactive) — без этого современный веб не функционален
 
-- **`[P1+P3]` Shadow DOM + custom elements + `<template>` + `<slot>`.** **P1** — Shadow DOM cascade + composed tree + tree-builder; **P3** — JS bindings (`Element.attachShadow`, `customElements.define`) + lifecycle dispatch.
+- 🟡 **`[P1+P3]` Shadow DOM + custom elements + `<template>` + `<slot>`.** **P1 done** — `ShadowRootMode`, `NodeData::ShadowRoot`, `Document::attach_shadow/shadow_root_of/is_shadow_host`, `FlatTree` + `build_flat_tree` (slot assignment, fallback content, zero-alloc fast path), layout wiring (`build_box`/`collect_inline_segments` use `flat.children_of`). **P3** — JS bindings (`Element.attachShadow`, `customElements.define`) + lifecycle dispatch. **P4** — `:host`, `::slotted` CSS pseudo-classes (marked with `// CSS: :host, ::slotted` in `build_box`).
 - **`[P1+P3]` Accessibility tree + platform bridges.** **P1** — построение accessibility tree из DOM/layout + ARIA semantics + focus model; **P3** — platform bridges (UIA / AT-SPI / NSAccessibility) + focus dispatch.
 - **`[P1+P3]` Forms runtime.** **P1** — `ValidityState`, validation pseudo-classes, submission algorithm; **P3** — native pickers, autofill popup, validation tooltip UI.
 - **`[P1+P2]` `<picture>` / `srcset` / `sizes` + `loading="lazy"`.** 🟡 **P1**: готовы parser + pickers + `pick_picture_source` + L4 nested `(not (...))` / `((...))` (см. § «P1 4A»). Осталось: IntersectionObserver event source для lazy. **P2** — image-side GPU upload + integration в shell.

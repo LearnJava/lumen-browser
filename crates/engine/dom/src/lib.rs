@@ -1,5 +1,6 @@
 //! Arena-based DOM tree. Build via `Document::create_*` and `append_child`.
 
+use std::collections::HashMap;
 use std::fmt;
 
 pub use lumen_core::sandbox::{parse_sandbox_value, SandboxFlags};
@@ -48,6 +49,25 @@ pub struct Attribute {
     pub value: String,
 }
 
+/// Shadow root mode per Shadow DOM spec §4.2.
+///
+/// `Open` — JS can access the shadow root via `element.shadowRoot`.
+/// `Closed` — `element.shadowRoot` returns `null` (encapsulated).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ShadowRootMode {
+    Open,
+    Closed,
+}
+
+impl fmt::Display for ShadowRootMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Open => f.write_str("open"),
+            Self::Closed => f.write_str("closed"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum NodeData {
     Document,
@@ -55,6 +75,14 @@ pub enum NodeData {
         name: String,
         public_id: String,
         system_id: String,
+    },
+    /// Root of a shadow tree attached to a shadow host element.
+    ///
+    /// Not a regular DOM child — the host stores a pointer via
+    /// `Document.shadow_roots`. Contains the shadow subtree as DOM children.
+    /// Layout uses this through the composed (flat) tree; see `build_flat_tree`.
+    ShadowRoot {
+        mode: ShadowRootMode,
     },
     Element {
         name: QualName,
@@ -295,6 +323,12 @@ pub struct Document {
     root: NodeId,
     mode: DocumentMode,
     target_id: Option<String>,
+    /// Maps each shadow host `NodeId` to its shadow root `NodeId`.
+    ///
+    /// Shadow roots are stored in the arena like regular nodes but are not
+    /// DOM children of the host. The flat tree (see `build_flat_tree`) uses
+    /// this map to route layout traversal through shadow trees.
+    shadow_roots: HashMap<NodeId, NodeId>,
 }
 
 impl Default for Document {
@@ -315,6 +349,7 @@ impl Document {
             root: NodeId(0),
             mode: DocumentMode::default(),
             target_id: None,
+            shadow_roots: HashMap::new(),
         }
     }
 
@@ -356,6 +391,30 @@ impl Document {
     /// не вызывается отсюда.
     pub fn set_target<S: Into<String>>(&mut self, id: Option<S>) {
         self.target_id = id.map(Into::into).filter(|s| !s.is_empty());
+    }
+
+    /// Attach a shadow root to `host` and return its `NodeId`.
+    ///
+    /// The shadow root is allocated in the arena but is **not** a DOM child of
+    /// `host`. Children appended to the shadow root form the shadow tree.
+    /// Calling twice on the same host replaces the old shadow root (old root
+    /// remains in the arena as an orphan — no automatic cleanup in Phase 0).
+    ///
+    /// Shadow DOM spec §4.2 «Attaching a shadow root».
+    pub fn attach_shadow(&mut self, host: NodeId, mode: ShadowRootMode) -> NodeId {
+        let sr = self.alloc(NodeData::ShadowRoot { mode });
+        self.shadow_roots.insert(host, sr);
+        sr
+    }
+
+    /// Return the shadow root attached to `host`, or `None` if not a shadow host.
+    pub fn shadow_root_of(&self, host: NodeId) -> Option<NodeId> {
+        self.shadow_roots.get(&host).copied()
+    }
+
+    /// Whether `id` is a shadow host (has an attached shadow root).
+    pub fn is_shadow_host(&self, id: NodeId) -> bool {
+        self.shadow_roots.contains_key(&id)
     }
 
     pub fn get(&self, id: NodeId) -> &Node {
@@ -482,6 +541,7 @@ fn write_tree(doc: &Document, id: NodeId, depth: usize, f: &mut fmt::Formatter<'
     match &node.data {
         NodeData::Document => writeln!(f, "#document")?,
         NodeData::Doctype { name, .. } => writeln!(f, "<!DOCTYPE {name}>")?,
+        NodeData::ShadowRoot { mode } => writeln!(f, "#shadow-root ({mode})")?,
         NodeData::Element { name, attrs } => {
             write!(f, "<{}", name.local)?;
             for a in attrs {
@@ -494,6 +554,10 @@ fn write_tree(doc: &Document, id: NodeId, depth: usize, f: &mut fmt::Formatter<'
     }
     for &child in &node.children {
         write_tree(doc, child, depth + 1, f)?;
+    }
+    // Shadow roots are not DOM children — print them after light-tree children.
+    if let Some(sr) = doc.shadow_root_of(id) {
+        write_tree(doc, sr, depth + 1, f)?;
     }
     Ok(())
 }
@@ -586,6 +650,130 @@ fn collect_anchors(doc: &Document, id: NodeId, out: &mut Vec<AnchorInfo>) {
     }
     for &child in &node.children.clone() {
         collect_anchors(doc, child, out);
+    }
+}
+
+// ──────── Shadow DOM: composed (flat) tree ────────
+
+/// Pre-computed composed tree (flat tree) for Shadow DOM layout traversal.
+///
+/// Shadow DOM spec §8.2: the flat tree replaces the DOM tree for rendering.
+/// Shadow hosts are replaced by their shadow subtrees and `<slot>` elements
+/// are replaced by their assigned light-tree nodes.
+///
+/// For documents without Shadow DOM `overrides` is empty, so every lookup
+/// falls through to DOM children — zero allocation overhead.
+#[derive(Debug, Default)]
+pub struct FlatTree {
+    /// Nodes whose composed-tree children differ from their DOM children.
+    overrides: HashMap<NodeId, Vec<NodeId>>,
+}
+
+impl FlatTree {
+    /// Composed-tree children of `id`.
+    ///
+    /// Returns DOM children when no shadow override exists (fast path for
+    /// ordinary elements in non-shadow documents).
+    pub fn children_of<'a>(&'a self, doc: &'a Document, id: NodeId) -> &'a [NodeId] {
+        self.overrides
+            .get(&id)
+            .map(Vec::as_slice)
+            .unwrap_or_else(|| doc.get(id).children.as_slice())
+    }
+}
+
+/// Build the composed (flat) tree for the document.
+///
+/// Shadow DOM spec §8.2. Layout calls this once before `build_box` so that
+/// the tree traversal follows shadow boundaries without per-node branching.
+///
+/// Fast path: if the document has no shadow hosts, returns an empty `FlatTree`
+/// (every `children_of` call falls through to DOM children).
+pub fn build_flat_tree(doc: &Document) -> FlatTree {
+    if doc.shadow_roots.is_empty() {
+        return FlatTree::default();
+    }
+
+    let mut overrides: HashMap<NodeId, Vec<NodeId>> = HashMap::new();
+
+    for i in 0..doc.len() {
+        let id = NodeId::from_index(i);
+        if !doc.is_shadow_host(id) {
+            continue;
+        }
+        let sr = doc.shadow_root_of(id).expect("shadow host has no root");
+
+        // Shadow host's composed children = shadow root's DOM children.
+        overrides.insert(id, doc.get(sr).children.clone());
+
+        // Distribute light-tree children into matching <slot> elements.
+        let slot_map = compute_slot_assignments(doc, id, sr);
+        wire_slot_overrides(doc, sr, &slot_map, &mut overrides);
+    }
+
+    FlatTree { overrides }
+}
+
+/// Maps each `<slot>` NodeId to its assigned light-tree nodes.
+type SlotAssignments = HashMap<NodeId, Vec<NodeId>>;
+
+/// Compute slot assignments for `host`'s shadow tree rooted at `sr`.
+///
+/// Each light-tree child of `host` whose `slot=""` attribute matches a
+/// `<slot name="">` in the shadow tree is assigned to that slot. Unmatched
+/// children are dropped (they don't appear in the flat tree).
+fn compute_slot_assignments(doc: &Document, host: NodeId, sr: NodeId) -> SlotAssignments {
+    let mut slots: Vec<(NodeId, String)> = Vec::new();
+    collect_slots(doc, sr, &mut slots);
+
+    let mut map: SlotAssignments = HashMap::new();
+    for &(slot_id, _) in &slots {
+        map.insert(slot_id, Vec::new());
+    }
+
+    for &child in &doc.get(host).children {
+        let wanted = doc.get(child).get_attr("slot").unwrap_or("").to_string();
+        if let Some(&(slot_id, _)) = slots.iter().find(|(_, name)| *name == wanted) {
+            map.get_mut(&slot_id).expect("slot in map").push(child);
+        }
+        // Children with no matching slot are not rendered in the flat tree.
+    }
+
+    map
+}
+
+fn collect_slots(doc: &Document, id: NodeId, out: &mut Vec<(NodeId, String)>) {
+    if let NodeData::Element { name, .. } = &doc.get(id).data
+        && name.local == "slot"
+    {
+        let slot_name = doc.get(id).get_attr("name").unwrap_or("").to_string();
+        out.push((id, slot_name));
+    }
+    for &child in &doc.get(id).children {
+        collect_slots(doc, child, out);
+    }
+}
+
+/// Override each `<slot>` in the shadow tree with its assigned light-tree nodes.
+///
+/// A slot with assigned nodes gets an override (composed children = assigned).
+/// A slot with no assigned nodes keeps its DOM children as fallback content.
+fn wire_slot_overrides(
+    doc: &Document,
+    id: NodeId,
+    slot_map: &SlotAssignments,
+    overrides: &mut HashMap<NodeId, Vec<NodeId>>,
+) {
+    if let NodeData::Element { name, .. } = &doc.get(id).data
+        && name.local == "slot"
+        && let Some(assigned) = slot_map.get(&id)
+        && !assigned.is_empty()
+    {
+        overrides.insert(id, assigned.clone());
+        // Empty assignment → no override; slot's DOM children are the fallback.
+    }
+    for &child in &doc.get(id).children {
+        wire_slot_overrides(doc, child, slot_map, overrides);
     }
 }
 
@@ -1275,5 +1463,134 @@ mod tests {
     fn check_navigation_gate_allowed_returns_zero() {
         let doc = build_doc_with_anchors(&["/a"]);
         assert_eq!(check_navigation_gate(&doc, SandboxFlags::empty()), 0);
+    }
+
+    // ──────── Shadow DOM ────────
+
+    fn build_shadow_host() -> (Document, NodeId, NodeId) {
+        // <div id="host">  ← shadow host
+        //   #shadow-root(open)
+        //     <span>shadow</span>
+        //   <p>light</p>   ← light-tree child (no slot match → not in flat tree)
+        let mut doc = Document::new();
+        let host = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), host);
+
+        let sr = doc.attach_shadow(host, ShadowRootMode::Open);
+        let span = doc.create_element(QualName::html("span"));
+        let text = doc.create_text("shadow");
+        doc.append_child(sr, span);
+        doc.append_child(span, text);
+
+        let light_p = doc.create_element(QualName::html("p"));
+        doc.append_child(host, light_p);
+
+        (doc, host, sr)
+    }
+
+    #[test]
+    fn attach_shadow_registers_host() {
+        let (doc, host, sr) = build_shadow_host();
+        assert!(doc.is_shadow_host(host));
+        assert_eq!(doc.shadow_root_of(host), Some(sr));
+    }
+
+    #[test]
+    fn shadow_root_node_data_variant() {
+        let (doc, _, sr) = build_shadow_host();
+        assert!(matches!(
+            doc.get(sr).data,
+            NodeData::ShadowRoot { mode: ShadowRootMode::Open }
+        ));
+    }
+
+    #[test]
+    fn shadow_root_mode_display() {
+        assert_eq!(ShadowRootMode::Open.to_string(), "open");
+        assert_eq!(ShadowRootMode::Closed.to_string(), "closed");
+    }
+
+    #[test]
+    fn flat_tree_no_shadow_is_zero_alloc() {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let body = doc.create_element(QualName::html("body"));
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+
+        let flat = build_flat_tree(&doc);
+        // No overrides — fast path, HashMap is empty.
+        assert!(flat.overrides.is_empty());
+        // children_of falls through to DOM children.
+        assert_eq!(flat.children_of(&doc, html), &[body]);
+    }
+
+    #[test]
+    fn flat_tree_host_children_are_shadow_root_children() {
+        let (doc, host, sr) = build_shadow_host();
+        let flat = build_flat_tree(&doc);
+
+        // Host's composed children = shadow root's DOM children (the <span>).
+        let sr_children = doc.get(sr).children.clone();
+        assert_eq!(flat.children_of(&doc, host), sr_children.as_slice());
+    }
+
+    #[test]
+    fn flat_tree_slot_distributes_light_children() {
+        // Shadow: <slot name="x"> … </slot>
+        // Light:  <p slot="x">light</p>
+        // After flat tree: slot's composed children = [<p>]
+        let mut doc = Document::new();
+        let host = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), host);
+
+        let sr = doc.attach_shadow(host, ShadowRootMode::Open);
+
+        let slot = doc.create_element(QualName::html("slot"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(slot).data {
+            attrs.push(Attribute { name: QualName::html("name"), value: "x".into() });
+        }
+        let fallback = doc.create_text("fallback");
+        doc.append_child(sr, slot);
+        doc.append_child(slot, fallback);
+
+        let light_p = doc.create_element(QualName::html("p"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(light_p).data {
+            attrs.push(Attribute { name: QualName::html("slot"), value: "x".into() });
+        }
+        doc.append_child(host, light_p);
+
+        let flat = build_flat_tree(&doc);
+
+        // Slot is overridden with assigned light node, not fallback.
+        assert_eq!(flat.children_of(&doc, slot), &[light_p]);
+    }
+
+    #[test]
+    fn flat_tree_slot_fallback_when_no_assigned_nodes() {
+        // Slot with name "x" but no light-tree child with slot="x".
+        let mut doc = Document::new();
+        let host = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), host);
+
+        let sr = doc.attach_shadow(host, ShadowRootMode::Open);
+        let slot = doc.create_element(QualName::html("slot"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(slot).data {
+            attrs.push(Attribute { name: QualName::html("name"), value: "y".into() });
+        }
+        let fallback = doc.create_text("fallback");
+        doc.append_child(sr, slot);
+        doc.append_child(slot, fallback);
+
+        let flat = build_flat_tree(&doc);
+        // No assignment → no override → slot keeps its DOM children (fallback).
+        assert_eq!(flat.children_of(&doc, slot), &[fallback]);
+    }
+
+    #[test]
+    fn shadow_root_printed_in_display() {
+        let (doc, _, _) = build_shadow_host();
+        let s = doc.to_string();
+        assert!(s.contains("#shadow-root (open)"));
     }
 }
