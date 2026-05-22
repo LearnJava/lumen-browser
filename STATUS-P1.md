@@ -1,6 +1,6 @@
-In progress: —
+In progress: BUG-011 list markers: create ::marker box  branch: bug-011-marker
 
-Next step: —
+Next step: BoxKind::Marker + inject_marker() + lay_out  box_tree.rs:258
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
