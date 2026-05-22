@@ -1,6 +1,6 @@
-In progress: Shadow DOM cascade + composed tree  branch: shadow-dom
+In progress: —
 
-Next step: добавить ShadowRoot в NodeData, attach_shadow API, FlatTree  dom/src/lib.rs:52
+Next step: —
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -8,9 +8,8 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   the call site and add a line to STATUS-P4.md "Needs wiring".
 
 Next:
-(взято в работу)
-
-Queue (Wave 3+):
 (все основные layout-задачи выполнены)
 
-Recent: display:flow-root BFC + display:contents elimination 2026-05-22, BUG-011 FIXED (::marker box + list-item layout) 2026-05-22, BUG-026 FIXED (img renders at correct CSS size) 2026-05-22, BUG-025 FIXED (InlineSpace shrink-to-fit) 2026-05-22, Forms ValidityState :valid/:invalid 2026-05-22, BUG-013 display:none breaks inline context 2026-05-22, bug-024-box-sizing 2026-05-21, table-layout 2026-05-21, forms-layout 2026-05-21, css-nesting 2026-05-21
+Queue (Wave 3+):
+
+Recent: Shadow DOM composed tree (FlatTree) + layout wiring 2026-05-22, display:flow-root BFC + display:contents elimination 2026-05-22, BUG-011 FIXED (::marker box + list-item layout) 2026-05-22, BUG-026 FIXED (img renders at correct CSS size) 2026-05-22, BUG-025 FIXED (InlineSpace shrink-to-fit) 2026-05-22, Forms ValidityState :valid/:invalid 2026-05-22, BUG-013 display:none breaks inline context 2026-05-22, bug-024-box-sizing 2026-05-21, table-layout 2026-05-21, forms-layout 2026-05-21, css-nesting 2026-05-21
