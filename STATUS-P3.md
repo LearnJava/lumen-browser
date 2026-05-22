@@ -1,5 +1,4 @@
-In progress: Fetch API runtime (fetch/Request/Response/Headers/AbortController в JS shim)  branch: fetch-api-runtime
-Next step: добавить _lumen_fetch нативный биндинг + JS-классы Request/Response/Headers/AbortController  crates/js/src/dom.rs
+In progress: —
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
