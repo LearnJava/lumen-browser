@@ -15,6 +15,5 @@ Queue (Wave 3+):
 Table layout algorithm                        box_tree.rs    DONE 2026-05-21 (BUG-006)
 display: list-item marker box                 box_tree.rs    ~1h
 Shadow DOM cascade + composed tree                           ~3h
-Forms: ValidityState + validation pseudo                     ~2h
 
-Recent: BUG-013 display:none breaks inline context FIXED 2026-05-22, bug-024-box-sizing 2026-05-21, table-layout 2026-05-21, forms-layout 2026-05-21, css-nesting 2026-05-21, aspect-ratio 2026-05-21, flex-order 2026-05-21, css-units 2026-05-21, logical-properties 2026-05-21, quirks-table-cell-width 2026-05-21
+Recent: Forms ValidityState :valid/:invalid 2026-05-22, BUG-013 display:none breaks inline context FIXED 2026-05-22, bug-024-box-sizing 2026-05-21, table-layout 2026-05-21, forms-layout 2026-05-21, css-nesting 2026-05-21, aspect-ratio 2026-05-21, flex-order 2026-05-21, css-units 2026-05-21, logical-properties 2026-05-21
