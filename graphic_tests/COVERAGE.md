@@ -46,6 +46,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 29-container-queries.html | @container | 4 | wide container: min-width applies (blue) · narrow: not applies (red) · named container · max-width |
 | 30-css-filter.html | CSS filter | 14 | grayscale(1) · sepia(1) · brightness(2) · invert(1) · contrast(3) · saturate(3) · opacity(0.4) · blur(8px) · hue-rotate(90deg/180deg) |
 | 31-clip-path.html | clip-path | 9 | inset(1/4-value) · circle(r/at) · ellipse(rx ry/at) · polygon(triangle/rect bbox) · clip-path + overflow:hidden |
+| 32-forms.html | form controls static rendering | 18 | input[text/email/password/number/search/range/color/submit] · checkbox (unchecked/checked/disabled) · radio (unchecked/checked) · button · textarea · select · required · disabled UA styles |
 | **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~66 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (Phase 0: квадрат в Lumen, скруглён в Edge) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) |
 
 ---

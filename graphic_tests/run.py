@@ -73,6 +73,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('29', '29-container-queries.html', 2.0, '@container queries: min-width applies/not · named container · max-width'),
     ('30', '30-css-filter.html',        3.0, 'CSS filter: grayscale/sepia/brightness/invert/contrast/saturate/opacity/blur/hue-rotate'),
     ('31', '31-clip-path.html',          3.0, 'clip-path: inset/circle/ellipse/polygon bounding-box clip'),
+    ('32', '32-forms.html',             3.0, 'form controls: input/checkbox/radio/button/textarea/select static rendering'),
 ]
 
 # --- PNG reader (stdlib only) ---

@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<!-- Test 32: form controls static layout — input, checkbox, radio, button, textarea, select -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f {
+    background: #f8f8f8;
+    width: 1022px;
+    height: 718px;
+    margin: 1px;
+    padding: 24px;
+    overflow: hidden;
+  }
+  .row { display: block; margin-bottom: 16px; }
+  /* Text inputs */
+  input[type=text], input[type=email], input[type=password],
+  input[type=number], input[type=search], input[type=url] {
+    width: 180px; height: 24px; border: 1px solid #999; background: #fff;
+  }
+  /* Checkbox + radio */
+  input[type=checkbox], input[type=radio] {
+    width: 16px; height: 16px; border: 1px solid #555;
+  }
+  /* Checked states */
+  input[type=checkbox][checked], input[type=radio][checked] {
+    background: #fff;
+  }
+  /* Button */
+  button { width: 100px; height: 28px; border: 1px solid #777; background: #e0e0e0; }
+  /* Textarea */
+  textarea { width: 220px; height: 54px; border: 1px solid #999; background: #fff; }
+  /* Select */
+  select { width: 140px; height: 24px; border: 1px solid #999; background: #fff; }
+  /* Color input */
+  input[type=color] { width: 40px; height: 28px; border: 1px solid #777; background: #4488cc; }
+  /* Range */
+  input[type=range] { width: 160px; height: 20px; border: 1px solid #aaa; background: #ddd; }
+  /* Submit */
+  input[type=submit] { width: 100px; height: 28px; border: 1px solid #777; background: #c0d8f0; }
+  /* Labels */
+  .lbl { display: inline-block; width: 160px; color: #333; }
+  /* Required field */
+  input[required] { border: 1px solid #e44; }
+  /* Disabled */
+  input[disabled] { background: #eee; border: 1px solid #bbb; color: #999; }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <div class="row">
+    <input type="text" value="" placeholder="text input" required>
+    <input type="email" value="user@example.com">
+    <input type="password" value="secret">
+  </div>
+
+  <div class="row">
+    <input type="checkbox">
+    <input type="checkbox" checked>
+    <input type="radio">
+    <input type="radio" checked>
+    <input type="checkbox" disabled>
+  </div>
+
+  <div class="row">
+    <input type="number" value="42">
+    <input type="search" value="query">
+    <input type="range">
+  </div>
+
+  <div class="row">
+    <input type="color">
+    <input type="submit" value="Submit">
+    <button>Button</button>
+    <button type="reset">Reset</button>
+  </div>
+
+  <div class="row">
+    <textarea></textarea>
+    <select>
+      <option>Option A</option>
+      <option>Option B</option>
+    </select>
+  </div>
+
+  <div class="row">
+    <input type="text" disabled value="disabled input">
+    <input type="text" required value="">
+    <input type="hidden" value="hidden-value">
+  </div>
+
+</div>
+</body>
+</html>

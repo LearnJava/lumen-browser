@@ -7,7 +7,6 @@ CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   add a line to STATUS-P4.md "Needs wiring".
 
 Next:
-Forms UI: native pickers, validation tooltip                 ~2h
 
 Queue (Wave 3+):
 

@@ -45,11 +45,14 @@ fn is_picture_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
-/// Вид form control — используется в `BoxKind::FormControl` для будущих
-/// paint-специализаций (фокус-рамка, placeholder, стрелка select и т.д.).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Вид form control — используется в `BoxKind::FormControl` для paint-специализаций
+/// (фокус-рамка, checkbox/radio indicator, placeholder, стрелка select и т.д.).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FormControlKind {
-    Input,
+    /// `<input>` — carries input type (from `type` attribute) and initial
+    /// checked state (from presence of `checked` attribute in DOM). Paint uses
+    /// this to draw checkbox/radio indicators without re-querying the DOM.
+    Input { input_type: lumen_dom::InputType, checked: bool },
     Button,
     Select,
     Textarea,
@@ -708,14 +711,23 @@ fn build_box(
                 }
                 BoxKind::Image { src: src.url, alt }
             } else if is_form_control_element(doc, id) {
-                let kind = match &doc.get(id).data {
-                    NodeData::Element { name, .. } => match name.local.as_str() {
+                let kind = {
+                    let node = doc.get(id);
+                    let tag = node.element_name()
+                        .map(|q| q.local.as_str())
+                        .unwrap_or("")
+                        .to_owned();
+                    match tag.as_str() {
                         "button"   => FormControlKind::Button,
                         "select"   => FormControlKind::Select,
                         "textarea" => FormControlKind::Textarea,
-                        _          => FormControlKind::Input,
-                    },
-                    _ => FormControlKind::Input,
+                        _ => {
+                            let input_type = node.input_type()
+                                .unwrap_or(lumen_dom::InputType::Text);
+                            let checked = node.get_attr("checked").is_some();
+                            FormControlKind::Input { input_type, checked }
+                        }
+                    }
                 };
                 BoxKind::FormControl { kind }
             } else if matches!(style.display, Display::TableRow) {

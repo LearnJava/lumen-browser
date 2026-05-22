@@ -7,11 +7,13 @@
 //! верхнего левого угла окна.
 
 use lumen_core::geom::Rect;
+use lumen_dom::InputType;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame,
     BackgroundClip, BackgroundImage, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
     ClipPath, Color, ContainFlags, CssColor, FilterFn, FontStyle, FontWeight,
+    FormControlKind,
     GradientStop, ImageRendering, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent,
@@ -1670,6 +1672,28 @@ fn is_opacity_subtree_painted(b: &LayoutBox) -> bool {
     b.style.opacity > 0.0
 }
 
+/// Render checkbox checkmark or radio dot for checked form controls.
+/// P2 note: this renders a simple filled rectangle as indicator; a full
+/// vector checkmark / circle belongs to the renderer GPU primitive set.
+fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut Vec<DisplayCommand>) {
+    let FormControlKind::Input { input_type, checked } = kind else { return };
+    if !checked { return; }
+    let inset = match input_type {
+        InputType::Checkbox => (b.rect.width * 0.2).clamp(2.0, 4.0),
+        InputType::Radio    => (b.rect.width * 0.27).clamp(2.0, 4.0),
+        _ => return,
+    };
+    out.push(DisplayCommand::FillRect {
+        rect: Rect::new(
+            b.rect.x + inset,
+            b.rect.y + inset,
+            (b.rect.width  - inset * 2.0).max(1.0),
+            (b.rect.height - inset * 2.0).max(1.0),
+        ),
+        color: Color { r: 21, g: 90, b: 192, a: 255 },
+    });
+}
+
 /// Эмитит DisplayCommand-ы для одного box-а БЕЗ рекурсии в детей. Аналог
 /// тела `walk` для одного box-а.
 fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
@@ -1730,7 +1754,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             emit_inline_run(b, lines, out);
         }
         BoxKind::InlineBlockRow | BoxKind::InlineSpace => {}
-        BoxKind::FormControl { .. } => {
+        BoxKind::FormControl { kind } => {
             if !is_paint_visible(b) {
                 return;
             }
@@ -1775,6 +1799,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 });
             }
             emit_outline(b, out);
+            emit_form_control_indicator(b, kind, out);
         }
         BoxKind::Image { src, alt } => {
             if !is_paint_visible(b) {
@@ -1957,7 +1982,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 out.push(DisplayCommand::PopMask);
             }
         }
-        BoxKind::FormControl { .. } => {
+        BoxKind::FormControl { kind } => {
             // Replaced element: background + border box (Phase 0, no content).
             if !is_paint_visible(b) {
                 return;
@@ -1996,6 +2021,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 });
             }
             emit_outline(b, out);
+            emit_form_control_indicator(b, kind, out);
         }
         BoxKind::InlineBlockRow => {
             // Анонимный контейнер: нет фона/бордера собственного.
