@@ -11,7 +11,7 @@
 use lumen_core::geom::{Rect, Size};
 use lumen_core::ext::{HyphenationProvider, NullHyphenationProvider};
 use lumen_css_parser::Stylesheet;
-use lumen_dom::{Document, NodeData, NodeId};
+use lumen_dom::{build_flat_tree, Document, FlatTree, NodeData, NodeId};
 use lumen_html_parser::{
     PictureParams, SizesViewport, pick_img_source, pick_picture_source,
 };
@@ -327,7 +327,8 @@ pub enum BoxKind {
 
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let root_style = ComputedStyle::root();
-    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
+    let flat = build_flat_tree(doc);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     let null_hp = NullHyphenationProvider;
@@ -356,7 +357,8 @@ pub fn layout_measured_hyp(
     hp: &dyn HyphenationProvider,
 ) -> LayoutBox {
     let root_style = ComputedStyle::root();
-    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
+    let flat = build_flat_tree(doc);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp);
@@ -529,6 +531,7 @@ fn collect_inline_segments(
     inherited: &ComputedStyle,
     viewport: Size,
     out: &mut Vec<InlineSegment>,
+    flat: &FlatTree,
 ) {
     match &doc.get(id).data {
         NodeData::Text(s) if inherited.white_space.preserves_whitespace() => {
@@ -621,9 +624,9 @@ fn collect_inline_segments(
                 + s.border_right_width
                 + s.margin_right.resolve_or_zero(em, 0.0, viewport);
             let start = out.len();
-            let children: Vec<NodeId> = doc.get(id).children.clone();
+            let children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
             for child_id in children {
-                collect_inline_segments(doc, sheet, child_id, &s, viewport, out);
+                collect_inline_segments(doc, sheet, child_id, &s, viewport, out, flat);
             }
             let added = out.len() - start;
             // Mark all segments from this element as element boxes.
@@ -860,11 +863,14 @@ fn build_box(
     id: NodeId,
     inherited: &ComputedStyle,
     viewport: Size,
+    flat: &FlatTree,
 ) -> LayoutBox {
     let mut style = compute_style(doc, id, sheet, inherited, viewport);
 
     let kind = match &doc.get(id).data {
-        NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. } => BoxKind::Skip,
+        // Shadow root nodes are infrastructure — never rendered directly.
+        // The flat tree already maps host children to shadow root's children.
+        NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. } | NodeData::ShadowRoot { .. } => BoxKind::Skip,
         NodeData::Document | NodeData::Element { .. } => {
             if style.display == Display::None {
                 BoxKind::Skip
@@ -922,7 +928,8 @@ fn build_box(
 
     let mut children = Vec::new();
     if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow) {
-        let dom_children: Vec<NodeId> = doc.get(id).children.clone();
+        // CSS: :host, ::slotted — P4 wires shadow-scoped styles here
+        let dom_children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
         // CSS Grid L1 §6: all direct children of a grid/flex container are
         // "blockified" — they participate as individual items, not wrapped in
         // InlineRun. Skip the inline-collection logic for these containers.
@@ -933,7 +940,7 @@ fn build_box(
         );
         if is_item_container {
             for child_id in dom_children {
-                let child_box = build_box(doc, sheet, child_id, &style, viewport);
+                let child_box = build_box(doc, sheet, child_id, &style, viewport, flat);
                 if !matches!(child_box.kind, BoxKind::Skip) {
                     children.push(child_box);
                 }
@@ -974,7 +981,7 @@ fn build_box(
                         _ => {}
                     }
                     if is_inline_content(doc, sheet, cid, &style, viewport) {
-                        collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending);
+                        collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat);
                         had_ws = false;
                         i += 1;
                     } else if is_inline_block(doc, sheet, cid, &style, viewport) {
@@ -995,7 +1002,7 @@ fn build_box(
                                 children: vec![],
                             });
                         }
-                        row_items.push(build_box(doc, sheet, cid, &style, viewport));
+                        row_items.push(build_box(doc, sheet, cid, &style, viewport, flat));
                         had_ws = false;
                         i += 1;
                     } else if matches!(doc.get(cid).data, NodeData::Element { .. })
@@ -1024,7 +1031,7 @@ fn build_box(
                     }
                 }
             } else {
-                children.push(build_box(doc, sheet, child_id, &style, viewport));
+                children.push(build_box(doc, sheet, child_id, &style, viewport, flat));
                 i += 1;
             }
         }
@@ -3477,10 +3484,10 @@ mod tests {
         let sheet = lumen_css_parser::parse(css);
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
         fn find_by_id<'a>(b: &'a super::LayoutBox, doc: &lumen_dom::Document, id: &str) -> Option<&'a super::LayoutBox> {
-            if let lumen_dom::NodeData::Element { attrs, .. } = &doc.get(b.node).data {
-                if attrs.iter().any(|a| a.name.local == "id" && a.value == id) {
-                    return Some(b);
-                }
+            if let lumen_dom::NodeData::Element { attrs, .. } = &doc.get(b.node).data
+                && attrs.iter().any(|a| a.name.local == "id" && a.value == id)
+            {
+                return Some(b);
             }
             for child in &b.children { if let Some(f) = find_by_id(child, doc, id) { return Some(f); } }
             None

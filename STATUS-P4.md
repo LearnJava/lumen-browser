@@ -9,6 +9,13 @@ Role: P4 owns ALL CSS work. P1/P2/P3 do not write CSS properties.
 Full property roadmap and work queue — CSS-SPECS.md (P4 Priority Queue section).
 
 Needs wiring (algorithm ready, CSS not connected):
+  — :host / ::slotted pseudo-classes (Shadow DOM cascade + composed tree merged).
+    P4 task: implement :host selector matching in `matches_complex` (matches shadow
+    host from inside shadow tree) + ::slotted() functional pseudo-element matching.
+    Wire point: build_box() in layout/src/box_tree.rs — see comment
+    "// CSS: :host, ::slotted — P4 wires shadow-scoped styles here".
+    Branch: new branch for this P4 task.
+
   — @font-face registry wired in shell (branch: font-face-loading).
     P4 task: wire font-weight/font-style/font-stretch descriptors from
     FontFaceRule into FontRegistry::register_from_bytes calls.
