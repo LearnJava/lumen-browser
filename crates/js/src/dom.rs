@@ -1098,6 +1098,29 @@ EventSource.CONNECTING = 0;
 EventSource.OPEN = 1;
 EventSource.CLOSED = 2;
 
+// ── IME Composition events (UI Events Specification §5.3) ─────────────────────
+// Слушатели compositionstart/compositionupdate/compositionend:
+// страница регистрирует их через addEventListener на нужном элементе.
+// _lumen_dispatch_composition вызывается Rust-сторона после получения
+// Ime::Preedit / Ime::Commit от winit. Диспатч идёт на document.activeElement
+// (или document.body как fallback).
+var _ime_active_element = null;
+
+function _lumen_set_ime_target(el) {
+    _ime_active_element = el || null;
+}
+
+function _lumen_dispatch_composition(type, data) {
+    var target = _ime_active_element || (typeof document !== 'undefined' && document.body) || null;
+    if (!target) return;
+    var nid = target.__nid__;
+    if (nid === undefined) return;
+    var evt = new Event(type);
+    evt.data = String(data);
+    evt.locale = '';
+    _lumen_dispatch(nid, evt);
+}
+
 var window = {
     history: history,
     onpopstate: null,
@@ -1115,6 +1138,8 @@ var window = {
     caches: caches,
     document: document,
     console: console,
+    _lumen_dispatch_composition: _lumen_dispatch_composition,
+    _lumen_set_ime_target: _lumen_set_ime_target,
     addEventListener: function(type, fn) {
         if (type === 'popstate' && typeof fn === 'function') {
             _popstate_listeners.push(fn);
@@ -1925,6 +1950,77 @@ mod tests {
     fn window_has_caches() {
         let rt = runtime_with_dom(make_doc());
         let result = rt.eval("typeof window.caches === 'object'").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── IME composition API ───────────────────────────────────────────────────
+
+    #[test]
+    fn dispatch_composition_function_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("typeof _lumen_dispatch_composition === 'function'")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn set_ime_target_function_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("typeof _lumen_set_ime_target === 'function'")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatch_composition_on_element_fires_listener() {
+        let rt = runtime_with_dom(make_doc());
+        // Регистрируем слушатель compositionstart на main div.
+        // При диспатче он должен сохранить data в глобальной переменной.
+        rt.eval(r#"
+            var _got_composition = null;
+            var el = document.getElementById('main');
+            el.addEventListener('compositionstart', function(e) {
+                _got_composition = e.type;
+            });
+            _lumen_set_ime_target(el);
+            _lumen_dispatch_composition('compositionstart', '');
+        "#).unwrap();
+        let result = rt.eval("_got_composition").unwrap();
+        assert_eq!(result, lumen_core::JsValue::String("compositionstart".into()));
+    }
+
+    #[test]
+    fn dispatch_composition_update_carries_data() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _comp_data = null;
+            var el = document.getElementById('main');
+            el.addEventListener('compositionupdate', function(e) {
+                _comp_data = e.data;
+            });
+            _lumen_set_ime_target(el);
+            _lumen_dispatch_composition('compositionupdate', 'あい');
+        "#).unwrap();
+        let result = rt.eval("_comp_data").unwrap();
+        assert_eq!(result, lumen_core::JsValue::String("あい".into()));
+    }
+
+    #[test]
+    fn dispatch_composition_without_target_does_not_crash() {
+        let rt = runtime_with_dom(make_doc());
+        // Нет target — должен молча ничего не сделать.
+        rt.eval("_lumen_set_ime_target(null); _lumen_dispatch_composition('compositionstart', '');")
+            .unwrap();
+    }
+
+    #[test]
+    fn window_has_dispatch_composition() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("typeof window._lumen_dispatch_composition === 'function'")
+            .unwrap();
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
 }
