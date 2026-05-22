@@ -70,6 +70,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('26', '26-mask-image.html',       2.0, 'mask-image: linear/radial gradient mask (Phase 0 fallback = no-op)'),
     ('27', '27-direction-rtl.html',    1.5, 'direction: rtl — LTR/RTL start/end alignment via colored bars'),
     ('28', '28-css-containment.html', 2.0, 'CSS Containment: contain:size (height=0) · contain:paint (clip) · contain:layout · contain:strict'),
+    ('29', '29-container-queries.html', 2.0, '@container queries: min-width applies/not · named container · max-width'),
 ]
 
 # --- PNG reader (stdlib only) ---

@@ -2328,6 +2328,144 @@ pub enum ContainerType {
     InlineSize,
 }
 
+/// Resolved container dimensions, passed during style re-computation for container queries.
+/// CSS Container Queries L1 §3: size features (width, height) evaluated against this context.
+#[derive(Debug, Clone)]
+pub struct ContainerContext {
+    /// Content width of the container element in pixels.
+    pub width: f32,
+    /// Content height if definite (None when auto/unknown).
+    pub height: Option<f32>,
+    /// The container's `container-name` values (for named queries).
+    pub names: Vec<String>,
+}
+
+/// Evaluates a raw @container condition string against a `ContainerContext`.
+///
+/// Phase 0: handles `(min-width: Npx)`, `(max-width: Npx)`, `(min-height: Npx)`,
+/// `(max-height: Npx)`, `(width: Npx)`, `(height: Npx)`, and `and`/`or`/`not` operators.
+/// Unknown features → false (safe fallback).
+pub fn evaluate_container_condition(condition: &str, ctx: &ContainerContext) -> bool {
+    let s = condition.trim();
+    // Handle `not (...)`.
+    if let Some(rest) = s.strip_prefix("not") {
+        let rest = rest.trim();
+        if rest.starts_with('(') {
+            return !evaluate_container_condition(rest, ctx);
+        }
+    }
+    // Split on top-level `and` / `or`.
+    if let Some((lhs, rhs)) = split_top_level_logical(s, " and ") {
+        return evaluate_container_condition(lhs, ctx) && evaluate_container_condition(rhs, ctx);
+    }
+    if let Some((lhs, rhs)) = split_top_level_logical(s, " or ") {
+        return evaluate_container_condition(lhs, ctx) || evaluate_container_condition(rhs, ctx);
+    }
+    // Feature: `(feature: value)`.
+    let inner = s.strip_prefix('(').and_then(|x| x.strip_suffix(')'));
+    let inner = match inner {
+        Some(i) => i.trim(),
+        None => return false,
+    };
+    // Parse `feature: value`.
+    let colon = inner.find(':');
+    let (feature, value) = if let Some(pos) = colon {
+        (inner[..pos].trim(), inner[pos + 1..].trim())
+    } else {
+        // Boolean feature (e.g. `(color)`) — unsupported in Phase 0.
+        return false;
+    };
+    let px = parse_css_length_to_px(value);
+    match (feature, px) {
+        ("min-width", Some(v))  => ctx.width >= v,
+        ("max-width", Some(v))  => ctx.width <= v,
+        ("width", Some(v))      => (ctx.width - v).abs() < 0.5,
+        ("min-height", Some(v)) => ctx.height.is_some_and(|h| h >= v),
+        ("max-height", Some(v)) => ctx.height.is_none_or(|h| h <= v),
+        ("height", Some(v))     => ctx.height.is_some_and(|h| (h - v).abs() < 0.5),
+        _ => false,
+    }
+}
+
+/// Parses a CSS length value to pixels (px / em not supported — just px for Phase 0).
+fn parse_css_length_to_px(s: &str) -> Option<f32> {
+    let s = s.trim();
+    if let Some(n) = s.strip_suffix("px") {
+        n.trim().parse::<f32>().ok()
+    } else if let Some(n) = s.strip_suffix("em") {
+        // Phase 0: treat em as px (approximate).
+        n.trim().parse::<f32>().ok()
+    } else {
+        s.parse::<f32>().ok()
+    }
+}
+
+/// Splits `s` on the first occurrence of `sep` that is not inside parentheses.
+fn split_top_level_logical<'a>(s: &'a str, sep: &str) -> Option<(&'a str, &'a str)> {
+    let sep_bytes = sep.as_bytes();
+    let s_bytes = s.as_bytes();
+    let mut depth: i32 = 0;
+    let mut i = 0;
+    while i + sep.len() <= s.len() {
+        match s_bytes[i] {
+            b'(' => depth += 1,
+            b')' => depth -= 1,
+            _ => {}
+        }
+        if depth == 0 && s_bytes[i..].starts_with(sep_bytes) {
+            return Some((&s[..i], &s[i + sep.len()..]));
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Applies matching `@container` rules from `sheet` to `style`.
+/// Called during the second layout pass for descendants of container elements.
+/// `ctx` — resolved size of the nearest container ancestor.
+pub fn apply_container_rules(
+    style: &mut ComputedStyle,
+    doc: &Document,
+    node: NodeId,
+    sheet: &Stylesheet,
+    ctx: &ContainerContext,
+    viewport: Size,
+) {
+    let is_quirks = doc.mode() == DocumentMode::Quirks;
+    for container_rule in &sheet.container_rules {
+        // Name filter: if the rule has a name, the context must include that name.
+        if container_rule.name.as_ref().is_some_and(|rule_name| {
+            !ctx.names.iter().any(|n| n == rule_name)
+        }) {
+            continue;
+        }
+        if !evaluate_container_condition(&container_rule.condition, ctx) {
+            continue;
+        }
+        // Apply declarations from matching rules.
+        for rule in &container_rule.rules {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if matches_complex(complex, doc, node) {
+                    let spec = complex.specificity();
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if best.is_some() {
+                let em = style.font_size;
+                let pw = style.font_weight;
+                let inherited = style.clone();
+                for decl in &rule.declarations {
+                    apply_declaration(style, decl, em, viewport, pw, &inherited, is_quirks);
+                }
+            }
+        }
+    }
+}
+
 /// CSS Shapes L1 §3 — `shape-outside` value. NOT inherited. Initial: `None`.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub enum ShapeOutside {

@@ -16,10 +16,11 @@ use lumen_html_parser::{
 };
 
 use crate::style::{
-    compute_pseudo_element_style, compute_style, AlignValue, BackgroundImage, BoxSizing,
-    ContainFlags, Content, ContentItem, ComputedStyle, Direction, Display, FlexBasis,
-    FlexDirection, FlexWrap, GridAutoFlow, GridLine, GridTrackSize, Length, LengthOrAuto,
-    Overflow, Position, TextAlign, TextOverflow, VerticalAlign,
+    apply_container_rules, compute_pseudo_element_style, compute_style, AlignValue,
+    BackgroundImage, BoxSizing, ContainFlags, ContainerContext, ContainerType, Content,
+    ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap,
+    GridAutoFlow, GridLine, GridTrackSize, Length, LengthOrAuto, Overflow, Position, TextAlign,
+    TextOverflow, VerticalAlign,
 };
 use crate::TextMeasurer;
 
@@ -303,6 +304,8 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), None, viewport, init_pcb);
+    // CSS Container Queries L1: second pass applies @container rules + re-layout.
+    apply_container_styles(&mut root, doc, sheet, viewport, None);
     root
 }
 
@@ -317,6 +320,7 @@ pub fn layout_measured(
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb);
+    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer));
     root
 }
 
@@ -2649,6 +2653,125 @@ fn truncate_frag_with_ellipsis(
     buf.push(ellipsis);
     frag.text = buf;
     frag.width = w + ellipsis_w;
+}
+
+/// CSS Container Queries L1: second-pass after layout.
+///
+/// Walks the laid-out box tree looking for elements that establish containers
+/// (`container-type: size | inline-size`). For each container, resolves its
+/// content dimensions from the first-pass layout rect, re-applies matching
+/// `@container` rules to all descendants, then re-lays out those descendants
+/// so that layout-affecting properties (width, height, display, …) take effect.
+///
+/// Phase 0 limitations:
+/// - Only block-flow children are re-laid out (Flex/Grid children use first-pass positions).
+/// - Nested containers are processed outermost-first (inner containers are re-entered in
+///   the same walk, but they use the parent container's context for their own re-layout).
+pub fn apply_container_styles(
+    root: &mut LayoutBox,
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: Option<&dyn TextMeasurer>,
+) {
+    // No container rules in this sheet → fast path.
+    if sheet.container_rules.is_empty() {
+        return;
+    }
+    let pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
+    apply_container_inner(root, doc, sheet, viewport, measurer, pcb);
+}
+
+fn apply_container_inner(
+    b: &mut LayoutBox,
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: Option<&dyn TextMeasurer>,
+    pcb: Rect,
+) {
+    let is_container = !matches!(b.style.container_type, ContainerType::Normal);
+    if is_container {
+        // Derive content dimensions from already-laid-out rect + style.
+        let em = b.style.font_size;
+        let bw = b.rect.width;
+        let pad_l = b.style.padding_left.resolve_or_zero(em, bw, viewport);
+        let pad_r = b.style.padding_right.resolve_or_zero(em, bw, viewport);
+        let pad_t = b.style.padding_top.resolve_or_zero(em, bw, viewport);
+        let pad_b = b.style.padding_bottom.resolve_or_zero(em, bw, viewport);
+        let content_w = (bw - pad_l - pad_r
+            - b.style.border_left_width - b.style.border_right_width).max(0.0);
+        let content_h_val = (b.rect.height - pad_t - pad_b
+            - b.style.border_top_width - b.style.border_bottom_width).max(0.0);
+        let content_h = if matches!(b.style.container_type, ContainerType::Size) {
+            Some(content_h_val)
+        } else {
+            None // inline-size: height not queryable
+        };
+        let ctx = ContainerContext {
+            width: content_w,
+            height: content_h,
+            names: b.style.container_name.clone(),
+        };
+        // Re-apply container rules to all direct + indirect descendants.
+        for child in &mut b.children {
+            re_style_subtree(child, doc, sheet, &ctx, viewport);
+        }
+        // Re-lay out block-flow children with updated styles.
+        let content_x = b.rect.x + pad_l + b.style.border_left_width;
+        let content_y = b.rect.y + pad_t + b.style.border_top_width;
+        let avail_h: Option<f32> = content_h;
+        let child_pcb = if !matches!(b.style.position, Position::Static) {
+            Rect::new(b.rect.x, b.rect.y, b.rect.width, b.rect.height)
+        } else {
+            pcb
+        };
+        let mut child_y = content_y;
+        for child in &mut b.children {
+            if matches!(child.style.position, Position::Absolute | Position::Fixed) {
+                // Re-lay out against new pcb but don't advance child_y.
+                lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb);
+                continue;
+            }
+            lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb);
+            if matches!(child.kind, BoxKind::Skip) {
+                continue;
+            }
+            let child_mb = child.style.margin_bottom
+                .resolve_or_zero(child.style.font_size, content_w, viewport);
+            child_y = child.rect.y + child.rect.height + child_mb;
+        }
+        // After re-layout, recurse into children to catch nested containers.
+        for child in &mut b.children {
+            apply_container_inner(child, doc, sheet, viewport, measurer, child_pcb);
+        }
+    } else {
+        // Not a container — just recurse looking for container descendants.
+        for child in &mut b.children {
+            apply_container_inner(child, doc, sheet, viewport, measurer, pcb);
+        }
+    }
+}
+
+/// Recursively re-applies container rules to a subtree.
+/// Stops descending into elements that are themselves containers (they will
+/// be processed by `apply_container_inner` with their own context).
+fn re_style_subtree(
+    b: &mut LayoutBox,
+    doc: &Document,
+    sheet: &Stylesheet,
+    ctx: &ContainerContext,
+    viewport: Size,
+) {
+    if !matches!(b.kind, BoxKind::Skip) {
+        apply_container_rules(&mut b.style, doc, b.node, sheet, ctx, viewport);
+    }
+    // Don't propagate into nested containers — they'll build their own context.
+    if matches!(b.style.container_type, ContainerType::Normal) {
+        for child in &mut b.children {
+            re_style_subtree(child, doc, sheet, ctx, viewport);
+        }
+    }
 }
 
 #[cfg(test)]

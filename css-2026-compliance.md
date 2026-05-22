@@ -402,8 +402,9 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 ### CSS Container Queries Level 1
 | Property | Status | Notes |
 |---|---|---|
-| `container-type` | 🟡 | parsed/stored (normal/size/inline-size); @container query matching — deferred |
-| `container-name` | 🟡 | parsed/stored as `Vec<String>` of `<custom-ident>`; `container` shorthand supported |
+| `container-type` | 🟡 | parsed/stored (normal/size/inline-size); @container size queries applied in 2nd layout pass |
+| `container-name` | 🟡 | parsed/stored as `Vec<String>`; named @container rules matched against container-name |
+| `@container` rule | 🟡 | min-width/max-width/width/min-height/max-height/height + and/or/not; nested containers; style re-applied + re-layout in 2nd pass |
 
 ### CSS Shapes Level 1
 | Property | Status | Notes |
