@@ -790,6 +790,12 @@ fn build_box(
                         row_items.push(build_box(doc, sheet, cid, &style, viewport));
                         had_ws = false;
                         i += 1;
+                    } else if matches!(doc.get(cid).data, NodeData::Element { .. })
+                        && compute_style(doc, cid, sheet, &style, viewport).display
+                            == Display::None
+                    {
+                        // display:none не прерывает inline-контекст — CSS §9.2.4.
+                        i += 1;
                     } else {
                         break;
                     }
