@@ -1,7 +1,6 @@
-In progress: —
+In progress: BUG-017+018 text-decoration-style+color закрыты  branch: bug-017-018-decoration
 
 Next (Wave 1):
-BUG-017+018  text-decoration-style+color      display_list.rs/renderer.rs  ~1h
 BUG-032      mipmap for large downscale       renderer.rs                  ~2h
 
 Next (Wave 2, after P4 finishes @font-face parse):
