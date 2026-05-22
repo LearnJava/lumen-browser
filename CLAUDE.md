@@ -368,7 +368,7 @@ git branch -d text-rendering
 
 **`--no-ff` is required** — preserves "this commit series = one task" structure in `git log --graph`.
 
-Branch names: short kebab-case, no prefixes (`text-rendering`, `font-atlas`, `http-client`).
+Branch names: short kebab-case. **Developer sessions (P1–P4) must prefix the branch name with their number:** `p1-text-rendering`, `p2-font-atlas`, `p3-http-client`, `p4-css-filter`. This makes it possible to identify which session owns a branch if it crashes mid-task.
 
 ### Commits
 
