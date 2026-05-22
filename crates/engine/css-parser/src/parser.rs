@@ -1525,9 +1525,35 @@ impl<'a> Parser<'a> {
                 },
                 Some(_) => {
                     let before = self.pos;
-                    if let Some((rule, nested)) = self.parse_rule() {
+                    if let Some((rule, nested, nested_at)) = self.parse_rule() {
                         rules.push(rule);
                         rules.extend(nested); // CSS Nesting L1: flat-expanded nested rules
+                        // CSS Nesting L1 §5: nested at-rules bubble up into the stylesheet.
+                        for at in nested_at {
+                            match at {
+                                AtRuleOutcome::Media(m) => media_rules.push(m),
+                                AtRuleOutcome::Supports(s) => supports_rules.push(s),
+                                AtRuleOutcome::LayerNames(names) => {
+                                    for n in names {
+                                        if !layer_order.iter().any(|e| e == &n) {
+                                            layer_order.push(n);
+                                        }
+                                    }
+                                }
+                                AtRuleOutcome::LayerBlock { name, rules: lr } => {
+                                    let resolved = name.unwrap_or_else(|| {
+                                        anon_counter += 1;
+                                        format!("__anon_{anon_counter}__")
+                                    });
+                                    if !layer_order.iter().any(|e| e == &resolved) {
+                                        layer_order.push(resolved.clone());
+                                    }
+                                    layers.push(LayerRule { name: resolved, rules: lr });
+                                }
+                                AtRuleOutcome::Container(c) => container_rules.push(c),
+                                _ => {}
+                            }
+                        }
                     } else if self.pos == before {
                         // Защита от бесконечного цикла: parse_rule не сдвинул
                         // позицию — принудительно проглатываем один символ.
@@ -1680,7 +1706,7 @@ impl<'a> Parser<'a> {
                         }
                         Some(_) => {
                             let before = self.pos;
-                            if let Some((rule, nested)) = self.parse_rule() {
+                            if let Some((rule, nested, _)) = self.parse_rule() {
                                 rules.push(rule);
                                 rules.extend(nested);
                             } else if self.pos == before {
@@ -1854,7 +1880,7 @@ impl<'a> Parser<'a> {
                 }
                 Some(_) => {
                     let before = self.pos;
-                    if let Some((rule, nested)) = self.parse_rule() {
+                    if let Some((rule, nested, _)) = self.parse_rule() {
                         rules.push(rule);
                         rules.extend(nested);
                     } else if self.pos == before {
@@ -1905,7 +1931,7 @@ impl<'a> Parser<'a> {
                 }
                 Some(_) => {
                     let before = self.pos;
-                    if let Some((rule, nested)) = self.parse_rule() {
+                    if let Some((rule, nested, _)) = self.parse_rule() {
                         rules.push(rule);
                         rules.extend(nested);
                     } else if self.pos == before {
@@ -2101,7 +2127,7 @@ impl<'a> Parser<'a> {
                 }
                 Some(_) => {
                     let before = self.pos;
-                    if let Some((rule, nested)) = self.parse_rule() {
+                    if let Some((rule, nested, _)) = self.parse_rule() {
                         rules.push(rule);
                         rules.extend(nested);
                     } else if self.pos == before {
@@ -2162,7 +2188,7 @@ impl<'a> Parser<'a> {
                 }
                 Some(_) => {
                     let before = self.pos;
-                    if let Some((rule, nested)) = self.parse_rule() {
+                    if let Some((rule, nested, _)) = self.parse_rule() {
                         rules.push(rule);
                         rules.extend(nested);
                     } else if self.pos == before {
@@ -2212,7 +2238,7 @@ impl<'a> Parser<'a> {
                 }
                 Some(_) => {
                     let before = self.pos;
-                    if let Some((rule, nested)) = self.parse_rule() {
+                    if let Some((rule, nested, _)) = self.parse_rule() {
                         rules.push(rule);
                         rules.extend(nested);
                     } else if self.pos == before {
@@ -2356,7 +2382,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_rule(&mut self) -> Option<(Rule, Vec<Rule>)> {
+    fn parse_rule(&mut self) -> Option<(Rule, Vec<Rule>, Vec<AtRuleOutcome>)> {
         let start = self.pos;
         let selectors = self.parse_selector_list();
         self.skip_ws_and_comments();
@@ -2368,18 +2394,26 @@ impl<'a> Parser<'a> {
             return None;
         }
         self.consume(); // '{'
-        let (declarations, nested) = self.parse_declaration_block_with_nesting(&selectors);
-        Some((Rule { selectors, declarations }, nested))
+        let (declarations, nested, at_rules) =
+            self.parse_declaration_block_with_nesting(&selectors);
+        Some((Rule { selectors, declarations }, nested, at_rules))
     }
 
-    /// CSS Nesting L1 §3 — parse declaration block that may contain `& { }` nested rules.
-    /// Returns (declarations, flattened nested rules with expanded selectors).
+    /// CSS Nesting L1 §3–§5 — parse declaration block that may contain nested rules and at-rules.
+    /// Returns (declarations, flattened nested rules, nested at-rules).
+    ///
+    /// Handles:
+    /// - `& selector { }` — explicit nesting with `&`
+    /// - `.child { }`, `#id { }`, `[attr] { }`, `:hover { }`, `* { }` — implicit descendant nesting
+    /// - `> .child { }`, `+ .sib { }`, `~ .sib { }` — implicit relative-combinator nesting
+    /// - `@media / @supports / @layer / @container { }` — nested at-rules
     fn parse_declaration_block_with_nesting(
         &mut self,
         parent_sels: &[ComplexSelector],
-    ) -> (Vec<Declaration>, Vec<Rule>) {
+    ) -> (Vec<Declaration>, Vec<Rule>, Vec<AtRuleOutcome>) {
         let mut decls = Vec::new();
         let mut nested: Vec<Rule> = Vec::new();
+        let mut at_rules: Vec<AtRuleOutcome> = Vec::new();
         loop {
             self.skip_ws_and_comments();
             match self.peek() {
@@ -2393,9 +2427,36 @@ impl<'a> Parser<'a> {
                     continue;
                 }
                 Some('&') => {
-                    // Nested rule starting with nesting selector `&`.
-                    let expanded = self.parse_nested_rule_amp(parent_sels);
-                    nested.extend(expanded);
+                    // Explicit nesting with `&`.
+                    let (r, a) = self.parse_nested_rule_amp(parent_sels);
+                    nested.extend(r);
+                    at_rules.extend(a);
+                }
+                // CSS Nesting L1 §4: implicit descendant — `.foo {}`, `#id {}`, `[attr] {}`,
+                // `:pseudo {}`, `* {}` cannot start a property name, so treat as nested rule.
+                Some('.') | Some('#') | Some('[') | Some(':') | Some('*') => {
+                    let (r, a) = self.parse_implicit_nested_rule(parent_sels, None);
+                    nested.extend(r);
+                    at_rules.extend(a);
+                }
+                // CSS Nesting L1 §4: implicit relative — `> .foo {}`, `+ .sib {}`, `~ .sib {}`.
+                Some('>') | Some('+') | Some('~') => {
+                    // SAFETY: we just peeked this char, consume() cannot return None here.
+                    let c = self.consume().unwrap_or('>');
+                    let comb = match c {
+                        '+' => Combinator::NextSibling,
+                        '~' => Combinator::LaterSibling,
+                        _ => Combinator::Child, // '>'
+                    };
+                    self.skip_ws_and_comments();
+                    let (r, a) = self.parse_implicit_nested_rule(parent_sels, Some(comb));
+                    nested.extend(r);
+                    at_rules.extend(a);
+                }
+                // CSS Nesting L1 §5: nested at-rule.
+                Some('@') => {
+                    let ats = self.parse_nested_at_rule(parent_sels);
+                    at_rules.extend(ats);
                 }
                 _ => match self.parse_declaration() {
                     Some(d) => decls.push(d),
@@ -2403,12 +2464,15 @@ impl<'a> Parser<'a> {
                 },
             }
         }
-        (decls, nested)
+        (decls, nested, at_rules)
     }
 
     /// Parse `& [combinator] selector-list { declarations }` and expand into flat rules.
     /// The `&` has already been peeked but not consumed.
-    fn parse_nested_rule_amp(&mut self, parent_sels: &[ComplexSelector]) -> Vec<Rule> {
+    fn parse_nested_rule_amp(
+        &mut self,
+        parent_sels: &[ComplexSelector],
+    ) -> (Vec<Rule>, Vec<AtRuleOutcome>) {
         self.consume(); // consume '&'
         let had_ws = self.skip_ws_and_comments_track();
         // Determine if there's an explicit combinator after &.
@@ -2427,14 +2491,14 @@ impl<'a> Parser<'a> {
             let s = self.parse_selector_list();
             if s.is_empty() {
                 self.recover_to_block_end();
-                return vec![];
+                return (vec![], vec![]);
             }
             s
         };
         self.skip_ws_and_comments();
         if self.peek() != Some('{') {
             self.recover_to_block_end();
-            return vec![];
+            return (vec![], vec![]);
         }
         self.consume(); // '{'
         // Expand: combine each parent selector with each nested selector.
@@ -2443,11 +2507,185 @@ impl<'a> Parser<'a> {
         } else {
             expand_nesting(parent_sels, combinator, &nested_sels)
         };
-        let (declarations, sub_nested) =
+        let (declarations, sub_nested, sub_at) =
             self.parse_declaration_block_with_nesting(&expanded_sels);
         let mut result = vec![Rule { selectors: expanded_sels, declarations }];
         result.extend(sub_nested);
-        result
+        (result, sub_at)
+    }
+
+    /// CSS Nesting L1 §4: implicit nesting — `.child { }` inside a rule block
+    /// is treated as `& .child { }` (descendant). Called when we see a selector-
+    /// start token (`.`, `#`, `[`, `:`, `*`) without an explicit `&`.
+    /// `combinator` — pre-parsed explicit combinator (`>`, `+`, `~`), or `None`
+    /// for implicit descendant.
+    fn parse_implicit_nested_rule(
+        &mut self,
+        parent_sels: &[ComplexSelector],
+        combinator: Option<Combinator>,
+    ) -> (Vec<Rule>, Vec<AtRuleOutcome>) {
+        let nested_sels = self.parse_selector_list();
+        if nested_sels.is_empty() {
+            self.recover_to_block_end();
+            return (vec![], vec![]);
+        }
+        self.skip_ws_and_comments();
+        if self.peek() != Some('{') {
+            self.recover_to_block_end();
+            return (vec![], vec![]);
+        }
+        self.consume(); // '{'
+        // Implicit nesting without explicit combinator → descendant.
+        let comb = combinator.unwrap_or(Combinator::Descendant);
+        let expanded_sels = expand_nesting(parent_sels, Some(comb), &nested_sels);
+        let (declarations, sub_nested, sub_at) =
+            self.parse_declaration_block_with_nesting(&expanded_sels);
+        let mut rules = vec![Rule { selectors: expanded_sels, declarations }];
+        rules.extend(sub_nested);
+        (rules, sub_at)
+    }
+
+    /// CSS Nesting L1 §5: nested at-rule inside a qualified rule.
+    /// Example: `.parent { @media (min-width: 800px) { color: red; } }`
+    /// expands to: `@media (min-width: 800px) { .parent { color: red; } }`.
+    /// Supports `@media`, `@supports`, `@layer`, `@container`.
+    fn parse_nested_at_rule(&mut self, parent_sels: &[ComplexSelector]) -> Vec<AtRuleOutcome> {
+        let start = self.pos;
+        self.consume(); // '@'
+        let name = self.parse_ident().unwrap_or_default();
+        self.skip_ws_and_comments();
+
+        if name.eq_ignore_ascii_case("media") {
+            let query_start = self.pos;
+            while let Some(c) = self.peek() {
+                if c == '{' {
+                    break;
+                }
+                self.consume();
+            }
+            if self.peek() != Some('{') {
+                return vec![];
+            }
+            let query_str = self.input[query_start..self.pos].trim();
+            let query = parse_media_query(query_str);
+            self.consume(); // '{'
+            let (decls, inner_rules, inner_at) =
+                self.parse_declaration_block_with_nesting(parent_sels);
+            let mut rules = Vec::new();
+            if !decls.is_empty() {
+                rules.push(Rule { selectors: parent_sels.to_vec(), declarations: decls });
+            }
+            rules.extend(inner_rules);
+            let mut outcomes = vec![AtRuleOutcome::Media(MediaRule { query, rules })];
+            outcomes.extend(inner_at);
+            return outcomes;
+        }
+
+        if name.eq_ignore_ascii_case("supports") {
+            let cond_start = self.pos;
+            let mut depth: i32 = 0;
+            while let Some(c) = self.peek() {
+                if c == '(' {
+                    depth += 1;
+                } else if c == ')' {
+                    depth -= 1;
+                } else if c == '{' && depth == 0 {
+                    break;
+                }
+                self.consume();
+            }
+            if self.peek() != Some('{') {
+                return vec![];
+            }
+            let cond_str = self.input[cond_start..self.pos].trim();
+            let condition = parse_supports_condition(cond_str);
+            self.consume(); // '{'
+            let (decls, inner_rules, inner_at) =
+                self.parse_declaration_block_with_nesting(parent_sels);
+            let mut rules = Vec::new();
+            if !decls.is_empty() {
+                rules.push(Rule { selectors: parent_sels.to_vec(), declarations: decls });
+            }
+            rules.extend(inner_rules);
+            let mut outcomes =
+                vec![AtRuleOutcome::Supports(SupportsRule { condition, rules })];
+            outcomes.extend(inner_at);
+            return outcomes;
+        }
+
+        if name.eq_ignore_ascii_case("layer") {
+            let names_start = self.pos;
+            while let Some(c) = self.peek() {
+                if c == '{' || c == ';' {
+                    break;
+                }
+                self.consume();
+            }
+            let prelude = self.input[names_start..self.pos].trim();
+            if self.peek() == Some(';') {
+                self.consume();
+                return vec![];
+            }
+            if self.peek() != Some('{') {
+                return vec![];
+            }
+            let layer_name = if prelude.is_empty() {
+                None
+            } else {
+                Some(prelude.to_string())
+            };
+            self.consume(); // '{'
+            let (decls, inner_rules, inner_at) =
+                self.parse_declaration_block_with_nesting(parent_sels);
+            let mut rules = Vec::new();
+            if !decls.is_empty() {
+                rules.push(Rule { selectors: parent_sels.to_vec(), declarations: decls });
+            }
+            rules.extend(inner_rules);
+            let mut outcomes =
+                vec![AtRuleOutcome::LayerBlock { name: layer_name, rules }];
+            outcomes.extend(inner_at);
+            return outcomes;
+        }
+
+        if name.eq_ignore_ascii_case("container") {
+            let cond_start = self.pos;
+            let mut depth: i32 = 0;
+            while let Some(c) = self.peek() {
+                if c == '(' {
+                    depth += 1;
+                } else if c == ')' {
+                    depth -= 1;
+                } else if c == '{' && depth == 0 {
+                    break;
+                }
+                self.consume();
+            }
+            if self.peek() != Some('{') {
+                return vec![];
+            }
+            let condition = self.input[cond_start..self.pos].trim().to_string();
+            self.consume(); // '{'
+            let (decls, inner_rules, inner_at) =
+                self.parse_declaration_block_with_nesting(parent_sels);
+            let mut rules = Vec::new();
+            if !decls.is_empty() {
+                rules.push(Rule { selectors: parent_sels.to_vec(), declarations: decls });
+            }
+            rules.extend(inner_rules);
+            let mut outcomes = vec![AtRuleOutcome::Container(ContainerRule {
+                name: None,
+                condition,
+                rules,
+            })];
+            outcomes.extend(inner_at);
+            return outcomes;
+        }
+
+        // Unknown nested at-rule — skip the block.
+        self.pos = start;
+        self.skip_at_rule();
+        vec![]
     }
 
     fn recover_to_block_end(&mut self) {
@@ -5743,5 +5981,218 @@ mod tests {
         assert_eq!(s.rules[0].declarations[0].property, "margin");
         assert_eq!(s.rules[0].declarations[1].property, "padding");
         assert_eq!(s.rules[1].declarations[0].property, "font-weight");
+    }
+
+    // ── CSS Nesting L1 §4: implicit nesting (without `&`) ───────────────────
+
+    #[test]
+    fn implicit_nesting_class_descendant() {
+        // `.parent { .child { color: blue; } }` → `.parent .child { color: blue; }`
+        let s = parse(".parent { .child { color: blue; } }");
+        assert_eq!(s.rules.len(), 2);
+        assert_eq!(s.rules[0].selectors, vec![one(SimpleSelector::Class("parent".into()))]);
+        assert!(s.rules[0].declarations.is_empty());
+        // Nested rule: `.parent .child`
+        let nested = &s.rules[1];
+        assert_eq!(nested.selectors.len(), 1);
+        assert_eq!(nested.selectors[0].head.parts, vec![SimpleSelector::Class("parent".into())]);
+        assert_eq!(nested.selectors[0].tail.len(), 1);
+        assert_eq!(nested.selectors[0].tail[0].0, Combinator::Descendant);
+        assert_eq!(
+            nested.selectors[0].tail[0].1.parts,
+            vec![SimpleSelector::Class("child".into())]
+        );
+        assert_eq!(nested.declarations[0].property, "color");
+        assert_eq!(nested.declarations[0].value, "blue");
+    }
+
+    #[test]
+    fn implicit_nesting_id_descendant() {
+        // `div { #hero { color: red; } }` → `div #hero { color: red; }`
+        let s = parse("div { #hero { color: red; } }");
+        assert_eq!(s.rules.len(), 2);
+        let nested = &s.rules[1];
+        assert_eq!(nested.selectors[0].head.parts, vec![SimpleSelector::Type("div".into())]);
+        assert_eq!(nested.selectors[0].tail[0].0, Combinator::Descendant);
+        assert_eq!(
+            nested.selectors[0].tail[0].1.parts,
+            vec![SimpleSelector::Id("hero".into())]
+        );
+    }
+
+    #[test]
+    fn implicit_nesting_pseudo_class() {
+        // `.btn { :hover { opacity: 0.8; } }` → `.btn :hover { opacity: 0.8; }`
+        let s = parse(".btn { :hover { opacity: 0.8; } }");
+        assert_eq!(s.rules.len(), 2);
+        let nested = &s.rules[1];
+        assert_eq!(nested.selectors[0].tail[0].0, Combinator::Descendant);
+        // :hover is PseudoClass::Unsupported("hover") since not stateful-matched
+        assert_eq!(nested.declarations[0].property, "opacity");
+        assert_eq!(nested.declarations[0].value, "0.8");
+    }
+
+    #[test]
+    fn implicit_nesting_universal() {
+        // `div { * { box-sizing: border-box; } }` → `div * { box-sizing: border-box; }`
+        let s = parse("div { * { box-sizing: border-box; } }");
+        assert_eq!(s.rules.len(), 2);
+        let nested = &s.rules[1];
+        assert_eq!(nested.selectors[0].tail[0].0, Combinator::Descendant);
+        assert_eq!(
+            nested.selectors[0].tail[0].1.parts,
+            vec![SimpleSelector::Universal]
+        );
+    }
+
+    #[test]
+    fn implicit_nesting_relative_child() {
+        // `ul { > li { list-style: none; } }` → `ul > li { list-style: none; }`
+        let s = parse("ul { > li { list-style: none; } }");
+        assert_eq!(s.rules.len(), 2);
+        let nested = &s.rules[1];
+        assert_eq!(nested.selectors[0].tail[0].0, Combinator::Child);
+        assert_eq!(
+            nested.selectors[0].tail[0].1.parts,
+            vec![SimpleSelector::Type("li".into())]
+        );
+        assert_eq!(nested.declarations[0].property, "list-style");
+    }
+
+    #[test]
+    fn implicit_nesting_relative_next_sibling() {
+        // `.a { + .b { color: red; } }` → `.a + .b { color: red; }`
+        let s = parse(".a { + .b { color: red; } }");
+        assert_eq!(s.rules.len(), 2);
+        let nested = &s.rules[1];
+        assert_eq!(nested.selectors[0].tail[0].0, Combinator::NextSibling);
+    }
+
+    #[test]
+    fn implicit_nesting_relative_later_sibling() {
+        // `.a { ~ .b { color: red; } }` → `.a ~ .b { color: red; }`
+        let s = parse(".a { ~ .b { color: red; } }");
+        assert_eq!(s.rules.len(), 2);
+        let nested = &s.rules[1];
+        assert_eq!(nested.selectors[0].tail[0].0, Combinator::LaterSibling);
+    }
+
+    #[test]
+    fn implicit_nesting_with_declarations_mixed() {
+        // `.card { color: red; .title { font-weight: bold; } padding: 8px; }`
+        let s = parse(".card { color: red; .title { font-weight: bold; } padding: 8px; }");
+        assert_eq!(s.rules.len(), 2);
+        // Parent keeps both declarations
+        assert_eq!(s.rules[0].declarations.len(), 2);
+        assert_eq!(s.rules[0].declarations[0].property, "color");
+        assert_eq!(s.rules[0].declarations[1].property, "padding");
+        // Nested rule gets its declaration
+        assert_eq!(s.rules[1].declarations[0].property, "font-weight");
+    }
+
+    #[test]
+    fn implicit_nesting_deep_two_levels() {
+        // `div { .a { .b { color: red; } } }` → 3 rules: div, div .a, div .a .b
+        let s = parse("div { .a { .b { color: red; } } }");
+        assert_eq!(s.rules.len(), 3);
+        let deepest = &s.rules[2];
+        assert_eq!(deepest.selectors[0].head.parts, vec![SimpleSelector::Type("div".into())]);
+        assert_eq!(deepest.selectors[0].tail.len(), 2);
+        assert_eq!(deepest.selectors[0].tail[0].0, Combinator::Descendant);
+        assert_eq!(deepest.selectors[0].tail[1].0, Combinator::Descendant);
+    }
+
+    #[test]
+    fn implicit_nesting_attribute_selector() {
+        // `form { [required] { border-color: red; } }` → `form [required] { border-color: red; }`
+        let s = parse("form { [required] { border-color: red; } }");
+        assert_eq!(s.rules.len(), 2);
+        let nested = &s.rules[1];
+        assert_eq!(nested.selectors[0].tail[0].0, Combinator::Descendant);
+        assert_eq!(nested.declarations[0].property, "border-color");
+    }
+
+    // ── CSS Nesting L1 §5: nested at-rules ─────────────────────────────────
+
+    #[test]
+    fn nested_at_media_basic() {
+        // `.card { @media (min-width: 800px) { color: blue; } }`
+        // → `@media (min-width: 800px) { .card { color: blue; } }` in media_rules
+        let s = parse(".card { @media (min-width: 800px) { color: blue; } }");
+        assert_eq!(s.rules.len(), 1); // parent rule (no decls)
+        assert_eq!(s.media_rules.len(), 1);
+        let mr = &s.media_rules[0];
+        assert_eq!(mr.rules.len(), 1);
+        assert_eq!(mr.rules[0].selectors, vec![one(SimpleSelector::Class("card".into()))]);
+        assert_eq!(mr.rules[0].declarations[0].property, "color");
+        assert_eq!(mr.rules[0].declarations[0].value, "blue");
+    }
+
+    #[test]
+    fn nested_at_media_with_nested_rule() {
+        // `.parent { @media (max-width: 600px) { .child { color: red; } } }`
+        // → `@media ... { .parent .child { color: red; } }`
+        let s = parse(".parent { @media (max-width: 600px) { .child { color: red; } } }");
+        assert_eq!(s.media_rules.len(), 1);
+        let mr = &s.media_rules[0];
+        // .parent (empty decls rule from parent) is absent since decls empty; only the nested rule
+        assert!(mr.rules.iter().any(|r| {
+            r.selectors.iter().any(|sel| {
+                sel.head.parts == vec![SimpleSelector::Class("parent".into())]
+                    && sel.tail.len() == 1
+                    && sel.tail[0].1.parts == vec![SimpleSelector::Class("child".into())]
+            })
+        }));
+        let nested = mr.rules.iter().find(|r| r.selectors[0].tail.len() == 1).unwrap();
+        assert_eq!(nested.declarations[0].property, "color");
+    }
+
+    #[test]
+    fn nested_at_media_mixed_decls_and_rules() {
+        // `.el { @media screen { color: red; .inner { opacity: 0.5; } } }`
+        // → media_rules has: [.el { color: red }, .el .inner { opacity: 0.5 }]
+        let s =
+            parse(".el { @media screen { color: red; .inner { opacity: 0.5; } } }");
+        assert_eq!(s.media_rules.len(), 1);
+        let mr = &s.media_rules[0];
+        assert_eq!(mr.rules.len(), 2);
+        // First rule: .el { color: red }
+        assert_eq!(mr.rules[0].selectors, vec![one(SimpleSelector::Class("el".into()))]);
+        assert_eq!(mr.rules[0].declarations[0].property, "color");
+        // Second rule: .el .inner { opacity: 0.5 }
+        assert_eq!(mr.rules[1].declarations[0].property, "opacity");
+    }
+
+    #[test]
+    fn nested_at_supports() {
+        // `div { @supports (display: grid) { display: grid; } }`
+        // → `@supports ... { div { display: grid; } }` in supports_rules
+        let s = parse("div { @supports (display: grid) { display: grid; } }");
+        assert_eq!(s.supports_rules.len(), 1);
+        let sr = &s.supports_rules[0];
+        assert_eq!(sr.rules.len(), 1);
+        assert_eq!(sr.rules[0].selectors, vec![one(SimpleSelector::Type("div".into()))]);
+        assert_eq!(sr.rules[0].declarations[0].property, "display");
+    }
+
+    #[test]
+    fn nested_at_layer() {
+        // `.btn { @layer base { color: red; } }`
+        // → `@layer base { .btn { color: red; } }` in layers
+        let s = parse(".btn { @layer base { color: red; } }");
+        assert_eq!(s.layers.len(), 1);
+        assert_eq!(s.layers[0].name, "base");
+        assert_eq!(s.layers[0].rules.len(), 1);
+        assert_eq!(s.layers[0].rules[0].declarations[0].property, "color");
+    }
+
+    #[test]
+    fn nested_at_container() {
+        // `.grid { @container sidebar (min-width: 300px) { gap: 1rem; } }`
+        let s = parse(".grid { @container sidebar (min-width: 300px) { gap: 1rem; } }");
+        assert_eq!(s.container_rules.len(), 1);
+        let cr = &s.container_rules[0];
+        assert_eq!(cr.rules.len(), 1);
+        assert_eq!(cr.rules[0].declarations[0].property, "gap");
     }
 }
