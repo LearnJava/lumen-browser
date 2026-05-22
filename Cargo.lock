@@ -1045,6 +1045,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-canvas"
+version = "0.0.1"
+dependencies = [
+ "lumen-core",
+]
+
+[[package]]
 name = "lumen-core"
 version = "0.0.1"
 
