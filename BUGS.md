@@ -36,7 +36,7 @@ BUG-017 | FIXED 2026-05-22 | layout/paint    | text-decoration-style ignored (al
 BUG-018 | FIXED 2026-05-22 | layout          | text-decoration-color ignored (always inherits text color)
 BUG-023 | OPEN             | layout+paint    | opacity deviation 2.20% — compositing correct; root: InlineBlockRow baseline + no edge-AA
 BUG-024 | FIXED 2026-05-21 | layout          | box-sizing: content-box — border not added to outer size; height% resolved against width
-BUG-025 | OPEN             | layout          | max-height does not clamp block height
+BUG-025 | FIXED 2026-05-22 | layout          | max-height does not clamp block height; InlineSpace not included in shrink-to-fit width
 BUG-026 | OPEN             | layout/paint    | <img> CSS/HTML width+height ignored — renders at natural size
 BUG-028 | OPEN  [P3]       | shell           | relayout-on-resize + maximized window triggers BUG-027
 BUG-029 | FIXED 2026-05-21 | paint           | border-style: dotted renders square dots instead of circles

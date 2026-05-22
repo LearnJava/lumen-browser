@@ -850,7 +850,11 @@ fn build_box(
 ///
 /// Для typed-Length полей используем em = font_size, cb_width = 0 как
 /// аппроксимацию (shrink-to-fit не знает cb_width заранее).
-fn preferred_inline_block_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
+fn preferred_inline_block_width(
+    b: &LayoutBox,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> Option<f32> {
     let s = &b.style;
     let em = s.font_size;
     // % ширины на этом этапе не разрешима — трактуем как отсутствие.
@@ -867,10 +871,17 @@ fn preferred_inline_block_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
         return Some(outer.max(0.0));
     }
     // InlineBlockRow — горизонтальный поток: суммируем ширины детей + их margins.
+    // InlineSpace — collapsed whitespace gap; его ширина = char_width(' ').
     // Остальные боксы (Block, Image и т.д.) — вертикальный поток: берём max.
     let content_w = if matches!(b.kind, BoxKind::InlineBlockRow) {
         let sum: f32 = b.children.iter().map(|c| {
-            let cw = preferred_inline_block_width(c, viewport).unwrap_or(0.0);
+            if matches!(c.kind, BoxKind::InlineSpace) {
+                // Учитываем ширину collapsed space, чтобы при shrink-to-fit
+                // не занижать ширину контейнера и не вызывать перенос соседних
+                // inline-block элементов на следующую строку.
+                return measurer.map_or(0.0, |m| m.char_width(' ', c.style.font_size));
+            }
+            let cw = preferred_inline_block_width(c, measurer, viewport).unwrap_or(0.0);
             let cem = c.style.font_size;
             let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
             let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
@@ -880,7 +891,7 @@ fn preferred_inline_block_width(b: &LayoutBox, viewport: Size) -> Option<f32> {
     } else {
         b.children
             .iter()
-            .filter_map(|c| preferred_inline_block_width(c, viewport))
+            .filter_map(|c| preferred_inline_block_width(c, measurer, viewport))
             .fold(0.0_f32, f32::max)
     };
     if content_w > 0.0 {
@@ -997,7 +1008,7 @@ fn lay_out(
     // Полный алгоритм (CSS 2.1 §10.3.9) требует двух проходов; здесь —
     // упрощение: ищем максимальную explicit-width среди потомков.
     if s.width.is_none() && s.display == Display::InlineBlock
-        && let Some(pref_w) = preferred_inline_block_width(b, viewport)
+        && let Some(pref_w) = preferred_inline_block_width(b, measurer, viewport)
     {
         b.rect.width = pref_w.min(b.rect.width);
     }
