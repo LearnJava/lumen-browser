@@ -283,7 +283,7 @@ def run_task_loop(developer: str, max_tasks: int = 0):
             log(developer, f"Ошибка запуска: {e}")
             break
 
-        if rate_limited:
+        if rate_limited and exit_code != 0:
             task_count -= 1  # Не считать неудачную попытку как задачу
             wait_for_rate_limit(developer)
         elif exit_code != 0:
