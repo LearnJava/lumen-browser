@@ -51,6 +51,21 @@ pub struct AnimationFrame {
 }
 
 impl AnimationFrame {
+    /// Merge `other` into `self`; `other` values take precedence per property.
+    ///
+    /// Use to combine animation and transition frames in the shell frame loop:
+    /// call `anim_frame.merge(transition_frame)` so transitions win on conflict.
+    pub fn merge(&mut self, other: AnimationFrame) {
+        self.has_active |= other.has_active;
+        for (node, style) in other.overrides {
+            let entry = self.overrides.entry(node).or_default();
+            if let Some(v) = style.opacity { entry.opacity = Some(v); }
+            if let Some(v) = style.transform { entry.transform = Some(v); }
+            if let Some(v) = style.color { entry.color = Some(v); }
+            if let Some(v) = style.background_color { entry.background_color = Some(v); }
+        }
+    }
+
     /// Extract only compositor-offloadable properties (opacity, transform).
     ///
     /// opacity and transform can be applied by patching the display list during

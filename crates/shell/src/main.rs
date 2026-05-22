@@ -184,6 +184,7 @@ fn run_window_mode(
         renderer: None,
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
+        transition_scheduler: lumen_layout::TransitionScheduler::new(),
         anim_frame: None,
         layout_box: None,
         epoch: std::time::Instant::now(),
@@ -1430,6 +1431,10 @@ struct Lumen {
     /// Хранит start-time для каждой запущенной анимации и вычисляет
     /// интерполированные значения. Очищается при load/reload.
     animation_scheduler: animation_scheduler::AnimationScheduler,
+    /// CSS Transitions scheduler — detects computed-style changes and
+    /// interpolates properties over their transition duration.
+    /// P4 calls `sync()` after relayout; P2 calls `tick()` each frame.
+    transition_scheduler: lumen_layout::TransitionScheduler,
     /// Последний вычисленный кадр анимаций. `None` — страница не загружена
     /// или нет активных анимаций.
     anim_frame: Option<lumen_layout::AnimationFrame>,
@@ -1539,6 +1544,7 @@ impl Lumen {
         self.display_list = new_dl;
         self.layout_box = Some(lb);
         self.animation_scheduler.clear();
+        self.transition_scheduler = lumen_layout::TransitionScheduler::new();
         self.anim_frame = None;
         self.scroll_y = clamp_scroll(self.scroll_y, self.max_scroll());
         self.scroll_x = clamp_scroll(self.scroll_x, self.max_scroll_x());
@@ -1571,6 +1577,7 @@ impl Lumen {
                 self.layout_box = Some(page.layout_box);
                 self.title = page.title;
                 self.animation_scheduler.clear();
+                self.transition_scheduler = lumen_layout::TransitionScheduler::new();
                 self.anim_frame = None;
                 // Display list другой → старые match-rect-ы невалидны.
                 // Closing полностью сбрасывает query/active — пользователю
@@ -1699,6 +1706,7 @@ impl Lumen {
         self.layout_box = Some(page.layout_box);
         self.title = page.title;
         self.animation_scheduler.clear();
+        self.transition_scheduler = lumen_layout::TransitionScheduler::new();
         self.anim_frame = None;
         self.find.close();
         self.scroll_y = 0.0;
@@ -2186,6 +2194,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         self.request_redraw();
                     }
                     self.anim_frame = if frame.overrides.is_empty() { None } else { Some(frame) };
+                }
+
+                // Шаг 5.6: CSS Transitions tick.
+                // Transitions are reactive: P4 calls sync() after computed-style
+                // changes. Here we tick each frame so active transitions produce
+                // overrides. Transition values take precedence over @keyframes.
+                // CSS: transition-* (P4 wires transition properties + calls sync())
+                {
+                    let ts_frame = self.transition_scheduler.tick(timestamp_ms as f32 / 1000.0);
+                    if ts_frame.has_active {
+                        self.request_redraw();
+                    }
+                    if !ts_frame.overrides.is_empty() {
+                        match self.anim_frame.as_mut() {
+                            Some(f) => f.merge(ts_frame),
+                            None => self.anim_frame = Some(ts_frame),
+                        }
+                    }
                 }
 
                 // Шаг 6: layout invalidation stub. В Phase 0 rAF-callback-и —

@@ -3477,10 +3477,9 @@ mod tests {
         let sheet = lumen_css_parser::parse(css);
         let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
         fn find_by_id<'a>(b: &'a super::LayoutBox, doc: &lumen_dom::Document, id: &str) -> Option<&'a super::LayoutBox> {
-            if let lumen_dom::NodeData::Element { attrs, .. } = &doc.get(b.node).data {
-                if attrs.iter().any(|a| a.name.local == "id" && a.value == id) {
-                    return Some(b);
-                }
+            if let lumen_dom::NodeData::Element { attrs, .. } = &doc.get(b.node).data
+                && attrs.iter().any(|a| a.name.local == "id" && a.value == id) {
+                return Some(b);
             }
             for child in &b.children { if let Some(f) = find_by_id(child, doc, id) { return Some(f); } }
             None
