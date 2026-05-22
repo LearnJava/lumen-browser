@@ -1,8 +1,6 @@
-In progress: BUG-025 InlineSpace shrink-to-fit  branch: bug-025-inline-space
-Next step: commit + merge
+In progress: —
 
-Next (Wave 1):
-BUG-026  <img> CSS width/height ignored       box_tree.rs    ~1h
+Next step: —
 
 Next (Wave 2, after D finishes content+pseudo):
 ::before/::after layout integration           box_tree.rs    ~2h  depends on P4 content
@@ -14,4 +12,4 @@ Table layout algorithm                        box_tree.rs    DONE 2026-05-21 (BU
 display: list-item marker box                 box_tree.rs    ~1h
 Shadow DOM cascade + composed tree                           ~3h
 
-Recent: Forms ValidityState :valid/:invalid 2026-05-22, BUG-013 display:none breaks inline context FIXED 2026-05-22, bug-024-box-sizing 2026-05-21, table-layout 2026-05-21, forms-layout 2026-05-21, css-nesting 2026-05-21, aspect-ratio 2026-05-21, flex-order 2026-05-21, css-units 2026-05-21, logical-properties 2026-05-21
+Recent: BUG-026 FIXED (img renders at correct CSS size) 2026-05-22, BUG-025 FIXED (InlineSpace shrink-to-fit) 2026-05-22, Forms ValidityState :valid/:invalid 2026-05-22, BUG-013 display:none breaks inline context 2026-05-22, bug-024-box-sizing 2026-05-21, table-layout 2026-05-21, forms-layout 2026-05-21, css-nesting 2026-05-21
