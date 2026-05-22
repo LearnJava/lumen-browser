@@ -52,6 +52,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 35-grid-named-areas.html | CSS Grid named areas | 9 | grid-template-areas · grid-area: &lt;name&gt; · named area spanning multiple rows/cols · page layout (header/sidebar/main/footer) · mini-grid with 5 named areas |
 | 36-border-radius.html | border-radius: uniform, pill, circle, asymmetric | 22 | border-radius: 0/4/8/16/24/32px · + border · pill (999px) · circle (50%) · asymmetric per-corner (24px 0 0 0 / etc.) · large clamped · nested rounded divs |
 | 37-float-clear.html | float: left/right + clear: both | 11 | float: left · float: right · float left + right combined · two left floats horizontal stack · clear: both clearance |
+| 38-gradients.html | linear-gradient / radial-gradient | 13 | linear: to right / to bottom / 45deg / 3-stop / transparent · radial: circle center / offset / 3-stop / ellipse · repeating-linear / repeating-radial · stacked |
 | **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~66 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (SDF rendering: uniform/pill/circle/asymmetric) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) |
 
 ---
@@ -136,7 +137,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **z-index** — требует `position: absolute/relative` с offset (Phase 0: offsets не применяются)
 - **box-shadow: inset** — не реализовано в paint (требует clip)
 - **border-radius: elliptical (rx≠ry)** — CSS spec allows `border-radius: 10px / 20px` (elliptical), only circular supported
-- **background-image** (gradient, url) — parse only (Phase 0)
+- **background-image** (url) — url images ✅; gradient rendering ✅ (linear + radial GPU pipeline, тест 38)
 - **transform** — ✅ полностью реализован (translate/rotate/scale/skew/matrix + transform-origin), тест 22
 - **filter** — ✅ реализован (grayscale/sepia/brightness/invert/contrast/saturate/opacity/hue-rotate + blur), тест 30
 - **clip-path** — ✅ реализован (inset/circle/ellipse/polygon bounding-box clip), тест 31

@@ -32,7 +32,7 @@ use lumen_font::{
     maybe_decode_font,
 };
 use lumen_image::{Image, PixelFormat};
-use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
+use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, GradientStop, ImageRendering, Length, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
@@ -722,6 +722,92 @@ struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> }
 }
 "#;
 
+/// CSS Images L3 §3.3 — GPU gradient pipeline shader (linear + radial).
+///
+/// Single shader module handles both kinds via `gp.kind` uniform (0=linear, 1=radial).
+///
+/// Group 0, binding 0: viewport uniform (shared with fill pipeline).
+/// Group 1, binding 0: GradParams uniform — gradient line/center/stops.
+///
+/// Vertex layout (GradVertex): loc 0 = pos (CSS px), loc 1 = uv [0,1]×[0,1].
+/// UV is baked into vertices as normalized rect coordinates; the fragment
+/// shader uses UV directly without needing rect bounds in the uniform.
+///
+/// Linear gradient: p0=(sx,sy), p1=(ex,ey) are gradient-line endpoints
+/// in UV space.  t = dot(uv-p0, p1-p0) / |p1-p0|²  (0 at start, 1 at end).
+///
+/// Radial gradient: p0=(cx,cy) is center in UV space; p1=(rx,ry) are
+/// semi-axes (farthest-corner size) in UV space.
+/// t = length((uv-p0)/p1)  (0 at center, 1 at ellipse edge).
+const GRADIENT_SHADER_SRC: &str = r#"
+struct ViewUniforms { viewport: vec2<f32> }
+@group(0) @binding(0) var<uniform> vu: ViewUniforms;
+
+struct GradStop {
+    color: vec4<f32>,
+    pos:   f32,
+    _p0:   f32, _p1: f32, _p2: f32,
+}
+struct GradParams {
+    p0:        vec2<f32>,
+    p1:        vec2<f32>,
+    n_stops:   u32,
+    kind:      u32,
+    repeating: u32,
+    _pad:      u32,
+    stops: array<GradStop, 16>,
+}
+@group(1) @binding(0) var<uniform> gp: GradParams;
+
+struct VIn  { @location(0) pos: vec2<f32>, @location(1) uv: vec2<f32> }
+struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> }
+
+@vertex fn vs_main(in: VIn) -> VOut {
+    let ndc = vec2<f32>(
+        in.pos.x / vu.viewport.x * 2.0 - 1.0,
+        1.0 - in.pos.y / vu.viewport.y * 2.0,
+    );
+    return VOut(vec4<f32>(ndc, 0.0, 1.0), in.uv);
+}
+
+fn sample_grad(t_in: f32) -> vec4<f32> {
+    if gp.n_stops == 0u { return vec4<f32>(0.0); }
+    var t = t_in;
+    if gp.repeating != 0u {
+        t = t - floor(t);
+    } else {
+        t = clamp(t, 0.0, 1.0);
+    }
+    if gp.n_stops == 1u { return gp.stops[0].color; }
+    if t <= gp.stops[0].pos { return gp.stops[0].color; }
+    let last = gp.n_stops - 1u;
+    if t >= gp.stops[last].pos { return gp.stops[last].color; }
+    for (var i = 0u; i + 1u < gp.n_stops; i = i + 1u) {
+        let a = gp.stops[i];
+        let b = gp.stops[i + 1u];
+        if t >= a.pos && t <= b.pos {
+            let span = b.pos - a.pos;
+            let f = select(0.0, (t - a.pos) / span, span > 0.0001);
+            return mix(a.color, b.color, f);
+        }
+    }
+    return gp.stops[last].color;
+}
+
+@fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    var t: f32;
+    if gp.kind == 0u {
+        let d = gp.p1 - gp.p0;
+        let len_sq = dot(d, d);
+        t = select(0.0, dot(in.uv - gp.p0, d) / len_sq, len_sq > 0.0001);
+    } else {
+        let rel = (in.uv - gp.p0) / gp.p1;
+        t = length(rel);
+    }
+    return sample_grad(t);
+}
+"#;
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct FillVertex {
@@ -809,6 +895,47 @@ struct FilterParamsCpu {
 #[derive(Copy, Clone)]
 struct BlurParamsCpu { sigma: f32, direction: u32, _p0: u32, _p1: u32 }
 
+/// CSS Images L3 §3.3 — вершина градиентного пайплайна.
+/// `uv` — нормализованные координаты [0,1]×[0,1] внутри прямоугольника градиента,
+/// бейкятся в вершины, чтобы фрагментный шейдер не нуждался в размерах rect в uniform.
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct GradVertex {
+    /// CSS pixel position.
+    pos: [f32; 2],
+    /// Normalized rect coords: (0,0)=TL, (1,1)=BR.
+    uv: [f32; 2],
+}
+
+/// CPU-side зеркало WGSL `GradStop` (color: vec4 + pos: f32 + 12 bytes pad = 32 bytes).
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct GradStopCpu {
+    color: [f32; 4],
+    pos: f32,
+    _p0: f32, _p1: f32, _p2: f32,
+}
+
+/// CPU-side зеркало WGSL `GradParams` (32 bytes header + 16×32 bytes stops = 544 bytes).
+/// Используется как uniform buffer для одного DrawLinearGradient/DrawRadialGradient.
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct GradParamsCpu {
+    /// Linear: (sx, sy, ex, ey) — gradient-line endpoints in UV [0,1].
+    /// Radial: (cx, cy) — center in UV [0,1].
+    p0: [f32; 2],
+    /// Linear: (ex, ey) — gradient-line end (used with p0 start).
+    /// Radial: (rx, ry) — farthest-corner semi-axes in UV [0,1].
+    p1: [f32; 2],
+    n_stops: u32,
+    /// 0 = linear, 1 = radial.
+    kind: u32,
+    /// 0 = clamp, 1 = repeating (wrap t via fract).
+    repeating: u32,
+    _pad: u32,
+    stops: [GradStopCpu; 16],
+}
+
 /// Конвертирует `FilterFn` в `FilterEntryCpu` для GPU uniform.
 /// Blur (kind=0) передаётся как is; color-filter pass пропускает его по kind.
 fn filter_fn_to_entry(f: &FilterFn) -> FilterEntryCpu {
@@ -841,6 +968,9 @@ enum DrawOp {
     RRect { v_start: u32, v_count: u32 },
     Text { v_start: u32, v_count: u32 },
     Image { v_start: u32, v_count: u32, image_batch_idx: u32 },
+    /// CSS Images L3 §3.3 — linear or radial gradient quad. `grad_batch_idx`
+    /// indexes into the per-frame `grad_bind_groups` Vec.
+    Gradient { v_start: u32, v_count: u32, grad_batch_idx: u32 },
 }
 
 /// GPU-ресурсы для одной зарегистрированной картинки. Texture хранит уже
@@ -1024,6 +1154,9 @@ pub struct Renderer {
     blur_bgl: wgpu::BindGroupLayout,
     blur_pipeline: wgpu::RenderPipeline,
     blur_uniform: wgpu::Buffer,
+    /// CSS Images L3 §3.3 — linear/radial gradient pipeline.
+    gradient_bgl: wgpu::BindGroupLayout,
+    gradient_pipeline: wgpu::RenderPipeline,
     scratch_layer: Option<OffscreenLayer>,
     layer_sampler: wgpu::Sampler,
     layer_textures: Vec<OffscreenLayer>,
@@ -1990,6 +2123,70 @@ impl Renderer {
             cache: None,
         });
 
+        // ── Gradient pipeline (linear + radial) ──────────────────────────────
+        let gradient_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("gradient-bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+        let gradient_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("gradient-shader"),
+            source: wgpu::ShaderSource::Wgsl(GRADIENT_SHADER_SRC.into()),
+        });
+        let gradient_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("gradient-layout"),
+            bind_group_layouts: &[&uniform_bgl, &gradient_bgl],
+            push_constant_ranges: &[],
+        });
+        let gradient_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("gradient-pipeline"),
+            layout: Some(&gradient_layout),
+            vertex: wgpu::VertexState {
+                module: &gradient_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<GradVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &gradient_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         let atlas = GlyphAtlas::new(ATLAS_DIM);
 
         Ok(Self {
@@ -2026,6 +2223,8 @@ impl Renderer {
             blur_bgl,
             blur_pipeline,
             blur_uniform,
+            gradient_bgl,
+            gradient_pipeline,
             scratch_layer: None,
             layer_sampler,
             layer_textures: Vec::new(),
@@ -2611,6 +2810,9 @@ impl Renderer {
         // Bind groups для image draw-ов в порядке появления. DrawOp::Image
         // хранит индекс в этот Vec вместо клонирования BindGroup в каждый op.
         let mut image_bind_groups: Vec<wgpu::BindGroup> = Vec::new();
+        let mut grad_vertices: Vec<GradVertex> = Vec::new();
+        // Per-gradient CPU uniform data; index = grad_batch_idx in DrawOp::Gradient.
+        let mut grad_params: Vec<GradParamsCpu> = Vec::new();
 
         // Ordered draw operations. Каждая рисующая DisplayCommand → один
         // DrawOp в этом списке. SetScissor добавляется при изменении clip-стека.
@@ -3266,36 +3468,49 @@ impl Renderer {
                         draw_ops.push(DrawOp::Image { v_start, v_count, image_batch_idx });
                     }
                 }
-                // Phase 0 gradient stubs — render as solid fill with the average
-                // stop color until P2 implements a proper GPU gradient pipeline.
-                DisplayCommand::DrawLinearGradient { rect, stops, .. }
-                | DisplayCommand::DrawRadialGradient { rect, stops, .. } => {
+                // CSS Images L3 §3.3 — GPU linear gradient pipeline.
+                DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
                     if stops.is_empty() {
                         continue;
                     }
-                    // Average RGBA of all stops as Phase 0 approximation.
-                    let n = stops.len() as f32;
-                    let r = stops.iter().map(|s| s.color.r as f32).sum::<f32>() / n;
-                    let g = stops.iter().map(|s| s.color.g as f32).sum::<f32>() / n;
-                    let b = stops.iter().map(|s| s.color.b as f32).sum::<f32>() / n;
-                    let a = stops.iter().map(|s| s.color.a as f32).sum::<f32>() / n;
                     let scrolled = translate_rect(*rect, dx, dy);
-                    let v_start = fill_vertices.len() as u32;
-                    push_fill_quad(
-                        &mut fill_vertices,
-                        scrolled,
-                        [r / 255.0, g / 255.0, b / 255.0, a / 255.0],
-                    );
+                    let (p0, p1) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
+                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    let params = build_grad_params(&resolved, p0, p1, 0, *repeating);
+                    let v_start = grad_vertices.len() as u32;
+                    push_grad_quad(&mut grad_vertices, scrolled);
                     if let Some(m) = transform_stack.last() {
-                        apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                        apply_affine_to_grad_verts(&mut grad_vertices[v_start as usize..], m);
                     }
-                    let v_count = fill_vertices.len() as u32 - v_start;
-                    if v_count > 0 {
-                        draw_ops.push(DrawOp::Fill { v_start, v_count });
+                    let v_count = grad_vertices.len() as u32 - v_start;
+                    let grad_batch_idx = grad_params.len() as u32;
+                    grad_params.push(params);
+                    draw_ops.push(DrawOp::Gradient { v_start, v_count, grad_batch_idx });
+                }
+                // CSS Images L3 §3.5 — GPU radial gradient pipeline.
+                DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
                     }
+                    if stops.is_empty() {
+                        continue;
+                    }
+                    let scrolled = translate_rect(*rect, dx, dy);
+                    let (p0, p1) = radial_gradient_uv_params(*center_x_pct, *center_y_pct);
+                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    let params = build_grad_params(&resolved, p0, p1, 1, *repeating);
+                    let v_start = grad_vertices.len() as u32;
+                    push_grad_quad(&mut grad_vertices, scrolled);
+                    if let Some(m) = transform_stack.last() {
+                        apply_affine_to_grad_verts(&mut grad_vertices[v_start as usize..], m);
+                    }
+                    let v_count = grad_vertices.len() as u32 - v_start;
+                    let grad_batch_idx = grad_params.len() as u32;
+                    grad_params.push(params);
+                    draw_ops.push(DrawOp::Gradient { v_start, v_count, grad_batch_idx });
                 }
                 DisplayCommand::DrawLayerSnapshot { id, rect, alpha } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
@@ -3626,6 +3841,41 @@ impl Renderer {
             self.queue.write_buffer(&buf, 0, as_bytes(&mask_vertices));
             Some(buf)
         };
+        let grad_vbuf = if grad_vertices.is_empty() {
+            None
+        } else {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("grad-vbuf"),
+                size: std::mem::size_of_val(grad_vertices.as_slice()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buf, 0, as_bytes(&grad_vertices));
+            Some(buf)
+        };
+        // One uniform buffer + bind group per gradient draw call (same pattern as image batches).
+        let grad_bind_groups: Vec<wgpu::BindGroup> = grad_params
+            .iter()
+            .enumerate()
+            .map(|(i, params)| {
+                let ubuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some(&format!("grad-ubuf-{i}")),
+                    size: std::mem::size_of::<GradParamsCpu>() as u64,
+                    usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                });
+                // SAFETY: GradParamsCpu is #[repr(C)]; casting to bytes is valid.
+                self.queue.write_buffer(&ubuf, 0, as_bytes(std::slice::from_ref(params)));
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some(&format!("grad-bg-{i}")),
+                    layout: &self.gradient_bgl,
+                    entries: &[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: ubuf.as_entire_binding(),
+                    }],
+                })
+            })
+            .collect();
 
         // ── Off-screen textures ───────────────────────────────────────────
         // Blend composites (mode != Normal) also need from_level offscreen layers.
@@ -3700,6 +3950,18 @@ impl Renderer {
                                 image_bind_groups.get(*image_batch_idx as usize),
                             ) {
                                 $pass.set_pipeline(&self.image_pipeline);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_bind_group(1, bind_group, &[]);
+                                $pass.set_vertex_buffer(0, vb.slice(..));
+                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                            }
+                        }
+                        DrawOp::Gradient { v_start, v_count, grad_batch_idx } => {
+                            if let (Some(vb), Some(bind_group)) = (
+                                &grad_vbuf,
+                                grad_bind_groups.get(*grad_batch_idx as usize),
+                            ) {
+                                $pass.set_pipeline(&self.gradient_pipeline);
                                 $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                                 $pass.set_bind_group(1, bind_group, &[]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
@@ -4123,6 +4385,14 @@ impl VertexPos for CircleVertex {
     fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
 }
 
+impl VertexPos for GradVertex {
+    fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
+}
+
+fn apply_affine_to_grad_verts(verts: &mut [GradVertex], m: &Mat4) {
+    apply_affine_to_verts(verts, m);
+}
+
 fn apply_affine_to_verts<V: VertexPos>(verts: &mut [V], m: &Mat4) {
     let a = m.0[0];
     let b = m.0[1];
@@ -4238,6 +4508,147 @@ fn emit_border_arc(
             FillVertex { pos: pi1, color },
             FillVertex { pos: pi0, color },
         ]);
+    }
+}
+
+/// CSS Images L3 §3.3 — push 6 GradVertex (2 triangles) for `rect`.
+/// UV is baked: TL=(0,0), TR=(1,0), BL=(0,1), BR=(1,1).
+fn push_grad_quad(out: &mut Vec<GradVertex>, rect: Rect) {
+    let (x0, y0) = (rect.x, rect.y);
+    let (x1, y1) = (rect.x + rect.width, rect.y + rect.height);
+    out.extend_from_slice(&[
+        GradVertex { pos: [x0, y0], uv: [0.0, 0.0] },
+        GradVertex { pos: [x1, y0], uv: [1.0, 0.0] },
+        GradVertex { pos: [x1, y1], uv: [1.0, 1.0] },
+        GradVertex { pos: [x0, y0], uv: [0.0, 0.0] },
+        GradVertex { pos: [x1, y1], uv: [1.0, 1.0] },
+        GradVertex { pos: [x0, y1], uv: [0.0, 1.0] },
+    ]);
+}
+
+/// CSS Images L3 §3.3 — resolve `GradientStop` positions to normalized [0,1].
+///
+/// CSS spec: if first/last stop position is unspecified, default to 0/100%.
+/// Runs of unspecified positions between explicit ones are evenly distributed.
+/// `line_len`: pixel length of gradient line (for `Length::Px` stops).
+fn resolve_gradient_stops(stops: &[GradientStop], line_len: f32) -> Vec<(f32, [f32; 4])> {
+    if stops.is_empty() {
+        return vec![];
+    }
+    let n = stops.len();
+    let mut positions: Vec<Option<f32>> = stops
+        .iter()
+        .map(|s| {
+            s.position.as_ref().map(|l| match l {
+                Length::Percent(p) => p / 100.0,
+                Length::Px(v) if line_len > 0.0 => v / line_len,
+                _ => 0.0,
+            })
+        })
+        .collect();
+    if positions[0].is_none() {
+        positions[0] = Some(0.0);
+    }
+    if positions[n - 1].is_none() {
+        positions[n - 1] = Some(1.0);
+    }
+    // Distribute runs of None between two explicit positions.
+    let mut i = 0;
+    while i < n {
+        if positions[i].is_some() {
+            i += 1;
+            continue;
+        }
+        let lo_i = i - 1;
+        let lo_pos = positions[lo_i].unwrap_or(0.0);
+        let mut hi_i = i + 1;
+        while hi_i < n && positions[hi_i].is_none() {
+            hi_i += 1;
+        }
+        let hi_pos = positions[hi_i.min(n - 1)].unwrap_or(1.0);
+        let gap = (hi_i - lo_i) as f32;
+        for (offset, pos) in positions[i..hi_i].iter_mut().enumerate() {
+            let t = (i + offset - lo_i) as f32 / gap;
+            *pos = Some(lo_pos + (hi_pos - lo_pos) * t);
+        }
+        i = hi_i;
+    }
+    stops
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            let pos = positions[i].unwrap_or(0.0);
+            let c = s.color;
+            let col = [
+                c.r as f32 / 255.0,
+                c.g as f32 / 255.0,
+                c.b as f32 / 255.0,
+                c.a as f32 / 255.0,
+            ];
+            (pos, col)
+        })
+        .collect()
+}
+
+/// CSS Images L3 §3.4 — compute linear gradient line endpoints in UV [0,1] space.
+///
+/// Returns (start_uv, end_uv) such that `t = dot(uv-start, end-start)/|end-start|²`
+/// gives t=0 at the start-color edge and t=1 at the end-color edge.
+///
+/// CSS angle convention: 0° = "to top", 90° = "to right", 180° = "to bottom".
+/// Box dimensions `w`×`h` in CSS pixels.
+fn linear_gradient_uv_endpoints(w: f32, h: f32, angle_deg: f32) -> ([f32; 2], [f32; 2]) {
+    if w <= 0.0 || h <= 0.0 {
+        return ([0.0, 0.5], [1.0, 0.5]);
+    }
+    let theta = angle_deg.to_radians();
+    let dx = theta.sin();
+    let dy = -theta.cos(); // negative because CSS y grows down
+    let half_len = (w * dx.abs() + h * dy.abs()) / 2.0;
+    if half_len < 1e-6 {
+        return ([0.5, 0.5], [0.5, 0.5]);
+    }
+    let cx = w / 2.0;
+    let cy = h / 2.0;
+    let sx = (cx - dx * half_len) / w;
+    let sy = (cy - dy * half_len) / h;
+    let ex = (cx + dx * half_len) / w;
+    let ey = (cy + dy * half_len) / h;
+    ([sx, sy], [ex, ey])
+}
+
+/// CSS Images L3 §3.5 — compute radial gradient center + semi-axes in UV [0,1] space.
+///
+/// Returns (center_uv, semi_axes_uv) where semi-axes are "farthest-corner" sized:
+/// rx = max(cx_frac, 1-cx_frac), ry = max(cy_frac, 1-cy_frac).
+fn radial_gradient_uv_params(cx_pct: f32, cy_pct: f32) -> ([f32; 2], [f32; 2]) {
+    let rx = cx_pct.max(1.0 - cx_pct).max(1e-6);
+    let ry = cy_pct.max(1.0 - cy_pct).max(1e-6);
+    ([cx_pct, cy_pct], [rx, ry])
+}
+
+/// Build a `GradParamsCpu` uniform from resolved stops + pre-computed UV params.
+fn build_grad_params(
+    resolved: &[(f32, [f32; 4])],
+    p0: [f32; 2],
+    p1: [f32; 2],
+    kind: u32,
+    repeating: bool,
+) -> GradParamsCpu {
+    let n = resolved.len().min(16);
+    let zero_stop = GradStopCpu { color: [0.0; 4], pos: 0.0, _p0: 0.0, _p1: 0.0, _p2: 0.0 };
+    let mut stops = [zero_stop; 16];
+    for (i, &(pos, col)) in resolved.iter().take(16).enumerate() {
+        stops[i] = GradStopCpu { color: col, pos, _p0: 0.0, _p1: 0.0, _p2: 0.0 };
+    }
+    GradParamsCpu {
+        p0,
+        p1,
+        n_stops: n as u32,
+        kind,
+        repeating: if repeating { 1 } else { 0 },
+        _pad: 0,
+        stops,
     }
 }
 
