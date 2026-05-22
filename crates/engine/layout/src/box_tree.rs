@@ -2284,10 +2284,33 @@ fn lay_out_grid(
     // Pass 1: items with fully explicit placements.
     for (k, &i) in item_idxs.iter().enumerate() {
         let is = &children[i].style;
-        let cs = resolve_grid_line(&is.grid_column_start, n_explicit_cols as u32);
-        let ce = resolve_grid_line_end(&is.grid_column_end, cs, n_explicit_cols as u32);
-        let rs = resolve_grid_line(&is.grid_row_start, 0);
-        let re = resolve_grid_line_end(&is.grid_row_end, rs, 0);
+
+        // Resolve named area references first (grid-area: <name> shorthand or
+        // individual grid-{row,column}-{start,end}: <name> values).
+        let (named_cs, named_ce, named_rs, named_re) = {
+            let has_named = matches!(&is.grid_column_start, GridLine::Named(_))
+                || matches!(&is.grid_column_end, GridLine::Named(_))
+                || matches!(&is.grid_row_start, GridLine::Named(_))
+                || matches!(&is.grid_row_end, GridLine::Named(_));
+            if has_named && !s.grid_template_areas.is_empty() {
+                resolve_named_lines(
+                    &is.grid_column_start,
+                    &is.grid_column_end,
+                    &is.grid_row_start,
+                    &is.grid_row_end,
+                    &s.grid_template_areas,
+                )
+            } else {
+                (0, 0, 0, 0)
+            }
+        };
+
+        // For each axis: use resolved named value if non-zero, else fall back to
+        // the normal numeric/span resolver.
+        let cs = if named_cs != 0 { named_cs } else { resolve_grid_line(&is.grid_column_start, n_explicit_cols as u32) };
+        let ce = if named_ce != 0 { named_ce } else { resolve_grid_line_end(&is.grid_column_end, cs, n_explicit_cols as u32) };
+        let rs = if named_rs != 0 { named_rs } else { resolve_grid_line(&is.grid_row_start, 0) };
+        let re = if named_re != 0 { named_re } else { resolve_grid_line_end(&is.grid_row_end, rs, 0) };
 
         if cs != 0 && rs != 0 {
             // Fully explicit: both axes known.
@@ -2615,7 +2638,7 @@ fn grid_track<'a>(idx: u32, template: &'a [GridTrackSize], auto_track: &'a GridT
 /// Resolve a `GridLine` to a 1-based track number, or 0 if auto.
 fn resolve_grid_line(line: &GridLine, n_tracks: u32) -> u32 {
     match line {
-        GridLine::Auto => 0,
+        GridLine::Auto | GridLine::Named(_) => 0,
         GridLine::Line(n) => {
             if *n > 0 {
                 *n as u32
@@ -2633,7 +2656,7 @@ fn resolve_grid_line(line: &GridLine, n_tracks: u32) -> u32 {
 /// Resolve a grid-line end given start position and span.
 fn resolve_grid_line_end(line: &GridLine, start: u32, n_tracks: u32) -> u32 {
     match line {
-        GridLine::Auto => {
+        GridLine::Auto | GridLine::Named(_) => {
             if start > 0 { start + 1 } else { 0 }
         }
         GridLine::Line(n) => {
@@ -2650,6 +2673,77 @@ fn resolve_grid_line_end(line: &GridLine, start: u32, n_tracks: u32) -> u32 {
             if start > 0 { start + n } else { 0 }
         }
     }
+}
+
+/// CSS Grid L1 §7.3 — locate a named area in `grid-template-areas`.
+///
+/// Returns `(row_start, row_end, col_start, col_end)` as 1-based exclusive
+/// line numbers, or `None` if the name is not found. Handles rectangular
+/// area shapes only (CSS Grid L1 requires areas to be rectangular).
+fn find_named_area(areas: &[Vec<String>], name: &str) -> Option<(u32, u32, u32, u32)> {
+    let mut row_start: Option<u32> = None;
+    let mut row_end: Option<u32> = None;
+    let mut col_start: Option<u32> = None;
+    let mut col_end: Option<u32> = None;
+    for (r, row) in areas.iter().enumerate() {
+        for (c, cell) in row.iter().enumerate() {
+            if cell == name {
+                let rs = (r + 1) as u32;
+                let re = (r + 2) as u32;
+                let cs = (c + 1) as u32;
+                let ce = (c + 2) as u32;
+                row_start = Some(row_start.map_or(rs, |v: u32| v.min(rs)));
+                row_end   = Some(row_end.map_or(re,   |v: u32| v.max(re)));
+                col_start = Some(col_start.map_or(cs, |v: u32| v.min(cs)));
+                col_end   = Some(col_end.map_or(ce,   |v: u32| v.max(ce)));
+            }
+        }
+    }
+    Some((row_start?, row_end?, col_start?, col_end?))
+}
+
+/// Resolve named grid-line references for a single item against the
+/// container's `grid-template-areas`. Returns `(col_start, col_end, row_start, row_end)`.
+///
+/// When all four placement properties are `Named(same_name)` (set by
+/// `grid-area: <name>` shorthand), the area bounds are looked up once and
+/// applied to all four axes. Mixed named/unnamed configurations fall back
+/// to `Auto` (0) for any unresolved axis.
+fn resolve_named_lines(
+    col_start: &GridLine,
+    col_end: &GridLine,
+    row_start: &GridLine,
+    row_end: &GridLine,
+    areas: &[Vec<String>],
+) -> (u32, u32, u32, u32) {
+    // When grid-area: <name> sets all four to Named(name), resolve as one area.
+    if let (
+        GridLine::Named(n_cs),
+        GridLine::Named(n_ce),
+        GridLine::Named(n_rs),
+        GridLine::Named(n_re),
+    ) = (col_start, col_end, row_start, row_end)
+        && n_cs == n_ce
+        && n_ce == n_rs
+        && n_rs == n_re
+        && let Some((rs, re, cs, ce)) = find_named_area(areas, n_cs)
+    {
+        return (cs, ce, rs, re);
+    }
+    // Partial Named references: each axis resolved independently.
+    let cs = if let GridLine::Named(n) = col_start {
+        find_named_area(areas, n).map_or(0, |(_, _, cs, _)| cs)
+    } else { 0 };
+    let ce = if let GridLine::Named(n) = col_end {
+        find_named_area(areas, n).map_or(0, |(_, _, _, ce)| ce)
+    } else { 0 };
+    let rs = if let GridLine::Named(n) = row_start {
+        find_named_area(areas, n).map_or(0, |(rs, _, _, _)| rs)
+    } else { 0 };
+    let re = if let GridLine::Named(n) = row_end {
+        find_named_area(areas, n).map_or(0, |(_, re, _, _)| re)
+    } else { 0 };
+    (cs, ce, rs, re)
 }
 
 /// Strips U+00AD (soft hyphens) from a word and collects break positions

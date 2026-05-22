@@ -69,7 +69,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Pseudo-Elements L4 | [css-pseudo-4](https://www.w3.org/TR/css-pseudo-4/) | 🟡 | ::first-line/::first-letter split; ::marker; ::selection | **#16** |
 | CSS Images L3 | [css3-images](https://www.w3.org/TR/css3-images/) | 🟡 | conic-gradient(); multiple bg layers | **#17** |
 | CSS Images L4 | [css4-images](https://www.w3.org/TR/css4-images/) | ⬜ | image-set(), cross-fade() | **#18** |
-| CSS Grid L1 | [css-grid-1](https://www.w3.org/TR/css-grid-1/) | 🟡 | named areas (grid-template-areas); dense auto-flow | **#19** |
+| CSS Grid L1 | [css-grid-1](https://www.w3.org/TR/css-grid-1/) | 🟡 | grid-template-areas ✅ 2026-05-22; dense auto-flow ⬜ | **#19** |
 | CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading; font-optical-sizing | **#20** |
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | 🟡 | min-content / max-content / fit-content | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
@@ -461,7 +461,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `grid-template-columns` / `grid-template-rows` | 🟡 | px/fr/auto/repeat()/minmax() ✅ |
-| `grid-template-areas` | 🟡 | parsed; named area lookup not wired to placement |
+| `grid-template-areas` | ✅ | parsed + named area placement in lay_out_grid; GridLine::Named resolved |
 | `grid-template` / `grid` (super-shorthand) | 🟡 | |
 | `grid-auto-columns` / `grid-auto-rows` | 🟡 | |
 | `grid-auto-flow` | 🟡 | row/column ✅; dense ⬜ |
@@ -693,7 +693,7 @@ Ordered list of 🟡→✅ promotions for the P4 developer. One item = one featu
 | 16 | `::marker` rendering | S | float/list |
 | 17 | `conic-gradient()` | S | gradient renderer |
 | 18 | Multiple backgrounds | M | background layer stack |
-| 19 | `grid-template-areas` named placement | M | grid engine |
+| 19 | `grid-template-areas` named placement | ✅ | GridLine::Named + find_named_area + resolve_named_lines 2026-05-22 |
 | 20 | `@font-face` actual file loading | L | network/P3 |
 | 21 | `min-content` / `max-content` / `fit-content` | L | layout engine |
 | 22 | `overflow: scroll` scrollable containers | L | shell scroll |

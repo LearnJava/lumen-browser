@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 35 CSS Grid named areas</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #f7fafc; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
+
+    /* Layout: 2-column page layout via named areas */
+    .layout {
+      display: grid;
+      grid-template-columns: 200px 760px;
+      grid-template-rows: 60px 500px 60px;
+      grid-template-areas:
+        "header  header"
+        "sidebar main"
+        "footer  footer";
+      width: 960px;
+      gap: 4px;
+    }
+    .header  { grid-area: header;  background: #3182ce; }
+    .sidebar { grid-area: sidebar; background: #38a169; }
+    .main    { grid-area: main;    background: #e53e3e; }
+    .footer  { grid-area: footer;  background: #805ad5; }
+
+    /* Nested 3-area grid */
+    .mini-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr 1fr;
+      grid-template-rows: 40px 40px;
+      grid-template-areas: "a b c" "a d e";
+      width: 300px;
+      gap: 2px;
+      margin-top: 8px;
+    }
+    .mini-a { grid-area: a; background: #dd6b20; }
+    .mini-b { grid-area: b; background: #d53f8c; }
+    .mini-c { grid-area: c; background: #319795; }
+    .mini-d { grid-area: d; background: #2b6cb0; }
+    .mini-e { grid-area: e; background: #276749; }
+  </style>
+</head>
+<body>
+  <div class="__f">
+    <!-- Page layout with named areas -->
+    <div class="layout">
+      <div class="header"></div>
+      <div class="sidebar"></div>
+      <div class="main"></div>
+      <div class="footer"></div>
+    </div>
+    <!-- Small grid with a spanning area (a spans both rows) -->
+    <div class="mini-grid">
+      <div class="mini-a"></div>
+      <div class="mini-b"></div>
+      <div class="mini-c"></div>
+      <div class="mini-d"></div>
+      <div class="mini-e"></div>
+    </div>
+  </div>
+</body>
+</html>
