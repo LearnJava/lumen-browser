@@ -226,6 +226,9 @@ pub struct InlineSegment {
     pub img_src: Option<String>,
     /// Pre-computed pixel width for image segments (0.0 for text segments).
     pub img_width: f32,
+    /// True when this segment represents a forced line break (CSS §4.1: newline
+    /// in white-space: pre / pre-wrap text). `text` is empty in this case.
+    pub forced_break: bool,
 }
 
 /// Позиционированный текстовый фрагмент в строке (после layout).
@@ -505,6 +508,37 @@ fn collect_inline_segments(
     out: &mut Vec<InlineSegment>,
 ) {
     match &doc.get(id).data {
+        NodeData::Text(s) if inherited.white_space.preserves_whitespace() => {
+            // CSS Text L3 §4.1: white-space: pre/pre-wrap — preserve tabs and
+            // newlines. Split on \n to produce forced-break segments.
+            let style = inherited.clone();
+            for (i, line) in s.split('\n').enumerate() {
+                if i > 0 {
+                    out.push(InlineSegment {
+                        text: String::new(),
+                        style: style.clone(),
+                        pre_space: 0.0,
+                        post_space: 0.0,
+                        is_element_box: false,
+                        img_src: None,
+                        img_width: 0.0,
+                        forced_break: true,
+                    });
+                }
+                if !line.is_empty() {
+                    out.push(InlineSegment {
+                        text: line.to_string(),
+                        style: style.clone(),
+                        pre_space: 0.0,
+                        post_space: 0.0,
+                        is_element_box: false,
+                        img_src: None,
+                        img_width: 0.0,
+                        forced_break: false,
+                    });
+                }
+            }
+        }
         NodeData::Text(s) if !s.chars().all(char::is_whitespace) => {
             // text-transform применяется здесь, до wrapping и paint —
             // measurer считает ширину уже после преобразования.
@@ -517,6 +551,7 @@ fn collect_inline_segments(
                 is_element_box: false,
                 img_src: None,
                 img_width: 0.0,
+                forced_break: false,
             });
         }
         NodeData::Text(_) => {}
@@ -549,6 +584,7 @@ fn collect_inline_segments(
                     is_element_box: true,
                     img_src: Some(src.url),
                     img_width: w,
+                    forced_break: false,
                 });
                 return;
             }
@@ -670,6 +706,7 @@ fn content_to_inline_segments(style: &ComputedStyle) -> Vec<InlineSegment> {
         is_element_box: false,
         img_src: None,
         img_width: 0.0,
+        forced_break: false,
     }]
 }
 
@@ -1052,13 +1089,13 @@ fn lay_out(
             // white-space: nowrap → передаём «бесконечную» max_width в wrap,
             // чтобы перенос не сработал; остальная логика (letter-spacing,
             // word-spacing, объединение фрагментов) остаётся.
-            let wrap_width = if s.white_space == crate::style::WhiteSpace::Nowrap {
+            let wrap_width = if s.white_space.is_nowrap() {
                 f32::INFINITY
             } else {
                 content_width
             };
             let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport);
-            *lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp);
+            *lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space);
             align_lines(lines, content_width, s.text_align, s.direction);
             let line_h = s.font_size * s.line_height;
             apply_inline_vertical_align(lines, line_h);
@@ -2380,13 +2417,17 @@ fn strip_soft_hyphens(raw: &str) -> (String, Vec<usize>) {
 }
 
 /// Measures text width (letter_spacing applied between each character).
-fn measure_text_w(text: &str, font_size: f32, letter_spacing: f32, m: &dyn TextMeasurer) -> f32 {
+/// `tab_size` is used for `\t` characters; pass 0.0 when text contains no tabs.
+fn measure_text_w(text: &str, font_size: f32, letter_spacing: f32, tab_size: f32, m: &dyn TextMeasurer) -> f32 {
     if text.is_empty() {
         return 0.0;
     }
     let total: f32 = text
         .chars()
-        .map(|c| m.char_width(c, font_size) + letter_spacing)
+        .map(|c| {
+            let cw = if c == '\t' { tab_size } else { m.char_width(c, font_size) };
+            cw + letter_spacing
+        })
         .sum();
     total - letter_spacing
 }
@@ -2412,7 +2453,7 @@ fn try_hyp_break(
             continue;
         }
         let prefix = &display[..pos];
-        let prefix_w = measure_text_w(prefix, font_size, letter_spacing, m);
+        let prefix_w = measure_text_w(prefix, font_size, letter_spacing, 0.0, m);
         if prefix_w + hyphen_w <= available_w {
             let mut pfx = prefix.to_string();
             pfx.push('-');
@@ -2428,6 +2469,7 @@ fn try_hyp_break(
 /// Слова одного стиля на одной строке сливаются
 /// в один `InlineFrag`. Сегменты обрабатываются по одному, чтобы учитывать
 /// `pre_space` / `post_space` (inline box model: margin + border + padding).
+/// `white_space` controls whether whitespace is preserved (pre/pre-wrap).
 #[allow(clippy::too_many_arguments)]
 fn wrap_inline_run(
     segments: &[InlineSegment],
@@ -2438,6 +2480,7 @@ fn wrap_inline_run(
     m: &dyn TextMeasurer,
     hyphens: Hyphens,
     hp: &dyn HyphenationProvider,
+    white_space: crate::style::WhiteSpace,
 ) -> Vec<Vec<InlineFrag>> {
     let space_w = m.char_width(' ', container_font_size);
 
@@ -2447,6 +2490,42 @@ fn wrap_inline_run(
     let mut current_x = text_indent;
 
     for seg in segments {
+        // Forced line break from \n in white-space: pre/pre-wrap text.
+        if seg.forced_break {
+            result.push(std::mem::take(&mut current_line));
+            current_x = 0.0;
+            continue;
+        }
+
+        // Pre-mode: whitespace preserved, no word wrapping, tabs are tab_size wide.
+        if white_space.preserves_whitespace() {
+            if seg.text.is_empty() {
+                continue;
+            }
+            let style = &seg.style;
+            let em = style.font_size;
+            let ls = style.letter_spacing;
+            let tab_size = style.tab_size;
+            let pad_l = style.padding_left.resolve_or_zero(em, max_width, viewport);
+            let pad_r = style.padding_right.resolve_or_zero(em, max_width, viewport);
+            current_x += seg.pre_space;
+            let frag_x = current_x;
+            let frag_w = measure_text_w(&seg.text, em, ls, tab_size, m);
+            current_line.push(InlineFrag {
+                x: frag_x,
+                y_offset: 0.0,
+                width: frag_w,
+                text: seg.text.clone(),
+                style: style.clone(),
+                padding_left: pad_l,
+                padding_right: pad_r,
+                is_element_box: seg.is_element_box,
+                img_src: None,
+            });
+            current_x += frag_w + seg.post_space;
+            continue;
+        }
+
         // Image segments are fixed-width, non-breakable inline replaced elements.
         if let Some(img_src) = &seg.img_src {
             let img_w = seg.img_width;
@@ -2502,7 +2581,7 @@ fn wrap_inline_run(
             let pre = if is_seg_first { seg.pre_space } else { 0.0 };
             let post = if is_seg_last { seg.post_space } else { 0.0 };
 
-            let word_w = measure_text_w(&display_word, style.font_size, ls, m);
+            let word_w = measure_text_w(&display_word, style.font_size, ls, 0.0, m);
             let gap = if current_line.is_empty() { 0.0 } else { inter_word };
 
             // Wrap: слово не влезает (но первое слово строки добавляем всегда).
@@ -2527,7 +2606,7 @@ fn wrap_inline_run(
 
                 if let Some((pfx, sfx)) = hyph_result {
                     // Emit prefix (with trailing '-') to current line, then wrap.
-                    let pfx_w = measure_text_w(&pfx, style.font_size, ls, m);
+                    let pfx_w = measure_text_w(&pfx, style.font_size, ls, 0.0, m);
                     current_x += gap + pre;
                     current_line.push(InlineFrag {
                         x: current_x,
@@ -2543,7 +2622,7 @@ fn wrap_inline_run(
                     result.push(std::mem::take(&mut current_line));
                     current_x = 0.0;
                     // Emit suffix as first fragment on new line.
-                    let sfx_w = measure_text_w(&sfx, style.font_size, ls, m);
+                    let sfx_w = measure_text_w(&sfx, style.font_size, ls, 0.0, m);
                     current_line.push(InlineFrag {
                         x: 0.0,
                         y_offset: 0.0,
@@ -3017,7 +3096,7 @@ mod tests {
             fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
         }
         let m = ZeroMeasurer;
-        assert_eq!(super::measure_text_w("", 16.0, 0.0, &m), 0.0);
+        assert_eq!(super::measure_text_w("", 16.0, 0.0, 0.0, &m), 0.0);
     }
 
     #[test]
@@ -3027,7 +3106,7 @@ mod tests {
             fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
         }
         // 3 chars × 8px − 0 letter-spacing = 24px
-        let w = super::measure_text_w("abc", 16.0, 0.0, &Fixed8);
+        let w = super::measure_text_w("abc", 16.0, 0.0, 0.0, &Fixed8);
         assert_eq!(w, 24.0);
     }
 
@@ -3096,11 +3175,12 @@ mod tests {
             is_element_box: false,
             img_src: None,
             img_width: 0.0,
+            forced_break: false,
         };
 
         let m = Fixed10;
         let hp = NullHyphenationProvider;
-        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::Manual, &hp);
+        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::Manual, &hp, crate::style::WhiteSpace::Normal);
         assert_eq!(lines.len(), 2, "expected 2 lines, got {}", lines.len());
         // Line 1 has both "hi" and "hy-" merged or as separate frags.
         let line1_text: String = lines[0].iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join(" ");
@@ -3132,10 +3212,11 @@ mod tests {
             is_element_box: false,
             img_src: None,
             img_width: 0.0,
+            forced_break: false,
         };
         let m = Fixed10;
         let hp = NullHyphenationProvider;
-        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::None, &hp);
+        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::None, &hp, crate::style::WhiteSpace::Normal);
         assert_eq!(lines.len(), 2, "expected 2 lines, got {}", lines.len());
         // Line 1 has only "hi"; line 2 has "hyphen" (whole, no hyphen char).
         assert_eq!(lines[0].len(), 1);
