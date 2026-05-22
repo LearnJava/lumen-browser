@@ -1,6 +1,6 @@
-In progress: —
+In progress: ::before / ::after inline pseudo-elements in collect_inline_segments  branch: p1-pseudo-inline
 
-Next step: —
+Next step: modify collect_inline_segments in box_tree.rs:626 to inject pseudo-element segments  crates/engine/layout/src/box_tree.rs:626
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
