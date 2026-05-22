@@ -15,7 +15,8 @@ use lumen_layout::{
     GradientStop, ImageRendering, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent,
-    StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness, TextOverflow,
+    StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness,
+    TextEmphasisShape, TextEmphasisStyle, TextOverflow,
     Visibility,
 };
 
@@ -836,6 +837,72 @@ fn overflow_clips(o: Overflow) -> bool {
 /// prevents pixel bleed if the renderer's actual advance differs slightly.
 const ELLIPSIS_EM: f32 = 0.65;
 
+/// Returns the Unicode string for a CSS `text-emphasis-style` symbol.
+/// Returns empty string for `None`.
+fn emphasis_mark_str(style: &TextEmphasisStyle) -> &str {
+    match style {
+        TextEmphasisStyle::None => "",
+        TextEmphasisStyle::String(s) => s.as_str(),
+        TextEmphasisStyle::Symbol { filled, shape } => match (filled, shape) {
+            (true,  TextEmphasisShape::Dot)          => "\u{2022}", // •
+            (false, TextEmphasisShape::Dot)          => "\u{25E6}", // ◦
+            (true,  TextEmphasisShape::Circle)       => "\u{25CF}", // ●
+            (false, TextEmphasisShape::Circle)       => "\u{25CB}", // ○
+            (true,  TextEmphasisShape::DoubleCircle) => "\u{25C9}", // ◉
+            (false, TextEmphasisShape::DoubleCircle) => "\u{25CE}", // ◎
+            (true,  TextEmphasisShape::Triangle)     => "\u{25B2}", // ▲
+            (false, TextEmphasisShape::Triangle)     => "\u{25B3}", // △
+            (true,  TextEmphasisShape::Sesame)       => "\u{FE45}", // ﹅
+            (false, TextEmphasisShape::Sesame)       => "\u{FE46}", // ﹆
+        },
+    }
+}
+
+/// CSS Text Decoration L4 §5 — emits per-character emphasis marks above or
+/// below each grapheme cluster of `frag.text`.
+///
+/// Phase 0: distributes marks uniformly over the fragment width (no per-glyph
+/// advance measurement). Accurate spacing requires a measurer at paint time
+/// (deferred to Phase 1).
+fn emit_text_emphasis_marks(
+    out: &mut Vec<DisplayCommand>,
+    container_x: f32,
+    line_h: f32,
+    frag_y: f32,
+    frag: &InlineFrag,
+) {
+    let mark = emphasis_mark_str(&frag.style.text_emphasis_style);
+    if mark.is_empty() {
+        return;
+    }
+    let char_count = frag.text.chars().count();
+    if char_count == 0 {
+        return;
+    }
+    let mark_size = frag.style.font_size * 0.5;
+    let is_over = frag.style.text_emphasis_position.is_over();
+    let mark_y = if is_over {
+        frag_y - mark_size * 1.2
+    } else {
+        frag_y + line_h
+    };
+    let color = frag.style.text_emphasis_color.resolve(frag.style.color);
+    let char_w = frag.width / char_count as f32;
+    let frag_x = container_x + frag.x;
+    for i in 0..char_count {
+        out.push(DisplayCommand::DrawText {
+            rect: Rect::new(frag_x + i as f32 * char_w, mark_y, char_w, mark_size * 1.5),
+            text: mark.to_string(),
+            font_size: mark_size,
+            color,
+            font_family: frag.style.font_family.clone(),
+            font_weight: frag.style.font_weight,
+            font_style: frag.style.font_style,
+            font_variation_axes: vec![],
+        });
+    }
+}
+
 /// Emits shadow + DrawText + decorations for every visible frag in `line`.
 fn emit_text_frags(
     line: &[InlineFrag],
@@ -880,6 +947,7 @@ fn emit_text_frags(
                 .collect(),
         });
         push_text_decoration(out, container_x, frag_y, frag);
+        emit_text_emphasis_marks(out, container_x, line_h, frag_y, frag);
     }
 }
 
@@ -4987,5 +5055,94 @@ mod tests {
         let pop_tx = dl.iter().filter(|c| matches!(c, DisplayCommand::PopTransform)).count();
         assert_eq!(push_op, pop_op, "PushOpacity/PopOpacity must balance");
         assert_eq!(push_tx, pop_tx, "PushTransform/PopTransform must balance");
+    }
+
+    // ── text-emphasis rendering ───────────────────────────────────────────────
+
+    #[test]
+    fn text_emphasis_filled_circle_emits_marks_above_text() {
+        let dl = build(
+            "<p>ab</p>",
+            "p { text-emphasis-style: filled circle; font-size: 16px; }",
+        );
+        // Должен быть основной DrawText + 2 DrawText-а для marks (по одному на символ).
+        let texts: Vec<_> = dl
+            .iter()
+            .filter_map(|c| {
+                if let DisplayCommand::DrawText { text, .. } = c {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Два mark DrawText-а с символом ● (U+25CF).
+        let mark_count = texts.iter().filter(|&&t| t == "\u{25CF}").count();
+        assert_eq!(mark_count, 2, "по одному mark на каждый символ 'a' и 'b'");
+    }
+
+    #[test]
+    fn text_emphasis_none_emits_no_marks() {
+        let dl = build("<p>ab</p>", "p { font-size: 16px; }");
+        let texts: Vec<_> = dl
+            .iter()
+            .filter_map(|c| {
+                if let DisplayCommand::DrawText { text, .. } = c {
+                    Some(text.as_str())
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // Только один DrawText с "ab", никаких mark-ов.
+        assert_eq!(texts.len(), 1, "без text-emphasis — только основной DrawText");
+        assert_eq!(texts[0], "ab");
+    }
+
+    #[test]
+    fn text_emphasis_under_position_mark_below_text() {
+        let dl = build(
+            "<p>x</p>",
+            "p { text-emphasis-style: filled dot; text-emphasis-position: under right; font-size: 16px; }",
+        );
+        let rects: Vec<_> = dl
+            .iter()
+            .filter_map(|c| {
+                if let DisplayCommand::DrawText { rect, text, .. } = c {
+                    if text == "\u{2022}" { Some(*rect) } else { None }
+                } else {
+                    None
+                }
+            })
+            .collect();
+        assert_eq!(rects.len(), 1, "один mark для 'x'");
+        // Ищем основной DrawText для сравнения y.
+        let base_y = dl.iter().find_map(|c| {
+            if let DisplayCommand::DrawText { rect, text, .. } = c {
+                if text == "x" { Some(rect.y) } else { None }
+            } else {
+                None
+            }
+        });
+        if let Some(base_y) = base_y {
+            assert!(
+                rects[0].y > base_y,
+                "under mark должен быть ниже текста: mark_y={} base_y={}",
+                rects[0].y, base_y
+            );
+        }
+    }
+
+    #[test]
+    fn text_emphasis_custom_string_used_as_mark() {
+        let dl = build(
+            "<p>abc</p>",
+            "p { text-emphasis-style: \"*\"; font-size: 16px; }",
+        );
+        let mark_count = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "*"))
+            .count();
+        assert_eq!(mark_count, 3, "три символа → три mark '*'");
     }
 }
