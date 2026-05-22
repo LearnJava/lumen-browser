@@ -12,6 +12,7 @@
     python scripts/orchestrator.py P1 --max-tasks 3
     python scripts/orchestrator.py --stop P1       # мягкая остановка
     python scripts/orchestrator.py --stop-all      # остановить всех
+    python scripts/orchestrator.py --status        # статус всех
 """
 
 import argparse
@@ -51,6 +52,49 @@ def stop_file_path(developer: str) -> Path:
     return PROJECT_DIR / f".stop-{developer}"
 
 
+def jobstatus_path(developer: str) -> Path:
+    return PROJECT_DIR / f".jobstatus-{developer}"
+
+
+def set_jobstatus(developer: str, status: str, detail: str = ""):
+    """Записать текущий статус разработчика в файл."""
+    path = jobstatus_path(developer)
+    ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    lines = [f"status: {status}", f"updated: {ts}"]
+    if detail:
+        lines.append(f"detail: {detail}")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
+def show_status():
+    """Показать статус всех разработчиков."""
+    print("Статус разработчиков:")
+    print("-" * 50)
+    for dev in ["P1", "P2", "P3", "P4"]:
+        path = jobstatus_path(dev)
+        if not path.exists():
+            print(f"  {dev}: не запущен")
+        else:
+            content = path.read_text(encoding="utf-8")
+            status = ""
+            updated = ""
+            detail = ""
+            for line in content.splitlines():
+                if line.startswith("status:"):
+                    status = line.split(":", 1)[1].strip()
+                elif line.startswith("updated:"):
+                    updated = line.split(":", 1)[1].strip()
+                elif line.startswith("detail:"):
+                    detail = line.split(":", 1)[1].strip()
+            info = f"{status}"
+            if detail:
+                info += f" | {detail}"
+            if updated:
+                info += f" (обн. {updated})"
+            print(f"  {dev}: {info}")
+    print("-" * 50)
+
+
 def run_task_loop(developer: str, max_tasks: int = 0):
     """Цикл задач для одного разработчика."""
     stop_file = stop_file_path(developer)
@@ -59,6 +103,7 @@ def run_task_loop(developer: str, max_tasks: int = 0):
     log(developer, f"Старт. Проект: {PROJECT_DIR}")
     log(developer, f"Стоп-файл: {stop_file}")
     log(developer, "")
+    set_jobstatus(developer, "запущен")
 
     while True:
         # Проверка стоп-файла
@@ -79,6 +124,7 @@ def run_task_loop(developer: str, max_tasks: int = 0):
 
         task_count += 1
         log(developer, f"=== Задача #{task_count} ===")
+        set_jobstatus(developer, "работает", f"задача #{task_count}")
 
         prompt = (
             f"Ты разработчик {developer}. "
@@ -108,6 +154,7 @@ def run_task_loop(developer: str, max_tasks: int = 0):
         else:
             log(developer, f"Задача #{task_count} завершена.")
 
+    set_jobstatus(developer, "остановлен", f"выполнено задач: {task_count}")
     log(developer, f"Цикл завершён. Выполнено задач: {task_count}.")
 
 
@@ -148,8 +195,18 @@ def main():
         action="store_true",
         help="Остановить всех разработчиков",
     )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Показать статус всех разработчиков",
+    )
 
     args = parser.parse_args()
+
+    # Режим статуса
+    if args.status:
+        show_status()
+        return
 
     # Режим остановки
     if args.stop_all:
