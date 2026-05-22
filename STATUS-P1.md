@@ -1,6 +1,6 @@
-In progress: —
+In progress: Shadow DOM cascade + composed tree  branch: shadow-dom
 
-Next step: —
+Next step: добавить ShadowRoot в NodeData, attach_shadow API, FlatTree  dom/src/lib.rs:52
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -8,7 +8,7 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   the call site and add a line to STATUS-P4.md "Needs wiring".
 
 Next:
-Shadow DOM cascade + composed tree                           ~3h
+(взято в работу)
 
 Queue (Wave 3+):
 (все основные layout-задачи выполнены)
