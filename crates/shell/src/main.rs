@@ -511,6 +511,9 @@ struct LoadedPage {
     images: Vec<(String, lumen_image::Image)>,
     /// Layout-дерево страницы — используется animation scheduler-ом.
     layout_box: lumen_layout::LayoutBox,
+    /// Провайдер шрифтов с @font-face URL-источниками страницы.
+    /// Передаётся рендеру через `set_font_provider` при apply_loaded_page.
+    font_registry: Arc<dyn lumen_core::FontProvider>,
 }
 
 impl LoadedPage {
@@ -526,6 +529,7 @@ impl LoadedPage {
                 kind: lumen_layout::BoxKind::Block,
                 children: Vec::new(),
             },
+            font_registry: Arc::new(lumen_font::SystemFontIndex::new()),
         }
     }
 }
@@ -870,6 +874,8 @@ struct ParsedPage {
     preload_hints: Vec<lumen_html_parser::PreloadHint>,
     /// Decoded UTF-8 HTML source — stored for bfcache snapshot.
     html_source: String,
+    /// @font-face URL-шрифты + системные шрифты. Передаётся рендеру.
+    font_registry: Arc<dyn lumen_core::FontProvider>,
 }
 
 /// Источник для повторного layout без повторной загрузки/парсинга.
@@ -928,6 +934,11 @@ fn parse_and_layout(
 
     let sheet = lumen_css_parser::parse(&css);
 
+    // @font-face: загружаем url()-источники до layout.
+    // CSS: @font-face multi-font TextMeasurer — P1 нужно поддержать font-family в layout
+    let font_registry = load_font_faces(&sheet.font_faces, base, sink);
+    let font_provider: Arc<dyn lumen_core::FontProvider> = Arc::new(font_registry);
+
     let font = lumen_font::Font::parse(INTER_FONT)
         .map_err(|e| format!("ошибка разбора шрифта: {e}"))?;
     let measurer = lumen_paint::FontMeasurer::new(&font)
@@ -954,6 +965,7 @@ fn parse_and_layout(
         images,
         preload_hints,
         html_source: source,
+        font_registry: font_provider,
     })
 }
 
@@ -991,6 +1003,91 @@ fn fetch_and_decode_background_images(
         out.push((url, image));
     }
     out
+}
+
+/// Загружает шрифты из @font-face правил таблицы стилей в `FontRegistry`.
+///
+/// Для каждого `FontFaceRule` перебирает `src:` источники в порядке (CSS §4.1:
+/// первый успешный wins). `local()` пропускается — `SystemFontIndex` уже
+/// покрывает системные шрифты. `url()` загружается так же, как изображения.
+/// WOFF/WOFF2 прозрачно декодируются в sfnt перед регистрацией.
+///
+/// Ошибки загрузки/декодирования отдельных источников не фатальны: пишутся в
+/// stderr и переходим к следующему источнику.
+fn load_font_faces(
+    font_faces: &[lumen_css_parser::FontFaceRule],
+    base: &ResourceBase,
+    sink: &Arc<dyn EventSink>,
+) -> lumen_font::FontRegistry {
+    use lumen_css_parser::FontFaceSourceKind;
+    use lumen_core::FontStyle;
+
+    let registry = lumen_font::FontRegistry::new();
+
+    for rule in font_faces {
+        if rule.family.is_empty() || rule.sources.is_empty() {
+            continue;
+        }
+
+        let weight = parse_font_weight(rule.weight.as_deref());
+        let style = rule
+            .style
+            .as_deref()
+            .and_then(FontStyle::parse_keyword)
+            .unwrap_or(FontStyle::Normal);
+
+        for src in &rule.sources {
+            if src.kind == FontFaceSourceKind::Local {
+                continue;
+            }
+
+            let raw = match fetch_image_bytes(&src.value, base, sink) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("@font-face «{}»: не загружен {}: {e}", rule.family, src.value);
+                    continue;
+                }
+            };
+
+            let bytes = match lumen_font::maybe_decode_font(&raw) {
+                Ok(Some(decoded)) => decoded,
+                Ok(None) => raw,
+                Err(e) => {
+                    eprintln!("@font-face «{}»: не декодирован WOFF: {e}", rule.family);
+                    continue;
+                }
+            };
+
+            if lumen_font::Font::parse(&bytes).is_err() {
+                eprintln!("@font-face «{}»: невалидный шрифт {}", rule.family, src.value);
+                continue;
+            }
+
+            eprintln!(
+                "@font-face загружен: «{}» weight={} src={}",
+                rule.family, weight, src.value
+            );
+            registry.register_from_bytes(&rule.family, weight, style, bytes);
+            break;
+        }
+    }
+
+    registry
+}
+
+/// Парсит `font-weight` дескриптор @font-face: ключевые слова + числа.
+/// Диапазоны (`400 700`) — берём первое значение. Default: 400.
+fn parse_font_weight(s: Option<&str>) -> u16 {
+    let Some(s) = s else { return 400 };
+    match s.trim() {
+        "normal" => 400,
+        "bold" => 700,
+        other => other
+            .split_ascii_whitespace()
+            .next()
+            .and_then(|n| n.parse().ok())
+            .unwrap_or(400),
+    }
 }
 
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
@@ -1032,6 +1129,7 @@ fn render_bytes(
             title: parsed.title,
             images: parsed.images,
             layout_box,
+            font_registry: parsed.font_registry,
         },
         layout_source,
     ))
@@ -1595,6 +1693,7 @@ impl Lumen {
         self.momentum_anim = None;
         self.touchpad_vel = (0.0, 0.0);
         if let Some(r) = self.renderer.as_mut() {
+            r.set_font_provider(Some(page.font_registry.clone()));
             r.clear_images();
             for (src, image) in &page.images {
                 if let Err(err) = r.register_image(src.clone(), image) {
@@ -2693,7 +2792,9 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushTransform { .. }
             | DisplayCommand::PopTransform
             | DisplayCommand::PopMask
-            | DisplayCommand::DrawLayerSnapshot { .. } => continue,
+            | DisplayCommand::DrawLayerSnapshot { .. }
+            | DisplayCommand::PushFilter { .. }
+            | DisplayCommand::PopFilter => continue,
         };
         let bottom = r.y + r.height;
         if bottom > max_y {
@@ -2730,7 +2831,9 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushTransform { .. }
             | DisplayCommand::PopTransform
             | DisplayCommand::PopMask
-            | DisplayCommand::DrawLayerSnapshot { .. } => continue,
+            | DisplayCommand::DrawLayerSnapshot { .. }
+            | DisplayCommand::PushFilter { .. }
+            | DisplayCommand::PopFilter => continue,
         };
         let right = r.x + r.width;
         if right > max_x {

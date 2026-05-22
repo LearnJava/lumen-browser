@@ -10,7 +10,10 @@ Role: P4 owns ALL CSS work. P1/P2/P3 do not write CSS properties.
 Full property roadmap and work queue — CSS-SPECS.md (P4 Priority Queue section).
 
 Needs wiring (algorithm ready, CSS not connected):
-  — (empty — add here when P1/P2/P3 ship a new algorithm stub)
+  — @font-face registry wired in shell (branch: font-face-loading).
+    P4 task: wire font-weight/font-style/font-stretch descriptors from
+    FontFaceRule into FontRegistry::register_from_bytes calls.
+    CSS: @font-face unicode-range, font-display — P4 deferred.
 
 Coordination rules:
   — Before touching style.rs: check STATUS-P1.md, avoid same property area

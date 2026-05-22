@@ -9,7 +9,7 @@
 //! реализации, а не от всех альтернатив.
 
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::error::Result;
 use crate::event::Event;
@@ -370,6 +370,15 @@ pub trait FontProvider: Send + Sync {
     fn pick_face(&self, family: &str, weight: u16, style: FontStyle) -> Option<FaceRecord> {
         let faces = self.lookup_faces(family);
         match_face(&faces, weight, style).cloned()
+    }
+
+    /// Байты шрифта для face-а по виртуальному пути.
+    ///
+    /// Реализации, которые хранят шрифты в памяти (@font-face из URL),
+    /// возвращают `Some(bytes)` — рендер минует `fs::read`. Default → None:
+    /// рендер тогда читает через `std::fs::read(&rec.path)`.
+    fn read_face_bytes(&self, _path: &Path) -> Option<Vec<u8>> {
+        None
     }
 }
 
