@@ -260,7 +260,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `:target` | ⬜ | fragment navigation |
 | `:enabled`, `:disabled`, `:checked` | 🟡 | parsed; form state ⬜ |
 | `:is(S)`, `:where(S)`, `:has(S)` | 🟡 | Selectors L4; matching ⬜ |
-| `::before`, `::after` | 🟡 | block-level ✅; inline ⬜ |
+| `::before`, `::after` | ✅ | block-level ✅; inline ✅ (display:inline/inline-block in IFC) |
 | `::first-line`, `::first-letter` | ⬜ | Pseudo-Elements L4 |
 | `::marker`, `::placeholder`, `::selection` | ⬜ | Pseudo-Elements L4 |
 | `:nth-child(An+B of S)` | ⬜ | Selectors L5 |
@@ -434,7 +434,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Element | Status | Notes |
 |---------|--------|-------|
-| `::before` / `::after` | 🟡 | block-level generation ✅; inline ⬜ |
+| `::before` / `::after` | ✅ | block-level generation ✅; inline ✅ |
 | `::first-line` / `::first-letter` | ⬜ | line split required |
 | `::marker` | ⬜ | list marker box |
 | `::placeholder` | ⬜ | input placeholder |
