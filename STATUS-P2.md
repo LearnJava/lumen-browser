@@ -1,7 +1,7 @@
-In progress: BUG-017+018 text-decoration-style+color закрыты  branch: bug-017-018-decoration
+In progress: BUG-032 area averaging для downscale  branch: bug-032-mipmap
+Next step: resize_area_avg в image/src/lib.rs, заменить resize_bilinear в renderer.rs
 
 Next (Wave 1):
-BUG-032      mipmap for large downscale       renderer.rs                  ~2h
 
 Next (Wave 2, after P4 finishes @font-face parse):
 @font-face loading: fetch URL + font register font/ + shell                ~3h  depends on P4 @font-face

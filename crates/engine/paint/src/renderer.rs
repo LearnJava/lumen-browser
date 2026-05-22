@@ -34,7 +34,7 @@ use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
 use crate::display_list::{fit_image_quad, fit_image_rect, BlendMode};
-use lumen_image::resize_bilinear;
+use lumen_image::{resize_area_avg, resize_bilinear};
 use crate::DisplayCommand;
 
 /// Размер атласа в пикселях (квадратный). Поднят с 512 до 1024 под
@@ -1699,7 +1699,11 @@ impl Renderer {
             if !self.images.contains_key(&gpu_key)
                 && let Some(raw) = self.raw_images.get(src).cloned()
             {
-                let resized = resize_bilinear(&raw, tw, th);
+                let resized = if tw <= raw.width && th <= raw.height {
+                    resize_area_avg(&raw, tw, th)
+                } else {
+                    resize_bilinear(&raw, tw, th)
+                };
                 let rgba = convert_to_rgba(&resized);
                 let gi = self.make_gpu_image_entry(&rgba, tw, th);
                 self.images.insert(gpu_key, gi);
