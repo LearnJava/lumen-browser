@@ -20,8 +20,8 @@ use crate::style::{
     apply_container_rules, compute_pseudo_element_style, compute_style, AlignValue,
     BackgroundImage, BoxSizing, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap,
-    GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, Overflow, Position,
-    TextAlign, TextOverflow, VerticalAlign,
+    GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition,
+    ListStyleType, Overflow, Position, TextAlign, TextOverflow, VerticalAlign,
 };
 use crate::TextMeasurer;
 
@@ -297,6 +297,14 @@ pub enum BoxKind {
     InlineSpace,
     /// Не участвует в layout (whitespace, комментарий, doctype, display:none).
     Skip,
+    /// CSS Lists L3 §2.1 — `::marker` pseudo-element for `display: list-item`.
+    /// `text` — marker string (•, 1., a., …), `position` — inside/outside flow.
+    /// For `outside` (default) positioned left of the principal block, out of flow.
+    /// CSS: list-style-type, list-style-image
+    Marker {
+        text: String,
+        position: ListStylePosition,
+    },
 }
 
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
@@ -673,6 +681,103 @@ fn content_to_inline_segments(style: &ComputedStyle) -> Vec<InlineSegment> {
     }]
 }
 
+/// CSS Lists L3 §2.1 — ordinal of a `<li>` among its element siblings (1-based).
+fn li_ordinal(doc: &Document, id: NodeId) -> u32 {
+    let Some(parent_id) = doc.get(id).parent else { return 1 };
+    let mut n = 0u32;
+    for &sib in &doc.get(parent_id).children.clone() {
+        if matches!(&doc.get(sib).data, NodeData::Element { name, .. } if name.local.as_str() == "li") {
+            n += 1;
+            if sib == id {
+                return n;
+            }
+        }
+    }
+    1
+}
+
+fn to_roman(n: u32, upper: bool) -> String {
+    const VALS: &[(u32, &str, &str)] = &[
+        (1000, "M", "m"), (900, "CM", "cm"), (500, "D", "d"), (400, "CD", "cd"),
+        (100, "C", "c"), (90, "XC", "xc"), (50, "L", "l"), (40, "XL", "xl"),
+        (10, "X", "x"), (9, "IX", "ix"), (5, "V", "v"), (4, "IV", "iv"), (1, "I", "i"),
+    ];
+    if n == 0 { return "0".to_string(); }
+    let mut out = String::new();
+    let mut rem = n;
+    for &(val, up, lo) in VALS {
+        while rem >= val {
+            out.push_str(if upper { up } else { lo });
+            rem -= val;
+        }
+    }
+    out
+}
+
+fn to_alpha(n: u32, upper: bool) -> String {
+    if n == 0 { return "0".to_string(); }
+    let base = if upper { b'A' } else { b'a' };
+    let mut out = String::new();
+    let mut rem = n;
+    while rem > 0 {
+        rem -= 1;
+        out.insert(0, (base + (rem % 26) as u8) as char);
+        rem /= 26;
+    }
+    out
+}
+
+fn to_greek(n: u32) -> String {
+    const GREEK: &[char] = &['α','β','γ','δ','ε','ζ','η','θ','ι','κ','λ','μ',
+                              'ν','ξ','ο','π','ρ','σ','τ','υ','φ','χ','ψ','ω'];
+    if n == 0 { return "0".to_string(); }
+    let idx = ((n - 1) as usize) % GREEK.len();
+    GREEK[idx].to_string()
+}
+
+/// CSS Lists L3 §2.1 — builds the marker string from `list-style-type` + ordinal.
+/// CSS: list-style-type, @counter-style — P4 extends with custom counter styles.
+fn marker_text(lst: ListStyleType, ordinal: u32) -> String {
+    match lst {
+        ListStyleType::None => String::new(),
+        ListStyleType::Disc   => "\u{2022} ".to_string(),
+        ListStyleType::Circle => "\u{25e6} ".to_string(),
+        ListStyleType::Square => "\u{25aa} ".to_string(),
+        ListStyleType::Decimal            => format!("{}. ", ordinal),
+        ListStyleType::DecimalLeadingZero => format!("{:02}. ", ordinal),
+        ListStyleType::LowerRoman => format!("{}. ", to_roman(ordinal, false)),
+        ListStyleType::UpperRoman => format!("{}. ", to_roman(ordinal, true)),
+        ListStyleType::LowerAlpha => format!("{}. ", to_alpha(ordinal, false)),
+        ListStyleType::UpperAlpha => format!("{}. ", to_alpha(ordinal, true)),
+        ListStyleType::LowerGreek => format!("{}. ", to_greek(ordinal)),
+    }
+}
+
+/// CSS Lists L3 §2.1 — creates `BoxKind::Marker` and prepends to children.
+/// Does nothing when `list-style-type: none` or `list-style-image` is set (P4).
+fn inject_marker(parent_id: NodeId, children: &mut Vec<LayoutBox>, style: &ComputedStyle, ordinal: u32) {
+    if matches!(style.list_style_type, ListStyleType::None) {
+        return;
+    }
+    // CSS: list-style-image — P4 wires image markers.
+    let text = marker_text(style.list_style_type, ordinal);
+    let mut ms = ComputedStyle::root();
+    ms.font_size    = style.font_size;
+    ms.font_weight  = style.font_weight;
+    ms.font_style   = style.font_style;
+    ms.font_family  = style.font_family.clone();
+    ms.line_height  = style.line_height;
+    ms.color        = style.color;
+    ms.display      = Display::Inline;
+    children.insert(0, LayoutBox {
+        node:     parent_id,
+        rect:     Rect::ZERO,
+        style:    ms,
+        kind:     BoxKind::Marker { text, position: style.list_style_position },
+        children: vec![],
+    });
+}
+
 fn build_box(
     doc: &Document,
     sheet: &Stylesheet,
@@ -843,6 +948,12 @@ fn build_box(
                 compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport);
             inject_pseudo(id, &mut children, before_ps, true);
             inject_pseudo(id, &mut children, after_ps, false);
+            // CSS Lists L3 §2.1 — inject ::marker for list items.
+            // ::marker comes before ::before in document order.
+            if style.display == Display::ListItem {
+                let ordinal = li_ordinal(doc, id);
+                inject_marker(id, &mut children, &style, ordinal);
+            }
         }
         } // end else (non-item-container)
     }
@@ -1173,6 +1284,25 @@ fn lay_out(
                         abs_deferred.push((i, content_x, child_y));
                         continue;
                     }
+                    // CSS Lists L3 §2.4 — position ::marker outside or inside principal block.
+                    if matches!(&child.kind, BoxKind::Marker { .. }) {
+                        let (position, em, lh) = if let BoxKind::Marker { position, .. } = &child.kind {
+                            (*position, child.style.font_size, child.style.line_height)
+                        } else { unreachable!() };
+                        let line_h = em * lh;
+                        let marker_w = em * 1.5; // CSS: list-style-type determines exact width
+                        match position {
+                            ListStylePosition::Outside => {
+                                // Out of flow: does not advance child_y.
+                                child.rect = Rect::new(content_x - marker_w, child_y, marker_w, line_h);
+                            }
+                            ListStylePosition::Inside => {
+                                child.rect = Rect::new(content_x, child_y, marker_w, line_h);
+                                child_y += line_h;
+                            }
+                        }
+                        continue;
+                    }
                     lay_out(child, content_x, child_y, content_width, children_available_height, measurer, viewport, children_pcb, hp);
                     if matches!(child.kind, BoxKind::Skip) {
                         continue;
@@ -1350,6 +1480,9 @@ fn lay_out(
         BoxKind::InlineRun { .. } => unreachable!(),
         BoxKind::InlineSpace => unreachable!(),
         BoxKind::Skip => unreachable!(),
+        BoxKind::Marker { .. } => {
+            // Rect is set by the parent's block-flow loop; nothing to do here.
+        }
     }
 
     // CSS Positioned Layout L3 §4 — абсолютное / фиксированное позиционирование.

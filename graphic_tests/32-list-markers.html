@@ -1,0 +1,122 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f {
+    background: #1a1a2e;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 30px 60px;
+    overflow: hidden;
+  }
+  /* Row container */
+  .row { display: flex; margin-bottom: 24px; }
+  .col { flex: 1; padding-right: 20px; }
+  .label {
+    color: #888;
+    font-size: 13px;
+    margin-bottom: 6px;
+    font-family: monospace;
+  }
+  /* List reset — no UA stylesheet in Lumen, set explicitly */
+  ul, ol {
+    padding-left: 32px;
+    list-style-type: disc;
+  }
+  ul.circle  { list-style-type: circle; }
+  ul.square  { list-style-type: square; }
+  ol.decimal { list-style-type: decimal; }
+  ol.lower-alpha { list-style-type: lower-alpha; }
+  ol.lower-roman { list-style-type: lower-roman; }
+  li {
+    color: #e0e0e0;
+    font-size: 16px;
+    line-height: 1.4;
+    background: #16213e;
+    margin-bottom: 2px;
+    padding: 2px 4px;
+  }
+  /* Inside position demo */
+  ul.inside {
+    list-style-position: inside;
+    padding-left: 0;
+  }
+  ul.inside li { background: #0f3460; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="row">
+    <div class="col">
+      <div class="label">disc (default)</div>
+      <ul>
+        <li>Alpha</li>
+        <li>Beta</li>
+        <li>Gamma</li>
+      </ul>
+    </div>
+    <div class="col">
+      <div class="label">circle</div>
+      <ul class="circle">
+        <li>Delta</li>
+        <li>Epsilon</li>
+        <li>Zeta</li>
+      </ul>
+    </div>
+    <div class="col">
+      <div class="label">square</div>
+      <ul class="square">
+        <li>Eta</li>
+        <li>Theta</li>
+        <li>Iota</li>
+      </ul>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col">
+      <div class="label">decimal</div>
+      <ol class="decimal">
+        <li>One</li>
+        <li>Two</li>
+        <li>Three</li>
+      </ol>
+    </div>
+    <div class="col">
+      <div class="label">lower-alpha</div>
+      <ol class="lower-alpha">
+        <li>Apple</li>
+        <li>Banana</li>
+        <li>Cherry</li>
+      </ol>
+    </div>
+    <div class="col">
+      <div class="label">lower-roman</div>
+      <ol class="lower-roman">
+        <li>Uno</li>
+        <li>Dos</li>
+        <li>Tres</li>
+      </ol>
+    </div>
+  </div>
+  <div class="row">
+    <div class="col">
+      <div class="label">inside (marker in flow)</div>
+      <ul class="inside">
+        <li>First inside</li>
+        <li>Second inside</li>
+      </ul>
+    </div>
+    <div class="col">
+      <div class="label">list-style-type: none</div>
+      <ul style="list-style-type: none; padding-left: 0;">
+        <li>No bullet A</li>
+        <li>No bullet B</li>
+      </ul>
+    </div>
+  </div>
+</div>
+</body>
+</html>

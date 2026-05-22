@@ -1730,6 +1730,23 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             emit_inline_run(b, lines, out);
         }
         BoxKind::InlineBlockRow | BoxKind::InlineSpace => {}
+        BoxKind::Marker { text, .. } => {
+            // CSS: list-style-type, list-style-image — P4 wires marker visual style.
+            if !text.is_empty() && is_paint_visible(b) {
+                let s = &b.style;
+                out.push(DisplayCommand::DrawText {
+                    rect: b.rect,
+                    text: text.clone(),
+                    font_size: s.font_size,
+                    color: s.color,
+                    font_family: s.font_family.clone(),
+                    font_weight: s.font_weight,
+                    font_style: s.font_style,
+                    font_variation_axes: s.font_variation_settings
+                        .iter().map(|a| (a.tag, a.value)).collect(),
+                });
+            }
+        }
         BoxKind::FormControl { .. } => {
             if !is_paint_visible(b) {
                 return;
@@ -2005,6 +2022,23 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             }
         }
         BoxKind::InlineSpace => {}
+        BoxKind::Marker { text, .. } => {
+            // CSS: list-style-type, list-style-image — P4 wires marker visual style.
+            if !text.is_empty() && is_paint_visible(b) {
+                let s = &b.style;
+                out.push(DisplayCommand::DrawText {
+                    rect: b.rect,
+                    text: text.clone(),
+                    font_size: s.font_size,
+                    color: s.color,
+                    font_family: s.font_family.clone(),
+                    font_weight: s.font_weight,
+                    font_style: s.font_style,
+                    font_variation_axes: s.font_variation_settings
+                        .iter().map(|a| (a.tag, a.value)).collect(),
+                });
+            }
+        }
         BoxKind::InlineRun { lines, .. } => {
             emit_inline_run(b, lines, out);
         }
