@@ -1,11 +1,8 @@
-In progress: BUG-032 area averaging для downscale  branch: bug-032-mipmap
-Next step: resize_area_avg в image/src/lib.rs, заменить resize_bilinear в renderer.rs
+In progress: CSS filter pipeline (blur, grayscale, etc.)  branch: css-filter-pipeline
+Next step: filter: blur() → Gaussian на CPU в image/  renderer.rs
 
-Next (Wave 1):
-
-Next (Wave 2, after P4 finishes @font-face parse):
+Next (Wave 2):
 @font-face loading: fetch URL + font register font/ + shell                ~3h  depends on P4 @font-face
-CSS filter pipeline (blur, grayscale, etc.)   renderer.rs                  ~2h
 mix-blend-mode wgpu blend states              renderer.rs                  ~2h
 
 Queue (Wave 3+):
@@ -16,4 +13,4 @@ WOFF2 decoder                                                ~2h
 Multi-column layout rendering                                ~2h  depends on P4 multi-column
 Canvas 2D basic context                                      ~3h
 
-Recent: image-third-party 2026-05-21, overflow-clip 2026-05-21, img-in-span 2026-05-21, dotted-circles 2026-05-21, image-cpu-resize 2026-05-21, bug023-analysis 2026-05-21
+Recent: bug017-018-closed 2026-05-22, bug032-area-avg 2026-05-22, image-third-party 2026-05-21, overflow-clip 2026-05-21, img-in-span 2026-05-21
