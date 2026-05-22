@@ -11,7 +11,7 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame,
     BackgroundClip, BackgroundImage, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
-    Color, ContainFlags, CssColor, FontStyle, FontWeight,
+    Color, ContainFlags, CssColor, FilterFn, FontStyle, FontWeight,
     GradientStop, ImageRendering, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent,
@@ -307,6 +307,17 @@ pub enum DisplayCommand {
     PushTransform { matrix: Mat4 },
     /// Закрывает transform-группу.
     PopTransform,
+    /// CSS Filter Effects L1 §5 — открывает filter-группу. Содержимое до
+    /// парного `PopFilter` рендерится в offscreen-слой; при PopFilter
+    /// применяются все функции из `filters` в порядке объявления (spec §5.1)
+    /// и результат composites в родительский слой.
+    ///
+    /// Phase 0: color-matrix фильтры (grayscale/sepia/brightness/contrast/
+    /// saturate/invert/opacity/hue-rotate) реализованы через GPU-шейдер;
+    /// blur реализован через двухпроходный Gaussian GPU-шейдер.
+    PushFilter { filters: Vec<FilterFn> },
+    /// Закрывает filter-группу.
+    PopFilter,
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
@@ -633,6 +644,13 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             DisplayCommand::PopTransform => {
                 out.push_str("PopTransform\n");
             }
+            DisplayCommand::PushFilter { filters } => {
+                let names: Vec<&str> = filters.iter().map(filter_fn_name).collect();
+                out.push_str(&format!("PushFilter [{}]\n", names.join(", ")));
+            }
+            DisplayCommand::PopFilter => {
+                out.push_str("PopFilter\n");
+            }
             DisplayCommand::PushMaskImage { rect, src, size, repeat, .. } => {
                 out.push_str(&format!(
                     "PushMaskImage ({:.2}, {:.2}, {:.2}, {:.2}) src={src:?} size={size:?} repeat={repeat:?}\n",
@@ -657,6 +675,20 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
         }
     }
     out
+}
+
+fn filter_fn_name(f: &FilterFn) -> &'static str {
+    match f {
+        FilterFn::Blur(_) => "blur",
+        FilterFn::Brightness(_) => "brightness",
+        FilterFn::Contrast(_) => "contrast",
+        FilterFn::Grayscale(_) => "grayscale",
+        FilterFn::HueRotate(_) => "hue-rotate",
+        FilterFn::Invert(_) => "invert",
+        FilterFn::Opacity(_) => "opacity",
+        FilterFn::Saturate(_) => "saturate",
+        FilterFn::Sepia(_) => "sepia",
+    }
 }
 
 fn outline_style_name(s: OutlineStyle) -> &'static str {
@@ -1071,6 +1103,10 @@ fn box_layer_ops(b: &LayoutBox) -> (Vec<DisplayCommand>, Vec<DisplayCommand>) {
     if let Some(matrix) = forward_box_transform(b) {
         pre.push(DisplayCommand::PushTransform { matrix });
         post.push(DisplayCommand::PopTransform);
+    }
+    if !s.filter.is_empty() {
+        pre.push(DisplayCommand::PushFilter { filters: s.filter.clone() });
+        post.push(DisplayCommand::PopFilter);
     }
     // post в LIFO порядке относительно pre.
     post.reverse();
@@ -3113,6 +3149,8 @@ mod tests {
                 DisplayCommand::PushMaskLinearGradient { .. } => "PushMaskLinearGradient",
                 DisplayCommand::PushMaskRadialGradient { .. } => "PushMaskRadialGradient",
                 DisplayCommand::PopMask => "PopMask",
+                DisplayCommand::PushFilter { .. } => "PushFilter",
+                DisplayCommand::PopFilter => "PopFilter",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);

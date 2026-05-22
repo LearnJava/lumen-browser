@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #1a1a2e; width: 1022px; height: 718px; margin: 1px; padding: 30px; overflow: hidden; box-sizing: border-box; }
+
+  .row { display: flex; gap: 16px; margin-bottom: 24px; }
+
+  /* Base box: bright blue square */
+  .box {
+    width: 120px;
+    height: 120px;
+    background: #4299e1;
+    border: 3px solid #2b6cb0;
+  }
+
+  /* CSS filter functions */
+  .f-none       { }
+  .f-grayscale  { filter: grayscale(1); }
+  .f-sepia      { filter: sepia(1); }
+  .f-brightness { filter: brightness(2); }
+  .f-invert     { filter: invert(1); }
+  .f-contrast   { filter: contrast(3); }
+  .f-saturate   { filter: saturate(3); }
+  .f-opacity    { filter: opacity(0.4); }
+
+  /* Blur test: sharp edge box vs blurred */
+  .blur-base {
+    width: 180px;
+    height: 100px;
+    background: linear-gradient(to right, #e53e3e 50%, #38a169 50%);
+    border: none;
+  }
+  .f-blur { filter: blur(8px); }
+
+  /* Hue-rotate test */
+  .hue-box {
+    width: 100px;
+    height: 100px;
+    background: #e53e3e;
+  }
+  .f-hue-90  { filter: hue-rotate(90deg); }
+  .f-hue-180 { filter: hue-rotate(180deg); }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- Row 1: color filter functions on blue boxes -->
+  <div class="row">
+    <div class="box f-none"></div>
+    <div class="box f-grayscale"></div>
+    <div class="box f-sepia"></div>
+    <div class="box f-brightness"></div>
+    <div class="box f-invert"></div>
+    <div class="box f-contrast"></div>
+    <div class="box f-saturate"></div>
+    <div class="box f-opacity"></div>
+  </div>
+
+  <!-- Row 2: blur -->
+  <div class="row">
+    <div class="blur-base f-none"></div>
+    <div class="blur-base f-blur"></div>
+  </div>
+
+  <!-- Row 3: hue-rotate on red box -->
+  <div class="row">
+    <div class="hue-box f-none"></div>
+    <div class="hue-box f-hue-90"></div>
+    <div class="hue-box f-hue-180"></div>
+  </div>
+
+</div>
+</body>
+</html>
