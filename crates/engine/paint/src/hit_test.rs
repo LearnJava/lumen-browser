@@ -40,7 +40,7 @@ use lumen_core::geom::{Point, Rect};
 use lumen_dom::NodeId;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, BoxKind, Cursor, Display, LayoutBox,
-    Mat4, PointerEvents, TransformFn,
+    Mat4, PointerEvents, TransformFn, UserSelect,
 };
 
 /// Результат hit-теста.
@@ -58,6 +58,9 @@ pub struct HitTestResult {
     pub path: Vec<NodeId>,
     /// CSS `cursor` значение hit-узла — для wire-up к OS cursor.
     pub cursor: Cursor,
+    /// CSS `user-select` hit-узла — для запрета выделения текста (`None`)
+    /// или принудительного выделения всего элемента (`All`).
+    pub user_select: UserSelect,
 }
 
 /// Hit-тест точки в viewport-координатах. `root` — layout-дерево из
@@ -147,6 +150,7 @@ fn hit_test_box(point: Point, b: &LayoutBox) -> Option<HitTestResult> {
         local_point: child_point,
         path: vec![b.node],
         cursor: b.style.cursor,
+        user_select: b.style.user_select,
     })
 }
 
@@ -448,5 +452,34 @@ mod tests {
         let inner = by_class(&doc, "inner");
         let r = hit_test(Point::new(175.0, 50.0), &root).expect("hit");
         assert_eq!(r.node, inner);
+    }
+
+    #[test]
+    fn user_select_none_propagated_in_hit_result() {
+        let (doc, root) = build(
+            "<div>text</div>",
+            "div { height: 50px; user-select: none; }",
+        );
+        let div = by_tag(&doc, "div");
+        let r = hit_test(Point::new(10.0, 10.0), &root).expect("hit");
+        assert_eq!(r.node, div);
+        assert_eq!(r.user_select, UserSelect::None, "user-select:none пропагируется в HitTestResult");
+    }
+
+    #[test]
+    fn user_select_auto_default_in_hit_result() {
+        let (_, root) = build("<div>text</div>", "div { height: 50px; }");
+        let r = hit_test(Point::new(10.0, 10.0), &root).expect("hit");
+        assert_eq!(r.user_select, UserSelect::Auto, "user-select:auto по умолчанию");
+    }
+
+    #[test]
+    fn user_select_all_propagated_in_hit_result() {
+        let (_, root) = build(
+            "<div>text</div>",
+            "div { height: 50px; user-select: all; }",
+        );
+        let r = hit_test(Point::new(10.0, 10.0), &root).expect("hit");
+        assert_eq!(r.user_select, UserSelect::All);
     }
 }
