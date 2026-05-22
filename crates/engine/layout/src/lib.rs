@@ -10496,4 +10496,77 @@ mod tests {
         assert_eq!(ch0.rect.x, ch1.rect.x, "children should share same x in normal flow");
         assert!(ch1.rect.y > ch0.rect.y, "b should be below a");
     }
+
+    // ── ::marker box (BUG-011) ───────────────────────────────────────────
+
+    #[test]
+    fn list_item_generates_marker_box() {
+        let root = lay("<ul><li>item</li></ul>", "");
+        let ul = first_element_child(&root);
+        let li = ul.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        let marker = li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. }));
+        assert!(marker.is_some(), "list-item must have a ::marker child");
+        if let BoxKind::Marker { text, position } = &marker.unwrap().kind {
+            assert_eq!(text, "\u{2022} ", "default disc marker text");
+            assert_eq!(*position, ListStylePosition::Outside);
+        }
+    }
+
+    #[test]
+    fn list_item_none_no_marker() {
+        let root = lay("<ul><li>item</li></ul>", "li { list-style-type: none; }");
+        let ul = first_element_child(&root);
+        let li = ul.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        let marker = li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. }));
+        assert!(marker.is_none(), "list-style-type:none must not generate marker");
+    }
+
+    #[test]
+    fn ordered_list_decimal_marker() {
+        let root = lay(
+            "<ol><li>a</li><li>b</li></ol>",
+            "ol { list-style-type: decimal; }",
+        );
+        let ol = first_element_child(&root);
+        let lis: Vec<_> = ol.children.iter().filter(|c| matches!(c.kind, BoxKind::Block)).collect();
+        assert_eq!(lis.len(), 2);
+        let m0 = lis[0].children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. })).unwrap();
+        let m1 = lis[1].children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. })).unwrap();
+        if let (BoxKind::Marker { text: t0, .. }, BoxKind::Marker { text: t1, .. }) = (&m0.kind, &m1.kind) {
+            assert_eq!(t0, "1. ", "first item");
+            assert_eq!(t1, "2. ", "second item");
+        }
+    }
+
+    #[test]
+    fn marker_outside_not_in_flow() {
+        // For outside markers: child_y must not advance past the marker.
+        let root = lay(
+            "<ul><li>item</li></ul>",
+            "ul { margin: 0; padding: 0; } li { font-size: 16px; line-height: 1; }",
+        );
+        let ul = first_element_child(&root);
+        let li = ul.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        let marker = li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. })).unwrap();
+        let content = li.children.iter().find(|c| matches!(&c.kind, BoxKind::InlineRun { .. })).unwrap();
+        // Marker y should equal content y (both at top of list item).
+        assert_eq!(marker.rect.y, content.rect.y, "marker and content must share the same top");
+        // Marker x must be to the left of content x.
+        assert!(marker.rect.x < content.rect.x, "marker must be left of content");
+    }
+
+    #[test]
+    fn marker_inside_in_flow() {
+        let root = lay(
+            "<ul><li>item</li></ul>",
+            "li { list-style-position: inside; font-size: 16px; line-height: 1; }",
+        );
+        let ul = first_element_child(&root);
+        let li = ul.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        let marker = li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. })).unwrap();
+        let content = li.children.iter().find(|c| matches!(&c.kind, BoxKind::InlineRun { .. })).unwrap();
+        // Inside: marker participates in flow, content starts below it.
+        assert!(content.rect.y >= marker.rect.y + marker.rect.height - 0.01,
+            "content must start at or after inside marker");
+    }
 }
