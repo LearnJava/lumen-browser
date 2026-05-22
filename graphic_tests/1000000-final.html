@@ -324,6 +324,18 @@
     <div style="background:#4a5568;height:40px;"></div>
   </div>
 
+  <!-- CSS Grid named areas -->
+  <div style="margin-top:8px; font-size:10px; color:#888;">CSS Grid named areas (grid-template-areas):</div>
+  <div style="display:grid;
+              grid-template-columns:80px 160px 160px;
+              grid-template-rows:30px 50px;
+              grid-template-areas:'h h h' 's m m';
+              gap:2px; width:404px; margin-bottom:4px;">
+    <div style="grid-area:h; background:#3182ce;"></div>
+    <div style="grid-area:s; background:#38a169;"></div>
+    <div style="grid-area:m; background:#e53e3e;"></div>
+  </div>
+
 </div><!-- /card -->
 </body>
 </html>

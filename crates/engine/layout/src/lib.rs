@@ -43,7 +43,7 @@ pub use stacking::{
 pub use style::{
     apply_container_rules, evaluate_container_condition,
     parse_background_gradient, parse_color, parse_css_wide_keyword, parse_gradient_stops,
-    parse_transform_list,
+    parse_grid_template_areas, parse_transform_list,
     AlignValue, AnimationDirection, ContainerContext,
     AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundOrigin, BackgroundRepeat,
@@ -9893,6 +9893,179 @@ mod tests {
         let div = first_element_child(body);
         // Container height should accommodate the 80px item.
         assert!(div.rect.height >= 80.0, "grid height should be ≥80px, got {}", div.rect.height);
+    }
+
+    // ── CSS Grid named areas ──────────────────────────────────────────────────
+
+    /// `parse_grid_template_areas` — 2×2 grid with named areas.
+    #[test]
+    fn grid_template_areas_parse_2x2() {
+        use crate::parse_grid_template_areas;
+        let areas = parse_grid_template_areas(r#""header header" "sidebar main""#);
+        assert_eq!(areas.len(), 2, "should have 2 rows");
+        assert_eq!(areas[0], vec!["header", "header"]);
+        assert_eq!(areas[1], vec!["sidebar", "main"]);
+    }
+
+    /// `parse_grid_template_areas` — single row.
+    #[test]
+    fn grid_template_areas_parse_single_row() {
+        use crate::parse_grid_template_areas;
+        let areas = parse_grid_template_areas(r#""a b c""#);
+        assert_eq!(areas, vec![vec!["a", "b", "c"]]);
+    }
+
+    /// `parse_grid_template_areas` — `none` returns empty.
+    #[test]
+    fn grid_template_areas_none() {
+        use crate::parse_grid_template_areas;
+        let areas = parse_grid_template_areas("none");
+        assert!(areas.is_empty());
+    }
+
+    /// `parse_grid_template_areas` — dot (.) cells are stored as-is.
+    #[test]
+    fn grid_template_areas_dot_cells() {
+        use crate::parse_grid_template_areas;
+        let areas = parse_grid_template_areas(r#""a . b""#);
+        assert_eq!(areas[0], vec!["a", ".", "b"]);
+    }
+
+    /// `GridLine::parse` recognises named area idents.
+    #[test]
+    fn grid_line_parse_named_ident() {
+        use crate::GridLine;
+        assert_eq!(GridLine::parse("main"), Some(GridLine::Named("main".into())));
+        assert_eq!(GridLine::parse("header-area"), Some(GridLine::Named("header-area".into())));
+        assert_eq!(GridLine::parse("auto"), Some(GridLine::Auto));
+        assert_eq!(GridLine::parse("2"), Some(GridLine::Line(2)));
+        // digit-only or empty → not an ident
+        assert_eq!(GridLine::parse("3abc"), None);
+    }
+
+    /// `grid-area: <name>` shorthand sets all four placement properties to Named.
+    #[test]
+    fn grid_area_named_sets_all_four() {
+        let root = lay(
+            "<body><div></div></body>",
+            "div { grid-area: main; }",
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.style.grid_row_start,    GridLine::Named("main".into()));
+        assert_eq!(div.style.grid_row_end,      GridLine::Named("main".into()));
+        assert_eq!(div.style.grid_column_start, GridLine::Named("main".into()));
+        assert_eq!(div.style.grid_column_end,   GridLine::Named("main".into()));
+    }
+
+    /// `grid-template-areas` stored on container after cascade.
+    #[test]
+    fn grid_template_areas_stored_on_container() {
+        let root = lay(
+            "<body><div></div></body>",
+            r#"div { display: grid; grid-template-areas: "header header" "sidebar main"; }"#,
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        let areas = &div.style.grid_template_areas;
+        assert_eq!(areas.len(), 2, "should have 2 rows");
+        assert_eq!(areas[0], vec!["header", "header"]);
+        assert_eq!(areas[1], vec!["sidebar", "main"]);
+    }
+
+    /// Named area layout: a 2×2 grid where items reference areas by name.
+    ///
+    /// ```css
+    /// .grid {
+    ///   display: grid;
+    ///   grid-template-columns: 100px 100px;
+    ///   grid-template-rows: 50px 50px;
+    ///   grid-template-areas: "a b" "a c";
+    ///   width: 200px;
+    /// }
+    /// .item-a { grid-area: a; }  /* row 1–3, col 1–2 */
+    /// .item-b { grid-area: b; }  /* row 1–2, col 2–3 */
+    /// .item-c { grid-area: c; }  /* row 2–3, col 2–3 */
+    /// ```
+    #[test]
+    fn grid_named_areas_layout_placement() {
+        let root = lay(
+            "<body><div><span id='a'></span><span id='b'></span><span id='c'></span></div></body>",
+            r#"
+            div {
+                display: grid;
+                grid-template-columns: 100px 100px;
+                grid-template-rows: 50px 50px;
+                grid-template-areas: "a b" "a c";
+                width: 200px;
+            }
+            #a { grid-area: a; }
+            #b { grid-area: b; }
+            #c { grid-area: c; }
+            "#,
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        let items: Vec<_> = div
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .collect();
+        assert_eq!(items.len(), 3, "3 named-area items");
+        let item_a = &items[0];
+        let item_b = &items[1];
+        let item_c = &items[2];
+        // item-a occupies rows 1-2 (height=100) at column 1 (x=0, width=100)
+        assert!((item_a.rect.x - 0.0).abs() < 1.0,  "a.x should be 0, got {}", item_a.rect.x);
+        assert!((item_a.rect.width - 100.0).abs() < 1.0, "a.w should be 100, got {}", item_a.rect.width);
+        assert!((item_a.rect.height - 100.0).abs() < 1.0, "a.h should be 100 (2 rows), got {}", item_a.rect.height);
+        // item-b occupies row 1 at column 2 (x=100, width=100, height=50)
+        assert!((item_b.rect.x - 100.0).abs() < 1.0, "b.x should be 100, got {}", item_b.rect.x);
+        assert!((item_b.rect.y - 0.0).abs() < 1.0,   "b.y should be 0, got {}", item_b.rect.y);
+        assert!((item_b.rect.width - 100.0).abs() < 1.0, "b.w should be 100, got {}", item_b.rect.width);
+        assert!((item_b.rect.height - 50.0).abs() < 1.0, "b.h should be 50, got {}", item_b.rect.height);
+        // item-c occupies row 2 at column 2 (y=50, width=100, height=50)
+        assert!((item_c.rect.x - 100.0).abs() < 1.0, "c.x should be 100, got {}", item_c.rect.x);
+        assert!((item_c.rect.y - 50.0).abs() < 1.0,  "c.y should be 50, got {}", item_c.rect.y);
+        assert!((item_c.rect.width - 100.0).abs() < 1.0, "c.w should be 100, got {}", item_c.rect.width);
+        assert!((item_c.rect.height - 50.0).abs() < 1.0, "c.h should be 50, got {}", item_c.rect.height);
+    }
+
+    /// Named area with a span > 1 row: area "sidebar" spans both rows.
+    #[test]
+    fn grid_named_area_spanning_rows() {
+        let root = lay(
+            "<body><div><span id='h'></span><span id='s'></span></div></body>",
+            r#"
+            div {
+                display: grid;
+                grid-template-columns: 200px 600px;
+                grid-template-rows: 80px 80px;
+                grid-template-areas: "header header" "sidebar content";
+                width: 800px;
+            }
+            #h { grid-area: header; }
+            #s { grid-area: sidebar; }
+            "#,
+        );
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        let items: Vec<_> = div
+            .children
+            .iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .collect();
+        // header spans both columns: x=0, w=800, y=0, h=80
+        let header = &items[0];
+        assert!((header.rect.x - 0.0).abs() < 1.0,    "h.x={}", header.rect.x);
+        assert!((header.rect.width - 800.0).abs() < 1.0, "h.w={}", header.rect.width);
+        assert!((header.rect.y - 0.0).abs() < 1.0,    "h.y={}", header.rect.y);
+        assert!((header.rect.height - 80.0).abs() < 1.0, "h.h={}", header.rect.height);
+        // sidebar: x=0, w=200, y=80, h=80
+        let sidebar = &items[1];
+        assert!((sidebar.rect.x - 0.0).abs() < 1.0,   "s.x={}", sidebar.rect.x);
+        assert!((sidebar.rect.width - 200.0).abs() < 1.0, "s.w={}", sidebar.rect.width);
+        assert!((sidebar.rect.y - 80.0).abs() < 1.0,  "s.y={}", sidebar.rect.y);
     }
 
     // ── collect_image_requests ────────────────────────────────────────────────

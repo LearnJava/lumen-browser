@@ -1895,6 +1895,10 @@ pub struct ComputedStyle {
     /// CSS Grid Layout L1 §7.2 — `grid-template-rows`. Non-inherited.
     /// Default `[]` (no explicit tracks). Parsed track-list.
     pub grid_template_rows: Vec<GridTrackSize>,
+    /// CSS Grid Layout L1 §7.3 — `grid-template-areas`. Non-inherited.
+    /// Default `[]` (none). Outer vec = rows (top-to-bottom), inner vec = columns
+    /// (left-to-right). Each string is a cell name; `"."` means unnamed cell.
+    pub grid_template_areas: Vec<Vec<String>>,
     /// CSS Grid Layout L1 §8.5 — `grid-auto-flow`. Non-inherited. Default `Row`.
     pub grid_auto_flow: GridAutoFlow,
     /// CSS Grid Layout L1 §8.6 — `grid-auto-columns`. Non-inherited. Default `Auto`.
@@ -3212,6 +3216,9 @@ pub enum GridLine {
     Line(i32),
     /// `span <integer>` — span N tracks.
     Span(u32),
+    /// Named grid area reference (CSS Grid L1 §8.3). Resolved at layout time
+    /// by looking up the name in the containing grid's `grid-template-areas`.
+    Named(String),
 }
 
 impl GridLine {
@@ -3233,6 +3240,12 @@ impl GridLine {
         // integer line number
         if let Ok(n) = trimmed.parse::<i32>() && n != 0 {
             return Some(Self::Line(n));
+        }
+        // CSS custom-ident: named grid area or named line.
+        // Only accept valid CSS idents (letters, digits, hyphens, underscores;
+        // cannot start with a digit or two hyphens without a letter).
+        if is_css_ident(trimmed) {
+            return Some(Self::Named(trimmed.to_string()));
         }
         None
     }
@@ -3748,6 +3761,7 @@ impl ComputedStyle {
             order: 0,
             grid_template_columns: Vec::new(),
             grid_template_rows: Vec::new(),
+            grid_template_areas: Vec::new(),
             grid_auto_flow: GridAutoFlow::Row,
             grid_auto_columns: GridTrackSize::Auto,
             grid_auto_rows: GridTrackSize::Auto,
@@ -3996,6 +4010,7 @@ pub fn compute_style(
         // CSS Grid Layout L1 — grid properties не наследуются.
         grid_template_columns: Vec::new(),
         grid_template_rows: Vec::new(),
+        grid_template_areas: Vec::new(),
         grid_auto_flow: GridAutoFlow::Row,
         grid_auto_columns: GridTrackSize::Auto,
         grid_auto_rows: GridTrackSize::Auto,
@@ -8483,6 +8498,13 @@ fn apply_declaration(
                 style.grid_template_rows = Vec::new();
             }
         }
+        "grid-template-areas" => {
+            if val.trim().eq_ignore_ascii_case("none") {
+                style.grid_template_areas = Vec::new();
+            } else {
+                style.grid_template_areas = parse_grid_template_areas(val);
+            }
+        }
         "grid-auto-columns" => {
             if let Some(ts) = GridTrackSize::parse_single(val, is_quirks) {
                 style.grid_auto_columns = ts;
@@ -10813,12 +10835,28 @@ fn apply_grid_line_shorthand(val: &str, start: &mut GridLine, end: &mut GridLine
 }
 
 /// Parse `grid-area` shorthand: `row-start / col-start / row-end / col-end`.
+///
+/// CSS Grid L1 §8.3: when only a single `<custom-ident>` is provided
+/// (not `auto`, not an integer, not `span`), it is a named area reference —
+/// all four grid-line properties are set to `Named(ident)` and resolved at
+/// layout time against the parent's `grid-template-areas`.
 fn apply_grid_area_shorthand(val: &str, style: &mut ComputedStyle) {
     let parts: Vec<&str> = val.split('/').map(str::trim).collect();
     match parts.as_slice() {
-        [rs] => {
-            if let Some(v) = GridLine::parse(rs) {
-                style.grid_row_start = v;
+        [single] => {
+            if let Some(v) = GridLine::parse(single) {
+                // Single named area: propagate to all four placement properties.
+                match &v {
+                    GridLine::Named(_) => {
+                        style.grid_row_start = v.clone();
+                        style.grid_row_end = v.clone();
+                        style.grid_column_start = v.clone();
+                        style.grid_column_end = v;
+                    }
+                    _ => {
+                        style.grid_row_start = v;
+                    }
+                }
             }
         }
         [rs, cs] => {
@@ -11630,8 +11668,9 @@ fn apply_css_wide_keyword(
                 init.flex_wrap
             };
         }
-        "grid-template-columns" | "grid-template-rows" | "grid-auto-flow"
-        | "grid-auto-columns" | "grid-auto-rows" | "grid-column-start" | "grid-column-end"
+        "grid-template-columns" | "grid-template-rows" | "grid-template-areas"
+        | "grid-auto-flow" | "grid-auto-columns" | "grid-auto-rows"
+        | "grid-column-start" | "grid-column-end"
         | "grid-row-start" | "grid-row-end" | "grid-column" | "grid-row" | "grid-area"
         | "grid-template" | "grid" => {
             // None of the grid properties are inherited.
@@ -11639,6 +11678,7 @@ fn apply_css_wide_keyword(
                 // inherit: copy from parent (non-inherited → initial)
                 style.grid_template_columns = init.grid_template_columns.clone();
                 style.grid_template_rows = init.grid_template_rows.clone();
+                style.grid_template_areas = init.grid_template_areas.clone();
                 style.grid_auto_flow = init.grid_auto_flow;
                 style.grid_auto_columns = init.grid_auto_columns.clone();
                 style.grid_auto_rows = init.grid_auto_rows.clone();
@@ -11649,6 +11689,7 @@ fn apply_css_wide_keyword(
             } else {
                 style.grid_template_columns = init.grid_template_columns.clone();
                 style.grid_template_rows = init.grid_template_rows.clone();
+                style.grid_template_areas = init.grid_template_areas.clone();
                 style.grid_auto_flow = init.grid_auto_flow;
                 style.grid_auto_columns = init.grid_auto_columns.clone();
                 style.grid_auto_rows = init.grid_auto_rows.clone();
@@ -12443,6 +12484,49 @@ fn is_gradient_function(s: &str) -> bool {
         || s.starts_with("repeating-linear-gradient(")
         || s.starts_with("repeating-radial-gradient(")
         || s.starts_with("repeating-conic-gradient(")
+}
+
+/// CSS Grid L1 §7.3 — parse `grid-template-areas` value.
+///
+/// Input: a CSS string value like `'"header header" "sidebar main"'`.
+/// Each quoted string defines one row; tokens within the string are cell
+/// names. `"."` (dot) is the null cell token (unnamed). Returns a 2D grid:
+/// outer vec = rows top-to-bottom, inner vec = column names left-to-right.
+///
+/// Malformed rows (different column count) are silently dropped to keep the
+/// grid rectangular.
+pub fn parse_grid_template_areas(val: &str) -> Vec<Vec<String>> {
+    // Extract all quoted strings in order.
+    let mut rows: Vec<Vec<String>> = Vec::new();
+    let mut s = val.trim();
+    while !s.is_empty() {
+        s = s.trim_start();
+        if s.starts_with('"') || s.starts_with('\'') {
+            let quote = s.chars().next().unwrap();
+            s = &s[1..];
+            let end = s.find(quote).unwrap_or(s.len());
+            let row_str = &s[..end];
+            s = if end < s.len() { &s[end + 1..] } else { "" };
+            let cells: Vec<String> = row_str
+                .split_whitespace()
+                .map(|t| t.to_string())
+                .collect();
+            if !cells.is_empty() {
+                rows.push(cells);
+            }
+        } else {
+            // Skip unexpected token.
+            let next = s.find(|c: char| c.is_whitespace() || c == '"' || c == '\'').unwrap_or(s.len());
+            s = &s[next..];
+        }
+    }
+    // Ensure all rows have the same column count (take minimum; drop trailing).
+    if rows.is_empty() {
+        return rows;
+    }
+    let cols = rows.iter().map(Vec::len).min().unwrap_or(0);
+    rows.retain(|r| r.len() == cols);
+    rows
 }
 
 /// Whitespace tokenizer that treats `(...)` as an opaque unit.
