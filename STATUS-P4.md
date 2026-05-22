@@ -1,4 +1,5 @@
-In progress: —
+In progress: float + clear layout algorithm  branch: p4-float-clear
+Next step: добавить FloatSide/ClearSide enums и поля в ComputedStyle  crates/engine/layout/src/style.rs
 
 Next:
 

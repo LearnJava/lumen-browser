@@ -53,7 +53,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Display L3 (table) | [css-display-3](https://www.w3.org/TR/css-display-3/) | 🟡 | display:table/row/cell layout engine | **#5** |
 | CSS Positioning L3 (sticky) | [css3-positioning](https://www.w3.org/TR/css3-positioning/) | 🟡 | position:sticky + scroll listener | **#6** |
 | CSS Positioning L3 (z-index) | [css3-positioning](https://www.w3.org/TR/css3-positioning/) | 🟡 | stacking context paint ordering | **#7** |
-| CSS 2.1 floats | [CSS2](https://www.w3.org/TR/CSS2/) | 🟡 | float + clear layout algorithm | **#8** |
+| CSS 2.1 floats | [CSS2](https://www.w3.org/TR/CSS2/) | ✅ | FloatContext placement + FloatSide/ClearSide + 10 tests | **#8** |
 | CSS Lists L3 | [css3-lists](https://www.w3.org/TR/css3-lists/) | 🟡 | list-style-type marker rendering | **#9** |
 | CSS Cascading L4/L5 | [css-cascade-4](https://www.w3.org/TR/css-cascade-4/) | ✅ | @layer cascade ordering: layer_priority in sort key, 6 tests | **#10** |
 | Selectors L4 | [selectors4](https://www.w3.org/TR/selectors4/) | 🟡 | :is()/:where()/:has() matching | **#11** |
@@ -180,8 +180,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `opacity` | ✅ | composited layer |
 | `aspect-ratio` | ✅ | auto, W/H ratio |
 | `text-overflow` | ✅ | clip, ellipsis |
-| `float` | 🟡 | parsed; layout algorithm ⬜ |
-| `clear` | 🟡 | parsed; clearance ⬜ |
+| `float` | ✅ | left/right/none — FloatContext placement; shrink-to-fit width |
+| `clear` | ✅ | left/right/both — FloatContext.clear_y() clearance |
 | `-webkit-line-clamp` / `line-clamp` | 🟡 | parsed; multi-line truncation ⬜ |
 | `contain-intrinsic-size` | 🟡 | parsed; intrinsic size hint ⬜ |
 
@@ -362,8 +362,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `float` | 🟡 | left/right/none parsed; float layout ⬜ |
-| `clear` | 🟡 | both/left/right parsed; clearance ⬜ |
+| `float` | ✅ | left/right/none; FloatContext axis-aligned placement + shrink-to-fit |
+| `clear` | ✅ | left/right/both; FloatContext.clear_y() |
 | `shape-outside` | 🟡 | parsed; float shape wrapping ⬜ |
 
 ### [T1] Lists
@@ -681,7 +681,7 @@ Ordered list of 🟡→✅ promotions for the P4 developer. One item = one featu
 | 4 | CSS Nesting — nested rule parser | L | none |
 | 5 | `position: sticky` layout + scroll listener | M | none |
 | 6 | `z-index` stacking context paint ordering | M | none |
-| 7 | `float` + `clear` layout algorithm | L | none |
+| 7 | `float` + `clear` layout algorithm | ✅ | FloatContext + FloatSide/ClearSide + 10 tests 2026-05-22 |
 | 8 | `list-style-type` marker rendering | S | none |
 | 9 | `@layer` cascade ordering | ✅ | done 2026-05-22 |
 | 10 | `:is()` / `:where()` / `:has()` matching | M | none |

@@ -926,6 +926,60 @@ impl Position {
     }
 }
 
+/// CSS 2.1 §9.5.1 — `float`. Не наследуется. `Left`/`Right` выводят
+/// элемент из нормального потока и размещают его у соответствующего
+/// края контейнера; следующий контент обтекает float сбоку.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FloatSide {
+    #[default]
+    None,
+    Left,
+    Right,
+}
+
+impl FloatSide {
+    /// Parses `float` keyword value.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "left" => Some(Self::Left),
+            "right" => Some(Self::Right),
+            "inline-start" => Some(Self::Left),
+            "inline-end" => Some(Self::Right),
+            _ => None,
+        }
+    }
+
+    /// Returns `true` for `float: none`.
+    pub fn is_none(self) -> bool {
+        matches!(self, Self::None)
+    }
+}
+
+/// CSS 2.1 §9.5.2 — `clear`. Не наследуется. Указывает, мимо
+/// каких float-ов следующий блок должен «пройти» перед размещением.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ClearSide {
+    #[default]
+    None,
+    Left,
+    Right,
+    Both,
+}
+
+impl ClearSide {
+    /// Parses `clear` keyword value.
+    pub fn parse(s: &str) -> Option<Self> {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Some(Self::None),
+            "left" | "inline-start" => Some(Self::Left),
+            "right" | "inline-end" => Some(Self::Right),
+            "both" => Some(Self::Both),
+            _ => None,
+        }
+    }
+}
+
 /// CSS Compositing & Blending L1 §2.1 — `isolation`. Не наследуется.
 /// `Isolate` принудительно создаёт stacking context, обеспечивая
 /// изоляцию blend / backdrop-filter эффектов потомков от внешних
@@ -1578,6 +1632,12 @@ pub struct ComputedStyle {
     /// positioned- и flex/grid-item элементов это запускает создание
     /// stacking context.
     pub z_index: Option<i32>,
+    /// CSS 2.1 §9.5.1 — `float`. Не наследуется. `Left`/`Right` выводят
+    /// элемент из нормального потока. `None` — нормальный поток.
+    pub float_side: FloatSide,
+    /// CSS 2.1 §9.5.2 — `clear`. Не наследуется. Определяет, мимо каких
+    /// float-ов блок обязан «пройти» перед размещением в потоке.
+    pub clear: ClearSide,
     /// CSS Compositing & Blending L1 §2.1 — `isolation`. Не наследуется.
     /// `Isolate` создаёт stacking context.
     pub isolation: Isolation,
@@ -3644,6 +3704,8 @@ impl ComputedStyle {
             bottom: LengthOrAuto::Auto,
             left: LengthOrAuto::Auto,
             z_index: None,
+            float_side: FloatSide::None,
+            clear: ClearSide::None,
             isolation: Isolation::Auto,
             mix_blend_mode: MixBlendMode::Normal,
             border_top_left_radius: 0.0,
@@ -3871,6 +3933,8 @@ pub fn compute_style(
         bottom: LengthOrAuto::Auto,
         left: LengthOrAuto::Auto,
         z_index: None,
+        float_side: FloatSide::None,
+        clear: ClearSide::None,
         isolation: Isolation::Auto,
         mix_blend_mode: MixBlendMode::Normal,
         // border-radius не наследуется.
@@ -9408,6 +9472,16 @@ fn apply_declaration(
                 style.z_index = Some(n);
             }
         }
+        "float" => {
+            if let Some(v) = FloatSide::parse(val) {
+                style.float_side = v;
+            }
+        }
+        "clear" => {
+            if let Some(v) = ClearSide::parse(val) {
+                style.clear = v;
+            }
+        }
         "isolation" => {
             if let Some(v) = Isolation::parse(val) {
                 style.isolation = v;
@@ -11519,6 +11593,12 @@ fn apply_css_wide_keyword(
         }
         "z-index" => {
             style.z_index = if inh_only_inherit { inherited.z_index } else { init.z_index };
+        }
+        "float" => {
+            style.float_side = if inh_only_inherit { inherited.float_side } else { init.float_side };
+        }
+        "clear" => {
+            style.clear = if inh_only_inherit { inherited.clear } else { init.clear };
         }
         "isolation" => {
             style.isolation = if inh_only_inherit { inherited.isolation } else { init.isolation };
