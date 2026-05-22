@@ -1,4 +1,5 @@
-In progress: —
+In progress: border-radius rendering (FillRoundedRect SDF)  branch: p2-border-radius
+Next step: add CornerRadii + FillRoundedRect to display_list.rs  crates/engine/paint/src/display_list.rs
 
 CSS rule: P2 does NOT implement CSS properties. P4 owns all CSS.
   P2 writes rendering primitives and GPU pipelines only.
