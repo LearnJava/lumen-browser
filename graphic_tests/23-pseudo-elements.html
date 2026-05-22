@@ -75,15 +75,65 @@
       background: #1d3557;
       margin-top: 16px;
     }
+
+    /* ── Inline pseudo-elements ── */
+    /* Containers right-side column at x=290px using absolute positioning */
+    .col-inline {
+      position: absolute;
+      top: 40px;
+      left: 290px;
+    }
+    /* Each inline-row is a block with height+line-height so line has visible area */
+    .irow {
+      width: 200px;
+      height: 50px;
+      line-height: 50px;
+      background: #1d3557;
+      margin-top: 16px;
+    }
+    .irow:first-child { margin-top: 0; }
+
+    /* ::before inline — colored padded box before a span */
+    .sp-before::before {
+      content: " ";
+      display: inline;
+      background: #e63946;
+      padding: 0 30px;
+    }
+    /* ::after inline */
+    .sp-after::after {
+      content: " ";
+      display: inline;
+      background: #2a9d8f;
+      padding: 0 30px;
+    }
+    /* both ::before and ::after inline */
+    .sp-both::before {
+      content: " ";
+      display: inline;
+      background: #f4a261;
+      padding: 0 22px;
+    }
+    .sp-both::after {
+      content: " ";
+      display: inline;
+      background: #e76f51;
+      padding: 0 22px;
+    }
   </style>
 </head>
 <body>
-  <div class="__f">
+  <div class="__f" style="position:relative;">
   <div class="row">
     <div class="box-before"></div>
     <div class="box-after"></div>
     <div class="box-both"></div>
     <div class="box-narrow"></div>
+  </div>
+  <div class="col-inline">
+    <div class="irow"><span class="sp-before"></span></div>
+    <div class="irow"><span class="sp-after"></span></div>
+    <div class="irow"><span class="sp-both"></span></div>
   </div>
   </div>
 </body>

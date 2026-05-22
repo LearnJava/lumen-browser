@@ -37,7 +37,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 20-quirks-bgcolor.html | Устаревший bgcolor (Quirks mode) | 15 | CSS hashless hex · bgcolor attr on \<td\> · legacy color parsing |
 | 21-border-style.html | Стили border: dashed/dotted/double | 16 | border-style: dashed · dotted · double (2/4/8/16px) · per-side mix · double thin fallback |
 | 22-transform.html | CSS transform | 30 | transform: translate · translateX/Y · rotate · scale · scaleX/Y · skewX · skewY · matrix() · combined · transform-origin (4 variants) |
-| 23-pseudo-elements.html | ::before / ::after block generation | 4 | ::before display:block · ::after display:block · both on one element · ::before с другой шириной |
+| 23-pseudo-elements.html | ::before / ::after block + inline generation | 7 | ::before display:block · ::after display:block · both on one element · ::before с другой шириной · ::before inline (padding box) · ::after inline · both inline |
 | 24-vertical-align.html | vertical-align | 6 | inline-block: top/middle/bottom · inline span: super/middle/sub (frag y-offset + bg) |
 | 25-table-layout.html | Table layout | 19 | display:table — горизонтальный layout ячеек · auto-width distribution · явные ширины · несколько строк (вертикальное стакование) |
 | 26-mask-image.html | mask-image | 3 | linear-gradient mask · radial-gradient mask · control (no mask). Phase 0: gradient masks fallback to full-opacity |
@@ -107,8 +107,10 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | transform: matrix(a,b,c,d,e,f) | 22 | — |
 | transform: combined (multiple functions) | 22 | — |
 | transform-origin | 22 | % values (50% 50% default works; explicit % not tested) |
-| ::before (display:block, content) | 23 | inline ::before (text injection) |
-| ::after (display:block, content) | 23 | inline ::after (text injection) |
+| ::before (display:block, content) | 23 | — |
+| ::before (display:inline, padding box) | 23 | — |
+| ::after (display:block, content) | 23 | — |
+| ::after (display:inline, padding box) | 23 | — |
 | vertical-align: top / middle / bottom (inline-block) | 24 | — |
 | vertical-align: super / sub / middle (inline text y-offset) | 24 | length/percent (text-only, no visual without font) |
 | column-count | 33 | — |

@@ -624,12 +624,40 @@ fn collect_inline_segments(
                 + s.border_right_width
                 + s.margin_right.resolve_or_zero(em, 0.0, viewport);
             let start = out.len();
+            // CSS Pseudo-elements L4 §4 — ::before in inline formatting context.
+            // Block pseudo-elements inside inline context are skipped (Phase 0).
+            if let Some(ps) =
+                compute_pseudo_element_style(doc, id, "before", sheet, &s, viewport)
+                && matches!(
+                    ps.display,
+                    Display::Inline
+                        | Display::InlineFlex
+                        | Display::InlineGrid
+                        | Display::InlineBlock
+                )
+            {
+                push_pseudo_inline_segs(&ps, viewport, out);
+            }
             let children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
             for child_id in children {
                 collect_inline_segments(doc, sheet, child_id, &s, viewport, out, flat);
             }
+            // CSS Pseudo-elements L4 §4 — ::after in inline formatting context.
+            if let Some(ps) =
+                compute_pseudo_element_style(doc, id, "after", sheet, &s, viewport)
+                && matches!(
+                    ps.display,
+                    Display::Inline
+                        | Display::InlineFlex
+                        | Display::InlineGrid
+                        | Display::InlineBlock
+                )
+            {
+                push_pseudo_inline_segs(&ps, viewport, out);
+            }
             let added = out.len() - start;
-            // Mark all segments from this element as element boxes.
+            // Mark all segments from this element (including pseudo-element content)
+            // as element boxes so the painter draws their background/border.
             for seg in &mut out[start..start + added] {
                 seg.is_element_box = true;
             }
@@ -734,6 +762,31 @@ fn content_to_inline_segments(style: &ComputedStyle) -> Vec<InlineSegment> {
         img_width: 0.0,
         forced_break: false,
     }]
+}
+
+/// Builds inline segments for a pseudo-element and applies its own box model
+/// spacing (margin + border + padding) as `pre_space` / `post_space`.
+/// Used by `collect_inline_segments` to inject `::before` / `::after` content.
+fn push_pseudo_inline_segs(ps: &ComputedStyle, viewport: Size, out: &mut Vec<InlineSegment>) {
+    let mut segs = content_to_inline_segments(ps);
+    if segs.is_empty() {
+        return;
+    }
+    let em = ps.font_size;
+    let pre = ps.margin_left.resolve_or_zero(em, 0.0, viewport)
+        + ps.border_left_width
+        + ps.padding_left.resolve_or_zero(em, 0.0, viewport);
+    let post = ps.padding_right.resolve_or_zero(em, 0.0, viewport)
+        + ps.border_right_width
+        + ps.margin_right.resolve_or_zero(em, 0.0, viewport);
+    if pre > 0.0 {
+        segs[0].pre_space += pre;
+    }
+    if post > 0.0 {
+        let last = segs.len() - 1;
+        segs[last].post_space += post;
+    }
+    out.extend(segs);
 }
 
 /// CSS Lists L3 §2.1 — ordinal of a `<li>` among its element siblings (1-based).

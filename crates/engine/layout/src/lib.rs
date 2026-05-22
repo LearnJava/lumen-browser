@@ -10419,6 +10419,123 @@ mod tests {
         assert!(matches!(p.children[0].kind, BoxKind::InlineRun { .. }));
     }
 
+    // ──────── inline ::before / ::after (collect_inline_segments path) ───────
+
+    #[test]
+    fn inline_before_pseudo_injects_segment_before_children() {
+        // span::before { content: ">>"; } — сегмент ">>" перед текстом span.
+        let root = lay(
+            "<p><span>Hello</span></p>",
+            r#"span::before { content: ">>"; }"#,
+        );
+        let p = first_element_child(&root);
+        let run = p
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }))
+            .expect("InlineRun expected");
+        if let BoxKind::InlineRun { segments, .. } = &run.kind {
+            let first = segments.first().expect("at least one segment");
+            assert!(
+                first.text.contains(">>"),
+                "::before segment should be first, got {:?}",
+                first.text
+            );
+        }
+    }
+
+    #[test]
+    fn inline_after_pseudo_injects_segment_after_children() {
+        // span::after { content: "<<"; } — сегмент "<<" после текста span.
+        let root = lay(
+            "<p><span>Hello</span></p>",
+            r#"span::after { content: "<<"; }"#,
+        );
+        let p = first_element_child(&root);
+        let run = p
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }))
+            .expect("InlineRun expected");
+        if let BoxKind::InlineRun { segments, .. } = &run.kind {
+            let last = segments.last().expect("at least one segment");
+            assert!(
+                last.text.contains("<<"),
+                "::after segment should be last, got {:?}",
+                last.text
+            );
+        }
+    }
+
+    #[test]
+    fn inline_before_after_order() {
+        // span::before + ::after — порядок: before / span-text / after.
+        let root = lay(
+            "<p><span>X</span></p>",
+            r#"span::before { content: "A"; } span::after { content: "B"; }"#,
+        );
+        let p = first_element_child(&root);
+        let all_text: String = p
+            .children
+            .iter()
+            .flat_map(|c| {
+                if let BoxKind::InlineRun { segments, .. } = &c.kind {
+                    segments.iter().map(|s| s.text.clone()).collect::<Vec<_>>()
+                } else {
+                    vec![]
+                }
+            })
+            .collect();
+        let a_pos = all_text.find('A').expect("A not found");
+        let x_pos = all_text.find('X').expect("X not found");
+        let b_pos = all_text.find('B').expect("B not found");
+        assert!(a_pos < x_pos, "::before must precede span text");
+        assert!(x_pos < b_pos, "::after must follow span text");
+    }
+
+    #[test]
+    fn inline_before_inherits_span_style() {
+        // span::before наследует color от span.
+        let root = lay(
+            "<p><span>X</span></p>",
+            r#"span { color: #ff0000; } span::before { content: "●"; }"#,
+        );
+        let p = first_element_child(&root);
+        let run = p
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }))
+            .expect("InlineRun");
+        if let BoxKind::InlineRun { segments, .. } = &run.kind {
+            let before = segments.iter().find(|s| s.text.contains('●')).expect("● not found");
+            assert!(
+                before.style.color.r > 0 && before.style.color.g == 0,
+                "::before should inherit red color, got {:?}",
+                before.style.color
+            );
+        }
+    }
+
+    #[test]
+    fn inline_before_display_block_skipped_in_inline_context() {
+        // span::before { display: block } внутри inline-контекста — пропускается.
+        let root = lay(
+            "<p><span>Only</span></p>",
+            r#"span::before { content: "X"; display: block; }"#,
+        );
+        let p = first_element_child(&root);
+        let run = p
+            .children
+            .iter()
+            .find(|c| matches!(c.kind, BoxKind::InlineRun { .. }))
+            .expect("InlineRun");
+        if let BoxKind::InlineRun { segments, .. } = &run.kind {
+            // Текст "X" не должен появиться — псевдо-элемент block в inline-контексте пропускается.
+            let has_x = segments.iter().any(|s| s.text == "X");
+            assert!(!has_x, "block ::before must be skipped in inline context");
+        }
+    }
+
     fn first_inline_run_frag(b: &LayoutBox) -> &InlineFrag {
         let run = b
             .children
