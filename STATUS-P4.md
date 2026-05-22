@@ -1,4 +1,4 @@
-In progress: pointer-events + user-select wire-up  branch: user-select-wireup
+In progress: text-emphasis rendering  branch: text-emphasis
 
 Next (Wave 1 — unblock P1/P2):
 
