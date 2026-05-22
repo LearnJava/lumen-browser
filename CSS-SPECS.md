@@ -55,7 +55,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Positioning L3 (z-index) | [css3-positioning](https://www.w3.org/TR/css3-positioning/) | 🟡 | stacking context paint ordering | **#7** |
 | CSS 2.1 floats | [CSS2](https://www.w3.org/TR/CSS2/) | 🟡 | float + clear layout algorithm | **#8** |
 | CSS Lists L3 | [css3-lists](https://www.w3.org/TR/css3-lists/) | 🟡 | list-style-type marker rendering | **#9** |
-| CSS Cascading L4/L5 | [css-cascade-4](https://www.w3.org/TR/css-cascade-4/) | 🟡 | @layer cascade ordering | **#10** |
+| CSS Cascading L4/L5 | [css-cascade-4](https://www.w3.org/TR/css-cascade-4/) | ✅ | @layer cascade ordering: layer_priority in sort key, 6 tests | **#10** |
 | Selectors L4 | [selectors4](https://www.w3.org/TR/selectors4/) | 🟡 | :is()/:where()/:has() matching | **#11** |
 | Media Queries L3 | [mediaqueries-3](https://www.w3.org/TR/mediaqueries-3/) | 🟡 | resize hook; @media re-evaluation | **#12** |
 
@@ -381,7 +381,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `@layer` declaration | 🟡 | parsed; cascade ordering ⬜ |
+| `@layer` declaration | ✅ | parsed; cascade ordering wired: layer_priority sort key in compute_style |
 | `@import layer()` | 🟡 | URL parsed; layer() modifier ⬜ |
 | `revert-layer` | ⬜ | |
 
@@ -588,7 +588,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@supports` | 🟡 | parsed; feature detection ⬜ |
 | `@font-face` | 🟡 | descriptors parsed; loading ⬜ |
 | `@keyframes` | 🟡 | parsed; scheduler ⬜ |
-| `@layer` | 🟡 | parsed; ordering ⬜ |
+| `@layer` | ✅ | parsed; cascade ordering ✅ |
 | `@container` | 🟡 | condition matching ✅; 2nd-pass re-layout ✅; cq* units ⬜ |
 | `@color-profile` | ⬜ | CSS Color L5 |
 | `@font-palette-values` | ⬜ | CSS Fonts L5 |
@@ -683,7 +683,7 @@ Ordered list of 🟡→✅ promotions for the P4 developer. One item = one featu
 | 6 | `z-index` stacking context paint ordering | M | none |
 | 7 | `float` + `clear` layout algorithm | L | none |
 | 8 | `list-style-type` marker rendering | S | none |
-| 9 | `@layer` cascade ordering | M | none |
+| 9 | `@layer` cascade ordering | ✅ | done 2026-05-22 |
 | 10 | `:is()` / `:where()` / `:has()` matching | M | none |
 | 11 | `@media` resize hook re-evaluation | S | shell event |
 | 12 | `filter` GPU offscreen pass | L | wgpu pipeline |

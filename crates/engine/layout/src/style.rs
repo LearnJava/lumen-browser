@@ -4150,14 +4150,24 @@ pub fn compute_style(
         .unwrap_or_default();
 
     // Собираем все matched declarations с их sort key:
-    // (important, is_inline, specificity, rule_order, decl_index). `important`
-    // идёт первым: после ascending sort `true > false`, поэтому !important идёт
-    // в конец и побеждает normal даже при меньшей specificity (CSS Cascade L4
-    // §8.1). `is_inline` — вторым: в пределах одного `important` inline-style
-    // атрибут побеждает стилевой лист (CSS Cascade L4 §6.4.3). Внутри одного
-    // origin `important = false` сначала разрешается обычный каскад, потом тот
-    // же каскад применяется поверх с !important.
-    let mut matched: Vec<(bool, bool, Specificity, usize, usize, &Declaration)> = Vec::new();
+    // (important, is_inline, layer_priority, specificity, rule_order, decl_index).
+    //
+    // `important` идёт первым: !important побеждает normal (CSS Cascade L4 §8.1).
+    // `is_inline` — вторым: inline-style атрибут побеждает стилевой лист
+    // (CSS Cascade L4 §6.4.3).
+    // `layer_priority` — CSS Cascade L5 §6.4.5 @layer ordering:
+    //   - normal: unlayered = N (highest), layer[i] = i (earlier layer = lower priority)
+    //   - !important: unlayered = -N (lowest), layer[i] = -i (earlier layer = highest)
+    //   Ascending sort, last applied wins → correct per spec.
+    // `specificity`, `rule_idx`, `decl_idx` — обычный каскад внутри одного layer.
+    let layer_n = sheet.layer_order.len() as i32;
+    // Compute layer priority sign correctly for normal vs !important declarations.
+    // For normal (imp=false): higher = wins → unlayered = N > layer[N-1] > ... > layer[0]
+    // For !important (imp=true): lower layer_idx wins → layer[0] = 0 > layer[1] = -1 > ... > unlayered = -N
+    let layer_pri = |imp: bool, layer_idx: i32| -> i32 {
+        if imp { -layer_idx } else { layer_idx }
+    };
+    let mut matched: Vec<(bool, bool, i32, Specificity, usize, usize, &Declaration)> = Vec::new();
     for (rule_idx, rule) in sheet.rules.iter().enumerate() {
         let mut best: Option<Specificity> = None;
         for complex in &rule.selectors {
@@ -4171,10 +4181,46 @@ pub fn compute_style(
         }
         if let Some(spec) = best {
             for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                matched.push((decl.important, false, spec, rule_idx, decl_idx, decl));
+                let lp = layer_pri(decl.important, layer_n);
+                matched.push((decl.important, false, lp, spec, rule_idx, decl_idx, decl));
             }
         }
     }
+
+    // CSS Cascade L5 §6.4.5 — @layer rules: каждый LayerRule добавляет
+    // свои декларации в каскад с layer_priority < unlayered. Layer с меньшим
+    // индексом в `layer_order` имеет меньший приоритет для normal (earlier
+    // declared → overridden by later), и больший для !important (CSS Cascade
+    // L5 §6.4.5 inversion: earlier layer !important wins).
+    let layer_rule_base = sheet.rules.len()
+        + sheet.media_rules.iter().map(|m| m.rules.len()).sum::<usize>();
+    let mut layer_rule_offset = 0usize;
+    for layer_rule in &sheet.layers {
+        let layer_idx = sheet.layer_order.iter()
+            .position(|n| n == &layer_rule.name)
+            .unwrap_or(0) as i32;
+        for (rule_idx, rule) in layer_rule.rules.iter().enumerate() {
+            let mut best: Option<Specificity> = None;
+            for complex in &rule.selectors {
+                if matches_complex(complex, doc, node) {
+                    let spec = complex.specificity();
+                    best = Some(match best {
+                        Some(prev) if prev >= spec => prev,
+                        _ => spec,
+                    });
+                }
+            }
+            if let Some(spec) = best {
+                let global_rule_idx = layer_rule_base + layer_rule_offset + rule_idx;
+                for (decl_idx, decl) in rule.declarations.iter().enumerate() {
+                    let lp = layer_pri(decl.important, layer_idx);
+                    matched.push((decl.important, false, lp, spec, global_rule_idx, decl_idx, decl));
+                }
+            }
+        }
+        layer_rule_offset += layer_rule.rules.len();
+    }
+
     // CSS Media Queries L4: rules внутри `@media`-блока, чей query
     // совпадает с текущим MediaContext, добавляются в каскад. В Phase 0
     // упрощённый MediaContext: media_type="screen", width/height из
@@ -4201,7 +4247,8 @@ pub fn compute_style(
             }
             if let Some(spec) = best {
                 for (decl_idx, decl) in rule.declarations.iter().enumerate() {
-                    matched.push((decl.important, false, spec, next_rule_idx, decl_idx, decl));
+                    let lp = layer_pri(decl.important, layer_n);
+                    matched.push((decl.important, false, lp, spec, next_rule_idx, decl_idx, decl));
                 }
             }
             next_rule_idx += 1;
@@ -4211,19 +4258,20 @@ pub fn compute_style(
     // synthetic specificity = default (Cascade L4 §6.4.3 — реальная
     // specificity inline-стиля игнорируется в сортировке: за порядок
     // отвечает is_inline-бит, а внутри inline — источниковый порядок
-    // декларации в атрибуте).
+    // декларации в атрибуте). Inline-стиль всегда unlayered.
     for (decl_idx, decl) in inline_decls.iter().enumerate() {
         matched.push((
             decl.important,
             true,
+            layer_pri(decl.important, layer_n),
             Specificity::default(),
             next_rule_idx,
             decl_idx,
             decl,
         ));
     }
-    matched.sort_by_key(|&(imp, inline, spec, rule_idx, decl_idx, _)| {
-        (imp, inline, spec, rule_idx, decl_idx)
+    matched.sort_by_key(|&(imp, inline, lp, spec, rule_idx, decl_idx, _)| {
+        (imp, inline, lp, spec, rule_idx, decl_idx)
     });
 
     // Pre-pass: применяем font-size раньше, потому что em/% других свойств
@@ -4231,7 +4279,7 @@ pub fn compute_style(
     // самого font-size — относительно inherited (родительского) font-size.
     let parent_fs = inherited.font_size;
     let is_quirks = doc.mode() == DocumentMode::Quirks;
-    for (_, _, _, _, _, decl) in &matched {
+    for (_, _, _, _, _, _, decl) in &matched {
         apply_font_size(&mut style, decl, parent_fs, viewport, is_quirks);
     }
 
@@ -4247,7 +4295,7 @@ pub fn compute_style(
     // значение (родительское inherited или initial-value) остаётся.
     // value, содержащее `var(`, пропускается без валидации — резолв
     // происходит позже, и итоговая строка может быть валидной.
-    for (_, _, _, _, _, decl) in &matched {
+    for (_, _, _, _, _, _, decl) in &matched {
         if let Some(name) = decl.property.strip_prefix("--") {
             let key = format!("--{name}");
             if let Some(prop_rule) = registry.get(key.as_str())
@@ -4273,7 +4321,7 @@ pub fn compute_style(
     // `inherited` целиком — для CSS-wide keywords (CSS Cascade L4 §7).
     let em_basis = style.font_size;
     let parent_weight = inherited.font_weight;
-    for (_, _, _, _, _, decl) in &matched {
+    for (_, _, _, _, _, _, decl) in &matched {
         apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, inherited, is_quirks);
     }
 
@@ -17121,6 +17169,86 @@ mod tests {
             "",
             &[0],
         );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    // ─── @layer cascade ordering (CSS Cascade L5 §6.4.5) ─────────────────────
+
+    #[test]
+    fn at_layer_unlayered_beats_layered() {
+        // Unlayered rule wins over layered rule with equal specificity.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base { p { color: red; } } p { color: blue; }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn at_layer_later_layer_beats_earlier_layer() {
+        // layer `components` declared after `base` → higher priority.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base { p { color: red; } } \
+             @layer components { p { color: blue; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn at_layer_order_statement_respected() {
+        // Statement-form `@layer base, components;` fixes order;
+        // later block definitions don't change priority.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base, components; \
+             @layer components { p { color: blue; } } \
+             @layer base { p { color: red; } }",
+            &[0],
+        );
+        // components has higher priority than base → blue wins.
+        assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn at_layer_important_reversal() {
+        // CSS Cascade L5 §6.4.5: for !important, earlier layer's !important
+        // wins (inversion of normal ordering). Layer `base` declared first
+        // → base !important wins over components !important.
+        let s = cascade_at(
+            "<p>x</p>",
+            "@layer base { p { color: red !important; } } \
+             @layer components { p { color: blue !important; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_layer_unlayered_important_loses_to_layered_important() {
+        // Unlayered !important loses to any layer's !important
+        // (per CSS Cascade L5 §6.4.5 inversion: unlayered has lowest
+        // !important priority, i.e., layer[0]'s !important beats it).
+        let s = cascade_at(
+            "<p>x</p>",
+            "p { color: blue !important; } \
+             @layer base { p { color: red !important; } }",
+            &[0],
+        );
+        assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn at_layer_specificity_within_same_layer() {
+        // Within a single layer, normal specificity rules apply.
+        let s = cascade_at(
+            r#"<p class="k">x</p>"#,
+            "@layer base { .k { color: blue; } p { color: red; } }",
+            &[0],
+        );
+        // .k has higher specificity → blue.
         assert_eq!(s.color, Color { r: 0, g: 0, b: 255, a: 255 });
     }
 
