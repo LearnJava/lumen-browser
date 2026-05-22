@@ -2474,6 +2474,25 @@ mod tests {
         assert_eq!(rects.len(), 2, "expected underline + line-through rects");
     }
 
+    /// text-decoration-color: explicit — линия использует его, не цвет текста.
+    #[test]
+    fn decoration_explicit_color_overrides_text_color() {
+        let dl = build_wrapped(
+            "<p><a>link</a></p>",
+            "a { color: red; text-decoration: underline; text-decoration-color: blue; }",
+            800.0,
+        );
+        let colors: Vec<Color> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::FillRect { color, .. } => Some(*color),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(colors.len(), 1);
+        assert_eq!([colors[0].r, colors[0].g, colors[0].b], [0, 0, 255]);
+    }
+
     /// Цвет линии совпадает с цветом текста (currentColor).
     #[test]
     fn decoration_uses_text_color() {

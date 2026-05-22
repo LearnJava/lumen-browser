@@ -32,8 +32,8 @@ BUG-011 | OPEN             | layout/paint    | list markers (bullet, numbers) no
 BUG-013 | FIXED 2026-05-22 | layout          | adjacent <span style="..."> stack vertically without separator
 BUG-014 | FIXED 2026-05-21 | image           | JPEG not decoded (PNG only)
 BUG-015 | OPEN             | shell/paint     | broken <img> src shows no alt text
-BUG-017 | OPEN             | layout/paint    | text-decoration-style ignored (all render as solid)
-BUG-018 | OPEN             | layout          | text-decoration-color ignored (always inherits text color)
+BUG-017 | FIXED 2026-05-22 | layout/paint    | text-decoration-style ignored (all render as solid)
+BUG-018 | FIXED 2026-05-22 | layout          | text-decoration-color ignored (always inherits text color)
 BUG-023 | OPEN             | layout+paint    | opacity deviation 2.20% — compositing correct; root: InlineBlockRow baseline + no edge-AA
 BUG-024 | FIXED 2026-05-21 | layout          | box-sizing: content-box — border not added to outer size; height% resolved against width
 BUG-025 | OPEN             | layout          | max-height does not clamp block height
