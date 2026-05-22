@@ -17,7 +17,7 @@ Coordination rules:
   — Before touching display_list.rs / renderer.rs: notify P2 in commit message
   — Use separate worktree for every task: .claude/worktrees/<task>/
   — Merge to main after each property (keep divergence small)
-  — Compliance tracker: css-2026-compliance.md
+  — Compliance tracker: CSS-SPECS.md (единственный источник правды)
   — P1/P2/P3 handoff: when they add a new algorithm stub marked // CSS: <prop>,
     it appears in "Needs wiring" above — pick it up as a P4 task
 

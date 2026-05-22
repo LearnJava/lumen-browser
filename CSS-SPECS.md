@@ -205,6 +205,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `background-color` | ✅ | |
 | `color-scheme` | 🟡 | parsed; UA switching ⬜ |
 | `forced-color-adjust` | 🟡 | parsed; Forced Colors Mode ⬜ |
+| `print-color-adjust` / `color-adjust` | 🟡 | parsed/stored; print rendering ⬜ |
 | `accent-color` | 🟡 | parsed; UA default ⬜ |
 | `color-mix()` | ⬜ | CSS Color L5 |
 
@@ -334,7 +335,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| Nested rules `&` | ⬜ | parser does not handle nested blocks |
+| Nested rules `&` | ✅ | parse-time expansion: `& sel`, `& > sel`, `& + sel`, `& ~ sel`, `&.cls`; multi-parent + deep nesting |
 | `@nest` (legacy) | ⬜ | |
 
 ### [T1] Table Layout
@@ -460,7 +461,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `grid-template-columns` / `grid-template-rows` | 🟡 | px/fr/auto/repeat()/minmax() ✅ |
-| `grid-template-areas` | ⬜ | named area strings |
+| `grid-template-areas` | 🟡 | parsed; named area lookup not wired to placement |
 | `grid-template` / `grid` (super-shorthand) | 🟡 | |
 | `grid-auto-columns` / `grid-auto-rows` | 🟡 | |
 | `grid-auto-flow` | 🟡 | row/column ✅; dense ⬜ |
@@ -493,7 +494,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `env()` | ⬜ | safe-area-inset-*, titlebar-area-* |
 | `attr()` with type | 🟡 | string only; type casting ⬜ |
 | `cqw` / `cqh` / `cqi` / `cqb` | ⬜ | container query units |
-| `svh` / `dvh` / `lvh` / `svw` / `dvw` | 🟡 | parsed; approx as vh/vw ⬜ |
+| `svh` / `dvh` / `lvh` / `svw` / `dvw` / `lvw` | ✅ | = vh/vw (Phase 0 fixed viewport) |
+| `svmin`/`dvmin`/`lvmin`, `svmax`/`dvmax`/`lvmax` | ✅ | = vmin/vmax |
 
 ---
 
@@ -516,7 +518,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `column-rule` / `column-rule-*` | 🟡 | parsed; rendering ⬜ |
 | `column-span` | 🟡 | parsed; spanning ⬜ |
 | `column-fill` | 🟡 | parsed; balancing ⬜ |
-| `break-before` / `break-after` / `break-inside` | ⬜ | CSS Fragmentation L3 |
+| `break-before` / `break-after` / `break-inside` | 🟡 | parsed/stored; fragmentation algorithm ⬜ |
+| `orphans` / `widows` | 🟡 | parsed/stored; paged-media layout ⬜ |
 
 ### [T3] Container Queries
 
@@ -600,12 +603,15 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `px`/`em`/`rem`/`%` | ✅ | |
 | `vh`/`vw`/`vmin`/`vmax` | ✅ | |
 | `pt`/`pc`/`in`/`cm`/`mm` | ✅ | absolute |
-| `ch`/`ex` | 🟡 | approximate |
+| `ch`/`ex` | ✅ | approximated as 0.5em (Phase 0) |
+| `cap`/`lh` | ✅ | approximated as 0.7em / 1.2em (Phase 0) |
+| `Q` | ✅ | = 0.25mm → px |
 | `calc()` | ✅ | arithmetic |
 | `min()`/`max()`/`clamp()` | ✅ | comparison |
 | `var()` | 🟡 | partial substitution |
 | `url()` | ✅ | |
-| `svh`/`dvh`/`lvh` | 🟡 | approx as vh ⬜ |
+| `svh`/`dvh`/`lvh`/`svw`/`dvw`/`lvw` | ✅ | = vh/vw (Phase 0 fixed viewport) |
+| `svmin`/`dvmin`/`lvmin`/`svmax`/`dvmax`/`lvmax` | ✅ | = vmin/vmax |
 | `cqw`/`cqh`/`cqi`/`cqb` | ⬜ | container query units |
 | `env()` | ⬜ | |
 | `attr()` | 🟡 | string; type casting ⬜ |
