@@ -39,9 +39,9 @@ use lumen_storage::session_export::{self, ExportedTab, SessionFile};
 use lumen_storage::{BfCache, BfCacheEntry};
 use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
 use std::collections::HashMap;
-use lumen_layout::{LayoutBox, TransitionScheduler};
+use lumen_layout::{LayoutBox, PaintOrder, StackingTree, TransitionScheduler};
 use lumen_layout::style::ComputedStyle;
-use lumen_paint::{build_display_list_with_anim, hit_test, DisplayList, Renderer};
+use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, Renderer};
 use lumen_layout::Cursor as CssCursor;
 use winit::application::ApplicationHandler;
 
@@ -255,7 +255,7 @@ fn run_dump(
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
             let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp)?;
-            let dl = lumen_paint::build_display_list(&parsed.layout);
+            let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
         }
@@ -1117,13 +1117,20 @@ fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, ComputedStyle>) 
     }
 }
 
+/// Строит display list с правильным painting order (CSS 2.1 Appendix E, z-index stacking).
+fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
+    let tree = StackingTree::build(layout);
+    let order = PaintOrder::from_tree(&tree);
+    build_display_list_ordered(layout, &tree, &order)
+}
+
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
 /// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
 fn relayout_page(src: &LayoutSource, viewport: Size) -> (DisplayList, lumen_layout::LayoutBox) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let layout = lumen_layout::layout_measured(&src.document, &src.stylesheet, viewport, &measurer);
-    let dl = lumen_paint::build_display_list(&layout);
+    let dl = paint_ordered(&layout);
     (dl, layout)
 }
 
@@ -1135,7 +1142,7 @@ fn render_bytes(
     viewport: Size,
 ) -> Result<(LoadedPage, LayoutSource), Box<dyn Error>> {
     let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport)?;
-    let display_list = lumen_paint::build_display_list(&parsed.layout);
+    let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
         parsed.document.len(),
@@ -1727,7 +1734,7 @@ impl Lumen {
 
         let empty_sheet = lumen_css_parser::Stylesheet::default();
         let layout = lumen_layout::layout_measured(doc, &empty_sheet, viewport, &measurer);
-        let dl = lumen_paint::build_display_list(&layout);
+        let dl = paint_ordered(&layout);
 
         self.content_height = content_height_of(&dl);
         self.content_width = content_width_of(&dl);
@@ -2335,7 +2342,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     if let (Some(frame), Some(lb)) = (&self.anim_frame, &self.layout_box) {
                         let comp = frame.to_compositor_frame();
                         if !comp.is_empty() {
-                            Some(build_display_list_with_anim(lb, Some(&comp)))
+                            let tree = StackingTree::build(lb);
+                            let order = PaintOrder::from_tree(&tree);
+                            Some(build_display_list_ordered_with_anim(lb, &tree, &order, Some(&comp)))
                         } else {
                             None
                         }

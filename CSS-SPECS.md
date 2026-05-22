@@ -9,12 +9,12 @@ Legend: ✅ implemented · 🟡 parsed/stored, rendering deferred · ⬜ not sta
 
 ---
 
-## Quick stats (2026-05-22)
+## Quick stats (2026-05-23)
 
 | Status | Properties |
 |--------|-----------|
-| ✅ Fully implemented | ~135 |
-| 🟡 Partial (parsed, not rendered) | ~91 |
+| ✅ Fully implemented | ~136 |
+| 🟡 Partial (parsed, not rendered) | ~90 |
 | ⬜ Not started | ~15 |
 | 🚫 Out of scope | ~20 |
 
@@ -52,7 +52,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Nesting | [css-nesting-1](https://www.w3.org/TR/css-nesting-1/) | ✅ | `&`-explicit + implicit `.foo{}`/`>.foo{}` nesting + nested `@media`/`@supports`/`@layer`/`@container`; 20 tests | **#4** |
 | CSS Display L3 (table) | [css-display-3](https://www.w3.org/TR/css-display-3/) | 🟡 | display:table/row/cell layout engine | **#5** |
 | CSS Positioning L3 (sticky) | [css3-positioning](https://www.w3.org/TR/css3-positioning/) | 🟡 | position:sticky + scroll listener | **#6** |
-| CSS Positioning L3 (z-index) | [css3-positioning](https://www.w3.org/TR/css3-positioning/) | 🟡 | stacking context paint ordering | **#7** |
+| CSS Positioning L3 (z-index) | [css3-positioning](https://www.w3.org/TR/css3-positioning/) | ✅ | StackingTree + PaintOrder + build_display_list_ordered wired in shell | **#7** |
 | CSS 2.1 floats | [CSS2](https://www.w3.org/TR/CSS2/) | ✅ | FloatContext placement + FloatSide/ClearSide + 10 tests | **#8** |
 | CSS Lists L3 | [css3-lists](https://www.w3.org/TR/css3-lists/) | 🟡 | list-style-type marker rendering | **#9** |
 | CSS Cascading L4/L5 | [css-cascade-4](https://www.w3.org/TR/css-cascade-4/) | ✅ | @layer cascade ordering: layer_priority in sort key, 6 tests | **#10** |
@@ -680,7 +680,7 @@ Ordered list of 🟡→✅ promotions for the P4 developer. One item = one featu
 | 3 | `@keyframes` AnimationScheduler::tick wiring | L | transitions done |
 | 4 | CSS Nesting — nested rule parser | L | none |
 | 5 | `position: sticky` layout + scroll listener | M | none |
-| 6 | `z-index` stacking context paint ordering | M | none |
+| 6 | `z-index` stacking context paint ordering | ✅ | StackingTree+PaintOrder wired in shell; build_display_list_ordered_with_anim 2026-05-23 |
 | 7 | `float` + `clear` layout algorithm | ✅ | FloatContext + FloatSide/ClearSide + 10 tests 2026-05-22 |
 | 8 | `list-style-type` marker rendering | S | none |
 | 9 | `@layer` cascade ordering | ✅ | done 2026-05-22 |

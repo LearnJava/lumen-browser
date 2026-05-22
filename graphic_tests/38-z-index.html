@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>TEST-38: z-index stacking context paint order</title>
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f {
+    background: #ffffff;
+    width: 1022px; height: 718px; margin: 1px; padding: 40px;
+    overflow: hidden; box-sizing: border-box;
+    position: relative;
+  }
+  /* Three concentric squares — each a stacking context via position+z-index.
+     Expected: corners=green(z1), ring=blue(z2), center=red(z3).
+     Any wrong paint order makes a different color appear at an unexpected position. */
+  .box {
+    position: absolute;
+  }
+  .green {
+    width: 300px; height: 300px;
+    background: #00cc44;
+    top: 80px; left: 80px;
+    z-index: 1;
+  }
+  .blue {
+    width: 200px; height: 200px;
+    background: #2255cc;
+    top: 130px; left: 130px;
+    z-index: 2;
+  }
+  .red {
+    width: 100px; height: 100px;
+    background: #ee2222;
+    top: 180px; left: 180px;
+    z-index: 3;
+  }
+  /* Negative z-index: purple box should render BEHIND the white .__f background.
+     It becomes invisible — tests negative-z child painted in phase 2 (behind root). */
+  .neg {
+    width: 120px; height: 120px;
+    background: #880088;
+    top: 460px; left: 80px;
+    z-index: -1;
+  }
+  /* z-index:auto (no z-index keyword) positioned element — painted in phase 6. */
+  .auto-z {
+    width: 120px; height: 120px;
+    background: #ff8800;
+    top: 460px; left: 240px;
+    position: absolute;
+  }
+  /* Sibling with explicit z-index:0 — same phase as auto. */
+  .zero-z {
+    width: 120px; height: 120px;
+    background: #ffcc00;
+    top: 460px; left: 400px;
+    z-index: 0;
+  }
+  /* High positive z-index overlapping zero-z — should render on top. */
+  .high-z {
+    width: 120px; height: 120px;
+    background: #00aaff;
+    top: 480px; left: 440px;
+    z-index: 5;
+  }
+</style>
+</head>
+<body>
+<div class="__f">
+  <!-- Nested stacking contexts: green < blue < red -->
+  <div class="box green"></div>
+  <div class="box blue"></div>
+  <div class="box red"></div>
+  <!-- Negative z — invisible (behind .__f background) -->
+  <div class="box neg"></div>
+  <!-- auto, zero, and high positive z-index -->
+  <div class="box auto-z"></div>
+  <div class="box zero-z"></div>
+  <div class="box high-z"></div>
+</div>
+</body>
+</html>

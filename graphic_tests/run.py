@@ -79,6 +79,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('35', '35-grid-named-areas.html',  2.0, 'CSS Grid named areas: grid-template-areas + grid-area: <name>'),
     ('36', '36-border-radius.html',     2.0, 'border-radius: uniform/pill/circle/asymmetric SDF rendering'),
     ('37', '37-float-clear.html',       3.0, 'float: left/right placement + clear: both clearance'),
+    ('38', '38-z-index.html',           3.0, 'z-index stacking context paint order (CSS 2.1 Appendix E)'),
 ]
 
 # --- PNG reader (stdlib only) ---
