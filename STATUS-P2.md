@@ -1,4 +1,5 @@
-In progress: —
+In progress: gradient-rendering  branch: p2-gradient-rendering
+Next step: WGSL шейдеры linear/radial gradient + GPU pipeline в renderer.rs  crates/engine/paint/src/renderer.rs:3271
 
 Next:
 
