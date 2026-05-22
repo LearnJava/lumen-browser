@@ -23,7 +23,7 @@ use rustls::pki_types::ServerName;
 use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, TabId};
 use lumen_core::ext::{
-    ContentDecoder, DnsResolver, EventSink, HstsEnforcement, HttpAuthScheme,
+    ContentDecoder, DnsResolver, EventSink, FetchInterceptor, HstsEnforcement, HttpAuthScheme,
     HttpCredentialProvider, NetworkTransport, RequestFilter, SseProvider, SseSession,
     WebSocketProvider, WebSocketSession,
 };
@@ -96,6 +96,18 @@ fn require_http_scheme(url: &Url) -> Result<(String, u16, bool)> {
         .effective_port()
         .ok_or_else(|| Error::Network(format!("no port for URL: {}", url.as_str())))?;
     Ok((host, port, is_tls))
+}
+
+/// Построить ASCII-origin из URL: `scheme://host[:port]`.
+/// Стандартные порты опускаются (80 для http, 443 для https).
+fn build_origin(url: &Url) -> String {
+    let scheme = url.scheme();
+    let host = url.host_ascii().unwrap_or_default();
+    let default_port: u16 = if scheme == "https" { 443 } else { 80 };
+    match url.effective_port() {
+        Some(p) if p != default_port => format!("{scheme}://{host}:{p}"),
+        _ => format!("{scheme}://{host}"),
+    }
 }
 
 // ── TCP + TLS stream ─────────────────────────────────────────────────────────
@@ -1200,6 +1212,7 @@ fn fetch_with_redirect(
 pub struct HttpClient {
     sink: Option<Arc<dyn EventSink>>,
     filter: Option<Arc<dyn RequestFilter>>,
+    interceptor: Option<Arc<dyn FetchInterceptor>>,
     pool: Arc<ConnectionPool>,
     h2_pool: Option<Arc<H2Pool>>,
     resolver: Arc<dyn DnsResolver>,
@@ -1216,6 +1229,7 @@ impl HttpClient {
         Self {
             sink: None,
             filter: None,
+            interceptor: None,
             pool: Arc::new(ConnectionPool::new()),
             h2_pool: None,
             resolver: Arc::new(SystemDnsResolver),
@@ -1243,6 +1257,18 @@ impl HttpClient {
     #[must_use]
     pub fn with_filter(mut self, filter: Arc<dyn RequestFilter>) -> Self {
         self.filter = Some(filter);
+        self
+    }
+
+    /// Подключить Service Worker перехватчик fetch-запросов. Проверяется
+    /// до выхода в сеть: если `intercept()` вернул `Some(body)` — ответ
+    /// берётся из SW-кэша без TCP-соединения. `None` — обычный сетевой fetch.
+    ///
+    /// Реализация — `lumen-storage::ServiceWorkerInterceptor` (SQLite-backed).
+    /// Для тестов без SQLite используется `InMemoryFetchInterceptor`.
+    #[must_use]
+    pub fn with_interceptor(mut self, interceptor: Arc<dyn FetchInterceptor>) -> Self {
+        self.interceptor = Some(interceptor);
         self
     }
 
@@ -1646,6 +1672,13 @@ impl HttpClient {
 
 impl NetworkTransport for HttpClient {
     fn fetch(&self, url: &Url) -> Result<Vec<u8>> {
+        // SW intercept: check before any network I/O.
+        if let Some(ref interceptor) = self.interceptor {
+            let origin = build_origin(url);
+            if let Some(body) = interceptor.intercept(url, &origin) {
+                return Ok(body);
+            }
+        }
         let accept_encoding = self.accept_encoding_header();
         // Когда mixed_content policy задана (клиент работает в secure-context),
         // используем RequestDestination::Other (Blockable) как fallback —
@@ -1703,6 +1736,50 @@ impl SseProvider for HttpClient {
     ) -> Result<Box<dyn SseSession>> {
         let es = sse::EventSource::connect(url, Arc::clone(&self.resolver), sink, tab_id)?;
         Ok(Box::new(es))
+    }
+}
+
+// ── Service Worker in-memory interceptor (для тестов) ────────────────────────
+
+/// In-memory реализация `FetchInterceptor` для тестов без SQLite.
+///
+/// Хранит `origin → cache_name → url → body`. Shell подключает
+/// `ServiceWorkerInterceptor` из lumen-storage; эта заглушка используется
+/// в unit-тестах lumen-network, где SQLite не нужен.
+pub struct InMemoryFetchInterceptor {
+    // (origin, url) → body
+    cache: std::sync::Mutex<std::collections::HashMap<(String, String), Vec<u8>>>,
+}
+
+impl InMemoryFetchInterceptor {
+    pub fn new() -> Self {
+        Self {
+            cache: std::sync::Mutex::new(std::collections::HashMap::new()),
+        }
+    }
+
+    /// Добавить запись: ответ для (origin, url) берётся из кэша без сети.
+    pub fn insert(&self, origin: impl Into<String>, url: impl Into<String>, body: Vec<u8>) {
+        self.cache
+            .lock()
+            .unwrap()
+            .insert((origin.into(), url.into()), body);
+    }
+}
+
+impl Default for InMemoryFetchInterceptor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl FetchInterceptor for InMemoryFetchInterceptor {
+    fn intercept(&self, url: &Url, origin: &str) -> Option<Vec<u8>> {
+        self.cache
+            .lock()
+            .unwrap()
+            .get(&(origin.to_string(), url.as_str().to_string()))
+            .cloned()
     }
 }
 
@@ -4628,3 +4705,74 @@ world\r\n\
     }
 }
 
+// ── InMemoryFetchInterceptor tests ────────────────────────────────────────────
+
+#[cfg(test)]
+mod interceptor_tests {
+    use super::*;
+
+    #[test]
+    fn build_origin_standard_ports_omitted() {
+        let http = Url::parse("http://example.com/path").unwrap();
+        assert_eq!(build_origin(&http), "http://example.com");
+
+        let https = Url::parse("https://example.com/path").unwrap();
+        assert_eq!(build_origin(&https), "https://example.com");
+    }
+
+    #[test]
+    fn build_origin_non_standard_port_included() {
+        let url = Url::parse("https://example.com:8443/path").unwrap();
+        assert_eq!(build_origin(&url), "https://example.com:8443");
+
+        let url2 = Url::parse("http://localhost:3000/api").unwrap();
+        assert_eq!(build_origin(&url2), "http://localhost:3000");
+    }
+
+    #[test]
+    fn in_memory_interceptor_miss_returns_none() {
+        let i = InMemoryFetchInterceptor::new();
+        let url = Url::parse("https://example.com/page").unwrap();
+        assert!(i.intercept(&url, "https://example.com").is_none());
+    }
+
+    #[test]
+    fn in_memory_interceptor_hit_returns_body() {
+        let i = InMemoryFetchInterceptor::new();
+        i.insert(
+            "https://example.com",
+            "https://example.com/page",
+            b"hello".to_vec(),
+        );
+        let url = Url::parse("https://example.com/page").unwrap();
+        assert_eq!(
+            i.intercept(&url, "https://example.com"),
+            Some(b"hello".to_vec())
+        );
+    }
+
+    #[test]
+    fn in_memory_interceptor_wrong_origin_miss() {
+        let i = InMemoryFetchInterceptor::new();
+        i.insert("https://other.com", "https://example.com/page", b"x".to_vec());
+        let url = Url::parse("https://example.com/page").unwrap();
+        assert!(i.intercept(&url, "https://example.com").is_none());
+    }
+
+    #[test]
+    fn network_transport_uses_interceptor_before_network() {
+        // Interceptor возвращает тело — сетевого запроса не должно быть.
+        // Проверяем на несуществующем хосте: если interceptor не сработает,
+        // fetch провалится с network error; если сработает — Ok.
+        let interceptor = Arc::new(InMemoryFetchInterceptor::new());
+        interceptor.insert(
+            "https://no-such-host-lumen-test.invalid",
+            "https://no-such-host-lumen-test.invalid/data",
+            b"intercepted".to_vec(),
+        );
+        let client = HttpClient::new().with_interceptor(interceptor);
+        let url = Url::parse("https://no-such-host-lumen-test.invalid/data").unwrap();
+        let result = client.fetch(&url).unwrap();
+        assert_eq!(result, b"intercepted");
+    }
+}
