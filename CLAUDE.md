@@ -22,6 +22,7 @@ Current phase: **Phase 0 (prototype)**. Goal: open local HTML+CSS and render it 
 | `STATUS-P3.md` | P3 sprint: in-progress task, next items, recent merge. Read at session start if you are P3. |
 | `STATUS-P4.md` | P4 sprint: CSS spec compliance. Read at session start if you are P4. |
 | `lumen-plan.md` | Full design doc (~1200 lines, 22 chapters): principles, scope, architecture, phases. Read for architecture/history, not daily status. |
+| `CSS-SPECS.md` | Complete CSS property & spec roadmap: all W3C modules, per-property status (✅🟡⬜🚫), P4 priority queue. |
 | `CLAUDE.md` | (this file) Conventions and invariants for the assistant. |
 | `samples/page.html` | Test page for pipeline runs. |
 | `assets/fonts/Inter-Regular.ttf` | Bundled font (SIL OFL 1.1). |
