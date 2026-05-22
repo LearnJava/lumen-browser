@@ -97,47 +97,64 @@ def show_status():
     print("-" * 50)
 
 
-def format_event(event: dict) -> str | None:
-    """Превратить JSON-событие stream-json в читаемую строку."""
-    msg = event.get("message", {})
-    msg_type = event.get("type", "")
+def format_tool_use(block: dict) -> str:
+    """Форматировать один tool_use блок."""
+    tool = block.get("name", "?")
+    inp = block.get("input", {})
+    if tool == "Bash":
+        cmd = inp.get("command", "")
+        preview = cmd[:120].replace("\n", " ")
+        return f"  $ {preview}"
+    elif tool == "Read":
+        return f"  Читает: {inp.get('file_path', '?')}"
+    elif tool == "Edit":
+        return f"  Редактирует: {inp.get('file_path', '?')}"
+    elif tool == "Write":
+        return f"  Пишет: {inp.get('file_path', '?')}"
+    elif tool == "Grep":
+        return f"  Ищет: {inp.get('pattern', '?')}"
+    elif tool == "Glob":
+        return f"  Glob: {inp.get('pattern', '?')}"
+    elif tool == "Skill":
+        return f"  Skill: {inp.get('skill', '?')}"
+    elif tool == "Agent":
+        return f"  Agent: {inp.get('description', '?')}"
+    else:
+        return f"  Инструмент: {tool}"
 
-    # Ответ ассистента (финальный текст)
-    if msg.get("role") == "assistant" and msg_type == "result":
-        text = ""
-        for block in msg.get("content", []):
-            if block.get("type") == "text":
-                text = block["text"]
-        if text:
-            preview = text[:200].replace("\n", " ")
-            if len(text) > 200:
+
+def format_event(event: dict) -> list[str]:
+    """Превратить JSON-событие stream-json в читаемые строки."""
+    lines = []
+    ev_type = event.get("type", "")
+
+    # Финальный результат
+    if ev_type == "result":
+        result_text = event.get("result", "")
+        if result_text:
+            preview = result_text[:200].replace("\n", " ")
+            if len(result_text) > 200:
                 preview += "..."
-            return f"  Ответ: {preview}"
+            lines.append(f"  Результат: {preview}")
+        return lines
 
-    # Использование инструмента
-    if msg_type == "tool_use":
-        tool = msg.get("name", "?")
-        inp = msg.get("input", {})
-        if tool == "Bash":
-            cmd = inp.get("command", "")
-            preview = cmd[:120].replace("\n", " ")
-            return f"  $ {preview}"
-        elif tool == "Read":
-            return f"  Читает: {inp.get('file_path', '?')}"
-        elif tool == "Edit":
-            return f"  Редактирует: {inp.get('file_path', '?')}"
-        elif tool == "Write":
-            return f"  Пишет: {inp.get('file_path', '?')}"
-        elif tool == "Grep":
-            return f"  Ищет: {inp.get('pattern', '?')}"
-        elif tool == "Glob":
-            return f"  Glob: {inp.get('pattern', '?')}"
-        elif tool == "Skill":
-            return f"  Skill: {inp.get('skill', '?')}"
-        else:
-            return f"  Инструмент: {tool}"
+    # Сообщение ассистента — содержит content[] с text и tool_use
+    if ev_type == "assistant":
+        msg = event.get("message", {})
+        for block in msg.get("content", []):
+            btype = block.get("type", "")
+            if btype == "tool_use":
+                lines.append(format_tool_use(block))
+            elif btype == "text":
+                text = block.get("text", "")
+                if text:
+                    preview = text[:200].replace("\n", " ")
+                    if len(text) > 200:
+                        preview += "..."
+                    lines.append(f"  {preview}")
+        return lines
 
-    return None
+    return lines
 
 
 RATE_LIMIT_RE = re.compile(r"resets?\s+(\d{1,2}:\d{2}(?:am|pm)?)", re.IGNORECASE)
@@ -149,6 +166,7 @@ def run_claude(developer: str, prompt: str) -> tuple[int, bool]:
         [
             "claude", "-p", prompt,
             "--dangerously-skip-permissions",
+            "--verbose",
             "--output-format", "stream-json",
         ],
         stdout=subprocess.PIPE,
@@ -180,9 +198,15 @@ def run_claude(developer: str, prompt: str) -> tuple[int, bool]:
                 log(developer, f"  Rate limit: {line[:120]}")
             continue
 
-        display = format_event(event)
-        if display:
-            log(developer, display)
+        # Детект rate limit в JSON-событии
+        if event.get("type") == "rate_limit_event":
+            info = event.get("rate_limit_info", {})
+            if info.get("status", "").startswith("blocked"):
+                rate_limited = True
+                log(developer, "  Rate limit (blocked)")
+
+        for display_line in format_event(event):
+            log(developer, display_line)
 
     # Проверить stderr тоже — rate limit может быть там
     stderr_output = process.stderr.read()
