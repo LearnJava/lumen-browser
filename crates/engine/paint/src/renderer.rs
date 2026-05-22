@@ -1876,6 +1876,13 @@ impl Renderer {
         self
     }
 
+    /// Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
+    /// чтобы передать `FontRegistry` с @font-face шрифтами после загрузки
+    /// страницы (Renderer уже создан, builder-паттерн недоступен).
+    pub fn set_font_provider(&mut self, provider: Option<Arc<dyn FontProvider>>) {
+        self.font_provider = provider;
+    }
+
     /// Эагерно загружает указанные family-имена через текущий `FontProvider`,
     /// чтобы они были доступны для codepoint cascade ещё до первого `DrawText`
     /// с этой family-ой в CSS. Используется shell-ом для прогрева
@@ -1944,8 +1951,14 @@ impl Renderer {
             if let Some(&id) = self.face_id_by_path.get(&rec.path) {
                 return id;
             }
-            let Ok(raw) = std::fs::read(&rec.path) else {
-                continue;
+            // @font-face in-memory байты (virtual path) или диск для системных шрифтов.
+            let raw = if let Some(mem_bytes) = provider.read_face_bytes(&rec.path) {
+                mem_bytes
+            } else {
+                let Ok(disk_bytes) = std::fs::read(&rec.path) else {
+                    continue;
+                };
+                disk_bytes
             };
             // Transparent WOFF/WOFF2 → sfnt conversion before parsing.
             let bytes = match maybe_decode_font(&raw) {
