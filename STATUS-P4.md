@@ -1,14 +1,10 @@
 In progress: —
 
-Next (Wave 1 — unblock P1/P2):
-
-Next (Wave 2 — unblock P2 animations):
-
-Queue (Wave 3+):
-
-Filler (no dependencies, pick when idle):
+Next:
 tab-size rendering                                           ~1h
 Update css-2026-compliance.md (Grid/Position/Transform outdated)
+
+Queue (Wave 3+):
 
 Coordination rules:
   — Before touching style.rs: check STATUS-P1.md, avoid same property area

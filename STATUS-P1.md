@@ -2,13 +2,12 @@ In progress: —
 
 Next step: —
 
-Next (Wave 2, after D finishes content+pseudo):
-::before/::after layout integration           box_tree.rs    ~2h  depends on P4 content
-BUG-011  list markers (disc/decimal/::marker) box_tree.rs    ~2h  depends on pseudo
+Next:
+::before/::after layout integration           box_tree.rs    ~2h
+BUG-011  list markers (disc/decimal/::marker) box_tree.rs    ~2h
 display: flow-root BFC + contents elimination box_tree.rs    ~2h
 
 Queue (Wave 3+):
-Table layout algorithm                        box_tree.rs    DONE 2026-05-21 (BUG-006)
 display: list-item marker box                 box_tree.rs    ~1h
 Shadow DOM cascade + composed tree                           ~3h
 
