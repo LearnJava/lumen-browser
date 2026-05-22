@@ -1,0 +1,11 @@
+[package]
+name = "lumen-canvas"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Lumen: HTML Canvas 2D rendering context (CanvasRenderingContext2D)"
+
+[dependencies]
+lumen-core.workspace = true

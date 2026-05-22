@@ -184,7 +184,9 @@
 | 4.5.1 | ✅ PushTransform/PopTransform DisplayCommand | `paint/src/display_list.rs` | 2026-05-20 |
 | 4.5.2 | ✅ forward_box_transform публичный из layout | `layout/src/property_trees.rs` | 2026-05-20 |
 | 4.5.3 | ✅ transform_stack + CPU-side vertex transformation | `paint/src/renderer.rs` | 2026-05-20 |
-| 5+ | ⬜ **Extras**: object-fit, Canvas 2D, WOFF2, variable fonts, Print PDF | — | — |
+| 5A | ✅ **Canvas 2D basic context** — CPU rasterizer, `CanvasRenderingContext2D` Phase 0 | `engine/canvas/` | 2026-05-22 |
+| 5B | ✅ **WOFF2/WOFF1 decoder** — brotli + zlib, glyf transform, sfnt rebuild | `engine/font/src/woff2.rs` | 2026-05-22 |
+| 5+ | ⬜ **Extras**: object-fit, variable fonts, Print PDF | — | — |
 
 #### Track P3 — Runtime + system (объединённый домен — больше треков, но всё параллельно)
 

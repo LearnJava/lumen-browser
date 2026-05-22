@@ -23,4 +23,5 @@ Updated with every plan-item commit. For ground truth — `git log --oneline` + 
 | lumen-shell | 🟡 window + render + event loop | [subsystems/shell.md](subsystems/shell.md) |
 | lumen-devtools | ✅ WebSocket + CDP минимум | [subsystems/devtools.md](subsystems/devtools.md) |
 | lumen-bench | ✅ pipeline benchmark | [subsystems/bench.md](subsystems/bench.md) |
+| lumen-canvas | ✅ Canvas 2D CPU rasterizer (Phase 0) | [subsystems/canvas.md](subsystems/canvas.md) |
 | Infrastructure | workspace + test counts + dep policy | [subsystems/infra.md](subsystems/infra.md) |
