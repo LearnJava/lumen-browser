@@ -1,7 +1,7 @@
 # CSS Snapshot 2026 — Lumen Compliance Report
 
 Source: https://www.w3.org/TR/css-2026/ (W3C Group Note, 26 March 2026)  
-Checked: 2026-05-20
+Checked: 2026-05-22
 
 Legend: ✅ implemented & rendered · 🟡 parsed/stored, not rendered · ⬜ not implemented
 
@@ -31,7 +31,7 @@ Legend: ✅ implemented & rendered · 🟡 parsed/stored, not rendered · ⬜ no
 | `list-style-position` | 🟡 | parsed |
 | `list-style-image` | 🟡 | parsed |
 | `list-style` | 🟡 | shorthand parsed |
-| `cursor` | 🟡 | stored; shell does not yet switch OS cursor |
+| `cursor` | ✅ | stored + `css_cursor_to_winit` → `window.set_cursor` in shell |
 | `direction` | 🟡 | stored + RTL inline layout: Start/End resolve, fragment mirroring via align_lines; full UBA deferred |
 | `vertical-align` | ✅ | baseline/top/middle/bottom/sub/super/length/percent applied as per-frag y_offset in InlineFrag |
 | `content` | 🟡 | string content generated for `::before`/`::after` block containers; `attr()`/`counter()` — deferred |
@@ -149,7 +149,7 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | `box-sizing` | ✅ |
 | `outline` | ✅ |
 | `outline-offset` | ✅ |
-| `cursor` | 🟡 parsed; OS cursor not switched |
+| `cursor` | ✅ | parsed + wired to OS cursor via `css_cursor_to_winit` |
 | `resize` | 🟡 | parsed/stored (none/both/horizontal/vertical/block/inline); drag-resize UI — P3 task |
 
 ### CSS Counter Styles Level 3
@@ -160,13 +160,13 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 ## §2.2 Reliable Candidate Recommendations
 
 ### CSS Scroll Snap Level 1
-| Property | Status |
-|---|---|
-| `scroll-snap-type` | 🟡 parsed |
-| `scroll-snap-align` | 🟡 parsed |
-| `scroll-snap-stop` | 🟡 parsed |
-| `scroll-margin-*` | 🟡 parsed |
-| `scroll-padding-*` | 🟡 parsed |
+| Property | Status | Notes |
+|---|---|---|
+| `scroll-snap-type` | 🟡 | parsed; `find_scroll_snap_y` / `find_scroll_snap_y_proximity` in `lumen-paint` compute snap targets; shell wiring pending (P3 task) |
+| `scroll-snap-align` | 🟡 | parsed + used by snap algorithm (Start/Center/End → candidate positions) |
+| `scroll-snap-stop` | 🟡 | parsed |
+| `scroll-margin-*` | 🟡 | parsed |
+| `scroll-padding-*` | 🟡 | parsed |
 
 ### CSS Scrollbars Styling Level 1
 | Property | Status |
@@ -176,10 +176,16 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | `scrollbar-gutter` | 🟡 parsed |
 
 ### CSS Grid Layout Level 1 / Level 2
-| Property | Status |
-|---|---|
-| `display: grid` | ⬜ not implemented |
-| All `grid-*` properties | ⬜ |
+| Property | Status | Notes |
+|---|---|---|
+| `display: grid` | 🟡 | Phase-0 layout: explicit tracks (px/fr/auto), `repeat(N,size)`, `minmax`, integer/span line numbers, `grid-auto-flow: row/column`, `gap`/`column-gap`/`row-gap`, `align-items`/`justify-items` within cells |
+| `grid-template-columns`, `grid-template-rows` | 🟡 | parsed + used by `lay_out_grid` |
+| `grid-auto-columns`, `grid-auto-rows` | 🟡 | parsed + used for auto-track sizing |
+| `grid-column`, `grid-row` (line numbers, span) | 🟡 | parsed + placed in `lay_out_grid` |
+| `grid-area`, `grid-template-areas` | 🟡 | parsed; named area lookup not wired |
+| `grid-auto-flow` | 🟡 | row/column; dense packing deferred |
+| `column-gap`, `row-gap`, `gap` | ✅ | used in grid + flex + multicol |
+| `justify-items`, `align-items` | 🟡 | within grid cells |
 
 ### CSS Color Adjustment Level 1
 | Property | Status |
@@ -200,8 +206,8 @@ Handled by `lumen-css-parser`. Custom properties (`--name`) and `var()` substitu
 | `inline-block` | ✅ |
 | `flex` | ✅ |
 | `none` | ✅ |
-| `grid` | 🟡 | parsed/stored; real grid layout — deferred (4B.6-7) |
-| `inline-grid` | 🟡 | parsed/stored |
+| `grid` | 🟡 | Phase-0 layout in `lay_out_grid` — see CSS Grid L1/L2 section |
+| `inline-grid` | 🟡 | same as `grid` |
 | `flow-root` | 🟡 | parsed/stored; treated as Block in layout |
 | `contents` | 🟡 | parsed/stored; box-generation semantics — deferred |
 | `list-item` | 🟡 | parsed/stored; marker box — deferred |
@@ -238,7 +244,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | `overflow-wrap` / `word-wrap` | ✅ | |
 | `word-break` | ✅ | |
 | `line-break` | 🟡 | parsed/stored (auto/loose/normal/strict/anywhere); CJK line-break — deferred |
-| `hyphens` | 🟡 parsed; no hyphenation engine |
+| `hyphens` | 🟡 | parsed + engine: `none` strips U+00AD; `manual` breaks on soft hyphens; `auto` uses `HyphenationProvider` (stub → real dictionary via trait-anchor) |
 | `tab-size` | 🟡 parsed; tab rendering partial |
 | `text-transform` | ✅ | uppercase / lowercase / capitalize |
 
@@ -260,12 +266,12 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | `mask-repeat`, `mask-size` | 🟡 parsed + wired (URL mask tiling via PopMask composite pass; gradient masks pending) |
 
 ### CSS Text Emphasis (Level 4 / Text Decoration Level 4)
-| Property | Status |
-|---|---|
-| `text-emphasis-style` | 🟡 parsed |
-| `text-emphasis-color` | 🟡 parsed |
-| `text-emphasis-position` | 🟡 parsed |
-| `text-emphasis` | 🟡 parsed |
+| Property | Status | Notes |
+|---|---|---|
+| `text-emphasis-style` | 🟡 | parsed + rendered: per-char mark drawn above/below via `emit_text_emphasis_marks` (linear spacing, no per-glyph metrics) |
+| `text-emphasis-color` | 🟡 | parsed + applied to marks |
+| `text-emphasis-position` | 🟡 | parsed + over/under placement applied |
+| `text-emphasis` | 🟡 | shorthand parsed |
 
 ---
 
@@ -333,8 +339,8 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 |---|---|
 | `position: static` | ✅ |
 | `position: relative` | ✅ | `shift_tree` in `box_tree.rs` applies left/top/right/bottom after normal flow |
-| `position: absolute` | 🟡 stored; OOF layout not implemented |
-| `position: fixed` | 🟡 stored |
+| `position: absolute` | ✅ | `lay_out_abs_children`: resolves left/right/top/bottom against nearest positioned ancestor |
+| `position: fixed` | ✅ | same; containing block = viewport |
 | `position: sticky` | 🟡 stored |
 | `inset` (shorthand) | 🟡 parsed |
 | `z-index` | 🟡 stored |
@@ -386,7 +392,7 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 ### CSS UI Level 4 extras
 | Property | Status |
 |---|---|
-| `user-select` | 🟡 parsed |
+| `user-select` | 🟡 | parsed + exposed via `HitTestResult.user_select`; selection enforcement pending |
 | `caret-color` | 🟡 parsed |
 | `accent-color` | 🟡 parsed |
 | `pointer-events` | 🟡 parsed |
@@ -430,18 +436,18 @@ Implemented for flex containers. Grid not applicable (grid not implemented).
 | CSS Level 2 core (box model, display, color) | ✅ | partial | table layout |
 | CSS Flexbox L1 | ✅ | — | — |
 | CSS Box Alignment L3 | ✅ (flex) | grid/block | — |
-| CSS Text L3 | ✅ most | hyphens, tab, line-break | — |
+| CSS Text L3 | ✅ most | hyphens engine ✅ (manual/auto), tab/line-break parse | — |
 | CSS Text Decoration L3 | ✅ most | thickness | underline-position |
 | CSS Backgrounds L3 | ✅ (color/border/shadow/repeat/position/size) | clip/origin/attachment layers | — |
 | CSS Fonts L3/L4 | ✅ (size/weight/style) | stretch/variant | @font-face parse✅ no fetch |
 | CSS Compositing L1 | ✅ opacity | blend-mode/isolation | — |
 | CSS Images L3 | ✅ object-fit/position/image-rendering | — | — |
-| CSS Transforms L1 | — | parse-only | paint apply |
+| CSS Transforms L1 | ✅ | — | — |
 | CSS Animations L1 | — | parse-only | scheduler |
 | CSS Transitions L1 | — | parse-only | engine |
 | CSS Filters L1 | — | parse-only | paint apply |
-| CSS Positioned Layout L3 | ✅ static | others parse-only | OOF layout |
-| CSS Grid L1/L2 | — | parse+store (grid/inline-grid) | layout algorithm |
+| CSS Positioned Layout L3 | ✅ static/relative/absolute/fixed | sticky parse-only | — |
+| CSS Grid L1/L2 | — | Phase-0 layout: tracks/fr/auto/span/gap/align | named-areas, dense, subgrid |
 | CSS Logical Properties L1 | ✅ parse+store (LTR) | — | full RTL/vertical |
 | CSS Nesting L1 | ✅ | — | — |
 | CSS Multi-column L1 | ✅ count/width/gap | column-rule/span | — |
