@@ -9,3 +9,5 @@ description = "Lumen: TrueType / OpenType парсер и растеризато
 
 [dependencies]
 lumen-core.workspace = true
+brotli-decompressor = "5"
+zune-inflate = "0.2"

@@ -62,6 +62,8 @@ pub enum FontError {
     TableOutOfBounds([u8; 4]),
     TableNotFound([u8; 4]),
     InvalidTable([u8; 4]),
+    /// Structural error in WOFF/WOFF2 container or unsupported feature.
+    InvalidData(&'static str),
 }
 
 impl fmt::Display for FontError {
@@ -72,6 +74,7 @@ impl fmt::Display for FontError {
             Self::TableOutOfBounds(tag) => write!(f, "table {} out of bounds", tag_str(tag)),
             Self::TableNotFound(tag) => write!(f, "table {} not found", tag_str(tag)),
             Self::InvalidTable(tag) => write!(f, "table {} malformed", tag_str(tag)),
+            Self::InvalidData(msg) => write!(f, "invalid font data: {msg}"),
         }
     }
 }

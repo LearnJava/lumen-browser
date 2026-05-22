@@ -1080,7 +1080,9 @@ dependencies = [
 name = "lumen-font"
 version = "0.0.1"
 dependencies = [
+ "brotli-decompressor",
  "lumen-core",
+ "zune-inflate",
 ]
 
 [[package]]
