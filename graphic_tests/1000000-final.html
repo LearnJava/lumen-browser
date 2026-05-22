@@ -251,6 +251,24 @@
     </div>
   </div>
 
+  <!-- @container queries: wide(blue tall) · narrow(red short) · named(green) · max-width(yellow) -->
+  <style>
+    .cq-wide  { container-type:size; width:120px; height:50px; background:#0f3460; border:1px solid #1a5276; }
+    .cq-narrow{ container-type:size; width:60px;  height:50px; background:#0f3460; border:1px solid #922b21; }
+    .cq-named { container-type:size; container-name:fin-sidebar; width:100px; height:50px; background:#1a4a1a; border:1px solid #27ae60; }
+    .cq-maxw  { container-type:inline-size; width:80px; height:50px; background:#2d2d2d; border:1px solid #d4ac0d; }
+    .cq-child { width:100%; height:10px; background:#e74c3c; }
+    @container (min-width: 100px) { .cq-child { height:30px; background:#3498db; } }
+    @container fin-sidebar (min-width: 80px) { .cq-child { height:30px; background:#2ecc71; } }
+    @container (max-width: 150px) { .cq-child { height:30px; background:#f1c40f; } }
+  </style>
+  <div style="margin-top:8px;display:flex;gap:6px;align-items:flex-start">
+    <div class="cq-wide"><div class="cq-child"></div></div>
+    <div class="cq-narrow"><div class="cq-child"></div></div>
+    <div class="cq-named"><div class="cq-child"></div></div>
+    <div class="cq-maxw"><div class="cq-child"></div></div>
+  </div>
+
 </div><!-- /card -->
 </body>
 </html>

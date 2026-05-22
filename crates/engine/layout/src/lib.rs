@@ -25,6 +25,7 @@ pub use animation::{
     CompositorAnimFrame, CompositorOverride,
 };
 pub use box_tree::{
+    apply_container_styles,
     collect_background_image_requests, collect_image_requests, layout, layout_measured, BoxKind,
     ImageRequest, InlineFrag, InlineSegment, LayoutBox,
 };
@@ -39,9 +40,10 @@ pub use stacking::{
     StackingContext, StackingContextId, StackingTree,
 };
 pub use style::{
+    apply_container_rules, evaluate_container_condition,
     parse_background_gradient, parse_color, parse_css_wide_keyword, parse_gradient_stops,
     parse_transform_list,
-    AlignValue, AnimationDirection,
+    AlignValue, AnimationDirection, ContainerContext,
     AnimationFillMode, AnimationPlayState,
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BorderStyle,
@@ -5475,6 +5477,99 @@ mod tests {
         );
         let div = first_element_child(&root);
         assert_eq!(div.rect.height, 0.0, "contain:strict → auto height must be 0, got {}", div.rect.height);
+    }
+
+    // ── CSS Container Queries L1 ──────────────────────────────────────────
+
+    /// @container (min-width) — rule applies when container is wide enough.
+    #[test]
+    fn container_query_min_width_applies() {
+        // Container is 200px wide. Rule applies at min-width:150px → p gets height:40px.
+        let root = lay_measured(
+            "<div><p></p></div>",
+            "div { container-type: size; width: 200px; height: 100px; }
+             @container (min-width: 150px) { p { height: 40px; } }",
+            400.0,
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(
+            (p.rect.height - 40.0).abs() < 0.5,
+            "container min-width:150px should apply to 200px container, got height={}",
+            p.rect.height,
+        );
+    }
+
+    /// @container (min-width) — rule does NOT apply when container is too narrow.
+    #[test]
+    fn container_query_min_width_not_applies() {
+        let root = lay_measured(
+            "<div><p></p></div>",
+            "div { container-type: size; width: 100px; height: 100px; }
+             @container (min-width: 200px) { p { height: 40px; } }",
+            400.0,
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(
+            p.rect.height < 1.0,
+            "container min-width:200px should NOT apply to 100px container, got height={}",
+            p.rect.height,
+        );
+    }
+
+    /// @container (max-width) — rule applies when container is narrow.
+    #[test]
+    fn container_query_max_width_applies() {
+        let root = lay_measured(
+            "<div><p></p></div>",
+            "div { container-type: inline-size; width: 150px; height: 100px; }
+             @container (max-width: 200px) { p { height: 30px; } }",
+            400.0,
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(
+            (p.rect.height - 30.0).abs() < 0.5,
+            "container max-width:200px should apply to 150px container, got height={}",
+            p.rect.height,
+        );
+    }
+
+    /// Named @container — only applies to matching container-name.
+    #[test]
+    fn container_query_named_applies() {
+        let root = lay_measured(
+            "<div><p></p></div>",
+            "div { container-type: size; container-name: sidebar; width: 200px; height: 100px; }
+             @container sidebar (min-width: 100px) { p { height: 50px; } }",
+            400.0,
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(
+            (p.rect.height - 50.0).abs() < 0.5,
+            "named container query should match sidebar, got height={}",
+            p.rect.height,
+        );
+    }
+
+    /// Named @container — does NOT apply to wrong container name.
+    #[test]
+    fn container_query_named_wrong_name_not_applies() {
+        let root = lay_measured(
+            "<div><p></p></div>",
+            "div { container-type: size; container-name: main; width: 200px; height: 100px; }
+             @container sidebar (min-width: 100px) { p { height: 50px; } }",
+            400.0,
+        );
+        let div = first_element_child(&root);
+        let p = first_element_child(div);
+        assert!(
+            p.rect.height < 1.0,
+            "named container 'sidebar' should NOT match 'main', got height={}",
+            p.rect.height,
+        );
     }
 
     // ── <img> replaced element ───────────────────────────────────────────
