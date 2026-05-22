@@ -1,7 +1,7 @@
-In progress: —
+In progress: CSS-SPECS.md sync (P2 filter/clip-path/column-rule + P4 text-emphasis/scroll-snap/container)  branch: css-specs-sync
+Next step: update CSS-SPECS.md statuses per merged implementations
 
 Next:
-Update css-2026-compliance.md (Grid/Position/Transform outdated)
 
 Queue (Wave 3+):
 

@@ -13,8 +13,8 @@ Legend: ✅ implemented · 🟡 parsed/stored, rendering deferred · ⬜ not sta
 
 | Status | Properties |
 |--------|-----------|
-| ✅ Fully implemented | ~130 |
-| 🟡 Partial (parsed, not rendered) | ~96 |
+| ✅ Fully implemented | ~135 |
+| 🟡 Partial (parsed, not rendered) | ~91 |
 | ⬜ Not started | ~15 |
 | 🚫 Out of scope | ~20 |
 
@@ -63,8 +63,8 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 
 | Module | Spec | Status | Missing piece | Priority |
 |--------|------|--------|--------------|---------|
-| Filter Effects L1 | [filter-effects](https://www.w3.org/TR/filter-effects/) | 🟡 | GPU offscreen texture + shader pass | **#13** |
-| CSS Masking | [css-masking](https://www.w3.org/TR/css-masking/) | 🟡 | clip-path geometry; mask-image GPU | **#14** |
+| Filter Effects L1 | [filter-effects](https://www.w3.org/TR/filter-effects/) | 🟡 | backdrop-filter GPU compositing | **#13** |
+| CSS Masking | [css-masking](https://www.w3.org/TR/css-masking/) | 🟡 | mask-image GPU compositing | **#14** |
 | Compositing & Blending | [compositing](https://www.w3.org/TR/compositing/) | 🟡 | mix-blend-mode blend pipeline | **#15** |
 | CSS Pseudo-Elements L4 | [css-pseudo-4](https://www.w3.org/TR/css-pseudo-4/) | 🟡 | ::first-line/::first-letter split; ::marker; ::selection | **#16** |
 | CSS Images L3 | [css3-images](https://www.w3.org/TR/css3-images/) | 🟡 | conic-gradient(); multiple bg layers | **#17** |
@@ -83,7 +83,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 |--------|------|--------|--------------|---------|
 | CSS Scroll Snap L1 | [css-scroll-snap-1](https://www.w3.org/TR/css-scroll-snap-1/) | 🟡 | shell scroll integration | **#26** |
 | CSS Multi-column L1 | [css3-multicol](https://www.w3.org/TR/css3-multicol/) | 🟡 | column-rule rendering; column-span; column-fill | **#27** |
-| CSS Containment L2/L3 | [css-contain-2](https://www.w3.org/TR/css-contain-2/) | 🟡 | @container 2nd-pass full execution | **#28** |
+| CSS Containment L2/L3 | [css-contain-2](https://www.w3.org/TR/css-contain-2/) | 🟡 | content-visibility skip-content; cq* units | **#28** |
 | CSS Counter Styles L3 | [css-counter-styles-3](https://www.w3.org/TR/css-counter-styles-3/) | 🟡 | counter-reset/increment resolution; @counter-style ⬜ | **#29** |
 | CSS Box Alignment L3 | [css3-align](https://www.w3.org/TR/css3-align/) | 🟡 | justify-items/justify-self for grid | **#30** |
 | CSS Inline L3 | [css-inline-3](https://www.w3.org/TR/css-inline-3/) | 🟡 | line-height leading; baseline grid | **#31** |
@@ -243,7 +243,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `line-break` | 🟡 | parsed; CJK-aware breaking ⬜ |
 | `text-wrap-mode` / `text-wrap-style` | 🟡 | parsed; integration ⬜ |
 | `text-underline-position` / `text-underline-offset` | 🟡 | parsed; paint offset ⬜ |
-| `text-emphasis` / `text-emphasis-*` | 🟡 | parsed; per-char marks ⬜ |
+| `text-emphasis` / `text-emphasis-*` | ✅ | per-char marks rendered (emit_text_emphasis_marks) |
 
 ### [T0] Selectors
 
@@ -409,17 +409,17 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `filter` | 🟡 | all fn() parsed (blur/brightness/contrast/grayscale/hue-rotate/invert/saturate/sepia/drop-shadow); GPU pass ⬜ |
+| `filter` | ✅ | GPU pipeline: blur/brightness/contrast/grayscale/hue-rotate/invert/saturate/sepia/drop-shadow |
 | `backdrop-filter` | 🟡 | parsed; backdrop GPU compositing ⬜ |
 
 ### [T2] Clipping & Masking
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `clip-path` | 🟡 | inset/circle/ellipse/polygon parsed; geometry clipping ⬜ |
+| `clip-path` | ✅ | inset/circle/ellipse/polygon rendered (bbox-clip); complex paths ⬜ |
 | `clip-rule` | ⬜ | evenodd/nonzero |
 | `mask` (shorthand) | 🟡 | |
-| `mask-image` | 🟡 | url/gradient parsed; GPU alpha-mask ⬜ |
+| `mask-image` | 🟡 | GPU mask composite pipeline 🟡 (PushMask/PopMask); full alpha compositing ⬜ |
 | `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed |
 | `mask-origin` / `mask-clip` / `mask-composite` / `mask-mode` | 🟡 | parsed |
 
@@ -503,7 +503,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `scroll-snap-type` / `scroll-snap-align` / `scroll-snap-stop` | 🟡 | parsed; shell integration ⬜ |
+| `scroll-snap-type` / `scroll-snap-align` / `scroll-snap-stop` | ✅ | find_scroll_snap_y + proximity snapping |
 | `scroll-margin*` / `scroll-padding*` | 🟡 | parsed |
 | `scroll-behavior` | 🟡 | auto/smooth parsed |
 | `overscroll-behavior*` | 🟡 | parsed; gesture boundary ⬜ |
@@ -515,7 +515,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `column-count` / `column-width` / `columns` | ✅ | |
 | `column-gap` | ✅ | |
-| `column-rule` / `column-rule-*` | 🟡 | parsed; rendering ⬜ |
+| `column-rule` / `column-rule-*` | ✅ | rendered between columns (solid/dashed/dotted) |
 | `column-span` | 🟡 | parsed; spanning ⬜ |
 | `column-fill` | 🟡 | parsed; balancing ⬜ |
 | `break-before` / `break-after` / `break-inside` | 🟡 | parsed/stored; fragmentation algorithm ⬜ |
@@ -525,8 +525,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `container-type` / `container-name` | 🟡 | parsed |
-| `@container` | 🟡 | condition parsing ✅; 2nd-pass execution 🟡 |
+| `container-type` / `container-name` | ✅ | |
+| `@container` | 🟡 | condition matching ✅; 2nd-pass re-layout ✅; cq* units ⬜ |
 | Container query units (`cq*`) | ⬜ | |
 
 ### [T3] Counters & Lists (rendering)
@@ -569,8 +569,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `cursor` | ✅ | 17 keywords; OS cursor via winit |
-| `user-select` | 🟡 | parsed; enforcement ⬜ |
-| `pointer-events` | 🟡 | auto/none parsed; hit-testing ⬜ |
+| `user-select` | 🟡 | HitTestResult wire-up ✅; text selection enforcement ⬜ |
+| `pointer-events` | 🟡 | none ✅ (cursor wired); auto/shell enforcement ⬜ |
 | `touch-action` | 🟡 | parsed; gesture ⬜ |
 | `resize` | 🟡 | parsed; drag-UI ⬜ |
 | `appearance` | 🟡 | parsed; form widgets ⬜ |
@@ -589,7 +589,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@font-face` | 🟡 | descriptors parsed; loading ⬜ |
 | `@keyframes` | 🟡 | parsed; scheduler ⬜ |
 | `@layer` | 🟡 | parsed; ordering ⬜ |
-| `@container` | 🟡 | parsed; 2nd-pass ⬜ |
+| `@container` | 🟡 | condition matching ✅; 2nd-pass re-layout ✅; cq* units ⬜ |
 | `@color-profile` | ⬜ | CSS Color L5 |
 | `@font-palette-values` | ⬜ | CSS Fonts L5 |
 | `@counter-style` | ⬜ | CSS Counter Styles L3 |
@@ -641,7 +641,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `contain` | 🟡 | size/layout/paint/style flags; size=0 ✅ |
+| `contain` | 🟡 | size/layout/paint enforcement ✅; content-visibility skip-content ⬜ |
 | `content-visibility` | 🟡 | parsed; skip-content ⬜ |
 
 ### [T4] Scroll-driven Animations
