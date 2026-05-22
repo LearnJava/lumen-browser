@@ -35,6 +35,7 @@ use lumen_core::ext::EventSink;
 use lumen_core::geom::{Point, Rect, Size};
 use lumen_devtools::DevToolsServer;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
+use lumen_storage::{BfCache, BfCacheEntry};
 use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
 use lumen_layout::LayoutBox;
 use lumen_paint::{build_display_list_with_anim, hit_test, DisplayList, Renderer};
@@ -202,6 +203,9 @@ fn run_window_mode(
         stream_builder: None,
         stream_last_paint: std::time::Instant::now(),
         ime_composing: None,
+        bfcache: BfCache::new(16),
+        nav_back: Vec::new(),
+        nav_fwd: Vec::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -320,6 +324,17 @@ enum PageSource {
     Empty,
     File(PathBuf),
     Url(String),
+    /// Страница восстанавливается из bfcache: HTML уже есть в памяти,
+    /// сетевой запрос не нужен. `base_url` — оригинальный URL страницы
+    /// (для разрешения относительных ссылок внутри HTML).
+    Snapshot { html: String, base_url: String },
+}
+
+/// Запись в стеке истории навигации браузера.
+struct NavEntry {
+    source: PageSource,
+    scroll_x: f32,
+    scroll_y: f32,
 }
 
 impl PageSource {
@@ -338,6 +353,16 @@ impl PageSource {
             PageSource::Empty => "(пустая вкладка)".to_owned(),
             PageSource::File(p) => p.display().to_string(),
             PageSource::Url(u) => u.clone(),
+            PageSource::Snapshot { base_url, .. } => format!("[bfcache] {base_url}"),
+        }
+    }
+
+    /// URL-строка страницы для bfcache-ключа. `None` если нет URL (пустая вкладка, файл).
+    fn url_str(&self) -> Option<&str> {
+        match self {
+            PageSource::Url(u) => Some(u.as_str()),
+            PageSource::Snapshot { base_url, .. } => Some(base_url.as_str()),
+            _ => None,
         }
     }
 
@@ -367,6 +392,14 @@ impl PageSource {
                 Ok(RawPage {
                     bytes,
                     base: ResourceBase::Url(url.clone()),
+                    content_type: Some("text/html"),
+                })
+            }
+            PageSource::Snapshot { html, base_url } => {
+                // bfcache restoration: HTML already in memory, no network request.
+                Ok(RawPage {
+                    bytes: html.as_bytes().to_vec(),
+                    base: ResourceBase::Url(base_url.clone()),
                     content_type: Some("text/html"),
                 })
             }
@@ -504,9 +537,13 @@ enum KeyCommand {
     Reload,
     Exit,
     FindOpen,
+    /// Навигация назад (Alt+Left). Восстанавливает из bfcache если возможно.
+    HistoryBack,
+    /// Навигация вперёд (Alt+Right). Восстанавливает из bfcache если возможно.
+    HistoryForward,
     /// Скролл на одну строку вниз (стрелка вниз).
     ScrollLineDown,
-    /// Скролл на одну строку вверх (стрелка вверх).
+    /// Скролл на одну строку вверх (стрелка вниз).
     ScrollLineUp,
     /// Скролл на ~90% viewport-а вниз (PageDown / Space).
     ScrollPageDown,
@@ -541,6 +578,7 @@ enum KeyCommand {
 fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
     let ctrl_only = mods == ModifiersState::CONTROL;
     let shift_only = mods == ModifiersState::SHIFT;
+    let alt_only = mods == ModifiersState::ALT;
     let no_mods = mods.is_empty();
     match code {
         KeyCode::F5 if no_mods => Some(KeyCommand::Reload),
@@ -548,6 +586,8 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::Escape if no_mods => Some(KeyCommand::Exit),
         KeyCode::KeyW if ctrl_only => Some(KeyCommand::Exit),
         KeyCode::KeyF if ctrl_only => Some(KeyCommand::FindOpen),
+        KeyCode::ArrowLeft if alt_only => Some(KeyCommand::HistoryBack),
+        KeyCode::ArrowRight if alt_only => Some(KeyCommand::HistoryForward),
         KeyCode::ArrowDown if no_mods => Some(KeyCommand::ScrollLineDown),
         KeyCode::ArrowUp if no_mods => Some(KeyCommand::ScrollLineUp),
         KeyCode::ArrowRight if no_mods => Some(KeyCommand::ScrollLineRight),
@@ -828,6 +868,8 @@ struct ParsedPage {
     /// Subresource-хинты, найденные preload-сканером ДО DOM-парсинга.
     /// Source-order: первые хинты важнее (их fetch стартует первым).
     preload_hints: Vec<lumen_html_parser::PreloadHint>,
+    /// Decoded UTF-8 HTML source — stored for bfcache snapshot.
+    html_source: String,
 }
 
 /// Источник для повторного layout без повторной загрузки/парсинга.
@@ -835,6 +877,9 @@ struct ParsedPage {
 struct LayoutSource {
     document: Document,
     stylesheet: lumen_css_parser::Stylesheet,
+    /// Decoded HTML source captured after encoding detection. Used by bfcache
+    /// to restore the page without a network round-trip.
+    html_source: Option<String>,
 }
 
 fn parse_and_layout(
@@ -908,6 +953,7 @@ fn parse_and_layout(
         rule_count,
         images,
         preload_hints,
+        html_source: source,
     })
 }
 
@@ -978,6 +1024,7 @@ fn render_bytes(
     let layout_source = LayoutSource {
         document: parsed.document,
         stylesheet: parsed.stylesheet,
+        html_source: Some(parsed.html_source),
     };
     Ok((
         LoadedPage {
@@ -1354,6 +1401,15 @@ struct Lumen {
     /// Текущий IME preedit-текст. `Some` — composition-сессия активна,
     /// `None` — нет активного IME ввода.
     ime_composing: Option<String>,
+    /// In-memory bfcache — HTML snapshots keyed by URL for instant back/forward
+    /// restoration without a network round-trip (HTML Living Standard §8.6).
+    bfcache: BfCache,
+    /// Navigation history stack — pages the user navigated away from.
+    /// Top = most recent previous page.
+    nav_back: Vec<NavEntry>,
+    /// Forward history stack — pages the user went back from.
+    /// Top = most recently visited "forward" page.
+    nav_fwd: Vec<NavEntry>,
 }
 
 impl Lumen {
@@ -2051,6 +2107,8 @@ impl Lumen {
                 self.find.open();
                 self.request_redraw();
             }
+            KeyCommand::HistoryBack => self.navigate_back(),
+            KeyCommand::HistoryForward => self.navigate_forward(),
             KeyCommand::ScrollLineDown => self.scroll_by_smooth(LINE_STEP_CSS_PX),
             KeyCommand::ScrollLineUp => self.scroll_by_smooth(-LINE_STEP_CSS_PX),
             KeyCommand::ScrollLineRight => self.scroll_x_by(LINE_STEP_CSS_PX),
@@ -2066,6 +2124,104 @@ impl Lumen {
             KeyCommand::ScrollHome => self.start_smooth_scroll(0.0),
             KeyCommand::ScrollEnd => self.start_smooth_scroll(f32::INFINITY),
         }
+    }
+
+    /// Сохранить текущую страницу в bfcache и стек навигации,
+    /// затем загрузить `source` как новую страницу.
+    /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
+    fn navigate_to(&mut self, source: PageSource) {
+        // Snapshot current page into bfcache if it has an HTML source.
+        if let Some(ref ls) = self.layout_source {
+            if let Some(ref html) = ls.html_source {
+                if let Some(url) = self.source.url_str() {
+                    self.bfcache.store(BfCacheEntry {
+                        url: url.to_owned(),
+                        html: html.clone(),
+                        scroll_x: self.scroll_x,
+                        scroll_y: self.scroll_y,
+                        title: self.title.clone(),
+                    });
+                }
+            }
+        }
+        // Push current page to back stack.
+        self.nav_back.push(NavEntry {
+            source: self.source.clone(),
+            scroll_x: self.scroll_x,
+            scroll_y: self.scroll_y,
+        });
+        // New navigation invalidates forward history.
+        self.nav_fwd.clear();
+        // Load new page.
+        self.source = source;
+        self.reload();
+    }
+
+    /// Перейти на предыдущую страницу в истории (Alt+Left).
+    fn navigate_back(&mut self) {
+        let Some(prev) = self.nav_back.pop() else { return };
+        // Save current page to forward stack.
+        self.nav_fwd.push(NavEntry {
+            source: self.source.clone(),
+            scroll_x: self.scroll_x,
+            scroll_y: self.scroll_y,
+        });
+        // Try bfcache first.
+        let restored_scroll = if let Some(url) = prev.source.url_str() {
+            if let Some(entry) = self.bfcache.retrieve(url) {
+                let html = entry.html.clone();
+                let scroll_x = entry.scroll_x;
+                let scroll_y = entry.scroll_y;
+                let base_url = url.to_owned();
+                self.source = PageSource::Snapshot { html, base_url };
+                Some((scroll_x, scroll_y))
+            } else {
+                self.source = prev.source;
+                None
+            }
+        } else {
+            self.source = prev.source;
+            None
+        };
+        self.reload();
+        // Restore scroll position from bfcache (or from nav entry if no bfcache hit).
+        let (sx, sy) = restored_scroll.unwrap_or((prev.scroll_x, prev.scroll_y));
+        self.scroll_x = sx;
+        self.scroll_y = sy;
+        if let Some(w) = self.window.as_ref() { w.request_redraw(); }
+    }
+
+    /// Перейти на следующую страницу в истории (Alt+Right).
+    fn navigate_forward(&mut self) {
+        let Some(next) = self.nav_fwd.pop() else { return };
+        // Save current page to back stack.
+        self.nav_back.push(NavEntry {
+            source: self.source.clone(),
+            scroll_x: self.scroll_x,
+            scroll_y: self.scroll_y,
+        });
+        // Try bfcache first.
+        let restored_scroll = if let Some(url) = next.source.url_str() {
+            if let Some(entry) = self.bfcache.retrieve(url) {
+                let html = entry.html.clone();
+                let scroll_x = entry.scroll_x;
+                let scroll_y = entry.scroll_y;
+                let base_url = url.to_owned();
+                self.source = PageSource::Snapshot { html, base_url };
+                Some((scroll_x, scroll_y))
+            } else {
+                self.source = next.source;
+                None
+            }
+        } else {
+            self.source = next.source;
+            None
+        };
+        self.reload();
+        let (sx, sy) = restored_scroll.unwrap_or((next.scroll_x, next.scroll_y));
+        self.scroll_x = sx;
+        self.scroll_y = sy;
+        if let Some(w) = self.window.as_ref() { w.request_redraw(); }
     }
 
     fn handle_ime(&mut self, ime: &Ime) {
@@ -2393,6 +2549,7 @@ impl Lumen {
             PageSource::Empty => return,
             PageSource::File(p) => p.display().to_string(),
             PageSource::Url(u) => u.clone(),
+            PageSource::Snapshot { base_url, .. } => base_url.clone(),
         };
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
