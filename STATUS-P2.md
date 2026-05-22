@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: @font-face loading  branch: font-face-loading
+Next step: FontRegistry + read_face_bytes  crates/engine/font/src/font_registry.rs
 
 CSS rule: P2 does NOT implement CSS properties. P4 owns all CSS.
   P2 writes rendering primitives and GPU pipelines only.
