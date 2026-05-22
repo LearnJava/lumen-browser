@@ -1483,9 +1483,12 @@ fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
 
 /// Эмитит outset box-shadow ПЕРЕД background (painter's order по CSS
 /// Backgrounds L3 §4.6 — shadow «cast … behind the element», то есть
-/// под background-color). Phase 0:
-/// * `blur` игнорируется — требует off-screen Gaussian pass (P2 п.4+);
-///   shadow = резкий FillRect со смещением и spread.
+/// под background-color).
+/// * `blur > 0`: shadow рисуется через `PushFilter { Blur(sigma) }` +
+///   `FillRect` + `PopFilter`. Renderer применяет двухпроходный Gaussian
+///   GPU-шейдер. sigma = blur / 2.0 (CSS Backgrounds L3 §4.6 — blur-radius
+///   = standard deviation × 2, аналогично Edge/Chrome/Firefox).
+/// * `blur == 0`: резкий `FillRect` напрямую (без offscreen pass).
 /// * `inset` тени рисуются отдельно — `emit_inset_box_shadows` после
 ///   background и до border, по спеке §3.5.1 «inset shadows are drawn
 ///   inside the box, above the background and below the border».
@@ -1515,10 +1518,19 @@ fn emit_box_shadows(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
+        let sigma = shadow.blur / 2.0;
+        if sigma > 0.0 {
+            out.push(DisplayCommand::PushFilter {
+                filters: vec![FilterFn::Blur(sigma)],
+            });
+        }
         out.push(DisplayCommand::FillRect {
             rect: Rect::new(x, y, w, h),
             color,
         });
+        if sigma > 0.0 {
+            out.push(DisplayCommand::PopFilter);
+        }
     }
 }
 
@@ -1547,8 +1559,11 @@ fn emit_box_shadows(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
 /// последней; верхние перекрывают нижние). Несколько inset друг над
 /// другом — нормальный паттерн под «двойную» обводку.
 ///
-/// Phase 0 ограничения, совпадающие с outset:
-/// * `blur` игнорируется (нужен Gaussian pass).
+/// Phase 0 ограничения:
+/// * `blur` игнорируется — inset blur требует clip-маски вокруг padding-box,
+///   иначе размытие вытекает за границы элемента. Clip-маски будут реализованы
+///   как часть stacking context (P1 п.2A). Outset blur реализован через
+///   PushFilter/PopFilter без clip.
 /// * Полностью прозрачная shadow (`color.a == 0`) — skip.
 /// * `currentColor` для `color: None` берётся из `s.color`.
 fn emit_inset_box_shadows(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
@@ -4802,18 +4817,52 @@ mod tests {
     }
 
     #[test]
-    fn box_shadow_blur_ignored_phase0() {
-        // blur не влияет на rect в Phase 0 — эмитим резкую копию.
+    fn box_shadow_blur_wraps_in_push_filter() {
+        // blur > 0 → FillRect завёрнут в PushFilter { Blur(sigma) } / PopFilter.
+        // sigma = blur / 2 = 10.0.
         let dl = build(
             "<div></div>",
             "div { width: 100px; height: 50px; background: white; \
              box-shadow: 5px 5px 20px black; }",
         );
+        // 2 FillRect: shadow + bg (PushFilter/PopFilter не считаются fills).
         let fills = fills_with_color(&dl);
         assert_eq!(fills.len(), 2);
-        // Размер shadow == размер box (spread=0); blur игнорируется.
+        // Размер shadow rect совпадает с box (spread=0), blur не меняет rect.
         assert!((fills[0].0.width - fills[1].0.width).abs() < 0.01);
         assert!((fills[0].0.height - fills[1].0.height).abs() < 0.01);
+        // Структура: PushFilter, FillRect(shadow), PopFilter, FillRect(bg), ...
+        let first = dl.first().unwrap();
+        assert!(
+            matches!(first, DisplayCommand::PushFilter { filters }
+                if matches!(filters.as_slice(), [FilterFn::Blur(s)] if (*s - 10.0).abs() < 0.01)),
+            "PushFilter с Blur(10.0) перед shadow FillRect, got {first:?}"
+        );
+        let second = dl.get(1).unwrap();
+        assert!(
+            matches!(second, DisplayCommand::FillRect { color, .. } if color.r == 0),
+            "shadow FillRect (black) после PushFilter"
+        );
+        let third = dl.get(2).unwrap();
+        assert!(
+            matches!(third, DisplayCommand::PopFilter),
+            "PopFilter после shadow FillRect"
+        );
+    }
+
+    #[test]
+    fn box_shadow_no_blur_no_filter_wrap() {
+        // blur == 0 → прямой FillRect без PushFilter/PopFilter.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 50px; background: white; \
+             box-shadow: 5px 5px black; }",
+        );
+        let first = dl.first().unwrap();
+        assert!(
+            matches!(first, DisplayCommand::FillRect { .. }),
+            "без blur первая команда — FillRect, не PushFilter"
+        );
     }
 
     // ───────── background-clip rendering ─────────

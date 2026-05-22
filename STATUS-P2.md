@@ -1,4 +1,4 @@
-In progress: —
+In progress: BUG-033 box-shadow Gaussian blur  branch: p2-bug033-box-shadow-blur
 
 CSS rule: P2 does NOT implement CSS properties. P4 owns all CSS.
   P2 writes rendering primitives and GPU pipelines only.
