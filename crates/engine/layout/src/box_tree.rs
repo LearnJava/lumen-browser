@@ -9,6 +9,7 @@
 //! Whitespace-only текст и комментарии пропускаются.
 
 use lumen_core::geom::{Rect, Size};
+use lumen_core::ext::{HyphenationProvider, NullHyphenationProvider};
 use lumen_css_parser::Stylesheet;
 use lumen_dom::{Document, NodeData, NodeId};
 use lumen_html_parser::{
@@ -19,8 +20,8 @@ use crate::style::{
     apply_container_rules, compute_pseudo_element_style, compute_style, AlignValue,
     BackgroundImage, BoxSizing, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap,
-    GridAutoFlow, GridLine, GridTrackSize, Length, LengthOrAuto, Overflow, Position, TextAlign,
-    TextOverflow, VerticalAlign,
+    GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, Overflow, Position,
+    TextAlign, TextOverflow, VerticalAlign,
 };
 use crate::TextMeasurer;
 
@@ -303,9 +304,10 @@ pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), None, viewport, init_pcb);
+    let null_hp = NullHyphenationProvider;
+    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), None, viewport, init_pcb, &null_hp);
     // CSS Container Queries L1: second pass applies @container rules + re-layout.
-    apply_container_styles(&mut root, doc, sheet, viewport, None);
+    apply_container_styles(&mut root, doc, sheet, viewport, None, &null_hp);
     root
 }
 
@@ -315,12 +317,24 @@ pub fn layout_measured(
     viewport: Size,
     measurer: &dyn TextMeasurer,
 ) -> LayoutBox {
+    let null_hp = NullHyphenationProvider;
+    layout_measured_hyp(doc, sheet, viewport, measurer, &null_hp)
+}
+
+/// Layout with a real hyphenation provider (for `hyphens: auto`).
+pub fn layout_measured_hyp(
+    doc: &Document,
+    sheet: &Stylesheet,
+    viewport: Size,
+    measurer: &dyn TextMeasurer,
+    hp: &dyn HyphenationProvider,
+) -> LayoutBox {
     let root_style = ComputedStyle::root();
     let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb);
-    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer));
+    lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp);
+    apply_container_styles(&mut root, doc, sheet, viewport, Some(measurer), hp);
     root
 }
 
@@ -940,6 +954,7 @@ fn lay_out(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
+    hp: &dyn HyphenationProvider,
 ) {
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
@@ -1043,7 +1058,7 @@ fn lay_out(
                 content_width
             };
             let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport);
-            *lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m);
+            *lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp);
             align_lines(lines, content_width, s.text_align, s.direction);
             let line_h = s.font_size * s.line_height;
             apply_inline_vertical_align(lines, line_h);
@@ -1071,7 +1086,7 @@ fn lay_out(
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
                 let content_height = lay_out_flex(
                     &mut b.children, &s, content_x, content_y, content_width, measurer, viewport,
-                    children_pcb,
+                    children_pcb, hp,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
                     && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -1100,7 +1115,7 @@ fn lay_out(
             if matches!(s.display, Display::Grid | Display::InlineGrid) {
                 let content_height = lay_out_grid(
                     &mut b.children, &s, content_x, content_y, content_width, measurer, viewport,
-                    children_pcb,
+                    children_pcb, hp,
                 );
                 b.rect.height = if let Some(h_len) = &s.height
                     && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -1149,7 +1164,7 @@ fn lay_out(
                 lay_out_multicol_children(
                     &mut b.children,
                     content_x, content_y, content_width,
-                    &s, em, measurer, viewport, children_pcb,
+                    &s, em, measurer, viewport, children_pcb, hp,
                 )
             } else {
                 let mut child_y = content_y;
@@ -1158,7 +1173,7 @@ fn lay_out(
                         abs_deferred.push((i, content_x, child_y));
                         continue;
                     }
-                    lay_out(child, content_x, child_y, content_width, children_available_height, measurer, viewport, children_pcb);
+                    lay_out(child, content_x, child_y, content_width, children_available_height, measurer, viewport, children_pcb, hp);
                     if matches!(child.kind, BoxKind::Skip) {
                         continue;
                     }
@@ -1251,7 +1266,7 @@ fn lay_out(
                 } else {
                     content_width
                 };
-                lay_out(&mut b.children[i], cur_x, cur_y, child_avail, None, measurer, viewport, children_pcb);
+                lay_out(&mut b.children[i], cur_x, cur_y, child_avail, None, measurer, viewport, children_pcb, hp);
                 if matches!(b.children[i].kind, BoxKind::Skip) {
                     continue;
                 }
@@ -1272,7 +1287,7 @@ fn lay_out(
                     row_y = cur_y;
                     cur_x = content_x;
                     row_max_h = 0.0;
-                    lay_out(&mut b.children[i], cur_x, cur_y, content_width, None, measurer, viewport, children_pcb);
+                    lay_out(&mut b.children[i], cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp);
                 }
                 cur_row.push(i);
                 cur_x = b.children[i].rect.x + b.children[i].rect.width + child_mr;
@@ -1314,7 +1329,7 @@ fn lay_out(
         BoxKind::TableRow => {
             // CSS 2.1 §17.5 — table row: ячейки раскладываются горизонтально.
             let row_h = lay_out_table_row(
-                b, content_x, content_y, content_width, measurer, viewport, children_pcb,
+                b, content_x, content_y, content_width, measurer, viewport, children_pcb, hp,
             );
             b.rect.height = if let Some(h_len) = &s.height
                 && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -1347,7 +1362,7 @@ fn lay_out(
         } else {
             pcb
         };
-        lay_out_abs_children(b, &abs_deferred, measurer, viewport, my_pcb);
+        lay_out_abs_children(b, &abs_deferred, measurer, viewport, my_pcb, hp);
     }
 
     // CSS Positioned Layout L3 §9.4.3 — position: relative — смещение после normal flow.
@@ -1380,6 +1395,7 @@ fn lay_out(
 /// 3. После layout все ячейки выравниваются по максимальной высоте строки.
 ///
 /// Возвращает высоту строки (content height, без padding/border родителя).
+#[allow(clippy::too_many_arguments)]
 fn lay_out_table_row(
     b: &mut LayoutBox,
     content_x: f32,
@@ -1388,6 +1404,7 @@ fn lay_out_table_row(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
+    hp: &dyn HyphenationProvider,
 ) -> f32 {
     let cell_idxs: Vec<usize> = b
         .children
@@ -1440,7 +1457,7 @@ fn lay_out_table_row(
     let mut cur_x = content_x;
     for (j, &i) in cell_idxs.iter().enumerate() {
         let avail = explicit_w[j].unwrap_or(auto_share);
-        lay_out(&mut b.children[i], cur_x, content_y, avail, None, measurer, viewport, pcb);
+        lay_out(&mut b.children[i], cur_x, content_y, avail, None, measurer, viewport, pcb, hp);
         let c = &b.children[i];
         let c_em = c.style.font_size;
         let mr = c.style.margin_right.resolve_or_zero(c_em, content_width, viewport);
@@ -1472,6 +1489,7 @@ fn lay_out_multicol_children(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
+    hp: &dyn HyphenationProvider,
 ) -> f32 {
     let cb = content_width;
     let col_gap = s.column_gap.resolve_or_zero(em, cb, viewport).max(0.0);
@@ -1516,7 +1534,7 @@ fn lay_out_multicol_children(
 
     // First pass at (0, 0) to measure intrinsic heights.
     for &i in &flow_idxs {
-        lay_out(&mut children[i], 0.0, 0.0, col_w, None, measurer, viewport, pcb);
+        lay_out(&mut children[i], 0.0, 0.0, col_w, None, measurer, viewport, pcb, hp);
     }
 
     // Outer height of each child = margin_top + rect.height + margin_bottom.
@@ -1561,7 +1579,7 @@ fn lay_out_multicol_children(
     for &i in &flow_idxs {
         let col = child_col[i];
         let col_x = content_x + col as f32 * (col_w + col_gap);
-        lay_out(&mut children[i], col_x, col_y[col], col_w, None, measurer, viewport, pcb);
+        lay_out(&mut children[i], col_x, col_y[col], col_w, None, measurer, viewport, pcb, hp);
         let mb = children[i]
             .style
             .margin_bottom
@@ -1581,6 +1599,7 @@ fn lay_out_abs_children(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     my_pcb: Rect,
+    hp: &dyn HyphenationProvider,
 ) {
     for &(idx, static_x, static_y) in deferred {
         let cs = parent.children[idx].style.clone();
@@ -1604,7 +1623,7 @@ fn lay_out_abs_children(
             cb.width
         };
 
-        lay_out(&mut parent.children[idx], 0.0, 0.0, avail_w, None, measurer, viewport, my_pcb);
+        lay_out(&mut parent.children[idx], 0.0, 0.0, avail_w, None, measurer, viewport, my_pcb, hp);
 
         let c_ml = cs.margin_left.resolve_or_zero(c_em, cb.width, viewport);
         let c_mr = cs.margin_right.resolve_or_zero(c_em, cb.width, viewport);
@@ -1653,6 +1672,7 @@ fn lay_out_flex(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
+    hp: &dyn HyphenationProvider,
 ) -> f32 {
     let is_column = matches!(s.flex_direction, FlexDirection::Column | FlexDirection::ColumnReverse);
     let is_reverse = matches!(
@@ -1697,7 +1717,7 @@ fn lay_out_flex(
     // Step 1 — preliminary layout for intrinsic sizes.
     let cb = content_width;
     for &i in &item_idxs {
-        lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb);
+        lay_out(&mut children[i], content_x, content_y, content_width, None, measurer, viewport, pcb, hp);
     }
 
     // Compute hypothetical main sizes for all items (outer = including margins).
@@ -1840,6 +1860,7 @@ fn lay_out_flex(
                     measurer,
                     viewport,
                     pcb,
+                    hp,
                 );
                 main_cursor += outer_main + item_gap + jc_gap;
             } else {
@@ -1854,6 +1875,7 @@ fn lay_out_flex(
                     measurer,
                     viewport,
                     pcb,
+                    hp,
                 );
                 main_cursor += outer_main + item_gap + jc_gap;
             }
@@ -1942,6 +1964,7 @@ fn lay_out_grid(
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
+    hp: &dyn HyphenationProvider,
 ) -> f32 {
     let em = s.font_size;
 
@@ -2172,7 +2195,7 @@ fn lay_out_grid(
             col_widths[c0]
         };
         // Layout at temporary position (y=0) to get intrinsic height.
-        lay_out(&mut children[i], content_x + col_offsets[c0], 0.0, cell_w, None, measurer, viewport, pcb);
+        lay_out(&mut children[i], content_x + col_offsets[c0], 0.0, cell_w, None, measurer, viewport, pcb, hp);
         // Update auto row heights.
         let r0 = (rs - 1) as usize;
         if r0 < row_heights.len()
@@ -2219,7 +2242,7 @@ fn lay_out_grid(
         let (cs, ce, rs, re) = placements[k];
         if cs == 0 || rs == 0 {
             // Unplaced — stack below grid content.
-            lay_out(&mut children[i], content_x, content_y + y_off, content_width, None, measurer, viewport, pcb);
+            lay_out(&mut children[i], content_x, content_y + y_off, content_width, None, measurer, viewport, pcb, hp);
             y_off += children[i].rect.height;
             continue;
         }
@@ -2242,7 +2265,7 @@ fn lay_out_grid(
         };
 
         // Re-layout with final cell width.
-        lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb);
+        lay_out(&mut children[i], cell_x, cell_y, cell_w, None, measurer, viewport, pcb, hp);
 
         let item = &mut children[i];
         let is = &item.style;
@@ -2341,11 +2364,71 @@ fn resolve_grid_line_end(line: &GridLine, start: u32, n_tracks: u32) -> u32 {
     }
 }
 
+/// Strips U+00AD (soft hyphens) from a word and collects break positions
+/// (byte offsets in the returned display string).
+fn strip_soft_hyphens(raw: &str) -> (String, Vec<usize>) {
+    let mut display = String::with_capacity(raw.len());
+    let mut positions: Vec<usize> = Vec::new();
+    for ch in raw.chars() {
+        if ch == '\u{00AD}' {
+            positions.push(display.len());
+        } else {
+            display.push(ch);
+        }
+    }
+    (display, positions)
+}
+
+/// Measures text width (letter_spacing applied between each character).
+fn measure_text_w(text: &str, font_size: f32, letter_spacing: f32, m: &dyn TextMeasurer) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let total: f32 = text
+        .chars()
+        .map(|c| m.char_width(c, font_size) + letter_spacing)
+        .sum();
+    total - letter_spacing
+}
+
+/// Tries to find a hyphenation break in `display` that fits within `available_w`.
+/// `break_positions` are byte offsets in `display` (already sorted ascending).
+/// Returns `(prefix_with_hyphen, suffix)` for the rightmost fitting break, or `None`.
+fn try_hyp_break(
+    display: &str,
+    available_w: f32,
+    font_size: f32,
+    letter_spacing: f32,
+    m: &dyn TextMeasurer,
+    break_positions: &[usize],
+) -> Option<(String, String)> {
+    if break_positions.is_empty() || available_w <= 0.0 {
+        return None;
+    }
+    let hyphen_w = m.char_width('-', font_size) + letter_spacing;
+    // Try from rightmost to leftmost — most characters on current line preferred.
+    for &pos in break_positions.iter().rev() {
+        if !display.is_char_boundary(pos) || pos == 0 {
+            continue;
+        }
+        let prefix = &display[..pos];
+        let prefix_w = measure_text_w(prefix, font_size, letter_spacing, m);
+        if prefix_w + hyphen_w <= available_w {
+            let mut pfx = prefix.to_string();
+            pfx.push('-');
+            return Some((pfx, display[pos..].to_string()));
+        }
+    }
+    None
+}
+
 /// Разбивает потоковые сегменты на строки.
 ///
-/// Алгоритм: жадный word-wrap. Слова одного стиля на одной строке сливаются
+/// Алгоритм: жадный word-wrap + опциональные переносы (hyphens: manual/auto).
+/// Слова одного стиля на одной строке сливаются
 /// в один `InlineFrag`. Сегменты обрабатываются по одному, чтобы учитывать
 /// `pre_space` / `post_space` (inline box model: margin + border + padding).
+#[allow(clippy::too_many_arguments)]
 fn wrap_inline_run(
     segments: &[InlineSegment],
     max_width: f32,
@@ -2353,6 +2436,8 @@ fn wrap_inline_run(
     text_indent: f32,
     viewport: Size,
     m: &dyn TextMeasurer,
+    hyphens: Hyphens,
+    hp: &dyn HyphenationProvider,
 ) -> Vec<Vec<InlineFrag>> {
     let space_w = m.char_width(' ', container_font_size);
 
@@ -2390,8 +2475,9 @@ fn wrap_inline_run(
             continue;
         }
 
-        let words: Vec<&str> = seg.text.split_whitespace().collect();
-        if words.is_empty() {
+        // Collect words; split_whitespace preserves U+00AD within tokens.
+        let raw_words: Vec<&str> = seg.text.split_whitespace().collect();
+        if raw_words.is_empty() {
             continue;
         }
         let style = &seg.style;
@@ -2404,25 +2490,76 @@ fn wrap_inline_run(
         let pad_l = style.padding_left.resolve_or_zero(em, max_width, viewport);
         let pad_r = style.padding_right.resolve_or_zero(em, max_width, viewport);
 
-        let n = words.len();
-        for (wi, word) in words.iter().enumerate() {
+        let n = raw_words.len();
+        for (wi, raw_word) in raw_words.iter().enumerate() {
             let is_seg_first = wi == 0;
             let is_seg_last = wi == n - 1;
+
+            // Strip soft hyphens for display + collect hyphenation break positions.
+            let (display_word, shy_positions) = strip_soft_hyphens(raw_word);
 
             // Space that the inline box model contributes at the word boundaries.
             let pre = if is_seg_first { seg.pre_space } else { 0.0 };
             let post = if is_seg_last { seg.post_space } else { 0.0 };
 
-            let word_w: f32 = word
-                .chars()
-                .map(|c| m.char_width(c, style.font_size) + ls)
-                .sum::<f32>()
-                - if word.is_empty() { 0.0 } else { ls };
-
+            let word_w = measure_text_w(&display_word, style.font_size, ls, m);
             let gap = if current_line.is_empty() { 0.0 } else { inter_word };
 
             // Wrap: слово не влезает (но первое слово строки добавляем всегда).
-            if !current_line.is_empty() && current_x + gap + pre + word_w > max_width {
+            let needs_wrap = !current_line.is_empty()
+                && current_x + gap + pre + word_w > max_width;
+
+            if needs_wrap {
+                // CSS Text L3 §6: try hyphenation before hard wrap.
+                let hyph_result = if hyphens != Hyphens::None {
+                    let mut break_pts = shy_positions.clone();
+                    if hyphens == Hyphens::Auto && !display_word.is_empty() {
+                        let auto_pts = hp.hyphenate(&display_word, "");
+                        break_pts.extend_from_slice(&auto_pts);
+                        break_pts.sort_unstable();
+                        break_pts.dedup();
+                    }
+                    let avail = max_width - current_x - gap - pre;
+                    try_hyp_break(&display_word, avail, style.font_size, ls, m, &break_pts)
+                } else {
+                    None
+                };
+
+                if let Some((pfx, sfx)) = hyph_result {
+                    // Emit prefix (with trailing '-') to current line, then wrap.
+                    let pfx_w = measure_text_w(&pfx, style.font_size, ls, m);
+                    current_x += gap + pre;
+                    current_line.push(InlineFrag {
+                        x: current_x,
+                        y_offset: 0.0,
+                        width: pfx_w,
+                        text: pfx,
+                        style: style.clone(),
+                        padding_left: if is_seg_first { pad_l } else { 0.0 },
+                        padding_right: 0.0,
+                        is_element_box: seg.is_element_box,
+                        img_src: None,
+                    });
+                    result.push(std::mem::take(&mut current_line));
+                    current_x = 0.0;
+                    // Emit suffix as first fragment on new line.
+                    let sfx_w = measure_text_w(&sfx, style.font_size, ls, m);
+                    current_line.push(InlineFrag {
+                        x: 0.0,
+                        y_offset: 0.0,
+                        width: sfx_w,
+                        text: sfx,
+                        style: style.clone(),
+                        padding_left: 0.0,
+                        padding_right: if is_seg_last { pad_r } else { 0.0 },
+                        is_element_box: seg.is_element_box,
+                        img_src: None,
+                    });
+                    current_x += sfx_w + post;
+                    continue;
+                }
+
+                // No hyphenation break found — normal wrap.
                 result.push(std::mem::take(&mut current_line));
                 current_x = 0.0;
             }
@@ -2438,7 +2575,7 @@ fn wrap_inline_run(
                 if let Some(last) = current_line.last_mut() {
                     if last.style.text_rendering_eq(style) && last.padding_right == 0.0 {
                         last.text.push(' ');
-                        last.text.push_str(word);
+                        last.text.push_str(&display_word);
                         last.width += inter_word + word_w;
                         current_x += word_w;
                         true
@@ -2457,7 +2594,7 @@ fn wrap_inline_run(
                     x: frag_x,
                     y_offset: 0.0,
                     width: word_w,
-                    text: word.to_string(),
+                    text: display_word,
                     style: style.clone(),
                     padding_left: if is_seg_first { pad_l } else { 0.0 },
                     padding_right: if is_seg_last { pad_r } else { 0.0 },
@@ -2690,13 +2827,14 @@ pub fn apply_container_styles(
     sheet: &Stylesheet,
     viewport: Size,
     measurer: Option<&dyn TextMeasurer>,
+    hp: &dyn HyphenationProvider,
 ) {
     // No container rules in this sheet → fast path.
     if sheet.container_rules.is_empty() {
         return;
     }
     let pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
-    apply_container_inner(root, doc, sheet, viewport, measurer, pcb);
+    apply_container_inner(root, doc, sheet, viewport, measurer, pcb, hp);
 }
 
 fn apply_container_inner(
@@ -2706,6 +2844,7 @@ fn apply_container_inner(
     viewport: Size,
     measurer: Option<&dyn TextMeasurer>,
     pcb: Rect,
+    hp: &dyn HyphenationProvider,
 ) {
     let is_container = !matches!(b.style.container_type, ContainerType::Normal);
     if is_container {
@@ -2747,10 +2886,10 @@ fn apply_container_inner(
         for child in &mut b.children {
             if matches!(child.style.position, Position::Absolute | Position::Fixed) {
                 // Re-lay out against new pcb but don't advance child_y.
-                lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb);
+                lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb, hp);
                 continue;
             }
-            lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb);
+            lay_out(child, content_x, child_y, content_w, avail_h, measurer, viewport, child_pcb, hp);
             if matches!(child.kind, BoxKind::Skip) {
                 continue;
             }
@@ -2760,12 +2899,12 @@ fn apply_container_inner(
         }
         // After re-layout, recurse into children to catch nested containers.
         for child in &mut b.children {
-            apply_container_inner(child, doc, sheet, viewport, measurer, child_pcb);
+            apply_container_inner(child, doc, sheet, viewport, measurer, child_pcb, hp);
         }
     } else {
         // Not a container — just recurse looking for container descendants.
         for child in &mut b.children {
-            apply_container_inner(child, doc, sheet, viewport, measurer, pcb);
+            apply_container_inner(child, doc, sheet, viewport, measurer, pcb, hp);
         }
     }
 }
@@ -2845,5 +2984,163 @@ mod tests {
         let div = layout_div("div { width: 200px; }", 800.0, 600.0);
         assert_eq!(div.rect.width, 200.0);
         assert_eq!(div.rect.height, 0.0);
+    }
+
+    // ── Hyphenation helpers ───────────────────────────────────────────────────
+
+    #[test]
+    fn strip_soft_hyphens_removes_shy_and_collects_positions() {
+        let (disp, pos) = super::strip_soft_hyphens("hy\u{00AD}phen");
+        assert_eq!(disp, "hyphen");
+        assert_eq!(pos, vec![2]); // break point between 'y' and 'p'
+    }
+
+    #[test]
+    fn strip_soft_hyphens_multiple_breaks() {
+        // "su\u{AD}per\u{AD}man"
+        let (disp, pos) = super::strip_soft_hyphens("su\u{00AD}per\u{00AD}man");
+        assert_eq!(disp, "superman");
+        assert_eq!(pos, vec![2, 5]);
+    }
+
+    #[test]
+    fn strip_soft_hyphens_no_shy_returns_empty_positions() {
+        let (disp, pos) = super::strip_soft_hyphens("hello");
+        assert_eq!(disp, "hello");
+        assert!(pos.is_empty());
+    }
+
+    #[test]
+    fn measure_text_w_empty_is_zero() {
+        struct ZeroMeasurer;
+        impl super::super::TextMeasurer for ZeroMeasurer {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let m = ZeroMeasurer;
+        assert_eq!(super::measure_text_w("", 16.0, 0.0, &m), 0.0);
+    }
+
+    #[test]
+    fn measure_text_w_three_chars_no_spacing() {
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        // 3 chars × 8px − 0 letter-spacing = 24px
+        let w = super::measure_text_w("abc", 16.0, 0.0, &Fixed8);
+        assert_eq!(w, 24.0);
+    }
+
+    #[test]
+    fn try_hyp_break_finds_rightmost_fitting_split() {
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        // "superman" → break positions [2, 5] (su|per|man)
+        // Each char = 8px; hyphen = 8px.
+        // If available_w = 32px: "su-" = 3×8 = 24 ≤ 32 ✓, "super-" = 6×8 = 48 > 32
+        // So rightmost fitting = pos 2 ("su-" / "perman")
+        let m = Fixed8;
+        let result = super::try_hyp_break("superman", 32.0, 16.0, 0.0, &m, &[2, 5]);
+        assert_eq!(result, Some(("su-".to_string(), "perman".to_string())));
+    }
+
+    #[test]
+    fn try_hyp_break_prefers_rightmost_break() {
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        // "superman" → break positions [2, 5]; available = 56px
+        // "super-" = 6×8 = 48 ≤ 56 ✓ → prefer pos 5 over pos 2
+        let m = Fixed8;
+        let result = super::try_hyp_break("superman", 56.0, 16.0, 0.0, &m, &[2, 5]);
+        assert_eq!(result, Some(("super-".to_string(), "man".to_string())));
+    }
+
+    #[test]
+    fn try_hyp_break_returns_none_when_nothing_fits() {
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        // Only 10px available; minimum "su-" = 24px
+        let m = Fixed8;
+        let result = super::try_hyp_break("superman", 10.0, 16.0, 0.0, &m, &[2, 5]);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn wrap_inline_run_soft_hyphen_breaks_word_on_manual() {
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // Segment: "hi hy\u{AD}phen" — two words; 'hi' fills line, 'hy\u{AD}phen' needs break.
+        // char=10, max_width=60:
+        //   "hi"=20px fits; then gap(10)+60=90>60 → wrap attempted.
+        //   avail = 60-20-10 = 30; "hy-"=30 ≤ 30 → break at pos 2.
+        let seg = InlineSegment {
+            text: "hi hy\u{00AD}phen".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_width: 0.0,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::Manual, &hp);
+        assert_eq!(lines.len(), 2, "expected 2 lines, got {}", lines.len());
+        // Line 1 has both "hi" and "hy-" merged or as separate frags.
+        let line1_text: String = lines[0].iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join(" ");
+        assert!(line1_text.contains("hi"), "line1={line1_text}");
+        assert!(line1_text.contains("hy-"), "line1={line1_text}");
+        assert_eq!(lines[1].len(), 1);
+        assert_eq!(lines[1][0].text, "phen");
+    }
+
+    #[test]
+    fn wrap_inline_run_hyphens_none_no_break_on_shy() {
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens};
+        use lumen_core::geom::Size;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // Same segment, Hyphens::None → soft hyphen ignored, full word wraps to new line unbroken.
+        let seg = InlineSegment {
+            text: "hi hy\u{00AD}phen".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_width: 0.0,
+        };
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::None, &hp);
+        assert_eq!(lines.len(), 2, "expected 2 lines, got {}", lines.len());
+        // Line 1 has only "hi"; line 2 has "hyphen" (whole, no hyphen char).
+        assert_eq!(lines[0].len(), 1);
+        assert_eq!(lines[0][0].text, "hi");
+        let line2_text = &lines[1][0].text;
+        assert_eq!(line2_text, "hyphen", "soft-hyphen should be stripped: {line2_text}");
     }
 }

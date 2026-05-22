@@ -23,8 +23,9 @@ pub use capability::{Capability, CapabilityToken};
 pub use error::{Error, Result};
 pub use event::{Event, FetchPriority, SubresourceKind, TabId};
 pub use ext::{
-    match_face, EventSink, FaceRecord, FontProvider, FontStyle, JsError, JsResult, JsRuntime,
-    JsValue, NoopEventSink, NullJsRuntime,
+    match_face, EventSink, FaceRecord, FontProvider, FontStyle,
+    HyphenationProvider, NullHyphenationProvider,
+    JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime,
 };
 pub use form::{
     decode_form_value, encode_form_multipart, encode_form_urlencoded, FormEntry, FormValue,
