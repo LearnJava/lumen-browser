@@ -134,9 +134,14 @@ def run_task_loop(developer: str, max_tasks: int = 0):
             f"Когда задача завершена — вызови /lumen-task-finish."
         )
 
+        log(developer, "Запуск claude...")
         try:
             result = subprocess.run(
-                ["claude", "-p", prompt, "--dangerously-skip-permissions"],
+                [
+                    "claude", "-p", prompt,
+                    "--dangerously-skip-permissions",
+                    "--verbose",
+                ],
                 cwd=PROJECT_DIR,
             )
             exit_code = result.returncode
