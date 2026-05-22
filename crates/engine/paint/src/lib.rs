@@ -14,6 +14,7 @@ pub mod display_list;
 pub mod fallback;
 pub mod hit_test;
 pub mod renderer;
+pub mod scroll_snap;
 
 pub use atlas::{GlyphAtlas, GlyphEntry};
 pub use fallback::CURATED_FALLBACK_FAMILIES;
@@ -27,6 +28,7 @@ pub use display_list::{
 };
 pub use hit_test::{hit_test, HitTestResult};
 pub use renderer::{ImageRegisterError, Renderer, SnapshotUploadError};
+pub use scroll_snap::{find_scroll_snap_y, find_scroll_snap_y_proximity};
 
 // ── FontMeasurer ────────────────────────────────────────────────────────────
 
