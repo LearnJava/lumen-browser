@@ -16,12 +16,13 @@
 """
 
 import argparse
+import json
 import os
 import subprocess
 import sys
 import re
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 # Корень проекта — два уровня вверх от scripts/
@@ -95,6 +96,119 @@ def show_status():
     print("-" * 50)
 
 
+def format_event(event: dict) -> str | None:
+    """Превратить JSON-событие stream-json в читаемую строку."""
+    msg = event.get("message", {})
+    msg_type = event.get("type", "")
+
+    # Ответ ассистента (финальный текст)
+    if msg.get("role") == "assistant" and msg_type == "result":
+        text = ""
+        for block in msg.get("content", []):
+            if block.get("type") == "text":
+                text = block["text"]
+        if text:
+            preview = text[:200].replace("\n", " ")
+            if len(text) > 200:
+                preview += "..."
+            return f"  Ответ: {preview}"
+
+    # Использование инструмента
+    if msg_type == "tool_use":
+        tool = msg.get("name", "?")
+        inp = msg.get("input", {})
+        if tool == "Bash":
+            cmd = inp.get("command", "")
+            preview = cmd[:120].replace("\n", " ")
+            return f"  $ {preview}"
+        elif tool == "Read":
+            return f"  Читает: {inp.get('file_path', '?')}"
+        elif tool == "Edit":
+            return f"  Редактирует: {inp.get('file_path', '?')}"
+        elif tool == "Write":
+            return f"  Пишет: {inp.get('file_path', '?')}"
+        elif tool == "Grep":
+            return f"  Ищет: {inp.get('pattern', '?')}"
+        elif tool == "Glob":
+            return f"  Glob: {inp.get('pattern', '?')}"
+        elif tool == "Skill":
+            return f"  Skill: {inp.get('skill', '?')}"
+        else:
+            return f"  Инструмент: {tool}"
+
+    return None
+
+
+RATE_LIMIT_RE = re.compile(r"resets?\s+(\d{1,2}:\d{2}(?:am|pm)?)", re.IGNORECASE)
+
+
+def run_claude(developer: str, prompt: str) -> tuple[int, bool]:
+    """Запустить claude и показать прогресс. Возвращает (exit_code, rate_limited)."""
+    process = subprocess.Popen(
+        [
+            "claude", "-p", prompt,
+            "--dangerously-skip-permissions",
+            "--output-format", "stream-json",
+        ],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=PROJECT_DIR,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+    )
+
+    rate_limited = False
+    for line in process.stdout:
+        line = line.strip()
+        if not line:
+            continue
+
+        # Детект rate limit в сыром выводе
+        if "hit your limit" in line.lower() or "rate limit" in line.lower():
+            rate_limited = True
+            log(developer, f"  Rate limit: {line[:120]}")
+            continue
+
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            # Не-JSON строка — может быть сообщение от CLI
+            if "hit your limit" in line.lower() or "rate limit" in line.lower():
+                rate_limited = True
+                log(developer, f"  Rate limit: {line[:120]}")
+            continue
+
+        display = format_event(event)
+        if display:
+            log(developer, display)
+
+    # Проверить stderr тоже — rate limit может быть там
+    stderr_output = process.stderr.read()
+    if stderr_output and ("hit your limit" in stderr_output.lower()
+                          or "rate limit" in stderr_output.lower()):
+        rate_limited = True
+        # Попробовать извлечь время сброса
+        match = RATE_LIMIT_RE.search(stderr_output)
+        if match:
+            log(developer, f"  Rate limit до {match.group(1)}")
+        else:
+            log(developer, f"  Rate limit обнаружен")
+
+    process.wait()
+    return process.returncode, rate_limited
+
+
+def wait_for_rate_limit(developer: str):
+    """Подождать 5 минут при rate limit."""
+    wait_minutes = 5
+    log(developer, f"Rate limit — пауза {wait_minutes} мин...")
+    set_jobstatus(developer, "rate limit",
+                  f"ждёт до {(datetime.now() + timedelta(minutes=wait_minutes)).strftime('%H:%M')}")
+    time.sleep(wait_minutes * 60)
+    log(developer, "Пауза завершена, продолжаю.")
+
+
 def run_task_loop(developer: str, max_tasks: int = 0):
     """Цикл задач для одного разработчика."""
     stop_file = stop_file_path(developer)
@@ -112,7 +226,7 @@ def run_task_loop(developer: str, max_tasks: int = 0):
             stop_file.unlink()
             break
 
-        # Проверка лимита
+        # Проверка лимита задач
         if max_tasks > 0 and task_count >= max_tasks:
             log(developer, f"Достигнут лимит задач ({max_tasks}). Останавливаюсь.")
             break
@@ -136,15 +250,7 @@ def run_task_loop(developer: str, max_tasks: int = 0):
 
         log(developer, "Запуск claude...")
         try:
-            result = subprocess.run(
-                [
-                    "claude", "-p", prompt,
-                    "--dangerously-skip-permissions",
-                    "--verbose",
-                ],
-                cwd=PROJECT_DIR,
-            )
-            exit_code = result.returncode
+            exit_code, rate_limited = run_claude(developer, prompt)
         except FileNotFoundError:
             log(developer, "claude не найден в PATH.")
             break
@@ -152,10 +258,14 @@ def run_task_loop(developer: str, max_tasks: int = 0):
             log(developer, f"Ошибка запуска: {e}")
             break
 
-        if exit_code != 0:
+        if rate_limited:
+            task_count -= 1  # Не считать неудачную попытку как задачу
+            wait_for_rate_limit(developer)
+        elif exit_code != 0:
+            task_count -= 1  # Не считать ошибку как задачу
             log(developer, f"Claude завершился с кодом {exit_code}.")
-            log(developer, "Пауза 10 секунд перед повтором...")
-            time.sleep(10)
+            log(developer, "Пауза 30 секунд перед повтором...")
+            time.sleep(30)
         else:
             log(developer, f"Задача #{task_count} завершена.")
 
