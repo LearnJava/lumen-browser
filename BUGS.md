@@ -45,7 +45,7 @@ BUG-006 | FIXED 2026-05-21 | layout          | table layout not implemented (td/
 BUG-021 | FIXED 2026-05-22 | html-parser     | HTML bgcolor attribute ignored
 BUG-022 | FIXED 2026-05-22 | css-parser      | Quirks-mode hashless hex colors not parsed
 BUG-032 | FIXED 2026-05-22 | paint/image     | object-fit image quality ~16%: area averaging заменяет bilinear при downscale
-BUG-033 | OPEN             | paint           | box-shadow: нет Gaussian blur — рендерится solid прямоугольник вместо размытой тени
+BUG-033 | FIXED 2026-05-22 | paint           | box-shadow: нет Gaussian blur — рендерится solid прямоугольник вместо размытой тени
 BUG-034 | FIXED 2026-05-22 | layout          | transform-origin 50% 50% default not resolved against box size — pivot at (0,0) instead of center
 BUG-035 | FIXED 2026-05-22 | layout          | ::before/::after pseudo-elements не генерируются в box_tree (реализация частичная)
 ```
