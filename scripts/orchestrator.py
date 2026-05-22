@@ -15,13 +15,13 @@
 """
 
 import argparse
+import os
 import subprocess
 import sys
 import re
 import time
 from datetime import datetime
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor
 
 # Корень проекта — два уровня вверх от scripts/
 PROJECT_DIR = Path(__file__).resolve().parent.parent
@@ -171,19 +171,33 @@ def main():
         # Один разработчик — в текущем окне
         run_task_loop(developers[0], args.max_tasks)
     else:
-        # Несколько — каждый в своём потоке
-        print(f"Запуск {len(developers)} разработчиков: {', '.join(developers)}")
+        # Несколько — каждый в отдельном окне консоли
+        script = Path(__file__).resolve()
+        max_arg = f" --max-tasks {args.max_tasks}" if args.max_tasks > 0 else ""
+
+        for dev in developers:
+            cmd = f'python "{script}" {dev}{max_arg}'
+            title = f"Lumen {dev}"
+
+            if os.name == "nt":
+                # Windows: start открывает новое окно с заголовком
+                subprocess.Popen(
+                    f'start "{title}" cmd /k {cmd}',
+                    shell=True,
+                    cwd=PROJECT_DIR,
+                )
+            else:
+                # Linux/macOS fallback
+                subprocess.Popen(
+                    ["bash", "-c", f"{cmd}; exec bash"],
+                    cwd=PROJECT_DIR,
+                )
+
+            print(f"Запущен {dev} в отдельном окне.")
+
+        print()
         print(f"Для остановки: python scripts/orchestrator.py --stop P1")
         print(f"Остановить всех: python scripts/orchestrator.py --stop-all")
-        print()
-
-        with ThreadPoolExecutor(max_workers=len(developers)) as pool:
-            futures = {
-                pool.submit(run_task_loop, dev, args.max_tasks): dev
-                for dev in developers
-            }
-            for future in futures:
-                future.result()
 
 
 if __name__ == "__main__":
