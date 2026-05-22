@@ -39,10 +39,17 @@ impl QuickJsRuntime {
     /// the DOM.  The `doc` Arc is captured by the registered native functions;
     /// drop the runtime (via `drop(runtime)`) before calling
     /// `Arc::try_unwrap(doc)` to recover the document after script execution.
-    pub fn install_dom(&self, doc: Arc<Mutex<Document>>) -> JsResult<()> {
+    ///
+    /// `fetch_provider` is forwarded to `window.fetch()`.  Pass `None` in
+    /// sandboxed contexts or unit tests that do not need network access.
+    pub fn install_dom(
+        &self,
+        doc: Arc<Mutex<Document>>,
+        fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+    ) -> JsResult<()> {
         let guard = self.inner.lock().unwrap();
         guard.ctx.with(|ctx| {
-            dom::install_dom_api(&ctx, doc).map_err(|e| rq_err(&ctx, e))
+            dom::install_dom_api(&ctx, doc, fetch_provider).map_err(|e| rq_err(&ctx, e))
         })
     }
 }

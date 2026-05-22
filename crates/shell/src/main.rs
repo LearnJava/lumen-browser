@@ -922,7 +922,15 @@ fn parse_and_layout(
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.
     // QuickJS + install_dom дают скриптам полный доступ к DOM-дереву.
-    doc = run_scripts_with_dom(doc, lumen_core::SandboxFlags::empty());
+    // fetch_provider пробрасывается в window.fetch() для JS-скриптов.
+    let fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>> = match base {
+        ResourceBase::Url(_) => {
+            let client = base.http_client_for_subresource(Arc::clone(sink));
+            Some(Arc::new(client))
+        }
+        ResourceBase::File(_) => None,
+    };
+    doc = run_scripts_with_dom(doc, lumen_core::SandboxFlags::empty(), fetch_provider);
 
     // Гейт отправки форм: Phase 0 — top-level документ не sandboxed.
     check_form_gate(&doc, lumen_core::SandboxFlags::empty());
@@ -1285,7 +1293,14 @@ fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
 /// Принимает `doc` по значению, оборачивает в `Arc<Mutex<>>` на время выполнения
 /// скриптов, возвращает `Document` обратно. При `quickjs` feature отключён —
 /// использует NullJsRuntime (скрипты пропускаются с логом NotImplemented).
-fn run_scripts_with_dom(doc: Document, sandbox: lumen_core::SandboxFlags) -> Document {
+///
+/// `fetch_provider` пробрасывается в `window.fetch()`. `None` = no network
+/// (sandboxed context или отключён quickjs feature).
+fn run_scripts_with_dom(
+    doc: Document,
+    sandbox: lumen_core::SandboxFlags,
+    fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
+) -> Document {
     let mut scripts: Vec<String> = Vec::new();
     collect_inline_scripts(&doc, doc.root(), &mut scripts);
 
@@ -1306,7 +1321,7 @@ fn run_scripts_with_dom(doc: Document, sandbox: lumen_core::SandboxFlags) -> Doc
         let doc_arc = Arc::new(Mutex::new(doc));
         match lumen_js::QuickJsRuntime::new() {
             Ok(rt) => {
-                if let Err(e) = rt.install_dom(doc_arc.clone()) {
+                if let Err(e) = rt.install_dom(doc_arc.clone(), fetch_provider) {
                     eprintln!("JS DOM init failed: {e}");
                 }
                 for src in &scripts {
@@ -1333,6 +1348,7 @@ fn run_scripts_with_dom(doc: Document, sandbox: lumen_core::SandboxFlags) -> Doc
 
     #[cfg(not(feature = "quickjs"))]
     {
+        let _ = fetch_provider;
         use lumen_core::ext::JsRuntime as _;
         for src in &scripts {
             match lumen_core::NullJsRuntime.eval(src) {

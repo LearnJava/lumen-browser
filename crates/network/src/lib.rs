@@ -24,8 +24,8 @@ use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, TabId};
 use lumen_core::ext::{
     ContentDecoder, DnsResolver, EventSink, FetchInterceptor, HstsEnforcement, HttpAuthScheme,
-    HttpCredentialProvider, NetworkTransport, RequestFilter, SseProvider, SseSession,
-    WebSocketProvider, WebSocketSession,
+    HttpCredentialProvider, JsFetchProvider, JsFetchResult, NetworkTransport, RequestFilter,
+    SseProvider, SseSession, WebSocketProvider, WebSocketSession,
 };
 use lumen_core::url::Url;
 
@@ -1706,6 +1706,80 @@ impl NetworkTransport for HttpClient {
             None,
         )
         .map(|resp| resp.body)
+    }
+}
+
+fn http_status_text(status: u16) -> &'static str {
+    match status {
+        100 => "Continue", 101 => "Switching Protocols", 200 => "OK",
+        201 => "Created", 202 => "Accepted", 204 => "No Content",
+        206 => "Partial Content", 301 => "Moved Permanently", 302 => "Found",
+        303 => "See Other", 304 => "Not Modified", 307 => "Temporary Redirect",
+        308 => "Permanent Redirect", 400 => "Bad Request", 401 => "Unauthorized",
+        403 => "Forbidden", 404 => "Not Found", 405 => "Method Not Allowed",
+        408 => "Request Timeout", 409 => "Conflict", 410 => "Gone",
+        413 => "Content Too Large", 414 => "URI Too Long",
+        422 => "Unprocessable Content", 429 => "Too Many Requests",
+        500 => "Internal Server Error", 501 => "Not Implemented",
+        502 => "Bad Gateway", 503 => "Service Unavailable",
+        504 => "Gateway Timeout", _ => "",
+    }
+}
+
+impl JsFetchProvider for HttpClient {
+    fn fetch_sync(&self, url: &str, method: &str) -> Result<JsFetchResult> {
+        let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        match method.to_ascii_uppercase().as_str() {
+            "GET" | "HEAD" => {}
+            m => {
+                return Err(Error::Network(format!(
+                    "fetch: Phase 0 supports GET/HEAD only, got {m}"
+                )));
+            }
+        }
+        // SW intercept before network.
+        if let Some(ref interceptor) = self.interceptor {
+            let origin = build_origin(&url);
+            if let Some(body) = interceptor.intercept(&url, &origin) {
+                return Ok(JsFetchResult {
+                    status: 200,
+                    status_text: "OK".into(),
+                    headers: vec![],
+                    body,
+                });
+            }
+        }
+        let accept_encoding = self.accept_encoding_header();
+        let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
+        let resp = fetch_with_redirect(
+            &url,
+            5,
+            &self.pool,
+            self.h2_pool.as_deref(),
+            self.resolver.as_ref(),
+            self.sink.as_deref(),
+            self.filter.as_deref(),
+            self.hsts.as_deref(),
+            self.credentials.as_deref(),
+            &self.decoders,
+            accept_encoding.as_deref(),
+            None,
+            None,
+            self.tab_id,
+            self.mixed_content.as_ref(),
+            destination,
+            None,
+        )?;
+        Ok(JsFetchResult {
+            status_text: http_status_text(resp.status).to_string(),
+            status: resp.status,
+            headers: resp
+                .headers
+                .into_iter()
+                .map(|(k, v)| (k.to_ascii_lowercase(), v))
+                .collect(),
+            body: resp.body,
+        })
     }
 }
 
