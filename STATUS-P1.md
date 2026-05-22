@@ -1,6 +1,5 @@
-In progress: —
-
-Next step: —
+In progress: BUG-034 fix transform-origin % resolution  branch: fix-transform-origin
+Next step: verify --dump-display-list 22-transform.html shows correct rotate pivot  crates/engine/layout/src/style.rs:9646
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.

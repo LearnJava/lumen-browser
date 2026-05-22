@@ -172,8 +172,8 @@ fn invert_box_transform(b: &LayoutBox) -> Option<Mat4> {
         return None;
     }
     let (ox, oy, _) = b.style.transform_origin;
-    let pivot_x = b.rect.x + ox;
-    let pivot_y = b.rect.y + oy;
+    let pivot_x = b.rect.x + ox.resolve(b.rect.width);
+    let pivot_y = b.rect.y + oy.resolve(b.rect.height);
     let mut m = Mat4::IDENTITY;
     for f in &b.style.transform {
         let step = transform_fn_to_mat4(f);

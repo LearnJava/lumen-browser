@@ -7466,13 +7466,19 @@ mod tests {
     #[test]
     fn transform_origin_x_y_z() {
         let root = lay("<p>x</p>", "p { transform-origin: 10px 20px 30px; }");
-        assert_eq!(first_p_style(&root).transform_origin, (10.0, 20.0, 30.0));
+        let o = first_p_style(&root).transform_origin;
+        assert_eq!(o.0, PositionComponent::Px(10.0));
+        assert_eq!(o.1, PositionComponent::Px(20.0));
+        assert!((o.2 - 30.0).abs() < 1e-5);
     }
 
     #[test]
-    fn transform_origin_partial_defaults_to_zero() {
+    fn transform_origin_single_value_y_defaults_to_center() {
+        // CSS Transforms L1 §6: single value applies to x, y defaults to center (50%).
         let root = lay("<p>x</p>", "p { transform-origin: 50px; }");
-        assert_eq!(first_p_style(&root).transform_origin, (50.0, 0.0, 0.0));
+        let o = first_p_style(&root).transform_origin;
+        assert_eq!(o.0, PositionComponent::Px(50.0));
+        assert_eq!(o.1, PositionComponent::Percent(0.5));
     }
 
     #[test]
@@ -7480,8 +7486,11 @@ mod tests {
         let root = lay("<div><p>x</p></div>", "div { transform-origin: 10px 20px; }");
         let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
         let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
-        assert_eq!(p.style.transform_origin, (0.0, 0.0, 0.0));
-        assert_eq!(div.style.transform_origin, (10.0, 20.0, 0.0));
+        // Non-inherited: <p> gets initial value 50% 50%.
+        assert_eq!(p.style.transform_origin.0, PositionComponent::Percent(0.5));
+        assert_eq!(p.style.transform_origin.1, PositionComponent::Percent(0.5));
+        assert_eq!(div.style.transform_origin.0, PositionComponent::Px(10.0));
+        assert_eq!(div.style.transform_origin.1, PositionComponent::Px(20.0));
     }
 
     #[test]
