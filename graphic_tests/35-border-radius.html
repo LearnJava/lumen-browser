@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 35 border-radius</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
+
+    /* Base card style */
+    .card { display: inline-block; margin: 0 14px 20px 0; vertical-align: top; }
+
+    /* Row 1: uniform border-radius, no border */
+    .r1 { width: 100px; height: 70px; background: #4299e1; }
+
+    /* Row 2: border-radius + border */
+    .r2 { width: 100px; height: 70px; background: #48bb78;
+          border: 3px solid #276749; }
+
+    /* Row 3: pill / circle shapes */
+    .pill { width: 140px; height: 44px; background: #ed8936; }
+    .circle { width: 70px; height: 70px; background: #9f7aea; }
+
+    /* Row 4: asymmetric corner radii */
+    .asym { width: 110px; height: 70px; background: #f687b3; }
+
+    /* Row 5: large radius clamped by box size */
+    .clamp { width: 80px; height: 80px; background: #fc8181; }
+  </style>
+</head>
+<body>
+  <div class="__f">
+
+    <!-- Row 1: uniform radius (background only, no border) -->
+    <div style="margin-bottom: 4px;">
+      <div class="card r1" style="border-radius: 0;"></div>
+      <div class="card r1" style="border-radius: 4px;"></div>
+      <div class="card r1" style="border-radius: 8px;"></div>
+      <div class="card r1" style="border-radius: 16px;"></div>
+      <div class="card r1" style="border-radius: 24px;"></div>
+      <div class="card r1" style="border-radius: 32px;"></div>
+    </div>
+
+    <!-- Row 2: radius + solid border -->
+    <div style="margin-bottom: 4px;">
+      <div class="card r2" style="border-radius: 0;"></div>
+      <div class="card r2" style="border-radius: 4px;"></div>
+      <div class="card r2" style="border-radius: 8px;"></div>
+      <div class="card r2" style="border-radius: 16px;"></div>
+      <div class="card r2" style="border-radius: 24px;"></div>
+      <div class="card r2" style="border-radius: 32px;"></div>
+    </div>
+
+    <!-- Row 3: pill and circle shapes -->
+    <div style="margin-bottom: 4px;">
+      <div class="card pill" style="border-radius: 999px;"></div>
+      <div class="card pill" style="border-radius: 999px; border: 3px solid #c05621;"></div>
+      <div class="card circle" style="border-radius: 50%;"></div>
+      <div class="card circle" style="border-radius: 50%; border: 4px solid #6b46c1;"></div>
+      <div class="card circle" style="border-radius: 50%; border: 8px solid #553c9a;"></div>
+    </div>
+
+    <!-- Row 4: asymmetric per-corner radii -->
+    <div style="margin-bottom: 4px;">
+      <div class="card asym" style="border-radius: 24px 0 0 0;"></div>
+      <div class="card asym" style="border-radius: 0 24px 0 0;"></div>
+      <div class="card asym" style="border-radius: 0 0 24px 0;"></div>
+      <div class="card asym" style="border-radius: 0 0 0 24px;"></div>
+      <div class="card asym" style="border-radius: 24px 0 24px 0;"></div>
+      <div class="card asym" style="border-radius: 0 24px 0 24px;"></div>
+    </div>
+
+    <!-- Row 5: large radius (clamped) and nested rounded divs -->
+    <div style="margin-bottom: 4px;">
+      <div class="card clamp" style="border-radius: 999px; background: #fc8181;"></div>
+      <div class="card clamp" style="border-radius: 40px; background: #f6ad55;"></div>
+      <!-- Nested: outer rounded container clips inner content visually -->
+      <div class="card" style="width: 80px; height: 80px; background: #667eea; border-radius: 16px;">
+        <div style="width: 40px; height: 40px; background: #764ba2; border-radius: 8px; margin: 8px;"></div>
+      </div>
+      <!-- Background-color only, various sizes -->
+      <div class="card" style="width: 50px; height: 50px; background: #81e6d9; border-radius: 12px;"></div>
+      <div class="card" style="width: 60px; height: 40px; background: #68d391; border-radius: 20px;"></div>
+      <div class="card" style="width: 120px; height: 30px; background: #faf089; border-radius: 15px; border: 2px solid #d69e2e;"></div>
+    </div>
+
+  </div>
+</body>
+</html>

@@ -2983,6 +2983,7 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
     for cmd in dl {
         let r = match cmd {
             DisplayCommand::FillRect { rect, .. }
+            | DisplayCommand::FillRoundedRect { rect, .. }
             | DisplayCommand::DrawBorder { rect, .. }
             | DisplayCommand::DrawText { rect, .. }
             | DisplayCommand::DrawImage { rect, .. }
@@ -3022,6 +3023,7 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
     for cmd in dl {
         let r = match cmd {
             DisplayCommand::FillRect { rect, .. }
+            | DisplayCommand::FillRoundedRect { rect, .. }
             | DisplayCommand::DrawBorder { rect, .. }
             | DisplayCommand::DrawText { rect, .. }
             | DisplayCommand::DrawImage { rect, .. }

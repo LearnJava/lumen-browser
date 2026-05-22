@@ -49,7 +49,8 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 32-list-markers.html | list markers | 14 | display:list-item · ::marker box · list-style-type: disc/circle/square/decimal/lower-alpha/lower-roman · list-style-position: outside/inside · list-style-type:none (Порог 6%: маркеры — текст, антиалиасинг расходится с Edge) |
 | 33-multi-column.html | multi-column layout + column-rule | 7 | column-count:2/3/4/5 · column-width · column-gap · column-rule: solid/dashed/dotted · rule centered in gap · rule wider than gap (clamped) |
 | 34-forms.html | form controls static rendering | 18 | input[text/email/password/number/search/range/color/submit] · checkbox (unchecked/checked/disabled) · radio (unchecked/checked) · button · textarea · select · required · disabled UA styles |
-| **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~66 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (Phase 0: квадрат в Lumen, скруглён в Edge) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) |
+| 35-border-radius.html | border-radius: uniform, pill, circle, asymmetric | 22 | border-radius: 0/4/8/16/24/32px · + border · pill (999px) · circle (50%) · asymmetric per-corner (24px 0 0 0 / etc.) · large clamped · nested rounded divs |
+| **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~66 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (SDF rendering: uniform/pill/circle/asymmetric) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) |
 
 ---
 
@@ -132,7 +133,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **display: inline** — нет смысла без текста (нулевые размеры)
 - **z-index** — требует `position: absolute/relative` с offset (Phase 0: offsets не применяются)
 - **box-shadow: inset** — не реализовано в paint (требует clip)
-- **border-radius** — парсируется, но углы остаются прямыми (Phase 0)
+- **border-radius: elliptical (rx≠ry)** — CSS spec allows `border-radius: 10px / 20px` (elliptical), only circular supported
 - **background-image** (gradient, url) — parse only (Phase 0)
 - **transform** — ✅ полностью реализован (translate/rotate/scale/skew/matrix + transform-origin), тест 22
 - **filter** — ✅ реализован (grayscale/sepia/brightness/invert/contrast/saturate/opacity/hue-rotate + blur), тест 30
