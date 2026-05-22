@@ -47,6 +47,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 30-css-filter.html | CSS filter | 14 | grayscale(1) · sepia(1) · brightness(2) · invert(1) · contrast(3) · saturate(3) · opacity(0.4) · blur(8px) · hue-rotate(90deg/180deg) |
 | 31-clip-path.html | clip-path | 9 | inset(1/4-value) · circle(r/at) · ellipse(rx ry/at) · polygon(triangle/rect bbox) · clip-path + overflow:hidden |
 | 32-list-markers.html | list markers | 14 | display:list-item · ::marker box · list-style-type: disc/circle/square/decimal/lower-alpha/lower-roman · list-style-position: outside/inside · list-style-type:none (Порог 6%: маркеры — текст, антиалиасинг расходится с Edge) |
+| 33-multi-column.html | multi-column layout + column-rule | 7 | column-count:2/3/4/5 · column-width · column-gap · column-rule: solid/dashed/dotted · rule centered in gap · rule wider than gap (clamped) |
 | **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~66 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (Phase 0: квадрат в Lumen, скруглён в Edge) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) |
 
 ---
@@ -109,6 +110,13 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | ::after (display:block, content) | 23 | inline ::after (text injection) |
 | vertical-align: top / middle / bottom (inline-block) | 24 | — |
 | vertical-align: super / sub / middle (inline text y-offset) | 24 | length/percent (text-only, no visual without font) |
+| column-count | 33 | — |
+| column-width | 33 | — |
+| column-gap | 33 | — |
+| column-rule (shorthand) | 33 | — |
+| column-rule-width | 33 | — |
+| column-rule-style: solid/dashed/dotted | 33 | double не тестируется отдельно |
+| column-rule-color | 33 | — |
 
 ---
 
