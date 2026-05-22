@@ -446,7 +446,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |----------|--------|-------|
 | `background` (shorthand) | 🟡 | single layer ✅; multiple ⬜ |
 | `background-color` | ✅ | |
-| `background-image` | 🟡 | url() ✅; linear/radial gradient ✅; conic-gradient ⬜ |
+| `background-image` | 🟡 | url() ✅; linear/radial/repeating gradient GPU ✅; conic-gradient ⬜ |
 | `background-repeat` / `background-position` / `background-size` | ✅ | |
 | `background-attachment` | 🟡 | parsed; scroll/fixed ⬜ |
 | `background-origin` / `background-clip` | 🟡 | parsed; text clip ⬜ |

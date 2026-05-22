@@ -80,6 +80,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('36', '36-border-radius.html',     2.0, 'border-radius: uniform/pill/circle/asymmetric SDF rendering'),
     ('37', '37-float-clear.html',       3.0, 'float: left/right placement + clear: both clearance'),
     ('38', '38-z-index.html',           3.0, 'z-index stacking context paint order (CSS 2.1 Appendix E)'),
+    ('39', '39-gradients.html',         3.0, 'linear-gradient / radial-gradient GPU pipeline'),
 ]
 
 # --- PNG reader (stdlib only) ---
