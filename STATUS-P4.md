@@ -1,4 +1,5 @@
-In progress: —
+In progress: CSS Grid named areas — grid-template-areas + grid-area: <name>  branch: p4-css-grid-named-areas
+Next step: GridLine::Named + parse_grid_template_areas + lay_out_grid resolution  crates/engine/layout/src/style.rs:3207
 
 Next:
 
