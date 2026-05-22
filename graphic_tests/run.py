@@ -77,6 +77,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('33', '33-multi-column.html',       2.0, 'multi-column: column-count/width layout + column-rule solid/dashed/dotted'),
     ('34', '34-forms.html',             3.0, 'form controls: input/checkbox/radio/button/textarea/select static rendering'),
     ('35', '35-grid-named-areas.html',  2.0, 'CSS Grid named areas: grid-template-areas + grid-area: <name>'),
+    ('36', '36-border-radius.html',     2.0, 'border-radius: uniform/pill/circle/asymmetric SDF rendering'),
 ]
 
 # --- PNG reader (stdlib only) ---

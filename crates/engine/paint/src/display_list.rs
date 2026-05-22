@@ -2,9 +2,7 @@
 //! дерева layout. Растеризатору (renderer) уже не нужно понимать DOM/CSS:
 //! он рендерит то, что ему говорят.
 //!
-//! Phase 0 — только `FillRect` и `DrawText`. Тени, скругления, градиенты,
-//! border-радиусы — позже, по запросу. Координаты — экранные пиксели от
-//! верхнего левого угла окна.
+//! Координаты — экранные пиксели от верхнего левого угла окна.
 
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::InputType;
@@ -89,11 +87,42 @@ impl BlendMode {
     }
 }
 
+/// Corner radii for CSS `border-radius`. Values are in CSS pixels, clamped to ≥ 0.
+/// Order matches CSS shorthand resolution: top-left, top-right, bottom-right, bottom-left.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct CornerRadii {
+    /// Top-left radius in CSS px.
+    pub tl: f32,
+    /// Top-right radius in CSS px.
+    pub tr: f32,
+    /// Bottom-right radius in CSS px.
+    pub br: f32,
+    /// Bottom-left radius in CSS px.
+    pub bl: f32,
+}
+
+impl CornerRadii {
+    /// Returns `true` if all four radii are zero (no rounding needed).
+    #[must_use]
+    pub fn all_zero(&self) -> bool {
+        self.tl == 0.0 && self.tr == 0.0 && self.br == 0.0 && self.bl == 0.0
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum DisplayCommand {
     FillRect {
         rect: Rect,
         color: Color,
+    },
+    /// CSS Backgrounds L3 §5 — `border-radius`: filled rect with rounded corners.
+    /// Rendered via SDF in the GPU fragment shader; anti-aliased at sub-pixel level.
+    /// Used instead of `FillRect` when any corner radius > 0.
+    FillRoundedRect {
+        rect: Rect,
+        color: Color,
+        /// Corner radii in CSS px (tl, tr, br, bl).
+        radii: CornerRadii,
     },
     DrawBorder {
         rect: Rect,
@@ -106,6 +135,8 @@ pub enum DisplayCommand {
         /// попадает Solid / Dashed / Dotted (по текущему `BorderStyle` enum).
         /// Renderer разворачивает Dashed/Dotted в pattern из штрихов / точек.
         styles: [BorderStyle; 4],
+        /// Corner radii in CSS px (tl, tr, br, bl). Zero = rectangular corners.
+        radii: CornerRadii,
     },
     /// CSS Basic UI L4 §5 — `outline`. Рисуется СНАРУЖИ box-а (в отличие
     /// от border, который часть box-model), не занимает место в layout,
@@ -478,11 +509,20 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     color.r, color.g, color.b, color.a,
                 ));
             }
+            DisplayCommand::FillRoundedRect { rect, color, radii } => {
+                out.push_str(&format!(
+                    "FillRoundedRect ({:.2}, {:.2}, {:.2}, {:.2}) #{:02x}{:02x}{:02x}{:02x} r=[{:.2},{:.2},{:.2},{:.2}]\n",
+                    rect.x, rect.y, rect.width, rect.height,
+                    color.r, color.g, color.b, color.a,
+                    radii.tl, radii.tr, radii.br, radii.bl,
+                ));
+            }
             DisplayCommand::DrawBorder {
                 rect,
                 widths: [wt, wr, wb, wl],
                 colors: [ct, cr, cb, cl],
                 styles: [st, sr, sb, sl],
+                radii: _,
             } => {
                 out.push_str(&format!(
                     "DrawBorder ({:.2}, {:.2}, {:.2}, {:.2}) \
@@ -1286,15 +1326,24 @@ fn emit_inline_frag_box(
     let box_h = line_h;
     let box_y = line_y;
 
+    let radii = CornerRadii {
+        tl: s.border_top_left_radius,
+        tr: s.border_top_right_radius,
+        br: s.border_bottom_right_radius,
+        bl: s.border_bottom_left_radius,
+    };
+
     // Background (CSS Backgrounds L3: painted over padding+border area).
     if let Some(CssColor::Rgba(bg)) = s.background_color
         && bg.a > 0
         && box_w > 0.0
     {
-        out.push(DisplayCommand::FillRect {
-            rect: Rect::new(box_x, box_y, box_w, box_h),
-            color: bg,
-        });
+        let r = Rect::new(box_x, box_y, box_w, box_h);
+        if radii.all_zero() {
+            out.push(DisplayCommand::FillRect { rect: r, color: bg });
+        } else {
+            out.push(DisplayCommand::FillRoundedRect { rect: r, color: bg, radii });
+        }
     }
 
     // Border.
@@ -1319,6 +1368,7 @@ fn emit_inline_frag_box(
                 s.border_bottom_style,
                 s.border_left_style,
             ],
+            radii,
         });
     }
 }
@@ -1768,6 +1818,7 @@ fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 BorderStyle::None,
                 BorderStyle::None,
             ],
+            radii: CornerRadii::default(),
         });
     }
 }
@@ -1831,17 +1882,27 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 return;
             }
             emit_box_shadows(b, out);
+            let s = &b.style;
+            let radii = CornerRadii {
+                tl: s.border_top_left_radius,
+                tr: s.border_top_right_radius,
+                br: s.border_bottom_right_radius,
+                bl: s.border_bottom_left_radius,
+            };
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
                 let clip = background_clip_rect(b);
                 if clip.width > 0.0 && clip.height > 0.0 {
-                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                    if radii.all_zero() {
+                        out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                    } else {
+                        out.push(DisplayCommand::FillRoundedRect { rect: clip, color: bg, radii });
+                    }
                 }
             }
             emit_background_image(out, b);
             emit_inset_box_shadows(b, out);
-            let s = &b.style;
             let has_border = s.border_top_style.is_visible()
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
@@ -1868,6 +1929,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         s.border_bottom_style,
                         s.border_left_style,
                     ],
+                    radii,
                 });
             }
             emit_column_rules(b, out);
@@ -1900,17 +1962,27 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                 return;
             }
             emit_box_shadows(b, out);
+            let s = &b.style;
+            let radii = CornerRadii {
+                tl: s.border_top_left_radius,
+                tr: s.border_top_right_radius,
+                br: s.border_bottom_right_radius,
+                bl: s.border_bottom_left_radius,
+            };
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
                 let clip = background_clip_rect(b);
                 if clip.width > 0.0 && clip.height > 0.0 {
-                    out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                    if radii.all_zero() {
+                        out.push(DisplayCommand::FillRect { rect: clip, color: bg });
+                    } else {
+                        out.push(DisplayCommand::FillRoundedRect { rect: clip, color: bg, radii });
+                    }
                 }
             }
             emit_background_image(out, b);
             emit_inset_box_shadows(b, out);
-            let s = &b.style;
             let has_border = s.border_top_style.is_visible()
                 || s.border_right_style.is_visible()
                 || s.border_bottom_style.is_visible()
@@ -1937,6 +2009,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         s.border_bottom_style,
                         s.border_left_style,
                     ],
+                    radii,
                 });
             }
             emit_outline(b, out);
@@ -1984,6 +2057,12 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         s.border_bottom_style,
                         s.border_left_style,
                     ],
+                    radii: CornerRadii {
+                        tl: s.border_top_left_radius,
+                        tr: s.border_top_right_radius,
+                        br: s.border_bottom_right_radius,
+                        bl: s.border_bottom_left_radius,
+                    },
                 });
             }
             out.push(DisplayCommand::DrawImage {
@@ -2072,6 +2151,12 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                             s.border_top_style, s.border_right_style,
                             s.border_bottom_style, s.border_left_style,
                         ],
+                        radii: CornerRadii {
+                            tl: s.border_top_left_radius,
+                            tr: s.border_top_right_radius,
+                            br: s.border_bottom_right_radius,
+                            bl: s.border_bottom_left_radius,
+                        },
                     });
                 }
                 emit_column_rules(b, out);
@@ -2160,6 +2245,12 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         s.border_top_style, s.border_right_style,
                         s.border_bottom_style, s.border_left_style,
                     ],
+                    radii: CornerRadii {
+                        tl: s.border_top_left_radius,
+                        tr: s.border_top_right_radius,
+                        br: s.border_bottom_right_radius,
+                        bl: s.border_bottom_left_radius,
+                    },
                 });
             }
             emit_outline(b, out);
@@ -2234,6 +2325,12 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         s.border_top_style, s.border_right_style,
                         s.border_bottom_style, s.border_left_style,
                     ],
+                    radii: CornerRadii {
+                        tl: s.border_top_left_radius,
+                        tr: s.border_top_right_radius,
+                        br: s.border_bottom_right_radius,
+                        bl: s.border_bottom_left_radius,
+                    },
                 });
             }
             // Image content внутри padding/border-области; в Phase 0
@@ -2516,6 +2613,12 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
                             s.border_top_style, s.border_right_style,
                             s.border_bottom_style, s.border_left_style,
                         ],
+                        radii: CornerRadii {
+                            tl: s.border_top_left_radius,
+                            tr: s.border_top_right_radius,
+                            br: s.border_bottom_right_radius,
+                            bl: s.border_bottom_left_radius,
+                        },
                     });
                 }
                 emit_column_rules(b, out);
@@ -3386,6 +3489,7 @@ mod tests {
             .iter()
             .map(|c| match c {
                 DisplayCommand::FillRect { .. } => "FillRect",
+                DisplayCommand::FillRoundedRect { .. } => "FillRoundedRect",
                 DisplayCommand::DrawBorder { .. } => "DrawBorder",
                 DisplayCommand::DrawOutline { .. } => "DrawOutline",
                 DisplayCommand::DrawImage { .. } => "DrawImage",

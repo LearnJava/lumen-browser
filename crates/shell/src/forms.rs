@@ -214,6 +214,7 @@ pub fn build_validation_tooltip(
         widths: [1.0; 4],
         colors: [Color { r: 60, g: 60, b: 60, a: 255 }; 4],
         styles: [BorderStyle::Solid; 4],
+        radii: lumen_paint::CornerRadii::default(),
     });
     // Text
     out.push(DisplayCommand::DrawText {
@@ -274,6 +275,7 @@ pub fn build_color_picker(anchor: Rect, scroll_y: f32, viewport_w: f32) -> Displ
         widths: [1.0; 4],
         colors: [Color { r: 80, g: 80, b: 80, a: 255 }; 4],
         styles: [BorderStyle::Solid; 4],
+        radii: lumen_paint::CornerRadii::default(),
     });
 
     for (i, &[r, g, b]) in PALETTE.iter().enumerate() {

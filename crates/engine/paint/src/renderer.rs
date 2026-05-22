@@ -36,7 +36,7 @@ use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterF
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
-use crate::display_list::{fit_image_quad, fit_image_rect, BlendMode};
+use crate::display_list::{fit_image_quad, fit_image_rect, BlendMode, CornerRadii};
 use lumen_image::{resize_area_avg, resize_bilinear};
 use crate::DisplayCommand;
 
@@ -160,6 +160,83 @@ fn vs_main(in: VIn) -> VOut {
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let dist = length(in.uv);
     let alpha = 1.0 - smoothstep(0.8, 1.0, dist);
+    if alpha <= 0.0 { discard; }
+    return vec4<f32>(in.color.rgb, in.color.a * alpha);
+}
+"#;
+
+/// SDF rounded-rect shader. Per-vertex data carries the rect's center,
+/// half-size, and per-corner radii so the fragment shader can evaluate the
+/// SDF without a uniform buffer per draw call.
+///
+/// Vertex layout (matches `RRectVertex`):
+///   loc 0  pos       vec2  – screen CSS-px position
+///   loc 1  color     vec4  – premultiplied RGBA
+///   loc 2  center    vec2  – CSS-px center of the rounded rect
+///   loc 3  half_size vec2  – CSS-px half-dimensions (w/2, h/2)
+///   loc 4  radii     vec4  – corner radii px: tl, tr, br, bl
+const RRECT_SHADER_SRC: &str = r#"
+struct Uniforms {
+    viewport: vec2<f32>,
+};
+
+@group(0) @binding(0) var<uniform> u: Uniforms;
+
+struct VIn {
+    @location(0) pos:       vec2<f32>,
+    @location(1) color:     vec4<f32>,
+    @location(2) center:    vec2<f32>,
+    @location(3) half_size: vec2<f32>,
+    @location(4) radii:     vec4<f32>,
+};
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) color:     vec4<f32>,
+    @location(1) world_pos: vec2<f32>,
+    @location(2) center:    vec2<f32>,
+    @location(3) half_size: vec2<f32>,
+    @location(4) radii:     vec4<f32>,
+};
+
+@vertex
+fn vs_main(in: VIn) -> VOut {
+    let ndc = vec2<f32>(
+        in.pos.x / u.viewport.x * 2.0 - 1.0,
+        1.0 - in.pos.y / u.viewport.y * 2.0,
+    );
+    var out: VOut;
+    out.clip      = vec4<f32>(ndc, 0.0, 1.0);
+    out.color     = in.color;
+    out.world_pos = in.pos;
+    out.center    = in.center;
+    out.half_size = in.half_size;
+    out.radii     = in.radii;
+    return out;
+}
+
+/// Inigo Quilez SDF for an axis-aligned rounded rectangle with per-corner radii.
+/// `p`         = position relative to rect center.
+/// `half_size` = half-dimensions of the rect (before radius is applied).
+/// `radii`     = (tl, tr, br, bl) corner radii.
+fn sdf_rrect(p: vec2<f32>, half_size: vec2<f32>, radii: vec4<f32>) -> f32 {
+    // Select which corner radius applies to this quadrant.
+    var r: f32 = radii.x;                                 // top-left (default)
+    if p.x >= 0.0 && p.y <= 0.0 { r = radii.y; }         // top-right
+    if p.x >= 0.0 && p.y > 0.0  { r = radii.z; }         // bottom-right
+    if p.x < 0.0  && p.y > 0.0  { r = radii.w; }         // bottom-left
+    // Clamp radius so it fits inside the box (CSS §5.5 overlap rule).
+    r = min(r, min(half_size.x, half_size.y));
+    let q = abs(p) - half_size + vec2<f32>(r, r);
+    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    let p = in.world_pos - in.center;
+    let d = sdf_rrect(p, in.half_size, in.radii);
+    // Sub-pixel anti-aliasing: smoothstep over [-0.5, 0.5] px.
+    let alpha = 1.0 - smoothstep(-0.5, 0.5, d);
     if alpha <= 0.0 { discard; }
     return vec4<f32>(in.color.rgb, in.color.a * alpha);
 }
@@ -677,6 +754,24 @@ struct CircleVertex {
     color: [f32; 4],
 }
 
+/// Вершина для SDF-скруглённого прямоугольника (`RRECT_SHADER_SRC`).
+/// `center`/`half_size`/`radii` одинаковы для всех 6 вершин одного quad-а
+/// и передаются как interpolants (константны внутри одного треугольника).
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct RRectVertex {
+    /// Screen position in CSS pixels.
+    pos: [f32; 2],
+    /// RGBA color (linear premultiplied alpha is handled by blend state).
+    color: [f32; 4],
+    /// Center of the rounded rect in CSS pixels.
+    center: [f32; 2],
+    /// Half-dimensions of the rect: (width/2, height/2).
+    half_size: [f32; 2],
+    /// Corner radii in CSS pixels: [tl, tr, br, bl].
+    radii: [f32; 4],
+}
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct CompositeVertex {
@@ -742,6 +837,8 @@ enum DrawOp {
     SetScissor(DeviceScissor),
     Fill { v_start: u32, v_count: u32 },
     Circle { v_start: u32, v_count: u32 },
+    /// SDF rounded-rect draw — uses `rrect_pipeline` + `rrect_vbuf`.
+    RRect { v_start: u32, v_count: u32 },
     Text { v_start: u32, v_count: u32 },
     Image { v_start: u32, v_count: u32, image_batch_idx: u32 },
 }
@@ -906,6 +1003,8 @@ pub struct Renderer {
 
     fill_pipeline: wgpu::RenderPipeline,
     circle_pipeline: wgpu::RenderPipeline,
+    /// CSS border-radius SDF pipeline. Uses `RRectVertex` layout.
+    rrect_pipeline: wgpu::RenderPipeline,
     text_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
     composite_pipeline: wgpu::RenderPipeline,
@@ -1211,6 +1310,77 @@ impl Renderer {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &circle_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // ── RRect (SDF rounded-rect) pipeline ─────────────────────────────
+        let rrect_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("rrect-shader"),
+            source: wgpu::ShaderSource::Wgsl(RRECT_SHADER_SRC.into()),
+        });
+        let rrect_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("rrect-layout"),
+            bind_group_layouts: &[&uniform_bgl],
+            push_constant_ranges: &[],
+        });
+        let rrect_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("rrect-pipeline"),
+            layout: Some(&rrect_layout),
+            vertex: wgpu::VertexState {
+                module: &rrect_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<RRectVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        // loc 0: pos (vec2)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0,
+                        },
+                        // loc 1: color (vec4)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 8,
+                            shader_location: 1,
+                        },
+                        // loc 2: center (vec2)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 24,
+                            shader_location: 2,
+                        },
+                        // loc 3: half_size (vec2)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 32,
+                            shader_location: 3,
+                        },
+                        // loc 4: radii (vec4: tl, tr, br, bl)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 40,
+                            shader_location: 4,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &rrect_shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
@@ -1830,6 +2000,7 @@ impl Renderer {
             scale_factor,
             fill_pipeline,
             circle_pipeline,
+            rrect_pipeline,
             text_pipeline,
             image_pipeline,
             uniform_buffer,
@@ -2434,6 +2605,7 @@ impl Renderer {
         // ── Сбор вершин ────────────────────────────────────────────────────
         let mut fill_vertices: Vec<FillVertex> = Vec::new();
         let mut circle_vertices: Vec<CircleVertex> = Vec::new();
+        let mut rrect_vertices: Vec<RRectVertex> = Vec::new();
         let mut text_vertices: Vec<TextVertex> = Vec::new();
         let mut image_vertices: Vec<ImageVertex> = Vec::new();
         // Bind groups для image draw-ов в порядке появления. DrawOp::Image
@@ -2579,11 +2751,27 @@ impl Renderer {
                         draw_ops.push(DrawOp::Fill { v_start, v_count });
                     }
                 }
+                DisplayCommand::FillRoundedRect { rect, color, radii } => {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
+                    let r = translate_rect(*rect, dx, dy);
+                    let v_start = rrect_vertices.len() as u32;
+                    push_rrect_quad(&mut rrect_vertices, r, color_to_array(color), *radii);
+                    if let Some(m) = transform_stack.last() {
+                        apply_affine_to_rrect_verts(&mut rrect_vertices[v_start as usize..], m);
+                    }
+                    let v_count = rrect_vertices.len() as u32 - v_start;
+                    if v_count > 0 {
+                        draw_ops.push(DrawOp::RRect { v_start, v_count });
+                    }
+                }
                 DisplayCommand::DrawBorder {
                     rect,
                     widths: [wt, wr, wb, wl],
                     colors: [ct, cr, cb, cl],
                     styles: [st, sr, sb, sl],
+                    radii,
                 } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
@@ -2592,54 +2780,124 @@ impl Renderer {
                     let r = translate_rect(*rect, dx, dy);
                     let fill_v_start = fill_vertices.len() as u32;
                     let circle_v_start = circle_vertices.len() as u32;
-                    // CSS Backgrounds L3 §6.3 — рёбра рисуются как
-                    // прямоугольники полной width/height; Phase 0 без
-                    // mitre-углов (углы overlap-ятся как fillRect-ы,
-                    // что нормально пока border-color одинаков).
-                    if *wt > 0.0 {
-                        emit_border_side(
-                            &mut fill_vertices,
-                            &mut circle_vertices,
-                            Rect::new(r.x, r.y, r.width, *wt),
-                            true,
-                            *wt,
-                            apply_alpha_to_color(color_to_array(ct), alpha),
-                            *st,
-                        );
+
+                    if radii.all_zero() {
+                        // CSS Backgrounds L3 §6.3 — прямоугольные рёбра без угловых дуг.
+                        if *wt > 0.0 {
+                            emit_border_side(
+                                &mut fill_vertices, &mut circle_vertices,
+                                Rect::new(r.x, r.y, r.width, *wt),
+                                true, *wt,
+                                apply_alpha_to_color(color_to_array(ct), alpha), *st,
+                            );
+                        }
+                        if *wr > 0.0 {
+                            emit_border_side(
+                                &mut fill_vertices, &mut circle_vertices,
+                                Rect::new(r.x + r.width - wr, r.y, *wr, r.height),
+                                false, *wr,
+                                apply_alpha_to_color(color_to_array(cr), alpha), *sr,
+                            );
+                        }
+                        if *wb > 0.0 {
+                            emit_border_side(
+                                &mut fill_vertices, &mut circle_vertices,
+                                Rect::new(r.x, r.y + r.height - wb, r.width, *wb),
+                                true, *wb,
+                                apply_alpha_to_color(color_to_array(cb), alpha), *sb,
+                            );
+                        }
+                        if *wl > 0.0 {
+                            emit_border_side(
+                                &mut fill_vertices, &mut circle_vertices,
+                                Rect::new(r.x, r.y, *wl, r.height),
+                                false, *wl,
+                                apply_alpha_to_color(color_to_array(cl), alpha), *sl,
+                            );
+                        }
+                    } else {
+                        // CSS Backgrounds L3 §5 + §6.3 — стороны укорочены у углов;
+                        // каждый угол рисуется как дуга-сектор (tessellated arc).
+                        // Каждый радиус также ограничен половиной соответствующей стороны.
+                        let r_tl = radii.tl.min(r.width / 2.0).min(r.height / 2.0);
+                        let r_tr = radii.tr.min(r.width / 2.0).min(r.height / 2.0);
+                        let r_br = radii.br.min(r.width / 2.0).min(r.height / 2.0);
+                        let r_bl = radii.bl.min(r.width / 2.0).min(r.height / 2.0);
+                        let ct_arr = apply_alpha_to_color(color_to_array(ct), alpha);
+                        let cr_arr = apply_alpha_to_color(color_to_array(cr), alpha);
+                        let cb_arr = apply_alpha_to_color(color_to_array(cb), alpha);
+                        let cl_arr = apply_alpha_to_color(color_to_array(cl), alpha);
+                        // Top side (shortened by r_tl on left, r_tr on right).
+                        if *wt > 0.0 {
+                            let x0 = r.x + r_tl;
+                            let x1 = r.x + r.width - r_tr;
+                            if x1 > x0 {
+                                emit_border_side(
+                                    &mut fill_vertices, &mut circle_vertices,
+                                    Rect::new(x0, r.y, x1 - x0, *wt),
+                                    true, *wt, ct_arr, *st,
+                                );
+                            }
+                        }
+                        // Right side (shortened by r_tr on top, r_br on bottom).
+                        if *wr > 0.0 {
+                            let y0 = r.y + r_tr;
+                            let y1 = r.y + r.height - r_br;
+                            if y1 > y0 {
+                                emit_border_side(
+                                    &mut fill_vertices, &mut circle_vertices,
+                                    Rect::new(r.x + r.width - wr, y0, *wr, y1 - y0),
+                                    false, *wr, cr_arr, *sr,
+                                );
+                            }
+                        }
+                        // Bottom side (shortened by r_br on right, r_bl on left).
+                        if *wb > 0.0 {
+                            let x0 = r.x + r_bl;
+                            let x1 = r.x + r.width - r_br;
+                            if x1 > x0 {
+                                emit_border_side(
+                                    &mut fill_vertices, &mut circle_vertices,
+                                    Rect::new(x0, r.y + r.height - wb, x1 - x0, *wb),
+                                    true, *wb, cb_arr, *sb,
+                                );
+                            }
+                        }
+                        // Left side (shortened by r_tl on top, r_bl on bottom).
+                        if *wl > 0.0 {
+                            let y0 = r.y + r_tl;
+                            let y1 = r.y + r.height - r_bl;
+                            if y1 > y0 {
+                                emit_border_side(
+                                    &mut fill_vertices, &mut circle_vertices,
+                                    Rect::new(r.x, y0, *wl, y1 - y0),
+                                    false, *wl, cl_arr, *sl,
+                                );
+                            }
+                        }
+                        // Corner arcs: quarter-annulus for each corner with radius > 0.
+                        // TL corner (180°→270° in screen-Y-down coords = left→up).
+                        if r_tl > 0.0 {
+                            let inner = (r_tl - wt.max(*wl)).max(0.0);
+                            emit_border_arc(&mut fill_vertices, [r.x + r_tl, r.y + r_tl], r_tl, inner, 180.0, 270.0, ct_arr);
+                        }
+                        // TR corner (270°→360° = up→right).
+                        if r_tr > 0.0 {
+                            let inner = (r_tr - wt.max(*wr)).max(0.0);
+                            emit_border_arc(&mut fill_vertices, [r.x + r.width - r_tr, r.y + r_tr], r_tr, inner, 270.0, 360.0, ct_arr);
+                        }
+                        // BR corner (0°→90° = right→down).
+                        if r_br > 0.0 {
+                            let inner = (r_br - wb.max(*wr)).max(0.0);
+                            emit_border_arc(&mut fill_vertices, [r.x + r.width - r_br, r.y + r.height - r_br], r_br, inner, 0.0, 90.0, cb_arr);
+                        }
+                        // BL corner (90°→180° = down→left).
+                        if r_bl > 0.0 {
+                            let inner = (r_bl - wb.max(*wl)).max(0.0);
+                            emit_border_arc(&mut fill_vertices, [r.x + r_bl, r.y + r.height - r_bl], r_bl, inner, 90.0, 180.0, cb_arr);
+                        }
                     }
-                    if *wr > 0.0 {
-                        emit_border_side(
-                            &mut fill_vertices,
-                            &mut circle_vertices,
-                            Rect::new(r.x + r.width - wr, r.y, *wr, r.height),
-                            false,
-                            *wr,
-                            apply_alpha_to_color(color_to_array(cr), alpha),
-                            *sr,
-                        );
-                    }
-                    if *wb > 0.0 {
-                        emit_border_side(
-                            &mut fill_vertices,
-                            &mut circle_vertices,
-                            Rect::new(r.x, r.y + r.height - wb, r.width, *wb),
-                            true,
-                            *wb,
-                            apply_alpha_to_color(color_to_array(cb), alpha),
-                            *sb,
-                        );
-                    }
-                    if *wl > 0.0 {
-                        emit_border_side(
-                            &mut fill_vertices,
-                            &mut circle_vertices,
-                            Rect::new(r.x, r.y, *wl, r.height),
-                            false,
-                            *wl,
-                            apply_alpha_to_color(color_to_array(cl), alpha),
-                            *sl,
-                        );
-                    }
+
                     if let Some(m) = transform_stack.last() {
                         apply_affine_to_verts(&mut fill_vertices[fill_v_start as usize..], m);
                         apply_affine_to_circle_verts(&mut circle_vertices[circle_v_start as usize..], m);
@@ -3308,6 +3566,18 @@ impl Renderer {
             self.queue.write_buffer(&buf, 0, as_bytes(&circle_vertices));
             Some(buf)
         };
+        let rrect_vbuf = if rrect_vertices.is_empty() {
+            None
+        } else {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("rrect-vbuf"),
+                size: std::mem::size_of_val(rrect_vertices.as_slice()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buf, 0, as_bytes(&rrect_vertices));
+            Some(buf)
+        };
         let text_vbuf = if text_vertices.is_empty() {
             None
         } else {
@@ -3402,6 +3672,14 @@ impl Renderer {
                         DrawOp::Circle { v_start, v_count } => {
                             if let Some(vb) = &circle_vbuf {
                                 $pass.set_pipeline(&self.circle_pipeline);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_vertex_buffer(0, vb.slice(..));
+                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                            }
+                        }
+                        DrawOp::RRect { v_start, v_count } => {
+                            if let Some(vb) = &rrect_vbuf {
+                                $pass.set_pipeline(&self.rrect_pipeline);
                                 $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
                                 $pass.draw(*v_start..*v_start + *v_count, 0..1);
@@ -3883,6 +4161,84 @@ fn push_circle_quad(out: &mut Vec<CircleVertex>, rect: Rect, color: [f32; 4]) {
 /// внутри квада, а не мировые координаты.
 fn apply_affine_to_circle_verts(verts: &mut [CircleVertex], m: &Mat4) {
     apply_affine_to_verts(verts, m);
+}
+
+/// Emits 6 `RRectVertex` (two triangles) for a rounded rect quad.
+/// Per-vertex `center`, `half_size`, and `radii` are constant across the quad so
+/// the fragment shader can evaluate the SDF at each fragment position.
+fn push_rrect_quad(out: &mut Vec<RRectVertex>, rect: Rect, color: [f32; 4], radii: CornerRadii) {
+    let x0 = rect.x;
+    let y0 = rect.y;
+    let x1 = rect.x + rect.width;
+    let y1 = rect.y + rect.height;
+    let center = [(x0 + x1) * 0.5, (y0 + y1) * 0.5];
+    let half_size = [rect.width * 0.5, rect.height * 0.5];
+    let r = [radii.tl, radii.tr, radii.br, radii.bl];
+    let v = |px: f32, py: f32| RRectVertex { pos: [px, py], color, center, half_size, radii: r };
+    out.extend_from_slice(&[
+        v(x0, y0), v(x1, y0), v(x1, y1),
+        v(x0, y0), v(x1, y1), v(x0, y1),
+    ]);
+}
+
+/// Applies a 2D affine transform to `RRectVertex::pos` AND `center` fields.
+/// `half_size` and `radii` are scale-invariant for Phase 0 (no rotation/scale transforms on layout boxes).
+fn apply_affine_to_rrect_verts(verts: &mut [RRectVertex], m: &Mat4) {
+    for v in verts {
+        let [px, py] = v.pos;
+        v.pos = [
+            m.0[0] * px + m.0[4] * py + m.0[12],
+            m.0[1] * px + m.0[5] * py + m.0[13],
+        ];
+        let [cx, cy] = v.center;
+        v.center = [
+            m.0[0] * cx + m.0[4] * cy + m.0[12],
+            m.0[1] * cx + m.0[5] * cy + m.0[13],
+        ];
+    }
+}
+
+/// Emits tessellated triangle fan for one border corner arc (quarter-annulus).
+/// `center`   = pivot point of the arc (corner center of the rounded rect).
+/// `outer_r`  = outer radius (= border-radius value).
+/// `inner_r`  = inner radius (= outer_r - border_width, or 0 if border fills the corner).
+/// `start_deg`/`end_deg` = sweep in degrees (screen Y-down, clockwise).
+/// `color`    = fill color from the adjacent border side.
+///
+/// Uses 8 segments for smooth Phase 0 quality. Each segment is two triangles
+/// forming an annular sector quad.
+fn emit_border_arc(
+    out: &mut Vec<FillVertex>,
+    center: [f32; 2],
+    outer_r: f32,
+    inner_r: f32,
+    start_deg: f32,
+    end_deg: f32,
+    color: [f32; 4],
+) {
+    const N: u32 = 8;
+    let step = (end_deg - start_deg) / N as f32;
+    let [cx, cy] = center;
+    for i in 0..N {
+        let a0 = (start_deg + i as f32 * step).to_radians();
+        let a1 = (start_deg + (i + 1) as f32 * step).to_radians();
+        let (s0, c0) = (a0.sin(), a0.cos());
+        let (s1, c1) = (a1.sin(), a1.cos());
+        // Outer arc vertices.
+        let po0 = [cx + outer_r * c0, cy + outer_r * s0];
+        let po1 = [cx + outer_r * c1, cy + outer_r * s1];
+        // Inner arc vertices (or center if inner_r == 0).
+        let pi0 = [cx + inner_r * c0, cy + inner_r * s0];
+        let pi1 = [cx + inner_r * c1, cy + inner_r * s1];
+        out.extend_from_slice(&[
+            FillVertex { pos: po0, color },
+            FillVertex { pos: po1, color },
+            FillVertex { pos: pi1, color },
+            FillVertex { pos: po0, color },
+            FillVertex { pos: pi1, color },
+            FillVertex { pos: pi0, color },
+        ]);
+    }
 }
 
 fn push_fill_quad(out: &mut Vec<FillVertex>, rect: Rect, color: [f32; 4]) {

@@ -24,7 +24,7 @@ pub use compositor::{
 };
 pub use display_list::{
     build_display_list, build_display_list_ordered, build_display_list_with_anim,
-    serialize_display_list, BlendMode, DisplayCommand, DisplayList,
+    serialize_display_list, BlendMode, CornerRadii, DisplayCommand, DisplayList,
 };
 pub use hit_test::{hit_test, HitTestResult};
 pub use renderer::{ImageRegisterError, Renderer, SnapshotUploadError};
