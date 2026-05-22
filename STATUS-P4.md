@@ -1,4 +1,5 @@
-In progress: —
+In progress: CSS Nesting L1 — implicit nesting + nested at-rules  branch: p4-css-nesting
+Next step: first commit in worktree  crates/engine/css-parser/src/parser.rs
 
 Next:
 

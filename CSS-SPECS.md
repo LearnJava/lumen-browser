@@ -49,7 +49,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Custom Properties L1 | [css-variables](https://www.w3.org/TR/css-variables/) | ✅ | var() recursive + @property + env() | **#1** |
 | CSS Transitions | [css3-transitions](https://www.w3.org/TR/css3-transitions/) | ✅ | TransitionScheduler wired: sync()+tick() in shell loop | **#2** |
 | CSS Animations L1 | [css-animations-1](https://www.w3.org/TR/css-animations-1/) | ✅ | AnimationScheduler::tick() wired in shell RedrawRequested | **#3** |
-| CSS Nesting | [css-nesting-1](https://www.w3.org/TR/css-nesting-1/) | ⬜ | nested rule parsing entirely missing | **#4** |
+| CSS Nesting | [css-nesting-1](https://www.w3.org/TR/css-nesting-1/) | ✅ | `&`-explicit + implicit `.foo{}`/`>.foo{}` nesting + nested `@media`/`@supports`/`@layer`/`@container`; 20 tests | **#4** |
 | CSS Display L3 (table) | [css-display-3](https://www.w3.org/TR/css-display-3/) | 🟡 | display:table/row/cell layout engine | **#5** |
 | CSS Positioning L3 (sticky) | [css3-positioning](https://www.w3.org/TR/css3-positioning/) | 🟡 | position:sticky + scroll listener | **#6** |
 | CSS Positioning L3 (z-index) | [css3-positioning](https://www.w3.org/TR/css3-positioning/) | 🟡 | stacking context paint ordering | **#7** |
