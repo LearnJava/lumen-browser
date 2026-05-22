@@ -327,6 +327,135 @@ fn install_primitives(ctx: &Ctx<'_>, doc: Arc<Mutex<Document>>) -> QjResult<()> 
         );
     }
 
+    // ── Service Worker / Cache Storage (in-memory scaffold) ─────────────────
+    {
+        // SW registrations: origin+scope+scriptUrl stored in-memory.
+        // Key: (origin, scope) → script_url
+        type SwMap = std::collections::HashMap<(String, String), String>;
+        let sw_regs: Arc<Mutex<SwMap>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+        // Cache storage: origin → cache_name → url → body (Vec<u8>)
+        type CacheMap = std::collections::HashMap<String, std::collections::HashMap<String, std::collections::HashMap<String, Vec<u8>>>>;
+        let cache_data: Arc<Mutex<CacheMap>> = Arc::new(Mutex::new(std::collections::HashMap::new()));
+
+        let sw = Arc::clone(&sw_regs);
+        reg!(
+            "_lumen_sw_register",
+            move |origin: String, scope: String, script_url: String| {
+                sw.lock().unwrap().insert((origin, scope), script_url);
+            }
+        );
+
+        let sw = Arc::clone(&sw_regs);
+        reg!(
+            "_lumen_sw_has_registration",
+            move |origin: String| -> bool {
+                sw.lock().unwrap().keys().any(|(o, _)| *o == origin)
+            }
+        );
+
+        let cd = Arc::clone(&cache_data);
+        reg!(
+            "_lumen_cache_put",
+            move |origin: String, cache_name: String, url: String, body: Vec<u8>| {
+                cd.lock()
+                    .unwrap()
+                    .entry(origin)
+                    .or_default()
+                    .entry(cache_name)
+                    .or_default()
+                    .insert(url, body);
+            }
+        );
+
+        let cd = Arc::clone(&cache_data);
+        reg!(
+            "_lumen_cache_match",
+            move |origin: String, cache_name: String, url: String| -> Option<Vec<u8>> {
+                cd.lock()
+                    .unwrap()
+                    .get(&origin)
+                    .and_then(|caches| caches.get(&cache_name))
+                    .and_then(|cache| cache.get(&url))
+                    .cloned()
+            }
+        );
+
+        let cd = Arc::clone(&cache_data);
+        reg!(
+            "_lumen_cache_match_any",
+            move |origin: String, url: String| -> Option<Vec<u8>> {
+                let guard = cd.lock().unwrap();
+                let caches = guard.get(&origin)?;
+                for cache in caches.values() {
+                    if let Some(body) = cache.get(&url) {
+                        return Some(body.clone());
+                    }
+                }
+                None
+            }
+        );
+
+        let cd = Arc::clone(&cache_data);
+        reg!(
+            "_lumen_cache_delete",
+            move |origin: String, cache_name: String, url: String| {
+                if let Some(caches) = cd.lock().unwrap().get_mut(&origin)
+                    && let Some(cache) = caches.get_mut(&cache_name)
+                {
+                    cache.remove(&url);
+                }
+            }
+        );
+
+        let cd = Arc::clone(&cache_data);
+        reg!(
+            "_lumen_cache_keys",
+            move |origin: String, cache_name: String| -> Vec<String> {
+                cd.lock()
+                    .unwrap()
+                    .get(&origin)
+                    .and_then(|caches| caches.get(&cache_name))
+                    .map(|cache| cache.keys().cloned().collect())
+                    .unwrap_or_default()
+            }
+        );
+
+        let cd = Arc::clone(&cache_data);
+        reg!(
+            "_lumen_cache_has",
+            move |origin: String, cache_name: String| -> bool {
+                cd.lock()
+                    .unwrap()
+                    .get(&origin)
+                    .map(|caches| caches.contains_key(&cache_name))
+                    .unwrap_or(false)
+            }
+        );
+
+        let cd = Arc::clone(&cache_data);
+        reg!(
+            "_lumen_cache_delete_cache",
+            move |origin: String, cache_name: String| {
+                if let Some(caches) = cd.lock().unwrap().get_mut(&origin) {
+                    caches.remove(&cache_name);
+                }
+            }
+        );
+
+        let cd = Arc::clone(&cache_data);
+        reg!(
+            "_lumen_cache_names",
+            move |origin: String| -> Vec<String> {
+                cd.lock()
+                    .unwrap()
+                    .get(&origin)
+                    .map(|caches| caches.keys().cloned().collect())
+                    .unwrap_or_default()
+            }
+        );
+    }
+
     // ── history ──────────────────────────────────────────────────────────────
     {
         let hist = Arc::new(Mutex::new(HistoryState::new()));
@@ -802,8 +931,108 @@ var document = {
 var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
 var confirm  = function()  { return false; };
 var prompt   = function()  { return null; };
-var location = { href: '', protocol: 'file:', hostname: '', pathname: '', search: '', hash: '' };
-var navigator = { userAgent: 'Lumen/0.0', language: 'en-US', onLine: false };
+var location = { href: '', protocol: 'file:', hostname: '', host: '', pathname: '', search: '', hash: '' };
+// ── Service Worker API ────────────────────────────────────────────────────────
+
+function _lumen_build_cache_object(origin, cacheName) {
+    return {
+        put: function(request, response) {
+            var url = (typeof request === 'string') ? request : request.url;
+            return response.arrayBuffer().then(function(buf) {
+                _lumen_cache_put(origin, cacheName, url, new Uint8Array(buf));
+                return undefined;
+            });
+        },
+        match: function(request) {
+            var url = (typeof request === 'string') ? request : request.url;
+            var body = _lumen_cache_match(origin, cacheName, url);
+            if (body === undefined || body === null) return Promise.resolve(undefined);
+            return Promise.resolve(new Response(body));
+        },
+        delete: function(request) {
+            var url = (typeof request === 'string') ? request : request.url;
+            _lumen_cache_delete(origin, cacheName, url);
+            return Promise.resolve(true);
+        },
+        keys: function() {
+            return Promise.resolve(
+                _lumen_cache_keys(origin, cacheName).map(function(u) { return new Request(u); })
+            );
+        },
+        addAll: function(urls) {
+            return Promise.all(urls.map(function(u) {
+                return fetch(u).then(function(r) {
+                    _lumen_cache_put(origin, cacheName, u, []);
+                    return r;
+                });
+            }));
+        },
+    };
+}
+
+var _sw_origin = (typeof location !== 'undefined') ? (location.protocol + '//' + location.host) : '';
+
+var caches = {
+    open: function(name) {
+        return Promise.resolve(_lumen_build_cache_object(_sw_origin, String(name)));
+    },
+    match: function(request) {
+        var url = (typeof request === 'string') ? request : request.url;
+        var body = _lumen_cache_match_any(_sw_origin, url);
+        if (body === undefined || body === null) return Promise.resolve(undefined);
+        return Promise.resolve(new Response(body));
+    },
+    has: function(name) {
+        return Promise.resolve(_lumen_cache_has(_sw_origin, String(name)));
+    },
+    delete: function(name) {
+        _lumen_cache_delete_cache(_sw_origin, String(name));
+        return Promise.resolve(true);
+    },
+    keys: function() {
+        return Promise.resolve(_lumen_cache_names(_sw_origin));
+    },
+};
+
+var _sw_registrations = {};
+var _sw_container = {
+    register: function(scriptUrl, options) {
+        var scope = (options && options.scope) ? String(options.scope) : '/';
+        _lumen_sw_register(_sw_origin, scope, String(scriptUrl));
+        var reg = {
+            scope: scope,
+            scriptURL: String(scriptUrl),
+            active: null,
+            installing: null,
+            waiting: null,
+            update: function() { return Promise.resolve(); },
+            unregister: function() { return Promise.resolve(true); },
+        };
+        _sw_registrations[scope] = reg;
+        return Promise.resolve(reg);
+    },
+    getRegistration: function(url) {
+        var u = url || _sw_origin + '/';
+        for (var scope in _sw_registrations) {
+            if (String(u).indexOf(scope) === 0) return Promise.resolve(_sw_registrations[scope]);
+        }
+        return Promise.resolve(undefined);
+    },
+    getRegistrations: function() {
+        return Promise.resolve(Object.values(_sw_registrations));
+    },
+    ready: Promise.resolve({ scope: '/', active: null }),
+    controller: null,
+    oncontrollerchange: null,
+    onmessage: null,
+};
+
+var navigator = {
+    userAgent: 'Lumen/0.0',
+    language: 'en-US',
+    onLine: false,
+    serviceWorker: _sw_container,
+};
 var setTimeout  = function(fn) { try { fn(); } catch(e) {} return 0; };
 var setInterval = function()   { return 0; };
 var clearTimeout  = function() {};
@@ -883,6 +1112,7 @@ var window = {
     clearInterval: clearInterval,
     requestAnimationFrame: requestAnimationFrame,
     EventSource: EventSource,
+    caches: caches,
     document: document,
     console: console,
     addEventListener: function(type, fn) {
@@ -1561,6 +1791,140 @@ mod tests {
     fn custom_event_detail_null_by_default() {
         let rt = runtime_with_dom(make_doc());
         let result = rt.eval("new CustomEvent('x').detail === null").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── navigator.serviceWorker ───────────────────────────────────────────────
+
+    #[test]
+    fn navigator_has_service_worker() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("typeof navigator.serviceWorker === 'object'")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sw_register_returns_promise() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval(
+                r#"
+                var p = navigator.serviceWorker.register('/sw.js', { scope: '/app/' });
+                typeof p.then === 'function'
+                "#,
+            )
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn sw_register_calls_lumen_primitive() {
+        let rt = runtime_with_dom(make_doc());
+        // _sw_origin = location.protocol + '//' + location.host = 'file://'
+        rt.eval("navigator.serviceWorker.register('/sw.js', { scope: '/' });")
+            .unwrap();
+        // проверяем через примитив — origin 'file://'
+        let result = rt.eval("_lumen_sw_has_registration('file://')").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── caches API ────────────────────────────────────────────────────────────
+
+    #[test]
+    fn caches_object_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval("typeof caches === 'object'").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn caches_open_returns_promise() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("typeof caches.open('v1').then === 'function'")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn cache_has_returns_false_for_unknown() {
+        let rt = runtime_with_dom(make_doc());
+        // has() returns promise; we check the primitive directly.
+        let result = rt
+            .eval("_lumen_cache_has('', 'nonexistent')")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn cache_put_and_match_roundtrip() {
+        let rt = runtime_with_dom(make_doc());
+        // Put raw bytes via primitive, then match.
+        rt.eval("_lumen_cache_put('', 'v1', 'https://x.com/a', [72, 101, 108, 108, 111]);")
+            .unwrap();
+        let result = rt
+            .eval("_lumen_cache_has('', 'v1')")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+        let keys = rt.eval("_lumen_cache_keys('', 'v1')").unwrap();
+        assert_eq!(
+            keys,
+            lumen_core::JsValue::Array(vec![lumen_core::JsValue::String(
+                "https://x.com/a".into()
+            )])
+        );
+    }
+
+    #[test]
+    fn cache_match_any_returns_none_on_miss() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("_lumen_cache_match_any('', 'https://x.com/missing') === undefined")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn cache_delete_removes_entry() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("_lumen_cache_put('', 'v1', 'https://x.com/b', []);")
+            .unwrap();
+        rt.eval("_lumen_cache_delete('', 'v1', 'https://x.com/b');")
+            .unwrap();
+        let keys = rt.eval("_lumen_cache_keys('', 'v1')").unwrap();
+        assert_eq!(keys, lumen_core::JsValue::Array(vec![]));
+    }
+
+    #[test]
+    fn cache_names_lists_opened_caches() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("_lumen_cache_put('', 'alpha', 'https://x.com/r', []);")
+            .unwrap();
+        rt.eval("_lumen_cache_put('', 'beta', 'https://x.com/s', []);")
+            .unwrap();
+        let mut names = match rt.eval("_lumen_cache_names('')").unwrap() {
+            lumen_core::JsValue::Array(a) => a
+                .into_iter()
+                .filter_map(|v| {
+                    if let lumen_core::JsValue::String(s) = v {
+                        Some(s)
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>(),
+            _ => vec![],
+        };
+        names.sort();
+        assert_eq!(names, vec!["alpha".to_string(), "beta".to_string()]);
+    }
+
+    #[test]
+    fn window_has_caches() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval("typeof window.caches === 'object'").unwrap();
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
 }
