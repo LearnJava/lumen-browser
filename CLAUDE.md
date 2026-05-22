@@ -41,7 +41,7 @@ Exception: Claude memory (`~/.claude/projects/.../memory/`) lives outside the re
 
 ## Developer assignments
 
-Four parallel developers (4 Claude Code sessions, each in its own `git worktree`). Each owns a domain to minimize merge conflicts. Former P4 role (shell + JS + runtime + UI) is merged into P3. New P4 role covers CSS spec compliance.
+Four parallel developers (4 Claude Code sessions, each in its own `git worktree`). Each owns a domain to minimize merge conflicts. Former P4 role (shell + JS + runtime + UI) is merged into P3. New P4 role covers **all CSS work** — P1/P2/P3 do not write CSS properties.
 
 **If the user says "you are developer N" at session start — read `STATUS-PN.md` and take the first item from "Next". If "In progress" is set — continue that task. If all your tasks are taken — ask the user which task to take next.**
 
@@ -52,13 +52,43 @@ Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `fo
 | **P1** | Frontend engine: source → layout tree | `html-parser`, `css-parser`, `dom`, `layout`, `encoding` |
 | **P2** | Backend rendering: layout tree → pixels | `font`, `paint`, `image` |
 | **P3** | Runtime + system: everything outside the engine | `shell`, `network`, `storage`, `knowledge`, `core::ext` |
-| **P4** | CSS spec compliance: promote 🟡→✅, add ⬜→🟡 per CSS 2026 | `layout` (style.rs), `paint` (display_list.rs) — cross-domain, coordinate with P1/P2 |
+| **P4** | **All CSS**: parsing, ComputedStyle, cascade, every property end-to-end | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) — cross-domain |
 
 Full subsystem breakdown per role — [lumen-plan.md](lumen-plan.md) §developer-assignments.
 
 > **Multi-marker subtasks** (`[P1+P2]` etc.) are common due to cross-domain runtime. **First marker = primary owner**; others contribute via review / interface / separate branches. `[P3]` now covers former `[P4]` tasks; historical commits keep `[P4]` unchanged.
 >
 > **P4 coordination rule:** before touching `style.rs` — check `STATUS-P1.md`; before touching `display_list.rs` / `renderer.rs` — leave a note in the commit message for P2. Merge to `main` after each property to minimize divergence.
+
+### CSS ownership: P4 only
+
+**P1, P2, P3 do not implement CSS properties.** All CSS work belongs to P4:
+
+- CSS parsing (`css-parser`) — P4
+- `ComputedStyle` fields and `apply_declaration()` — P4
+- `var()` substitution, `@layer` ordering, cascade — P4
+- Wiring stored values to layout algorithms — P4
+- Wiring stored values to paint/display-list — P4
+- CSS at-rules: `@media`, `@keyframes`, `@container`, `@layer`, `@supports` — P4
+
+**The only CSS code P1/P2/P3 write** is the algorithm stub — when a new layout or render primitive is needed, they:
+
+1. Implement the algorithm / GPU primitive
+2. Expose a clean Rust interface (function or trait)
+3. Add `// CSS: <property-name>` comment marking where P4 should connect
+4. Do **not** add the property to `ComputedStyle` or `apply_declaration()` — that is P4's job
+
+Example split for `float`:
+```
+P1 writes:  fn lay_out_with_floats(node, floats: &FloatContext)  // CSS: float, clear
+P4 writes:  ComputedStyle.float field + apply_declaration("float") + calls lay_out_with_floats
+```
+
+Example split for `filter`:
+```
+P2 writes:  fn apply_filter_pass(cmd: FilterCommand)  // CSS: filter, backdrop-filter
+P4 writes:  ComputedStyle.filter field + apply_declaration("filter") + emits FilterCommand
+```
 
 ### Collaboration rules
 
@@ -67,6 +97,7 @@ Full subsystem breakdown per role — [lumen-plan.md](lumen-plan.md) §developer
 - **`lumen-shell` is P3's.** Only P3 integrates into the shell. P1/P2 describe integration points in commit body; P3 picks them up as separate tasks.
 - **Interface-first.** Cross-team tasks start with the owner publishing **types/traits** (with `todo!()` stubs) in a dedicated commit. Consumers implement against the stub; the real impl is a drop-in replacement.
 - **Add extension points yourself.** Don't block on "P3 hasn't added the trait yet" — add it yourself, P3 reviews post-factum.
+- **P1/P2/P3 → P4 handoff.** When a new algorithm needs a CSS property, add `// CSS: <property>` comment at the call site and note it in `STATUS-P4.md` under "Needs wiring". Do not wait for P4 — ship the algorithm, P4 wires CSS independently.
 
 ### Reserving a task
 

@@ -1,6 +1,11 @@
 In progress: —
 Next step: —
 
+CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
+  P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
+  When a new shell hook is needed for a CSS property → add it and
+  add a line to STATUS-P4.md "Needs wiring".
+
 Next:
 Forms UI: native pickers, validation tooltip                 ~2h
 

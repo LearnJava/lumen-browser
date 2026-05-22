@@ -2,9 +2,16 @@ In progress: —
 
 Next step: —
 
+CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
+  P1 writes layout algorithms and box-tree structure only.
+  When a new algorithm needs a CSS property → add // CSS: <prop> comment at
+  the call site and add a line to STATUS-P4.md "Needs wiring".
+
 Next:
 ::before/::after layout integration           box_tree.rs    ~2h
-BUG-011  list markers (disc/decimal/::marker) box_tree.rs    ~2h
+  (P1: create pseudo-element boxes in box tree; P4: wire `content` property)
+BUG-011  list markers: create ::marker box    box_tree.rs    ~2h
+  (P1: create marker box geometry; P4: wire list-style-type rendering)
 display: flow-root BFC + contents elimination box_tree.rs    ~2h
 
 Queue (Wave 3+):
