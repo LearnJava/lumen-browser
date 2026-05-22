@@ -19,6 +19,13 @@ Needs wiring (algorithm ready, CSS not connected):
     P4 task: wire font-weight/font-style/font-stretch descriptors from
     FontFaceRule into FontRegistry::register_from_bytes calls.
     CSS: @font-face unicode-range, font-display — P4 deferred.
+  — CSS Transitions sync(): TransitionScheduler::tick() is wired into the
+    shell frame loop (P2, branch animation-transition-engine). P4 task: call
+    transition_scheduler.sync(node, &old_style, &new_style, now) after every
+    relayout or computed-style mutation so transitions actually fire.
+    Location: shell/src/main.rs — relayout() and apply_loaded_page().
+    CSS: transition-property / transition-duration / transition-delay /
+    transition-timing-function already in ComputedStyle (P4 2026-05-21).
 
 Coordination rules:
   — Before touching style.rs: check STATUS-P1.md, avoid same property area
