@@ -1126,6 +1126,38 @@ pub trait FetchInterceptor: Send + Sync {
     fn intercept(&self, url: &Url, origin: &str) -> Option<Vec<u8>>;
 }
 
+// ============================================================================
+// JS Fetch API provider (Fetch Standard §3).
+// ============================================================================
+
+/// Full HTTP response for a synchronous JS `fetch()` call.
+///
+/// Phase 0: GET-only, blocking. `headers` are lower-cased name + value pairs.
+pub struct JsFetchResult {
+    /// HTTP status code (200, 404, …).
+    pub status: u16,
+    /// HTTP status text derived from `status` ("OK", "Not Found", …).
+    pub status_text: String,
+    /// Response headers as `(lowercase-name, value)` pairs.
+    pub headers: Vec<(String, String)>,
+    /// Decoded response body bytes.
+    pub body: Vec<u8>,
+}
+
+/// Synchronous HTTP fetch bridge for the JS runtime.
+///
+/// The implementation lives in `lumen-network::HttpClient`, which keeps the
+/// full connection pool and policy state.  `lumen-js` depends only on this
+/// trait from `lumen-core`, avoiding a direct `lumen-js → lumen-network` edge.
+///
+/// Phase 0 constraints: GET + HEAD only, no request body, no streaming.
+pub trait JsFetchProvider: Send + Sync {
+    /// Perform a blocking HTTP request and return the full response.
+    ///
+    /// Returns `Err` for network errors or unsupported methods.
+    fn fetch_sync(&self, url: &str, method: &str) -> Result<JsFetchResult>;
+}
+
 // Точки расширения, спроектированные, но без интерфейса до Phase 1+.
 //
 // Trait-ы для трёх оставшихся «разрешённых exceptions» из §5 (внешние

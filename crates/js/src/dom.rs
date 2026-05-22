@@ -9,6 +9,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use lumen_core::ext::JsFetchProvider;
 use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
 use rquickjs::{Ctx, Function, Result as QjResult};
 
@@ -85,9 +86,17 @@ impl HistoryState {
 /// Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`.
 ///
 /// After this call the context exposes `console`, `document`, `window`,
-/// `location`, `navigator`, and `alert`.
-pub fn install_dom_api(ctx: &Ctx<'_>, doc: Arc<Mutex<Document>>) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc))?;
+/// `location`, `navigator`, `alert`, and `fetch`.
+///
+/// `fetch_provider` wires `window.fetch()` to the real HTTP stack.
+/// When `None`, `fetch()` rejects with a network error (useful for sandboxed
+/// contexts or tests that don't need network access).
+pub fn install_dom_api(
+    ctx: &Ctx<'_>,
+    doc: Arc<Mutex<Document>>,
+    fetch_provider: Option<Arc<dyn JsFetchProvider>>,
+) -> QjResult<()> {
+    install_primitives(ctx, Arc::clone(&doc), fetch_provider)?;
     ctx.eval::<(), _>(WEB_API_SHIM)?;
     Ok(())
 }
@@ -95,7 +104,11 @@ pub fn install_dom_api(ctx: &Ctx<'_>, doc: Arc<Mutex<Document>>) -> QjResult<()>
 // ─── primitive registrations ──────────────────────────────────────────────────
 
 #[allow(clippy::too_many_lines)]
-fn install_primitives(ctx: &Ctx<'_>, doc: Arc<Mutex<Document>>) -> QjResult<()> {
+fn install_primitives(
+    ctx: &Ctx<'_>,
+    doc: Arc<Mutex<Document>>,
+    fetch_provider: Option<Arc<dyn JsFetchProvider>>,
+) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
             ctx.globals()
@@ -185,6 +198,7 @@ fn install_primitives(ctx: &Ctx<'_>, doc: Arc<Mutex<Document>>) -> QjResult<()> 
                 NodeData::Document => "#document".into(),
                 NodeData::Comment(_) => "#comment".into(),
                 NodeData::Doctype { .. } => "html".into(),
+                NodeData::ShadowRoot { .. } => "#shadow-root".into(),
             }
         });
         let d = Arc::clone(&doc);
@@ -494,6 +508,75 @@ fn install_primitives(ctx: &Ctx<'_>, doc: Arc<Mutex<Document>>) -> QjResult<()> 
         let h = Arc::clone(&hist);
         reg!("_lumen_history_url", move || -> String {
             h.lock().unwrap().url().to_string()
+        });
+    }
+
+    // ── Fetch API ─────────────────────────────────────────────────────────────
+    {
+        struct FetchCache {
+            status: u16,
+            status_text: String,
+            headers: Vec<String>, // flat: [name, value, name, value, ...]
+            body: Vec<u8>,
+        }
+
+        let cache: Arc<Mutex<Option<FetchCache>>> = Arc::new(Mutex::new(None));
+
+        let (fp, c) = (fetch_provider, Arc::clone(&cache));
+        reg!("_lumen_fetch_sync", move |url: String, method: String| -> bool {
+            let Some(ref provider) = fp else { return false };
+            match provider.fetch_sync(&url, &method) {
+                Ok(resp) => {
+                    let mut flat = Vec::with_capacity(resp.headers.len() * 2);
+                    for (k, v) in resp.headers {
+                        flat.push(k);
+                        flat.push(v);
+                    }
+                    *c.lock().unwrap() = Some(FetchCache {
+                        status: resp.status,
+                        status_text: resp.status_text,
+                        headers: flat,
+                        body: resp.body,
+                    });
+                    true
+                }
+                Err(e) => {
+                    eprintln!("fetch error: {e}");
+                    false
+                }
+            }
+        });
+
+        let c = Arc::clone(&cache);
+        reg!("_lumen_fetch_get_status", move || -> u32 {
+            c.lock()
+                .unwrap()
+                .as_ref()
+                .map_or(0, |r| u32::from(r.status))
+        });
+
+        let c = Arc::clone(&cache);
+        reg!("_lumen_fetch_get_status_text", move || -> String {
+            c.lock()
+                .unwrap()
+                .as_ref()
+                .map_or_else(String::new, |r| r.status_text.clone())
+        });
+
+        let c = Arc::clone(&cache);
+        reg!("_lumen_fetch_get_headers", move || -> Vec<String> {
+            c.lock()
+                .unwrap()
+                .as_ref()
+                .map_or_else(Vec::new, |r| r.headers.clone())
+        });
+
+        let c = Arc::clone(&cache);
+        reg!("_lumen_fetch_get_body", move || -> Vec<u8> {
+            c.lock()
+                .unwrap()
+                .as_ref()
+                .map_or_else(Vec::new, |r| r.body.clone())
         });
     }
 
@@ -1142,6 +1225,178 @@ function _lumen_fire_page_lifecycle(type, persisted) {
     }
 }
 
+// ── Fetch API (Fetch Standard §3) ─────────────────────────────────────────────
+// AbortController / AbortSignal (Phase 0 stubs — abort() records state but
+// does not actually cancel in-flight network requests).
+function AbortSignal() {
+    this.aborted = false;
+    this.reason = undefined;
+    this._listeners = [];
+}
+AbortSignal.prototype.addEventListener = function(type, fn) {
+    if (type === 'abort') this._listeners.push(fn);
+};
+AbortSignal.prototype.removeEventListener = function(type, fn) {
+    if (type !== 'abort') return;
+    var i = this._listeners.indexOf(fn);
+    if (i >= 0) this._listeners.splice(i, 1);
+};
+AbortSignal.prototype.throwIfAborted = function() {
+    if (this.aborted) throw this.reason || new DOMException('AbortError');
+};
+
+function AbortController() {
+    this.signal = new AbortSignal();
+}
+AbortController.prototype.abort = function(reason) {
+    if (this.signal.aborted) return;
+    this.signal.aborted = true;
+    this.signal.reason = reason !== undefined ? reason : new DOMException('AbortError');
+    var listeners = this.signal._listeners.slice();
+    for (var i = 0; i < listeners.length; i++) {
+        try { listeners[i]({ type: 'abort', target: this.signal }); } catch(e) {}
+    }
+};
+
+// Headers (Fetch Standard §2.2)
+function Headers(init) {
+    this._map = [];
+    if (init) {
+        if (Array.isArray(init)) {
+            for (var i = 0; i < init.length; i++) this.append(init[i][0], init[i][1]);
+        } else if (typeof init === 'object') {
+            var keys = Object.keys(init);
+            for (var k = 0; k < keys.length; k++) this.append(keys[k], init[keys[k]]);
+        }
+    }
+}
+Headers.prototype._key = function(name) { return String(name).toLowerCase(); };
+Headers.prototype.append = function(name, value) {
+    var k = this._key(name);
+    this._map.push([k, String(value)]);
+};
+Headers.prototype.set = function(name, value) {
+    var k = this._key(name);
+    this._map = this._map.filter(function(p) { return p[0] !== k; });
+    this._map.push([k, String(value)]);
+};
+Headers.prototype.get = function(name) {
+    var k = this._key(name);
+    var vals = this._map.filter(function(p) { return p[0] === k; }).map(function(p) { return p[1]; });
+    return vals.length ? vals.join(', ') : null;
+};
+Headers.prototype.has = function(name) { return this.get(name) !== null; };
+Headers.prototype.delete = function(name) {
+    var k = this._key(name);
+    this._map = this._map.filter(function(p) { return p[0] !== k; });
+};
+Headers.prototype.forEach = function(cb) {
+    this._map.forEach(function(p) { cb(p[1], p[0]); });
+};
+Headers.prototype.entries = function() { return this._map.map(function(p) { return [p[0], p[1]]; }); };
+Headers.prototype.keys   = function() { return this._map.map(function(p) { return p[0]; }); };
+Headers.prototype.values = function() { return this._map.map(function(p) { return p[1]; }); };
+
+// Response (Fetch Standard §2.5)
+function Response(body, init) {
+    init = init || {};
+    this.status = init.status !== undefined ? init.status : 200;
+    this.statusText = init.statusText !== undefined ? init.statusText : '';
+    this.ok = this.status >= 200 && this.status < 300;
+    this.headers = new Headers(init.headers || []);
+    this.redirected = false;
+    this.type = 'default';
+    this.url = '';
+    this._body = body;
+}
+Response.prototype.text = function() {
+    var b = this._body;
+    if (b instanceof Uint8Array) {
+        var s = '';
+        for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]);
+        return Promise.resolve(s);
+    }
+    return Promise.resolve(b == null ? '' : String(b));
+};
+Response.prototype.json = function() {
+    return this.text().then(function(t) { return JSON.parse(t); });
+};
+Response.prototype.arrayBuffer = function() {
+    var b = this._body;
+    if (b instanceof Uint8Array) return Promise.resolve(b.buffer);
+    return Promise.resolve(new Uint8Array(0).buffer);
+};
+Response.prototype.blob = function() {
+    return this.arrayBuffer().then(function(ab) { return ab; });
+};
+Response.prototype.clone = function() {
+    var r = new Response(this._body, {
+        status: this.status,
+        statusText: this.statusText,
+        headers: this.headers.entries(),
+    });
+    r.url = this.url;
+    return r;
+};
+Response.error = function() {
+    return new Response(null, { status: 0, statusText: '' });
+};
+Response.redirect = function(url, status) {
+    var r = new Response(null, { status: status || 302 });
+    r.url = String(url);
+    return r;
+};
+
+// Request (Fetch Standard §2.4) — minimal Phase 0 impl
+function Request(input, init) {
+    init = init || {};
+    this.url = typeof input === 'string' ? input : (input.url || '');
+    this.method = (init.method || (typeof input === 'object' && input.method) || 'GET').toUpperCase();
+    this.headers = new Headers(init.headers || (typeof input === 'object' && input.headers) || []);
+    this.body = init.body !== undefined ? init.body : null;
+    this.signal = init.signal || new AbortSignal();
+    this.mode = init.mode || 'cors';
+    this.credentials = init.credentials || 'same-origin';
+    this.cache = init.cache || 'default';
+    this.redirect = init.redirect || 'follow';
+    this.referrer = init.referrer || 'about:client';
+    this.integrity = init.integrity || '';
+}
+Request.prototype.clone = function() {
+    return new Request(this.url, {
+        method: this.method,
+        headers: this.headers.entries(),
+        body: this.body,
+        signal: this.signal,
+    });
+};
+
+// fetch() (Fetch Standard §3) — synchronous under the hood, wrapped in Promise.
+function fetch(input, init) {
+    try {
+        var url = typeof input === 'string' ? input : (input && input.url ? input.url : String(input));
+        var method = (init && init.method) ? String(init.method).toUpperCase() :
+                     (typeof input === 'object' && input.method ? input.method.toUpperCase() : 'GET');
+        var ok = _lumen_fetch_sync(url, method);
+        if (!ok) {
+            return Promise.reject(new TypeError('fetch: network error for ' + url));
+        }
+        var status = _lumen_fetch_get_status();
+        var statusText = _lumen_fetch_get_status_text();
+        var rawHeaders = _lumen_fetch_get_headers();
+        var body = _lumen_fetch_get_body();
+        var hdrs = [];
+        for (var i = 0; i + 1 < rawHeaders.length; i += 2) {
+            hdrs.push([rawHeaders[i], rawHeaders[i + 1]]);
+        }
+        var resp = new Response(body, { status: status, statusText: statusText, headers: hdrs });
+        resp.url = url;
+        return Promise.resolve(resp);
+    } catch(e) {
+        return Promise.reject(e);
+    }
+}
+
 var window = {
     history: history,
     onpopstate: null,
@@ -1161,6 +1416,12 @@ var window = {
     caches: caches,
     document: document,
     console: console,
+    fetch: fetch,
+    Request: Request,
+    Response: Response,
+    Headers: Headers,
+    AbortController: AbortController,
+    AbortSignal: AbortSignal,
     _lumen_dispatch_composition: _lumen_dispatch_composition,
     _lumen_set_ime_target: _lumen_set_ime_target,
     _lumen_fire_page_lifecycle: _lumen_fire_page_lifecycle,
@@ -1231,7 +1492,7 @@ mod tests {
 
     fn runtime_with_dom(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(doc).unwrap();
+        rt.install_dom(doc, None).unwrap();
         rt
     }
 
@@ -2144,5 +2405,127 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let result = rt.eval("typeof window._lumen_fire_page_lifecycle === 'function'").unwrap();
         assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── Fetch API tests ───────────────────────────────────────────────────────
+
+    #[test]
+    fn fetch_global_is_function() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof fetch === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn window_fetch_is_function() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.fetch === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn headers_class_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof Headers === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn request_class_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof Request === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_class_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof Response === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn abort_controller_class_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof AbortController === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn headers_get_set() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var h = new Headers(); h.set('Content-Type', 'application/json'); h.get('content-type')"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("application/json".into()));
+    }
+
+    #[test]
+    fn headers_case_insensitive() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var h = new Headers({'X-Foo': 'bar'}); h.get('x-foo')"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("bar".into()));
+    }
+
+    #[test]
+    fn response_ok_for_200() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("new Response(null, {status: 200}).ok").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn response_not_ok_for_404() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("new Response(null, {status: 404}).ok").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn response_text_returns_promise() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var r = new Response(new Uint8Array([104, 105])); \
+             typeof r.text() === 'object'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn abort_controller_abort_sets_signal() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var ctrl = new AbortController(); ctrl.abort(); ctrl.signal.aborted"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn fetch_without_provider_returns_promise() {
+        // install_dom with None fetch_provider: fetch() should return a rejected Promise.
+        // QuickJS doesn't flush microtasks synchronously in eval, so we only verify
+        // that fetch() returns a thenable (Promise), not that catch fired.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval(
+            "var p = fetch('http://example.com/'); \
+             typeof p === 'object' && typeof p.then === 'function'"
+        ).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn request_default_method_get() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("new Request('https://x.com/').method").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("GET".into()));
+    }
+
+    #[test]
+    fn window_has_abort_controller() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.AbortController === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 }

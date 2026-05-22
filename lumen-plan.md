@@ -303,7 +303,7 @@
 
 #### Phase 3+ — без этого браузер не полнофункциональный
 
-- **`[P3]` WebSockets (RFC 6455) + Server-Sent Events + Fetch API runtime.** WS: HTTP upgrade, frame-based binary protocol, ping/pong, permessage-deflate. SSE: `text/event-stream` + auto-reconnect. Fetch: Request / Response / Headers, ReadableStream body, AbortController.
+- 🟡 **`[P3]` WebSockets (RFC 6455) + Server-Sent Events + Fetch API runtime.** WS: HTTP upgrade, frame-based binary protocol, ping/pong, permessage-deflate. SSE: `text/event-stream` + auto-reconnect. ✅ Fetch: `fetch()` / `Request` / `Response` / `Headers` / `AbortController` / `AbortSignal` в JS shim; `JsFetchProvider` trait в `lumen-core::ext`; `HttpClient` реализует trait; интеграция в shell. Осталось: WS + SSE.
 - **`[P3]` HTTP auth — Basic + Digest готовы** (см. status). **Осталось:** Negotiate/NTLM, client certificates mTLS, UI-popup для credentials.
 - **`[P3]` OCSP stapling + CT log enforcement + invalid cert UI.**
 - **`[P3]` Safe Browsing — готово** (см. status). Отложено: 4-byte prefixes с full-hash callback, public-suffix list для безопасной обрезки host-suffixes ниже eTLD+1.

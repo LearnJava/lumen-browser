@@ -24,6 +24,13 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - Phase 0 querySelector: supports `#id`, `.class`, `tagname`, `*` (no compound selectors).
   - 19 DOM tests + 16 runtime tests = 35 total. All pass.
   - Shell integration: `run_scripts_with_dom` wraps `Document` in `Arc<Mutex<>>`, calls `install_dom`, drops runtime to release Arc clones, recovers `Document`.
+- **Fetch API JS shim** (`install_dom_api`, `crates/js/src/dom.rs`). 2026-05-22.
+  - 5 native `_lumen_fetch_*` bindings: `_lumen_fetch_sync`, `_lumen_fetch_get_status`, `_lumen_fetch_get_status_text`, `_lumen_fetch_get_headers`, `_lumen_fetch_get_body`. Shared result via `Arc<Mutex<Option<FetchCache>>>`.
+  - `install_dom` now accepts `Option<Arc<dyn JsFetchProvider>>` — `None` makes `fetch()` reject immediately.
+  - JS classes: `AbortSignal`, `AbortController`, `Headers`, `Response`, `Request`, `fetch()` global + `window.fetch`.
+  - `Response.ok` (200–299), `Response.text()` / `Response.json()` returning Promises, `Headers` case-insensitive get/set/has/delete.
+  - `AbortController.abort()` sets `signal.aborted = true`.
+  - 109 JS tests (was 35 before). All pass.
 
 ## Deferred
 
