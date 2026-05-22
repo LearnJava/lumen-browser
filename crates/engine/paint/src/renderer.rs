@@ -29,7 +29,7 @@ use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
 use lumen_font::{Bitmap, Cmap, Font, Head, Hhea, Hmtx, Outline, Rasterizer, SystemFontIndex};
 use lumen_image::{Image, PixelFormat};
-use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FontStyle, FontWeight, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
+use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
@@ -517,6 +517,131 @@ struct VOut {
 }
 "#;
 
+/// CSS Filter Effects Module L1 — color filter pipeline.
+/// Bindings: 0=t_src (offscreen layer), 1=s_src (sampler), 2=FilterParams uniform.
+/// Uses CompositeVertex layout. Blend: ALPHA_BLENDING (composites filtered element over parent).
+/// Kind values: 1=Brightness, 2=Contrast, 3=Grayscale, 4=HueRotate(rad), 5=Invert,
+/// 6=Opacity, 7=Saturate, 8=Sepia. Kind=0 (Blur) is handled by the blur shader, not here.
+const FILTER_SHADER_SRC: &str = r#"
+struct FilterEntry {
+    kind: u32,
+    amount: f32,
+    _p0: u32,
+    _p1: u32,
+}
+struct FilterParams {
+    count: u32,
+    _pad0: u32,
+    _pad1: u32,
+    _pad2: u32,
+    entries: array<FilterEntry, 8>,
+}
+
+@group(0) @binding(0) var t_src: texture_2d<f32>;
+@group(0) @binding(1) var s_src: sampler;
+@group(0) @binding(2) var<uniform> u: FilterParams;
+
+struct VIn { @location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) alpha: f32 }
+struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> }
+
+@vertex fn vs_main(in: VIn) -> VOut {
+    var o: VOut;
+    o.clip = vec4<f32>(in.pos, 0.0, 1.0);
+    o.uv = in.uv;
+    return o;
+}
+
+fn apply_filter_fn(c: vec4<f32>, kind: u32, amount: f32) -> vec4<f32> {
+    if kind == 1u { // Brightness
+        return vec4<f32>(clamp(c.rgb * amount, vec3<f32>(0.0), vec3<f32>(1.0)), c.a);
+    }
+    if kind == 2u { // Contrast
+        return vec4<f32>(clamp((c.rgb - 0.5) * amount + 0.5, vec3<f32>(0.0), vec3<f32>(1.0)), c.a);
+    }
+    if kind == 3u { // Grayscale
+        let lum3 = vec3<f32>(dot(c.rgb, vec3<f32>(0.2126, 0.7152, 0.0722)));
+        return vec4<f32>(mix(c.rgb, lum3, amount), c.a);
+    }
+    if kind == 4u { // HueRotate (amount in radians)
+        let cos_a = cos(amount);
+        let sin_a = sin(amount);
+        let r = dot(c.rgb, vec3<f32>(0.213+0.787*cos_a-0.213*sin_a, 0.715-0.715*cos_a-0.715*sin_a, 0.072-0.072*cos_a+0.928*sin_a));
+        let g = dot(c.rgb, vec3<f32>(0.213-0.213*cos_a+0.143*sin_a, 0.715+0.285*cos_a+0.140*sin_a, 0.072-0.072*cos_a-0.283*sin_a));
+        let b = dot(c.rgb, vec3<f32>(0.213-0.213*cos_a-0.787*sin_a, 0.715-0.715*cos_a+0.715*sin_a, 0.072+0.928*cos_a+0.072*sin_a));
+        return vec4<f32>(clamp(r, 0.0, 1.0), clamp(g, 0.0, 1.0), clamp(b, 0.0, 1.0), c.a);
+    }
+    if kind == 5u { // Invert
+        return vec4<f32>(mix(c.rgb, 1.0 - c.rgb, amount), c.a);
+    }
+    if kind == 6u { // Opacity
+        return vec4<f32>(c.rgb, c.a * amount);
+    }
+    if kind == 7u { // Saturate
+        let r = dot(c.rgb, vec3<f32>(0.213+0.787*amount, 0.715-0.715*amount, 0.072-0.072*amount));
+        let g = dot(c.rgb, vec3<f32>(0.213-0.213*amount, 0.715+0.285*amount, 0.072-0.072*amount));
+        let b = dot(c.rgb, vec3<f32>(0.213-0.213*amount, 0.715-0.715*amount, 0.072+0.928*amount));
+        return vec4<f32>(clamp(r, 0.0, 1.0), clamp(g, 0.0, 1.0), clamp(b, 0.0, 1.0), c.a);
+    }
+    if kind == 8u { // Sepia
+        let sr = clamp(dot(c.rgb, vec3<f32>(0.393, 0.769, 0.189)), 0.0, 1.0);
+        let sg = clamp(dot(c.rgb, vec3<f32>(0.349, 0.686, 0.168)), 0.0, 1.0);
+        let sb = clamp(dot(c.rgb, vec3<f32>(0.272, 0.534, 0.131)), 0.0, 1.0);
+        return vec4<f32>(mix(c.rgb, vec3<f32>(sr, sg, sb), amount), c.a);
+    }
+    return c;
+}
+
+@fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    var c = textureSample(t_src, s_src, in.uv);
+    for (var i = 0u; i < u.count; i = i + 1u) {
+        c = apply_filter_fn(c, u.entries[i].kind, u.entries[i].amount);
+    }
+    return c;
+}
+"#;
+
+/// CSS Filter Effects — separable Gaussian blur shader (one pass: H or V).
+/// Bindings: 0=t_src, 1=s_src (linear sampler), 2=BlurParams uniform.
+/// Uses CompositeVertex layout. Blend: REPLACE (intermediate buffer pass).
+const BLUR_SHADER_SRC: &str = r#"
+struct BlurParams {
+    sigma: f32,
+    direction: u32,   // 0 = horizontal, 1 = vertical
+    _p0: u32,
+    _p1: u32,
+}
+
+@group(0) @binding(0) var t_src: texture_2d<f32>;
+@group(0) @binding(1) var s_src: sampler;
+@group(0) @binding(2) var<uniform> u: BlurParams;
+
+struct VIn { @location(0) pos: vec2<f32>, @location(1) uv: vec2<f32>, @location(2) alpha: f32 }
+struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> }
+
+@vertex fn vs_main(in: VIn) -> VOut {
+    var o: VOut;
+    o.clip = vec4<f32>(in.pos, 0.0, 1.0);
+    o.uv = in.uv;
+    return o;
+}
+
+@fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    let sigma = max(u.sigma, 0.001);
+    let radius = min(i32(ceil(3.0 * sigma)), 32);
+    let dim = vec2<f32>(textureDimensions(t_src));
+    let step = select(vec2<f32>(1.0 / dim.x, 0.0), vec2<f32>(0.0, 1.0 / dim.y), u.direction == 1u);
+    var sum = vec4<f32>(0.0);
+    var weight_total = 0.0;
+    for (var i = -radius; i <= radius; i = i + 1) {
+        let fi = f32(i);
+        let w = exp(-fi * fi / (2.0 * sigma * sigma));
+        sum = sum + textureSample(t_src, s_src, in.uv + fi * step) * w;
+        weight_total = weight_total + w;
+    }
+    return sum / weight_total;
+}
+"#;
+
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct FillVertex {
@@ -566,6 +691,41 @@ struct CompositeVertex {
 struct MaskVertex {
     pos: [f32; 2],
     uv_mask: [f32; 2],
+}
+
+/// CPU-side зеркало WGSL `FilterEntry` (kind:u32, amount:f32, 2×u32 pad = 16 bytes).
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct FilterEntryCpu { kind: u32, amount: f32, _p0: u32, _p1: u32 }
+
+/// CPU-side зеркало WGSL `FilterParams` (16 bytes header + 8×FilterEntry = 144 bytes).
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct FilterParamsCpu {
+    count: u32, _pad0: u32, _pad1: u32, _pad2: u32,
+    entries: [FilterEntryCpu; 8],
+}
+
+/// CPU-side зеркало WGSL `BlurParams` (sigma:f32, direction:u32, 2×u32 pad = 16 bytes).
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct BlurParamsCpu { sigma: f32, direction: u32, _p0: u32, _p1: u32 }
+
+/// Конвертирует `FilterFn` в `FilterEntryCpu` для GPU uniform.
+/// Blur (kind=0) передаётся как is; color-filter pass пропускает его по kind.
+fn filter_fn_to_entry(f: &FilterFn) -> FilterEntryCpu {
+    let (kind, amount) = match f {
+        FilterFn::Blur(v)       => (0u32, *v),
+        FilterFn::Brightness(v) => (1,    *v),
+        FilterFn::Contrast(v)   => (2,    *v),
+        FilterFn::Grayscale(v)  => (3,    *v),
+        FilterFn::HueRotate(v)  => (4,    *v),
+        FilterFn::Invert(v)     => (5,    *v),
+        FilterFn::Opacity(v)    => (6,    *v),
+        FilterFn::Saturate(v)   => (7,    *v),
+        FilterFn::Sepia(v)      => (8,    *v),
+    };
+    FilterEntryCpu { kind, amount, _p0: 0, _p1: 0 }
 }
 
 /// Атомарная команда render-pass-а после сборки display list-а. Каждый
@@ -754,6 +914,14 @@ pub struct Renderer {
     /// Used by PopMask to composite the offscreen layer using a mask image.
     mask_composite_bgl: wgpu::BindGroupLayout,
     mask_composite_pipeline: wgpu::RenderPipeline,
+    /// CSS Filter Effects L1 — color filter pipeline (grayscale/sepia/brightness/etc.).
+    filter_bgl: wgpu::BindGroupLayout,
+    filter_pipeline: wgpu::RenderPipeline,
+    filter_uniform: wgpu::Buffer,
+    /// CSS Filter Effects L1 — separable Gaussian blur pipeline (one pass: H or V).
+    blur_bgl: wgpu::BindGroupLayout,
+    blur_pipeline: wgpu::RenderPipeline,
+    blur_uniform: wgpu::Buffer,
     scratch_layer: Option<OffscreenLayer>,
     layer_sampler: wgpu::Sampler,
     layer_textures: Vec<OffscreenLayer>,
@@ -1485,6 +1653,170 @@ impl Renderer {
             cache: None,
         });
 
+        // ── CSS Filter pipeline ──────────────────────────────────────────────
+        // Group 0: { t_src, s_src, FilterParams uniform }
+        let filter_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("filter-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let filter_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("filter-uniform"),
+            size: std::mem::size_of::<FilterParamsCpu>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let filter_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("filter-shader"),
+            source: wgpu::ShaderSource::Wgsl(FILTER_SHADER_SRC.into()),
+        });
+        let filter_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("filter-layout"),
+            bind_group_layouts: &[&filter_bgl],
+            push_constant_ranges: &[],
+        });
+        let filter_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("filter-pipeline"),
+            layout: Some(&filter_layout),
+            vertex: wgpu::VertexState {
+                module: &filter_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &filter_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // ── CSS Blur pipeline ────────────────────────────────────────────────
+        // Group 0: { t_src, s_src, BlurParams uniform }
+        let blur_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blur-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let blur_uniform = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("blur-uniform"),
+            size: std::mem::size_of::<BlurParamsCpu>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let blur_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("blur-shader"),
+            source: wgpu::ShaderSource::Wgsl(BLUR_SHADER_SRC.into()),
+        });
+        let blur_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blur-layout"),
+            bind_group_layouts: &[&blur_bgl],
+            push_constant_ranges: &[],
+        });
+        let blur_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("blur-pipeline"),
+            layout: Some(&blur_layout),
+            vertex: wgpu::VertexState {
+                module: &blur_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blur_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         let atlas = GlyphAtlas::new(ATLAS_DIM);
 
         Ok(Self {
@@ -1514,6 +1846,12 @@ impl Renderer {
             blend_mode_uniform,
             mask_composite_bgl,
             mask_composite_pipeline,
+            filter_bgl,
+            filter_pipeline,
+            filter_uniform,
+            blur_bgl,
+            blur_pipeline,
+            blur_uniform,
             scratch_layer: None,
             layer_sampler,
             layer_textures: Vec::new(),
@@ -2121,10 +2459,20 @@ impl Renderer {
             mask_v_end: u32,
             mask_src: Option<String>, // None → gradient mask Phase 0 fallback (alpha=1.0)
         }
+        // CSS Filter Effects L1 — filter composite plan.
+        // `from_level` = offscreen layer with element content.
+        // `filters` = filter list (may include Blur + color filters).
+        // `comp_v_start` = start of 6-vertex fullscreen quad in composite_vertices.
+        struct FilterCompositePlan {
+            from_level: usize,
+            filters: Vec<FilterFn>,
+            comp_v_start: u32,
+        }
         enum RenderPlanItem {
             Draw(DrawBatchPlan),
             Composite(CompositePlan),
             MaskComposite(MaskCompositePlan),
+            FilterComposite(FilterCompositePlan),
         }
 
         let mut render_plan: Vec<RenderPlanItem> = Vec::new();
@@ -2146,6 +2494,8 @@ impl Renderer {
         let mut level_alpha_stack: Vec<f32> = Vec::new();
         // Tracks blend mode per opened offscreen level (for non-Normal PushBlendMode).
         let mut level_blend_mode_stack: Vec<BlendMode> = Vec::new();
+        // Tracks filter list per opened offscreen level (for CSS filter compositing).
+        let mut filter_stack: Vec<Vec<FilterFn>> = Vec::new();
         let mut level_first: Vec<bool> = vec![true];
         let mut batch_start: usize = 0;
 
@@ -2839,6 +3189,30 @@ impl Renderer {
                     }));
                     current_level -= 1;
                 }
+                // CSS Filter Effects L1 — PushFilter opens an offscreen level;
+                // PopFilter composites it onto the parent with filter applied.
+                DisplayCommand::PushFilter { filters } => {
+                    flush_batch!();
+                    filter_stack.push(filters.clone());
+                    current_level += 1;
+                    while level_first.len() <= current_level {
+                        level_first.push(true);
+                    }
+                    level_first[current_level] = true;
+                }
+                DisplayCommand::PopFilter => {
+                    if let Some(filters) = filter_stack.pop() {
+                        flush_batch!();
+                        let comp_v_start = composite_vertices.len() as u32;
+                        push_composite_quad(&mut composite_vertices, 1.0);
+                        render_plan.push(RenderPlanItem::FilterComposite(FilterCompositePlan {
+                            from_level: current_level,
+                            filters,
+                            comp_v_start,
+                        }));
+                        current_level -= 1;
+                    }
+                }
             }
         }
         flush_batch!();
@@ -2965,6 +3339,7 @@ impl Renderer {
             RenderPlanItem::Draw(b) => m.max(b.target_level),
             RenderPlanItem::Composite(c) => m.max(c.from_level),
             RenderPlanItem::MaskComposite(c) => m.max(c.from_level),
+            RenderPlanItem::FilterComposite(c) => m.max(c.from_level),
         });
         if max_level > 0 {
             self.ensure_layer_textures(max_level, surface_w, surface_h);
@@ -3264,6 +3639,142 @@ impl Renderer {
                         pass.set_bind_group(0, src_bg, &[]);
                         pass.set_vertex_buffer(0, fallback_buf.slice(..));
                         pass.draw(0..6, 0..1);
+                    }
+                }
+                // CSS Filter Effects L1 — filter composite.
+                // If blur in filter list: two-pass separable Gaussian (H: src→scratch, V: scratch→src).
+                // Then color filter pass composites src_level onto parent with ALPHA_BLENDING.
+                RenderPlanItem::FilterComposite(plan) => {
+                    if plan.from_level == 0 { continue; }
+                    let src_layer_idx = plan.from_level - 1;
+                    let Some(cvb) = &comp_vbuf else { continue };
+
+                    let blur_sigma = plan.filters.iter().find_map(|f| match f {
+                        FilterFn::Blur(s) if *s > 0.0 => Some(*s),
+                        _ => None,
+                    });
+
+                    if let Some(sigma) = blur_sigma {
+                        // Ensure scratch before any immutable borrows of self.
+                        let src_w = self.layer_textures[src_layer_idx].width;
+                        let src_h = self.layer_textures[src_layer_idx].height;
+                        self.ensure_scratch_layer(src_w, src_h);
+
+                        // H pass: src_level → scratch
+                        let blur_h = BlurParamsCpu { sigma, direction: 0, _p0: 0, _p1: 0 };
+                        self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_h]));
+                        let src_view_h = &self.layer_textures[src_layer_idx].view;
+                        let scratch_view_h = &self.scratch_layer.as_ref().unwrap().view;
+                        let blur_bg_h = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("blur-h-bg"),
+                            layout: &self.blur_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src_view_h) },
+                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
+                                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
+                            ],
+                        });
+                        {
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("blur-h-pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: scratch_view_h,
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            pass.set_pipeline(&self.blur_pipeline);
+                            pass.set_bind_group(0, &blur_bg_h, &[]);
+                            pass.set_vertex_buffer(0, cvb.slice(..));
+                            pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                        }
+
+                        // V pass: scratch → src_level (overwrite with fully blurred result)
+                        let blur_v = BlurParamsCpu { sigma, direction: 1, _p0: 0, _p1: 0 };
+                        self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_v]));
+                        let scratch_view_v = &self.scratch_layer.as_ref().unwrap().view;
+                        let src_level_view_v = &self.layer_textures[src_layer_idx].view;
+                        let blur_bg_v = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("blur-v-bg"),
+                            layout: &self.blur_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(scratch_view_v) },
+                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
+                                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
+                            ],
+                        });
+                        {
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("blur-v-pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: src_level_view_v,
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            pass.set_pipeline(&self.blur_pipeline);
+                            pass.set_bind_group(0, &blur_bg_v, &[]);
+                            pass.set_vertex_buffer(0, cvb.slice(..));
+                            pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                        }
+                    }
+
+                    // Color filter pass: src_level → parent (ALPHA_BLENDING).
+                    // src_level now has blurred content if blur was applied.
+                    let mut entries = [FilterEntryCpu { kind: 0, amount: 0.0, _p0: 0, _p1: 0 }; 8];
+                    let mut color_count = 0u32;
+                    for f in &plan.filters {
+                        if !matches!(f, FilterFn::Blur(_)) && (color_count as usize) < 8 {
+                            entries[color_count as usize] = filter_fn_to_entry(f);
+                            color_count += 1;
+                        }
+                    }
+                    let filter_params = FilterParamsCpu {
+                        count: color_count, _pad0: 0, _pad1: 0, _pad2: 0,
+                        entries,
+                    };
+                    self.queue.write_buffer(&self.filter_uniform, 0, as_bytes(&[filter_params]));
+
+                    let dst_view = if plan.from_level == 1 {
+                        &frame_view
+                    } else {
+                        &self.layer_textures[plan.from_level - 2].view
+                    };
+                    let src_view_f = &self.layer_textures[src_layer_idx].view;
+                    let filter_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("filter-bg"),
+                        layout: &self.filter_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src_view_f) },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
+                            wgpu::BindGroupEntry { binding: 2, resource: self.filter_uniform.as_entire_binding() },
+                        ],
+                    });
+                    {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("filter-pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: dst_view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        pass.set_pipeline(&self.filter_pipeline);
+                        pass.set_bind_group(0, &filter_bg, &[]);
+                        pass.set_vertex_buffer(0, cvb.slice(..));
+                        pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
                     }
                 }
             }
