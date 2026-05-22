@@ -56,6 +56,24 @@ impl AnimationFrame {
     /// opacity and transform can be applied by patching the display list during
     /// paint without relayout. color/background-color require full relayout and
     /// stay in the caller's AnimationFrame for that path.
+    /// Merge overrides from `other` into `self`. `other` values win on conflict.
+    /// `has_active` becomes true if either frame has active animations.
+    pub fn merge_from(&mut self, other: AnimationFrame) {
+        self.has_active |= other.has_active;
+        for (node, style) in other.overrides {
+            let entry = self.overrides.entry(node).or_default();
+            if style.opacity.is_some() { entry.opacity = style.opacity; }
+            if style.transform.is_some() { entry.transform = style.transform; }
+            if style.color.is_some() { entry.color = style.color; }
+            if style.background_color.is_some() { entry.background_color = style.background_color; }
+        }
+    }
+
+    /// Extract only compositor-offloadable properties (opacity, transform).
+    ///
+    /// opacity and transform can be applied by patching the display list during
+    /// paint without relayout. color/background-color require full relayout and
+    /// stay in the caller's AnimationFrame for that path.
     pub fn to_compositor_frame(&self) -> CompositorAnimFrame {
         let mut frame = CompositorAnimFrame {
             has_active: self.has_active,

@@ -22,7 +22,7 @@ pub mod style;
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
-    CompositorAnimFrame, CompositorOverride,
+    CompositorAnimFrame, CompositorOverride, TransitionScheduler,
 };
 pub use box_tree::{
     apply_container_styles,

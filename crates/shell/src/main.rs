@@ -39,7 +39,8 @@ use lumen_storage::session_export::{self, ExportedTab, SessionFile};
 use lumen_storage::{BfCache, BfCacheEntry};
 use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
 use std::collections::HashMap;
-use lumen_layout::LayoutBox;
+use lumen_layout::{LayoutBox, TransitionScheduler};
+use lumen_layout::style::ComputedStyle;
 use lumen_paint::{build_display_list_with_anim, hit_test, DisplayList, Renderer};
 use lumen_layout::Cursor as CssCursor;
 use winit::application::ApplicationHandler;
@@ -184,6 +185,8 @@ fn run_window_mode(
         renderer: None,
         runtime: runtime::EventLoop::new(),
         animation_scheduler: animation_scheduler::AnimationScheduler::new(),
+        transition_scheduler: TransitionScheduler::new(),
+        prev_styles: HashMap::new(),
         anim_frame: None,
         layout_box: None,
         epoch: std::time::Instant::now(),
@@ -1096,6 +1099,16 @@ fn parse_font_weight(s: Option<&str>) -> u16 {
     }
 }
 
+/// Рекурсивно собирает `ComputedStyle` всех узлов layout-дерева.
+/// Результат используется `transition_scheduler.sync()` для сравнения
+/// предыдущего и нового стиля после каждого relayout-а.
+fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, ComputedStyle>) {
+    map.insert(lb.node, lb.style.clone());
+    for child in &lb.children {
+        collect_box_styles(child, map);
+    }
+}
+
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
 /// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
 fn relayout_page(src: &LayoutSource, viewport: Size) -> (DisplayList, lumen_layout::LayoutBox) {
@@ -1430,6 +1443,14 @@ struct Lumen {
     /// Хранит start-time для каждой запущенной анимации и вычисляет
     /// интерполированные значения. Очищается при load/reload.
     animation_scheduler: animation_scheduler::AnimationScheduler,
+    /// CSS Transitions scheduler — reactive; обнаруживает изменения computed-style
+    /// между двумя relayout-ами и интерполирует значения per-frame.
+    /// `sync()` вызывается после каждого layout-обновления; `tick()` — на каждом
+    /// RedrawRequested вместе с animation_scheduler. Очищается при load/reload.
+    transition_scheduler: TransitionScheduler,
+    /// Computed styles предыдущего layout-дерева — нужны `transition_scheduler.sync()`
+    /// для определения изменившихся свойств. Обновляется после каждого layout.
+    prev_styles: HashMap<NodeId, ComputedStyle>,
     /// Последний вычисленный кадр анимаций. `None` — страница не загружена
     /// или нет активных анимаций.
     anim_frame: Option<lumen_layout::AnimationFrame>,
@@ -1537,6 +1558,16 @@ impl Lumen {
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
         self.display_list = new_dl;
+        // Sync transitions: compare prev styles with new layout before replacing.
+        let now_s = self.epoch.elapsed().as_secs_f32();
+        let mut new_styles = HashMap::new();
+        collect_box_styles(&lb, &mut new_styles);
+        for (node, new_style) in &new_styles {
+            if let Some(old_style) = self.prev_styles.get(node) {
+                self.transition_scheduler.sync(*node, old_style, new_style, now_s);
+            }
+        }
+        self.prev_styles = new_styles;
         self.layout_box = Some(lb);
         self.animation_scheduler.clear();
         self.anim_frame = None;
@@ -1568,9 +1599,12 @@ impl Lumen {
                 self.content_height = content_height_of(&page.display_list);
                 self.content_width = content_width_of(&page.display_list);
                 self.display_list = page.display_list;
+                self.animation_scheduler.clear();
+                self.transition_scheduler = TransitionScheduler::new();
+                self.prev_styles.clear();
+                collect_box_styles(&page.layout_box, &mut self.prev_styles);
                 self.layout_box = Some(page.layout_box);
                 self.title = page.title;
-                self.animation_scheduler.clear();
                 self.anim_frame = None;
                 // Display list другой → старые match-rect-ы невалидны.
                 // Closing полностью сбрасывает query/active — пользователю
@@ -1696,9 +1730,12 @@ impl Lumen {
         self.content_height = content_height_of(&page.display_list);
         self.content_width = content_width_of(&page.display_list);
         self.display_list = page.display_list;
+        self.animation_scheduler.clear();
+        self.transition_scheduler = TransitionScheduler::new();
+        self.prev_styles.clear();
+        collect_box_styles(&page.layout_box, &mut self.prev_styles);
         self.layout_box = Some(page.layout_box);
         self.title = page.title;
-        self.animation_scheduler.clear();
         self.anim_frame = None;
         self.find.close();
         self.scroll_y = 0.0;
@@ -2173,15 +2210,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // Шаг 5: rAF callbacks + microtask checkpoint.
                 self.runtime.run_rendering_step(timestamp_ms);
 
-                // Шаг 5.5: CSS Animations timeline tick.
-                // Вычисляем interpolated values для всех анимированных узлов.
-                // has_active → следующий кадр запрашивается автоматически.
+                // Шаг 5.5: CSS Animations + Transitions tick.
+                // Анимации и переходы тикаются вместе; фреймы сливаются перед рендером.
+                // has_active в любом из них → следующий кадр запрашивается автоматически.
                 if let (Some(lb), Some(src)) = (&self.layout_box, &self.layout_source) {
-                    let frame = self.animation_scheduler.tick(
+                    let mut frame = self.animation_scheduler.tick(
                         timestamp_ms,
                         lb,
                         &src.stylesheet,
                     );
+                    // CSS Transitions L1: тикаем переходы и сливаем в тот же frame.
+                    let now_s = (timestamp_ms / 1000.0) as f32;
+                    let trans_frame = self.transition_scheduler.tick(now_s);
+                    frame.merge_from(trans_frame);
                     if frame.has_active {
                         self.request_redraw();
                     }
