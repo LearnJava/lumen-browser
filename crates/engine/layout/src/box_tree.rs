@@ -310,6 +310,16 @@ pub enum BoxKind {
         text: String,
         position: ListStylePosition,
     },
+    /// CSS Display L3 §8 — `display: flow-root`. Establishes a Block Formatting
+    /// Context: contains floats, prevents margin escape. Laid out identically to
+    /// Block in Phase 0; BFC float-containment wired when float layout is added.
+    /// CSS: flow-root
+    FlowRoot,
+    /// CSS Display L3 §7.2 — `display: contents`. The element itself generates no
+    /// box. Children are flattened into the parent's formatting context by
+    /// `flatten_contents()` during `build_box`. Must never appear in the final
+    /// layout tree that reaches `lay_out`.
+    Contents,
 }
 
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
@@ -817,6 +827,30 @@ fn inject_marker(parent_id: NodeId, children: &mut Vec<LayoutBox>, style: &Compu
     });
 }
 
+/// CSS Display L3 §7.2 — replaces each `BoxKind::Contents` child with its own
+/// children in-place. Grandchildren are already flattened (recursive `build_box`
+/// calls run `flatten_contents` on inner levels first).
+fn flatten_contents(children: &mut Vec<LayoutBox>) {
+    let mut i = 0;
+    while i < children.len() {
+        if matches!(children[i].kind, BoxKind::Contents) {
+            let grandchildren = std::mem::take(&mut children[i].children);
+            let gc_len = grandchildren.len();
+            children.remove(i);
+            for (j, gc) in grandchildren.into_iter().enumerate() {
+                children.insert(i + j, gc);
+            }
+            // Don't advance i — a grandchild might itself be Contents (edge case
+            // if the inner build_box somehow produced an un-flattened Contents).
+            // Advancing by gc_len skips them all safely since they were already
+            // flattened at their own build level.
+            i += gc_len;
+        } else {
+            i += 1;
+        }
+    }
+}
+
 fn build_box(
     doc: &Document,
     sheet: &Stylesheet,
@@ -864,6 +898,10 @@ fn build_box(
                 BoxKind::FormControl { kind }
             } else if matches!(style.display, Display::TableRow) {
                 BoxKind::TableRow
+            } else if matches!(style.display, Display::FlowRoot) {
+                BoxKind::FlowRoot
+            } else if matches!(style.display, Display::Contents) {
+                BoxKind::Contents
             } else {
                 BoxKind::Block
             }
@@ -871,7 +909,7 @@ fn build_box(
     };
 
     let mut children = Vec::new();
-    if matches!(kind, BoxKind::Block | BoxKind::FormControl { .. } | BoxKind::TableRow) {
+    if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow) {
         let dom_children: Vec<NodeId> = doc.get(id).children.clone();
         // CSS Grid L1 §6: all direct children of a grid/flex container are
         // "blockified" — they participate as individual items, not wrapped in
@@ -979,8 +1017,8 @@ fn build_box(
             }
         }
         // CSS Pseudo-elements L4 §4 — inject ::before / ::after for block-flow.
-        // Only for Block (not FormControl, not flex/grid item containers).
-        if matches!(kind, BoxKind::Block) {
+        // Only for Block / FlowRoot (not FormControl, not flex/grid item containers).
+        if matches!(kind, BoxKind::Block | BoxKind::FlowRoot) {
             let before_ps =
                 compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport);
             let after_ps =
@@ -994,6 +1032,11 @@ fn build_box(
                 inject_marker(id, &mut children, &style, ordinal);
             }
         }
+        // CSS Display L3 §7.2 — flatten display:contents boxes into this context.
+        // Each Contents child is replaced by its own children (already built and
+        // recursively flattened). Runs after pseudo-element injection so ::before/
+        // ::after on the contents element itself are preserved inside the box.
+        flatten_contents(&mut children);
         } // end else (non-item-container)
     }
 
@@ -1231,7 +1274,7 @@ fn lay_out(
     let mut abs_deferred: Vec<(usize, f32, f32)> = Vec::new();
 
     match &mut b.kind {
-        BoxKind::Block | BoxKind::Image { .. } | BoxKind::FormControl { .. } => {
+        BoxKind::Block | BoxKind::FlowRoot | BoxKind::Image { .. } | BoxKind::FormControl { .. } => {
             // Flex containers dispatch to lay_out_flex before block-flow.
             if matches!(s.display, Display::Flex | Display::InlineFlex) {
                 let content_height = lay_out_flex(
@@ -1519,6 +1562,7 @@ fn lay_out(
         BoxKind::InlineRun { .. } => unreachable!(),
         BoxKind::InlineSpace => unreachable!(),
         BoxKind::Skip => unreachable!(),
+        BoxKind::Contents => unreachable!("display:contents boxes must be flattened before lay_out"),
         BoxKind::Marker { .. } => {
             // Rect is set by the parent's block-flow loop; nothing to do here.
         }
@@ -3358,5 +3402,100 @@ mod tests {
         assert_eq!(lines[0][0].text, "hi");
         let line2_text = &lines[1][0].text;
         assert_eq!(line2_text, "hyphen", "soft-hyphen should be stripped: {line2_text}");
+    }
+
+    // ── display: flow-root (BFC) ──────────────────────────────────────────────
+
+    #[test]
+    fn flow_root_produces_flow_root_kind() {
+        let html = r#"<div id="bfc"></div>"#;
+        let css = "#bfc { display: flow-root; width: 200px; height: 50px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        fn find_flow_root(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::FlowRoot) {
+                return Some(b);
+            }
+            for child in &b.children {
+                if let Some(found) = find_flow_root(child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        let bfc = find_flow_root(&root).expect("FlowRoot box not found");
+        assert_eq!(bfc.rect.width, 200.0);
+        assert_eq!(bfc.rect.height, 50.0);
+    }
+
+    #[test]
+    fn flow_root_lays_out_children_like_block() {
+        // A flow-root containing two block children should stack them vertically.
+        let html = r#"<div class="bfc"><div class="a"></div><div class="b"></div></div>"#;
+        let css = ".bfc { display: flow-root; width: 200px; } .a { height: 30px; } .b { height: 20px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        fn find_flow_root(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::FlowRoot) { return Some(b); }
+            for c in &b.children { if let Some(f) = find_flow_root(c) { return Some(f); } }
+            None
+        }
+        let bfc = find_flow_root(&root).expect("FlowRoot box not found");
+        // Height auto → sum of children (30 + 20 = 50).
+        assert_eq!(bfc.rect.height, 50.0, "flow-root auto height wrong: {}", bfc.rect.height);
+        // Children stacked vertically.
+        let blocks: Vec<_> = bfc.children.iter()
+            .filter(|c| matches!(c.kind, super::BoxKind::Block))
+            .collect();
+        assert_eq!(blocks.len(), 2);
+        assert!(blocks[1].rect.y > blocks[0].rect.y, "children not stacked vertically");
+    }
+
+    // ── display: contents (box elimination) ──────────────────────────────────
+
+    #[test]
+    fn contents_box_is_eliminated_from_layout_tree() {
+        // The display:contents wrapper should not appear as a box; its child
+        // block should be a direct child of the outer div.
+        let html = r#"<div id="outer"><div id="wrap"><div id="inner"></div></div></div>"#;
+        let css = "#outer { width: 400px; } #wrap { display: contents; } #inner { height: 40px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        fn find_by_id<'a>(b: &'a super::LayoutBox, doc: &lumen_dom::Document, id: &str) -> Option<&'a super::LayoutBox> {
+            if let lumen_dom::NodeData::Element { attrs, .. } = &doc.get(b.node).data {
+                if attrs.iter().any(|a| a.name.local == "id" && a.value == id) {
+                    return Some(b);
+                }
+            }
+            for child in &b.children { if let Some(f) = find_by_id(child, doc, id) { return Some(f); } }
+            None
+        }
+        // display:contents wrapper must not appear as a Contents box in the tree.
+        fn find_contents(b: &super::LayoutBox) -> bool {
+            if matches!(b.kind, super::BoxKind::Contents) { return true; }
+            b.children.iter().any(find_contents)
+        }
+        assert!(!find_contents(&root), "Contents box must be flattened out of layout tree");
+        // Inner block must exist with correct height.
+        let inner = find_by_id(&root, &doc, "inner").expect("inner div not found");
+        assert_eq!(inner.rect.height, 40.0, "inner height wrong: {}", inner.rect.height);
+    }
+
+    #[test]
+    fn nested_contents_flattened() {
+        // Two nested display:contents wrappers — both should be eliminated.
+        let html = r#"<div id="root"><div id="a"><div id="b"><div id="leaf"></div></div></div></div>"#;
+        let css = "#a, #b { display: contents; } #leaf { height: 25px; width: 100px; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        fn find_contents(b: &super::LayoutBox) -> bool {
+            if matches!(b.kind, super::BoxKind::Contents) { return true; }
+            b.children.iter().any(find_contents)
+        }
+        assert!(!find_contents(&root), "nested Contents boxes must be fully flattened");
     }
 }
