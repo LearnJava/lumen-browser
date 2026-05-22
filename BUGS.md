@@ -44,7 +44,7 @@ BUG-020 | OPEN             | paint/layout    | overflow: scroll/auto — scrollb
 BUG-006 | FIXED 2026-05-21 | layout          | table layout not implemented (td/th render as blocks)
 BUG-021 | OPEN             | html-parser     | HTML bgcolor attribute ignored
 BUG-022 | OPEN             | css-parser      | Quirks-mode hashless hex colors not parsed
-BUG-032 | OPEN             | paint/image     | object-fit image quality ~16%: GPU bilinear without mipmaps for large downscales
+BUG-032 | FIXED 2026-05-22 | paint/image     | object-fit image quality ~16%: area averaging заменяет bilinear при downscale
 BUG-033 | OPEN             | paint           | box-shadow: нет Gaussian blur — рендерится solid прямоугольник вместо размытой тени
 BUG-034 | OPEN             | layout          | CSS transform не реализован — translate/rotate/scale/skew/matrix игнорируются
 BUG-035 | OPEN             | layout          | ::before/::after pseudo-elements не генерируются в box_tree (реализация частичная)
