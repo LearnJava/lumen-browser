@@ -82,4 +82,36 @@ pub enum Event {
     SseClosed { tab_id: TabId, url: Url, reason: String },
     /// Транспортная ошибка SSE (до/после connect, до reconnect).
     SseError { tab_id: TabId, url: Url, message: String },
+    // ── IME composition events (UI Events Specification §5.3) ────────────────
+    /// Начало IME-composition сессии. Диспатчится при `Ime::Enabled`
+    /// или при первом `Preedit` с непустым текстом.
+    /// JS: `compositionstart` с `data = ""`.
+    ImeCompositionStarted { tab_id: TabId },
+    /// Preedit обновился (Ime::Preedit с непустым текстом).
+    /// JS: `compositionupdate` с `data = preedit_text`.
+    ImeCompositionUpdated { tab_id: TabId, data: String },
+    /// Финальный символ зафиксирован (Ime::Commit).
+    /// JS: `compositionend` с `data = committed_text`.
+    ImeCompositionEnded { tab_id: TabId, data: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ime_events_are_clone() {
+        let e = Event::ImeCompositionStarted { tab_id: TabId(1) };
+        let _ = e.clone();
+        let e2 = Event::ImeCompositionUpdated { tab_id: TabId(1), data: "あ".to_string() };
+        let _ = e2.clone();
+        let e3 = Event::ImeCompositionEnded { tab_id: TabId(1), data: "あい".to_string() };
+        let _ = e3.clone();
+    }
+
+    #[test]
+    fn ime_event_debug() {
+        let e = Event::ImeCompositionUpdated { tab_id: TabId(0), data: "test".into() };
+        assert!(format!("{e:?}").contains("ImeCompositionUpdated"));
+    }
 }

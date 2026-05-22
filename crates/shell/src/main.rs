@@ -101,7 +101,7 @@ impl EventSink for StdoutEventSink {
 /// SIL OFL 1.1, см. assets/fonts/OFL.txt.
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 use winit::dpi::{LogicalPosition, LogicalSize};
-use winit::event::{ElementState, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
+use winit::event::{ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorIcon, Window, WindowId};
@@ -201,6 +201,7 @@ fn run_window_mode(
         load_proxy,
         stream_builder: None,
         stream_last_paint: std::time::Instant::now(),
+        ime_composing: None,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -1350,6 +1351,9 @@ struct Lumen {
     stream_builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
     /// Момент последнего промежуточного кадра при streaming — для throttling.
     stream_last_paint: std::time::Instant,
+    /// Текущий IME preedit-текст. `Some` — composition-сессия активна,
+    /// `None` — нет активного IME ввода.
+    ime_composing: Option<String>,
 }
 
 impl Lumen {
@@ -1713,6 +1717,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             WindowEvent::KeyboardInput { event: ref key_event, .. } => {
                 self.handle_key(event_loop, key_event);
             }
+            WindowEvent::Ime(ref ime_event) => {
+                self.handle_ime(ime_event);
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 self.cursor_position = Some(position);
                 self.update_cursor_icon();
@@ -2058,6 +2065,52 @@ impl Lumen {
             }
             KeyCommand::ScrollHome => self.start_smooth_scroll(0.0),
             KeyCommand::ScrollEnd => self.start_smooth_scroll(f32::INFINITY),
+        }
+    }
+
+    fn handle_ime(&mut self, ime: &Ime) {
+        use lumen_core::event::{Event, TabId};
+        let tab_id = TabId(0);
+        match ime {
+            Ime::Enabled => {
+                // Не диспатчим compositionstart сразу — ждём первый Preedit
+                // с текстом (браузеры так же: событие только когда есть данные).
+            }
+            Ime::Preedit(text, _cursor) if text.is_empty() => {
+                // Пустой preedit = конец composition без Commit (отмена).
+                if self.ime_composing.take().is_some() {
+                    self.event_sink
+                        .emit(&Event::ImeCompositionEnded { tab_id, data: String::new() });
+                }
+            }
+            Ime::Preedit(text, _cursor) => {
+                if self.ime_composing.is_none() {
+                    // Первый непустой preedit — начало composition.
+                    self.event_sink
+                        .emit(&Event::ImeCompositionStarted { tab_id });
+                }
+                self.ime_composing = Some(text.clone());
+                self.event_sink.emit(&Event::ImeCompositionUpdated {
+                    tab_id,
+                    data: text.clone(),
+                });
+            }
+            Ime::Commit(text) => {
+                // Commit приходит после пустого Preedit (winit гарантирует),
+                // но на случай если нет — сбрасываем composing сами.
+                self.ime_composing = None;
+                self.event_sink.emit(&Event::ImeCompositionEnded {
+                    tab_id,
+                    data: text.clone(),
+                });
+            }
+            Ime::Disabled => {
+                // IME деактивирован. Если composition была открыта — закрываем.
+                if self.ime_composing.take().is_some() {
+                    self.event_sink
+                        .emit(&Event::ImeCompositionEnded { tab_id, data: String::new() });
+                }
+            }
         }
     }
 
