@@ -1,9 +1,7 @@
-In progress: —
-
-Next step: —
+In progress: BUG-025 InlineSpace shrink-to-fit  branch: bug-025-inline-space
+Next step: commit + merge
 
 Next (Wave 1):
-BUG-025  max-height clamp                     box_tree.rs    ~1h
 BUG-026  <img> CSS width/height ignored       box_tree.rs    ~1h
 
 Next (Wave 2, after D finishes content+pseudo):
