@@ -2017,6 +2017,187 @@ mod tests {
         assert_eq!((c.r, c.b), (255, 0));
     }
 
+    // ──────────────── :valid / :invalid ────────────────
+
+    #[test]
+    fn valid_matches_non_required_input() {
+        // Без required — value не может быть missing, элемент valid.
+        let c = element_color(
+            r#"<input type="text">"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (0, 128), ":valid должен матчить input без required");
+    }
+
+    #[test]
+    fn invalid_matches_required_input_without_value() {
+        let c = element_color(
+            r#"<input type="text" required>"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (255, 0), ":invalid — required + нет value");
+    }
+
+    #[test]
+    fn valid_matches_required_input_with_value() {
+        let c = element_color(
+            r#"<input type="text" required value="hello">"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (0, 128), ":valid — required + value присутствует");
+    }
+
+    #[test]
+    fn invalid_email_typemismatch() {
+        let c = element_color(
+            r#"<input type="email" value="notanemail">"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (255, 0), ":invalid — email без @");
+    }
+
+    #[test]
+    fn valid_email_with_at_and_domain() {
+        let c = element_color(
+            r#"<input type="email" value="user@example.com">"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (0, 128), ":valid — корректный email");
+    }
+
+    #[test]
+    fn valid_email_empty_value_not_required() {
+        // Пустой value при отсутствии required — valid.
+        let c = element_color(
+            r#"<input type="email">"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (0, 128), ":valid — пустой email без required");
+    }
+
+    #[test]
+    fn invalid_url_typemismatch() {
+        let c = element_color(
+            r#"<input type="url" value="not-a-url">"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (255, 0), ":invalid — url без схемы");
+    }
+
+    #[test]
+    fn valid_url_with_scheme() {
+        let c = element_color(
+            r#"<input type="url" value="https://example.com">"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (0, 128), ":valid — корректный url");
+    }
+
+    #[test]
+    fn invalid_number_out_of_range() {
+        // :invalid покрывает rangeOverflow так же, как :out-of-range.
+        let c = element_color(
+            r#"<input type="number" min="0" max="10" value="99">"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (255, 0), ":invalid — out-of-range number");
+    }
+
+    #[test]
+    fn valid_number_within_range() {
+        let c = element_color(
+            r#"<input type="number" min="0" max="10" value="5">"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (0, 128), ":valid — number in range");
+    }
+
+    #[test]
+    fn valid_invalid_not_match_div() {
+        // :valid/:invalid не применимы к не-form-control элементам.
+        let c = element_color(
+            r#"<div>x</div>"#,
+            "div:valid { color: green; } div:invalid { color: red; }",
+            "div",
+        );
+        assert_eq!((c.r, c.g), (0, 0), ":valid/:invalid не матчат <div>");
+    }
+
+    #[test]
+    fn valid_invalid_not_match_hidden_input() {
+        // <input type="hidden"> не является кандидатом для constraint validation.
+        let c = element_color(
+            r#"<input type="hidden" required>"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (0, 0), "hidden input — не матчит ни :valid, ни :invalid");
+    }
+
+    #[test]
+    fn valid_invalid_not_match_disabled_input() {
+        // Disabled — barred from constraint validation.
+        let c = element_color(
+            r#"<input type="text" required disabled>"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (0, 0), "disabled input — не матчит ни :valid, ни :invalid");
+    }
+
+    #[test]
+    fn invalid_required_checkbox_unchecked() {
+        let c = element_color(
+            r#"<input type="checkbox" required>"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (255, 0), ":invalid — required checkbox без checked");
+    }
+
+    #[test]
+    fn valid_required_checkbox_checked() {
+        let c = element_color(
+            r#"<input type="checkbox" required checked>"#,
+            "input:valid { color: green; } input:invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (0, 128), ":valid — required checkbox с checked");
+    }
+
+    #[test]
+    fn valid_required_textarea_with_value() {
+        let c = element_color(
+            r#"<textarea required>hello</textarea>"#,
+            "textarea:valid { color: green; } textarea:invalid { color: red; }",
+            "textarea",
+        );
+        // textarea: значение в content, не в value-атрибуте — Phase 0: смотрим
+        // только value-атрибут, потому элемент valid при его отсутствии.
+        assert_eq!((c.r, c.g), (0, 128), ":valid — textarea без value-атрибута при required");
+    }
+
+    #[test]
+    fn user_valid_user_invalid_always_false() {
+        // Phase 0: без интерактивного состояния :user-valid/:user-invalid = false.
+        let c = element_color(
+            r#"<input type="text">"#,
+            "input:user-valid { color: green; } input:user-invalid { color: red; }",
+            "input",
+        );
+        assert_eq!((c.r, c.g), (0, 0), ":user-valid/:user-invalid always false в Phase 0");
+    }
+
     #[test]
     fn id_wins_over_class() {
         // id specificity (1,0,0) > class (0,1,0). Порядок правил в CSS — class

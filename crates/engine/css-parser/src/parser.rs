@@ -288,6 +288,25 @@ pub enum PseudoClass {
     /// ещё-не-наступивший момент в timed-text потоке (следует за `:current`).
     /// Phase 0 без timed-text runtime — всегда `false`.
     Future,
+    /// `:valid` (CSS Selectors L4 §14.1, HTML5 §4.10.21.3) — form control,
+    /// чьё текущее значение удовлетворяет всем ограничениям (constraint
+    /// validation). Phase 0: pure DOM/attribute-based: `valueMissing` (required +
+    /// пустое значение), `typeMismatch` (email/url формат), `rangeOverflow/
+    /// Underflow` (min/max на number/range). Без runtime JS не учитывается
+    /// `setCustomValidity()`.
+    Valid,
+    /// `:invalid` (CSS Selectors L4 §14.1) — форм-контрол, нарушающий хотя бы
+    /// одно ограничение. Дополняет `:valid`, не пересекается. Элементы, не
+    /// являющиеся кандидатами для constraint validation, не матчат ни `:valid`,
+    /// ни `:invalid`.
+    Invalid,
+    /// `:user-valid` (CSS Selectors L4 §14.3) — как `:valid`, но только после
+    /// того, как пользователь взаимодействовал с полем. Phase 0 без интерактивного
+    /// состояния — всегда `false`.
+    UserValid,
+    /// `:user-invalid` (CSS Selectors L4 §14.3) — как `:invalid`, но только
+    /// после взаимодействия пользователя. Phase 0 — всегда `false`.
+    UserInvalid,
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
@@ -2720,6 +2739,10 @@ impl<'a> Parser<'a> {
             "link" => PseudoClass::Link,
             "visited" => PseudoClass::Visited,
             "any-link" => PseudoClass::AnyLink,
+            "valid" => PseudoClass::Valid,
+            "invalid" => PseudoClass::Invalid,
+            "user-valid" => PseudoClass::UserValid,
+            "user-invalid" => PseudoClass::UserInvalid,
             "in-range" => PseudoClass::InRange,
             "out-of-range" => PseudoClass::OutOfRange,
             "scope" => PseudoClass::Scope,
