@@ -328,7 +328,8 @@ Every new `[dependencies]` entry requires this in the commit body:
 
 - `dev` profile uses `opt-level = 1` for own code (10% slower build, 5-10× faster layout/paint) and `opt-level = 3` for deps via `[profile.dev.package."*"]` (wgpu/winit/rustls are unusable in pure debug; rationale in [DECISIONS.md](DECISIONS.md)).
 - `clippy::all` + `clippy::pedantic` not yet enabled globally, but `cargo clippy -p <crate> --all-targets -- -D warnings` must pass before every commit.
-- No unnecessary comments — only when explaining *why*, not *what*. `///` doc comments on public APIs are welcome.
+- No unnecessary comments — only when explaining *why*, not *what*.
+- **`///` doc comments on all public structs, fields, and functions are mandatory.** Parallel sessions rely on these to understand semantics without reading the full implementation. At minimum: what the value represents, what coordinate system or box model it uses, what units, what it includes/excludes. Example: `/// Border-box rectangle: includes padding + border, excludes margin.`
 - Names: `snake_case` functions/fields, `PascalCase` types, `SCREAMING_SNAKE` constants.
 
 ### Tests-first for parsers and algorithms

@@ -200,6 +200,8 @@ fn resolve_image_source(doc: &Document, img_id: NodeId, viewport: Size) -> Image
 #[derive(Debug, Clone)]
 pub struct LayoutBox {
     pub node: NodeId,
+    /// Border-box rectangle: (x, y) is the top-left corner after margin,
+    /// (width, height) includes padding + border but NOT margin.
     pub rect: Rect,
     pub style: ComputedStyle,
     pub kind: BoxKind,
