@@ -470,8 +470,8 @@ pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
         return None;
     }
     let (ox, oy, _) = b.style.transform_origin;
-    let pivot_x = b.rect.x + ox;
-    let pivot_y = b.rect.y + oy;
+    let pivot_x = b.rect.x + ox.resolve(b.rect.width);
+    let pivot_y = b.rect.y + oy.resolve(b.rect.height);
     let mut m = Mat4::IDENTITY;
     for f in &b.style.transform {
         let step = match *f {
@@ -590,7 +590,9 @@ fn walk(
     if box_can_own_property_node(b) {
         if creates_transform(style) {
             let id = PropertyTreeNodeId(trees.transform.nodes.len() as u32);
-            let local = compute_local_transform(&style.transform, style.transform_origin);
+            let (raw_ox, raw_oy, oz) = style.transform_origin;
+            let resolved_origin = (raw_ox.resolve(b.rect.width), raw_oy.resolve(b.rect.height), oz);
+            let local = compute_local_transform(&style.transform, resolved_origin);
             trees.transform.nodes.push(TransformNode {
                 id,
                 parent: Some(transform_parent),

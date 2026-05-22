@@ -1791,11 +1791,10 @@ pub struct ComputedStyle {
     /// CSS Text L3 §6 — `hyphens: none | manual | auto`. Inherited.
     /// Default `Manual`.
     pub hyphens: Hyphens,
-    /// CSS Transforms L1 §6 — `transform-origin: <x> <y> <z>?` в px.
-    /// Default `(50%, 50%, 0)` — центр коробки. Phase 0 хранит как
-    /// пиксельные координаты после resolve (или None для процентных —
-    /// нужен размер box-а; пока разрешаем только px/em/rem).
-    pub transform_origin: (f32, f32, f32),
+    /// CSS Transforms L1 §6 — `transform-origin: <x> <y> <z>?`.
+    /// Default `50% 50% 0` — центр бокса. Percentages resolved at display-list
+    /// time against border-box width/height (box dimensions known only after layout).
+    pub transform_origin: (PositionComponent, PositionComponent, f32),
     /// CSS Transforms L2 §4 — `perspective: <length> | none`.
     /// `None` = no perspective; `Some(px)` = distance to camera.
     pub perspective: Option<f32>,
@@ -3713,7 +3712,7 @@ impl ComputedStyle {
             word_break: WordBreak::Normal,
             line_break: LineBreak::Auto,
             hyphens: Hyphens::Manual,
-            transform_origin: (0.0, 0.0, 0.0),
+            transform_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5), 0.0),
             perspective: None,
             list_style_type: ListStyleType::Disc,
             list_style_position: ListStylePosition::Outside,
@@ -3950,7 +3949,7 @@ pub fn compute_style(
         line_break: inherited.line_break,
         hyphens: inherited.hyphens,
         // CSS Transforms transform-origin + perspective — не наследуются.
-        transform_origin: (0.0, 0.0, 0.0),
+        transform_origin: (PositionComponent::Percent(0.5), PositionComponent::Percent(0.5), 0.0),
         perspective: None,
         // CSS Lists — list-style-* наследуются.
         list_style_type: inherited.list_style_type,
@@ -9645,11 +9644,16 @@ fn apply_declaration(
         }
         "transform-origin" => {
             // CSS Transforms L1 §6: <position> [<length>]?
-            // Phase 0: парсим 1-3 значения как px. Keywords (center / top /
-            // bottom / left / right) пока не поддерживаем.
+            // Supports px, %, and keywords (center/left/right/top/bottom).
+            // Percentages are stored raw and resolved at display-list time against
+            // the element's border-box dimensions (size only known after layout).
             let parts: Vec<&str> = val.split_whitespace().collect();
-            let x = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport, is_quirks)).unwrap_or(0.0);
-            let y = parts.get(1).and_then(|s| resolve_box_length(s, em_basis, viewport, is_quirks)).unwrap_or(0.0);
+            let x = parts.first()
+                .and_then(|s| parse_position_component(s, em_basis, viewport, false))
+                .unwrap_or(PositionComponent::Percent(0.5));
+            let y = parts.get(1)
+                .and_then(|s| parse_position_component(s, em_basis, viewport, true))
+                .unwrap_or(PositionComponent::Percent(0.5));
             let z = parts.get(2).and_then(|s| resolve_box_length(s, em_basis, viewport, is_quirks)).unwrap_or(0.0);
             style.transform_origin = (x, y, z);
         }
