@@ -1121,9 +1121,32 @@ function _lumen_dispatch_composition(type, data) {
     _lumen_dispatch(nid, evt);
 }
 
+// ── Page lifecycle events: pageshow / pagehide (HTML Living Standard §8.6) ───
+// _lumen_bfcache_persisted is set to true by an injected init script when the
+// shell restores a page from bfcache. Pages can read event.persisted to detect
+// this case and skip expensive re-initialisation.
+var _lumen_bfcache_persisted = false;
+var _pageshow_listeners = [];
+var _pagehide_listeners = [];
+
+function _lumen_fire_page_lifecycle(type, persisted) {
+    var evt = new Event(type);
+    evt.persisted = !!persisted;
+    var listeners = type === 'pageshow' ? _pageshow_listeners : _pagehide_listeners;
+    for (var i = 0; i < listeners.length; i++) {
+        try { listeners[i](evt); } catch(e) {}
+    }
+    var handler = type === 'pageshow' ? window.onpageshow : window.onpagehide;
+    if (typeof handler === 'function') {
+        try { handler(evt); } catch(e) {}
+    }
+}
+
 var window = {
     history: history,
     onpopstate: null,
+    onpageshow: null,
+    onpagehide: null,
     location: location,
     navigator: navigator,
     alert: alert,
@@ -1140,16 +1163,25 @@ var window = {
     console: console,
     _lumen_dispatch_composition: _lumen_dispatch_composition,
     _lumen_set_ime_target: _lumen_set_ime_target,
+    _lumen_fire_page_lifecycle: _lumen_fire_page_lifecycle,
     addEventListener: function(type, fn) {
-        if (type === 'popstate' && typeof fn === 'function') {
+        if (typeof fn !== 'function') return;
+        if (type === 'popstate') {
             _popstate_listeners.push(fn);
+        } else if (type === 'pageshow') {
+            _pageshow_listeners.push(fn);
+        } else if (type === 'pagehide') {
+            _pagehide_listeners.push(fn);
         }
     },
     removeEventListener: function(type, fn) {
-        if (type === 'popstate') {
-            var idx = _popstate_listeners.indexOf(fn);
-            if (idx >= 0) _popstate_listeners.splice(idx, 1);
-        }
+        var arr;
+        if (type === 'popstate') arr = _popstate_listeners;
+        else if (type === 'pageshow') arr = _pageshow_listeners;
+        else if (type === 'pagehide') arr = _pagehide_listeners;
+        else return;
+        var idx = arr.indexOf(fn);
+        if (idx >= 0) arr.splice(idx, 1);
     },
     dispatchEvent: function() { return true; },
 };
@@ -2021,6 +2053,96 @@ mod tests {
         let result = rt
             .eval("typeof window._lumen_dispatch_composition === 'function'")
             .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── bfcache / pageshow / pagehide ────────────────────────────────────────
+
+    #[test]
+    fn window_has_pageshow_pagehide_handlers() {
+        let rt = runtime_with_dom(make_doc());
+        // onpageshow and onpagehide should be null (not set) initially.
+        let r1 = rt.eval("window.onpageshow === null").unwrap();
+        let r2 = rt.eval("window.onpagehide === null").unwrap();
+        assert_eq!(r1, lumen_core::JsValue::Bool(true));
+        assert_eq!(r2, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pageshow_listener_receives_event_with_persisted_false() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var saw = false; var persistedFlag = null;
+             window.addEventListener('pageshow', function(e) { saw = true; persistedFlag = e.persisted; });
+             _lumen_fire_page_lifecycle('pageshow', false);",
+        ).unwrap();
+        let saw = rt.eval("saw").unwrap();
+        let persisted = rt.eval("persistedFlag").unwrap();
+        assert_eq!(saw, lumen_core::JsValue::Bool(true));
+        assert_eq!(persisted, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn pageshow_listener_receives_persisted_true_from_bfcache() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var persistedFlag = null;
+             window.addEventListener('pageshow', function(e) { persistedFlag = e.persisted; });
+             _lumen_fire_page_lifecycle('pageshow', true);",
+        ).unwrap();
+        let persisted = rt.eval("persistedFlag").unwrap();
+        assert_eq!(persisted, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn pagehide_listener_fires() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var fired = false;
+             window.addEventListener('pagehide', function(e) { fired = true; });
+             _lumen_fire_page_lifecycle('pagehide', false);",
+        ).unwrap();
+        let fired = rt.eval("fired").unwrap();
+        assert_eq!(fired, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn onpageshow_handler_fires() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var saw = false;
+             window.onpageshow = function(e) { saw = true; };
+             _lumen_fire_page_lifecycle('pageshow', false);",
+        ).unwrap();
+        let saw = rt.eval("saw").unwrap();
+        assert_eq!(saw, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn remove_pageshow_listener_stops_it_firing() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(
+            "var count = 0;
+             var fn1 = function() { count++; };
+             window.addEventListener('pageshow', fn1);
+             window.removeEventListener('pageshow', fn1);
+             _lumen_fire_page_lifecycle('pageshow', false);",
+        ).unwrap();
+        let count = rt.eval("count").unwrap();
+        assert_eq!(count, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn lumen_bfcache_persisted_default_false() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval("_lumen_bfcache_persisted").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn lumen_fire_page_lifecycle_exported_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval("typeof window._lumen_fire_page_lifecycle === 'function'").unwrap();
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
 }

@@ -13,6 +13,7 @@
 //! (`None` и `Some("")` — один namespace) и реализуют тот же trait.
 
 pub mod autofill;
+pub mod bfcache;
 pub mod bookmarks;
 pub mod broadcast_channels;
 pub mod cache_storage;
@@ -46,6 +47,7 @@ pub mod web_manifest;
 pub mod workspaces;
 
 pub use autofill::{Autofill, AutofillEntry};
+pub use bfcache::{BfCache, BfCacheEntry};
 pub use bookmarks::{Bookmark, Bookmarks};
 pub use broadcast_channels::{BroadcastChannels, ChannelRegistration};
 pub use cache_storage::{CacheStorage, CachedEntry};
