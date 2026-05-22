@@ -79,13 +79,11 @@ while ($true) {
     $TaskCount++
     Write-Log "=== Задача #$TaskCount ==="
 
-    $prompt = @"
-Ты разработчик $Developer.
-Прочитай STATUS-$Developer.md.
-Если есть "In progress" — продолжи эту задачу.
-Если нет — возьми первую задачу из "Next".
-Когда задача завершена — вызови /lumen-task-finish.
-"@
+    $prompt = "Ты разработчик $Developer. " +
+        "Прочитай STATUS-$Developer.md. " +
+        "Если есть 'In progress' — продолжи эту задачу. " +
+        "Если нет — возьми первую задачу из 'Next'. " +
+        "Когда задача завершена — вызови /lumen-task-finish."
 
     try {
         claude -p $prompt --dangerously-skip-permissions --cwd $ProjectDir
