@@ -139,6 +139,71 @@ pub fn resize_bilinear(src: &Image, dst_w: u32, dst_h: u32) -> Image {
     Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out }
 }
 
+/// Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter).
+/// Возвращает новый [`Image`] в формате [`PixelFormat::Rgba8`].
+///
+/// При downscale с коэффициентом k×k каждый выходной пиксель получает вес от
+/// k² источников, что устраняет алиасинг. При upscale поведение идентично
+/// bilinear (area < 1 pixel → единственная точка выборки). Для смешанных случаев
+/// (down по X, up по Y) каждая ось работает независимо.
+#[must_use]
+pub fn resize_area_avg(src: &Image, dst_w: u32, dst_h: u32) -> Image {
+    let dst_w = dst_w.max(1);
+    let dst_h = dst_h.max(1);
+
+    let src_rgba = src.to_rgba8();
+    let sw = src.width as usize;
+    let sh = src.height as usize;
+    let dw = dst_w as usize;
+    let dh = dst_h as usize;
+
+    let scale_x = sw as f64 / dw as f64;
+    let scale_y = sh as f64 / dh as f64;
+
+    let mut out = vec![0u8; dw * dh * 4];
+
+    for dy in 0..dh {
+        let sy0 = dy as f64 * scale_y;
+        let sy1 = sy0 + scale_y;
+        let iy0 = sy0 as usize;
+        let iy1 = (sy1.ceil() as usize).min(sh);
+
+        for dx in 0..dw {
+            let sx0 = dx as f64 * scale_x;
+            let sx1 = sx0 + scale_x;
+            let ix0 = sx0 as usize;
+            let ix1 = (sx1.ceil() as usize).min(sw);
+
+            let mut acc = [0.0f64; 4];
+            let mut total_w = 0.0f64;
+
+            for py in iy0..iy1 {
+                let wy = (py as f64 + 1.0).min(sy1) - (py as f64).max(sy0);
+                if wy <= 0.0 { continue; }
+                for px in ix0..ix1 {
+                    let wx = (px as f64 + 1.0).min(sx1) - (px as f64).max(sx0);
+                    if wx <= 0.0 { continue; }
+                    let w = wx * wy;
+                    let base = (py * sw + px) * 4;
+                    for c in 0..4 {
+                        acc[c] += src_rgba[base + c] as f64 * w;
+                    }
+                    total_w += w;
+                }
+            }
+
+            let o = (dy * dw + dx) * 4;
+            if total_w > 0.0 {
+                for c in 0..4 {
+                    out[o + c] = (acc[c] / total_w).round().clamp(0.0, 255.0) as u8;
+                }
+            }
+        }
+    }
+
+    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out }
+}
+
 /// Формат пикселя декодированного изображения. Все варианты — 8 бит на канал.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PixelFormat {
@@ -248,5 +313,62 @@ mod tests {
     fn image_error_display_unknown_format() {
         let s = format!("{}", ImageError::UnknownFormat);
         assert!(!s.is_empty());
+    }
+
+    fn solid_image(w: u32, h: u32, r: u8, g: u8, b: u8, a: u8) -> Image {
+        let data = vec![r, g, b, a].into_iter().cycle().take((w * h * 4) as usize).collect();
+        Image { width: w, height: h, format: PixelFormat::Rgba8, data }
+    }
+
+    #[test]
+    fn area_avg_1x1_solid_preserves_color() {
+        let src = solid_image(4, 4, 200, 100, 50, 255);
+        let dst = resize_area_avg(&src, 1, 1);
+        assert_eq!(dst.width, 1);
+        assert_eq!(dst.height, 1);
+        assert_eq!(&dst.data[..4], &[200, 100, 50, 255]);
+    }
+
+    #[test]
+    fn area_avg_same_size_preserves_pixels() {
+        let src = solid_image(3, 3, 128, 64, 32, 255);
+        let dst = resize_area_avg(&src, 3, 3);
+        assert_eq!(dst.data, src.data);
+    }
+
+    #[test]
+    fn area_avg_2x1_downscale_averages_correctly() {
+        // 2×1 → 1×1: два горизонтальных пикселя, разный цвет.
+        let data = vec![100, 0, 0, 255, 200, 0, 0, 255];
+        let src = Image { width: 2, height: 1, format: PixelFormat::Rgba8, data };
+        let dst = resize_area_avg(&src, 1, 1);
+        assert_eq!(dst.data[0], 150); // (100+200)/2
+    }
+
+    #[test]
+    fn area_avg_output_size_correct() {
+        let src = solid_image(100, 80, 255, 0, 0, 255);
+        let dst = resize_area_avg(&src, 20, 16);
+        assert_eq!(dst.width, 20);
+        assert_eq!(dst.height, 16);
+        assert_eq!(dst.data.len(), 20 * 16 * 4);
+        assert_eq!(dst.format, PixelFormat::Rgba8);
+    }
+
+    #[test]
+    fn area_avg_upscale_works() {
+        let src = solid_image(2, 2, 10, 20, 30, 255);
+        let dst = resize_area_avg(&src, 4, 4);
+        assert_eq!(dst.width, 4);
+        assert_eq!(dst.height, 4);
+        assert_eq!(&dst.data[..4], &[10, 20, 30, 255]);
+    }
+
+    #[test]
+    fn area_avg_zero_size_clamped_to_1() {
+        let src = solid_image(4, 4, 0, 0, 0, 255);
+        let dst = resize_area_avg(&src, 0, 0);
+        assert_eq!(dst.width, 1);
+        assert_eq!(dst.height, 1);
     }
 }
