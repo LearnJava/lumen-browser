@@ -1,4 +1,5 @@
-In progress: —
+In progress: z-index stacking context paint ordering  branch: p4-z-index-stacking
+Next step: commit + merge
 
 Next:
 

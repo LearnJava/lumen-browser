@@ -52,7 +52,8 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 35-grid-named-areas.html | CSS Grid named areas | 9 | grid-template-areas · grid-area: &lt;name&gt; · named area spanning multiple rows/cols · page layout (header/sidebar/main/footer) · mini-grid with 5 named areas |
 | 36-border-radius.html | border-radius: uniform, pill, circle, asymmetric | 22 | border-radius: 0/4/8/16/24/32px · + border · pill (999px) · circle (50%) · asymmetric per-corner (24px 0 0 0 / etc.) · large clamped · nested rounded divs |
 | 37-float-clear.html | float: left/right + clear: both | 11 | float: left · float: right · float left + right combined · two left floats horizontal stack · clear: both clearance |
-| **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~66 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (SDF rendering: uniform/pill/circle/asymmetric) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) |
+| 38-z-index.html | z-index stacking context paint order | 6 | positive z-index (1/2/3) painted in correct order · negative z-index behind parent · z-index:auto same phase as z:0 · high z-index over zero-z sibling |
+| **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~69 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (SDF rendering: uniform/pill/circle/asymmetric) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) |
 
 ---
 
@@ -93,7 +94,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | overflow-x / overflow-y раздельно | 14 | — |
 | box-shadow (offset/blur/spread/color) | 15 | inset-тень (не реализована в paint) |
 | outline (width/color/offset) | 16 | — |
-| z-index / stacking order | — | ❌ требует position:absolute (не работает в Phase 0) |
+| z-index / stacking order | 38 | negative-z behind viewport bg · z:auto vs z:0 same phase |
 | calc() / min() / max() / clamp() | 17 | — |
 | sqrt() / cos() / abs() / hypot() | 17 | sin() не тестируется отдельно |
 | \<img\> PNG / JPEG | 18 | — |

@@ -8,7 +8,7 @@ use lumen_core::geom::{Rect, Size};
 use lumen_dom::InputType;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
-    transform_fns_to_matrix, CompositorAnimFrame,
+    transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
     BackgroundClip, BackgroundImage, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
     ClipPath, Color, ContainFlags, CssColor, FilterFn, FontStyle, FontWeight,
     FormControlKind,
@@ -831,7 +831,7 @@ pub fn build_display_list_ordered(
     let n_sc = tree.contexts.len().max(1);
     let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
     let mut next_sc_id: u32 = 1;
-    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true);
+    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, None);
 
     let mut out = Vec::new();
     for (sc_id, phase) in &order.steps {
@@ -853,6 +853,44 @@ pub fn build_display_list_ordered(
             // marker-фазы (NegativeZ / PositionedAndZAuto / PositiveZ) в
             // выводе `PaintOrder::from_tree` не появляются — рекурсия
             // энкодирует их позицию через линейный порядок.
+            _ => {}
+        }
+    }
+    out
+}
+
+/// Like [`build_display_list_ordered`] but applies compositor animation overrides per node.
+///
+/// Opacity and transform values from `anim` replace the style's values in the emitted
+/// PushOpacity / PushTransform commands. Stacking context paint ordering is preserved.
+/// Pass `None` to get the same output as `build_display_list_ordered`.
+pub fn build_display_list_ordered_with_anim(
+    root: &LayoutBox,
+    tree: &StackingTree,
+    order: &PaintOrder,
+    anim: Option<&CompositorAnimFrame>,
+) -> DisplayList {
+    let n_sc = tree.contexts.len().max(1);
+    let mut buckets: Vec<ScBucket> = vec![ScBucket::default(); n_sc];
+    let mut next_sc_id: u32 = 1;
+    fill_buckets(root, StackingContextId::ROOT, &mut next_sc_id, &mut buckets, true, anim);
+
+    let mut out = Vec::new();
+    for (sc_id, phase) in &order.steps {
+        let idx = sc_id.0 as usize;
+        if idx >= buckets.len() {
+            continue;
+        }
+        let bucket = &mut buckets[idx];
+        match phase {
+            PaintPhase::RootBackground => {
+                out.append(&mut bucket.pre);
+                out.append(&mut bucket.root_bg);
+            }
+            PaintPhase::InlineContent => {
+                out.append(&mut bucket.contents);
+                out.append(&mut bucket.post);
+            }
             _ => {}
         }
     }
@@ -1175,7 +1213,7 @@ fn emit_inline_run(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<Displ
 /// Pop — в обратном (Transform → Opacity → Blend → Clip). Transform пушится
 /// последним, чтобы преобразовывать всё содержимое SC (включая собственные
 /// background/border бокса, эмитимые в `root_bg`).
-fn box_layer_ops(b: &LayoutBox) -> (Vec<DisplayCommand>, Vec<DisplayCommand>) {
+fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> (Vec<DisplayCommand>, Vec<DisplayCommand>) {
     let mut pre = Vec::new();
     let mut post = Vec::new();
     if !box_can_own_stacking_context(b) {
@@ -1203,11 +1241,20 @@ fn box_layer_ops(b: &LayoutBox) -> (Vec<DisplayCommand>, Vec<DisplayCommand>) {
         });
         post.push(DisplayCommand::PopBlendMode);
     }
-    if s.opacity < 1.0 {
-        pre.push(DisplayCommand::PushOpacity { alpha: s.opacity });
+    // Opacity: animation override wins over style value.
+    let effective_opacity = ov.and_then(|o| o.opacity).unwrap_or(s.opacity);
+    if effective_opacity < 1.0 {
+        pre.push(DisplayCommand::PushOpacity { alpha: effective_opacity });
         post.push(DisplayCommand::PopOpacity);
     }
-    if let Some(matrix) = forward_box_transform(b) {
+    // Transform: animation override wins over style value.
+    let transform = if let Some(fns) = ov.and_then(|o| o.transform.as_deref()) {
+        let (ox, oy, _) = s.transform_origin;
+        transform_fns_to_matrix(fns, b.rect.x + ox.resolve(b.rect.width), b.rect.y + oy.resolve(b.rect.height))
+    } else {
+        forward_box_transform(b)
+    };
+    if let Some(matrix) = transform {
         pre.push(DisplayCommand::PushTransform { matrix });
         post.push(DisplayCommand::PopTransform);
     }
@@ -1236,8 +1283,10 @@ fn fill_buckets(
     next_sc_id: &mut u32,
     buckets: &mut [ScBucket],
     is_sc_root: bool,
+    anim: Option<&CompositorAnimFrame>,
 ) {
-    let (pre_ops, post_ops) = box_layer_ops(b);
+    let ov = anim.and_then(|a| a.get(b.node));
+    let (pre_ops, post_ops) = box_layer_ops(b, ov);
 
     if is_sc_root {
         let bucket = &mut buckets[current_sc.0 as usize];
@@ -1253,9 +1302,9 @@ fn fill_buckets(
             if child_creates_sc {
                 let id = StackingContextId(*next_sc_id);
                 *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true);
+                fill_buckets(child, id, next_sc_id, buckets, true, anim);
             } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false);
+                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim);
             }
         }
     } else {
@@ -1272,9 +1321,9 @@ fn fill_buckets(
             if child_creates_sc {
                 let id = StackingContextId(*next_sc_id);
                 *next_sc_id += 1;
-                fill_buckets(child, id, next_sc_id, buckets, true);
+                fill_buckets(child, id, next_sc_id, buckets, true, anim);
             } else {
-                fill_buckets(child, current_sc, next_sc_id, buckets, false);
+                fill_buckets(child, current_sc, next_sc_id, buckets, false, anim);
             }
         }
 

@@ -23,7 +23,8 @@ pub use compositor::{
     LayerTree, ThreadedCompositor, ThreadedCompositorHandle,
 };
 pub use display_list::{
-    build_display_list, build_display_list_ordered, build_display_list_with_anim,
+    build_display_list, build_display_list_ordered, build_display_list_ordered_with_anim,
+    build_display_list_with_anim,
     serialize_display_list, BlendMode, CornerRadii, DisplayCommand, DisplayList,
 };
 pub use hit_test::{hit_test, HitTestResult};
