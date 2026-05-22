@@ -1,4 +1,4 @@
-In progress: —
+In progress: scroll-snap-* application  branch: scroll-snap
 
 Next (Wave 1 — unblock P1/P2):
 
