@@ -74,6 +74,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('30', '30-css-filter.html',        3.0, 'CSS filter: grayscale/sepia/brightness/invert/contrast/saturate/opacity/blur/hue-rotate'),
     ('31', '31-clip-path.html',          3.0, 'clip-path: inset/circle/ellipse/polygon bounding-box clip'),
     ('32', '32-list-markers.html',       6.0, 'list markers: ::marker box geometry, outside/inside, disc/decimal/alpha/roman'),
+    ('33', '33-multi-column.html',       2.0, 'multi-column: column-count/width layout + column-rule solid/dashed/dotted'),
 ]
 
 # --- PNG reader (stdlib only) ---

@@ -6,7 +6,7 @@
 //! border-радиусы — позже, по запросу. Координаты — экранные пиксели от
 //! верхнего левого угла окна.
 
-use lumen_core::geom::Rect;
+use lumen_core::geom::{Rect, Size};
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame,
@@ -1655,6 +1655,106 @@ fn emit_outline(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     });
 }
 
+/// CSS Multi-column Layout L1 §3.3 — рисует разделители колонок
+/// (`column-rule`) между каждой парой соседних колонок.
+///
+/// Разделитель центрируется в gap между колонками. Геометрия колонок
+/// вычисляется заново по тем же формулам, что и в `lay_out_multicol_children`,
+/// поскольку после layout она не сохраняется в LayoutBox.
+///
+/// Реализует только Solid / Dashed / Dotted через существующий `DrawBorder`
+/// (правая сторона rect = rule rect); Double и прочие — как Solid (Phase 0).
+/// Порядок рисования: после фона и бордера контейнера, перед children
+/// (CSS Multi-column L1 §3.3: «above the border of the multi-column element»).
+fn emit_column_rules(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
+    let s = &b.style;
+    if s.column_count.is_none() && s.column_width.is_none() {
+        return;
+    }
+    if !s.column_rule_style.is_visible() || s.column_rule_width <= 0.0 {
+        return;
+    }
+
+    // Content box — mirrors lay_out_multicol_children content_x/y/w/h.
+    let em = s.font_size;
+    let content_x = b.rect.x + s.border_left_width + s.padding_left.px();
+    let content_y = b.rect.y + s.border_top_width + s.padding_top.px();
+    let content_w = (b.rect.width
+        - s.border_left_width
+        - s.border_right_width
+        - s.padding_left.px()
+        - s.padding_right.px())
+    .max(0.0);
+    let content_h = (b.rect.height
+        - s.border_top_width
+        - s.border_bottom_width
+        - s.padding_top.px()
+        - s.padding_bottom.px())
+    .max(0.0);
+    if content_w <= 0.0 || content_h <= 0.0 {
+        return;
+    }
+
+    // Sentinel viewport for length resolution (good enough for px/em/%).
+    let vp = Size::new(content_w, content_h);
+    let col_gap = s.column_gap.resolve_or_zero(em, content_w, vp).max(0.0);
+
+    // Mirror column count computation from lay_out_multicol_children.
+    let n_cols: u32 = match (s.column_count, &s.column_width) {
+        (Some(n), Some(w_len)) => {
+            if let Some(w) = w_len.resolve(em, Some(content_w), vp)
+                && w > 0.0
+            {
+                let n_from_w = ((content_w + col_gap) / (w + col_gap)).floor() as u32;
+                n.min(n_from_w).max(1)
+            } else {
+                n.max(1)
+            }
+        }
+        (Some(n), None) => n.max(1),
+        (None, Some(w_len)) => {
+            if let Some(w) = w_len.resolve(em, Some(content_w), vp)
+                && w > 0.0
+            {
+                ((content_w + col_gap) / (w + col_gap)).floor() as u32
+            } else {
+                1
+            }
+        }
+        (None, None) => 1,
+    }
+    .max(1);
+
+    if n_cols <= 1 || col_gap <= 0.0 {
+        return;
+    }
+
+    let col_w = ((content_w - col_gap * (n_cols - 1) as f32) / n_cols as f32).max(0.0);
+    let rule_w = s.column_rule_width;
+    let rule_color = s.column_rule_color.resolve(s.color);
+
+    for i in 0..(n_cols - 1) {
+        // Left edge of gap after column i.
+        let gap_left = content_x + (i + 1) as f32 * col_w + i as f32 * col_gap;
+        // Rule centered in the gap.
+        let sep_x = gap_left + (col_gap - rule_w) * 0.5;
+
+        // Reuse DrawBorder: emit as right-side only with rect.width = rule_w.
+        // Renderer draws right side at: rect.x + rect.width - wr = sep_x ✓.
+        out.push(DisplayCommand::DrawBorder {
+            rect: Rect::new(sep_x, content_y, rule_w, content_h),
+            widths: [0.0, rule_w, 0.0, 0.0],
+            colors: [Color::TRANSPARENT, rule_color, Color::TRANSPARENT, Color::TRANSPARENT],
+            styles: [
+                BorderStyle::None,
+                s.column_rule_style,
+                BorderStyle::None,
+                BorderStyle::None,
+            ],
+        });
+    }
+}
+
 /// CSS Display L3 §4 — `visibility: hidden` (и `collapse` для не-table
 /// per spec) делает box-self **не-рисуемым** (background, border,
 /// outline, box-shadow, content), но layout остаётся (`Skip` иной
@@ -1731,6 +1831,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     ],
                 });
             }
+            emit_column_rules(b, out);
             emit_outline(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
@@ -1932,6 +2033,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         ],
                     });
                 }
+                emit_column_rules(b, out);
             }
             // CSS Overflow L3 §3.2: overflow: hidden/scroll/auto/clip clips
             // descendant content to the padding-box edge. Per-axis: only the
@@ -2373,6 +2475,7 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
                         ],
                     });
                 }
+                emit_column_rules(b, out);
             }
             for child in &b.children {
                 walk_with_anim(child, anim, out);
@@ -5368,5 +5471,93 @@ mod tests {
             .filter(|c| matches!(c, DisplayCommand::PopClip))
             .count();
         assert_eq!(push_count, pop_count, "Push/Pop должны быть сбалансированы");
+    }
+
+    // ── emit_column_rules ──────────────────────────────────────────────────
+
+    fn column_rule_cmds(dl: &DisplayList) -> Vec<&DisplayCommand> {
+        // Column rules emitted as DrawBorder with widths=[0, rule_w, 0, 0].
+        dl.iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawBorder { widths: [0.0, w, 0.0, 0.0], .. } if *w > 0.0))
+            .collect()
+    }
+
+    #[test]
+    fn column_rule_emits_separators_between_columns() {
+        // 3 columns → 2 separators.
+        let dl = build(
+            r#"<div style="column-count:3;column-gap:30px;
+                           column-rule:4px solid red;
+                           width:300px;height:100px;background:white"></div>"#,
+            "",
+        );
+        let rules = column_rule_cmds(&dl);
+        assert_eq!(rules.len(), 2, "3 columns → 2 column-rule separators, got {}", rules.len());
+    }
+
+    #[test]
+    fn column_rule_none_style_emits_nothing() {
+        // column-rule-style defaults to None → no separators.
+        let dl = build(
+            r#"<div style="column-count:2;column-gap:20px;
+                           column-rule-width:4px;
+                           width:200px;height:100px;background:white"></div>"#,
+            "",
+        );
+        let rules = column_rule_cmds(&dl);
+        assert_eq!(rules.len(), 0, "column-rule-style:none should emit no separators");
+    }
+
+    #[test]
+    fn column_rule_zero_width_emits_nothing() {
+        let dl = build(
+            r#"<div style="column-count:3;column-gap:20px;
+                           column-rule:0px solid blue;
+                           width:300px;height:100px;background:white"></div>"#,
+            "",
+        );
+        let rules = column_rule_cmds(&dl);
+        assert_eq!(rules.len(), 0, "column-rule-width:0 should emit no separators");
+    }
+
+    #[test]
+    fn column_rule_single_column_emits_nothing() {
+        let dl = build(
+            r#"<div style="column-count:1;column-gap:20px;
+                           column-rule:4px solid green;
+                           width:200px;height:100px;background:white"></div>"#,
+            "",
+        );
+        let rules = column_rule_cmds(&dl);
+        assert_eq!(rules.len(), 0, "1 column → no separators");
+    }
+
+    #[test]
+    fn column_rule_no_column_props_emits_nothing() {
+        // No column-count or column-width → not a multicol container.
+        let dl = build(
+            r#"<div style="column-rule:4px solid red;width:200px;height:100px"></div>"#,
+            "",
+        );
+        let rules = column_rule_cmds(&dl);
+        assert_eq!(rules.len(), 0, "no column-count/width → no separators");
+    }
+
+    #[test]
+    fn column_rule_separator_centered_in_gap() {
+        // 2 columns, 40px gap, 4px rule → rule centered at gap_left + (40-4)/2 = gap_left + 18.
+        let dl = build(
+            r#"<div style="column-count:2;column-gap:40px;
+                           column-rule:4px solid red;
+                           width:280px;height:100px;background:white"></div>"#,
+            "",
+        );
+        let rules = column_rule_cmds(&dl);
+        assert_eq!(rules.len(), 1, "2 columns → 1 separator");
+        if let DisplayCommand::DrawBorder { rect, widths: [_, rule_w, _, _], .. } = rules[0] {
+            // col_w = (280 - 40) / 2 = 120px; gap_left = 120; sep_x = 120 + 18 = 138.
+            assert!((rect.x - 138.0).abs() < 0.5, "sep_x expected ~138, got {}", rect.x);
+            assert!((*rule_w - 4.0).abs() < 0.01, "rule width expected 4, got {}", rule_w);
+        }
     }
 }
