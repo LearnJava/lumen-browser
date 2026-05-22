@@ -1,6 +1,6 @@
-In progress: —
+In progress: display:flow-root BFC + display:contents elimination  branch: flow-root-bfc
 
-Next step: —
+Next step: add BoxKind::FlowRoot + BoxKind::Contents, flatten_contents()  box_tree.rs:258
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.

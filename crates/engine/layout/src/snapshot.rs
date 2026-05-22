@@ -68,6 +68,8 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
         BoxKind::FormControl { .. } => "FormControl",
         BoxKind::Skip => "Skip",
         BoxKind::Marker { .. } => "Marker",
+        BoxKind::FlowRoot => "FlowRoot",
+        BoxKind::Contents => "Contents",
     };
     let _ = write!(
         out,
