@@ -8007,6 +8007,65 @@ mod tests {
     }
 
     #[test]
+    fn white_space_pre_parsed() {
+        let root = lay("<p>x</p>", "p { white-space: pre; }");
+        assert_eq!(first_p_style(&root).white_space, crate::style::WhiteSpace::Pre);
+    }
+
+    #[test]
+    fn white_space_pre_wrap_parsed() {
+        let root = lay("<p>x</p>", "p { white-space: pre-wrap; }");
+        assert_eq!(first_p_style(&root).white_space, crate::style::WhiteSpace::PreWrap);
+    }
+
+    #[test]
+    fn white_space_pre_line_parsed() {
+        let root = lay("<p>x</p>", "p { white-space: pre-line; }");
+        assert_eq!(first_p_style(&root).white_space, crate::style::WhiteSpace::PreLine);
+    }
+
+    #[test]
+    fn pre_element_ua_white_space_pre() {
+        let root = lay("<pre>hello</pre>", "");
+        let pre_box = root.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(pre_box.style.white_space, crate::style::WhiteSpace::Pre,
+            "UA: <pre> should default to white-space: pre");
+    }
+
+    #[test]
+    fn pre_element_newline_creates_two_lines() {
+        let root = lay_measured("<pre>line1\nline2</pre>", "", 800.0);
+        let pre_box = root.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        let run = pre_box.children.iter().find(|c| matches!(c.kind, BoxKind::InlineRun { .. })).unwrap();
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert_eq!(lines.len(), 2, "expected 2 lines for \\n in <pre>, got {}", lines.len());
+            assert_eq!(lines[0][0].text, "line1");
+            assert_eq!(lines[1][0].text, "line2");
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn pre_element_tab_renders_with_tab_size() {
+        // tab-size: 4 → 4*8=32px; char width=8px each.
+        // "a\tb" → 'a'=8 + '\t'=32 + 'b'=8 = 48px width frag.
+        let root = lay_measured("<pre>a\tb</pre>", "pre { tab-size: 4; }", 800.0);
+        let pre_box = root.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        let run = pre_box.children.iter().find(|c| matches!(c.kind, BoxKind::InlineRun { .. })).unwrap();
+        if let BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert_eq!(lines.len(), 1);
+            let frag = &lines[0][0];
+            // text should be preserved verbatim including \t
+            assert!(frag.text.contains('\t'), "tab should be preserved in text: {:?}", frag.text);
+            // width: 'a'(8) + '\t'(32) + 'b'(8) = 48
+            assert!((frag.width - 48.0).abs() < 0.01, "expected width=48, got {}", frag.width);
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
     fn caret_color_named() {
         let root = lay("<p>x</p>", "p { caret-color: red; }");
         assert_eq!(

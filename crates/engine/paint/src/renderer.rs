@@ -2662,6 +2662,7 @@ impl Renderer {
                     font_weight: _,
                     font_style: _,
                     font_variation_axes,
+                    tab_size,
                 } => {
                     let primary_face_id = text_face_iter.next().unwrap_or(0);
                     if parsed_faces
@@ -2687,6 +2688,7 @@ impl Renderer {
                         &mut self.atlas,
                         &mut self.cached_glyphs,
                         font_variation_axes,
+                        *tab_size,
                     );
                     if let Some(m) = transform_stack.last() {
                         apply_affine_to_verts(&mut text_vertices[v_start as usize..], m);
@@ -4010,6 +4012,7 @@ fn push_text_glyphs(
     atlas: &mut GlyphAtlas,
     cached: &mut HashMap<AtlasKey, Option<CachedGlyph>>,
     font_variation_axes: &[([u8; 4], f32)],
+    tab_size: f32,
 ) {
     // Multi-size atlas: подбираем bin под font_size, растеризируем глифы
     // на этом bin. Display масштаб = font_size / size_bin — если font_size
@@ -4036,6 +4039,11 @@ fn push_text_glyphs(
 
     let mut cursor_x = rect.x;
     for ch in text.chars() {
+        // CSS Text L3 §10.1 — tab character advances by tab_size pixels.
+        if ch == '\t' && tab_size > 0.0 {
+            cursor_x += tab_size;
+            continue;
+        }
         let (face_id, glyph_id) = *char_face_cache
             .entry(ch)
             .or_insert_with(|| pick_face_for_codepoint(ch as u32, primary_face_id, parsed));

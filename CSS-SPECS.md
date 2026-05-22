@@ -73,7 +73,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading; font-optical-sizing | **#20** |
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | 🟡 | min-content / max-content / fit-content | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
-| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last; hyphens:auto; tab-size rendering | **#23** |
+| CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last; hyphens:auto | **#23** |
 | CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | perspective/3D; individual translate/rotate/scale props | **#24** |
 | CSS Values L4/L5 | [css-values-4](https://www.w3.org/TR/css-values-4/) | 🟡 | env(); attr() with type; cq* units | **#25** |
 
@@ -231,7 +231,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `text-align` | ✅ | start/end/left/center/right; LTR/RTL |
 | `text-indent` | ✅ | |
 | `text-transform` | ✅ | none/uppercase/lowercase/capitalize |
-| `white-space` | ✅ | normal/nowrap/pre/pre-wrap/pre-line |
+| `white-space` | ✅ | normal/nowrap/pre/pre-wrap/pre-line — UA default for &lt;pre&gt; |
 | `word-spacing` / `letter-spacing` | ✅ | |
 | `word-break` / `overflow-wrap` | ✅ | |
 | `text-decoration` / `text-decoration-*` | ✅ | line/style/color/thickness |
@@ -239,7 +239,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `vertical-align` | ✅ | baseline/top/middle/bottom/sub/super/length/% |
 | `text-align-last` | 🟡 | parsed; last-line apply ⬜ |
 | `hyphens` | 🟡 | none/manual ✅; auto (HyphenationProvider) ⬜ |
-| `tab-size` | 🟡 | parsed; tab rendering partial |
+| `tab-size` | ✅ | parsed; \t expanded in pre/pre-wrap; renderer advances cursor by tab_size |
 | `line-break` | 🟡 | parsed; CJK-aware breaking ⬜ |
 | `text-wrap-mode` / `text-wrap-style` | 🟡 | parsed; integration ⬜ |
 | `text-underline-position` / `text-underline-offset` | 🟡 | parsed; paint offset ⬜ |

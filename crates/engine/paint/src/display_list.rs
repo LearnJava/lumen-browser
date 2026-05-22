@@ -142,6 +142,9 @@ pub enum DisplayCommand {
         /// выполняется в renderer-е, который имеет доступ к шрифтовым таблицам.
         /// Пустой Vec = `normal` (default-instance без variation deltas).
         font_variation_axes: Vec<([u8; 4], f32)>,
+        /// CSS Text L3 §10.1 — pixel width for a tab character (\t).
+        /// 0.0 means no tab characters in text (renderer skips tab expansion).
+        tab_size: f32,
     },
     /// Растровое изображение из `<img>`. `rect` — итоговая коробка после
     /// расчёта по CSS (width/height + HTML presentational hints), `src` —
@@ -507,7 +510,7 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::DrawText {
                 rect, text, font_size, color, font_family, font_weight, font_style,
-                font_variation_axes,
+                font_variation_axes, tab_size: _,
             } => {
                 out.push_str(&format!(
                     "DrawText ({:.2}, {:.2}, {:.2}, {:.2}) {:?} {:.2} #{:02x}{:02x}{:02x}{:02x}",
@@ -982,6 +985,7 @@ fn emit_text_emphasis_marks(
             font_weight: frag.style.font_weight,
             font_style: frag.style.font_style,
             font_variation_axes: vec![],
+            tab_size: 0.0,
         });
     }
 }
@@ -1028,6 +1032,7 @@ fn emit_text_frags(
                 .iter()
                 .map(|a| (a.tag, a.value))
                 .collect(),
+            tab_size: frag.style.tab_size,
         });
         push_text_decoration(out, container_x, frag_y, frag);
         emit_text_emphasis_marks(out, container_x, line_h, frag_y, frag);
@@ -1094,6 +1099,7 @@ fn emit_inline_run(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<Displ
                     .iter()
                     .map(|a| (a.tag, a.value))
                     .collect(),
+                tab_size: 0.0,
             });
         } else {
             emit_text_frags(line, b.rect.x, b.rect.width, line_y, line_h, out);
@@ -1343,6 +1349,7 @@ fn emit_text_shadows(
             font_style: frag.style.font_style,
             font_variation_axes: frag.style.font_variation_settings
                 .iter().map(|s| (s.tag, s.value)).collect(),
+            tab_size: frag.style.tab_size,
         });
     }
 }

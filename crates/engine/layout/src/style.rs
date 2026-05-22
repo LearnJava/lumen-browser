@@ -234,15 +234,30 @@ pub enum Visibility {
 
 /// CSS Text Module L3 §3.1 — `white-space`. Inherited.
 ///
-/// Управляет collapse-ом whitespace и переносами строк. Phase 0:
-/// реализованы только `Normal` (default — collapse + wrap) и `Nowrap`
-/// (collapse, без переноса). `Pre`/`PreWrap`/`PreLine` требуют сохранения
-/// whitespace в input (сейчас split_whitespace его теряет) — отложены.
+/// Управляет collapse-ом whitespace и переносами строк.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum WhiteSpace {
     #[default]
     Normal,
     Nowrap,
+    /// Preserves all whitespace including tabs and newlines; no line wrapping.
+    Pre,
+    /// Preserves whitespace; wraps at available width.
+    PreWrap,
+    /// Collapses spaces but preserves newlines; wraps at available width.
+    PreLine,
+}
+
+impl WhiteSpace {
+    /// True when whitespace (tabs, newlines) is preserved rather than collapsed.
+    pub fn preserves_whitespace(self) -> bool {
+        matches!(self, WhiteSpace::Pre | WhiteSpace::PreWrap)
+    }
+
+    /// True when line wrapping is disabled (lines only break at forced breaks).
+    pub fn is_nowrap(self) -> bool {
+        matches!(self, WhiteSpace::Pre | WhiteSpace::Nowrap)
+    }
 }
 
 /// CSS Text Module L3 §3.4 — `text-transform`. Inherited.
@@ -3789,7 +3804,7 @@ pub fn compute_style(
         font_family: inherited.font_family.clone(),
         font_variation_settings: inherited.font_variation_settings.clone(),
         text_transform: inherited.text_transform,
-        white_space: inherited.white_space,
+        white_space: ua_white_space(doc, node).unwrap_or(inherited.white_space),
         text_indent: inherited.text_indent.clone(),
         letter_spacing: inherited.letter_spacing,
         word_spacing: inherited.word_spacing,
@@ -6046,6 +6061,21 @@ fn default_display(doc: &Document, node: NodeId) -> Display {
         // CSS 2.1 — list-item UA default.
         "li" => Display::ListItem,
         _ => Display::Block,
+    }
+}
+
+/// HTML5 §14.3.3 — UA white-space for specific elements.
+/// Returns `Some` only for elements that override the inherited value.
+fn ua_white_space(doc: &Document, node: NodeId) -> Option<WhiteSpace> {
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return None;
+    };
+    match name.local.as_str() {
+        // HTML5 UA stylesheet: pre, listing, xmp, plaintext — white-space: pre
+        "pre" | "listing" | "xmp" | "plaintext" => Some(WhiteSpace::Pre),
+        // textarea — white-space: pre-wrap (per HTML5 rendering spec)
+        "textarea" => Some(WhiteSpace::PreWrap),
+        _ => None,
     }
 }
 
@@ -8637,12 +8667,12 @@ fn apply_declaration(
             };
         }
         "white-space" => {
-            // CSS Text L3 §3.1: phase 0 — normal | nowrap. Pre-варианты
-            // требуют preserved whitespace в input и пока игнорируются
-            // (молча сохраняют текущее значение).
             style.white_space = match val.trim() {
                 "normal" => WhiteSpace::Normal,
                 "nowrap" => WhiteSpace::Nowrap,
+                "pre" => WhiteSpace::Pre,
+                "pre-wrap" => WhiteSpace::PreWrap,
+                "pre-line" => WhiteSpace::PreLine,
                 _ => style.white_space,
             };
         }
