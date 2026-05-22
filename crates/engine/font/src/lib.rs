@@ -13,6 +13,7 @@
 
 pub mod avar;
 pub mod binary;
+pub mod woff2;
 pub mod cmap;
 pub mod delta_set_index_map;
 pub mod face;
@@ -63,3 +64,4 @@ pub use rasterizer::{Bitmap, Rasterizer};
 pub use system_fonts::SystemFontIndex;
 pub use variation::apply_variations_to_simple_outline;
 pub use vvar::Vvar;
+pub use woff2::{decode_woff1, decode_woff2, is_woff1, is_woff2, maybe_decode_font};

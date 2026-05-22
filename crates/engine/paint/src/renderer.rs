@@ -27,7 +27,10 @@ use std::sync::Arc;
 
 use lumen_core::ext::{FontProvider, FontStyle as CssFontStyle};
 use lumen_core::geom::Rect;
-use lumen_font::{Bitmap, Cmap, Font, Head, Hhea, Hmtx, Outline, Rasterizer, SystemFontIndex};
+use lumen_font::{
+    Bitmap, Cmap, Font, Head, Hhea, Hmtx, Outline, Rasterizer, SystemFontIndex,
+    maybe_decode_font,
+};
 use lumen_image::{Image, PixelFormat};
 use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterFn, FontStyle, FontWeight, ImageRendering, Mat4, ObjectFit, ObjectPosition, OutlineStyle, PositionComponent};
 use winit::window::Window;
@@ -1941,8 +1944,14 @@ impl Renderer {
             if let Some(&id) = self.face_id_by_path.get(&rec.path) {
                 return id;
             }
-            let Ok(bytes) = std::fs::read(&rec.path) else {
+            let Ok(raw) = std::fs::read(&rec.path) else {
                 continue;
+            };
+            // Transparent WOFF/WOFF2 → sfnt conversion before parsing.
+            let bytes = match maybe_decode_font(&raw) {
+                Ok(Some(decoded)) => decoded,
+                Ok(None) => raw,
+                Err(_) => continue,
             };
             if Font::parse(&bytes).is_err() {
                 continue;
