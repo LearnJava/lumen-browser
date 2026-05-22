@@ -2105,6 +2105,25 @@ mod tests {
         );
     }
 
+    /// BUG-013: display:none между inline-элементами не должен разрывать InlineRun.
+    /// До фикса: `<span style="display:none">` вызывал break, и соседние <span>
+    /// попадали в разные строки, удваивая высоту параграфа.
+    #[test]
+    fn display_none_does_not_break_inline_context() {
+        // Три <span>: первый и третий видимые, второй — display:none.
+        // Ожидание: все три в одном inline-контексте → высота = одна строка (19.2).
+        let root = lay_measured(
+            "<p><span>hello</span><span style=\"display:none\">x</span><span>world</span></p>",
+            "",
+            800.0,
+        );
+        assert!(
+            (root.rect.height - 19.2).abs() < 0.5,
+            "display:none разрывает inline-контекст: height={} (ожидалось 19.2)",
+            root.rect.height,
+        );
+    }
+
     // ── Функциональные pseudo: :nth-*, :*-of-type, :not ───────────────────
 
     /// Собирает все элементы с тегом `tag` из children корневого LayoutBox.
