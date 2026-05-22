@@ -49,8 +49,8 @@ pub use style::{
     BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat, ColorSpace,
-    ContainFlags, ComputedStyle, Content,
-    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, FilterFn, FontStretch,
+    ClearSide, ContainFlags, ComputedStyle, Content,
+    ContentItem, CssColor, CssWideKeyword, Cursor, Direction, Display, FilterFn, FloatSide, FontStretch,
     FontStyle,
     FontVariant, FontWeight, GradientStop, GridAutoFlow, GridLine, GridTrackSize, Hyphens, ImageRendering,
     Isolation, IterationCount, Length,
@@ -10927,5 +10927,171 @@ mod tests {
         // Inside: marker participates in flow, content starts below it.
         assert!(content.rect.y >= marker.rect.y + marker.rect.height - 0.01,
             "content must start at or after inside marker");
+    }
+
+    // ─── CSS 2.1 §9.5 — float + clear ────────────────────────────────────────
+
+    /// `float: left` с явной шириной — элемент помещается у левого края контейнера.
+    #[test]
+    fn float_left_positioned_at_left_edge() {
+        let root = lay(
+            "<div class='c'><div class='f'>x</div></div>",
+            ".c { width: 400px; }
+             .f { float: left; width: 100px; height: 50px; }",
+        );
+        let c = first_element_child(&root);
+        let f = first_element_child(c);
+        assert_eq!(f.rect.x, 0.0, "float left: x at container left");
+        assert_eq!(f.rect.y, 0.0, "float left: y at top");
+        assert_eq!(f.rect.width,  100.0, "float left: explicit width");
+        assert_eq!(f.rect.height,  50.0, "float left: explicit height");
+    }
+
+    /// `float: right` с явной шириной — элемент у правого края контейнера.
+    #[test]
+    fn float_right_positioned_at_right_edge() {
+        let root = lay(
+            "<div class='c'><div class='f'>x</div></div>",
+            ".c { width: 400px; }
+             .f { float: right; width: 100px; height: 50px; }",
+        );
+        let c = first_element_child(&root);
+        let f = first_element_child(c);
+        // right edge of container = 400px; float width = 100px → x = 300
+        assert_eq!(f.rect.x, 300.0, "float right: x at container_right - width");
+        assert_eq!(f.rect.y,   0.0, "float right: y at top");
+    }
+
+    /// Float left сужает доступную ширину последующего block-брата.
+    #[test]
+    fn float_left_narrows_sibling_width() {
+        let root = lay(
+            "<div class='c'><div class='f'>x</div><div class='s'>y</div></div>",
+            ".c { width: 400px; }
+             .f { float: left; width: 100px; height: 50px; }
+             .s { height: 30px; }",
+        );
+        let c = first_element_child(&root);
+        let sibling = c.children.iter()
+            .find(|ch| matches!(ch.kind, BoxKind::Block) && ch.style.float_side == FloatSide::None)
+            .expect("sibling block");
+        // Sibling starts after left float (x=100) and has width = 400-100 = 300.
+        assert_eq!(sibling.rect.x,     100.0, "sibling starts after float");
+        assert_eq!(sibling.rect.width, 300.0, "sibling width narrowed");
+    }
+
+    /// Float right сужает доступную ширину последующего block-брата.
+    #[test]
+    fn float_right_narrows_sibling_width() {
+        let root = lay(
+            "<div class='c'><div class='f'>x</div><div class='s'>y</div></div>",
+            ".c { width: 400px; }
+             .f { float: right; width: 100px; height: 50px; }
+             .s { height: 30px; }",
+        );
+        let c = first_element_child(&root);
+        let sibling = c.children.iter()
+            .find(|ch| matches!(ch.kind, BoxKind::Block) && ch.style.float_side == FloatSide::None)
+            .expect("sibling block");
+        // Sibling starts at x=0 (right float doesn't push it right), width = 400-100 = 300.
+        assert_eq!(sibling.rect.x,     0.0, "sibling starts at left edge");
+        assert_eq!(sibling.rect.width, 300.0, "sibling width narrowed by right float");
+    }
+
+    /// Два `float: left` выстраиваются горизонтально.
+    #[test]
+    fn two_left_floats_stack_horizontally() {
+        let root = lay(
+            "<div class='c'><div class='f1'>a</div><div class='f2'>b</div></div>",
+            ".c  { width: 400px; }
+             .f1 { float: left; width: 100px; height: 50px; }
+             .f2 { float: left; width: 80px;  height: 40px; }",
+        );
+        let c = first_element_child(&root);
+        let floats: Vec<_> = c.children.iter()
+            .filter(|ch| ch.style.float_side == FloatSide::Left)
+            .collect();
+        assert_eq!(floats.len(), 2, "expected two left floats");
+        assert_eq!(floats[0].rect.x, 0.0,   "first float at left edge");
+        assert_eq!(floats[1].rect.x, 100.0, "second float after first");
+    }
+
+    /// `clear: both` сдвигает элемент ниже обоих float-ов.
+    #[test]
+    fn clear_both_advances_past_floats() {
+        let root = lay(
+            "<div class='c'><div class='fl'>a</div><div class='fr'>b</div><div class='clr'>c</div></div>",
+            ".c   { width: 400px; }
+             .fl  { float: left;  width: 80px; height: 60px; }
+             .fr  { float: right; width: 80px; height: 40px; }
+             .clr { clear: both; height: 20px; }",
+        );
+        let c = first_element_child(&root);
+        let clr = c.children.iter()
+            .find(|ch| matches!(ch.kind, BoxKind::Block) && ch.style.clear == ClearSide::Both)
+            .expect("clear:both block");
+        // clear:both → must start at y >= max(60, 40) = 60
+        assert!(clr.rect.y >= 60.0 - 0.01,
+            "clear:both block must start below tallest float (got {})", clr.rect.y);
+    }
+
+    /// Контейнер height охватывает float (float clearing родителя).
+    /// CSS 2.1 §9.5: контейнер должен расти, чтобы содержать свои float-ы.
+    #[test]
+    fn container_height_encloses_float() {
+        let root = lay(
+            "<div class='c'><div class='f'>x</div></div>",
+            ".c { width: 400px; }
+             .f { float: left; width: 100px; height: 80px; }",
+        );
+        let c = first_element_child(&root);
+        // Container has no non-float children, so height = float height = 80.
+        assert!(c.rect.height >= 80.0 - 0.01,
+            "container must enclose float (height={}, expected >=80)", c.rect.height);
+    }
+
+    /// `clear: left` сдвигает элемент мимо левого float.
+    #[test]
+    fn clear_left_only_clears_left_floats() {
+        let root = lay(
+            "<div class='c'><div class='fl'>a</div><div class='clr'>c</div></div>",
+            ".c   { width: 400px; }
+             .fl  { float: left; width: 80px; height: 50px; }
+             .clr { clear: left; height: 20px; }",
+        );
+        let c = first_element_child(&root);
+        let clr = c.children.iter()
+            .find(|ch| matches!(ch.kind, BoxKind::Block) && ch.style.clear == ClearSide::Left)
+            .expect("clear:left block");
+        assert!(clr.rect.y >= 50.0 - 0.01,
+            "clear:left must start below left float (got {})", clr.rect.y);
+    }
+
+    /// CSS `float` парсится в FloatSide.
+    #[test]
+    fn float_side_parsed_correctly() {
+        let root = lay("<div class='l'>x</div><div class='r'>x</div><div class='n'>x</div>",
+            ".l { float: left } .r { float: right } .n { float: none }");
+        let mut iter = root.children.iter().filter(|c| matches!(c.kind, BoxKind::Block));
+        let l = iter.next().unwrap();
+        let r = iter.next().unwrap();
+        let n = iter.next().unwrap();
+        assert_eq!(l.style.float_side, FloatSide::Left,  "float: left");
+        assert_eq!(r.style.float_side, FloatSide::Right, "float: right");
+        assert_eq!(n.style.float_side, FloatSide::None,  "float: none");
+    }
+
+    /// CSS `clear` парсится в ClearSide.
+    #[test]
+    fn clear_parsed_correctly() {
+        let root = lay("<div class='b'>x</div><div class='l'>x</div><div class='r'>x</div>",
+            ".b { clear: both } .l { clear: left } .r { clear: right }");
+        let mut iter = root.children.iter().filter(|c| matches!(c.kind, BoxKind::Block));
+        let b = iter.next().unwrap();
+        let l = iter.next().unwrap();
+        let r = iter.next().unwrap();
+        assert_eq!(b.style.clear, ClearSide::Both,  "clear: both");
+        assert_eq!(l.style.clear, ClearSide::Left,  "clear: left");
+        assert_eq!(r.style.clear, ClearSide::Right, "clear: right");
     }
 }

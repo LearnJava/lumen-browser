@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 37 float + clear</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #f7fafc; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
+    .row { width: 940px; margin-bottom: 16px; overflow: hidden; }
+    .label { font-size: 0; }
+  </style>
+</head>
+<body>
+  <div class="__f">
+
+    <!-- Section 1: float:left — blue box left, grey fills right -->
+    <div class="row" style="height: 80px;">
+      <div style="float: left; width: 160px; height: 80px; background: #3182ce;"></div>
+      <div style="height: 80px; background: #bee3f8;"></div>
+    </div>
+
+    <!-- Section 2: float:right — green box right, grey fills left -->
+    <div class="row" style="height: 80px;">
+      <div style="float: right; width: 160px; height: 80px; background: #38a169;"></div>
+      <div style="height: 80px; background: #c6f6d5;"></div>
+    </div>
+
+    <!-- Section 3: float:left + float:right simultaneously -->
+    <div class="row" style="height: 80px;">
+      <div style="float: left;  width: 140px; height: 80px; background: #e53e3e;"></div>
+      <div style="float: right; width: 140px; height: 80px; background: #d69e2e;"></div>
+      <div style="height: 80px; background: #fefcbf;"></div>
+    </div>
+
+    <!-- Section 4: two left floats stacking horizontally -->
+    <div class="row" style="height: 60px;">
+      <div style="float: left; width: 120px; height: 60px; background: #805ad5;"></div>
+      <div style="float: left; width: 120px; height: 60px; background: #6b46c1;"></div>
+      <div style="float: left; width: 120px; height: 60px; background: #553c9a;"></div>
+      <div style="height: 60px; background: #e9d8fd;"></div>
+    </div>
+
+    <!-- Section 5: clear:both — red bar below all floats -->
+    <div class="row" style="position: relative;">
+      <div style="float: left;  width: 200px; height: 100px; background: #3182ce;"></div>
+      <div style="float: right; width: 200px; height:  60px; background: #38a169;"></div>
+      <div style="clear: both;  height:  20px; background: #fc8181;"></div>
+    </div>
+
+  </div>
+</body>
+</html>

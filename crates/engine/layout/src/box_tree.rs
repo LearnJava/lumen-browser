@@ -18,8 +18,8 @@ use lumen_html_parser::{
 
 use crate::style::{
     apply_container_rules, compute_pseudo_element_style, compute_style, AlignValue,
-    BackgroundImage, BoxSizing, ContainFlags, ContainerContext, ContainerType, Content,
-    ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap,
+    BackgroundImage, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
+    ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition,
     ListStyleType, Overflow, Position, TextAlign, TextOverflow, VerticalAlign,
 };
@@ -1205,6 +1205,74 @@ fn shift_tree(b: &mut LayoutBox, dx: f32, dy: f32) {
     }
 }
 
+// ─── CSS 2.1 §9.5 — Float context ────────────────────────────────────────────
+
+/// CSS 2.1 §9.5 — tracks float placements within a single block formatting
+/// context.  Simplified Phase-0 implementation: only axis-aligned rectangles,
+/// no shape-outside wrapping.  All coordinates are in the same space as the
+/// block container's content area (i.e. not relative to viewport).
+struct FloatContext {
+    /// Left floats: `(bottom_y, right_edge)` — right edge of the float margin
+    /// box in content-area coordinates.  Active while `bottom_y > query_y`.
+    left: Vec<(f32, f32)>,
+    /// Right floats: `(bottom_y, left_edge)` — left edge of the float margin
+    /// box.  Active while `bottom_y > query_y`.
+    right: Vec<(f32, f32)>,
+}
+
+impl FloatContext {
+    fn new() -> Self {
+        Self { left: Vec::new(), right: Vec::new() }
+    }
+
+    /// Left boundary of available inline space at `y` (= rightmost right-edge
+    /// of all left floats whose `bottom_y > y`).  Falls back to `default_x`.
+    fn left_edge_at(&self, y: f32, default_x: f32) -> f32 {
+        self.left
+            .iter()
+            .filter(|(bot, _)| *bot > y)
+            .map(|(_, r)| *r)
+            .fold(default_x, f32::max)
+    }
+
+    /// Right boundary of available inline space at `y` (= leftmost left-edge
+    /// of all right floats whose `bottom_y > y`).  Falls back to `default_x`.
+    fn right_edge_at(&self, y: f32, default_x: f32) -> f32 {
+        self.right
+            .iter()
+            .filter(|(bot, _)| *bot > y)
+            .map(|(_, l)| *l)
+            .fold(default_x, f32::min)
+    }
+
+    /// Record a left float occupying `[y_top, bottom_y)` with right margin
+    /// edge at `right_edge`.
+    fn add_left(&mut self, bottom_y: f32, right_edge: f32) {
+        self.left.push((bottom_y, right_edge));
+    }
+
+    /// Record a right float occupying `[y_top, bottom_y)` with left margin
+    /// edge at `left_edge`.
+    fn add_right(&mut self, bottom_y: f32, left_edge: f32) {
+        self.right.push((bottom_y, left_edge));
+    }
+
+    /// CSS 2.1 §9.5.2 — advance `y` past all floats on the given side.
+    fn clear_y(&self, y: f32, side: ClearSide) -> f32 {
+        let mut result = y;
+        let do_left  = matches!(side, ClearSide::Left  | ClearSide::Both);
+        let do_right = matches!(side, ClearSide::Right | ClearSide::Both);
+        if do_left  { for (bot, _) in &self.left  { result = result.max(*bot); } }
+        if do_right { for (bot, _) in &self.right { result = result.max(*bot); } }
+        result
+    }
+
+    /// True when there are no active floats at all.
+    fn is_empty(&self) -> bool {
+        self.left.is_empty() && self.right.is_empty()
+    }
+}
+
 /// `pcb` — rect positioned containing block (ближайший предок с position != static),
 /// используется для layout абсолютно-позиционированных потомков.
 #[allow(clippy::too_many_arguments)]
@@ -1432,6 +1500,10 @@ fn lay_out(
                     &s, em, measurer, viewport, children_pcb, hp,
                 )
             } else {
+                // CSS 2.1 §9.5 — float context for this block formatting context.
+                let mut fc = FloatContext::new();
+                let container_right = content_x + content_width;
+
                 let mut child_y = content_y;
                 for (i, child) in b.children.iter_mut().enumerate() {
                     if matches!(child.style.position, Position::Absolute | Position::Fixed) {
@@ -1457,7 +1529,63 @@ fn lay_out(
                         }
                         continue;
                     }
-                    lay_out(child, content_x, child_y, content_width, children_available_height, measurer, viewport, children_pcb, hp);
+
+                    // CSS 2.1 §9.5.2: clear — advance child_y past relevant floats.
+                    if !fc.is_empty() && child.style.clear != ClearSide::None {
+                        child_y = fc.clear_y(child_y, child.style.clear);
+                    }
+
+                    // CSS 2.1 §9.5.1: float box — placed out of normal flow.
+                    if child.style.float_side != FloatSide::None {
+                        let cem = child.style.font_size;
+                        let avail_left  = fc.left_edge_at(child_y, content_x);
+                        let avail_right = fc.right_edge_at(child_y, container_right);
+                        let avail_w = (avail_right - avail_left).max(0.0);
+
+                        // Shrink-to-fit width: explicit CSS width wins; otherwise use
+                        // preferred content width clamped to available space.
+                        let float_layout_w = if child.style.width.is_some() {
+                            avail_w
+                        } else {
+                            preferred_inline_block_width(child, measurer, viewport)
+                                .map(|pw| pw.min(avail_w))
+                                .unwrap_or(avail_w)
+                        };
+                        lay_out(child, avail_left, child_y, float_layout_w,
+                                children_available_height, measurer, viewport, children_pcb, hp);
+
+                        let fml = child.style.margin_left.resolve_or_zero(cem, avail_w, viewport);
+                        let fmr = child.style.margin_right.resolve_or_zero(cem, avail_w, viewport);
+                        let fmt = child.style.margin_top.resolve_or_zero(cem, avail_w, viewport);
+                        let fmb = child.style.margin_bottom.resolve_or_zero(cem, avail_w, viewport);
+                        let fw  = child.rect.width;
+                        let fh  = child.rect.height;
+
+                        match child.style.float_side {
+                            FloatSide::Left => {
+                                let lx = fc.left_edge_at(child_y, content_x);
+                                child.rect.x = lx + fml;
+                                child.rect.y = child_y + fmt;
+                                fc.add_left(child_y + fmt + fh + fmb, lx + fml + fw + fmr);
+                            }
+                            FloatSide::Right => {
+                                let rx = fc.right_edge_at(child_y, container_right);
+                                child.rect.x = rx - fmr - fw;
+                                child.rect.y = child_y + fmt;
+                                fc.add_right(child_y + fmt + fh + fmb, rx - fmr - fw - fml);
+                            }
+                            FloatSide::None => unreachable!(),
+                        }
+                        // Float does not advance child_y in normal flow.
+                        continue;
+                    }
+
+                    // Normal flow: narrow x/width for active floats.
+                    let flow_left  = fc.left_edge_at(child_y, content_x);
+                    let flow_right = fc.right_edge_at(child_y, container_right);
+                    let flow_w = (flow_right - flow_left).max(0.0);
+                    lay_out(child, flow_left, child_y, flow_w,
+                            children_available_height, measurer, viewport, children_pcb, hp);
                     if matches!(child.kind, BoxKind::Skip) {
                         continue;
                     }
@@ -1465,7 +1593,11 @@ fn lay_out(
                         child.style.font_size, content_width, viewport);
                     child_y = child.rect.y + child.rect.height + child_mb;
                 }
-                (child_y - content_y).max(0.0)
+                // CSS 2.1 §9.5: the container height must also enclose all floats.
+                let float_bottom = fc.left.iter().chain(fc.right.iter())
+                    .map(|(bot, _)| *bot)
+                    .fold(child_y, f32::max);
+                (float_bottom - content_y).max(0.0)
             };
             // Явная высота (CSS height: Npx) перекрывает auto-высоту по содержимому.
             // box-sizing работает симметрично width: content-box прибавляет

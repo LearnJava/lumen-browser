@@ -51,6 +51,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 34-forms.html | form controls static rendering | 18 | input[text/email/password/number/search/range/color/submit] · checkbox (unchecked/checked/disabled) · radio (unchecked/checked) · button · textarea · select · required · disabled UA styles |
 | 35-grid-named-areas.html | CSS Grid named areas | 9 | grid-template-areas · grid-area: &lt;name&gt; · named area spanning multiple rows/cols · page layout (header/sidebar/main/footer) · mini-grid with 5 named areas |
 | 36-border-radius.html | border-radius: uniform, pill, circle, asymmetric | 22 | border-radius: 0/4/8/16/24/32px · + border · pill (999px) · circle (50%) · asymmetric per-corner (24px 0 0 0 / etc.) · large clamped · nested rounded divs |
+| 37-float-clear.html | float: left/right + clear: both | 11 | float: left · float: right · float left + right combined · two left floats horizontal stack · clear: both clearance |
 | **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~66 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (SDF rendering: uniform/pill/circle/asymmetric) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) |
 
 ---
