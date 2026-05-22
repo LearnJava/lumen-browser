@@ -18,6 +18,7 @@
 
 mod animation_scheduler;
 mod find;
+mod forms;
 mod momentum_anim;
 mod runtime;
 mod scroll_anim;
@@ -37,6 +38,7 @@ use lumen_devtools::DevToolsServer;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
 use lumen_storage::{BfCache, BfCacheEntry};
 use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
+use std::collections::HashMap;
 use lumen_layout::LayoutBox;
 use lumen_paint::{build_display_list_with_anim, hit_test, DisplayList, Renderer};
 use lumen_layout::Cursor as CssCursor;
@@ -206,6 +208,9 @@ fn run_window_mode(
         bfcache: BfCache::new(16),
         nav_back: Vec::new(),
         nav_fwd: Vec::new(),
+        form_state: HashMap::new(),
+        validation_tooltip: None,
+        color_picker_node: None,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -885,6 +890,7 @@ struct LayoutSource {
     stylesheet: lumen_css_parser::Stylesheet,
     /// Decoded HTML source captured after encoding detection. Used by bfcache
     /// to restore the page without a network round-trip.
+    #[allow(dead_code)]
     html_source: Option<String>,
 }
 
@@ -1508,6 +1514,15 @@ struct Lumen {
     /// Forward history stack — pages the user went back from.
     /// Top = most recently visited "forward" page.
     nav_fwd: Vec<NavEntry>,
+    /// Runtime form control state (value, checked) keyed by NodeId.
+    /// Persists for the lifetime of the current page; cleared on load/reload.
+    form_state: forms::FormState,
+    /// Active validation tooltip: (anchor_rect_in_doc_space, message).
+    /// Displayed as a viewport-locked overlay. Dismissed on next click.
+    validation_tooltip: Option<(Rect, String)>,
+    /// NodeId of the `<input type="color">` whose picker is currently open.
+    /// The picker overlay is viewport-locked; clicking a swatch closes it.
+    color_picker_node: Option<NodeId>,
 }
 
 impl Lumen {
@@ -1692,6 +1707,9 @@ impl Lumen {
         self.scroll_anim = None;
         self.momentum_anim = None;
         self.touchpad_vel = (0.0, 0.0);
+        self.form_state.clear();
+        self.validation_tooltip = None;
+        self.color_picker_node = None;
         if let Some(r) = self.renderer.as_mut() {
             r.set_font_provider(Some(page.font_registry.clone()));
             r.clear_images();
@@ -1944,7 +1962,105 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             // Клик по track ниже thumb-а — прыжок на страницу вниз.
                             self.scroll_by_smooth(page_step(vh));
                         }
-                        scrollbar::TrackClick::None => {}
+                        scrollbar::TrackClick::None => {
+                            // Dismiss validation tooltip on any non-scrollbar click.
+                            self.validation_tooltip = None;
+                            let scroll_y = self.scroll_y;
+
+                            // ── Color picker swatch hit ──────────────────────
+                            // Check if click lands on an open color picker swatch.
+                            // Compute swatch result inside a scoped borrow, then act.
+                            let picker_swatch_result: Option<(NodeId, [u8; 3])> = {
+                                let picker_node = self.color_picker_node;
+                                picker_node.and_then(|pn| {
+                                    let anchor = forms::find_box_rect(
+                                        self.layout_box.as_ref()?,
+                                        pn,
+                                    )?;
+                                    let color = forms::hit_color_swatch(
+                                        anchor, scroll_y, x_css, y_css,
+                                    )?;
+                                    Some((pn, color))
+                                })
+                            };
+                            if let Some((pn, color)) = picker_swatch_result {
+                                self.color_picker_node = None;
+                                let css_color = forms::swatch_to_css_color(color);
+                                if let Some(src) = self.layout_source.as_mut() {
+                                    forms::set_value(&mut src.document, pn, &css_color);
+                                }
+                                self.form_state.entry(pn).or_default().value = css_color;
+                                self.relayout();
+                                return;
+                            }
+                            // Any click outside the picker closes it.
+                            self.color_picker_node = None;
+
+                            // ── Form control click ───────────────────────────
+                            // Compute action inside scoped borrow, then apply.
+                            let page_x = x_css + self.scroll_x;
+                            let page_y = y_css + self.scroll_y;
+                            let form_action: forms::FormClickAction = {
+                                let hit = self.layout_box.as_ref().and_then(|lb| {
+                                    hit_test(Point::new(page_x, page_y), lb)
+                                });
+                                if let (Some(result), Some(src)) =
+                                    (hit, self.layout_source.as_ref())
+                                {
+                                    forms::classify_click(&src.document, result.node)
+                                } else {
+                                    forms::FormClickAction::Nothing
+                                }
+                            };
+                            match form_action {
+                                forms::FormClickAction::ToggleCheckbox(id) => {
+                                    if let Some(src) = self.layout_source.as_mut() {
+                                        forms::toggle_checkbox(&mut src.document, id);
+                                    }
+                                    self.relayout();
+                                }
+                                forms::FormClickAction::ToggleRadio {
+                                    clicked,
+                                    _group_name: _,
+                                } => {
+                                    if let Some(src) = self.layout_source.as_mut() {
+                                        forms::toggle_checkbox(&mut src.document, clicked);
+                                    }
+                                    self.relayout();
+                                }
+                                forms::FormClickAction::OpenColorPicker(id) => {
+                                    self.color_picker_node = Some(id);
+                                    if let Some(w) = self.window.as_ref() {
+                                        w.request_redraw();
+                                    }
+                                }
+                                forms::FormClickAction::SubmitForm(submit_node) => {
+                                    let err = {
+                                        match (&self.layout_box, &self.layout_source) {
+                                            (Some(lb), Some(src)) => {
+                                                forms::find_validation_error(
+                                                    lb,
+                                                    &src.document,
+                                                    &self.form_state,
+                                                )
+                                            }
+                                            _ => None,
+                                        }
+                                    };
+                                    if let Some((_node, rect, msg)) = err {
+                                        self.validation_tooltip = Some((rect, msg));
+                                        if let Some(w) = self.window.as_ref() {
+                                            w.request_redraw();
+                                        }
+                                    } else {
+                                        eprintln!(
+                                            "[forms] submit {submit_node:?}: OK (Phase 0: no network POST)"
+                                        );
+                                    }
+                                }
+                                forms::FormClickAction::Nothing => {}
+                            }
+                        }
                     }
                 } else {
                     // Released — завершаем drag (если он был).
@@ -2118,6 +2234,24 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf = combined;
                 }
 
+                // Forms: validation tooltip and color picker overlays.
+                let vp_w = self.viewport_width_css();
+                if let Some((anchor, msg)) = &self.validation_tooltip {
+                    let mut tt = forms::build_validation_tooltip(
+                        *anchor, msg, self.scroll_y, vp_w,
+                    );
+                    tt.append(&mut overlay_buf);
+                    overlay_buf = tt;
+                }
+                if let (Some(picker_node), Some(lb)) =
+                    (self.color_picker_node, &self.layout_box)
+                    && let Some(anchor) = forms::find_box_rect(lb, picker_node)
+                {
+                    let mut picker = forms::build_color_picker(anchor, self.scroll_y, vp_w);
+                    picker.append(&mut overlay_buf);
+                    overlay_buf = picker;
+                }
+
                 // Compositor offload: если есть активные анимации с opacity/transform —
                 // пересобираем display list из layout_box с overrides, минуя relayout.
                 // color/background-color остаются в anim_frame на будущее (требуют relayout).
@@ -2228,20 +2362,20 @@ impl Lumen {
     /// Сохранить текущую страницу в bfcache и стек навигации,
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
+    #[allow(dead_code)]
     fn navigate_to(&mut self, source: PageSource) {
         // Snapshot current page into bfcache if it has an HTML source.
-        if let Some(ref ls) = self.layout_source {
-            if let Some(ref html) = ls.html_source {
-                if let Some(url) = self.source.url_str() {
-                    self.bfcache.store(BfCacheEntry {
-                        url: url.to_owned(),
-                        html: html.clone(),
-                        scroll_x: self.scroll_x,
-                        scroll_y: self.scroll_y,
-                        title: self.title.clone(),
-                    });
-                }
-            }
+        if let Some(ref ls) = self.layout_source
+            && let Some(ref html) = ls.html_source
+            && let Some(url) = self.source.url_str()
+        {
+            self.bfcache.store(BfCacheEntry {
+                url: url.to_owned(),
+                html: html.clone(),
+                scroll_x: self.scroll_x,
+                scroll_y: self.scroll_y,
+                title: self.title.clone(),
+            });
         }
         // Push current page to back stack.
         self.nav_back.push(NavEntry {

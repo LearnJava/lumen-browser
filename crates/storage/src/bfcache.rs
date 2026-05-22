@@ -71,10 +71,10 @@ impl BfCache {
         if self.entries.contains_key(&url) {
             // Move to back (refresh LRU position).
             self.order.retain(|u| u != &url);
-        } else if self.order.len() >= self.max_size {
-            if let Some(evicted) = self.order.pop_front() {
-                self.entries.remove(&evicted);
-            }
+        } else if self.order.len() >= self.max_size
+            && let Some(evicted) = self.order.pop_front()
+        {
+            self.entries.remove(&evicted);
         }
         self.order.push_back(url.clone());
         self.entries.insert(url, entry);

@@ -27,7 +27,7 @@ pub use animation::{
 pub use box_tree::{
     apply_container_styles,
     collect_background_image_requests, collect_image_requests, layout, layout_measured,
-    layout_measured_hyp, BoxKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
+    layout_measured_hyp, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
 };
 pub use property_trees::{
     compute_local_transform, forward_box_transform, transform_fns_to_matrix,
