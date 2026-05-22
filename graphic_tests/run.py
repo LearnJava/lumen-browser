@@ -72,6 +72,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('28', '28-css-containment.html', 2.0, 'CSS Containment: contain:size (height=0) · contain:paint (clip) · contain:layout · contain:strict'),
     ('29', '29-container-queries.html', 2.0, '@container queries: min-width applies/not · named container · max-width'),
     ('30', '30-css-filter.html',        3.0, 'CSS filter: grayscale/sepia/brightness/invert/contrast/saturate/opacity/blur/hue-rotate'),
+    ('31', '31-clip-path.html',          3.0, 'clip-path: inset/circle/ellipse/polygon bounding-box clip'),
 ]
 
 # --- PNG reader (stdlib only) ---

@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>TEST-31: clip-path</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f {
+    background: #1a1a2e;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 40px;
+    overflow: hidden;
+  }
+
+  /* Row 1 — inset() clips */
+  .row { display: flex; gap: 20px; margin-bottom: 40px; }
+  .box {
+    width: 140px; height: 100px;
+    background: #e63946;
+    flex-shrink: 0;
+  }
+  .inset-0  { clip-path: inset(0px); }
+  .inset-10 { clip-path: inset(10px); }
+  .inset-20 { clip-path: inset(20px); }
+  .inset-tb { clip-path: inset(10px 30px); }
+  .inset-trbl { clip-path: inset(0px 40px 30px 20px); }
+
+  /* Row 2 — circle() */
+  .circle-box {
+    width: 120px; height: 120px;
+    background: #457b9d;
+    flex-shrink: 0;
+  }
+  .circle-def  { clip-path: circle(40px); }
+  .circle-50   { clip-path: circle(50px); }
+  .circle-at   { clip-path: circle(30px at 30px 30px); }
+
+  /* Row 3 — ellipse() */
+  .ellipse-box {
+    width: 160px; height: 100px;
+    background: #2a9d8f;
+    flex-shrink: 0;
+  }
+  .ellipse-def { clip-path: ellipse(60px 30px); }
+  .ellipse-at  { clip-path: ellipse(50px 20px at 60px 40px); }
+
+  /* Row 4 — polygon() */
+  .poly-box {
+    width: 140px; height: 140px;
+    background: #e9c46a;
+    flex-shrink: 0;
+  }
+  .poly-tri  { clip-path: polygon(70px 0px, 140px 140px, 0px 140px); }
+  .poly-rect { clip-path: polygon(20px 20px, 120px 20px, 120px 120px, 20px 120px); }
+
+  /* Row 5 — clip-path + overflow:hidden combo */
+  .combo-box {
+    width: 140px; height: 100px;
+    background: #f4a261;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+  .combo-clip { clip-path: inset(15px); }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- Row 1: inset() -->
+  <div class="row">
+    <div class="box inset-0"></div>
+    <div class="box inset-10"></div>
+    <div class="box inset-20"></div>
+    <div class="box inset-tb"></div>
+    <div class="box inset-trbl"></div>
+  </div>
+
+  <!-- Row 2: circle() -->
+  <div class="row">
+    <div class="circle-box circle-def"></div>
+    <div class="circle-box circle-50"></div>
+    <div class="circle-box circle-at"></div>
+  </div>
+
+  <!-- Row 3: ellipse() -->
+  <div class="row">
+    <div class="ellipse-box ellipse-def"></div>
+    <div class="ellipse-box ellipse-at"></div>
+  </div>
+
+  <!-- Row 4: polygon() -->
+  <div class="row">
+    <div class="poly-box poly-tri"></div>
+    <div class="poly-box poly-rect"></div>
+  </div>
+
+  <!-- Row 5: clip-path + overflow:hidden combo -->
+  <div class="row">
+    <div class="combo-box combo-clip"></div>
+    <div class="combo-box"></div>
+  </div>
+
+</div>
+</body>
+</html>

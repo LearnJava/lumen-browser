@@ -11,7 +11,7 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame,
     BackgroundClip, BackgroundImage, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
-    Color, ContainFlags, CssColor, FilterFn, FontStyle, FontWeight,
+    ClipPath, Color, ContainFlags, CssColor, FilterFn, FontStyle, FontWeight,
     GradientStop, ImageRendering, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent,
@@ -869,6 +869,57 @@ fn overflow_clips(o: Overflow) -> bool {
 /// prevents pixel bleed if the renderer's actual advance differs slightly.
 const ELLIPSIS_EM: f32 = 0.65;
 
+/// CSS Masking L1 §9 — bounding-box rect for a `clip-path` shape relative to
+/// the element's border-box `r`. Phase 0: non-rect shapes use their bounding
+/// box as an approximation; full polygon masking is deferred.
+fn clip_path_to_rect(clip: &ClipPath, r: Rect) -> Rect {
+    match clip {
+        ClipPath::Inset(sides) => {
+            let (top, right, bottom, left) = match sides.as_slice() {
+                [a]          => (*a, *a, *a, *a),
+                [tb, rl]     => (*tb, *rl, *tb, *rl),
+                [t, rl, b]   => (*t, *rl, *b, *rl),
+                [t, ri, b, l] => (*t, *ri, *b, *l),
+                _            => (0.0, 0.0, 0.0, 0.0),
+            };
+            Rect::new(
+                r.x + left,
+                r.y + top,
+                (r.width - left - right).max(0.0),
+                (r.height - top - bottom).max(0.0),
+            )
+        }
+        ClipPath::Circle { radius, center } => {
+            let (cx, cy) = center
+                .map(|(x, y)| (r.x + x, r.y + y))
+                .unwrap_or((r.x + r.width * 0.5, r.y + r.height * 0.5));
+            Rect::new(cx - radius, cy - radius, 2.0 * radius, 2.0 * radius)
+        }
+        ClipPath::Ellipse { rx, ry, center } => {
+            let (cx, cy) = center
+                .map(|(x, y)| (r.x + x, r.y + y))
+                .unwrap_or((r.x + r.width * 0.5, r.y + r.height * 0.5));
+            Rect::new(cx - rx, cy - ry, 2.0 * rx, 2.0 * ry)
+        }
+        ClipPath::Polygon(vertices) => {
+            if vertices.is_empty() {
+                return r;
+            }
+            let mut mn_x = f32::MAX;
+            let mut mn_y = f32::MAX;
+            let mut mx_x = f32::MIN;
+            let mut mx_y = f32::MIN;
+            for (vx, vy) in vertices {
+                mn_x = mn_x.min(r.x + vx);
+                mn_y = mn_y.min(r.y + vy);
+                mx_x = mx_x.max(r.x + vx);
+                mx_y = mx_y.max(r.y + vy);
+            }
+            Rect::new(mn_x, mn_y, (mx_x - mn_x).max(0.0), (mx_y - mn_y).max(0.0))
+        }
+    }
+}
+
 /// Returns the Unicode string for a CSS `text-emphasis-style` symbol.
 /// Returns empty string for `None`.
 fn emphasis_mark_str(style: &TextEmphasisStyle) -> &str {
@@ -1083,6 +1134,14 @@ fn box_layer_ops(b: &LayoutBox) -> (Vec<DisplayCommand>, Vec<DisplayCommand>) {
         return (pre, post);
     }
     let s = &b.style;
+
+    // CSS Masking L1 §9: clip-path is the outermost clip — applied before all
+    // other layer effects so it masks the final painted output of the element.
+    if let Some(clip) = &s.clip_path {
+        let cr = clip_path_to_rect(clip, b.rect);
+        pre.push(DisplayCommand::PushClipRect { rect: cr });
+        post.push(DisplayCommand::PopClip);
+    }
 
     // CSS Containment L3 §3.5: contain:paint clips content to border box.
     let paint_contain = s.contain.0 & ContainFlags::PAINT.0 != 0;
@@ -1788,6 +1847,14 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             // CSS Masking L1 §4: mask-image wraps the entire element (opacity+transform+content).
             // Emitted outermost so the mask applies to the fully composited element.
             let has_mask = emit_push_mask(out, b);
+            // CSS Masking L1 §9: clip-path clips the fully composited element.
+            let has_clip_path = if let Some(clip) = &b.style.clip_path {
+                let cr = clip_path_to_rect(clip, b.rect);
+                out.push(DisplayCommand::PushClipRect { rect: cr });
+                true
+            } else {
+                false
+            };
             // CSS Color L3 §3: opacity < 1.0 creates compositing layer.
             let has_opacity = b.style.opacity < 1.0; // >0.0 already checked above
             if has_opacity {
@@ -1882,6 +1949,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             }
             if has_opacity {
                 out.push(DisplayCommand::PopOpacity);
+            }
+            if has_clip_path {
+                out.push(DisplayCommand::PopClip);
             }
             if has_mask {
                 out.push(DisplayCommand::PopMask);
@@ -5182,5 +5252,80 @@ mod tests {
             .filter(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "*"))
             .count();
         assert_eq!(mark_count, 3, "три символа → три mark '*'");
+    }
+
+    // ── clip-path ──────────────────────────────────────────────────────────
+
+    #[test]
+    fn clip_path_inset_1() {
+        use super::clip_path_to_rect;
+        use lumen_layout::ClipPath;
+        let r = Rect::new(10.0, 20.0, 100.0, 80.0);
+        let clip = ClipPath::Inset(vec![5.0]);
+        let cr = clip_path_to_rect(&clip, r);
+        assert_eq!(cr, Rect::new(15.0, 25.0, 90.0, 70.0));
+    }
+
+    #[test]
+    fn clip_path_inset_4() {
+        use super::clip_path_to_rect;
+        use lumen_layout::ClipPath;
+        let r = Rect::new(0.0, 0.0, 200.0, 100.0);
+        // top=10 right=20 bottom=30 left=40
+        let clip = ClipPath::Inset(vec![10.0, 20.0, 30.0, 40.0]);
+        let cr = clip_path_to_rect(&clip, r);
+        assert_eq!(cr, Rect::new(40.0, 10.0, 140.0, 60.0));
+    }
+
+    #[test]
+    fn clip_path_circle_default_center() {
+        use super::clip_path_to_rect;
+        use lumen_layout::ClipPath;
+        let r = Rect::new(0.0, 0.0, 100.0, 60.0);
+        let clip = ClipPath::Circle { radius: 25.0, center: None };
+        let cr = clip_path_to_rect(&clip, r);
+        // center = (50, 30); bounding box = (25, 5, 50, 50)
+        assert_eq!(cr, Rect::new(25.0, 5.0, 50.0, 50.0));
+    }
+
+    #[test]
+    fn clip_path_ellipse_explicit_center() {
+        use super::clip_path_to_rect;
+        use lumen_layout::ClipPath;
+        let r = Rect::new(10.0, 10.0, 200.0, 100.0);
+        let clip = ClipPath::Ellipse { rx: 40.0, ry: 20.0, center: Some((100.0, 50.0)) };
+        let cr = clip_path_to_rect(&clip, r);
+        // cx = 10+100=110, cy = 10+50=60
+        assert_eq!(cr, Rect::new(70.0, 40.0, 80.0, 40.0));
+    }
+
+    #[test]
+    fn clip_path_polygon_bounding_box() {
+        use super::clip_path_to_rect;
+        use lumen_layout::ClipPath;
+        let r = Rect::new(0.0, 0.0, 200.0, 200.0);
+        // triangle: (100,0) (200,200) (0,200)
+        let clip = ClipPath::Polygon(vec![(100.0, 0.0), (200.0, 200.0), (0.0, 200.0)]);
+        let cr = clip_path_to_rect(&clip, r);
+        assert_eq!(cr, Rect::new(0.0, 0.0, 200.0, 200.0));
+    }
+
+    #[test]
+    fn clip_path_emits_push_pop_clip() {
+        // clip-path:inset(10px) on a div must emit PushClipRect/PopClip
+        let dl = build(
+            "<div></div>",
+            "div { width:100px; height:50px; clip-path:inset(10px); background:red; }",
+        );
+        let push_count = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::PushClipRect { .. }))
+            .count();
+        assert!(push_count >= 1, "clip-path:inset должен эмитить PushClipRect");
+        let pop_count = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::PopClip))
+            .count();
+        assert_eq!(push_count, pop_count, "Push/Pop должны быть сбалансированы");
     }
 }
