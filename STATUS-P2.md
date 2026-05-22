@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: animation-transition-engine  branch: animation-transition-engine
+Next step: export TransitionScheduler from lib.rs, wire into main.rs frame loop  crates/shell/src/main.rs:2176
 
 CSS rule: P2 does NOT implement CSS properties. P4 owns all CSS.
   P2 writes rendering primitives and GPU pipelines only.

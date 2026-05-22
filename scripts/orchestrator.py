@@ -26,6 +26,7 @@ from pathlib import Path
 
 # Корень проекта — два уровня вверх от scripts/
 PROJECT_DIR = Path(__file__).resolve().parent.parent
+SCRIPTS_DIR = Path(__file__).resolve().parent
 
 
 def log(developer: str, message: str):
@@ -49,11 +50,11 @@ def has_tasks(developer: str) -> bool:
 
 
 def stop_file_path(developer: str) -> Path:
-    return PROJECT_DIR / f".stop-{developer}"
+    return SCRIPTS_DIR / f".stop-{developer}"
 
 
 def jobstatus_path(developer: str) -> Path:
-    return PROJECT_DIR / f".jobstatus-{developer}"
+    return SCRIPTS_DIR / f".jobstatus-{developer}"
 
 
 def set_jobstatus(developer: str, status: str, detail: str = ""):
