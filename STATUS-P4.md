@@ -1,4 +1,5 @@
-In progress: —
+In progress: border-radius elliptical (rx≠ry)  branch: p4-border-radius-elliptical
+Next step: commit + merge  crates/engine/layout/src/style.rs, crates/engine/paint/src/display_list.rs, crates/engine/paint/src/renderer.rs
 
 Next:
 
