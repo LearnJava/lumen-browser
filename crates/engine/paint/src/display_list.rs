@@ -12,7 +12,7 @@ use lumen_layout::{
     BackgroundClip, BackgroundImage, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, FilterFn, FontStyle, FontWeight,
     FormControlKind,
-    GradientStop, ImageRendering, ParsedGradient,
+    GradientStop, ImageRendering, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, Position, PositionComponent,
     StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness,
@@ -2056,6 +2056,70 @@ fn emit_form_control_indicator(b: &LayoutBox, kind: &FormControlKind, out: &mut 
     });
 }
 
+/// CSS Lists L3 §2.1 — renders the `::marker` pseudo-element.
+/// Bullet types (disc/circle/square) are drawn as geometric shapes to avoid
+/// relying on specific Unicode glyphs in the bundled font.
+/// Counter types (decimal/roman/alpha/greek) are rendered as text.
+fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
+    let BoxKind::Marker { ref text, list_style_type, .. } = b.kind else { return };
+    if !is_paint_visible(b) {
+        return;
+    }
+    let s = &b.style;
+    let color = s.color;
+    let em = s.font_size;
+    let cx = b.rect.x + b.rect.width * 0.5;
+    let cy = b.rect.y + b.rect.height * 0.5;
+    match list_style_type {
+        ListStyleType::Disc => {
+            // Filled circle ~0.4em in diameter, centered in marker rect.
+            let d = em * 0.40;
+            let r = d * 0.5;
+            let rect = Rect::new(cx - r, cy - r, d, d);
+            let radii = CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r };
+            out.push(DisplayCommand::FillRoundedRect { rect, color, radii });
+        }
+        ListStyleType::Circle => {
+            // Hollow circle ~0.4em in diameter, border ~0.08em thick.
+            let d = em * 0.40;
+            let r = d * 0.5;
+            let bw = (em * 0.08).max(1.0);
+            let rect = Rect::new(cx - r, cy - r, d, d);
+            let radii = CornerRadii { tl: r, tl_y: r, tr: r, tr_y: r, br: r, br_y: r, bl: r, bl_y: r };
+            out.push(DisplayCommand::DrawBorder {
+                rect,
+                widths: [bw; 4],
+                colors: [color; 4],
+                styles: [BorderStyle::Solid; 4],
+                radii,
+            });
+        }
+        ListStyleType::Square => {
+            // Filled square ~0.35em side, centered in marker rect.
+            let d = em * 0.35;
+            let rect = Rect::new(cx - d * 0.5, cy - d * 0.5, d, d);
+            out.push(DisplayCommand::FillRect { rect, color });
+        }
+        _ => {
+            // Counter types: decimal, roman, alpha, greek — render as text.
+            if !text.is_empty() {
+                out.push(DisplayCommand::DrawText {
+                    rect: b.rect,
+                    text: text.clone(),
+                    font_size: em,
+                    color,
+                    font_family: s.font_family.clone(),
+                    font_weight: s.font_weight,
+                    font_style: s.font_style,
+                    font_variation_axes: s.font_variation_settings
+                        .iter().map(|a| (a.tag, a.value)).collect(),
+                    tab_size: 0.0,
+                });
+            }
+        }
+    }
+}
+
 /// Эмитит DisplayCommand-ы для одного box-а БЕЗ рекурсии в детей. Аналог
 /// тела `walk` для одного box-а.
 fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
@@ -2124,23 +2188,8 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             emit_inline_run(b, lines, out);
         }
         BoxKind::InlineBlockRow | BoxKind::InlineSpace | BoxKind::Contents => {}
-        BoxKind::Marker { text, .. } => {
-            // CSS: list-style-type, list-style-image — P4 wires marker visual style.
-            if !text.is_empty() && is_paint_visible(b) {
-                let s = &b.style;
-                out.push(DisplayCommand::DrawText {
-                    rect: b.rect,
-                    text: text.clone(),
-                    font_size: s.font_size,
-                    color: s.color,
-                    font_family: s.font_family.clone(),
-                    font_weight: s.font_weight,
-                    font_style: s.font_style,
-                    font_variation_axes: s.font_variation_settings
-                        .iter().map(|a| (a.tag, a.value)).collect(),
-                    tab_size: 0.0,
-                });
-            }
+        BoxKind::Marker { .. } => {
+            emit_list_marker(b, out);
         }
         BoxKind::FormControl { kind } => {
             if !is_paint_visible(b) {
@@ -2444,23 +2493,8 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             }
         }
         BoxKind::InlineSpace => {}
-        BoxKind::Marker { text, .. } => {
-            // CSS: list-style-type, list-style-image — P4 wires marker visual style.
-            if !text.is_empty() && is_paint_visible(b) {
-                let s = &b.style;
-                out.push(DisplayCommand::DrawText {
-                    rect: b.rect,
-                    text: text.clone(),
-                    font_size: s.font_size,
-                    color: s.color,
-                    font_family: s.font_family.clone(),
-                    font_weight: s.font_weight,
-                    font_style: s.font_style,
-                    font_variation_axes: s.font_variation_settings
-                        .iter().map(|a| (a.tag, a.value)).collect(),
-                    tab_size: 0.0,
-                });
-            }
+        BoxKind::Marker { .. } => {
+            emit_list_marker(b, out);
         }
         BoxKind::InlineRun { lines, .. } => {
             emit_inline_run(b, lines, out);
@@ -6090,5 +6124,107 @@ mod tests {
             assert!((rect.x - 138.0).abs() < 0.5, "sep_x expected ~138, got {}", rect.x);
             assert!((*rule_w - 4.0).abs() < 0.01, "rule width expected 4, got {}", rule_w);
         }
+    }
+
+    // ── CSS Lists L3 §2.1 — list marker geometric rendering ─────────────────
+
+    /// disc marker emits FillRoundedRect (filled circle), not DrawText.
+    #[test]
+    fn disc_marker_emits_filled_rounded_rect() {
+        let dl = build(
+            r#"<ul style="padding-left:32px"><li style="color:red">A</li></ul>"#,
+            "",
+        );
+        let circles: Vec<_> = dl.iter().filter_map(|c| match c {
+            DisplayCommand::FillRoundedRect { radii, .. } => Some(radii),
+            _ => None,
+        }).collect();
+        assert!(!circles.is_empty(), "disc marker must emit FillRoundedRect");
+        // All radii equal (it's a circle): tl == tl_y == tr == tr_y == ...
+        let r = circles[0];
+        assert!((r.tl - r.tl_y).abs() < 0.01, "disc radii should be equal (circle)");
+        assert!((r.tl - r.tr).abs() < 0.01, "disc radii should be equal (circle)");
+    }
+
+    /// disc marker renders no Unicode bullet text.
+    #[test]
+    fn disc_marker_no_bullet_text() {
+        let dl = build(
+            r#"<ul style="padding-left:32px"><li>A</li></ul>"#,
+            "",
+        );
+        let bullet_texts: Vec<_> = dl.iter().filter_map(|c| match c {
+            DisplayCommand::DrawText { text, .. } if text.contains('\u{2022}') => Some(text.as_str()),
+            _ => None,
+        }).collect();
+        assert!(bullet_texts.is_empty(), "disc should not render Unicode bullet •");
+    }
+
+    /// circle marker emits DrawBorder (hollow circle outline), not DrawText.
+    #[test]
+    fn circle_marker_emits_draw_border() {
+        let dl = build(
+            r#"<ul style="list-style-type:circle;padding-left:32px"><li>A</li></ul>"#,
+            "",
+        );
+        let borders: Vec<_> = dl.iter().filter_map(|c| match c {
+            DisplayCommand::DrawBorder { radii, .. } if radii.tl > 0.0 => Some(radii),
+            _ => None,
+        }).collect();
+        assert!(!borders.is_empty(), "circle marker must emit DrawBorder with rounded corners");
+    }
+
+    /// square marker emits FillRect (filled square), not DrawText.
+    #[test]
+    fn square_marker_emits_fill_rect() {
+        let dl = build(
+            r#"<ul style="list-style-type:square;padding-left:32px"><li>A</li></ul>"#,
+            "",
+        );
+        // FillRect count: one for the square marker (li has no background by default)
+        // We just check at least one FillRect exists from the square marker.
+        let rects: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRect { .. })).collect();
+        assert!(!rects.is_empty(), "square marker must emit FillRect");
+    }
+
+    /// decimal (ordered) marker renders as DrawText with counter string.
+    /// Note: Lumen has no UA stylesheet, so list-style-type must be set explicitly.
+    #[test]
+    fn decimal_marker_emits_draw_text() {
+        let dl = build(
+            r#"<ol style="list-style-type:decimal;padding-left:32px"><li>A</li><li>B</li></ol>"#,
+            "",
+        );
+        let counter_texts: Vec<_> = dl.iter().filter_map(|c| match c {
+            DisplayCommand::DrawText { text, .. } if text.starts_with("1.") || text.starts_with("2.") => Some(text.as_str()),
+            _ => None,
+        }).collect();
+        assert_eq!(counter_texts.len(), 2, "2 decimal markers should produce 2 DrawText commands");
+    }
+
+    /// list-style-type:none produces no marker output.
+    #[test]
+    fn list_style_none_no_marker() {
+        let dl = build(
+            r#"<ul style="list-style-type:none;padding-left:32px"><li>A</li></ul>"#,
+            "",
+        );
+        // No FillRoundedRect from markers (li has no background), no DrawBorder with positive radii from markers.
+        let circles: Vec<_> = dl.iter().filter(|c| matches!(c, DisplayCommand::FillRoundedRect { .. })).collect();
+        assert!(circles.is_empty(), "list-style-type:none should not emit any marker shape");
+    }
+
+    /// lower-alpha marker renders letter counter text (explicit list-style-type — no UA stylesheet).
+    #[test]
+    fn lower_alpha_marker_emits_text() {
+        let dl = build(
+            r#"<ul style="list-style-type:lower-alpha;padding-left:32px"><li>A</li><li>B</li></ul>"#,
+            "",
+        );
+        let alpha_texts: Vec<_> = dl.iter().filter_map(|c| match c {
+            DisplayCommand::DrawText { text, .. } if text.starts_with("a.") || text.starts_with("b.") => Some(text.as_str()),
+            _ => None,
+        }).collect();
+        assert_eq!(alpha_texts.len(), 2, "lower-alpha markers: expected 'a. ' and 'b. '");
     }
 }

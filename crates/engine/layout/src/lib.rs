@@ -11308,8 +11308,10 @@ mod tests {
         let li = ul.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
         let marker = li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. }));
         assert!(marker.is_some(), "list-item must have a ::marker child");
-        if let BoxKind::Marker { text, position } = &marker.unwrap().kind {
-            assert_eq!(text, "\u{2022} ", "default disc marker text");
+        if let BoxKind::Marker { text, position, list_style_type } = &marker.unwrap().kind {
+            // Disc renders geometrically — marker_text returns "" for bullet types.
+            assert!(text.is_empty(), "disc marker text must be empty (geometric rendering)");
+            assert_eq!(*list_style_type, ListStyleType::Disc, "default list-style-type is disc");
             assert_eq!(*position, ListStylePosition::Outside);
         }
     }
