@@ -1,6 +1,5 @@
-In progress: —
-
-Next step: —
+In progress: Quirks mode application — body percentage height  branch: p1-quirks-body-height
+Next step: add doc: &Document to lay_out, thread through call sites  box_tree.rs:1299
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
