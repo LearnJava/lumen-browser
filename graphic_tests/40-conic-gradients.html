@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { margin: 0; background: #ff00ff; width: 1024px; height: 720px; }
+  .__f { background: #1a1a2e; width: 1022px; height: 718px; margin: 1px; padding: 20px; overflow: hidden; box-sizing: border-box; }
+
+  .row { display: flex; gap: 16px; margin-bottom: 16px; }
+
+  /* Default conic — from 0deg (top) at center */
+  .c-default      { width: 180px; height: 180px; background: conic-gradient(#e63946, #f1faee, #a8dadc, #457b9d, #1d3557, #e63946); }
+
+  /* Two-color simple sweep */
+  .c-two-color    { width: 180px; height: 180px; background: conic-gradient(#ff006e, #3a86ff); }
+
+  /* `from <angle>` — rotated start */
+  .c-from-90      { width: 180px; height: 180px; background: conic-gradient(from 90deg, #f72585, #7209b7, #4cc9f0, #f72585); }
+
+  /* `at <pos>` — off-center pivot */
+  .c-at-corner    { width: 180px; height: 180px; background: conic-gradient(at 25% 25%, #fb5607, #ffbe0b, #8338ec, #fb5607); }
+
+  /* Explicit angle stops */
+  .c-deg-stops    { width: 180px; height: 180px; background: conic-gradient(red 0deg, yellow 90deg, green 180deg, blue 270deg, red 360deg); }
+
+  /* Pie chart segments (sharp stops) */
+  .c-pie          { width: 180px; height: 180px; background: conic-gradient(
+                      #e63946 0deg,    #e63946 90deg,
+                      #ffbe0b 90deg,   #ffbe0b 180deg,
+                      #43aa8b 180deg,  #43aa8b 270deg,
+                      #3a86ff 270deg,  #3a86ff 360deg); }
+
+  /* Repeating conic — 4 wedges per revolution */
+  .c-repeating-4  { width: 180px; height: 180px; background: repeating-conic-gradient(#1a1a2e 0deg, #1a1a2e 45deg, #f1faee 45deg, #f1faee 90deg); }
+
+  /* Repeating conic — 8 wedges per revolution */
+  .c-repeating-8  { width: 180px; height: 180px; background: repeating-conic-gradient(#264653 0deg, #264653 22.5deg, #e9c46a 22.5deg, #e9c46a 45deg); }
+
+  /* Rectangular box — angles in box-coordinate space */
+  .c-wide         { width: 360px; height: 180px; background: conic-gradient(from 0deg, #d62828, #f77f00, #fcbf49, #eae2b7, #d62828); }
+</style>
+</head>
+<body>
+<div class="__f">
+  <div class="row">
+    <div class="c-default"></div>
+    <div class="c-two-color"></div>
+    <div class="c-from-90"></div>
+    <div class="c-at-corner"></div>
+  </div>
+  <div class="row">
+    <div class="c-deg-stops"></div>
+    <div class="c-pie"></div>
+    <div class="c-repeating-4"></div>
+    <div class="c-repeating-8"></div>
+  </div>
+  <div class="row">
+    <div class="c-wide"></div>
+  </div>
+</div>
+</body>
+</html>

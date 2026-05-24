@@ -739,6 +739,11 @@ struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> }
 /// Radial gradient: p0=(cx,cy) is center in UV space; p1=(rx,ry) are
 /// semi-axes (farthest-corner size) in UV space.
 /// t = length((uv-p0)/p1)  (0 at center, 1 at ellipse edge).
+///
+/// Conic gradient (CSS Images L4 §3.7): p0=(cx,cy) is center in UV space;
+/// p1=(w,h) is box size in CSS px (for box-space angle calculation);
+/// `param0` is starting angle in radians (0 = top, clockwise).
+/// t = (atan2(dx_box, -dy_box) - param0) / (2π), wrapped to [0,1].
 const GRADIENT_SHADER_SRC: &str = r#"
 struct ViewUniforms { viewport: vec2<f32> }
 @group(0) @binding(0) var<uniform> vu: ViewUniforms;
@@ -754,7 +759,7 @@ struct GradParams {
     n_stops:   u32,
     kind:      u32,
     repeating: u32,
-    _pad:      u32,
+    param0:    f32,
     stops: array<GradStop, 16>,
 }
 @group(1) @binding(0) var<uniform> gp: GradParams;
@@ -800,9 +805,34 @@ fn sample_grad(t_in: f32) -> vec4<f32> {
         let d = gp.p1 - gp.p0;
         let len_sq = dot(d, d);
         t = select(0.0, dot(in.uv - gp.p0, d) / len_sq, len_sq > 0.0001);
-    } else {
+    } else if gp.kind == 1u {
         let rel = (in.uv - gp.p0) / gp.p1;
         t = length(rel);
+    } else {
+        // Conic: convert UV offset back to box-space pixels so the polar
+        // angle is computed in the box coordinate system (CSS spec).
+        let dx = (in.uv.x - gp.p0.x) * gp.p1.x;
+        let dy = (in.uv.y - gp.p0.y) * gp.p1.y;
+        // CSS convention: 0° = top (-y), angles grow clockwise.
+        // atan2(dx, -dy) gives the angle measured CW from -y axis.
+        let two_pi = 6.2831853;
+        let raw = atan2(dx, -dy) - gp.param0;
+        let frac = raw / two_pi;
+        let norm = frac - floor(frac);  // [0, 1) — one full revolution
+        if gp.repeating != 0u && gp.n_stops > 1u {
+            // Repeating conic (CSS Images L4 §3.7): stops tile within one
+            // revolution such that consecutive iterations align edge-to-edge.
+            let last = gp.n_stops - 1u;
+            let span = gp.stops[last].pos - gp.stops[0].pos;
+            if span > 0.0001 {
+                let mod_s = norm - floor(norm / span) * span;
+                t = gp.stops[0].pos + mod_s;
+            } else {
+                t = norm;
+            }
+        } else {
+            t = norm;
+        }
     }
     return sample_grad(t);
 }
@@ -917,22 +947,25 @@ struct GradStopCpu {
 }
 
 /// CPU-side зеркало WGSL `GradParams` (32 bytes header + 16×32 bytes stops = 544 bytes).
-/// Используется как uniform buffer для одного DrawLinearGradient/DrawRadialGradient.
+/// Используется как uniform buffer для одного DrawLinearGradient/DrawRadialGradient/DrawConicGradient.
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct GradParamsCpu {
-    /// Linear: (sx, sy, ex, ey) — gradient-line endpoints in UV [0,1].
+    /// Linear: (sx, sy) — gradient-line start in UV [0,1].
     /// Radial: (cx, cy) — center in UV [0,1].
+    /// Conic:  (cx, cy) — center in UV [0,1].
     p0: [f32; 2],
     /// Linear: (ex, ey) — gradient-line end (used with p0 start).
     /// Radial: (rx, ry) — farthest-corner semi-axes in UV [0,1].
+    /// Conic:  (w, h) — box dimensions in CSS pixels (for box-space angle).
     p1: [f32; 2],
     n_stops: u32,
-    /// 0 = linear, 1 = radial.
+    /// 0 = linear, 1 = radial, 2 = conic.
     kind: u32,
     /// 0 = clamp, 1 = repeating (wrap t via fract).
     repeating: u32,
-    _pad: u32,
+    /// Conic: starting angle in radians (0 = top, CW). Unused for linear/radial.
+    param0: f32,
     stops: [GradStopCpu; 16],
 }
 
@@ -3479,7 +3512,7 @@ impl Renderer {
                     let scrolled = translate_rect(*rect, dx, dy);
                     let (p0, p1) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
                     let resolved = resolve_gradient_stops(stops, 1.0);
-                    let params = build_grad_params(&resolved, p0, p1, 0, *repeating);
+                    let params = build_grad_params(&resolved, p0, p1, 0, *repeating, 0.0);
                     let v_start = grad_vertices.len() as u32;
                     push_grad_quad(&mut grad_vertices, scrolled);
                     if let Some(m) = transform_stack.last() {
@@ -3501,7 +3534,32 @@ impl Renderer {
                     let scrolled = translate_rect(*rect, dx, dy);
                     let (p0, p1) = radial_gradient_uv_params(*center_x_pct, *center_y_pct);
                     let resolved = resolve_gradient_stops(stops, 1.0);
-                    let params = build_grad_params(&resolved, p0, p1, 1, *repeating);
+                    let params = build_grad_params(&resolved, p0, p1, 1, *repeating, 0.0);
+                    let v_start = grad_vertices.len() as u32;
+                    push_grad_quad(&mut grad_vertices, scrolled);
+                    if let Some(m) = transform_stack.last() {
+                        apply_affine_to_grad_verts(&mut grad_vertices[v_start as usize..], m);
+                    }
+                    let v_count = grad_vertices.len() as u32 - v_start;
+                    let grad_batch_idx = grad_params.len() as u32;
+                    grad_params.push(params);
+                    draw_ops.push(DrawOp::Gradient { v_start, v_count, grad_batch_idx });
+                }
+                // CSS Images L4 §3.7 — GPU conic gradient pipeline.
+                DisplayCommand::DrawConicGradient { rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating } => {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
+                    if stops.is_empty() {
+                        continue;
+                    }
+                    let scrolled = translate_rect(*rect, dx, dy);
+                    // p0 = center (UV); p1 = box size in CSS px (for box-space angle).
+                    let p0 = [*center_x_pct, *center_y_pct];
+                    let p1 = [scrolled.width.max(1e-6), scrolled.height.max(1e-6)];
+                    let from_angle_rad = from_angle_deg.to_radians();
+                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    let params = build_grad_params(&resolved, p0, p1, 2, *repeating, from_angle_rad);
                     let v_start = grad_vertices.len() as u32;
                     push_grad_quad(&mut grad_vertices, scrolled);
                     if let Some(m) = transform_stack.last() {
@@ -3571,7 +3629,8 @@ impl Renderer {
                     level_first[current_level] = true;
                 }
                 DisplayCommand::PushMaskLinearGradient { rect, .. }
-                | DisplayCommand::PushMaskRadialGradient { rect, .. } => {
+                | DisplayCommand::PushMaskRadialGradient { rect, .. }
+                | DisplayCommand::PushMaskConicGradient { rect, .. } => {
                     flush_batch!();
                     // Gradient masks: Phase 0 fallback — open offscreen level,
                     // PopMask composites at alpha=1.0 (no actual gradient masking).
@@ -4628,12 +4687,16 @@ fn radial_gradient_uv_params(cx_pct: f32, cy_pct: f32) -> ([f32; 2], [f32; 2]) {
 }
 
 /// Build a `GradParamsCpu` uniform from resolved stops + pre-computed UV params.
+///
+/// `param0` is used by the conic gradient (kind = 2) to pass the starting
+/// angle in radians (0 = top, clockwise); for linear/radial it is unused.
 fn build_grad_params(
     resolved: &[(f32, [f32; 4])],
     p0: [f32; 2],
     p1: [f32; 2],
     kind: u32,
     repeating: bool,
+    param0: f32,
 ) -> GradParamsCpu {
     let n = resolved.len().min(16);
     let zero_stop = GradStopCpu { color: [0.0; 4], pos: 0.0, _p0: 0.0, _p1: 0.0, _p2: 0.0 };
@@ -4647,7 +4710,7 @@ fn build_grad_params(
         n_stops: n as u32,
         kind,
         repeating: if repeating { 1 } else { 0 },
-        _pad: 0,
+        param0,
         stops,
     }
 }

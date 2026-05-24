@@ -251,6 +251,22 @@ pub enum DisplayCommand {
         stops: Vec<GradientStop>,
         repeating: bool,
     },
+    /// CSS Images L4 §3.7 — `conic-gradient(...)`.
+    ///
+    /// Angular gradient revolving clockwise around `(center_x_pct,
+    /// center_y_pct)` in box-relative coordinates ([0,1] = [left/top,
+    /// right/bottom]). `from_angle_deg` is the starting angle in CSS
+    /// degrees (0° = top, 90° = right, clockwise). Stops' positions are
+    /// percentages where 100% = a full revolution (angle stops are
+    /// pre-converted to percent on parse).
+    DrawConicGradient {
+        rect: Rect,
+        center_x_pct: f32,
+        center_y_pct: f32,
+        from_angle_deg: f32,
+        stops: Vec<GradientStop>,
+        repeating: bool,
+    },
     /// Sprint 0 P2 stub. Открывает rect-клип: все последующие команды до
     /// парного `PopClip` рисуются только в пределах `rect`. Используется
     /// для `overflow: hidden`, `clip-path: inset(...)`. Phase 0: эмиттер
@@ -315,6 +331,15 @@ pub enum DisplayCommand {
         rect: Rect,
         center_x_pct: f32,
         center_y_pct: f32,
+        stops: Vec<GradientStop>,
+        repeating: bool,
+    },
+    /// CSS Masking L1 §4 — conic-gradient mask.
+    PushMaskConicGradient {
+        rect: Rect,
+        center_x_pct: f32,
+        center_y_pct: f32,
+        from_angle_deg: f32,
         stops: Vec<GradientStop>,
         repeating: bool,
     },
@@ -644,6 +669,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     rect.x, rect.y, rect.width, rect.height, stops.len(),
                 ));
             }
+            DisplayCommand::DrawConicGradient { rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating } => {
+                out.push_str(&format!(
+                    "DrawConicGradient ({:.2}, {:.2}, {:.2}, {:.2}) center=({center_x_pct:.2},{center_y_pct:.2}) from={from_angle_deg:.1}deg stops={} repeating={repeating}\n",
+                    rect.x, rect.y, rect.width, rect.height, stops.len(),
+                ));
+            }
             DisplayCommand::PushClipRect { rect } => {
                 out.push_str(&format!(
                     "PushClipRect ({:.2}, {:.2}, {:.2}, {:.2})\n",
@@ -711,6 +742,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             DisplayCommand::PushMaskRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
                 out.push_str(&format!(
                     "PushMaskRadialGradient ({:.2}, {:.2}, {:.2}, {:.2}) center=({:.2},{:.2}) stops={} repeating={repeating}\n",
+                    rect.x, rect.y, rect.width, rect.height, center_x_pct, center_y_pct, stops.len(),
+                ));
+            }
+            DisplayCommand::PushMaskConicGradient { rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating } => {
+                out.push_str(&format!(
+                    "PushMaskConicGradient ({:.2}, {:.2}, {:.2}, {:.2}) center=({:.2},{:.2}) from={from_angle_deg:.1}deg stops={} repeating={repeating}\n",
                     rect.x, rect.y, rect.width, rect.height, center_x_pct, center_y_pct, stops.len(),
                 ));
             }
@@ -1498,7 +1535,8 @@ fn background_clip_rect(b: &LayoutBox) -> Rect {
 /// * `Url` → `DrawBackgroundImage`
 /// * `Gradient(Linear)` → `DrawLinearGradient`
 /// * `Gradient(Radial)` → `DrawRadialGradient`
-/// * `Gradient(Unknown)` — no-op (conic/unsupported, Phase 0)
+/// * `Gradient(Conic)`  → `DrawConicGradient`
+/// * `Gradient(Unknown)` — no-op (unsupported, Phase 0)
 ///
 /// Пустой rect (width/height ≤ 0) — no-op: GPU отбракует, экономим память.
 fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox) {
@@ -1530,6 +1568,18 @@ fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox) {
                 rect: clip,
                 center_x_pct: *center_x_pct,
                 center_y_pct: *center_y_pct,
+                stops: stops.clone(),
+                repeating: *repeating,
+            });
+        }
+        BackgroundImage::Gradient(ParsedGradient::Conic {
+            center_x_pct, center_y_pct, from_angle_deg, stops, repeating
+        }) => {
+            out.push(DisplayCommand::DrawConicGradient {
+                rect: clip,
+                center_x_pct: *center_x_pct,
+                center_y_pct: *center_y_pct,
+                from_angle_deg: *from_angle_deg,
                 stops: stops.clone(),
                 repeating: *repeating,
             });
@@ -1571,6 +1621,19 @@ fn emit_push_mask(out: &mut Vec<DisplayCommand>, b: &LayoutBox) -> bool {
                 rect,
                 center_x_pct: *center_x_pct,
                 center_y_pct: *center_y_pct,
+                stops: stops.clone(),
+                repeating: *repeating,
+            });
+            true
+        }
+        BackgroundImage::Gradient(ParsedGradient::Conic {
+            center_x_pct, center_y_pct, from_angle_deg, stops, repeating
+        }) => {
+            out.push(DisplayCommand::PushMaskConicGradient {
+                rect,
+                center_x_pct: *center_x_pct,
+                center_y_pct: *center_y_pct,
+                from_angle_deg: *from_angle_deg,
                 stops: stops.clone(),
                 repeating: *repeating,
             });
@@ -3555,9 +3618,11 @@ mod tests {
                 DisplayCommand::PopTransform => "PopTransform",
                 DisplayCommand::DrawLinearGradient { .. } => "DrawLinearGradient",
                 DisplayCommand::DrawRadialGradient { .. } => "DrawRadialGradient",
+                DisplayCommand::DrawConicGradient { .. } => "DrawConicGradient",
                 DisplayCommand::PushMaskImage { .. } => "PushMaskImage",
                 DisplayCommand::PushMaskLinearGradient { .. } => "PushMaskLinearGradient",
                 DisplayCommand::PushMaskRadialGradient { .. } => "PushMaskRadialGradient",
+                DisplayCommand::PushMaskConicGradient { .. } => "PushMaskConicGradient",
                 DisplayCommand::PopMask => "PopMask",
                 DisplayCommand::PushFilter { .. } => "PushFilter",
                 DisplayCommand::PopFilter => "PopFilter",
@@ -3654,6 +3719,59 @@ mod tests {
             assert!((center_y_pct - 0.5).abs() < 0.01);
             assert_eq!(stops.len(), 2);
         }
+    }
+
+    #[test]
+    fn background_image_conic_gradient_emits_draw_conic_gradient() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 50px; height: 20px; \
+             background-image: conic-gradient(from 90deg at 30% 70%, red, blue); }",
+        );
+        let grads: Vec<&DisplayCommand> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawConicGradient { .. }))
+            .collect();
+        assert_eq!(grads.len(), 1, "expected DrawConicGradient");
+        if let DisplayCommand::DrawConicGradient {
+            center_x_pct, center_y_pct, from_angle_deg, stops, repeating, ..
+        } = grads[0]
+        {
+            assert!((center_x_pct - 0.3).abs() < 0.01);
+            assert!((center_y_pct - 0.7).abs() < 0.01);
+            assert!((from_angle_deg - 90.0).abs() < 0.1);
+            assert_eq!(stops.len(), 2);
+            assert!(!repeating);
+        }
+    }
+
+    #[test]
+    fn background_image_repeating_conic_gradient() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 50px; height: 20px; \
+             background-image: repeating-conic-gradient(red 0deg, blue 90deg); }",
+        );
+        let grads: Vec<&DisplayCommand> = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawConicGradient { .. }))
+            .collect();
+        assert_eq!(grads.len(), 1, "expected DrawConicGradient (repeating)");
+        if let DisplayCommand::DrawConicGradient { repeating, .. } = grads[0] {
+            assert!(*repeating);
+        }
+    }
+
+    #[test]
+    fn background_image_conic_gradient_serialize_includes_from_angle() {
+        let dl = build(
+            "<div>x</div>",
+            "div { width: 50px; height: 20px; \
+             background-image: conic-gradient(from 45deg, red, blue); }",
+        );
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("DrawConicGradient"), "should contain DrawConicGradient line");
+        assert!(s.contains("from=45.0deg"), "should record from-angle: {s}");
     }
 
     #[test]

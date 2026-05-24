@@ -3000,10 +3000,12 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawOutline { rect, .. }
             | DisplayCommand::DrawLinearGradient { rect, .. }
             | DisplayCommand::DrawRadialGradient { rect, .. }
+            | DisplayCommand::DrawConicGradient { rect, .. }
             | DisplayCommand::PushClipRect { rect, .. }
             | DisplayCommand::PushMaskImage { rect, .. }
             | DisplayCommand::PushMaskLinearGradient { rect, .. }
-            | DisplayCommand::PushMaskRadialGradient { rect, .. } => rect,
+            | DisplayCommand::PushMaskRadialGradient { rect, .. }
+            | DisplayCommand::PushMaskConicGradient { rect, .. } => rect,
             DisplayCommand::PopClip
             | DisplayCommand::PushOpacity { .. }
             | DisplayCommand::PopOpacity
@@ -3040,10 +3042,12 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawOutline { rect, .. }
             | DisplayCommand::DrawLinearGradient { rect, .. }
             | DisplayCommand::DrawRadialGradient { rect, .. }
+            | DisplayCommand::DrawConicGradient { rect, .. }
             | DisplayCommand::PushClipRect { rect, .. }
             | DisplayCommand::PushMaskImage { rect, .. }
             | DisplayCommand::PushMaskLinearGradient { rect, .. }
-            | DisplayCommand::PushMaskRadialGradient { rect, .. } => rect,
+            | DisplayCommand::PushMaskRadialGradient { rect, .. }
+            | DisplayCommand::PushMaskConicGradient { rect, .. } => rect,
             DisplayCommand::PopClip
             | DisplayCommand::PushOpacity { .. }
             | DisplayCommand::PopOpacity
