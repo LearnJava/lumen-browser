@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<!-- TEST-42: position:sticky — element stays in flow at its natural position
+     when the page is not scrolled. On scroll it would clamp to the inset.
+     This static test verifies: sticky element appears at flow position,
+     background painted correctly, normal-flow children below it are not shifted. -->
+<html>
+<head>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f {
+    background: #1a1a2e;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    overflow: hidden;
+    position: relative;
+  }
+
+  /* Sticky header bar — at top of scrolling container */
+  .sticky-bar {
+    position: sticky;
+    top: 10px;
+    background: #e94560;
+    width: 600px;
+    height: 60px;
+    margin: 20px auto 0;
+  }
+
+  /* Static block below to verify normal flow is unaffected */
+  .block-a {
+    background: #0f3460;
+    width: 400px;
+    height: 80px;
+    margin: 20px auto 0;
+  }
+
+  /* Sticky sidebar — left-pinned */
+  .sticky-side {
+    position: sticky;
+    left: 10px;
+    background: #533483;
+    width: 120px;
+    height: 100px;
+    margin-top: 20px;
+  }
+
+  /* Another static block */
+  .block-b {
+    background: #16213e;
+    width: 500px;
+    height: 60px;
+    margin: 20px auto 0;
+    border: 3px solid #e94560;
+  }
+
+  /* Sticky element with bottom constraint */
+  .sticky-bottom {
+    position: sticky;
+    bottom: 30px;
+    background: #f5a623;
+    width: 300px;
+    height: 50px;
+    margin: 20px auto 0;
+  }
+</style>
+</head>
+<body>
+  <div class="__f">
+    <div class="sticky-bar"></div>
+    <div class="block-a"></div>
+    <div class="sticky-side"></div>
+    <div class="block-b"></div>
+    <div class="sticky-bottom"></div>
+  </div>
+</body>
+</html>

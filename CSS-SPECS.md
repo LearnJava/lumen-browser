@@ -9,7 +9,7 @@ Legend: ✅ implemented · 🟡 parsed/stored, rendering deferred · ⬜ not sta
 
 ---
 
-## Quick stats (2026-05-24)
+## Quick stats (2026-05-24 sticky)
 
 | Status | Properties |
 |--------|-----------|
@@ -51,7 +51,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Animations L1 | [css-animations-1](https://www.w3.org/TR/css-animations-1/) | ✅ | AnimationScheduler::tick() wired in shell RedrawRequested | **#3** |
 | CSS Nesting | [css-nesting-1](https://www.w3.org/TR/css-nesting-1/) | ✅ | `&`-explicit + implicit `.foo{}`/`>.foo{}` nesting + nested `@media`/`@supports`/`@layer`/`@container`; 20 tests | **#4** |
 | CSS Display L3 (table) | [css-display-3](https://www.w3.org/TR/css-display-3/) | ✅ | BoxKind::Table + BoxKind::TableRowGroup; global col-width pass; thead/tbody/tfoot; 6 tests 2026-05-24 | **#5** |
-| CSS Positioning L3 (sticky) | [css3-positioning](https://www.w3.org/TR/css3-positioning/) | 🟡 | position:sticky + scroll listener | **#6** |
+| CSS Positioning L3 (sticky) | [css3-positioning](https://www.w3.org/TR/css3-positioning/) | ✅ | BeginStickyLayer/EndStickyLayer in DL + sticky_offset_dy/dx in renderer; 5 display-list tests + graphic test 42 2026-05-24 | **#6** |
 | CSS Positioning L3 (z-index) | [css3-positioning](https://www.w3.org/TR/css3-positioning/) | ✅ | StackingTree + PaintOrder + build_display_list_ordered wired in shell | **#7** |
 | CSS 2.1 floats | [CSS2](https://www.w3.org/TR/CSS2/) | ✅ | FloatContext placement + FloatSide/ClearSide + 10 tests | **#8** |
 | CSS Lists L3 | [css3-lists](https://www.w3.org/TR/css3-lists/) | 🟡 | list-style-type marker rendering | **#9** |
