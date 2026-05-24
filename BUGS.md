@@ -40,7 +40,7 @@ BUG-025 | FIXED 2026-05-22 | layout          | max-height does not clamp block h
 BUG-026 | FIXED 2026-05-22 | layout/paint    | <img> CSS/HTML width+height ignored — renders at natural size (remaining TEST-18 ~10%: BUG-032)
 BUG-028 | OPEN  [P3]       | shell           | relayout-on-resize + maximized window triggers BUG-027
 BUG-029 | FIXED 2026-05-21 | paint           | border-style: dotted renders square dots instead of circles
-BUG-020 | OPEN             | paint/layout    | overflow: scroll/auto — scrollbar UI не рендерится; hidden clip частично работает
+BUG-020 | OPEN             | paint/layout    | overflow: scroll/auto — scrollbar UI не рендерится; hidden/clip per-axis FIXED 2026-05-24 (box_layer_ops теперь использует BIG-сентинели для некляпируемой оси)
 BUG-006 | FIXED 2026-05-21 | layout          | table layout not implemented (td/th render as blocks)
 BUG-021 | FIXED 2026-05-22 | html-parser     | HTML bgcolor attribute ignored
 BUG-022 | FIXED 2026-05-22 | css-parser      | Quirks-mode hashless hex colors not parsed
