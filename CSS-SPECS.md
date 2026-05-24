@@ -84,7 +84,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Scroll Snap L1 | [css-scroll-snap-1](https://www.w3.org/TR/css-scroll-snap-1/) | 🟡 | shell scroll integration | **#26** |
 | CSS Multi-column L1 | [css3-multicol](https://www.w3.org/TR/css3-multicol/) | 🟡 | column-rule rendering; column-span; column-fill | **#27** |
 | CSS Containment L2/L3 | [css-contain-2](https://www.w3.org/TR/css-contain-2/) | 🟡 | content-visibility skip-content; cq* units | **#28** |
-| CSS Counter Styles L3 | [css-counter-styles-3](https://www.w3.org/TR/css-counter-styles-3/) | 🟡 | counter-reset/increment resolution; @counter-style ⬜ | **#29** |
+| CSS Counter Styles L3 | [css-counter-styles-3](https://www.w3.org/TR/css-counter-styles-3/) | 🟡 | counter-reset/increment resolution ✅ 2026-05-25; @counter-style ⬜ | **#29** |
 | CSS Box Alignment L3 | [css3-align](https://www.w3.org/TR/css3-align/) | 🟡 | justify-items/justify-self for grid | **#30** |
 | CSS Inline L3 | [css-inline-3](https://www.w3.org/TR/css-inline-3/) | 🟡 | line-height leading; baseline grid | **#31** |
 | CSS Text Decoration L4 | [css-text-decor-4](https://www.w3.org/TR/css-text-decor-4/) | 🟡 | text-emphasis rendering; text-underline-offset | **#32** |
@@ -533,15 +533,15 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `counter-reset` / `counter-increment` | 🟡 | parsed; resolution ⬜ |
-| `counter()` / `counters()` in `content` | 🟡 | parsed; rendering ⬜ |
+| `counter-reset` / `counter-increment` | ✅ | precompute_counters() pre-order DOM walk 2026-05-25 |
+| `counter()` / `counters()` in `content` | ✅ | resolved in content_to_inline_segments 2026-05-25 |
 | `@counter-style` | ⬜ | custom counter symbols |
 
 ### [T3] Content & Pseudo-element content
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `content` | 🟡 | string ✅; attr() ⬜; counter() ⬜; url() ⬜ |
+| `content` | 🟡 | string ✅; attr() ✅ 2026-05-25; counter()/counters() ✅ 2026-05-25; url() ⬜ |
 
 ### [T3] Box Alignment (grid)
 
@@ -614,9 +614,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `svmin`/`dvmin`/`lvmin`/`svmax`/`dvmax`/`lvmax` | ✅ | = vmin/vmax |
 | `cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax` | ✅ | container query units 2026-05-25 |
 | `env()` | ⬜ | |
-| `attr()` | 🟡 | string; type casting ⬜ |
+| `attr()` | 🟡 | string ✅ 2026-05-25 in content; type casting ⬜ |
 | `color-mix()` | ⬜ | CSS Color L5 |
-| `counter()`/`counters()` | 🟡 | in content; resolution ⬜ |
+| `counter()`/`counters()` | ✅ | in content; resolution 2026-05-25 |
 | `linear()` | ⬜ | CSS Easing L2 |
 
 ---

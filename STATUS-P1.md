@@ -1,5 +1,4 @@
-In progress: CSS Counters resolution CSS Lists L3 §6.4  branch: p1-css-counters
-Next step: create counters.rs CounterContext + precompute_counters()  box_tree.rs:541
+In progress: (нет)
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.

@@ -14,11 +14,13 @@
 
 pub mod animation;
 pub mod box_tree;
+pub mod counters;
 pub mod property_trees;
 pub mod snapshot;
 pub mod stacking;
 pub mod style;
 
+pub use counters::{format_counter, precompute_counters, CounterMap, CounterSnapshot};
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
@@ -12177,5 +12179,155 @@ mod tests {
             matches!(style.width, Some(Length::FitContent(Some(_)))),
             "expected FitContent(Some(200px)), got {:?}", style.width
         );
+    }
+
+    // ──────── CSS Counters resolution (CSS Lists L3 §6.4) ────────
+
+    /// Extract the text from the first InlineRun segment of a box's first child.
+    fn counter_first_inline_text(b: &LayoutBox) -> String {
+        for c in &b.children {
+            match &c.kind {
+                BoxKind::InlineRun { segments, .. } => {
+                    return segments.iter().map(|s| s.text.as_str()).collect();
+                }
+                BoxKind::Block => {
+                    let t = counter_first_inline_text(c);
+                    if !t.is_empty() {
+                        return t;
+                    }
+                }
+                _ => {}
+            }
+        }
+        String::new()
+    }
+
+    #[test]
+    fn counter_before_resolves_decimal() {
+        // div::before renders "1. " using counter(section) after counter-increment.
+        let root = lay(
+            "<div id='a'></div>",
+            "div { counter-reset: section; counter-increment: section; } \
+             div::before { content: counter(section) \". \"; display: block; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let text = counter_first_inline_text(div);
+        assert_eq!(text, "1. ", "counter(section) should resolve to '1'");
+    }
+
+    #[test]
+    fn counter_multiple_increments() {
+        // Three divs, each increment section by 1 → values 1, 2, 3.
+        let root = lay(
+            "<div id='a'></div><div id='b'></div><div id='c'></div>",
+            "body { counter-reset: section; } \
+             div { counter-increment: section; } \
+             div::before { content: counter(section); display: block; }",
+        );
+        let blocks: Vec<&LayoutBox> = root
+            .children
+            .iter()
+            .filter(|c| matches!(&c.kind, BoxKind::Block))
+            .collect();
+        assert_eq!(blocks.len(), 3);
+        assert_eq!(first_inline_text(blocks[0]), "1");
+        assert_eq!(first_inline_text(blocks[1]), "2");
+        assert_eq!(first_inline_text(blocks[2]), "3");
+    }
+
+    #[test]
+    fn counter_lower_alpha_style() {
+        let root = lay(
+            "<div id='a'></div>",
+            "div { counter-reset: s; counter-increment: s; } \
+             div::before { content: counter(s, lower-alpha); display: block; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let text = counter_first_inline_text(div);
+        assert_eq!(text, "a");
+    }
+
+    #[test]
+    fn counters_nested_decimal() {
+        // Outer ol resets "item", inner ol also resets "item" creating nested scope.
+        // Inner li::before should show "1.1" via counters(item, ".").
+        let root = lay(
+            "<ol><li><ol><li id='inner'></li></ol></li></ol>",
+            "ol { counter-reset: item; } \
+             li { counter-increment: item; } \
+             li::before { content: counters(item, \".\"); display: block; }",
+        );
+        // Walk tree to find the innermost li's ::before text.
+        fn find_text(b: &LayoutBox, depth: u32) -> Option<String> {
+            if depth == 0 { return None; }
+            for c in &b.children {
+                if let BoxKind::Block = &c.kind {
+                    // Try text in this block.
+                    let t: String = c.children.iter().flat_map(|sc| {
+                        if let BoxKind::InlineRun { segments, .. } = &sc.kind {
+                            segments.iter().map(|s| s.text.clone()).collect::<Vec<_>>()
+                        } else {
+                            vec![]
+                        }
+                    }).collect();
+                    if t.contains('.') {
+                        return Some(t);
+                    }
+                    if let Some(inner) = find_text(c, depth - 1) {
+                        return Some(inner);
+                    }
+                }
+            }
+            None
+        }
+        let text = find_text(&root, 6).unwrap_or_default();
+        assert_eq!(text, "1.1", "counters(item, '.') should give '1.1'");
+    }
+
+    #[test]
+    fn content_attr_resolves() {
+        // div::before { content: attr(data-label); } → "hello"
+        let root = lay(
+            "<div data-label=\"hello\"></div>",
+            "div::before { content: attr(data-label); display: block; }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let text = counter_first_inline_text(div);
+        assert_eq!(text, "hello");
+    }
+
+    #[test]
+    fn counter_reset_creates_new_scope() {
+        // Inner ol counter-reset creates nested scope; outer li still sees own value.
+        let root = lay(
+            "<ol><li id='outer'><ol><li id='inner'></li></ol></li></ol>",
+            "ol { counter-reset: item; } \
+             li { counter-increment: item; } \
+             li::before { content: counter(item); display: block; }",
+        );
+        // Outer li::before → "1", inner li::before → "1" (own nested scope).
+        let mut outer_text = String::new();
+        let mut inner_found = false;
+        fn collect(b: &LayoutBox, depth: u32, outer: &mut String, inner: &mut bool) {
+            if depth == 0 { return; }
+            for c in &b.children {
+                if let BoxKind::Block = &c.kind {
+                    for sc in &c.children {
+                        if let BoxKind::InlineRun { segments, .. } = &sc.kind {
+                            let t: String = segments.iter().map(|s| s.text.as_str()).collect();
+                            if !t.is_empty() && outer.is_empty() {
+                                *outer = t;
+                            } else if !t.is_empty() {
+                                *inner = true;
+                            }
+                        }
+                    }
+                    collect(c, depth - 1, outer, inner);
+                }
+            }
+        }
+        collect(&root, 5, &mut outer_text, &mut inner_found);
+        assert_eq!(outer_text, "1", "outer li counter should be 1");
+        assert!(inner_found, "inner li should also have counter text");
     }
 }
