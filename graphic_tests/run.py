@@ -82,6 +82,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('38', '38-z-index.html',           3.0, 'z-index stacking context paint order (CSS 2.1 Appendix E)'),
     ('39', '39-gradients.html',         3.0, 'linear-gradient / radial-gradient GPU pipeline'),
     ('40', '40-conic-gradients.html',   3.0, 'conic-gradient / repeating-conic-gradient (CSS Images L4 §3.7)'),
+    ('41', '41-table.html',             3.0, 'display:table/row/cell with row groups (CSS 2.1 §17)'),
 ]
 
 # --- PNG reader (stdlib only) ---

@@ -323,6 +323,14 @@ pub enum BoxKind {
     /// `flatten_contents()` during `build_box`. Must never appear in the final
     /// layout tree that reaches `lay_out`.
     Contents,
+    /// CSS 2.1 §17 — table container (`display: table` / `display: inline-table`).
+    /// Direct children are `TableRowGroup` or `TableRow` boxes. Layout computes
+    /// global column widths across all rows before positioning each row.
+    Table,
+    /// CSS 2.1 §17 — row group (`display: table-row-group`, `table-header-group`,
+    /// `table-footer-group`). Rendered as a transparent wrapper; rows inside are
+    /// collected by the parent `Table` box during column-width computation.
+    TableRowGroup,
 }
 
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
@@ -969,6 +977,15 @@ fn build_box(
                 BoxKind::FormControl { kind }
             } else if matches!(style.display, Display::TableRow) {
                 BoxKind::TableRow
+            } else if matches!(style.display, Display::Table | Display::InlineTable) {
+                BoxKind::Table
+            } else if matches!(
+                style.display,
+                Display::TableRowGroup
+                    | Display::TableHeaderGroup
+                    | Display::TableFooterGroup
+            ) {
+                BoxKind::TableRowGroup
             } else if matches!(style.display, Display::FlowRoot) {
                 BoxKind::FlowRoot
             } else if matches!(style.display, Display::Contents) {
@@ -980,7 +997,7 @@ fn build_box(
     };
 
     let mut children = Vec::new();
-    if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow) {
+    if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup) {
         // CSS: :host, ::slotted — P4 wires shadow-scoped styles here
         let dom_children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
         // CSS Grid L1 §6: all direct children of a grid/flex container are
@@ -990,6 +1007,8 @@ fn build_box(
             style.display,
             Display::Grid | Display::InlineGrid | Display::Flex | Display::InlineFlex
                 | Display::TableRow
+                | Display::Table | Display::InlineTable
+                | Display::TableRowGroup | Display::TableHeaderGroup | Display::TableFooterGroup
         );
         if is_item_container {
             for child_id in dom_children {
@@ -1752,8 +1771,9 @@ fn lay_out(
         }
         BoxKind::TableRow => {
             // CSS 2.1 §17.5 — table row: ячейки раскладываются горизонтально.
+            // col_widths=None → per-row auto-distribution (standalone <tr> outside <table>).
             let row_h = lay_out_table_row(
-                b, content_x, content_y, content_width, measurer, viewport, children_pcb, hp,
+                b, content_x, content_y, content_width, None, measurer, viewport, children_pcb, hp,
             );
             b.rect.height = if let Some(h_len) = &s.height
                 && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -1770,6 +1790,44 @@ fn lay_out(
                 row_h + padding_top + padding_bottom
                     + s.border_top_width + s.border_bottom_width
             };
+        }
+        BoxKind::Table => {
+            // CSS 2.1 §17 — table container: compute global column widths, lay out rows.
+            let content_height = lay_out_table(
+                b, content_x, content_y, content_width, measurer, viewport, children_pcb, hp,
+            );
+            b.rect.height = if let Some(h_len) = &s.height
+                && let Some(h) = h_len.resolve(em, available_height, viewport)
+            {
+                match s.box_sizing {
+                    BoxSizing::ContentBox => (h + padding_top + padding_bottom
+                        + s.border_top_width + s.border_bottom_width).max(0.0),
+                    BoxSizing::BorderBox => h.max(
+                        padding_top + padding_bottom
+                            + s.border_top_width + s.border_bottom_width,
+                    ),
+                }
+            } else {
+                content_height + padding_top + padding_bottom
+                    + s.border_top_width + s.border_bottom_width
+            };
+        }
+        BoxKind::TableRowGroup => {
+            // CSS 2.1 §17 — row group standalone (outside a <table>): block-flow of rows.
+            // When inside a Table, rows are handled directly by lay_out_table.
+            let mut cur_y = content_y;
+            for i in 0..b.children.len() {
+                if !matches!(b.children[i].kind, BoxKind::TableRow) {
+                    continue;
+                }
+                let c_em = b.children[i].style.font_size;
+                let c_mt = b.children[i].style.margin_top.resolve_or_zero(c_em, content_width, viewport);
+                lay_out(&mut b.children[i], content_x, cur_y + c_mt, content_width, None, measurer, viewport, children_pcb, hp);
+                let c_mb = b.children[i].style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
+                cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb;
+            }
+            b.rect.height = (cur_y - content_y) + padding_top + padding_bottom
+                + s.border_top_width + s.border_bottom_width;
         }
         BoxKind::InlineRun { .. } => unreachable!(),
         BoxKind::InlineSpace => unreachable!(),
@@ -1829,6 +1887,7 @@ fn lay_out_table_row(
     content_x: f32,
     content_y: f32,
     content_width: f32,
+    col_widths: Option<&[f32]>,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
@@ -1847,45 +1906,60 @@ fn lay_out_table_row(
         return 0.0;
     }
 
-    // Шаг 1: определяем явные ширины ячеек.
-    let mut explicit_w: Vec<Option<f32>> = Vec::with_capacity(n);
-    let mut total_explicit = 0.0_f32;
-    let mut auto_count: usize = 0;
-
-    for &i in &cell_idxs {
-        let c = &b.children[i];
-        let em = c.style.font_size;
-        if let Some(w_len) = &c.style.width
-            && let Some(w) = w_len.resolve(em, Some(content_width), viewport)
-        {
-            // Приводим к border-box, чтобы суммировать с другими ячейками.
-            let border_w = match c.style.box_sizing {
-                BoxSizing::ContentBox => {
-                    let pl = c.style.padding_left.resolve_or_zero(em, content_width, viewport);
-                    let pr = c.style.padding_right.resolve_or_zero(em, content_width, viewport);
-                    w + pl + pr + c.style.border_left_width + c.style.border_right_width
-                }
-                BoxSizing::BorderBox => w,
-            };
-            explicit_w.push(Some(border_w));
-            total_explicit += border_w;
-            continue;
-        }
-        explicit_w.push(None);
-        auto_count += 1;
-    }
-
-    let auto_share = if auto_count > 0 {
-        ((content_width - total_explicit) / auto_count as f32).max(0.0)
+    // Шаг 1: определяем ширины ячеек — из col_widths если они переданы,
+    // иначе вычисляем из явных CSS-ширин ячеек текущей строки.
+    let resolved_w: Vec<f32> = if let Some(cw) = col_widths {
+        // Pre-computed table-wide column widths; take min(n, cw.len()) columns.
+        (0..n).map(|j| cw.get(j).copied().unwrap_or(0.0)).collect()
     } else {
-        0.0
+        let mut explicit_w: Vec<Option<f32>> = Vec::with_capacity(n);
+        let mut total_explicit = 0.0_f32;
+        let mut auto_count: usize = 0;
+
+        for &i in &cell_idxs {
+            let c = &b.children[i];
+            let em = c.style.font_size;
+            if let Some(w_len) = &c.style.width
+                && let Some(w) = w_len.resolve(em, Some(content_width), viewport)
+            {
+                // Приводим к border-box, чтобы суммировать с другими ячейками.
+                let border_w = match c.style.box_sizing {
+                    BoxSizing::ContentBox => {
+                        let pl = c.style.padding_left.resolve_or_zero(em, content_width, viewport);
+                        let pr = c.style.padding_right.resolve_or_zero(em, content_width, viewport);
+                        w + pl + pr + c.style.border_left_width + c.style.border_right_width
+                    }
+                    BoxSizing::BorderBox => w,
+                };
+                explicit_w.push(Some(border_w));
+                total_explicit += border_w;
+                continue;
+            }
+            explicit_w.push(None);
+            auto_count += 1;
+        }
+
+        let auto_share = if auto_count > 0 {
+            ((content_width - total_explicit) / auto_count as f32).max(0.0)
+        } else {
+            0.0
+        };
+        explicit_w.iter().map(|w| w.unwrap_or(auto_share)).collect()
     };
 
     // Шаг 2: раскладываем ячейки горизонтально.
+    // When col_widths are pre-computed (table layout), the column width is
+    // authoritative — cell's CSS `width` was only a hint for column computation.
+    // Temporarily clear it so lay_out uses avail (the column width) as final width.
+    let use_global = col_widths.is_some();
     let mut cur_x = content_x;
     for (j, &i) in cell_idxs.iter().enumerate() {
-        let avail = explicit_w[j].unwrap_or(auto_share);
+        let avail = resolved_w[j];
+        let saved_width = if use_global { b.children[i].style.width.take() } else { None };
         lay_out(&mut b.children[i], cur_x, content_y, avail, None, measurer, viewport, pcb, hp);
+        if use_global {
+            b.children[i].style.width = saved_width;
+        }
         let c = &b.children[i];
         let c_em = c.style.font_size;
         let mr = c.style.margin_right.resolve_or_zero(c_em, content_width, viewport);
@@ -1902,6 +1976,184 @@ fn lay_out_table_row(
     }
 
     row_h
+}
+
+/// CSS 2.1 §17 — table layout. Computes global column widths across all rows
+/// (through `TableRowGroup` and direct `TableRow` children), then lays out
+/// rows top-to-bottom in DOM order. Returns content height.
+#[allow(clippy::too_many_arguments)]
+fn lay_out_table(
+    b: &mut LayoutBox,
+    content_x: f32,
+    content_y: f32,
+    content_width: f32,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+    pcb: Rect,
+    hp: &dyn HyphenationProvider,
+) -> f32 {
+    let col_widths = compute_table_col_widths(b, content_width, viewport);
+
+    let mut cur_y = content_y;
+    let n = b.children.len();
+    for i in 0..n {
+        match b.children[i].kind {
+            BoxKind::TableRow => {
+                let c_em = b.children[i].style.font_size;
+                let c_mt = b.children[i].style.margin_top.resolve_or_zero(c_em, content_width, viewport);
+                let row_x = content_x;
+                let row_y = cur_y + c_mt;
+                b.children[i].rect.x = row_x;
+                b.children[i].rect.y = row_y;
+                b.children[i].rect.width = content_width;
+                let row_h = lay_out_table_row(
+                    &mut b.children[i],
+                    row_x, row_y, content_width,
+                    Some(&col_widths),
+                    measurer, viewport, pcb, hp,
+                );
+                let row_style_h = {
+                    let s = &b.children[i].style;
+                    if let Some(h_len) = &s.height
+                        && let Some(h) = h_len.resolve(s.font_size, None, viewport)
+                    {
+                        let pt = s.padding_top.resolve_or_zero(s.font_size, content_width, viewport);
+                        let pb = s.padding_bottom.resolve_or_zero(s.font_size, content_width, viewport);
+                        match s.box_sizing {
+                            BoxSizing::ContentBox => (h + pt + pb + s.border_top_width + s.border_bottom_width).max(0.0),
+                            BoxSizing::BorderBox => h.max(pt + pb + s.border_top_width + s.border_bottom_width),
+                        }
+                    } else {
+                        let pt = b.children[i].style.padding_top.resolve_or_zero(b.children[i].style.font_size, content_width, viewport);
+                        let pb = b.children[i].style.padding_bottom.resolve_or_zero(b.children[i].style.font_size, content_width, viewport);
+                        row_h + pt + pb + b.children[i].style.border_top_width + b.children[i].style.border_bottom_width
+                    }
+                };
+                b.children[i].rect.height = row_style_h;
+                let c_mb = b.children[i].style.margin_bottom.resolve_or_zero(b.children[i].style.font_size, content_width, viewport);
+                cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb;
+            }
+            BoxKind::TableRowGroup => {
+                let group_em = b.children[i].style.font_size;
+                let g_mt = b.children[i].style.margin_top.resolve_or_zero(group_em, content_width, viewport);
+                let group_y = cur_y + g_mt;
+                b.children[i].rect.x = content_x;
+                b.children[i].rect.y = group_y;
+                b.children[i].rect.width = content_width;
+                let mut row_y = group_y;
+                let n_rows = b.children[i].children.len();
+                for r in 0..n_rows {
+                    if !matches!(b.children[i].children[r].kind, BoxKind::TableRow) {
+                        continue;
+                    }
+                    let r_em = b.children[i].children[r].style.font_size;
+                    let r_mt = b.children[i].children[r].style.margin_top.resolve_or_zero(r_em, content_width, viewport);
+                    b.children[i].children[r].rect.x = content_x;
+                    b.children[i].children[r].rect.y = row_y + r_mt;
+                    b.children[i].children[r].rect.width = content_width;
+                    let row_h = lay_out_table_row(
+                        &mut b.children[i].children[r],
+                        content_x, row_y + r_mt, content_width,
+                        Some(&col_widths),
+                        measurer, viewport, pcb, hp,
+                    );
+                    let r_pt = b.children[i].children[r].style.padding_top.resolve_or_zero(r_em, content_width, viewport);
+                    let r_pb = b.children[i].children[r].style.padding_bottom.resolve_or_zero(r_em, content_width, viewport);
+                    let r_bor = b.children[i].children[r].style.border_top_width + b.children[i].children[r].style.border_bottom_width;
+                    b.children[i].children[r].rect.height = row_h + r_pt + r_pb + r_bor;
+                    let r_mb = b.children[i].children[r].style.margin_bottom.resolve_or_zero(r_em, content_width, viewport);
+                    row_y = b.children[i].children[r].rect.y + b.children[i].children[r].rect.height + r_mb;
+                }
+                let g_pt = b.children[i].style.padding_top.resolve_or_zero(group_em, content_width, viewport);
+                let g_pb = b.children[i].style.padding_bottom.resolve_or_zero(group_em, content_width, viewport);
+                let g_bor = b.children[i].style.border_top_width + b.children[i].style.border_bottom_width;
+                b.children[i].rect.height = (row_y - group_y) + g_pt + g_pb + g_bor;
+                let g_mb = b.children[i].style.margin_bottom.resolve_or_zero(group_em, content_width, viewport);
+                cur_y = b.children[i].rect.y + b.children[i].rect.height + g_mb;
+            }
+            _ => {}
+        }
+    }
+    (cur_y - content_y).max(0.0)
+}
+
+/// Scans `b`'s cells and updates `col_explicit` with the max explicit border-box
+/// width for each column. Called once per row during the pre-layout scan.
+fn scan_row_explicit_widths(
+    row: &LayoutBox,
+    col_explicit: &mut Vec<Option<f32>>,
+    content_width: f32,
+    viewport: Size,
+) {
+    let cells: Vec<_> = row
+        .children
+        .iter()
+        .filter(|c| !matches!(c.kind, BoxKind::Skip))
+        .collect();
+    for (j, cell) in cells.iter().enumerate() {
+        let em = cell.style.font_size;
+        let w_border = if let Some(w_len) = &cell.style.width
+            && let Some(w) = w_len.resolve(em, Some(content_width), viewport)
+        {
+            let bw = match cell.style.box_sizing {
+                BoxSizing::ContentBox => {
+                    let pl = cell.style.padding_left.resolve_or_zero(em, content_width, viewport);
+                    let pr = cell.style.padding_right.resolve_or_zero(em, content_width, viewport);
+                    w + pl + pr + cell.style.border_left_width + cell.style.border_right_width
+                }
+                BoxSizing::BorderBox => w,
+            };
+            Some(bw)
+        } else {
+            None
+        };
+        if j >= col_explicit.len() {
+            col_explicit.resize(j + 1, None);
+        }
+        col_explicit[j] = match (col_explicit[j], w_border) {
+            (Some(existing), Some(new)) => Some(existing.max(new)),
+            (Some(existing), None) => Some(existing),
+            (None, v) => v,
+        };
+    }
+}
+
+/// Computes per-column widths for a `BoxKind::Table` element by scanning all rows
+/// (direct and inside `TableRowGroup` children). Returns a `Vec<f32>` of border-box
+/// widths, one per column.
+fn compute_table_col_widths(b: &LayoutBox, content_width: f32, viewport: Size) -> Vec<f32> {
+    let mut col_explicit: Vec<Option<f32>> = Vec::new();
+
+    for child in &b.children {
+        match &child.kind {
+            BoxKind::TableRow => {
+                scan_row_explicit_widths(child, &mut col_explicit, content_width, viewport);
+            }
+            BoxKind::TableRowGroup => {
+                for row in &child.children {
+                    if matches!(row.kind, BoxKind::TableRow) {
+                        scan_row_explicit_widths(row, &mut col_explicit, content_width, viewport);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let n_cols = col_explicit.len();
+    if n_cols == 0 {
+        return Vec::new();
+    }
+
+    let total_explicit: f32 = col_explicit.iter().filter_map(|w| *w).sum();
+    let auto_count = col_explicit.iter().filter(|w| w.is_none()).count();
+    let auto_share = if auto_count > 0 {
+        ((content_width - total_explicit) / auto_count as f32).max(0.0)
+    } else {
+        0.0
+    };
+
+    col_explicit.iter().map(|w| w.unwrap_or(auto_share)).collect()
 }
 
 /// CSS Multi-column Layout L1 — lays out `children` into N columns.
