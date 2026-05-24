@@ -40,6 +40,25 @@
     .mini-c { grid-area: c; background: #319795; }
     .mini-d { grid-area: d; background: #2b6cb0; }
     .mini-e { grid-area: e; background: #276749; }
+
+    /* Dense auto-flow: items fill gaps (5-col, span items leave holes that 1×1s fill) */
+    .dense-grid {
+      display: grid;
+      grid-template-columns: repeat(5, 90px);
+      grid-auto-rows: 50px;
+      grid-auto-flow: row dense;
+      width: 450px;
+      gap: 3px;
+      margin-top: 8px;
+    }
+    .dg-span2 { grid-column: span 2; }
+    .dg-span3 { grid-column: span 3; }
+    .dg-1 { background: #3182ce; }
+    .dg-2 { background: #e53e3e; }
+    .dg-3 { background: #38a169; }
+    .dg-4 { background: #805ad5; }
+    .dg-5 { background: #dd6b20; }
+    .dg-6 { background: #d53f8c; }
   </style>
 </head>
 <body>
@@ -58,6 +77,15 @@
       <div class="mini-c"></div>
       <div class="mini-d"></div>
       <div class="mini-e"></div>
+    </div>
+    <!-- Dense auto-flow: span-2, span-3, and 1x1 items fill gaps -->
+    <div class="dense-grid">
+      <div class="dg-1 dg-span2"></div>
+      <div class="dg-2 dg-span3"></div>
+      <div class="dg-3"></div>
+      <div class="dg-4"></div>
+      <div class="dg-5 dg-span2"></div>
+      <div class="dg-6"></div>
     </div>
   </div>
 </body>

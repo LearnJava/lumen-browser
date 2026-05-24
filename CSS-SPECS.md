@@ -69,7 +69,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Pseudo-Elements L4 | [css-pseudo-4](https://www.w3.org/TR/css-pseudo-4/) | 🟡 | ::first-line/::first-letter split; ::marker; ::selection | **#16** |
 | CSS Images L3 | [css3-images](https://www.w3.org/TR/css3-images/) | 🟡 | conic-gradient() ✅ 2026-05-24; multiple bg layers | **#17** |
 | CSS Images L4 | [css4-images](https://www.w3.org/TR/css4-images/) | ⬜ | image-set(), cross-fade() | **#18** |
-| CSS Grid L1 | [css-grid-1](https://www.w3.org/TR/css-grid-1/) | 🟡 | grid-template-areas ✅ 2026-05-22; dense auto-flow ⬜ | **#19** |
+| CSS Grid L1 | [css-grid-1](https://www.w3.org/TR/css-grid-1/) | 🟡 | grid-template-areas ✅ 2026-05-22; dense auto-flow ✅ 2026-05-24 | **#19** |
 | CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading; font-optical-sizing | **#20** |
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | 🟡 | min-content / max-content / fit-content | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
@@ -464,7 +464,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `grid-template-areas` | ✅ | parsed + named area placement in lay_out_grid; GridLine::Named resolved |
 | `grid-template` / `grid` (super-shorthand) | 🟡 | |
 | `grid-auto-columns` / `grid-auto-rows` | 🟡 | |
-| `grid-auto-flow` | 🟡 | row/column ✅; dense ⬜ |
+| `grid-auto-flow` | ✅ | row/column/dense/column dense ✅ 2026-05-24 |
 | `grid-column*` / `grid-row*` / `grid-area` | 🟡 | auto/int/span |
 | `subgrid` | ⬜ | CSS Grid L2 |
 | `masonry` | ⬜ | CSS Grid L3 |
