@@ -2961,11 +2961,20 @@ impl Renderer {
             }}
         }
 
-        let chained = content
-            .iter()
-            .map(|c| (c, -scroll_y, -scroll_x))
-            .chain(overlay.iter().map(|c| (c, 0.0_f32, 0.0_f32)));
-        for (cmd, dy, dx) in chained {
+        // CSS Positioning L3 §6.3 — position:sticky offset stack.
+        // Each BeginStickyLayer pushes a (dy, dx) that clamps scroll for its subtree.
+        let viewport_css_h = surface_h as f32 / dpr_f32;
+        let viewport_css_w = surface_w as f32 / dpr_f32;
+        let mut sticky_stack: Vec<(f32, f32)> = Vec::new();
+
+        let iter_content = content.iter().map(|c| (c, false));
+        let iter_overlay = overlay.iter().map(|c| (c, true));
+        for (cmd, is_overlay) in iter_content.chain(iter_overlay) {
+            let (dy, dx) = if is_overlay {
+                (0.0_f32, 0.0_f32)
+            } else {
+                sticky_stack.last().copied().unwrap_or((-scroll_y, -scroll_x))
+            };
             match cmd {
                 DisplayCommand::FillRect { rect, color } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
@@ -3769,6 +3778,20 @@ impl Renderer {
                         current_level -= 1;
                     }
                 }
+                // CSS Positioning L3 §6.3 — position:sticky.
+                // Offsets computed above; stack managed here to suppress unused-var warnings.
+                DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right } => {
+                    if !is_overlay {
+                        let sdy = sticky_offset_dy(flow_rect, *top, *bottom, scroll_y, viewport_css_h);
+                        let sdx = sticky_offset_dx(flow_rect, *left, *right, scroll_x, viewport_css_w);
+                        sticky_stack.push((sdy, sdx));
+                    }
+                }
+                DisplayCommand::EndStickyLayer => {
+                    if !is_overlay {
+                        sticky_stack.pop();
+                    }
+                }
             }
         }
         flush_batch!();
@@ -4407,6 +4430,63 @@ impl Renderer {
         frame.present();
         Ok(())
     }
+}
+
+/// CSS Positioning L3 §6.3 — computes the effective `dy` for a sticky-positioned
+/// element given its normal-flow Y position (`flow_rect.y`), `scroll_y`, and
+/// sticky insets. The element sticks when scrolling would push it past `top` or
+/// before the `bottom` limit from the viewport bottom edge.
+///
+/// Returns the `dy` to apply instead of `-scroll_y` for this layer's content.
+fn sticky_offset_dy(
+    flow_rect: &lumen_core::geom::Rect,
+    top: Option<f32>,
+    bottom: Option<f32>,
+    scroll_y: f32,
+    viewport_h: f32,
+) -> f32 {
+    let mut dy = -scroll_y;
+    // top: clamp screen_y to be at least `top` px from the viewport top.
+    if let Some(t) = top {
+        let screen_y = flow_rect.y + dy;
+        if screen_y < t {
+            dy += t - screen_y;
+        }
+    }
+    // bottom: clamp so the element's bottom edge is at most `viewport_h - bottom` from top.
+    if let Some(b) = bottom {
+        let max_screen_y = viewport_h - b - flow_rect.height;
+        let actual_screen_y = flow_rect.y + dy;
+        if actual_screen_y > max_screen_y {
+            dy -= actual_screen_y - max_screen_y;
+        }
+    }
+    dy
+}
+
+/// CSS Positioning L3 §6.3 — same as `sticky_offset_dy` but for the X axis.
+fn sticky_offset_dx(
+    flow_rect: &lumen_core::geom::Rect,
+    left: Option<f32>,
+    right: Option<f32>,
+    scroll_x: f32,
+    viewport_w: f32,
+) -> f32 {
+    let mut dx = -scroll_x;
+    if let Some(l) = left {
+        let screen_x = flow_rect.x + dx;
+        if screen_x < l {
+            dx += l - screen_x;
+        }
+    }
+    if let Some(r) = right {
+        let max_screen_x = viewport_w - r - flow_rect.width;
+        let actual_screen_x = flow_rect.x + dx;
+        if actual_screen_x > max_screen_x {
+            dx -= actual_screen_x - max_screen_x;
+        }
+    }
+    dx
 }
 
 /// Сдвиг rect-а по Y (CSS px). Используется в `render` для применения

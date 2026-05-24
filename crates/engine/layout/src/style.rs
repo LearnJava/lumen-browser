@@ -7381,6 +7381,17 @@ impl LengthOrAuto {
         matches!(self, Self::Auto)
     }
 
+    /// Returns the raw pixel value for `Length::Px` variants; `Auto` and all
+    /// other length units (em, %, rem, …) return `None`.
+    /// Used by the paint layer where the layout context is unavailable.
+    pub fn to_px_opt(&self) -> Option<f32> {
+        match self {
+            Self::Auto => None,
+            Self::Length(Length::Px(px)) => Some(*px),
+            Self::Length(_) => None,
+        }
+    }
+
     /// Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`.
     /// `em` = font_size элемента, `cb_width` = containing-block width.
     pub fn resolve(&self, em: f32, cb_width: f32, vp: Size) -> Option<f32> {

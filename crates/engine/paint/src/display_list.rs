@@ -14,7 +14,7 @@ use lumen_layout::{
     FormControlKind,
     GradientStop, ImageRendering, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
-    OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, PositionComponent,
+    OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, Position, PositionComponent,
     StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness,
     TextEmphasisShape, TextEmphasisStyle, TextOverflow,
     Visibility,
@@ -379,6 +379,35 @@ pub enum DisplayCommand {
     PushFilter { filters: Vec<FilterFn> },
     /// Закрывает filter-группу.
     PopFilter,
+    /// CSS Positioning L3 §6.3 — position:sticky layer.
+    ///
+    /// All content between `BeginStickyLayer` and `EndStickyLayer` is rendered
+    /// with a scroll-clamped offset: the element stays at its normal-flow
+    /// position until the scroll would push it past a sticky inset, then it
+    /// sticks at that inset until the scroll moves it back.
+    ///
+    /// `flow_rect` — the element's border-box in normal-flow coordinates
+    ///   (absolute page coords, same coordinate system as all other rects in
+    ///   the display list).
+    /// `top` / `bottom` / `left` / `right` — resolved sticky insets in CSS px
+    ///   (`None` = `auto`, no constraint on that side).
+    ///
+    /// Renderer computes `sticky_dy = clamp(-scroll_y, top - flow_y, …)` at
+    /// draw time so the layer stays viewport-relative.
+    BeginStickyLayer {
+        /// Element's border-box in normal-flow (page) coordinates.
+        flow_rect: lumen_core::geom::Rect,
+        /// Distance from the top of the viewport to stick at. `None` = auto.
+        top: Option<f32>,
+        /// Distance from the bottom of the viewport to stick at. `None` = auto.
+        bottom: Option<f32>,
+        /// Distance from the left of the viewport to stick at. `None` = auto.
+        left: Option<f32>,
+        /// Distance from the right of the viewport to stick at. `None` = auto.
+        right: Option<f32>,
+    },
+    /// Closes the sticky layer opened by `BeginStickyLayer`.
+    EndStickyLayer,
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
@@ -726,6 +755,19 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::PopFilter => {
                 out.push_str("PopFilter\n");
+            }
+            DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right } => {
+                out.push_str(&format!(
+                    "BeginStickyLayer flow=({:.0},{:.0},{:.0},{:.0}) top={} bottom={} left={} right={}\n",
+                    flow_rect.x, flow_rect.y, flow_rect.width, flow_rect.height,
+                    top.map_or("auto".to_string(), |v| format!("{v:.0}")),
+                    bottom.map_or("auto".to_string(), |v| format!("{v:.0}")),
+                    left.map_or("auto".to_string(), |v| format!("{v:.0}")),
+                    right.map_or("auto".to_string(), |v| format!("{v:.0}")),
+                ));
+            }
+            DisplayCommand::EndStickyLayer => {
+                out.push_str("EndStickyLayer\n");
             }
             DisplayCommand::PushMaskImage { rect, src, size, repeat, .. } => {
                 out.push_str(&format!(
@@ -2004,7 +2046,8 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     }
     match &b.kind {
         BoxKind::Skip => {}
-        BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow => {
+        BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow
+        | BoxKind::Table | BoxKind::TableRowGroup => {
             if !is_paint_visible(b) {
                 return;
             }
@@ -2213,9 +2256,24 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
     if !is_opacity_subtree_painted(b) {
         return;
     }
+    // CSS Positioning L3 §6.3 — position:sticky. Wraps the entire box in a
+    // BeginStickyLayer/EndStickyLayer pair so the renderer can apply a
+    // scroll-clamped offset at draw time without rebuilding the display list.
+    let is_sticky = matches!(b.style.position, Position::Sticky);
+    if is_sticky {
+        let s = &b.style;
+        out.push(DisplayCommand::BeginStickyLayer {
+            flow_rect: b.rect,
+            top:    s.top.to_px_opt(),
+            bottom: s.bottom.to_px_opt(),
+            left:   s.left.to_px_opt(),
+            right:  s.right.to_px_opt(),
+        });
+    }
     match &b.kind {
         BoxKind::Skip | BoxKind::Contents => {}
-        BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow => {
+        BoxKind::Block | BoxKind::FlowRoot | BoxKind::TableRow
+        | BoxKind::Table | BoxKind::TableRowGroup => {
             // CSS Masking L1 §4: mask-image wraps the entire element (opacity+transform+content).
             // Emitted outermost so the mask applies to the fully composited element.
             let has_mask = emit_push_mask(out, b);
@@ -2476,6 +2534,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             emit_outline(b, out);
         }
     }
+    if is_sticky {
+        out.push(DisplayCommand::EndStickyLayer);
+    }
 }
 
 /// Эмитит FillRect-ы для активных линий text-decoration. Геометрия —
@@ -2669,6 +2730,19 @@ fn emit_wavy_line(
 fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut DisplayList) {
     let ov = anim.and_then(|a| a.get(b.node));
 
+    // CSS Positioning L3 §6.3 — position:sticky (same as in walk).
+    let is_sticky = matches!(b.style.position, Position::Sticky);
+    if is_sticky {
+        let s = &b.style;
+        out.push(DisplayCommand::BeginStickyLayer {
+            flow_rect: b.rect,
+            top:    s.top.to_px_opt(),
+            bottom: s.bottom.to_px_opt(),
+            left:   s.left.to_px_opt(),
+            right:  s.right.to_px_opt(),
+        });
+    }
+
     // Determine effective opacity: animated override wins over style.
     let effective_opacity = ov.and_then(|o| o.opacity).unwrap_or(b.style.opacity);
 
@@ -2776,6 +2850,9 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
         _ => {
             walk(b, out);
         }
+    }
+    if is_sticky {
+        out.push(DisplayCommand::EndStickyLayer);
     }
 }
 
@@ -3641,6 +3718,8 @@ mod tests {
                 DisplayCommand::PopMask => "PopMask",
                 DisplayCommand::PushFilter { .. } => "PushFilter",
                 DisplayCommand::PopFilter => "PopFilter",
+                DisplayCommand::BeginStickyLayer { .. } => "BeginStickyLayer",
+                DisplayCommand::EndStickyLayer => "EndStickyLayer",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);
@@ -5944,6 +6023,70 @@ mod tests {
         );
         let rules = column_rule_cmds(&dl);
         assert_eq!(rules.len(), 0, "no column-count/width → no separators");
+    }
+
+    // ── position:sticky display list tests ──────────────────────────────────
+
+    #[test]
+    fn sticky_top_emits_begin_end_layer() {
+        let dl = build(
+            r#"<div style="position:sticky;top:10px;background:blue;width:200px;height:50px"></div>"#,
+            "",
+        );
+        let has_begin = dl.iter().any(|c| matches!(c, DisplayCommand::BeginStickyLayer { top: Some(t), .. } if (*t - 10.0).abs() < 0.01));
+        let has_end = dl.iter().any(|c| matches!(c, DisplayCommand::EndStickyLayer));
+        assert!(has_begin, "expected BeginStickyLayer with top=10 in display list");
+        assert!(has_end, "expected EndStickyLayer in display list");
+    }
+
+    #[test]
+    fn sticky_begin_before_fill_rect() {
+        let dl = build(
+            r#"<div style="position:sticky;top:0px;background:red;width:100px;height:40px"></div>"#,
+            "",
+        );
+        let begin_idx = dl.iter().position(|c| matches!(c, DisplayCommand::BeginStickyLayer { .. })).unwrap();
+        let fill_idx = dl.iter().position(|c| matches!(c, DisplayCommand::FillRect { .. })).unwrap();
+        let end_idx = dl.iter().position(|c| matches!(c, DisplayCommand::EndStickyLayer)).unwrap();
+        assert!(begin_idx < fill_idx, "BeginStickyLayer must come before FillRect");
+        assert!(fill_idx < end_idx, "FillRect must come before EndStickyLayer");
+    }
+
+    #[test]
+    fn sticky_auto_top_no_layer() {
+        // position:sticky with no insets (all auto) — still emits layer (spec allows sticky
+        // with auto insets; it behaves like static but is logically sticky-positioned).
+        let dl = build(
+            r#"<div style="position:sticky;background:green;width:100px;height:40px"></div>"#,
+            "",
+        );
+        let has_begin = dl.iter().any(|c| matches!(c, DisplayCommand::BeginStickyLayer { .. }));
+        // With all-auto insets the layer is still emitted (no inset = no clamping in renderer).
+        assert!(has_begin, "BeginStickyLayer emitted even for all-auto sticky");
+    }
+
+    #[test]
+    fn sticky_bottom_inset_stored() {
+        let dl = build(
+            r#"<div style="position:sticky;bottom:20px;background:blue;width:200px;height:50px"></div>"#,
+            "",
+        );
+        let has_bottom = dl.iter().any(|c| matches!(
+            c,
+            DisplayCommand::BeginStickyLayer { bottom: Some(b), .. } if (*b - 20.0).abs() < 0.01
+        ));
+        assert!(has_bottom, "expected BeginStickyLayer with bottom=20");
+    }
+
+    #[test]
+    fn non_sticky_no_layer() {
+        // position:relative does not produce a sticky layer.
+        let dl = build(
+            r#"<div style="position:relative;top:10px;background:blue;width:200px;height:50px"></div>"#,
+            "",
+        );
+        let has_begin = dl.iter().any(|c| matches!(c, DisplayCommand::BeginStickyLayer { .. }));
+        assert!(!has_begin, "position:relative must not emit BeginStickyLayer");
     }
 
     #[test]
