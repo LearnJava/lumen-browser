@@ -699,7 +699,7 @@ Ordered list of 🟡→✅ promotions for the P4 developer. One item = one featu
 | 22 | `overflow: scroll` scrollable containers | L | shell scroll |
 | 23 | `border-radius` elliptical (rx≠ry) | ✅ | border_{corner}_radius_y + RRectVertex radii_x/y + WGSL sdf_rrect elliptical SDF + 12 tests + graphic test 36 2026-05-24 |
 | 24 | `column-rule` rendering | S | paint |
-| 25 | `line-height` leading in line box | M | inline layout |
+| 25 | `line-height` leading in line box | ✅ | half_leading=(line_h-em)/2 в apply_inline_vertical_align + ascent_px() в TextMeasurer + 4 тесты 2026-05-24 |
 | 26 | Scroll snap shell integration | M | scroll event |
 | 27 | `@container` 2nd-pass execution | L | container-type done |
 | 28 | `backdrop-filter` GPU compositing pass | L | wgpu pipeline |
