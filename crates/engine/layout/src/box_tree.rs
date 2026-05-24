@@ -17,7 +17,8 @@ use lumen_html_parser::{
 };
 
 use crate::style::{
-    apply_container_rules, compute_pseudo_element_style, compute_style, AlignValue,
+    apply_container_rules, clear_cq_context, compute_pseudo_element_style, compute_style,
+    set_cq_context, AlignValue,
     BackgroundImage, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition,
@@ -4100,6 +4101,8 @@ fn apply_container_inner(
         } else {
             pcb
         };
+        // Expose this container's dimensions to cq* unit resolution during re-layout.
+        set_cq_context(content_w, content_h);
         let mut child_y = content_y;
         for child in &mut b.children {
             if matches!(child.style.position, Position::Absolute | Position::Fixed) {
@@ -4115,7 +4118,9 @@ fn apply_container_inner(
                 .resolve_or_zero(child.style.font_size, content_w, viewport);
             child_y = child.rect.y + child.rect.height + child_mb;
         }
+        clear_cq_context();
         // After re-layout, recurse into children to catch nested containers.
+        // Each nested container will set its own cq* context during its own re-layout.
         for child in &mut b.children {
             apply_container_inner(child, doc, sheet, viewport, measurer, child_pcb, hp);
         }
