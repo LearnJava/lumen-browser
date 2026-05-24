@@ -1,4 +1,5 @@
-In progress: (нет)
+In progress: CSS 2.1 §10.8 line-height leading (half-leading в inline box)  branch: p1-line-height-leading
+Next step: исправить apply_inline_vertical_align + ascent_px в TextMeasurer  crates/engine/layout/src/box_tree.rs:3874
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
