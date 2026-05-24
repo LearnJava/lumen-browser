@@ -1111,7 +1111,7 @@ impl VerticalAlign {
 /// P2 п.3B compositor offload и P1 п.3A Web Animations interpolation —
 /// потребители этого AST: оба применяют функцию `progress(t) → [0, 1]`
 /// к линейному времени `t ∈ [0, 1]` для получения eased progress.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum TimingFunction {
     /// `linear` ≡ `cubic-bezier(0, 0, 1, 1)`. progress(t) = t.
     Linear,
@@ -1126,6 +1126,35 @@ pub enum TimingFunction {
     /// `step-end` ≡ `steps(1, jump-end)`. `n` — положительное целое;
     /// для `jump-none` ещё и ≥ 2.
     Steps(u32, StepPosition),
+    /// `linear(<linear-stop-list>)` (CSS Easing L2 §2.4) — кусочно-линейная
+    /// функция easing-а, задаваемая 2+ control-точками. Каждая точка:
+    /// output (unitless number, может выходить за `[0, 1]`) и input
+    /// (∈ `[0, 1]`, монотонно неубывает). Inputs нормализованы по правилам
+    /// §2.5.1: пропущенные значения распределяются между соседними
+    /// заданными; первая точка получает `0`, последняя — `1`.
+    ///
+    /// Discontinuity-кейсы (две точки с одинаковым input → вертикальный
+    /// прыжок) допустимы и формируются из stop-а с двумя percentage-ами:
+    /// `linear(0 0% 50%, 1 50% 100%)` ≡ step-функция со скачком на 0.5.
+    ///
+    /// `linear(0, 1)` поведенчески эквивалентно `Linear`; парсер хранит
+    /// этот случай как `LinearStops`, без коллапса в `Linear`, чтобы
+    /// сохранять round-trip.
+    LinearStops(Vec<LinearEasingPoint>),
+}
+
+/// CSS Easing L2 §2.4 — одна control-точка функции `linear(...)`.
+///
+/// `output` — значение easing-а в этой точке (unitless, может выходить за
+/// `[0, 1]` — overshoot допустим). `input` — соответствующая позиция на
+/// time-axis в `[0, 1]`. После канонизации (§2.5.1) inputs всех точек
+/// одного `LinearStops` монотонно неубывают.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct LinearEasingPoint {
+    /// Output progress в этой точке. Unitless. May exceed `[0, 1]`.
+    pub output: f32,
+    /// Input progress ∈ `[0, 1]` (доля времени анимации).
+    pub input: f32,
 }
 
 impl Default for TimingFunction {
@@ -1196,6 +1225,12 @@ impl TimingFunction {
             };
             return Some(Self::Steps(n, pos));
         }
+        if let Some(args) = t
+            .strip_prefix("linear(")
+            .and_then(|rest| rest.strip_suffix(')'))
+        {
+            return parse_linear_easing_stops(args).map(Self::LinearStops);
+        }
         None
     }
 
@@ -1222,10 +1257,11 @@ impl TimingFunction {
     /// в animation engine ДО вызова progress().)
     pub fn progress(&self, t: f32) -> f32 {
         let x = t.clamp(0.0, 1.0);
-        match *self {
+        match self {
             TimingFunction::Linear => x,
-            TimingFunction::CubicBezier(x1, y1, x2, y2) => cubic_bezier_progress(x1, y1, x2, y2, x),
-            TimingFunction::Steps(n, position) => steps_progress(n, position, x),
+            TimingFunction::CubicBezier(x1, y1, x2, y2) => cubic_bezier_progress(*x1, *y1, *x2, *y2, x),
+            TimingFunction::Steps(n, position) => steps_progress(*n, *position, x),
+            TimingFunction::LinearStops(points) => linear_stops_progress(points, x),
         }
     }
 }
@@ -1316,6 +1352,161 @@ fn steps_progress(n: u32, position: StepPosition, t: f32) -> f32 {
     };
     let step = raw_index.max(0.0).min(max_step);
     (step / divisor).clamp(0.0, 1.0)
+}
+
+/// CSS Easing L2 §2.5.1 — канонизация stop-листа `linear(...)`.
+///
+/// Принимает содержимое скобок (без `linear(` / `)`); ожидает 2+ stop-а,
+/// разделённых запятыми. Каждый stop = `<number>` + 0..2 `<percentage>`.
+/// Возвращает `None` при синтаксической ошибке или < 2 stop-ов.
+///
+/// Алгоритм (§2.5.1):
+/// 1. Парсим raw stops, преобразуем percentages → доли в `[0, 1]`.
+/// 2. Расширяем stops с двумя lengths в две точки с одинаковым output.
+/// 3. Первый stop без length получает input = 0, последний — max(1, largest).
+/// 4. Каждый явный input clamp-ается до текущего `largest_input` (монотонность).
+/// 5. Пропуски (точки без input) распределяются равномерно между соседними
+///    известными inputs.
+fn parse_linear_easing_stops(args: &str) -> Option<Vec<LinearEasingPoint>> {
+    let parts = split_top_level_commas(args);
+    if parts.len() < 2 {
+        return None;
+    }
+
+    // Raw: (output, optional percentages already normalised to [0, 1]).
+    let mut raw: Vec<(f32, Vec<f32>)> = Vec::with_capacity(parts.len());
+    for stop in &parts {
+        let stop = stop.trim();
+        if stop.is_empty() {
+            return None;
+        }
+        let tokens: Vec<&str> = stop.split_whitespace().collect();
+        if tokens.is_empty() || tokens.len() > 3 {
+            return None;
+        }
+        let output = tokens[0].parse::<f32>().ok()?;
+        if !output.is_finite() {
+            return None;
+        }
+        let mut lengths: Vec<f32> = Vec::new();
+        for tok in &tokens[1..] {
+            let stripped = tok.strip_suffix('%')?;
+            let pct = stripped.parse::<f32>().ok()?;
+            if !pct.is_finite() {
+                return None;
+            }
+            lengths.push(pct / 100.0);
+        }
+        raw.push((output, lengths));
+    }
+
+    // Step 1 + 3 + 4: build points list with optional inputs and clamp by
+    // largest_input для монотонности (spec: «whichever is greater»).
+    let last_idx = raw.len() - 1;
+    let mut points: Vec<(f32, Option<f32>)> = Vec::new();
+    let mut largest = f32::NEG_INFINITY;
+    for (i, (output, lengths)) in raw.iter().enumerate() {
+        if lengths.is_empty() {
+            if i == 0 {
+                points.push((*output, Some(0.0)));
+                largest = 0.0;
+            } else if i == last_idx {
+                let v = 1.0_f32.max(largest);
+                points.push((*output, Some(v)));
+                largest = v;
+            } else {
+                points.push((*output, None));
+            }
+        } else {
+            let first_len = lengths[0].max(largest);
+            points.push((*output, Some(first_len)));
+            largest = first_len;
+            if lengths.len() == 2 {
+                let second_len = lengths[1].max(largest);
+                points.push((*output, Some(second_len)));
+                largest = second_len;
+            }
+        }
+    }
+
+    // Step 5: distribute `None` runs evenly between surrounding known inputs.
+    // По §2.5.1 первая и последняя точки гарантированно получают input
+    // в шагах 3-4, поэтому None-run всегда окружён двумя Some-границами.
+    let mut i = 0;
+    while i < points.len() {
+        if points[i].1.is_some() {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while j < points.len() && points[j].1.is_none() {
+            j += 1;
+        }
+        // i..j — диапазон None; prev и next — соседние Some.
+        let prev = points[i - 1].1?;
+        let next = points[j].1?;
+        let span = next - prev;
+        let count = (j - i) as f32 + 1.0;
+        for (k, idx) in (i..j).enumerate() {
+            let frac = (k as f32 + 1.0) / count;
+            points[idx].1 = Some(prev + frac * span);
+        }
+        i = j;
+    }
+
+    Some(
+        points
+            .into_iter()
+            .map(|(output, input)| LinearEasingPoint {
+                output,
+                input: input.unwrap_or(0.0),
+            })
+            .collect(),
+    )
+}
+
+/// CSS Easing L2 §2.5.2 — вычисление output функции `linear(...)`.
+///
+/// `points` — канонизованный список из `parse_linear_easing_stops` (inputs
+/// монотонно неубывают). `t ∈ [0, 1]` — input progress (уже clamp-нутый
+/// вызывающим `progress()`). Алгоритм:
+///
+/// - Меньше первого input — возвращаем output первой точки.
+/// - Больше-или-равно последнему input — output последней (включая
+///   `t == 1.0` ровно).
+/// - Иначе ищем первую пару соседних точек `[A, B]` такую, что
+///   `A.input ≤ t < B.input`, и линейно интерполируем. Discontinuity
+///   (одинаковые inputs у соседних точек) обрабатывается возвратом
+///   output левой точки — пара выбирается по first-match, поэтому
+///   при `t == A.input` мы попадём на левую сторону скачка.
+fn linear_stops_progress(points: &[LinearEasingPoint], t: f32) -> f32 {
+    match points.len() {
+        0 => t,
+        1 => points[0].output,
+        _ => {
+            let first = points[0];
+            let last = points[points.len() - 1];
+            if t < first.input {
+                return first.output;
+            }
+            if t >= last.input {
+                return last.output;
+            }
+            for w in points.windows(2) {
+                let a = w[0];
+                let b = w[1];
+                if a.input <= t && t < b.input {
+                    let span = b.input - a.input;
+                    if span <= f32::EPSILON {
+                        return a.output;
+                    }
+                    let local = (t - a.input) / span;
+                    return a.output + local * (b.output - a.output);
+                }
+            }
+            last.output
+        }
+    }
 }
 
 /// CSS Easing L1 §3 — позиция шага в `steps()`. Default по spec — `jump-end`.
@@ -17223,6 +17414,155 @@ mod tests {
         assert!(approx(f.progress(0.5), 0.0));
         assert!(approx(f.progress(0.99), 0.0));
         assert!(approx(f.progress(1.0), 1.0));
+    }
+
+    // ──────────────── CSS Easing L2 §2.4: linear(<linear-stop-list>) ────────────────
+
+    fn extract_linear_stops(tf: TimingFunction) -> Vec<LinearEasingPoint> {
+        match tf {
+            TimingFunction::LinearStops(p) => p,
+            other => panic!("expected LinearStops, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn linear_stops_parse_two_endpoints() {
+        // linear(0, 1) — два endpoint-а без percentage; распределяются 0 и 1.
+        let pts = extract_linear_stops(TimingFunction::parse("linear(0, 1)").unwrap());
+        assert_eq!(pts.len(), 2);
+        assert!(approx(pts[0].input, 0.0));
+        assert!(approx(pts[0].output, 0.0));
+        assert!(approx(pts[1].input, 1.0));
+        assert!(approx(pts[1].output, 1.0));
+    }
+
+    #[test]
+    fn linear_stops_parse_three_evenly_distributed() {
+        // linear(0, 0.5, 1) — три точки, средняя без percentage → input=0.5.
+        let pts = extract_linear_stops(TimingFunction::parse("linear(0, 0.5, 1)").unwrap());
+        assert_eq!(pts.len(), 3);
+        assert!(approx(pts[1].input, 0.5));
+        assert!(approx(pts[1].output, 0.5));
+    }
+
+    #[test]
+    fn linear_stops_parse_explicit_percentage() {
+        // linear(0, 0.25 75%, 1) — средняя точка явно на 75%.
+        let pts = extract_linear_stops(TimingFunction::parse("linear(0, 0.25 75%, 1)").unwrap());
+        assert_eq!(pts.len(), 3);
+        assert!(approx(pts[1].input, 0.75));
+        assert!(approx(pts[1].output, 0.25));
+    }
+
+    #[test]
+    fn linear_stops_parse_two_lengths_makes_jump() {
+        // linear(0 0% 50%, 1 50% 100%) — два stop-а, каждый с двумя
+        // percentage-ами → 4 точки; разрыв при input=0.5 (output 0 → 1).
+        let pts = extract_linear_stops(
+            TimingFunction::parse("linear(0 0% 50%, 1 50% 100%)").unwrap(),
+        );
+        assert_eq!(pts.len(), 4);
+        assert!(approx(pts[0].input, 0.0));
+        assert!(approx(pts[0].output, 0.0));
+        assert!(approx(pts[1].input, 0.5));
+        assert!(approx(pts[1].output, 0.0));
+        assert!(approx(pts[2].input, 0.5));
+        assert!(approx(pts[2].output, 1.0));
+        assert!(approx(pts[3].input, 1.0));
+        assert!(approx(pts[3].output, 1.0));
+    }
+
+    #[test]
+    fn linear_stops_parse_invalid_single_stop_is_none() {
+        // linear() с < 2 stop-ами — invalid (§2.5.1 step 3).
+        assert!(TimingFunction::parse("linear(0.5)").is_none());
+        assert!(TimingFunction::parse("linear()").is_none());
+    }
+
+    #[test]
+    fn linear_stops_parse_monotonicity_clamps_decreasing_inputs() {
+        // §2.5.1 step 4.iii: input clamp-ается до largest_input. Если в исходнике
+        // 75% идёт перед 50%, второй stop поднимается до 75%.
+        let pts = extract_linear_stops(
+            TimingFunction::parse("linear(0, 0.5 75%, 1 50%)").unwrap(),
+        );
+        assert_eq!(pts.len(), 3);
+        assert!(approx(pts[1].input, 0.75));
+        assert!(approx(pts[2].input, 0.75));
+    }
+
+    #[test]
+    fn linear_stops_progress_identity_equivalent_to_linear() {
+        // linear(0, 1) поведенчески = Linear.
+        let f = TimingFunction::parse("linear(0, 1)").unwrap();
+        assert!(approx(f.progress(0.0), 0.0));
+        assert!(approx(f.progress(0.25), 0.25));
+        assert!(approx(f.progress(0.5), 0.5));
+        assert!(approx(f.progress(0.75), 0.75));
+        assert!(approx(f.progress(1.0), 1.0));
+    }
+
+    #[test]
+    fn linear_stops_progress_piecewise() {
+        // linear(0, 0.25 75%, 1): на [0, 0.75] — наклон 0.25/0.75 ≈ 0.333;
+        // на [0.75, 1] — наклон 0.75/0.25 = 3.
+        let f = TimingFunction::parse("linear(0, 0.25 75%, 1)").unwrap();
+        assert!(approx(f.progress(0.0), 0.0));
+        assert!(approx(f.progress(0.375), 0.125));
+        assert!(approx(f.progress(0.75), 0.25));
+        assert!(approx(f.progress(0.875), 0.625));
+        assert!(approx(f.progress(1.0), 1.0));
+    }
+
+    #[test]
+    fn linear_stops_progress_overshoot_allowed() {
+        // Output может выходить за [0, 1] — overshoot easing.
+        let f = TimingFunction::parse("linear(0, 1.5 50%, 1)").unwrap();
+        assert!(approx(f.progress(0.5), 1.5));
+        assert!(approx(f.progress(0.25), 0.75));
+        assert!(approx(f.progress(0.75), 1.25));
+    }
+
+    #[test]
+    fn linear_stops_progress_jump_at_discontinuity() {
+        // linear(0 0% 50%, 1 50% 100%): output=0 на [0, 0.5), output=1 на [0.5, 1].
+        let f = TimingFunction::parse("linear(0 0% 50%, 1 50% 100%)").unwrap();
+        assert!(approx(f.progress(0.0), 0.0));
+        assert!(approx(f.progress(0.49), 0.0));
+        // На самой границе скачка first-match выбирает левую пару → 0
+        // (выбор не виден в анимации — discontinuity).
+        assert!(approx(f.progress(0.51), 1.0));
+        assert!(approx(f.progress(1.0), 1.0));
+    }
+
+    #[test]
+    fn linear_stops_progress_clamps_inputs_out_of_range() {
+        // CSS Easing §2: t вне [0, 1] клампится. linear() не исключение.
+        let f = TimingFunction::parse("linear(0, 1)").unwrap();
+        assert!(approx(f.progress(-1.0), 0.0));
+        assert!(approx(f.progress(2.0), 1.0));
+    }
+
+    #[test]
+    fn linear_stops_distributes_run_of_missing_inputs() {
+        // linear(0, 0.25, 0.5, 0.75, 1): первая=0, последняя=1, три средние
+        // равномерно распределяются → 0.25, 0.5, 0.75.
+        let pts = extract_linear_stops(
+            TimingFunction::parse("linear(0, 0.25, 0.5, 0.75, 1)").unwrap(),
+        );
+        assert_eq!(pts.len(), 5);
+        for (i, expected) in [0.0, 0.25, 0.5, 0.75, 1.0].iter().enumerate() {
+            assert!(approx(pts[i].input, *expected), "point {i} input mismatch");
+        }
+    }
+
+    #[test]
+    fn linear_stops_parse_in_animation_shorthand() {
+        // linear(...) должна корректно распознаваться внутри animation-timing-function.
+        let tfs = TimingFunction::parse_list("linear(0, 0.5, 1), ease-in");
+        assert_eq!(tfs.len(), 2);
+        assert!(matches!(tfs[0], TimingFunction::LinearStops(_)));
+        assert_eq!(tfs[1], TimingFunction::CubicBezier(0.42, 0.0, 1.0, 1.0));
     }
 
     // ──────────────── CSS Cascade L4 §6.4.3: inline style attribute ────────────────
