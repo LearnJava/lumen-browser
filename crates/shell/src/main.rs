@@ -3017,6 +3017,8 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawLayerSnapshot { .. }
             | DisplayCommand::PushFilter { .. }
             | DisplayCommand::PopFilter
+            | DisplayCommand::PushBackdropFilter { .. }
+            | DisplayCommand::PopBackdropFilter
             | DisplayCommand::BeginStickyLayer { .. }
             | DisplayCommand::EndStickyLayer => continue,
         };
@@ -3061,6 +3063,8 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::DrawLayerSnapshot { .. }
             | DisplayCommand::PushFilter { .. }
             | DisplayCommand::PopFilter
+            | DisplayCommand::PushBackdropFilter { .. }
+            | DisplayCommand::PopBackdropFilter
             | DisplayCommand::BeginStickyLayer { .. }
             | DisplayCommand::EndStickyLayer => continue,
         };

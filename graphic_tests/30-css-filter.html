@@ -43,6 +43,35 @@
   }
   .f-hue-90  { filter: hue-rotate(90deg); }
   .f-hue-180 { filter: hue-rotate(180deg); }
+
+  /* Row 4: backdrop-filter test.
+     Parent uses opacity:0.999 to push to offscreen layer (level > 0),
+     enabling backdrop-filter children (from_level >= 2 requirement). */
+  .bd-scene {
+    position: relative;
+    width: 660px;
+    height: 120px;
+    opacity: 0.999;
+  }
+  .bd-bg {
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to right, #e53e3e 0%, #ed8936 20%, #ecc94b 40%, #48bb78 60%, #4299e1 80%, #9f7aea 100%);
+  }
+  .bd-card {
+    position: absolute;
+    top: 10px;
+    width: 90px;
+    height: 100px;
+    background: rgba(255,255,255,0.15);
+    border: 1px solid rgba(255,255,255,0.4);
+  }
+  .bd-blur   { left:   0; backdrop-filter: blur(8px); }
+  .bd-gray   { left: 110px; backdrop-filter: grayscale(1); }
+  .bd-bright { left: 220px; backdrop-filter: brightness(1.8); }
+  .bd-invert { left: 330px; backdrop-filter: invert(1); }
+  .bd-combo  { left: 440px; backdrop-filter: blur(4px) brightness(0.6); }
+  .bd-none   { left: 550px; /* no backdrop-filter, control */ }
 </style>
 </head>
 <body>
@@ -71,6 +100,19 @@
     <div class="hue-box f-none"></div>
     <div class="hue-box f-hue-90"></div>
     <div class="hue-box f-hue-180"></div>
+  </div>
+
+  <!-- Row 4: backdrop-filter (blur · grayscale · brightness · invert · combo · control) -->
+  <div class="row">
+    <div class="bd-scene">
+      <div class="bd-bg"></div>
+      <div class="bd-card bd-blur"></div>
+      <div class="bd-card bd-gray"></div>
+      <div class="bd-card bd-bright"></div>
+      <div class="bd-card bd-invert"></div>
+      <div class="bd-card bd-combo"></div>
+      <div class="bd-card bd-none"></div>
+    </div>
   </div>
 
 </div>

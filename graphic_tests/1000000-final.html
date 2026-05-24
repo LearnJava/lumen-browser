@@ -282,6 +282,19 @@
     <div style="width:80px;height:40px;background:linear-gradient(to right,#e53e3e 50%,#38a169 50%);filter:blur(4px);"></div>
   </div>
 
+  <!-- backdrop-filter (requires parent stacking context via opacity:0.999) -->
+  <div style="margin-top:8px; font-size:10px; color:#888;">backdrop-filter:</div>
+  <div style="display:flex; gap:6px;">
+    <div style="position:relative; width:280px; height:44px; opacity:0.999;">
+      <div style="position:absolute;inset:0;background:linear-gradient(to right,#e53e3e,#ecc94b,#48bb78,#4299e1,#9f7aea);"></div>
+      <div style="position:absolute;top:4px;left:0;width:40px;height:36px;background:rgba(255,255,255,0.15);backdrop-filter:blur(8px);"></div>
+      <div style="position:absolute;top:4px;left:50px;width:40px;height:36px;background:rgba(255,255,255,0.15);backdrop-filter:grayscale(1);"></div>
+      <div style="position:absolute;top:4px;left:100px;width:40px;height:36px;background:rgba(255,255,255,0.15);backdrop-filter:brightness(1.8);"></div>
+      <div style="position:absolute;top:4px;left:150px;width:40px;height:36px;background:rgba(255,255,255,0.15);backdrop-filter:invert(1);"></div>
+      <div style="position:absolute;top:4px;left:200px;width:40px;height:36px;background:rgba(255,255,255,0.15);backdrop-filter:blur(4px) brightness(0.6);"></div>
+    </div>
+  </div>
+
   <!-- clip-path -->
   <div style="margin-top:8px; font-size:10px; color:#888;">clip-path:</div>
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
