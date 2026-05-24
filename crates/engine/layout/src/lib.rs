@@ -6800,6 +6800,81 @@ mod tests {
     }
 
     #[test]
+    fn inline_block_row_without_text_has_no_strut_descent() {
+        // BUG-023 regression: ряд из одних пустых inline-block-ов не должен
+        // получать font-baseline strut (~font_size*0.2). Без фикса каждый
+        // ряд накапливал +3.2px (Fixed8: descent_px default = 16*0.2 = 3.2)
+        // и смещал последующие блоки вниз.
+        let root = lay_measured(
+            "<div><span></span><span></span></div>",
+            "span { display: inline-block; width: 50px; height: 80px; }",
+        body_w_or_default(),
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let row = div.children.iter().find(|c| matches!(&c.kind, BoxKind::InlineBlockRow)).unwrap();
+        // Без strut высота строки = max child margin-box = 80px.
+        assert!(
+            (row.rect.height - 80.0).abs() < 0.01,
+            "InlineBlockRow без текста должен иметь высоту 80 (без strut), got {}",
+            row.rect.height
+        );
+    }
+
+    #[test]
+    fn inline_block_row_with_text_keeps_strut_descent() {
+        // Контрольный случай: если в ряду есть текст (InlineRun), strut
+        // обязан добавлять descent под baseline, иначе сломается выравнивание
+        // текста с inline-block-ами по baseline. Сравниваем парную раскладку:
+        // ряд без текста должен быть ниже ряда с текстом, потому что
+        // в текстовом ряду InlineRun сам приносит ascent+descent, а strut
+        // дополнительно резервирует место под descent шрифта родителя.
+        let css = "span { display: inline-block; width: 50px; height: 20px; } \
+                   div { font-size: 16px; }";
+        let no_text = lay_measured("<div><span></span></div>", css, body_w_or_default());
+        let with_text = lay_measured("<div>txt<span></span></div>", css, body_w_or_default());
+        let row_no_text = no_text.children[0].children.iter()
+            .find(|c| matches!(&c.kind, BoxKind::InlineBlockRow)).unwrap();
+        let row_with_text = with_text.children[0].children.iter()
+            .find(|c| matches!(&c.kind, BoxKind::InlineBlockRow)).unwrap();
+        assert!(
+            (row_no_text.rect.height - 20.0).abs() < 0.01,
+            "Ряд без текста: 20px (inline-block.height), got {}",
+            row_no_text.rect.height
+        );
+        assert!(
+            row_with_text.rect.height > row_no_text.rect.height,
+            "Ряд с текстом должен быть выше ряда без текста (есть strut), got {} vs {}",
+            row_with_text.rect.height, row_no_text.rect.height
+        );
+    }
+
+    #[test]
+    fn inline_block_rows_no_drift_after_block_sep() {
+        // BUG-023: при чередовании InlineBlockRow без текста и блоков-разделителей
+        // позиция последующего ряда не должна смещаться из-за phantom-descent
+        // в предыдущем ряду.
+        let root = lay_measured(
+            "<div>\
+              <div class=ib></div><div class=ib></div>\
+              <div class=sep></div>\
+              <div class=ib></div><div class=ib></div>\
+             </div>",
+            ".ib { display: inline-block; width: 50px; height: 80px; } \
+             .sep { height: 40px; }",
+            body_w_or_default(),
+        );
+        let outer = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        // Ожидаемая раскладка: row1 (80) + sep (40) + row2 (80) = 200px.
+        assert!(
+            (outer.rect.height - 200.0).abs() < 0.01,
+            "Сумма высот должна быть 200 (без накопления strut), got {}",
+            outer.rect.height
+        );
+    }
+
+    fn body_w_or_default() -> f32 { 800.0 }
+
+    #[test]
     fn display_unknown_value_keeps_previous() {
         // unknown value игнорируется — лог по умолчанию остаётся.
         let root = lay("<p>x</p>", "p { display: zomg-flexed; }");

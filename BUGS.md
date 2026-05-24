@@ -34,7 +34,7 @@ BUG-014 | FIXED 2026-05-21 | image           | JPEG not decoded (PNG only)
 BUG-015 | OPEN             | shell/paint     | broken <img> src shows no alt text
 BUG-017 | FIXED 2026-05-22 | layout/paint    | text-decoration-style ignored (all render as solid)
 BUG-018 | FIXED 2026-05-22 | layout          | text-decoration-color ignored (always inherits text color)
-BUG-023 | OPEN             | layout+paint    | opacity deviation 2.20% — compositing correct; root: InlineBlockRow baseline + no edge-AA
+BUG-023 | OPEN             | layout+paint    | opacity deviation 2.20% — P1-часть FIXED 2026-05-24 (strut в строках без текста убран); остаток ~1.6% edge-AA в paint (P2)
 BUG-024 | FIXED 2026-05-21 | layout          | box-sizing: content-box — border not added to outer size; height% resolved against width
 BUG-025 | FIXED 2026-05-22 | layout          | max-height does not clamp block height; InlineSpace not included in shrink-to-fit width
 BUG-026 | FIXED 2026-05-22 | layout/paint    | <img> CSS/HTML width+height ignored — renders at natural size (remaining TEST-18 ~10%: BUG-032)
@@ -289,9 +289,9 @@ Block-элемент с `width: 400px` берёт 100% ширины viewport. П
 
 Opacity compositing математически корректен: `PushOpacity`/`PopOpacity` + off-screen layer composite shader (`c.rgb * in.alpha + white * (1 - in.alpha)`). TEST-13 (2.20%) не хуже TEST-02 color-named (2.35%) без opacity — т.е. opacity не добавляет ошибку.
 
-Оставшиеся 2.2%: (1) ~0.6% — InlineBlockRow добавляет 3.86px descender-зону из-за font-baseline strut, смещая opacity-боксы относительно Edge; (2) ~1.6% — edge antialiasing: Edge сглаживает рёбра, Lumen нет.
+**P1-часть FIXED 2026-05-24** (commit на ветке p1-bug-023-strut): InlineBlockRow больше не добавляет strut_descent в строках без InlineRun. Edge/Blink не расширяют line box font-strut'ом, когда в строке только inline-block/replaced элементы; ранее каждый такой ряд накапливал ~3.86 px (Inter, font-size:16) лишнего descender, смещая последующие блоки.
 
-**Для снижения ниже 1%:** P1-фикс InlineBlockRow baseline height + edge antialiasing в renderer (MSAA). Точечным фиксом в P2 не решается.
+Оставшиеся ~1.6% — edge antialiasing: Edge сглаживает рёбра, Lumen нет. Для снижения ниже 1% — MSAA/SSAA в renderer (P2).
 
 ---
 
