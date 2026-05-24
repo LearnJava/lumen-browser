@@ -404,6 +404,26 @@ pub enum DisplayCommand {
     PushFilter { filters: Vec<FilterFn> },
     /// Закрывает filter-группу.
     PopFilter,
+    /// CSS Filter Effects L1 §2 / Compositing L1 §13 — backdrop-filter.
+    ///
+    /// Открывает stacking-context-слой для элемента. При `PopBackdropFilter`
+    /// рендерер:
+    ///   1. Копирует содержимое parent-слоя в scratch (backdrop snapshot).
+    ///   2. Применяет `filters` к snapshot-у (те же GPU-проходы, что и
+    ///      `PushFilter`: Gaussian blur + color-matrix).
+    ///   3. Заменяет (REPLACE blend) область `bounds` в parent-слое
+    ///      отфильтрованным snapshot-ом.
+    ///   4. Composites содержимое element-слоя поверх parent (ALPHA_BLENDING).
+    ///
+    /// `bounds` — border-box элемента в CSS px (layout-координаты).
+    ///
+    /// Phase 0 limitation: работает только когда parent-слой является
+    /// offscreen layer (from_level > 1). При from_level == 1 (parent =
+    /// surface texture) backdrop-filter пропускается — surface texture
+    /// не поддерживает TEXTURE_BINDING в текущей конфигурации.
+    PushBackdropFilter { filters: Vec<FilterFn>, bounds: Rect },
+    /// Закрывает backdrop-filter-группу.
+    PopBackdropFilter,
     /// CSS Positioning L3 §6.3 — position:sticky layer.
     ///
     /// All content between `BeginStickyLayer` and `EndStickyLayer` is rendered
@@ -780,6 +800,17 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::PopFilter => {
                 out.push_str("PopFilter\n");
+            }
+            DisplayCommand::PushBackdropFilter { filters, bounds } => {
+                let names: Vec<&str> = filters.iter().map(filter_fn_name).collect();
+                out.push_str(&format!(
+                    "PushBackdropFilter [{fns}] bounds=({x:.0},{y:.0},{w:.0},{h:.0})\n",
+                    fns = names.join(", "),
+                    x = bounds.x, y = bounds.y, w = bounds.width, h = bounds.height,
+                ));
+            }
+            DisplayCommand::PopBackdropFilter => {
+                out.push_str("PopBackdropFilter\n");
             }
             DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right } => {
                 out.push_str(&format!(
@@ -1376,6 +1407,16 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> (Vec<Display
     if let Some(matrix) = transform {
         pre.push(DisplayCommand::PushTransform { matrix });
         post.push(DisplayCommand::PopTransform);
+    }
+    // backdrop-filter: outermost SC — captures parent content, filters it, then
+    // composites element on top. Must wrap PushFilter so the element's own `filter`
+    // applies to the element content before it's blended over the filtered backdrop.
+    if !s.backdrop_filter.is_empty() {
+        pre.push(DisplayCommand::PushBackdropFilter {
+            filters: s.backdrop_filter.clone(),
+            bounds: b.rect,
+        });
+        post.push(DisplayCommand::PopBackdropFilter);
     }
     if !s.filter.is_empty() {
         pre.push(DisplayCommand::PushFilter { filters: s.filter.clone() });
@@ -3737,6 +3778,8 @@ mod tests {
                 DisplayCommand::PopMask => "PopMask",
                 DisplayCommand::PushFilter { .. } => "PushFilter",
                 DisplayCommand::PopFilter => "PopFilter",
+                DisplayCommand::PushBackdropFilter { .. } => "PushBackdropFilter",
+                DisplayCommand::PopBackdropFilter => "PopBackdropFilter",
                 DisplayCommand::BeginStickyLayer { .. } => "BeginStickyLayer",
                 DisplayCommand::EndStickyLayer => "EndStickyLayer",
             })
@@ -5287,6 +5330,66 @@ mod tests {
             matches!(first, DisplayCommand::FillRect { .. }),
             "без blur первая команда — FillRect, не PushFilter"
         );
+    }
+
+    // ───────── backdrop-filter display list ─────────
+
+    #[test]
+    fn backdrop_filter_emits_push_pop_commands() {
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 100px; backdrop-filter: blur(8px); }",
+        );
+        let has_push = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::PushBackdropFilter { filters, .. }
+                if matches!(filters.as_slice(), [FilterFn::Blur(s)] if (*s - 8.0).abs() < 0.01))
+        });
+        assert!(has_push, "PushBackdropFilter(Blur(8)) должен быть в DL, got {dl:?}");
+        let has_pop = dl.iter().any(|c| matches!(c, DisplayCommand::PopBackdropFilter));
+        assert!(has_pop, "PopBackdropFilter должен быть в DL");
+    }
+
+    #[test]
+    fn backdrop_filter_bounds_match_element_rect() {
+        let dl = build(
+            "<div></div>",
+            "div { width: 200px; height: 100px; backdrop-filter: grayscale(1); }",
+        );
+        let push = dl.iter().find_map(|c| match c {
+            DisplayCommand::PushBackdropFilter { bounds, .. } => Some(*bounds),
+            _ => None,
+        });
+        let b = push.expect("PushBackdropFilter должен быть");
+        assert!((b.width - 200.0).abs() < 0.01, "bounds.width = {}", b.width);
+        assert!((b.height - 100.0).abs() < 0.01, "bounds.height = {}", b.height);
+    }
+
+    #[test]
+    fn backdrop_filter_chain_parsed_correctly() {
+        let dl = build(
+            "<div></div>",
+            "div { width: 50px; height: 50px; backdrop-filter: blur(4px) brightness(0.8); }",
+        );
+        let filters = dl.iter().find_map(|c| match c {
+            DisplayCommand::PushBackdropFilter { filters, .. } => Some(filters.clone()),
+            _ => None,
+        }).expect("PushBackdropFilter");
+        assert_eq!(filters.len(), 2);
+        assert!(matches!(filters[0], FilterFn::Blur(_)));
+        assert!(matches!(filters[1], FilterFn::Brightness(_)));
+    }
+
+    #[test]
+    fn backdrop_filter_and_filter_both_emit() {
+        // When both filter and backdrop-filter are set, both Push commands appear.
+        let dl = build(
+            "<div></div>",
+            "div { width: 50px; height: 50px; filter: invert(1); backdrop-filter: blur(6px); }",
+        );
+        let has_bf = dl.iter().any(|c| matches!(c, DisplayCommand::PushBackdropFilter { .. }));
+        let has_f = dl.iter().any(|c| matches!(c, DisplayCommand::PushFilter { .. }));
+        assert!(has_bf, "PushBackdropFilter должен быть");
+        assert!(has_f, "PushFilter должен быть");
     }
 
     // ───────── background-clip rendering ─────────

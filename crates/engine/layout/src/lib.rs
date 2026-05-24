@@ -7217,6 +7217,69 @@ mod tests {
         assert!(!div.style.filter.is_empty());
     }
 
+    // ──────── backdrop-filter ────────
+
+    #[test]
+    fn backdrop_filter_blur_parsed() {
+        let root = lay("<p>x</p>", "p { backdrop-filter: blur(10px); }");
+        let f = first_p_style(&root).backdrop_filter.clone();
+        assert_eq!(f, vec![FilterFn::Blur(10.0)]);
+    }
+
+    #[test]
+    fn backdrop_filter_grayscale_percentage() {
+        let root = lay("<p>x</p>", "p { backdrop-filter: grayscale(80%); }");
+        let f = first_p_style(&root).backdrop_filter.clone();
+        match &f[..] {
+            [FilterFn::Grayscale(v)] => assert!((v - 0.8).abs() < 1e-5),
+            _ => panic!("expected Grayscale(0.8), got {f:?}"),
+        }
+    }
+
+    #[test]
+    fn backdrop_filter_chain() {
+        let root = lay(
+            "<p>x</p>",
+            "p { backdrop-filter: blur(4px) brightness(1.5) saturate(2); }",
+        );
+        let f = first_p_style(&root).backdrop_filter.clone();
+        assert_eq!(f.len(), 3);
+        assert!(matches!(f[0], FilterFn::Blur(_)));
+        assert!(matches!(f[1], FilterFn::Brightness(_)));
+        assert!(matches!(f[2], FilterFn::Saturate(_)));
+    }
+
+    #[test]
+    fn backdrop_filter_none_clears() {
+        let root = lay("<p>x</p>", "p { backdrop-filter: blur(5px); backdrop-filter: none; }");
+        assert!(first_p_style(&root).backdrop_filter.is_empty());
+    }
+
+    #[test]
+    fn backdrop_filter_not_inherited() {
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { backdrop-filter: blur(5px); }",
+        );
+        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!(!div.style.backdrop_filter.is_empty(), "div должен иметь backdrop-filter");
+        assert!(p.style.backdrop_filter.is_empty(), "p не наследует backdrop-filter");
+    }
+
+    #[test]
+    fn backdrop_filter_and_filter_independent() {
+        let root = lay(
+            "<p>x</p>",
+            "p { filter: invert(1); backdrop-filter: blur(8px); }",
+        );
+        let s = first_p_style(&root);
+        assert!(!s.filter.is_empty(), "filter должен быть установлен");
+        assert!(!s.backdrop_filter.is_empty(), "backdrop-filter должен быть установлен");
+        assert!(matches!(s.filter[0], FilterFn::Invert(_)));
+        assert!(matches!(s.backdrop_filter[0], FilterFn::Blur(_)));
+    }
+
     // ──────── gap / aspect-ratio ────────
 
     #[test]

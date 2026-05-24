@@ -9,12 +9,12 @@ Legend: ✅ implemented · 🟡 parsed/stored, rendering deferred · ⬜ not sta
 
 ---
 
-## Quick stats (2026-05-24 list-markers)
+## Quick stats (2026-05-24 backdrop-filter)
 
 | Status | Properties |
 |--------|-----------|
-| ✅ Fully implemented | ~138 |
-| 🟡 Partial (parsed, not rendered) | ~89 |
+| ✅ Fully implemented | ~139 |
+| 🟡 Partial (parsed, not rendered) | ~88 |
 | ⬜ Not started | ~14 |
 | 🚫 Out of scope | ~20 |
 
@@ -63,7 +63,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 
 | Module | Spec | Status | Missing piece | Priority |
 |--------|------|--------|--------------|---------|
-| Filter Effects L1 | [filter-effects](https://www.w3.org/TR/filter-effects/) | 🟡 | backdrop-filter GPU compositing | **#13** |
+| Filter Effects L1 | [filter-effects](https://www.w3.org/TR/filter-effects/) | ✅ | backdrop-filter GPU compositing: PushBackdropFilter/PopBackdropFilter + 4 display-list tests + 6 layout tests + graphic test 30 2026-05-24 | **#13** |
 | CSS Masking | [css-masking](https://www.w3.org/TR/css-masking/) | 🟡 | mask-image GPU compositing | **#14** |
 | Compositing & Blending | [compositing](https://www.w3.org/TR/compositing/) | 🟡 | mix-blend-mode blend pipeline | **#15** |
 | CSS Pseudo-Elements L4 | [css-pseudo-4](https://www.w3.org/TR/css-pseudo-4/) | 🟡 | ::first-line/::first-letter split; ::marker; ::selection | **#16** |

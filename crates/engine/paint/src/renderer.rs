@@ -1216,6 +1216,15 @@ pub struct Renderer {
     blur_bgl: wgpu::BindGroupLayout,
     blur_pipeline: wgpu::RenderPipeline,
     blur_uniform: wgpu::Buffer,
+    /// CSS Filter Effects L1 §2 — backdrop-filter blit pipeline.
+    /// Same shader as `filter_pipeline` but uses REPLACE blend so the filtered
+    /// backdrop snapshot overwrites (not composites over) the parent layer at
+    /// the bounded element rect.
+    backdrop_blit_pipeline: wgpu::RenderPipeline,
+    /// Intermediate texture for backdrop-filter: ping-pong target for blur passes
+    /// (H: scratch → backdrop_layer; V: backdrop_layer → scratch), and color-filter
+    /// target when compositing filtered backdrop back onto parent.
+    backdrop_layer: Option<OffscreenLayer>,
     /// CSS Images L3 §3.3 — linear/radial gradient pipeline.
     gradient_bgl: wgpu::BindGroupLayout,
     gradient_pipeline: wgpu::RenderPipeline,
@@ -2191,6 +2200,44 @@ impl Renderer {
             cache: None,
         });
 
+        // ── Backdrop-filter blit pipeline ────────────────────────────────────
+        // Same shader + bind group layout as filter_pipeline, but REPLACE blend.
+        // Used to overwrite the parent layer's element-bounds region with the
+        // filtered backdrop snapshot (with optional color-matrix filter applied).
+        let backdrop_blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("backdrop-blit-pipeline"),
+            layout: Some(&filter_layout),
+            vertex: wgpu::VertexState {
+                module: &filter_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CompositeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+                        wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32, offset: 16, shader_location: 2 },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &filter_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState::REPLACE),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         // ── Gradient pipeline (linear + radial) ──────────────────────────────
         let gradient_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("gradient-bgl"),
@@ -2291,6 +2338,8 @@ impl Renderer {
             blur_bgl,
             blur_pipeline,
             blur_uniform,
+            backdrop_blit_pipeline,
+            backdrop_layer: None,
             gradient_bgl,
             gradient_pipeline,
             scratch_layer: None,
@@ -2771,7 +2820,13 @@ impl Renderer {
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
                 format: self.surface_format,
-                usage: wgpu::TextureUsages::COPY_DST | wgpu::TextureUsages::TEXTURE_BINDING,
+                // RENDER_ATTACHMENT: needed for blur V-pass (backdrop_layer → scratch)
+                //   and for blend-composite destination.
+                // COPY_DST: needed for copy_texture_to_texture (parent → scratch) in
+                //   backdrop-filter snapshot capture.
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::COPY_DST
+                    | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
             });
             let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -2792,6 +2847,20 @@ impl Renderer {
                 ],
             });
             self.scratch_layer = Some(OffscreenLayer { texture, view, bind_group, width, height });
+        }
+    }
+
+    /// Создаёт или пересоздаёт `backdrop_layer` нужного размера.
+    /// Используется как ping-pong target для blur-проходов backdrop-filter:
+    /// H-проход (scratch → backdrop_layer) и как промежуточный буфер для
+    /// color-filter применения.
+    fn ensure_backdrop_layer(&mut self, width: u32, height: u32) {
+        let needs_create = self
+            .backdrop_layer
+            .as_ref()
+            .is_none_or(|l| l.width != width || l.height != height);
+        if needs_create {
+            self.backdrop_layer = Some(self.create_layer_texture(width, height));
         }
     }
 
@@ -2932,11 +3001,23 @@ impl Renderer {
             filters: Vec<FilterFn>,
             comp_v_start: u32,
         }
+        // CSS Filter Effects L1 §2 / Compositing §13 — backdrop-filter plan.
+        // `from_level` = element's offscreen layer (content rendered here).
+        // `filters` = backdrop filter list.
+        // `comp_v_start` = fullscreen quad (blur passes + element composite).
+        // `bounds_v_start` = bounded quad (color-filter blit to parent at element bounds).
+        struct BackdropFilterCompositePlan {
+            from_level: usize,
+            filters: Vec<FilterFn>,
+            comp_v_start: u32,
+            bounds_v_start: u32,
+        }
         enum RenderPlanItem {
             Draw(DrawBatchPlan),
             Composite(CompositePlan),
             MaskComposite(MaskCompositePlan),
             FilterComposite(FilterCompositePlan),
+            BackdropFilterComposite(BackdropFilterCompositePlan),
         }
 
         let mut render_plan: Vec<RenderPlanItem> = Vec::new();
@@ -2960,6 +3041,8 @@ impl Renderer {
         let mut level_blend_mode_stack: Vec<BlendMode> = Vec::new();
         // Tracks filter list per opened offscreen level (for CSS filter compositing).
         let mut filter_stack: Vec<Vec<FilterFn>> = Vec::new();
+        // Stack for backdrop-filter: (filter_list, element_bounds_css_px).
+        let mut backdrop_filter_stack: Vec<(Vec<FilterFn>, lumen_core::geom::Rect)> = Vec::new();
         let mut level_first: Vec<bool> = vec![true];
         let mut batch_start: usize = 0;
 
@@ -3813,6 +3896,42 @@ impl Renderer {
                         current_level -= 1;
                     }
                 }
+                // CSS Filter Effects L1 §2 — backdrop-filter.
+                // Opens a new offscreen level for the element's own content.
+                DisplayCommand::PushBackdropFilter { filters, bounds } => {
+                    flush_batch!();
+                    backdrop_filter_stack.push((filters.clone(), *bounds));
+                    current_level += 1;
+                    while level_first.len() <= current_level {
+                        level_first.push(true);
+                    }
+                    level_first[current_level] = true;
+                }
+                DisplayCommand::PopBackdropFilter => {
+                    if let Some((filters, bounds)) = backdrop_filter_stack.pop() {
+                        flush_batch!();
+                        let comp_v_start = composite_vertices.len() as u32;
+                        push_composite_quad(&mut composite_vertices, 1.0);
+                        let bounds_v_start = composite_vertices.len() as u32;
+                        push_bounded_quad(
+                            &mut composite_vertices,
+                            bounds,
+                            surface_w as f32,
+                            surface_h as f32,
+                            dpr_f32,
+                            1.0,
+                        );
+                        render_plan.push(RenderPlanItem::BackdropFilterComposite(
+                            BackdropFilterCompositePlan {
+                                from_level: current_level,
+                                filters,
+                                comp_v_start,
+                                bounds_v_start,
+                            },
+                        ));
+                        current_level -= 1;
+                    }
+                }
                 // CSS Positioning L3 §6.3 — position:sticky.
                 // Offsets computed above; stack managed here to suppress unused-var warnings.
                 DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right } => {
@@ -4001,6 +4120,7 @@ impl Renderer {
             RenderPlanItem::Composite(c) => m.max(c.from_level),
             RenderPlanItem::MaskComposite(c) => m.max(c.from_level),
             RenderPlanItem::FilterComposite(c) => m.max(c.from_level),
+            RenderPlanItem::BackdropFilterComposite(c) => m.max(c.from_level),
         });
         if max_level > 0 {
             self.ensure_layer_textures(max_level, surface_w, surface_h);
@@ -4458,6 +4578,192 @@ impl Renderer {
                         pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
                     }
                 }
+                // CSS Filter Effects L1 §2 / Compositing §13 — backdrop-filter composite.
+                //
+                // Execution order:
+                //   1. copy parent layer → scratch (GPU texture copy)
+                //   2. blur scratch if needed (H: scratch → backdrop_layer, V: backdrop_layer → scratch)
+                //   3. blit scratch → parent at bounds with optional color filter (REPLACE blend)
+                //   4. composite element layer → parent (ALPHA_BLENDING, same as FilterComposite)
+                //
+                // Phase 0 limitation: skipped when from_level <= 1 (parent = surface texture,
+                // which lacks TEXTURE_BINDING and cannot be used as a copy source).
+                RenderPlanItem::BackdropFilterComposite(plan) => {
+                    // Need from_level >= 2: parent_idx = from_level - 2 indexes layer_textures.
+                    if plan.from_level < 2 { continue; }
+                    let Some(cvb) = &comp_vbuf else { continue };
+
+                    let parent_idx = plan.from_level - 2;
+                    let parent_w = self.layer_textures[parent_idx].width;
+                    let parent_h = self.layer_textures[parent_idx].height;
+                    self.ensure_scratch_layer(parent_w, parent_h);
+                    self.ensure_backdrop_layer(parent_w, parent_h);
+
+                    // Step 1: copy parent layer → scratch (full-texture copy).
+                    // parent has COPY_SRC, scratch has COPY_DST.
+                    let parent_copy = self.layer_textures[parent_idx].texture.as_image_copy();
+                    let scratch_copy = self.scratch_layer.as_ref().unwrap().texture.as_image_copy();
+                    encoder.copy_texture_to_texture(
+                        parent_copy,
+                        scratch_copy,
+                        wgpu::Extent3d { width: parent_w, height: parent_h, depth_or_array_layers: 1 },
+                    );
+
+                    // Step 2: apply blur if present (H: scratch → backdrop_layer, V: backdrop_layer → scratch).
+                    let blur_sigma = plan.filters.iter().find_map(|f| match f {
+                        FilterFn::Blur(s) if *s > 0.0 => Some(*s),
+                        _ => None,
+                    });
+                    if let Some(sigma) = blur_sigma {
+                        // H pass: scratch → backdrop_layer (REPLACE).
+                        let blur_h = BlurParamsCpu { sigma, direction: 0, _p0: 0, _p1: 0 };
+                        self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_h]));
+                        let scratch_view_h = &self.scratch_layer.as_ref().unwrap().view;
+                        let backdrop_view_h = &self.backdrop_layer.as_ref().unwrap().view;
+                        let blur_bg_h = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("backdrop-blur-h-bg"),
+                            layout: &self.blur_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(scratch_view_h) },
+                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
+                                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
+                            ],
+                        });
+                        {
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("backdrop-blur-h-pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: backdrop_view_h,
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            pass.set_pipeline(&self.blur_pipeline);
+                            pass.set_bind_group(0, &blur_bg_h, &[]);
+                            pass.set_vertex_buffer(0, cvb.slice(..));
+                            pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                        }
+                        // V pass: backdrop_layer → scratch (REPLACE).
+                        let blur_v = BlurParamsCpu { sigma, direction: 1, _p0: 0, _p1: 0 };
+                        self.queue.write_buffer(&self.blur_uniform, 0, as_bytes(&[blur_v]));
+                        let backdrop_view_v = &self.backdrop_layer.as_ref().unwrap().view;
+                        let scratch_view_v = &self.scratch_layer.as_ref().unwrap().view;
+                        let blur_bg_v = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("backdrop-blur-v-bg"),
+                            layout: &self.blur_bgl,
+                            entries: &[
+                                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(backdrop_view_v) },
+                                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
+                                wgpu::BindGroupEntry { binding: 2, resource: self.blur_uniform.as_entire_binding() },
+                            ],
+                        });
+                        {
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("backdrop-blur-v-pass"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: scratch_view_v,
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT), store: wgpu::StoreOp::Store },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            pass.set_pipeline(&self.blur_pipeline);
+                            pass.set_bind_group(0, &blur_bg_v, &[]);
+                            pass.set_vertex_buffer(0, cvb.slice(..));
+                            pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                        }
+                    }
+
+                    // Step 3: blit scratch → parent at element bounds (REPLACE blend).
+                    // Applies color filters (count > 0) or passthrough (count = 0).
+                    // Bounded quad ensures only the element's bounds region is overwritten.
+                    let mut bd_entries = [FilterEntryCpu { kind: 0, amount: 0.0, _p0: 0, _p1: 0 }; 8];
+                    let mut bd_color_count = 0u32;
+                    for f in &plan.filters {
+                        if !matches!(f, FilterFn::Blur(_)) && (bd_color_count as usize) < 8 {
+                            bd_entries[bd_color_count as usize] = filter_fn_to_entry(f);
+                            bd_color_count += 1;
+                        }
+                    }
+                    let bd_filter_params = FilterParamsCpu {
+                        count: bd_color_count, _pad0: 0, _pad1: 0, _pad2: 0,
+                        entries: bd_entries,
+                    };
+                    self.queue.write_buffer(&self.filter_uniform, 0, as_bytes(&[bd_filter_params]));
+                    let parent_dst_view = &self.layer_textures[parent_idx].view;
+                    let scratch_src_view = &self.scratch_layer.as_ref().unwrap().view;
+                    let bd_blit_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("backdrop-blit-bg"),
+                        layout: &self.filter_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(scratch_src_view) },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
+                            wgpu::BindGroupEntry { binding: 2, resource: self.filter_uniform.as_entire_binding() },
+                        ],
+                    });
+                    {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("backdrop-blit-pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: parent_dst_view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        pass.set_pipeline(&self.backdrop_blit_pipeline);
+                        pass.set_bind_group(0, &bd_blit_bg, &[]);
+                        pass.set_vertex_buffer(0, cvb.slice(..));
+                        pass.draw(plan.bounds_v_start..plan.bounds_v_start + 6, 0..1);
+                    }
+
+                    // Step 4: composite element layer → parent (ALPHA_BLENDING).
+                    // This is identical to FilterComposite's color-filter pass but with
+                    // count=0 (no element-level filter here; PushFilter handles that separately).
+                    let elem_filter_params = FilterParamsCpu {
+                        count: 0, _pad0: 0, _pad1: 0, _pad2: 0,
+                        entries: [FilterEntryCpu { kind: 0, amount: 0.0, _p0: 0, _p1: 0 }; 8],
+                    };
+                    self.queue.write_buffer(&self.filter_uniform, 0, as_bytes(&[elem_filter_params]));
+                    let elem_src_view = &self.layer_textures[plan.from_level - 1].view;
+                    let elem_filter_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("backdrop-elem-composite-bg"),
+                        layout: &self.filter_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(elem_src_view) },
+                            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
+                            wgpu::BindGroupEntry { binding: 2, resource: self.filter_uniform.as_entire_binding() },
+                        ],
+                    });
+                    {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("backdrop-elem-composite-pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: parent_dst_view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        pass.set_pipeline(&self.filter_pipeline);
+                        pass.set_bind_group(0, &elem_filter_bg, &[]);
+                        pass.set_vertex_buffer(0, cvb.slice(..));
+                        pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                    }
+                }
             }
         }
 
@@ -4877,6 +5183,40 @@ fn push_composite_quad(out: &mut Vec<CompositeVertex>, alpha: f32) {
         CompositeVertex { pos: [-1.0,  1.0], uv: [0.0, 0.0], alpha },
         CompositeVertex { pos: [ 1.0, -1.0], uv: [1.0, 1.0], alpha },
         CompositeVertex { pos: [-1.0, -1.0], uv: [0.0, 1.0], alpha },
+    ]);
+}
+
+/// Pushes 6 vertices for a quad covering only `bounds` (in CSS px) in screen
+/// space, sampling from the corresponding UV region of the source texture.
+///
+/// NDC x = css_x / vw * 2 - 1; NDC y = 1 - css_y / vh * 2 (Y flipped).
+/// UV  x = css_x / vw;         UV  y = css_y / vh.
+/// `vw = surf_w / dpr`, `vh = surf_h / dpr`.
+fn push_bounded_quad(
+    out: &mut Vec<CompositeVertex>,
+    bounds: lumen_core::geom::Rect,
+    surf_w: f32,
+    surf_h: f32,
+    dpr: f32,
+    alpha: f32,
+) {
+    let vw = surf_w / dpr;
+    let vh = surf_h / dpr;
+    let x0 = bounds.x / vw * 2.0 - 1.0;
+    let x1 = (bounds.x + bounds.width) / vw * 2.0 - 1.0;
+    let y0 = 1.0 - bounds.y / vh * 2.0;
+    let y1 = 1.0 - (bounds.y + bounds.height) / vh * 2.0;
+    let u0 = bounds.x / vw;
+    let u1 = (bounds.x + bounds.width) / vw;
+    let v0 = bounds.y / vh;
+    let v1 = (bounds.y + bounds.height) / vh;
+    out.extend_from_slice(&[
+        CompositeVertex { pos: [x0, y0], uv: [u0, v0], alpha },
+        CompositeVertex { pos: [x1, y0], uv: [u1, v0], alpha },
+        CompositeVertex { pos: [x1, y1], uv: [u1, v1], alpha },
+        CompositeVertex { pos: [x0, y0], uv: [u0, v0], alpha },
+        CompositeVertex { pos: [x1, y1], uv: [u1, v1], alpha },
+        CompositeVertex { pos: [x0, y1], uv: [u0, v1], alpha },
     ]);
 }
 
