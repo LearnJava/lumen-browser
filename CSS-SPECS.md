@@ -9,13 +9,13 @@ Legend: ✅ implemented · 🟡 parsed/stored, rendering deferred · ⬜ not sta
 
 ---
 
-## Quick stats (2026-05-23)
+## Quick stats (2026-05-24)
 
 | Status | Properties |
 |--------|-----------|
-| ✅ Fully implemented | ~136 |
+| ✅ Fully implemented | ~137 |
 | 🟡 Partial (parsed, not rendered) | ~90 |
-| ⬜ Not started | ~15 |
+| ⬜ Not started | ~14 |
 | 🚫 Out of scope | ~20 |
 
 ---
@@ -108,7 +108,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Fragmentation L3 | [css3-break](https://www.w3.org/TR/css3-break/) | ⬜ | break-before/after/inside | **#45** |
 | CSS Color L5 | [css-color-5](https://www.w3.org/TR/css-color-5/) | ⬜ | color-mix(); relative color syntax | **#46** |
 | CSS Fonts L5 | [css-fonts-5](https://www.w3.org/TR/css-fonts-5/) | ⬜ | font-palette; @font-palette-values | **#47** |
-| CSS Easing L2 | [css-easing-2](https://www.w3.org/TR/css-easing-2/) | ⬜ | linear() easing with keyframes | **#48** |
+| CSS Easing L2 | [css-easing-2](https://www.w3.org/TR/css-easing-2/) | ✅ | linear() easing TimingFunction::LinearStops 2026-05-24 | **#48** |
 | CSS Overscroll L1 | [css-overscroll-1](https://www.w3.org/TR/css-overscroll-1/) | 🟡 | gesture boundary handling | **#49** |
 | CSS Gap Decorations L1 | [css-gaps-1](https://www.w3.org/TR/css-gaps-1/) | ⬜ | decorative lines in gaps | **#50** |
 | CSS Env Variables L1 | [css-env-1](https://www.w3.org/TR/css-env-1/) | ⬜ | env() safe-area-inset-* | **#51** |
@@ -705,3 +705,4 @@ Ordered list of 🟡→✅ promotions for the P4 developer. One item = one featu
 | 28 | `backdrop-filter` GPU compositing pass | L | wgpu pipeline |
 | 29 | `writing-mode: vertical-*` axis swap | L | layout engine |
 | 30 | `subgrid` track inheritance | XL | grid engine |
+| 48 | `linear()` easing function | ✅ | TimingFunction::LinearStops + parse_linear_easing_stops + linear_stops_progress 2026-05-24 |
