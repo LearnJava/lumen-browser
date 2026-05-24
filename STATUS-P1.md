@@ -1,4 +1,5 @@
-In progress: (нет)
+In progress: cq* units (CSS Container Queries L1 §6.2)  branch: p1-cq-units
+Next step: commit → merge  STATUS-P1.md
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.

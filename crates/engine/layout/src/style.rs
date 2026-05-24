@@ -14,6 +14,7 @@
 //! вложенными `a`-предками могут промахнуться — это известное упрощение, до
 //! фазы со «честным» Selectors-движком.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
 use lumen_core::geom::Size;
@@ -7411,6 +7412,25 @@ fn relative_bolder(parent: FontWeight) -> FontWeight {
 /// настроек пользователя). Используется как базис для `rem`.
 pub const ROOT_FONT_SIZE: f32 = 16.0;
 
+thread_local! {
+    /// CSS Container Queries L1 §6.2 — nearest container dimensions for `cq*` unit resolution.
+    /// Set by `set_cq_context` before re-laying out container children; cleared afterwards.
+    /// Tuple: (inline_size_px, block_size_px). Block size is 0.0 when not queryable
+    /// (container-type: inline-size only exposes inline axis).
+    static CONTAINER_CQ: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
+}
+
+/// Sets the nearest-container size for `cq*` unit resolution during the container re-layout pass.
+/// `height` is `None` when the container is `inline-size` type (block axis not queryable).
+pub fn set_cq_context(width: f32, height: Option<f32>) {
+    CONTAINER_CQ.with(|c| c.set(Some((width, height.unwrap_or(0.0)))));
+}
+
+/// Clears the `cq*` context after the container re-layout pass completes.
+pub fn clear_cq_context() {
+    CONTAINER_CQ.with(|c| c.set(None));
+}
+
 /// CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
 /// отдельную семантику (centering). Typed; `%` резолвится при layout с
 /// known containing block. Initial value margin = `Length(Px(0.0))`, не `Auto`.
@@ -7480,6 +7500,23 @@ pub enum Length {
     Vmin(f32),
     /// `vmax` — 1% от большей из двух сторон viewport.
     Vmax(f32),
+    /// CSS Container Queries L1 §6.2 — `cqw`: 1% of the nearest container's inline size (width
+    /// in horizontal writing mode). Resolves via thread-local `CONTAINER_CQ`; returns `None`
+    /// outside a container re-layout pass.
+    Cqw(f32),
+    /// `cqh`: 1% of the nearest container's block size (height in horizontal writing mode).
+    /// Returns `None` when the container is `inline-size` type (block axis not queryable).
+    Cqh(f32),
+    /// `cqi`: 1% of the nearest container's inline size. Alias for `cqw` in horizontal writing
+    /// mode; writing-mode-aware in vertical contexts (Phase 0: treated as cqw).
+    Cqi(f32),
+    /// `cqb`: 1% of the nearest container's block size. Alias for `cqh` in horizontal writing
+    /// mode; writing-mode-aware (Phase 0: treated as cqh).
+    Cqb(f32),
+    /// `cqmin`: 1% of the smaller of `cqi` and `cqb`.
+    Cqmin(f32),
+    /// `cqmax`: 1% of the larger of `cqi` and `cqb`.
+    Cqmax(f32),
     /// CSS Values L4 §10 — `calc()` выражение. Резолвится через
     /// `CalcNode::resolve`, который рекурсивно вычисляет поддерево
     /// в `f32`-пикселях, используя те же `em_basis` / `percent_basis` /
@@ -7797,6 +7834,28 @@ impl Length {
             Length::Vw(v) => Some(*v / 100.0 * viewport.width),
             Length::Vmin(v) => Some(*v / 100.0 * viewport.width.min(viewport.height)),
             Length::Vmax(v) => Some(*v / 100.0 * viewport.width.max(viewport.height)),
+            // CSS Container Queries L1 §6.2 — resolved against the nearest container's
+            // dimensions, available via thread-local CONTAINER_CQ set before re-layout.
+            Length::Cqw(v) | Length::Cqi(v) => {
+                CONTAINER_CQ.with(|c| c.get()).map(|(w, _h)| *v / 100.0 * w)
+            }
+            Length::Cqh(v) | Length::Cqb(v) => {
+                // Block size is 0.0 when the container is `inline-size` type (not queryable).
+                CONTAINER_CQ.with(|c| c.get()).and_then(|(_w, h)| {
+                    if h > 0.0 { Some(*v / 100.0 * h) } else { None }
+                })
+            }
+            Length::Cqmin(v) => {
+                CONTAINER_CQ.with(|c| c.get()).and_then(|(w, h)| {
+                    // When block size is 0 (inline-size container), block axis is unknown → None.
+                    if h > 0.0 { Some(*v / 100.0 * w.min(h)) } else { None }
+                })
+            }
+            Length::Cqmax(v) => {
+                CONTAINER_CQ.with(|c| c.get()).and_then(|(w, h)| {
+                    if h > 0.0 { Some(*v / 100.0 * w.max(h)) } else { None }
+                })
+            }
             Length::Calc(node) => node.resolve(em_basis, percent_basis, viewport),
             // Intrinsic sizing keywords require layout context — not resolvable here.
             Length::MinContent | Length::MaxContent | Length::FitContent(_) => None,
@@ -7922,6 +7981,26 @@ fn parse_length_q(s: &str, is_quirks: bool) -> Option<Length> {
     }
     if let Some(num) = s.strip_suffix("vw") {
         return num.trim().parse::<f32>().ok().map(Length::Vw);
+    }
+    // ── Container-relative units (CSS Container Queries L1 §6.2) ─────────────
+    // Longer suffixes (cqmin/cqmax) before shorter (cqw/cqh/cqi/cqb).
+    if let Some(num) = s.strip_suffix("cqmin") {
+        return num.trim().parse::<f32>().ok().map(Length::Cqmin);
+    }
+    if let Some(num) = s.strip_suffix("cqmax") {
+        return num.trim().parse::<f32>().ok().map(Length::Cqmax);
+    }
+    if let Some(num) = s.strip_suffix("cqw") {
+        return num.trim().parse::<f32>().ok().map(Length::Cqw);
+    }
+    if let Some(num) = s.strip_suffix("cqh") {
+        return num.trim().parse::<f32>().ok().map(Length::Cqh);
+    }
+    if let Some(num) = s.strip_suffix("cqi") {
+        return num.trim().parse::<f32>().ok().map(Length::Cqi);
+    }
+    if let Some(num) = s.strip_suffix("cqb") {
+        return num.trim().parse::<f32>().ok().map(Length::Cqb);
     }
     // ── Absolute units → px at parse time (CSS Values L3 §5.2) ──────────────
     // Reference: 1in = 96px, 1pt = 1/72in = 4/3px, 1pc = 12pt = 16px,
@@ -8371,6 +8450,13 @@ fn calc_num_to_node(value: f32, unit: &str) -> Option<CalcNode> {
         "svw" | "dvw" | "lvw" => Length::Vw(value),
         "svmin" | "dvmin" | "lvmin" => Length::Vmin(value),
         "svmax" | "dvmax" | "lvmax" => Length::Vmax(value),
+        // CSS Container Queries L1 §6.2 — container-relative units.
+        "cqw" => Length::Cqw(value),
+        "cqh" => Length::Cqh(value),
+        "cqi" => Length::Cqi(value),
+        "cqb" => Length::Cqb(value),
+        "cqmin" => Length::Cqmin(value),
+        "cqmax" => Length::Cqmax(value),
         // Absolute units → px (CSS Values L3 §5.2, 96dpi reference pixel).
         "pt" => Length::Px(value * 4.0 / 3.0),
         "pc" => Length::Px(value * 16.0),
@@ -10356,6 +10442,12 @@ fn apply_declaration(
                     | Length::Vw(_)
                     | Length::Vmin(_)
                     | Length::Vmax(_)
+                    | Length::Cqw(_)
+                    | Length::Cqh(_)
+                    | Length::Cqi(_)
+                    | Length::Cqb(_)
+                    | Length::Cqmin(_)
+                    | Length::Cqmax(_)
                     | Length::Calc(_) => {
                         // Резолвим в px и переводим в коэффициент.
                         // Для calc() — то же самое: если выражение содержит
@@ -13362,6 +13454,14 @@ fn apply_font_size(
         Length::Vw(v) => *v / 100.0 * viewport.width,
         Length::Vmin(v) => *v / 100.0 * viewport.width.min(viewport.height),
         Length::Vmax(v) => *v / 100.0 * viewport.width.max(viewport.height),
+        // cq* units — resolved via CONTAINER_CQ thread-local (set during container re-layout).
+        Length::Cqw(_) | Length::Cqh(_) | Length::Cqi(_) | Length::Cqb(_)
+        | Length::Cqmin(_) | Length::Cqmax(_) => {
+            match len.resolve(parent_fs, None, viewport) {
+                Some(v) => v,
+                None => return,
+            }
+        }
         // `calc()` для font-size: резолвим с em_basis = parent_fs и
         // percent_basis = parent_fs (для `%` внутри выражения). vh/vw
         // используют viewport, что уже делает CalcNode::resolve.
@@ -21271,5 +21371,66 @@ mod tests {
         let (rx, ry) = split_radius_pair("30px 15px");
         assert_eq!(rx, "30px");
         assert_eq!(ry, Some("15px"));
+    }
+
+    // --- cq* units ---
+
+    #[test]
+    fn cq_units_parse() {
+        let vp = Size::new(1024.0, 768.0);
+        assert_eq!(parse_length("50cqw"), Some(Length::Cqw(50.0)));
+        assert_eq!(parse_length("30cqh"), Some(Length::Cqh(30.0)));
+        assert_eq!(parse_length("10cqi"), Some(Length::Cqi(10.0)));
+        assert_eq!(parse_length("20cqb"), Some(Length::Cqb(20.0)));
+        assert_eq!(parse_length("5cqmin"), Some(Length::Cqmin(5.0)));
+        assert_eq!(parse_length("5cqmax"), Some(Length::Cqmax(5.0)));
+        // Without container context, cq* resolve to None.
+        assert_eq!(Length::Cqw(50.0).resolve(16.0, None, vp), None);
+        assert_eq!(Length::Cqh(30.0).resolve(16.0, None, vp), None);
+    }
+
+    #[test]
+    fn cq_units_resolve_with_context() {
+        let vp = Size::new(1024.0, 768.0);
+        // Set a container context: 800px wide, 600px tall (size container).
+        set_cq_context(800.0, Some(600.0));
+
+        assert_eq!(Length::Cqw(50.0).resolve(16.0, None, vp), Some(400.0)); // 50% of 800
+        assert_eq!(Length::Cqi(10.0).resolve(16.0, None, vp), Some(80.0));  // 10% of 800
+        assert_eq!(Length::Cqh(25.0).resolve(16.0, None, vp), Some(150.0)); // 25% of 600
+        assert_eq!(Length::Cqb(50.0).resolve(16.0, None, vp), Some(300.0)); // 50% of 600
+        assert_eq!(Length::Cqmin(10.0).resolve(16.0, None, vp), Some(60.0)); // 10% of min(800,600)
+        assert_eq!(Length::Cqmax(10.0).resolve(16.0, None, vp), Some(80.0)); // 10% of max(800,600)
+
+        clear_cq_context();
+        // After clearing, cq* units return None again.
+        assert_eq!(Length::Cqw(50.0).resolve(16.0, None, vp), None);
+    }
+
+    #[test]
+    fn cq_units_inline_size_container() {
+        let vp = Size::new(1024.0, 768.0);
+        // inline-size container: block axis not queryable → height is None → stored as 0.0.
+        set_cq_context(400.0, None);
+
+        assert_eq!(Length::Cqw(25.0).resolve(16.0, None, vp), Some(100.0)); // 25% of 400
+        // cqh / cqb / cqmin / cqmax return None when block size is unavailable.
+        assert_eq!(Length::Cqh(50.0).resolve(16.0, None, vp), None);
+        assert_eq!(Length::Cqb(50.0).resolve(16.0, None, vp), None);
+        assert_eq!(Length::Cqmin(10.0).resolve(16.0, None, vp), None);
+        assert_eq!(Length::Cqmax(10.0).resolve(16.0, None, vp), None);
+
+        clear_cq_context();
+    }
+
+    #[test]
+    fn cq_units_in_calc() {
+        let vp = Size::new(1024.0, 768.0);
+        // calc(50cqw + 20px) inside a 600px container → 300 + 20 = 320px.
+        set_cq_context(600.0, Some(400.0));
+        let calc_len = parse_length("calc(50cqw + 20px)").expect("calc parse");
+        let px = calc_len.resolve(16.0, None, vp);
+        assert_eq!(px, Some(320.0));
+        clear_cq_context();
     }
 }
