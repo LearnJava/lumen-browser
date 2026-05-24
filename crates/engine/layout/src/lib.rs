@@ -85,13 +85,19 @@ pub trait TextMeasurer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::VerticalAlign;
+    use crate::style::{compute_style, VerticalAlign};
     use lumen_core::geom::Size;
 
     fn lay(html: &str, css: &str) -> LayoutBox {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         layout(&doc, &sheet, Size::new(800.0, 600.0))
+    }
+
+    fn lay_viewport(html: &str, css: &str, vp: Size) -> LayoutBox {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        layout(&doc, &sheet, vp)
     }
 
     /// Измеритель с фиксированной шириной 8px на символ.
@@ -11755,5 +11761,180 @@ mod tests {
         assert!((a.rect.y -  0.0).abs() < 0.1, "a.y={}", a.rect.y);
         assert!((b.rect.y - 25.0).abs() < 0.1, "b.y={}", b.rect.y);
         assert!((c.rect.y - 55.0).abs() < 0.1, "c.y={}", c.rect.y);
+    }
+
+    // ── CSS Intrinsic Sizing L3 — min-content / max-content / fit-content ────
+
+    /// `width: fit-content` на block-элементе с явной шириной потомка: бокс
+    /// сжимается до ширины потомка, не растягиваясь на весь контейнер.
+    #[test]
+    fn fit_content_shrinks_to_child_explicit_width() {
+        let root = lay(
+            "<div class='outer'><div class='inner'>x</div></div>",
+            ".outer { width: fit-content; }
+             .inner { width: 120px; height: 10px; }",
+        );
+        let outer = first_element_child(&root);
+        // outer's border-box should equal inner's 120px (no padding/border on outer).
+        assert!(
+            (outer.rect.width - 120.0).abs() < 1.0,
+            "outer.width={} expected≈120",
+            outer.rect.width
+        );
+    }
+
+    /// `width: fit-content` не выходит за пределы доступного пространства.
+    #[test]
+    fn fit_content_capped_at_available_width() {
+        // Container 200px wide; inner has explicit width 300px (wider than container).
+        let root = lay_viewport(
+            "<div class='outer'><div class='inner'>x</div></div>",
+            ".outer { width: fit-content; }
+             .inner { width: 300px; height: 10px; }",
+            Size { width: 200.0, height: 600.0 },
+        );
+        let outer = first_element_child(&root);
+        // fit-content = min(available=200, max-content=300) → 200.
+        assert!(
+            outer.rect.width <= 200.0 + 0.5,
+            "outer.width={} should be ≤ 200",
+            outer.rect.width
+        );
+    }
+
+    /// `width: max-content` expands past the container to fit content.
+    #[test]
+    fn max_content_expands_to_child_explicit_width() {
+        let root = lay_viewport(
+            "<div class='outer'><div class='inner'>x</div></div>",
+            ".outer { width: max-content; }
+             .inner { width: 500px; height: 10px; }",
+            Size { width: 200.0, height: 600.0 },
+        );
+        let outer = first_element_child(&root);
+        // max-content ignores available width — should be 500px.
+        assert!(
+            (outer.rect.width - 500.0).abs() < 1.0,
+            "outer.width={} expected≈500",
+            outer.rect.width
+        );
+    }
+
+    /// `width: min-content` with single-word text: box shrinks to word width.
+    #[test]
+    fn min_content_shrinks_to_word_width() {
+        // Fixed8 measurer: each char = 8px. "Hello" = 5 chars = 40px.
+        // Container is 800px wide. min-content should give 40px.
+        let root = lay_measured(
+            "<p class='p'>Hello</p>",
+            ".p { width: min-content; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        // With Fixed8 measurer: "Hello" = 5 × 8 = 40px.
+        assert!(
+            (p.rect.width - 40.0).abs() < 1.0,
+            "p.width={} expected≈40 (5 chars × 8px)",
+            p.rect.width
+        );
+    }
+
+    /// `width: fit-content` on block with text: shrinks to text width.
+    #[test]
+    fn fit_content_text_shrinks_within_container() {
+        // "Hi" = 2 chars × 8px = 16px; container = 800px.
+        let root = lay(
+            "<p class='p'>Hi</p>",
+            ".p { width: fit-content; }",
+        );
+        let p = first_element_child(&root);
+        assert!(
+            p.rect.width <= 800.0,
+            "p.width={} should be ≤ container",
+            p.rect.width
+        );
+        // Text content width = 16px. Box should shrink to ~16px (+ any padding).
+        assert!(
+            p.rect.width < 100.0,
+            "p.width={} should be much less than 800px (container)",
+            p.rect.width
+        );
+    }
+
+    /// `width: fit-content` with text: element shrinks to text content width.
+    #[test]
+    fn fit_content_text_node_shrinks_to_content() {
+        // "Hi" = 2 chars × 8px = 16px with Fixed8 measurer.
+        let root = lay_measured(
+            "<div class='d'>Hi</div>",
+            ".d { width: fit-content; }",
+            800.0,
+        );
+        let div = first_element_child(&root);
+        // Should shrink to text content width ≈ 16px, not fill the 800px container.
+        assert!(
+            div.rect.width < 100.0,
+            "div.width={} should shrink to ~16px",
+            div.rect.width
+        );
+        assert!(
+            div.rect.width >= 16.0,
+            "div.width={} should be at least text width 16px",
+            div.rect.width
+        );
+    }
+
+    /// `width: max-content` parsing: keyword stored correctly.
+    #[test]
+    fn max_content_keyword_parsed() {
+        let sheet = lumen_css_parser::parse(".x { width: max-content; }");
+        let doc = lumen_html_parser::parse("<div class='x'>a</div>");
+        let vp = Size { width: 800.0, height: 600.0 };
+        use crate::style::Length;
+        let children = doc.get(doc.root()).children.clone();
+        let div_id = children.into_iter().find(|&id| {
+            matches!(&doc.get(id).data, lumen_dom::NodeData::Element { name, .. } if name.local == "div")
+        }).unwrap();
+        let div_style = compute_style(&doc, div_id, &sheet, &ComputedStyle::root(), vp);
+        assert!(
+            matches!(div_style.width, Some(Length::MaxContent)),
+            "expected MaxContent, got {:?}", div_style.width
+        );
+    }
+
+    /// `width: min-content` and `width: fit-content` parsing round-trip.
+    #[test]
+    fn min_fit_content_keywords_parsed() {
+        let sheet = lumen_css_parser::parse(".a { width: min-content; } .b { width: fit-content; }");
+        let doc = lumen_html_parser::parse("<div class='a'></div><div class='b'></div>");
+        let root_style = ComputedStyle::root();
+        let vp = Size { width: 800.0, height: 600.0 };
+        use crate::style::Length;
+        let children = doc.get(doc.root()).children.clone();
+        let mut it = children.into_iter().filter(|&id| matches!(&doc.get(id).data, lumen_dom::NodeData::Element { .. }));
+        let a_id = it.next().unwrap();
+        let b_id = it.next().unwrap();
+        let a_style = compute_style(&doc, a_id, &sheet, &root_style, vp);
+        let b_style = compute_style(&doc, b_id, &sheet, &root_style, vp);
+        assert!(matches!(a_style.width, Some(Length::MinContent)), "got {:?}", a_style.width);
+        assert!(matches!(b_style.width, Some(Length::FitContent(None))), "got {:?}", b_style.width);
+    }
+
+    /// `fit-content(<length>)` functional form: parsed with inner length.
+    #[test]
+    fn fit_content_functional_form_parsed() {
+        let sheet = lumen_css_parser::parse(".x { width: fit-content(200px); }");
+        let doc = lumen_html_parser::parse("<div class='x'>a</div>");
+        let vp = Size { width: 800.0, height: 600.0 };
+        use crate::style::Length;
+        let children = doc.get(doc.root()).children.clone();
+        let div_id = children.into_iter().find(|&id| {
+            matches!(&doc.get(id).data, lumen_dom::NodeData::Element { name, .. } if name.local == "div")
+        }).unwrap();
+        let style = compute_style(&doc, div_id, &sheet, &ComputedStyle::root(), vp);
+        assert!(
+            matches!(style.width, Some(Length::FitContent(Some(_)))),
+            "expected FitContent(Some(200px)), got {:?}", style.width
+        );
     }
 }

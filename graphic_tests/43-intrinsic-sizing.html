@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<!-- TEST-43: CSS Intrinsic Sizing L3 — width: max-content / min-content / fit-content
+     All containers use fixed-width block children so intrinsic sizes are deterministic
+     and independent of font metrics.
+     Each pair: gray reference bar (explicit width) + green test bar (intrinsic keyword).
+     Widths must visually match (left+right edges align). -->
+<html>
+<head>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f {
+    background: #1a202c;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    padding: 24px;
+    overflow: hidden;
+  }
+  /* gray baseline = explicit expected width */
+  .ref  { height: 28px; background: #718096; margin-bottom: 4px; }
+  /* green = intrinsic-sized container; must match ref */
+  .test { height: 28px; background: #38a169; margin-bottom: 20px; overflow: hidden; }
+</style>
+</head>
+<body>
+  <div class="__f">
+
+    <!-- max-content: outer expands to child's 300px -->
+    <div class="ref"  style="width: 300px;"></div>
+    <div class="test" style="width: max-content;">
+      <div style="width: 300px; height: 100%;"></div>
+    </div>
+
+    <!-- min-content: block child at 250px → min-content = 250px -->
+    <div class="ref"  style="width: 250px;"></div>
+    <div class="test" style="width: min-content;">
+      <div style="width: 250px; height: 100%;"></div>
+    </div>
+
+    <!-- fit-content: child 400px, avail ~974px → fit-content = 400px -->
+    <div class="ref"  style="width: 400px;"></div>
+    <div class="test" style="width: fit-content;">
+      <div style="width: 400px; height: 100%;"></div>
+    </div>
+
+    <!-- fit-content: child 180px → fit-content = 180px -->
+    <div class="ref"  style="width: 180px;"></div>
+    <div class="test" style="width: fit-content;">
+      <div style="width: 180px; height: 100%;"></div>
+    </div>
+
+    <!-- max-content: wider child 600px -->
+    <div class="ref"  style="width: 600px;"></div>
+    <div class="test" style="width: max-content;">
+      <div style="width: 600px; height: 100%;"></div>
+    </div>
+
+    <!-- min-content with two children: wider child 500px, narrower 200px
+         → min-content of block container = max of children min-contents = 500px -->
+    <div class="ref"  style="width: 500px;"></div>
+    <div class="test" style="width: min-content;">
+      <div style="width: 500px; height: 14px;"></div>
+      <div style="width: 200px; height: 14px;"></div>
+    </div>
+
+  </div>
+</body>
+</html>

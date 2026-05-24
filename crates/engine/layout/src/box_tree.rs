@@ -1213,6 +1213,133 @@ fn preferred_inline_block_width(
     }
 }
 
+/// CSS Intrinsic Sizing L3 §4 — max-content border-box width of `b`.
+///
+/// The max-content width is the width a box would use if line breaking were
+/// suppressed: all content on one line. For block containers this is the
+/// maximum over children's max-content widths. For `InlineRun` boxes it is
+/// the sum of all segment text widths (no wrapping). Includes the box's own
+/// padding + border in the returned value (border-box width).
+///
+/// Phase-0 approximation: only `char_width` per-character measurement is
+/// available; inter-word spacing is included, but features like ligatures or
+/// kerning are not. Word-break is not applied — text is treated as one run.
+fn max_content_outer_width(
+    b: &LayoutBox,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
+    let s = &b.style;
+    let em = s.font_size;
+    let pl = s.padding_left.resolve_or_zero(em, 0.0, viewport);
+    let pr = s.padding_right.resolve_or_zero(em, 0.0, viewport);
+    // Explicit non-intrinsic CSS width takes precedence (same logic as
+    // preferred_inline_block_width).
+    if let Some(w_len) = &s.width
+        && !w_len.is_intrinsic()
+        && let Some(w) = w_len.resolve(em, Some(0.0), viewport)
+    {
+        let outer = match s.box_sizing {
+            BoxSizing::ContentBox => w + pl + pr + s.border_left_width + s.border_right_width,
+            BoxSizing::BorderBox => w.max(pl + pr + s.border_left_width + s.border_right_width),
+        };
+        return outer.max(0.0);
+    }
+    let content_w = match &b.kind {
+        BoxKind::InlineRun { segments, .. } => {
+            // max-content = all segments on one line (no wrapping).
+            measurer.map_or(0.0, |m| {
+                segments.iter().map(|seg| {
+                    let ls = seg.style.letter_spacing;
+                    let ts = seg.style.tab_size * m.char_width(' ', seg.style.font_size);
+                    measure_text_w(&seg.text, seg.style.font_size, ls, ts, m)
+                }).sum()
+            })
+        }
+        BoxKind::InlineBlockRow => {
+            b.children.iter().map(|c| {
+                if matches!(c.kind, BoxKind::InlineSpace) {
+                    return measurer.map_or(0.0, |m| m.char_width(' ', c.style.font_size));
+                }
+                let cw = max_content_outer_width(c, measurer, viewport);
+                let cem = c.style.font_size;
+                let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+                let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+                cw + ml + mr
+            }).sum()
+        }
+        _ => {
+            b.children.iter()
+                .map(|c| max_content_outer_width(c, measurer, viewport))
+                .fold(0.0_f32, f32::max)
+        }
+    };
+    (content_w + pl + pr + s.border_left_width + s.border_right_width).max(0.0)
+}
+
+/// CSS Intrinsic Sizing L3 §4 — min-content border-box width of `b`.
+///
+/// The min-content width is the narrowest a box can be without overflowing:
+/// the width of the longest unbreakable content unit (word, image, etc.).
+///
+/// Phase-0 approximation: computes the max word width per `InlineRun` by
+/// splitting on ASCII whitespace. This gives correct results for Latin text
+/// but may overestimate for languages without whitespace-based word breaks.
+fn min_content_outer_width(
+    b: &LayoutBox,
+    measurer: Option<&dyn TextMeasurer>,
+    viewport: Size,
+) -> f32 {
+    let s = &b.style;
+    let em = s.font_size;
+    let pl = s.padding_left.resolve_or_zero(em, 0.0, viewport);
+    let pr = s.padding_right.resolve_or_zero(em, 0.0, viewport);
+    if let Some(w_len) = &s.width
+        && !w_len.is_intrinsic()
+        && let Some(w) = w_len.resolve(em, Some(0.0), viewport)
+    {
+        let outer = match s.box_sizing {
+            BoxSizing::ContentBox => w + pl + pr + s.border_left_width + s.border_right_width,
+            BoxSizing::BorderBox => w.max(pl + pr + s.border_left_width + s.border_right_width),
+        };
+        return outer.max(0.0);
+    }
+    let content_w = match &b.kind {
+        BoxKind::InlineRun { segments, .. } => {
+            // min-content = longest single word across all segments.
+            measurer.map_or(0.0, |m| {
+                segments.iter().flat_map(|seg| {
+                    let ls = seg.style.letter_spacing;
+                    let ts = seg.style.tab_size * m.char_width(' ', seg.style.font_size);
+                    // Split on whitespace to find individual "words".
+                    seg.text.split_whitespace().map(move |word| {
+                        measure_text_w(word, seg.style.font_size, ls, ts, m)
+                    })
+                }).fold(0.0_f32, f32::max)
+            })
+        }
+        BoxKind::InlineBlockRow => {
+            // For inline-block row, min-content is the max over children.
+            b.children.iter().map(|c| {
+                if matches!(c.kind, BoxKind::InlineSpace) {
+                    return 0.0; // spaces are breakable
+                }
+                let cw = min_content_outer_width(c, measurer, viewport);
+                let cem = c.style.font_size;
+                let ml = c.style.margin_left.resolve_or_zero(cem, 0.0, viewport);
+                let mr = c.style.margin_right.resolve_or_zero(cem, 0.0, viewport);
+                cw + ml + mr
+            }).fold(0.0_f32, f32::max)
+        }
+        _ => {
+            b.children.iter()
+                .map(|c| min_content_outer_width(c, measurer, viewport))
+                .fold(0.0_f32, f32::max)
+        }
+    };
+    (content_w + pl + pr + s.border_left_width + s.border_right_width).max(0.0)
+}
+
 /// Рекурсивно смещает rect.y всего поддерева на dy (для vertical-align).
 fn shift_y_box(b: &mut LayoutBox, dy: f32) {
     b.rect.y += dy;
@@ -1352,16 +1479,45 @@ fn lay_out(
     // box-sizing определяет, к какой части бокса относится `width`:
     //   - content-box: width — это размер контента, padding+border прибавляются;
     //   - border-box: width — общий размер вместе с padding+border.
-    if let Some(w_len) = &s.width
-        && let Some(w) = w_len.resolve(em, Some(cb), viewport)
-    {
-        b.rect.width = match s.box_sizing {
-            BoxSizing::ContentBox => (w + padding_left + padding_right
-                + s.border_left_width + s.border_right_width).max(0.0),
-            BoxSizing::BorderBox => w.max(padding_left + padding_right + s.border_left_width + s.border_right_width),
-        };
+    if let Some(w_len) = &s.width {
+        if w_len.is_intrinsic() {
+            // CSS Intrinsic Sizing L3 §4 — min-content / max-content / fit-content.
+            // max_content_outer_width / min_content_outer_width already include
+            // the box's own padding+border (border-box width), so we assign directly.
+            let avail_bb = (available_width - margin_left - margin_right).max(0.0);
+            b.rect.width = match w_len {
+                Length::MaxContent => max_content_outer_width(b, measurer, viewport),
+                Length::MinContent => min_content_outer_width(b, measurer, viewport),
+                Length::FitContent(max_arg) => {
+                    let max_c = max_content_outer_width(b, measurer, viewport);
+                    if let Some(arg) = max_arg {
+                        // fit-content(<length>) = min(avail, max(min-content, arg))
+                        let min_c = min_content_outer_width(b, measurer, viewport);
+                        let arg_px = arg.resolve(em, Some(cb), viewport).unwrap_or(avail_bb);
+                        // arg_px is a content-box length; convert to border-box:
+                        let arg_bb = match s.box_sizing {
+                            BoxSizing::ContentBox => arg_px + padding_left + padding_right
+                                + s.border_left_width + s.border_right_width,
+                            BoxSizing::BorderBox => arg_px,
+                        };
+                        max_c.min(min_c.max(arg_bb)).min(avail_bb)
+                    } else {
+                        // fit-content = min(available, max-content)
+                        max_c.min(avail_bb)
+                    }
+                }
+                _ => unreachable!(),
+            };
+        } else if let Some(w) = w_len.resolve(em, Some(cb), viewport) {
+            b.rect.width = match s.box_sizing {
+                BoxSizing::ContentBox => (w + padding_left + padding_right
+                    + s.border_left_width + s.border_right_width).max(0.0),
+                BoxSizing::BorderBox => w.max(padding_left + padding_right + s.border_left_width + s.border_right_width),
+            };
+        }
     }
     // CSS 2.1 §10.4: tentative width → clamp в [min-width, max-width].
+    // Intrinsic keywords in min-/max- also resolve to intrinsic values here.
     // Порядок «max сначала, потом min» автоматически даёт правило
     // «при min > max побеждает min». min-/max- интерпретируются в той же
     // box-sizing модели, что и width: content-box добавляет padding+border,
@@ -1371,15 +1527,25 @@ fn lay_out(
             + s.border_left_width + s.border_right_width,
         BoxSizing::BorderBox => v,
     };
-    if let Some(max_len) = &s.max_width
-        && let Some(max_w) = max_len.resolve(em, Some(cb), viewport)
-    {
-        b.rect.width = b.rect.width.min(outer_horiz(max_w).max(0.0));
+    if let Some(max_len) = &s.max_width {
+        let max_bb = if max_len.is_intrinsic() {
+            Some(max_content_outer_width(b, measurer, viewport))
+        } else {
+            max_len.resolve(em, Some(cb), viewport).map(|v| outer_horiz(v).max(0.0))
+        };
+        if let Some(max_w) = max_bb {
+            b.rect.width = b.rect.width.min(max_w);
+        }
     }
-    if let Some(min_len) = &s.min_width
-        && let Some(min_w) = min_len.resolve(em, Some(cb), viewport)
-    {
-        b.rect.width = b.rect.width.max(outer_horiz(min_w.max(0.0)));
+    if let Some(min_len) = &s.min_width {
+        let min_bb = if min_len.is_intrinsic() {
+            Some(min_content_outer_width(b, measurer, viewport))
+        } else {
+            min_len.resolve(em, Some(cb), viewport).map(|v| outer_horiz(v.max(0.0)))
+        };
+        if let Some(min_w) = min_bb {
+            b.rect.width = b.rect.width.max(min_w);
+        }
     }
     // Phase 0 shrink-to-fit для inline-block без явной CSS width.
     // Полный алгоритм (CSS 2.1 §10.3.9) требует двух проходов; здесь —

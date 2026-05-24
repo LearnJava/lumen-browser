@@ -7485,6 +7485,19 @@ pub enum Length {
     /// в `f32`-пикселях, используя те же `em_basis` / `percent_basis` /
     /// `viewport`, что и обычный `Length`.
     Calc(Box<CalcNode>),
+    /// CSS Intrinsic Sizing L3 §4 — `min-content` keyword.
+    /// Minimum content width: narrowest the box can be without overflowing
+    /// its content (longest word / longest unbreakable run). Needs layout
+    /// context to resolve; `resolve()` returns `None`.
+    MinContent,
+    /// CSS Intrinsic Sizing L3 §4 — `max-content` keyword.
+    /// Maximum content width: as wide as the content prefers with no forced
+    /// line breaks. Needs layout context to resolve; `resolve()` returns `None`.
+    MaxContent,
+    /// CSS Intrinsic Sizing L3 §4 — `fit-content` / `fit-content(<length>)`.
+    /// Bare `fit-content` = `min(available, max-content)`. With argument =
+    /// `min(available, max(min-content, arg))`. Needs layout context.
+    FitContent(Option<Box<Length>>),
 }
 
 /// CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
@@ -7785,7 +7798,15 @@ impl Length {
             Length::Vmin(v) => Some(*v / 100.0 * viewport.width.min(viewport.height)),
             Length::Vmax(v) => Some(*v / 100.0 * viewport.width.max(viewport.height)),
             Length::Calc(node) => node.resolve(em_basis, percent_basis, viewport),
+            // Intrinsic sizing keywords require layout context — not resolvable here.
+            Length::MinContent | Length::MaxContent | Length::FitContent(_) => None,
         }
+    }
+
+    /// Returns `true` if this is an intrinsic sizing keyword (min-content,
+    /// max-content, or fit-content). These are handled specially in layout.
+    pub fn is_intrinsic(&self) -> bool {
+        matches!(self, Length::MinContent | Length::MaxContent | Length::FitContent(_))
     }
 
     /// Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче.
@@ -7801,6 +7822,31 @@ impl Length {
             Length::Px(v) => *v,
             _ => 0.0,
         }
+    }
+}
+
+/// Парсит sizing-значение для `width`/`height`/`min-width`/`max-width` и т.д.
+/// Обрабатывает:
+/// - `auto` → `None`
+/// - `min-content` / `max-content` → `Some(Length::MinContent/MaxContent)`
+/// - `fit-content` → `Some(Length::FitContent(None))`
+/// - `fit-content(<length>)` → `Some(Length::FitContent(Some(l)))`
+/// - всё остальное → `parse_length_q()`
+fn parse_sizing_length(s: &str, is_quirks: bool) -> Option<Length> {
+    let v = s.trim();
+    match v {
+        "auto" => None,
+        "min-content" => Some(Length::MinContent),
+        "max-content" => Some(Length::MaxContent),
+        "fit-content" | "stretch" | "-webkit-fill-available" | "-moz-available" => {
+            // CSS Sizing L3/L4 §4: stretch = fill available; treat same as fit-content.
+            Some(Length::FitContent(None))
+        }
+        _ if v.starts_with("fit-content(") && v.ends_with(')') => {
+            let inner = &v["fit-content(".len()..v.len() - 1];
+            Some(Length::FitContent(parse_length_q(inner, is_quirks).map(Box::new)))
+        }
+        _ => parse_length_q(s, is_quirks),
     }
 }
 
@@ -8911,29 +8957,21 @@ fn apply_declaration(
             apply_grid_area_shorthand(val, style);
         }
         "width" => {
-            // `auto` = None (сдвигается на контейнер); иначе typed Length.
-            if val.trim() == "auto" {
-                style.width = None;
-            } else {
-                style.width = parse_length_q(val, is_quirks);
-            }
+            // `auto` = None; intrinsic keywords = MinContent/MaxContent/FitContent.
+            style.width = parse_sizing_length(val, is_quirks);
         }
         "height" => {
-            if val.trim() == "auto" {
-                style.height = None;
-            } else {
-                style.height = parse_length_q(val, is_quirks);
-            }
+            style.height = parse_sizing_length(val, is_quirks);
         }
         // CSS 2.1 §10.4: min-/max- ширина и высота. Отрицательные `<length>`
         // запрещены — сохраняем typed, фильтрация при resolve в box_tree.
         // `auto` для min-* = None (Phase 0: эквивалентно 0); `none` для
         // max-* = None (без ограничения). `%` теперь сохраняется, резолв
-        // при layout с known cb_width.
+        // при layout с known cb_width. Intrinsic keywords accepted here too.
         "min-width" => {
             if val.trim() == "auto" {
                 style.min_width = None;
-            } else if let Some(len) = parse_length_q(val, is_quirks)
+            } else if let Some(len) = parse_sizing_length(val, is_quirks)
                 && !matches!(&len, Length::Px(v) if *v < 0.0)
             {
                 style.min_width = Some(len);
@@ -8942,7 +8980,7 @@ fn apply_declaration(
         "max-width" => {
             if val.trim() == "none" {
                 style.max_width = None;
-            } else if let Some(len) = parse_length_q(val, is_quirks)
+            } else if let Some(len) = parse_sizing_length(val, is_quirks)
                 && !matches!(&len, Length::Px(v) if *v < 0.0)
             {
                 style.max_width = Some(len);
@@ -8951,7 +8989,7 @@ fn apply_declaration(
         "min-height" => {
             if val.trim() == "auto" {
                 style.min_height = None;
-            } else if let Some(len) = parse_length_q(val, is_quirks)
+            } else if let Some(len) = parse_sizing_length(val, is_quirks)
                 && !matches!(&len, Length::Px(v) if *v < 0.0)
             {
                 style.min_height = Some(len);
@@ -8960,7 +8998,7 @@ fn apply_declaration(
         "max-height" => {
             if val.trim() == "none" {
                 style.max_height = None;
-            } else if let Some(len) = parse_length_q(val, is_quirks)
+            } else if let Some(len) = parse_sizing_length(val, is_quirks)
                 && !matches!(&len, Length::Px(v) if *v < 0.0)
             {
                 style.max_height = Some(len);
@@ -10331,6 +10369,8 @@ fn apply_declaration(
                             style.line_height = px / style.font_size;
                         }
                     }
+                    // Intrinsic keywords not meaningful for line-height — ignore.
+                    Length::MinContent | Length::MaxContent | Length::FitContent(_) => {}
                 }
             }
         }
@@ -13328,6 +13368,8 @@ fn apply_font_size(
             Some(v) => v,
             None => return,
         },
+        // Intrinsic keywords not meaningful for font-size — ignore.
+        Length::MinContent | Length::MaxContent | Length::FitContent(_) => return,
     };
 }
 
