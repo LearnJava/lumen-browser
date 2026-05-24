@@ -27,6 +27,10 @@ fn fmt_len(l: &Length) -> String {
         Length::Vmin(v) => format!("{v:.2}vmin"),
         Length::Vmax(v) => format!("{v:.2}vmax"),
         Length::Calc(_) => "calc(?)".to_string(),
+        Length::MinContent => "min-content".to_string(),
+        Length::MaxContent => "max-content".to_string(),
+        Length::FitContent(None) => "fit-content".to_string(),
+        Length::FitContent(Some(inner)) => format!("fit-content({})", fmt_len(inner)),
     }
 }
 
