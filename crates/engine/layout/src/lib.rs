@@ -80,6 +80,14 @@ pub trait TextMeasurer {
     fn descent_px(&self, font_size_px: f32) -> f32 {
         font_size_px * 0.2
     }
+
+    /// Ascent шрифта в пикселях при размере `font_size_px`.
+    /// Расстояние от baseline до верхнего края content area.
+    /// Используется paint-кодом для точного позиционирования baseline
+    /// внутри line-box с учётом half-leading (CSS 2.1 §10.8.1).
+    fn ascent_px(&self, font_size_px: f32) -> f32 {
+        font_size_px * 0.8
+    }
 }
 
 #[cfg(test)]
@@ -11334,14 +11342,19 @@ mod tests {
     }
 
     #[test]
-    fn vertical_align_baseline_y_offset_zero() {
-        // baseline (default) — y_offset == 0 для текста.
+    fn vertical_align_baseline_y_offset_half_leading() {
+        // baseline — y_offset == half_leading = (line_h - font_size) / 2.
+        // CSS 2.1 §10.8.1: content area is centred in line-box via half-leading.
         let root = lay_measured("<p>Hello</p>", "", 800.0);
         let p = first_element_child(&root);
         let frag = first_inline_run_frag(p);
+        let fs = frag.style.font_size;
+        let line_h = fs * frag.style.line_height;
+        let expected = ((line_h - fs) / 2.0).max(0.0);
         assert!(
-            frag.y_offset.abs() < 0.001,
-            "baseline y_offset must be 0, got {}",
+            (frag.y_offset - expected).abs() < 0.01,
+            "baseline y_offset must be half_leading={}, got {}",
+            expected,
             frag.y_offset
         );
     }
@@ -11390,7 +11403,8 @@ mod tests {
 
     #[test]
     fn vertical_align_length_shifts_up() {
-        // vertical-align: 8px → y_offset = -8.0 (позитивная длина CSS = вверх = отрицательный y).
+        // vertical-align: 8px → y_offset = half_leading - 8px
+        // (позитивная длина CSS = вверх от baseline = half_leading - 8).
         let root = lay_measured(
             "<p><span>Hi</span></p>",
             "span { vertical-align: 8px; }",
@@ -11398,9 +11412,14 @@ mod tests {
         );
         let p = first_element_child(&root);
         let frag = first_inline_run_frag(p);
+        let fs = frag.style.font_size;
+        let line_h = fs * frag.style.line_height;
+        let half_leading = ((line_h - fs) / 2.0).max(0.0);
+        let expected = half_leading - 8.0;
         assert!(
-            (frag.y_offset - (-8.0_f32)).abs() < 0.01,
-            "length 8px y_offset: expected -8.0, got {}",
+            (frag.y_offset - expected).abs() < 0.01,
+            "length 8px y_offset: expected {}, got {}",
+            expected,
             frag.y_offset
         );
     }
@@ -11428,6 +11447,63 @@ mod tests {
             frag.y_offset > 0.0,
             "sub y_offset must be positive, got {}",
             frag.y_offset
+        );
+    }
+
+    // ── Half-leading (CSS 2.1 §10.8.1) ──────────────────────────────────────
+
+    #[test]
+    fn half_leading_baseline_centred_in_line_box() {
+        // line-height: 2.0 → half_leading = (32 - 16) / 2 = 8px for 16px font.
+        // Baseline фрагмента должен быть смещён на 8px вниз от верха строки.
+        let root = lay_measured(
+            "<p>Hello</p>",
+            "p { line-height: 2.0; font-size: 16px; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let frag = first_inline_run_frag(p);
+        let expected_half_leading = 8.0_f32; // (32 - 16) / 2
+        assert!(
+            (frag.y_offset - expected_half_leading).abs() < 0.1,
+            "half_leading with line-height:2: expected y_offset={}, got {}",
+            expected_half_leading,
+            frag.y_offset
+        );
+    }
+
+    #[test]
+    fn half_leading_zero_when_line_height_equals_font_size() {
+        // line-height: 1.0 → нет leading, y_offset = 0.
+        let root = lay_measured(
+            "<p>Hello</p>",
+            "p { line-height: 1.0; font-size: 16px; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let frag = first_inline_run_frag(p);
+        assert!(
+            frag.y_offset.abs() < 0.001,
+            "line-height:1.0 → no half-leading, expected y_offset=0, got {}",
+            frag.y_offset
+        );
+    }
+
+    #[test]
+    fn half_leading_line_box_height_correct() {
+        // line-height: 1.5, font-size: 20px → line_h = 30px.
+        // Высота InlineRun должна быть 30px.
+        let root = lay_measured(
+            "<p>Hello</p>",
+            "p { line-height: 1.5; font-size: 20px; }",
+            800.0,
+        );
+        let p = first_element_child(&root);
+        let run = p.children.iter().find(|c| matches!(c.kind, crate::box_tree::BoxKind::InlineRun { .. })).expect("InlineRun not found");
+        assert!(
+            (run.rect.height - 30.0).abs() < 0.5,
+            "line-height:1.5 font-size:20px → height=30px, got {}",
+            run.rect.height
         );
     }
 
