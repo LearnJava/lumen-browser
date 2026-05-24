@@ -54,7 +54,8 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 37-float-clear.html | float: left/right + clear: both | 11 | float: left · float: right · float left + right combined · two left floats horizontal stack · clear: both clearance |
 | 38-z-index.html | z-index stacking context paint order | 6 | positive z-index (1/2/3) painted in correct order · negative z-index behind parent · z-index:auto same phase as z:0 · high z-index over zero-z sibling |
 | 39-gradients.html | linear-gradient / radial-gradient | 13 | linear: to right / to bottom / 45deg / 3-stop / transparent · radial: circle center / offset / 3-stop / ellipse · repeating-linear / repeating-radial · stacked |
-| **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~75 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (SDF rendering: uniform/pill/circle/asymmetric) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) · linear/radial gradient (6 объектов) |
+| 40-conic-gradients.html | conic-gradient / repeating-conic-gradient | 9 | default rainbow · 2-color · from 90deg · at 25% 25% · explicit deg-stops · pie chart (sharp) · repeating-conic 4 wedges · repeating-conic 8 wedges · wide box (box-space angles) |
+| **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~80 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (SDF rendering: uniform/pill/circle/asymmetric) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) · linear/radial gradient (6 объектов) · conic gradient (5 объектов) |
 
 ---
 
@@ -138,7 +139,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **z-index** — требует `position: absolute/relative` с offset (Phase 0: offsets не применяются)
 - **box-shadow: inset** — не реализовано в paint (требует clip)
 - **border-radius: elliptical (rx≠ry)** — CSS spec allows `border-radius: 10px / 20px` (elliptical), only circular supported
-- **background-image** (url) — url images ✅; gradient rendering ✅ (linear + radial GPU pipeline, тест 39)
+- **background-image** (url) — url images ✅; gradient rendering ✅ (linear + radial GPU pipeline, тест 39; conic gradient ✅ тест 40)
 - **transform** — ✅ полностью реализован (translate/rotate/scale/skew/matrix + transform-origin), тест 22
 - **filter** — ✅ реализован (grayscale/sepia/brightness/invert/contrast/saturate/opacity/hue-rotate + blur), тест 30
 - **clip-path** — ✅ реализован (inset/circle/ellipse/polygon bounding-box clip), тест 31

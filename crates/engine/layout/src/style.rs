@@ -2900,11 +2900,11 @@ impl ScrollBehavior {
     }
 }
 
-/// CSS Images L3 §3.3 — parsed linear or radial gradient.
+/// CSS Images L3/L4 §3.3/§3.7 — parsed linear / radial / conic gradient.
 ///
 /// Stored instead of the raw CSS string once `parse_background_gradient`
 /// has tokenised the gradient function. `Unknown` is kept as fallback for
-/// conic / unsupported variants so they round-trip without information loss.
+/// future / malformed variants so they round-trip without information loss.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParsedGradient {
     /// `linear-gradient(angle, stop, ...)` — angle in CSS degrees measured
@@ -2925,7 +2925,22 @@ pub enum ParsedGradient {
         /// True when the original function was `repeating-radial-gradient`.
         repeating: bool,
     },
-    /// Fallback for `conic-gradient` and any future gradient not yet rendered.
+    /// CSS Images L4 §3.7 — `conic-gradient([from <angle>]? [at <pos>]?, <stops>)`.
+    /// Angular gradient revolving around `(center_x_pct, center_y_pct)` (fraction of
+    /// box width/height). `from_angle_deg` is the starting angle in CSS degrees
+    /// (0° = top, 90° = right), clockwise. Stops' positions are stored as
+    /// `Length::Percent` where 100% corresponds to a full revolution
+    /// (angle units `<angle>` are pre-converted to percent on parse).
+    Conic {
+        center_x_pct: f32,
+        center_y_pct: f32,
+        /// Starting angle in CSS degrees (0° = top, 90° = right, clockwise).
+        from_angle_deg: f32,
+        stops: Vec<GradientStop>,
+        /// True when the original function was `repeating-conic-gradient`.
+        repeating: bool,
+    },
+    /// Fallback for any future gradient variant not yet rendered.
     Unknown(String),
 }
 
@@ -2937,8 +2952,7 @@ pub enum BackgroundImage {
     /// `url("path")` — внешний image-ресурс. Хранится без resolve
     /// относительно base-href.
     Url(String),
-    /// Parsed gradient. Phase 0 renders linear/radial; conic is stored as
-    /// `ParsedGradient::Unknown` and skipped by the painter.
+    /// Parsed gradient. Phase 0 renders linear / radial / conic.
     Gradient(ParsedGradient),
 }
 
@@ -12835,7 +12849,7 @@ fn paren_whitespace_tokens(s: &str) -> Vec<String> {
     tokens
 }
 
-/// CSS Images L3 §3.3 — parses color stops from a CSS gradient string.
+/// CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string.
 ///
 /// Accepts `linear-gradient(...)`, `radial-gradient(...)`,
 /// `conic-gradient(...)` and their `repeating-` variants.
@@ -12843,20 +12857,21 @@ fn paren_whitespace_tokens(s: &str) -> Vec<String> {
 /// Parse a CSS gradient function string into a [`ParsedGradient`].
 ///
 /// Recognises `linear-gradient`, `repeating-linear-gradient`,
-/// `radial-gradient`, `repeating-radial-gradient`. Anything else
-/// (e.g. `conic-gradient`) is returned as `ParsedGradient::Unknown`.
+/// `radial-gradient`, `repeating-radial-gradient`, `conic-gradient`,
+/// `repeating-conic-gradient`. Anything else is returned as
+/// `ParsedGradient::Unknown`.
 pub fn parse_background_gradient(s: &str) -> ParsedGradient {
     let s = s.trim();
     let lower = s.to_ascii_lowercase();
 
-    let (repeating_linear, repeating_radial) = (
-        lower.starts_with("repeating-linear-gradient"),
-        lower.starts_with("repeating-radial-gradient"),
-    );
+    let repeating_linear = lower.starts_with("repeating-linear-gradient");
+    let repeating_radial = lower.starts_with("repeating-radial-gradient");
+    let repeating_conic = lower.starts_with("repeating-conic-gradient");
     let is_linear = lower.starts_with("linear-gradient") || repeating_linear;
     let is_radial = lower.starts_with("radial-gradient") || repeating_radial;
+    let is_conic = lower.starts_with("conic-gradient") || repeating_conic;
 
-    if !is_linear && !is_radial {
+    if !is_linear && !is_radial && !is_conic {
         return ParsedGradient::Unknown(s.to_string());
     }
 
@@ -12877,11 +12892,23 @@ pub fn parse_background_gradient(s: &str) -> ParsedGradient {
         let angle_deg = parse_linear_gradient_angle(segments.first().map(|s| s.trim()).unwrap_or(""));
         let stops = parse_gradient_stops(s);
         ParsedGradient::Linear { angle_deg, stops, repeating: repeating_linear }
-    } else {
+    } else if is_radial {
         // Radial: look for `at <x> <y>` in the first segment.
         let (cx, cy) = parse_radial_gradient_center(segments.first().map(|s| s.trim()).unwrap_or(""));
         let stops = parse_gradient_stops(s);
         ParsedGradient::Radial { center_x_pct: cx, center_y_pct: cy, stops, repeating: repeating_radial }
+    } else {
+        // Conic: `[from <angle>]? [at <x> <y>]?` in the first segment.
+        let (from_angle_deg, cx, cy) =
+            parse_conic_gradient_params(segments.first().map(|s| s.trim()).unwrap_or(""));
+        let stops = parse_gradient_stops(s);
+        ParsedGradient::Conic {
+            center_x_pct: cx,
+            center_y_pct: cy,
+            from_angle_deg,
+            stops,
+            repeating: repeating_conic,
+        }
     }
 }
 
@@ -12939,6 +12966,51 @@ fn parse_radial_gradient_center(first_seg: &str) -> (f32, f32) {
     (0.5, 0.5)
 }
 
+/// Parse `[from <angle>]? [at <x> <y>]?` from the first segment of a
+/// `conic-gradient`. Returns `(from_angle_deg, center_x, center_y)`.
+/// Defaults: `from 0deg at 50% 50%`.
+fn parse_conic_gradient_params(first_seg: &str) -> (f32, f32, f32) {
+    let s = first_seg.trim().to_ascii_lowercase();
+    // If the first segment starts with a color, treat as no positioning hint.
+    if s.is_empty() || (!s.starts_with("from") && !s.starts_with("at")) {
+        return (0.0, 0.5, 0.5);
+    }
+
+    // Extract `from <angle>` clause.
+    let mut from_deg = 0.0_f32;
+    let mut rest = s.clone();
+    if let Some(stripped) = rest.strip_prefix("from") {
+        let rest_trim = stripped.trim_start();
+        // Find boundary: next whitespace after the angle token (may be
+        // followed by `at ...`).
+        let at_pos = rest_trim.find(" at ");
+        let angle_tok = match at_pos {
+            Some(idx) => rest_trim[..idx].trim(),
+            None => rest_trim.trim(),
+        };
+        if let Some(rad) = parse_angle_to_radians(angle_tok) {
+            from_deg = rad.to_degrees();
+        }
+        rest = match at_pos {
+            Some(idx) => rest_trim[idx + 1..].to_string(), // includes "at ..."
+            None => String::new(),
+        };
+    }
+
+    // Extract `at <x> <y>` clause (rest may begin with "at ").
+    let rest = rest.trim();
+    let (cx, cy) = if let Some(pos) = rest.strip_prefix("at ") {
+        let parts: Vec<&str> = pos.split_whitespace().collect();
+        let cx = parse_pct_or_keyword_x(parts.first().copied().unwrap_or("50%"));
+        let cy = parse_pct_or_keyword_y(parts.get(1).copied().unwrap_or("50%"));
+        (cx, cy)
+    } else {
+        (0.5, 0.5)
+    };
+
+    (from_deg, cx, cy)
+}
+
 fn parse_pct_or_keyword_x(s: &str) -> f32 {
     match s {
         "left" => 0.0,
@@ -12974,8 +13046,18 @@ fn parse_pct_or_keyword_y(s: &str) -> f32 {
 /// `<color>` and silently skipped. Color hints (bare `<length-percentage>`
 /// without a color) are also skipped. Two-position stops (`red 20% 40%`)
 /// expand to two `GradientStop`s per CSS Images L4 §3.4.
+///
+/// For `conic-gradient(...)` (and `repeating-conic-gradient(...)`), stop
+/// positions accept `<angle>` units (`deg`/`rad`/`turn`/`grad`) in addition
+/// to `<percentage>` per CSS Images L4 §3.7. Angles are normalised to
+/// `Length::Percent` where 360° (1 full turn) maps to 100% — this lets the
+/// downstream renderer treat conic and linear/radial stops uniformly.
 pub fn parse_gradient_stops(s: &str) -> Vec<GradientStop> {
     let s = s.trim();
+    let lower = s.to_ascii_lowercase();
+    let is_conic =
+        lower.starts_with("conic-gradient") || lower.starts_with("repeating-conic-gradient");
+
     let Some(open) = s.find('(') else {
         return vec![];
     };
@@ -12987,6 +13069,14 @@ pub fn parse_gradient_stops(s: &str) -> Vec<GradientStop> {
 
     let segments = split_top_level_commas(inner);
     let mut stops: Vec<GradientStop> = Vec::new();
+
+    let parse_pos = |t: &str| -> Option<Length> {
+        if is_conic {
+            parse_conic_stop_position(t)
+        } else {
+            parse_length_q(t, false)
+        }
+    };
 
     for seg in &segments {
         let tokens = paren_whitespace_tokens(seg.trim());
@@ -13002,8 +13092,8 @@ pub fn parse_gradient_stops(s: &str) -> Vec<GradientStop> {
         let color = parse_color(&tokens[ci]).unwrap();
 
         // CSS Images L3/L4: `<color> [ <length-percentage>{1,2} ]?`
-        let pos1 = tokens.get(ci + 1).and_then(|t| parse_length_q(t, false));
-        let pos2 = tokens.get(ci + 2).and_then(|t| parse_length_q(t, false));
+        let pos1 = tokens.get(ci + 1).and_then(|t| parse_pos(t));
+        let pos2 = tokens.get(ci + 2).and_then(|t| parse_pos(t));
 
         stops.push(GradientStop { color, position: pos1 });
         if pos2.is_some() {
@@ -13012,6 +13102,42 @@ pub fn parse_gradient_stops(s: &str) -> Vec<GradientStop> {
     }
 
     stops
+}
+
+/// Parse a conic-gradient stop position: `<angle>` or `<percentage>` per
+/// CSS Images L4 §3.7. Angles (`deg`/`rad`/`turn`/`grad`) are converted to
+/// `Length::Percent` with 360° → 100%, so downstream renderer logic can
+/// treat all gradient kinds uniformly.
+fn parse_conic_stop_position(s: &str) -> Option<Length> {
+    let s = s.trim();
+    // Percentage — pass through.
+    if let Some(num) = s.strip_suffix('%')
+        && let Ok(v) = num.trim().parse::<f32>()
+    {
+        return Some(Length::Percent(v));
+    }
+    // Angle units — convert to percent (360° = 100%).
+    for (suffix, factor_deg) in [
+        ("deg", 1.0_f32),
+        ("turn", 360.0),
+        ("grad", 0.9),
+    ] {
+        if let Some(num) = s.strip_suffix(suffix)
+            && let Ok(v) = num.trim().parse::<f32>()
+        {
+            return Some(Length::Percent(v * factor_deg / 360.0 * 100.0));
+        }
+    }
+    if let Some(num) = s.strip_suffix("rad")
+        && let Ok(v) = num.trim().parse::<f32>()
+    {
+        return Some(Length::Percent(v.to_degrees() / 360.0 * 100.0));
+    }
+    // Unitless 0 — treat as 0°.
+    if let Ok(0.0) = s.parse::<f32>() {
+        return Some(Length::Percent(0.0));
+    }
+    None
 }
 
 /// CSS Sizing L4 §6.1 — парсит `<ratio>`: либо одно положительное

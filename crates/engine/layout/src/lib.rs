@@ -8494,6 +8494,169 @@ mod tests {
         assert_eq!(stops[0].position, Some(Length::Px(0.0)));
     }
 
+    // ── conic-gradient parsing ───────────────────────────────────────────────
+
+    #[test]
+    fn background_image_gradient_parsed_conic_default() {
+        use crate::style::ParsedGradient;
+        let root = lay(
+            "<p>x</p>",
+            "p { background-image: conic-gradient(red, blue); }",
+        );
+        match &first_p_style(&root).background_image {
+            BackgroundImage::Gradient(ParsedGradient::Conic {
+                center_x_pct, center_y_pct, from_angle_deg, stops, repeating,
+            }) => {
+                assert!((center_x_pct - 0.5).abs() < 1e-4);
+                assert!((center_y_pct - 0.5).abs() < 1e-4);
+                assert!(from_angle_deg.abs() < 1e-4, "default from-angle = 0°");
+                assert_eq!(stops.len(), 2);
+                assert!(!*repeating);
+            }
+            other => panic!("expected Conic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn background_image_gradient_parsed_conic_from_and_at() {
+        use crate::style::ParsedGradient;
+        let root = lay(
+            "<p>x</p>",
+            "p { background-image: conic-gradient(from 90deg at 25% 75%, red, blue); }",
+        );
+        match &first_p_style(&root).background_image {
+            BackgroundImage::Gradient(ParsedGradient::Conic {
+                center_x_pct, center_y_pct, from_angle_deg, ..
+            }) => {
+                assert!((center_x_pct - 0.25).abs() < 1e-4);
+                assert!((center_y_pct - 0.75).abs() < 1e-4);
+                assert!((from_angle_deg - 90.0).abs() < 1e-3);
+            }
+            other => panic!("expected Conic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn background_image_gradient_parsed_repeating_conic() {
+        use crate::style::ParsedGradient;
+        let root = lay(
+            "<p>x</p>",
+            "p { background-image: repeating-conic-gradient(red 0deg, blue 90deg); }",
+        );
+        match &first_p_style(&root).background_image {
+            BackgroundImage::Gradient(ParsedGradient::Conic { repeating, stops, .. }) => {
+                assert!(*repeating);
+                assert_eq!(stops.len(), 2);
+                // 0deg → 0%, 90deg → 25%.
+                assert_eq!(stops[0].position, Some(Length::Percent(0.0)));
+                if let Some(Length::Percent(p)) = stops[1].position {
+                    assert!((p - 25.0).abs() < 1e-3, "90deg should map to 25%, got {p}");
+                } else {
+                    panic!("expected Percent position, got {:?}", stops[1].position);
+                }
+            }
+            other => panic!("expected repeating Conic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conic_stops_angles_converted_to_percent() {
+        let stops = parse_gradient_stops("conic-gradient(red 0deg, green 180deg, blue 360deg)");
+        assert_eq!(stops.len(), 3);
+        assert_eq!(stops[0].position, Some(Length::Percent(0.0)));
+        assert_eq!(stops[1].position, Some(Length::Percent(50.0)));
+        if let Some(Length::Percent(p)) = stops[2].position {
+            assert!((p - 100.0).abs() < 1e-3);
+        } else {
+            panic!("expected Percent");
+        }
+    }
+
+    #[test]
+    fn conic_stops_turn_unit() {
+        let stops = parse_gradient_stops("conic-gradient(red 0turn, blue 0.5turn)");
+        assert_eq!(stops.len(), 2);
+        if let Some(Length::Percent(p)) = stops[1].position {
+            assert!((p - 50.0).abs() < 1e-3, "0.5turn should map to 50%, got {p}");
+        } else {
+            panic!("expected Percent");
+        }
+    }
+
+    #[test]
+    fn conic_stops_percent_passthrough() {
+        let stops = parse_gradient_stops("conic-gradient(red 0%, blue 25%, green 100%)");
+        assert_eq!(stops.len(), 3);
+        assert_eq!(stops[0].position, Some(Length::Percent(0.0)));
+        assert_eq!(stops[1].position, Some(Length::Percent(25.0)));
+        assert_eq!(stops[2].position, Some(Length::Percent(100.0)));
+    }
+
+    #[test]
+    fn conic_stops_named_colors_no_position() {
+        // No explicit positions: auto-distributed by renderer; parser keeps None.
+        let stops = parse_gradient_stops("conic-gradient(red, green, blue)");
+        assert_eq!(stops.len(), 3);
+        for s in &stops {
+            assert!(s.position.is_none());
+        }
+    }
+
+    #[test]
+    fn conic_from_and_at_parsed_independently() {
+        use crate::style::ParsedGradient;
+        // Only `at` clause, no `from`.
+        let root = lay(
+            "<p>x</p>",
+            "p { background-image: conic-gradient(at 10% 20%, red, blue); }",
+        );
+        match &first_p_style(&root).background_image {
+            BackgroundImage::Gradient(ParsedGradient::Conic {
+                center_x_pct, center_y_pct, from_angle_deg, ..
+            }) => {
+                assert!((center_x_pct - 0.1).abs() < 1e-4);
+                assert!((center_y_pct - 0.2).abs() < 1e-4);
+                assert!(from_angle_deg.abs() < 1e-4);
+            }
+            other => panic!("expected Conic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn conic_from_turn_unit() {
+        use crate::style::ParsedGradient;
+        let root = lay(
+            "<p>x</p>",
+            "p { background-image: conic-gradient(from 0.25turn, red, blue); }",
+        );
+        match &first_p_style(&root).background_image {
+            BackgroundImage::Gradient(ParsedGradient::Conic { from_angle_deg, .. }) => {
+                // 0.25turn = 90deg.
+                assert!((from_angle_deg - 90.0).abs() < 1e-3, "got {from_angle_deg}");
+            }
+            other => panic!("expected Conic, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn background_image_gradient_parsed_conic_keyword_position() {
+        use crate::style::ParsedGradient;
+        // `at top left` → (0, 0).
+        let root = lay(
+            "<p>x</p>",
+            "p { background-image: conic-gradient(at left top, red, blue); }",
+        );
+        match &first_p_style(&root).background_image {
+            BackgroundImage::Gradient(ParsedGradient::Conic {
+                center_x_pct, center_y_pct, ..
+            }) => {
+                assert!(center_x_pct.abs() < 1e-4);
+                assert!(center_y_pct.abs() < 1e-4);
+            }
+            other => panic!("expected Conic, got {other:?}"),
+        }
+    }
+
     #[test]
     fn background_repeat_values() {
         for (s, expected) in [
