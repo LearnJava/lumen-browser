@@ -1658,8 +1658,11 @@ fn lay_out(
             //
             // rows: (row_y, row_max_h, Vec<child_index>)
             // IFC strut (CSS §10.8): descent шрифта родителя добавляется к
-            // высоте каждой строки, так как baseline пустых inline-block
-            // совпадает с нижним краем margin-box, а descent опускается ниже.
+            // высоте строки только если в строке есть текстовый InlineRun.
+            // Для строк из одних inline-block / replaced элементов strut не
+            // нужен — их вертикальные размеры заданы margin-box, а Edge/Blink
+            // в таких случаях strut'ом не расширяют line box, иначе ряды
+            // inline-block-ов накапливают descender-зазор (BUG-023).
             let strut_descent = measurer.map_or(0.0, |m| m.descent_px(b.style.font_size));
             let mut rows: Vec<(f32, f32, Vec<usize>)> = Vec::new();
             let mut cur_x = content_x;
@@ -1667,6 +1670,7 @@ fn lay_out(
             let mut row_max_h: f32 = 0.0;
             let mut row_y = cur_y;
             let mut cur_row: Vec<usize> = Vec::new();
+            let mut row_has_text = false;
             let mut total_h: f32 = 0.0;
 
             for i in 0..b.children.len() {
@@ -1694,25 +1698,29 @@ fn lay_out(
                 let child_full_h = child_mt + b.children[i].rect.height + child_mb;
 
                 if !is_run && child_right > content_x + content_width && cur_x > content_x {
-                    // Строка завершена: row_max_h — высота контента (для vertical-align),
-                    // row_spacing = row_max_h + strut_descent — для cur_y (IFC strut).
-                    let row_spacing = row_max_h + strut_descent;
+                    // Строка завершена. row_spacing включает strut_descent
+                    // только если в строке был текст (см. комментарий выше).
+                    let row_spacing = row_max_h + if row_has_text { strut_descent } else { 0.0 };
                     rows.push((row_y, row_max_h, std::mem::take(&mut cur_row)));
                     total_h += row_spacing;
                     cur_y += row_spacing;
                     row_y = cur_y;
                     cur_x = content_x;
                     row_max_h = 0.0;
+                    row_has_text = false;
                     lay_out(&mut b.children[i], cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp);
                 }
                 cur_row.push(i);
+                if is_run {
+                    row_has_text = true;
+                }
                 cur_x = b.children[i].rect.x + b.children[i].rect.width + child_mr;
                 row_max_h = row_max_h.max(child_full_h);
             }
             if !cur_row.is_empty() {
                 rows.push((row_y, row_max_h, cur_row));
             }
-            b.rect.height = total_h + row_max_h + strut_descent;
+            b.rect.height = total_h + row_max_h + if row_has_text { strut_descent } else { 0.0 };
 
             // Фаза 2: vertical-align. Для пустых inline-block элементов
             // baseline = нижний край margin-box (CSS 2.1 §10.8.1), поэтому
