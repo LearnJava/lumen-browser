@@ -433,3 +433,56 @@ fn position_static_no_offset() {
     // Should NOT contain any x=20.00 or similar
     assert!(!actual.contains("x=20.00"), "static position must not shift rect");
 }
+
+// ── BUG-004 regression: height on inline / inline-block / block ─────────────
+
+/// BUG-004: `display:inline-block; height:40px` must produce a 40px-tall box.
+/// Earlier the project had no inline-block support, so authors couldn't apply
+/// height to a span-like element at all. After inline-block was wired up,
+/// `height` must take effect (CSS 2.1 §10.6.2 covers replaced/inline-block).
+#[test]
+fn bug_004_inline_block_height_applies() {
+    let actual = build(
+        r#"<span class="x">a</span>"#,
+        ".x { display: inline-block; height: 40px; width: 80px; }",
+        800.0,
+    );
+    assert!(
+        actual.contains("(0.00, 0.00, 80.00, 40.00)") && actual.contains("display=inline-block"),
+        "expected an 80x40 inline-block box, got:\n{actual}"
+    );
+}
+
+/// BUG-004 spec-correctness: `display:inline; height:40px` must be ignored.
+/// CSS 2.1 §10.6.1: "Properties 'height', 'min-height', and 'max-height' do
+/// not apply to non-replaced inline elements." The inline run height must
+/// follow line-height, not the explicit `height` declaration.
+#[test]
+fn bug_004_inline_height_ignored_per_spec() {
+    let actual = build(
+        r#"<p><span class="x">a</span></p>"#,
+        ".x { display: inline; height: 40px; }",
+        800.0,
+    );
+    // No inline box should adopt the 40px height — its row must be
+    // line-height-driven (well under 40px for the default font-size).
+    assert!(
+        !actual.contains(", 40.00)") && !actual.contains("h=40px"),
+        "height must not apply to display:inline, got:\n{actual}"
+    );
+}
+
+/// BUG-004 baseline: `display:block; height:60px` on a `<div>` applies.
+/// Ensures the regression suite covers all three display flavors.
+#[test]
+fn bug_004_block_height_applies() {
+    let actual = build(
+        "<div></div>",
+        "div { width: 100px; height: 60px; }",
+        800.0,
+    );
+    assert!(
+        actual.contains("(0.00, 0.00, 100.00, 60.00)"),
+        "expected a 100x60 block, got:\n{actual}"
+    );
+}
