@@ -1505,6 +1505,10 @@ fn lay_out(
                 let container_right = content_x + content_width;
 
                 let mut child_y = content_y;
+                // CSS 2.1 §8.3.1: resolved bottom margin of the previous block-level child.
+                // Adjacent Block/FlowRoot siblings collapse their margins (gap = max, not sum).
+                // Inline runs, replaced elements, and floats break the collapsing chain.
+                let mut prev_block_mb: f32 = 0.0;
                 for (i, child) in b.children.iter_mut().enumerate() {
                     if matches!(child.style.position, Position::Absolute | Position::Fixed) {
                         abs_deferred.push((i, content_x, child_y));
@@ -1584,14 +1588,30 @@ fn lay_out(
                     let flow_left  = fc.left_edge_at(child_y, content_x);
                     let flow_right = fc.right_edge_at(child_y, container_right);
                     let flow_w = (flow_right - flow_left).max(0.0);
-                    lay_out(child, flow_left, child_y, flow_w,
+
+                    // CSS 2.1 §8.3.1: collapse adjacent sibling block margins.
+                    // Only Block/FlowRoot participate; other kinds break the chain.
+                    // Formula: start_y = child_y - min(prev_mb, mt)
+                    // so that lay_out's internal "+mt" yields child_y + max(prev_mb, mt).
+                    let is_block = matches!(&child.kind, BoxKind::Block | BoxKind::FlowRoot);
+                    let mt = child.style.margin_top
+                        .resolve_or_zero(child.style.font_size, flow_w, viewport);
+                    let start_y = if is_block {
+                        child_y - prev_block_mb.min(mt.max(0.0))
+                    } else {
+                        child_y
+                    };
+
+                    lay_out(child, flow_left, start_y, flow_w,
                             children_available_height, measurer, viewport, children_pcb, hp);
                     if matches!(child.kind, BoxKind::Skip) {
+                        // Zero-height; does not break the collapsing chain.
                         continue;
                     }
                     let child_mb = child.style.margin_bottom.resolve_or_zero(
                         child.style.font_size, content_width, viewport);
                     child_y = child.rect.y + child.rect.height + child_mb;
+                    prev_block_mb = if is_block { child_mb.max(0.0) } else { 0.0 };
                 }
                 // CSS 2.1 §9.5: the container height must also enclose all floats.
                 let float_bottom = fc.left.iter().chain(fc.right.iter())

@@ -11332,4 +11332,58 @@ mod tests {
         assert_eq!(l.style.clear, ClearSide::Left,  "clear: left");
         assert_eq!(r.style.clear, ClearSide::Right, "clear: right");
     }
+
+    // ── Margin collapsing CSS 2.1 §8.3.1 ─────────────────────────────────────
+
+    /// Соседние блоки: побеждает бо́льший margin-top (top wins).
+    #[test]
+    fn sibling_blocks_margin_collapse_top_wins() {
+        // mb=10, mt=30 → gap = max(10,30) = 30, а не 40
+        let root = lay(
+            "<div class='a'>x</div><div class='b'>y</div>",
+            ".a { height: 10px; margin-bottom: 10px; } .b { height: 10px; margin-top: 30px; }",
+        );
+        let mut iter = root.children.iter().filter(|c| matches!(c.kind, BoxKind::Block));
+        let a = iter.next().unwrap();
+        let b = iter.next().unwrap();
+        assert!((a.rect.y - 0.0).abs() < 0.1, "a.y={}", a.rect.y);
+        // bottom of .a = 10. gap = max(10,30)=30. .b top = 40.
+        assert!((b.rect.y - 40.0).abs() < 0.1, "b.y={}", b.rect.y);
+    }
+
+    /// Соседние блоки: побеждает бо́льший margin-bottom (bottom wins).
+    #[test]
+    fn sibling_blocks_margin_collapse_bottom_wins() {
+        // mb=30, mt=10 → gap = max(30,10) = 30, а не 40
+        let root = lay(
+            "<div class='a'>x</div><div class='b'>y</div>",
+            ".a { height: 10px; margin-bottom: 30px; } .b { height: 10px; margin-top: 10px; }",
+        );
+        let mut iter = root.children.iter().filter(|c| matches!(c.kind, BoxKind::Block));
+        let a = iter.next().unwrap();
+        let b = iter.next().unwrap();
+        assert!((a.rect.y - 0.0).abs() < 0.1, "a.y={}", a.rect.y);
+        // bottom of .a = 10. gap = max(30,10)=30. .b top = 40.
+        assert!((b.rect.y - 40.0).abs() < 0.1, "b.y={}", b.rect.y);
+    }
+
+    /// Цепочка из трёх блоков: два соседних схлопывания независимы.
+    #[test]
+    fn three_sibling_blocks_margin_collapse_chain() {
+        // .a mb=20, .b mt=15 mb=25, .c mt=10
+        // gap(a–b) = max(20,15)=20,  gap(b–c) = max(25,10)=25
+        let root = lay(
+            "<div class='a'>x</div><div class='b'>y</div><div class='c'>z</div>",
+            ".a { height: 5px; margin-bottom: 20px; }
+             .b { height: 5px; margin-top: 15px; margin-bottom: 25px; }
+             .c { height: 5px; margin-top: 10px; }",
+        );
+        let mut iter = root.children.iter().filter(|c| matches!(c.kind, BoxKind::Block));
+        let a = iter.next().unwrap();
+        let b = iter.next().unwrap();
+        let c = iter.next().unwrap();
+        assert!((a.rect.y -  0.0).abs() < 0.1, "a.y={}", a.rect.y);
+        assert!((b.rect.y - 25.0).abs() < 0.1, "b.y={}", b.rect.y);
+        assert!((c.rect.y - 55.0).abs() < 0.1, "c.y={}", c.rect.y);
+    }
 }
