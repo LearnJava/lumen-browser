@@ -1229,10 +1229,25 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> (Vec<Display
         post.push(DisplayCommand::PopClip);
     }
 
-    // CSS Containment L3 §3.5: contain:paint clips content to border box.
+    // CSS Overflow L3 §3.2: overflow clip to padding-box edge; unconstrained
+    // axis uses a BIG sentinel so the GPU scissor doesn't cut off content in
+    // that direction. CSS Containment L3 §3.5: contain:paint clips both axes.
     let paint_contain = s.contain.0 & ContainFlags::PAINT.0 != 0;
-    if overflow_clips(s.overflow_x) || overflow_clips(s.overflow_y) || paint_contain {
-        pre.push(DisplayCommand::PushClipRect { rect: b.rect });
+    let clip_x = overflow_clips(s.overflow_x) || paint_contain;
+    let clip_y = overflow_clips(s.overflow_y) || paint_contain;
+    if clip_x || clip_y {
+        const BIG: f32 = 1_000_000.0;
+        let px = b.rect.x + s.border_left_width;
+        let py = b.rect.y + s.border_top_width;
+        let pw = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
+        let ph = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
+        let cr = Rect::new(
+            if clip_x { px } else { -BIG },
+            if clip_y { py } else { -BIG },
+            if clip_x { pw } else { 2.0 * BIG },
+            if clip_y { ph } else { 2.0 * BIG },
+        );
+        pre.push(DisplayCommand::PushClipRect { rect: cr });
         post.push(DisplayCommand::PopClip);
     }
     if s.mix_blend_mode != LayoutBlendMode::Normal {
@@ -4386,9 +4401,8 @@ mod tests {
     }
 
     #[test]
-    fn ordered_clip_rect_matches_box_rect() {
-        // PushClipRect должен использовать b.rect (после layout-а).
-        // Не привязываемся к точным значениям — проверяем, что rect не нулевой.
+    fn ordered_clip_rect_overflow_hidden_clips_both_axes() {
+        // overflow: hidden → PushClipRect clips padding-box on both axes.
         let dl = build_ordered(
             "<div>x</div>",
             "div { overflow: hidden; width: 200px; height: 100px; background: #f00; }",
@@ -4401,6 +4415,47 @@ mod tests {
             })
             .expect("должен быть PushClipRect");
         assert!(rect.width > 0.0 && rect.height > 0.0);
+    }
+
+    #[test]
+    fn ordered_clip_overflow_x_hidden_y_visible_clips_x_only() {
+        // overflow-x: hidden; overflow-y: visible — только X ограничен,
+        // Y использует BIG-сентинель (не клипает по вертикали).
+        let dl = build_ordered(
+            "<div>x</div>",
+            "div { overflow-x: hidden; overflow-y: visible; width: 100px; height: 50px; background: #f00; }",
+        );
+        let rect = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushClipRect { rect } => Some(*rect),
+                _ => None,
+            })
+            .expect("должен быть PushClipRect для overflow-x:hidden");
+        // X должен быть ограничен шириной бокса (≈100px).
+        assert!(rect.width < 1_000.0, "x-axis should be clipped: width={}", rect.width);
+        // Y не должен быть ограничен — высота должна быть огромным сентинелем.
+        assert!(rect.height > 1_000.0, "y-axis should not be clipped: height={}", rect.height);
+    }
+
+    #[test]
+    fn ordered_clip_overflow_x_visible_y_hidden_clips_y_only() {
+        // overflow-x: visible; overflow-y: hidden — только Y ограничен.
+        let dl = build_ordered(
+            "<div>x</div>",
+            "div { overflow-x: visible; overflow-y: hidden; width: 100px; height: 50px; background: #f00; }",
+        );
+        let rect = dl
+            .iter()
+            .find_map(|c| match c {
+                DisplayCommand::PushClipRect { rect } => Some(*rect),
+                _ => None,
+            })
+            .expect("должен быть PushClipRect для overflow-y:hidden");
+        // Y должен быть ограничен высотой бокса (≈50px).
+        assert!(rect.height < 1_000.0, "y-axis should be clipped: height={}", rect.height);
+        // X не должен быть ограничен.
+        assert!(rect.width > 1_000.0, "x-axis should not be clipped: width={}", rect.width);
     }
 
     #[test]

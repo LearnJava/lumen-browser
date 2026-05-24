@@ -1,6 +1,5 @@
-In progress: —
-
-Next step: —
+In progress: BUG-020 overflow per-axis clip  branch: p1-bug020-overflow-peraxis
+Next step: commit + merge
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
