@@ -25,7 +25,7 @@ BUG-027 | FIXED 2026-05-20 | layout          | block element ignores explicit wi
 BUG-030 | FIXED 2026-05-20 | layout          | IFC: no whitespace gap between inline-block siblings (CSS §4.1.2)
 BUG-031 | FIXED 2026-05-20 | layout          | IFC: missing strut descent causes rows to be ~4px too short
 BUG-002 | FIXED 2026-05-20 | layout/paint    | inline padding/border/margin stacks vertically instead of flowing
-BUG-004 | OPEN             | layout          | height on inline elements ignored
+BUG-004 | FIXED 2026-05-24 | layout          | height on inline elements (display:inline-block applies; display:inline ignores per CSS 2.1 §10.6.1)
 BUG-005 | FIXED 2026-05-21 | layout+paint    | <img> inside <span> not rendered
 BUG-010 | FIXED 2026-05-20 | layout          | <hr> renders nothing
 BUG-011 | FIXED 2026-05-22 | layout/paint    | list markers (bullet, numbers) not rendered
