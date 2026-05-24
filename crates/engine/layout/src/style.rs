@@ -13320,6 +13320,7 @@ fn media_context_from_viewport(viewport: Size) -> MediaContext {
         width: viewport.width,
         height: viewport.height,
         prefers_dark: false,
+        prefers_reduced_motion: false,
     }
 }
 

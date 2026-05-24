@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<!--
+  TEST-44: Media Queries L3 #12
+  Viewport: 1024×720. Box layout:
+    Row 1: [green=@media screen ✓] [dark=#media print ✗] [blue=@media(min-width:48em) ✓]
+    Row 2: [dark=@media(max-width:50rem) ✗] [purple=@media(orientation:landscape) ✓] [cyan=@media(min-aspect-ratio:1/1) ✓]
+  Expected: 4 coloured boxes (green/blue/purple/cyan), 2 dark unchanged.
+-->
+<html>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f {
+    background: #111111;
+    width: 1022px; height: 718px;
+    margin: 1px;
+    display: flex; flex-wrap: wrap;
+    align-content: flex-start;
+    gap: 10px;
+    padding: 10px;
+    overflow: hidden;
+  }
+  .box { width: 316px; height: 224px; background: #333333; }
+
+  /* @media screen → applies, box1 green */
+  @media screen { #b1 { background: #22c55e; } }
+
+  /* @media print → does NOT apply at 1024×720 viewport, box2 stays dark */
+  @media print { #b2 { background: #ef4444; } }
+
+  /* @media (min-width: 48em) = 768px → matches (viewport 1024px), box3 blue */
+  @media (min-width: 48em) { #b3 { background: #3b82f6; } }
+
+  /* @media (max-width: 50rem) = 800px → does NOT match (viewport 1024px), box4 stays dark */
+  @media (max-width: 50rem) { #b4 { background: #f97316; } }
+
+  /* @media (orientation: landscape) → matches (1024 > 720), box5 purple */
+  @media (orientation: landscape) { #b5 { background: #a855f7; } }
+
+  /* @media (min-aspect-ratio: 1/1) → matches (1024/720 ≈ 1.42 > 1), box6 cyan */
+  @media (min-aspect-ratio: 1/1) { #b6 { background: #06b6d4; } }
+</style>
+<body>
+  <div class="__f">
+    <div class="box" id="b1"></div>
+    <div class="box" id="b2"></div>
+    <div class="box" id="b3"></div>
+    <div class="box" id="b4"></div>
+    <div class="box" id="b5"></div>
+    <div class="box" id="b6"></div>
+  </div>
+</body>
+</html>

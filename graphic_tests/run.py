@@ -85,6 +85,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('41', '41-table.html',             3.0, 'display:table/row/cell with row groups (CSS 2.1 §17)'),
     ('42', '42-position-sticky.html',   3.0, 'position:sticky — flow position + BeginStickyLayer/EndStickyLayer (CSS Positioning L3 §6.3)'),
     ('43', '43-intrinsic-sizing.html',  2.0, 'CSS Intrinsic Sizing L3 — width: max-content / min-content / fit-content'),
+    ('44', '44-media-queries.html',     2.0, 'Media Queries L3 — @media screen/print/min-width(em)/orientation/aspect-ratio'),
 ]
 
 # --- PNG reader (stdlib only) ---
