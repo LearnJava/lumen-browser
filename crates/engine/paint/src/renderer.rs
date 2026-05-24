@@ -165,16 +165,17 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
-/// SDF rounded-rect shader. Per-vertex data carries the rect's center,
-/// half-size, and per-corner radii so the fragment shader can evaluate the
-/// SDF without a uniform buffer per draw call.
+/// SDF rounded-rect shader with elliptical per-corner radii.
+/// Per-vertex data carries the rect's center, half-size, and two vec4s for
+/// horizontal (x) and vertical (y) corner radii, enabling `border-radius: H/V`.
 ///
 /// Vertex layout (matches `RRectVertex`):
 ///   loc 0  pos       vec2  – screen CSS-px position
 ///   loc 1  color     vec4  – premultiplied RGBA
 ///   loc 2  center    vec2  – CSS-px center of the rounded rect
 ///   loc 3  half_size vec2  – CSS-px half-dimensions (w/2, h/2)
-///   loc 4  radii     vec4  – corner radii px: tl, tr, br, bl
+///   loc 4  radii_x   vec4  – horizontal corner radii px: tl, tr, br, bl
+///   loc 5  radii_y   vec4  – vertical corner radii px:   tl, tr, br, bl
 const RRECT_SHADER_SRC: &str = r#"
 struct Uniforms {
     viewport: vec2<f32>,
@@ -187,7 +188,8 @@ struct VIn {
     @location(1) color:     vec4<f32>,
     @location(2) center:    vec2<f32>,
     @location(3) half_size: vec2<f32>,
-    @location(4) radii:     vec4<f32>,
+    @location(4) radii_x:   vec4<f32>,
+    @location(5) radii_y:   vec4<f32>,
 };
 
 struct VOut {
@@ -196,7 +198,8 @@ struct VOut {
     @location(1) world_pos: vec2<f32>,
     @location(2) center:    vec2<f32>,
     @location(3) half_size: vec2<f32>,
-    @location(4) radii:     vec4<f32>,
+    @location(4) radii_x:   vec4<f32>,
+    @location(5) radii_y:   vec4<f32>,
 };
 
 @vertex
@@ -211,30 +214,52 @@ fn vs_main(in: VIn) -> VOut {
     out.world_pos = in.pos;
     out.center    = in.center;
     out.half_size = in.half_size;
-    out.radii     = in.radii;
+    out.radii_x   = in.radii_x;
+    out.radii_y   = in.radii_y;
     return out;
 }
 
-/// Inigo Quilez SDF for an axis-aligned rounded rectangle with per-corner radii.
+/// SDF for an axis-aligned rounded rectangle with per-corner elliptical radii.
 /// `p`         = position relative to rect center.
-/// `half_size` = half-dimensions of the rect (before radius is applied).
-/// `radii`     = (tl, tr, br, bl) corner radii.
-fn sdf_rrect(p: vec2<f32>, half_size: vec2<f32>, radii: vec4<f32>) -> f32 {
-    // Select which corner radius applies to this quadrant.
-    var r: f32 = radii.x;                                 // top-left (default)
-    if p.x >= 0.0 && p.y <= 0.0 { r = radii.y; }         // top-right
-    if p.x >= 0.0 && p.y > 0.0  { r = radii.z; }         // bottom-right
-    if p.x < 0.0  && p.y > 0.0  { r = radii.w; }         // bottom-left
-    // Clamp radius so it fits inside the box (CSS §5.5 overlap rule).
-    r = min(r, min(half_size.x, half_size.y));
-    let q = abs(p) - half_size + vec2<f32>(r, r);
-    return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0) - r;
+/// `half_size` = half-dimensions of the rect.
+/// `radii_x`   = horizontal corner radii (tl, tr, br, bl).
+/// `radii_y`   = vertical  corner radii (tl, tr, br, bl).
+///
+/// Screen y-axis is DOWN: p.y < 0 = top half, p.y > 0 = bottom half.
+/// For circular corners (rx == ry) this degenerates to the standard Quilez SDF.
+/// Elliptical corners use a first-order approximation: (|q/r| - 1) * min(rx,ry),
+/// which is exact on the ellipse surface and has unit gradient near the boundary.
+fn sdf_rrect(p: vec2<f32>, half_size: vec2<f32>, radii_x: vec4<f32>, radii_y: vec4<f32>) -> f32 {
+    // Select corner radii based on quadrant (y-down screen space).
+    var rx: f32 = radii_x.x; // top-left (default)
+    var ry: f32 = radii_y.x;
+    if p.x >= 0.0 && p.y <= 0.0 { rx = radii_x.y; ry = radii_y.y; } // top-right
+    if p.x >= 0.0 && p.y >  0.0 { rx = radii_x.z; ry = radii_y.z; } // bottom-right
+    if p.x <  0.0 && p.y >  0.0 { rx = radii_x.w; ry = radii_y.w; } // bottom-left
+    // CSS Backgrounds L3 §5.5 overlap clamp: radius must fit inside half-box.
+    rx = min(rx, half_size.x);
+    ry = min(ry, half_size.y);
+    // Position relative to corner center (both axes clamped to ≥ 0 for corner).
+    let q = abs(p) - half_size + vec2<f32>(rx, ry);
+    // Inside the straight (non-corner) region.
+    if q.x <= 0.0 && q.y <= 0.0 { return max(q.x, q.y); }
+    // Sharp corner (degenerate radius): standard box SDF.
+    if rx < 0.001 || ry < 0.001 {
+        return length(max(q, vec2<f32>(0.0))) + min(max(q.x, q.y), 0.0);
+    }
+    // Only one axis in the corner region.
+    if q.x <= 0.0 { return q.y; }
+    if q.y <= 0.0 { return q.x; }
+    // Both axes in the ellipse corner: first-order ellipse SDF approximation.
+    // For rx == ry this is identical to the Quilez circular formula.
+    let k = length(q / vec2<f32>(rx, ry));
+    return (k - 1.0) * min(rx, ry);
 }
 
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let p = in.world_pos - in.center;
-    let d = sdf_rrect(p, in.half_size, in.radii);
+    let d = sdf_rrect(p, in.half_size, in.radii_x, in.radii_y);
     // Sub-pixel anti-aliasing: smoothstep over [-0.5, 0.5] px.
     let alpha = 1.0 - smoothstep(-0.5, 0.5, d);
     if alpha <= 0.0 { discard; }
@@ -871,8 +896,9 @@ struct CircleVertex {
 }
 
 /// Вершина для SDF-скруглённого прямоугольника (`RRECT_SHADER_SRC`).
-/// `center`/`half_size`/`radii` одинаковы для всех 6 вершин одного quad-а
+/// `center`/`half_size`/`radii_x`/`radii_y` одинаковы для всех 6 вершин одного quad-а
 /// и передаются как interpolants (константны внутри одного треугольника).
+/// Layout: pos(8) + color(16) + center(8) + half_size(8) + radii_x(16) + radii_y(16) = 72 bytes.
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct RRectVertex {
@@ -884,8 +910,11 @@ struct RRectVertex {
     center: [f32; 2],
     /// Half-dimensions of the rect: (width/2, height/2).
     half_size: [f32; 2],
-    /// Corner radii in CSS pixels: [tl, tr, br, bl].
-    radii: [f32; 4],
+    /// Horizontal corner radii in CSS pixels: [tl, tr, br, bl]. Matches WGSL loc 4.
+    radii_x: [f32; 4],
+    /// Vertical corner radii in CSS pixels: [tl, tr, br, bl]. Matches WGSL loc 5.
+    /// Equal to `radii_x` for circular corners; differs for elliptical (`border-radius: H/V`).
+    radii_y: [f32; 4],
 }
 
 #[repr(C)]
@@ -1535,11 +1564,17 @@ impl Renderer {
                             offset: 32,
                             shader_location: 3,
                         },
-                        // loc 4: radii (vec4: tl, tr, br, bl)
+                        // loc 4: radii_x (vec4: horizontal tl, tr, br, bl)
                         wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Float32x4,
                             offset: 40,
                             shader_location: 4,
+                        },
+                        // loc 5: radii_y (vec4: vertical tl, tr, br, bl)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 56,
+                            shader_location: 5,
                         },
                     ],
                 }],
@@ -4582,8 +4617,9 @@ fn push_rrect_quad(out: &mut Vec<RRectVertex>, rect: Rect, color: [f32; 4], radi
     let y1 = rect.y + rect.height;
     let center = [(x0 + x1) * 0.5, (y0 + y1) * 0.5];
     let half_size = [rect.width * 0.5, rect.height * 0.5];
-    let r = [radii.tl, radii.tr, radii.br, radii.bl];
-    let v = |px: f32, py: f32| RRectVertex { pos: [px, py], color, center, half_size, radii: r };
+    let radii_x = [radii.tl,   radii.tr,   radii.br,   radii.bl  ];
+    let radii_y = [radii.tl_y, radii.tr_y, radii.br_y, radii.bl_y];
+    let v = |px: f32, py: f32| RRectVertex { pos: [px, py], color, center, half_size, radii_x, radii_y };
     out.extend_from_slice(&[
         v(x0, y0), v(x1, y0), v(x1, y1),
         v(x0, y0), v(x1, y1), v(x0, y1),

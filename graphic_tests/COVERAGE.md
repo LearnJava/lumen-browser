@@ -50,7 +50,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 33-multi-column.html | multi-column layout + column-rule | 7 | column-count:2/3/4/5 · column-width · column-gap · column-rule: solid/dashed/dotted · rule centered in gap · rule wider than gap (clamped) |
 | 34-forms.html | form controls static rendering | 18 | input[text/email/password/number/search/range/color/submit] · checkbox (unchecked/checked/disabled) · radio (unchecked/checked) · button · textarea · select · required · disabled UA styles |
 | 35-grid-named-areas.html | CSS Grid named areas | 9 | grid-template-areas · grid-area: &lt;name&gt; · named area spanning multiple rows/cols · page layout (header/sidebar/main/footer) · mini-grid with 5 named areas |
-| 36-border-radius.html | border-radius: uniform, pill, circle, asymmetric | 22 | border-radius: 0/4/8/16/24/32px · + border · pill (999px) · circle (50%) · asymmetric per-corner (24px 0 0 0 / etc.) · large clamped · nested rounded divs |
+| 36-border-radius.html | border-radius: uniform, pill, circle, asymmetric, elliptical (rx≠ry) | 28 | border-radius: 0/4/8/16/24/32px · + border · pill (999px) · circle (50%) · asymmetric per-corner · large clamped · nested · elliptical shorthand (H/V) · per-corner elliptical · individual corner rx ry |
 | 37-float-clear.html | float: left/right + clear: both | 11 | float: left · float: right · float left + right combined · two left floats horizontal stack · clear: both clearance |
 | 38-z-index.html | z-index stacking context paint order | 6 | positive z-index (1/2/3) painted in correct order · negative z-index behind parent · z-index:auto same phase as z:0 · high z-index over zero-z sibling |
 | 39-gradients.html | linear-gradient / radial-gradient | 13 | linear: to right / to bottom / 45deg / 3-stop / transparent · radial: circle center / offset / 3-stop / ellipse · repeating-linear / repeating-radial · stacked |
@@ -140,7 +140,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **display: inline** — нет смысла без текста (нулевые размеры)
 - **z-index** — требует `position: absolute/relative` с offset (Phase 0: offsets не применяются)
 - **box-shadow: inset** — не реализовано в paint (требует clip)
-- **border-radius: elliptical (rx≠ry)** — CSS spec allows `border-radius: 10px / 20px` (elliptical), only circular supported
+- **border-radius: elliptical (rx≠ry)** — ✅ supported since 2026-05-24: `border-radius: H / V` shorthand + individual `border-*-*-radius: rx ry`
 - **background-image** (url) — url images ✅; gradient rendering ✅ (linear + radial GPU pipeline, тест 39; conic gradient ✅ тест 40)
 - **transform** — ✅ полностью реализован (translate/rotate/scale/skew/matrix + transform-origin), тест 22
 - **filter** — ✅ реализован (grayscale/sepia/brightness/invert/contrast/saturate/opacity/hue-rotate + blur), тест 30
