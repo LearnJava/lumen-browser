@@ -3016,7 +3016,9 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PopMask
             | DisplayCommand::DrawLayerSnapshot { .. }
             | DisplayCommand::PushFilter { .. }
-            | DisplayCommand::PopFilter => continue,
+            | DisplayCommand::PopFilter
+            | DisplayCommand::BeginStickyLayer { .. }
+            | DisplayCommand::EndStickyLayer => continue,
         };
         let bottom = r.y + r.height;
         if bottom > max_y {
@@ -3058,7 +3060,9 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PopMask
             | DisplayCommand::DrawLayerSnapshot { .. }
             | DisplayCommand::PushFilter { .. }
-            | DisplayCommand::PopFilter => continue,
+            | DisplayCommand::PopFilter
+            | DisplayCommand::BeginStickyLayer { .. }
+            | DisplayCommand::EndStickyLayer => continue,
         };
         let right = r.x + r.width;
         if right > max_x {

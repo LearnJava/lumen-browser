@@ -3871,22 +3871,32 @@ fn align_lines(
 /// CSS 2.1 §10.8 — применяет вертикальное выравнивание к inline-фрагментам.
 /// Записывает `y_offset` (смещение от верхнего края line-box, вниз — положительное).
 /// `line_h` = font_size * line_height контейнера.
+///
+/// Half-leading (§10.8.1): когда line-height > content-area, разница делится пополам
+/// и добавляется выше и ниже content-area. Для `baseline` — фрагмент сдвигается вниз
+/// на `half_leading = (line_h - frag_h) / 2`, чтобы content-area была центрирована.
 fn apply_inline_vertical_align(lines: &mut [Vec<InlineFrag>], line_h: f32) {
     for line in lines.iter_mut() {
         for frag in line.iter_mut() {
-            // frag_h: approximation of frag's rendered height ≈ its font-size.
+            // frag_h: content area height ≈ font-size (ascent + descent for normal line-height).
             let frag_h = frag.style.font_size;
+            // CSS 2.1 §10.8.1: half-leading pushes content area away from line-box edges.
+            let half_leading = ((line_h - frag_h) / 2.0).max(0.0);
             frag.y_offset = match frag.style.vertical_align {
-                VerticalAlign::Baseline => 0.0,
+                // Baseline: content area centred via half-leading (top = half_leading).
+                VerticalAlign::Baseline => half_leading,
+                // Top/TextTop: fragment top-aligned to line-box top edge.
                 VerticalAlign::Top | VerticalAlign::TextTop => 0.0,
+                // Bottom/TextBottom: fragment bottom-aligned to line-box bottom edge.
                 VerticalAlign::Bottom | VerticalAlign::TextBottom => (line_h - frag_h).max(0.0),
+                // Middle: visual midpoint of fragment at midpoint of line-box.
                 VerticalAlign::Middle => ((line_h - frag_h) / 2.0).max(0.0),
                 // sub/super: relative shift from baseline (~0.8 * frag_h from frag top).
-                VerticalAlign::Sub => frag_h * 0.15,
-                VerticalAlign::Super => -(frag_h * 0.35),
+                VerticalAlign::Sub => half_leading + frag_h * 0.15,
+                VerticalAlign::Super => half_leading - frag_h * 0.35,
                 // CSS: positive length = shift up (above baseline) → negative screen y.
-                VerticalAlign::Length(px) => -px,
-                VerticalAlign::Percent(p) => -(p / 100.0 * line_h),
+                VerticalAlign::Length(px) => half_leading - px,
+                VerticalAlign::Percent(p) => half_leading - (p / 100.0 * line_h),
             };
         }
     }
