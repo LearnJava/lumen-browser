@@ -1,4 +1,5 @@
-In progress: —
+In progress: CSS Lists L3 #9 — list marker geometric rendering  branch: p4-list-markers
+Next step: add list_style_type to BoxKind::Marker, emit FillRoundedRect/DrawBorder/FillRect for bullets  box_tree.rs:313
 
 Next:
 
