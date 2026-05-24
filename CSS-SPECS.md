@@ -56,7 +56,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS 2.1 floats | [CSS2](https://www.w3.org/TR/CSS2/) | ✅ | FloatContext placement + FloatSide/ClearSide + 10 tests | **#8** |
 | CSS Lists L3 | [css3-lists](https://www.w3.org/TR/css3-lists/) | ✅ | disc/circle/square geometric shapes + decimal/roman/alpha/greek text markers; 7 tests 2026-05-24 | **#9** |
 | CSS Cascading L4/L5 | [css-cascade-4](https://www.w3.org/TR/css-cascade-4/) | ✅ | @layer cascade ordering: layer_priority in sort key, 6 tests | **#10** |
-| Selectors L4 | [selectors4](https://www.w3.org/TR/selectors4/) | 🟡 | :is()/:where()/:has() matching | **#11** |
+| Selectors L4 | [selectors4](https://www.w3.org/TR/selectors4/) | ✅ | :is()/:where()/:has() matching + all L4 pseudo-classes 2026-05-24 | **#11** |
 | Media Queries L3 | [mediaqueries-3](https://www.w3.org/TR/mediaqueries-3/) | 🟡 | resize hook; @media re-evaluation | **#12** |
 
 ### Tier 2 — High visual value (visually broken without these)
@@ -71,7 +71,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Images L4 | [css4-images](https://www.w3.org/TR/css4-images/) | ⬜ | image-set(), cross-fade() | **#18** |
 | CSS Grid L1 | [css-grid-1](https://www.w3.org/TR/css-grid-1/) | 🟡 | grid-template-areas ✅ 2026-05-22; dense auto-flow ⬜ | **#19** |
 | CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading; font-optical-sizing | **#20** |
-| CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | 🟡 | min-content / max-content / fit-content | **#21** |
+| CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | ✅ | min-content/max-content/fit-content/fit-content(L) for width/height/min-max; 11 tests 2026-05-24 | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
 | CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last; hyphens:auto | **#23** |
 | CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | perspective/3D; individual translate/rotate/scale props | **#24** |
@@ -473,10 +473,10 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Value | Status | Notes |
 |-------|--------|-------|
-| `min-content` | ⬜ | CSS Intrinsic Sizing L3 |
-| `max-content` | ⬜ | |
-| `fit-content` / `fit-content(L)` | ⬜ | |
-| `stretch` / `available` | ⬜ | |
+| `min-content` | ✅ | Length::MinContent; phase-0 approx = longest-word width 2026-05-24 |
+| `max-content` | ✅ | Length::MaxContent; max_content_outer_width() measures text 2026-05-24 |
+| `fit-content` / `fit-content(L)` | ✅ | Length::FitContent(Option<Box<Length>>); capped at available 2026-05-24 |
+| `stretch` / `available` | 🟡 | parsed as FitContent(None) |
 
 ### [T2] Transforms L2 / 3D
 

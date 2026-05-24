@@ -84,6 +84,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('40', '40-conic-gradients.html',   3.0, 'conic-gradient / repeating-conic-gradient (CSS Images L4 §3.7)'),
     ('41', '41-table.html',             3.0, 'display:table/row/cell with row groups (CSS 2.1 §17)'),
     ('42', '42-position-sticky.html',   3.0, 'position:sticky — flow position + BeginStickyLayer/EndStickyLayer (CSS Positioning L3 §6.3)'),
+    ('43', '43-intrinsic-sizing.html',  2.0, 'CSS Intrinsic Sizing L3 — width: max-content / min-content / fit-content'),
 ]
 
 # --- PNG reader (stdlib only) ---
