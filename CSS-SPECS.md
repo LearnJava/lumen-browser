@@ -493,7 +493,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 |-------|--------|-------|
 | `env()` | ⬜ | safe-area-inset-*, titlebar-area-* |
 | `attr()` with type | 🟡 | string only; type casting ⬜ |
-| `cqw` / `cqh` / `cqi` / `cqb` | ⬜ | container query units |
+| `cqw` / `cqh` / `cqi` / `cqb` / `cqmin` / `cqmax` | ✅ | container query units; thread-local CONTAINER_CQ; 4 tests 2026-05-25 |
 | `svh` / `dvh` / `lvh` / `svw` / `dvw` / `lvw` | ✅ | = vh/vw (Phase 0 fixed viewport) |
 | `svmin`/`dvmin`/`lvmin`, `svmax`/`dvmax`/`lvmax` | ✅ | = vmin/vmax |
 
@@ -526,8 +526,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Feature | Status | Notes |
 |---------|--------|-------|
 | `container-type` / `container-name` | ✅ | |
-| `@container` | 🟡 | condition matching ✅; 2nd-pass re-layout ✅; cq* units ⬜ |
-| Container query units (`cq*`) | ⬜ | |
+| `@container` | ✅ | condition matching ✅; 2nd-pass re-layout ✅; cq* units ✅ 2026-05-25 |
+| Container query units (`cq*`) | ✅ | cqw/cqh/cqi/cqb/cqmin/cqmax 2026-05-25 |
 
 ### [T3] Counters & Lists (rendering)
 
@@ -589,7 +589,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `@font-face` | 🟡 | descriptors parsed; loading ⬜ |
 | `@keyframes` | 🟡 | parsed; scheduler ⬜ |
 | `@layer` | ✅ | parsed; cascade ordering ✅ |
-| `@container` | 🟡 | condition matching ✅; 2nd-pass re-layout ✅; cq* units ⬜ |
+| `@container` | ✅ | condition matching ✅; 2nd-pass re-layout ✅; cq* units ✅ 2026-05-25 |
 | `@color-profile` | ⬜ | CSS Color L5 |
 | `@font-palette-values` | ⬜ | CSS Fonts L5 |
 | `@counter-style` | ⬜ | CSS Counter Styles L3 |
@@ -612,7 +612,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `url()` | ✅ | |
 | `svh`/`dvh`/`lvh`/`svw`/`dvw`/`lvw` | ✅ | = vh/vw (Phase 0 fixed viewport) |
 | `svmin`/`dvmin`/`lvmin`/`svmax`/`dvmax`/`lvmax` | ✅ | = vmin/vmax |
-| `cqw`/`cqh`/`cqi`/`cqb` | ⬜ | container query units |
+| `cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax` | ✅ | container query units 2026-05-25 |
 | `env()` | ⬜ | |
 | `attr()` | 🟡 | string; type casting ⬜ |
 | `color-mix()` | ⬜ | CSS Color L5 |
