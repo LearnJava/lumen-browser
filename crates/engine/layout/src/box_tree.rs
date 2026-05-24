@@ -2733,108 +2733,155 @@ fn lay_out_grid(
         let rs = if named_rs != 0 { named_rs } else { resolve_grid_line(&is.grid_row_start, 0) };
         let re = if named_re != 0 { named_re } else { resolve_grid_line_end(&is.grid_row_end, rs, 0) };
 
+        // `grid-column: span N` → start=Span(N), end=Auto → cs=0, ce=0.
+        // resolve_grid_line returns 0 for Span-on-start, losing the count.
+        // Recover the span so Pass 2 can use it for placement sizing.
+        let ce = if ce == 0 {
+            match &is.grid_column_start { GridLine::Span(n) => *n, _ => 0 }
+        } else { ce };
+        let re = if re == 0 {
+            match &is.grid_row_start { GridLine::Span(n) => *n, _ => 0 }
+        } else { re };
+
         if cs != 0 && rs != 0 {
             // Fully explicit: both axes known.
             placements[k] = (cs, ce, rs, re);
         } else if cs != 0 {
-            // Column fixed, row auto.
-            placements[k] = (cs, ce, 0, 0);
+            // Column position fixed, row auto; preserve row-span if declared.
+            placements[k] = (cs, ce, 0, re);
         } else if rs != 0 {
-            // Row fixed, column auto.
-            placements[k] = (0, 0, rs, re);
+            // Row position fixed, column auto; preserve col-span if declared.
+            placements[k] = (0, ce, rs, re);
+        } else if ce > 0 || re > 0 {
+            // Both axes auto but at least one span is declared (e.g. grid-column:span 2).
+            // Store so pass-2 can recover the span via `end - 0 = span`.
+            placements[k] = (0, ce, 0, re);
         }
-        // both auto: handled in pass 2
+        // All-auto no spans: stays (0,0,0,0) → span=1 in pass 2.
     }
 
-    // Pass 2: auto-place remaining items.
-    // Simple auto-placement: scan in row order, fill left-to-right then wrap.
+    // Pass 2: auto-place remaining items — CSS Grid L1 §8.5 auto-placement algorithm.
+    //
+    // Two packing modes:
+    //   Sparse (grid-auto-flow: row | column): cursor only moves forward.
+    //   Dense  (grid-auto-flow: row dense | column dense): each item scans from
+    //          (1,1) so it can fill gaps left by larger items.
+    //
+    // Occupancy HashSet replaces the O(k²) overlap scan from Pass 1 with O(1)
+    // per-cell lookups.
+    let dense = matches!(s.grid_auto_flow, GridAutoFlow::RowDense | GridAutoFlow::ColumnDense);
+    let mut occupied: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+    for &(cs, ce, rs, re) in &placements {
+        if cs != 0 && rs != 0 {
+            for r in rs..re {
+                for c in cs..ce {
+                    occupied.insert((c, r));
+                }
+            }
+        }
+    }
+
     let mut cursor_row: u32 = 1;
     let mut cursor_col: u32 = 1;
 
     for (k, _) in item_idxs.iter().enumerate() {
         let (cs, ce, rs, re) = placements[k];
         if cs != 0 && rs != 0 {
-            continue; // already placed
+            continue; // explicitly placed
         }
 
-        // Determine span
         let col_span = if ce > cs { ce - cs } else { 1 };
         let row_span = if re > rs { re - rs } else { 1 };
 
         if row_flow {
-            // If column is fixed, row needs auto-placement.
             let fixed_cs = if cs != 0 { cs } else { 0 };
             let fixed_ce = if cs != 0 { ce } else { 0 };
 
-            // Find next empty cell starting at cursor.
-            loop {
-                let try_col = if fixed_cs != 0 { fixed_cs } else { cursor_col };
-                let try_ce = if fixed_cs != 0 { fixed_ce } else { try_col + col_span };
-                // Check if this cell overlaps any already-placed item in the same row.
-                let overlaps = (0..k).any(|j| {
-                    let (ocs, oce, ors, ore) = placements[j];
-                    ocs != 0 && ors != 0
-                        && cursor_row < ore && cursor_row + row_span > ors
-                        && try_col < oce && try_ce > ocs
-                });
+            // Dense packing starts each scan from (1,1); sparse continues from cursor.
+            let (mut scan_r, mut scan_c) = if dense { (1u32, 1u32) } else { (cursor_row, cursor_col) };
 
-                if !overlaps && (try_ce - 1) <= n_explicit_cols as u32 || n_explicit_cols == 1 {
-                    placements[k] = (try_col, try_ce, cursor_row, cursor_row + row_span);
-                    // Advance cursor.
-                    cursor_col = try_ce;
-                    if cursor_col > n_explicit_cols as u32 {
-                        cursor_col = 1;
-                        cursor_row += 1;
+            loop {
+                let try_c   = if fixed_cs != 0 { fixed_cs } else { scan_c };
+                let try_ce_val = if fixed_cs != 0 { fixed_ce } else { try_c + col_span };
+
+                // Bounds: item must fit within explicit column count (or 1-col fallback).
+                let fits = (try_ce_val - 1) <= n_explicit_cols as u32 || n_explicit_cols == 1;
+                let cell_free = fits && (try_c..try_ce_val)
+                    .all(|c| (scan_r..scan_r + row_span).all(|r| !occupied.contains(&(c, r))));
+
+                if cell_free {
+                    placements[k] = (try_c, try_ce_val, scan_r, scan_r + row_span);
+                    for r in scan_r..scan_r + row_span {
+                        for c in try_c..try_ce_val {
+                            occupied.insert((c, r));
+                        }
+                    }
+                    // Track highest placed row for grid-size calculation.
+                    cursor_row = cursor_row.max(scan_r);
+                    if !dense {
+                        cursor_col = try_ce_val;
+                        if cursor_col > n_explicit_cols as u32 {
+                            cursor_col = 1;
+                            cursor_row += 1;
+                        }
                     }
                     break;
                 }
-                // Try next column.
+
+                // Advance scan position.
                 if fixed_cs != 0 {
-                    // Column is fixed, just advance row.
-                    cursor_row += 1;
-                    cursor_col = 1;
+                    scan_r += 1;
+                    scan_c = 1;
                 } else {
-                    cursor_col += 1;
-                    if cursor_col > n_explicit_cols as u32 {
-                        cursor_col = 1;
-                        cursor_row += 1;
+                    scan_c += 1;
+                    if scan_c > n_explicit_cols as u32 {
+                        scan_c = 1;
+                        scan_r += 1;
                     }
                 }
             }
         } else {
-            // Column flow: fill top-to-bottom, wrap into next column.
+            // Column flow: fill top-to-bottom, wrap to next column.
             let n_explicit_rows = s.grid_template_rows.len().max(1) as u32;
             let fixed_rs = if rs != 0 { rs } else { 0 };
             let fixed_re = if rs != 0 { re } else { 0 };
 
+            let (mut scan_r, mut scan_c) = if dense { (1u32, 1u32) } else { (cursor_row, cursor_col) };
+
             loop {
-                let try_row = if fixed_rs != 0 { fixed_rs } else { cursor_row };
-                let try_re = if fixed_rs != 0 { fixed_re } else { try_row + row_span };
+                let try_r      = if fixed_rs != 0 { fixed_rs } else { scan_r };
+                let try_re_val = if fixed_rs != 0 { fixed_re } else { try_r + row_span };
 
-                let overlaps = (0..k).any(|j| {
-                    let (ocs, oce, ors, ore) = placements[j];
-                    ocs != 0 && ors != 0
-                        && cursor_col < oce && cursor_col + col_span > ocs
-                        && try_row < ore && try_re > ors
-                });
+                let fits = (try_re_val - 1) <= n_explicit_rows || n_explicit_rows == 1;
+                let cell_free = fits && (scan_c..scan_c + col_span)
+                    .all(|c| (try_r..try_re_val).all(|r| !occupied.contains(&(c, r))));
 
-                if !overlaps && (try_re - 1) <= n_explicit_rows || n_explicit_rows == 1 {
-                    placements[k] = (cursor_col, cursor_col + col_span, try_row, try_re);
-                    cursor_row = try_re;
-                    if cursor_row > n_explicit_rows {
-                        cursor_row = 1;
-                        cursor_col += 1;
+                if cell_free {
+                    placements[k] = (scan_c, scan_c + col_span, try_r, try_re_val);
+                    for r in try_r..try_re_val {
+                        for c in scan_c..scan_c + col_span {
+                            occupied.insert((c, r));
+                        }
+                    }
+                    cursor_col = cursor_col.max(scan_c);
+                    if !dense {
+                        cursor_row = try_re_val;
+                        if cursor_row > n_explicit_rows {
+                            cursor_row = 1;
+                            cursor_col += 1;
+                        }
                     }
                     break;
                 }
+
                 if fixed_rs != 0 {
-                    cursor_col += 1;
-                    cursor_row = 1;
+                    scan_c += 1;
+                    scan_r = 1;
                 } else {
-                    cursor_row += 1;
-                    if cursor_row > n_explicit_rows {
-                        cursor_row = 1;
-                        cursor_col += 1;
+                    scan_r += 1;
+                    if scan_r > n_explicit_rows {
+                        scan_r = 1;
+                        scan_c += 1;
                     }
                 }
             }
@@ -3091,7 +3138,10 @@ fn resolve_grid_line_end(line: &GridLine, start: u32, n_tracks: u32) -> u32 {
             }
         }
         GridLine::Span(n) => {
-            if start > 0 { start + n } else { 0 }
+            // When start is known: end = start + span.
+            // When start is auto (0): store span N directly so pass-2 placement
+            // can use `re - rs = N - 0 = N` to recover the span count.
+            if start > 0 { start + n } else { *n }
         }
     }
 }

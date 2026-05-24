@@ -10511,6 +10511,169 @@ mod tests {
         assert!((sidebar.rect.y - 80.0).abs() < 1.0,  "s.y={}", sidebar.rect.y);
     }
 
+    // ── grid-auto-flow: dense ────────────────────────────────────────────────
+
+    /// Dense row packing fills the gap left by a wide item.
+    ///
+    ///  3 cols, A and B each span 2 cols; C and D are 1×1.
+    ///
+    ///  Sparse (row):             Dense (row dense):
+    ///  +---+---+---+             +---+---+---+
+    ///  | A   A |   |             | A   A | C |  ← C fills gap in row 1
+    ///  +---+---+---+             +---+---+---+
+    ///  | B   B | C |             | B   B | D |  ← D fills gap in row 2
+    ///  +---+---+---+             +---+---+---+
+    ///  | D |       |
+    ///  +---+---+---+
+    #[test]
+    fn grid_dense_row_fills_gap() {
+        let root = lay(
+            "<body><div id='g'>\
+               <span id='a'></span>\
+               <span id='b'></span>\
+               <span id='c'></span>\
+               <span id='d'></span>\
+             </div></body>",
+            r#"
+            #g {
+                display: grid;
+                grid-template-columns: 100px 100px 100px;
+                grid-auto-rows: 50px;
+                grid-auto-flow: row dense;
+                width: 300px;
+            }
+            #a { grid-column: span 2; }
+            #b { grid-column: span 2; }
+            /* c, d: auto 1×1 */
+            "#,
+        );
+        let body = first_element_child(&root);
+        let grid = first_element_child(body);
+        let items: Vec<_> = grid.children.iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .collect();
+        assert_eq!(items.len(), 4, "expected 4 items");
+
+        let a = &items[0];
+        let b = &items[1];
+        let c = &items[2];
+        let d = &items[3];
+
+        // A: cols 1-2, row 1 → x=0, w=200, y=0
+        assert!((a.rect.x - 0.0).abs() < 1.0,     "a.x={}", a.rect.x);
+        assert!((a.rect.width - 200.0).abs() < 1.0, "a.w={}", a.rect.width);
+        assert!((a.rect.y - 0.0).abs() < 1.0,     "a.y={}", a.rect.y);
+
+        // B: cols 1-2, row 2 → x=0, w=200, y=50
+        assert!((b.rect.x - 0.0).abs() < 1.0,     "b.x={}", b.rect.x);
+        assert!((b.rect.width - 200.0).abs() < 1.0, "b.w={}", b.rect.width);
+        assert!((b.rect.y - 50.0).abs() < 1.0,    "b.y={}", b.rect.y);
+
+        // Dense: C fills the gap at col 3, row 1 → x=200, y=0
+        assert!((c.rect.x - 200.0).abs() < 1.0, "c.x={}: dense must fill row-1 gap", c.rect.x);
+        assert!((c.rect.y - 0.0).abs() < 1.0,   "c.y={}: dense must fill row-1 gap", c.rect.y);
+
+        // Dense: D fills the gap at col 3, row 2 → x=200, y=50
+        assert!((d.rect.x - 200.0).abs() < 1.0, "d.x={}: dense must fill row-2 gap", d.rect.x);
+        assert!((d.rect.y - 50.0).abs() < 1.0,  "d.y={}: dense must fill row-2 gap", d.rect.y);
+    }
+
+    /// Sparse layout must NOT back-fill: C stays in row 2 (after B), D in row 3.
+    ///
+    ///  Same grid: A(span2), B(span2), C(1×1), D(1×1) with `grid-auto-flow: row`.
+    ///  Col-3 gap in row 1 is skipped by the forward-only cursor.
+    #[test]
+    fn grid_sparse_row_no_backfill() {
+        let root = lay(
+            "<body><div id='g'>\
+               <span id='a'></span>\
+               <span id='b'></span>\
+               <span id='c'></span>\
+               <span id='d'></span>\
+             </div></body>",
+            r#"
+            #g {
+                display: grid;
+                grid-template-columns: 100px 100px 100px;
+                grid-auto-rows: 50px;
+                grid-auto-flow: row;
+                width: 300px;
+            }
+            #a { grid-column: span 2; }
+            #b { grid-column: span 2; }
+            "#,
+        );
+        let body = first_element_child(&root);
+        let grid = first_element_child(body);
+        let items: Vec<_> = grid.children.iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .collect();
+        assert_eq!(items.len(), 4, "expected 4 items");
+
+        let c = &items[2];
+        let d = &items[3];
+
+        // Sparse: C ends up at col 3, row 2 (not row 1 — cursor didn't go back).
+        assert!((c.rect.x - 200.0).abs() < 1.0, "c.x={}: sparse must not back-fill col3 row1", c.rect.x);
+        assert!((c.rect.y - 50.0).abs() < 1.0,  "c.y={}: sparse must not back-fill col3 row1", c.rect.y);
+
+        // D ends up at col 1, row 3 (cursor advanced past row 2).
+        assert!((d.rect.y - 100.0).abs() < 1.0, "d.y={}: sparse must not back-fill", d.rect.y);
+    }
+
+    /// Dense column flow: small items back-fill gaps left by tall items in earlier columns.
+    ///
+    ///  2 cols, 3 explicit rows (50px).
+    ///  A spans 2 rows (col 1, rows 1-2); B spans 3 rows (col 2, rows 1-3).
+    ///  Dense: C fills the remaining slot in col 1, row 3.
+    ///  Sparse: C would continue forward to col 3 (outside the explicit grid).
+    #[test]
+    fn grid_dense_column_fills_gap() {
+        let root = lay(
+            "<body><div id='g'>\
+               <span id='a'></span>\
+               <span id='b'></span>\
+               <span id='c'></span>\
+             </div></body>",
+            r#"
+            #g {
+                display: grid;
+                grid-template-columns: 100px 100px;
+                grid-template-rows: 50px 50px 50px;
+                grid-auto-flow: column dense;
+                width: 200px;
+            }
+            #a { grid-row: span 2; }
+            #b { grid-row: span 3; }
+            /* c: auto 1×1 */
+            "#,
+        );
+        let body = first_element_child(&root);
+        let grid = first_element_child(body);
+        let items: Vec<_> = grid.children.iter()
+            .filter(|c| !matches!(c.kind, BoxKind::Skip))
+            .collect();
+        assert_eq!(items.len(), 3, "expected 3 items");
+
+        let a = &items[0];
+        let b = &items[1];
+        let c = &items[2];
+
+        // A: col 1, rows 1-2 → x=0, y=0, h=100
+        assert!((a.rect.x - 0.0).abs() < 1.0,      "a.x={}", a.rect.x);
+        assert!((a.rect.y - 0.0).abs() < 1.0,      "a.y={}", a.rect.y);
+        assert!((a.rect.height - 100.0).abs() < 1.0, "a.h={}", a.rect.height);
+
+        // B: col 2, rows 1-3 → x=100, y=0, h=150
+        assert!((b.rect.x - 100.0).abs() < 1.0,    "b.x={}", b.rect.x);
+        assert!((b.rect.y - 0.0).abs() < 1.0,      "b.y={}", b.rect.y);
+        assert!((b.rect.height - 150.0).abs() < 1.0, "b.h={}", b.rect.height);
+
+        // Dense: C fills col 1 row 3 → x=0, y=100
+        assert!((c.rect.x - 0.0).abs() < 1.0,   "c.x={}: dense col must back-fill col1 row3", c.rect.x);
+        assert!((c.rect.y - 100.0).abs() < 1.0, "c.y={}: dense col must back-fill col1 row3", c.rect.y);
+    }
+
     // ── collect_image_requests ────────────────────────────────────────────────
 
     fn vp() -> Size {
