@@ -512,6 +512,14 @@ Framework + winit-integration + task source priorities + requestIdleCallback + `
 
 ---
 
+### P4 — CSS
+
+#### CSS Intrinsic Sizing L3 (2026-05-24)
+
+**`p4-intrinsic-sizing`**: `Length::MinContent` / `Length::MaxContent` / `Length::FitContent(Option<Box<Length>>)` в enum `Length`. `parse_sizing_length()` парсит intrinsic keywords (плюс `stretch`/`-webkit-fill-available`/`-moz-available` → `FitContent(None)`); подключён в `apply_declaration()` для `width`/`height`/`min-*`/`max-*`. `Length::is_intrinsic()` — флаг для layout. `max_content_outer_width()` и `min_content_outer_width()` в `box_tree.rs` — рекурсивный обход дерева; Phase-0: min-content = максимальное слово (split по пробелам), max-content = весь текст одной строкой. `fit-content(L)` = min(max-content, max(min-content, L)). Минимальная/максимальная ширина через intrinsic функции учитывается при clamping. Graphic test 43. 11 unit-тестов. CSS-SPECS.md #21 🟡→✅.
+
+---
+
 
 ## 0. Терминология
 
