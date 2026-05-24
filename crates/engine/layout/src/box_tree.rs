@@ -21,7 +21,8 @@ use crate::style::{
     BackgroundImage, BoxSizing, ClearSide, ContainFlags, ContainerContext, ContainerType, Content,
     ContentItem, ComputedStyle, Direction, Display, FlexBasis, FlexDirection, FlexWrap, FloatSide,
     GridAutoFlow, GridLine, GridTrackSize, Hyphens, Length, LengthOrAuto, ListStylePosition,
-    ListStyleType, Overflow, Position, TextAlign, TextOverflow, VerticalAlign,
+    ListStyleType, Overflow, OverflowWrap, Position, TextAlign, TextOverflow, TextWrapMode,
+    VerticalAlign, WordBreak,
 };
 use crate::TextMeasurer;
 
@@ -1401,16 +1402,15 @@ fn lay_out(
     // InlineRun обрабатывается до основного match.
     if let BoxKind::InlineRun { segments, lines } = &mut b.kind {
         if let Some(m) = measurer {
-            // white-space: nowrap → передаём «бесконечную» max_width в wrap,
-            // чтобы перенос не сработал; остальная логика (letter-spacing,
-            // word-spacing, объединение фрагментов) остаётся.
-            let wrap_width = if s.white_space.is_nowrap() {
+            // white-space: nowrap / text-wrap-mode: nowrap → infinite max_width so
+            // the line-breaker never wraps; word-spacing/letter-spacing logic unchanged.
+            let wrap_width = if s.white_space.is_nowrap() || s.text_wrap_mode == TextWrapMode::Nowrap {
                 f32::INFINITY
             } else {
                 content_width
             };
             let text_indent_px = s.text_indent.resolve_or_zero(em, cb, viewport);
-            *lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space);
+            *lines = wrap_inline_run(segments, wrap_width, s.font_size, text_indent_px, viewport, m, s.hyphens, hp, s.white_space, s.word_break, s.overflow_wrap);
             align_lines(lines, content_width, s.text_align, s.direction);
             let line_h = s.font_size * s.line_height;
             apply_inline_vertical_align(lines, line_h);
@@ -3224,6 +3224,35 @@ fn try_hyp_break(
 ///
 /// Алгоритм: жадный word-wrap + опциональные переносы (hyphens: manual/auto).
 /// Слова одного стиля на одной строке сливаются
+/// Returns the byte offset where `word` must be split so the prefix fits within
+/// `avail_px`. Guarantees at least one character in the prefix to prevent
+/// infinite loops when even a single character is wider than `avail_px`.
+/// Returns `word.len()` when the whole word fits.
+fn char_break_offset(
+    word: &str,
+    avail_px: f32,
+    font_size: f32,
+    ls: f32,
+    m: &dyn TextMeasurer,
+) -> usize {
+    let mut w = 0.0_f32;
+    for (char_idx, (byte_pos, ch)) in word.char_indices().enumerate() {
+        let cw = m.char_width(ch, font_size);
+        // Width of prefix ending at this char: sum(cw + ls) - ls.
+        // For first char: width = cw (no trailing letter-spacing).
+        let prefix_w = if char_idx == 0 { cw } else { w + ls + cw };
+        if prefix_w > avail_px {
+            if char_idx == 0 {
+                // Even the first char overflows — emit it to avoid infinite loop.
+                return byte_pos + ch.len_utf8();
+            }
+            return byte_pos;
+        }
+        w = prefix_w;
+    }
+    word.len()
+}
+
 /// в один `InlineFrag`. Сегменты обрабатываются по одному, чтобы учитывать
 /// `pre_space` / `post_space` (inline box model: margin + border + padding).
 /// `white_space` controls whether whitespace is preserved (pre/pre-wrap).
@@ -3238,6 +3267,8 @@ fn wrap_inline_run(
     hyphens: Hyphens,
     hp: &dyn HyphenationProvider,
     white_space: crate::style::WhiteSpace,
+    word_break: WordBreak,
+    overflow_wrap: OverflowWrap,
 ) -> Vec<Vec<InlineFrag>> {
     let space_w = m.char_width(' ', container_font_size);
 
@@ -3395,9 +3426,89 @@ fn wrap_inline_run(
                     continue;
                 }
 
+                // CSS Text L3 §5.1: word-break: break-all — char-break at the
+                // current line position before wrapping.
+                if word_break == WordBreak::BreakAll {
+                    let gap_w = if current_line.is_empty() { 0.0 } else { inter_word };
+                    current_x += gap_w + pre;
+                    let mut rest = display_word.as_str();
+                    let mut first_chunk = true;
+                    while !rest.is_empty() {
+                        let avail = (max_width - current_x).max(0.0);
+                        let split = char_break_offset(rest, avail, style.font_size, ls, m);
+                        let head = &rest[..split];
+                        let tail = &rest[split..];
+                        if !head.is_empty() {
+                            let head_w = measure_text_w(head, style.font_size, ls, 0.0, m);
+                            current_line.push(InlineFrag {
+                                x: current_x,
+                                y_offset: 0.0,
+                                width: head_w,
+                                text: head.to_string(),
+                                style: style.clone(),
+                                padding_left: if first_chunk && is_seg_first { pad_l } else { 0.0 },
+                                padding_right: if tail.is_empty() && is_seg_last { pad_r } else { 0.0 },
+                                is_element_box: seg.is_element_box,
+                                img_src: None,
+                            });
+                            current_x += head_w;
+                            first_chunk = false;
+                        }
+                        rest = tail;
+                        if !rest.is_empty() {
+                            result.push(std::mem::take(&mut current_line));
+                            current_x = 0.0;
+                        }
+                    }
+                    current_x += post;
+                    continue;
+                }
+
                 // No hyphenation break found — normal wrap.
                 result.push(std::mem::take(&mut current_line));
                 current_x = 0.0;
+            }
+
+            // CSS Text L3 §8.1: overflow-wrap: break-word / anywhere — char-break
+            // words that are wider than the container (won't fit on any line).
+            // word-break: break-word is a legacy alias for overflow-wrap: break-word.
+            let ow_char_break = (word_break == WordBreak::BreakWord
+                || matches!(overflow_wrap, OverflowWrap::BreakWord | OverflowWrap::Anywhere))
+                && word_w > max_width;
+            if ow_char_break {
+                let line_gap_ow = if current_line.is_empty() { 0.0 } else { inter_word };
+                current_x += line_gap_ow + pre;
+                let mut rest = display_word.as_str();
+                let mut first_chunk = true;
+                while !rest.is_empty() {
+                    let avail = (max_width - current_x).max(0.0);
+                    let split = char_break_offset(rest, avail, style.font_size, ls, m);
+                    let head = &rest[..split];
+                    let tail = &rest[split..];
+                    if !head.is_empty() {
+                        let head_w = measure_text_w(head, style.font_size, ls, 0.0, m);
+                        current_line.push(InlineFrag {
+                            x: current_x,
+                            y_offset: 0.0,
+                            width: head_w,
+                            text: head.to_string(),
+                            style: style.clone(),
+                            padding_left: if first_chunk && is_seg_first { pad_l } else { 0.0 },
+                            padding_right: if tail.is_empty() && is_seg_last { pad_r } else { 0.0 },
+                            is_element_box: seg.is_element_box,
+                            img_src: None,
+                        });
+                        current_x += head_w;
+                        first_chunk = false;
+                    }
+                    rest = tail;
+                    if !rest.is_empty() {
+                        result.push(std::mem::take(&mut current_line));
+                        current_x = 0.0;
+                    }
+                }
+                current_x += post;
+                continue;
             }
 
             let line_gap = if current_line.is_empty() { 0.0 } else { inter_word };
@@ -3937,7 +4048,7 @@ mod tests {
 
         let m = Fixed10;
         let hp = NullHyphenationProvider;
-        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::Manual, &hp, crate::style::WhiteSpace::Normal);
+        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::Manual, &hp, crate::style::WhiteSpace::Normal, crate::style::WordBreak::Normal, crate::style::OverflowWrap::Normal);
         assert_eq!(lines.len(), 2, "expected 2 lines, got {}", lines.len());
         // Line 1 has both "hi" and "hy-" merged or as separate frags.
         let line1_text: String = lines[0].iter().map(|f| f.text.as_str()).collect::<Vec<_>>().join(" ");
@@ -3973,13 +4084,176 @@ mod tests {
         };
         let m = Fixed10;
         let hp = NullHyphenationProvider;
-        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::None, &hp, crate::style::WhiteSpace::Normal);
+        let lines = wrap_inline_run(&[seg], 60.0, 16.0, 0.0, Size::new(800.0, 600.0), &m, Hyphens::None, &hp, crate::style::WhiteSpace::Normal, crate::style::WordBreak::Normal, crate::style::OverflowWrap::Normal);
         assert_eq!(lines.len(), 2, "expected 2 lines, got {}", lines.len());
         // Line 1 has only "hi"; line 2 has "hyphen" (whole, no hyphen char).
         assert_eq!(lines[0].len(), 1);
         assert_eq!(lines[0][0].text, "hi");
         let line2_text = &lines[1][0].text;
         assert_eq!(line2_text, "hyphen", "soft-hyphen should be stripped: {line2_text}");
+    }
+
+    // ── char_break_offset ────────────────────────────────────────────────────
+
+    #[test]
+    fn char_break_offset_all_fit() {
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        // "abc" = 3 chars × 8px = 24px; avail = 100 → whole word fits.
+        let off = super::char_break_offset("abc", 100.0, 16.0, 0.0, &Fixed8);
+        assert_eq!(off, 3); // "abc".len() == 3
+    }
+
+    #[test]
+    fn char_break_offset_splits_after_second_char() {
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+        // "abcde", avail = 25px; "ab" = 20px fits, "abc" = 30px > 25 → split at 2.
+        let off = super::char_break_offset("abcde", 25.0, 16.0, 0.0, &Fixed10);
+        assert_eq!(off, 2); // byte offset 2 = between 'b' and 'c'
+    }
+
+    #[test]
+    fn char_break_offset_emits_at_least_one_char() {
+        struct Wide;
+        impl super::super::TextMeasurer for Wide {
+            fn char_width(&self, _: char, _: f32) -> f32 { 100.0 }
+        }
+        // avail = 5px, char width 100px — even first char doesn't fit.
+        // Must return offset past first char to avoid infinite loop.
+        let off = super::char_break_offset("abc", 5.0, 16.0, 0.0, &Wide);
+        assert_eq!(off, 1); // emit 'a' anyway
+    }
+
+    // ── text-wrap-mode: nowrap ────────────────────────────────────────────────
+
+    #[test]
+    fn text_wrap_mode_nowrap_no_line_break() {
+        // text-wrap-mode: nowrap should prevent wrapping (like white-space: nowrap).
+        // Container 50px wide, word each 8px × 5 chars = 40px ("Hello" + " " + "World").
+        let html = "<p>Hello World</p>";
+        let css = "p { width: 50px; text-wrap-mode: nowrap; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        fn find_inline_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+            for c in &b.children { if let Some(f) = find_inline_run(c) { return Some(f); } }
+            None
+        }
+        let ir = find_inline_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { lines, .. } = &ir.kind {
+            assert_eq!(lines.len(), 1, "text-wrap-mode:nowrap must produce 1 line, got {}", lines.len());
+        }
+    }
+
+    // ── overflow-wrap: break-word ─────────────────────────────────────────────
+
+    #[test]
+    fn overflow_wrap_break_word_splits_long_word() {
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens, OverflowWrap, WordBreak};
+        use lumen_core::geom::Size;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // "Superlongword" = 13 chars × 10px = 130px; max_width = 80px.
+        // overflow-wrap: break-word should split it across lines.
+        let seg = InlineSegment {
+            text: "Superlongword".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_width: 0.0,
+            forced_break: false,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 80.0, 16.0, 0.0,
+            Size::new(800.0, 600.0),
+            &m, Hyphens::None, &hp,
+            crate::style::WhiteSpace::Normal,
+            WordBreak::Normal,
+            OverflowWrap::BreakWord,
+        );
+        // 13 chars at 10px = 130px > 80px, so must wrap.
+        assert!(lines.len() >= 2, "expected multiple lines, got {}", lines.len());
+        // No line should exceed max_width.
+        for (i, line) in lines.iter().enumerate() {
+            if let Some(last) = line.last() {
+                let line_w = last.x + last.width;
+                assert!(line_w <= 81.0, "line {} width {line_w} exceeds max_width 80", i);
+            }
+        }
+        // All characters of "Superlongword" must appear in the output.
+        let all_text: String = lines.iter().flat_map(|l| l.iter().map(|f| f.text.as_str())).collect();
+        assert_eq!(all_text, "Superlongword", "all chars must be emitted: {all_text}");
+    }
+
+    // ── word-break: break-all ─────────────────────────────────────────────────
+
+    #[test]
+    fn word_break_break_all_breaks_at_current_position() {
+        use lumen_core::ext::NullHyphenationProvider;
+        use super::{InlineSegment, wrap_inline_run};
+        use crate::style::{ComputedStyle, Hyphens, OverflowWrap, WordBreak};
+        use lumen_core::geom::Size;
+
+        struct Fixed10;
+        impl super::super::TextMeasurer for Fixed10 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 10.0 }
+        }
+
+        let style = ComputedStyle::root();
+        // Two words: "Hi" (20px) then "World" (50px). max_width = 60px.
+        // Normal: "Hi" fits, gap(10)+50=80 > 60 → wrap → line2 = "World".
+        // break-all: "Hi" fits; gap(10)+"World" → need 80 > 60 → char-break.
+        //   avail at current pos = 60 - 20 - 10 = 30px → "Wor" (30px) fits.
+        //   Emit "Wor" at end of line1, line2 = "ld".
+        let seg = InlineSegment {
+            text: "Hi World".to_string(),
+            style: style.clone(),
+            pre_space: 0.0,
+            post_space: 0.0,
+            is_element_box: false,
+            img_src: None,
+            img_width: 0.0,
+            forced_break: false,
+        };
+
+        let m = Fixed10;
+        let hp = NullHyphenationProvider;
+        let lines = wrap_inline_run(
+            &[seg], 60.0, 16.0, 0.0,
+            Size::new(800.0, 600.0),
+            &m, Hyphens::None, &hp,
+            crate::style::WhiteSpace::Normal,
+            WordBreak::BreakAll,
+            OverflowWrap::Normal,
+        );
+        assert_eq!(lines.len(), 2, "expected 2 lines with break-all, got {}", lines.len());
+        // All text must be preserved.
+        let all_text: String = lines.iter()
+            .flat_map(|l| l.iter().map(|f| f.text.as_str()))
+            .collect::<Vec<_>>()
+            .join(" "); // words may be merged by frag-merging
+        assert!(all_text.contains("Hi"), "line1 must contain 'Hi': {all_text}");
+        // Line 2 must have the remainder of "World".
+        let line2_text: String = lines[1].iter().map(|f| f.text.as_str()).collect();
+        assert!(!line2_text.is_empty(), "line2 must not be empty");
     }
 
     // ── display: flow-root (BFC) ──────────────────────────────────────────────
