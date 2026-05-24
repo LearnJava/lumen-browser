@@ -697,7 +697,7 @@ Ordered list of 🟡→✅ promotions for the P4 developer. One item = one featu
 | 20 | `@font-face` actual file loading | L | network/P3 |
 | 21 | `min-content` / `max-content` / `fit-content` | L | layout engine |
 | 22 | `overflow: scroll` scrollable containers | L | shell scroll |
-| 23 | `border-radius` elliptical (rx≠ry) | S | paint command |
+| 23 | `border-radius` elliptical (rx≠ry) | ✅ | border_{corner}_radius_y + RRectVertex radii_x/y + WGSL sdf_rrect elliptical SDF + 12 tests + graphic test 36 2026-05-24 |
 | 24 | `column-rule` rendering | S | paint |
 | 25 | `line-height` leading in line box | M | inline layout |
 | 26 | Scroll snap shell integration | M | scroll event |
