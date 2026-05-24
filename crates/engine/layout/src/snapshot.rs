@@ -60,6 +60,8 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
     let indent = "  ".repeat(depth);
     let kind = match &b.kind {
         BoxKind::Block => "Block",
+        BoxKind::Table => "Table",
+        BoxKind::TableRowGroup => "TableRowGroup",
         BoxKind::TableRow => "TableRow",
         BoxKind::InlineRun { .. } => "InlineRun",
         BoxKind::InlineBlockRow => "InlineBlockRow",

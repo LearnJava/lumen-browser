@@ -55,6 +55,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 38-z-index.html | z-index stacking context paint order | 6 | positive z-index (1/2/3) painted in correct order · negative z-index behind parent · z-index:auto same phase as z:0 · high z-index over zero-z sibling |
 | 39-gradients.html | linear-gradient / radial-gradient | 13 | linear: to right / to bottom / 45deg / 3-stop / transparent · radial: circle center / offset / 3-stop / ellipse · repeating-linear / repeating-radial · stacked |
 | 40-conic-gradients.html | conic-gradient / repeating-conic-gradient | 9 | default rainbow · 2-color · from 90deg · at 25% 25% · explicit deg-stops · pie chart (sharp) · repeating-conic 4 wedges · repeating-conic 8 wedges · wide box (box-space angles) |
+| 41-table.html | display:table/row/cell layout engine | 3 | table with thead/tbody/tfoot row groups · global column width alignment across rows · native HTML table |
 | **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~80 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (SDF rendering: uniform/pill/circle/asymmetric) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) · linear/radial gradient (6 объектов) · conic gradient (5 объектов) |
 
 ---

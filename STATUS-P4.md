@@ -1,4 +1,5 @@
-In progress: —
+In progress: CSS Display L3 table layout  branch: p4-table-layout
+Next step: commit implementation  box_tree.rs:1972
 
 Next:
 

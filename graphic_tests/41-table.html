@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; }
+  .__f { background: #1a1a2e; width: 1022px; height: 718px; margin: 1px; padding: 20px; overflow: hidden; box-sizing: border-box; }
+
+  /* CSS 2.1 §17 — display:table layout */
+  .tbl { display: table; border-collapse: collapse; margin-bottom: 20px; }
+  .tbd { display: table-row-group; }
+  .thd { display: table-row-group; }
+  .tft { display: table-row-group; }
+  .tr  { display: table-row; }
+  .td  { display: table-cell; padding: 0; }
+
+  /* Header row: blue cells */
+  .header .tr .td { background: #4a90d9; height: 40px; width: 120px; }
+
+  /* Body rows: alternating teal/dark */
+  .body .tr:nth-child(1) .td { background: #16a085; height: 60px; }
+  .body .tr:nth-child(2) .td { background: #1abc9c; height: 60px; }
+  .body .tr:nth-child(3) .td { background: #27ae60; height: 60px; }
+
+  /* Footer row: orange cells */
+  .footer .tr .td { background: #e67e22; height: 40px; }
+
+  /* Global column widths demo: row 1 sets col0=80, row 2 sets col1=200 */
+  .tbl2 { display: table; border-collapse: collapse; margin-bottom: 20px; }
+  .tbl2 .tr { display: table-row; }
+  .tbl2 .td { display: table-cell; height: 50px; }
+  .tbl2 .tr:nth-child(1) .td:nth-child(1) { background: #e74c3c; width: 80px; }
+  .tbl2 .tr:nth-child(1) .td:nth-child(2) { background: #9b59b6; width: 200px; }
+  .tbl2 .tr:nth-child(1) .td:nth-child(3) { background: #3498db; width: 150px; }
+  .tbl2 .tr:nth-child(2) .td:nth-child(1) { background: #e74c3c; width: 120px; }
+  .tbl2 .tr:nth-child(2) .td:nth-child(2) { background: #9b59b6; width: 100px; }
+  .tbl2 .tr:nth-child(2) .td:nth-child(3) { background: #3498db; width: 200px; }
+</style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- Table 1: display:table with thead/tbody/tfoot row groups -->
+  <div class="tbl">
+    <div class="thd header">
+      <div class="tr">
+        <div class="td"></div><div class="td"></div><div class="td"></div><div class="td"></div>
+      </div>
+    </div>
+    <div class="tbd body">
+      <div class="tr">
+        <div class="td"></div><div class="td"></div><div class="td"></div><div class="td"></div>
+      </div>
+      <div class="tr">
+        <div class="td"></div><div class="td"></div><div class="td"></div><div class="td"></div>
+      </div>
+      <div class="tr">
+        <div class="td"></div><div class="td"></div><div class="td"></div><div class="td"></div>
+      </div>
+    </div>
+    <div class="tft footer">
+      <div class="tr">
+        <div class="td"></div><div class="td"></div><div class="td"></div><div class="td"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Table 2: global column width alignment across rows -->
+  <!-- Col widths: col0=max(80,120)=120, col1=max(200,100)=200, col2=max(150,200)=200 -->
+  <div class="tbl2">
+    <div class="tr">
+      <div class="td"></div><div class="td"></div><div class="td"></div>
+    </div>
+    <div class="tr">
+      <div class="td"></div><div class="td"></div><div class="td"></div>
+    </div>
+  </div>
+
+  <!-- Native HTML table for comparison -->
+  <table style="border-collapse:collapse;margin-bottom:20px">
+    <thead>
+      <tr>
+        <td style="background:#4a90d9;width:120px;height:40px;padding:0"></td>
+        <td style="background:#4a90d9;width:120px;height:40px;padding:0"></td>
+        <td style="background:#4a90d9;width:120px;height:40px;padding:0"></td>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td style="background:#8e44ad;width:120px;height:50px;padding:0"></td>
+        <td style="background:#2c3e50;width:120px;height:50px;padding:0"></td>
+        <td style="background:#8e44ad;width:120px;height:50px;padding:0"></td>
+      </tr>
+      <tr>
+        <td style="background:#2c3e50;width:120px;height:50px;padding:0"></td>
+        <td style="background:#8e44ad;width:120px;height:50px;padding:0"></td>
+        <td style="background:#2c3e50;width:120px;height:50px;padding:0"></td>
+      </tr>
+    </tbody>
+  </table>
+
+</div>
+</body>
+</html>

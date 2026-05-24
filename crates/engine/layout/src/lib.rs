@@ -113,7 +113,11 @@ mod tests {
             .iter()
             .find(|c| matches!(
                 c.kind,
-                BoxKind::Block | BoxKind::FormControl { .. } | BoxKind::TableRow
+                BoxKind::Block
+                    | BoxKind::FormControl { .. }
+                    | BoxKind::TableRow
+                    | BoxKind::Table
+                    | BoxKind::TableRowGroup
             ))
             .expect("expected at least one element child")
     }
@@ -9573,6 +9577,126 @@ mod tests {
         assert_eq!(rows.len(), 2, "должно быть 2 строки");
         assert!((rows[0].rect.y - 0.0).abs() < 0.01, "первая строка y=0");
         assert!((rows[1].rect.y - 40.0).abs() < 0.01, "вторая строка y=40, получено {}", rows[1].rect.y);
+    }
+
+    /// Колонки выравниваются между строками — global column widths.
+    /// Row 1: col0=100px, col1=200px. Row 2: col0=80px, col1=250px.
+    /// Global: col0=max(100,80)=100, col1=max(200,250)=250.
+    /// All rows use the global widths, so both rows → col0=100, col1=250.
+    #[test]
+    fn table_global_column_widths_aligned() {
+        let root = lay(
+            "<body><table><tr>\
+               <td style=\"width:100px;height:20px\"></td>\
+               <td style=\"width:200px;height:20px\"></td>\
+             </tr><tr>\
+               <td style=\"width:80px;height:20px\"></td>\
+               <td style=\"width:250px;height:20px\"></td>\
+             </tr></table></body>",
+            "body,table,tr,td { margin:0; padding:0; border:0 }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        assert!(matches!(table.kind, BoxKind::Table), "table должен иметь BoxKind::Table");
+        let rows: Vec<_> = table.children.iter().filter(|c| matches!(c.kind, BoxKind::TableRow)).collect();
+        assert_eq!(rows.len(), 2);
+        let r1_cells: Vec<_> = rows[0].children.iter().filter(|c| matches!(c.kind, BoxKind::Block)).collect();
+        let r2_cells: Vec<_> = rows[1].children.iter().filter(|c| matches!(c.kind, BoxKind::Block)).collect();
+        // col0 global = max(100, 80) = 100 — both rows.
+        assert!((r1_cells[0].rect.width - 100.0).abs() < 0.01, "r1 col0=100, got {}", r1_cells[0].rect.width);
+        assert!((r2_cells[0].rect.width - 100.0).abs() < 0.01, "r2 col0=100 (global), got {}", r2_cells[0].rect.width);
+        // col1 global = max(200, 250) = 250 — both rows.
+        assert!((r1_cells[1].rect.width - 250.0).abs() < 0.01, "r1 col1=250 (global), got {}", r1_cells[1].rect.width);
+        assert!((r2_cells[1].rect.width - 250.0).abs() < 0.01, "r2 col1=250 (global), got {}", r2_cells[1].rect.width);
+    }
+
+    /// `<table>` имеет BoxKind::Table (не Block).
+    #[test]
+    fn table_has_boxkind_table() {
+        let root = lay("<body><table><tr><td>x</td></tr></table></body>", "");
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        assert!(
+            matches!(table.kind, BoxKind::Table),
+            "table должен быть BoxKind::Table, получено {:?}", table.kind
+        );
+    }
+
+    /// `<tbody>` имеет BoxKind::TableRowGroup.
+    #[test]
+    fn tbody_has_boxkind_tablerowgroup() {
+        let root = lay("<body><table><tbody><tr><td>x</td></tr></tbody></table></body>", "");
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        let tbody = first_element_child(table);
+        assert!(
+            matches!(tbody.kind, BoxKind::TableRowGroup),
+            "tbody должен быть BoxKind::TableRowGroup, получено {:?}", tbody.kind
+        );
+    }
+
+    /// Строки внутри `<tbody>` выравниваются вертикально через `<table>`.
+    #[test]
+    fn table_with_tbody_rows_stack_vertically() {
+        let root = lay(
+            "<body><table><tbody>\
+               <tr><td style=\"width:100px;height:40px\"></td></tr>\
+               <tr><td style=\"width:100px;height:60px\"></td></tr>\
+             </tbody></table></body>",
+            "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        let tbody = first_element_child(table);
+        let rows: Vec<_> = tbody.children.iter().filter(|c| matches!(c.kind, BoxKind::TableRow)).collect();
+        assert_eq!(rows.len(), 2, "должно быть 2 строки");
+        assert!((rows[0].rect.y - 0.0).abs() < 0.01, "первая строка y=0, got {}", rows[0].rect.y);
+        assert!((rows[1].rect.y - 40.0).abs() < 0.01, "вторая строка y=40, got {}", rows[1].rect.y);
+    }
+
+    /// `<thead>` и `<tfoot>` должны иметь BoxKind::TableRowGroup.
+    #[test]
+    fn thead_tfoot_have_boxkind_tablerowgroup() {
+        let root = lay(
+            "<body><table>\
+               <thead><tr><th>H</th></tr></thead>\
+               <tfoot><tr><td>F</td></tr></tfoot>\
+             </table></body>",
+            "",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        let groups: Vec<_> = table.children.iter()
+            .filter(|c| matches!(c.kind, BoxKind::TableRowGroup))
+            .collect();
+        assert_eq!(groups.len(), 2, "должно быть 2 row group (thead + tfoot)");
+    }
+
+    /// Колонки внутри tbody выравниваются глобально (через родительский table).
+    #[test]
+    fn table_tbody_global_col_widths() {
+        let root = lay(
+            "<body><table><tbody><tr>\
+               <td style=\"width:120px;height:20px\"></td>\
+               <td style=\"width:80px;height:20px\"></td>\
+             </tr><tr>\
+               <td style=\"width:60px;height:20px\"></td>\
+               <td style=\"width:150px;height:20px\"></td>\
+             </tr></tbody></table></body>",
+            "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        );
+        let body = first_element_child(&root);
+        let table = first_element_child(body);
+        let tbody = first_element_child(table);
+        let rows: Vec<_> = tbody.children.iter().filter(|c| matches!(c.kind, BoxKind::TableRow)).collect();
+        let r1: Vec<_> = rows[0].children.iter().filter(|c| matches!(c.kind, BoxKind::Block)).collect();
+        let r2: Vec<_> = rows[1].children.iter().filter(|c| matches!(c.kind, BoxKind::Block)).collect();
+        // Col0 global = max(120, 60) = 120 — both rows.
+        assert!((r1[0].rect.width - 120.0).abs() < 0.01, "r1 col0=120, got {}", r1[0].rect.width);
+        assert!((r2[0].rect.width - 120.0).abs() < 0.01, "r2 col0=120 (global), got {}", r2[0].rect.width);
+        // Col1 global = max(80, 150) = 150 — both rows.
+        assert!((r1[1].rect.width - 150.0).abs() < 0.01, "r1 col1=150 (global), got {}", r1[1].rect.width);
+        assert!((r2[1].rect.width - 150.0).abs() < 0.01, "r2 col1=150 (global), got {}", r2[1].rect.width);
     }
 
     /// Author CSS `background-color` выигрывает у presentational hint `bgcolor`.
