@@ -1,4 +1,5 @@
-In progress: —
+In progress: CSS Intrinsic Sizing L3 — min-content/max-content/fit-content  branch: p4-intrinsic-sizing
+Next step: add MinContent/MaxContent/FitContent variants to Length enum  crates/engine/layout/src/style.rs:7462
 
 Next:
 
