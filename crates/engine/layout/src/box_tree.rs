@@ -1390,6 +1390,42 @@ fn lay_out(
         b.rect.width = pref_w.min(b.rect.width);
     }
 
+    // CSS 2.1 §10.3.3 — auto horizontal-margin centering for block-level
+    // non-replaced elements in normal flow with an explicit CSS width.
+    // Remaining inline space distributes to auto margins: both auto → equal
+    // halves (centered block); only left auto → left takes all remaining;
+    // only right auto → no x shift (right margin absorbs remainder silently).
+    // Does not apply to: replaced, inline-block, flex/grid containers, floats,
+    // or absolute/fixed positioned elements.
+    let ml_is_auto = s.margin_left.is_auto();
+    let mr_is_auto = s.margin_right.is_auto();
+    if (ml_is_auto || mr_is_auto)
+        && s.width.is_some()
+        && !is_replaced
+        && !matches!(
+            s.display,
+            Display::InlineBlock
+                | Display::Flex
+                | Display::InlineFlex
+                | Display::Grid
+                | Display::InlineGrid
+        )
+        && !matches!(s.float_side, FloatSide::Left | FloatSide::Right)
+        && !matches!(s.position, Position::Absolute | Position::Fixed)
+    {
+        let ml_fixed = if ml_is_auto { 0.0 } else { margin_left };
+        let mr_fixed = if mr_is_auto { 0.0 } else { margin_right };
+        let remaining = (available_width - b.rect.width - ml_fixed - mr_fixed).max(0.0);
+        let ml_computed = if ml_is_auto && mr_is_auto {
+            remaining / 2.0
+        } else if ml_is_auto {
+            remaining
+        } else {
+            ml_fixed
+        };
+        b.rect.x = start_x + ml_computed;
+    }
+
     let content_x = b.rect.x + padding_left + s.border_left_width;
     let content_y = b.rect.y + padding_top + s.border_top_width;
     let content_width = (b.rect.width
@@ -4408,5 +4444,105 @@ mod tests {
             b.children.iter().any(find_contents)
         }
         assert!(!find_contents(&root), "nested Contents boxes must be fully flattened");
+    }
+
+    // ── CSS 2.1 §10.3.3 — auto horizontal-margin centering ───────────────────
+
+    fn find_by_id_all<'a>(b: &'a super::LayoutBox, doc: &lumen_dom::Document, id: &str) -> Option<&'a super::LayoutBox> {
+        if let lumen_dom::NodeData::Element { attrs, .. } = &doc.get(b.node).data
+            && attrs.iter().any(|a| a.name.local == "id" && a.value == id)
+        {
+            return Some(b);
+        }
+        for child in &b.children {
+            if let Some(f) = find_by_id_all(child, doc, id) { return Some(f); }
+        }
+        None
+    }
+
+    #[test]
+    fn margin_auto_both_centers_block() {
+        // margin: 0 auto on a 200px block inside an 800px viewport → x = 300.
+        let html = r#"<div id="box"></div>"#;
+        let css = "#box { width: 200px; height: 50px; margin: 0 auto; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let b = find_by_id_all(&root, &doc, "box").expect("box not found");
+        // (800 - 200) / 2 = 300
+        assert_eq!(b.rect.x, 300.0, "centered x expected 300, got {}", b.rect.x);
+        assert_eq!(b.rect.width, 200.0, "width must stay 200px");
+    }
+
+    #[test]
+    fn margin_auto_left_only_pushes_to_right() {
+        // margin-left: auto, margin-right: 0 → element flush-right.
+        let html = r#"<div id="box"></div>"#;
+        let css = "#box { width: 200px; height: 50px; margin-left: auto; margin-right: 0; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let b = find_by_id_all(&root, &doc, "box").expect("box not found");
+        // available=800, width=200, mr=0 → remaining=600 → ml_computed=600 → x=600
+        assert_eq!(b.rect.x, 600.0, "flush-right x expected 600, got {}", b.rect.x);
+    }
+
+    #[test]
+    fn margin_auto_right_only_no_x_shift() {
+        // margin-right: auto, margin-left: 20px → element at x=20.
+        let html = r#"<div id="box"></div>"#;
+        let css = "#box { width: 200px; height: 50px; margin-left: 20px; margin-right: auto; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let b = find_by_id_all(&root, &doc, "box").expect("box not found");
+        // margin-left is fixed at 20px → x=20
+        assert_eq!(b.rect.x, 20.0, "x with fixed left margin expected 20, got {}", b.rect.x);
+    }
+
+    #[test]
+    fn margin_auto_no_explicit_width_fills_container() {
+        // Without explicit width, auto margins resolve to 0 (width takes remaining).
+        let html = r#"<div id="box"></div>"#;
+        let css = "#box { height: 50px; margin: 0 auto; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let b = find_by_id_all(&root, &doc, "box").expect("box not found");
+        // No explicit width → margin auto resolves to 0 → element fills 800px, x=0.
+        assert_eq!(b.rect.x, 0.0, "x without explicit width must be 0, got {}", b.rect.x);
+        assert_eq!(b.rect.width, 800.0, "width without explicit must fill 800px, got {}", b.rect.width);
+    }
+
+    #[test]
+    fn margin_auto_position_sticky_centers() {
+        // position:sticky element with margin: 20px auto 0 in 1022px container.
+        // Static view: sticky behaves like normal flow → centering applies.
+        let html = r#"<div id="wrap"><div id="sticky"></div></div>"#;
+        let css = "#wrap { width: 1022px; position: relative; } \
+                   #sticky { position: sticky; top: 10px; width: 600px; height: 60px; margin: 20px auto 0; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(1024.0, 720.0));
+        let s = find_by_id_all(&root, &doc, "sticky").expect("sticky not found");
+        // (1022 - 600) / 2 = 211 → x = wrap.content_x + 211
+        assert_eq!(s.rect.width, 600.0, "width must be 600, got {}", s.rect.width);
+        let centered_x = s.rect.x;
+        // Should be (1022-600)/2 = 211 relative to wrap's content_x (0).
+        assert!((centered_x - 211.0).abs() < 1.0, "centered x expected ~211, got {centered_x}");
+        assert_eq!(s.rect.y, 20.0, "top margin 20px must be respected, got {}", s.rect.y);
+    }
+
+    #[test]
+    fn margin_auto_float_not_centered() {
+        // float:left with margin: 0 auto must NOT be centered — floats ignore auto margins.
+        let html = r#"<div id="box"></div>"#;
+        let css = "#box { float: left; width: 100px; height: 50px; margin: 0 auto; }";
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        let root = super::layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let b = find_by_id_all(&root, &doc, "box").expect("box not found");
+        // Float placed at left edge (auto = 0).
+        assert_eq!(b.rect.x, 0.0, "float with auto margins must be at x=0, got {}", b.rect.x);
     }
 }
