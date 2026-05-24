@@ -1,6 +1,6 @@
-In progress: —
+In progress: margin collapsing CSS 2.1 §8.3.1  branch: p1-margin-collapsing
 
-Next step: —
+Next step: реализовать prev_block_mb коллапс в child-loop box_tree.rs:1507
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
