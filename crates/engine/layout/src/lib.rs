@@ -6736,6 +6736,108 @@ mod tests {
     }
 
     #[test]
+    fn media_min_width_em_applies() {
+        // 48em = 768px; viewport 1024 → матчит.
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (min-width: 48em) { p { color: red; } }",
+            1024.0,
+            720.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn media_min_width_em_no_match_narrow() {
+        // 48em = 768px; viewport 600 → не матчит.
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (min-width: 48em) { p { color: red; } }",
+            600.0,
+            720.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color::BLACK);
+    }
+
+    #[test]
+    fn media_max_width_rem_applies() {
+        // 50rem = 800px; viewport 600 → матчит.
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (max-width: 50rem) { p { color: blue; } }",
+            600.0,
+            480.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 0, g: 0, b: 255, a: 255 });
+    }
+
+    #[test]
+    fn media_width_exact_matches() {
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (width: 1024px) { p { color: red; } }",
+            1024.0,
+            720.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn media_width_exact_no_match() {
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (width: 800px) { p { color: red; } }",
+            1024.0,
+            720.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color::BLACK);
+    }
+
+    #[test]
+    fn media_min_aspect_ratio_matches() {
+        // min-aspect-ratio: 1/1; 1024/720 > 1 → матчит.
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (min-aspect-ratio: 1/1) { p { color: green; } }",
+            1024.0,
+            720.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color { r: 0, g: 128, b: 0, a: 255 });
+    }
+
+    #[test]
+    fn media_max_aspect_ratio_no_match() {
+        // max-aspect-ratio: 4/3 ≈ 1.333; 1024/720 ≈ 1.422 → не матчит.
+        let root = lay_with_viewport(
+            "<p>x</p>",
+            "@media (max-aspect-ratio: 4/3) { p { color: red; } }",
+            1024.0,
+            720.0,
+        );
+        let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p.style.color, Color::BLACK);
+    }
+
+    #[test]
+    fn media_reeval_on_resize_wider() {
+        // При маленьком viewport — не матчит; при увеличении — матчит.
+        let css = "@media (min-width: 600px) { p { color: red; } }";
+        let narrow = lay_with_viewport("<p>x</p>", css, 400.0, 600.0);
+        let p_narrow = narrow.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p_narrow.style.color, Color::BLACK);
+
+        let wide = lay_with_viewport("<p>x</p>", css, 1024.0, 600.0);
+        let p_wide = wide.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(p_wide.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
+    }
+
+    #[test]
     fn display_flex_parses_and_stores() {
         let root = lay("<p>x</p>", "p { display: flex; }");
         let p = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();

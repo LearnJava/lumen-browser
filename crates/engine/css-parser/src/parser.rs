@@ -830,12 +830,22 @@ pub enum MediaCondition {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum MediaFeature {
+    // Viewport dimensions — exact and range
+    Width(f32),
     MinWidth(f32),
     MaxWidth(f32),
+    Height(f32),
     MinHeight(f32),
     MaxHeight(f32),
+    // Aspect ratio: numerator/denominator stored as f32 ratio
+    AspectRatio(f32),
+    MinAspectRatio(f32),
+    MaxAspectRatio(f32),
+    // Display
     Orientation(MediaOrientation),
+    // User preferences (MQ L5, commonly used)
     PrefersColorScheme(ColorScheme),
+    PrefersReducedMotion(bool),
 }
 
 impl Eq for MediaFeature {}
@@ -862,6 +872,8 @@ pub struct MediaContext {
     pub width: f32,
     pub height: f32,
     pub prefers_dark: bool,
+    /// Соответствует `prefers-reduced-motion: reduce`.
+    pub prefers_reduced_motion: bool,
 }
 
 impl Default for MediaContext {
@@ -871,6 +883,7 @@ impl Default for MediaContext {
             width: 0.0,
             height: 0.0,
             prefers_dark: false,
+            prefers_reduced_motion: false,
         }
     }
 }
@@ -922,10 +935,24 @@ impl MediaCondition {
 impl MediaFeature {
     pub fn matches(&self, ctx: &MediaContext) -> bool {
         match self {
+            Self::Width(px) => (ctx.width - px).abs() < 0.5,
             Self::MinWidth(px) => ctx.width >= *px,
             Self::MaxWidth(px) => ctx.width <= *px,
+            Self::Height(px) => (ctx.height - px).abs() < 0.5,
             Self::MinHeight(px) => ctx.height >= *px,
             Self::MaxHeight(px) => ctx.height <= *px,
+            Self::AspectRatio(ratio) => {
+                let actual = if ctx.height > 0.0 { ctx.width / ctx.height } else { f32::INFINITY };
+                (actual - ratio).abs() < 0.01
+            }
+            Self::MinAspectRatio(ratio) => {
+                let actual = if ctx.height > 0.0 { ctx.width / ctx.height } else { f32::INFINITY };
+                actual >= *ratio
+            }
+            Self::MaxAspectRatio(ratio) => {
+                let actual = if ctx.height > 0.0 { ctx.width / ctx.height } else { 0.0 };
+                actual <= *ratio
+            }
             Self::Orientation(o) => {
                 let actual = if ctx.width >= ctx.height {
                     MediaOrientation::Landscape
@@ -938,6 +965,7 @@ impl MediaFeature {
                 ColorScheme::Dark => ctx.prefers_dark,
                 ColorScheme::Light => !ctx.prefers_dark,
             },
+            Self::PrefersReducedMotion(reduce) => ctx.prefers_reduced_motion == *reduce,
         }
     }
 }
@@ -1375,6 +1403,33 @@ fn strip_leading_keyword<'a>(input: &'a str, keyword: &str) -> Option<&'a str> {
     Some(&trimmed[kw.len()..])
 }
 
+/// Парсит значение длины в px: `Npx`, `Nem` (1em=16px), `Nrem` (1rem=16px).
+/// Используется только для media features, где viewport context недоступен.
+fn parse_media_length_px(val: &str) -> Option<f32> {
+    const ROOT_EM: f32 = 16.0;
+    if let Some(n) = val.strip_suffix("px") {
+        n.trim().parse::<f32>().ok()
+    } else if let Some(n) = val.strip_suffix("rem") {
+        n.trim().parse::<f32>().ok().map(|v| v * ROOT_EM)
+    } else if let Some(n) = val.strip_suffix("em") {
+        n.trim().parse::<f32>().ok().map(|v| v * ROOT_EM)
+    } else {
+        None
+    }
+}
+
+/// Парсит значение aspect-ratio: `N/M` или просто `N`.
+fn parse_aspect_ratio(val: &str) -> Option<f32> {
+    if let Some((n, d)) = val.split_once('/') {
+        let n: f32 = n.trim().parse().ok()?;
+        let d: f32 = d.trim().parse().ok()?;
+        if d == 0.0 { return None; }
+        Some(n / d)
+    } else {
+        val.trim().parse::<f32>().ok()
+    }
+}
+
 fn parse_media_feature(s: &str) -> MediaCondition {
     // `feature: value` или просто `feature` (boolean feature, не поддерживаем).
     let Some((key, val)) = s.split_once(':') else {
@@ -1383,20 +1438,29 @@ fn parse_media_feature(s: &str) -> MediaCondition {
     let key = key.trim().to_ascii_lowercase();
     let val = val.trim();
     match key.as_str() {
-        "min-width" | "max-width" | "min-height" | "max-height" => {
-            // Парсим как `Npx`. Прочие единицы (em/rem) require viewport context —
-            // отложены.
-            let Some(num) = val.strip_suffix("px") else {
-                return MediaCondition::Unsupported;
-            };
-            let Ok(px) = num.trim().parse::<f32>() else {
+        "width" | "min-width" | "max-width" | "height" | "min-height" | "max-height" => {
+            let Some(px) = parse_media_length_px(val) else {
                 return MediaCondition::Unsupported;
             };
             let feature = match key.as_str() {
+                "width" => MediaFeature::Width(px),
                 "min-width" => MediaFeature::MinWidth(px),
                 "max-width" => MediaFeature::MaxWidth(px),
+                "height" => MediaFeature::Height(px),
                 "min-height" => MediaFeature::MinHeight(px),
                 "max-height" => MediaFeature::MaxHeight(px),
+                _ => unreachable!(),
+            };
+            MediaCondition::Feature(feature)
+        }
+        "aspect-ratio" | "min-aspect-ratio" | "max-aspect-ratio" => {
+            let Some(ratio) = parse_aspect_ratio(val) else {
+                return MediaCondition::Unsupported;
+            };
+            let feature = match key.as_str() {
+                "aspect-ratio" => MediaFeature::AspectRatio(ratio),
+                "min-aspect-ratio" => MediaFeature::MinAspectRatio(ratio),
+                "max-aspect-ratio" => MediaFeature::MaxAspectRatio(ratio),
                 _ => unreachable!(),
             };
             MediaCondition::Feature(feature)
@@ -1409,6 +1473,11 @@ fn parse_media_feature(s: &str) -> MediaCondition {
         "prefers-color-scheme" => match val.to_ascii_lowercase().as_str() {
             "light" => MediaCondition::Feature(MediaFeature::PrefersColorScheme(ColorScheme::Light)),
             "dark" => MediaCondition::Feature(MediaFeature::PrefersColorScheme(ColorScheme::Dark)),
+            _ => MediaCondition::Unsupported,
+        },
+        "prefers-reduced-motion" => match val.to_ascii_lowercase().as_str() {
+            "reduce" => MediaCondition::Feature(MediaFeature::PrefersReducedMotion(true)),
+            "no-preference" => MediaCondition::Feature(MediaFeature::PrefersReducedMotion(false)),
             _ => MediaCondition::Unsupported,
         },
         _ => MediaCondition::Unsupported,
@@ -5712,6 +5781,7 @@ mod tests {
             width,
             height: 600.0,
             prefers_dark: false,
+            prefers_reduced_motion: false,
         }
     }
 
@@ -5817,6 +5887,129 @@ mod tests {
         let mut dark = screen_ctx(500.0);
         dark.prefers_dark = true;
         assert!(!q.matches(&dark));
+    }
+
+    // ── MQ L3 §4: exact width/height, em/rem units ──
+
+    #[test]
+    fn media_query_width_exact_px() {
+        let q = parse_media_query("(width: 1024px)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.height = 720.0;
+        assert!(q.matches(&ctx));
+        ctx.width = 800.0;
+        assert!(!q.matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_height_exact_px() {
+        let q = parse_media_query("(height: 720px)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.height = 720.0;
+        assert!(q.matches(&ctx));
+        ctx.height = 600.0;
+        assert!(!q.matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_min_width_em() {
+        // 48em = 48 * 16 = 768px
+        let q = parse_media_query("(min-width: 48em)");
+        assert!(q.matches(&screen_ctx(1024.0)));
+        assert!(!q.matches(&screen_ctx(600.0)));
+    }
+
+    #[test]
+    fn media_query_max_width_rem() {
+        // 50rem = 50 * 16 = 800px
+        let q = parse_media_query("(max-width: 50rem)");
+        assert!(q.matches(&screen_ctx(600.0)));
+        assert!(!q.matches(&screen_ctx(1024.0)));
+    }
+
+    #[test]
+    fn media_query_min_height_em() {
+        // 30em = 30 * 16 = 480px
+        let q = parse_media_query("(min-height: 30em)");
+        let mut ctx = screen_ctx(800.0);
+        ctx.height = 600.0;
+        assert!(q.matches(&ctx));
+        ctx.height = 400.0;
+        assert!(!q.matches(&ctx));
+    }
+
+    // ── MQ L3 §4.3: aspect-ratio ──
+
+    #[test]
+    fn media_query_min_aspect_ratio() {
+        // min-aspect-ratio: 16/9 ≈ 1.777; 1024/720 ≈ 1.422 → не матчит
+        let q = parse_media_query("(min-aspect-ratio: 16/9)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.height = 720.0;
+        assert!(!q.matches(&ctx)); // 1.422 < 1.777
+        ctx.width = 1920.0;
+        ctx.height = 720.0;
+        assert!(q.matches(&ctx)); // 2.666 >= 1.777
+    }
+
+    #[test]
+    fn media_query_max_aspect_ratio() {
+        // max-aspect-ratio: 4/3 ≈ 1.333; 800/600 ≈ 1.333 → матчит
+        let q = parse_media_query("(max-aspect-ratio: 4/3)");
+        let mut ctx = screen_ctx(800.0);
+        ctx.height = 600.0;
+        assert!(q.matches(&ctx));
+        ctx.width = 1920.0;
+        assert!(!q.matches(&ctx)); // 3.2 > 1.333
+    }
+
+    #[test]
+    fn media_query_aspect_ratio_exact() {
+        // aspect-ratio: 1/1 → квадрат
+        let q = parse_media_query("(aspect-ratio: 1/1)");
+        let mut ctx = screen_ctx(600.0);
+        ctx.height = 600.0;
+        assert!(q.matches(&ctx));
+        ctx.width = 800.0;
+        assert!(!q.matches(&ctx));
+    }
+
+    // ── MQ L5 §6.4: prefers-reduced-motion ──
+
+    #[test]
+    fn media_query_prefers_reduced_motion_reduce() {
+        let q = parse_media_query("(prefers-reduced-motion: reduce)");
+        let mut ctx = screen_ctx(1024.0);
+        ctx.prefers_reduced_motion = true;
+        assert!(q.matches(&ctx));
+        ctx.prefers_reduced_motion = false;
+        assert!(!q.matches(&ctx));
+    }
+
+    #[test]
+    fn media_query_prefers_reduced_motion_no_preference() {
+        let q = parse_media_query("(prefers-reduced-motion: no-preference)");
+        let ctx = screen_ctx(1024.0); // prefers_reduced_motion = false по умолчанию
+        assert!(q.matches(&ctx));
+    }
+
+    // ── Стиль: @media с новыми фичами применяется в каскаде ──
+
+    #[test]
+    fn media_rule_with_em_width_applies_in_layout() {
+        // Парсинг: @media (min-width: 48em) - должен создать MediaRule с query.
+        let s = parse("@media (min-width: 48em) { p { color: red; } }");
+        assert_eq!(s.media_rules.len(), 1);
+        let ctx = MediaContext {
+            media_type: "screen".into(),
+            width: 1024.0, // > 768px (48em)
+            height: 720.0,
+            prefers_dark: false,
+            prefers_reduced_motion: false,
+        };
+        assert!(s.media_rules[0].query.matches(&ctx));
+        let ctx_narrow = MediaContext { width: 600.0, ..ctx.clone() };
+        assert!(!s.media_rules[0].query.matches(&ctx_narrow));
     }
 
     #[test]

@@ -57,7 +57,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Lists L3 | [css3-lists](https://www.w3.org/TR/css3-lists/) | ✅ | disc/circle/square geometric shapes + decimal/roman/alpha/greek text markers; 7 tests 2026-05-24 | **#9** |
 | CSS Cascading L4/L5 | [css-cascade-4](https://www.w3.org/TR/css-cascade-4/) | ✅ | @layer cascade ordering: layer_priority in sort key, 6 tests | **#10** |
 | Selectors L4 | [selectors4](https://www.w3.org/TR/selectors4/) | ✅ | :is()/:where()/:has() matching + all L4 pseudo-classes 2026-05-24 | **#11** |
-| Media Queries L3 | [mediaqueries-3](https://www.w3.org/TR/mediaqueries-3/) | 🟡 | resize hook; @media re-evaluation | **#12** |
+| Media Queries L3 | [mediaqueries-3](https://www.w3.org/TR/mediaqueries-3/) | ✅ | width/height exact ✅; em/rem in features ✅; aspect-ratio ✅; re-eval on resize ✅; prefers-reduced-motion ✅; 11 tests; graphic test 44 2026-05-24 | **#12** |
 
 ### Tier 2 — High visual value (visually broken without these)
 
@@ -397,9 +397,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
-| `@media` | 🟡 | width/height/orientation condition ✅; re-eval on resize ⬜ |
+| `@media` | ✅ | width/height exact ✅; min/max ✅; em/rem units ✅; orientation ✅; aspect-ratio ✅; re-eval on resize ✅ |
 | `prefers-color-scheme` | ✅ | |
-| `prefers-reduced-motion` | 🟡 | parsed; skip animation ⬜ |
+| `prefers-reduced-motion` | ✅ | parsed + matched; OS integration deferred (always `no-preference` until shell wires OS pref) |
 | `hover`, `pointer` | ⬜ | |
 | `prefers-contrast` / `prefers-reduced-data` | ⬜ | MQ L5 |
 

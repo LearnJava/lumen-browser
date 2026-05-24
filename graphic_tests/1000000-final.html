@@ -401,6 +401,25 @@
   </div>
 </div>
 
+
+<!-- Media Queries L3 #12 — screen/print/min-width(em)/orientation/aspect-ratio -->
+<style>
+  .mq-row { display:flex; gap:6px; margin-top:8px; }
+  .mq-box { width:80px; height:30px; background:#333; }
+  @media screen { #mq1 { background:#22c55e; } }
+  @media print  { #mq2 { background:#ef4444; } }
+  @media (min-width: 48em) { #mq3 { background:#3b82f6; } }
+  @media (orientation: landscape) { #mq4 { background:#a855f7; } }
+  @media (min-aspect-ratio: 1/1) { #mq5 { background:#06b6d4; } }
+</style>
+<div class="mq-row">
+  <div class="mq-box" id="mq1"></div>
+  <div class="mq-box" id="mq2"></div>
+  <div class="mq-box" id="mq3"></div>
+  <div class="mq-box" id="mq4"></div>
+  <div class="mq-box" id="mq5"></div>
+</div>
+
 </div><!-- /card -->
 </body>
 </html>
