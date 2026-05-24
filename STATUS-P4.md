@@ -1,4 +1,5 @@
-In progress: —
+In progress: CSS Easing L2 linear() easing function  branch: p4-linear-easing
+Next step: add TimingFunction::LinearStops variant in style.rs near line 1115
 
 Next:
 
