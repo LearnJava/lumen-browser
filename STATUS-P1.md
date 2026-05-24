@@ -1,6 +1,5 @@
-In progress: —
-
-Next step: —
+In progress: text-wrap-mode nowrap + overflow-wrap break-word + word-break break-all  branch: p1-text-wrap-overflow
+Next step: wire TextWrapMode::Nowrap in box_tree.rs:1407; add word_break/overflow_wrap to wrap_inline_run; char-level break
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
