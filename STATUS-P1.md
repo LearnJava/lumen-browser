@@ -1,4 +1,5 @@
-In progress: (нет)
+In progress: CSS 2.1 §10.3.3 margin:auto centering  branch: p1-margin-auto-centering
+Next step: clippy + commit + merge
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
