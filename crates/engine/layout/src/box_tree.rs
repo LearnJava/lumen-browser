@@ -307,12 +307,15 @@ pub enum BoxKind {
     /// Не участвует в layout (whitespace, комментарий, doctype, display:none).
     Skip,
     /// CSS Lists L3 §2.1 — `::marker` pseudo-element for `display: list-item`.
-    /// `text` — marker string (•, 1., a., …), `position` — inside/outside flow.
+    /// `text` — marker string for counter types (1., a., i., …); empty for bullet
+    /// types (disc/circle/square) which are rendered as geometric shapes.
+    /// `position` — inside/outside flow. `list_style_type` — used by the display-list
+    /// emitter to choose geometric (disc/circle/square) vs text rendering.
     /// For `outside` (default) positioned left of the principal block, out of flow.
-    /// CSS: list-style-type, list-style-image
     Marker {
         text: String,
         position: ListStylePosition,
+        list_style_type: ListStyleType,
     },
     /// CSS Display L3 §8 — `display: flow-root`. Establishes a Block Formatting
     /// Context: contains floats, prevents margin escape. Laid out identically to
@@ -853,13 +856,15 @@ fn to_greek(n: u32) -> String {
 }
 
 /// CSS Lists L3 §2.1 — builds the marker string from `list-style-type` + ordinal.
-/// CSS: list-style-type, @counter-style — P4 extends with custom counter styles.
+/// Bullet types (Disc/Circle/Square) return "" — rendered as geometric shapes by
+/// the display-list emitter (FillRoundedRect / DrawBorder / FillRect).
+/// CSS: @counter-style — P4 extends with custom counter styles.
 fn marker_text(lst: ListStyleType, ordinal: u32) -> String {
     match lst {
-        ListStyleType::None => String::new(),
-        ListStyleType::Disc   => "\u{2022} ".to_string(),
-        ListStyleType::Circle => "\u{25e6} ".to_string(),
-        ListStyleType::Square => "\u{25aa} ".to_string(),
+        ListStyleType::None   => String::new(),
+        ListStyleType::Disc   => String::new(), // geometric: filled circle
+        ListStyleType::Circle => String::new(), // geometric: hollow circle
+        ListStyleType::Square => String::new(), // geometric: filled square
         ListStyleType::Decimal            => format!("{}. ", ordinal),
         ListStyleType::DecimalLeadingZero => format!("{:02}. ", ordinal),
         ListStyleType::LowerRoman => format!("{}. ", to_roman(ordinal, false)),
@@ -890,7 +895,11 @@ fn inject_marker(parent_id: NodeId, children: &mut Vec<LayoutBox>, style: &Compu
         node:     parent_id,
         rect:     Rect::ZERO,
         style:    ms,
-        kind:     BoxKind::Marker { text, position: style.list_style_position },
+        kind:     BoxKind::Marker {
+            text,
+            position:        style.list_style_position,
+            list_style_type: style.list_style_type,
+        },
         children: vec![],
     });
 }

@@ -9,12 +9,12 @@ Legend: ✅ implemented · 🟡 parsed/stored, rendering deferred · ⬜ not sta
 
 ---
 
-## Quick stats (2026-05-24 sticky)
+## Quick stats (2026-05-24 list-markers)
 
 | Status | Properties |
 |--------|-----------|
-| ✅ Fully implemented | ~137 |
-| 🟡 Partial (parsed, not rendered) | ~90 |
+| ✅ Fully implemented | ~138 |
+| 🟡 Partial (parsed, not rendered) | ~89 |
 | ⬜ Not started | ~14 |
 | 🚫 Out of scope | ~20 |
 
@@ -54,7 +54,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Positioning L3 (sticky) | [css3-positioning](https://www.w3.org/TR/css3-positioning/) | ✅ | BeginStickyLayer/EndStickyLayer in DL + sticky_offset_dy/dx in renderer; 5 display-list tests + graphic test 42 2026-05-24 | **#6** |
 | CSS Positioning L3 (z-index) | [css3-positioning](https://www.w3.org/TR/css3-positioning/) | ✅ | StackingTree + PaintOrder + build_display_list_ordered wired in shell | **#7** |
 | CSS 2.1 floats | [CSS2](https://www.w3.org/TR/CSS2/) | ✅ | FloatContext placement + FloatSide/ClearSide + 10 tests | **#8** |
-| CSS Lists L3 | [css3-lists](https://www.w3.org/TR/css3-lists/) | 🟡 | list-style-type marker rendering | **#9** |
+| CSS Lists L3 | [css3-lists](https://www.w3.org/TR/css3-lists/) | ✅ | disc/circle/square geometric shapes + decimal/roman/alpha/greek text markers; 7 tests 2026-05-24 | **#9** |
 | CSS Cascading L4/L5 | [css-cascade-4](https://www.w3.org/TR/css-cascade-4/) | ✅ | @layer cascade ordering: layer_priority in sort key, 6 tests | **#10** |
 | Selectors L4 | [selectors4](https://www.w3.org/TR/selectors4/) | 🟡 | :is()/:where()/:has() matching | **#11** |
 | Media Queries L3 | [mediaqueries-3](https://www.w3.org/TR/mediaqueries-3/) | 🟡 | resize hook; @media re-evaluation | **#12** |
