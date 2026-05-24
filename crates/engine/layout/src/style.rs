@@ -4405,6 +4405,9 @@ pub fn compute_style(
     apply_quirks_table_reset(doc, node, &mut style);
     // CSS Quirks Mode §3.2: replaced-элементы получают line-height: 1 как UA-правило.
     apply_quirks_line_height(doc, node, &mut style);
+    // CSS Quirks Mode §3.5: <html> получает height: 100vh как UA-правило,
+    // чтобы body { height: 100% } резолвилось против viewport.
+    apply_quirks_html_height(doc, node, &mut style);
 
     // HTML presentational hints (HTML5 §10): для `<img>` атрибуты
     // `width`/`height` задают начальные значения соответствующих CSS-свойств.
@@ -7144,6 +7147,29 @@ fn apply_quirks_line_height(doc: &Document, node: NodeId, style: &mut ComputedSt
             | "iframe" | "input" | "textarea" | "select" | "audio"
     ) {
         style.line_height = 1.0;
+    }
+}
+
+/// CSS Quirks Mode §3.5 — viewport height as percentage basis for `<html>`.
+///
+/// In quirks mode the `<html>` element acts as if it has a definite height
+/// equal to the viewport height, so that descendant elements can resolve
+/// percentage heights against it (e.g. `body { height: 100% }`).
+///
+/// Implemented as a UA rule `html { height: 100vh }` applied before the CSS
+/// cascade.  `Vh` resolves against the viewport directly and therefore does
+/// not need a definite `available_height` from the parent (Document) box,
+/// which currently propagates `None`.  Author CSS (`height: 200px`,
+/// `height: auto`) overrides this UA rule through normal cascade ordering.
+fn apply_quirks_html_height(doc: &Document, node: NodeId, style: &mut ComputedStyle) {
+    if doc.mode() != DocumentMode::Quirks {
+        return;
+    }
+    let NodeData::Element { name, .. } = &doc.get(node).data else {
+        return;
+    };
+    if name.local.as_str() == "html" {
+        style.height = Some(Length::Vh(100.0));
     }
 }
 

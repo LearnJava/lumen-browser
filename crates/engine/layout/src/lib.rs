@@ -9160,6 +9160,87 @@ mod tests {
         assert_eq!(p.style.color, Color::BLACK);
     }
 
+    // ──────────────── CSS Quirks Mode §3.5 — html viewport height ────────────────
+
+    /// В quirks-mode `<html>` получает UA-правило `height: 100vh`, поэтому
+    /// его rect.height равен высоте viewport (600.0 в тестовом lay).
+    #[test]
+    fn quirks_html_height_equals_viewport() {
+        let root = lay("<html><body><p>x</p></body></html>", "");
+        let (html, _body) = html_and_body(&root);
+        assert!(
+            (html.rect.height - 600.0).abs() < 0.1,
+            "quirks: html.rect.height={} (ожидалось 600.0)",
+            html.rect.height
+        );
+    }
+
+    /// В quirks-mode `body { height: 100% }` резолвится против viewport
+    /// через html-box с высотой 100vh.
+    #[test]
+    fn quirks_body_height_100pct_resolves_to_viewport() {
+        let root = lay(
+            "<html><body></body></html>",
+            "body { height: 100%; }",
+        );
+        let (_html, body) = html_and_body(&root);
+        assert!(
+            (body.rect.height - 600.0).abs() < 0.1,
+            "quirks: body.rect.height={} (ожидалось 600.0)",
+            body.rect.height
+        );
+    }
+
+    /// В standards-mode (с `<!DOCTYPE html>`) `<html>` с высотой auto
+    /// НЕ получает 100vh — высота определяется контентом (маленькая).
+    #[test]
+    fn standards_html_height_is_content_not_viewport() {
+        let root = lay(
+            "<!DOCTYPE html><html><body><p style=\"height:20px\">x</p></body></html>",
+            "",
+        );
+        let (html, _body) = html_and_body(&root);
+        // Контент высотой 20px + margins body → html значительно < 600.
+        assert!(
+            html.rect.height < 200.0,
+            "standards: html.rect.height={} (ожидалось меньше 200.0)",
+            html.rect.height
+        );
+    }
+
+    /// В quirks-mode author CSS на `<html>` перекрывает UA-правило 100vh.
+    #[test]
+    fn quirks_html_author_height_overrides_ua_rule() {
+        let root = lay(
+            "<html><body></body></html>",
+            "html { height: 300px; }",
+        );
+        let (html, _body) = html_and_body(&root);
+        assert!(
+            (html.rect.height - 300.0).abs() < 0.1,
+            "quirks: author height=300px, html.rect.height={} (ожидалось 300.0)",
+            html.rect.height
+        );
+    }
+
+    /// В limited-quirks mode (HTML 4.01 Transitional + system_id) правило
+    /// §3.5 НЕ применяется — только full quirks mode.
+    #[test]
+    fn limited_quirks_html_height_is_content_not_viewport() {
+        let root = lay(
+            "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\" \
+             \"http://www.w3.org/TR/html4/loose.dtd\">\
+             <html><body><p style=\"height:20px\">x</p></body></html>",
+            "",
+        );
+        let (html, _body) = html_and_body(&root);
+        assert!(
+            html.rect.height < 200.0,
+            "limited-quirks: html.rect.height={} (ожидалось меньше 200.0)",
+            html.rect.height
+        );
+    }
+
     // ──────────────── :fullscreen / :modal / :popover-open (open-state pseudo-classes) ────────────────
 
     /// `:fullscreen` (Fullscreen API §4.2) — Phase 0 без runtime top-layer
