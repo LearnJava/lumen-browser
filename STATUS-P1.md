@@ -1,6 +1,6 @@
-In progress: —
+In progress: BUG-023 InlineBlockRow strut в строках без текста  branch: p1-bug-023-strut
 
-Next step: —
+Next step: пропустить добавление strut_descent, если в строке нет InlineRun (нет текстового базлайна)  crates/engine/layout/src/box_tree.rs:1663
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
