@@ -1,6 +1,6 @@
-In progress: —
+In progress: CSS Grid dense auto-flow  branch: p1-grid-dense-autoflow
 
-Next step: —
+Next step: реализовать dense auto-placement в lay_out_grid  crates/engine/layout/src/box_tree.rs:2740
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
