@@ -1413,6 +1413,7 @@ fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
 /// `ls_store` — localStorage partition для текущего origin (persists across reloads).
 /// `None` = no network (sandboxed context или отключён quickjs feature).
 #[allow(clippy::needless_return)] // `return` inside #[cfg] block is needed for correct control flow
+#[allow(unused_variables)] // ls_store is used only inside #[cfg(feature = "quickjs")]
 fn run_scripts_with_dom(
     doc: Document,
     sandbox: lumen_core::SandboxFlags,
