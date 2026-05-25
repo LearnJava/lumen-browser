@@ -38,9 +38,42 @@ pub fn find_link_href(doc: &Document, mut node_id: NodeId) -> Option<String> {
 /// Return true if `href` is a URL scheme the browser should navigate to.
 /// Suppresses `javascript:` and `mailto:` — no JS navigation handler and no
 /// mail client in this shell.
+/// Fragment-only hrefs (`#id`) return `false` — caller handles them as
+/// same-page scroll via [`fragment_only`].
 pub fn is_navigable_href(href: &str) -> bool {
     let lower = href.to_ascii_lowercase();
-    !lower.starts_with("javascript:") && !lower.starts_with("mailto:")
+    !lower.starts_with('#')
+        && !lower.starts_with("javascript:")
+        && !lower.starts_with("mailto:")
+}
+
+/// If `href` is a fragment-only reference (starts with `#`), return the
+/// fragment text without the leading `#`. Returns `None` for cross-page hrefs.
+/// An empty string (`href = "#"`) returns `Some("")` — top-of-page scroll.
+pub fn fragment_only(href: &str) -> Option<&str> {
+    href.strip_prefix('#')
+}
+
+/// Walk the document tree and return the first element whose `id` attribute
+/// equals `id_value` (case-sensitive per HTML LS §3.2.6). Returns `None` if
+/// no such element exists.
+pub fn find_element_by_id(doc: &Document, id_value: &str) -> Option<NodeId> {
+    find_by_id_recursive(doc, doc.root(), id_value)
+}
+
+fn find_by_id_recursive(doc: &Document, node: NodeId, id_value: &str) -> Option<NodeId> {
+    let n = doc.get(node);
+    if let NodeData::Element { .. } = &n.data
+        && n.get_attr("id") == Some(id_value)
+    {
+        return Some(node);
+    }
+    for &child in &n.children {
+        if let Some(found) = find_by_id_recursive(doc, child, id_value) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
@@ -155,6 +188,33 @@ mod tests {
         assert!(is_navigable_href("http://example.com"));
         assert!(is_navigable_href("/path/to/page.html"));
         assert!(is_navigable_href("../sibling.html"));
-        assert!(is_navigable_href("#section"));
+    }
+
+    #[test]
+    fn is_navigable_blocks_fragment_only() {
+        assert!(!is_navigable_href("#section"));
+        assert!(!is_navigable_href("#"));
+    }
+
+    #[test]
+    fn fragment_only_extracts_id() {
+        assert_eq!(fragment_only("#section"), Some("section"));
+        assert_eq!(fragment_only("#"), Some(""));
+        assert_eq!(fragment_only("https://example.com"), None);
+        assert_eq!(fragment_only("/path#anchor"), None);
+    }
+
+    #[test]
+    fn find_element_by_id_finds_element() {
+        use lumen_dom::{Attribute, QualName};
+        let mut doc = Document::new();
+        let root = doc.root();
+        let div = doc.create_element(QualName::html("div"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(div).data {
+            attrs.push(Attribute { name: QualName::html("id"), value: "section".into() });
+        }
+        doc.append_child(root, div);
+        assert_eq!(find_element_by_id(&doc, "section"), Some(div));
+        assert_eq!(find_element_by_id(&doc, "missing"), None);
     }
 }

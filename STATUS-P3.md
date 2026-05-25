@@ -1,4 +1,5 @@
-In progress: —
+In progress: target-fragment  branch: p3-target-fragment
+Next step: set doc.set_target() from URL fragment in parse_and_layout + handle fragment-only link clicks  crates/shell/src/main.rs:1005
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
