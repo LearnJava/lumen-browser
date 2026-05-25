@@ -7,7 +7,10 @@
 //! Phase 0 selector support: `#id`, `.class`, `tagname`, `*`.
 //! Compound selectors (e.g. `div.foo`) are not supported in Phase 0.
 
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 use lumen_core::ext::{JsFetchProvider, JsWebSocketProvider, JsWsEvent};
 use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
@@ -129,8 +132,9 @@ pub fn install_dom_api(
     ls_store: Arc<Mutex<WebStorage>>,
     ss_store: Arc<Mutex<WebStorage>>,
     timer_wakeup: Arc<Mutex<Option<f64>>>,
+    dom_dirty: Arc<AtomicBool>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -150,6 +154,7 @@ fn install_primitives(
     ls_store: Arc<Mutex<WebStorage>>,
     ss_store: Arc<Mutex<WebStorage>>,
     timer_wakeup: Arc<Mutex<Option<f64>>>,
+    dom_dirty: Arc<AtomicBool>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -262,19 +267,23 @@ fn install_primitives(
             }
         );
         let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
         reg!(
             "_lumen_set_attr",
             move |node_id: u32, name: String, value: String| {
                 let mut doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 set_attribute(&mut doc, nid, &name, &value);
+                dirty.store(true, Ordering::Relaxed);
             }
         );
         let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
         reg!("_lumen_remove_attr", move |node_id: u32, name: String| {
             let mut doc = d.lock().unwrap();
             let nid = NodeId::from_index(node_id as usize);
             remove_attribute(&mut doc, nid, &name);
+            dirty.store(true, Ordering::Relaxed);
         });
         let d = Arc::clone(&doc);
         reg!(
@@ -286,12 +295,14 @@ fn install_primitives(
             }
         );
         let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
         reg!(
             "_lumen_set_text_content",
             move |node_id: u32, text: String| {
                 let mut doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 set_text_content(&mut doc, nid, &text);
+                dirty.store(true, Ordering::Relaxed);
             }
         );
         let d = Arc::clone(&doc);
@@ -305,6 +316,7 @@ fn install_primitives(
             }
         );
         let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
         reg!(
             "_lumen_set_inner_html",
             move |node_id: u32, html: String| {
@@ -312,6 +324,7 @@ fn install_primitives(
                 let mut doc = d.lock().unwrap();
                 let nid = NodeId::from_index(node_id as usize);
                 set_text_content(&mut doc, nid, &html);
+                dirty.store(true, Ordering::Relaxed);
             }
         );
     }
@@ -363,6 +376,7 @@ fn install_primitives(
             }
         );
         let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
         reg!(
             "_lumen_append_child",
             move |parent_id: u32, child_id: u32| {
@@ -370,15 +384,18 @@ fn install_primitives(
                 let parent = NodeId::from_index(parent_id as usize);
                 let child = NodeId::from_index(child_id as usize);
                 doc.append_child(parent, child);
+                dirty.store(true, Ordering::Relaxed);
             }
         );
         let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
         reg!(
             "_lumen_remove_child",
             move |_parent_id: u32, child_id: u32| {
                 let mut doc = d.lock().unwrap();
                 let child = NodeId::from_index(child_id as usize);
                 doc.detach(child);
+                dirty.store(true, Ordering::Relaxed);
             }
         );
     }

@@ -3,7 +3,10 @@ pub mod dom;
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue};
 use lumen_dom::Document;
 use rquickjs::{Array, Context, Ctx, FromJs, Function, IntoJs, Object, Runtime, Type, Value};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicBool, Ordering},
+};
 
 pub use dom::NavigateRequest;
 pub use lumen_core::WebStorage;
@@ -21,6 +24,10 @@ pub struct QuickJsRuntime {
     /// Read by the shell event loop to schedule `ControlFlow::WaitUntil`.
     /// `take_timer_wakeup` atomically clears after reading.
     timer_wakeup: Arc<Mutex<Option<f64>>>,
+    /// Set to `true` by any DOM-mutating JS binding (setAttribute, textContent,
+    /// appendChild, etc.). The shell reads and clears this after each rAF pass
+    /// to decide whether a relayout is needed before the next paint.
+    dom_dirty: Arc<AtomicBool>,
 }
 
 struct Inner {
@@ -43,6 +50,7 @@ impl QuickJsRuntime {
             inner: Mutex::new(Inner { _rt: rt, ctx }),
             nav_out: Arc::new(Mutex::new(None)),
             timer_wakeup: Arc::new(Mutex::new(None)),
+            dom_dirty: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -81,6 +89,7 @@ impl QuickJsRuntime {
                 ls,
                 ss,
                 Arc::clone(&self.timer_wakeup),
+                Arc::clone(&self.dom_dirty),
             )
             .map_err(|e| rq_err(&ctx, e))
         })
@@ -91,6 +100,14 @@ impl QuickJsRuntime {
     /// Must be called before `drop(runtime)` to avoid losing the request.
     pub fn take_navigate_request(&self) -> Option<NavigateRequest> {
         self.nav_out.lock().unwrap().take()
+    }
+
+    /// Returns `true` if JS mutated the DOM since the last call, clearing the flag.
+    ///
+    /// Called by the shell event loop after each rAF pass to decide whether a
+    /// relayout is needed before the next paint.
+    pub fn take_dom_dirty(&self) -> bool {
+        self.dom_dirty.swap(false, Ordering::Relaxed)
     }
 
     /// Take the next timer wakeup as Unix epoch ms, clearing the stored value.

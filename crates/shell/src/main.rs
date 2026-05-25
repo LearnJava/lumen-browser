@@ -388,6 +388,11 @@ trait PersistentJs {
     /// Take the next timer wakeup deadline as Unix epoch ms, clearing the stored
     /// value.  Returns `None` if no timers are pending after the last tick.
     fn take_timer_wakeup(&self) -> Option<f64>;
+    /// Returns `true` if JS mutated the DOM since the last call, clearing the flag.
+    ///
+    /// Called after each rAF pass in `RedrawRequested`; when `true`, a relayout
+    /// must happen before the next paint to reflect DOM changes.
+    fn take_dom_dirty(&self) -> bool;
 }
 
 #[cfg(feature = "quickjs")]
@@ -399,10 +404,10 @@ struct QuickPersistentJs {
 impl PersistentJs for QuickPersistentJs {
     fn eval_js(&self, script: &str) {
         use lumen_core::ext::JsRuntime as _;
-        if let Err(e) = self.rt.eval(script) {
-            if !matches!(e, lumen_core::JsError::NotImplemented) {
-                eprintln!("JS event error: {e}");
-            }
+        if let Err(e) = self.rt.eval(script)
+            && !matches!(e, lumen_core::JsError::NotImplemented)
+        {
+            eprintln!("JS event error: {e}");
         }
     }
     fn take_navigate_request(&self) -> Option<JsNavigateRequest> {
@@ -417,6 +422,9 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn take_timer_wakeup(&self) -> Option<f64> {
         self.rt.take_timer_wakeup()
+    }
+    fn take_dom_dirty(&self) -> bool {
+        self.rt.take_dom_dirty()
     }
 }
 
@@ -2635,9 +2643,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
 
-                // Шаг 6: layout invalidation stub. В Phase 0 rAF-callback-и —
-                // только Rust-closures без DOM-мутаций, relayout не нужен.
-                // При подключении QuickJS здесь появится `if layout_dirty { self.relayout(); }`.
+                // Шаг 6: layout invalidation — если rAF-callback изменил DOM
+                // (setAttribute/textContent/appendChild/etc.), делаем relayout
+                // прежде чем красить, чтобы paint отражал актуальный DOM.
+                if self.js_ctx.as_ref().is_some_and(|j| j.take_dom_dirty()) {
+                    self.relayout();
+                }
 
                 // Page-полоса: исходный display list + highlight-FillRect-ы
                 // перед своими DrawText (когда find открыт). Прокручивается.
