@@ -214,6 +214,7 @@ fn run_window_mode(
         last_cursor_icon: None,
         layout_source: None,
         pending_reload: Rc::new(Cell::new(false)),
+        pending_js_navigate: None,
         load_proxy,
         stream_builder: None,
         stream_last_paint: std::time::Instant::now(),
@@ -354,6 +355,18 @@ struct NavEntry {
     source: PageSource,
     scroll_x: f32,
     scroll_y: f32,
+}
+
+/// Навигационный запрос от JS (location.href=, assign, replace, reload).
+/// Хранится в `Lumen::pending_js_navigate` и выполняется в `about_to_wait`.
+#[cfg_attr(not(feature = "quickjs"), allow(dead_code))]
+enum JsNavigateRequest {
+    /// Перейти на URL, добавить запись в историю.
+    Push(String),
+    /// Перейти на URL, заменить текущую запись истории (без push).
+    Replace(String),
+    /// Перезагрузить текущую страницу.
+    Reload,
 }
 
 impl PageSource {
@@ -546,6 +559,9 @@ struct LoadedPage {
     /// Провайдер шрифтов с @font-face URL-источниками страницы.
     /// Передаётся рендеру через `set_font_provider` при apply_loaded_page.
     font_registry: Arc<dyn lumen_core::FontProvider>,
+    /// Навигационный запрос от JS (location.href= и т.п.), выполненный
+    /// в процессе загрузки. Обрабатывается в `about_to_wait`.
+    js_navigate: Option<JsNavigateRequest>,
 }
 
 impl LoadedPage {
@@ -562,6 +578,7 @@ impl LoadedPage {
                 children: Vec::new(),
             },
             font_registry: Arc::new(lumen_font::SystemFontIndex::new()),
+            js_navigate: None,
         }
     }
 }
@@ -909,6 +926,8 @@ struct ParsedPage {
     html_source: String,
     /// @font-face URL-шрифты + системные шрифты. Передаётся рендеру.
     font_registry: Arc<dyn lumen_core::FontProvider>,
+    /// Навигационный запрос, выставленный JS во время выполнения скриптов.
+    js_navigate: Option<JsNavigateRequest>,
 }
 
 /// Источник для повторного layout без повторной загрузки/парсинга.
@@ -943,7 +962,7 @@ fn parse_and_layout(
     let preload_hints = lumen_html_parser::scan_preload_hints(&source);
     dispatch_preload_hints(&preload_hints, base, sink, preload_seen);
 
-    let mut doc = lumen_html_parser::parse(&source);
+    let doc = lumen_html_parser::parse(&source);
     let title = extract_title(&doc);
 
     // Гейт выполнения скриптов: top-level документ не sandboxed.
@@ -961,7 +980,18 @@ fn parse_and_layout(
         }
         ResourceBase::File(_) => (None, None),
     };
-    doc = run_scripts_with_dom(doc, lumen_core::SandboxFlags::empty(), fetch_provider, ws_provider);
+    // URL страницы для инициализации window.location в JS.
+    let page_url = match base {
+        ResourceBase::Url(u) => u.as_str().to_owned(),
+        ResourceBase::File(p) => format!("file://{}", p.display()),
+    };
+    let (mut doc, js_nav) = run_scripts_with_dom(
+        doc,
+        lumen_core::SandboxFlags::empty(),
+        &page_url,
+        fetch_provider,
+        ws_provider,
+    );
 
     // Гейт отправки форм: Phase 0 — top-level документ не sandboxed.
     check_form_gate(&doc, lumen_core::SandboxFlags::empty());
@@ -1014,6 +1044,7 @@ fn parse_and_layout(
         preload_hints,
         html_source: source,
         font_registry: font_provider,
+        js_navigate: js_nav,
     })
 }
 
@@ -1196,6 +1227,7 @@ fn render_bytes(
             images: parsed.images,
             layout_box,
             font_registry: parsed.font_registry,
+            js_navigate: parsed.js_navigate,
         },
         layout_source,
     ))
@@ -1333,39 +1365,43 @@ fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
 /// Выполнить inline `<script>` блоки с DOM-доступом (QuickJS + install_dom).
 ///
 /// Принимает `doc` по значению, оборачивает в `Arc<Mutex<>>` на время выполнения
-/// скриптов, возвращает `Document` обратно. При `quickjs` feature отключён —
-/// использует NullJsRuntime (скрипты пропускаются с логом NotImplemented).
+/// скриптов, возвращает `(Document, Option<JsNavigateRequest>)`.
+/// При `quickjs` feature отключён — использует NullJsRuntime (скрипты пропускаются).
 ///
+/// `page_url` пробрасывается в `window.location` (инициализация).
 /// `fetch_provider` пробрасывается в `window.fetch()`.
 /// `ws_provider` пробрасывается в `new WebSocket(url)`.
 /// `None` = no network (sandboxed context или отключён quickjs feature).
 fn run_scripts_with_dom(
     doc: Document,
     sandbox: lumen_core::SandboxFlags,
+    page_url: &str,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
-) -> Document {
+) -> (Document, Option<JsNavigateRequest>) {
     let mut scripts: Vec<String> = Vec::new();
     collect_inline_scripts(&doc, doc.root(), &mut scripts);
 
     if scripts.is_empty() {
-        return doc;
+        return (doc, None);
     }
     if sandbox.contains(lumen_core::SandboxFlags::SCRIPTS) {
         eprintln!(
             "sandbox: заблокировано {} скрипт(ов) (sandbox=scripts)",
             scripts.len()
         );
-        return doc;
+        return (doc, None);
     }
 
     #[cfg(feature = "quickjs")]
     {
+        use lumen_core::ext::JsRuntime as _;
         use std::sync::Mutex;
         let doc_arc = Arc::new(Mutex::new(doc));
+        let nav_req: Option<JsNavigateRequest>;
         match lumen_js::QuickJsRuntime::new() {
             Ok(rt) => {
-                if let Err(e) = rt.install_dom(doc_arc.clone(), fetch_provider, ws_provider) {
+                if let Err(e) = rt.install_dom(doc_arc.clone(), page_url, fetch_provider, ws_provider) {
                     eprintln!("JS DOM init failed: {e}");
                 }
                 for src in &scripts {
@@ -1380,18 +1416,28 @@ fn run_scripts_with_dom(
                         Err(e) => eprintln!("script error: {e}"),
                     }
                 }
+                nav_req = rt.take_navigate_request().map(|r| match r {
+                    lumen_js::NavigateRequest::Push(u)    => JsNavigateRequest::Push(u),
+                    lumen_js::NavigateRequest::Replace(u) => JsNavigateRequest::Replace(u),
+                    lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
+                });
                 drop(rt); // освобождаем Arc-клоны в замыканиях QuickJS
             }
-            Err(e) => eprintln!("QuickJS init failed: {e}"),
+            Err(e) => {
+                eprintln!("QuickJS init failed: {e}");
+                nav_req = None;
+            }
         }
-        return Arc::try_unwrap(doc_arc)
+        let doc = Arc::try_unwrap(doc_arc)
             .expect("Arc still held after drop(rt)")
             .into_inner()
             .unwrap();
+        return (doc, nav_req);
     }
 
     #[cfg(not(feature = "quickjs"))]
     {
+        let _ = page_url;
         let _ = fetch_provider;
         let _ = ws_provider;
         use lumen_core::ext::JsRuntime as _;
@@ -1407,7 +1453,7 @@ fn run_scripts_with_dom(
                 Err(e) => eprintln!("script error: {e}"),
             }
         }
-        doc
+        (doc, None)
     }
 }
 
@@ -1577,6 +1623,10 @@ struct Lumen {
     /// closure-ом внутри queue_task — это единственный способ сообщить
     /// Lumen-у из task-closure (которая `+ 'static` и не владеет `&mut self`).
     pending_reload: Rc<Cell<bool>>,
+    /// Навигационный запрос от JS (location.href=, assign, replace, reload),
+    /// захваченный во время выполнения скриптов страницы. Обрабатывается
+    /// в `about_to_wait` после первого рендера загруженной страницы.
+    pending_js_navigate: Option<JsNavigateRequest>,
     /// Proxy для отправки LoadEvent из background-потока загрузки в event loop.
     load_proxy: EventLoopProxy<LoadEvent>,
     /// Инкрементальный HTML-парсер — активен во время streaming load.
@@ -1708,6 +1758,9 @@ impl Lumen {
                     w.set_title(&window_title(self.title.as_deref()));
                     w.request_redraw();
                 }
+                // JS may have requested navigation via location.href= etc.
+                // Store it for processing in about_to_wait (after first render).
+                self.pending_js_navigate = page.js_navigate;
             }
             Err(err) => {
                 eprintln!("Ошибка reload {}: {err}", self.source.describe());
@@ -1838,6 +1891,8 @@ impl Lumen {
             w.set_title(&window_title(self.title.as_deref()));
             w.request_redraw();
         }
+        // JS may have requested navigation via location.href= etc.
+        self.pending_js_navigate = page.js_navigate;
     }
 }
 
@@ -1966,6 +2021,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         // `take` атомарно сбрасывает флаг, чтобы reload вызвался только раз.
         if self.pending_reload.take() {
             self.reload();
+        }
+
+        // JS navigation: location.href=, assign(), replace(), reload().
+        // Executed after the initial page render so the user sees something
+        // before the redirect completes (matches browser behaviour).
+        if let Some(nav) = self.pending_js_navigate.take() {
+            match nav {
+                JsNavigateRequest::Push(url)    => self.navigate_to(PageSource::Url(url)),
+                JsNavigateRequest::Replace(url) => self.navigate_replace(PageSource::Url(url)),
+                JsNavigateRequest::Reload       => self.reload(),
+            }
         }
     }
 
@@ -2520,7 +2586,6 @@ impl Lumen {
     /// Сохранить текущую страницу в bfcache и стек навигации,
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
-    #[allow(dead_code)]
     fn navigate_to(&mut self, source: PageSource) {
         // Snapshot current page into bfcache if it has an HTML source.
         if let Some(ref ls) = self.layout_source
@@ -2544,6 +2609,15 @@ impl Lumen {
         // New navigation invalidates forward history.
         self.nav_fwd.clear();
         // Load new page.
+        self.source = source;
+        self.reload();
+    }
+
+    /// Перейти на `source`, заменяя текущую запись истории (без push в back-stack).
+    /// Аналог `history.replaceState` / `location.replace()` в браузере.
+    fn navigate_replace(&mut self, source: PageSource) {
+        // New navigation invalidates forward history but does NOT push to back stack.
+        self.nav_fwd.clear();
         self.source = source;
         self.reload();
     }

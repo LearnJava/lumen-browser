@@ -5,12 +5,17 @@ use lumen_dom::Document;
 use rquickjs::{Array, Context, Ctx, FromJs, Function, IntoJs, Object, Runtime, Type, Value};
 use std::sync::{Arc, Mutex};
 
+pub use dom::NavigateRequest;
+
 /// QuickJS-based JS runtime via `rquickjs`.
 ///
 /// QuickJS is single-threaded; `Mutex` provides the exclusive access needed
 /// to satisfy `JsRuntime: Send + Sync`.
 pub struct QuickJsRuntime {
     inner: Mutex<Inner>,
+    /// Navigation request written by JS via `location.href=`, `location.assign()` etc.
+    /// Captured inside `install_dom_api`; read by `take_navigate_request`.
+    nav_out: Arc<Mutex<Option<NavigateRequest>>>,
 }
 
 struct Inner {
@@ -31,6 +36,7 @@ impl QuickJsRuntime {
         let ctx = Context::full(&rt).map_err(|e| JsError::Runtime(e.to_string()))?;
         Ok(Self {
             inner: Mutex::new(Inner { _rt: rt, ctx }),
+            nav_out: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -40,20 +46,29 @@ impl QuickJsRuntime {
     /// drop the runtime (via `drop(runtime)`) before calling
     /// `Arc::try_unwrap(doc)` to recover the document after script execution.
     ///
+    /// `page_url` initialises `window.location` with the current page URL.
     /// `fetch_provider` is forwarded to `window.fetch()`.
     /// `ws_provider` is forwarded to `new WebSocket(url)`.
-    /// Pass `None` for either in sandboxed contexts or unit tests.
+    /// Pass `None` for providers in sandboxed contexts or unit tests.
     pub fn install_dom(
         &self,
         doc: Arc<Mutex<Document>>,
+        page_url: &str,
         fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
         ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
     ) -> JsResult<()> {
         let guard = self.inner.lock().unwrap();
         guard.ctx.with(|ctx| {
-            dom::install_dom_api(&ctx, doc, fetch_provider, ws_provider)
+            dom::install_dom_api(&ctx, doc, page_url, Arc::clone(&self.nav_out), fetch_provider, ws_provider)
                 .map_err(|e| rq_err(&ctx, e))
         })
+    }
+
+    /// Consume any navigation request that JS placed via `location.href =` etc.
+    /// Returns `None` if no navigation was requested during script execution.
+    /// Must be called before `drop(runtime)` to avoid losing the request.
+    pub fn take_navigate_request(&self) -> Option<NavigateRequest> {
+        self.nav_out.lock().unwrap().take()
     }
 }
 

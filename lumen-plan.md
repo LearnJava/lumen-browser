@@ -311,7 +311,7 @@
 - **`[P3]` OCSP stapling + CT log enforcement + invalid cert UI.**
 - **`[P3]` Safe Browsing — готово** (см. status). Отложено: 4-byte prefixes с full-hash callback, public-suffix list для безопасной обрезки host-suffixes ниже eTLD+1.
 - **`[P3]` Back/forward cache (bfcache).** Снапшот DOM+JS heap для мгновенного back. Eligibility rules.
-- **`[P3]` Navigation API + History API runtime.** `history.pushState` / `popstate`, `navigate` event.
+- **`[P3]` Navigation API + History API runtime.** ✅ `history.pushState/replaceState/go/back/forward` + `popstate` event + `location` object (href/protocol/hostname/host/port/pathname/search/hash/origin) инициализируется из page URL, `location.href=` / `assign()` / `replace()` / `reload()` → навигация через shell. Отложено: `navigate` event (Navigation API 2023).
 - **`[P1+P2+P3]` Web Animations API runtime** поверх parsed `@keyframes` / transitions. **P1** — интерполяция; **P2** — compositor offload для transform / opacity; **P3** — animation timeline scheduling в rendering steps stage.
 - **`[P1+P3]` `<contenteditable>` + Input Events Level 2 + Selection / Range API.** **P1** — DOM mutations + Selection / Range типы + `beforeinput` / `input`; **P3** — input dispatch (key + IME + drag-drop + paste), undo/redo stack в shell.
 - **`[P3]` Service Worker runtime.** Fetch interception, push delivery, background sync, cache strategies. **P3** — и backend (fetch hook + storage), и JS worker context + lifecycle + `clients` API (бывший P4 объединён).
