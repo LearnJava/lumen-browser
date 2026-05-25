@@ -1011,6 +1011,17 @@ fn parse_and_layout(
         ls_store,
     );
 
+    // CSS Selectors L4 §9.6 `:target`: set current target from URL fragment so
+    // the matcher has the correct target_id before style cascade in layout.
+    let page_fragment = if let ResourceBase::Url(u) = base {
+        lumen_core::url::Url::parse(u)
+            .ok()
+            .and_then(|u| u.fragment().map(str::to_owned))
+    } else {
+        None
+    };
+    doc.set_target(page_fragment.as_deref());
+
     // Гейт отправки форм: Phase 0 — top-level документ не sandboxed.
     check_form_gate(&doc, lumen_core::SandboxFlags::empty());
 
@@ -1743,6 +1754,41 @@ impl Lumen {
         }
     }
 
+    /// Same-page fragment navigation: update `:target` CSS state and scroll to
+    /// the target element. `fragment` is the id without the leading `#`; an empty
+    /// string scrolls to the top and clears `:target`.
+    ///
+    /// Triggers a full re-layout so that `:target`-based CSS rules take effect
+    /// before the scroll position is calculated.
+    fn navigate_fragment(&mut self, fragment: String) {
+        if let Some(src) = self.layout_source.as_mut() {
+            if fragment.is_empty() {
+                src.document.set_target::<String>(None);
+            } else {
+                src.document.set_target(Some(fragment.clone()));
+            }
+        }
+        // Re-layout so :target cascade is applied.
+        self.relayout();
+        if fragment.is_empty() {
+            self.scroll_to(0.0);
+            return;
+        }
+        let node_id = self
+            .layout_source
+            .as_ref()
+            .and_then(|src| links::find_element_by_id(&src.document, &fragment));
+        let target_y = node_id.and_then(|nid| {
+            self.layout_box
+                .as_ref()
+                .and_then(|lb| forms::find_box_rect(lb, nid))
+                .map(|r| r.y)
+        });
+        if let Some(y) = target_y {
+            self.scroll_to(y);
+        }
+    }
+
     /// Перезагрузить текущий источник: fetch/parse/layout/paint снова. На
     /// `PageSource::Empty` — no-op (грузить нечего). При ошибке — оставляем
     /// предыдущий display_list, печатаем причину в stderr.
@@ -2301,15 +2347,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                     // ── Link click ───────────────────────────
                                     // No form control was activated — check if
                                     // the clicked node is inside an <a href>.
-                                    if let (Some(result), Some(src)) =
-                                        (hit_result.as_ref(), self.layout_source.as_ref())
-                                        && let Some(href) =
-                                            links::find_link_href(&src.document, result.node)
-                                        && links::is_navigable_href(&href)
-                                    {
-                                        let resolved = self.source.resolve_href(&href);
-                                        let target = PageSource::from_arg(Some(&resolved));
-                                        self.navigate_to(target);
+                                    let href = hit_result.as_ref().and_then(|r| {
+                                        self.layout_source
+                                            .as_ref()
+                                            .and_then(|src| links::find_link_href(&src.document, r.node))
+                                    });
+                                    if let Some(href) = href {
+                                        if let Some(frag) = links::fragment_only(&href) {
+                                            // Same-page fragment navigation.
+                                            self.navigate_fragment(frag.to_owned());
+                                        } else if links::is_navigable_href(&href) {
+                                            let resolved = self.source.resolve_href(&href);
+                                            let target = PageSource::from_arg(Some(&resolved));
+                                            self.navigate_to(target);
+                                        }
                                     }
                                 }
                             }
