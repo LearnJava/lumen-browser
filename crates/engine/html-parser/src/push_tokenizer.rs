@@ -22,10 +22,9 @@
 //! отдавать `Token::Text` несколькими кусками для одного непрерывного
 //! текстового потока, и это нормально.
 //!
-//! UTF-8: `feed` принимает `&str`, поэтому вызыватель отвечает за то,
-//! что граница chunk-а попадает между code point-ами. `feed_bytes`
-//! с буферизацией незавершённой UTF-8 последовательности — отдельная
-//! задача.
+//! UTF-8: `feed` принимает `&str` — вызыватель отвечает за то, чтобы
+//! граница chunk-а лежала на code point boundary. [`PushTokenizer::feed_bytes`]
+//! принимает `&[u8]` и сам буферизует незавершённые UTF-8 последовательности.
 
 use crate::tokenizer::{Token, Tokenizer};
 
@@ -41,14 +40,20 @@ pub struct PushTokenizer {
     text_only: Option<(String, bool)>,
     /// `true` после `end()` — следующие вызовы `feed` запрещены.
     ended: bool,
+    /// Незавершённая UTF-8 последовательность с конца предыдущего
+    /// `feed_bytes`-вызова. Максимум 3 байта. Присоединяется к началу
+    /// следующего chunk-а в `feed_bytes`.
+    partial_utf8: Vec<u8>,
 }
 
 impl PushTokenizer {
+    /// Создаёт новый `PushTokenizer` в исходном состоянии.
     pub fn new() -> Self {
         Self {
             buf: String::new(),
             text_only: None,
             ended: false,
+            partial_utf8: Vec::new(),
         }
     }
 
@@ -64,16 +69,102 @@ impl PushTokenizer {
         self.tokenize(false)
     }
 
+    /// Вариант [`PushTokenizer::feed`] для сырых байт из сети.
+    ///
+    /// Буферизует незавершённую UTF-8 последовательность на границе
+    /// chunk-а и присоединяет её к следующему вызову. Корректно
+    /// обрабатывает многобайтные символы (кириллица, CJK, эмодзи),
+    /// разрезанные на границе сетевого пакета.
+    ///
+    /// Гарантированно завершённые code point-ы передаются в
+    /// [`PushTokenizer::feed`]-логику без дополнительного копирования.
+    ///
+    /// Гарантии WHATWG Encoding §4:
+    /// - Незавершённая последовательность в хвосте chunk-а → буферизуется.
+    /// - Явно невалидные байты (0xFF, неожиданный continuation byte и т.п.)
+    ///   → заменяются U+FFFD inline, обработка продолжается.
+    /// - Незавершённая последовательность при `end()` → U+FFFD.
+    pub fn feed_bytes(&mut self, chunk: &[u8]) -> Vec<Token> {
+        assert!(!self.ended, "feed_bytes() after end()");
+
+        self.partial_utf8.extend_from_slice(chunk);
+
+        // Декодируем partial_utf8 → self.buf, сохраняя незавершённый хвост.
+        // Используем три варианта результата:
+        //   (valid_len, true,  _)       — from_utf8 вернул Ok: все байты валидны
+        //   (valid_len, false, None)    — от Err: хвост обрезан (truncated sequence)
+        //   (valid_len, false, Some(n)) — от Err: невалидная последовательность n байт
+        let mut consumed = 0;
+        loop {
+            let (valid_len, all_valid, error_len) = {
+                let slice = &self.partial_utf8[consumed..];
+                if slice.is_empty() {
+                    break;
+                }
+                match std::str::from_utf8(slice) {
+                    Ok(s) => (s.len(), true, None::<usize>),
+                    Err(e) => (e.valid_up_to(), false, e.error_len()),
+                }
+            };
+            // slice, s/e вышли из области видимости — borrow отпущен
+
+            if valid_len > 0 {
+                // SAFETY: partial_utf8[consumed..consumed+valid_len] — ровно та
+                // подпоследовательность, которую from_utf8 выше признала валидной
+                // UTF-8; границы совпадают с code-point boundary.
+                let s = unsafe {
+                    std::str::from_utf8_unchecked(
+                        &self.partial_utf8[consumed..consumed + valid_len],
+                    )
+                };
+                self.buf.push_str(s);
+            }
+            consumed += valid_len;
+
+            if all_valid {
+                // from_utf8 вернул Ok — все оставшиеся байты обработаны.
+                consumed = self.partial_utf8.len();
+                break;
+            }
+
+            match error_len {
+                None => {
+                    // Незавершённая последовательность в хвосте chunk-а —
+                    // буферизуем оставшиеся байты для следующего вызова.
+                    break;
+                }
+                Some(n) => {
+                    // Явно невалидная последовательность — заменяем U+FFFD,
+                    // пропускаем n байт и продолжаем декодирование.
+                    self.buf.push('\u{FFFD}');
+                    consumed += n;
+                }
+            }
+        }
+
+        self.partial_utf8.drain(..consumed);
+        self.tokenize(false)
+    }
+
     /// Финализирует ввод. Хвост буфера токенизируется как при EOF —
     /// pull-токенизатор сам lenient-обрабатывает незакрытые теги/
     /// entity. После `end()` любой `feed` приведёт к panic.
+    ///
+    /// Если был вызван `feed_bytes` с незавершённой UTF-8
+    /// последовательностью в конце, она заменяется U+FFFD (WHATWG
+    /// Encoding §4).
     pub fn end(&mut self) -> Vec<Token> {
         self.ended = true;
+        // Незавершённая последовательность на EOF → U+FFFD (WHATWG Encoding §4)
+        if !self.partial_utf8.is_empty() {
+            self.buf.push('\u{FFFD}');
+            self.partial_utf8.clear();
+        }
         self.tokenize(true)
     }
 
-    /// Количество ещё не потреблённых байт. Только для диагностики /
-    /// тестов; в production-коде не используется.
+    /// Количество ещё не потреблённых байт строкового буфера.
+    /// Только для диагностики / тестов; в production-коде не используется.
     #[cfg(test)]
     pub fn pending_len(&self) -> usize {
         self.buf.len()
@@ -591,6 +682,118 @@ mod tests {
             let input = "<p>Привет мир</p>";
             let push = normalize(&tokenize_chunked(input, chunk_size));
             assert_eq!(push, pull_tokens(input), "chunk_size={chunk_size}");
+        }
+    }
+
+    // ──────── feed_bytes: буферизация partial UTF-8 ────────
+
+    /// Вспомогательная функция: скармливает байты побайтово через feed_bytes.
+    fn tokenize_bytes_by_byte(input: &[u8]) -> Vec<Token> {
+        let mut pt = PushTokenizer::new();
+        let mut out = Vec::new();
+        for i in 0..input.len() {
+            out.extend(pt.feed_bytes(&input[i..i + 1]));
+        }
+        out.extend(pt.end());
+        out
+    }
+
+    #[test]
+    fn feed_bytes_ascii_matches_feed_str() {
+        // Для чистого ASCII feed_bytes должен давать тот же результат, что feed.
+        let input = "<html><body><p>Hello World</p></body></html>";
+        let mut pt = PushTokenizer::new();
+        let result: Vec<Token> = pt
+            .feed_bytes(input.as_bytes())
+            .into_iter()
+            .chain(pt.end())
+            .collect();
+        assert_eq!(normalize(&result), pull_tokens(input));
+    }
+
+    #[test]
+    fn feed_bytes_cyrillic_split_at_byte_boundary() {
+        // Кириллица — 2-байтовые символы. Подаём по 1 байту,
+        // граница chunk-а гарантированно разрезает символы.
+        let input = "<p>Привет</p>";
+        let result = tokenize_bytes_by_byte(input.as_bytes());
+        assert_eq!(normalize(&result), pull_tokens(input));
+    }
+
+    #[test]
+    fn feed_bytes_3byte_char_split() {
+        // '€' = U+20AC = 0xE2 0x82 0xAC (3 байта). Подаём по 1 байту.
+        let input = "price: €100";
+        let result = tokenize_bytes_by_byte(input.as_bytes());
+        assert_eq!(normalize(&result), pull_tokens(input));
+    }
+
+    #[test]
+    fn feed_bytes_4byte_emoji_split() {
+        // '😀' = U+1F600 = 0xF0 0x9F 0x98 0x80 (4 байта). Подаём по 1 байту.
+        let input = "hello 😀 world";
+        let result = tokenize_bytes_by_byte(input.as_bytes());
+        assert_eq!(normalize(&result), pull_tokens(input));
+    }
+
+    #[test]
+    fn feed_bytes_incomplete_at_eof_becomes_replacement() {
+        // Подаём первый байт 2-байтового символа 'П' (0xD0) и сразу end().
+        // Незавершённая последовательность должна стать U+FFFD.
+        let mut pt = PushTokenizer::new();
+        let _ = pt.feed_bytes(&[0xD0]); // первый байт 'П'
+        let tokens = pt.end();
+        let text: String = tokens
+            .iter()
+            .filter_map(|t| if let Token::Text(s) = t { Some(s.as_str()) } else { None })
+            .collect();
+        assert!(
+            text.contains('\u{FFFD}'),
+            "ожидаем U+FFFD для незавершённой последовательности, получили: {text:?}"
+        );
+    }
+
+    #[test]
+    fn feed_bytes_invalid_byte_replaced_inline() {
+        // 0xFF — никогда не валиден в UTF-8. Должен заменяться U+FFFD
+        // немедленно, не буферизоваться вечно.
+        let input = b"hello\xFFworld";
+        let mut pt = PushTokenizer::new();
+        let result: Vec<Token> = pt
+            .feed_bytes(input)
+            .into_iter()
+            .chain(pt.end())
+            .collect();
+        let text: String = result
+            .iter()
+            .filter_map(|t| if let Token::Text(s) = t { Some(s.as_str()) } else { None })
+            .collect();
+        assert!(text.contains("hello"), "ожидаем 'hello' в тексте");
+        assert!(text.contains("world"), "ожидаем 'world' в тексте");
+        assert!(text.contains('\u{FFFD}'), "ожидаем U+FFFD вместо 0xFF");
+    }
+
+    #[test]
+    fn feed_bytes_chunk_sizes_match_pull() {
+        // Разные размеры chunk-ов для HTML с кириллицей — все должны
+        // давать тот же результат, что pull-токенизатор.
+        let input = "<html><head><title>Тест</title></head><body><p>Привет мир</p></body></html>";
+        let bytes = input.as_bytes();
+        for chunk_size in [1usize, 2, 3, 5, 7, 16] {
+            let mut pt = PushTokenizer::new();
+            let mut out = Vec::new();
+            let mut pos = 0;
+            while pos < bytes.len() {
+                let end = (pos + chunk_size).min(bytes.len());
+                out.extend(pt.feed_bytes(&bytes[pos..end]));
+                pos = end;
+            }
+            out.extend(pt.end());
+            assert_eq!(
+                normalize(&out),
+                pull_tokens(input),
+                "chunk_size={chunk_size}"
+            );
         }
     }
 }
