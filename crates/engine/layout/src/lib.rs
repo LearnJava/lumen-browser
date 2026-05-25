@@ -2870,6 +2870,108 @@ mod tests {
         assert!((p.rect.height - 200.0).abs() < 0.01, "rect.height={}", p.rect.height);
     }
 
+    /// Находит первый Block-ребёнок, включая разворачивание InlineBlockRow.
+    fn first_inline_block_child(b: &LayoutBox) -> &LayoutBox {
+        // InlineBlockRow — анонимный контейнер; разворачиваем его.
+        for c in &b.children {
+            if matches!(c.kind, BoxKind::InlineBlockRow) {
+                for ic in &c.children {
+                    if matches!(ic.kind, BoxKind::Block) {
+                        return ic;
+                    }
+                }
+            }
+            if matches!(c.kind, BoxKind::Block) {
+                return c;
+            }
+        }
+        panic!("expected at least one inline-block child");
+    }
+
+    /// max-height clamps display:inline-block element height.
+    #[test]
+    fn max_height_clamps_inline_block() {
+        let root = lay(
+            r#"<div style="width:300px"><div style="display:inline-block;height:160px;max-height:80px;width:60px"></div></div>"#,
+            "",
+        );
+        let outer = first_element_child(&root);
+        let ib = first_inline_block_child(outer);
+        assert!((ib.rect.height - 80.0).abs() < 0.5,
+            "max-height should clamp 160→80, got {}", ib.rect.height);
+    }
+
+    /// min-height lifts display:inline-block element height.
+    #[test]
+    fn min_height_lifts_inline_block() {
+        let root = lay(
+            r#"<div style="width:300px"><div style="display:inline-block;height:40px;min-height:100px;width:60px"></div></div>"#,
+            "",
+        );
+        let outer = first_element_child(&root);
+        let ib = first_inline_block_child(outer);
+        assert!((ib.rect.height - 100.0).abs() < 0.5,
+            "min-height should lift 40→100, got {}", ib.rect.height);
+    }
+
+    /// vertical-align:bottom выравнивает inline-block элементы по нижнему краю.
+    #[test]
+    fn vertical_align_bottom_inline_block() {
+        // Два inline-block элемента с vertical-align:bottom.
+        // Высокий (120px) и низкий (60px) должны совпасть по нижнему краю.
+        // Без пробелов между тегами, чтобы не было InlineSpace.
+        let root = lay(
+            r#"<div style="width:500px"><div style="display:inline-block;width:60px;height:60px;vertical-align:bottom"></div><div style="display:inline-block;width:60px;height:120px;vertical-align:bottom"></div></div>"#,
+            "* { box-sizing: border-box; }",
+        );
+        let outer = first_element_child(&root);
+        let ibr = outer.children.iter().find(|c| matches!(c.kind, BoxKind::InlineBlockRow))
+            .expect("expected InlineBlockRow");
+        // Собираем только Block-детей (пропускаем InlineSpace)
+        let blocks: Vec<_> = ibr.children.iter()
+            .filter(|c| matches!(c.kind, BoxKind::Block))
+            .collect();
+        assert_eq!(blocks.len(), 2, "expected 2 block children, got {}", blocks.len());
+        // Определяем короткий и высокий по высоте
+        let (short, tall) = if blocks[0].rect.height < blocks[1].rect.height {
+            (blocks[0], blocks[1])
+        } else {
+            (blocks[1], blocks[0])
+        };
+        let short_bottom = short.rect.y + short.rect.height;
+        let tall_bottom  = tall.rect.y  + tall.rect.height;
+        assert!((short_bottom - tall_bottom).abs() < 0.5,
+            "bottom edges should match: short_bottom={} tall_bottom={}", short_bottom, tall_bottom);
+        // Короткий должен быть сдвинут вниз на (row_h - short_h) = 120 - 60 = 60
+        assert!((short.rect.y - 60.0).abs() < 0.5,
+            "short elem should be shifted down by 60px, got y={}", short.rect.y);
+    }
+
+    /// vertical-align:bottom для inline-block внутри inline-block (nested).
+    #[test]
+    fn vertical_align_bottom_nested_inline_block() {
+        // Структура TEST-11: пара inline-block с vertical-align:bottom внутри
+        // внешнего inline-block контейнера с vertical-align:bottom.
+        let root = lay(
+            r#"<div style="width:974px">
+              <div style="display:inline-block;margin-bottom:24px;vertical-align:bottom">
+                <div style="display:inline-block;width:60px;height:80px;margin-right:8px;vertical-align:bottom"></div>
+                <div style="display:inline-block;width:60px;height:160px;max-height:80px;vertical-align:bottom"></div>
+              </div>
+            </div>"#,
+            "* { box-sizing: border-box; }",
+        );
+        let outer = first_element_child(&root);
+        // outer → InlineBlockRow → pair
+        let ibr = outer.children.iter().find(|c| matches!(c.kind, BoxKind::InlineBlockRow))
+            .expect("outer InlineBlockRow");
+        let pair = ibr.children.iter().find(|c| matches!(c.kind, BoxKind::Block))
+            .expect("pair");
+        // pair height should be 80px (max-height clamped)
+        assert!((pair.rect.height - 80.0).abs() < 0.5,
+            "pair height should be 80, got {}", pair.rect.height);
+    }
+
     /// min-height поднимает high content-height до минимума.
     #[test]
     fn min_height_clamps_height_up() {
