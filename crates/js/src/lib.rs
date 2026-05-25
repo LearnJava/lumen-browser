@@ -28,6 +28,10 @@ pub struct QuickJsRuntime {
     /// appendChild, etc.). The shell reads and clears this after each rAF pass
     /// to decide whether a relayout is needed before the next paint.
     dom_dirty: Arc<AtomicBool>,
+    /// Set to `true` when JS calls `requestAnimationFrame(fn)`.
+    /// Cleared (and returned) by `take_raf_pending` after each rendering step.
+    /// Shell uses this to decide whether to request the next redraw for animations.
+    raf_pending: Arc<AtomicBool>,
 }
 
 struct Inner {
@@ -51,6 +55,7 @@ impl QuickJsRuntime {
             nav_out: Arc::new(Mutex::new(None)),
             timer_wakeup: Arc::new(Mutex::new(None)),
             dom_dirty: Arc::new(AtomicBool::new(false)),
+            raf_pending: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -90,6 +95,7 @@ impl QuickJsRuntime {
                 ss,
                 Arc::clone(&self.timer_wakeup),
                 Arc::clone(&self.dom_dirty),
+                Arc::clone(&self.raf_pending),
             )
             .map_err(|e| rq_err(&ctx, e))
         })
@@ -108,6 +114,15 @@ impl QuickJsRuntime {
     /// relayout is needed before the next paint.
     pub fn take_dom_dirty(&self) -> bool {
         self.dom_dirty.swap(false, Ordering::Relaxed)
+    }
+
+    /// Returns `true` if `requestAnimationFrame` was called since the last call,
+    /// clearing the flag.
+    ///
+    /// Shell reads this after each rendering step: if `true`, another redraw must
+    /// be requested so the animation loop gets its next frame.
+    pub fn take_raf_pending(&self) -> bool {
+        self.raf_pending.swap(false, Ordering::Relaxed)
     }
 
     /// Take the next timer wakeup as Unix epoch ms, clearing the stored value.

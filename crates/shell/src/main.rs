@@ -393,6 +393,17 @@ trait PersistentJs {
     /// Called after each rAF pass in `RedrawRequested`; when `true`, a relayout
     /// must happen before the next paint to reflect DOM changes.
     fn take_dom_dirty(&self) -> bool;
+    /// Run all pending `requestAnimationFrame` callbacks with `timestamp_ms`.
+    ///
+    /// Called in `RedrawRequested` before paint. Callbacks may register new rAF
+    /// callbacks (animation loop); use `take_raf_pending` to detect this.
+    fn run_animation_frame(&self, timestamp_ms: f64);
+    /// Returns `true` if `requestAnimationFrame` was called since the last
+    /// `take_raf_pending`, clearing the flag.
+    ///
+    /// Shell requests another redraw when this returns `true` so animation loops
+    /// continue without busy-polling.
+    fn take_raf_pending(&self) -> bool;
 }
 
 #[cfg(feature = "quickjs")]
@@ -425,6 +436,12 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn take_dom_dirty(&self) -> bool {
         self.rt.take_dom_dirty()
+    }
+    fn run_animation_frame(&self, timestamp_ms: f64) {
+        self.eval_js(&format!("_lumen_run_raf_callbacks({timestamp_ms})"));
+    }
+    fn take_raf_pending(&self) -> bool {
+        self.rt.take_raf_pending()
     }
 }
 
@@ -2605,6 +2622,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                 // Шаг 5: rAF callbacks + microtask checkpoint.
                 self.runtime.run_rendering_step(timestamp_ms);
+
+                // Шаг 5.1: JS requestAnimationFrame callbacks.
+                // Snapshot-pattern: callbacks registered during this call go into
+                // the next frame. If any new rAF was registered (animation loop),
+                // request another redraw immediately.
+                if let Some(js) = &self.js_ctx {
+                    js.run_animation_frame(timestamp_ms);
+                    if js.take_raf_pending() {
+                        self.request_redraw();
+                    }
+                }
 
                 // Шаг 5.5: CSS Animations + Transitions tick.
                 // Анимации и переходы тикаются вместе; фреймы сливаются перед рендером.

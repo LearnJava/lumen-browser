@@ -133,8 +133,9 @@ pub fn install_dom_api(
     ss_store: Arc<Mutex<WebStorage>>,
     timer_wakeup: Arc<Mutex<Option<f64>>>,
     dom_dirty: Arc<AtomicBool>,
+    raf_pending: Arc<AtomicBool>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -155,6 +156,7 @@ fn install_primitives(
     ss_store: Arc<Mutex<WebStorage>>,
     timer_wakeup: Arc<Mutex<Option<f64>>>,
     dom_dirty: Arc<AtomicBool>,
+    raf_pending: Arc<AtomicBool>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -845,6 +847,16 @@ fn install_primitives(
                 Some(prev) if deadline_ms < prev => *lock = Some(deadline_ms),
                 _ => {}
             }
+        });
+    }
+
+    // Called by requestAnimationFrame when a callback is queued.
+    // Shell reads this after each rendering step to decide whether to request
+    // the next redraw for JS animation loops.
+    {
+        let raf = Arc::clone(&raf_pending);
+        reg!("_lumen_mark_raf_pending", move || {
+            raf.store(true, Ordering::Relaxed);
         });
     }
 
@@ -1565,7 +1577,42 @@ function setInterval(fn, interval) {
 }
 
 function clearInterval(id) { clearTimeout(id); }
-var requestAnimationFrame = function() { return 0; };
+
+// ── requestAnimationFrame / cancelAnimationFrame (HTML §8.1.5.1) ──────────────
+// Callbacks are queued per-frame and called by Rust via _lumen_run_raf_callbacks
+// before each paint. Each callback receives a DOMHighResTimeStamp.
+var _lumen_raf_seq = 1;
+var _lumen_raf_callbacks = [];
+
+function requestAnimationFrame(fn) {
+    if (typeof fn !== 'function') return 0;
+    var id = _lumen_raf_seq++;
+    _lumen_raf_callbacks.push({ id: id, fn: fn });
+    _lumen_mark_raf_pending();
+    return id;
+}
+
+function cancelAnimationFrame(id) {
+    id = id | 0;
+    for (var i = 0; i < _lumen_raf_callbacks.length; i++) {
+        if (_lumen_raf_callbacks[i].id === id) {
+            _lumen_raf_callbacks.splice(i, 1);
+            return;
+        }
+    }
+}
+
+// Called by the shell event loop before each paint with the frame timestamp.
+// Snapshot-pattern per spec: new rAF calls during callbacks go into the NEXT
+// frame. Returns true when any callback was invoked (for relayout check).
+function _lumen_run_raf_callbacks(timestamp_ms) {
+    var callbacks = _lumen_raf_callbacks.splice(0);
+    if (callbacks.length === 0) return false;
+    for (var i = 0; i < callbacks.length; i++) {
+        try { callbacks[i].fn(timestamp_ms); } catch(e) {}
+    }
+    return true;
+}
 
 var _popstate_listeners = [];
 
@@ -1999,6 +2046,8 @@ var window = {
     clearTimeout: clearTimeout,
     clearInterval: clearInterval,
     requestAnimationFrame: requestAnimationFrame,
+    cancelAnimationFrame: cancelAnimationFrame,
+    _lumen_run_raf_callbacks: _lumen_run_raf_callbacks,
     EventSource: EventSource,
     WebSocket: WebSocket,
     CloseEvent: CloseEvent,
@@ -3954,6 +4003,108 @@ mod tests {
     fn queue_microtask_on_window() {
         let rt = runtime_with_dom(make_doc());
         let r = rt.eval("typeof window.queueMicrotask === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── requestAnimationFrame / cancelAnimationFrame ──────────────────────────
+
+    #[test]
+    fn raf_returns_numeric_id() {
+        let rt = runtime_with_dom(make_doc());
+        let id = rt.eval("requestAnimationFrame(function(){})").unwrap();
+        assert!(matches!(id, lumen_core::JsValue::Number(n) if n >= 1.0));
+    }
+
+    #[test]
+    fn raf_ids_are_sequential() {
+        let rt = runtime_with_dom(make_doc());
+        let id1 = rt.eval("requestAnimationFrame(function(){})").unwrap();
+        let id2 = rt.eval("requestAnimationFrame(function(){})").unwrap();
+        if let (lumen_core::JsValue::Number(n1), lumen_core::JsValue::Number(n2)) = (id1, id2) {
+            assert!(n2 > n1);
+        } else {
+            panic!("expected numeric IDs");
+        }
+    }
+
+    #[test]
+    fn raf_non_function_returns_zero() {
+        let rt = runtime_with_dom(make_doc());
+        let id = rt.eval("requestAnimationFrame(42)").unwrap();
+        assert_eq!(id, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn raf_marks_raf_pending() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(!rt.take_raf_pending(), "clean at start");
+        rt.eval("requestAnimationFrame(function(){})").unwrap();
+        assert!(rt.take_raf_pending(), "set after rAF call");
+        assert!(!rt.take_raf_pending(), "cleared after take");
+    }
+
+    #[test]
+    fn raf_run_calls_callback_with_timestamp() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var _raf_ts = -1; requestAnimationFrame(function(t){ _raf_ts = t; })").unwrap();
+        rt.eval("_lumen_run_raf_callbacks(16.7)").unwrap();
+        let ts = rt.eval("_raf_ts").unwrap();
+        assert_eq!(ts, lumen_core::JsValue::Number(16.7));
+    }
+
+    #[test]
+    fn raf_run_snapshot_pattern() {
+        // Callbacks registered during a frame run go into the NEXT frame.
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var _raf_count = 0;").unwrap();
+        rt.eval("requestAnimationFrame(function() { _raf_count++; requestAnimationFrame(function(){ _raf_count++; }); })").unwrap();
+        rt.eval("_lumen_run_raf_callbacks(0)").unwrap();
+        let count1 = rt.eval("_raf_count").unwrap();
+        assert_eq!(count1, lumen_core::JsValue::Number(1.0), "only outer cb in frame 1");
+        rt.eval("_lumen_run_raf_callbacks(16)").unwrap();
+        let count2 = rt.eval("_raf_count").unwrap();
+        assert_eq!(count2, lumen_core::JsValue::Number(2.0), "inner cb in frame 2");
+    }
+
+    #[test]
+    fn raf_recursive_marks_pending() {
+        let rt = runtime_with_dom(make_doc());
+        // Callback registers another rAF → raf_pending must be set after run.
+        rt.eval("requestAnimationFrame(function() { requestAnimationFrame(function(){}); })").unwrap();
+        let _ = rt.take_raf_pending(); // clear initial flag
+        rt.eval("_lumen_run_raf_callbacks(0)").unwrap();
+        assert!(rt.take_raf_pending(), "inner rAF sets pending for next frame");
+    }
+
+    #[test]
+    fn cancel_raf_prevents_callback() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var _raf_ran = false;").unwrap();
+        rt.eval("var id = requestAnimationFrame(function(){ _raf_ran = true; });").unwrap();
+        rt.eval("cancelAnimationFrame(id)").unwrap();
+        rt.eval("_lumen_run_raf_callbacks(0)").unwrap();
+        let ran = rt.eval("_raf_ran").unwrap();
+        assert_eq!(ran, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn cancel_raf_unknown_id_is_noop() {
+        let rt = runtime_with_dom(make_doc());
+        // Should not throw or panic.
+        rt.eval("cancelAnimationFrame(9999)").unwrap();
+    }
+
+    #[test]
+    fn raf_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.requestAnimationFrame === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn cancel_raf_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.cancelAnimationFrame === 'function'").unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 }
