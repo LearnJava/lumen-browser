@@ -1,4 +1,5 @@
-In progress: —
+In progress: persistent-js-runtime  branch: p3-persistent-js-runtime
+Next step: Arc<Mutex<Document>> в LayoutSource + QuickJsRuntime в Lumen  shell/src/main.rs:951
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
