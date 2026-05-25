@@ -3401,7 +3401,7 @@ impl Renderer {
                 DisplayCommand::DrawImage {
                     rect,
                     src,
-                    alt: _,
+                    alt,
                     object_fit,
                     object_position,
                     image_rendering,
@@ -3459,6 +3459,46 @@ impl Renderer {
                         let v_count = fill_vertices.len() as u32 - v_start;
                         if v_count > 0 {
                             draw_ops.push(DrawOp::Fill { v_start, v_count });
+                        }
+                        // BUG-015: render alt text over the placeholder when the
+                        // image fails to load. Uses face 0 (bundled Inter) at 12px.
+                        // Only rendered when the box is tall enough for one text line.
+                        const BROKEN_FONT_SIZE: f32 = 12.0;
+                        const BROKEN_PAD: f32 = 4.0;
+                        if !alt.is_empty()
+                            && scrolled.height >= BROKEN_FONT_SIZE + 2.0 * BROKEN_PAD
+                            && parsed_faces.first().and_then(|p| p.as_ref()).is_some()
+                        {
+                            let text_rect = Rect::new(
+                                scrolled.x + BROKEN_PAD,
+                                scrolled.y + BROKEN_PAD,
+                                (scrolled.width - 2.0 * BROKEN_PAD).max(0.0),
+                                (scrolled.height - 2.0 * BROKEN_PAD).max(0.0),
+                            );
+                            let t_start = text_vertices.len() as u32;
+                            push_text_glyphs(
+                                &mut text_vertices,
+                                text_rect,
+                                alt,
+                                BROKEN_FONT_SIZE,
+                                apply_alpha_to_color([0.35, 0.35, 0.35, 1.0], alpha),
+                                0,
+                                &parsed_faces,
+                                &mut self.atlas,
+                                &mut self.cached_glyphs,
+                                &[],
+                                0.0,
+                            );
+                            if let Some(m) = transform_stack.last() {
+                                apply_affine_to_verts(
+                                    &mut text_vertices[t_start as usize..],
+                                    m,
+                                );
+                            }
+                            let t_count = text_vertices.len() as u32 - t_start;
+                            if t_count > 0 {
+                                draw_ops.push(DrawOp::Text { v_start: t_start, v_count: t_count });
+                            }
                         }
                     }
                 }
