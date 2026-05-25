@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: dom-dirty-relayout  branch: p3-dom-dirty-relayout
+Next step: добавить Arc<AtomicBool> в QuickJsRuntime, проставить в DOM-мутациях, проверить в RedrawRequested  crates/js/src/lib.rs:15
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
