@@ -1158,6 +1158,64 @@ pub trait JsFetchProvider: Send + Sync {
     fn fetch_sync(&self, url: &str, method: &str) -> Result<JsFetchResult>;
 }
 
+/// A single queued event from a WebSocket connection, ready for delivery to JS.
+///
+/// Produced by the background recv thread; consumed by `JsWebSocketSession::poll`.
+#[derive(Debug, Clone)]
+pub enum JsWsEvent {
+    /// Connection handshake completed — ready to send/receive.
+    Open,
+    /// A data frame arrived from the server.
+    Message {
+        /// Raw payload bytes (`text` UTF-8 or `binary` arbitrary).
+        data: Vec<u8>,
+        /// `true` = binary frame; `false` = text frame.
+        is_binary: bool,
+    },
+    /// Server sent a Close frame (or the underlying TCP connection was lost).
+    Close {
+        /// RFC 6455 status code, if present in the Close frame.
+        code: Option<u16>,
+        /// UTF-8 close reason string from the Close frame (may be empty).
+        reason: String,
+    },
+    /// Unrecoverable network or protocol error.
+    Error(String),
+}
+
+/// A live WebSocket connection from the JS runtime's perspective.
+///
+/// The implementation runs the RFC 6455 receive loop in a background thread and
+/// buffers incoming events in a lock-free queue. JS calls `poll()` to drain that
+/// queue without blocking the script execution thread.
+///
+/// Phase 0 constraint: there is no persistent JS event loop between page renders,
+/// so `onmessage` callbacks are only dispatched when the page explicitly calls
+/// `_lumen_pump_websockets()` or an engine integration point does so.
+pub trait JsWebSocketSession: Send {
+    /// Send a UTF-8 text frame to the server.
+    fn send_text(&self, text: &str) -> Result<()>;
+    /// Send a binary frame to the server.
+    fn send_binary(&self, data: &[u8]) -> Result<()>;
+    /// Non-blocking: return the next queued event or `None` if the queue is empty.
+    fn poll(&self) -> Option<JsWsEvent>;
+    /// Send a Close frame and mark the session as closed.
+    fn close(&self, code: u16, reason: &str) -> Result<()>;
+}
+
+/// Factory that opens WebSocket connections for the JS runtime.
+///
+/// Implemented by `lumen-network::HttpClient`; `lumen-js` references only this
+/// trait from `lumen-core`, keeping the crate dependency graph acyclic.
+pub trait JsWebSocketProvider: Send + Sync {
+    /// Open a `ws://` or `wss://` connection to `url`.
+    ///
+    /// The handshake runs synchronously. On success, `onopen` can be fired
+    /// immediately; subsequent server messages are buffered in the returned
+    /// session and delivered via `poll()`.
+    fn connect(&self, url: &str) -> Result<Box<dyn JsWebSocketSession>>;
+}
+
 // Точки расширения, спроектированные, но без интерфейса до Phase 1+.
 //
 // Trait-ы для трёх оставшихся «разрешённых exceptions» из §5 (внешние

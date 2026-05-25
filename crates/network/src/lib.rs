@@ -24,8 +24,9 @@ use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, TabId};
 use lumen_core::ext::{
     ContentDecoder, DnsResolver, EventSink, FetchInterceptor, HstsEnforcement, HttpAuthScheme,
-    HttpCredentialProvider, JsFetchProvider, JsFetchResult, NetworkTransport, RequestFilter,
-    SseProvider, SseSession, WebSocketProvider, WebSocketSession,
+    HttpCredentialProvider, JsFetchProvider, JsFetchResult, JsWebSocketProvider,
+    JsWebSocketSession, JsWsEvent, NetworkTransport, NoopEventSink, RequestFilter, SseProvider,
+    SseSession, WebSocketProvider, WebSocketSession,
 };
 use lumen_core::url::Url;
 
@@ -1947,6 +1948,111 @@ impl SseProvider for HttpClient {
     ) -> Result<Box<dyn SseSession>> {
         let es = sse::EventSource::connect(url, Arc::clone(&self.resolver), sink, tab_id)?;
         Ok(Box::new(es))
+    }
+}
+
+// ── JsWebSocketSession ────────────────────────────────────────────────────────
+
+/// Background-threaded WebSocket session for the JS runtime.
+///
+/// Spawns a receive thread that pushes `JsWsEvent`s into a shared queue.
+/// JS calls `poll()` to drain the queue without blocking the script thread.
+struct JsWebSocketSessionImpl {
+    /// For sending: shared so both this struct and (indirectly) the bg thread
+    /// can access the same underlying stream.
+    session: Arc<std::sync::Mutex<Box<dyn WebSocketSession>>>,
+    /// Buffered events produced by the background recv thread.
+    queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsWsEvent>>>,
+}
+
+impl JsWebSocketSessionImpl {
+    /// Create a new session, spawning a background thread to receive frames.
+    fn new(ws: websocket::WebSocket) -> Self {
+        let queue: Arc<std::sync::Mutex<std::collections::VecDeque<JsWsEvent>>> =
+            Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
+        let session: Arc<std::sync::Mutex<Box<dyn WebSocketSession>>> =
+            Arc::new(std::sync::Mutex::new(Box::new(ws)));
+
+        let q2 = Arc::clone(&queue);
+        let s2 = Arc::clone(&session);
+
+        // The background thread calls recv() in a loop and pushes events into
+        // the shared queue so JS can poll without blocking.
+        std::thread::spawn(move || {
+            loop {
+                let result = s2.lock().unwrap().recv();
+                match result {
+                    Ok(lumen_core::ext::WsMessage::Text(t)) => {
+                        q2.lock().unwrap().push_back(JsWsEvent::Message {
+                            data: t.into_bytes(),
+                            is_binary: false,
+                        });
+                    }
+                    Ok(lumen_core::ext::WsMessage::Binary(b)) => {
+                        q2.lock().unwrap().push_back(JsWsEvent::Message {
+                            data: b,
+                            is_binary: true,
+                        });
+                    }
+                    Ok(lumen_core::ext::WsMessage::Close { code, reason }) => {
+                        q2.lock()
+                            .unwrap()
+                            .push_back(JsWsEvent::Close { code, reason });
+                        break;
+                    }
+                    Ok(
+                        lumen_core::ext::WsMessage::Ping(_)
+                        | lumen_core::ext::WsMessage::Pong(_),
+                    ) => {
+                        // Control frames handled internally by WebSocket::recv_inner.
+                    }
+                    Err(e) => {
+                        q2.lock()
+                            .unwrap()
+                            .push_back(JsWsEvent::Error(e.to_string()));
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self { session, queue }
+    }
+}
+
+impl JsWebSocketSession for JsWebSocketSessionImpl {
+    fn send_text(&self, text: &str) -> Result<()> {
+        self.session.lock().unwrap().send_text(text)
+    }
+
+    fn send_binary(&self, data: &[u8]) -> Result<()> {
+        self.session.lock().unwrap().send_binary(data)
+    }
+
+    fn poll(&self) -> Option<JsWsEvent> {
+        self.queue.lock().unwrap().pop_front()
+    }
+
+    fn close(&self, code: u16, reason: &str) -> Result<()> {
+        self.session.lock().unwrap().close(code, reason)
+    }
+}
+
+impl JsWebSocketProvider for HttpClient {
+    fn connect(&self, url: &str) -> Result<Box<dyn JsWebSocketSession>> {
+        let parsed = Url::parse(url)
+            .map_err(|e| Error::Network(format!("ws: invalid URL: {e}")))?;
+        let ws = websocket::WebSocket::connect(
+            &parsed,
+            self.resolver.as_ref(),
+            self.hsts.as_deref(),
+            Arc::new(NoopEventSink),
+            lumen_core::event::TabId(0),
+        )?;
+        let impl_ = JsWebSocketSessionImpl::new(ws);
+        // Push the Open event immediately — handshake already completed.
+        impl_.queue.lock().unwrap().push_back(JsWsEvent::Open);
+        Ok(Box::new(impl_))
     }
 }
 

@@ -292,7 +292,7 @@ Dependency graph and crate scope — in [lumen-plan.md](lumen-plan.md). Directio
 
 ### Extension traits (`lumen-core::ext`)
 
-**Defined:** `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `RequestFilter`, `EncodingDetector`, `EventSink`, `DnsResolver`, `HstsEnforcement`, `HttpCredentialProvider`, `FontProvider`, `JsRuntime` (`NullJsRuntime` stub).
+**Defined:** `NetworkTransport`, `StorageBackend`, `SearchProvider`, `FilterListSource`, `RequestFilter`, `EncodingDetector`, `EventSink`, `DnsResolver`, `HstsEnforcement`, `HttpCredentialProvider`, `FontProvider`, `JsRuntime` (`NullJsRuntime` stub), `JsFetchProvider`, `JsWebSocketProvider` / `JsWebSocketSession` / `JsWsEvent`.
 
 **Sprint 0 stubs:** `UnicodeProvider`, `IdnaProvider`, `PublicSuffixList`, `ContentDecoder` (`UnsupportedContentDecoder`), `FontFormat`, `SpellChecker`, `HyphenationProvider`.
 
