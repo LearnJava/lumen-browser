@@ -801,6 +801,16 @@ fn install_primitives(
         });
     }
 
+    // ── performance.now() — high-resolution timestamp ────────────────────────
+    // Returns milliseconds since Unix epoch as f64; JS shim subtracts
+    // the time-origin captured at install_dom_api time to give DOMHighResTimeStamp.
+    reg!("_lumen_now_ms", || -> f64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs_f64() * 1000.0)
+            .unwrap_or(0.0)
+    });
+
     Ok(())
 }
 
@@ -1927,6 +1937,211 @@ var window = {
     },
     dispatchEvent: function() { return true; },
 };
+
+// ── queueMicrotask (HTML LS §8.1.4.4) ────────────────────────────────────────
+// Schedules `fn` as a microtask; implemented via resolved Promise chain which
+// QuickJS drains between tasks (same semantics as spec §8.1.4.2 microtask queue).
+function queueMicrotask(fn) {
+    if (typeof fn !== 'function') throw new TypeError('queueMicrotask: argument must be a function');
+    Promise.resolve().then(fn);
+}
+
+// ── URLSearchParams (WHATWG URL §5) ──────────────────────────────────────────
+function URLSearchParams(init) {
+    this._p = [];
+    if (init === undefined || init === null) return;
+    if (typeof init === 'string') {
+        var s = (init.length > 0 && init[0] === '?') ? init.slice(1) : init;
+        if (!s) return;
+        var pairs = s.split('&');
+        for (var i = 0; i < pairs.length; i++) {
+            var pair = pairs[i];
+            if (!pair) continue;
+            var eq = pair.indexOf('=');
+            var k = eq >= 0 ? pair.slice(0, eq) : pair;
+            var v = eq >= 0 ? pair.slice(eq + 1) : '';
+            this._p.push([_usp_decode(k), _usp_decode(v)]);
+        }
+    } else if (Array.isArray(init)) {
+        for (var i = 0; i < init.length; i++) {
+            var entry = init[i];
+            if (!Array.isArray(entry) || entry.length < 2)
+                throw new TypeError('URLSearchParams: each sequence entry must have 2 items');
+            this._p.push([String(entry[0]), String(entry[1])]);
+        }
+    } else if (typeof init === 'object') {
+        var keys = Object.keys(init);
+        for (var i = 0; i < keys.length; i++) {
+            this._p.push([String(keys[i]), String(init[keys[i]])]);
+        }
+    }
+}
+function _usp_decode(s) {
+    try { return decodeURIComponent(s.split('+').join(' ')); } catch(e) { return s; }
+}
+function _usp_encode(s) {
+    // application/x-www-form-urlencoded percent-encode set (WHATWG URL §5.1 step 2)
+    return encodeURIComponent(s).replace(/%20/g, '+');
+}
+URLSearchParams.prototype.append = function(name, value) {
+    this._p.push([String(name), String(value)]);
+};
+URLSearchParams.prototype.delete = function(name) {
+    var n = String(name);
+    this._p = this._p.filter(function(e) { return e[0] !== n; });
+};
+URLSearchParams.prototype.get = function(name) {
+    var n = String(name);
+    for (var i = 0; i < this._p.length; i++) { if (this._p[i][0] === n) return this._p[i][1]; }
+    return null;
+};
+URLSearchParams.prototype.getAll = function(name) {
+    var n = String(name); var out = [];
+    for (var i = 0; i < this._p.length; i++) { if (this._p[i][0] === n) out.push(this._p[i][1]); }
+    return out;
+};
+URLSearchParams.prototype.has = function(name) {
+    var n = String(name);
+    for (var i = 0; i < this._p.length; i++) { if (this._p[i][0] === n) return true; }
+    return false;
+};
+URLSearchParams.prototype.set = function(name, value) {
+    var n = String(name), v = String(value), found = false;
+    this._p = this._p.filter(function(e) {
+        if (e[0] !== n) return true;
+        if (!found) { found = true; e[1] = v; return true; }
+        return false;
+    });
+    if (!found) this._p.push([n, v]);
+};
+URLSearchParams.prototype.sort = function() {
+    this._p.sort(function(a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; });
+};
+URLSearchParams.prototype.toString = function() {
+    return this._p.map(function(e) { return _usp_encode(e[0]) + '=' + _usp_encode(e[1]); }).join('&');
+};
+URLSearchParams.prototype.forEach = function(cb, thisArg) {
+    for (var i = 0; i < this._p.length; i++) cb.call(thisArg, this._p[i][1], this._p[i][0], this);
+};
+URLSearchParams.prototype.keys = function() {
+    var p = this._p, i = 0;
+    return { next: function() { return i < p.length ? { value: p[i++][0], done: false } : { value: undefined, done: true }; },
+             Symbol_iterator: function() { return this; } };
+};
+URLSearchParams.prototype.values = function() {
+    var p = this._p, i = 0;
+    return { next: function() { return i < p.length ? { value: p[i++][1], done: false } : { value: undefined, done: true }; },
+             Symbol_iterator: function() { return this; } };
+};
+URLSearchParams.prototype.entries = function() {
+    var p = this._p, i = 0;
+    return { next: function() { return i < p.length ? { value: [p[i][0], p[i++][1]], done: false } : { value: undefined, done: true }; },
+             Symbol_iterator: function() { return this; } };
+};
+URLSearchParams.prototype.size = undefined; // defined as getter below
+Object.defineProperty(URLSearchParams.prototype, 'size', {
+    get: function() { return this._p.length; }
+});
+
+// ── URL (WHATWG URL §6.1) ─────────────────────────────────────────────────────
+// Supports absolute URLs and resolution against a base URL.
+// Full IDNA/percent-encoding spec requires platform support; this is a
+// high-fidelity subset sufficient for the most common JS URL patterns.
+function _url_resolve(href, base) {
+    href = String(href || '');
+    // Already absolute?
+    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(href)) return href;
+    if (!base) return href;
+    var bp = _lumen_parse_url(String(base));
+    // Protocol-relative
+    if (href.slice(0, 2) === '//') return bp.protocol + href;
+    // Root-relative
+    if (href[0] === '/') return bp.protocol + '//' + bp.host + href;
+    // Fragment-only or query-only
+    if (href[0] === '#') return bp.protocol + '//' + bp.host + bp.pathname + bp.search + href;
+    if (href[0] === '?') return bp.protocol + '//' + bp.host + bp.pathname + href;
+    // Relative path
+    var dir = bp.pathname.slice(0, bp.pathname.lastIndexOf('/') + 1);
+    var raw = dir + href;
+    // Normalize dot segments (RFC 3986 §5.2.4)
+    var parts = raw.split('/');
+    var out = [];
+    for (var i = 0; i < parts.length; i++) {
+        if (parts[i] === '.') continue;
+        if (parts[i] === '..') { if (out.length > 1) out.pop(); }
+        else out.push(parts[i]);
+    }
+    return bp.protocol + '//' + bp.host + out.join('/');
+}
+function URL(href, base) {
+    if (arguments.length === 0) throw new TypeError('URL constructor: at least 1 argument required');
+    var resolved = _url_resolve(String(href), base ? String(base) : (typeof location !== 'undefined' ? location.href : ''));
+    var p = _lumen_parse_url(resolved);
+    if (!p.protocol) throw new TypeError('URL constructor: invalid URL: ' + href);
+    this._href     = p.href;
+    this._protocol = p.protocol;
+    this._hostname = p.hostname;
+    this._host     = p.host;
+    this._port     = p.port;
+    this._pathname = p.pathname;
+    this._search   = p.search;
+    this._hash     = p.hash;
+    this._origin   = p.origin;
+    this._sp       = null; // lazy URLSearchParams
+}
+(function() {
+    function prop(key, getter, setter) {
+        Object.defineProperty(URL.prototype, key, {
+            get: getter,
+            set: setter || function() {},
+            enumerable: true, configurable: true
+        });
+    }
+    prop('href',     function() { return this._href; },     function(v) { var p=_lumen_parse_url(String(v)); this._href=p.href; this._protocol=p.protocol; this._hostname=p.hostname; this._host=p.host; this._port=p.port; this._pathname=p.pathname; this._search=p.search; this._hash=p.hash; this._origin=p.origin; this._sp=null; });
+    prop('protocol', function() { return this._protocol; });
+    prop('hostname', function() { return this._hostname; });
+    prop('host',     function() { return this._host; });
+    prop('port',     function() { return this._port; });
+    prop('pathname', function() { return this._pathname; });
+    prop('search',   function() { return this._search; });
+    prop('hash',     function() { return this._hash; });
+    prop('origin',   function() { return this._origin; });
+    prop('username', function() { return ''; });
+    prop('password', function() { return ''; });
+    prop('searchParams', function() {
+        if (!this._sp) this._sp = new URLSearchParams(this._search);
+        return this._sp;
+    });
+    URL.prototype.toString = function() { return this._href; };
+    URL.prototype.toJSON   = function() { return this._href; };
+})();
+URL.createObjectURL  = function() { return 'blob:lumen/unsupported'; };
+URL.revokeObjectURL  = function() {};
+
+// ── performance (HR Timer — W3C HR Time L2) ───────────────────────────────────
+// Time origin is the instant install_dom_api ran (injected by Rust).
+var _perf_origin_ms = typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0;
+var performance = {
+    timeOrigin: _perf_origin_ms,
+    now: function() {
+        return (typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0) - _perf_origin_ms;
+    },
+    mark:    function() {},
+    measure: function() {},
+    getEntriesByName: function() { return []; },
+    getEntriesByType: function() { return []; },
+    clearMarks:    function() {},
+    clearMeasures: function() {},
+};
+
+// Expose new globals on window object (defined after window literal because
+// `var performance` is not hoisted with its value, only its name).
+window.URL             = URL;
+window.URLSearchParams = URLSearchParams;
+window.performance     = performance;
+window.queueMicrotask  = queueMicrotask;
+window.Event           = Event;
+window.CustomEvent     = CustomEvent;
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -3366,5 +3581,195 @@ mod tests {
         rt.eval("window.localStorage.setItem('w', 'win')").unwrap();
         let r = rt.eval("localStorage.getItem('w')").unwrap();
         assert_eq!(r, lumen_core::JsValue::String("win".into()));
+    }
+
+    // ── URLSearchParams tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn usp_parse_query_string() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var p = new URLSearchParams('a=1&b=2'); p.get('a') + ',' + p.get('b')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("1,2".into()));
+    }
+
+    #[test]
+    fn usp_parse_leading_question_mark() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("new URLSearchParams('?x=hello').get('x')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("hello".into()));
+    }
+
+    #[test]
+    fn usp_append_and_getall() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var p = new URLSearchParams(); p.append('k','1'); p.append('k','2'); p.getAll('k').join(',')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("1,2".into()));
+    }
+
+    #[test]
+    fn usp_set_replaces_first() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var p = new URLSearchParams('a=1&a=2'); p.set('a','9'); p.toString()").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("a=9".into()));
+    }
+
+    #[test]
+    fn usp_delete() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var p = new URLSearchParams('x=1&y=2'); p.delete('x'); p.toString()").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("y=2".into()));
+    }
+
+    #[test]
+    fn usp_has() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var p = new URLSearchParams('k=v'); p.has('k') && !p.has('z')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn usp_plus_as_space() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("new URLSearchParams('q=hello+world').get('q')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("hello world".into()));
+    }
+
+    #[test]
+    fn usp_size_property() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("new URLSearchParams('a=1&b=2&c=3').size").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(3.0));
+    }
+
+    #[test]
+    fn usp_from_object() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var p = new URLSearchParams({foo:'bar'}); p.get('foo')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("bar".into()));
+    }
+
+    #[test]
+    fn usp_empty_string() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("new URLSearchParams('').size").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    }
+
+    // ── URL tests ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn url_absolute_parse() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var u = new URL('https://example.com:8080/path?q=1#top'); u.hostname + ':' + u.port").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("example.com:8080".into()));
+    }
+
+    #[test]
+    fn url_pathname_and_search() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var u = new URL('https://x.com/a/b?c=d'); u.pathname + u.search").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("/a/b?c=d".into()));
+    }
+
+    #[test]
+    fn url_hash() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("new URL('https://x.com/page#section').hash").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("#section".into()));
+    }
+
+    #[test]
+    fn url_origin() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("new URL('https://api.example.com/data').origin").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("https://api.example.com".into()));
+    }
+
+    #[test]
+    fn url_resolve_relative_path() {
+        let rt = runtime_with_url("https://example.com/dir/page.html");
+        let r = rt.eval("new URL('../other.html', location.href).pathname").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("/other.html".into()));
+    }
+
+    #[test]
+    fn url_resolve_root_relative() {
+        let rt = runtime_with_url("https://example.com/dir/page.html");
+        let r = rt.eval("new URL('/top.html', location.href).pathname").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("/top.html".into()));
+    }
+
+    #[test]
+    fn url_tostring() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("new URL('https://example.com/').toString()").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("https://example.com/".into()));
+    }
+
+    #[test]
+    fn url_searchparams_from_url() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("new URL('https://example.com/?a=1&b=2').searchParams.get('b')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("2".into()));
+    }
+
+    #[test]
+    fn url_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.URL === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── performance tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn performance_now_returns_non_negative() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("performance.now() >= 0").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_now_monotonic() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var t1 = performance.now(); var t2 = performance.now(); t2 >= t1").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_time_origin_positive() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("performance.timeOrigin > 0").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.performance.now === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── queueMicrotask tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn queue_microtask_exists_as_function() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof queueMicrotask === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn queue_microtask_throws_on_non_function() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("var threw = false; try { queueMicrotask(42); } catch(e) { threw = true; } threw").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn queue_microtask_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.queueMicrotask === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 }
