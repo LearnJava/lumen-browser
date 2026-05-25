@@ -1,4 +1,5 @@
-In progress: —
+In progress: link-click-navigation  branch: p3-link-click
+Next step: find <a href> ancestor in hit-test result → navigate_to  crates/shell/src/main.rs:2122
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
