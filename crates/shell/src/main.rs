@@ -48,11 +48,18 @@ use winit::application::ApplicationHandler;
 
 /// Событие от background-потока загрузки страницы в event loop.
 ///
-/// Загрузка разбита на три фазы: (1) chunks сырых байт для инкрементального
-/// парсинга и промежуточных кадров через `IncrementalTreeBuilder::feed_bytes`;
-/// (2) `LoadDone` — все байты доступны, запускаем полный pipeline (CSS + изображения);
-/// (3) `LoadError` — ошибка fetch, показываем сообщение.
+/// Загрузка разбита на четыре фазы: (0) `EarlyPreloadHints` — хинты из первых
+/// байт HTML для раннего старта subresource fetch-ов; (1) chunks сырых байт для
+/// инкрементального парсинга и промежуточных кадров через
+/// `IncrementalTreeBuilder::feed_bytes`; (2) `LoadDone` — все байты доступны,
+/// запускаем полный pipeline (CSS + изображения); (3) `LoadError` — ошибка fetch.
 enum LoadEvent {
+    /// Subresource-хинты из первого chunk HTML (HTML LS §13.2.6.4.7
+    /// «Speculative HTML parsing»). Отправляются ДО первого `HtmlChunk`,
+    /// чтобы sink мог начать загружать CSS/шрифты ещё в процессе парсинга.
+    /// Дедупликация с финальными хинтами из `LoadDone` — через
+    /// `preload_dispatched` в `Lumen`.
+    EarlyPreloadHints(Vec<lumen_html_parser::PreloadHint>, ResourceBase),
     /// Очередной chunk сырых байт HTML. UTF-8 границы не выравниваются —
     /// `IncrementalTreeBuilder::feed_bytes` буферизует незавершённые
     /// code-point-ы внутри.
@@ -210,6 +217,7 @@ fn run_window_mode(
         load_proxy,
         stream_builder: None,
         stream_last_paint: std::time::Instant::now(),
+        preload_dispatched: std::collections::HashSet::new(),
         ime_composing: None,
         bfcache: BfCache::new(16),
         nav_back: Vec::new(),
@@ -251,13 +259,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new())?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new())?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -440,7 +448,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone())?;
         let (page, layout_source) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new())?;
         Ok((page, Some(layout_source)))
     }
 }
@@ -633,6 +641,7 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
 // ── Разрешение внешних ресурсов ──────────────────────────────────────────────
 
 /// Откуда загружена страница — нужно для разрешения относительных URL в `<link>`.
+#[derive(Clone)]
 enum ResourceBase {
     /// Страница загружена из файла. `href` разрешается относительно директории файла.
     File(PathBuf),
@@ -919,6 +928,7 @@ fn parse_and_layout(
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     viewport: Size,
+    preload_seen: &mut std::collections::HashSet<String>,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -926,12 +936,12 @@ fn parse_and_layout(
     let source = lumen_encoding::decode(encoding, bytes);
     eprintln!("Кодировка: {}", encoding.name());
 
-    // Preload-сканер запускается ДО DOM-парсинга, чтобы shell мог начать
-    // загружать subresource-ы параллельно с tree construction (HTML LS
-    // §13.2.6.4.7). В Phase 0 загрузка блокирующая, но порядок вызовов
-    // уже корректный — streaming pipeline подхватит его без переделки.
+    // Preload-сканер запускается ДО DOM-парсинга (HTML LS §13.2.6.4.7).
+    // `preload_seen` — cross-call dedup: если streaming уже отправил <head>-хинты
+    // через EarlyPreloadHints, финальный scan пропустит их и добавит только новые
+    // (body-images, lazy-loaded resources и т.п.).
     let preload_hints = lumen_html_parser::scan_preload_hints(&source);
-    dispatch_preload_hints(&preload_hints, base, sink);
+    dispatch_preload_hints(&preload_hints, base, sink, preload_seen);
 
     let mut doc = lumen_html_parser::parse(&source);
     let title = extract_title(&doc);
@@ -1161,8 +1171,9 @@ fn render_bytes(
     base: &ResourceBase,
     sink: Arc<dyn EventSink>,
     viewport: Size,
+    preload_seen: &mut std::collections::HashSet<String>,
 ) -> Result<(LoadedPage, LayoutSource), Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -1197,13 +1208,16 @@ fn render_bytes(
 /// Хинты сортируются по убыванию приоритета (High → Medium → Low), чтобы
 /// самые критичные ресурсы стартовали первыми (полезно при HTTP/2).
 /// `srcset`-строки эмитятся как-есть (multi-URL формат — задача picker-а).
+/// `seen` — набор уже отправленных URL (cross-call дедупликация); caller
+/// передаёт `&mut HashSet::new()` для одноразового вызова или persistent-сет
+/// для дедупа между streaming-сканом и финальным pipeline.
 /// В Phase 0 sink логирует в stderr; в будущем запустит fetch через HttpClient.
 fn dispatch_preload_hints(
     hints: &[lumen_html_parser::PreloadHint],
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
+    seen: &mut std::collections::HashSet<String>,
 ) {
-    use std::collections::HashSet;
     use lumen_html_parser::PreloadHint;
 
     // Первый проход: резолв URL + вычисление kind.
@@ -1244,8 +1258,8 @@ fn dispatch_preload_hints(
     // внутри одного уровня приоритета (важно для HTTP/2 multiplexing).
     resolved.sort_by_key(|(_, k)| FetchPriority::for_kind(k));
 
-    // Дедупликация + emit. Первый (наиболее приоритетный) хинт на URL побеждает.
-    let mut seen: HashSet<String> = HashSet::new();
+    // Дедупликация + emit: пропускаем URL, уже отправленные в предыдущих вызовах
+    // (cross-call dedup для streaming + финального pipeline).
     for (url, kind) in resolved {
         if seen.insert(url.clone()) {
             let priority = FetchPriority::for_kind(&kind);
@@ -1570,6 +1584,12 @@ struct Lumen {
     stream_builder: Option<lumen_html_parser::IncrementalTreeBuilder>,
     /// Момент последнего промежуточного кадра при streaming — для throttling.
     stream_last_paint: std::time::Instant,
+    /// URL subresource-хинтов, уже отправленных в sink во время streaming
+    /// (`EarlyPreloadHints`). Финальный `dispatch_preload_hints` в `LoadDone`
+    /// пропускает URL из этого набора — без дублей в stderr и без повторных
+    /// fetch-триггеров при реальном параллельном prefetch. Очищается в начале
+    /// каждого нового страничного load.
+    preload_dispatched: std::collections::HashSet<String>,
     /// Текущий IME preedit-текст. `Some` — composition-сессия активна,
     /// `None` — нет активного IME ввода.
     ime_composing: Option<String>,
@@ -1697,28 +1717,41 @@ impl Lumen {
 
     /// Запустить background-поток загрузки текущего `source`.
     ///
-    /// Поток fetches байты, разбивает на STREAM_CHUNK_BYTES-кусочки и
-    /// шлёт `LoadEvent::HtmlChunk(Vec<u8>)` через proxy. UTF-8 выравнивание
-    /// не нужно — `IncrementalTreeBuilder::feed_bytes` буферизует
-    /// незавершённые code-point-ы внутри. По завершении — `LoadEvent::LoadDone(raw)`
-    /// для финального pipeline (encoding detection + decode + CSS + images).
-    /// При ошибке — `LoadEvent::LoadError`.
+    /// Поток fetches байты, затем:
+    ///
+    /// 1. Отправляет `EarlyPreloadHints` из первого STREAM_CHUNK_BYTES байт —
+    ///    это даёт sink возможность начать загружать CSS/шрифты ещё до того,
+    ///    как main parser дойдёт до `<head>` (HTML LS §13.2.6.4.7).
+    /// 2. Разбивает на STREAM_CHUNK_BYTES-кусочки и шлёт `HtmlChunk` через proxy.
+    /// 3. По завершении — `LoadDone(raw)` для финального pipeline.
+    ///
+    /// При ошибке — `LoadError`.
     fn start_streaming_load(&self) {
         if matches!(self.source, PageSource::Empty) {
             return;
         }
         let source = self.source.clone();
-        let sink = self.event_sink.clone();
+        let sink = Arc::clone(&self.event_sink);
         let proxy = self.load_proxy.clone();
 
         std::thread::spawn(move || {
-            let raw = match source.load_bytes(sink) {
+            let raw = match source.load_bytes(Arc::clone(&sink)) {
                 Ok(r) => r,
                 Err(e) => {
                     let _ = proxy.send_event(LoadEvent::LoadError(e.to_string()));
                     return;
                 }
             };
+
+            // Ранний preload-скан первого chunk-а (обычно содержит весь <head>).
+            // Отправляем ДО первого HtmlChunk, чтобы sink начал prefetch
+            // сразу, пока парсер ещё не стартовал (real streaming win).
+            let scan_end = STREAM_CHUNK_BYTES.min(raw.bytes.len());
+            let partial = String::from_utf8_lossy(&raw.bytes[..scan_end]);
+            let early = lumen_html_parser::scan_preload_hints(&partial);
+            if !early.is_empty() {
+                let _ = proxy.send_event(LoadEvent::EarlyPreloadHints(early, raw.base.clone()));
+            }
 
             // Разбить сырые байты на chunk-и. Выравнивание по UTF-8 не нужно:
             // feed_bytes буферизует незавершённые code-point-ы на границах chunk-ов.
@@ -1846,11 +1879,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
         // Запустить background-загрузку сразу после создания окна —
         // первый кадр (пустой) уже виден, пока идёт fetch/parse.
+        // Сбрасываем набор уже отправленных preload-хинтов — новая страница.
+        self.preload_dispatched.clear();
         self.start_streaming_load();
     }
 
     fn user_event(&mut self, _event_loop: &ActiveEventLoop, event: LoadEvent) {
         match event {
+            LoadEvent::EarlyPreloadHints(hints, base) => {
+                // Ранние хинты из первого chunk — отправить в sink немедленно.
+                // `preload_dispatched` запоминает URL, чтобы финальный scan
+                // в LoadDone их не дублировал.
+                dispatch_preload_hints(&hints, &base, &self.event_sink, &mut self.preload_dispatched);
+            }
             LoadEvent::HtmlChunk(chunk) => {
                 let builder = self.stream_builder
                     .get_or_insert_with(lumen_html_parser::IncrementalTreeBuilder::new);
@@ -1872,7 +1913,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         Size::new(s.width as f32, s.height as f32)
                     },
                 );
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport) {
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched) {
                     Ok((page, new_layout_source)) => {
                         self.apply_loaded_page(page, Some(new_layout_source));
                     }
@@ -3240,7 +3281,7 @@ mod tests {
             PreloadHint::Script { url: "https://cdn.example.com/lib.js".into() },
         ];
 
-        dispatch_preload_hints(&hints, &base, &sink);
+        dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
 
         let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
         let events = unsafe { (*sink_any).0.lock().unwrap() };
@@ -3280,7 +3321,7 @@ mod tests {
             PreloadHint::Stylesheet { url: "other.css".into() },
         ];
 
-        dispatch_preload_hints(&hints, &base, &sink);
+        dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
 
         let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
         let events = unsafe { (*sink_any).0.lock().unwrap() };
@@ -3292,6 +3333,44 @@ mod tests {
         }).collect();
         assert!(urls.contains(&"https://example.com/style.css"));
         assert!(urls.contains(&"https://example.com/other.css"));
+    }
+
+    #[test]
+    fn dispatch_preload_hints_cross_call_dedup() {
+        // Второй вызов с тем же seen-набором не должен повторно эмитить.
+        use lumen_html_parser::PreloadHint;
+        use std::sync::{Arc, Mutex};
+
+        struct CollectingSink(Mutex<Vec<Event>>);
+        impl EventSink for CollectingSink {
+            fn emit(&self, e: &Event) { self.0.lock().unwrap().push(e.clone()); }
+        }
+
+        let sink: Arc<dyn EventSink> = Arc::new(CollectingSink(Mutex::new(Vec::new())));
+        let base = ResourceBase::Url("https://example.com/".to_owned());
+        let mut seen = std::collections::HashSet::new();
+
+        // Первый вызов — ранний скан (streaming chunk)
+        let early = vec![PreloadHint::Stylesheet { url: "reset.css".into() }];
+        dispatch_preload_hints(&early, &base, &sink, &mut seen);
+
+        // Второй вызов — финальный pipeline: те же хинты + новый
+        let full = vec![
+            PreloadHint::Stylesheet { url: "reset.css".into() },
+            PreloadHint::Image { url: Some("hero.png".into()), srcset: None, sizes: None },
+        ];
+        dispatch_preload_hints(&full, &base, &sink, &mut seen);
+
+        let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
+        let events = unsafe { (*sink_any).0.lock().unwrap() };
+        // reset.css — один раз (из первого вызова), hero.png — один раз (из второго)
+        assert_eq!(events.len(), 2);
+        let urls: Vec<_> = events.iter().map(|e| {
+            let Event::SubresourceHintFound { url, .. } = e else { panic!() };
+            url.as_str()
+        }).collect();
+        assert!(urls.contains(&"https://example.com/reset.css"));
+        assert!(urls.contains(&"https://example.com/hero.png"));
     }
 
     #[test]
@@ -3313,7 +3392,7 @@ mod tests {
             PreloadHint::Stylesheet { url: "main.css".into() },
         ];
 
-        dispatch_preload_hints(&hints, &base, &sink);
+        dispatch_preload_hints(&hints, &base, &sink, &mut std::collections::HashSet::new());
 
         let sink_any = sink.as_ref() as *const dyn EventSink as *const CollectingSink;
         let events = unsafe { (*sink_any).0.lock().unwrap() };
