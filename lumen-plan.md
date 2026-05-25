@@ -210,12 +210,13 @@
 | 3B.2 | ✅ rendering steps ordering | `shell/src/main.rs` | — |
 | 3B.3 | ✅ real observers | `shell/src/main.rs` | — |
 | 4A | ✅ **`[P3]` JS↔DOM bindings** (после 1B) | Любая JS-динамика | Phase 0: getElementById/querySelector/textContent/setAttribute/createElement/appendChild |
-| 4B | 🟡 **`[P1+P3]` Streaming pipeline shell-side** | Первый кадр без задержки | EventLoop\<LoadEvent\>: окно сразу, HTML chunks через EventLoopProxy, IncrementalTreeBuilder, промежуточные кадры каждые 150 мс |
+| 4B | ✅ **`[P1+P3]` Streaming pipeline shell-side** | Первый кадр без задержки | EventLoop\<LoadEvent\>: окно сразу, HTML bytes-chunks → feed_bytes → IncrementalTreeBuilder, промежуточные кадры каждые 150 мс; encoding decode один раз в финальном pipeline |
 | 4B.1 | ✅ preload scan call before DOM parse | `shell/src/main.rs:688` | — |
 | 4B.2 | ✅ preload hint dispatcher | `shell/src/main.rs` | — |
 | 4B.3 | ✅ preload URL resolution | `shell/src/main.rs` | — |
 | 4B.4 | ✅ preload fetch deduplication | `shell/src/main.rs` | — |
 | 4B.5 | ✅ preload priority + EventSink | `shell/src/main.rs` | — |
+| 4B.6 | ✅ feed_bytes in IncrementalTreeBuilder + raw byte chunks in shell | `html-parser/src/tree_builder.rs`, `shell/src/main.rs` | — |
 | 5A | ✅ **`[P3]` HTTP/2** | Latency | Только network |
 | 5A.1 | ✅ ALPN h2 negotiation | `network/src/lib.rs` | h2 → Err placeholder, http/1.1 fallback |
 | 5A.2 | ✅ Frame codec (RFC 9113 §6) | `network/src/h2/frame.rs` | 10 типов + Unknown, padding strip, +46 тестов |
@@ -503,6 +504,12 @@ Framework + winit-integration + task source priorities + requestIdleCallback + `
 - **Обработка ошибок**: `Error::Exception` → `ctx.catch()` + `.message` property fallback → string coerce → «JS exception».
 - **shell**: feature `quickjs` → `make_js_runtime()` возвращает `Box<dyn JsRuntime>` с `QuickJsRuntime`; без feature — `NullJsRuntime`.
 - **16 тестов**: eval (number/string/bool/null/array/object/error/syntax), set/get global, call_function (с/без args), round-trip array/bool, engine_name, Send+Sync.
+
+#### 4B.6 — Streaming pipeline: feed_bytes + raw byte chunks (2026-05-25)
+
+**`p3-streaming-feed-bytes`**: `IncrementalTreeBuilder::feed_bytes(&[u8])` — делегирует в `PushTokenizer::feed_bytes`, буферизует незавершённые UTF-8 code-point-ы. `LoadEvent::HtmlChunk(String)` → `LoadEvent::HtmlChunk(Vec<u8>)`. `start_streaming_load()` упрощён: убран `lumen_encoding::decode` в фоновом потоке и ручное выравнивание по code-point границам. Decode происходит один раз в финальном pipeline (`LoadDone`). 3 новых теста (`feed_bytes_ascii`, кириллица, emoji) → 341 итого в html-parser.
+
+---
 
 #### 5B — HTTP Range requests
 
