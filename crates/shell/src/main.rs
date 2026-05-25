@@ -19,6 +19,7 @@
 mod animation_scheduler;
 mod find;
 mod forms;
+mod links;
 mod momentum_anim;
 mod runtime;
 mod scroll_anim;
@@ -372,6 +373,19 @@ impl PageSource {
             PageSource::Snapshot { base_url, .. } => Some(base_url.as_str()),
             _ => None,
         }
+    }
+
+    /// Resolve a relative or absolute `href` against this page's base URL/path.
+    /// Returns the resolved string (absolute URL or absolute file path string).
+    /// Falls back to the raw `href` when the base is `Empty` or resolution fails.
+    fn resolve_href(&self, href: &str) -> String {
+        let base = match self {
+            PageSource::File(p) => ResourceBase::File(p.clone()),
+            PageSource::Url(u) => ResourceBase::Url(u.clone()),
+            PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
+            PageSource::Empty => return href.to_owned(),
+        };
+        base.resolve_str(href)
     }
 
     /// Прочитать байты страницы с диска или из сети, плюс вернуть базу для
@@ -2057,22 +2071,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             // Any click outside the picker closes it.
                             self.color_picker_node = None;
 
-                            // ── Form control click ───────────────────────────
-                            // Compute action inside scoped borrow, then apply.
+                            // ── Form control + link click ────────────────────
+                            // Single hit test shared by form dispatch and link navigation.
                             let page_x = x_css + self.scroll_x;
                             let page_y = y_css + self.scroll_y;
-                            let form_action: forms::FormClickAction = {
-                                let hit = self.layout_box.as_ref().and_then(|lb| {
-                                    hit_test(Point::new(page_x, page_y), lb)
-                                });
+                            let hit_result = self.layout_box.as_ref().and_then(|lb| {
+                                hit_test(Point::new(page_x, page_y), lb)
+                            });
+                            let form_action: forms::FormClickAction =
                                 if let (Some(result), Some(src)) =
-                                    (hit, self.layout_source.as_ref())
+                                    (hit_result.as_ref(), self.layout_source.as_ref())
                                 {
                                     forms::classify_click(&src.document, result.node)
                                 } else {
                                     forms::FormClickAction::Nothing
-                                }
-                            };
+                                };
                             match form_action {
                                 forms::FormClickAction::ToggleCheckbox(id) => {
                                     if let Some(src) = self.layout_source.as_mut() {
@@ -2119,7 +2132,21 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                         );
                                     }
                                 }
-                                forms::FormClickAction::Nothing => {}
+                                forms::FormClickAction::Nothing => {
+                                    // ── Link click ───────────────────────────
+                                    // No form control was activated — check if
+                                    // the clicked node is inside an <a href>.
+                                    if let (Some(result), Some(src)) =
+                                        (hit_result.as_ref(), self.layout_source.as_ref())
+                                        && let Some(href) =
+                                            links::find_link_href(&src.document, result.node)
+                                        && links::is_navigable_href(&href)
+                                    {
+                                        let resolved = self.source.resolve_href(&href);
+                                        let target = PageSource::from_arg(Some(&resolved));
+                                        self.navigate_to(target);
+                                    }
+                                }
                             }
                         }
                     }
