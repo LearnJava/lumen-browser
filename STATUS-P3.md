@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: p3-web-apis  branch: p3-web-apis
+Next step: добавить URL/URLSearchParams/performance/queueMicrotask в WEB_API_SHIM  crates/js/src/dom.rs:1930
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
