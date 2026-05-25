@@ -116,7 +116,7 @@ impl EventSink for StdoutEventSink {
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 use winit::dpi::{LogicalPosition, LogicalSize};
 use winit::event::{ElementState, Ime, KeyEvent, Modifiers, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop, EventLoopProxy};
 use winit::keyboard::{KeyCode, ModifiersState, PhysicalKey};
 use winit::window::{CursorIcon, Window, WindowId};
 
@@ -380,6 +380,14 @@ trait PersistentJs {
     fn eval_js(&self, script: &str);
     /// Consume any navigation request placed by JS during the last `eval_js`.
     fn take_navigate_request(&self) -> Option<JsNavigateRequest>;
+    /// Drain all expired JS timers (setTimeout/setInterval).
+    ///
+    /// Called each `about_to_wait`. Timer callbacks run synchronously inside
+    /// the JS context and may themselves schedule further timers or navigation.
+    fn tick_timers(&self);
+    /// Take the next timer wakeup deadline as Unix epoch ms, clearing the stored
+    /// value.  Returns `None` if no timers are pending after the last tick.
+    fn take_timer_wakeup(&self) -> Option<f64>;
 }
 
 #[cfg(feature = "quickjs")]
@@ -403,6 +411,12 @@ impl PersistentJs for QuickPersistentJs {
             lumen_js::NavigateRequest::Replace(u) => JsNavigateRequest::Replace(u),
             lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
         })
+    }
+    fn tick_timers(&self) {
+        self.eval_js("_lumen_tick_timers()");
+    }
+    fn take_timer_wakeup(&self) -> Option<f64> {
+        self.rt.take_timer_wakeup()
     }
 }
 
@@ -2157,7 +2171,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         }
     }
 
-    fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         // HTML §8.1.4.2 «Processing model»: между событиями event-loop-а
         // дренируем накопившиеся task-и. Каждый step выполняет одну task +
         // microtask checkpoint. Дренируем все pending tasks за один проход,
@@ -2188,6 +2202,26 @@ impl ApplicationHandler<LoadEvent> for Lumen {
         let now_ms = self.epoch.elapsed().as_secs_f64() * 1000.0;
         let remaining_ms = if reached_idle { IDLE_BUDGET_MS } else { 0.0 };
         self.runtime.run_idle_callbacks(remaining_ms, now_ms);
+
+        // JS timers: drain expired setTimeout/setInterval callbacks, then read
+        // the next wakeup deadline to schedule ControlFlow::WaitUntil so that
+        // winit wakes up exactly when the next timer fires (not only on OS events).
+        if let Some(js) = &self.js_ctx {
+            js.tick_timers();
+            if let Some(nav) = js.take_navigate_request() {
+                self.pending_js_navigate = Some(nav);
+            }
+            if let Some(wakeup_epoch_ms) = js.take_timer_wakeup() {
+                let now_epoch_ms = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .map(|d| d.as_secs_f64() * 1000.0)
+                    .unwrap_or(0.0);
+                let delay_ms = (wakeup_epoch_ms - now_epoch_ms).max(0.0);
+                let wakeup = std::time::Instant::now()
+                    + std::time::Duration::from_millis(delay_ms as u64 + 1);
+                event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup));
+            }
+        }
 
         // Пост-дренажный check: reload, запланированный через queue_task
         // (UserInteraction source), исполняется после microtask checkpoint.

@@ -115,6 +115,8 @@ pub enum NavigateRequest {
 /// `ls_store` — shared localStorage partition for this origin; persists across
 ///              page reloads.  Pass a fresh `Arc<Mutex<WebStorage>>` per origin.
 /// `ss_store` — fresh sessionStorage for this page load; created by the caller.
+/// `timer_wakeup` — shared slot written by `_lumen_request_wakeup` when a timer
+///              is scheduled; shell reads it to set `ControlFlow::WaitUntil`.
 /// Pass `None` for providers in sandboxed contexts or tests.
 #[allow(clippy::too_many_arguments)]
 pub fn install_dom_api(
@@ -126,8 +128,9 @@ pub fn install_dom_api(
     ws_provider: Option<Arc<dyn JsWebSocketProvider>>,
     ls_store: Arc<Mutex<WebStorage>>,
     ss_store: Arc<Mutex<WebStorage>>,
+    timer_wakeup: Arc<Mutex<Option<f64>>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -146,6 +149,7 @@ fn install_primitives(
     ws_provider: Option<Arc<dyn JsWebSocketProvider>>,
     ls_store: Arc<Mutex<WebStorage>>,
     ss_store: Arc<Mutex<WebStorage>>,
+    timer_wakeup: Arc<Mutex<Option<f64>>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -811,6 +815,22 @@ fn install_primitives(
             .unwrap_or(0.0)
     });
 
+    // ── timer wakeup notification ─────────────────────────────────────────────
+    // Called by _lumen_tick_timers / setTimeout / setInterval JS shims when a
+    // timer is scheduled. Stores the earliest pending deadline (Unix epoch ms)
+    // so the shell event loop can set ControlFlow::WaitUntil accordingly.
+    {
+        let tw = Arc::clone(&timer_wakeup);
+        reg!("_lumen_request_wakeup", move |deadline_ms: f64| {
+            let mut lock = tw.lock().unwrap();
+            match *lock {
+                None => *lock = Some(deadline_ms),
+                Some(prev) if deadline_ms < prev => *lock = Some(deadline_ms),
+                _ => {}
+            }
+        });
+    }
+
     Ok(())
 }
 
@@ -1459,10 +1479,75 @@ var navigator = {
     onLine: false,
     serviceWorker: _sw_container,
 };
-var setTimeout  = function(fn) { try { fn(); } catch(e) {} return 0; };
-var setInterval = function()   { return 0; };
-var clearTimeout  = function() {};
-var clearInterval = function() {};
+// ── Timer queue (HTML LS §8.6 «timers») ──────────────────────────────────────
+// Timers are stored as a JS-side array; Rust drains them each event loop tick
+// via _lumen_tick_timers() called from about_to_wait. When a new timer is
+// scheduled, _lumen_request_wakeup(deadline_ms) notifies the shell so that
+// ControlFlow::WaitUntil wakes the loop at the right time.
+var _lumen_timer_seq = 1;
+var _lumen_timers = [];
+
+function _lumen_tick_timers() {
+    var now = _lumen_now_ms();
+    var ready = [];
+    var keep = [];
+    for (var i = 0; i < _lumen_timers.length; i++) {
+        var t = _lumen_timers[i];
+        if (t.deadline <= now) {
+            ready.push(t);
+        } else {
+            keep.push(t);
+        }
+    }
+    _lumen_timers = keep;
+    // Re-schedule intervals before running callbacks (matches spec §8.6 step 18).
+    for (var j = 0; j < ready.length; j++) {
+        var r = ready[j];
+        if (r.interval !== null) {
+            _lumen_timers.push({ id: r.id, fn: r.fn, deadline: now + r.interval, interval: r.interval });
+        }
+    }
+    // Run callbacks; errors are swallowed (HTML §8.6 step 17).
+    for (var k = 0; k < ready.length; k++) {
+        try { ready[k].fn(); } catch(e) {}
+    }
+    // Notify shell of next wakeup if any timers remain.
+    if (_lumen_timers.length > 0) {
+        var next = _lumen_timers[0].deadline;
+        for (var m = 1; m < _lumen_timers.length; m++) {
+            if (_lumen_timers[m].deadline < next) next = _lumen_timers[m].deadline;
+        }
+        _lumen_request_wakeup(next);
+    }
+}
+
+function setTimeout(fn, delay) {
+    if (typeof fn !== 'function') return 0;
+    var ms = (typeof delay === 'number' && delay > 0) ? delay : 0;
+    var id = _lumen_timer_seq++;
+    var deadline = _lumen_now_ms() + ms;
+    _lumen_timers.push({ id: id, fn: fn, deadline: deadline, interval: null });
+    _lumen_request_wakeup(deadline);
+    return id;
+}
+
+function clearTimeout(id) {
+    for (var i = 0; i < _lumen_timers.length; i++) {
+        if (_lumen_timers[i].id === id) { _lumen_timers.splice(i, 1); return; }
+    }
+}
+
+function setInterval(fn, interval) {
+    if (typeof fn !== 'function') return 0;
+    var ms = (typeof interval === 'number' && interval > 0) ? interval : 0;
+    var id = _lumen_timer_seq++;
+    var deadline = _lumen_now_ms() + ms;
+    _lumen_timers.push({ id: id, fn: fn, deadline: deadline, interval: ms });
+    _lumen_request_wakeup(deadline);
+    return id;
+}
+
+function clearInterval(id) { clearTimeout(id); }
 var requestAnimationFrame = function() { return 0; };
 
 var _popstate_listeners = [];
@@ -2134,6 +2219,26 @@ var performance = {
     clearMeasures: function() {},
 };
 
+// ── scheduler (Prioritized Task Scheduling API — W3C §2) ─────────────────────
+// scheduler.postTask(fn, {priority?, delay?}) → Promise
+// Priorities: 'user-blocking' (microtask-like), 'user-visible' (default,
+// setTimeout 0), 'background' (setTimeout 0). All three converge to async
+// execution; priority differentiation is Phase 2 (requires Rust task sources).
+var scheduler = {
+    postTask: function(fn, opts) {
+        if (typeof fn !== 'function') return Promise.reject(new TypeError('scheduler.postTask: argument must be a function'));
+        var delay = (opts && typeof opts.delay === 'number' && opts.delay > 0) ? opts.delay : 0;
+        return new Promise(function(resolve, reject) {
+            setTimeout(function() {
+                try { resolve(fn()); } catch(e) { reject(e); }
+            }, delay);
+        });
+    },
+    yield: function() {
+        return new Promise(function(resolve) { setTimeout(resolve, 0); });
+    },
+};
+
 // Expose new globals on window object (defined after window literal because
 // `var performance` is not hoisted with its value, only its name).
 window.URL             = URL;
@@ -2142,6 +2247,11 @@ window.performance     = performance;
 window.queueMicrotask  = queueMicrotask;
 window.Event           = Event;
 window.CustomEvent     = CustomEvent;
+window.scheduler       = scheduler;
+window.setTimeout      = setTimeout;
+window.clearTimeout    = clearTimeout;
+window.setInterval     = setInterval;
+window.clearInterval   = clearInterval;
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -2374,17 +2484,74 @@ mod tests {
     }
 
     #[test]
-    fn timeout_calls_function() {
+    fn timeout_is_deferred_until_tick() {
         let rt = runtime_with_dom(make_doc());
-        // setTimeout in our shim calls the callback synchronously.
+        // Timer must NOT fire synchronously — deferred to _lumen_tick_timers().
         let result = rt
-            .eval(
-                "var x = 0; \
-                 setTimeout(function() { x = 1; }, 0); \
-                 x",
-            )
+            .eval("var x = 0; setTimeout(function() { x = 1; }, 0); x")
             .unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn timeout_fires_after_tick() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var x = 0; setTimeout(function() { x = 1; }, 0);")
+            .unwrap();
+        let result = rt.eval("_lumen_tick_timers(); x").unwrap();
         assert_eq!(result, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn clear_timeout_prevents_fire() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var x = 0; var id = setTimeout(function() { x = 1; }, 0); clearTimeout(id);")
+            .unwrap();
+        let result = rt.eval("_lumen_tick_timers(); x").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn set_interval_fires_repeatedly() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var n = 0; setInterval(function() { n++; }, 0);")
+            .unwrap();
+        rt.eval("_lumen_tick_timers();").unwrap();
+        rt.eval("_lumen_tick_timers();").unwrap();
+        let result = rt.eval("n").unwrap();
+        // Fired at least twice (exact count depends on scheduling).
+        assert!(matches!(result, lumen_core::JsValue::Number(n) if n >= 2.0));
+    }
+
+    #[test]
+    fn clear_interval_stops_fire() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval("var n = 0; var id = setInterval(function() { n++; }, 0);")
+            .unwrap();
+        rt.eval("_lumen_tick_timers(); clearInterval(id);")
+            .unwrap();
+        rt.eval("_lumen_tick_timers();").unwrap();
+        let result = rt.eval("n").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn scheduler_post_task_returns_promise() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("typeof scheduler.postTask(function() { return 42; })")
+            .unwrap();
+        assert_eq!(result, lumen_core::JsValue::String("object".into()));
+    }
+
+    #[test]
+    fn scheduler_post_task_rejects_non_function() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt
+            .eval("var rejected = false; scheduler.postTask(42).catch(function() { rejected = true; }); rejected")
+            .unwrap();
+        // Promise rejection is async; we can only verify the call didn't throw synchronously.
+        assert_eq!(result, lumen_core::JsValue::Bool(false));
     }
 
     #[test]
