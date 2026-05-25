@@ -16,11 +16,14 @@
 """
 
 import argparse
+import atexit
 import json
 import os
+import signal
 import subprocess
 import sys
 import re
+import threading
 import time
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -28,6 +31,118 @@ from pathlib import Path
 # Корень проекта — два уровня вверх от scripts/
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 SCRIPTS_DIR = Path(__file__).resolve().parent
+
+# --- Завершение дочерних процессов при выходе ---
+
+_active_process: subprocess.Popen | None = None
+_process_lock = threading.Lock()
+
+
+def _cleanup() -> None:
+    """Завершить активный подпроцесс claude при выходе оркестратора."""
+    with _process_lock:
+        proc = _active_process
+    if proc is not None and proc.poll() is None:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
+
+def _sighandler(sig, frame) -> None:
+    _cleanup()
+    sys.exit(0)
+
+
+atexit.register(_cleanup)
+signal.signal(signal.SIGINT, _sighandler)
+signal.signal(signal.SIGTERM, _sighandler)
+
+if os.name == "nt":
+    import ctypes
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_uint)
+    def _win_ctrl_handler(ctrl_type: int) -> bool:
+        # Срабатывает на Ctrl+C (0), Ctrl+Break (1) и закрытие окна (2)
+        _cleanup()
+        return False  # Передать управление стандартному обработчику
+
+    ctypes.windll.kernel32.SetConsoleCtrlHandler(_win_ctrl_handler, True)
+
+
+# --- Трекинг дочерних процессов (Windows) ---
+
+if os.name == "nt":
+    _k32 = ctypes.windll.kernel32
+    _k32.CreateToolhelp32Snapshot.restype = ctypes.c_void_p
+    _k32.CreateToolhelp32Snapshot.argtypes = [ctypes.c_uint32, ctypes.c_uint32]
+    _k32.Process32First.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _k32.Process32Next.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+    _k32.CloseHandle.argtypes = [ctypes.c_void_p]
+    _k32.OpenProcess.restype = ctypes.c_void_p
+    _k32.TerminateProcess.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+    _INVALID_HANDLE = ctypes.c_void_p(-1).value
+
+    class _PROCESSENTRY32(ctypes.Structure):
+        _fields_ = [
+            ("dwSize",              ctypes.c_ulong),
+            ("cntUsage",            ctypes.c_ulong),
+            ("th32ProcessID",       ctypes.c_ulong),
+            ("th32DefaultHeapID",   ctypes.c_size_t),
+            ("th32ModuleID",        ctypes.c_ulong),
+            ("cntThreads",          ctypes.c_ulong),
+            ("th32ParentProcessID", ctypes.c_ulong),
+            ("pcPriClassBase",      ctypes.c_long),
+            ("dwFlags",             ctypes.c_ulong),
+            ("szExeFile",           ctypes.c_char * 260),
+        ]
+
+    def _snapshot_descendants(root_pid: int) -> set:
+        """Вернуть PID всех живых потомков root_pid через Win32 Toolhelp snapshot."""
+        TH32CS_SNAPPROCESS = 0x00000002
+        snap = _k32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if snap is None or snap == _INVALID_HANDLE:
+            return set()
+        parent_to_children: dict = {}
+        entry = _PROCESSENTRY32()
+        entry.dwSize = ctypes.sizeof(_PROCESSENTRY32)
+        try:
+            ok = _k32.Process32First(snap, ctypes.byref(entry))
+            while ok:
+                parent_to_children.setdefault(
+                    entry.th32ParentProcessID, []
+                ).append(entry.th32ProcessID)
+                ok = _k32.Process32Next(snap, ctypes.byref(entry))
+        finally:
+            _k32.CloseHandle(snap)
+        result: set = set()
+        queue = [root_pid]
+        while queue:
+            pid = queue.pop()
+            for child in parent_to_children.get(pid, []):
+                result.add(child)
+                queue.append(child)
+        return result
+
+    def _kill_pids(pids: set) -> int:
+        """Завершить процессы по PID. Возвращает количество убитых."""
+        PROCESS_TERMINATE = 0x0001
+        killed = 0
+        for pid in pids:
+            handle = _k32.OpenProcess(PROCESS_TERMINATE, False, pid)
+            if handle:
+                if _k32.TerminateProcess(handle, 1):
+                    killed += 1
+                _k32.CloseHandle(handle)
+        return killed
+
+else:
+    def _snapshot_descendants(root_pid: int) -> set:  # type: ignore[misc]
+        return set()
+
+    def _kill_pids(pids: set) -> int:  # type: ignore[misc]
+        return 0
 
 
 def log(developer: str, message: str):
@@ -162,6 +277,8 @@ RATE_LIMIT_RE = re.compile(r"resets?\s+(\d{1,2}:\d{2}(?:am|pm)?)", re.IGNORECASE
 
 def run_claude(developer: str, prompt: str) -> tuple[int, bool]:
     """Запустить claude и показать прогресс. Возвращает (exit_code, rate_limited)."""
+    global _active_process
+
     process = subprocess.Popen(
         [
             "claude", "-p", prompt,
@@ -177,51 +294,77 @@ def run_claude(developer: str, prompt: str) -> tuple[int, bool]:
         errors="replace",
     )
 
-    rate_limited = False
-    for line in process.stdout:
-        line = line.strip()
-        if not line:
-            continue
+    with _process_lock:
+        _active_process = process
 
-        # Детект rate limit в сыром выводе
-        if "hit your limit" in line.lower() or "rate limit" in line.lower():
-            rate_limited = True
-            log(developer, f"  Rate limit: {line[:120]}")
-            continue
+    # Накапливаем PID потомков пока claude жив — после выхода они могут стать сиротами
+    _seen: set = set()
+    _stop_tracker = threading.Event()
 
-        try:
-            event = json.loads(line)
-        except json.JSONDecodeError:
-            # Не-JSON строка — может быть сообщение от CLI
+    def _tracker() -> None:
+        while not _stop_tracker.wait(timeout=2.0):
+            _seen.update(_snapshot_descendants(process.pid))
+
+    tracker = threading.Thread(target=_tracker, daemon=True)
+    tracker.start()
+
+    try:
+        rate_limited = False
+        for line in process.stdout:
+            line = line.strip()
+            if not line:
+                continue
+
+            # Детект rate limit в сыром выводе
             if "hit your limit" in line.lower() or "rate limit" in line.lower():
                 rate_limited = True
                 log(developer, f"  Rate limit: {line[:120]}")
-            continue
+                continue
 
-        # Детект rate limit в JSON-событии
-        if event.get("type") == "rate_limit_event":
-            info = event.get("rate_limit_info", {})
-            if info.get("status", "").startswith("blocked"):
-                rate_limited = True
-                log(developer, "  Rate limit (blocked)")
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                # Не-JSON строка — может быть сообщение от CLI
+                if "hit your limit" in line.lower() or "rate limit" in line.lower():
+                    rate_limited = True
+                    log(developer, f"  Rate limit: {line[:120]}")
+                continue
 
-        for display_line in format_event(event):
-            log(developer, display_line)
+            # Детект rate limit в JSON-событии
+            if event.get("type") == "rate_limit_event":
+                info = event.get("rate_limit_info", {})
+                if info.get("status", "").startswith("blocked"):
+                    rate_limited = True
+                    log(developer, "  Rate limit (blocked)")
 
-    # Проверить stderr тоже — rate limit может быть там
-    stderr_output = process.stderr.read()
-    if stderr_output and ("hit your limit" in stderr_output.lower()
-                          or "rate limit" in stderr_output.lower()):
-        rate_limited = True
-        # Попробовать извлечь время сброса
-        match = RATE_LIMIT_RE.search(stderr_output)
-        if match:
-            log(developer, f"  Rate limit до {match.group(1)}")
-        else:
-            log(developer, f"  Rate limit обнаружен")
+            for display_line in format_event(event):
+                log(developer, display_line)
 
-    process.wait()
-    return process.returncode, rate_limited
+        # Проверить stderr тоже — rate limit может быть там
+        stderr_output = process.stderr.read()
+        if stderr_output and ("hit your limit" in stderr_output.lower()
+                              or "rate limit" in stderr_output.lower()):
+            rate_limited = True
+            # Попробовать извлечь время сброса
+            match = RATE_LIMIT_RE.search(stderr_output)
+            if match:
+                log(developer, f"  Rate limit до {match.group(1)}")
+            else:
+                log(developer, f"  Rate limit обнаружен")
+
+        process.wait()
+        return process.returncode, rate_limited
+    finally:
+        _stop_tracker.set()
+        tracker.join(timeout=3.0)
+
+        with _process_lock:
+            if _active_process is process:
+                _active_process = None
+
+        killed = _kill_pids(_seen)
+        if killed > 0:
+            log(developer, f"  Завершено {killed} дочерних процессов после сессии")
 
 
 def wait_for_rate_limit(developer: str):

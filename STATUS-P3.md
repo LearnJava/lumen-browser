@@ -1,4 +1,5 @@
-In progress: —
+In progress: orchestrator-cleanup  branch: p3-orchestrator-cleanup
+Next step: commit orchestrator.py process-cleanup improvements + 38-gradients.html deletion
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
@@ -6,6 +7,7 @@ CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   add a line to STATUS-P4.md "Needs wiring".
 
 Next:
+- [ ] http-cache: HTTP response cache (Cache-Control/ETag/If-None-Match) в lumen-network
 
 Queue (Wave 3+):
 
