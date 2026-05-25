@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: bug015-img-alt  branch: p2-bug015-img-alt
+Next step: renderer.rs:3404 — render alt text in DrawImage fallback path
 
 Next:
 
