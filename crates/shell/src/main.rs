@@ -226,6 +226,7 @@ fn run_window_mode(
         form_state: HashMap::new(),
         validation_tooltip: None,
         color_picker_node: None,
+        ls_storage: HashMap::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -260,13 +261,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new())?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new())?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -389,6 +390,20 @@ impl PageSource {
         }
     }
 
+    /// Origin string (scheme+host+port) for localStorage partitioning.
+    /// Returns `None` for file: and empty sources (no cross-origin storage needed).
+    fn origin_str(&self) -> Option<String> {
+        let url_s = match self {
+            PageSource::Url(u) => u.as_str(),
+            PageSource::Snapshot { base_url, .. } => base_url.as_str(),
+            _ => return None,
+        };
+        lumen_core::url::Url::parse(url_s).ok().map(|u| {
+            let port = u.port().map(|p| format!(":{p}")).unwrap_or_default();
+            format!("{}://{}{}", u.scheme(), u.host(), port)
+        })
+    }
+
     /// URL-строка страницы для bfcache-ключа. `None` если нет URL (пустая вкладка, файл).
     fn url_str(&self) -> Option<&str> {
         match self {
@@ -455,13 +470,14 @@ impl PageSource {
         &self,
         sink: Arc<dyn EventSink>,
         viewport: Size,
+        ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
     ) -> Result<(LoadedPage, Option<LayoutSource>), Box<dyn Error>> {
         if matches!(self, PageSource::Empty) {
             return Ok((LoadedPage::empty(), None));
         }
         let raw = self.load_bytes(sink.clone())?;
         let (page, layout_source) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new())?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store)?;
         Ok((page, Some(layout_source)))
     }
 }
@@ -948,6 +964,7 @@ fn parse_and_layout(
     sink: &Arc<dyn EventSink>,
     viewport: Size,
     preload_seen: &mut std::collections::HashSet<String>,
+    ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -991,6 +1008,7 @@ fn parse_and_layout(
         &page_url,
         fetch_provider,
         ws_provider,
+        ls_store,
     );
 
     // Гейт отправки форм: Phase 0 — top-level документ не sandboxed.
@@ -1196,6 +1214,26 @@ fn relayout_page(src: &LayoutSource, viewport: Size) -> (DisplayList, lumen_layo
     (dl, layout)
 }
 
+/// Get-or-create the localStorage partition for the given `ResourceBase` origin.
+/// Returns `None` for file: bases (no persistent origin-partitioned storage).
+fn ls_store_for_base(
+    base: &ResourceBase,
+    ls_storage: &mut HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
+) -> Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>> {
+    let origin = match base {
+        ResourceBase::Url(u) => {
+            lumen_core::url::Url::parse(u).ok().map(|parsed| {
+                let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
+                format!("{}://{}{}", parsed.scheme(), parsed.host(), port)
+            })?
+        }
+        ResourceBase::File(_) => return None,
+    };
+    Some(Arc::clone(ls_storage.entry(origin).or_insert_with(|| {
+        Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
+    })))
+}
+
 fn render_bytes(
     bytes: &[u8],
     content_type: Option<&str>,
@@ -1203,8 +1241,9 @@ fn render_bytes(
     sink: Arc<dyn EventSink>,
     viewport: Size,
     preload_seen: &mut std::collections::HashSet<String>,
+    ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
 ) -> Result<(LoadedPage, LayoutSource), Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -1371,13 +1410,16 @@ fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
 /// `page_url` пробрасывается в `window.location` (инициализация).
 /// `fetch_provider` пробрасывается в `window.fetch()`.
 /// `ws_provider` пробрасывается в `new WebSocket(url)`.
+/// `ls_store` — localStorage partition для текущего origin (persists across reloads).
 /// `None` = no network (sandboxed context или отключён quickjs feature).
+#[allow(clippy::needless_return)] // `return` inside #[cfg] block is needed for correct control flow
 fn run_scripts_with_dom(
     doc: Document,
     sandbox: lumen_core::SandboxFlags,
     page_url: &str,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+    ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
 ) -> (Document, Option<JsNavigateRequest>) {
     let mut scripts: Vec<String> = Vec::new();
     collect_inline_scripts(&doc, doc.root(), &mut scripts);
@@ -1401,7 +1443,7 @@ fn run_scripts_with_dom(
         let nav_req: Option<JsNavigateRequest>;
         match lumen_js::QuickJsRuntime::new() {
             Ok(rt) => {
-                if let Err(e) = rt.install_dom(doc_arc.clone(), page_url, fetch_provider, ws_provider) {
+                if let Err(e) = rt.install_dom(doc_arc.clone(), page_url, fetch_provider, ws_provider, ls_store) {
                     eprintln!("JS DOM init failed: {e}");
                 }
                 for src in &scripts {
@@ -1661,6 +1703,10 @@ struct Lumen {
     /// NodeId of the `<input type="color">` whose picker is currently open.
     /// The picker overlay is viewport-locked; clicking a swatch closes it.
     color_picker_node: Option<NodeId>,
+    /// Persistent `localStorage` partitions keyed by origin (scheme+host+port).
+    /// Each entry survives page reloads within the same session.
+    /// Partitioned by origin to enforce Same-Origin Policy for storage access.
+    ls_storage: HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
 }
 
 impl Lumen {
@@ -1711,7 +1757,12 @@ impl Lumen {
                 Size::new(s.width as f32, s.height as f32)
             },
         );
-        match self.source.load(self.event_sink.clone(), viewport) {
+        let ls_store = self.source.origin_str().map(|o| {
+            Arc::clone(self.ls_storage.entry(o).or_insert_with(|| {
+                Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
+            }))
+        });
+        match self.source.load(self.event_sink.clone(), viewport, ls_store) {
             Ok((page, new_layout_source)) => {
                 self.layout_source = new_layout_source;
                 self.content_height = content_height_of(&page.display_list);
@@ -1968,7 +2019,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                         Size::new(s.width as f32, s.height as f32)
                     },
                 );
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched) {
+                let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store) {
                     Ok((page, new_layout_source)) => {
                         self.apply_loaded_page(page, Some(new_layout_source));
                     }

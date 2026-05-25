@@ -6,6 +6,7 @@ use rquickjs::{Array, Context, Ctx, FromJs, Function, IntoJs, Object, Runtime, T
 use std::sync::{Arc, Mutex};
 
 pub use dom::NavigateRequest;
+pub use lumen_core::WebStorage;
 
 /// QuickJS-based JS runtime via `rquickjs`.
 ///
@@ -49,6 +50,9 @@ impl QuickJsRuntime {
     /// `page_url` initialises `window.location` with the current page URL.
     /// `fetch_provider` is forwarded to `window.fetch()`.
     /// `ws_provider` is forwarded to `new WebSocket(url)`.
+    /// `ls_store` — shared localStorage for this origin; persists across reloads.
+    ///   Pass a fresh `Arc::new(Mutex::new(WebStorage::default()))` per origin.
+    ///   A fresh `sessionStorage` is created automatically inside.
     /// Pass `None` for providers in sandboxed contexts or unit tests.
     pub fn install_dom(
         &self,
@@ -56,10 +60,13 @@ impl QuickJsRuntime {
         page_url: &str,
         fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
         ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
+        ls_store: Option<Arc<Mutex<WebStorage>>>,
     ) -> JsResult<()> {
+        let ls = ls_store.unwrap_or_else(|| Arc::new(Mutex::new(WebStorage::default())));
+        let ss = Arc::new(Mutex::new(WebStorage::default()));
         let guard = self.inner.lock().unwrap();
         guard.ctx.with(|ctx| {
-            dom::install_dom_api(&ctx, doc, page_url, Arc::clone(&self.nav_out), fetch_provider, ws_provider)
+            dom::install_dom_api(&ctx, doc, page_url, Arc::clone(&self.nav_out), fetch_provider, ws_provider, ls, ss)
                 .map_err(|e| rq_err(&ctx, e))
         })
     }
