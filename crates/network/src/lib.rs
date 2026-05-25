@@ -36,6 +36,7 @@ mod dns;
 mod doh;
 mod dot;
 pub mod h2;
+pub mod http_cache;
 mod hsts;
 mod mixed_content;
 mod origin;
@@ -46,6 +47,7 @@ pub mod sse;
 pub(crate) mod websocket;
 pub use auth::StaticCredentialProvider;
 pub use brotli::BrotliContentDecoder;
+pub use http_cache::HttpCache;
 pub use cors::{
     CorsError, CorsRequest, CredentialsMode, DEFAULT_PREFLIGHT_MAX_AGE_SECONDS,
     MAX_SAFELISTED_HEADER_VALUE_LEN, PreflightCache, PreflightResult, build_preflight_headers,
@@ -883,6 +885,8 @@ fn fetch_with_redirect(
     mixed_content: Option<&MixedContentPolicy>,
     destination: Option<RequestDestination>,
     cors_ctx: Option<&CorsContext<'_>>,
+    // Extra headers for HTTP cache conditional GETs (If-None-Match / If-Modified-Since).
+    cache_extra_headers: &str,
 ) -> Result<Response> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
@@ -1036,9 +1040,16 @@ fn fetch_with_redirect(
 
     // Метод и cross-origin extra-headers для actual запроса.
     let actual_method = cors_ctx.map(|cx| cx.method.as_str()).unwrap_or("GET");
-    let actual_extra_headers = match (cors_ctx, &cross_origin_target) {
-        (Some(cx), Some(_)) => build_actual_cross_origin_headers(&cx.requestor, &cx.headers),
-        _ => String::new(),
+    let actual_extra_headers = {
+        let mut h = match (cors_ctx, &cross_origin_target) {
+            (Some(cx), Some(_)) => build_actual_cross_origin_headers(&cx.requestor, &cx.headers),
+            _ => String::new(),
+        };
+        // Append cache conditional headers (If-None-Match / If-Modified-Since).
+        if !cache_extra_headers.is_empty() {
+            h.push_str(cache_extra_headers);
+        }
+        h
     };
 
     // 401-retry loop: первый запрос без Authorization, при 401 + creds —
@@ -1125,6 +1136,11 @@ fn fetch_with_redirect(
                 resp.body = apply_content_encoding(resp.body, &resp.headers, decoders)?;
                 return Ok(resp);
             }
+            // 304 Not Modified: conditional GET confirmed the cached copy is
+            // still valid. Return the response as-is (empty body); caller is
+            // responsible for substituting the cached body and updating cache
+            // metadata via HttpCache::revalidate().
+            304 => return Ok(resp),
             301 | 302 | 303 | 307 | 308 => {
                 let location = header_value(&resp.headers, "location")
                     .ok_or_else(|| Error::Network("redirect without Location".to_owned()))?;
@@ -1155,6 +1171,10 @@ fn fetch_with_redirect(
                     mixed_content,
                     destination,
                     cors_ctx,
+                    // Cache conditional headers are per-resource; RFC 7234 §4 —
+                    // after a redirect the new URL may have different cache state.
+                    // Drop conditional headers on redirect to avoid 304 surprises.
+                    "",
                 );
             }
             401 if authorization.is_none() && credentials.is_some() => {
@@ -1222,6 +1242,8 @@ pub struct HttpClient {
     tab_id: TabId,
     mixed_content: Option<MixedContentPolicy>,
     cors_cache: Option<Arc<cors::PreflightCache>>,
+    /// RFC 7234 response cache. Optional — without it every request goes to the network.
+    http_cache: Option<Arc<http_cache::HttpCache>>,
 }
 
 impl HttpClient {
@@ -1239,6 +1261,7 @@ impl HttpClient {
             tab_id: TabId(0),
             mixed_content: None,
             cors_cache: None,
+            http_cache: None,
         }
     }
 
@@ -1434,6 +1457,25 @@ impl HttpClient {
         self
     }
 
+    /// Подключить HTTP response cache (RFC 7234).
+    ///
+    /// Кэш проверяется до выхода в сеть. Свежие записи возвращаются сразу.
+    /// Записи с истёкшей свежестью, но с валидаторами (`ETag`/`Last-Modified`)
+    /// провоцируют conditional GET (`If-None-Match`/`If-Modified-Since`).
+    /// 304 Not Modified → тело берётся из кэша, метаданные обновляются.
+    ///
+    /// Кэш можно делить между несколькими `HttpClient`-ами через `Arc::clone` —
+    /// реализован через `Mutex<HashMap>` и thread-safe.
+    ///
+    /// Phase 0 ограничения: только GET-запросы кэшируются; range-запросы,
+    /// POST/PUT и запросы с явным `cors_ctx` кэш пропускают; `Vary` не
+    /// поддерживается (unsafe Vary не помечается).
+    #[must_use]
+    pub fn with_http_cache(mut self, cache: Arc<http_cache::HttpCache>) -> Self {
+        self.http_cache = Some(cache);
+        self
+    }
+
     /// CORS-enabled fetch для cross-origin subresource (Fetch §3-§4).
     /// Поведение:
     /// - Same-origin: тождественно `fetch(url)` — preflight не шлётся,
@@ -1500,6 +1542,8 @@ impl HttpClient {
             self.mixed_content.as_ref(),
             destination,
             Some(&cors_ctx),
+            // CORS requests are not cached (credentials/Vary complications).
+            "",
         )
         .map(|resp| resp.body)
     }
@@ -1530,6 +1574,8 @@ impl HttpClient {
             self.mixed_content.as_ref(),
             None,
             None,
+            // Range requests are not cached.
+            "",
         )?;
         let content_range = if resp.status == 206 {
             header_value(&resp.headers, "content-range").and_then(parse_content_range)
@@ -1594,6 +1640,8 @@ impl HttpClient {
             self.mixed_content.as_ref(),
             None,
             None,
+            // Multi-range requests are not cached.
+            "",
         )?;
         Ok(parse_multi_range_response(resp))
     }
@@ -1646,8 +1694,48 @@ impl HttpClient {
         url: &Url,
         destination: RequestDestination,
     ) -> Result<Vec<u8>> {
+        let url_str = url.to_string();
         let accept_encoding = self.accept_encoding_header();
-        fetch_with_redirect(
+
+        // HTTP cache check (RFC 7234).
+        if let Some(cache) = &self.http_cache
+            && let Some(snap) = cache.get(&url_str)
+        {
+            if snap.is_fresh {
+                return Ok(snap.body);
+            }
+            if !snap.conditional_headers.is_empty() {
+                // Stale entry with validators — conditional GET.
+                let resp = fetch_with_redirect(
+                    url,
+                    5,
+                    &self.pool,
+                    self.h2_pool.as_deref(),
+                    self.resolver.as_ref(),
+                    self.sink.as_deref(),
+                    self.filter.as_deref(),
+                    self.hsts.as_deref(),
+                    self.credentials.as_deref(),
+                    &self.decoders,
+                    accept_encoding.as_deref(),
+                    None,
+                    None,
+                    self.tab_id,
+                    self.mixed_content.as_ref(),
+                    Some(destination),
+                    None,
+                    &snap.conditional_headers,
+                )?;
+                if resp.status == 304 {
+                    cache.revalidate(&url_str, &resp.headers);
+                    return Ok(snap.body);
+                }
+                cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
+                return Ok(resp.body);
+            }
+        }
+
+        let resp = fetch_with_redirect(
             url,
             5,
             &self.pool,
@@ -1665,8 +1753,12 @@ impl HttpClient {
             self.mixed_content.as_ref(),
             Some(destination),
             None,
-        )
-        .map(|resp| resp.body)
+            "",
+        )?;
+        if let Some(cache) = &self.http_cache {
+            cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
+        }
+        Ok(resp.body)
     }
 }
 
@@ -1679,6 +1771,8 @@ impl NetworkTransport for HttpClient {
                 return Ok(body);
             }
         }
+
+        let url_str = url.to_string();
         let accept_encoding = self.accept_encoding_header();
         // Когда mixed_content policy задана (клиент работает в secure-context),
         // используем RequestDestination::Other (Blockable) как fallback —
@@ -1686,7 +1780,45 @@ impl NetworkTransport for HttpClient {
         // Для top-level navigation policy не задаётся, поэтому destination
         // остаётся None и check не активируется.
         let destination = self.mixed_content.as_ref().map(|_| RequestDestination::Other);
-        fetch_with_redirect(
+
+        // HTTP cache check (RFC 7234).
+        if let Some(cache) = &self.http_cache
+            && let Some(snap) = cache.get(&url_str)
+        {
+            if snap.is_fresh {
+                return Ok(snap.body);
+            }
+            if !snap.conditional_headers.is_empty() {
+                let resp = fetch_with_redirect(
+                    url,
+                    5,
+                    &self.pool,
+                    self.h2_pool.as_deref(),
+                    self.resolver.as_ref(),
+                    self.sink.as_deref(),
+                    self.filter.as_deref(),
+                    self.hsts.as_deref(),
+                    self.credentials.as_deref(),
+                    &self.decoders,
+                    accept_encoding.as_deref(),
+                    None,
+                    None,
+                    self.tab_id,
+                    self.mixed_content.as_ref(),
+                    destination,
+                    None,
+                    &snap.conditional_headers,
+                )?;
+                if resp.status == 304 {
+                    cache.revalidate(&url_str, &resp.headers);
+                    return Ok(snap.body);
+                }
+                cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
+                return Ok(resp.body);
+            }
+        }
+
+        let resp = fetch_with_redirect(
             url,
             5,
             &self.pool,
@@ -1704,8 +1836,12 @@ impl NetworkTransport for HttpClient {
             self.mixed_content.as_ref(),
             destination,
             None,
-        )
-        .map(|resp| resp.body)
+            "",
+        )?;
+        if let Some(cache) = &self.http_cache {
+            cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
+        }
+        Ok(resp.body)
     }
 }
 
@@ -1769,6 +1905,7 @@ impl JsFetchProvider for HttpClient {
             self.mixed_content.as_ref(),
             destination,
             None,
+            "",
         )?;
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),
@@ -4848,5 +4985,168 @@ mod interceptor_tests {
         let url = Url::parse("https://no-such-host-lumen-test.invalid/data").unwrap();
         let result = client.fetch(&url).unwrap();
         assert_eq!(result, b"intercepted");
+    }
+}
+
+// ── HTTP cache integration tests ─────────────────────────────────────────────
+
+#[cfg(test)]
+mod http_cache_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+    use std::thread;
+
+    fn mock_server<F>(accept_count: usize, responder: F) -> (u16, thread::JoinHandle<()>)
+    where
+        F: Fn(usize) -> Vec<u8> + Send + 'static,
+    {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().unwrap().port();
+        let handle = thread::spawn(move || {
+            for i in 1..=accept_count {
+                let (mut sock, _) = listener.accept().expect("accept");
+                let mut reader = BufReader::new(sock.try_clone().unwrap());
+                loop {
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).unwrap_or(0) == 0 { break; }
+                    if line == "\r\n" || line == "\n" || line.is_empty() { break; }
+                }
+                let _ = sock.write_all(&responder(i));
+                let _ = sock.shutdown(std::net::Shutdown::Both);
+            }
+        });
+        (port, handle)
+    }
+
+    #[test]
+    fn http_cache_fresh_hit_skips_network() {
+        // Server accepts exactly 1 connection. Cache has a fresh entry.
+        // If the cache is used, the server never gets a request → test passes.
+        // If cache is bypassed, the server closes after 1 response and the
+        // second request would also go there (we only start 1 server accept).
+        let cache = Arc::new(http_cache::HttpCache::new());
+        let url = "http://127.0.0.1:0/resource"; // port 0 → unused, never connected
+        // Pre-populate cache with a fresh entry (max-age=3600).
+        cache.store(
+            url,
+            200,
+            b"cached body".to_vec(),
+            &[
+                ("Cache-Control".to_owned(), "max-age=3600".to_owned()),
+                ("ETag".to_owned(), "\"v1\"".to_owned()),
+            ],
+        );
+        let parsed = Url::parse(url).unwrap();
+        // HttpClient with the cache — should return the cached body without
+        // connecting (port 0 would fail to connect).
+        let client = HttpClient::new().with_http_cache(cache);
+        let result = client.fetch(&parsed).unwrap();
+        assert_eq!(result, b"cached body");
+    }
+
+    #[test]
+    fn http_cache_miss_fetches_and_stores() {
+        // Server returns 200 with Cache-Control: max-age=60 and ETag.
+        // First request should hit network and populate cache.
+        // Second request should be served from cache (server only accepts once).
+        let (port, server) = mock_server(1, |_| {
+            b"HTTP/1.1 200 OK\r\nCache-Control: max-age=60\r\nETag: \"v1\"\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody"
+                .to_vec()
+        });
+
+        let cache = Arc::new(http_cache::HttpCache::new());
+        let url = format!("http://127.0.0.1:{port}/data");
+        let parsed = Url::parse(&url).unwrap();
+
+        let client = HttpClient::new().with_http_cache(Arc::clone(&cache));
+
+        // First fetch — goes to network.
+        let body1 = client.fetch(&parsed).unwrap();
+        assert_eq!(body1, b"body");
+        assert_eq!(cache.len(), 1, "should have stored the response");
+
+        // Second fetch — served from cache (server thread has exited).
+        let body2 = client.fetch(&parsed).unwrap();
+        assert_eq!(body2, b"body");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn http_cache_stale_sends_conditional_get_304() {
+        // Server sequence: first request fills cache (max-age=0, ETag=v1).
+        // Second request is conditional GET → server returns 304.
+        // Client should return the cached body.
+        let (port, server) = mock_server(2, |i| match i {
+            1 => b"HTTP/1.1 200 OK\r\nCache-Control: max-age=0\r\nETag: \"v1\"\r\nContent-Length: 4\r\nConnection: close\r\n\r\nbody"
+                .to_vec(),
+            _ => b"HTTP/1.1 304 Not Modified\r\nETag: \"v1\"\r\nConnection: close\r\n\r\n"
+                .to_vec(),
+        });
+
+        let cache = Arc::new(http_cache::HttpCache::new());
+        let url = format!("http://127.0.0.1:{port}/data");
+        let parsed = Url::parse(&url).unwrap();
+        let client = HttpClient::new().with_http_cache(Arc::clone(&cache));
+
+        // First fetch.
+        let body1 = client.fetch(&parsed).unwrap();
+        assert_eq!(body1, b"body");
+
+        // Second fetch — stale entry, sends conditional GET, gets 304.
+        let body2 = client.fetch(&parsed).unwrap();
+        assert_eq!(body2, b"body", "should return cached body after 304");
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn http_cache_stale_new_200_updates_cache() {
+        // Server returns 200 twice (max-age=0, ETag changes between responses).
+        // Second fetch gets a new 200 (not 304); cache should be updated.
+        let (port, server) = mock_server(2, |i| match i {
+            1 => b"HTTP/1.1 200 OK\r\nCache-Control: max-age=0\r\nETag: \"v1\"\r\nContent-Length: 2\r\nConnection: close\r\n\r\nv1"
+                .to_vec(),
+            _ => b"HTTP/1.1 200 OK\r\nCache-Control: max-age=0\r\nETag: \"v2\"\r\nContent-Length: 2\r\nConnection: close\r\n\r\nv2"
+                .to_vec(),
+        });
+
+        let cache = Arc::new(http_cache::HttpCache::new());
+        let url = format!("http://127.0.0.1:{port}/data");
+        let parsed = Url::parse(&url).unwrap();
+        let client = HttpClient::new().with_http_cache(Arc::clone(&cache));
+
+        let body1 = client.fetch(&parsed).unwrap();
+        assert_eq!(body1, b"v1");
+
+        let body2 = client.fetch(&parsed).unwrap();
+        assert_eq!(body2, b"v2", "cache should update on new 200");
+
+        let snap = cache.get(&url).unwrap();
+        assert_eq!(snap.etag.as_deref(), Some("\"v2\""));
+
+        server.join().unwrap();
+    }
+
+    #[test]
+    fn http_cache_no_store_never_cached() {
+        let (port, server) = mock_server(2, |_| {
+            b"HTTP/1.1 200 OK\r\nCache-Control: no-store\r\nContent-Length: 4\r\nConnection: close\r\n\r\ndata"
+                .to_vec()
+        });
+
+        let cache = Arc::new(http_cache::HttpCache::new());
+        let url = format!("http://127.0.0.1:{port}/secret");
+        let parsed = Url::parse(&url).unwrap();
+        let client = HttpClient::new().with_http_cache(Arc::clone(&cache));
+
+        client.fetch(&parsed).unwrap();
+        assert_eq!(cache.len(), 0, "no-store must not be cached");
+
+        // Second fetch also goes to network (not cached).
+        client.fetch(&parsed).unwrap();
+
+        server.join().unwrap();
     }
 }
