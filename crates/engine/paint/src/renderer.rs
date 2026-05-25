@@ -2983,14 +2983,27 @@ impl Renderer {
         enum LoadOpChoice { ClearWhite, ClearTransparent, Load }
         struct DrawBatchPlan { target_level: usize, load_op: LoadOpChoice, ops_start: usize, ops_end: usize }
         struct CompositePlan { from_level: usize, comp_v_start: u32, mode: BlendMode }
+        // CSS Masking L1 §4: gradient mask spec — stored in plan for render-time GPU pass.
+        // For Linear: p0/p1 are UV endpoints (from linear_gradient_uv_endpoints).
+        // For Radial: p0=[cx_pct,cy_pct], p1=[1,1] (radial_gradient_uv_params).
+        // For Conic:  p0=[cx_pct,cy_pct], p1=[width,height] (box-space atan2).
+        #[derive(Clone)]
+        enum MaskGradientSpec {
+            Linear { params: GradParamsCpu, rect: Rect },
+            Radial { params: GradParamsCpu, rect: Rect },
+            Conic  { params: GradParamsCpu, rect: Rect },
+        }
         // CSS Masking L1 §4: mask composite plan. `from_level` = offscreen level
-        // with element content; `mask_src` = key in self.images (mask image).
+        // with element content; `mask_src` = key in self.images (image mask).
+        // `mask_gradient` = gradient mask rendered to temp surface-size texture.
         // `mask_v_start..mask_v_end` indexes into `mask_vertices`.
+        // Box<MaskGradientSpec>: GradParamsCpu is 544 bytes; boxing avoids large-variant warning.
         struct MaskCompositePlan {
             from_level: usize,
             mask_v_start: u32,
             mask_v_end: u32,
-            mask_src: Option<String>, // None → gradient mask Phase 0 fallback (alpha=1.0)
+            mask_src: Option<String>,
+            mask_gradient: Option<Box<MaskGradientSpec>>,
         }
         // CSS Filter Effects L1 — filter composite plan.
         // `from_level` = offscreen layer with element content.
@@ -3024,10 +3037,11 @@ impl Renderer {
         let mut composite_vertices: Vec<CompositeVertex> = Vec::new();
         // Accumulated vertex data for mask composite passes.
         let mut mask_vertices: Vec<MaskVertex> = Vec::new();
-        // Stack of PushMask params: (mask_src, size, position, repeat, rect, nearest).
-        // Pushed by PushMask*, popped by PopMask.
+        // Stack of PushMask params. Pushed by PushMask*, popped by PopMask.
+        // Either `src` (image key) or `gradient` is set; never both.
         struct MaskPushInfo {
             src: Option<String>,
+            gradient: Option<MaskGradientSpec>,
             size: BackgroundSize,
             position: ObjectPosition,
             repeat: BackgroundRepeat,
@@ -3784,6 +3798,7 @@ impl Renderer {
                     flush_batch!();
                     mask_params_stack.push(MaskPushInfo {
                         src: Some(src.clone()),
+                        gradient: None,
                         size: *size,
                         position: *position,
                         repeat: *repeat,
@@ -3795,18 +3810,63 @@ impl Renderer {
                     }
                     level_first[current_level] = true;
                 }
-                DisplayCommand::PushMaskLinearGradient { rect, .. }
-                | DisplayCommand::PushMaskRadialGradient { rect, .. }
-                | DisplayCommand::PushMaskConicGradient { rect, .. } => {
+                // CSS Masking L1 §4 — gradient masks: build GradParamsCpu at plan time;
+                // render-time pass renders gradient → surface-size temp texture → use as mask.
+                DisplayCommand::PushMaskLinearGradient { rect, angle_deg, stops, repeating } => {
                     flush_batch!();
-                    // Gradient masks: Phase 0 fallback — open offscreen level,
-                    // PopMask composites at alpha=1.0 (no actual gradient masking).
+                    let scrolled = translate_rect(*rect, dx, dy);
+                    let (p0, p1) = linear_gradient_uv_endpoints(scrolled.width, scrolled.height, *angle_deg);
+                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    let params = build_grad_params(&resolved, p0, p1, 0, *repeating, 0.0);
                     mask_params_stack.push(MaskPushInfo {
                         src: None,
+                        gradient: Some(MaskGradientSpec::Linear { params, rect: scrolled }),
                         size: BackgroundSize::Auto,
                         position: ObjectPosition::background_initial(),
                         repeat: BackgroundRepeat::NoRepeat,
-                        rect: translate_rect(*rect, dx, dy),
+                        rect: scrolled,
+                    });
+                    current_level += 1;
+                    while level_first.len() <= current_level {
+                        level_first.push(true);
+                    }
+                    level_first[current_level] = true;
+                }
+                DisplayCommand::PushMaskRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+                    flush_batch!();
+                    let scrolled = translate_rect(*rect, dx, dy);
+                    let (p0, p1) = radial_gradient_uv_params(*center_x_pct, *center_y_pct);
+                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    let params = build_grad_params(&resolved, p0, p1, 1, *repeating, 0.0);
+                    mask_params_stack.push(MaskPushInfo {
+                        src: None,
+                        gradient: Some(MaskGradientSpec::Radial { params, rect: scrolled }),
+                        size: BackgroundSize::Auto,
+                        position: ObjectPosition::background_initial(),
+                        repeat: BackgroundRepeat::NoRepeat,
+                        rect: scrolled,
+                    });
+                    current_level += 1;
+                    while level_first.len() <= current_level {
+                        level_first.push(true);
+                    }
+                    level_first[current_level] = true;
+                }
+                DisplayCommand::PushMaskConicGradient { rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating } => {
+                    flush_batch!();
+                    let scrolled = translate_rect(*rect, dx, dy);
+                    let p0 = [*center_x_pct, *center_y_pct];
+                    let p1 = [scrolled.width.max(1e-6), scrolled.height.max(1e-6)];
+                    let from_angle_rad = from_angle_deg.to_radians();
+                    let resolved = resolve_gradient_stops(stops, 1.0);
+                    let params = build_grad_params(&resolved, p0, p1, 2, *repeating, from_angle_rad);
+                    mask_params_stack.push(MaskPushInfo {
+                        src: None,
+                        gradient: Some(MaskGradientSpec::Conic { params, rect: scrolled }),
+                        size: BackgroundSize::Auto,
+                        position: ObjectPosition::background_initial(),
+                        repeat: BackgroundRepeat::NoRepeat,
+                        rect: scrolled,
                     });
                     current_level += 1;
                     while level_first.len() <= current_level {
@@ -3818,8 +3878,8 @@ impl Renderer {
                     flush_batch!();
                     let Some(info) = mask_params_stack.pop() else { continue };
                     let mv_start = mask_vertices.len() as u32;
-                    let mask_src = if let Some(src) = &info.src {
-                        // Build mask tile quads — same tiling logic as DrawBackgroundImage.
+                    let (mask_src, mask_gradient) = if let Some(src) = &info.src {
+                        // Image mask: build tile quads — same tiling logic as DrawBackgroundImage.
                         if let Some(gpu) = self.images.get(src) {
                             let img_w = gpu.width as f32;
                             let img_h = gpu.height as f32;
@@ -3881,7 +3941,6 @@ impl Renderer {
                                             let v0 = (cy - ty) / tile_h;
                                             let u1 = (cx1 - tx) / tile_w;
                                             let v1 = (cy1 - ty) / tile_h;
-                                            // Two triangles for the tile quad.
                                             mask_vertices.extend_from_slice(&[
                                                 MaskVertex { pos: [cx,  cy ], uv_mask: [u0, v0] },
                                                 MaskVertex { pos: [cx1, cy ], uv_mask: [u1, v0] },
@@ -3899,9 +3958,26 @@ impl Renderer {
                                 }
                             }
                         }
-                        Some(src.clone())
+                        (Some(src.clone()), None)
+                    } else if let Some(grad) = info.gradient.clone() {
+                        // Gradient mask: quad covers element rect; uv_mask = pos/surface
+                        // so the surface-size gradient texture is sampled at the same coords
+                        // as the content layer (uv_layer = pos/viewport).
+                        let area = info.rect;
+                        let (sw, sh) = (surface_w as f32, surface_h as f32);
+                        let (x0, y0) = (area.x, area.y);
+                        let (x1, y1) = (area.x + area.width, area.y + area.height);
+                        mask_vertices.extend_from_slice(&[
+                            MaskVertex { pos: [x0, y0], uv_mask: [x0/sw, y0/sh] },
+                            MaskVertex { pos: [x1, y0], uv_mask: [x1/sw, y0/sh] },
+                            MaskVertex { pos: [x1, y1], uv_mask: [x1/sw, y1/sh] },
+                            MaskVertex { pos: [x0, y0], uv_mask: [x0/sw, y0/sh] },
+                            MaskVertex { pos: [x1, y1], uv_mask: [x1/sw, y1/sh] },
+                            MaskVertex { pos: [x0, y1], uv_mask: [x0/sw, y1/sh] },
+                        ]);
+                        (None, Some(Box::new(grad)))
                     } else {
-                        None
+                        (None, None)
                     };
                     let mv_end = mask_vertices.len() as u32;
                     render_plan.push(RenderPlanItem::MaskComposite(MaskCompositePlan {
@@ -3909,6 +3985,7 @@ impl Renderer {
                         mask_v_start: mv_start,
                         mask_v_end: mv_end,
                         mask_src,
+                        mask_gradient,
                     }));
                     current_level -= 1;
                 }
@@ -4166,6 +4243,12 @@ impl Renderer {
             self.ensure_layer_textures(max_level, surface_w, surface_h);
         }
 
+        // CSS Masking L1 §4 — gradient mask temp textures.
+        // Kept alive until after encoder.submit() so GPU commands can safely read them.
+        // Each entry corresponds to one MaskComposite plan item with mask_gradient.
+        // Populated lazily during the render loop (see MaskComposite handler below).
+        let mut temp_grad_textures: Vec<(wgpu::Texture, wgpu::TextureView)> = Vec::new();
+
         // ── Frame ─────────────────────────────────────────────────────────
         let frame = self.surface.get_current_texture()?;
         let frame_view = frame
@@ -4381,7 +4464,7 @@ impl Renderer {
                 }
                 // CSS Masking L1 §4 — mask composite.
                 // Composites the offscreen element layer onto the parent using the
-                // mask image as an alpha multiplier (mask-mode: alpha).
+                // mask as an alpha multiplier (mask-mode: alpha, CSS Masking L1 §6.2).
                 RenderPlanItem::MaskComposite(comp) => {
                     let target_view = if comp.from_level == 1 {
                         &frame_view
@@ -4392,11 +4475,98 @@ impl Renderer {
                     };
                     let content_layer_view = &self.layer_textures[comp.from_level - 1].view;
 
-                    // Try to get the mask image GPU texture.
-                    let mask_gpu = comp.mask_src.as_ref().and_then(|src| self.images.get(src));
+                    // Determine mask texture view: image from cache or rendered gradient.
+                    let mask_gpu_image = comp.mask_src.as_ref().and_then(|src| self.images.get(src));
+                    let mask_view: Option<&wgpu::TextureView> = if let Some(img) = mask_gpu_image {
+                        Some(&img.view)
+                    } else if let Some(grad_spec) = &comp.mask_gradient {
+                        // Render gradient into a surface-size temp texture and use it as mask.
+                        // Gradient rendered in same pixel-coord system as content layer,
+                        // so uv_mask = pos/surface (set during plan building) samples correctly.
+                        let (grad_params, grad_rect) = match grad_spec.as_ref() {
+                            MaskGradientSpec::Linear { params, rect } => (params, rect),
+                            MaskGradientSpec::Radial { params, rect } => (params, rect),
+                            MaskGradientSpec::Conic  { params, rect } => (params, rect),
+                        };
+                        let temp_tex = self.device.create_texture(&wgpu::TextureDescriptor {
+                            label: Some("mask-grad-tex"),
+                            size: wgpu::Extent3d {
+                                width: surface_w, height: surface_h, depth_or_array_layers: 1,
+                            },
+                            mip_level_count: 1, sample_count: 1,
+                            dimension: wgpu::TextureDimension::D2,
+                            format: self.surface_format,
+                            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                                 | wgpu::TextureUsages::TEXTURE_BINDING,
+                            view_formats: &[],
+                        });
+                        let temp_view = temp_tex.create_view(&wgpu::TextureViewDescriptor::default());
+                        // Write gradient params uniform and build bind group.
+                        let grad_ubuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("mask-grad-ubuf"),
+                            size: std::mem::size_of::<GradParamsCpu>() as u64,
+                            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        // SAFETY: GradParamsCpu is #[repr(C)].
+                        self.queue.write_buffer(&grad_ubuf, 0, as_bytes(std::slice::from_ref(grad_params)));
+                        let grad_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                            label: Some("mask-grad-bg"),
+                            layout: &self.gradient_bgl,
+                            entries: &[wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: grad_ubuf.as_entire_binding(),
+                            }],
+                        });
+                        // Gradient vertex quad covering the element rect (CSS px coords).
+                        let r = grad_rect;
+                        let grad_verts: [GradVertex; 6] = [
+                            GradVertex { pos: [r.x,           r.y          ], uv: [0.0, 0.0] },
+                            GradVertex { pos: [r.x + r.width, r.y          ], uv: [1.0, 0.0] },
+                            GradVertex { pos: [r.x + r.width, r.y + r.height], uv: [1.0, 1.0] },
+                            GradVertex { pos: [r.x,           r.y          ], uv: [0.0, 0.0] },
+                            GradVertex { pos: [r.x + r.width, r.y + r.height], uv: [1.0, 1.0] },
+                            GradVertex { pos: [r.x,           r.y + r.height], uv: [0.0, 1.0] },
+                        ];
+                        let grad_vbuf_m = self.device.create_buffer(&wgpu::BufferDescriptor {
+                            label: Some("mask-grad-vbuf"),
+                            size: std::mem::size_of_val(&grad_verts) as u64,
+                            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                            mapped_at_creation: false,
+                        });
+                        self.queue.write_buffer(&grad_vbuf_m, 0, as_bytes(&grad_verts));
+                        // Render gradient into temp_tex (cleared to transparent first).
+                        {
+                            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                                label: Some("mask-grad-render"),
+                                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                    view: &temp_view,
+                                    resolve_target: None,
+                                    depth_slice: None,
+                                    ops: wgpu::Operations {
+                                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                                        store: wgpu::StoreOp::Store,
+                                    },
+                                })],
+                                depth_stencil_attachment: None,
+                                timestamp_writes: None,
+                                occlusion_query_set: None,
+                            });
+                            pass.set_pipeline(&self.gradient_pipeline);
+                            pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                            pass.set_bind_group(1, &grad_bg, &[]);
+                            pass.set_vertex_buffer(0, grad_vbuf_m.slice(..));
+                            pass.draw(0..6, 0..1);
+                        }
+                        // Store temp texture so it lives until encoder.submit().
+                        temp_grad_textures.push((temp_tex, temp_view));
+                        Some(&temp_grad_textures.last().unwrap().1)
+                    } else {
+                        None
+                    };
 
-                    if let (Some(mvb), Some(mask_gpu)) = (&mask_vbuf, mask_gpu) {
-                        // Build per-frame bind group: content layer + mask image + sampler.
+                    if let (Some(mvb), Some(mask_view)) = (&mask_vbuf, mask_view) {
+                        // Build per-frame bind group: content layer + mask texture + sampler.
                         let mask_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                             label: Some("mask-composite-bg"),
                             layout: &self.mask_composite_bgl,
@@ -4407,7 +4577,7 @@ impl Renderer {
                                 },
                                 wgpu::BindGroupEntry {
                                     binding: 1,
-                                    resource: wgpu::BindingResource::TextureView(&mask_gpu.view),
+                                    resource: wgpu::BindingResource::TextureView(mask_view),
                                 },
                                 wgpu::BindGroupEntry {
                                     binding: 2,
@@ -4439,28 +4609,8 @@ impl Renderer {
                             pass.draw(comp.mask_v_start..comp.mask_v_end, 0..1);
                         }
                     } else {
-                        // Mask image not registered or gradient mask (Phase 0 fallback):
-                        // composite the content layer at full opacity.
+                        // Mask image not registered: fallback — composite content at full opacity.
                         let src_bg = &self.layer_textures[comp.from_level - 1].bind_group;
-                        // Push a fullscreen quad with alpha=1.0 for the fallback composite.
-                        // We use the existing composite pipeline directly here.
-                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                            label: Some("mask-fallback-pass"),
-                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                                view: target_view,
-                                resolve_target: None,
-                                depth_slice: None,
-                                ops: wgpu::Operations {
-                                    load: wgpu::LoadOp::Load,
-                                    store: wgpu::StoreOp::Store,
-                                },
-                            })],
-                            depth_stencil_attachment: None,
-                            timestamp_writes: None,
-                            occlusion_query_set: None,
-                        });
-                        // Need a small fullscreen-quad vertex buffer just for this fallback.
-                        // Allocate it on the fly (rare path — only when mask image missing).
                         let fallback_verts: [CompositeVertex; 6] = [
                             CompositeVertex { pos: [-1.0,  1.0], uv: [0.0, 0.0], alpha: 1.0 },
                             CompositeVertex { pos: [ 1.0,  1.0], uv: [1.0, 0.0], alpha: 1.0 },
@@ -4476,6 +4626,21 @@ impl Renderer {
                             mapped_at_creation: false,
                         });
                         self.queue.write_buffer(&fallback_buf, 0, as_bytes(fallback_verts.as_slice()));
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("mask-fallback-pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: target_view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
                         pass.set_pipeline(&self.composite_pipeline);
                         pass.set_bind_group(0, src_bg, &[]);
                         pass.set_vertex_buffer(0, fallback_buf.slice(..));
