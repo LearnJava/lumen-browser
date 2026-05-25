@@ -1,4 +1,5 @@
-In progress: (нет)
+In progress: push-tokenizer feed_bytes  branch: p1-push-tokenizer-feed-bytes
+Next step: реализовать feed_bytes(&[u8]) + partial_utf8 буферизацию  crates/engine/html-parser/src/push_tokenizer.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
