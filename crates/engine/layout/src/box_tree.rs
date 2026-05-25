@@ -25,6 +25,8 @@ use crate::style::{
     ListStyleType, Overflow, OverflowWrap, Position, TextAlign, TextOverflow, TextWrapMode,
     VerticalAlign, WordBreak,
 };
+use crate::counters::{precompute_counters, CounterMap};
+use crate::counters::format_counter;
 use crate::TextMeasurer;
 
 /// HTML-имя элемента `<img>` для распознавания replaced-боксов в layout.
@@ -341,7 +343,8 @@ pub enum BoxKind {
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
-    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat);
+    let counters = precompute_counters(doc, sheet, viewport, &flat);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     let null_hp = NullHyphenationProvider;
@@ -371,7 +374,8 @@ pub fn layout_measured_hyp(
 ) -> LayoutBox {
     let root_style = ComputedStyle::root();
     let flat = build_flat_tree(doc);
-    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat);
+    let counters = precompute_counters(doc, sheet, viewport, &flat);
+    let mut root = build_box(doc, sheet, doc.root(), &root_style, viewport, &flat, &counters);
     propagate_canvas_background(doc, &mut root);
     let init_pcb = Rect::new(0.0, 0.0, viewport.width, viewport.height);
     lay_out(&mut root, 0.0, 0.0, viewport.width, Some(viewport.height), Some(measurer), viewport, init_pcb, hp);
@@ -537,6 +541,7 @@ fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<Layout
 }
 
 /// Рекурсивно собирает `InlineSegment`-ы из поддерева inline-контента.
+#[allow(clippy::too_many_arguments)]
 fn collect_inline_segments(
     doc: &Document,
     sheet: &Stylesheet,
@@ -545,6 +550,7 @@ fn collect_inline_segments(
     viewport: Size,
     out: &mut Vec<InlineSegment>,
     flat: &FlatTree,
+    counters: &CounterMap,
 ) {
     match &doc.get(id).data {
         NodeData::Text(s) if inherited.white_space.preserves_whitespace() => {
@@ -649,11 +655,11 @@ fn collect_inline_segments(
                         | Display::InlineBlock
                 )
             {
-                push_pseudo_inline_segs(&ps, viewport, out);
+                push_pseudo_inline_segs(&ps, doc, id, viewport, counters, out);
             }
             let children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
             for child_id in children {
-                collect_inline_segments(doc, sheet, child_id, &s, viewport, out, flat);
+                collect_inline_segments(doc, sheet, child_id, &s, viewport, out, flat, counters);
             }
             // CSS Pseudo-elements L4 §4 — ::after in inline formatting context.
             if let Some(ps) =
@@ -666,7 +672,7 @@ fn collect_inline_segments(
                         | Display::InlineBlock
                 )
             {
-                push_pseudo_inline_segs(&ps, viewport, out);
+                push_pseudo_inline_segs(&ps, doc, id, viewport, counters, out);
             }
             let added = out.len() - start;
             // Mark all segments from this element (including pseudo-element content)
@@ -693,6 +699,8 @@ fn inject_pseudo(
     children: &mut Vec<LayoutBox>,
     ps: Option<ComputedStyle>,
     is_before: bool,
+    doc: &Document,
+    counters: &CounterMap,
 ) {
     let Some(ps) = ps else { return };
     match ps.display {
@@ -700,7 +708,7 @@ fn inject_pseudo(
         | Display::InlineFlex
         | Display::InlineGrid
         | Display::InlineBlock => {
-            let segs = content_to_inline_segments(&ps);
+            let segs = content_to_inline_segments(&ps, doc, parent_id, counters);
             if segs.is_empty() {
                 return;
             }
@@ -724,7 +732,7 @@ fn inject_pseudo(
         }
         _ => {
             // Block-level pseudo-element.
-            let inner_segs = content_to_inline_segments(&ps);
+            let inner_segs = content_to_inline_segments(&ps, doc, parent_id, counters);
             let inner = if inner_segs.is_empty() {
                 vec![]
             } else {
@@ -747,19 +755,47 @@ fn inject_pseudo(
 }
 
 /// Extracts text from `Content::Items` and returns it as a single `InlineSegment`.
-/// Only `ContentItem::String` is handled in Phase 0; other variants are skipped.
-fn content_to_inline_segments(style: &ComputedStyle) -> Vec<InlineSegment> {
+///
+/// Resolves `ContentItem::String`, `ContentItem::Counter`, `ContentItem::Counters`,
+/// and `ContentItem::Attr` using the per-element `CounterMap` snapshot and DOM lookup.
+/// `owner_id` is the element whose `::before`/`::after` pseudo-element we're generating.
+fn content_to_inline_segments(
+    style: &ComputedStyle,
+    doc: &Document,
+    owner_id: NodeId,
+    counters: &CounterMap,
+) -> Vec<InlineSegment> {
     let Content::Items(items) = &style.content else {
         return vec![];
     };
+    let snap = counters.get(&owner_id);
     let text: String = items
         .iter()
-        .filter_map(|item| {
-            if let ContentItem::String(s) = item {
-                Some(s.as_str())
-            } else {
-                None
+        .filter_map(|item| match item {
+            ContentItem::String(s) => Some(s.clone()),
+            ContentItem::Counter { name, style: list_style } => {
+                let val = snap
+                    .and_then(|s| s.get(name))
+                    .and_then(|v| v.last())
+                    .copied()
+                    .unwrap_or(0);
+                Some(format_counter(val, list_style.as_deref().unwrap_or("decimal")))
             }
+            ContentItem::Counters { name, separator, style: list_style } => {
+                let vals = snap
+                    .and_then(|s| s.get(name))
+                    .map(|v| v.as_slice())
+                    .unwrap_or(&[]);
+                let formatted: Vec<String> = vals
+                    .iter()
+                    .map(|&v| format_counter(v, list_style.as_deref().unwrap_or("decimal")))
+                    .collect();
+                Some(formatted.join(separator.as_str()))
+            }
+            ContentItem::Attr(attr) => {
+                doc.get(owner_id).get_attr(attr).map(|s| s.to_string())
+            }
+            _ => None,
         })
         .collect();
     if text.is_empty() {
@@ -780,8 +816,15 @@ fn content_to_inline_segments(style: &ComputedStyle) -> Vec<InlineSegment> {
 /// Builds inline segments for a pseudo-element and applies its own box model
 /// spacing (margin + border + padding) as `pre_space` / `post_space`.
 /// Used by `collect_inline_segments` to inject `::before` / `::after` content.
-fn push_pseudo_inline_segs(ps: &ComputedStyle, viewport: Size, out: &mut Vec<InlineSegment>) {
-    let mut segs = content_to_inline_segments(ps);
+fn push_pseudo_inline_segs(
+    ps: &ComputedStyle,
+    doc: &Document,
+    owner_id: NodeId,
+    viewport: Size,
+    counters: &CounterMap,
+    out: &mut Vec<InlineSegment>,
+) {
+    let mut segs = content_to_inline_segments(ps, doc, owner_id, counters);
     if segs.is_empty() {
         return;
     }
@@ -936,6 +979,7 @@ fn build_box(
     inherited: &ComputedStyle,
     viewport: Size,
     flat: &FlatTree,
+    counters: &CounterMap,
 ) -> LayoutBox {
     let mut style = compute_style(doc, id, sheet, inherited, viewport);
 
@@ -1023,7 +1067,7 @@ fn build_box(
         );
         if is_item_container {
             for child_id in dom_children {
-                let child_box = build_box(doc, sheet, child_id, &style, viewport, flat);
+                let child_box = build_box(doc, sheet, child_id, &style, viewport, flat, counters);
                 if !matches!(child_box.kind, BoxKind::Skip) {
                     children.push(child_box);
                 }
@@ -1064,7 +1108,7 @@ fn build_box(
                         _ => {}
                     }
                     if is_inline_content(doc, sheet, cid, &style, viewport) {
-                        collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat);
+                        collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat, counters);
                         had_ws = false;
                         i += 1;
                     } else if is_inline_block(doc, sheet, cid, &style, viewport) {
@@ -1085,7 +1129,7 @@ fn build_box(
                                 children: vec![],
                             });
                         }
-                        row_items.push(build_box(doc, sheet, cid, &style, viewport, flat));
+                        row_items.push(build_box(doc, sheet, cid, &style, viewport, flat, counters));
                         had_ws = false;
                         i += 1;
                     } else if matches!(doc.get(cid).data, NodeData::Element { .. })
@@ -1114,7 +1158,7 @@ fn build_box(
                     }
                 }
             } else {
-                children.push(build_box(doc, sheet, child_id, &style, viewport, flat));
+                children.push(build_box(doc, sheet, child_id, &style, viewport, flat, counters));
                 i += 1;
             }
         }
@@ -1125,8 +1169,8 @@ fn build_box(
                 compute_pseudo_element_style(doc, id, "before", sheet, &style, viewport);
             let after_ps =
                 compute_pseudo_element_style(doc, id, "after", sheet, &style, viewport);
-            inject_pseudo(id, &mut children, before_ps, true);
-            inject_pseudo(id, &mut children, after_ps, false);
+            inject_pseudo(id, &mut children, before_ps, true, doc, counters);
+            inject_pseudo(id, &mut children, after_ps, false, doc, counters);
             // CSS Lists L3 §2.1 — inject ::marker for list items.
             // ::marker comes before ::before in document order.
             if style.display == Display::ListItem {
