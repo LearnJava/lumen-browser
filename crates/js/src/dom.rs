@@ -9,7 +9,7 @@
 
 use std::sync::{Arc, Mutex};
 
-use lumen_core::ext::JsFetchProvider;
+use lumen_core::ext::{JsFetchProvider, JsWebSocketProvider, JsWsEvent};
 use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
 use rquickjs::{Ctx, Function, Result as QjResult};
 
@@ -86,17 +86,18 @@ impl HistoryState {
 /// Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`.
 ///
 /// After this call the context exposes `console`, `document`, `window`,
-/// `location`, `navigator`, `alert`, and `fetch`.
+/// `location`, `navigator`, `alert`, `fetch`, and `WebSocket`.
 ///
 /// `fetch_provider` wires `window.fetch()` to the real HTTP stack.
-/// When `None`, `fetch()` rejects with a network error (useful for sandboxed
-/// contexts or tests that don't need network access).
+/// `ws_provider` wires `new WebSocket(url)` to the real WS stack.
+/// Pass `None` for either in sandboxed contexts or tests.
 pub fn install_dom_api(
     ctx: &Ctx<'_>,
     doc: Arc<Mutex<Document>>,
     fetch_provider: Option<Arc<dyn JsFetchProvider>>,
+    ws_provider: Option<Arc<dyn JsWebSocketProvider>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), fetch_provider)?;
+    install_primitives(ctx, Arc::clone(&doc), fetch_provider, ws_provider)?;
     ctx.eval::<(), _>(WEB_API_SHIM)?;
     Ok(())
 }
@@ -108,6 +109,7 @@ fn install_primitives(
     ctx: &Ctx<'_>,
     doc: Arc<Mutex<Document>>,
     fetch_provider: Option<Arc<dyn JsFetchProvider>>,
+    ws_provider: Option<Arc<dyn JsWebSocketProvider>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -578,6 +580,120 @@ fn install_primitives(
                 .as_ref()
                 .map_or_else(Vec::new, |r| r.body.clone())
         });
+    }
+
+    // ── WebSocket API ─────────────────────────────────────────────────────────
+    // Phase 0 model: synchronous connect, background recv thread, JS polls.
+    // _lumen_ws_connect(url)  → handle u32 (0 = error)
+    // _lumen_ws_send(h, text) → bool
+    // _lumen_ws_send_bin(h, data) → bool
+    // _lumen_ws_close(h, code, reason)
+    // _lumen_ws_poll(h) → Option<String> (JSON event or null)
+    {
+        use std::collections::HashMap;
+
+        // Registry: handle → Box<dyn JsWebSocketSession>
+        // Wrapped in Arc<Mutex<>> so each closure captures its own Arc clone.
+        let registry: Arc<Mutex<HashMap<u32, Box<dyn lumen_core::ext::JsWebSocketSession>>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let next_id: Arc<Mutex<u32>> = Arc::new(Mutex::new(1));
+
+        let (reg_c, nid_c, wp) = (Arc::clone(&registry), Arc::clone(&next_id), ws_provider);
+        reg!("_lumen_ws_connect", move |url: String| -> u32 {
+            let Some(ref provider) = wp else { return 0 };
+            match provider.connect(&url) {
+                Ok(session) => {
+                    let id = {
+                        let mut n = nid_c.lock().unwrap();
+                        let id = *n;
+                        *n = n.wrapping_add(1).max(1);
+                        id
+                    };
+                    reg_c.lock().unwrap().insert(id, session);
+                    id
+                }
+                Err(e) => {
+                    eprintln!("[JS WebSocket] connect error: {e}");
+                    0
+                }
+            }
+        });
+
+        let reg_c = Arc::clone(&registry);
+        reg!("_lumen_ws_send", move |handle: u32, text: String| -> bool {
+            let mut map = reg_c.lock().unwrap();
+            if let Some(sess) = map.get_mut(&handle) {
+                sess.send_text(&text).is_ok()
+            } else {
+                false
+            }
+        });
+
+        let reg_c = Arc::clone(&registry);
+        reg!(
+            "_lumen_ws_send_bin",
+            move |handle: u32, data: Vec<u8>| -> bool {
+                let mut map = reg_c.lock().unwrap();
+                if let Some(sess) = map.get_mut(&handle) {
+                    sess.send_binary(&data).is_ok()
+                } else {
+                    false
+                }
+            }
+        );
+
+        let reg_c = Arc::clone(&registry);
+        reg!(
+            "_lumen_ws_close",
+            move |handle: u32, code: u32, reason: String| {
+                let mut map = reg_c.lock().unwrap();
+                if let Some(sess) = map.get_mut(&handle) {
+                    let _ = sess.close(code as u16, &reason);
+                }
+            }
+        );
+
+        let reg_c = Arc::clone(&registry);
+        reg!(
+            "_lumen_ws_poll",
+            move |handle: u32| -> Option<String> {
+                let map = reg_c.lock().unwrap();
+                let sess = map.get(&handle)?;
+                sess.poll().map(|ev| match ev {
+                    JsWsEvent::Open => r#"{"t":"open"}"#.to_string(),
+                    JsWsEvent::Message { data, is_binary } => {
+                        if is_binary {
+                            // Encode binary payload as base64-like hex for Phase 0.
+                            let hex: String =
+                                data.iter().map(|b| format!("{b:02x}")).collect();
+                            format!(r#"{{"t":"msg","bin":true,"data":"{hex}"}}"#)
+                        } else {
+                            let text = String::from_utf8_lossy(&data);
+                            // Minimal JSON-escape: replace \ and " only.
+                            let escaped = text
+                                .replace('\\', "\\\\")
+                                .replace('"', "\\\"")
+                                .replace('\n', "\\n")
+                                .replace('\r', "\\r");
+                            format!(r#"{{"t":"msg","bin":false,"data":"{escaped}"}}"#)
+                        }
+                    }
+                    JsWsEvent::Close { code, reason } => {
+                        let c = code.unwrap_or(1000);
+                        let r = reason
+                            .replace('\\', "\\\\")
+                            .replace('"', "\\\"");
+                        format!(r#"{{"t":"close","code":{c},"reason":"{r}"}}"#)
+                    }
+                    JsWsEvent::Error(msg) => {
+                        let m = msg
+                            .replace('\\', "\\\\")
+                            .replace('"', "\\\"");
+                        format!(r#"{{"t":"error","msg":"{m}"}}"#)
+                    }
+                })
+            }
+        );
     }
 
     Ok(())
@@ -1397,6 +1513,120 @@ function fetch(input, init) {
     }
 }
 
+// ── WebSocket API (RFC 6455 §§3–7) ─────────────────────────────────────────
+// Phase 0 model: synchronous connect; background recv thread queues events;
+// JS polls via _lumen_pump_websockets(). Full async delivery (persistent JS
+// runtime) is Phase 2+.
+
+var _ws_instances = [];
+
+function CloseEvent(code, reason, wasClean) {
+    Event.call(this, 'close');
+    this.code = code || 1000;
+    this.reason = reason || '';
+    this.wasClean = !!wasClean;
+}
+CloseEvent.prototype = Object.create(Event.prototype);
+CloseEvent.prototype.constructor = CloseEvent;
+
+function MessageEvent(data) {
+    Event.call(this, 'message');
+    this.data = data;
+    this.origin = '';
+    this.lastEventId = '';
+}
+MessageEvent.prototype = Object.create(Event.prototype);
+MessageEvent.prototype.constructor = MessageEvent;
+
+function _lumen_ws_fire(ws, ev) {
+    ev.target = ws;
+    var prop = 'on' + ev.type;
+    if (typeof ws[prop] === 'function') { try { ws[prop](ev); } catch(e) {} }
+    var arr = ws._listeners[ev.type];
+    if (arr) { for (var i = 0; i < arr.length; i++) { try { arr[i](ev); } catch(e) {} } }
+}
+
+function _lumen_ws_pump_one(ws) {
+    if (!ws._handle) return;
+    var raw;
+    while ((raw = _lumen_ws_poll(ws._handle)) !== null && raw !== undefined) {
+        try {
+            var ev = JSON.parse(raw);
+            if (ev.t === 'open') {
+                ws.readyState = 1;
+                _lumen_ws_fire(ws, new Event('open'));
+            } else if (ev.t === 'msg') {
+                if (ws.readyState !== 1) { continue; }
+                _lumen_ws_fire(ws, new MessageEvent(ev.data));
+            } else if (ev.t === 'close') {
+                ws.readyState = 3;
+                _lumen_ws_fire(ws, new CloseEvent(ev.code, ev.reason, ev.code === 1000));
+                ws._handle = 0;
+                break;
+            } else if (ev.t === 'error') {
+                var err = new Event('error'); err.message = ev.msg;
+                _lumen_ws_fire(ws, err);
+                ws.readyState = 3; ws._handle = 0; break;
+            }
+        } catch(ignore) {}
+    }
+}
+
+function _lumen_pump_websockets() {
+    for (var i = _ws_instances.length - 1; i >= 0; i--) {
+        _lumen_ws_pump_one(_ws_instances[i]);
+        if (_ws_instances[i].readyState === 3) { _ws_instances.splice(i, 1); }
+    }
+}
+
+function WebSocket(url) {
+    this.url = String(url || '');
+    this.readyState = 0;
+    this.protocol = '';
+    this.binaryType = 'blob';
+    this.onopen = null; this.onmessage = null;
+    this.onclose = null; this.onerror = null;
+    this._handle = 0;
+    this._listeners = {};
+    var self = this;
+    var h = _lumen_ws_connect(this.url);
+    if (!h) {
+        this.readyState = 3;
+        setTimeout(function() {
+            var e = new Event('error'); e.message = 'WebSocket connection failed';
+            _lumen_ws_fire(self, e);
+            _lumen_ws_fire(self, new CloseEvent(1006, '', false));
+        }, 0);
+        return;
+    }
+    this._handle = h;
+    _ws_instances.push(this);
+    // Phase 0: no persistent event loop — caller must invoke _lumen_pump_websockets()
+    // after setting onopen/onmessage to receive queued events.
+}
+WebSocket.prototype.send = function(data) {
+    if (this.readyState !== 1) return;
+    if (typeof data === 'string') { _lumen_ws_send(this._handle, data); }
+    else { _lumen_ws_send_bin(this._handle, data instanceof Uint8Array ? data : new Uint8Array(data)); }
+};
+WebSocket.prototype.close = function(code, reason) {
+    if (this.readyState === 3) return;
+    this.readyState = 2;
+    _lumen_ws_close(this._handle, typeof code === 'number' ? code : 1000, typeof reason === 'string' ? reason : '');
+};
+WebSocket.prototype.addEventListener = function(type, fn) {
+    if (typeof fn !== 'function') return;
+    if (!this._listeners[type]) this._listeners[type] = [];
+    this._listeners[type].push(fn);
+};
+WebSocket.prototype.removeEventListener = function(type, fn) {
+    if (!this._listeners[type]) return;
+    var idx = this._listeners[type].indexOf(fn);
+    if (idx >= 0) this._listeners[type].splice(idx, 1);
+};
+WebSocket.CONNECTING = 0; WebSocket.OPEN = 1;
+WebSocket.CLOSING = 2;    WebSocket.CLOSED = 3;
+
 var window = {
     history: history,
     onpopstate: null,
@@ -1413,6 +1643,10 @@ var window = {
     clearInterval: clearInterval,
     requestAnimationFrame: requestAnimationFrame,
     EventSource: EventSource,
+    WebSocket: WebSocket,
+    CloseEvent: CloseEvent,
+    MessageEvent: MessageEvent,
+    _lumen_pump_websockets: _lumen_pump_websockets,
     caches: caches,
     document: document,
     console: console,
@@ -1492,7 +1726,7 @@ mod tests {
 
     fn runtime_with_dom(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(doc, None).unwrap();
+        rt.install_dom(doc, None, None).unwrap();
         rt
     }
 
@@ -2526,6 +2760,171 @@ mod tests {
     fn window_has_abort_controller() {
         let rt = runtime_with_dom(make_doc());
         let r = rt.eval("typeof window.AbortController === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── WebSocket API ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn window_has_websocket_constructor() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.WebSocket === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn websocket_constants_defined() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("WebSocket.CONNECTING === 0 && WebSocket.OPEN === 1 && WebSocket.CLOSING === 2 && WebSocket.CLOSED === 3")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // Mock WS provider: connect always fails (no server).
+    struct FailWsProvider;
+    impl lumen_core::ext::JsWebSocketProvider for FailWsProvider {
+        fn connect(&self, _url: &str) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
+            Err(lumen_core::error::Error::Network("test: no server".into()))
+        }
+    }
+
+    fn runtime_with_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(FailWsProvider);
+        rt.install_dom(doc, None, Some(provider)).unwrap();
+        rt
+    }
+
+    #[test]
+    fn websocket_connect_fail_sets_closed_state() {
+        let rt = runtime_with_ws(make_doc());
+        // connect fails immediately → readyState = 3 (CLOSED)
+        let r = rt
+            .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws.readyState")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(3.0));
+    }
+
+    #[test]
+    fn websocket_connect_fail_no_handle() {
+        let rt = runtime_with_ws(make_doc());
+        let r = rt
+            .eval("var ws = new WebSocket('ws://127.0.0.1:1'); ws._handle === 0")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn websocket_connect_fail_fires_onerror() {
+        let rt = runtime_with_ws(make_doc());
+        // onerror is called asynchronously via setTimeout(fn, 0) in the shim.
+        // We can't pump the timeout in this test — just verify the handler is set.
+        let r = rt
+            .eval(
+                "var fired = false;
+                 var ws = new WebSocket('ws://127.0.0.1:1');
+                 ws.onerror = function() { fired = true; };
+                 ws.readyState === 3",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // Mock WS provider: immediately queues Open + one Text message.
+    struct MockWsProvider;
+    struct MockWsSession {
+        queue: std::sync::Mutex<std::collections::VecDeque<lumen_core::ext::JsWsEvent>>,
+    }
+    impl lumen_core::ext::JsWebSocketSession for MockWsSession {
+        fn send_text(&self, _text: &str) -> lumen_core::error::Result<()> { Ok(()) }
+        fn send_binary(&self, _data: &[u8]) -> lumen_core::error::Result<()> { Ok(()) }
+        fn poll(&self) -> Option<lumen_core::ext::JsWsEvent> {
+            self.queue.lock().unwrap().pop_front()
+        }
+        fn close(&self, _code: u16, _reason: &str) -> lumen_core::error::Result<()> { Ok(()) }
+    }
+    impl lumen_core::ext::JsWebSocketProvider for MockWsProvider {
+        fn connect(&self, _url: &str) -> lumen_core::error::Result<Box<dyn lumen_core::ext::JsWebSocketSession>> {
+            use lumen_core::ext::JsWsEvent;
+            let mut q = std::collections::VecDeque::new();
+            q.push_back(JsWsEvent::Open);
+            q.push_back(JsWsEvent::Message { data: b"hello".to_vec(), is_binary: false });
+            Ok(Box::new(MockWsSession { queue: std::sync::Mutex::new(q) }))
+        }
+    }
+
+    fn runtime_with_mock_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockWsProvider);
+        rt.install_dom(doc, None, Some(provider)).unwrap();
+        rt
+    }
+
+    #[test]
+    fn websocket_mock_connect_open_state() {
+        let rt = runtime_with_mock_ws(make_doc());
+        // Phase 0: pump explicitly to deliver Open event → readyState = 1.
+        let r = rt
+            .eval("var ws = new WebSocket('ws://mock'); _lumen_pump_websockets(); ws.readyState")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn websocket_mock_open_fires_onopen() {
+        let rt = runtime_with_mock_ws(make_doc());
+        let r = rt
+            .eval(
+                "var opened = false;
+                 var ws = new WebSocket('ws://mock');
+                 ws.onopen = function() { opened = true; };
+                 _lumen_pump_websockets();
+                 opened",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn websocket_mock_message_via_pump() {
+        let rt = runtime_with_mock_ws(make_doc());
+        // Set handler before pump so onmessage fires when the message is dispatched.
+        let r = rt
+            .eval(
+                "var received = null;
+                 var ws = new WebSocket('ws://mock');
+                 ws.onmessage = function(e) { received = e.data; };
+                 _lumen_pump_websockets();
+                 received",
+            )
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("hello".into()));
+    }
+
+    #[test]
+    fn websocket_no_provider_connect_returns_zero() {
+        // Without ws_provider, _lumen_ws_connect always returns 0.
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("_lumen_ws_connect('ws://test')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn close_event_constructor() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("var ce = new CloseEvent(1001, 'bye', true); ce.code === 1001 && ce.reason === 'bye' && ce.wasClean === true")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn message_event_constructor() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("var me = new MessageEvent('payload'); me.data === 'payload' && me.type === 'message'")
+            .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 }
