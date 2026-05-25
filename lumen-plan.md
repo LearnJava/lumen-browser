@@ -723,6 +723,8 @@ Bidi (UAX #9), line breaking (UAX #14), segmentation (UAX #29), normalization (U
 | **`wgpu`** | GPU API (Vulkan / Metal / DX12 / GL) | `RenderBackend` | 4 разных API, разные семантики, driver-баги. Свой = годы работы и регрессий |
 | **`rustls`** + **`webpki-roots`** | TLS, X.509, X25519, AES-GCM, HKDF; `webpki-roots` — bundle корневых CA-сертификатов (Mozilla CA bundle). Без него HTTPS не валидируется. | `TlsBackend` | **Универсальное правило безопасности:** не пишите свой crypto. rustls — аудит + формальная верификация частей кода. `webpki-roots` — pure data + lookup, partner-crate к rustls |
 | **SQLite** (`rusqlite` с `bundled` feature) | Персистентное хранилище: history, bookmarks, notes, read-later, cookies-TTL, профили. FTS5 для §12.1 полнотекстового поиска. | `StorageBackend` + `KnowledgeStore` | 25 лет TH3-тестирования (100% MC/DC branch coverage), стандарт индустрии браузеров (Firefox/Chromium/Safari). Цена ошибки persistent storage асимметрична — молчаливая порча данных пользователя; та же логика, что у crypto. FTS5 закрывает §12.1 без своего inverted index |
+
+> **Долгосрочная стратегия: pure-Rust storage (redb + tantivy).** SQLite остаётся permanent exception на Phase 0–2. Однако `rusqlite` с `bundled` тянет ~250 КБ C-кода, который нельзя аудировать средствами Rust — это противоречит принципу «свой код = прозрачность». Целевая архитектура (Phase 3+): **redb** (pure Rust, ACID copy-on-write B+tree, ноль `unsafe`, используется в `cargo`) для key-value подсистем (localStorage, sessionStorage, IndexedDB, HTTP cache) + **tantivy** (Rust-native FTS) для полнотекстового поиска §12.1. Оба за `StorageBackend` / `KnowledgeStore` trait — drop-in замена. Graduation criterion: замерить p99 latency SQLite WAL vs redb на реальной нагрузке; если SQLite < 1 мс — миграция не срочна, но остаётся целью ради чистоты стека.
 | **JS engine** (`rquickjs` v0.5 → `rusty_v8` v1.0+) | Исполнение JavaScript | `JsRuntime` | V8 — 15 лет, миллиарды долларов, сотни инженеров. QuickJS на старте, V8 в v1.0+ |
 
 ### Provisional accelerators (берём готовое сейчас, заменяем по событию)
@@ -741,6 +743,8 @@ Trait-anchor у каждого — в `lumen-core::ext`. Подключаем п
 | `woff2` | Распаковка WOFF2 в TTF | расширение `FontFormat` | 2 | Phase 2 при WebFonts. Формат стабилен, маловероятно писать своё |
 | `hunspell-rs` / `spellbook` | Spell-check (русская морфология обязательна) | `SpellChecker` | 3 | Phase 3 при spell-check. Морфология русского сложна, цена своей реализации перекрывает выгоду |
 | `quinn` | HTTP/3 / QUIC | расширение `NetworkTransport` | 3 | Реалистично — никогда. QUIC = год+ работы (congestion control, packet loss recovery, 0-RTT, key updates) |
+| `redb` | Pure Rust ACID key-value (copy-on-write B+tree). Альтернативный storage backend для горячих key-value (localStorage, IndexedDB, HTTP cache) | `StorageBackend` | 2–3 | Замерить p99 latency SQLite WAL vs redb на реальной нагрузке localStorage/IndexedDB. Если SQLite < 1 мс — не нужен |
+| `tantivy` | Rust-native полнотекстовый поиск. Замена SQLite FTS5 для §12.1 knowledge layer при миграции на pure-Rust storage | `KnowledgeStore` | 3+ | Только вместе с redb — при решении полностью отказаться от SQLite C-кода |
 
 **Принципы работы с provisional-категорией:**
 
@@ -1076,6 +1080,7 @@ CI-чек на новые `[dependencies]`-строки добавим, когд
 - **Total cookie protection** — cookies партиционированы по top-level eTLD+1. Третьесторонний сайт получает свой cookie jar для каждого встраивающего сайта.
 - **SameSite=Lax по умолчанию** — даже если сайт не указал.
 - **First-Party Isolation** — IndexedDB, localStorage, cache — всё партиционировано.
+- **Целевой pure-Rust backend (Phase 3+):** redb для горячих key-value (localStorage, sessionStorage, IndexedDB, HTTP cache) + tantivy для FTS — замена SQLite C-кода за `StorageBackend` trait (см. §5).
 - **Auto-clear:** опционально, при закрытии вкладки/окна/сессии.
 - **Cookie viewer** — UI для просмотра и удаления.
 
