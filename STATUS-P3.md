@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: raf-js (requestAnimationFrame JS binding)  branch: p3-raf-js
+Next step: add raf_pending AtomicBool to QuickJsRuntime, wire _lumen_run_raf_callbacks in shim, call from shell RedrawRequested  crates/js/src/lib.rs:26
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
