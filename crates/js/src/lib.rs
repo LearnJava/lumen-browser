@@ -17,6 +17,10 @@ pub struct QuickJsRuntime {
     /// Navigation request written by JS via `location.href=`, `location.assign()` etc.
     /// Captured inside `install_dom_api`; read by `take_navigate_request`.
     nav_out: Arc<Mutex<Option<NavigateRequest>>>,
+    /// Next timer wakeup deadline as Unix epoch ms (set by `_lumen_request_wakeup`).
+    /// Read by the shell event loop to schedule `ControlFlow::WaitUntil`.
+    /// `take_timer_wakeup` atomically clears after reading.
+    timer_wakeup: Arc<Mutex<Option<f64>>>,
 }
 
 struct Inner {
@@ -38,6 +42,7 @@ impl QuickJsRuntime {
         Ok(Self {
             inner: Mutex::new(Inner { _rt: rt, ctx }),
             nav_out: Arc::new(Mutex::new(None)),
+            timer_wakeup: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -66,8 +71,18 @@ impl QuickJsRuntime {
         let ss = Arc::new(Mutex::new(WebStorage::default()));
         let guard = self.inner.lock().unwrap();
         guard.ctx.with(|ctx| {
-            dom::install_dom_api(&ctx, doc, page_url, Arc::clone(&self.nav_out), fetch_provider, ws_provider, ls, ss)
-                .map_err(|e| rq_err(&ctx, e))
+            dom::install_dom_api(
+                &ctx,
+                doc,
+                page_url,
+                Arc::clone(&self.nav_out),
+                fetch_provider,
+                ws_provider,
+                ls,
+                ss,
+                Arc::clone(&self.timer_wakeup),
+            )
+            .map_err(|e| rq_err(&ctx, e))
         })
     }
 
@@ -76,6 +91,15 @@ impl QuickJsRuntime {
     /// Must be called before `drop(runtime)` to avoid losing the request.
     pub fn take_navigate_request(&self) -> Option<NavigateRequest> {
         self.nav_out.lock().unwrap().take()
+    }
+
+    /// Take the next timer wakeup as Unix epoch ms, clearing the stored value.
+    ///
+    /// Called by the shell event loop in `about_to_wait` to schedule
+    /// `ControlFlow::WaitUntil` so the loop wakes up when the next JS timer fires.
+    /// Returns `None` when no timers are pending.
+    pub fn take_timer_wakeup(&self) -> Option<f64> {
+        self.timer_wakeup.lock().unwrap().take()
     }
 }
 

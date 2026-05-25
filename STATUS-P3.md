@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: timers-async (setTimeout/setInterval/clearTimeout/clearInterval + scheduler.postTask)  branch: p3-timers-async
+Next step: реализовать JS timer queue + _lumen_tick_timers + WaitUntil в about_to_wait  crates/js/src/dom.rs:1462
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
