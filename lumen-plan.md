@@ -378,7 +378,7 @@
 
 #### 3B — Push-tokenizer + incremental tree builder
 
-**`push-tokenizer`**: `PushTokenizer { feed, end }` поверх pull-Tokenizer-а с `find_safe_split`-эвристикой (учитывает `<!--…-->`, `<!DOCTYPE…>`, `<tag…>`, `&entity;`); `IncrementalTreeBuilder { feed, finish }` с text-node coalescing. Инвариант: pull/push дают побайтово равный `Document`. 44 теста (29 push_tokenizer + 15 incremental_tree_builder). **Осталось:** `feed_bytes(&[u8])` с буферизацией partial UTF-8.
+**`push-tokenizer`**: `PushTokenizer { feed, feed_bytes, end }` поверх pull-Tokenizer-а с `find_safe_split`-эвристикой (учитывает `<!--…-->`, `<!DOCTYPE…>`, `<tag…>`, `&entity;`); `IncrementalTreeBuilder { feed, finish }` с text-node coalescing. Инвариант: pull/push дают побайтово равный `Document`. `feed_bytes(&[u8])` буферизует незавершённые UTF-8 последовательности на границах chunk-ов (partial_utf8 до 3 байт); явно невалидные байты → U+FFFD inline; незавершённая последовательность при `end()` → U+FFFD (WHATWG Encoding §4). 342 теста (36 push_tokenizer + 15 incremental_tree_builder + остальные). **Разблокировано:** P3 п.4B (streaming pipeline) — shell переключается с blocking на push/bytes-режим.
 
 #### UA stylesheet phase 1 (2026-05-20)
 
