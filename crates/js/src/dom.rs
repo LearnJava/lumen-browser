@@ -13,6 +13,8 @@ use lumen_core::ext::{JsFetchProvider, JsWebSocketProvider, JsWsEvent};
 use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
 use rquickjs::{Ctx, Function, Result as QjResult};
 
+use lumen_core::WebStorage;
+
 // ─── history state ───────────────────────────────────────────────────────────
 
 struct HistoryEntry {
@@ -101,7 +103,8 @@ pub enum NavigateRequest {
 /// Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`.
 ///
 /// After this call the context exposes `console`, `document`, `window`,
-/// `location`, `navigator`, `alert`, `fetch`, and `WebSocket`.
+/// `location`, `navigator`, `alert`, `fetch`, `WebSocket`, `localStorage`,
+/// and `sessionStorage`.
 ///
 /// `page_url` — the URL of the current page, used to initialise `location`.
 /// `nav_out`  — shared slot; JS writes a `NavigateRequest` here when the page
@@ -109,7 +112,11 @@ pub enum NavigateRequest {
 ///              it after all scripts have run.
 /// `fetch_provider` wires `window.fetch()` to the real HTTP stack.
 /// `ws_provider` wires `new WebSocket(url)` to the real WS stack.
-/// Pass `None` for either in sandboxed contexts or tests.
+/// `ls_store` — shared localStorage partition for this origin; persists across
+///              page reloads.  Pass a fresh `Arc<Mutex<WebStorage>>` per origin.
+/// `ss_store` — fresh sessionStorage for this page load; created by the caller.
+/// Pass `None` for providers in sandboxed contexts or tests.
+#[allow(clippy::too_many_arguments)]
 pub fn install_dom_api(
     ctx: &Ctx<'_>,
     doc: Arc<Mutex<Document>>,
@@ -117,8 +124,10 @@ pub fn install_dom_api(
     nav_out: Arc<Mutex<Option<NavigateRequest>>>,
     fetch_provider: Option<Arc<dyn JsFetchProvider>>,
     ws_provider: Option<Arc<dyn JsWebSocketProvider>>,
+    ls_store: Arc<Mutex<WebStorage>>,
+    ss_store: Arc<Mutex<WebStorage>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -128,13 +137,15 @@ pub fn install_dom_api(
 
 // ─── primitive registrations ──────────────────────────────────────────────────
 
-#[allow(clippy::too_many_lines)]
+#[allow(clippy::too_many_lines, clippy::too_many_arguments)]
 fn install_primitives(
     ctx: &Ctx<'_>,
     doc: Arc<Mutex<Document>>,
     nav_out: Arc<Mutex<Option<NavigateRequest>>>,
     fetch_provider: Option<Arc<dyn JsFetchProvider>>,
     ws_provider: Option<Arc<dyn JsWebSocketProvider>>,
+    ls_store: Arc<Mutex<WebStorage>>,
+    ss_store: Arc<Mutex<WebStorage>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -736,6 +747,58 @@ fn install_primitives(
                 })
             }
         );
+    }
+
+    // ── localStorage ─────────────────────────────────────────────────────────
+    {
+        let s = Arc::clone(&ls_store);
+        reg!("_lumen_ls_length", move || -> u32 { s.lock().unwrap().len() });
+        let s = Arc::clone(&ls_store);
+        reg!("_lumen_ls_key", move |n: u32| -> Option<String> {
+            s.lock().unwrap().key(n).map(|k| k.to_owned())
+        });
+        let s = Arc::clone(&ls_store);
+        reg!("_lumen_ls_get", move |key: String| -> Option<String> {
+            s.lock().unwrap().get_item(&key).map(|v| v.to_owned())
+        });
+        let s = Arc::clone(&ls_store);
+        reg!("_lumen_ls_set", move |key: String, value: String| {
+            s.lock().unwrap().set_item(key, value);
+        });
+        let s = Arc::clone(&ls_store);
+        reg!("_lumen_ls_remove", move |key: String| {
+            s.lock().unwrap().remove_item(&key);
+        });
+        let s = Arc::clone(&ls_store);
+        reg!("_lumen_ls_clear", move || {
+            s.lock().unwrap().clear();
+        });
+    }
+
+    // ── sessionStorage ────────────────────────────────────────────────────────
+    {
+        let s = Arc::clone(&ss_store);
+        reg!("_lumen_ss_length", move || -> u32 { s.lock().unwrap().len() });
+        let s = Arc::clone(&ss_store);
+        reg!("_lumen_ss_key", move |n: u32| -> Option<String> {
+            s.lock().unwrap().key(n).map(|k| k.to_owned())
+        });
+        let s = Arc::clone(&ss_store);
+        reg!("_lumen_ss_get", move |key: String| -> Option<String> {
+            s.lock().unwrap().get_item(&key).map(|v| v.to_owned())
+        });
+        let s = Arc::clone(&ss_store);
+        reg!("_lumen_ss_set", move |key: String, value: String| {
+            s.lock().unwrap().set_item(key, value);
+        });
+        let s = Arc::clone(&ss_store);
+        reg!("_lumen_ss_remove", move |key: String| {
+            s.lock().unwrap().remove_item(&key);
+        });
+        let s = Arc::clone(&ss_store);
+        reg!("_lumen_ss_clear", move || {
+            s.lock().unwrap().clear();
+        });
     }
 
     Ok(())
@@ -1738,6 +1801,36 @@ WebSocket.prototype.removeEventListener = function(type, fn) {
 WebSocket.CONNECTING = 0; WebSocket.OPEN = 1;
 WebSocket.CLOSING = 2;    WebSocket.CLOSED = 3;
 
+// ── Web Storage (localStorage / sessionStorage) ───────────────────────────────
+// Spec: https://html.spec.whatwg.org/multipage/webstorage.html §8
+// Both objects share the same factory; backing native functions differ per type.
+
+function _lumen_make_storage(getLen, getKey, getItem, setItem, removeItem, clear) {
+    var obj = {
+        key:        function(n) { return _lumen_u2n(getKey(n >>> 0)); },
+        getItem:    function(k) { return _lumen_u2n(getItem(String(k))); },
+        setItem:    function(k, v) { setItem(String(k), String(v)); },
+        removeItem: function(k) { removeItem(String(k)); },
+        clear:      function() { clear(); }
+    };
+    Object.defineProperty(obj, 'length', {
+        get: function() { return getLen(); },
+        enumerable: false,
+        configurable: false
+    });
+    return obj;
+}
+
+var localStorage = _lumen_make_storage(
+    _lumen_ls_length, _lumen_ls_key,
+    _lumen_ls_get, _lumen_ls_set, _lumen_ls_remove, _lumen_ls_clear
+);
+
+var sessionStorage = _lumen_make_storage(
+    _lumen_ss_length, _lumen_ss_key,
+    _lumen_ss_get, _lumen_ss_set, _lumen_ss_remove, _lumen_ss_clear
+);
+
 var window = {
     history: history,
     onpopstate: null,
@@ -1767,6 +1860,8 @@ var window = {
     Headers: Headers,
     AbortController: AbortController,
     AbortSignal: AbortSignal,
+    localStorage: localStorage,
+    sessionStorage: sessionStorage,
     _lumen_dispatch_composition: _lumen_dispatch_composition,
     _lumen_set_ime_target: _lumen_set_ime_target,
     _lumen_fire_page_lifecycle: _lumen_fire_page_lifecycle,
@@ -1837,7 +1932,7 @@ mod tests {
 
     fn runtime_with_dom(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(doc, "", None, None).unwrap();
+        rt.install_dom(doc, "", None, None, None).unwrap();
         rt
     }
 
@@ -2902,7 +2997,7 @@ mod tests {
     fn runtime_with_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(FailWsProvider);
-        rt.install_dom(doc, "", None, Some(provider)).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None).unwrap();
         rt
     }
 
@@ -2967,7 +3062,7 @@ mod tests {
     fn runtime_with_mock_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockWsProvider);
-        rt.install_dom(doc, "", None, Some(provider)).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None).unwrap();
         rt
     }
 
@@ -3042,7 +3137,7 @@ mod tests {
 
     fn runtime_with_url(url: &str) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), url, None, None).unwrap();
+        rt.install_dom(make_doc(), url, None, None, None).unwrap();
         rt
     }
 
@@ -3149,5 +3244,86 @@ mod tests {
         let rt = runtime_with_url("file:///home/user/page.html");
         let r = rt.eval("location.protocol").unwrap();
         assert_eq!(r, lumen_core::JsValue::String("file:".into()));
+    }
+
+    // ── Web Storage tests ─────────────────────────────────────────────────────
+
+    fn runtime_with_storage(ls: Option<Arc<Mutex<lumen_core::WebStorage>>>) -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", None, None, ls).unwrap();
+        rt
+    }
+
+    #[test]
+    fn local_storage_set_get() {
+        let rt = runtime_with_storage(None);
+        rt.eval("localStorage.setItem('k', 'v')").unwrap();
+        let r = rt.eval("localStorage.getItem('k')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("v".into()));
+    }
+
+    #[test]
+    fn local_storage_missing_key_returns_null() {
+        let rt = runtime_with_storage(None);
+        let r = rt.eval("localStorage.getItem('nope')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Null);
+    }
+
+    #[test]
+    fn local_storage_length_and_key() {
+        let rt = runtime_with_storage(None);
+        rt.eval("localStorage.setItem('a', '1'); localStorage.setItem('b', '2')").unwrap();
+        let len = rt.eval("localStorage.length").unwrap();
+        assert_eq!(len, lumen_core::JsValue::Number(2.0));
+        // key(0) == 'a' (insertion order)
+        let k0 = rt.eval("localStorage.key(0)").unwrap();
+        assert_eq!(k0, lumen_core::JsValue::String("a".into()));
+    }
+
+    #[test]
+    fn local_storage_remove_item() {
+        let rt = runtime_with_storage(None);
+        rt.eval("localStorage.setItem('x', '42'); localStorage.removeItem('x')").unwrap();
+        let r = rt.eval("localStorage.getItem('x')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Null);
+    }
+
+    #[test]
+    fn local_storage_clear() {
+        let rt = runtime_with_storage(None);
+        rt.eval("localStorage.setItem('a', '1'); localStorage.setItem('b', '2'); localStorage.clear()").unwrap();
+        let len = rt.eval("localStorage.length").unwrap();
+        assert_eq!(len, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn local_storage_persists_across_runtimes() {
+        // Shared Arc<Mutex<WebStorage>> simulates the same origin across page reloads.
+        let shared = Arc::new(Mutex::new(lumen_core::WebStorage::default()));
+        {
+            let rt = runtime_with_storage(Some(Arc::clone(&shared)));
+            rt.eval("localStorage.setItem('persist', 'yes')").unwrap();
+        }
+        let rt2 = runtime_with_storage(Some(Arc::clone(&shared)));
+        let r = rt2.eval("localStorage.getItem('persist')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("yes".into()));
+    }
+
+    #[test]
+    fn session_storage_fresh_per_runtime() {
+        // sessionStorage is NOT shared; each runtime gets a fresh instance.
+        let rt1 = runtime_with_storage(None);
+        rt1.eval("sessionStorage.setItem('s', 'hello')").unwrap();
+        let rt2 = runtime_with_storage(None);
+        let r = rt2.eval("sessionStorage.getItem('s')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Null);
+    }
+
+    #[test]
+    fn local_storage_on_window() {
+        let rt = runtime_with_storage(None);
+        rt.eval("window.localStorage.setItem('w', 'win')").unwrap();
+        let r = rt.eval("localStorage.getItem('w')").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("win".into()));
     }
 }

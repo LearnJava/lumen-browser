@@ -306,6 +306,7 @@
 
 #### Phase 3+ — без этого браузер не полнофункциональный
 
+- ✅ **`[P3]` Web Storage API (`localStorage` + `sessionStorage`).** `WebStorage` in `lumen-core::web_storage` (insertion-order key list, `get_item/set_item/remove_item/clear/key/len`). `_lumen_ls_*` + `_lumen_ss_*` native bindings in `lumen-js`. `_lumen_make_storage` factory + `localStorage`/`sessionStorage` globals in `WEB_API_SHIM`. Shell stores `HashMap<origin, Arc<Mutex<WebStorage>>>` per session; `ls_store_for_base` extracts SOP-partitioned store from `ResourceBase`; `sessionStorage` is fresh per page load. 8 tests. Phase 0: in-memory only (no IndexedDB / disk persistence).
 - ✅ **`[P3]` WebSockets (RFC 6455) + Server-Sent Events + Fetch API runtime.** ✅ WS: RFC 6455 upgrade + frame codec + JS API (`WebSocket` class, `JsWebSocketProvider`/`JsWsEvent`/`JsWebSocketSession` traits, background recv thread, `_lumen_pump_websockets()`, 12 тестов). ✅ SSE: `SseParser` + `EventSource` client + `EventSource` JS stub. ✅ Fetch: `fetch()` / `Request` / `Response` / `Headers` / `AbortController` / `AbortSignal` в JS shim; `JsFetchProvider` trait; `HttpClient` реализует. Phase 0 ограничение WebSocket: нет постоянного JS event loop — `_lumen_pump_websockets()` вызывается явно.
 - **`[P3]` HTTP auth — Basic + Digest готовы** (см. status). **Осталось:** Negotiate/NTLM, client certificates mTLS, UI-popup для credentials.
 - **`[P3]` OCSP stapling + CT log enforcement + invalid cert UI.**

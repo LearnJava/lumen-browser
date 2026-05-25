@@ -18,6 +18,7 @@ pub mod punycode;
 pub mod sandbox;
 pub mod sri;
 pub mod url;
+pub mod web_storage;
 
 pub use capability::{Capability, CapabilityToken};
 pub use error::{Error, Result};
@@ -36,5 +37,6 @@ pub use module::Module;
 pub use sandbox::{parse_sandbox_value, SandboxFlags};
 pub use sri::{DigestProvider, IntegrityList, SriAlgorithm, SriError, SriHash, SriResult};
 pub use url::Url;
+pub use web_storage::WebStorage;
 
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
