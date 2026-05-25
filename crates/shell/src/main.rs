@@ -48,13 +48,15 @@ use winit::application::ApplicationHandler;
 
 /// Событие от background-потока загрузки страницы в event loop.
 ///
-/// Загрузка разбита на три фазы: (1) chunks декодированного HTML для
-/// инкрементального парсинга и промежуточных кадров; (2) `LoadDone` —
-/// все байты доступны, запускаем полный pipeline (CSS + изображения);
+/// Загрузка разбита на три фазы: (1) chunks сырых байт для инкрементального
+/// парсинга и промежуточных кадров через `IncrementalTreeBuilder::feed_bytes`;
+/// (2) `LoadDone` — все байты доступны, запускаем полный pipeline (CSS + изображения);
 /// (3) `LoadError` — ошибка fetch, показываем сообщение.
 enum LoadEvent {
-    /// Очередной chunk декодированного HTML.
-    HtmlChunk(String),
+    /// Очередной chunk сырых байт HTML. UTF-8 границы не выравниваются —
+    /// `IncrementalTreeBuilder::feed_bytes` буферизует незавершённые
+    /// code-point-ы внутри.
+    HtmlChunk(Vec<u8>),
     /// Все байты получены — для финального полного pipeline.
     LoadDone(RawPage),
     /// Ошибка при загрузке страницы.
@@ -1695,9 +1697,11 @@ impl Lumen {
 
     /// Запустить background-поток загрузки текущего `source`.
     ///
-    /// Поток fetches байты, декодирует в UTF-8, разбивает на
-    /// STREAM_CHUNK_BYTES-кусочки и шлёт `LoadEvent::HtmlChunk` через proxy.
-    /// По завершении — `LoadEvent::LoadDone(raw)` для финального pipeline.
+    /// Поток fetches байты, разбивает на STREAM_CHUNK_BYTES-кусочки и
+    /// шлёт `LoadEvent::HtmlChunk(Vec<u8>)` через proxy. UTF-8 выравнивание
+    /// не нужно — `IncrementalTreeBuilder::feed_bytes` буферизует
+    /// незавершённые code-point-ы внутри. По завершении — `LoadEvent::LoadDone(raw)`
+    /// для финального pipeline (encoding detection + decode + CSS + images).
     /// При ошибке — `LoadEvent::LoadError`.
     fn start_streaming_load(&self) {
         if matches!(self.source, PageSource::Empty) {
@@ -1715,20 +1719,13 @@ impl Lumen {
                     return;
                 }
             };
-            let encoding = lumen_encoding::detect(&raw.bytes, raw.content_type);
-            let html = lumen_encoding::decode(encoding, &raw.bytes);
-            eprintln!("Кодировка: {}", encoding.name());
 
-            // Разбить строку на chunk-и, не разрывая UTF-8 code-points.
-            let bytes = html.as_bytes();
+            // Разбить сырые байты на chunk-и. Выравнивание по UTF-8 не нужно:
+            // feed_bytes буферизует незавершённые code-point-ы на границах chunk-ов.
             let mut pos = 0;
-            while pos < bytes.len() {
-                let mut end = (pos + STREAM_CHUNK_BYTES).min(bytes.len());
-                // Отступить назад до начала code-point (continuation bytes = 0x80..=0xBF).
-                while end < bytes.len() && (bytes[end] & 0xC0) == 0x80 {
-                    end -= 1;
-                }
-                let chunk = html[pos..end].to_owned();
+            while pos < raw.bytes.len() {
+                let end = (pos + STREAM_CHUNK_BYTES).min(raw.bytes.len());
+                let chunk = raw.bytes[pos..end].to_vec();
                 if proxy.send_event(LoadEvent::HtmlChunk(chunk)).is_err() {
                     return; // event loop завершён
                 }
@@ -1857,7 +1854,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
             LoadEvent::HtmlChunk(chunk) => {
                 let builder = self.stream_builder
                     .get_or_insert_with(lumen_html_parser::IncrementalTreeBuilder::new);
-                builder.feed(&chunk);
+                builder.feed_bytes(&chunk);
                 if self.stream_last_paint.elapsed().as_millis() >= STREAM_PAINT_INTERVAL_MS {
                     // Клонируем снапшот для layout — builder остаётся живым.
                     let doc_snap = builder.as_doc().clone();

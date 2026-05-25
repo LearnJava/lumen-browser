@@ -72,6 +72,18 @@ impl IncrementalTreeBuilder {
         }
     }
 
+    /// Вариант [`feed`][Self::feed] для сырых байт.
+    ///
+    /// Делегирует в [`PushTokenizer::feed_bytes`], который буферизует
+    /// незавершённые UTF-8 последовательности на границах chunk-ов.
+    /// Позволяет шеллу передавать произвольные байтовые срезы без
+    /// выравнивания по code-point границам.
+    pub fn feed_bytes(&mut self, chunk: &[u8]) {
+        for token in self.tokenizer.feed_bytes(chunk) {
+            self.apply_token(token);
+        }
+    }
+
     /// Возвращает ссылку на текущее состояние DOM — для промежуточных
     /// layout-ов во время streaming. Дерево может быть незакрытым.
     pub fn as_doc(&self) -> &Document {
@@ -652,5 +664,59 @@ mod tests {
         assert!(s.contains("\"x = 1; \""), "got: {s}");
         assert!(s.contains("<p>"));
         assert!(s.contains("\"after\""));
+    }
+
+    // ──────── feed_bytes: инвариант feed_bytes == feed для ASCII и UTF-8 ────────
+
+    /// Вспомогательная: разбивает UTF-8 строку на сырые байтовые chunk-и
+    /// заданного размера (без выравнивания) и прогоняет через feed_bytes.
+    fn parse_feed_bytes_chunks(input: &str, chunk_size: usize) -> Document {
+        let mut b = IncrementalTreeBuilder::new();
+        let bytes = input.as_bytes();
+        let mut pos = 0;
+        while pos < bytes.len() {
+            let end = (pos + chunk_size).min(bytes.len());
+            b.feed_bytes(&bytes[pos..end]);
+            pos = end;
+        }
+        b.finish()
+    }
+
+    #[test]
+    fn feed_bytes_ascii_equals_feed() {
+        let input = "<html><body><p>hello world</p></body></html>";
+        let pull = parse(input).to_string();
+        let bytes_whole = {
+            let mut b = IncrementalTreeBuilder::new();
+            b.feed_bytes(input.as_bytes());
+            b.finish().to_string()
+        };
+        assert_eq!(bytes_whole, pull);
+        let bytes_chunked = parse_feed_bytes_chunks(input, 8).to_string();
+        assert_eq!(bytes_chunked, pull);
+    }
+
+    #[test]
+    fn feed_bytes_cyrillic_split_at_byte_boundary() {
+        // Кириллица — 2-байтные code-point-ы. Chunk boundary может разрезать
+        // code-point напополам; feed_bytes должен буферизовать незавершённый байт.
+        let input = "<p>Привет, мир!</p>";
+        let pull = parse(input).to_string();
+        // Разбиваем по 1 байту — гарантированно все code-point-ы разрезаны.
+        let bytes_1 = parse_feed_bytes_chunks(input, 1).to_string();
+        assert_eq!(bytes_1, pull, "1-byte chunks failed");
+        let bytes_3 = parse_feed_bytes_chunks(input, 3).to_string();
+        assert_eq!(bytes_3, pull, "3-byte chunks failed");
+    }
+
+    #[test]
+    fn feed_bytes_emoji_split() {
+        // Emoji — 4-байтные code-point-ы.
+        let input = "<p>Hello 🌍</p>";
+        let pull = parse(input).to_string();
+        let bytes_1 = parse_feed_bytes_chunks(input, 1).to_string();
+        assert_eq!(bytes_1, pull);
+        let bytes_2 = parse_feed_bytes_chunks(input, 2).to_string();
+        assert_eq!(bytes_2, pull);
     }
 }
