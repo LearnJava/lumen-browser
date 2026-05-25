@@ -31,7 +31,7 @@ BUG-010 | FIXED 2026-05-20 | layout          | <hr> renders nothing
 BUG-011 | FIXED 2026-05-22 | layout/paint    | list markers (bullet, numbers) not rendered
 BUG-013 | FIXED 2026-05-22 | layout          | adjacent <span style="..."> stack vertically without separator
 BUG-014 | FIXED 2026-05-21 | image           | JPEG not decoded (PNG only)
-BUG-015 | OPEN             | shell/paint     | broken <img> src shows no alt text
+BUG-015 | FIXED 2026-05-25 | paint           | broken <img> src shows no alt text
 BUG-017 | FIXED 2026-05-22 | layout/paint    | text-decoration-style ignored (all render as solid)
 BUG-018 | FIXED 2026-05-22 | layout          | text-decoration-color ignored (always inherits text color)
 BUG-023 | OPEN             | layout+paint    | opacity deviation 2.20% — P1-часть FIXED 2026-05-24 (strut в строках без текста убран); остаток ~1.6% edge-AA в paint (P2)
