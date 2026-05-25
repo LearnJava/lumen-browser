@@ -30,7 +30,7 @@ use std::error::Error;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::rc::Rc;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use lumen_core::event::{Event, FetchPriority, SubresourceKind};
 use lumen_core::ext::EventSink;
@@ -227,6 +227,7 @@ fn run_window_mode(
         validation_tooltip: None,
         color_picker_node: None,
         ls_storage: HashMap::new(),
+        js_ctx: None,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -370,6 +371,41 @@ enum JsNavigateRequest {
     Reload,
 }
 
+/// Shell-local abstraction over a persistent JS context that survives between
+/// renders. The JS DOM closures hold a reference to the same
+/// `Arc<Mutex<Document>>` as `LayoutSource::document`, so event-driven DOM
+/// mutations are visible to the next relayout without a full page reload.
+trait PersistentJs {
+    /// Evaluate a JS script (event handler dispatch, rAF tick, etc.).
+    fn eval_js(&self, script: &str);
+    /// Consume any navigation request placed by JS during the last `eval_js`.
+    fn take_navigate_request(&self) -> Option<JsNavigateRequest>;
+}
+
+#[cfg(feature = "quickjs")]
+struct QuickPersistentJs {
+    rt: lumen_js::QuickJsRuntime,
+}
+
+#[cfg(feature = "quickjs")]
+impl PersistentJs for QuickPersistentJs {
+    fn eval_js(&self, script: &str) {
+        use lumen_core::ext::JsRuntime as _;
+        if let Err(e) = self.rt.eval(script) {
+            if !matches!(e, lumen_core::JsError::NotImplemented) {
+                eprintln!("JS event error: {e}");
+            }
+        }
+    }
+    fn take_navigate_request(&self) -> Option<JsNavigateRequest> {
+        self.rt.take_navigate_request().map(|r| match r {
+            lumen_js::NavigateRequest::Push(u)    => JsNavigateRequest::Push(u),
+            lumen_js::NavigateRequest::Replace(u) => JsNavigateRequest::Replace(u),
+            lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
+        })
+    }
+}
+
 impl PageSource {
     fn from_arg(arg: Option<&str>) -> Self {
         match arg {
@@ -466,19 +502,20 @@ impl PageSource {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     fn load(
         &self,
         sink: Arc<dyn EventSink>,
         viewport: Size,
         ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
-    ) -> Result<(LoadedPage, Option<LayoutSource>), Box<dyn Error>> {
+    ) -> Result<(LoadedPage, Option<LayoutSource>, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
         if matches!(self, PageSource::Empty) {
-            return Ok((LoadedPage::empty(), None));
+            return Ok((LoadedPage::empty(), None, None));
         }
         let raw = self.load_bytes(sink.clone())?;
-        let (page, layout_source) =
+        let (page, layout_source, js_ctx) =
             render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store)?;
-        Ok((page, Some(layout_source)))
+        Ok((page, Some(layout_source), js_ctx))
     }
 }
 
@@ -928,7 +965,9 @@ fn apply_intrinsic_size(doc: &mut Document, node_id: NodeId, width: u32, height:
 /// Результат фаз `decode → parse → layout` — общая часть для оконного и
 /// dump-режимов. Поля владеют своими данными — нет ссылок наружу.
 struct ParsedPage {
-    document: Document,
+    /// Parsed DOM — shared with JS closures via Arc so event handlers can
+    /// mutate the document without rebuilding the entire page.
+    document: Arc<Mutex<Document>>,
     stylesheet: lumen_css_parser::Stylesheet,
     layout: LayoutBox,
     title: Option<String>,
@@ -944,12 +983,18 @@ struct ParsedPage {
     font_registry: Arc<dyn lumen_core::FontProvider>,
     /// Навигационный запрос, выставленный JS во время выполнения скриптов.
     js_navigate: Option<JsNavigateRequest>,
+    /// Persistent JS context (QuickJS) kept alive after page load so that
+    /// event handlers registered via `addEventListener` continue to work.
+    /// `None` when the quickjs feature is disabled or script init failed.
+    js_ctx: Option<Box<dyn PersistentJs>>,
 }
 
 /// Источник для повторного layout без повторной загрузки/парсинга.
 /// Хранится в `Lumen`; обновляется только при reload/load новой страницы.
 struct LayoutSource {
-    document: Document,
+    /// DOM — shared with the persistent JS runtime via Arc<Mutex> so that
+    /// JS event handlers can mutate it between repaints.
+    document: Arc<Mutex<Document>>,
     stylesheet: lumen_css_parser::Stylesheet,
     /// Decoded HTML source captured after encoding detection. Used by bfcache
     /// to restore the page without a network round-trip.
@@ -1002,7 +1047,7 @@ fn parse_and_layout(
         ResourceBase::Url(u) => u.as_str().to_owned(),
         ResourceBase::File(p) => format!("file://{}", p.display()),
     };
-    let (mut doc, js_nav) = run_scripts_with_dom(
+    let (doc_arc, js_nav, js_ctx) = run_scripts_with_dom(
         doc,
         lumen_core::SandboxFlags::empty(),
         &page_url,
@@ -1020,24 +1065,32 @@ fn parse_and_layout(
     } else {
         None
     };
-    doc.set_target(page_fragment.as_deref());
-
-    // Гейт отправки форм: Phase 0 — top-level документ не sandboxed.
-    check_form_gate(&doc, lumen_core::SandboxFlags::empty());
-
-    // Гейт навигации: Phase 0 — top-level документ не sandboxed.
-    check_navigation_gate(&doc, lumen_core::SandboxFlags::empty());
+    {
+        let mut d = doc_arc.lock().unwrap();
+        d.set_target(page_fragment.as_deref());
+        // Гейт отправки форм: Phase 0 — top-level документ не sandboxed.
+        check_form_gate(&d, lumen_core::SandboxFlags::empty());
+        // Гейт навигации: Phase 0 — top-level документ не sandboxed.
+        check_navigation_gate(&d, lumen_core::SandboxFlags::empty());
+    }
 
     // Fetch + decode <img src>. Должно идти ДО layout, потому что intrinsic
     // dimensions из декодированного изображения проставляются как HTML
     // presentational hints (width/height attribute) и потом подхватываются
     // style cascade. Errors silently пропускаются — битая картинка не валит
     // всю страницу, layout нарисует серый placeholder.
-    let images = fetch_and_decode_images(&mut doc, base, sink, viewport);
+    let images = {
+        let mut d = doc_arc.lock().unwrap();
+        fetch_and_decode_images(&mut d, base, sink, viewport)
+    };
 
     // Встроенные <style> + внешние <link rel=stylesheet>.
-    let mut css = extract_style_blocks(&doc);
-    css.push_str(&load_linked_stylesheets(&doc, base, sink));
+    let css = {
+        let d = doc_arc.lock().unwrap();
+        let mut css = extract_style_blocks(&d);
+        css.push_str(&load_linked_stylesheets(&d, base, sink));
+        css
+    };
 
     let sheet = lumen_css_parser::parse(&css);
 
@@ -1051,7 +1104,10 @@ fn parse_and_layout(
     let measurer = lumen_paint::FontMeasurer::new(&font)
         .map_err(|e| format!("ошибка метрик шрифта: {e}"))?;
 
-    let layout = lumen_layout::layout_measured(&doc, &sheet, viewport, &measurer);
+    let layout = {
+        let d = doc_arc.lock().unwrap();
+        lumen_layout::layout_measured(&d, &sheet, viewport, &measurer)
+    };
 
     // CSS Backgrounds L3 §3.10 — собираем `background-image: url(...)` уже
     // после layout-а (картинки фона не влияют на расчёт коробок). Декодируем
@@ -1064,7 +1120,7 @@ fn parse_and_layout(
 
     let rule_count = sheet.rules.len();
     Ok(ParsedPage {
-        document: doc,
+        document: doc_arc,
         stylesheet: sheet,
         layout,
         title,
@@ -1074,6 +1130,7 @@ fn parse_and_layout(
         html_source: source,
         font_registry: font_provider,
         js_navigate: js_nav,
+        js_ctx,
     })
 }
 
@@ -1220,7 +1277,9 @@ fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
 fn relayout_page(src: &LayoutSource, viewport: Size) -> (DisplayList, lumen_layout::LayoutBox) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
-    let layout = lumen_layout::layout_measured(&src.document, &src.stylesheet, viewport, &measurer);
+    let doc = src.document.lock().unwrap();
+    let layout = lumen_layout::layout_measured(&doc, &src.stylesheet, viewport, &measurer);
+    drop(doc);
     let dl = paint_ordered(&layout);
     (dl, layout)
 }
@@ -1245,6 +1304,7 @@ fn ls_store_for_base(
     })))
 }
 
+#[allow(clippy::type_complexity)]
 fn render_bytes(
     bytes: &[u8],
     content_type: Option<&str>,
@@ -1252,13 +1312,13 @@ fn render_bytes(
     sink: Arc<dyn EventSink>,
     viewport: Size,
     preload_seen: &mut std::collections::HashSet<String>,
-    ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
-) -> Result<(LoadedPage, LayoutSource), Box<dyn Error>> {
+    ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
+) -> Result<(LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
     let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
-        parsed.document.len(),
+        parsed.document.lock().unwrap().len(),
         parsed.rule_count,
         display_list.len(),
         parsed.images.len(),
@@ -1266,7 +1326,7 @@ fn render_bytes(
     );
     let layout_box = parsed.layout;
     let layout_source = LayoutSource {
-        document: parsed.document,
+        document: Arc::clone(&parsed.document),
         stylesheet: parsed.stylesheet,
         html_source: Some(parsed.html_source),
     };
@@ -1280,6 +1340,7 @@ fn render_bytes(
             js_navigate: parsed.js_navigate,
         },
         layout_source,
+        parsed.js_ctx,
     ))
 }
 
@@ -1415,8 +1476,12 @@ fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
 /// Выполнить inline `<script>` блоки с DOM-доступом (QuickJS + install_dom).
 ///
 /// Принимает `doc` по значению, оборачивает в `Arc<Mutex<>>` на время выполнения
-/// скриптов, возвращает `(Document, Option<JsNavigateRequest>)`.
-/// При `quickjs` feature отключён — использует NullJsRuntime (скрипты пропускаются).
+/// Выполняет inline `<script>` блоки через QuickJS (если feature включён),
+/// возвращает `(Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>)`.
+///
+/// Документ оборачивается в `Arc<Mutex>` чтобы JS-замыкания и layout-код
+/// могли разделить доступ без лишних клонов. Persistent runtime возвращается
+/// как `PersistentJs` для диспатча событий после загрузки страницы.
 ///
 /// `page_url` пробрасывается в `window.location` (инициализация).
 /// `fetch_provider` пробрасывается в `window.fetch()`.
@@ -1424,38 +1489,37 @@ fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
 /// `ls_store` — localStorage partition для текущего origin (persists across reloads).
 /// `None` = no network (sandboxed context или отключён quickjs feature).
 #[allow(clippy::needless_return)] // `return` inside #[cfg] block is needed for correct control flow
-#[allow(unused_variables)] // ls_store is used only inside #[cfg(feature = "quickjs")]
+#[allow(unused_variables, clippy::type_complexity)] // ls_store is used only inside #[cfg(feature = "quickjs")]
 fn run_scripts_with_dom(
     doc: Document,
     sandbox: lumen_core::SandboxFlags,
     page_url: &str,
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
-    ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
-) -> (Document, Option<JsNavigateRequest>) {
+    ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
+) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>) {
     let mut scripts: Vec<String> = Vec::new();
     collect_inline_scripts(&doc, doc.root(), &mut scripts);
 
+    let doc_arc = Arc::new(Mutex::new(doc));
+
     if scripts.is_empty() {
-        return (doc, None);
+        return (doc_arc, None, None);
     }
     if sandbox.contains(lumen_core::SandboxFlags::SCRIPTS) {
         eprintln!(
             "sandbox: заблокировано {} скрипт(ов) (sandbox=scripts)",
             scripts.len()
         );
-        return (doc, None);
+        return (doc_arc, None, None);
     }
 
     #[cfg(feature = "quickjs")]
     {
         use lumen_core::ext::JsRuntime as _;
-        use std::sync::Mutex;
-        let doc_arc = Arc::new(Mutex::new(doc));
-        let nav_req: Option<JsNavigateRequest>;
         match lumen_js::QuickJsRuntime::new() {
             Ok(rt) => {
-                if let Err(e) = rt.install_dom(doc_arc.clone(), page_url, fetch_provider, ws_provider, ls_store) {
+                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, ls_store) {
                     eprintln!("JS DOM init failed: {e}");
                 }
                 for src in &scripts {
@@ -1470,23 +1534,20 @@ fn run_scripts_with_dom(
                         Err(e) => eprintln!("script error: {e}"),
                     }
                 }
-                nav_req = rt.take_navigate_request().map(|r| match r {
+                let nav_req = rt.take_navigate_request().map(|r| match r {
                     lumen_js::NavigateRequest::Push(u)    => JsNavigateRequest::Push(u),
                     lumen_js::NavigateRequest::Replace(u) => JsNavigateRequest::Replace(u),
                     lumen_js::NavigateRequest::Reload     => JsNavigateRequest::Reload,
                 });
-                drop(rt); // освобождаем Arc-клоны в замыканиях QuickJS
+                // Keep rt alive: return as PersistentJs so event handlers work after load.
+                let ctx: Box<dyn PersistentJs> = Box::new(QuickPersistentJs { rt });
+                return (doc_arc, nav_req, Some(ctx));
             }
             Err(e) => {
                 eprintln!("QuickJS init failed: {e}");
-                nav_req = None;
+                return (doc_arc, None, None);
             }
         }
-        let doc = Arc::try_unwrap(doc_arc)
-            .expect("Arc still held after drop(rt)")
-            .into_inner()
-            .unwrap();
-        return (doc, nav_req);
     }
 
     #[cfg(not(feature = "quickjs"))]
@@ -1507,7 +1568,7 @@ fn run_scripts_with_dom(
                 Err(e) => eprintln!("script error: {e}"),
             }
         }
-        (doc, None)
+        (doc_arc, None, None)
     }
 }
 
@@ -1719,6 +1780,11 @@ struct Lumen {
     /// Each entry survives page reloads within the same session.
     /// Partitioned by origin to enforce Same-Origin Policy for storage access.
     ls_storage: HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
+    /// Live JS context for the current page — keeps event listeners active after
+    /// initial script execution. `None` when `quickjs` feature is disabled or
+    /// no scripts were registered. Must be dropped before `layout_source` on
+    /// navigation to release Arc clones held in JS closures.
+    js_ctx: Option<Box<dyn PersistentJs>>,
 }
 
 impl Lumen {
@@ -1762,10 +1828,11 @@ impl Lumen {
     /// before the scroll position is calculated.
     fn navigate_fragment(&mut self, fragment: String) {
         if let Some(src) = self.layout_source.as_mut() {
+            let mut doc = src.document.lock().unwrap();
             if fragment.is_empty() {
-                src.document.set_target::<String>(None);
+                doc.set_target::<String>(None);
             } else {
-                src.document.set_target(Some(fragment.clone()));
+                doc.set_target(Some(fragment.clone()));
             }
         }
         // Re-layout so :target cascade is applied.
@@ -1777,7 +1844,7 @@ impl Lumen {
         let node_id = self
             .layout_source
             .as_ref()
-            .and_then(|src| links::find_element_by_id(&src.document, &fragment));
+            .and_then(|src| links::find_element_by_id(&src.document.lock().unwrap(), &fragment));
         let target_y = node_id.and_then(|nid| {
             self.layout_box
                 .as_ref()
@@ -1810,8 +1877,12 @@ impl Lumen {
             }))
         });
         match self.source.load(self.event_sink.clone(), viewport, ls_store) {
-            Ok((page, new_layout_source)) => {
+            Ok((page, new_layout_source, new_js_ctx)) => {
+                // Drop JS closures before layout_source to release Arc<Mutex<Document>>
+                // clones held inside QuickJS closures before LayoutSource's Arc drops.
+                self.js_ctx = None;
                 self.layout_source = new_layout_source;
+                self.js_ctx = new_js_ctx;
                 self.content_height = content_height_of(&page.display_list);
                 self.content_width = content_width_of(&page.display_list);
                 self.display_list = page.display_list;
@@ -1952,8 +2023,11 @@ impl Lumen {
     /// Применить результат полного pipeline (fetch + parse + CSS + images).
     /// Используется и при streaming `LoadDone`, и может быть переиспользован
     /// в будущем для других путей загрузки.
-    fn apply_loaded_page(&mut self, page: LoadedPage, new_layout_source: Option<LayoutSource>) {
+    fn apply_loaded_page(&mut self, page: LoadedPage, new_layout_source: Option<LayoutSource>, new_js_ctx: Option<Box<dyn PersistentJs>>) {
+        // Drop JS closures before layout_source to release Arc clones in QuickJS.
+        self.js_ctx = None;
         self.layout_source = new_layout_source;
+        self.js_ctx = new_js_ctx;
         self.content_height = content_height_of(&page.display_list);
         self.content_width = content_width_of(&page.display_list);
         self.display_list = page.display_list;
@@ -2068,8 +2142,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 );
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
                 match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store) {
-                    Ok((page, new_layout_source)) => {
-                        self.apply_loaded_page(page, Some(new_layout_source));
+                    Ok((page, new_layout_source, new_js_ctx)) => {
+                        self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
                     }
                     Err(e) => {
                         eprintln!("Ошибка финального render {}: {e}", self.source.describe());
@@ -2273,7 +2347,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                 self.color_picker_node = None;
                                 let css_color = forms::swatch_to_css_color(color);
                                 if let Some(src) = self.layout_source.as_mut() {
-                                    forms::set_value(&mut src.document, pn, &css_color);
+                                    forms::set_value(&mut src.document.lock().unwrap(), pn, &css_color);
                                 }
                                 self.form_state.entry(pn).or_default().value = css_color;
                                 self.relayout();
@@ -2289,18 +2363,31 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                             let hit_result = self.layout_box.as_ref().and_then(|lb| {
                                 hit_test(Point::new(page_x, page_y), lb)
                             });
+                            // Dispatch JS click event (bubbles from hit node to document).
+                            if let (Some(result), Some(ctx)) =
+                                (hit_result.as_ref(), self.js_ctx.as_ref())
+                            {
+                                let script = format!(
+                                    "_lumen_dispatch_bubble({}, 'click')",
+                                    result.node.index()
+                                );
+                                ctx.eval_js(&script);
+                                if let Some(nav) = ctx.take_navigate_request() {
+                                    self.pending_js_navigate = Some(nav);
+                                }
+                            }
                             let form_action: forms::FormClickAction =
                                 if let (Some(result), Some(src)) =
                                     (hit_result.as_ref(), self.layout_source.as_ref())
                                 {
-                                    forms::classify_click(&src.document, result.node)
+                                    forms::classify_click(&src.document.lock().unwrap(), result.node)
                                 } else {
                                     forms::FormClickAction::Nothing
                                 };
                             match form_action {
                                 forms::FormClickAction::ToggleCheckbox(id) => {
                                     if let Some(src) = self.layout_source.as_mut() {
-                                        forms::toggle_checkbox(&mut src.document, id);
+                                        forms::toggle_checkbox(&mut src.document.lock().unwrap(), id);
                                     }
                                     self.relayout();
                                 }
@@ -2309,7 +2396,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                     _group_name: _,
                                 } => {
                                     if let Some(src) = self.layout_source.as_mut() {
-                                        forms::toggle_checkbox(&mut src.document, clicked);
+                                        forms::toggle_checkbox(&mut src.document.lock().unwrap(), clicked);
                                     }
                                     self.relayout();
                                 }
@@ -2325,7 +2412,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                             (Some(lb), Some(src)) => {
                                                 forms::find_validation_error(
                                                     lb,
-                                                    &src.document,
+                                                    &src.document.lock().unwrap(),
                                                     &self.form_state,
                                                 )
                                             }
@@ -2350,7 +2437,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                     let href = hit_result.as_ref().and_then(|r| {
                                         self.layout_source
                                             .as_ref()
-                                            .and_then(|src| links::find_link_href(&src.document, r.node))
+                                            .and_then(|src| links::find_link_href(&src.document.lock().unwrap(), r.node))
                                     });
                                     if let Some(href) = href {
                                         if let Some(frag) = links::fragment_only(&href) {

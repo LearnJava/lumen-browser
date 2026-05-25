@@ -945,6 +945,7 @@ function Event(type, init) {
     this.bubbles          = !!(init && init.bubbles);
     this.cancelable       = !!(init && init.cancelable);
     this.defaultPrevented = false;
+    this.cancelBubble     = false;
     this.target           = null;
     this.currentTarget    = null;
     this.timeStamp        = Date.now ? Date.now() : 0;
@@ -953,8 +954,8 @@ function Event(type, init) {
 Event.prototype.preventDefault = function() {
     if (this.cancelable) this.defaultPrevented = true;
 };
-Event.prototype.stopPropagation = function() {};
-Event.prototype.stopImmediatePropagation = function() { this._stopImmediate = true; };
+Event.prototype.stopPropagation = function() { this.cancelBubble = true; };
+Event.prototype.stopImmediatePropagation = function() { this._stopImmediate = true; this.cancelBubble = true; };
 
 function CustomEvent(type, init) {
     Event.call(this, type, init);
@@ -991,6 +992,46 @@ function _lumen_dispatch(nid, event) {
         if (event._stopImmediate) break;
     }
     return !event.defaultPrevented;
+}
+
+// Sentinel NID used by document.addEventListener to store document-level listeners.
+var _LUMEN_DOC_LISTENER_NID = -1;
+
+// Dispatch an event starting at `start_nid` and bubbling up to the document.
+// Called from Rust on user input (click, keydown, etc.).
+function _lumen_dispatch_bubble(start_nid, type) {
+    var evt = new Event(type, { bubbles: true, cancelable: true });
+    evt.target = _lumen_make_element(start_nid);
+    var cur = start_nid;
+    while (cur !== null && cur !== undefined) {
+        var key = String(cur) + ':' + String(type);
+        var arr = _lumen_listeners[key];
+        if (arr) {
+            var copy = arr.slice();
+            var el = _lumen_make_element(cur);
+            for (var i = 0; i < copy.length; i++) {
+                if (evt.cancelBubble) break;
+                try { copy[i].call(el, evt); } catch(e) {}
+                if (evt._stopImmediate) break;
+            }
+        }
+        if (evt.cancelBubble) break;
+        var pid = _lumen_u2n(_lumen_get_parent(cur));
+        cur = (pid !== null && pid !== undefined) ? pid : null;
+    }
+    if (!evt.cancelBubble) {
+        var dkey = String(_LUMEN_DOC_LISTENER_NID) + ':' + String(type);
+        var darr = _lumen_listeners[dkey];
+        if (darr) {
+            var dcopy = darr.slice();
+            for (var i = 0; i < dcopy.length; i++) {
+                if (evt.cancelBubble) break;
+                try { dcopy[i].call(document, evt); } catch(e) {}
+                if (evt._stopImmediate) break;
+            }
+        }
+    }
+    return !evt.defaultPrevented;
 }
 
 // ── DOMTokenList (classList) ──────────────────────────────────────────────────
@@ -1227,8 +1268,8 @@ var document = {
         if (c && c.__nid__ !== undefined) _lumen_append_child(_lumen_root_nid, c.__nid__);
         return c;
     },
-    addEventListener:    function() {},
-    removeEventListener: function() {},
+    addEventListener:    function(type, fn) { _lumen_add_listener(_LUMEN_DOC_LISTENER_NID, type, fn); },
+    removeEventListener: function(type, fn) { _lumen_rm_listener(_LUMEN_DOC_LISTENER_NID, type, fn); },
     dispatchEvent:       function() { return true; },
 };
 
