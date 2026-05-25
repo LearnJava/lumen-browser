@@ -81,6 +81,21 @@ impl HistoryState {
     }
 }
 
+// ─── navigation request ───────────────────────────────────────────────────────
+
+/// Navigation request emitted by JS (`location.href =`, `location.assign()`,
+/// `location.replace()`, `location.reload()`).  Captured in `nav_out` during
+/// script execution and read by the shell after `install_dom_api` returns.
+#[derive(Debug, Clone)]
+pub enum NavigateRequest {
+    /// Navigate to URL and push a new entry onto the history stack.
+    Push(String),
+    /// Navigate to URL and replace the current history entry.
+    Replace(String),
+    /// Reload the current page.
+    Reload,
+}
+
 // ─── public entry point ───────────────────────────────────────────────────────
 
 /// Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`.
@@ -88,16 +103,25 @@ impl HistoryState {
 /// After this call the context exposes `console`, `document`, `window`,
 /// `location`, `navigator`, `alert`, `fetch`, and `WebSocket`.
 ///
+/// `page_url` — the URL of the current page, used to initialise `location`.
+/// `nav_out`  — shared slot; JS writes a `NavigateRequest` here when the page
+///              requests navigation via `location.href=` etc.  The caller reads
+///              it after all scripts have run.
 /// `fetch_provider` wires `window.fetch()` to the real HTTP stack.
 /// `ws_provider` wires `new WebSocket(url)` to the real WS stack.
 /// Pass `None` for either in sandboxed contexts or tests.
 pub fn install_dom_api(
     ctx: &Ctx<'_>,
     doc: Arc<Mutex<Document>>,
+    page_url: &str,
+    nav_out: Arc<Mutex<Option<NavigateRequest>>>,
     fetch_provider: Option<Arc<dyn JsFetchProvider>>,
     ws_provider: Option<Arc<dyn JsWebSocketProvider>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), fetch_provider, ws_provider)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider)?;
+    // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
+    // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
+    ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
     ctx.eval::<(), _>(WEB_API_SHIM)?;
     Ok(())
 }
@@ -108,6 +132,7 @@ pub fn install_dom_api(
 fn install_primitives(
     ctx: &Ctx<'_>,
     doc: Arc<Mutex<Document>>,
+    nav_out: Arc<Mutex<Option<NavigateRequest>>>,
     fetch_provider: Option<Arc<dyn JsFetchProvider>>,
     ws_provider: Option<Arc<dyn JsWebSocketProvider>>,
 ) -> QjResult<()> {
@@ -510,6 +535,23 @@ fn install_primitives(
         let h = Arc::clone(&hist);
         reg!("_lumen_history_url", move || -> String {
             h.lock().unwrap().url().to_string()
+        });
+    }
+
+    // ── navigation (location.href =, assign, replace, reload) ────────────────
+    {
+        let nav = Arc::clone(&nav_out);
+        reg!("_lumen_navigate", move |url: String, replace: bool| {
+            *nav.lock().unwrap() = Some(if replace {
+                NavigateRequest::Replace(url)
+            } else {
+                NavigateRequest::Push(url)
+            });
+        });
+
+        let nav = Arc::clone(&nav_out);
+        reg!("_lumen_reload", move || {
+            *nav.lock().unwrap() = Some(NavigateRequest::Reload);
         });
     }
 
@@ -1130,7 +1172,78 @@ var document = {
 var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
 var confirm  = function()  { return false; };
 var prompt   = function()  { return null; };
-var location = { href: '', protocol: 'file:', hostname: '', host: '', pathname: '', search: '', hash: '' };
+
+// ── location (HTML LS §7.7 + WHATWG URL §8) ──────────────────────────────────
+// _LUMEN_PAGE_URL injected by Rust before this shim runs.
+function _lumen_parse_url(url) {
+    var href = String(url || '');
+    var protocol = '', hostname = '', host = '', port = '', pathname = '/', search = '', hash = '', origin = '';
+    var sIdx = href.indexOf('://');
+    if (sIdx >= 0) {
+        protocol = href.slice(0, sIdx + 1);
+        var rest = href.slice(sIdx + 3);
+        var splitAt = rest.length;
+        for (var i = 0; i < rest.length; i++) {
+            if (rest[i] === '/' || rest[i] === '?' || rest[i] === '#') { splitAt = i; break; }
+        }
+        var authority = rest.slice(0, splitAt);
+        rest = rest.slice(splitAt);
+        var atIdx = authority.indexOf('@');
+        if (atIdx >= 0) authority = authority.slice(atIdx + 1);
+        var portColon = authority.lastIndexOf(':');
+        if (portColon > authority.lastIndexOf(']')) {
+            hostname = authority.slice(0, portColon); port = authority.slice(portColon + 1);
+        } else {
+            hostname = authority; port = '';
+        }
+        host = port ? hostname + ':' + port : hostname;
+        var hIdx = rest.indexOf('#');
+        if (hIdx >= 0) { hash = rest.slice(hIdx); rest = rest.slice(0, hIdx); }
+        var qIdx = rest.indexOf('?');
+        if (qIdx >= 0) { search = rest.slice(qIdx); rest = rest.slice(0, qIdx); }
+        pathname = rest || '/';
+        origin = protocol + '//' + host;
+    } else {
+        var cIdx = href.indexOf(':');
+        if (cIdx >= 0) {
+            protocol = href.slice(0, cIdx + 1);
+            pathname = href.slice(cIdx + 1);
+        }
+    }
+    return { href: href, protocol: protocol, hostname: hostname, host: host, port: port,
+             pathname: pathname, search: search, hash: hash, origin: origin };
+}
+var _lumen_loc_parts = _lumen_parse_url(typeof _LUMEN_PAGE_URL !== 'undefined' ? _LUMEN_PAGE_URL : '');
+var _lumen_loc_href  = _lumen_loc_parts.href;
+function _lumen_location_update(url) {
+    var p = _lumen_parse_url(url);
+    _lumen_loc_href    = p.href;
+    location.protocol  = p.protocol;
+    location.hostname  = p.hostname;
+    location.host      = p.host;
+    location.port      = p.port;
+    location.pathname  = p.pathname;
+    location.search    = p.search;
+    location.hash      = p.hash;
+    location.origin    = p.origin;
+}
+var location = {
+    get href()    { return _lumen_loc_href; },
+    set href(v)   { _lumen_navigate(String(v || ''), false); },
+    protocol:  _lumen_loc_parts.protocol,
+    hostname:  _lumen_loc_parts.hostname,
+    host:      _lumen_loc_parts.host,
+    port:      _lumen_loc_parts.port,
+    pathname:  _lumen_loc_parts.pathname,
+    search:    _lumen_loc_parts.search,
+    hash:      _lumen_loc_parts.hash,
+    origin:    _lumen_loc_parts.origin,
+    assign:    function(url) { _lumen_navigate(String(url || ''), false); },
+    replace:   function(url) { _lumen_navigate(String(url || ''), true); },
+    reload:    function()    { _lumen_reload(); },
+    toString:  function()    { return this.href; }
+};
+
 // ── Service Worker API ────────────────────────────────────────────────────────
 
 function _lumen_build_cache_object(origin, cacheName) {
@@ -1246,16 +1359,14 @@ var history = {
         try { return JSON.parse(_lumen_history_state_json()); } catch(e) { return null; }
     },
     pushState:    function(state, title, url) {
-        _lumen_history_push(
-            JSON.stringify(state !== undefined ? state : null),
-            String(url || '')
-        );
+        var target = String(url !== undefined && url !== null ? url : '');
+        _lumen_history_push(JSON.stringify(state !== undefined ? state : null), target);
+        if (target) _lumen_location_update(target);
     },
     replaceState: function(state, title, url) {
-        _lumen_history_replace(
-            JSON.stringify(state !== undefined ? state : null),
-            String(url || '')
-        );
+        var target = String(url !== undefined && url !== null ? url : '');
+        _lumen_history_replace(JSON.stringify(state !== undefined ? state : null), target);
+        if (target) _lumen_location_update(target);
     },
     back:    function() { history.go(-1); },
     forward: function() { history.go(1); },
@@ -1726,7 +1837,7 @@ mod tests {
 
     fn runtime_with_dom(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(doc, None, None).unwrap();
+        rt.install_dom(doc, "", None, None).unwrap();
         rt
     }
 
@@ -2373,11 +2484,10 @@ mod tests {
 
     #[test]
     fn sw_register_calls_lumen_primitive() {
-        let rt = runtime_with_dom(make_doc());
-        // _sw_origin = location.protocol + '//' + location.host = 'file://'
+        // Pass a file URL so that _sw_origin = 'file://' (protocol + '//' + host).
+        let rt = runtime_with_url("file:///test.html");
         rt.eval("navigator.serviceWorker.register('/sw.js', { scope: '/' });")
             .unwrap();
-        // проверяем через примитив — origin 'file://'
         let result = rt.eval("_lumen_sw_has_registration('file://')").unwrap();
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
@@ -2792,7 +2902,7 @@ mod tests {
     fn runtime_with_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(FailWsProvider);
-        rt.install_dom(doc, None, Some(provider)).unwrap();
+        rt.install_dom(doc, "", None, Some(provider)).unwrap();
         rt
     }
 
@@ -2857,7 +2967,7 @@ mod tests {
     fn runtime_with_mock_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockWsProvider);
-        rt.install_dom(doc, None, Some(provider)).unwrap();
+        rt.install_dom(doc, "", None, Some(provider)).unwrap();
         rt
     }
 
@@ -2926,5 +3036,118 @@ mod tests {
             .eval("var me = new MessageEvent('payload'); me.data === 'payload' && me.type === 'message'")
             .unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── location / NavigateRequest tests ─────────────────────────────────────
+
+    fn runtime_with_url(url: &str) -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        rt.install_dom(make_doc(), url, None, None).unwrap();
+        rt
+    }
+
+    #[test]
+    fn location_href_initialised_from_page_url() {
+        let rt = runtime_with_url("https://example.com/path?q=1#top");
+        let r = rt.eval("location.href").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("https://example.com/path?q=1#top".into()));
+    }
+
+    #[test]
+    fn location_fields_parsed_correctly() {
+        let rt = runtime_with_url("https://example.com:8080/path/to?q=hello#sec");
+        let proto    = rt.eval("location.protocol").unwrap();
+        let hostname = rt.eval("location.hostname").unwrap();
+        let host     = rt.eval("location.host").unwrap();
+        let port     = rt.eval("location.port").unwrap();
+        let pathname = rt.eval("location.pathname").unwrap();
+        let search   = rt.eval("location.search").unwrap();
+        let hash     = rt.eval("location.hash").unwrap();
+        let origin   = rt.eval("location.origin").unwrap();
+        assert_eq!(proto,    lumen_core::JsValue::String("https:".into()));
+        assert_eq!(hostname, lumen_core::JsValue::String("example.com".into()));
+        assert_eq!(host,     lumen_core::JsValue::String("example.com:8080".into()));
+        assert_eq!(port,     lumen_core::JsValue::String("8080".into()));
+        assert_eq!(pathname, lumen_core::JsValue::String("/path/to".into()));
+        assert_eq!(search,   lumen_core::JsValue::String("?q=hello".into()));
+        assert_eq!(hash,     lumen_core::JsValue::String("#sec".into()));
+        assert_eq!(origin,   lumen_core::JsValue::String("https://example.com:8080".into()));
+    }
+
+    #[test]
+    fn location_href_empty_when_no_url() {
+        let rt = runtime_with_url("");
+        let r = rt.eval("location.href").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("".into()));
+    }
+
+    #[test]
+    fn location_assign_sets_navigate_push() {
+        let rt = runtime_with_url("https://start.example/");
+        rt.eval("location.assign('https://target.example/page')").unwrap();
+        let req = rt.take_navigate_request();
+        assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://target.example/page"));
+    }
+
+    #[test]
+    fn location_href_setter_sets_navigate_push() {
+        let rt = runtime_with_url("https://start.example/");
+        rt.eval("location.href = 'https://other.example/'").unwrap();
+        let req = rt.take_navigate_request();
+        assert!(matches!(req, Some(NavigateRequest::Push(u)) if u == "https://other.example/"));
+    }
+
+    #[test]
+    fn location_replace_sets_navigate_replace() {
+        let rt = runtime_with_url("https://start.example/");
+        rt.eval("location.replace('https://new.example/')").unwrap();
+        let req = rt.take_navigate_request();
+        assert!(matches!(req, Some(NavigateRequest::Replace(u)) if u == "https://new.example/"));
+    }
+
+    #[test]
+    fn location_reload_sets_navigate_reload() {
+        let rt = runtime_with_url("https://example.com/");
+        rt.eval("location.reload()").unwrap();
+        let req = rt.take_navigate_request();
+        assert!(matches!(req, Some(NavigateRequest::Reload)));
+    }
+
+    #[test]
+    fn no_navigate_request_when_no_navigation() {
+        let rt = runtime_with_url("https://example.com/");
+        rt.eval("1 + 1").unwrap();
+        assert!(rt.take_navigate_request().is_none());
+    }
+
+    #[test]
+    fn push_state_updates_location_href() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("history.pushState(null, '', '/page2')").unwrap();
+        let r = rt.eval("location.href").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("/page2".into()));
+    }
+
+    #[test]
+    fn replace_state_updates_location_href() {
+        let rt = runtime_with_url("https://example.com/page1");
+        rt.eval("history.replaceState({x:1}, '', '/replaced')").unwrap();
+        let r = rt.eval("location.href").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("/replaced".into()));
+    }
+
+    #[test]
+    fn push_state_does_not_request_navigation() {
+        let rt = runtime_with_url("https://example.com/");
+        rt.eval("history.pushState(null, '', '/other')").unwrap();
+        // pushState changes URL client-side without a network request
+        assert!(rt.take_navigate_request().is_none());
+    }
+
+    #[test]
+    fn location_file_url_parsed() {
+        let rt = runtime_with_url("file:///home/user/page.html");
+        let r = rt.eval("location.protocol").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("file:".into()));
     }
 }
