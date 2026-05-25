@@ -1,4 +1,5 @@
-In progress: —
+In progress: web-storage  branch: p3-web-storage
+Next step: WebStorage struct + _lumen_ls_* / _lumen_ss_* native functions  crates/js/src/dom.rs
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
