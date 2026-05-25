@@ -24,6 +24,8 @@ Current phase: **Phase 0 (prototype)**. Goal: open local HTML+CSS and render it 
 | `lumen-plan.md` | Full design doc (~1200 lines, 22 chapters): principles, scope, architecture, phases. Read for architecture/history, not daily status. |
 | `CSS-SPECS.md` | Complete CSS property & spec roadmap: all W3C modules, per-property status (✅🟡⬜🚫), P4 priority queue. |
 | `CLAUDE.md` | (this file) Conventions and invariants for the assistant. |
+| `docs/decisions/` | Formal ADR files (one per architectural decision). See README.md + TEMPLATE.md inside. |
+| `DECISIONS.md` | Historical decisions (pre-ADR format). Read-only — add new decisions to `docs/decisions/` instead. |
 | `samples/page.html` | Test page for pipeline runs. |
 | `assets/fonts/Inter-Regular.ttf` | Bundled font (SIL OFL 1.1). |
 
@@ -469,7 +471,7 @@ On significant milestones update:
 
 - **[subsystems/\<crate\>.md](subsystems/)** — extend the crate section (added to "Done" / removed from "Deferred" / test count).
 - **`lumen-plan.md` → Roadmap** — remove completed items.
-- **[DECISIONS.md](DECISIONS.md)** — new architectural decision (new dep exception, API approach choice).
+- **[docs/decisions/](docs/decisions/)** — new architectural decision (new dep exception, API approach choice). Use TEMPLATE.md, update README.md index.
 - **CLAUDE.md → "Known gotchas"** — if a gotcha is resolved or a new one is found.
 
 No manual doc update needed for: typos, formatting, minor refactors without API changes, tests not changing crate capability, code comments, merge history.
@@ -484,7 +486,9 @@ Per-crate state (scope, done, deferred, invariants) — [SUBSYSTEMS.md](SUBSYSTE
 
 ## Decisions log
 
-Architectural decisions and rationale — [DECISIONS.md](DECISIONS.md). Add there, not here.
+**New decisions** — one ADR file per decision in [`docs/decisions/`](docs/decisions/), using the template at [`docs/decisions/TEMPLATE.md`](docs/decisions/TEMPLATE.md). Update the index table in [`docs/decisions/README.md`](docs/decisions/README.md).
+
+**Historical decisions** (pre-ADR format) — [`DECISIONS.md`](DECISIONS.md). Do not add new entries there.
 
 ---
 
