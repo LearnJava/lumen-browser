@@ -1,4 +1,5 @@
-In progress: —
+In progress: streaming-feed-bytes  branch: p3-streaming-feed-bytes
+Next step: add feed_bytes(&[u8]) to IncrementalTreeBuilder  html-parser/src/tree_builder.rs:69
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
