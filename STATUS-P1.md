@@ -1,4 +1,5 @@
-In progress: (нет)
+In progress: ADR-инфраструктура (docs/decisions/)  branch: p1-adr-infrastructure
+Next step: создать TEMPLATE.md и первые ADR-файлы
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
