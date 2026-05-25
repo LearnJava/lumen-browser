@@ -1,4 +1,5 @@
-In progress: —
+In progress: websocket-js  branch: p3-websocket-js
+Next step: добавить JsWebSocketProvider/JsWsEvent/JsWebSocketSession в lumen-core/src/ext.rs
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
