@@ -1,4 +1,5 @@
-In progress: —
+In progress: html-full-tree-builder  branch: p1-html-full-tree-builder
+Next step: done — clippy clean, 349 tests pass  tree_builder.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
