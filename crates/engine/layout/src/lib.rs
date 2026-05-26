@@ -48,7 +48,7 @@ pub use style::{
     parse_grid_template_areas, parse_transform_list,
     AlignValue, AnimationDirection, ContainerContext,
     AnimationFillMode, AnimationPlayState,
-    BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundOrigin, BackgroundRepeat,
+    BackgroundAttachment, BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat,
     BackgroundSize, BorderStyle,
     BoxShadow, BoxSizing, BreakValue, CalcNode, ClipPath, Color, ColorFloat, ColorSpace,
     ClearSide, ContainFlags, ComputedStyle, Content,
@@ -8662,25 +8662,26 @@ mod tests {
     fn background_image_url_parses() {
         let root = lay("<p>x</p>", "p { background-image: url(\"bg.png\"); }");
         let s = first_p_style(&root);
-        assert_eq!(s.background_image, BackgroundImage::Url("bg.png".into()));
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Url("bg.png".into()));
     }
 
     #[test]
     fn background_image_url_unquoted() {
         let root = lay("<p>x</p>", "p { background-image: url(bg.png); }");
         assert_eq!(
-            first_p_style(&root).background_image,
+            first_p_style(&root).background_layers[0].image,
             BackgroundImage::Url("bg.png".into())
         );
     }
 
     #[test]
     fn background_image_none() {
+        // Setting "none" after a URL replaces all layers with one None-image layer.
         let root = lay(
             "<p>x</p>",
             "p { background-image: url(\"x.png\"); background-image: none; }",
         );
-        assert_eq!(first_p_style(&root).background_image, BackgroundImage::None);
+        assert_eq!(first_p_style(&root).background_layers[0].image, BackgroundImage::None);
     }
 
     #[test]
@@ -8690,7 +8691,7 @@ mod tests {
             "<p>x</p>",
             "p { background-image: linear-gradient(to right, red, blue); }",
         );
-        match &first_p_style(&root).background_image {
+        match &first_p_style(&root).background_layers[0].image {
             BackgroundImage::Gradient(ParsedGradient::Linear { angle_deg, stops, .. }) => {
                 assert!((angle_deg - 90.0).abs() < 0.1, "expected 90° for 'to right'");
                 assert_eq!(stops.len(), 2);
@@ -8825,7 +8826,7 @@ mod tests {
             "<p>x</p>",
             "p { background-image: conic-gradient(red, blue); }",
         );
-        match &first_p_style(&root).background_image {
+        match &first_p_style(&root).background_layers[0].image {
             BackgroundImage::Gradient(ParsedGradient::Conic {
                 center_x_pct, center_y_pct, from_angle_deg, stops, repeating,
             }) => {
@@ -8833,7 +8834,7 @@ mod tests {
                 assert!((center_y_pct - 0.5).abs() < 1e-4);
                 assert!(from_angle_deg.abs() < 1e-4, "default from-angle = 0°");
                 assert_eq!(stops.len(), 2);
-                assert!(!*repeating);
+                assert!(!repeating);
             }
             other => panic!("expected Conic, got {other:?}"),
         }
@@ -8846,7 +8847,7 @@ mod tests {
             "<p>x</p>",
             "p { background-image: conic-gradient(from 90deg at 25% 75%, red, blue); }",
         );
-        match &first_p_style(&root).background_image {
+        match &first_p_style(&root).background_layers[0].image {
             BackgroundImage::Gradient(ParsedGradient::Conic {
                 center_x_pct, center_y_pct, from_angle_deg, ..
             }) => {
@@ -8865,9 +8866,9 @@ mod tests {
             "<p>x</p>",
             "p { background-image: repeating-conic-gradient(red 0deg, blue 90deg); }",
         );
-        match &first_p_style(&root).background_image {
+        match &first_p_style(&root).background_layers[0].image {
             BackgroundImage::Gradient(ParsedGradient::Conic { repeating, stops, .. }) => {
-                assert!(*repeating);
+                assert!(repeating);
                 assert_eq!(stops.len(), 2);
                 // 0deg → 0%, 90deg → 25%.
                 assert_eq!(stops[0].position, Some(Length::Percent(0.0)));
@@ -8932,7 +8933,7 @@ mod tests {
             "<p>x</p>",
             "p { background-image: conic-gradient(at 10% 20%, red, blue); }",
         );
-        match &first_p_style(&root).background_image {
+        match &first_p_style(&root).background_layers[0].image {
             BackgroundImage::Gradient(ParsedGradient::Conic {
                 center_x_pct, center_y_pct, from_angle_deg, ..
             }) => {
@@ -8951,7 +8952,7 @@ mod tests {
             "<p>x</p>",
             "p { background-image: conic-gradient(from 0.25turn, red, blue); }",
         );
-        match &first_p_style(&root).background_image {
+        match &first_p_style(&root).background_layers[0].image {
             BackgroundImage::Gradient(ParsedGradient::Conic { from_angle_deg, .. }) => {
                 // 0.25turn = 90deg.
                 assert!((from_angle_deg - 90.0).abs() < 1e-3, "got {from_angle_deg}");
@@ -8968,7 +8969,7 @@ mod tests {
             "<p>x</p>",
             "p { background-image: conic-gradient(at left top, red, blue); }",
         );
-        match &first_p_style(&root).background_image {
+        match &first_p_style(&root).background_layers[0].image {
             BackgroundImage::Gradient(ParsedGradient::Conic {
                 center_x_pct, center_y_pct, ..
             }) => {
@@ -8991,7 +8992,7 @@ mod tests {
         ] {
             let css = format!("p {{ background-repeat: {s}; }}");
             let root = lay("<p>x</p>", &css);
-            assert_eq!(first_p_style(&root).background_repeat, expected);
+            assert_eq!(first_p_style(&root).background_layers[0].repeat, expected);
         }
     }
 
@@ -9004,14 +9005,14 @@ mod tests {
         ] {
             let css = format!("p {{ background-size: {s}; }}");
             let root = lay("<p>x</p>", &css);
-            assert_eq!(first_p_style(&root).background_size, expected);
+            assert_eq!(first_p_style(&root).background_layers[0].size, expected);
         }
     }
 
     #[test]
     fn background_size_length_single() {
         let root = lay("<p>x</p>", "p { background-size: 200px; }");
-        match first_p_style(&root).background_size {
+        match first_p_style(&root).background_layers[0].size {
             BackgroundSize::Length(w, h) => {
                 assert!((w - 200.0).abs() < 0.01);
                 assert_eq!(h, None);
@@ -9023,7 +9024,7 @@ mod tests {
     #[test]
     fn background_size_length_pair() {
         let root = lay("<p>x</p>", "p { background-size: 200px 100px; }");
-        match first_p_style(&root).background_size {
+        match first_p_style(&root).background_layers[0].size {
             BackgroundSize::Length(w, h) => {
                 assert!((w - 200.0).abs() < 0.01);
                 assert_eq!(h, Some(100.0));
@@ -9041,7 +9042,7 @@ mod tests {
         ] {
             let css = format!("p {{ background-attachment: {s}; }}");
             let root = lay("<p>x</p>", &css);
-            assert_eq!(first_p_style(&root).background_attachment, expected);
+            assert_eq!(first_p_style(&root).background_layers[0].attachment, expected);
         }
     }
 
@@ -9053,8 +9054,8 @@ mod tests {
         );
         let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
         let p = div.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
-        assert_eq!(p.style.background_image, BackgroundImage::None);
-        assert_eq!(p.style.background_repeat, BackgroundRepeat::Repeat);
+        // Child element has no background declarations → empty layers (initial state).
+        assert!(p.style.background_layers.is_empty());
     }
 
     // ──────── place-items / align-* / justify-* (CSS Box Alignment L3) ────────
@@ -9803,13 +9804,12 @@ mod tests {
         );
         let (html, body) = html_and_body(&root);
         assert!(
-            matches!(html.style.background_image, BackgroundImage::Url(ref s) if s == "bg.png"),
+            html.style.background_layers.first().is_some_and(|l| {
+                matches!(&l.image, BackgroundImage::Url(s) if s == "bg.png")
+            }),
             "html получает background-image"
         );
-        assert!(
-            matches!(body.style.background_image, BackgroundImage::None),
-            "у body background-image обнуляется"
-        );
+        assert!(body.style.background_layers.is_empty(), "у body background_layers обнуляется");
     }
 
     #[test]
@@ -9821,7 +9821,7 @@ mod tests {
             "html { background-image: url(\"h.png\"); } body { background-color: red; }",
         );
         let (html, body) = html_and_body(&root);
-        assert!(matches!(html.style.background_image, BackgroundImage::Url(_)));
+        assert!(html.style.background_layers.first().is_some_and(|l| matches!(&l.image, BackgroundImage::Url(_))));
         assert_eq!(html.style.background_color, None);
         assert_eq!(
             body.style.background_color,

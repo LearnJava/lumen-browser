@@ -9,7 +9,7 @@ use lumen_dom::InputType;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
-    BackgroundClip, BackgroundImage, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
+    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, FilterFn, FontStyle, FontWeight,
     FormControlKind,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
@@ -1636,9 +1636,13 @@ fn emit_text_shadows(
 ///   clip требует off-screen alpha-pass, P2 п.4+).
 ///
 /// `max(0.0)` страхует от negative-w/h на очень узких box-ах.
-fn background_clip_rect(b: &LayoutBox) -> Rect {
+/// Возвращает painting area для background с учётом `clip` значения.
+///
+/// CSS Backgrounds L3 §3.8: border-box = b.rect; padding-box = rect без border-а;
+/// content-box = rect без border-а и padding-а. Text трактуется как border-box (Phase 0).
+fn background_clip_rect(b: &LayoutBox, clip: BackgroundClip) -> Rect {
     let s = &b.style;
-    match s.background_clip {
+    match clip {
         BackgroundClip::BorderBox | BackgroundClip::Text => b.rect,
         BackgroundClip::PaddingBox => Rect::new(
             b.rect.x + s.border_left_width,
@@ -1665,28 +1669,29 @@ fn background_clip_rect(b: &LayoutBox) -> Rect {
     }
 }
 
-/// CSS Backgrounds L3 §3.10 — эмитит background-image команды поверх
-/// background-color и под border-ом (painter's order). Поддерживает:
-/// * `Url` → `DrawBackgroundImage`
-/// * `Gradient(Linear)` → `DrawLinearGradient`
-/// * `Gradient(Radial)` → `DrawRadialGradient`
-/// * `Gradient(Conic)`  → `DrawConicGradient`
-/// * `Gradient(Unknown)` — no-op (unsupported, Phase 0)
-///
-/// Пустой rect (width/height ≤ 0) — no-op: GPU отбракует, экономим память.
-fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox) {
-    let clip = background_clip_rect(b);
+/// CSS Backgrounds L3 §3.10: clip для `background-color` — last layer's clip (или default).
+fn background_color_clip(b: &LayoutBox) -> BackgroundClip {
+    b.style.background_layers.last().map_or(BackgroundClip::BorderBox, |l| l.clip)
+}
+
+/// Эмитит одну background-layer команду.
+fn emit_background_layer(
+    out: &mut Vec<DisplayCommand>,
+    b: &LayoutBox,
+    layer: &BackgroundLayer,
+) {
+    let clip = background_clip_rect(b, layer.clip);
     if clip.width <= 0.0 || clip.height <= 0.0 {
         return;
     }
-    match &b.style.background_image {
+    match &layer.image {
         BackgroundImage::Url(src) if !src.is_empty() => {
             out.push(DisplayCommand::DrawBackgroundImage {
                 rect: clip,
                 src: src.clone(),
-                size: b.style.background_size,
-                position: b.style.background_position,
-                repeat: b.style.background_repeat,
+                size: layer.size,
+                position: layer.position,
+                repeat: layer.repeat,
                 image_rendering: b.style.image_rendering,
             });
         }
@@ -1720,6 +1725,18 @@ fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox) {
             });
         }
         _ => {}
+    }
+}
+
+/// CSS Backgrounds L3 §3.10 — эмитит все фоновые слои элемента.
+///
+/// CSS Backgrounds L3 §3: слои рисуются снизу вверх — последний в списке (Vec)
+/// рисуется первым (самый нижний), первый в списке — последним (самый верхний).
+/// Пустых layers → no-op.
+fn emit_background_image(out: &mut Vec<DisplayCommand>, b: &LayoutBox) {
+    // Рисуем в обратном порядке: последний слой = нижний (рисуется первым).
+    for layer in b.style.background_layers.iter().rev() {
+        emit_background_layer(out, b, layer);
     }
 }
 
@@ -2199,7 +2216,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
-                let clip = background_clip_rect(b);
+                let clip = background_clip_rect(b, background_color_clip(b));
                 if clip.width > 0.0 && clip.height > 0.0 {
                     if radii.all_zero() {
                         out.push(DisplayCommand::FillRect { rect: clip, color: bg });
@@ -2259,7 +2276,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
-                let clip = background_clip_rect(b);
+                let clip = background_clip_rect(b, background_color_clip(b));
                 if clip.width > 0.0 && clip.height > 0.0 {
                     if radii.all_zero() {
                         out.push(DisplayCommand::FillRect { rect: clip, color: bg });
@@ -2310,7 +2327,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
-                let clip = background_clip_rect(b);
+                let clip = background_clip_rect(b, background_color_clip(b));
                 if clip.width > 0.0 && clip.height > 0.0 {
                     out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                 }
@@ -2418,7 +2435,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 if let Some(CssColor::Rgba(bg)) = b.style.background_color
                     && bg.a > 0
                 {
-                    let clip = background_clip_rect(b);
+                    let clip = background_clip_rect(b, background_color_clip(b));
                     if clip.width > 0.0 && clip.height > 0.0 {
                         out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                     }
@@ -2509,7 +2526,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
-                let clip = background_clip_rect(b);
+                let clip = background_clip_rect(b, background_color_clip(b));
                 if clip.width > 0.0 && clip.height > 0.0 {
                     out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                 }
@@ -2568,7 +2585,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
-                let clip = background_clip_rect(b);
+                let clip = background_clip_rect(b, background_color_clip(b));
                 if clip.width > 0.0 && clip.height > 0.0 {
                     out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                 }
@@ -2867,7 +2884,7 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
                 if let Some(CssColor::Rgba(bg)) = b.style.background_color
                     && bg.a > 0
                 {
-                    let clip = background_clip_rect(b);
+                    let clip = background_clip_rect(b, background_color_clip(b));
                     if clip.width > 0.0 && clip.height > 0.0 {
                         out.push(DisplayCommand::FillRect { rect: clip, color: bg });
                     }

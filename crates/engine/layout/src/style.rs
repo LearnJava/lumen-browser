@@ -1979,28 +1979,9 @@ pub struct ComputedStyle {
     pub justify_items: AlignValue,
     pub justify_self: AlignValue,
     pub justify_content: AlignValue,
-    /// CSS Backgrounds L3 — `background-image`.
-    pub background_image: BackgroundImage,
-    pub background_repeat: BackgroundRepeat,
-    pub background_size: BackgroundSize,
-    pub background_attachment: BackgroundAttachment,
-    /// CSS Backgrounds L3 §3.7 — `background-origin`. Не наследуется. Default
-    /// `PaddingBox`. Phase 0: parsing + storage; реальный выбор box-edge для
-    /// позиционной системы background-image — отдельная задача с согласованием
-    /// P2 (crate-ownership matrix).
-    pub background_origin: BackgroundOrigin,
-    /// CSS Backgrounds L3 §3.8 — `background-clip`. Не наследуется. Default
-    /// `BorderBox`. Variant `Text` (CSS Backgrounds L4) хранится как atom;
-    /// реальная отсечка по форме глифов требует mask-pipeline в `lumen-paint`.
-    pub background_clip: BackgroundClip,
-    /// CSS Backgrounds L3 §3.5 — `background-position`. Не наследуется.
-    /// Default `0% 0%` (top-left). Phase 0: parsing + storage; реальное
-    /// применение в paint pipeline (смещение background-image в pattern fill)
-    /// — отдельная задача с согласованием P2 (см. crate-ownership matrix).
-    /// Тип переиспользуется с `object-position`: те же 1-2-value формы,
-    /// keyword / length / percentage. Multi-background-position (список
-    /// через запятую) — отдельная задача после multi-background-image.
-    pub background_position: ObjectPosition,
+    /// CSS Backgrounds L3 §3 — стек фоновых слоёв. Первый элемент = верхний (рендерится поверх).
+    /// Пустой Vec соответствует `background-image: none` без слоёв. `background-color` отдельно.
+    pub background_layers: Vec<BackgroundLayer>,
     /// CSS Will Change L1. Список имён свойств для optimization hint.
     /// Пустой Vec = `auto` (default). Не наследуется.
     pub will_change: Vec<String>,
@@ -3098,6 +3079,42 @@ impl BackgroundClip {
     }
 }
 
+/// CSS Backgrounds L3 §3 — один фоновый слой. Первый в Vec = верхний (рисуется последним).
+///
+/// Все поля — initial values из спецификации. `background_color` не входит
+/// в слой — он всегда одиночный и хранится в `ComputedStyle.background_color`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BackgroundLayer {
+    /// `background-image` для этого слоя.
+    pub image: BackgroundImage,
+    /// `background-repeat` для этого слоя.
+    pub repeat: BackgroundRepeat,
+    /// `background-size` для этого слоя.
+    pub size: BackgroundSize,
+    /// `background-position` для этого слоя.
+    pub position: ObjectPosition,
+    /// `background-attachment` для этого слоя.
+    pub attachment: BackgroundAttachment,
+    /// `background-origin` для этого слоя.
+    pub origin: BackgroundOrigin,
+    /// `background-clip` для этого слоя.
+    pub clip: BackgroundClip,
+}
+
+impl Default for BackgroundLayer {
+    fn default() -> Self {
+        Self {
+            image: BackgroundImage::None,
+            repeat: BackgroundRepeat::Repeat,
+            size: BackgroundSize::Auto,
+            position: ObjectPosition::background_initial(),
+            attachment: BackgroundAttachment::Scroll,
+            origin: BackgroundOrigin::PaddingBox,
+            clip: BackgroundClip::BorderBox,
+        }
+    }
+}
+
 /// CSS Images L3 §5.5 — `object-fit`. Применяется к replaced elements
 /// (`<img>`, `<video>`, `<canvas>` и т.д.) и определяет, как «коробка»
 /// заливается содержимым с учётом intrinsic-размеров. Не наследуется.
@@ -3976,13 +3993,7 @@ impl ComputedStyle {
             justify_items: AlignValue::Auto,
             justify_self: AlignValue::Auto,
             justify_content: AlignValue::Auto,
-            background_image: BackgroundImage::None,
-            background_repeat: BackgroundRepeat::Repeat,
-            background_size: BackgroundSize::Auto,
-            background_attachment: BackgroundAttachment::Scroll,
-            background_origin: BackgroundOrigin::PaddingBox,
-            background_clip: BackgroundClip::BorderBox,
-            background_position: ObjectPosition::background_initial(),
+            background_layers: Vec::new(),
             will_change: Vec::new(),
             pointer_events: PointerEvents::Auto,
             touch_action: TouchAction::Auto,
@@ -4216,13 +4227,7 @@ pub fn compute_style(
         justify_self: AlignValue::Auto,
         justify_content: AlignValue::Auto,
         // Backgrounds — не наследуются, defaults.
-        background_image: BackgroundImage::None,
-        background_repeat: BackgroundRepeat::Repeat,
-        background_size: BackgroundSize::Auto,
-        background_attachment: BackgroundAttachment::Scroll,
-        background_origin: BackgroundOrigin::PaddingBox,
-        background_clip: BackgroundClip::BorderBox,
-        background_position: ObjectPosition::background_initial(),
+        background_layers: Vec::new(),
         // Will Change / Pointer Events — не наследуются.
         will_change: Vec::new(),
         pointer_events: PointerEvents::Auto,
@@ -8812,15 +8817,24 @@ fn apply_declaration(
             }
         }
         "background" => {
-            // CSS Backgrounds L3 §3.1 shorthand: <image> | <color>.
-            // Only simple single-layer values are handled here.
+            // CSS Backgrounds L3 §3 shorthand: comma-separated list of layers.
+            // Each layer: [<image>] [<position>[/<size>]]? [<repeat>]
+            //             [<attachment>] [<box> [<box>]?] + optional <color> in last.
             let trimmed = val.trim();
-            if is_gradient_function(trimmed) {
-                style.background_image = BackgroundImage::Gradient(parse_background_gradient(trimmed));
-            } else if let Some(url) = parse_url_value(trimmed) {
-                style.background_image = BackgroundImage::Url(url);
-            } else if let Some(c) = parse_css_color_legacy(trimmed, is_quirks) {
-                style.background_color = Some(c);
+            let layer_strs = split_top_level_commas(trimmed);
+            if layer_strs.is_empty() { return; }
+
+            // Сбрасываем текущие слои — shorthand всегда переписывает полностью.
+            style.background_layers.clear();
+            style.background_color = None;
+
+            for (i, ls) in layer_strs.iter().enumerate() {
+                let (layer, maybe_color) = parse_single_bg_layer(ls.trim(), em_basis, viewport, is_quirks);
+                style.background_layers.push(layer);
+                // Цвет допустим только в последнем слое.
+                if i == layer_strs.len() - 1 && let Some(c) = maybe_color {
+                    style.background_color = Some(c);
+                }
             }
         }
         "accent-color" => {
@@ -9747,75 +9761,128 @@ fn apply_declaration(
             }
         }
         "background-image" => {
-            // CSS Backgrounds L3 §3.1. `none` сбрасывает.
+            // CSS Backgrounds L3 §3.1 — comma-separated list of images.
             let trimmed = val.trim();
-            if trimmed.eq_ignore_ascii_case("none") {
-                style.background_image = BackgroundImage::None;
-            } else if let Some(url) = parse_url_value(trimmed) {
-                style.background_image = BackgroundImage::Url(url);
-            } else if is_gradient_function(trimmed) {
-                style.background_image = BackgroundImage::Gradient(parse_background_gradient(trimmed));
-            }
+            let pieces = split_top_level_commas(trimmed);
+            // Сохраняем текущие per-layer данные для cycling после изменения размера.
+            let old_layers = std::mem::take(&mut style.background_layers);
+            style.background_layers = pieces.iter().enumerate().map(|(i, s)| {
+                let s = s.trim();
+                let image = if s.eq_ignore_ascii_case("none") {
+                    BackgroundImage::None
+                } else if let Some(url) = parse_url_value(s) {
+                    BackgroundImage::Url(url)
+                } else if is_gradient_function(s) {
+                    BackgroundImage::Gradient(parse_background_gradient(s))
+                } else {
+                    BackgroundImage::None
+                };
+                // Прочие свойства берём из старого слоя (cycling) или defaults.
+                let old = old_layers.get(i % old_layers.len().max(1)).cloned().unwrap_or_default();
+                BackgroundLayer { image, ..old }
+            }).collect();
         }
         "background-repeat" => {
-            if let Some(v) = BackgroundRepeat::parse(val) {
-                style.background_repeat = v;
+            // CSS Backgrounds L3 §3.4 — comma-separated list (cycling).
+            let pieces = split_top_level_commas(val.trim());
+            let repeats: Vec<BackgroundRepeat> = pieces.iter()
+                .filter_map(|s| BackgroundRepeat::parse(s.trim()))
+                .collect();
+            if repeats.is_empty() { return; }
+            if style.background_layers.is_empty() {
+                style.background_layers.push(BackgroundLayer::default());
+            }
+            let n = repeats.len();
+            for (i, layer) in style.background_layers.iter_mut().enumerate() {
+                layer.repeat = repeats[i % n];
             }
         }
         "background-size" => {
-            let trimmed = val.trim();
-            if trimmed.eq_ignore_ascii_case("auto") {
-                style.background_size = BackgroundSize::Auto;
-            } else if trimmed.eq_ignore_ascii_case("cover") {
-                style.background_size = BackgroundSize::Cover;
-            } else if trimmed.eq_ignore_ascii_case("contain") {
-                style.background_size = BackgroundSize::Contain;
-            } else {
-                let parts: Vec<&str> = trimmed.split_whitespace().collect();
-                let w = parts.first().and_then(|s| resolve_box_length(s, em_basis, viewport, is_quirks));
-                let h = parts.get(1).and_then(|s| {
-                    if s.eq_ignore_ascii_case("auto") {
-                        None
-                    } else {
-                        resolve_box_length(s, em_basis, viewport, is_quirks)
-                    }
-                });
-                if let Some(w) = w {
-                    style.background_size = BackgroundSize::Length(w, h);
+            // CSS Backgrounds L3 §3.5 — comma-separated list (cycling).
+            let pieces = split_top_level_commas(val.trim());
+            let sizes: Vec<BackgroundSize> = pieces.iter().map(|s| {
+                let s = s.trim();
+                let parts: Vec<&str> = s.split_whitespace().collect();
+                let first = parts.first().copied().unwrap_or("auto");
+                let mut size = parse_background_size_single(first, em_basis, viewport, is_quirks);
+                // Второй токен как height
+                if let (BackgroundSize::Length(w, None), Some(&h_s)) = (size, parts.get(1))
+                    && !h_s.eq_ignore_ascii_case("auto")
+                    && let Some(h) = resolve_box_length(h_s, em_basis, viewport, is_quirks)
+                {
+                    size = BackgroundSize::Length(w, Some(h));
                 }
+                size
+            }).collect();
+            if sizes.is_empty() { return; }
+            if style.background_layers.is_empty() {
+                style.background_layers.push(BackgroundLayer::default());
+            }
+            let n = sizes.len();
+            for (i, layer) in style.background_layers.iter_mut().enumerate() {
+                layer.size = sizes[i % n];
             }
         }
         "background-attachment" => {
-            if let Some(v) = BackgroundAttachment::parse(val) {
-                style.background_attachment = v;
+            // CSS Backgrounds L3 §3.6 — comma-separated list (cycling).
+            let pieces = split_top_level_commas(val.trim());
+            let atts: Vec<BackgroundAttachment> = pieces.iter()
+                .filter_map(|s| BackgroundAttachment::parse(s.trim()))
+                .collect();
+            if atts.is_empty() { return; }
+            if style.background_layers.is_empty() {
+                style.background_layers.push(BackgroundLayer::default());
+            }
+            let n = atts.len();
+            for (i, layer) in style.background_layers.iter_mut().enumerate() {
+                layer.attachment = atts[i % n];
             }
         }
         "background-origin" => {
             // CSS Backgrounds L3 §3.7: border-box | padding-box | content-box.
-            // Non-inherited; initial padding-box. Multi-value (для multi-background)
-            // — отложено до multi-background-image (хранение Vec).
-            if let Some(v) = BackgroundOrigin::parse(val) {
-                style.background_origin = v;
+            let pieces = split_top_level_commas(val.trim());
+            let origins: Vec<BackgroundOrigin> = pieces.iter()
+                .filter_map(|s| BackgroundOrigin::parse(s.trim()))
+                .collect();
+            if origins.is_empty() { return; }
+            if style.background_layers.is_empty() {
+                style.background_layers.push(BackgroundLayer::default());
+            }
+            let n = origins.len();
+            for (i, layer) in style.background_layers.iter_mut().enumerate() {
+                layer.origin = origins[i % n];
             }
         }
         "background-clip" => {
-            // CSS Backgrounds L3 §3.8 + L4 (`text`):
-            // border-box | padding-box | content-box | text. Non-inherited;
-            // initial border-box. Multi-value (для multi-background) —
-            // отложено до multi-background-image.
-            if let Some(v) = BackgroundClip::parse(val) {
-                style.background_clip = v;
+            // CSS Backgrounds L3 §3.8 + L4 (`text`): comma-separated list.
+            let pieces = split_top_level_commas(val.trim());
+            let clips: Vec<BackgroundClip> = pieces.iter()
+                .filter_map(|s| BackgroundClip::parse(s.trim()))
+                .collect();
+            if clips.is_empty() { return; }
+            if style.background_layers.is_empty() {
+                style.background_layers.push(BackgroundLayer::default());
+            }
+            let n = clips.len();
+            for (i, layer) in style.background_layers.iter_mut().enumerate() {
+                layer.clip = clips[i % n];
             }
         }
         "background-position" => {
-            // CSS Backgrounds L3 §3.5. Парсер `<position>` переиспользуется
-            // с `object-position` (`ObjectPosition::parse`), но default
-            // для background-position другой — `0% 0%`, не `50% 50%`,
-            // поэтому используется отдельная константа `background_initial`.
-            // Multi-value список через запятую (для multi-background-image)
-            // — отдельная задача; здесь принимается один position.
-            if let Some(p) = ObjectPosition::parse(val, em_basis, viewport) {
-                style.background_position = p;
+            // CSS Backgrounds L3 §3.5 — comma-separated list (cycling).
+            // Парсер `<position>` переиспользуется с `object-position`,
+            // но default для background-position — `0% 0%`.
+            let pieces = split_top_level_commas(val.trim());
+            let positions: Vec<ObjectPosition> = pieces.iter()
+                .filter_map(|s| ObjectPosition::parse(s.trim(), em_basis, viewport))
+                .collect();
+            if positions.is_empty() { return; }
+            if style.background_layers.is_empty() {
+                style.background_layers.push(BackgroundLayer::default());
+            }
+            let n = positions.len();
+            for (i, layer) in style.background_layers.iter_mut().enumerate() {
+                layer.position = positions[i % n];
             }
         }
         "will-change" => {
@@ -11704,11 +11771,23 @@ fn apply_css_wide_keyword(
         "display" => {
             style.display = if inh_only_inherit { inherited.display } else { init.display };
         }
-        "background-color" | "background" => {
+        "background-color" => {
             style.background_color = if inh_only_inherit {
                 inherited.background_color
             } else {
                 init.background_color
+            };
+        }
+        "background" => {
+            style.background_color = if inh_only_inherit {
+                inherited.background_color
+            } else {
+                init.background_color
+            };
+            style.background_layers = if inh_only_inherit {
+                inherited.background_layers.clone()
+            } else {
+                Vec::new()
             };
         }
         "width" => style.width = if inh_only_inherit { inherited.width.clone() } else { init.width.clone() },
@@ -12081,28 +12160,15 @@ fn apply_css_wide_keyword(
                 init.vertical_align
             };
         }
-        // CSS Backgrounds L3 §3.5 — background-position non-inherited.
-        "background-position" => {
-            style.background_position = if inh_only_inherit {
-                inherited.background_position
+        // CSS Backgrounds L3 §3 — background-* non-inherited: reset to initial/inherit.
+        "background-position" | "background-origin" | "background-clip"
+        | "background-size" | "background-repeat" | "background-attachment"
+        | "background-image" => {
+            // Все background-* не наследуются: initial = пустые слои.
+            style.background_layers = if inh_only_inherit {
+                inherited.background_layers.clone()
             } else {
-                init.background_position
-            };
-        }
-        // CSS Backgrounds L3 §3.7 / §3.8 — background-origin / background-clip
-        // non-inherited.
-        "background-origin" => {
-            style.background_origin = if inh_only_inherit {
-                inherited.background_origin
-            } else {
-                init.background_origin
-            };
-        }
-        "background-clip" => {
-            style.background_clip = if inh_only_inherit {
-                inherited.background_clip
-            } else {
-                init.background_clip
+                Vec::new()
             };
         }
         // CSS Images L3 §6.1 — image-rendering inherited. inh — общий
@@ -13020,6 +13086,215 @@ fn is_gradient_function(s: &str) -> bool {
         || s.starts_with("repeating-linear-gradient(")
         || s.starts_with("repeating-radial-gradient(")
         || s.starts_with("repeating-conic-gradient(")
+}
+
+/// CSS Backgrounds L3 §3 — разбить строку одного слоя на токены.
+///
+/// Делит по пробелам и `/` только на depth=0 (не трогает содержимое функций
+/// вроде `url(path/img.png)` или `linear-gradient(red, blue)`).
+fn tokenize_bg_layer(s: &str) -> Vec<&str> {
+    let mut tokens = Vec::new();
+    let bytes = s.as_bytes();
+    let mut start = 0;
+    let mut depth = 0usize;
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'(' => { depth += 1; i += 1; }
+            b')' => { depth = depth.saturating_sub(1); i += 1; }
+            b' ' | b'\t' | b'\n' | b'\r' if depth == 0 => {
+                let tok = s[start..i].trim();
+                if !tok.is_empty() { tokens.push(tok); }
+                start = i + 1;
+                i += 1;
+            }
+            b'/' if depth == 0 => {
+                let tok = s[start..i].trim();
+                if !tok.is_empty() { tokens.push(tok); }
+                tokens.push("/");
+                start = i + 1;
+                i += 1;
+            }
+            _ => { i += 1; }
+        }
+    }
+    if start < bytes.len() {
+        let tok = s[start..].trim();
+        if !tok.is_empty() { tokens.push(tok); }
+    }
+    tokens
+}
+
+/// Возвращает `true` если токен может быть значением `background-position`.
+fn is_bg_position_token(s: &str) -> bool {
+    let lo = s.to_ascii_lowercase();
+    matches!(lo.as_str(), "center" | "top" | "bottom" | "left" | "right")
+        || s.ends_with('%')
+        || s.ends_with("px")
+        || s.ends_with("em")
+        || s.ends_with("rem")
+        || s.ends_with("vw")
+        || s.ends_with("vh")
+        || s.ends_with("vmin")
+        || s.ends_with("vmax")
+        || s.parse::<f32>().is_ok_and(|v| v == 0.0)
+}
+
+/// CSS Backgrounds L3 §3.5 — parse background-size от одного токена
+/// (`auto` / `cover` / `contain` / длина).
+fn parse_background_size_single(s: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> BackgroundSize {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "auto" => BackgroundSize::Auto,
+        "cover" => BackgroundSize::Cover,
+        "contain" => BackgroundSize::Contain,
+        other => {
+            if let Some(w) = resolve_box_length(other, em_basis, viewport, is_quirks) {
+                BackgroundSize::Length(w, None)
+            } else {
+                BackgroundSize::Auto
+            }
+        }
+    }
+}
+
+/// CSS Backgrounds L3 §3 — parse single layer of `background` shorthand.
+///
+/// Принимает строку одного слоя (после разбивки по top-level `,`).
+/// Возвращает `(BackgroundLayer, Option<CssColor>)` — цвет есть только
+/// у последнего слоя, но мы не знаем последний ли этот слой, поэтому
+/// caller сам решает, использовать ли цвет.
+fn parse_single_bg_layer(
+    layer_str: &str,
+    em_basis: f32,
+    viewport: Size,
+    is_quirks: bool,
+) -> (BackgroundLayer, Option<CssColor>) {
+    let mut layer = BackgroundLayer::default();
+    let mut color: Option<CssColor> = None;
+    let tokens = tokenize_bg_layer(layer_str);
+    let n = tokens.len();
+    let mut idx = 0;
+
+    while idx < n {
+        let t = tokens[idx];
+
+        // image: none / url(...) / gradient(...)
+        if t.eq_ignore_ascii_case("none") && layer.image == BackgroundImage::None {
+            // "none" as image — keep None (default already)
+            idx += 1;
+            continue;
+        }
+        if is_gradient_function(t) {
+            layer.image = BackgroundImage::Gradient(parse_background_gradient(t));
+            idx += 1;
+            continue;
+        }
+        if t.to_ascii_lowercase().starts_with("url(") {
+            if let Some(url) = parse_url_value(t) {
+                layer.image = BackgroundImage::Url(url);
+            }
+            idx += 1;
+            continue;
+        }
+
+        // background-repeat keywords
+        if let Some(r) = BackgroundRepeat::parse(t) {
+            layer.repeat = r;
+            idx += 1;
+            continue;
+        }
+
+        // background-attachment keywords
+        if let Some(a) = BackgroundAttachment::parse(t) {
+            layer.attachment = a;
+            idx += 1;
+            continue;
+        }
+
+        // box keywords: border-box | padding-box | content-box
+        // First occurrence = origin AND clip; second occurrence = clip only.
+        if let Some(o) = BackgroundOrigin::parse(t) {
+            // Первое box-keyword: origin = this; если дальше ещё keyword, оно = clip
+            layer.origin = o;
+            // По умолчанию clip совпадает с origin (CSS spec §3.6 initial handling)
+            layer.clip = match o {
+                BackgroundOrigin::BorderBox => BackgroundClip::BorderBox,
+                BackgroundOrigin::PaddingBox => BackgroundClip::PaddingBox,
+                BackgroundOrigin::ContentBox => BackgroundClip::ContentBox,
+            };
+            // Проверим следующий токен: может быть вторым box-keyword для clip
+            if idx + 1 < n && let Some(c2) = BackgroundClip::parse(tokens[idx + 1]) {
+                layer.clip = c2;
+                idx += 2;
+                continue;
+            }
+            idx += 1;
+            continue;
+        }
+        // background-clip only (text)
+        if t.eq_ignore_ascii_case("text") {
+            layer.clip = BackgroundClip::Text;
+            idx += 1;
+            continue;
+        }
+
+        // position: one or two position-tokens, optionally followed by / size
+        if t != "/" && is_bg_position_token(t) {
+            let mut pos_parts = vec![t];
+            // Второй позиционный токен?
+            if idx + 1 < n && tokens[idx + 1] != "/" && is_bg_position_token(tokens[idx + 1]) {
+                pos_parts.push(tokens[idx + 1]);
+                idx += 1;
+            }
+            let pos_str = pos_parts.join(" ");
+            if let Some(p) = ObjectPosition::parse(&pos_str, em_basis, viewport) {
+                layer.position = p;
+            }
+            idx += 1;
+
+            // После позиции может идти `/` и затем size
+            if idx < n && tokens[idx] == "/" {
+                idx += 1; // пропустить /
+                if idx < n {
+                    let s1 = tokens[idx];
+                    let mut size = parse_background_size_single(s1, em_basis, viewport, is_quirks);
+                    idx += 1;
+                    // Второй токен для size (width height)?
+                    if idx < n && tokens[idx] != "/" && !is_gradient_function(tokens[idx])
+                        && BackgroundRepeat::parse(tokens[idx]).is_none()
+                        && BackgroundAttachment::parse(tokens[idx]).is_none()
+                        && BackgroundOrigin::parse(tokens[idx]).is_none()
+                    {
+                        if let BackgroundSize::Length(w, None) = size {
+                            if let Some(h) = resolve_box_length(tokens[idx], em_basis, viewport, is_quirks) {
+                                size = BackgroundSize::Length(w, Some(h));
+                                idx += 1;
+                            }
+                        } else if matches!(size, BackgroundSize::Auto) {
+                            // auto <height>
+                            if let Some(_h) = resolve_box_length(tokens[idx], em_basis, viewport, is_quirks) {
+                                // auto height — CSS spec: "auto auto" = auto (keep Auto)
+                                idx += 1;
+                            }
+                        }
+                    }
+                    layer.size = size;
+                }
+            }
+            continue;
+        }
+
+        // color — пробуем последним, чтобы не спутать с keywords
+        if let Some(c) = parse_css_color_legacy(t, is_quirks) {
+            color = Some(c);
+            idx += 1;
+            continue;
+        }
+
+        idx += 1; // неизвестный токен — пропустить
+    }
+
+    (layer, color)
 }
 
 /// CSS Grid L1 §7.3 — parse `grid-template-areas` value.
@@ -17147,16 +17422,10 @@ mod tests {
 
     #[test]
     fn background_position_default_is_top_left() {
-        // CSS Backgrounds L3 §3.5 — initial `0% 0%`, отличается от
-        // object-position default (`50% 50%`).
+        // CSS Backgrounds L3 §3.5 — initial state: no layers (empty Vec).
+        // Default position is 0% 0% (from BackgroundLayer::default), applied when a layer exists.
         let s = cascade_at("<div></div>", "", &[0]);
-        assert_eq!(
-            s.background_position,
-            ObjectPosition {
-                x: PositionComponent::Percent(0.0),
-                y: PositionComponent::Percent(0.0),
-            }
-        );
+        assert!(s.background_layers.is_empty());
     }
 
     #[test]
@@ -17166,8 +17435,8 @@ mod tests {
             "div { background-position: 25% 75%; }",
             &[0],
         );
-        assert_eq!(s.background_position.x, PositionComponent::Percent(0.25));
-        assert_eq!(s.background_position.y, PositionComponent::Percent(0.75));
+        assert_eq!(s.background_layers[0].position.x, PositionComponent::Percent(0.25));
+        assert_eq!(s.background_layers[0].position.y, PositionComponent::Percent(0.75));
     }
 
     #[test]
@@ -17177,8 +17446,8 @@ mod tests {
             "div { background-position: 10px 20px; }",
             &[0],
         );
-        assert_eq!(s.background_position.x, PositionComponent::Px(10.0));
-        assert_eq!(s.background_position.y, PositionComponent::Px(20.0));
+        assert_eq!(s.background_layers[0].position.x, PositionComponent::Px(10.0));
+        assert_eq!(s.background_layers[0].position.y, PositionComponent::Px(20.0));
     }
 
     #[test]
@@ -17189,8 +17458,8 @@ mod tests {
             "div { background-position: 30%; }",
             &[0],
         );
-        assert_eq!(s.background_position.x, PositionComponent::Percent(0.30));
-        assert_eq!(s.background_position.y, PositionComponent::Percent(0.5));
+        assert_eq!(s.background_layers[0].position.x, PositionComponent::Percent(0.30));
+        assert_eq!(s.background_layers[0].position.y, PositionComponent::Percent(0.5));
     }
 
     #[test]
@@ -17200,8 +17469,8 @@ mod tests {
             "div { background-position: right bottom; }",
             &[0],
         );
-        assert_eq!(s.background_position.x, PositionComponent::Percent(1.0));
-        assert_eq!(s.background_position.y, PositionComponent::Percent(1.0));
+        assert_eq!(s.background_layers[0].position.x, PositionComponent::Percent(1.0));
+        assert_eq!(s.background_layers[0].position.y, PositionComponent::Percent(1.0));
     }
 
     #[test]
@@ -17211,37 +17480,31 @@ mod tests {
             "div { background-position: center; }",
             &[0],
         );
-        assert_eq!(s.background_position.x, PositionComponent::Percent(0.5));
-        assert_eq!(s.background_position.y, PositionComponent::Percent(0.5));
+        assert_eq!(s.background_layers[0].position.x, PositionComponent::Percent(0.5));
+        assert_eq!(s.background_layers[0].position.y, PositionComponent::Percent(0.5));
     }
 
     #[test]
     fn background_position_invalid_value_ignored() {
-        // Невалидное value → declaration invalid → остаётся initial.
+        // Невалидное value → declaration invalid → no layer created.
         let s = cascade_at(
             "<div></div>",
             "div { background-position: bogus; }",
             &[0],
         );
-        assert_eq!(
-            s.background_position,
-            ObjectPosition::background_initial()
-        );
+        assert!(s.background_layers.is_empty());
     }
 
     #[test]
     fn background_position_not_inherited() {
         // CSS Backgrounds L3 — non-inherited; ребёнок без своей декларации
-        // получает initial (`0% 0%`), а не родительское `right bottom`.
+        // получает initial (empty layers), а не родительское `right bottom`.
         let s = cascade_at(
             "<div><p></p></div>",
             "div { background-position: right bottom; }",
             &[0, 0],
         );
-        assert_eq!(
-            s.background_position,
-            ObjectPosition::background_initial()
-        );
+        assert!(s.background_layers.is_empty());
     }
 
     #[test]
@@ -17253,21 +17516,19 @@ mod tests {
             "div { background-position: center; } p { background-position: inherit; }",
             &[0, 0],
         );
-        assert_eq!(s.background_position.x, PositionComponent::Percent(0.5));
-        assert_eq!(s.background_position.y, PositionComponent::Percent(0.5));
+        assert_eq!(s.background_layers[0].position.x, PositionComponent::Percent(0.5));
+        assert_eq!(s.background_layers[0].position.y, PositionComponent::Percent(0.5));
     }
 
     #[test]
     fn background_position_initial_resets_to_top_left() {
+        // `initial` resets background-position → empty layers.
         let s = cascade_at(
             "<div></div>",
             "div { background-position: 80% 90%; background-position: initial; }",
             &[0],
         );
-        assert_eq!(
-            s.background_position,
-            ObjectPosition::background_initial()
-        );
+        assert!(s.background_layers.is_empty());
     }
 
     // -------- image-rendering (CSS Images L3 §6.1) --------
@@ -17363,8 +17624,9 @@ mod tests {
 
     #[test]
     fn background_origin_default_is_padding_box() {
+        // Initial state = empty layers. PaddingBox is default inside BackgroundLayer::default().
         let s = cascade_at("<div></div>", "", &[0]);
-        assert_eq!(s.background_origin, BackgroundOrigin::PaddingBox);
+        assert!(s.background_layers.is_empty());
     }
 
     #[test]
@@ -17379,31 +17641,32 @@ mod tests {
                 &format!("div {{ background-origin: {val}; }}"),
                 &[0],
             );
-            assert_eq!(s.background_origin, expected, "for value {val}");
+            assert_eq!(s.background_layers[0].origin, expected, "for value {val}");
         }
     }
 
     #[test]
     fn background_origin_case_insensitive() {
         let s = cascade_at("<div></div>", "div { background-origin: BORDER-BOX; }", &[0]);
-        assert_eq!(s.background_origin, BackgroundOrigin::BorderBox);
+        assert_eq!(s.background_layers[0].origin, BackgroundOrigin::BorderBox);
     }
 
     #[test]
     fn background_origin_invalid_value_ignored() {
+        // Invalid value → no layer created.
         let s = cascade_at("<div></div>", "div { background-origin: bogus; }", &[0]);
-        assert_eq!(s.background_origin, BackgroundOrigin::PaddingBox);
+        assert!(s.background_layers.is_empty());
     }
 
     #[test]
     fn background_origin_not_inherited() {
-        // CSS Backgrounds L3 §3.7 — non-inherited.
+        // CSS Backgrounds L3 §3.7 — non-inherited; child gets empty layers.
         let s = cascade_at(
             "<div><p></p></div>",
             "div { background-origin: content-box; }",
             &[0, 0],
         );
-        assert_eq!(s.background_origin, BackgroundOrigin::PaddingBox);
+        assert!(s.background_layers.is_empty());
     }
 
     #[test]
@@ -17414,34 +17677,36 @@ mod tests {
             "div { background-origin: content-box; } p { background-origin: inherit; }",
             &[0, 0],
         );
-        assert_eq!(s.background_origin, BackgroundOrigin::ContentBox);
+        assert_eq!(s.background_layers[0].origin, BackgroundOrigin::ContentBox);
     }
 
     #[test]
     fn background_origin_initial_keyword_resets() {
+        // `initial` clears layers → empty Vec.
         let s = cascade_at(
             "<div></div>",
             "div { background-origin: content-box; } div { background-origin: initial; }",
             &[0],
         );
-        assert_eq!(s.background_origin, BackgroundOrigin::PaddingBox);
+        assert!(s.background_layers.is_empty());
     }
 
     #[test]
     fn background_origin_unset_for_non_inherited_is_initial() {
-        // CSS Cascade L4 §7: `unset` для non-inherited == `initial`.
+        // CSS Cascade L4 §7: `unset` для non-inherited == `initial` → empty layers.
         let s = cascade_at(
             "<div><p></p></div>",
             "div { background-origin: content-box; } p { background-origin: unset; }",
             &[0, 0],
         );
-        assert_eq!(s.background_origin, BackgroundOrigin::PaddingBox);
+        assert!(s.background_layers.is_empty());
     }
 
     #[test]
     fn background_clip_default_is_border_box() {
+        // Initial state = empty layers. BorderBox is default inside BackgroundLayer::default().
         let s = cascade_at("<div></div>", "", &[0]);
-        assert_eq!(s.background_clip, BackgroundClip::BorderBox);
+        assert!(s.background_layers.is_empty());
     }
 
     #[test]
@@ -17457,20 +17722,21 @@ mod tests {
                 &format!("div {{ background-clip: {val}; }}"),
                 &[0],
             );
-            assert_eq!(s.background_clip, expected, "for value {val}");
+            assert_eq!(s.background_layers[0].clip, expected, "for value {val}");
         }
     }
 
     #[test]
     fn background_clip_case_insensitive() {
         let s = cascade_at("<div></div>", "div { background-clip: TEXT; }", &[0]);
-        assert_eq!(s.background_clip, BackgroundClip::Text);
+        assert_eq!(s.background_layers[0].clip, BackgroundClip::Text);
     }
 
     #[test]
     fn background_clip_invalid_value_ignored() {
+        // Invalid value → no layer created.
         let s = cascade_at("<div></div>", "div { background-clip: bogus; }", &[0]);
-        assert_eq!(s.background_clip, BackgroundClip::BorderBox);
+        assert!(s.background_layers.is_empty());
     }
 
     #[test]
@@ -17480,7 +17746,7 @@ mod tests {
             "div { background-clip: padding-box; }",
             &[0, 0],
         );
-        assert_eq!(s.background_clip, BackgroundClip::BorderBox);
+        assert!(s.background_layers.is_empty());
     }
 
     #[test]
@@ -17490,17 +17756,104 @@ mod tests {
             "div { background-clip: text; } p { background-clip: inherit; }",
             &[0, 0],
         );
-        assert_eq!(s.background_clip, BackgroundClip::Text);
+        assert_eq!(s.background_layers[0].clip, BackgroundClip::Text);
     }
 
     #[test]
     fn background_clip_initial_keyword_resets() {
+        // `initial` clears layers → empty Vec.
         let s = cascade_at(
             "<div></div>",
             "div { background-clip: text; } div { background-clip: initial; }",
             &[0],
         );
-        assert_eq!(s.background_clip, BackgroundClip::BorderBox);
+        assert!(s.background_layers.is_empty());
+    }
+
+    // ── CSS Backgrounds L3 §3 — multiple backgrounds ──
+
+    #[test]
+    fn multiple_backgrounds_two_images_in_shorthand() {
+        // CSS Backgrounds L3 §3: comma-separated layers. First = top layer.
+        let s = cascade_at(
+            "<div></div>",
+            "div { background: url(a.png), url(b.png); }",
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 2);
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Url("a.png".into()));
+        assert_eq!(s.background_layers[1].image, BackgroundImage::Url("b.png".into()));
+    }
+
+    #[test]
+    fn multiple_backgrounds_image_list_property() {
+        // background-image: comma list creates matching layers.
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-image: url(x.png), url(y.png), url(z.png); }",
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 3);
+        assert_eq!(s.background_layers[2].image, BackgroundImage::Url("z.png".into()));
+    }
+
+    #[test]
+    fn multiple_backgrounds_color_only_in_last_layer() {
+        // background shorthand: color applies only from last layer's declaration.
+        let s = cascade_at(
+            "<div></div>",
+            "div { background: url(a.png) no-repeat, red; }",
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 2);
+        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NoRepeat);
+        // Last layer had the color "red"
+        assert!(s.background_color.is_some());
+    }
+
+    #[test]
+    fn multiple_backgrounds_shorthand_with_position_size() {
+        // background: url(...) 50% 50% / cover no-repeat
+        let s = cascade_at(
+            "<div></div>",
+            "div { background: url(img.png) 50% 50% / cover no-repeat; }",
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        let layer = &s.background_layers[0];
+        assert_eq!(layer.image, BackgroundImage::Url("img.png".into()));
+        assert_eq!(layer.position.x, PositionComponent::Percent(0.5));
+        assert_eq!(layer.position.y, PositionComponent::Percent(0.5));
+        assert_eq!(layer.size, BackgroundSize::Cover);
+        assert_eq!(layer.repeat, BackgroundRepeat::NoRepeat);
+    }
+
+    #[test]
+    fn multiple_backgrounds_repeat_cycles_over_layers() {
+        // background-image with 3 images, background-repeat with 2 → cycles.
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-image: url(a.png), url(b.png), url(c.png); \
+             background-repeat: no-repeat, repeat-x; }",
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 3);
+        assert_eq!(s.background_layers[0].repeat, BackgroundRepeat::NoRepeat);
+        assert_eq!(s.background_layers[1].repeat, BackgroundRepeat::RepeatX);
+        assert_eq!(s.background_layers[2].repeat, BackgroundRepeat::NoRepeat); // cycles
+    }
+
+    #[test]
+    fn background_shorthand_resets_all_layers() {
+        // Setting background shorthand clears previous layers.
+        let s = cascade_at(
+            "<div></div>",
+            "div { background-image: url(a.png), url(b.png); \
+             background: url(c.png); }",
+            &[0],
+        );
+        assert_eq!(s.background_layers.len(), 1);
+        assert_eq!(s.background_layers[0].image, BackgroundImage::Url("c.png".into()));
     }
 
     // ── CSS Text Module Level 4 §6.4 — text-wrap-mode / text-wrap-style / text-wrap ──
