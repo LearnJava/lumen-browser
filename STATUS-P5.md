@@ -1,4 +1,4 @@
-In progress: —
+In progress: fix-bug028-resize  branch: p5-bug028-resize-guard
 
 Role: P5 owns ALL bug fixes across the entire codebase.
   P1/P2/P3/P4 do NOT fix bugs — they build new features only.

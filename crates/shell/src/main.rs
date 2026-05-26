@@ -1901,6 +1901,10 @@ impl Lumen {
         let Some(src) = self.layout_source.as_ref() else { return };
         let Some(r) = self.renderer.as_ref() else { return };
         let vp_size = r.viewport_size();
+        // Guard against degenerate viewport (renderer not yet configured or minimized).
+        if vp_size.width <= 0.0 || vp_size.height <= 0.0 {
+            return;
+        }
         let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
         let (new_dl, lb) = relayout_page(src, viewport);
         self.content_height = content_height_of(&new_dl);
@@ -2362,6 +2366,12 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 event_loop.exit();
             }
             WindowEvent::Resized(size) => {
+                // Windows fires Resized(0, 0) when the window is minimized.
+                // Skip resize + relayout entirely — the layout stays valid at
+                // the last non-zero size and will be refreshed on restore.
+                if size.width == 0 || size.height == 0 {
+                    return;
+                }
                 if let Some(r) = self.renderer.as_mut() {
                     r.resize(size.width, size.height);
                 }
