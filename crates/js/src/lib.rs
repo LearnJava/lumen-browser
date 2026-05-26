@@ -3,6 +3,7 @@ pub mod dom;
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue};
 use lumen_dom::Document;
 use rquickjs::{Array, Context, Ctx, FromJs, Function, IntoJs, Object, Runtime, Type, Value};
+use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -32,6 +33,13 @@ pub struct QuickJsRuntime {
     /// Cleared (and returned) by `take_raf_pending` after each rendering step.
     /// Shell uses this to decide whether to request the next redraw for animations.
     raf_pending: Arc<AtomicBool>,
+    /// Layout bounding rects updated after each relayout by the shell.
+    /// Maps NodeId index (u32) → [x, y, width, height] in viewport-relative CSS px.
+    /// Read by `_lumen_get_bounding_rect(nid)` from JS (e.g., ResizeObserver/IntersectionObserver).
+    layout_rects: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    /// Current viewport size [width, height] in CSS px.
+    /// Updated by the shell on every resize; read by `_lumen_get_viewport_size()`.
+    viewport_size: Arc<Mutex<[f32; 2]>>,
 }
 
 struct Inner {
@@ -56,6 +64,8 @@ impl QuickJsRuntime {
             timer_wakeup: Arc::new(Mutex::new(None)),
             dom_dirty: Arc::new(AtomicBool::new(false)),
             raf_pending: Arc::new(AtomicBool::new(false)),
+            layout_rects: Arc::new(Mutex::new(HashMap::new())),
+            viewport_size: Arc::new(Mutex::new([0.0, 0.0])),
         })
     }
 
@@ -96,6 +106,8 @@ impl QuickJsRuntime {
                 Arc::clone(&self.timer_wakeup),
                 Arc::clone(&self.dom_dirty),
                 Arc::clone(&self.raf_pending),
+                Arc::clone(&self.layout_rects),
+                Arc::clone(&self.viewport_size),
             )
             .map_err(|e| rq_err(&ctx, e))
         })
@@ -132,6 +144,23 @@ impl QuickJsRuntime {
     /// Returns `None` when no timers are pending.
     pub fn take_timer_wakeup(&self) -> Option<f64> {
         self.timer_wakeup.lock().unwrap().take()
+    }
+
+    /// Replace the layout bounding-rect table with a fresh snapshot.
+    ///
+    /// Called by the shell after every `relayout_page` call.  Maps `NodeId`
+    /// index (u32) → `[x, y, width, height]` in viewport-relative CSS px
+    /// (border-box coordinates, same as `getBoundingClientRect`).
+    pub fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
+        *self.layout_rects.lock().unwrap() = rects;
+    }
+
+    /// Update the viewport dimensions.
+    ///
+    /// Called by the shell after every resize event and at initial load.
+    /// `width` and `height` are in CSS px (physical size / device pixel ratio).
+    pub fn update_viewport_size(&self, width: f32, height: f32) {
+        *self.viewport_size.lock().unwrap() = [width, height];
     }
 }
 

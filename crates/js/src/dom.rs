@@ -7,6 +7,7 @@
 //! Phase 0 selector support: `#id`, `.class`, `tagname`, `*`.
 //! Compound selectors (e.g. `div.foo`) are not supported in Phase 0.
 
+use std::collections::HashMap;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, Ordering},
@@ -120,6 +121,9 @@ pub enum NavigateRequest {
 /// `ss_store` — fresh sessionStorage for this page load; created by the caller.
 /// `timer_wakeup` — shared slot written by `_lumen_request_wakeup` when a timer
 ///              is scheduled; shell reads it to set `ControlFlow::WaitUntil`.
+/// `layout_rects` — shared map updated by the shell after each relayout; maps
+///              `NodeId` index → `[x, y, width, height]` in viewport-relative CSS px.
+/// `viewport_size` — shared `[width, height]` updated by the shell on resize.
 /// Pass `None` for providers in sandboxed contexts or tests.
 #[allow(clippy::too_many_arguments)]
 pub fn install_dom_api(
@@ -134,8 +138,10 @@ pub fn install_dom_api(
     timer_wakeup: Arc<Mutex<Option<f64>>>,
     dom_dirty: Arc<AtomicBool>,
     raf_pending: Arc<AtomicBool>,
+    layout_rects: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    viewport_size: Arc<Mutex<[f32; 2]>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -157,6 +163,8 @@ fn install_primitives(
     timer_wakeup: Arc<Mutex<Option<f64>>>,
     dom_dirty: Arc<AtomicBool>,
     raf_pending: Arc<AtomicBool>,
+    layout_rects: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    viewport_size: Arc<Mutex<[f32; 2]>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -857,6 +865,28 @@ fn install_primitives(
         let raf = Arc::clone(&raf_pending);
         reg!("_lumen_mark_raf_pending", move || {
             raf.store(true, Ordering::Relaxed);
+        });
+    }
+
+    // ── element geometry (for getBoundingClientRect / ResizeObserver / IntersectionObserver) ──
+    // Returns [x, y, width, height] for the given NodeId in viewport-relative CSS px,
+    // or undefined if the node has no layout box (display:none, not laid out yet, etc.).
+    {
+        let lr = Arc::clone(&layout_rects);
+        reg!("_lumen_get_bounding_rect", move |nid: u32| -> Option<Vec<f64>> {
+            lr.lock()
+                .unwrap()
+                .get(&nid)
+                .map(|r| vec![f64::from(r[0]), f64::from(r[1]), f64::from(r[2]), f64::from(r[3])])
+        });
+    }
+
+    // Returns [width, height] of the current viewport in CSS px.
+    {
+        let vs = Arc::clone(&viewport_size);
+        reg!("_lumen_get_viewport_size", move || -> Vec<f64> {
+            let s = *vs.lock().unwrap();
+            vec![f64::from(s[0]), f64::from(s[1])]
         });
     }
 
@@ -2031,6 +2061,292 @@ var sessionStorage = _lumen_make_storage(
     _lumen_ss_get, _lumen_ss_set, _lumen_ss_remove, _lumen_ss_clear
 );
 
+// ── MutationObserver (WHATWG DOM §4.3.2) ─────────────────────────────────────
+// Intercept existing mutation primitives to capture DOM change events.
+// Wrapping happens here before the Element API (which calls these primitives)
+// is built, so all subsequent setAttribute / innerHTML / appendChild calls
+// automatically trigger observer delivery via queueMicrotask.
+
+var _mo_observers = [];
+var _mo_delivery_queued = false;
+
+function _mo_notify(nid, type, attrName, oldVal, addedNodeIds, removedNodeIds) {
+    var hasObs = false;
+    for (var oi = 0; oi < _mo_observers.length; oi++) {
+        var obs = _mo_observers[oi];
+        for (var ei = 0; ei < obs._observations.length; ei++) {
+            var entry = obs._observations[ei];
+            var tnid = entry.target && entry.target.__nid__;
+            if (tnid === undefined) continue;
+            var opts = entry.opts;
+            // Check if this mutation applies to this observation
+            if (tnid !== nid && !opts.subtree) continue;
+            if (type === 'attributes' && !opts.attributes) continue;
+            if (type === 'childList' && !opts.childList) continue;
+            if (type === 'characterData' && !opts.characterData) continue;
+            if (type === 'attributes' && opts.attributeFilter &&
+                    opts.attributeFilter.indexOf(attrName) < 0) continue;
+            var rec = {
+                type: type,
+                target: entry.target,
+                attributeName: attrName || null,
+                oldValue: (type === 'attributes' && opts.attributeOldValue) ? oldVal :
+                          (type === 'characterData' && opts.characterDataOldValue) ? oldVal : null,
+                addedNodes: addedNodeIds || [],
+                removedNodes: removedNodeIds || [],
+                nextSibling: null,
+                previousSibling: null,
+            };
+            obs._records.push(rec);
+            hasObs = true;
+        }
+    }
+    if (hasObs && !_mo_delivery_queued) {
+        _mo_delivery_queued = true;
+        queueMicrotask(_lumen_flush_mutation_observers);
+    }
+}
+
+// Synchronous delivery of all pending MutationObserver records.
+// Called automatically via queueMicrotask after mutations.
+// Can also be called directly by the shell after event dispatch (e.g. after
+// _lumen_dispatch) to ensure observer callbacks run before the next paint.
+function _lumen_flush_mutation_observers() {
+    _mo_delivery_queued = false;
+    for (var i = 0; i < _mo_observers.length; i++) {
+        var o = _mo_observers[i];
+        if (o._records.length === 0) continue;
+        var recs = o._records;
+        o._records = [];
+        try { o._cb(recs, o); } catch(e) {}
+    }
+}
+
+// Wrap _lumen_set_attr to intercept attribute mutations
+var _orig_set_attr = _lumen_set_attr;
+_lumen_set_attr = function(nid, name, value) {
+    var old = (_mo_observers.length > 0) ? _lumen_get_attr(nid, name) : undefined;
+    _orig_set_attr(nid, name, value);
+    if (_mo_observers.length > 0) {
+        _mo_notify(nid, 'attributes', String(name), old !== undefined ? old : null, null, null);
+    }
+};
+
+// Wrap _lumen_set_inner_html to intercept childList mutations
+var _orig_set_inner_html = _lumen_set_inner_html;
+_lumen_set_inner_html = function(nid, html) {
+    _orig_set_inner_html(nid, html);
+    if (_mo_observers.length > 0) {
+        _mo_notify(nid, 'childList', null, null, [], []);
+    }
+};
+
+// Wrap _lumen_append_child to intercept childList mutations
+var _orig_append_child = _lumen_append_child;
+_lumen_append_child = function(parent, child) {
+    _orig_append_child(parent, child);
+    if (_mo_observers.length > 0) {
+        _mo_notify(parent, 'childList', null, null, [child], []);
+    }
+};
+
+// Wrap _lumen_remove_child to intercept childList mutations
+var _orig_remove_child = _lumen_remove_child;
+_lumen_remove_child = function(parent, child) {
+    _orig_remove_child(parent, child);
+    if (_mo_observers.length > 0) {
+        _mo_notify(parent, 'childList', null, null, [], [child]);
+    }
+};
+
+// Wrap _lumen_set_text_content to intercept characterData/childList mutations
+var _orig_set_text_content = _lumen_set_text_content;
+_lumen_set_text_content = function(nid, text) {
+    _orig_set_text_content(nid, text);
+    if (_mo_observers.length > 0) {
+        _mo_notify(nid, 'characterData', null, null, null, null);
+    }
+};
+
+function MutationObserver(callback) {
+    this._cb = callback;
+    this._observations = [];
+    this._records = [];
+    _mo_observers.push(this);
+}
+MutationObserver.prototype.observe = function(target, options) {
+    if (!target || target.__nid__ === undefined) return;
+    var opts = options || {};
+    var config = {
+        target: target,
+        opts: {
+            childList:               !!opts.childList,
+            attributes:              !!(opts.attributes || opts.attributeFilter || opts.attributeOldValue),
+            characterData:           !!opts.characterData,
+            subtree:                 !!opts.subtree,
+            attributeOldValue:       !!opts.attributeOldValue,
+            characterDataOldValue:   !!opts.characterDataOldValue,
+            attributeFilter:         opts.attributeFilter ? opts.attributeFilter.slice() : null,
+        },
+    };
+    for (var i = 0; i < this._observations.length; i++) {
+        if (this._observations[i].target === target) {
+            this._observations[i] = config;
+            return;
+        }
+    }
+    this._observations.push(config);
+};
+MutationObserver.prototype.disconnect = function() {
+    var idx = _mo_observers.indexOf(this);
+    if (idx >= 0) _mo_observers.splice(idx, 1);
+    this._observations = [];
+    this._records = [];
+};
+MutationObserver.prototype.takeRecords = function() {
+    var r = this._records;
+    this._records = [];
+    return r;
+};
+
+// ── ResizeObserver (W3C Resize Observer §5) ───────────────────────────────────
+// Delivers size-change entries after layout; the shell calls
+// _lumen_deliver_resize_observers() after each relayout.
+
+var _ro_observers = [];
+
+function ResizeObserver(callback) {
+    this._cb = callback;
+    this._observations = [];
+    _ro_observers.push(this);
+}
+ResizeObserver.prototype.observe = function(target) {
+    if (!target || target.__nid__ === undefined) return;
+    for (var i = 0; i < this._observations.length; i++) {
+        if (this._observations[i].target === target) return;
+    }
+    this._observations.push({ target: target, lastW: -1, lastH: -1 });
+};
+ResizeObserver.prototype.unobserve = function(target) {
+    this._observations = this._observations.filter(function(o) { return o.target !== target; });
+};
+ResizeObserver.prototype.disconnect = function() {
+    var idx = _ro_observers.indexOf(this);
+    if (idx >= 0) _ro_observers.splice(idx, 1);
+    this._observations = [];
+};
+
+function _lumen_deliver_resize_observers() {
+    if (_ro_observers.length === 0) return;
+    for (var oi = 0; oi < _ro_observers.length; oi++) {
+        var obs = _ro_observers[oi];
+        var entries = [];
+        for (var ei = 0; ei < obs._observations.length; ei++) {
+            var o = obs._observations[ei];
+            var nid = o.target.__nid__;
+            var rect = _lumen_get_bounding_rect(nid);
+            if (!rect) continue;
+            var w = rect[2], h = rect[3];
+            if (Math.abs(w - o.lastW) < 0.5 && Math.abs(h - o.lastH) < 0.5) continue;
+            o.lastW = w; o.lastH = h;
+            entries.push({
+                target: o.target,
+                contentRect: { x: rect[0], y: rect[1], width: w, height: h,
+                               top: rect[1], left: rect[0], bottom: rect[1]+h, right: rect[0]+w },
+                borderBoxSize:  [{ inlineSize: w, blockSize: h }],
+                contentBoxSize: [{ inlineSize: w, blockSize: h }],
+                devicePixelContentBoxSize: [{ inlineSize: w, blockSize: h }],
+            });
+        }
+        if (entries.length > 0) {
+            try { obs._cb(entries, obs); } catch(e) {}
+        }
+    }
+}
+
+// ── IntersectionObserver (WICG Intersection Observer §4) ─────────────────────
+// Delivers intersection entries after layout; the shell calls
+// _lumen_deliver_intersection_observers() after each relayout.
+
+var _io_observers = [];
+
+function IntersectionObserver(callback, options) {
+    this._cb = callback;
+    this._options = options || {};
+    this._observations = [];
+    _io_observers.push(this);
+}
+IntersectionObserver.prototype.observe = function(target) {
+    if (!target || target.__nid__ === undefined) return;
+    for (var i = 0; i < this._observations.length; i++) {
+        if (this._observations[i].target === target) return;
+    }
+    // lastRatio = -1 means «never delivered» → first delivery always fires
+    this._observations.push({ target: target, lastRatio: -1 });
+};
+IntersectionObserver.prototype.unobserve = function(target) {
+    this._observations = this._observations.filter(function(o) { return o.target !== target; });
+};
+IntersectionObserver.prototype.disconnect = function() {
+    var idx = _io_observers.indexOf(this);
+    if (idx >= 0) _io_observers.splice(idx, 1);
+    this._observations = [];
+};
+
+function _lumen_deliver_intersection_observers() {
+    if (_io_observers.length === 0) return;
+    var vp = _lumen_get_viewport_size();
+    var vpW = vp[0], vpH = vp[1];
+    for (var oi = 0; oi < _io_observers.length; oi++) {
+        var obs = _io_observers[oi];
+        var t = obs._options.threshold !== undefined ? obs._options.threshold : 0;
+        var thresholds = Array.isArray(t) ? t : [t];
+        var entries = [];
+        for (var ei = 0; ei < obs._observations.length; ei++) {
+            var o = obs._observations[ei];
+            var nid = o.target.__nid__;
+            var rect = _lumen_get_bounding_rect(nid);
+            if (!rect) continue;
+            var ex = rect[0], ey = rect[1], ew = rect[2], eh = rect[3];
+            var ix = Math.max(ex, 0);
+            var iy = Math.max(ey, 0);
+            var iw = Math.max(0, Math.min(ex + ew, vpW) - ix);
+            var ih = Math.max(0, Math.min(ey + eh, vpH) - iy);
+            var area = ew * eh;
+            var ratio = area > 0 ? (iw * ih) / area : 0;
+            var prev = o.lastRatio;
+            var crossed = prev < 0; // first observation
+            if (!crossed) {
+                for (var ti = 0; ti < thresholds.length; ti++) {
+                    var thr = thresholds[ti];
+                    if ((prev < thr) !== (ratio < thr) ||
+                        (prev === 0 && ratio > 0) || (prev > 0 && ratio === 0)) {
+                        crossed = true;
+                        break;
+                    }
+                }
+            }
+            if (!crossed) continue;
+            o.lastRatio = ratio;
+            entries.push({
+                target: o.target,
+                isIntersecting: ratio > 0,
+                intersectionRatio: ratio,
+                boundingClientRect: { x: ex, y: ey, width: ew, height: eh,
+                                      top: ey, left: ex, bottom: ey+eh, right: ex+ew },
+                intersectionRect:   { x: ix, y: iy, width: iw, height: ih,
+                                      top: iy, left: ix, bottom: iy+ih, right: ix+iw },
+                rootBounds: { x: 0, y: 0, width: vpW, height: vpH,
+                              top: 0, left: 0, bottom: vpH, right: vpW },
+                time: typeof performance !== 'undefined' ? performance.now() : 0,
+            });
+        }
+        if (entries.length > 0) {
+            try { obs._cb(entries, obs); } catch(e) {}
+        }
+    }
+}
+
 var window = {
     history: history,
     onpopstate: null,
@@ -2307,17 +2623,20 @@ var scheduler = {
 
 // Expose new globals on window object (defined after window literal because
 // `var performance` is not hoisted with its value, only its name).
-window.URL             = URL;
-window.URLSearchParams = URLSearchParams;
-window.performance     = performance;
-window.queueMicrotask  = queueMicrotask;
-window.Event           = Event;
-window.CustomEvent     = CustomEvent;
-window.scheduler       = scheduler;
-window.setTimeout      = setTimeout;
-window.clearTimeout    = clearTimeout;
-window.setInterval     = setInterval;
-window.clearInterval   = clearInterval;
+window.URL                   = URL;
+window.URLSearchParams       = URLSearchParams;
+window.performance           = performance;
+window.queueMicrotask        = queueMicrotask;
+window.Event                 = Event;
+window.CustomEvent           = CustomEvent;
+window.scheduler             = scheduler;
+window.setTimeout            = setTimeout;
+window.clearTimeout          = clearTimeout;
+window.setInterval           = setInterval;
+window.clearInterval         = clearInterval;
+window.MutationObserver      = MutationObserver;
+window.ResizeObserver        = ResizeObserver;
+window.IntersectionObserver  = IntersectionObserver;
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -4106,5 +4425,283 @@ mod tests {
         let rt = runtime_with_dom(make_doc());
         let r = rt.eval("typeof window.cancelAnimationFrame === 'function'").unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── MutationObserver tests ────────────────────────────────────────────────
+
+    #[test]
+    fn mutation_observer_exists_as_constructor() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof MutationObserver === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn mutation_observer_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.MutationObserver === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn mutation_observer_fires_on_attribute_change() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _mo_fired = false;
+            var _mo_rec = null;
+            var obs = new MutationObserver(function(records) {
+                _mo_fired = true;
+                _mo_rec = records[0];
+            });
+            var el = document.getElementById('main');
+            obs.observe(el, { attributes: true });
+            el.setAttribute('data-x', '42');
+        "#).unwrap();
+        // Flush synchronously; queueMicrotask delivery drains on next eval but
+        // using the flush function is more explicit and reliable in tests.
+        rt.eval("_lumen_flush_mutation_observers()").unwrap();
+        let fired = rt.eval("_mo_fired").unwrap();
+        assert_eq!(fired, lumen_core::JsValue::Bool(true));
+        let attr = rt.eval("_mo_rec && _mo_rec.type").unwrap();
+        assert_eq!(attr, lumen_core::JsValue::String("attributes".into()));
+    }
+
+    #[test]
+    fn mutation_observer_fires_on_child_list_change() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _mo_cl_fired = false;
+            var obs2 = new MutationObserver(function(records) {
+                _mo_cl_fired = records.some(function(r){ return r.type === 'childList'; });
+            });
+            var body = document.body;
+            obs2.observe(body, { childList: true });
+            var d = document.createElement('div');
+            body.appendChild(d);
+        "#).unwrap();
+        rt.eval("_lumen_flush_mutation_observers()").unwrap();
+        let fired = rt.eval("_mo_cl_fired").unwrap();
+        assert_eq!(fired, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn mutation_observer_disconnect_stops_delivery() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var _mo_cnt = 0;
+            var obs3 = new MutationObserver(function() { _mo_cnt++; });
+            var el3 = document.getElementById('main');
+            obs3.observe(el3, { attributes: true });
+            obs3.disconnect();
+            el3.setAttribute('data-y', '1');
+        "#).unwrap();
+        rt.eval("_lumen_flush_mutation_observers()").unwrap();
+        let cnt = rt.eval("_mo_cnt").unwrap();
+        assert_eq!(cnt, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn mutation_observer_take_records_clears_queue() {
+        let rt = runtime_with_dom(make_doc());
+        rt.eval(r#"
+            var obs4 = new MutationObserver(function() {});
+            var el4 = document.getElementById('main');
+            obs4.observe(el4, { attributes: true });
+            el4.setAttribute('data-z', '1');
+            var recs = obs4.takeRecords();
+        "#).unwrap();
+        let len = rt.eval("recs.length").unwrap();
+        assert_eq!(len, lumen_core::JsValue::Number(1.0));
+        // Internal queue must be cleared
+        let inner_len = rt.eval("obs4.takeRecords().length").unwrap();
+        assert_eq!(inner_len, lumen_core::JsValue::Number(0.0));
+    }
+
+    // ── ResizeObserver tests ──────────────────────────────────────────────────
+
+    #[test]
+    fn resize_observer_exists_as_constructor() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof ResizeObserver === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn resize_observer_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.ResizeObserver === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn resize_observer_fires_when_rect_changes() {
+        let rt = runtime_with_dom(make_doc());
+        // Inject a fake bounding rect for the node
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        rt.update_layout_rects([(nid, [0.0, 0.0, 200.0, 100.0])].into_iter().collect());
+        rt.eval(r#"
+            var _ro_fired = false;
+            var _ro_entry = null;
+            var ro = new ResizeObserver(function(entries) {
+                _ro_fired = true;
+                _ro_entry = entries[0];
+            });
+            var body = document.body;
+            ro.observe(body);
+            _lumen_deliver_resize_observers();
+        "#).unwrap();
+        let fired = rt.eval("_ro_fired").unwrap();
+        assert_eq!(fired, lumen_core::JsValue::Bool(true));
+        let w = rt.eval("_ro_entry && _ro_entry.contentRect.width").unwrap();
+        assert_eq!(w, lumen_core::JsValue::Number(200.0));
+    }
+
+    #[test]
+    fn resize_observer_no_delivery_when_size_unchanged() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        rt.update_layout_rects([(nid, [0.0, 0.0, 100.0, 50.0])].into_iter().collect());
+        rt.eval("var _ro_cnt2 = 0; var ro2 = new ResizeObserver(function(){ _ro_cnt2++; }); ro2.observe(document.body);").unwrap();
+        // First delivery
+        rt.eval("_lumen_deliver_resize_observers()").unwrap();
+        // Second delivery with same rect → no callback
+        rt.eval("_lumen_deliver_resize_observers()").unwrap();
+        let cnt = rt.eval("_ro_cnt2").unwrap();
+        assert_eq!(cnt, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn resize_observer_disconnect_stops_delivery() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        rt.update_layout_rects([(nid, [0.0, 0.0, 300.0, 200.0])].into_iter().collect());
+        rt.eval(r#"
+            var _ro_cnt3 = 0;
+            var ro3 = new ResizeObserver(function(){ _ro_cnt3++; });
+            ro3.observe(document.body);
+            ro3.disconnect();
+            _lumen_deliver_resize_observers();
+        "#).unwrap();
+        let cnt = rt.eval("_ro_cnt3").unwrap();
+        assert_eq!(cnt, lumen_core::JsValue::Number(0.0));
+    }
+
+    // ── IntersectionObserver tests ────────────────────────────────────────────
+
+    #[test]
+    fn intersection_observer_exists_as_constructor() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof IntersectionObserver === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn intersection_observer_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.IntersectionObserver === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn intersection_observer_fires_on_first_observe_visible() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        rt.update_layout_rects([(nid, [0.0, 0.0, 100.0, 50.0])].into_iter().collect());
+        rt.update_viewport_size(1024.0, 720.0);
+        rt.eval(r#"
+            var _io_fired = false;
+            var _io_entry = null;
+            var io = new IntersectionObserver(function(entries) {
+                _io_fired = true;
+                _io_entry = entries[0];
+            });
+            io.observe(document.body);
+            _lumen_deliver_intersection_observers();
+        "#).unwrap();
+        let fired = rt.eval("_io_fired").unwrap();
+        assert_eq!(fired, lumen_core::JsValue::Bool(true));
+        let ratio = rt.eval("_io_entry && _io_entry.intersectionRatio > 0").unwrap();
+        assert_eq!(ratio, lumen_core::JsValue::Bool(true));
+        let intersecting = rt.eval("_io_entry.isIntersecting").unwrap();
+        assert_eq!(intersecting, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn intersection_observer_not_intersecting_when_outside_viewport() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        // Element is below viewport
+        rt.update_layout_rects([(nid, [0.0, 800.0, 100.0, 50.0])].into_iter().collect());
+        rt.update_viewport_size(1024.0, 720.0);
+        rt.eval(r#"
+            var _io2_entry = null;
+            var io2 = new IntersectionObserver(function(entries) { _io2_entry = entries[0]; });
+            io2.observe(document.body);
+            _lumen_deliver_intersection_observers();
+        "#).unwrap();
+        let intersecting = rt.eval("_io2_entry && _io2_entry.isIntersecting").unwrap();
+        assert_eq!(intersecting, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn get_bounding_rect_returns_values_from_runtime() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        rt.update_layout_rects([(nid, [10.0, 20.0, 300.0, 150.0])].into_iter().collect());
+        // The JS body element's __nid__ should match nid
+        let rect_val = rt.eval(&format!("_lumen_get_bounding_rect({nid})")).unwrap();
+        match rect_val {
+            lumen_core::JsValue::Array(arr) => {
+                assert_eq!(arr[0], lumen_core::JsValue::Number(10.0));
+                assert_eq!(arr[1], lumen_core::JsValue::Number(20.0));
+                assert_eq!(arr[2], lumen_core::JsValue::Number(300.0));
+                assert_eq!(arr[3], lumen_core::JsValue::Number(150.0));
+            }
+            other => panic!("expected Array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_viewport_size_returns_updated_values() {
+        let rt = runtime_with_dom(make_doc());
+        rt.update_viewport_size(1920.0, 1080.0);
+        let vp = rt.eval("_lumen_get_viewport_size()").unwrap();
+        match vp {
+            lumen_core::JsValue::Array(arr) => {
+                assert_eq!(arr[0], lumen_core::JsValue::Number(1920.0));
+                assert_eq!(arr[1], lumen_core::JsValue::Number(1080.0));
+            }
+            other => panic!("expected Array, got {other:?}"),
+        }
     }
 }

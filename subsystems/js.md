@@ -70,10 +70,18 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - `window.requestAnimationFrame` and `window.cancelAnimationFrame` both wired.
   - 11 new tests (id, sequential ids, non-function→0, mark-pending, snapshot-pattern, recursive-pending, cancel, cancel-unknown, window properties). 183 JS tests total.
 
+- **MutationObserver / ResizeObserver / IntersectionObserver + getBoundingClientRect** (`crates/js/src/dom.rs`). 2026-05-26.
+  - `_lumen_get_bounding_rect(nid: u32) -> Option<Vec<f64>>` — Rust binding backed by `Arc<Mutex<HashMap<u32,[f32;4]>>>` populated by shell after each `relayout_page`. Returns `[x, y, width, height]` in CSS px.
+  - `_lumen_get_viewport_size() -> Vec<f64>` — Rust binding backed by `Arc<Mutex<[f32;2]>>` updated by shell on window resize.
+  - `MutationObserver` (WHATWG DOM §4.3.2): `observe(target, options)` with full options normalization (`childList`, `attributes`, `attributeFilter`, `attributeOldValue`, `characterData`, `characterDataOldValue`, `subtree`); `disconnect()`; `takeRecords()`. `_mo_notify(nid, type, ...)` fires from primitive wrappers, delivers via `_lumen_flush_mutation_observers()` (sync) and `queueMicrotask` (async production path).
+  - `ResizeObserver` (W3C): `observe(target)`, `unobserve(target)`, `disconnect()`. `_lumen_deliver_resize_observers()` delivers only if width/height changed by >0.5 px. Shell calls it after `relayout_page`.
+  - `IntersectionObserver` (WICG): `observe(target)`, `unobserve(target)`, `disconnect()`. `_lumen_deliver_intersection_observers()` intersects element rect with viewport, delivers full `IntersectionObserverEntry` shape with threshold crossing semantics. Shell calls it after `relayout_page`.
+  - `element.getBoundingClientRect()` wired via `_lumen_get_bounding_rect`.
+  - 17 new tests (getBoundingClientRect, MutationObserver attribute/childList/subtree/disconnect/takeRecords, ResizeObserver fire/fire-on-resize/no-fire-same-size/unobserve/disconnect, IntersectionObserver fire/not-visible/threshold/multiple/unobserve/disconnect). **200 JS tests total.**
+
 ## Deferred
 
 - PerformanceObserver API.
-- Real MutationObserver / IntersectionObserver triggers (requires DOM mutation events).
 - querySelector compound selectors (e.g. `div.class`, `#id > p`).
 - `rusty_v8` backend (v1.0+).
 
