@@ -38,7 +38,7 @@ BUG-023 | FIXED 2026-05-26 | layout+paint    | opacity deviation — P1: strut f
 BUG-024 | FIXED 2026-05-21 | layout          | box-sizing: content-box — border not added to outer size; height% resolved against width
 BUG-025 | FIXED 2026-05-22 | layout          | max-height does not clamp block height; InlineSpace not included in shrink-to-fit width
 BUG-026 | FIXED 2026-05-22 | layout/paint    | <img> CSS/HTML width+height ignored — renders at natural size (remaining TEST-18 ~10%: BUG-032)
-BUG-028 | OPEN  [P3]       | shell           | relayout-on-resize + maximized window triggers BUG-027
+BUG-028 | FIXED 2026-05-26 | shell           | relayout-on-resize + maximized window triggers BUG-027
 BUG-029 | FIXED 2026-05-21 | paint           | border-style: dotted renders square dots instead of circles
 BUG-020 | FIXED 2026-05-26 | layout          | overflow axis coercion: visible+hidden combo не клипало ось; CSS Overflow L3 §2.1 visible→auto в compute_style; TEST-14: 1.70%→0.03% PASS
 BUG-006 | FIXED 2026-05-21 | layout          | table layout not implemented (td/th render as blocks)
@@ -397,12 +397,12 @@ Block-элемент с `width: 400px` берёт 100% ширины viewport. П
 
 ### BUG-028 · relayout-on-resize + `.with_maximized(true)` [P3]
 
-**Статус:** OPEN  
-**Компонент:** `lumen-shell` — `Lumen::relayout()`
+**Статус:** FIXED 2026-05-26  
+**Компонент:** `lumen-shell` — `Lumen::relayout()` + `WindowEvent::Resized` handler
 
 Окно открывается максимизированным, winit сразу стреляет `Resized(~1920×1040)`. `relayout()` пересчитывает с viewport 1920px → BUG-027 проявляется.
 
-**Временный фикс:** убрать `.with_maximized(true)` в `crates/shell/src/main.rs:1033`.
+**Фикс:** 1) guard в `WindowEvent::Resized` — skip при `size == 0` (минимизация на Windows); 2) defensive guard в `relayout()` при `vp_size <= 0`; 3) BUG-027 FIXED — explicit width больше не игнорируется при любом viewport. Временная мера (убрать `with_maximized`) оставлена: окно стартует 1024×720 для корректной работы графических тестов.
 
 ---
 
