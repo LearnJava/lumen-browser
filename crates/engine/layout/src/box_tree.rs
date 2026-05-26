@@ -90,6 +90,10 @@ pub struct ImageRequest {
     pub url: String,
     pub has_explicit_width: bool,
     pub has_explicit_height: bool,
+    /// `loading="lazy"` (HTML LS §2.6.6.9): defer fetch until element is near viewport.
+    /// Shell skips eager fetch and instead registers the image for IntersectionObserver
+    /// proximity check; loaded once the element scrolls within one viewport of the fold.
+    pub is_lazy: bool,
 }
 
 /// Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов.
@@ -144,6 +148,10 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
         let has_explicit_width = attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("width"));
         let has_explicit_height =
             attrs.iter().any(|a| a.name.local.eq_ignore_ascii_case("height"));
+        let is_lazy = attrs.iter().any(|a| {
+            a.name.local.eq_ignore_ascii_case("loading")
+                && a.value.as_str().eq_ignore_ascii_case("lazy")
+        });
         let source = resolve_image_source(doc, id, viewport);
         if !source.url.is_empty() {
             out.push(ImageRequest {
@@ -151,6 +159,7 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
                 url: source.url,
                 has_explicit_width,
                 has_explicit_height,
+                is_lazy,
             });
         }
         return; // void element — нет children
@@ -4818,5 +4827,52 @@ mod tests {
         let b = find_by_id_all(&root, &doc, "box").expect("box not found");
         // Float placed at left edge (auto = 0).
         assert_eq!(b.rect.x, 0.0, "float with auto margins must be at x=0, got {}", b.rect.x);
+    }
+
+    // ── loading="lazy" image deferral (HTML LS §2.6.6.9) ────────────────────
+
+    #[test]
+    fn loading_lazy_marks_image_as_lazy() {
+        let doc = lumen_html_parser::parse(r#"<img src="a.png" loading="lazy">"#);
+        let viewport = Size::new(800.0, 600.0);
+        let reqs = super::collect_image_requests(&doc, viewport);
+        assert_eq!(reqs.len(), 1);
+        assert!(reqs[0].is_lazy, "loading=lazy must set is_lazy=true");
+        assert_eq!(reqs[0].url, "a.png");
+    }
+
+    #[test]
+    fn loading_eager_not_lazy() {
+        let doc = lumen_html_parser::parse(r#"<img src="b.png" loading="eager">"#);
+        let reqs = super::collect_image_requests(&doc, Size::new(800.0, 600.0));
+        assert_eq!(reqs.len(), 1);
+        assert!(!reqs[0].is_lazy, "loading=eager must not set is_lazy");
+    }
+
+    #[test]
+    fn loading_absent_not_lazy() {
+        let doc = lumen_html_parser::parse(r#"<img src="c.png">"#);
+        let reqs = super::collect_image_requests(&doc, Size::new(800.0, 600.0));
+        assert_eq!(reqs.len(), 1);
+        assert!(!reqs[0].is_lazy, "absent loading attr must not set is_lazy");
+    }
+
+    #[test]
+    fn loading_lazy_case_insensitive() {
+        let doc = lumen_html_parser::parse(r#"<img src="d.png" loading="LAZY">"#);
+        let reqs = super::collect_image_requests(&doc, Size::new(800.0, 600.0));
+        assert_eq!(reqs.len(), 1);
+        assert!(reqs[0].is_lazy, "loading=LAZY (uppercase) must set is_lazy=true");
+    }
+
+    #[test]
+    fn loading_lazy_mixed_with_eager() {
+        let html = r#"<img src="e.png"><img src="f.png" loading="lazy"><img src="g.png">"#;
+        let doc = lumen_html_parser::parse(html);
+        let reqs = super::collect_image_requests(&doc, Size::new(800.0, 600.0));
+        assert_eq!(reqs.len(), 3);
+        assert!(!reqs[0].is_lazy, "first img (no attr) must not be lazy");
+        assert!(reqs[1].is_lazy, "second img (loading=lazy) must be lazy");
+        assert!(!reqs[2].is_lazy, "third img (no attr) must not be lazy");
     }
 }

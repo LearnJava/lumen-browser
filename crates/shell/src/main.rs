@@ -439,6 +439,24 @@ trait PersistentJs {
     /// geometry. Called by the shell after every `relayout_page`.
     #[allow(dead_code)] // called only from #[cfg(feature = "quickjs")] blocks
     fn deliver_layout_observers(&self);
+    /// Register lazy images for deferred IntersectionObserver-style proximity loading.
+    ///
+    /// Called once after the initial page load with `(node_id, url)` pairs for every
+    /// `<img loading="lazy">` element.  Subsequent proximity checks happen via
+    /// `deliver_lazy_images()` after each relayout.
+    #[allow(dead_code)]
+    fn register_lazy_images(&self, pairs: &[(u32, &str)]);
+    /// Check registered lazy images against the current viewport and enqueue load
+    /// requests for those within the lazy-load margin (1 viewport ahead of the fold).
+    ///
+    /// Must be called after `deliver_layout_observers` (fresh rects in JS).
+    #[allow(dead_code)]
+    fn deliver_lazy_images(&self);
+    /// Drain lazy image load requests queued by JS since the last call.
+    ///
+    /// Returns `(node_id, url)` pairs for images that entered the lazy-load margin.
+    #[allow(dead_code)]
+    fn take_lazy_image_requests(&self) -> Vec<(u32, String)>;
 }
 
 #[cfg(feature = "quickjs")]
@@ -486,6 +504,23 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn deliver_layout_observers(&self) {
         self.eval_js("_lumen_deliver_resize_observers();_lumen_deliver_intersection_observers();");
+    }
+    fn register_lazy_images(&self, pairs: &[(u32, &str)]) {
+        if pairs.is_empty() {
+            return;
+        }
+        let args = pairs
+            .iter()
+            .map(|(nid, url)| format!("[{nid},{}]", js_string_literal(url)))
+            .collect::<Vec<_>>()
+            .join(",");
+        self.eval_js(&format!("_lumen_init_lazy_images([{args}]);"));
+    }
+    fn deliver_lazy_images(&self) {
+        self.eval_js("_lumen_deliver_lazy_images();");
+    }
+    fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {
+        self.rt.take_lazy_image_requests()
     }
 }
 
@@ -690,6 +725,10 @@ struct LoadedPage {
     /// что попадает в `DisplayCommand::DrawImage.src`), чтобы render-side
     /// мог сделать lookup без отдельной нормализации URL.
     images: Vec<(String, lumen_image::Image)>,
+    /// `(node_id_u32, url)` pairs for `<img loading="lazy">` — registered with JS
+    /// after page load via `_lumen_init_lazy_images` for proximity-based loading.
+    #[allow(dead_code)] // read only inside #[cfg(feature = "quickjs")] blocks
+    lazy_pairs: Vec<(u32, String)>,
     /// Layout-дерево страницы — используется animation scheduler-ом.
     layout_box: lumen_layout::LayoutBox,
     /// Провайдер шрифтов с @font-face URL-источниками страницы.
@@ -706,6 +745,7 @@ impl LoadedPage {
             display_list: DisplayList::new(),
             title: None,
             images: Vec::new(),
+            lazy_pairs: Vec::new(),
             layout_box: lumen_layout::LayoutBox {
                 node: NodeId::from_index(0),
                 rect: Rect::ZERO,
@@ -963,16 +1003,28 @@ fn collect_link_hrefs(doc: &Document, id: NodeId, out: &mut Vec<String>) {
 /// Побочный эффект: для `<img>` без явных `width`/`height` проставляет
 /// intrinsic dimensions из декодированного изображения (HTML5 §10 mapped
 /// attributes). Author CSS затем перекроет при необходимости.
+///
+/// Возвращает `(images, lazy_pairs)`:
+/// - `images` — декодированные картинки для немедленной регистрации в renderer-е;
+/// - `lazy_pairs` — `(node_id_u32, url)` для `<img loading="lazy">`, которые
+///   не загружаются сейчас и будут зарегистрированы через `_lumen_init_lazy_images`.
+#[allow(clippy::type_complexity)]
 fn fetch_and_decode_images(
     doc: &mut Document,
     base: &ResourceBase,
     sink: &Arc<dyn EventSink>,
     viewport: lumen_core::geom::Size,
-) -> Vec<(String, lumen_image::Image)> {
+) -> (Vec<(String, lumen_image::Image)>, Vec<(u32, String)>) {
     let requests = lumen_layout::collect_image_requests(doc, viewport);
 
     let mut out: Vec<(String, lumen_image::Image)> = Vec::new();
+    let mut lazy_pairs: Vec<(u32, String)> = Vec::new();
     for req in requests {
+        if req.is_lazy {
+            // loading="lazy": defer until near viewport; register for proximity check.
+            lazy_pairs.push((req.node_id.index() as u32, req.url));
+            continue;
+        }
         let bytes = match fetch_image_bytes(&req.url, base, sink) {
             Ok(b) => b,
             Err(e) => {
@@ -998,6 +1050,25 @@ fn fetch_and_decode_images(
         );
         out.push((req.url, image));
     }
+    (out, lazy_pairs)
+}
+
+/// Encode `s` as a JS string literal (double-quoted, with escaping).
+/// Used when building JS snippets from Rust strings (e.g., `_lumen_init_lazy_images`).
+#[cfg(feature = "quickjs")]
+fn js_string_literal(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 2);
+    out.push('"');
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
     out
 }
 
@@ -1057,6 +1128,9 @@ struct ParsedPage {
     rule_count: usize,
     /// Декодированные изображения, найденные при обходе DOM. См. [`LoadedPage::images`].
     images: Vec<(String, lumen_image::Image)>,
+    /// `(node_id_u32, url)` pairs for `<img loading="lazy">` elements — skipped by
+    /// the eager fetch pass; registered with JS `_lumen_init_lazy_images` after load.
+    lazy_pairs: Vec<(u32, String)>,
     /// Subresource-хинты, найденные preload-сканером ДО DOM-парсинга.
     /// Source-order: первые хинты важнее (их fetch стартует первым).
     preload_hints: Vec<lumen_html_parser::PreloadHint>,
@@ -1162,7 +1236,8 @@ fn parse_and_layout(
     // presentational hints (width/height attribute) и потом подхватываются
     // style cascade. Errors silently пропускаются — битая картинка не валит
     // всю страницу, layout нарисует серый placeholder.
-    let images = {
+    // loading="lazy" изображения возвращаются в lazy_pairs и не загружаются сейчас.
+    let (images, lazy_pairs) = {
         let mut d = doc_arc.lock().unwrap();
         fetch_and_decode_images(&mut d, base, sink, viewport)
     };
@@ -1209,6 +1284,7 @@ fn parse_and_layout(
         title,
         rule_count,
         images,
+        lazy_pairs,
         preload_hints,
         html_source: source,
         font_registry: font_provider,
@@ -1438,6 +1514,7 @@ fn render_bytes(
             display_list,
             title: parsed.title,
             images: parsed.images,
+            lazy_pairs: parsed.lazy_pairs,
             layout_box,
             font_registry: parsed.font_registry,
             js_navigate: parsed.js_navigate,
@@ -1935,9 +2012,63 @@ impl Lumen {
             js.update_layout_rects(collect_layout_rects(lb_ref));
             js.update_viewport_size(viewport.width, viewport.height);
             js.deliver_layout_observers();
+            // After fresh rects are in JS: fire lazy-load proximity check.
+            // Images that entered the viewport+margin are queued by JS via
+            // _lumen_request_lazy_image_load; we drain and fetch them here.
+            js.deliver_lazy_images();
+            let lazy_reqs = js.take_lazy_image_requests();
+            if !lazy_reqs.is_empty() {
+                self.fetch_and_register_lazy_images(lazy_reqs);
+            }
         }
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
+        }
+    }
+
+    /// Fetch, decode and register lazy images whose node IDs were queued by JS.
+    ///
+    /// Called from `relayout()` after `_lumen_deliver_lazy_images()` fires load
+    /// requests for images that entered the lazy-load proximity margin.
+    /// Fetched images are registered in the renderer immediately so the next
+    /// repaint (already requested by `relayout`) shows them.
+    #[cfg(feature = "quickjs")]
+    fn fetch_and_register_lazy_images(&mut self, requests: Vec<(u32, String)>) {
+        let base = match &self.source {
+            PageSource::File(p) => ResourceBase::File(p.clone()),
+            PageSource::Url(u) => ResourceBase::Url(u.clone()),
+            PageSource::Snapshot { base_url, .. } => ResourceBase::Url(base_url.clone()),
+            PageSource::Empty => return,
+        };
+        for (nid, url) in requests {
+            let bytes = match fetch_image_bytes(&url, &base, &self.event_sink) {
+                Ok(b) => b,
+                Err(e) => {
+                    eprintln!("Lazy: пропуск {url}: {e}");
+                    continue;
+                }
+            };
+            let image = match lumen_image::decode(&bytes) {
+                Ok(i) => i,
+                Err(e) => {
+                    eprintln!("Lazy: не декодируется {url}: {e}");
+                    continue;
+                }
+            };
+            eprintln!("Lazy загружена: {} ({}×{}, {:?})", url, image.width, image.height, image.format);
+            // Apply intrinsic size to DOM so next relayout picks up correct dimensions.
+            if let Some(src) = self.layout_source.as_ref() {
+                let mut doc = src.document.lock().unwrap();
+                let node_id = NodeId::from_index(nid as usize);
+                apply_intrinsic_size(&mut doc, node_id, image.width, image.height);
+            }
+            if let Some(r) = self.renderer.as_mut() {
+                if let Err(e) = r.register_image(url.clone(), &image) {
+                    eprintln!("Lazy: не зарегистрирована {url}: {e}");
+                }
+            } else {
+                self.pending_images.push((url, image));
+            }
         }
     }
 
@@ -2190,6 +2321,14 @@ impl Lumen {
         if let Some(w) = self.window.as_ref() {
             w.set_title(&window_title(self.title.as_deref()));
             w.request_redraw();
+        }
+        // Register lazy images with JS so _lumen_deliver_lazy_images can check them
+        // on subsequent redraws (scroll, resize) via proximity threshold.
+        #[cfg(feature = "quickjs")]
+        if let Some(js) = &self.js_ctx {
+            let pairs: Vec<(u32, &str)> =
+                page.lazy_pairs.iter().map(|(n, u)| (*n, u.as_str())).collect();
+            js.register_lazy_images(&pairs);
         }
         // JS may have requested navigation via location.href= etc.
         self.pending_js_navigate = page.js_navigate;

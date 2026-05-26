@@ -40,6 +40,10 @@ pub struct QuickJsRuntime {
     /// Current viewport size [width, height] in CSS px.
     /// Updated by the shell on every resize; read by `_lumen_get_viewport_size()`.
     viewport_size: Arc<Mutex<[f32; 2]>>,
+    /// Lazy image load requests queued by `_lumen_request_lazy_image_load` from JS.
+    /// JS calls this when `_lumen_deliver_lazy_images()` detects an image within the
+    /// lazy-load margin.  Shell drains after each `deliver_lazy_images()` call.
+    lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
 }
 
 struct Inner {
@@ -66,6 +70,7 @@ impl QuickJsRuntime {
             raf_pending: Arc::new(AtomicBool::new(false)),
             layout_rects: Arc::new(Mutex::new(HashMap::new())),
             viewport_size: Arc::new(Mutex::new([0.0, 0.0])),
+            lazy_img_requests: Arc::new(Mutex::new(Vec::new())),
         })
     }
 
@@ -108,6 +113,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.raf_pending),
                 Arc::clone(&self.layout_rects),
                 Arc::clone(&self.viewport_size),
+                Arc::clone(&self.lazy_img_requests),
             )
             .map_err(|e| rq_err(&ctx, e))
         })
@@ -161,6 +167,15 @@ impl QuickJsRuntime {
     /// `width` and `height` are in CSS px (physical size / device pixel ratio).
     pub fn update_viewport_size(&self, width: f32, height: f32) {
         *self.viewport_size.lock().unwrap() = [width, height];
+    }
+
+    /// Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS.
+    ///
+    /// Called by the shell after `_lumen_deliver_lazy_images()` to get the list of
+    /// images that entered the lazy-load margin and should now be fetched.
+    /// Returns `(node_id, url)` pairs; clears the internal queue.
+    pub fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {
+        std::mem::take(&mut self.lazy_img_requests.lock().unwrap())
     }
 }
 
