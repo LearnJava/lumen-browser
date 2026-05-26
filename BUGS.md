@@ -49,7 +49,7 @@ BUG-033 | FIXED 2026-05-22 | paint           | box-shadow: нет Gaussian blur 
 BUG-034 | FIXED 2026-05-22 | layout          | transform-origin 50% 50% default not resolved against box size — pivot at (0,0) instead of center
 BUG-035 | FIXED 2026-05-22 | layout          | ::before/::after pseudo-elements не генерируются в box_tree (реализация частичная)
 BUG-036 | OPEN  [P4]       | layout          | border-radius: % значения (50%, etc.) не резолвятся → radius=0; только px работает
-BUG-037 | OPEN  [P2]       | paint           | CSS filter effects не применяются визуально (grayscale/sepia/blur/etc.) — дисплей-лист верен, баг в рендерере
+BUG-037 | FIXED 2026-05-26 | paint           | CSS filter effects не применяются визуально (grayscale/sepia/blur/etc.) — shared filter_uniform перезаписывался; fix: per-pass буфер через mapped_at_creation
 ```
 
 ---
@@ -106,7 +106,7 @@ TEST-26: FAIL  8.82%   mask-image             ← не реализован (Pha
 TEST-27: FAIL  9.35%   direction-rtl          ← RTL partial (P1: layout alignment)
 TEST-28: FAIL 12.60%   css-containment        ← contain:size/paint/strict
 TEST-29: FAIL  6.63%   container-queries      ← @container
-TEST-30: FAIL 37.75%   css-filter             ← BUG-037 (filter pipeline)
+TEST-30: FAIL 24.05%   css-filter             ← BUG-037 FIXED; остаток — linear-gradient не реализован (P4)
 TEST-31: FAIL 11.89%   clip-path              ← circle/ellipse/polygon
 TEST-32: FAIL  8.61%   list-markers           ← маркеры (fix-list-markers-test32)
 TEST-33: FAIL 19.71%   multi-column           ← column-count/column-width
@@ -161,7 +161,7 @@ TEST-26: FAIL  8.82%   mask-image         ← не реализован (Phase 0
 TEST-27: FAIL  9.76%   direction-rtl      ← RTL direction partial; alignment bands отсутствуют
 TEST-28: FAIL 14.81%   css-containment    ← contain:size/paint/strict не работают
 TEST-29: FAIL 11.04%   container-queries  ← @container не реализован
-TEST-30: FAIL 37.75%   css-filter         ← BUG-037 (filter pipeline не применяет эффект)
+TEST-30: FAIL 24.05%   css-filter         ← BUG-037 FIXED; остаток — linear-gradient не реализован (P4)
 TEST-31: FAIL 20.57%   clip-path          ← circle/ellipse/polygon только bbox-clip (известное ограничение)
 TEST-32: FAIL  6.05%   list-markers       ← маркеры отсутствуют (6% порог = текст+антиалиасинг)
 TEST-33: FAIL 32.88%   multi-column       ← column-count/column-width не реализованы
