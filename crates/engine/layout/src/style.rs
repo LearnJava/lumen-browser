@@ -4633,7 +4633,19 @@ pub fn compute_style(
         apply_declaration(&mut style, decl, em_basis, viewport, parent_weight, inherited, is_quirks);
     }
 
+    // CSS Overflow L3 §2.1: if one axis is `visible` and the other is not,
+    // the `visible` axis becomes `auto` (both axes must agree on visibility).
+    (style.overflow_x, style.overflow_y) = coerce_overflow_axes(style.overflow_x, style.overflow_y);
+
     style
+}
+
+/// CSS Overflow L3 §2.1: coerce mismatched overflow axes.
+/// If one axis is `visible` and the other is not, `visible` becomes `auto`.
+fn coerce_overflow_axes(ox: Overflow, oy: Overflow) -> (Overflow, Overflow) {
+    let new_ox = if ox == Overflow::Visible && oy != Overflow::Visible { Overflow::Auto } else { ox };
+    let new_oy = if oy == Overflow::Visible && ox != Overflow::Visible { Overflow::Auto } else { oy };
+    (new_ox, new_oy)
 }
 
 // ── Pseudo-element style matching ───────────────────────────────────────────
@@ -21432,5 +21444,46 @@ mod tests {
         let px = calc_len.resolve(16.0, None, vp);
         assert_eq!(px, Some(320.0));
         clear_cq_context();
+    }
+
+    // BUG-020 regression: CSS Overflow L3 §2.1 axis coercion.
+    #[test]
+    fn overflow_axis_coercion_visible_plus_hidden() {
+        // overflow-x: hidden; overflow-y: visible → overflow-y becomes auto.
+        let (ox, oy) = coerce_overflow_axes(Overflow::Hidden, Overflow::Visible);
+        assert_eq!(ox, Overflow::Hidden);
+        assert_eq!(oy, Overflow::Auto);
+        // overflow-x: visible; overflow-y: hidden → overflow-x becomes auto.
+        let (ox, oy) = coerce_overflow_axes(Overflow::Visible, Overflow::Hidden);
+        assert_eq!(ox, Overflow::Auto);
+        assert_eq!(oy, Overflow::Hidden);
+    }
+
+    #[test]
+    fn overflow_axis_coercion_both_visible_unchanged() {
+        let (ox, oy) = coerce_overflow_axes(Overflow::Visible, Overflow::Visible);
+        assert_eq!(ox, Overflow::Visible);
+        assert_eq!(oy, Overflow::Visible);
+    }
+
+    #[test]
+    fn overflow_axis_coercion_both_hidden_unchanged() {
+        let (ox, oy) = coerce_overflow_axes(Overflow::Hidden, Overflow::Hidden);
+        assert_eq!(ox, Overflow::Hidden);
+        assert_eq!(oy, Overflow::Hidden);
+    }
+
+    #[test]
+    fn overflow_axis_coercion_visible_plus_scroll() {
+        let (ox, oy) = coerce_overflow_axes(Overflow::Visible, Overflow::Scroll);
+        assert_eq!(ox, Overflow::Auto);
+        assert_eq!(oy, Overflow::Scroll);
+    }
+
+    #[test]
+    fn overflow_axis_coercion_visible_plus_auto() {
+        let (ox, oy) = coerce_overflow_axes(Overflow::Auto, Overflow::Visible);
+        assert_eq!(ox, Overflow::Auto);
+        assert_eq!(oy, Overflow::Auto);
     }
 }
