@@ -67,7 +67,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Masking | [css-masking](https://www.w3.org/TR/css-masking/) | 🟡 | mask-image GPU compositing | **#14** |
 | Compositing & Blending | [compositing](https://www.w3.org/TR/compositing/) | 🟡 | mix-blend-mode blend pipeline | **#15** |
 | CSS Pseudo-Elements L4 | [css-pseudo-4](https://www.w3.org/TR/css-pseudo-4/) | 🟡 | ::first-line/::first-letter split; ::marker; ::selection | **#16** |
-| CSS Images L3 | [css3-images](https://www.w3.org/TR/css3-images/) | 🟡 | conic-gradient() ✅ 2026-05-24; multiple bg layers | **#17** |
+| CSS Images L3 | [css3-images](https://www.w3.org/TR/css3-images/) | ✅ | conic-gradient() ✅ 2026-05-24; multiple bg layers ✅ 2026-05-26 | **#17** |
 | CSS Images L4 | [css4-images](https://www.w3.org/TR/css4-images/) | ⬜ | image-set(), cross-fade() | **#18** |
 | CSS Grid L1 | [css-grid-1](https://www.w3.org/TR/css-grid-1/) | 🟡 | grid-template-areas ✅ 2026-05-22; dense auto-flow ✅ 2026-05-24 | **#19** |
 | CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading; font-optical-sizing | **#20** |
@@ -692,7 +692,7 @@ Ordered list of 🟡→✅ promotions for the P4 developer. One item = one featu
 | 15 | `::first-letter` / `::first-line` line split | M | inline layout |
 | 16 | `::marker` rendering | S | float/list |
 | 17 | `conic-gradient()` | ✅ | ParsedGradient::Conic + DrawConicGradient + WGSL kind=2 + 9 tests + graphic test 40 2026-05-24 |
-| 18 | Multiple backgrounds | M | background layer stack |
+| 18 | Multiple backgrounds | ✅ | BackgroundLayer struct + Vec<BackgroundLayer> in ComputedStyle + parse_single_bg_layer + cycling shorthand + 6 tests + graphic test 45 2026-05-26 |
 | 19 | `grid-template-areas` named placement | ✅ | GridLine::Named + find_named_area + resolve_named_lines 2026-05-22 |
 | 20 | `@font-face` actual file loading | L | network/P3 |
 | 21 | `min-content` / `max-content` / `fit-content` | L | layout engine |

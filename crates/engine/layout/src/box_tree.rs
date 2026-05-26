@@ -123,11 +123,13 @@ pub fn collect_background_image_requests(root: &LayoutBox) -> Vec<String> {
 }
 
 fn collect_bg_image_inner(b: &LayoutBox, out: &mut Vec<String>) {
-    if let BackgroundImage::Url(src) = &b.style.background_image
-        && !src.is_empty()
-        && !out.iter().any(|u| u == src)
-    {
-        out.push(src.clone());
+    for layer in &b.style.background_layers {
+        if let BackgroundImage::Url(src) = &layer.image
+            && !src.is_empty()
+            && !out.iter().any(|u| u == src)
+        {
+            out.push(src.clone());
+        }
     }
     for child in &b.children {
         collect_bg_image_inner(child, out);
@@ -411,7 +413,7 @@ fn propagate_canvas_background(doc: &Document, root: &mut LayoutBox) {
 
     let html_box = &mut root.children[html_idx];
     let html_has_bg = html_box.style.background_color.is_some()
-        || !matches!(html_box.style.background_image, BackgroundImage::None);
+        || !html_box.style.background_layers.is_empty();
     if html_has_bg {
         return;
     }
@@ -426,15 +428,15 @@ fn propagate_canvas_background(doc: &Document, root: &mut LayoutBox) {
 
     let body = &mut html_box.children[body_idx];
     let body_has_bg = body.style.background_color.is_some()
-        || !matches!(body.style.background_image, BackgroundImage::None);
+        || !body.style.background_layers.is_empty();
     if !body_has_bg {
         return;
     }
 
     let bg_color = body.style.background_color.take();
-    let bg_image = std::mem::replace(&mut body.style.background_image, BackgroundImage::None);
+    let bg_layers = std::mem::take(&mut body.style.background_layers);
     html_box.style.background_color = bg_color;
-    html_box.style.background_image = bg_image;
+    html_box.style.background_layers = bg_layers;
 }
 
 fn is_html_element_named(doc: &Document, id: NodeId, want: &str) -> bool {

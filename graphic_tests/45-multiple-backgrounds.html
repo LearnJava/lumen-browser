@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<!-- TEST-45: CSS Backgrounds L3 §3 — multiple background layers -->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f { background: #1a1a2e; width: 1022px; height: 718px; margin: 1px; overflow: hidden; padding: 20px; }
+
+  /* Row 1: two gradient layers stacked */
+  .row { display: flex; gap: 16px; margin-bottom: 16px; }
+  .box { width: 200px; height: 120px; border: 2px solid #444; }
+
+  /* Multiple gradients: top layer = diagonal red/transparent, bottom = solid blue */
+  .multi-grad {
+    background:
+      linear-gradient(135deg, rgba(255,80,80,0.7) 0%, transparent 60%),
+      linear-gradient(to bottom, #1a6db5, #0a3a6b);
+  }
+
+  /* Three layers: radial highlight + stripe pattern + solid base */
+  .triple {
+    background:
+      radial-gradient(circle at 70% 30%, rgba(255,255,100,0.6) 0%, transparent 40%),
+      linear-gradient(45deg, rgba(255,255,255,0.15) 25%, transparent 25%,
+                             transparent 75%, rgba(255,255,255,0.15) 75%),
+      #2d7a4f;
+  }
+
+  /* Background-position: centered gradient */
+  .positioned {
+    background:
+      radial-gradient(circle, #e74c3c 0%, transparent 50%) center center / 80px 80px no-repeat,
+      #2c3e50;
+  }
+
+  /* Background-size cover + positioned top-right spot */
+  .sized {
+    background:
+      linear-gradient(to bottom right, #f39c12, #e74c3c) top right / 60px 60px no-repeat,
+      linear-gradient(to bottom, #1abc9c, #16a085);
+  }
+
+  /* Background-repeat: tiled stripes over solid */
+  .repeated {
+    background:
+      linear-gradient(90deg, rgba(255,255,255,0.2) 50%, transparent 50%) left top / 20px 100% repeat-x,
+      #8e44ad;
+  }
+
+  /* No-repeat URL fallback: two solid gradients (no images) */
+  .no-repeat-demo {
+    background:
+      linear-gradient(to right, #e74c3c, #c0392b) left center / 40% 60% no-repeat,
+      linear-gradient(to right, #2980b9, #1a5276) right center / 40% 60% no-repeat,
+      #2c3e50;
+  }
+
+  /* Background-clip: padding-box vs border-box */
+  .clip-demo {
+    background:
+      linear-gradient(135deg, #f1c40f, #e67e22) padding-box,
+      linear-gradient(135deg, #2ecc71, #27ae60) border-box;
+    border: 8px solid transparent;
+    padding: 4px;
+  }
+
+  /* Background-origin: content-box positions gradient from content edge */
+  .origin-demo {
+    background: linear-gradient(to right, #9b59b6, #8e44ad) content-box no-repeat;
+    padding: 15px;
+    border: 4px solid #7f8c8d;
+  }
+
+  /* Single color + layer interaction test */
+  .color-layer {
+    background: linear-gradient(to bottom, rgba(255,255,255,0.3) 0%, transparent 100%),
+                #e74c3c;
+  }
+
+  .label {
+    color: rgba(255,255,255,0.6);
+    font-size: 10px;
+    font-family: monospace;
+    margin-bottom: 4px;
+  }
+</style>
+<body>
+  <div class="__f">
+    <div class="row">
+      <div>
+        <div class="label">2 gradient layers</div>
+        <div class="box multi-grad"></div>
+      </div>
+      <div>
+        <div class="label">3 layers: radial+stripe+solid</div>
+        <div class="box triple"></div>
+      </div>
+      <div>
+        <div class="label">bg-position: center/80px</div>
+        <div class="box positioned"></div>
+      </div>
+      <div>
+        <div class="label">bg-size: top-right/60px</div>
+        <div class="box sized"></div>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <div class="label">repeat-x stripes+solid</div>
+        <div class="box repeated"></div>
+      </div>
+      <div>
+        <div class="label">two no-repeat halves</div>
+        <div class="box no-repeat-demo"></div>
+      </div>
+      <div>
+        <div class="label">clip: padding-box+border-box</div>
+        <div class="box clip-demo"></div>
+      </div>
+      <div>
+        <div class="label">origin: content-box</div>
+        <div class="box origin-demo"></div>
+      </div>
+    </div>
+    <div class="row">
+      <div>
+        <div class="label">color + gradient layer</div>
+        <div class="box color-layer"></div>
+      </div>
+    </div>
+  </div>
+</body>

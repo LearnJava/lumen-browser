@@ -86,6 +86,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('42', '42-position-sticky.html',    0.5, 'position:sticky — flow position + BeginStickyLayer/EndStickyLayer (CSS Positioning L3 §6.3)'),
     ('43', '43-intrinsic-sizing.html',   0.5, 'CSS Intrinsic Sizing L3 — width: max-content / min-content / fit-content'),
     ('44', '44-media-queries.html',      0.5, 'Media Queries L3 — @media screen/print/min-width(em)/orientation/aspect-ratio'),
+    ('45', '45-multiple-backgrounds.html', 0.5, 'CSS Backgrounds L3 §3 — multiple background layers, position/size/repeat/clip/origin'),
 ]
 
 # --- PNG reader (stdlib only) ---
