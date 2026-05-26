@@ -1,4 +1,5 @@
-In progress: —
+In progress: fix-bug023-opacity-aa  branch: p5-bug023-opacity-aa
+Next step: исследовать compositor.rs opacity pass — premultiplied alpha mismatch при edge blending
 
 Role: P5 owns ALL bug fixes across the entire codebase.
   P1/P2/P3/P4 do NOT fix bugs — they build new features only.

@@ -34,7 +34,7 @@ BUG-014 | FIXED 2026-05-21 | image           | JPEG not decoded (PNG only)
 BUG-015 | FIXED 2026-05-25 | paint           | broken <img> src shows no alt text
 BUG-017 | FIXED 2026-05-22 | layout/paint    | text-decoration-style ignored (all render as solid)
 BUG-018 | FIXED 2026-05-22 | layout          | text-decoration-color ignored (always inherits text color)
-BUG-023 | OPEN             | layout+paint    | opacity deviation 2.20% — P1-часть FIXED 2026-05-26 (strut только для baseline-выровненных строк; bottom-строки без strut); остаток ~1.6% edge-AA в paint (P2)
+BUG-023 | FIXED 2026-05-26 | layout+paint    | opacity deviation — P1: strut fix 2026-05-26; P5 paint: premultiplied alpha double-mult at edge-AA pixels in composite shader → TEST-13 0.24%
 BUG-024 | FIXED 2026-05-21 | layout          | box-sizing: content-box — border not added to outer size; height% resolved against width
 BUG-025 | FIXED 2026-05-22 | layout          | max-height does not clamp block height; InlineSpace not included in shrink-to-fit width
 BUG-026 | FIXED 2026-05-22 | layout/paint    | <img> CSS/HTML width+height ignored — renders at natural size (remaining TEST-18 ~10%: BUG-032)
@@ -89,7 +89,7 @@ TEST-09: PASS  0.00%   margin
 TEST-10: PASS  0.00%   min-max-width
 TEST-11: PASS  0.43%   min-max-height         ← BUG-025 FIXED (старый бинарь не имел фикса)
 TEST-12: FAIL  1.56%   display                ← inline-block baseline (fix-inline-block-baseline)
-TEST-13: FAIL  2.12%   visibility-opacity     ← BUG-023 остаток (edge-AA)
+TEST-13: PASS  0.24%   visibility-opacity     ← BUG-023 FIXED 2026-05-26 (premultiplied alpha в composite shader)
 TEST-14: FAIL  2.35%   overflow               ← BUG-020 (scrollbar UI)
 TEST-15: PASS  0.72%   box-shadow
 TEST-16: PASS  0.41%   outline
