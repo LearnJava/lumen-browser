@@ -3183,11 +3183,11 @@ impl Renderer {
                         let cb_arr = apply_alpha_to_color(color_to_array(cb), alpha);
                         let cl_arr = apply_alpha_to_color(color_to_array(cl), alpha);
 
-                        // Top side. Dashed spans full box width (Chrome/Edge — pattern covers
-                        // corners naturally). Other styles: trimmed + explicit corner fills.
-                        // Dotted corners use circle quads to match Edge's round dots at corners.
+                        // Top side. Dashed and Dotted span full box width (Chrome/Edge: pattern
+                        // covers corners naturally, first/last dot anchored at box edges).
+                        // Other styles: trimmed straight portion + explicit solid corner fills.
                         if *wt > 0.0 {
-                            if *st == BorderStyle::Dashed {
+                            if matches!(*st, BorderStyle::Dashed | BorderStyle::Dotted) {
                                 emit_border_side(
                                     &mut fill_vertices, &mut circle_vertices,
                                     Rect::new(r.x, r.y, r.width, *wt),
@@ -3203,27 +3203,17 @@ impl Renderer {
                                         true, *wt, ct_arr, *st,
                                     );
                                 }
-                                // TL corner: circle for Dotted, solid fill for everything else.
                                 if *wl > 0.0 {
-                                    if *st == BorderStyle::Dotted {
-                                        push_circle_quad(&mut circle_vertices, Rect::new(r.x, r.y, *wl, *wt), ct_arr);
-                                    } else {
-                                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, *wl, *wt), ct_arr);
-                                    }
+                                    push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, *wl, *wt), ct_arr);
                                 }
-                                // TR corner.
                                 if *wr > 0.0 {
-                                    if *st == BorderStyle::Dotted {
-                                        push_circle_quad(&mut circle_vertices, Rect::new(r.x + r.width - *wr, r.y, *wr, *wt), ct_arr);
-                                    } else {
-                                        push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - *wr, r.y, *wr, *wt), ct_arr);
-                                    }
+                                    push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - *wr, r.y, *wr, *wt), ct_arr);
                                 }
                             }
                         }
-                        // Right side. Dashed spans full box height (same rationale as top).
+                        // Right side. Dashed and Dotted span full height; Solid/Double are trimmed.
                         if *wr > 0.0 {
-                            if *sr == BorderStyle::Dashed {
+                            if matches!(*sr, BorderStyle::Dashed | BorderStyle::Dotted) {
                                 emit_border_side(
                                     &mut fill_vertices, &mut circle_vertices,
                                     Rect::new(r.x + r.width - *wr, r.y, *wr, r.height),
@@ -3241,10 +3231,9 @@ impl Renderer {
                                 }
                             }
                         }
-                        // Bottom side. Same as top: dashed spans full width, no corner fills;
-                        // dotted gets circle corner quads.
+                        // Bottom side. Dashed and Dotted span full width; others trimmed + corner fills.
                         if *wb > 0.0 {
-                            if *sb == BorderStyle::Dashed {
+                            if matches!(*sb, BorderStyle::Dashed | BorderStyle::Dotted) {
                                 emit_border_side(
                                     &mut fill_vertices, &mut circle_vertices,
                                     Rect::new(r.x, r.y + r.height - *wb, r.width, *wb),
@@ -3260,27 +3249,17 @@ impl Renderer {
                                         true, *wb, cb_arr, *sb,
                                     );
                                 }
-                                // BL corner.
                                 if *wl > 0.0 {
-                                    if *sb == BorderStyle::Dotted {
-                                        push_circle_quad(&mut circle_vertices, Rect::new(r.x, r.y + r.height - *wb, *wl, *wb), cb_arr);
-                                    } else {
-                                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y + r.height - *wb, *wl, *wb), cb_arr);
-                                    }
+                                    push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y + r.height - *wb, *wl, *wb), cb_arr);
                                 }
-                                // BR corner.
                                 if *wr > 0.0 {
-                                    if *sb == BorderStyle::Dotted {
-                                        push_circle_quad(&mut circle_vertices, Rect::new(r.x + r.width - *wr, r.y + r.height - *wb, *wr, *wb), cb_arr);
-                                    } else {
-                                        push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - *wr, r.y + r.height - *wb, *wr, *wb), cb_arr);
-                                    }
+                                    push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - *wr, r.y + r.height - *wb, *wr, *wb), cb_arr);
                                 }
                             }
                         }
-                        // Left side. Dashed spans full box height (same rationale as top).
+                        // Left side. Dashed and Dotted span full height; Solid/Double are trimmed.
                         if *wl > 0.0 {
-                            if *sl == BorderStyle::Dashed {
+                            if matches!(*sl, BorderStyle::Dashed | BorderStyle::Dotted) {
                                 emit_border_side(
                                     &mut fill_vertices, &mut circle_vertices,
                                     Rect::new(r.x, r.y, *wl, r.height),
@@ -5940,18 +5919,17 @@ fn emit_border_side(
             // Chrome/Edge (Skia): full side width, n=round(total/period), leading=0.
             // Dash=max(6,2w) and gap=max(4,w) reproduce Edge's observed n values:
             //   2px→n=18, 4px→n=15, 8px→n=8, 16px→n=4 on a 180px side.
-            // Last dash is anchored to the far edge so no trailing gap (Skia-style).
+            // Dash size is fixed (native); only gap (step) is adjusted to anchor the last
+            // dash end exactly at total. This matches Skia's dash rendering more closely.
             let target_dash = (width * 2.0).max(6.0);
             let target_gap = width.max(4.0);
             let target_period = target_dash + target_gap;
             let n = ((total / target_period).round() as usize).max(1);
-            let adjusted_period = total / n as f32;
-            let actual_dash = (target_dash / target_period * adjusted_period).round().max(1.0);
-            // Use period between starts = (total−D)/(n−1) so last dash ends exactly at total.
-            let step = if n > 1 { (total - actual_dash) / (n - 1) as f32 } else { 0.0 };
+            // Step between dash start positions; last dash end is clamped to total.
+            let step = if n > 1 { (total - target_dash) / (n - 1) as f32 } else { 0.0 };
             for i in 0..n {
                 let offset = (i as f32 * step).round();
-                let seg_end = (offset + actual_dash).min(total);
+                let seg_end = (offset + target_dash).min(total);
                 if seg_end > offset {
                     let seg = if horizontal {
                         Rect::new(side_rect.x + offset, side_rect.y, seg_end - offset, side_rect.height)
@@ -5963,15 +5941,23 @@ fn emit_border_side(
             }
         }
         BorderStyle::Dotted => {
-            // CSS Backgrounds L3 §4.5: dots are round (circles), 1:1 ratio.
+            // Chrome/Edge (Skia): first dot anchored at offset=0, last dot anchored at
+            // offset=total-dot. n=round(total/period). Equal gaps between all dots.
             let dot_len = width.max(1.0);
-            for (offset, len) in dash_segments(total, dot_len, dot_len) {
-                let seg = if horizontal {
-                    Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
-                } else {
-                    Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
-                };
-                push_circle_quad(circle_out, seg, color);
+            let period = dot_len * 2.0;
+            let n = ((total / period).round() as usize).max(1);
+            let step = if n > 1 { (total - dot_len) / (n - 1) as f32 } else { 0.0 };
+            for i in 0..n {
+                let offset = (i as f32 * step).round();
+                let seg_end = (offset + dot_len).min(total);
+                if seg_end > offset {
+                    let seg = if horizontal {
+                        Rect::new(side_rect.x + offset, side_rect.y, seg_end - offset, side_rect.height)
+                    } else {
+                        Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, seg_end - offset)
+                    };
+                    push_circle_quad(circle_out, seg, color);
+                }
             }
         }
         BorderStyle::Double => {
