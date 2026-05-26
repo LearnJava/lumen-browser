@@ -137,6 +137,7 @@ fn main() -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
+    let (no_scrollbar, rest_args) = extract_no_scrollbar(&rest_args);
     let cli = match parse_cli(&rest_args) {
         Ok(m) => m,
         Err(err) => {
@@ -163,7 +164,7 @@ fn main() -> ExitCode {
 
     match cli {
         CliMode::Dump { source, kind } => run_dump_mode(&source, kind, event_sink),
-        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, initial_scroll),
+        CliMode::OpenWindow(source) => run_window_mode(source, event_sink, initial_scroll, no_scrollbar),
     }
 }
 
@@ -171,6 +172,7 @@ fn run_window_mode(
     source: PageSource,
     event_sink: Arc<dyn EventSink>,
     initial_scroll: (f32, f32),
+    no_scrollbar: bool,
 ) -> ExitCode {
     println!("Lumen v{} — Phase 0 prototype", env!("CARGO_PKG_VERSION"));
 
@@ -228,6 +230,7 @@ fn run_window_mode(
         color_picker_node: None,
         ls_storage: HashMap::new(),
         js_ctx: None,
+        no_scrollbar,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -318,6 +321,20 @@ fn extract_import_session(
         i += 1;
     }
     Ok((session, rest))
+}
+
+/// Извлечь `--no-scrollbar` из аргументов, вернуть (flag, остальные аргументы).
+fn extract_no_scrollbar(args: &[String]) -> (bool, Vec<String>) {
+    let mut found = false;
+    let mut rest = Vec::new();
+    for arg in args {
+        if arg == "--no-scrollbar" {
+            found = true;
+        } else {
+            rest.push(arg.clone());
+        }
+    }
+    (found, rest)
 }
 
 /// Извлечь `--devtools-port N` из аргументов, вернуть (port, остальные аргументы).
@@ -1824,6 +1841,10 @@ struct Lumen {
     /// no scripts were registered. Must be dropped before `layout_source` on
     /// navigation to release Arc clones held in JS closures.
     js_ctx: Option<Box<dyn PersistentJs>>,
+    /// When true the vertical scrollbar overlay is suppressed entirely.
+    /// Set by `--no-scrollbar` CLI flag; used by graphic test pipeline to
+    /// avoid scrollbar pixels contaminating the diff against Edge headless.
+    no_scrollbar: bool,
 }
 
 impl Lumen {
@@ -2708,16 +2729,19 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 // первым = находится под find-bar-ом в painter's order. Они не
                 // пересекаются по x (bar занимает левее `ww - 12`, scrollbar
                 // справа от `ww - 8`), так что фактического overdraw нет.
-                let scrollbar_cmds = scrollbar::build_scrollbar_overlay(
-                    self.scroll_y,
-                    self.content_height,
-                    self.viewport_width_css(),
-                    self.viewport_height_css(),
-                );
-                if !scrollbar_cmds.is_empty() {
-                    let mut combined = scrollbar_cmds;
-                    combined.append(&mut overlay_buf);
-                    overlay_buf = combined;
+                // --no-scrollbar подавляет полосу для screenshot-пайплайна.
+                if !self.no_scrollbar {
+                    let scrollbar_cmds = scrollbar::build_scrollbar_overlay(
+                        self.scroll_y,
+                        self.content_height,
+                        self.viewport_width_css(),
+                        self.viewport_height_css(),
+                    );
+                    if !scrollbar_cmds.is_empty() {
+                        let mut combined = scrollbar_cmds;
+                        combined.append(&mut overlay_buf);
+                        overlay_buf = combined;
+                    }
                 }
 
                 // Forms: validation tooltip and color picker overlays.
