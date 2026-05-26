@@ -124,6 +124,10 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
 /// SDF-круг: UV (-1..1) из центра; фрагменты за радиусом 1.0 discarded.
 /// Anti-aliasing через smoothstep(0.9, 1.0, dist).
+/// SDF-круг: Skia-compatible 1px linear AA: coverage = clamp(0.5 + r - dist_px, 0, 1).
+/// Quad расширен на 0.5px с каждой стороны, UV=±1 соответствует r+0.5 px от центра.
+/// `radius_px` (loc 3) — CSS-радиус точки. Формула совпадает с Skia, что минимизирует
+/// разницу с Chrome/Edge (пиксельный pixel-diff для dotted border ≈ sub-pixel noise).
 const CIRCLE_SHADER_SRC: &str = r#"
 struct Uniforms {
     viewport: vec2<f32>,
@@ -132,15 +136,17 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
 struct VIn {
-    @location(0) pos: vec2<f32>,
-    @location(1) uv:  vec2<f32>,
-    @location(2) color: vec4<f32>,
+    @location(0) pos:       vec2<f32>,
+    @location(1) uv:        vec2<f32>,
+    @location(2) color:     vec4<f32>,
+    @location(3) radius_px: f32,
 };
 
 struct VOut {
     @builtin(position) clip: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) color: vec4<f32>,
+    @location(0) uv:        vec2<f32>,
+    @location(1) color:     vec4<f32>,
+    @location(2) radius_px: f32,
 };
 
 @vertex
@@ -150,16 +156,18 @@ fn vs_main(in: VIn) -> VOut {
         1.0 - in.pos.y / u.viewport.y * 2.0,
     );
     var out: VOut;
-    out.clip = vec4<f32>(ndc, 0.0, 1.0);
-    out.uv = in.uv;
-    out.color = in.color;
+    out.clip      = vec4<f32>(ndc, 0.0, 1.0);
+    out.uv        = in.uv;
+    out.color     = in.color;
+    out.radius_px = in.radius_px;
     return out;
 }
 
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
-    let dist = length(in.uv);
-    let alpha = 1.0 - smoothstep(0.8, 1.0, dist);
+    // Quad spans (r+0.5) px in each direction from center, so dist_px = |uv| * (r+0.5).
+    let dist_px = length(in.uv) * (in.radius_px + 0.5);
+    let alpha = clamp(0.5 + in.radius_px - dist_px, 0.0, 1.0);
     if alpha <= 0.0 { discard; }
     return vec4<f32>(in.color.rgb, in.color.a * alpha);
 }
@@ -888,13 +896,20 @@ struct ImageVertex {
     alpha: f32,
 }
 
-/// Вершина для SDF-круга. `uv` — нормализованные координаты (-1..1) от центра.
+/// Вершина для SDF-круга. `uv` — нормализованные координаты (-1..1) от центра
+/// (quad расширен на 0.5px в каждую сторону). `radius_px` — CSS-радиус точки.
+/// Layout: pos(8) + uv(8) + color(16) + radius_px(4) = 36 bytes.
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct CircleVertex {
+    /// Screen position in CSS pixels.
     pos: [f32; 2],
+    /// UV in [-1,1] over the expanded quad (CSS_radius + 0.5 in each direction).
     uv: [f32; 2],
+    /// RGBA color.
     color: [f32; 4],
+    /// CSS radius of the dot in pixels (= border_width / 2).
+    radius_px: f32,
 }
 
 /// Вершина для SDF-скруглённого прямоугольника (`RRECT_SHADER_SRC`).
@@ -1508,6 +1523,11 @@ impl Renderer {
                             format: wgpu::VertexFormat::Float32x4,
                             offset: 16,
                             shader_location: 2,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 32,
+                            shader_location: 3,
                         },
                     ],
                 }],
@@ -5138,20 +5158,24 @@ fn apply_affine_to_verts<V: VertexPos>(verts: &mut [V], m: &Mat4) {
     }
 }
 
-/// Эмитирует квад для SDF-круга. UV (-1..1) передаются шейдеру
-/// для discard-а за пределами окружности.
+/// Эмитирует квад для SDF-круга.
+///
+/// Quad расширяется на 0.5 CSS-px в каждую сторону от `rect`, чтобы шейдер
+/// мог рисовать внешнюю половину 1px AA-полосы (Skia-compatible linear AA).
+/// UV = ±1 соответствует CSS_radius + 0.5 px от центра.
 fn push_circle_quad(out: &mut Vec<CircleVertex>, rect: Rect, color: [f32; 4]) {
-    let x0 = rect.x;
-    let y0 = rect.y;
-    let x1 = rect.x + rect.width;
-    let y1 = rect.y + rect.height;
+    let radius_px = rect.width * 0.5;
+    let x0 = rect.x - 0.5;
+    let y0 = rect.y - 0.5;
+    let x1 = rect.x + rect.width + 0.5;
+    let y1 = rect.y + rect.height + 0.5;
     out.extend_from_slice(&[
-        CircleVertex { pos: [x0, y0], uv: [-1.0, -1.0], color },
-        CircleVertex { pos: [x1, y0], uv: [ 1.0, -1.0], color },
-        CircleVertex { pos: [x1, y1], uv: [ 1.0,  1.0], color },
-        CircleVertex { pos: [x0, y0], uv: [-1.0, -1.0], color },
-        CircleVertex { pos: [x1, y1], uv: [ 1.0,  1.0], color },
-        CircleVertex { pos: [x0, y1], uv: [-1.0,  1.0], color },
+        CircleVertex { pos: [x0, y0], uv: [-1.0, -1.0], color, radius_px },
+        CircleVertex { pos: [x1, y0], uv: [ 1.0, -1.0], color, radius_px },
+        CircleVertex { pos: [x1, y1], uv: [ 1.0,  1.0], color, radius_px },
+        CircleVertex { pos: [x0, y0], uv: [-1.0, -1.0], color, radius_px },
+        CircleVertex { pos: [x1, y1], uv: [ 1.0,  1.0], color, radius_px },
+        CircleVertex { pos: [x0, y1], uv: [-1.0,  1.0], color, radius_px },
     ]);
 }
 
@@ -6534,13 +6558,14 @@ mod tests {
     fn emit_border_side_dotted_circle_segments() {
         // Dotted → SDF-circles (circle_verts), not fill quads.
         // width=4 → dot=4; horizontal side 40 wide → 5 dots.
+        // Each quad is expanded 0.5px on each side: height = 4+1 = 5.
         let r = Rect::new(0.0, 0.0, 40.0, 4.0);
         let fill_quads = collect_border_fill_quads(r, true, 4.0, BorderStyle::Dotted);
         let circle_quads = collect_border_circle_quads(r, true, 4.0, BorderStyle::Dotted);
         assert_eq!(fill_quads.len(), 0, "dotted must NOT produce fill quads");
         assert!(circle_quads.len() > 1, "dotted must produce circle quads");
         for q in &circle_quads {
-            assert_eq!(q.height, 4.0);
+            assert_eq!(q.height, 5.0, "expanded quad: dot_size + 1 = 5.0");
         }
     }
 
