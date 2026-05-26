@@ -13,6 +13,22 @@
     python scripts/orchestrator.py --stop P1           # мягкая остановка
     python scripts/orchestrator.py --stop-all          # остановить всех
     python scripts/orchestrator.py --status            # статус всех
+
+Восстановление после краша
+---------------------------
+При старте каждой задачи оркестратор пишет файл состояния:
+    scripts/.session-PN.json  →  { task_number, started, session_id }
+
+session_id захватывается из первого stream-json события и дописывается в файл сразу.
+При нормальном завершении задачи файл удаляется.
+
+Если оркестратор упал (Ctrl+C, закрытие терминала, отключение питания):
+- при следующем запуске он найдёт .session-PN.json
+- если в нём есть session_id — запустит claude --resume <id> с recovery-промптом
+- Claude увидит полную историю диалога и состояние git, продолжит с места остановки
+- если session_id нет (сессия не успела стартовать) — сбросит файл, начнёт заново
+
+Файлы .session-*.json добавлены в .gitignore.
 """
 
 import argparse
@@ -173,6 +189,56 @@ def jobstatus_path(developer: str) -> Path:
     return SCRIPTS_DIR / f".jobstatus-{developer}"
 
 
+def session_state_path(developer: str) -> Path:
+    return SCRIPTS_DIR / f".session-{developer}.json"
+
+
+def save_session_state(developer: str, task_number: int, session_id: str | None = None) -> None:
+    """Сохранить состояние сессии перед запуском claude."""
+    state: dict = {
+        "developer": developer,
+        "task_number": task_number,
+        "started": datetime.now().isoformat(),
+    }
+    if session_id:
+        state["session_id"] = session_id
+    session_state_path(developer).write_text(
+        json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+
+
+def update_session_id(developer: str, session_id: str) -> None:
+    """Дописать session_id в уже существующий файл состояния."""
+    path = session_state_path(developer)
+    if not path.exists():
+        return
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+        if "session_id" not in state:
+            state["session_id"] = session_id
+            path.write_text(json.dumps(state, ensure_ascii=False, indent=2), encoding="utf-8")
+    except (json.JSONDecodeError, OSError):
+        pass
+
+
+def load_session_state(developer: str) -> dict | None:
+    """Загрузить сохранённое состояние сессии, если есть."""
+    path = session_state_path(developer)
+    if not path.exists():
+        return None
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return None
+
+
+def clear_session_state(developer: str) -> None:
+    """Удалить файл состояния после успешного завершения задачи."""
+    path = session_state_path(developer)
+    if path.exists():
+        path.unlink()
+
+
 def set_jobstatus(developer: str, status: str, detail: str = ""):
     """Записать текущий статус разработчика в файл."""
     path = jobstatus_path(developer)
@@ -275,17 +341,31 @@ def format_event(event: dict) -> list[str]:
 RATE_LIMIT_RE = re.compile(r"resets?\s+(\d{1,2}:\d{2}(?:am|pm)?)", re.IGNORECASE)
 
 
-def run_claude(developer: str, prompt: str) -> tuple[int, bool]:
-    """Запустить claude и показать прогресс. Возвращает (exit_code, rate_limited)."""
+def run_claude(
+    developer: str,
+    prompt: str,
+    task_number: int = 0,
+    resume_session_id: str | None = None,
+) -> tuple[int, bool]:
+    """Запустить claude и показать прогресс. Возвращает (exit_code, rate_limited).
+
+    При resume_session_id использует --resume <id> для продолжения прерванной сессии.
+    """
     global _active_process
 
+    cmd = [
+        "claude",
+        "--dangerously-skip-permissions",
+        "--verbose",
+        "--output-format", "stream-json",
+    ]
+    if resume_session_id:
+        cmd += ["--resume", resume_session_id, "-p", prompt]
+    else:
+        cmd += ["-p", prompt]
+
     process = subprocess.Popen(
-        [
-            "claude", "-p", prompt,
-            "--dangerously-skip-permissions",
-            "--verbose",
-            "--output-format", "stream-json",
-        ],
+        cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         cwd=PROJECT_DIR,
@@ -310,6 +390,8 @@ def run_claude(developer: str, prompt: str) -> tuple[int, bool]:
 
     try:
         rate_limited = False
+        auth_error = False
+        _session_id_saved = resume_session_id is not None  # уже знаем id при resume
         for line in process.stdout:
             line = line.strip()
             if not line:
@@ -321,6 +403,12 @@ def run_claude(developer: str, prompt: str) -> tuple[int, bool]:
                 log(developer, f"  Rate limit: {line[:120]}")
                 continue
 
+            # Детект 403 / auth error в сыром выводе
+            if "403" in line and ("forbidden" in line.lower() or "authenticate" in line.lower()):
+                auth_error = True
+                log(developer, f"  Auth error (403): {line[:120]}")
+                continue
+
             try:
                 event = json.loads(line)
             except json.JSONDecodeError:
@@ -328,7 +416,17 @@ def run_claude(developer: str, prompt: str) -> tuple[int, bool]:
                 if "hit your limit" in line.lower() or "rate limit" in line.lower():
                     rate_limited = True
                     log(developer, f"  Rate limit: {line[:120]}")
+                elif "403" in line and ("forbidden" in line.lower() or "authenticate" in line.lower()):
+                    auth_error = True
+                    log(developer, f"  Auth error (403): {line[:120]}")
                 continue
+
+            # Захватить session_id из первого события, где он есть
+            if not _session_id_saved and task_number > 0:
+                sid = event.get("session_id", "")
+                if sid:
+                    update_session_id(developer, sid)
+                    _session_id_saved = True
 
             # Детект rate limit в JSON-событии
             if event.get("type") == "rate_limit_event":
@@ -340,20 +438,23 @@ def run_claude(developer: str, prompt: str) -> tuple[int, bool]:
             for display_line in format_event(event):
                 log(developer, display_line)
 
-        # Проверить stderr тоже — rate limit может быть там
+        # Проверить stderr тоже — rate limit / auth error может быть там
         stderr_output = process.stderr.read()
-        if stderr_output and ("hit your limit" in stderr_output.lower()
-                              or "rate limit" in stderr_output.lower()):
-            rate_limited = True
-            # Попробовать извлечь время сброса
-            match = RATE_LIMIT_RE.search(stderr_output)
-            if match:
-                log(developer, f"  Rate limit до {match.group(1)}")
-            else:
-                log(developer, f"  Rate limit обнаружен")
+        if stderr_output:
+            sl = stderr_output.lower()
+            if "hit your limit" in sl or "rate limit" in sl:
+                rate_limited = True
+                match = RATE_LIMIT_RE.search(stderr_output)
+                if match:
+                    log(developer, f"  Rate limit до {match.group(1)}")
+                else:
+                    log(developer, "  Rate limit обнаружен")
+            elif "403" in stderr_output and ("forbidden" in sl or "authenticate" in sl):
+                auth_error = True
+                log(developer, "  Auth error (403) в stderr")
 
         process.wait()
-        return process.returncode, rate_limited
+        return process.returncode, rate_limited, auth_error
     finally:
         _stop_tracker.set()
         tracker.join(timeout=3.0)
@@ -383,6 +484,60 @@ def run_task_loop(developer: str, max_tasks: int = 0):
     task_count = 0
 
     log(developer, f"Старт. Проект: {PROJECT_DIR}")
+
+    # --- Восстановление после краша ---
+    existing = load_session_state(developer)
+    if existing:
+        task_number = existing.get("task_number", 1)
+        session_id = existing.get("session_id")
+        started = existing.get("started", "?")
+        if session_id:
+            log(developer, f"Найдена прерванная сессия #{task_number} (начата {started})")
+            log(developer, f"  session_id: {session_id[:16]}...")
+            log(developer, "Возобновляю через --resume...")
+
+            task_count = task_number
+            set_jobstatus(developer, "возобновление", f"задача #{task_count}")
+
+            resume_prompt = (
+                f"Сессия разработчика {developer} была прервана (crash/закрытие терминала/отключение питания). "
+                f"Выполни: git status, затем прочитай STATUS-{developer}.md. "
+                f"На основе истории диалога выше и текущего состояния git определи, "
+                f"что уже сделано, и продолжи задачу с места остановки. "
+                f"Когда задача завершена — вызови /lumen-task-finish."
+            )
+            try:
+                exit_code, rate_limited, auth_error = run_claude(
+                    developer, resume_prompt, task_count, resume_session_id=session_id
+                )
+            except FileNotFoundError:
+                log(developer, "claude не найден в PATH.")
+                clear_session_state(developer)
+                return
+            except Exception as e:
+                log(developer, f"Ошибка запуска: {e}")
+                clear_session_state(developer)
+                return
+
+            if exit_code == 0:
+                clear_session_state(developer)
+                log(developer, f"Задача #{task_count} (возобновлённая) завершена.")
+            elif rate_limited:
+                # Оставить файл состояния — попробуем снова после паузы
+                wait_for_rate_limit(developer)
+                task_count -= 1
+            elif auth_error:
+                log(developer, "Auth error при возобновлении. Пауза 60 сек...")
+                time.sleep(60)
+                task_count -= 1
+            else:
+                log(developer, f"Возобновление не удалось (код {exit_code}). Продолжаю обычным режимом.")
+                clear_session_state(developer)
+                task_count -= 1
+        else:
+            log(developer, f"Найдено состояние задачи #{task_number} без session_id (сессия не стартовала). Сбрасываю.")
+            clear_session_state(developer)
+
     log(developer, f"Стоп-файл: {stop_file}")
     log(developer, "")
     set_jobstatus(developer, "запущен")
@@ -408,6 +563,9 @@ def run_task_loop(developer: str, max_tasks: int = 0):
         log(developer, f"=== Задача #{task_count} ===")
         set_jobstatus(developer, "работает", f"задача #{task_count}")
 
+        # Записать состояние ДО запуска — чтобы не потерять при краше
+        save_session_state(developer, task_count)
+
         prompt = (
             f"Ты разработчик {developer}. "
             f"Прочитай STATUS-{developer}.md. "
@@ -418,23 +576,33 @@ def run_task_loop(developer: str, max_tasks: int = 0):
 
         log(developer, "Запуск claude...")
         try:
-            exit_code, rate_limited = run_claude(developer, prompt)
+            exit_code, rate_limited, auth_error = run_claude(developer, prompt, task_number=task_count)
         except FileNotFoundError:
             log(developer, "claude не найден в PATH.")
+            clear_session_state(developer)
             break
         except Exception as e:
             log(developer, f"Ошибка запуска: {e}")
+            clear_session_state(developer)
             break
 
         if rate_limited and exit_code != 0:
             task_count -= 1  # Не считать неудачную попытку как задачу
+            # Оставить файл состояния с session_id — пригодится при возобновлении после паузы
             wait_for_rate_limit(developer)
+        elif auth_error and exit_code != 0:
+            task_count -= 1
+            clear_session_state(developer)
+            log(developer, "Auth error (403). Пауза 60 сек перед повтором...")
+            time.sleep(60)
         elif exit_code != 0:
             task_count -= 1  # Не считать ошибку как задачу
+            clear_session_state(developer)
             log(developer, f"Claude завершился с кодом {exit_code}.")
             log(developer, "Пауза 30 секунд перед повтором...")
             time.sleep(30)
         else:
+            clear_session_state(developer)
             log(developer, f"Задача #{task_count} завершена.")
 
     set_jobstatus(developer, "остановлен", f"выполнено задач: {task_count}")
