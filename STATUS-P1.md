@@ -1,5 +1,4 @@
-In progress: html-loading-lazy  branch: p1-html-loading-lazy
-Next step: is_lazy field в ImageRequest + parse loading attr  box_tree.rs:88
+In progress: —
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -10,7 +9,6 @@ Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 pi
 
 Next:
 - css-first-line-letter: `::first-line` / `::first-letter` split в collect_inline_segments (box_tree.rs); expose pseudo kind → // CSS: ::first-line, ::first-letter — P4 wires styles
-- css-first-line-letter: `::first-line` / `::first-letter` split в collect_inline_segments (box_tree.rs); expose pseudo kind → // CSS: ::first-line, ::first-letter — P4 wires styles
 - form-submit: полный алгоритм form submission (action= + method=GET/POST + URLSearchParams encoding) → Event «FormSubmit» в EventSink
 - html-template-content: `<template>` element — парсить content во fragment (DocumentFragment, inert subtree), attach при clone; нужно для Web Components
 - colspan-rowspan: table layout colspan/rowspan атрибуты — compute_table_col_widths учитывает span
@@ -20,4 +18,4 @@ Queue (Wave 3+):
 - accessibility-aria: ARIA role/state → accessibility tree (AXTree struct); Phase 2
 - html5-insertion-modes-remaining: полный набор insertion modes (in-table, in-caption, in-cell, in-row, in-select, after-body, in-frameset, etc.) по HTML LS §13.2.6
 
-Recent: html-full-tree-builder (HTML5 §13.2 insertion modes + adoption agency, 17 режимов, AAA, 349 тестов) 2026-05-26, phase0-close (Phase 0 закрыта, маркеры ✅ для html-parser/css-parser/layout) 2026-05-26, fix-inline-block-baseline (BUG-023 P1-часть — strut только для baseline-строк; TEST-12 PASS 0.18%, TEST-13 PASS 0.24%) 2026-05-26, fix-max-height (BUG-025 подтверждён в layout — release-бинарь был устаревшим, TEST-11 PASS 0.43%, unit tests для max-height/min-height/vertical-align:bottom добавлены) 2026-05-25, full HTML5 named entities WHATWG 2125 (gen_entities.py + бинпоиск + 338 тестов) 2026-05-25, push-tokenizer feed_bytes(&[u8]) с буферизацией partial UTF-8, 7 тестов (342 итого) 2026-05-25, ADR-инфраструктура docs/decisions/ (TEMPLATE.md + README + ADR-001..005) 2026-05-25, CSS Counters resolution CSS Lists L3 §6.4 (counter-reset/increment, counter()/counters()/attr() в content:, CounterMap pre-pass, format_counter decimal/alpha/roman, 10 тестов) 2026-05-25, cq* units CSS Container Queries L1 §6.2 (cqw/cqh/cqi/cqb/cqmin/cqmax, thread-local CONTAINER_CQ, 4 тесты) 2026-05-25
+Recent: html-loading-lazy (loading="lazy" ImageRequest.is_lazy + JS _lumen_init_lazy_images/_lumen_deliver_lazy_images + shell proximity fetch, 9 тестов) 2026-05-26, html-full-tree-builder (HTML5 §13.2 insertion modes + adoption agency, 17 режимов, AAA, 349 тестов) 2026-05-26, phase0-close (Phase 0 закрыта, маркеры ✅ для html-parser/css-parser/layout) 2026-05-26, fix-inline-block-baseline (BUG-023 P1-часть — strut только для baseline-строк; TEST-12 PASS 0.18%, TEST-13 PASS 0.24%) 2026-05-26, fix-max-height (BUG-025 подтверждён в layout — release-бинарь был устаревшим, TEST-11 PASS 0.43%, unit tests для max-height/min-height/vertical-align:bottom добавлены) 2026-05-25, full HTML5 named entities WHATWG 2125 (gen_entities.py + бинпоиск + 338 тестов) 2026-05-25, push-tokenizer feed_bytes(&[u8]) с буферизацией partial UTF-8, 7 тестов (342 итого) 2026-05-25, ADR-инфраструктура docs/decisions/ (TEMPLATE.md + README + ADR-001..005) 2026-05-25
