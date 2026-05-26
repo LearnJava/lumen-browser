@@ -174,13 +174,14 @@ def capture_edge(html_path: str, out_png: str) -> None:
     url = 'file:///' + os.path.abspath(html_path).replace('\\', '/')
     subprocess.run(
         [EDGE, '--headless', f'--screenshot={out_png}',
-         f'--window-size={VIEWPORT_W},{VIEWPORT_H}', url],
+         f'--window-size={VIEWPORT_W},{VIEWPORT_H}',
+         '--hide-scrollbars', url],
         capture_output=True, timeout=60,
     )
 
 def capture_lumen(html_relpath: str, out_png: str) -> None:
     """Запускаем Lumen, ждём LUMEN_WAIT_SEC сек, грабим desktop через ffmpeg, kill-аем."""
-    proc = subprocess.Popen([LUMEN, html_relpath], cwd=REPO,
+    proc = subprocess.Popen([LUMEN, '--no-scrollbar', html_relpath], cwd=REPO,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     time.sleep(LUMEN_WAIT_SEC)
     _bring_pid_to_front(proc.pid)
