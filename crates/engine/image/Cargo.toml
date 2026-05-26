@@ -5,10 +5,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "Lumen: декодер растровых изображений (PNG, JPEG)"
+description = "Lumen: декодер растровых изображений (PNG, JPEG, WebP)"
 
 [dependencies]
 lumen-core.workspace = true
 zune-jpeg = "0.5"
 zune-png = "0.5"
 zune-core = "0.5"
+image-webp = "0.2"

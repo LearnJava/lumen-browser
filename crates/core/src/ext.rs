@@ -946,6 +946,36 @@ impl FontFormat for NullFontFormat {
     }
 }
 
+/// Plug-in декодер растровых изображений для форматов, не встроенных в
+/// `lumen-image` (встроены PNG и JPEG). Trait-anchor под `image-webp`
+/// (WebP VP8/VP8L), `rav1d` (AVIF), `gif-decoder` (GIF) и другие
+/// provisional-крейты (§5). P2 реализует каждый новый формат как отдельную
+/// структуру, implement-ящую этот trait.
+///
+/// Дизайн намеренно минимальный: sniff по байт-сигнатуре + decode в RGBA8.
+/// Никакого ICC, metadata, animation на этом уровне — только пиксели для
+/// GPU-upload.
+pub trait ImageDecoder: Send + Sync {
+    /// Имя формата: `"webp"`, `"avif"`, `"gif"`, …
+    fn format_name(&self) -> &'static str;
+
+    /// Магические байты входа соответствуют этому формату?
+    /// Быстрая sniff-функция — не выполняет полной валидации.
+    fn sniff(&self, bytes: &[u8]) -> bool;
+
+    /// MIME-типы, которые этот декодер обрабатывает.
+    /// Используется в `PictureParams::supported_types` для фильтрации
+    /// `<source type="…">` в `<picture>`.
+    fn mime_types(&self) -> &'static [&'static str];
+
+    /// Декодировать байты в RGBA8 (4 байта на пиксель, row-major).
+    /// Возвращает `(ширина, высота, rgba8_data)`.
+    ///
+    /// # Errors
+    /// Строка с диагностикой формата: `"WebP: invalid header"`, etc.
+    fn decode_rgba8(&self, bytes: &[u8]) -> std::result::Result<(u32, u32, Vec<u8>), String>;
+}
+
 /// Spell checker — проверка орфографии для form field / contenteditable.
 /// Trait-anchor под `hunspell-rs` / `spellbook` (provisional, §5, Phase 3).
 ///

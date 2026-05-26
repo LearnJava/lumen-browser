@@ -1,8 +1,10 @@
 mod jpeg;
 mod png;
+pub mod webp;
 
 pub use jpeg::{decode_jpeg, JpegError};
 pub use png::decode_png;
+pub use webp::{WebpError, WebpImageDecoder, decode_webp, is_webp};
 
 /// PNG-сигнатура: `89 50 4E 47 0D 0A 1A 0A` (PNG §5.2).
 pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -13,14 +15,13 @@ pub const JPEG_SIGNATURE_PREFIX: [u8; 3] = [0xFF, 0xD8, 0xFF];
 /// MIME-типы изображений, которые `decode` умеет декодировать.
 ///
 /// Передаётся в `PictureParams::supported_types` через `lumen-layout`, чтобы
-/// `<source type="image/webp">` (и любой другой неподдерживаемый формат)
-/// пропускался picker-ом — иначе picker выбирает недекодируемый источник
-/// и показывает пустую коробку вместо PNG/JPEG fallback-а.
+/// неподдерживаемые `<source type="...">` пропускались picker-ом и браузер
+/// выбирал подходящий fallback вместо пустой коробки.
 ///
-/// Расширяется при добавлении декодеров (WebP, AVIF, GIF, …).
+/// Расширяется при добавлении декодеров (AVIF, GIF, …).
 #[must_use]
 pub fn supported_mime_types() -> &'static [&'static str] {
-    &["image/png", "image/jpeg", "image/jpg"]
+    &["image/png", "image/jpeg", "image/jpg", "image/webp"]
 }
 
 /// Декодирует растровое изображение по сигнатуре первых байтов.
@@ -29,6 +30,7 @@ pub fn supported_mime_types() -> &'static [&'static str] {
 /// - [`ImageError::UnknownFormat`] — сигнатура не распознана.
 /// - [`ImageError::Png`] — PNG-сигнатура совпала, но декодер выдал ошибку.
 /// - [`ImageError::Jpeg`] — JPEG-сигнатура совпала, но декодер выдал ошибку.
+/// - [`ImageError::Webp`] — WebP-сигнатура (RIFF/WEBP) совпала, но декодер выдал ошибку.
 pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
     if bytes.len() >= PNG_SIGNATURE.len() && bytes[..PNG_SIGNATURE.len()] == PNG_SIGNATURE {
         return decode_png(bytes).map_err(ImageError::Png);
@@ -37,6 +39,10 @@ pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
         && bytes[..JPEG_SIGNATURE_PREFIX.len()] == JPEG_SIGNATURE_PREFIX
     {
         return decode_jpeg(bytes).map_err(ImageError::Jpeg);
+    }
+    if is_webp(bytes) {
+        let (width, height, data) = decode_webp(bytes).map_err(ImageError::Webp)?;
+        return Ok(Image { width, height, format: PixelFormat::Rgba8, data });
     }
     Err(ImageError::UnknownFormat)
 }
@@ -47,6 +53,8 @@ pub enum ImageError {
     UnknownFormat,
     Png(DecodeError),
     Jpeg(JpegError),
+    /// WebP-контейнер распознан (RIFF/WEBP), но декодирование не удалось.
+    Webp(WebpError),
 }
 
 impl core::fmt::Display for ImageError {
@@ -55,6 +63,7 @@ impl core::fmt::Display for ImageError {
             Self::UnknownFormat => write!(f, "формат изображения не распознан по сигнатуре"),
             Self::Png(e) => write!(f, "PNG: {e}"),
             Self::Jpeg(e) => write!(f, "JPEG: {e}"),
+            Self::Webp(e) => write!(f, "WebP: {e}"),
         }
     }
 }
@@ -67,6 +76,10 @@ impl From<DecodeError> for ImageError {
 
 impl From<JpegError> for ImageError {
     fn from(e: JpegError) -> Self { Self::Jpeg(e) }
+}
+
+impl From<WebpError> for ImageError {
+    fn from(e: WebpError) -> Self { Self::Webp(e) }
 }
 
 /// Декодированное растровое изображение в плотной row-major упаковке.

@@ -92,7 +92,7 @@
 - ✅ Layout — block/inline/flex/grid/positioned layout, CSS Variables, math-функции, text-decoration, visibility, opacity, Shadow DOM, CSS Transitions, CSS Transforms; полный CSS cascade с specificity
 - ✅ Paint — display list + wgpu-rasterizer + glyph atlas + text rendering
 - ✅ Связка движка с UI: shell открывает `samples/page.html` с фонами и текстом
-- 🟡 lumen-image — PNG (8/16-bit + palette + tRNS + Adam7) и JPEG baseline (DCT/Huffman/YCbCr) декодеры готовы; интеграция в layout/paint (`<img>` block-level placeholder сделан) и WebP/AVIF — отдельными задачами
+- ✅ lumen-image — PNG (8/16-bit + palette + tRNS + Adam7) + JPEG baseline (DCT/Huffman/YCbCr) + WebP (VP8 lossy + VP8L lossless, `image-webp`) декодеры; `ImageDecoder` trait в `lumen-core::ext`; `supported_mime_types()` для `<picture>` type-filter; AVIF/GIF — отдельными задачами
 - ⬜ Composite glyphs в lumen-font (Cyrillic 'А' и другие)
 - ⬜ Свой HTTP/1.1 + TLS через `rustls` — для загрузки внешней страницы
 
