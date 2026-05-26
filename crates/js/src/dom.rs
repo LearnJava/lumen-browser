@@ -124,6 +124,7 @@ pub enum NavigateRequest {
 /// `layout_rects` — shared map updated by the shell after each relayout; maps
 ///              `NodeId` index → `[x, y, width, height]` in viewport-relative CSS px.
 /// `viewport_size` — shared `[width, height]` updated by the shell on resize.
+/// `lazy_img_requests` — queue written by `_lumen_request_lazy_image_load`; drained by shell.
 /// Pass `None` for providers in sandboxed contexts or tests.
 #[allow(clippy::too_many_arguments)]
 pub fn install_dom_api(
@@ -140,8 +141,9 @@ pub fn install_dom_api(
     raf_pending: Arc<AtomicBool>,
     layout_rects: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     viewport_size: Arc<Mutex<[f32; 2]>>,
+    lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -165,6 +167,7 @@ fn install_primitives(
     raf_pending: Arc<AtomicBool>,
     layout_rects: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     viewport_size: Arc<Mutex<[f32; 2]>>,
+    lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -887,6 +890,16 @@ fn install_primitives(
         reg!("_lumen_get_viewport_size", move || -> Vec<f64> {
             let s = *vs.lock().unwrap();
             vec![f64::from(s[0]), f64::from(s[1])]
+        });
+    }
+
+    // Queues a lazy image load request.  Called by `_lumen_deliver_lazy_images()` in JS
+    // when an image registered via `_lumen_init_lazy_images` enters the lazy-load margin.
+    // Shell drains via `QuickJsRuntime::take_lazy_image_requests` after each layout.
+    {
+        let req = Arc::clone(&lazy_img_requests);
+        reg!("_lumen_request_lazy_image_load", move |nid: u32, url: String| {
+            req.lock().unwrap().push((nid, url));
         });
     }
 
@@ -2637,6 +2650,44 @@ window.clearInterval         = clearInterval;
 window.MutationObserver      = MutationObserver;
 window.ResizeObserver        = ResizeObserver;
 window.IntersectionObserver  = IntersectionObserver;
+
+// ── Lazy image loading (HTML LS §2.6.6.9) ──────────────────────────────────
+// Maps nid (u32 as string key) → url for images deferred by loading=\"lazy\".
+// Populated by _lumen_init_lazy_images (called once after initial layout).
+var _lumen_lazy_img_map = {};
+
+// Called by shell after initial layout with [[nid, url], ...] for lazy images.
+// Idempotent: already-registered images are skipped.
+function _lumen_init_lazy_images(pairs) {
+    for (var i = 0; i < pairs.length; i++) {
+        var nid = pairs[i][0];
+        if (_lumen_lazy_img_map[nid] === undefined) {
+            _lumen_lazy_img_map[nid] = pairs[i][1];
+        }
+    }
+}
+
+// Called by shell after each relayout+observer delivery.
+// Triggers a native load request for every lazy image within one viewport of
+// the visible area (HTML LS §lazy-loading distance threshold heuristic).
+function _lumen_deliver_lazy_images() {
+    var nids = Object.keys(_lumen_lazy_img_map);
+    if (nids.length === 0) return;
+    var vp = _lumen_get_viewport_size();
+    var vpH = vp[1];
+    var margin = vpH; // load 1 viewport-height ahead of the fold
+    for (var i = 0; i < nids.length; i++) {
+        var nid = parseInt(nids[i]);
+        var rect = _lumen_get_bounding_rect(nid);
+        if (!rect) continue;
+        var ey = rect[1], eh = rect[3];
+        // rect coords are viewport-relative; element within [−margin, vpH+margin]
+        if (ey < vpH + margin && ey + eh > -margin) {
+            _lumen_request_lazy_image_load(nid, _lumen_lazy_img_map[nid]);
+            delete _lumen_lazy_img_map[nid];
+        }
+    }
+}
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -4703,5 +4754,72 @@ mod tests {
             }
             other => panic!("expected Array, got {other:?}"),
         }
+    }
+
+    // ── Lazy image loading ────────────────────────────────────────────────────
+
+    #[test]
+    fn lazy_images_queued_when_in_viewport() {
+        let rt = runtime_with_dom(make_doc());
+        rt.update_viewport_size(800.0, 600.0);
+        // Node 5 — place its bounding rect fully within the viewport.
+        rt.update_layout_rects([(5, [10.0, 50.0, 200.0, 150.0])].into_iter().collect());
+        // Register node 5 as a lazy image.
+        rt.eval("_lumen_init_lazy_images([[5, 'photo.jpg']]);").unwrap();
+        // Deliver proximity check.
+        rt.eval("_lumen_deliver_lazy_images();").unwrap();
+        let reqs = rt.take_lazy_image_requests();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].0, 5);
+        assert_eq!(reqs[0].1, "photo.jpg");
+    }
+
+    #[test]
+    fn lazy_images_not_queued_when_far_below_fold() {
+        let rt = runtime_with_dom(make_doc());
+        rt.update_viewport_size(800.0, 600.0);
+        // Node 6 is 3 viewport-heights below the fold.
+        rt.update_layout_rects([(6, [0.0, 1900.0, 100.0, 100.0])].into_iter().collect());
+        rt.eval("_lumen_init_lazy_images([[6, 'far.png']]);").unwrap();
+        rt.eval("_lumen_deliver_lazy_images();").unwrap();
+        let reqs = rt.take_lazy_image_requests();
+        assert!(reqs.is_empty(), "image far below fold must not be loaded yet");
+    }
+
+    #[test]
+    fn lazy_images_removed_from_map_after_queue() {
+        let rt = runtime_with_dom(make_doc());
+        rt.update_viewport_size(800.0, 600.0);
+        rt.update_layout_rects([(7, [0.0, 0.0, 100.0, 100.0])].into_iter().collect());
+        rt.eval("_lumen_init_lazy_images([[7, 'once.png']]);").unwrap();
+        rt.eval("_lumen_deliver_lazy_images();").unwrap();
+        let first = rt.take_lazy_image_requests();
+        assert_eq!(first.len(), 1);
+        // Second delivery must NOT queue again (image was removed from map).
+        rt.eval("_lumen_deliver_lazy_images();").unwrap();
+        let second = rt.take_lazy_image_requests();
+        assert!(second.is_empty(), "already-loaded image must not be queued twice");
+    }
+
+    #[test]
+    fn lazy_images_init_idempotent() {
+        let rt = runtime_with_dom(make_doc());
+        rt.update_viewport_size(800.0, 600.0);
+        // Register same image twice — only one entry.
+        rt.eval("_lumen_init_lazy_images([[8, 'dup.png'],[8, 'other.png']]);").unwrap();
+        // Place rect out of viewport — so it won't be delivered.
+        rt.update_layout_rects([(8, [0.0, 5000.0, 100.0, 100.0])].into_iter().collect());
+        rt.eval("_lumen_deliver_lazy_images();").unwrap();
+        let reqs = rt.take_lazy_image_requests();
+        // Far below: nothing queued yet.
+        assert!(reqs.is_empty());
+        // Init again with different URL — must be ignored (first registration wins).
+        rt.eval("_lumen_init_lazy_images([[8, 'new.png']]);").unwrap();
+        // Now bring it into viewport.
+        rt.update_layout_rects([(8, [0.0, 0.0, 100.0, 100.0])].into_iter().collect());
+        rt.eval("_lumen_deliver_lazy_images();").unwrap();
+        let reqs2 = rt.take_lazy_image_requests();
+        assert_eq!(reqs2.len(), 1);
+        assert_eq!(reqs2[0].1, "dup.png", "first registration URL must win");
     }
 }

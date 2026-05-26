@@ -498,13 +498,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/html-parser/src/tokenizer.rs:71` **fn** `with_state` — Создаёт tokenizer с заранее заданным `text_only`-состоянием
 `crates/engine/html-parser/src/tokenizer.rs:81` **fn** `pos` — Текущая позиция курсора (в байтах от начала `input`). Используется
 `crates/engine/html-parser/src/tokenizer.rs:87` **fn** `text_only_state` — Текущее `text_only`-состояние. После исчерпания iterator-а это
-`crates/engine/html-parser/src/tree_builder.rs:27` **fn** `parse`
-`crates/engine/html-parser/src/tree_builder.rs:46` **struct** `IncrementalTreeBuilder` — Push-режим tree builder-а: принимает HTML chunk-ами, держит
-`crates/engine/html-parser/src/tree_builder.rs:54` **fn** `new`
-`crates/engine/html-parser/src/tree_builder.rs:69` **fn** `feed` — Скармливает chunk push-токенизатору и применяет полученные
-`crates/engine/html-parser/src/tree_builder.rs:81` **fn** `feed_bytes` — Вариант [`feed`][Self::feed] для сырых байт
-`crates/engine/html-parser/src/tree_builder.rs:89` **fn** `as_doc` — Возвращает ссылку на текущее состояние DOM — для промежуточных
-`crates/engine/html-parser/src/tree_builder.rs:96` **fn** `finish` — Финализирует ввод. Хвост push-tokenizer-а токенизируется как
+`crates/engine/html-parser/src/tree_builder.rs:44` **fn** `parse` — Парсит вход целиком в pull-режиме и возвращает построенный
+`crates/engine/html-parser/src/tree_builder.rs:101` **struct** `IncrementalTreeBuilder` — Push-режим tree builder-а: принимает HTML chunk-ами, держит
+`crates/engine/html-parser/src/tree_builder.rs:133` **fn** `new` — Создаёт пустой builder в insertion mode `Initial`
+`crates/engine/html-parser/src/tree_builder.rs:152` **fn** `feed` — Скармливает chunk push-токенизатору и применяет полученные
+`crates/engine/html-parser/src/tree_builder.rs:159` **fn** `feed_bytes` — Вариант [`feed`][Self::feed] для сырых байт
+`crates/engine/html-parser/src/tree_builder.rs:166` **fn** `as_doc` — Возвращает ссылку на текущее состояние DOM
+`crates/engine/html-parser/src/tree_builder.rs:175` **fn** `finish` — Финализирует ввод. Хвост push-tokenizer-а токенизируется как
 
 ## lumen-image  (11 symbols)
 
@@ -520,19 +520,20 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/lib.rs:233` **enum** `DecodeError` — Ошибки декодирования PNG
 `crates/engine/image/src/png/mod.rs:8` **fn** `decode_png`
 
-## lumen-js  (11 symbols)
+## lumen-js  (12 symbols)
 
 `crates/js/src/dom.rs:96` **enum** `NavigateRequest` — Navigation request emitted by JS (`location.href =`, `location.assign()`,
-`crates/js/src/dom.rs:129` **fn** `install_dom_api` — Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`
+`crates/js/src/dom.rs:130` **fn** `install_dom_api` — Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`
 `crates/js/src/lib.rs:19` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
-`crates/js/src/lib.rs:58` **fn** `new`
-`crates/js/src/lib.rs:85` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:119` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:127` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:136` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:145` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:154` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:162` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:62` **fn** `new`
+`crates/js/src/lib.rs:90` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+`crates/js/src/lib.rs:125` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:133` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:142` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:151` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:160` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:168` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:177` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
 
 ## lumen-knowledge  (37 symbols)
 
@@ -603,16 +604,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/animation.rs:1168` **fn** `tick` — Compute interpolated style overrides for the current frame
 `crates/engine/layout/src/box_tree.rs:55` **enum** `FormControlKind` — Вид form control — используется в `BoxKind::FormControl` для paint-специализаций
 `crates/engine/layout/src/box_tree.rs:88` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
-`crates/engine/layout/src/box_tree.rs:99` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
-`crates/engine/layout/src/box_tree.rs:119` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
-`crates/engine/layout/src/box_tree.rs:210` **struct** `LayoutBox`
-`crates/engine/layout/src/box_tree.rs:222` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
-`crates/engine/layout/src/box_tree.rs:252` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
-`crates/engine/layout/src/box_tree.rs:272` **enum** `BoxKind`
-`crates/engine/layout/src/box_tree.rs:345` **fn** `layout`
-`crates/engine/layout/src/box_tree.rs:359` **fn** `layout_measured`
-`crates/engine/layout/src/box_tree.rs:370` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:4136` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:103` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
+`crates/engine/layout/src/box_tree.rs:123` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
+`crates/engine/layout/src/box_tree.rs:219` **struct** `LayoutBox`
+`crates/engine/layout/src/box_tree.rs:231` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
+`crates/engine/layout/src/box_tree.rs:261` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
+`crates/engine/layout/src/box_tree.rs:281` **enum** `BoxKind`
+`crates/engine/layout/src/box_tree.rs:354` **fn** `layout`
+`crates/engine/layout/src/box_tree.rs:368` **fn** `layout_measured`
+`crates/engine/layout/src/box_tree.rs:379` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
+`crates/engine/layout/src/box_tree.rs:4145` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/counters.rs:33` **type** `CounterSnapshot` — Per-element counter stacks snapshot
 `crates/engine/layout/src/counters.rs:37` **type** `CounterMap` — Maps each element `NodeId` to its counter snapshot (after own reset/increment,
 `crates/engine/layout/src/counters.rs:90` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
@@ -1597,4 +1598,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 1544 symbols in 16 crates*
+*Total: 1545 symbols in 16 crates*
