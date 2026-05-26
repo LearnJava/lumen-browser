@@ -362,6 +362,8 @@ def run_one(tid: str, html: str, threshold: float, label: str,
         return False, None, -1.0
 
     ffmpeg_crop(lumen_raw, lumen_crop, crop_offset[0], crop_offset[1])
+    if os.path.exists(lumen_raw):
+        os.remove(lumen_raw)
     if not os.path.exists(lumen_crop):
         print(f'TEST-{tid}: FAIL (ffmpeg crop failed)')
         return False, crop_offset, -1.0
