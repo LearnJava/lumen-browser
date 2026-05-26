@@ -2,17 +2,17 @@
 """
 Оркестратор задач Lumen.
 
-Автоматический запуск сессий Claude Code для разработчиков P1-P4.
+Автоматический запуск сессий Claude Code для разработчиков P1-P5.
 Каждая задача — отдельная сессия с чистым контекстом.
 
 Использование:
-    python scripts/orchestrator.py P1              # один разработчик
-    python scripts/orchestrator.py P1 P2           # два в параллель
-    python scripts/orchestrator.py P1 P2 P3 P4    # все четверо
+    python scripts/orchestrator.py P1                  # один разработчик
+    python scripts/orchestrator.py P1 P2               # два в параллель
+    python scripts/orchestrator.py P1 P2 P3 P4 P5     # все пятеро
     python scripts/orchestrator.py P1 --max-tasks 3
-    python scripts/orchestrator.py --stop P1       # мягкая остановка
-    python scripts/orchestrator.py --stop-all      # остановить всех
-    python scripts/orchestrator.py --status        # статус всех
+    python scripts/orchestrator.py --stop P1           # мягкая остановка
+    python scripts/orchestrator.py --stop-all          # остановить всех
+    python scripts/orchestrator.py --status            # статус всех
 """
 
 import argparse
@@ -187,7 +187,7 @@ def show_status():
     """Показать статус всех разработчиков."""
     print("Статус разработчиков:")
     print("-" * 50)
-    for dev in ["P1", "P2", "P3", "P4"]:
+    for dev in ["P1", "P2", "P3", "P4", "P5"]:
         path = jobstatus_path(dev)
         if not path.exists():
             print(f"  {dev}: не запущен")
@@ -456,9 +456,9 @@ def main():
     parser.add_argument(
         "developers",
         nargs="*",
-        choices=["P1", "P2", "P3", "P4"],
+        choices=["P1", "P2", "P3", "P4", "P5"],
         metavar="DEV",
-        help="Разработчики для запуска: P1 P2 P3 P4",
+        help="Разработчики для запуска: P1 P2 P3 P4 P5",
     )
     parser.add_argument(
         "--max-tasks",
@@ -469,7 +469,7 @@ def main():
     parser.add_argument(
         "--stop",
         nargs="+",
-        choices=["P1", "P2", "P3", "P4"],
+        choices=["P1", "P2", "P3", "P4", "P5"],
         metavar="DEV",
         help="Остановить разработчика после текущей задачи",
     )
@@ -493,7 +493,7 @@ def main():
 
     # Режим остановки
     if args.stop_all:
-        create_stop_file(["P1", "P2", "P3", "P4"])
+        create_stop_file(["P1", "P2", "P3", "P4", "P5"])
         return
 
     if args.stop:
@@ -536,8 +536,8 @@ def main():
             print(f"Запущен {dev} в отдельном окне.")
 
         print()
-        print(f"Для остановки: python scripts/orchestrator.py --stop P1")
-        print(f"Остановить всех: python scripts/orchestrator.py --stop-all")
+        print("Для остановки: python scripts/orchestrator.py --stop P1")
+        print("Остановить всех: python scripts/orchestrator.py --stop-all")
 
 
 if __name__ == "__main__":
