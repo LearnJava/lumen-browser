@@ -199,6 +199,23 @@ grep "P1.*⬜\|P1.*🟡" lumen-plan.md
 grep -A 20 "^#### 3A" lumen-plan.md
 ```
 
+**SYMBOLS.md — symbol index.** `SYMBOLS.md` is an auto-generated index of every `pub fn/struct/enum/trait/type` with `file:line` and first `///` doc line. Use it instead of reading source files to locate a symbol:
+
+```bash
+# Find where LayoutBox is defined:
+grep "LayoutBox" SYMBOLS.md
+
+# See all public items in lumen-paint:
+grep -A 300 "^## lumen-paint" SYMBOLS.md | grep -m 300 "^\`"
+
+# Find all public traits in the codebase:
+grep "**trait**" SYMBOLS.md
+```
+
+Then read only the target lines: `Read file offset=<line> limit=30`. This replaces reading an entire file just to find a function signature.
+
+Regenerate after adding/moving/renaming any public symbol: `python scripts/gen_symbols.py`. Add the updated `SYMBOLS.md` to the same commit as the code change.
+
 **Session start protocol.** At the beginning of each session read only: `STATUS-PN.md` (your developer number) + `git branch`. Do not read `lumen-plan.md` unless the task explicitly requires architecture or roadmap details.
 
 ### Cargo output rules
