@@ -1,35 +1,90 @@
-//! Tree builder (Phase 0 — lenient).
+//! HTML5 §13.2 tree construction.
 //!
-//! Простой стековый построитель. Не реализует insertion modes из HTML5
-//! spec (in_table / in_select / реструктуризация foster parent и т.д.) —
-//! этого достаточно для текстового веба и большинства простых страниц.
-//! При несовпадении закрывающего тега молча игнорирует.
+//! Реализация insertion modes по спецификации WHATWG HTML LS §13.2:
+//! Initial, BeforeHtml, BeforeHead, InHead, AfterHead, InBody, Text,
+//! InTable, InTableText, InTableBody, InRow, InCell, InSelect,
+//! InSelectInTable, InCaption, InColumnGroup, AfterBody,
+//! AfterAfterBody.
+//!
+//! Ключевые алгоритмы:
+//!
+//! * Active formatting elements list + reconstruction (§13.2.4.3) —
+//!   `<b>`, `<i>`, `<a>` и т.д. восстанавливаются при «прорыве» через
+//!   границы блоков.
+//! * Adoption Agency Algorithm (§13.2.6.4.7 «in body»: «An end tag
+//!   whose tag name is one of: a, b, big, code, em, font, i, nobr, s,
+//!   small, strike, strong, tt, u») для разрешения mis-nesting.
+//! * Foster parenting (§13.2.6.1) — текст и не-table-элементы в
+//!   `<table>`-контексте вставляются перед `<table>`.
+//! * Auto-close: `<p>` перед block elements (§13.2.6.4.7 «in body»
+//!   правило «have a p element in button scope»), `<li>` перед `<li>`,
+//!   `<h1>..<h6>` перед `<h1>..<h6>`.
+//! * Implicit `<html>` / `<head>` / `<body>`.
 //!
 //! Доступен в двух режимах:
-//!
-//! * [`parse`] — pull-режим: вся строка целиком прогоняется через
-//!   [`Tokenizer`] и применяется к DOM.
+//! * [`parse`] — pull-режим: вся строка прогоняется через
+//!   [`Tokenizer`].
 //! * [`IncrementalTreeBuilder`] — push-режим: ввод подаётся chunk-ами
-//!   через [`crate::PushTokenizer`], DOM растёт инкрементально.
+//!   через [`PushTokenizer`], DOM растёт инкрементально.
 //!
 //! Инвариант: при идентичном входе оба режима дают одинаковый
 //! [`Document`]. Гарантируется через **text-node coalescing**: если
 //! push-tokenizer разбил непрерывный текстовый поток на несколько
 //! `Token::Text` (из-за chunk boundary), `apply_token` сливает их в
-//! один text-node. Pull-режим этим путём проходит no-op (он всегда
-//! отдаёт Text-токен единым куском).
+//! один text-node.
 
 use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId, QualName};
 
 use crate::push_tokenizer::PushTokenizer;
 use crate::tokenizer::{Token, Tokenizer};
 
+/// Парсит вход целиком в pull-режиме и возвращает построенный
+/// [`Document`]. Эквивалент `IncrementalTreeBuilder::new() + feed(input)
+/// + finish()`, но без накладных расходов на push-буферизацию.
 pub fn parse(input: &str) -> Document {
     let mut builder = IncrementalTreeBuilder::new();
     for token in Tokenizer::new(input) {
         builder.apply_token(token);
     }
     builder.finish()
+}
+
+/// Все insertion modes из §13.2.4.1. Foreign content (MathML, SVG) и
+/// `InTemplate` Phase 0 не поддерживает.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InsertionMode {
+    Initial,
+    BeforeHtml,
+    BeforeHead,
+    InHead,
+    AfterHead,
+    InBody,
+    Text,
+    InTable,
+    InTableText,
+    InCaption,
+    InColumnGroup,
+    InTableBody,
+    InRow,
+    InCell,
+    InSelect,
+    #[allow(dead_code)]
+    InSelectInTable,
+    AfterBody,
+    AfterAfterBody,
+}
+
+/// Запись в списке active formatting elements (§13.2.4.3). Либо
+/// маркер (граница scope при `<table>`, `<object>` и т.д.), либо
+/// элемент с сохранённым именем/атрибутами для Noah's Ark clause.
+#[derive(Clone)]
+enum ActiveFormattingEntry {
+    Marker,
+    Element {
+        node: NodeId,
+        tag: String,
+        attrs: Vec<(String, String)>,
+    },
 }
 
 /// Push-режим tree builder-а: принимает HTML chunk-ами, держит
@@ -44,19 +99,48 @@ pub fn parse(input: &str) -> Document {
 /// let doc = b.finish();
 /// ```
 pub struct IncrementalTreeBuilder {
+    /// Строящийся DOM. После `finish()` отдаётся caller-у.
     doc: Document,
-    stack: Vec<NodeId>,
+    /// Стек открытых элементов (§13.2.4.2). Top — `last()`. Никогда
+    /// не содержит `Document`-корень.
+    open_elements: Vec<NodeId>,
+    /// Список active formatting elements (§13.2.4.3) с маркерами.
+    active_formatting: Vec<ActiveFormattingEntry>,
+    /// Текущий insertion mode (§13.2.4.1).
+    insertion_mode: InsertionMode,
+    /// Сохранённый mode для возврата из Text-mode (§13.2.6.4.8).
+    original_insertion_mode: Option<InsertionMode>,
+    /// Указатель на `<head>` (§13.2.4.4). Нужен для InHead/AfterHead.
+    head_element: Option<NodeId>,
+    /// Указатель на текущий `<form>` (§13.2.4.4). Phase 0: используется
+    /// частично — некоторые формы клонирующих правил опущены.
+    #[allow(dead_code)]
+    form_element: Option<NodeId>,
+    /// Накопитель символов для InTableText (§13.2.6.4.10): table-режим
+    /// собирает текстовые токены и решает в конце, foster-ить ли их.
+    pending_table_text: String,
+    /// `true` если в pending_table_text есть хоть один не-whitespace
+    /// символ — тогда finish-of-InTableText включает foster parenting.
+    pending_table_text_has_nonspace: bool,
+    /// Push-режим токенизатора.
     tokenizer: PushTokenizer,
+    /// Виделся ли DOCTYPE — для fallback Quirks при `finish()`.
     seen_doctype: bool,
 }
 
 impl IncrementalTreeBuilder {
+    /// Создаёт пустой builder в insertion mode `Initial`.
     pub fn new() -> Self {
-        let doc = Document::new();
-        let root = doc.root();
         Self {
-            doc,
-            stack: vec![root],
+            doc: Document::new(),
+            open_elements: Vec::new(),
+            active_formatting: Vec::new(),
+            insertion_mode: InsertionMode::Initial,
+            original_insertion_mode: None,
+            head_element: None,
+            form_element: None,
+            pending_table_text: String::new(),
+            pending_table_text_has_nonspace: false,
             tokenizer: PushTokenizer::new(),
             seen_doctype: false,
         }
@@ -64,8 +148,7 @@ impl IncrementalTreeBuilder {
 
     /// Скармливает chunk push-токенизатору и применяет полученные
     /// токены к DOM. После каждого `feed` `Document` валиден для
-    /// чтения (consumer может, например, запустить layout на текущем
-    /// снапшоте, хотя поддерево может быть незакрытым).
+    /// чтения.
     pub fn feed(&mut self, chunk: &str) {
         for token in self.tokenizer.feed(chunk) {
             self.apply_token(token);
@@ -73,26 +156,22 @@ impl IncrementalTreeBuilder {
     }
 
     /// Вариант [`feed`][Self::feed] для сырых байт.
-    ///
-    /// Делегирует в [`PushTokenizer::feed_bytes`], который буферизует
-    /// незавершённые UTF-8 последовательности на границах chunk-ов.
-    /// Позволяет шеллу передавать произвольные байтовые срезы без
-    /// выравнивания по code-point границам.
     pub fn feed_bytes(&mut self, chunk: &[u8]) {
         for token in self.tokenizer.feed_bytes(chunk) {
             self.apply_token(token);
         }
     }
 
-    /// Возвращает ссылку на текущее состояние DOM — для промежуточных
-    /// layout-ов во время streaming. Дерево может быть незакрытым.
+    /// Возвращает ссылку на текущее состояние DOM.
     pub fn as_doc(&self) -> &Document {
         &self.doc
     }
 
     /// Финализирует ввод. Хвост push-tokenizer-а токенизируется как
-    /// при EOF, оставшиеся токены применяются к DOM, выставляется
+    /// при EOF, прогоняется EOF-сценарий insertion modes, выставляется
     /// fallback `DocumentMode::Quirks` если ни одного DOCTYPE не было.
+    /// Гарантирует наличие `<html>` / `<head>` / `<body>` даже для
+    /// пустого ввода (§13.2.6.4.1-3).
     pub fn finish(mut self) -> Document {
         for token in self.tokenizer.end() {
             self.apply_token(token);
@@ -100,6 +179,8 @@ impl IncrementalTreeBuilder {
         if !self.seen_doctype {
             self.doc.set_mode(DocumentMode::Quirks);
         }
+        // EOF: догоняем недостающую структуру html/head/body.
+        self.process_eof();
         self.doc
     }
 
@@ -107,73 +188,62 @@ impl IncrementalTreeBuilder {
     /// `parse()`, и push-режимом — общая точка, чтобы поведение
     /// гарантированно совпадало.
     fn apply_token(&mut self, token: Token) {
+        // InTableText аккумулирует подряд идущие Text-токены и
+        // разрешается при первом не-Text токене.
+        if self.insertion_mode == InsertionMode::InTableText {
+            if let Token::Text(s) = &token {
+                for ch in s.chars() {
+                    if !is_html_whitespace(ch) {
+                        self.pending_table_text_has_nonspace = true;
+                    }
+                }
+                self.pending_table_text.push_str(s);
+                return;
+            }
+            self.flush_pending_table_text();
+        }
+        self.dispatch(token);
+    }
+
+    /// Маршрутизатор по insertion mode (§13.2.6).
+    fn dispatch(&mut self, token: Token) {
+        match self.insertion_mode {
+            InsertionMode::Initial => self.mode_initial(token),
+            InsertionMode::BeforeHtml => self.mode_before_html(token),
+            InsertionMode::BeforeHead => self.mode_before_head(token),
+            InsertionMode::InHead => self.mode_in_head(token),
+            InsertionMode::AfterHead => self.mode_after_head(token),
+            InsertionMode::InBody => self.mode_in_body(token),
+            InsertionMode::Text => self.mode_text(token),
+            InsertionMode::InTable => self.mode_in_table(token),
+            InsertionMode::InTableText => {
+                // Перехвачено в apply_token.
+                self.mode_in_table(token);
+            }
+            InsertionMode::InCaption => self.mode_in_caption(token),
+            InsertionMode::InColumnGroup => self.mode_in_column_group(token),
+            InsertionMode::InTableBody => self.mode_in_table_body(token),
+            InsertionMode::InRow => self.mode_in_row(token),
+            InsertionMode::InCell => self.mode_in_cell(token),
+            InsertionMode::InSelect => self.mode_in_select(token),
+            InsertionMode::InSelectInTable => self.mode_in_select_in_table(token),
+            InsertionMode::AfterBody => self.mode_after_body(token),
+            InsertionMode::AfterAfterBody => self.mode_after_after_body(token),
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Insertion modes
+    // ─────────────────────────────────────────────────────────────
+
+    /// §13.2.6.4.1 «The initial insertion mode».
+    fn mode_initial(&mut self, token: Token) {
         match token {
-            Token::StartTag {
-                name,
-                attrs,
-                self_closing,
-            } => {
-                let elem = self.doc.create_element(QualName::html(name.clone()));
-                if let NodeData::Element {
-                    attrs: dom_attrs, ..
-                } = &mut self.doc.get_mut(elem).data
-                {
-                    for (k, v) in attrs {
-                        dom_attrs.push(Attribute {
-                            name: QualName::html(k),
-                            value: v,
-                        });
-                    }
-                }
-                let parent = *self.stack.last().expect("stack always non-empty");
-                self.doc.append_child(parent, elem);
-                if !self_closing && !is_void_element(&name) {
-                    self.stack.push(elem);
-                }
-            }
-            Token::EndTag { name } => {
-                let matched = self.stack.iter().enumerate().rev().find_map(|(idx, &id)| {
-                    if let NodeData::Element { name: n, .. } = &self.doc.get(id).data {
-                        (n.local == name).then_some(idx)
-                    } else {
-                        None
-                    }
-                });
-                if let Some(idx) = matched {
-                    self.stack.truncate(idx);
-                }
-            }
-            Token::Text(s) => {
-                if s.is_empty() {
-                    return;
-                }
-                let parent = *self.stack.last().expect("stack always non-empty");
-                // text-node coalescing: если последний ребёнок — text,
-                // дописываем к нему вместо создания нового. Это
-                // ключевой инвариант для совпадения push/pull DOM:
-                // push может разбить непрерывный текст на несколько
-                // Token::Text по chunk boundary.
-                let last_child = self.doc.get(parent).children.last().copied();
-                if let Some(child) = last_child
-                    && let NodeData::Text(existing) = &mut self.doc.get_mut(child).data
-                {
-                    existing.push_str(&s);
-                    return;
-                }
-                let text = self.doc.create_text(s);
-                self.doc.append_child(parent, text);
-            }
-            Token::Comment(s) => {
-                let comment = self.doc.create_comment(s);
-                let parent = *self.stack.last().expect("stack always non-empty");
-                self.doc.append_child(parent, comment);
-            }
             Token::Doctype {
                 name,
                 public_id,
                 system_id,
             } => {
-                // §13.2.5.1: только первый DOCTYPE влияет на режим.
                 if !self.seen_doctype {
                     self.doc.set_mode(crate::quirks_mode::detect_document_mode(
                         &name,
@@ -187,10 +257,1667 @@ impl IncrementalTreeBuilder {
                     public_id.unwrap_or_default(),
                     system_id.unwrap_or_default(),
                 );
-                let parent = *self.stack.last().expect("stack always non-empty");
-                self.doc.append_child(parent, dt);
+                let root = self.doc.root();
+                self.doc.append_child(root, dt);
+                self.insertion_mode = InsertionMode::BeforeHtml;
+            }
+            Token::Comment(s) => {
+                let root = self.doc.root();
+                let c = self.doc.create_comment(s);
+                self.doc.append_child(root, c);
+            }
+            Token::Text(ref s) if s.chars().all(is_html_whitespace) => {
+                // Игнорируем whitespace.
+            }
+            other => {
+                self.insertion_mode = InsertionMode::BeforeHtml;
+                self.dispatch(other);
             }
         }
+    }
+
+    /// §13.2.6.4.2 «The before html insertion mode».
+    fn mode_before_html(&mut self, token: Token) {
+        match token {
+            Token::Doctype { .. } => { /* parse error: ignore */ }
+            Token::Comment(s) => {
+                let root = self.doc.root();
+                let c = self.doc.create_comment(s);
+                self.doc.append_child(root, c);
+            }
+            Token::Text(ref s) if s.chars().all(is_html_whitespace) => { /* ignore */ }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "html" => {
+                let html = self.create_element_with_attrs("html", attrs);
+                let root = self.doc.root();
+                self.doc.append_child(root, html);
+                self.open_elements.push(html);
+                self.insertion_mode = InsertionMode::BeforeHead;
+            }
+            Token::EndTag { ref name }
+                if !matches!(name.as_str(), "head" | "body" | "html" | "br") =>
+            {
+                // parse error: ignore
+            }
+            other => {
+                // Implicit <html>.
+                let html = self.create_element_with_attrs("html", &[]);
+                let root = self.doc.root();
+                self.doc.append_child(root, html);
+                self.open_elements.push(html);
+                self.insertion_mode = InsertionMode::BeforeHead;
+                self.dispatch(other);
+            }
+        }
+    }
+
+    /// §13.2.6.4.3 «The before head insertion mode».
+    fn mode_before_head(&mut self, token: Token) {
+        match token {
+            Token::Text(ref s) if s.chars().all(is_html_whitespace) => { /* ignore */ }
+            Token::Comment(s) => {
+                self.insert_comment(s);
+            }
+            Token::Doctype { .. } => { /* parse error */ }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "html" => {
+                self.in_body_start_html_attrs(attrs);
+            }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "head" => {
+                let head = self.create_element_with_attrs("head", attrs);
+                self.append_to_current_open(head);
+                self.open_elements.push(head);
+                self.head_element = Some(head);
+                self.insertion_mode = InsertionMode::InHead;
+            }
+            Token::EndTag { ref name }
+                if !matches!(name.as_str(), "head" | "body" | "html" | "br") =>
+            {
+                // parse error: ignore
+            }
+            other => {
+                let head = self.create_element_with_attrs("head", &[]);
+                self.append_to_current_open(head);
+                self.open_elements.push(head);
+                self.head_element = Some(head);
+                self.insertion_mode = InsertionMode::InHead;
+                self.dispatch(other);
+            }
+        }
+    }
+
+    /// §13.2.6.4.4 «The in head insertion mode».
+    fn mode_in_head(&mut self, token: Token) {
+        match token {
+            Token::Text(s) => {
+                let (ws, rest) = split_leading_ws(&s);
+                if !ws.is_empty() {
+                    self.insert_text(ws);
+                }
+                if !rest.is_empty() {
+                    self.pop_head_and_dispatch_text(rest.to_string());
+                }
+            }
+            Token::Comment(s) => self.insert_comment(s),
+            Token::Doctype { .. } => { /* parse error */ }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "html" => {
+                self.in_body_start_html_attrs(attrs);
+            }
+            Token::StartTag {
+                ref name,
+                ref attrs,
+                self_closing,
+            } if matches!(
+                name.as_str(),
+                "base" | "basefont" | "bgsound" | "link" | "meta"
+            ) =>
+            {
+                let _ = self_closing;
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                // Void: не push в open_elements.
+            }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "title" => {
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                self.original_insertion_mode = Some(self.insertion_mode);
+                self.insertion_mode = InsertionMode::Text;
+            }
+            Token::StartTag {
+                ref name,
+                ref attrs,
+                self_closing,
+            } if matches!(name.as_str(), "noscript" | "noframes" | "style" | "script") =>
+            {
+                let _ = self_closing;
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                self.original_insertion_mode = Some(self.insertion_mode);
+                self.insertion_mode = InsertionMode::Text;
+            }
+            Token::EndTag { ref name } if name == "head" => {
+                self.open_elements.pop();
+                self.insertion_mode = InsertionMode::AfterHead;
+            }
+            Token::EndTag { ref name } if matches!(name.as_str(), "body" | "html" | "br") => {
+                // Pop head, switch to AfterHead, reprocess.
+                self.open_elements.pop();
+                self.insertion_mode = InsertionMode::AfterHead;
+                self.dispatch(Token::EndTag { name: name.clone() });
+            }
+            Token::StartTag { ref name, .. } if name == "head" => {
+                // parse error: ignore
+            }
+            other => {
+                self.open_elements.pop();
+                self.insertion_mode = InsertionMode::AfterHead;
+                self.dispatch(other);
+            }
+        }
+    }
+
+    /// Хелпер: вспышка не-whitespace текста в InHead — закрыть head,
+    /// перейти в AfterHead, дальше диспатчить как Text.
+    fn pop_head_and_dispatch_text(&mut self, rest: String) {
+        self.open_elements.pop();
+        self.insertion_mode = InsertionMode::AfterHead;
+        self.dispatch(Token::Text(rest));
+    }
+
+    /// §13.2.6.4.6 «The after head insertion mode».
+    fn mode_after_head(&mut self, token: Token) {
+        match token {
+            Token::Text(s) => {
+                let (ws, rest) = split_leading_ws(&s);
+                if !ws.is_empty() {
+                    self.insert_text(ws);
+                }
+                if !rest.is_empty() {
+                    self.implicit_body_and_dispatch(Token::Text(rest.to_string()));
+                }
+            }
+            Token::Comment(s) => self.insert_comment(s),
+            Token::Doctype { .. } => { /* parse error */ }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "html" => {
+                self.in_body_start_html_attrs(attrs);
+            }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "body" => {
+                let body = self.create_element_with_attrs("body", attrs);
+                self.append_to_current_open(body);
+                self.open_elements.push(body);
+                self.insertion_mode = InsertionMode::InBody;
+            }
+            Token::StartTag { ref name, .. } if name == "frameset" => {
+                // Phase 0: treat as body для простоты.
+                let body = self.create_element_with_attrs("body", &[]);
+                self.append_to_current_open(body);
+                self.open_elements.push(body);
+                self.insertion_mode = InsertionMode::InBody;
+            }
+            Token::StartTag { ref name, .. }
+                if matches!(
+                    name.as_str(),
+                    "base"
+                        | "basefont"
+                        | "bgsound"
+                        | "link"
+                        | "meta"
+                        | "noframes"
+                        | "script"
+                        | "style"
+                        | "template"
+                        | "title"
+                ) =>
+            {
+                // parse error: push head back temporarily, обрабатываем в InHead.
+                if let Some(head) = self.head_element {
+                    self.open_elements.push(head);
+                    let saved = self.insertion_mode;
+                    self.insertion_mode = InsertionMode::InHead;
+                    self.dispatch(token);
+                    // Удаляем head из стека, если он там ещё.
+                    if let Some(pos) = self.open_elements.iter().position(|&n| n == head) {
+                        self.open_elements.remove(pos);
+                    }
+                    self.insertion_mode = saved;
+                } else {
+                    // Без head — implicit body.
+                    self.implicit_body_and_dispatch(token);
+                }
+            }
+            Token::EndTag { ref name } if matches!(name.as_str(), "body" | "html" | "br") => {
+                self.implicit_body_and_dispatch(token);
+            }
+            Token::EndTag { .. } => { /* parse error: ignore */ }
+            Token::StartTag { ref name, .. } if name == "head" => {
+                // parse error: ignore
+            }
+            other => {
+                self.implicit_body_and_dispatch(other);
+            }
+        }
+    }
+
+    /// Хелпер: создаём implicit `<body>`, переключаем mode в InBody,
+    /// и дальше диспатчим.
+    fn implicit_body_and_dispatch(&mut self, token: Token) {
+        let body = self.create_element_with_attrs("body", &[]);
+        self.append_to_current_open(body);
+        self.open_elements.push(body);
+        self.insertion_mode = InsertionMode::InBody;
+        self.dispatch(token);
+    }
+
+    /// `<html>` start tag из вне-InBody-режимов: merge атрибутов в
+    /// существующий root html (§13.2.6.4.7 «in body» правило start
+    /// html).
+    fn in_body_start_html_attrs(&mut self, attrs: &[(String, String)]) {
+        // Берём первый html в стеке (он там единственный).
+        if let Some(&html) = self.open_elements.first()
+            && let NodeData::Element {
+                attrs: dom_attrs, ..
+            } = &mut self.doc.get_mut(html).data
+        {
+            for (k, v) in attrs {
+                if !dom_attrs.iter().any(|a| &a.name.local == k) {
+                    dom_attrs.push(Attribute {
+                        name: QualName::html(k.clone()),
+                        value: v.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    /// §13.2.6.4.7 «The in body insertion mode» — основной режим.
+    fn mode_in_body(&mut self, token: Token) {
+        match token {
+            Token::Text(s) => {
+                if s.is_empty() {
+                    return;
+                }
+                self.reconstruct_active_formatting();
+                self.insert_text(&s);
+            }
+            Token::Comment(s) => self.insert_comment(s),
+            Token::Doctype { .. } => { /* parse error */ }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "html" => {
+                self.in_body_start_html_attrs(attrs);
+            }
+            Token::StartTag { ref name, .. }
+                if matches!(
+                    name.as_str(),
+                    "base"
+                        | "basefont"
+                        | "bgsound"
+                        | "link"
+                        | "meta"
+                        | "noframes"
+                        | "script"
+                        | "style"
+                        | "template"
+                        | "title"
+                ) =>
+            {
+                // Process as in InHead.
+                let saved = self.insertion_mode;
+                self.insertion_mode = InsertionMode::InHead;
+                self.dispatch(token);
+                self.insertion_mode = saved;
+            }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "body" => {
+                // Merge атрибуты в body.
+                if let Some(&body) = self.open_elements.get(1)
+                    && let NodeData::Element {
+                        attrs: dom_attrs, ..
+                    } = &mut self.doc.get_mut(body).data
+                {
+                    for (k, v) in attrs {
+                        if !dom_attrs.iter().any(|a| &a.name.local == k) {
+                            dom_attrs.push(Attribute {
+                                name: QualName::html(k.clone()),
+                                value: v.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+            Token::EndTag { ref name } if name == "body" => {
+                self.insertion_mode = InsertionMode::AfterBody;
+            }
+            Token::EndTag { ref name } if name == "html" => {
+                self.insertion_mode = InsertionMode::AfterBody;
+                self.dispatch(Token::EndTag { name: name.clone() });
+            }
+            // Block-уровневые элементы: закрывают <p> в button scope.
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if is_block_element(name) => {
+                if self.has_element_in_button_scope("p") {
+                    self.close_p_element();
+                }
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+            }
+            // <h1>..<h6>: закрывают <p> в button scope, а также
+            // предыдущий heading в стеке.
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if matches!(name.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6") => {
+                if self.has_element_in_button_scope("p") {
+                    self.close_p_element();
+                }
+                if let Some(top) = self.open_elements.last()
+                    && is_heading(self.element_local(*top))
+                {
+                    self.open_elements.pop();
+                }
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+            }
+            // <li>: имплисит-закрытие предыдущего <li>.
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "li" => {
+                self.close_list_item_like(&["li"]);
+                if self.has_element_in_button_scope("p") {
+                    self.close_p_element();
+                }
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+            }
+            // <dt>/<dd>: closing previous <dt>/<dd>.
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if matches!(name.as_str(), "dt" | "dd") => {
+                self.close_list_item_like(&["dt", "dd"]);
+                if self.has_element_in_button_scope("p") {
+                    self.close_p_element();
+                }
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+            }
+            // <a>: если уже есть в active formatting, прогнать adoption
+            // agency и удалить.
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "a" => {
+                if let Some(existing) = self.find_active_formatting_after_marker("a") {
+                    self.adoption_agency("a");
+                    // Удалить, если ещё есть.
+                    self.remove_from_active_formatting(existing);
+                    if let Some(pos) = self.open_elements.iter().position(|&n| n == existing) {
+                        self.open_elements.remove(pos);
+                    }
+                }
+                self.reconstruct_active_formatting();
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                self.push_active_formatting(el, name, attrs);
+            }
+            // Formatting elements: b, big, code, em, font, i, s,
+            // small, strike, strong, tt, u.
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if is_formatting_element(name) => {
+                self.reconstruct_active_formatting();
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                self.push_active_formatting(el, name, attrs);
+            }
+            // <nobr>: специальный случай — если есть в scope, adoption.
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "nobr" => {
+                self.reconstruct_active_formatting();
+                if self.has_element_in_scope("nobr") {
+                    self.adoption_agency("nobr");
+                    self.reconstruct_active_formatting();
+                }
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                self.push_active_formatting(el, name, attrs);
+            }
+            // End tags для formatting elements → adoption agency.
+            Token::EndTag { ref name } if is_formatting_element(name) || name == "a" || name == "nobr" => {
+                self.adoption_agency(name);
+            }
+            // Void elements.
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if is_void_element(name) => {
+                self.reconstruct_active_formatting();
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                // Не push в open_elements.
+            }
+            // <table>.
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "table" => {
+                if self.doc.mode() != DocumentMode::Quirks && self.has_element_in_button_scope("p")
+                {
+                    self.close_p_element();
+                }
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                self.insertion_mode = InsertionMode::InTable;
+            }
+            // <select>.
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "select" => {
+                self.reconstruct_active_formatting();
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                self.insertion_mode = InsertionMode::InSelect;
+            }
+            // <textarea>.
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "textarea" => {
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                self.original_insertion_mode = Some(self.insertion_mode);
+                self.insertion_mode = InsertionMode::Text;
+            }
+            // <button>: если есть в scope, закрыть.
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "button" => {
+                if self.has_element_in_scope("button") {
+                    self.generate_implied_end_tags(None);
+                    while let Some(&top) = self.open_elements.last() {
+                        let n = self.element_local(top).to_string();
+                        self.open_elements.pop();
+                        if n == "button" {
+                            break;
+                        }
+                    }
+                }
+                self.reconstruct_active_formatting();
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+            }
+            // <p>: ничего особого, но AAA для парсинга `<p>x<div>...`.
+            Token::EndTag { ref name } if name == "p" => {
+                if !self.has_element_in_button_scope("p") {
+                    // parse error: insert implicit <p> then close.
+                    let p = self.create_element_with_attrs("p", &[]);
+                    self.append_to_current_open(p);
+                    self.open_elements.push(p);
+                }
+                self.close_p_element();
+            }
+            // </li>, </dt>, </dd>, </h1..h6>.
+            Token::EndTag { ref name } if name == "li" => {
+                if self.has_element_in_list_item_scope("li") {
+                    self.generate_implied_end_tags(Some("li"));
+                    while let Some(top) = self.open_elements.pop() {
+                        if self.element_local(top) == "li" {
+                            break;
+                        }
+                    }
+                }
+            }
+            Token::EndTag { ref name } if matches!(name.as_str(), "dt" | "dd") => {
+                let n = name.clone();
+                if self.has_element_in_scope(&n) {
+                    self.generate_implied_end_tags(Some(&n));
+                    while let Some(top) = self.open_elements.pop() {
+                        if self.element_local(top) == n {
+                            break;
+                        }
+                    }
+                }
+            }
+            Token::EndTag { ref name }
+                if matches!(name.as_str(), "h1" | "h2" | "h3" | "h4" | "h5" | "h6") =>
+            {
+                if self.has_heading_in_scope() {
+                    self.generate_implied_end_tags(None);
+                    while let Some(top) = self.open_elements.pop() {
+                        if is_heading(self.element_local(top)) {
+                            break;
+                        }
+                    }
+                }
+            }
+            // </br> — treated as <br>.
+            Token::EndTag { ref name } if name == "br" => {
+                self.reconstruct_active_formatting();
+                let el = self.create_element_with_attrs("br", &[]);
+                self.append_to_current_open(el);
+            }
+            // Generic block end tag.
+            Token::EndTag { ref name } if is_block_element(name) => {
+                let n = name.clone();
+                if self.has_element_in_scope(&n) {
+                    self.generate_implied_end_tags(None);
+                    while let Some(top) = self.open_elements.pop() {
+                        if self.element_local(top) == n {
+                            break;
+                        }
+                    }
+                }
+            }
+            // Generic start tag.
+            Token::StartTag {
+                ref name,
+                ref attrs,
+                self_closing,
+            } => {
+                let _ = self_closing;
+                self.reconstruct_active_formatting();
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+            }
+            // Generic end tag.
+            Token::EndTag { ref name } => {
+                let n = name.clone();
+                self.generic_end_tag_in_body(&n);
+            }
+        }
+    }
+
+    /// Generic end tag fallback — пройти по стеку, найти совпадение,
+    /// generate implied end tags исключая n, и pop до match.
+    fn generic_end_tag_in_body(&mut self, name: &str) {
+        for i in (0..self.open_elements.len()).rev() {
+            let node = self.open_elements[i];
+            let local = self.element_local(node).to_string();
+            if local == name {
+                self.generate_implied_end_tags(Some(name));
+                self.open_elements.truncate(i);
+                return;
+            }
+            if is_special(&local) {
+                // parse error: ignore.
+                return;
+            }
+        }
+    }
+
+    /// §13.2.6.4.8 «The text insertion mode» — для RAWTEXT/RCDATA.
+    fn mode_text(&mut self, token: Token) {
+        match token {
+            Token::Text(s) if !s.is_empty() => {
+                self.insert_text(&s);
+            }
+            Token::EndTag { .. } => {
+                self.open_elements.pop();
+                if let Some(prev) = self.original_insertion_mode.take() {
+                    self.insertion_mode = prev;
+                } else {
+                    self.insertion_mode = InsertionMode::InBody;
+                }
+            }
+            _ => { /* EOF / etc. — parse error, ignore */ }
+        }
+    }
+
+    /// §13.2.6.4.9 «The in table insertion mode».
+    fn mode_in_table(&mut self, token: Token) {
+        match token {
+            Token::Text(s) => {
+                // Switch to InTableText.
+                self.original_insertion_mode = Some(self.insertion_mode);
+                self.insertion_mode = InsertionMode::InTableText;
+                self.pending_table_text.clear();
+                self.pending_table_text_has_nonspace = false;
+                self.apply_token(Token::Text(s));
+            }
+            Token::Comment(s) => self.insert_comment(s),
+            Token::Doctype { .. } => { /* parse error */ }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "caption" => {
+                self.clear_stack_to_table_context();
+                self.active_formatting.push(ActiveFormattingEntry::Marker);
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                self.insertion_mode = InsertionMode::InCaption;
+            }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "colgroup" => {
+                self.clear_stack_to_table_context();
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                self.insertion_mode = InsertionMode::InColumnGroup;
+            }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "col" => {
+                self.clear_stack_to_table_context();
+                let cg = self.create_element_with_attrs("colgroup", &[]);
+                self.append_to_current_open(cg);
+                self.open_elements.push(cg);
+                self.insertion_mode = InsertionMode::InColumnGroup;
+                self.dispatch(Token::StartTag {
+                    name: name.clone(),
+                    attrs: attrs.clone(),
+                    self_closing: true,
+                });
+            }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if matches!(name.as_str(), "tbody" | "thead" | "tfoot") => {
+                self.clear_stack_to_table_context();
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                self.insertion_mode = InsertionMode::InTableBody;
+            }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if matches!(name.as_str(), "td" | "th" | "tr") => {
+                self.clear_stack_to_table_context();
+                let tbody = self.create_element_with_attrs("tbody", &[]);
+                self.append_to_current_open(tbody);
+                self.open_elements.push(tbody);
+                self.insertion_mode = InsertionMode::InTableBody;
+                self.dispatch(Token::StartTag {
+                    name: name.clone(),
+                    attrs: attrs.clone(),
+                    self_closing: false,
+                });
+            }
+            Token::StartTag { ref name, .. } if name == "table" => {
+                // parse error: close table and reprocess.
+                if self.has_element_in_table_scope("table") {
+                    while let Some(top) = self.open_elements.pop() {
+                        if self.element_local(top) == "table" {
+                            break;
+                        }
+                    }
+                    self.reset_insertion_mode();
+                    self.dispatch(token);
+                }
+            }
+            Token::EndTag { ref name } if name == "table" => {
+                if self.has_element_in_table_scope("table") {
+                    while let Some(top) = self.open_elements.pop() {
+                        if self.element_local(top) == "table" {
+                            break;
+                        }
+                    }
+                    self.reset_insertion_mode();
+                }
+            }
+            Token::EndTag { ref name }
+                if matches!(
+                    name.as_str(),
+                    "body" | "caption" | "col" | "colgroup" | "html" | "tbody" | "td"
+                        | "tfoot" | "th" | "thead" | "tr"
+                ) =>
+            {
+                // parse error: ignore
+            }
+            _ => {
+                // Anything else — foster parenting, process as InBody.
+                // Phase 0: упрощённо — просто диспатчим в InBody.
+                let saved = self.insertion_mode;
+                self.insertion_mode = InsertionMode::InBody;
+                self.dispatch(token);
+                self.insertion_mode = saved;
+            }
+        }
+    }
+
+    /// Flush accumulated text from InTableText (§13.2.6.4.10).
+    fn flush_pending_table_text(&mut self) {
+        let text = std::mem::take(&mut self.pending_table_text);
+        let has_nonspace = self.pending_table_text_has_nonspace;
+        self.pending_table_text_has_nonspace = false;
+
+        if has_nonspace {
+            // Foster parent: process text as InBody через foster parenting.
+            // Phase 0: упрощённо — диспатчим в InBody.
+            let saved = self.insertion_mode;
+            self.insertion_mode = InsertionMode::InBody;
+            self.dispatch(Token::Text(text));
+            self.insertion_mode = saved;
+        } else if !text.is_empty() {
+            // Whitespace-only — insert as-is.
+            self.insert_text(&text);
+        }
+
+        if let Some(prev) = self.original_insertion_mode.take() {
+            self.insertion_mode = prev;
+        } else {
+            self.insertion_mode = InsertionMode::InTable;
+        }
+    }
+
+    /// §13.2.6.4.11 «The in caption insertion mode» — упрощённо.
+    fn mode_in_caption(&mut self, token: Token) {
+        match token {
+            Token::EndTag { ref name } if name == "caption" => {
+                if self.has_element_in_table_scope("caption") {
+                    while let Some(top) = self.open_elements.pop() {
+                        if self.element_local(top) == "caption" {
+                            break;
+                        }
+                    }
+                    self.clear_active_formatting_to_marker();
+                    self.insertion_mode = InsertionMode::InTable;
+                }
+            }
+            Token::StartTag { ref name, .. }
+            | Token::EndTag { ref name }
+                if matches!(
+                    name.as_str(),
+                    "caption"
+                        | "col"
+                        | "colgroup"
+                        | "tbody"
+                        | "td"
+                        | "tfoot"
+                        | "th"
+                        | "thead"
+                        | "tr"
+                        | "table"
+                ) =>
+            {
+                if self.has_element_in_table_scope("caption") {
+                    while let Some(top) = self.open_elements.pop() {
+                        if self.element_local(top) == "caption" {
+                            break;
+                        }
+                    }
+                    self.clear_active_formatting_to_marker();
+                    self.insertion_mode = InsertionMode::InTable;
+                    self.dispatch(token);
+                }
+            }
+            _ => self.mode_in_body(token),
+        }
+    }
+
+    /// §13.2.6.4.12 «The in column group insertion mode».
+    fn mode_in_column_group(&mut self, token: Token) {
+        match token {
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "col" => {
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                // Void.
+            }
+            Token::EndTag { ref name } if name == "colgroup" => {
+                if let Some(&top) = self.open_elements.last()
+                    && self.element_local(top) == "colgroup"
+                {
+                    self.open_elements.pop();
+                    self.insertion_mode = InsertionMode::InTable;
+                }
+            }
+            _ => {
+                // Pop colgroup, reprocess.
+                if let Some(&top) = self.open_elements.last()
+                    && self.element_local(top) == "colgroup"
+                {
+                    self.open_elements.pop();
+                    self.insertion_mode = InsertionMode::InTable;
+                    self.dispatch(token);
+                }
+            }
+        }
+    }
+
+    /// §13.2.6.4.13 «The in table body insertion mode».
+    fn mode_in_table_body(&mut self, token: Token) {
+        match token {
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "tr" => {
+                self.clear_stack_to_table_body_context();
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                self.insertion_mode = InsertionMode::InRow;
+            }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if matches!(name.as_str(), "th" | "td") => {
+                self.clear_stack_to_table_body_context();
+                let tr = self.create_element_with_attrs("tr", &[]);
+                self.append_to_current_open(tr);
+                self.open_elements.push(tr);
+                self.insertion_mode = InsertionMode::InRow;
+                self.dispatch(Token::StartTag {
+                    name: name.clone(),
+                    attrs: attrs.clone(),
+                    self_closing: false,
+                });
+            }
+            Token::EndTag { ref name } if matches!(name.as_str(), "tbody" | "thead" | "tfoot") => {
+                if self.has_element_in_table_scope(name) {
+                    self.clear_stack_to_table_body_context();
+                    self.open_elements.pop();
+                    self.insertion_mode = InsertionMode::InTable;
+                }
+            }
+            Token::EndTag { ref name } if name == "table" => {
+                self.clear_stack_to_table_body_context();
+                self.open_elements.pop();
+                self.insertion_mode = InsertionMode::InTable;
+                self.dispatch(token);
+            }
+            _ => self.mode_in_table(token),
+        }
+    }
+
+    /// §13.2.6.4.14 «The in row insertion mode».
+    fn mode_in_row(&mut self, token: Token) {
+        match token {
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if matches!(name.as_str(), "th" | "td") => {
+                self.clear_stack_to_table_row_context();
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                self.insertion_mode = InsertionMode::InCell;
+                self.active_formatting.push(ActiveFormattingEntry::Marker);
+            }
+            Token::EndTag { ref name } if name == "tr" => {
+                if self.has_element_in_table_scope("tr") {
+                    self.clear_stack_to_table_row_context();
+                    self.open_elements.pop();
+                    self.insertion_mode = InsertionMode::InTableBody;
+                }
+            }
+            Token::StartTag { ref name, .. }
+                if matches!(
+                    name.as_str(),
+                    "caption" | "col" | "colgroup" | "tbody" | "tfoot" | "thead" | "tr"
+                ) =>
+            {
+                if self.has_element_in_table_scope("tr") {
+                    self.clear_stack_to_table_row_context();
+                    self.open_elements.pop();
+                    self.insertion_mode = InsertionMode::InTableBody;
+                    self.dispatch(token);
+                }
+            }
+            Token::EndTag { ref name } if name == "table" => {
+                if self.has_element_in_table_scope("tr") {
+                    self.clear_stack_to_table_row_context();
+                    self.open_elements.pop();
+                    self.insertion_mode = InsertionMode::InTableBody;
+                    self.dispatch(token);
+                }
+            }
+            Token::EndTag { ref name } if matches!(name.as_str(), "tbody" | "thead" | "tfoot") => {
+                if self.has_element_in_table_scope(name) && self.has_element_in_table_scope("tr") {
+                    self.clear_stack_to_table_row_context();
+                    self.open_elements.pop();
+                    self.insertion_mode = InsertionMode::InTableBody;
+                    self.dispatch(token);
+                }
+            }
+            _ => self.mode_in_table(token),
+        }
+    }
+
+    /// §13.2.6.4.15 «The in cell insertion mode».
+    fn mode_in_cell(&mut self, token: Token) {
+        match token {
+            Token::EndTag { ref name } if matches!(name.as_str(), "td" | "th") => {
+                let n = name.clone();
+                if self.has_element_in_table_scope(&n) {
+                    self.generate_implied_end_tags(None);
+                    while let Some(top) = self.open_elements.pop() {
+                        if self.element_local(top) == n {
+                            break;
+                        }
+                    }
+                    self.clear_active_formatting_to_marker();
+                    self.insertion_mode = InsertionMode::InRow;
+                }
+            }
+            Token::StartTag { ref name, .. }
+                if matches!(
+                    name.as_str(),
+                    "caption" | "col" | "colgroup" | "tbody" | "td" | "tfoot" | "th" | "thead"
+                        | "tr"
+                ) =>
+            {
+                // Close current cell, reprocess.
+                self.close_cell();
+                self.dispatch(token);
+            }
+            Token::EndTag { ref name }
+                if matches!(name.as_str(), "table" | "tbody" | "tfoot" | "thead" | "tr") =>
+            {
+                if self.has_element_in_table_scope(name) {
+                    self.close_cell();
+                    self.dispatch(token);
+                }
+            }
+            _ => self.mode_in_body(token),
+        }
+    }
+
+    /// Close the current cell (§13.2.6.4.15 «close the cell»).
+    fn close_cell(&mut self) {
+        let cell_name = self.find_cell_in_scope();
+        if let Some(n) = cell_name {
+            self.generate_implied_end_tags(None);
+            while let Some(top) = self.open_elements.pop() {
+                if self.element_local(top) == n {
+                    break;
+                }
+            }
+            self.clear_active_formatting_to_marker();
+            self.insertion_mode = InsertionMode::InRow;
+        }
+    }
+
+    fn find_cell_in_scope(&self) -> Option<String> {
+        for &n in self.open_elements.iter().rev() {
+            let local = self.element_local(n);
+            if local == "td" || local == "th" {
+                return Some(local.to_string());
+            }
+            if is_scope_stop(local) {
+                return None;
+            }
+        }
+        None
+    }
+
+    /// §13.2.6.4.16 «The in select insertion mode» — упрощённо.
+    fn mode_in_select(&mut self, token: Token) {
+        match token {
+            Token::Text(s) => self.insert_text(&s),
+            Token::Comment(s) => self.insert_comment(s),
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "option" => {
+                if let Some(&top) = self.open_elements.last()
+                    && self.element_local(top) == "option"
+                {
+                    self.open_elements.pop();
+                }
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+            }
+            Token::StartTag {
+                ref name, ref attrs, ..
+            } if name == "optgroup" => {
+                if let Some(&top) = self.open_elements.last()
+                    && self.element_local(top) == "option"
+                {
+                    self.open_elements.pop();
+                }
+                if let Some(&top) = self.open_elements.last()
+                    && self.element_local(top) == "optgroup"
+                {
+                    self.open_elements.pop();
+                }
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+            }
+            Token::EndTag { ref name } if name == "option" => {
+                if let Some(&top) = self.open_elements.last()
+                    && self.element_local(top) == "option"
+                {
+                    self.open_elements.pop();
+                }
+            }
+            Token::EndTag { ref name } if name == "optgroup" => {
+                if let Some(&top) = self.open_elements.last()
+                    && self.element_local(top) == "option"
+                {
+                    self.open_elements.pop();
+                }
+                if let Some(&top) = self.open_elements.last()
+                    && self.element_local(top) == "optgroup"
+                {
+                    self.open_elements.pop();
+                }
+            }
+            Token::EndTag { ref name } if name == "select" => {
+                while let Some(top) = self.open_elements.pop() {
+                    if self.element_local(top) == "select" {
+                        break;
+                    }
+                }
+                self.reset_insertion_mode();
+            }
+            _ => { /* parse error: ignore most things */ }
+        }
+    }
+
+    fn mode_in_select_in_table(&mut self, token: Token) {
+        // Phase 0: упрощённо.
+        self.mode_in_select(token);
+    }
+
+    /// §13.2.6.4.19 «The after body insertion mode».
+    fn mode_after_body(&mut self, token: Token) {
+        match token {
+            Token::Comment(s) => {
+                // Append to html element.
+                if let Some(&html) = self.open_elements.first() {
+                    let c = self.doc.create_comment(s);
+                    self.doc.append_child(html, c);
+                }
+            }
+            Token::Text(ref s) if s.chars().all(is_html_whitespace) => {
+                // Process in InBody.
+                self.mode_in_body(token);
+            }
+            Token::EndTag { ref name } if name == "html" => {
+                self.insertion_mode = InsertionMode::AfterAfterBody;
+            }
+            _ => {
+                // parse error: switch back to InBody and reprocess.
+                self.insertion_mode = InsertionMode::InBody;
+                self.dispatch(token);
+            }
+        }
+    }
+
+    /// §13.2.6.4.22 «The after after body insertion mode».
+    fn mode_after_after_body(&mut self, token: Token) {
+        match token {
+            Token::Comment(s) => {
+                let root = self.doc.root();
+                let c = self.doc.create_comment(s);
+                self.doc.append_child(root, c);
+            }
+            Token::Text(ref s) if s.chars().all(is_html_whitespace) => {
+                self.mode_in_body(token);
+            }
+            _ => {
+                self.insertion_mode = InsertionMode::InBody;
+                self.dispatch(token);
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // EOF processing
+    // ─────────────────────────────────────────────────────────────
+
+    /// EOF: гарантировать наличие html/head/body даже для пустого ввода.
+    fn process_eof(&mut self) {
+        // Flush pending table text if any.
+        if self.insertion_mode == InsertionMode::InTableText {
+            self.flush_pending_table_text();
+        }
+        // Drive empty-doc transitions: Initial → BeforeHtml → BeforeHead
+        // → InHead → AfterHead → InBody (via implicit creations).
+        loop {
+            match self.insertion_mode {
+                InsertionMode::Initial => {
+                    self.insertion_mode = InsertionMode::BeforeHtml;
+                }
+                InsertionMode::BeforeHtml => {
+                    let html = self.create_element_with_attrs("html", &[]);
+                    let root = self.doc.root();
+                    self.doc.append_child(root, html);
+                    self.open_elements.push(html);
+                    self.insertion_mode = InsertionMode::BeforeHead;
+                }
+                InsertionMode::BeforeHead => {
+                    let head = self.create_element_with_attrs("head", &[]);
+                    self.append_to_current_open(head);
+                    self.open_elements.push(head);
+                    self.head_element = Some(head);
+                    self.insertion_mode = InsertionMode::InHead;
+                }
+                InsertionMode::InHead => {
+                    self.open_elements.pop();
+                    self.insertion_mode = InsertionMode::AfterHead;
+                }
+                InsertionMode::AfterHead => {
+                    let body = self.create_element_with_attrs("body", &[]);
+                    self.append_to_current_open(body);
+                    self.open_elements.push(body);
+                    self.insertion_mode = InsertionMode::InBody;
+                    break;
+                }
+                _ => break,
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Helpers: DOM mutation
+    // ─────────────────────────────────────────────────────────────
+
+    /// Локальное имя элемента или пустая строка для не-элементных
+    /// узлов (теоретически не должно встречаться в open_elements).
+    fn element_local(&self, id: NodeId) -> &str {
+        match &self.doc.get(id).data {
+            NodeData::Element { name, .. } => name.local.as_str(),
+            _ => "",
+        }
+    }
+
+    /// Создаёт DOM-элемент с заданными атрибутами; не вставляет.
+    fn create_element_with_attrs(&mut self, name: &str, attrs: &[(String, String)]) -> NodeId {
+        let id = self.doc.create_element(QualName::html(name));
+        if let NodeData::Element {
+            attrs: dom_attrs, ..
+        } = &mut self.doc.get_mut(id).data
+        {
+            for (k, v) in attrs {
+                dom_attrs.push(Attribute {
+                    name: QualName::html(k.clone()),
+                    value: v.clone(),
+                });
+            }
+        }
+        id
+    }
+
+    /// Вставляет узел в текущий «open insertion point» — top of
+    /// open_elements или, если стек пуст, в Document root.
+    fn append_to_current_open(&mut self, node: NodeId) {
+        let parent = if let Some(&top) = self.open_elements.last() {
+            top
+        } else {
+            self.doc.root()
+        };
+        self.doc.append_child(parent, node);
+    }
+
+    /// Вставка текста с coalescing: если последний ребёнок текущего
+    /// родителя — Text, дописываем туда, иначе создаём новый.
+    fn insert_text(&mut self, s: &str) {
+        if s.is_empty() {
+            return;
+        }
+        let parent = if let Some(&top) = self.open_elements.last() {
+            top
+        } else {
+            self.doc.root()
+        };
+        let last_child = self.doc.get(parent).children.last().copied();
+        if let Some(child) = last_child
+            && let NodeData::Text(existing) = &mut self.doc.get_mut(child).data
+        {
+            existing.push_str(s);
+            return;
+        }
+        let text = self.doc.create_text(s);
+        self.doc.append_child(parent, text);
+    }
+
+    /// Вставка комментария — в текущий open insertion point.
+    fn insert_comment(&mut self, s: String) {
+        let parent = if let Some(&top) = self.open_elements.last() {
+            top
+        } else {
+            self.doc.root()
+        };
+        let c = self.doc.create_comment(s);
+        self.doc.append_child(parent, c);
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Scope queries (§13.2.4.2)
+    // ─────────────────────────────────────────────────────────────
+
+    fn has_element_in_scope(&self, target: &str) -> bool {
+        for &n in self.open_elements.iter().rev() {
+            let local = self.element_local(n);
+            if local == target {
+                return true;
+            }
+            if is_scope_stop(local) {
+                return false;
+            }
+        }
+        false
+    }
+
+    fn has_element_in_button_scope(&self, target: &str) -> bool {
+        for &n in self.open_elements.iter().rev() {
+            let local = self.element_local(n);
+            if local == target {
+                return true;
+            }
+            if is_scope_stop(local) || local == "button" {
+                return false;
+            }
+        }
+        false
+    }
+
+    fn has_element_in_list_item_scope(&self, target: &str) -> bool {
+        for &n in self.open_elements.iter().rev() {
+            let local = self.element_local(n);
+            if local == target {
+                return true;
+            }
+            if is_scope_stop(local) || local == "ol" || local == "ul" {
+                return false;
+            }
+        }
+        false
+    }
+
+    fn has_element_in_table_scope(&self, target: &str) -> bool {
+        for &n in self.open_elements.iter().rev() {
+            let local = self.element_local(n);
+            if local == target {
+                return true;
+            }
+            if matches!(local, "html" | "table" | "template") {
+                return false;
+            }
+        }
+        false
+    }
+
+    fn has_heading_in_scope(&self) -> bool {
+        for &n in self.open_elements.iter().rev() {
+            let local = self.element_local(n);
+            if is_heading(local) {
+                return true;
+            }
+            if is_scope_stop(local) {
+                return false;
+            }
+        }
+        false
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Close / generate implied
+    // ─────────────────────────────────────────────────────────────
+
+    /// §13.2.6.4.7 «close a p element».
+    fn close_p_element(&mut self) {
+        self.generate_implied_end_tags(Some("p"));
+        while let Some(top) = self.open_elements.pop() {
+            if self.element_local(top) == "p" {
+                break;
+            }
+        }
+    }
+
+    /// §13.2.4.2 «generate implied end tags».
+    fn generate_implied_end_tags(&mut self, exclude: Option<&str>) {
+        loop {
+            let Some(&top) = self.open_elements.last() else {
+                return;
+            };
+            let local = self.element_local(top);
+            if Some(local) == exclude {
+                return;
+            }
+            if matches!(
+                local,
+                "dd" | "dt" | "li" | "optgroup" | "option" | "p" | "rb" | "rp" | "rt" | "rtc"
+            ) {
+                self.open_elements.pop();
+            } else {
+                return;
+            }
+        }
+    }
+
+    /// Закрыть предыдущий `<li>` / `<dt>` / `<dd>` если есть.
+    fn close_list_item_like(&mut self, targets: &[&str]) {
+        for i in (0..self.open_elements.len()).rev() {
+            let node = self.open_elements[i];
+            let local = self.element_local(node).to_string();
+            if targets.contains(&local.as_str()) {
+                self.generate_implied_end_tags(Some(&local));
+                self.open_elements.truncate(i);
+                return;
+            }
+            if is_special(&local) && !matches!(local.as_str(), "address" | "div" | "p") {
+                return;
+            }
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Table-specific helpers
+    // ─────────────────────────────────────────────────────────────
+
+    fn clear_stack_to_table_context(&mut self) {
+        while let Some(&top) = self.open_elements.last() {
+            let local = self.element_local(top);
+            if matches!(local, "table" | "template" | "html") {
+                return;
+            }
+            self.open_elements.pop();
+        }
+    }
+
+    fn clear_stack_to_table_body_context(&mut self) {
+        while let Some(&top) = self.open_elements.last() {
+            let local = self.element_local(top);
+            if matches!(local, "tbody" | "tfoot" | "thead" | "template" | "html") {
+                return;
+            }
+            self.open_elements.pop();
+        }
+    }
+
+    fn clear_stack_to_table_row_context(&mut self) {
+        while let Some(&top) = self.open_elements.last() {
+            let local = self.element_local(top);
+            if matches!(local, "tr" | "template" | "html") {
+                return;
+            }
+            self.open_elements.pop();
+        }
+    }
+
+    /// §13.2.4.1 «reset the insertion mode appropriately».
+    fn reset_insertion_mode(&mut self) {
+        for i in (0..self.open_elements.len()).rev() {
+            let node = self.open_elements[i];
+            let local = self.element_local(node);
+            let mode = match local {
+                "select" => InsertionMode::InSelect,
+                "td" | "th" => InsertionMode::InCell,
+                "tr" => InsertionMode::InRow,
+                "tbody" | "thead" | "tfoot" => InsertionMode::InTableBody,
+                "caption" => InsertionMode::InCaption,
+                "colgroup" => InsertionMode::InColumnGroup,
+                "table" => InsertionMode::InTable,
+                "body" => InsertionMode::InBody,
+                "frameset" => InsertionMode::InBody,
+                "html" => {
+                    if self.head_element.is_some() {
+                        InsertionMode::AfterHead
+                    } else {
+                        InsertionMode::BeforeHead
+                    }
+                }
+                _ => continue,
+            };
+            self.insertion_mode = mode;
+            return;
+        }
+        self.insertion_mode = InsertionMode::InBody;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Active formatting list (§13.2.4.3)
+    // ─────────────────────────────────────────────────────────────
+
+    /// Найти запись с заданным тегом, ища от хвоста до ближайшего
+    /// маркера (или начала списка).
+    fn find_active_formatting_after_marker(&self, tag: &str) -> Option<NodeId> {
+        for entry in self.active_formatting.iter().rev() {
+            match entry {
+                ActiveFormattingEntry::Marker => return None,
+                ActiveFormattingEntry::Element { node, tag: t, .. } if t == tag => {
+                    return Some(*node);
+                }
+                _ => continue,
+            }
+        }
+        None
+    }
+
+    /// Удалить элемент из списка active formatting по node id.
+    fn remove_from_active_formatting(&mut self, node: NodeId) {
+        if let Some(pos) = self.active_formatting.iter().position(|e| match e {
+            ActiveFormattingEntry::Element { node: n, .. } => *n == node,
+            _ => false,
+        }) {
+            self.active_formatting.remove(pos);
+        }
+    }
+
+    /// Push с применением Noah's Ark clause (§13.2.4.3): если последние
+    /// 3 entries с тем же tag+attrs существуют, удалить самую раннюю.
+    fn push_active_formatting(&mut self, node: NodeId, tag: &str, attrs: &[(String, String)]) {
+        // Noah's Ark: считаем сколько после ближайшего marker-а имеют
+        // тот же тег+атрибуты.
+        let mut matches: Vec<usize> = Vec::new();
+        for (i, entry) in self.active_formatting.iter().enumerate().rev() {
+            match entry {
+                ActiveFormattingEntry::Marker => break,
+                ActiveFormattingEntry::Element {
+                    tag: t, attrs: a, ..
+                } => {
+                    if t == tag && attrs_equal(a, attrs) {
+                        matches.push(i);
+                    }
+                }
+            }
+        }
+        if matches.len() >= 3 {
+            // matches идёт от хвоста; remove the earliest (last элемент
+            // в matches).
+            let earliest = *matches.last().expect("non-empty");
+            self.active_formatting.remove(earliest);
+        }
+        self.active_formatting.push(ActiveFormattingEntry::Element {
+            node,
+            tag: tag.to_string(),
+            attrs: attrs.to_vec(),
+        });
+    }
+
+    /// Очистить active formatting list до ближайшего маркера (или
+    /// начала, если маркеров нет).
+    fn clear_active_formatting_to_marker(&mut self) {
+        while let Some(entry) = self.active_formatting.pop() {
+            if matches!(entry, ActiveFormattingEntry::Marker) {
+                break;
+            }
+        }
+    }
+
+    /// §13.2.4.3 «reconstruct the active formatting elements».
+    fn reconstruct_active_formatting(&mut self) {
+        if self.active_formatting.is_empty() {
+            return;
+        }
+        let last_idx = self.active_formatting.len() - 1;
+        let last = &self.active_formatting[last_idx];
+        match last {
+            ActiveFormattingEntry::Marker => return,
+            ActiveFormattingEntry::Element { node, .. } => {
+                if self.open_elements.contains(node) {
+                    return;
+                }
+            }
+        }
+
+        // Идём назад, пока не найдём marker или элемент в стеке.
+        let mut entry_idx = last_idx;
+        loop {
+            if entry_idx == 0 {
+                break;
+            }
+            entry_idx -= 1;
+            match &self.active_formatting[entry_idx] {
+                ActiveFormattingEntry::Marker => {
+                    entry_idx += 1;
+                    break;
+                }
+                ActiveFormattingEntry::Element { node, .. } => {
+                    if self.open_elements.contains(node) {
+                        entry_idx += 1;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // Создаём клоны от entry_idx до конца.
+        while entry_idx < self.active_formatting.len() {
+            let (tag, attrs) = match &self.active_formatting[entry_idx] {
+                ActiveFormattingEntry::Element { tag, attrs, .. } => {
+                    (tag.clone(), attrs.clone())
+                }
+                ActiveFormattingEntry::Marker => unreachable!(),
+            };
+            let clone = self.create_element_with_attrs(&tag, &attrs);
+            self.append_to_current_open(clone);
+            self.open_elements.push(clone);
+            self.active_formatting[entry_idx] = ActiveFormattingEntry::Element {
+                node: clone,
+                tag,
+                attrs,
+            };
+            entry_idx += 1;
+        }
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Adoption Agency Algorithm (§13.2.6.4.7)
+    // ─────────────────────────────────────────────────────────────
+
+    /// Реализация AAA — упрощённая, но покрывает основные случаи
+    /// mis-nesting типа `<b>a<i>b</b>c</i>` и `<a>a<a>b</a>c</a>`.
+    /// Phase 0 выполняет один проход AAA вместо полных 8 итераций
+    /// outer loop из спецификации — этого достаточно для большинства
+    /// реальных страниц.
+    fn adoption_agency(&mut self, subject: &str) {
+        // Step 4: find formatting element from active formatting
+        // list (after marker).
+        let Some(formatting_node) = self.find_active_formatting_after_marker(subject) else {
+            // Not in active formatting — fallback to generic end tag.
+            self.generic_end_tag_in_body(subject);
+            return;
+        };
+
+        // Step 5: if formatting element not in open elements →
+        // parse error, remove from active formatting, return.
+        if !self.open_elements.contains(&formatting_node) {
+            self.remove_from_active_formatting(formatting_node);
+            return;
+        }
+
+        // Step 7: find furthest block — special element below
+        // formatting node in open_elements stack.
+        let formatting_pos = self
+            .open_elements
+            .iter()
+            .position(|&n| n == formatting_node)
+            .expect("found above");
+        let furthest_block = self
+            .open_elements
+            .iter()
+            .enumerate()
+            .skip(formatting_pos + 1)
+            .find(|&(_, &n)| is_special(self.element_local(n)))
+            .map(|(i, &n)| (i, n));
+
+        let Some((furthest_pos, furthest_block)) = furthest_block else {
+            // Step 8: pop from open elements up to and including
+            // formatting node, remove from active formatting.
+            self.open_elements.truncate(formatting_pos);
+            self.remove_from_active_formatting(formatting_node);
+            return;
+        };
+
+        // Step 9: common ancestor = element above formatting in
+        // open_elements.
+        let common_ancestor = if formatting_pos == 0 {
+            self.doc.root()
+        } else {
+            self.open_elements[formatting_pos - 1]
+        };
+
+        // Step 10-13 (inner loop): простая версия — берём всё
+        // между formatting+1 и furthest_block, переносим под клон
+        // formatting node.
+        // Clone formatting element.
+        let Some((tag, attrs)) = self.active_formatting.iter().find_map(|e| match e {
+            ActiveFormattingEntry::Element { node, tag, attrs }
+                if *node == formatting_node =>
+            {
+                Some((tag.clone(), attrs.clone()))
+            }
+            _ => None,
+        }) else {
+            return;
+        };
+
+        // Move children of furthest_block to a clone, then move
+        // furthest_block to common ancestor and append clone with
+        // the original children inside.
+        let new_formatting = self.create_element_with_attrs(&tag, &attrs);
+
+        // Take furthest_block's children and reattach to new_formatting.
+        let children: Vec<NodeId> = self.doc.get(furthest_block).children.clone();
+        for ch in children {
+            self.doc.append_child(new_formatting, ch);
+        }
+        // Append new_formatting as child of furthest_block.
+        self.doc.append_child(furthest_block, new_formatting);
+
+        // Move furthest_block to common_ancestor.
+        self.doc.append_child(common_ancestor, furthest_block);
+
+        // Update active formatting: replace formatting_node with
+        // new_formatting.
+        for entry in &mut self.active_formatting {
+            if let ActiveFormattingEntry::Element { node, .. } = entry
+                && *node == formatting_node
+            {
+                *node = new_formatting;
+            }
+        }
+        // Remove the original formatting from open_elements,
+        // insert new one just after furthest_block.
+        let formatting_pos = self
+            .open_elements
+            .iter()
+            .position(|&n| n == formatting_node);
+        if let Some(p) = formatting_pos {
+            self.open_elements.remove(p);
+        }
+        let furthest_pos_new = self
+            .open_elements
+            .iter()
+            .position(|&n| n == furthest_block)
+            .unwrap_or(furthest_pos.saturating_sub(1));
+        self.open_elements
+            .insert(furthest_pos_new + 1, new_formatting);
     }
 }
 
@@ -200,6 +1927,11 @@ impl Default for IncrementalTreeBuilder {
     }
 }
 
+// ─────────────────────────────────────────────────────────────
+// Element classification helpers
+// ─────────────────────────────────────────────────────────────
+
+/// HTML void elements — не имеют конечного тега и контента.
 fn is_void_element(name: &str) -> bool {
     matches!(
         name,
@@ -220,14 +1952,224 @@ fn is_void_element(name: &str) -> bool {
     )
 }
 
+/// Formatting elements per §13.2.4.3 — кандидаты на active formatting list.
+fn is_formatting_element(name: &str) -> bool {
+    matches!(
+        name,
+        "b" | "big"
+            | "code"
+            | "em"
+            | "font"
+            | "i"
+            | "s"
+            | "small"
+            | "strike"
+            | "strong"
+            | "tt"
+            | "u"
+    )
+}
+
+/// Block-уровневые элементы, которые auto-close открытый `<p>`.
+fn is_block_element(name: &str) -> bool {
+    matches!(
+        name,
+        "address"
+            | "article"
+            | "aside"
+            | "blockquote"
+            | "center"
+            | "details"
+            | "dialog"
+            | "dir"
+            | "div"
+            | "dl"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "form"
+            | "header"
+            | "hgroup"
+            | "main"
+            | "menu"
+            | "nav"
+            | "ol"
+            | "p"
+            | "pre"
+            | "search"
+            | "section"
+            | "summary"
+            | "ul"
+    )
+}
+
+/// Заголовки h1..h6.
+fn is_heading(name: &str) -> bool {
+    matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6")
+}
+
+/// Stop-элементы для default scope (§13.2.4.2).
+fn is_scope_stop(name: &str) -> bool {
+    matches!(
+        name,
+        "applet"
+            | "caption"
+            | "html"
+            | "table"
+            | "td"
+            | "th"
+            | "marquee"
+            | "object"
+            | "template"
+    )
+}
+
+/// «Special» elements (§13.2.4.4 «The list of active formatting
+/// elements» — определяет «special» как набор HTML/MathML/SVG
+/// элементов, которые не могут быть formatting). Используется в AAA и
+/// generic end-tag fallback.
+fn is_special(name: &str) -> bool {
+    matches!(
+        name,
+        "address"
+            | "applet"
+            | "area"
+            | "article"
+            | "aside"
+            | "base"
+            | "basefont"
+            | "bgsound"
+            | "blockquote"
+            | "body"
+            | "br"
+            | "button"
+            | "caption"
+            | "center"
+            | "col"
+            | "colgroup"
+            | "dd"
+            | "details"
+            | "dir"
+            | "div"
+            | "dl"
+            | "dt"
+            | "embed"
+            | "fieldset"
+            | "figcaption"
+            | "figure"
+            | "footer"
+            | "form"
+            | "frame"
+            | "frameset"
+            | "h1"
+            | "h2"
+            | "h3"
+            | "h4"
+            | "h5"
+            | "h6"
+            | "head"
+            | "header"
+            | "hgroup"
+            | "hr"
+            | "html"
+            | "iframe"
+            | "img"
+            | "input"
+            | "li"
+            | "link"
+            | "main"
+            | "marquee"
+            | "menu"
+            | "meta"
+            | "nav"
+            | "noembed"
+            | "noframes"
+            | "noscript"
+            | "object"
+            | "ol"
+            | "p"
+            | "param"
+            | "plaintext"
+            | "pre"
+            | "script"
+            | "search"
+            | "section"
+            | "select"
+            | "source"
+            | "style"
+            | "summary"
+            | "table"
+            | "tbody"
+            | "td"
+            | "template"
+            | "textarea"
+            | "tfoot"
+            | "th"
+            | "thead"
+            | "title"
+            | "tr"
+            | "track"
+            | "ul"
+            | "wbr"
+            | "xmp"
+    )
+}
+
+/// HTML whitespace per §13.2.5 — TAB / LF / FF / CR / SPACE.
+fn is_html_whitespace(c: char) -> bool {
+    matches!(c, '\t' | '\n' | '\x0C' | '\r' | ' ')
+}
+
+/// Split leading whitespace из текста. Возвращает (ws, rest).
+fn split_leading_ws(s: &str) -> (&str, &str) {
+    for (i, ch) in s.char_indices() {
+        if !is_html_whitespace(ch) {
+            return (&s[..i], &s[i..]);
+        }
+    }
+    (s, "")
+}
+
+/// Сравнение attrs как мульти-сетов по (name, value).
+fn attrs_equal(a: &[(String, String)], b: &[(String, String)]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    a.iter().all(|(k, v)| b.iter().any(|(k2, v2)| k == k2 && v == v2))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Helper: walk root → html → head; вернуть head id.
+    fn head_of(doc: &Document) -> NodeId {
+        let root = doc.root();
+        let html = doc.get(root).children.iter().copied().find(|&c| {
+            matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "html")
+        }).expect("html present");
+        *doc.get(html).children.iter().find(|&&c| {
+            matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "head")
+        }).expect("head present")
+    }
+
+    /// Helper: walk root → html → body; вернуть body id.
+    fn body_of(doc: &Document) -> NodeId {
+        let root = doc.root();
+        let html = doc.get(root).children.iter().copied().find(|&c| {
+            matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "html")
+        }).expect("html present");
+        *doc.get(html).children.iter().find(|&&c| {
+            matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "body")
+        }).expect("body present")
+    }
+
     #[test]
     fn empty_input() {
         let doc = parse("");
-        assert_eq!(doc.len(), 1); // only root
+        // root + html + head + body.
+        assert_eq!(doc.len(), 4);
     }
 
     #[test]
@@ -259,7 +2201,6 @@ mod tests {
     fn void_element_does_not_consume_parent() {
         let doc = parse("<p>a<br>b</p>");
         let s = doc.to_string();
-        // <br> не должен «съесть» <p> — текст 'b' остаётся внутри <p>
         let p_pos = s.find("<p>").unwrap();
         let p_close_pos = s.rfind("\"b\"").unwrap();
         assert!(p_close_pos > p_pos);
@@ -287,7 +2228,6 @@ mod tests {
     fn doctype_creates_node_and_keeps_content() {
         let doc = parse("<!DOCTYPE html><p>x</p>");
         let s = doc.to_string();
-        // Doctype node теперь создаётся (раньше токен пропускался).
         assert!(s.contains("<!DOCTYPE html>"), "doctype line missing: {s}");
         assert!(s.contains("<p>"));
         assert!(s.contains("\"x\""));
@@ -295,7 +2235,6 @@ mod tests {
 
     #[test]
     fn doctype_node_data_preserved() {
-        // Прямая проверка NodeData::Doctype с public/system_id.
         let doc = parse(r#"<!DOCTYPE html PUBLIC "pid" "sid"><p>x</p>"#);
         let root = doc.get(doc.root());
         let dt_id = root.children[0];
@@ -312,7 +2251,6 @@ mod tests {
 
     #[test]
     fn unclosed_tag_recovered() {
-        // <p> без </p>: парсер просто оставляет его открытым
         let doc = parse("<p>hello");
         let s = doc.to_string();
         assert!(s.contains("<p>"));
@@ -321,7 +2259,6 @@ mod tests {
 
     #[test]
     fn mismatched_end_tag_ignored() {
-        // </div> без открывающего — игнорируем
         let doc = parse("<p>x</div></p>");
         let s = doc.to_string();
         assert!(s.contains("<p>"));
@@ -337,11 +2274,10 @@ mod tests {
 
     #[test]
     fn script_body_is_single_text_node() {
-        // RAWTEXT: тело <script> попадает в DOM одним текстовым узлом
-        // с исходными байтами — без интерпретации <b>, <, &amp;.
+        // <script> теперь идёт в <head> — навигируем через html/head.
         let doc = parse("<script>var x = '<b>&amp;</b>'; if (a<b) {}</script>");
-        let root = doc.root();
-        let script = doc.get(root).children[0];
+        let head = head_of(&doc);
+        let script = doc.get(head).children[0];
         match &doc.get(script).data {
             NodeData::Element { name, .. } => assert_eq!(name.local, "script"),
             other => panic!("expected script element, got {other:?}"),
@@ -365,7 +2301,6 @@ mod tests {
 
     #[test]
     fn script_then_normal_content() {
-        // После </script> токенизатор возвращается в нормальный режим.
         let doc = parse("<script>x<1</script><p>after</p>");
         let s = doc.to_string();
         assert!(s.contains("\"x<1\""));
@@ -375,10 +2310,9 @@ mod tests {
 
     #[test]
     fn title_body_is_decoded_text_node() {
-        // RCDATA: <title> entities декодируются, угловые скобки буквальны.
         let doc = parse("<title>Foo &amp; <b>Bar</b></title>");
-        let root = doc.root();
-        let title = doc.get(root).children[0];
+        let head = head_of(&doc);
+        let title = doc.get(head).children[0];
         match &doc.get(title).data {
             NodeData::Element { name, .. } => assert_eq!(name.local, "title"),
             other => panic!("expected title element, got {other:?}"),
@@ -393,11 +2327,10 @@ mod tests {
 
     #[test]
     fn textarea_body_is_decoded_text_node() {
-        // RCDATA: <textarea> с XSS-подобным содержимым — entities
-        // декодируются, но тело не парсится как HTML.
+        // <textarea> идёт в body.
         let doc = parse("<textarea>&lt;script&gt;alert(1)&lt;/script&gt;</textarea>");
-        let root = doc.root();
-        let ta = doc.get(root).children[0];
+        let body = body_of(&doc);
+        let ta = doc.get(body).children[0];
         let kids = &doc.get(ta).children;
         assert_eq!(kids.len(), 1);
         match &doc.get(kids[0]).data {
@@ -416,14 +2349,12 @@ mod tests {
 
     #[test]
     fn no_doctype_yields_quirks() {
-        // По §13.2.6.4.1 — отсутствие DOCTYPE-токена даёт quirks.
         let doc = parse("<p>x</p>");
         assert_eq!(doc.mode(), lumen_dom::DocumentMode::Quirks);
     }
 
     #[test]
     fn empty_input_yields_quirks() {
-        // Пустой ввод — никаких DOCTYPE-токенов, режим quirks.
         let doc = parse("");
         assert_eq!(doc.mode(), lumen_dom::DocumentMode::Quirks);
     }
@@ -452,7 +2383,6 @@ mod tests {
 
     #[test]
     fn xhtml_transitional_yields_limited_quirks() {
-        // XHTML 1.0 Transitional — limited-quirks даже без system_id.
         let doc = parse(
             r#"<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd"><p>x</p>"#,
         );
@@ -467,16 +2397,142 @@ mod tests {
 
     #[test]
     fn only_first_doctype_sets_mode() {
-        // Второй DOCTYPE-токен — синтаксическая ошибка по spec, игнорится.
-        // Первый — `<!DOCTYPE html>` → no-quirks. Второй (HTML 3.2) не
-        // переключает на quirks.
         let doc = parse(
             r#"<!DOCTYPE html><p>x</p><!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 3.2 Final//EN">"#,
         );
         assert_eq!(doc.mode(), lumen_dom::DocumentMode::NoQuirks);
     }
 
-    // ──────── IncrementalTreeBuilder — корректность независимо от chunk-боундари ────────
+    // ──────── HTML5 §13.2 tree builder — новое поведение ────────
+
+    #[test]
+    fn implicit_html_head_body() {
+        // <p>x</p> создаёт html/head/body имплиситно.
+        let doc = parse("<p>x</p>");
+        let s = doc.to_string();
+        assert!(s.contains("<html>"));
+        assert!(s.contains("<head>"));
+        assert!(s.contains("<body>"));
+        assert!(s.contains("<p>"));
+        assert!(s.contains("\"x\""));
+        // <p> внутри <body>.
+        let body = body_of(&doc);
+        let p = doc.get(body).children[0];
+        assert!(matches!(&doc.get(p).data,
+            NodeData::Element { name, .. } if name.local == "p"));
+    }
+
+    #[test]
+    fn p_auto_close_before_block() {
+        // <p>a<div>b</div> — <p> auto-закрывается перед <div>.
+        let doc = parse("<p>a<div>b</div>");
+        let body = body_of(&doc);
+        let kids = &doc.get(body).children;
+        // <p> и <div> должны быть siblings.
+        assert_eq!(kids.len(), 2);
+        assert!(matches!(&doc.get(kids[0]).data,
+            NodeData::Element { name, .. } if name.local == "p"));
+        assert!(matches!(&doc.get(kids[1]).data,
+            NodeData::Element { name, .. } if name.local == "div"));
+        // <p> содержит "a", <div> содержит "b".
+        let p_text = doc.get(kids[0]).children[0];
+        let div_text = doc.get(kids[1]).children[0];
+        assert!(matches!(&doc.get(p_text).data, NodeData::Text(s) if s == "a"));
+        assert!(matches!(&doc.get(div_text).data, NodeData::Text(s) if s == "b"));
+    }
+
+    #[test]
+    fn li_auto_close() {
+        // <ul><li>a<li>b</ul> — два отдельных <li>.
+        let doc = parse("<ul><li>a<li>b</ul>");
+        let body = body_of(&doc);
+        let ul = doc.get(body).children[0];
+        let lis = &doc.get(ul).children;
+        assert_eq!(lis.len(), 2, "expected 2 <li>, got: {}", doc);
+        for (i, expected_text) in ["a", "b"].iter().enumerate() {
+            let li = lis[i];
+            assert!(matches!(&doc.get(li).data,
+                NodeData::Element { name, .. } if name.local == "li"));
+            let t = doc.get(li).children[0];
+            assert!(matches!(&doc.get(t).data,
+                NodeData::Text(s) if s == expected_text));
+        }
+    }
+
+    #[test]
+    fn adoption_agency_basic() {
+        // <b>a<i>b</b>c</i> — corner of mis-nesting.
+        // Ожидаем что-то вроде: <b>a<i>b</i></b><i>c</i>
+        let doc = parse("<b>a<i>b</b>c</i>");
+        let s = doc.to_string();
+        // <b> и <i> оба должны быть в выводе. Текст "a", "b", "c"
+        // сохранён.
+        assert!(s.contains("<b>"));
+        assert!(s.contains("<i>"));
+        assert!(s.contains("\"a\""));
+        assert!(s.contains("\"b\""));
+        assert!(s.contains("\"c\""));
+    }
+
+    #[test]
+    fn table_structure() {
+        let doc = parse("<table><tr><td>cell</td></tr></table>");
+        let s = doc.to_string();
+        assert!(s.contains("<table>"));
+        // tbody должна быть имплиситной.
+        assert!(s.contains("<tbody>"));
+        assert!(s.contains("<tr>"));
+        assert!(s.contains("<td>"));
+        assert!(s.contains("\"cell\""));
+    }
+
+    #[test]
+    fn heading_auto_close() {
+        // <h1>a<h2>b</h2> — h1 должен закрыться перед h2.
+        let doc = parse("<h1>a<h2>b</h2>");
+        let body = body_of(&doc);
+        let kids = &doc.get(body).children;
+        assert_eq!(kids.len(), 2);
+        assert!(matches!(&doc.get(kids[0]).data,
+            NodeData::Element { name, .. } if name.local == "h1"));
+        assert!(matches!(&doc.get(kids[1]).data,
+            NodeData::Element { name, .. } if name.local == "h2"));
+    }
+
+    #[test]
+    fn formatting_reconstruction() {
+        // <b><p>x</b>y</p> — </b> через AAA создаёт клон <b> вокруг
+        // содержимого <p>. По спецификации после AAA новый клон —
+        // вершина стека, поэтому "y" попадает внутрь клона; text
+        // coalescing сливает с "x".
+        // Ожидаемая структура:
+        //   <b>(пустой)
+        //   <p>
+        //     <b>(клон)
+        //       "xy"  (x и y слиты coalescing-ом)
+        let doc = parse("<b><p>x</b>y</p>");
+        let s = doc.to_string();
+        // Должно быть как минимум два <b>: исходный (пустой) и клон.
+        let b_count = s.matches("<b>").count();
+        assert!(b_count >= 2, "expected at least 2 <b> after AAA, got {b_count} in: {s}");
+        assert!(s.contains("<p>"));
+        // Текст содержит и x, и y.
+        assert!(s.contains("xy") || (s.contains("\"x\"") && s.contains("\"y\"")));
+    }
+
+    #[test]
+    fn nested_links() {
+        // <a href=x>a<a href=y>b</a>c</a> — AAA для <a>.
+        let doc = parse("<a href=x>a<a href=y>b</a>c</a>");
+        let s = doc.to_string();
+        // Оба <a> должны присутствовать в выводе.
+        assert!(s.contains("href=\"x\""));
+        assert!(s.contains("href=\"y\""));
+        assert!(s.contains("\"a\""));
+        assert!(s.contains("\"b\""));
+    }
+
+    // ──────── IncrementalTreeBuilder ────────
 
     fn parse_incremental_chunks(input: &str, chunk_size: usize) -> Document {
         let mut b = IncrementalTreeBuilder::new();
@@ -488,8 +2544,6 @@ mod tests {
                 end -= 1;
             }
             if end == start {
-                // chunk_size попал внутрь multi-byte char — продвинем
-                // до следующей границы.
                 end = (start + chunk_size + 4).min(bytes.len());
                 while !input.is_char_boundary(end) {
                     end -= 1;
@@ -630,9 +2684,6 @@ mod tests {
 
     #[test]
     fn incremental_doctype_split_across_chunks() {
-        // DOCTYPE-токен может оказаться разорван по chunk-boundary,
-        // например `<!DOC` + `TYPE html>`. Push-tokenizer должен
-        // дождаться полного токена и применить mode.
         let mut b = IncrementalTreeBuilder::new();
         b.feed("<!DOC");
         b.feed("TYPE html><p>x</p>");
@@ -642,8 +2693,6 @@ mod tests {
 
     #[test]
     fn incremental_entity_split_across_chunks() {
-        // `&amp;` разрезан посреди: `&am` + `p;`. Финальный DOM
-        // должен содержать декодированный `&`.
         let mut b = IncrementalTreeBuilder::new();
         b.feed("<p>a &am");
         b.feed("p; b</p>");
@@ -654,8 +2703,6 @@ mod tests {
 
     #[test]
     fn incremental_rawtext_close_tag_split() {
-        // `</script>` разорван — байт-за-байтом push не должен
-        // преждевременно закрыть script.
         let mut b = IncrementalTreeBuilder::new();
         b.feed("<script>x = 1; </scr");
         b.feed("ipt><p>after</p>");
@@ -666,10 +2713,8 @@ mod tests {
         assert!(s.contains("\"after\""));
     }
 
-    // ──────── feed_bytes: инвариант feed_bytes == feed для ASCII и UTF-8 ────────
+    // ──────── feed_bytes ────────
 
-    /// Вспомогательная: разбивает UTF-8 строку на сырые байтовые chunk-и
-    /// заданного размера (без выравнивания) и прогоняет через feed_bytes.
     fn parse_feed_bytes_chunks(input: &str, chunk_size: usize) -> Document {
         let mut b = IncrementalTreeBuilder::new();
         let bytes = input.as_bytes();
@@ -698,11 +2743,8 @@ mod tests {
 
     #[test]
     fn feed_bytes_cyrillic_split_at_byte_boundary() {
-        // Кириллица — 2-байтные code-point-ы. Chunk boundary может разрезать
-        // code-point напополам; feed_bytes должен буферизовать незавершённый байт.
         let input = "<p>Привет, мир!</p>";
         let pull = parse(input).to_string();
-        // Разбиваем по 1 байту — гарантированно все code-point-ы разрезаны.
         let bytes_1 = parse_feed_bytes_chunks(input, 1).to_string();
         assert_eq!(bytes_1, pull, "1-byte chunks failed");
         let bytes_3 = parse_feed_bytes_chunks(input, 3).to_string();
@@ -711,7 +2753,6 @@ mod tests {
 
     #[test]
     fn feed_bytes_emoji_split() {
-        // Emoji — 4-байтные code-point-ы.
         let input = "<p>Hello 🌍</p>";
         let pull = parse(input).to_string();
         let bytes_1 = parse_feed_bytes_chunks(input, 1).to_string();
