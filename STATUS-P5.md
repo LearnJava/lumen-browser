@@ -1,6 +1,3 @@
-In progress: fix-border-style-dashed  branch: p5-fix-border-style-dashed
-Next step: dash ratio (2w,w)→(3w,3w) + corner trimming в renderer.rs
-
 Role: P5 owns ALL bug fixes across the entire codebase.
   P1/P2/P3/P4 do NOT fix bugs — they build new features only.
   When P1–P4 discover a bug while implementing: add it to BUGS.md as OPEN,
@@ -14,14 +11,15 @@ Role: P5 owns ALL bug fixes across the entire codebase.
   5. Clippy clean → cargo test → commit
 
 Next:
-- fix-border-style-dashed: TEST-21 — border-style dashed/dotted алгоритм (текущий вариант оставляет артефакты)
+- Run `python graphic_tests/run.py --continue-on-fail` to find next failing test
 
 Queue (новые баги по мере появления):
 - Запускать `python graphic_tests/run.py --continue-on-fail` после каждого мержа P1–P4
 - Новые провалы → добавить в BUGS.md + в этот Queue
 - Следить за регрессиями: если ранее PASS тест упал → приоритет выше нового бага
 
-Recent: fix-list-markers-test32 — BUG-038 FIXED 2026-05-26 (list-style-position: inside; inside_marker_w индент; маркер и InlineRun на одной строке; flex-ряд 123px→78px; 1838/1838 тестов)
+Recent: fix-circle-sdf-aa — BUG-039 FIXED 2026-05-26 (dashed/dotted: Skia dash algo n=floor(total/period)+leading=gap/2; dotted corners→circle quads; dashed spans full side; 1px linear SDF AA)
+Previous: fix-list-markers-test32 — BUG-038 FIXED 2026-05-26 (list-style-position: inside; inside_marker_w индент; маркер и InlineRun на одной строке; flex-ряд 123px→78px; 1838/1838 тестов)
 Previous: fix-bug036-border-radius-pct — BUG-036 FIXED 2026-05-26 (border_*_radius поля f32→Length; parse_radius_length откладывает % до paint-time; CornerRadii::from_style_and_box резолвит по border-box; 20/20 тестов)
 Previous: fix-bug028-resize — BUG-028 FIXED 2026-05-26 (guard Resized(0,0) в shell + defensive guard в relayout(); root cause BUG-027 уже устранён)
 Previous: fix-bug020-overflow-axis — BUG-020 FIXED 2026-05-26 (CSS Overflow L3 §2.1 visible→auto coercion в compute_style; TEST-14: 1.70%→0.03% PASS)
