@@ -1,4 +1,5 @@
-In progress: —
+In progress: html-loading-lazy  branch: p1-html-loading-lazy
+Next step: is_lazy field в ImageRequest + parse loading attr  box_tree.rs:88
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -8,8 +9,7 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
 Next:
-- css-has-selector: `:has(S)` matching algorithm в layout/src/selector.rs — парсер готов (css-parser), matching не реализован
-- html-loading-lazy: `loading="lazy"` — P1-часть: emit IntersectionObserver event source при добавлении <img loading=lazy> в flat tree; координация с P3 (JS-сторона готова)
+- css-first-line-letter: `::first-line` / `::first-letter` split в collect_inline_segments (box_tree.rs); expose pseudo kind → // CSS: ::first-line, ::first-letter — P4 wires styles
 - css-first-line-letter: `::first-line` / `::first-letter` split в collect_inline_segments (box_tree.rs); expose pseudo kind → // CSS: ::first-line, ::first-letter — P4 wires styles
 - form-submit: полный алгоритм form submission (action= + method=GET/POST + URLSearchParams encoding) → Event «FormSubmit» в EventSink
 - html-template-content: `<template>` element — парсить content во fragment (DocumentFragment, inert subtree), attach при clone; нужно для Web Components
