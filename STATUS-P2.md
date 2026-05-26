@@ -1,10 +1,9 @@
-In progress: picture-srcset-gpu  branch: p2-picture-srcset-gpu
-Next step: supported_mime_types() в lumen-image + wire в resolve_image_source  crates/engine/image/src/lib.rs:1
+In progress: —
+Next step: —
 
 Bug fixes rule: P2 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
 Next:
-- picture-srcset-gpu: <picture>/srcset P2-часть — GPU texture upload для picked source + интеграция с shell ImageLoader (P1-парсер готов, P3-shell hook готов)
 - webp-decoder: WebP decoder (VP8 lossy baseline + VP8L lossless, pure-Rust); за trait ImageDecoder в lumen-core::ext; интегрировать в lumen-image dispatch
 - gif-decoder: GIF87a/89a decoder (LZW + frame loop); статичные кадры (frame 0); анимация — Wave 3
 - font-stretch-matcher: font-stretch percentage matching в FontRegistry::find_best_match (CSS Fonts L4 §5.2 stretch selection algorithm)
@@ -18,4 +17,4 @@ Queue (Wave 3+):
 - subpixel-text: subpixel LCD rendering — RGB-stripe фильтр; toggleable через prefers-reduced-motion
 - svg-rasterizer: SVG basic shapes рендеринг (path/circle/rect) через paint pipeline; Phase 2
 
-Recent: bug037-filter-uniform 2026-05-26, bug015-img-alt 2026-05-25, gradient-rendering 2026-05-22, border-radius-sdf 2026-05-22, bug033-box-shadow-blur 2026-05-22, animation-transition-engine 2026-05-22, multi-column-rendering 2026-05-22, @font-face-loading 2026-05-22, canvas2d-context 2026-05-22, woff2-decoder 2026-05-22, clip-path-rendering 2026-05-22, css-filter-pipeline 2026-05-22, bug017-018-closed 2026-05-22, bug032-area-avg 2026-05-22
+Recent: picture-srcset-gpu 2026-05-27, bug037-filter-uniform 2026-05-26, bug015-img-alt 2026-05-25, gradient-rendering 2026-05-22, border-radius-sdf 2026-05-22, bug033-box-shadow-blur 2026-05-22, animation-transition-engine 2026-05-22, multi-column-rendering 2026-05-22, @font-face-loading 2026-05-22, canvas2d-context 2026-05-22, woff2-decoder 2026-05-22, clip-path-rendering 2026-05-22, css-filter-pipeline 2026-05-22, bug017-018-closed 2026-05-22
