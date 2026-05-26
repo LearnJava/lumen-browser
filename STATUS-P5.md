@@ -1,4 +1,5 @@
-In progress: —
+In progress: fix-border-style-dashed  branch: p5-fix-border-style-dashed
+Next step: dash ratio (2w,w)→(3w,3w) + corner trimming в renderer.rs
 
 Role: P5 owns ALL bug fixes across the entire codebase.
   P1/P2/P3/P4 do NOT fix bugs — they build new features only.
@@ -13,9 +14,6 @@ Role: P5 owns ALL bug fixes across the entire codebase.
   5. Clippy clean → cargo test → commit
 
 Next:
-- fix-direction-rtl-test27: TEST-27 9.35% — RTL text alignment; layout TextAlign::Start/End mirror logic
-- fix-border-style-dashed: TEST-21 — border-style dashed/dotted алгоритм (текущий вариант оставляет артефакты)
-- fix-direction-rtl-test27: TEST-27 9.35% — RTL text alignment; layout TextAlign::Start/End mirror logic
 - fix-border-style-dashed: TEST-21 — border-style dashed/dotted алгоритм (текущий вариант оставляет артефакты)
 
 Queue (новые баги по мере появления):

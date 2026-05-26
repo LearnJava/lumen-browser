@@ -3155,37 +3155,77 @@ impl Renderer {
 
                     if radii.all_zero() {
                         // CSS Backgrounds L3 §6.3 — прямоугольные рёбра без угловых дуг.
+                        // Каждая сторона укорочена на corner-квадраты, чтобы dash/dot
+                        // паттерн шёл только вдоль прямого участка (как в Chrome/Edge).
+                        // Угловые квадраты всегда solid.
+                        let ct_arr = apply_alpha_to_color(color_to_array(ct), alpha);
+                        let cr_arr = apply_alpha_to_color(color_to_array(cr), alpha);
+                        let cb_arr = apply_alpha_to_color(color_to_array(cb), alpha);
+                        let cl_arr = apply_alpha_to_color(color_to_array(cl), alpha);
+
+                        // Top side (straight portion, trimmed by TL and TR corner squares).
                         if *wt > 0.0 {
-                            emit_border_side(
-                                &mut fill_vertices, &mut circle_vertices,
-                                Rect::new(r.x, r.y, r.width, *wt),
-                                true, *wt,
-                                apply_alpha_to_color(color_to_array(ct), alpha), *st,
-                            );
+                            let x0 = r.x + *wl;
+                            let x1 = r.x + r.width - *wr;
+                            if x1 > x0 {
+                                emit_border_side(
+                                    &mut fill_vertices, &mut circle_vertices,
+                                    Rect::new(x0, r.y, x1 - x0, *wt),
+                                    true, *wt, ct_arr, *st,
+                                );
+                            }
+                            // TL corner solid fill (top border color).
+                            if *wl > 0.0 {
+                                push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, *wl, *wt), ct_arr);
+                            }
+                            // TR corner solid fill (top border color).
+                            if *wr > 0.0 {
+                                push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - *wr, r.y, *wr, *wt), ct_arr);
+                            }
                         }
+                        // Right side (straight portion, trimmed by TR and BR corner squares).
                         if *wr > 0.0 {
-                            emit_border_side(
-                                &mut fill_vertices, &mut circle_vertices,
-                                Rect::new(r.x + r.width - wr, r.y, *wr, r.height),
-                                false, *wr,
-                                apply_alpha_to_color(color_to_array(cr), alpha), *sr,
-                            );
+                            let y0 = r.y + *wt;
+                            let y1 = r.y + r.height - *wb;
+                            if y1 > y0 {
+                                emit_border_side(
+                                    &mut fill_vertices, &mut circle_vertices,
+                                    Rect::new(r.x + r.width - *wr, y0, *wr, y1 - y0),
+                                    false, *wr, cr_arr, *sr,
+                                );
+                            }
                         }
+                        // Bottom side (straight portion, trimmed by BL and BR corner squares).
                         if *wb > 0.0 {
-                            emit_border_side(
-                                &mut fill_vertices, &mut circle_vertices,
-                                Rect::new(r.x, r.y + r.height - wb, r.width, *wb),
-                                true, *wb,
-                                apply_alpha_to_color(color_to_array(cb), alpha), *sb,
-                            );
+                            let x0 = r.x + *wl;
+                            let x1 = r.x + r.width - *wr;
+                            if x1 > x0 {
+                                emit_border_side(
+                                    &mut fill_vertices, &mut circle_vertices,
+                                    Rect::new(x0, r.y + r.height - *wb, x1 - x0, *wb),
+                                    true, *wb, cb_arr, *sb,
+                                );
+                            }
+                            // BL corner solid fill (bottom border color).
+                            if *wl > 0.0 {
+                                push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y + r.height - *wb, *wl, *wb), cb_arr);
+                            }
+                            // BR corner solid fill (bottom border color).
+                            if *wr > 0.0 {
+                                push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - *wr, r.y + r.height - *wb, *wr, *wb), cb_arr);
+                            }
                         }
+                        // Left side (straight portion, trimmed by TL and BL corner squares).
                         if *wl > 0.0 {
-                            emit_border_side(
-                                &mut fill_vertices, &mut circle_vertices,
-                                Rect::new(r.x, r.y, *wl, r.height),
-                                false, *wl,
-                                apply_alpha_to_color(color_to_array(cl), alpha), *sl,
-                            );
+                            let y0 = r.y + *wt;
+                            let y1 = r.y + r.height - *wb;
+                            if y1 > y0 {
+                                emit_border_side(
+                                    &mut fill_vertices, &mut circle_vertices,
+                                    Rect::new(r.x, y0, *wl, y1 - y0),
+                                    false, *wl, cl_arr, *sl,
+                                );
+                            }
                         }
                     } else {
                         // CSS Backgrounds L3 §5 + §6.3 — стороны укорочены у углов;
@@ -5827,8 +5867,9 @@ fn emit_border_side(
     let total = if horizontal { side_rect.width } else { side_rect.height };
     match style {
         BorderStyle::Dashed => {
-            let dash_len = (width * 2.0).max(1.0);
-            let gap_len = width.max(1.0);
+            // 3:3 ratio matches Chrome/Edge (Skia) behavior: dash=3w, gap=3w.
+            let dash_len = (width * 3.0).max(1.0);
+            let gap_len = (width * 3.0).max(1.0);
             for (offset, len) in dash_segments(total, dash_len, gap_len) {
                 let seg = if horizontal {
                     Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
@@ -5839,7 +5880,7 @@ fn emit_border_side(
             }
         }
         BorderStyle::Dotted => {
-            // CSS Backgrounds L3 §4.5: dots are round (circles).
+            // CSS Backgrounds L3 §4.5: dots are round (circles), 1:1 ratio.
             let dot_len = width.max(1.0);
             for (offset, len) in dash_segments(total, dot_len, dot_len) {
                 let seg = if horizontal {
@@ -5895,8 +5936,8 @@ fn emit_outline_side(
     let total = if horizontal { side_rect.width } else { side_rect.height };
     match style {
         OutlineStyle::Dashed => {
-            let dash_len = (width * 2.0).max(1.0);
-            let gap_len = width.max(1.0);
+            let dash_len = (width * 3.0).max(1.0);
+            let gap_len = (width * 3.0).max(1.0);
             for (offset, len) in dash_segments(total, dash_len, gap_len) {
                 let seg = if horizontal {
                     Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
@@ -6480,7 +6521,7 @@ mod tests {
 
     #[test]
     fn emit_border_side_dashed_produces_multiple_quads() {
-        // width=4 → dash=8, gap=4; side 100 wide → several segments.
+        // width=4 → dash=12, gap=12 (3:3 ratio); side 100 wide → several segments.
         let r = Rect::new(0.0, 0.0, 100.0, 4.0);
         let quads = collect_border_fill_quads(r, true, 4.0, BorderStyle::Dashed);
         assert!(quads.len() > 1, "dashed must produce multiple segments");
