@@ -1,4 +1,5 @@
-In progress: —
+In progress: CSS Transitions sync() wire-up fix  branch: p4-transitions-fix
+Next step: compile + tests  shell/src/main.rs:1922
 
 Next:
 
