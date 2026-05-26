@@ -1836,24 +1836,26 @@ pub struct ComputedStyle {
     /// CSS Compositing & Blending L1 §3.1 — `mix-blend-mode`. Не наследуется.
     /// Любое значение, отличное от `Normal`, создаёт stacking context.
     pub mix_blend_mode: MixBlendMode,
-    /// CSS Backgrounds L3 §5.5: horizontal (x) corner radius, resolved px. Not inherited.
-    pub border_top_left_radius: f32,
-    /// CSS Backgrounds L3 §5.5: horizontal (x) corner radius, resolved px. Not inherited.
-    pub border_top_right_radius: f32,
-    /// CSS Backgrounds L3 §5.5: horizontal (x) corner radius, resolved px. Not inherited.
-    pub border_bottom_right_radius: f32,
-    /// CSS Backgrounds L3 §5.5: horizontal (x) corner radius, resolved px. Not inherited.
-    pub border_bottom_left_radius: f32,
-    /// CSS Backgrounds L3 §5.5: vertical (y) corner radius, resolved px. Equals x-radius
-    /// for circular corners (`border-radius: 10px`); differs for elliptical corners
-    /// (`border-radius: 10px / 20px` or `border-top-left-radius: 10px 20px`). Not inherited.
-    pub border_top_left_radius_y: f32,
+    /// CSS Backgrounds L3 §5.5: horizontal (x) corner radius. Stored as `Length::Px` for
+    /// absolute/em/rem values (resolved at cascade time) or `Length::Percent` for `%`
+    /// (resolved at paint time against border-box width). Not inherited.
+    pub border_top_left_radius: Length,
+    /// CSS Backgrounds L3 §5.5: horizontal (x) corner radius. See `border_top_left_radius`.
+    pub border_top_right_radius: Length,
+    /// CSS Backgrounds L3 §5.5: horizontal (x) corner radius. See `border_top_left_radius`.
+    pub border_bottom_right_radius: Length,
+    /// CSS Backgrounds L3 §5.5: horizontal (x) corner radius. See `border_top_left_radius`.
+    pub border_bottom_left_radius: Length,
+    /// CSS Backgrounds L3 §5.5: vertical (y) corner radius. Equals x-radius for circular corners
+    /// (`border-radius: 10px`); differs for elliptical (`border-radius: 10px / 20px`). `%` is
+    /// resolved against border-box **height** at paint time. Not inherited.
+    pub border_top_left_radius_y: Length,
     /// CSS Backgrounds L3 §5.5: vertical (y) corner radius. See `border_top_left_radius_y`.
-    pub border_top_right_radius_y: f32,
+    pub border_top_right_radius_y: Length,
     /// CSS Backgrounds L3 §5.5: vertical (y) corner radius. See `border_top_left_radius_y`.
-    pub border_bottom_right_radius_y: f32,
+    pub border_bottom_right_radius_y: Length,
     /// CSS Backgrounds L3 §5.5: vertical (y) corner radius. See `border_top_left_radius_y`.
-    pub border_bottom_left_radius_y: f32,
+    pub border_bottom_left_radius_y: Length,
     /// CSS Display L3 §4 — visibility. Inherited.
     pub visibility: Visibility,
     /// CSS UI L4 §8.1 — cursor. Inherited.
@@ -3926,14 +3928,14 @@ impl ComputedStyle {
             clear: ClearSide::None,
             isolation: Isolation::Auto,
             mix_blend_mode: MixBlendMode::Normal,
-            border_top_left_radius: 0.0,
-            border_top_right_radius: 0.0,
-            border_bottom_right_radius: 0.0,
-            border_bottom_left_radius: 0.0,
-            border_top_left_radius_y: 0.0,
-            border_top_right_radius_y: 0.0,
-            border_bottom_right_radius_y: 0.0,
-            border_bottom_left_radius_y: 0.0,
+            border_top_left_radius: Length::Px(0.0),
+            border_top_right_radius: Length::Px(0.0),
+            border_bottom_right_radius: Length::Px(0.0),
+            border_bottom_left_radius: Length::Px(0.0),
+            border_top_left_radius_y: Length::Px(0.0),
+            border_top_right_radius_y: Length::Px(0.0),
+            border_bottom_right_radius_y: Length::Px(0.0),
+            border_bottom_left_radius_y: Length::Px(0.0),
             visibility: Visibility::Visible,
             cursor: Cursor::Auto,
             box_shadow: Vec::new(),
@@ -4160,14 +4162,14 @@ pub fn compute_style(
         isolation: Isolation::Auto,
         mix_blend_mode: MixBlendMode::Normal,
         // border-radius не наследуется.
-        border_top_left_radius: 0.0,
-        border_top_right_radius: 0.0,
-        border_bottom_right_radius: 0.0,
-        border_bottom_left_radius: 0.0,
-        border_top_left_radius_y: 0.0,
-        border_top_right_radius_y: 0.0,
-        border_bottom_right_radius_y: 0.0,
-        border_bottom_left_radius_y: 0.0,
+        border_top_left_radius: Length::Px(0.0),
+        border_top_right_radius: Length::Px(0.0),
+        border_bottom_right_radius: Length::Px(0.0),
+        border_bottom_left_radius: Length::Px(0.0),
+        border_top_left_radius_y: Length::Px(0.0),
+        border_top_right_radius_y: Length::Px(0.0),
+        border_bottom_right_radius_y: Length::Px(0.0),
+        border_bottom_left_radius_y: Length::Px(0.0),
         // Inherited (CSS Display L3 §4).
         visibility: inherited.visibility,
         // Inherited (CSS UI L4 §8.1).
@@ -10700,70 +10702,70 @@ fn apply_declaration(
             let (h_part, v_part) = split_border_radius_slash(val);
             let h = expand_border_4(h_part);
             let v = if let Some(vp) = v_part { expand_border_4(vp) } else { h };
-            if let Some(x) = resolve_box_length(h[0], em_basis, viewport, is_quirks) {
-                style.border_top_left_radius = x.max(0.0);
+            if let Some(x) = parse_radius_length(h[0], em_basis, viewport, is_quirks) {
+                style.border_top_left_radius = x;
             }
-            if let Some(x) = resolve_box_length(h[1], em_basis, viewport, is_quirks) {
-                style.border_top_right_radius = x.max(0.0);
+            if let Some(x) = parse_radius_length(h[1], em_basis, viewport, is_quirks) {
+                style.border_top_right_radius = x;
             }
-            if let Some(x) = resolve_box_length(h[2], em_basis, viewport, is_quirks) {
-                style.border_bottom_right_radius = x.max(0.0);
+            if let Some(x) = parse_radius_length(h[2], em_basis, viewport, is_quirks) {
+                style.border_bottom_right_radius = x;
             }
-            if let Some(x) = resolve_box_length(h[3], em_basis, viewport, is_quirks) {
-                style.border_bottom_left_radius = x.max(0.0);
+            if let Some(x) = parse_radius_length(h[3], em_basis, viewport, is_quirks) {
+                style.border_bottom_left_radius = x;
             }
-            if let Some(y) = resolve_box_length(v[0], em_basis, viewport, is_quirks) {
-                style.border_top_left_radius_y = y.max(0.0);
+            if let Some(y) = parse_radius_length(v[0], em_basis, viewport, is_quirks) {
+                style.border_top_left_radius_y = y;
             }
-            if let Some(y) = resolve_box_length(v[1], em_basis, viewport, is_quirks) {
-                style.border_top_right_radius_y = y.max(0.0);
+            if let Some(y) = parse_radius_length(v[1], em_basis, viewport, is_quirks) {
+                style.border_top_right_radius_y = y;
             }
-            if let Some(y) = resolve_box_length(v[2], em_basis, viewport, is_quirks) {
-                style.border_bottom_right_radius_y = y.max(0.0);
+            if let Some(y) = parse_radius_length(v[2], em_basis, viewport, is_quirks) {
+                style.border_bottom_right_radius_y = y;
             }
-            if let Some(y) = resolve_box_length(v[3], em_basis, viewport, is_quirks) {
-                style.border_bottom_left_radius_y = y.max(0.0);
+            if let Some(y) = parse_radius_length(v[3], em_basis, viewport, is_quirks) {
+                style.border_bottom_left_radius_y = y;
             }
         }
         "border-top-left-radius" => {
             // CSS Backgrounds L3 §5.5: одно или два значения `rx [ry]`.
             let (rx, ry) = split_radius_pair(val);
-            if let Some(x) = resolve_box_length(rx, em_basis, viewport, is_quirks) {
-                style.border_top_left_radius = x.max(0.0);
+            if let Some(x) = parse_radius_length(rx, em_basis, viewport, is_quirks) {
+                style.border_top_left_radius = x;
             }
             let ry_val = ry.unwrap_or(rx);
-            if let Some(y) = resolve_box_length(ry_val, em_basis, viewport, is_quirks) {
-                style.border_top_left_radius_y = y.max(0.0);
+            if let Some(y) = parse_radius_length(ry_val, em_basis, viewport, is_quirks) {
+                style.border_top_left_radius_y = y;
             }
         }
         "border-top-right-radius" => {
             let (rx, ry) = split_radius_pair(val);
-            if let Some(x) = resolve_box_length(rx, em_basis, viewport, is_quirks) {
-                style.border_top_right_radius = x.max(0.0);
+            if let Some(x) = parse_radius_length(rx, em_basis, viewport, is_quirks) {
+                style.border_top_right_radius = x;
             }
             let ry_val = ry.unwrap_or(rx);
-            if let Some(y) = resolve_box_length(ry_val, em_basis, viewport, is_quirks) {
-                style.border_top_right_radius_y = y.max(0.0);
+            if let Some(y) = parse_radius_length(ry_val, em_basis, viewport, is_quirks) {
+                style.border_top_right_radius_y = y;
             }
         }
         "border-bottom-right-radius" => {
             let (rx, ry) = split_radius_pair(val);
-            if let Some(x) = resolve_box_length(rx, em_basis, viewport, is_quirks) {
-                style.border_bottom_right_radius = x.max(0.0);
+            if let Some(x) = parse_radius_length(rx, em_basis, viewport, is_quirks) {
+                style.border_bottom_right_radius = x;
             }
             let ry_val = ry.unwrap_or(rx);
-            if let Some(y) = resolve_box_length(ry_val, em_basis, viewport, is_quirks) {
-                style.border_bottom_right_radius_y = y.max(0.0);
+            if let Some(y) = parse_radius_length(ry_val, em_basis, viewport, is_quirks) {
+                style.border_bottom_right_radius_y = y;
             }
         }
         "border-bottom-left-radius" => {
             let (rx, ry) = split_radius_pair(val);
-            if let Some(x) = resolve_box_length(rx, em_basis, viewport, is_quirks) {
-                style.border_bottom_left_radius = x.max(0.0);
+            if let Some(x) = parse_radius_length(rx, em_basis, viewport, is_quirks) {
+                style.border_bottom_left_radius = x;
             }
             let ry_val = ry.unwrap_or(rx);
-            if let Some(y) = resolve_box_length(ry_val, em_basis, viewport, is_quirks) {
-                style.border_bottom_left_radius_y = y.max(0.0);
+            if let Some(y) = parse_radius_length(ry_val, em_basis, viewport, is_quirks) {
+                style.border_bottom_left_radius_y = y;
             }
         }
         "border-top-width" => {
@@ -11947,31 +11949,31 @@ fn apply_css_wide_keyword(
         "border-block-end-color"    => style.border_bottom_color = if inh_only_inherit { inherited.border_bottom_color } else { init.border_bottom_color },
         // border-radius (CSS Backgrounds L3 §5) — 4 угла, x и y.
         "border-top-left-radius" => {
-            style.border_top_left_radius   = if inh_only_inherit { inherited.border_top_left_radius   } else { init.border_top_left_radius   };
-            style.border_top_left_radius_y = if inh_only_inherit { inherited.border_top_left_radius_y } else { init.border_top_left_radius_y };
+            style.border_top_left_radius   = if inh_only_inherit { inherited.border_top_left_radius.clone()   } else { init.border_top_left_radius.clone()   };
+            style.border_top_left_radius_y = if inh_only_inherit { inherited.border_top_left_radius_y.clone() } else { init.border_top_left_radius_y.clone() };
         }
         "border-top-right-radius" => {
-            style.border_top_right_radius   = if inh_only_inherit { inherited.border_top_right_radius   } else { init.border_top_right_radius   };
-            style.border_top_right_radius_y = if inh_only_inherit { inherited.border_top_right_radius_y } else { init.border_top_right_radius_y };
+            style.border_top_right_radius   = if inh_only_inherit { inherited.border_top_right_radius.clone()   } else { init.border_top_right_radius.clone()   };
+            style.border_top_right_radius_y = if inh_only_inherit { inherited.border_top_right_radius_y.clone() } else { init.border_top_right_radius_y.clone() };
         }
         "border-bottom-right-radius" => {
-            style.border_bottom_right_radius   = if inh_only_inherit { inherited.border_bottom_right_radius   } else { init.border_bottom_right_radius   };
-            style.border_bottom_right_radius_y = if inh_only_inherit { inherited.border_bottom_right_radius_y } else { init.border_bottom_right_radius_y };
+            style.border_bottom_right_radius   = if inh_only_inherit { inherited.border_bottom_right_radius.clone()   } else { init.border_bottom_right_radius.clone()   };
+            style.border_bottom_right_radius_y = if inh_only_inherit { inherited.border_bottom_right_radius_y.clone() } else { init.border_bottom_right_radius_y.clone() };
         }
         "border-bottom-left-radius" => {
-            style.border_bottom_left_radius   = if inh_only_inherit { inherited.border_bottom_left_radius   } else { init.border_bottom_left_radius   };
-            style.border_bottom_left_radius_y = if inh_only_inherit { inherited.border_bottom_left_radius_y } else { init.border_bottom_left_radius_y };
+            style.border_bottom_left_radius   = if inh_only_inherit { inherited.border_bottom_left_radius.clone()   } else { init.border_bottom_left_radius.clone()   };
+            style.border_bottom_left_radius_y = if inh_only_inherit { inherited.border_bottom_left_radius_y.clone() } else { init.border_bottom_left_radius_y.clone() };
         }
         "border-radius" => {
             let src = if inh_only_inherit { inherited } else { &init };
-            style.border_top_left_radius       = src.border_top_left_radius;
-            style.border_top_right_radius      = src.border_top_right_radius;
-            style.border_bottom_right_radius   = src.border_bottom_right_radius;
-            style.border_bottom_left_radius    = src.border_bottom_left_radius;
-            style.border_top_left_radius_y     = src.border_top_left_radius_y;
-            style.border_top_right_radius_y    = src.border_top_right_radius_y;
-            style.border_bottom_right_radius_y = src.border_bottom_right_radius_y;
-            style.border_bottom_left_radius_y  = src.border_bottom_left_radius_y;
+            style.border_top_left_radius       = src.border_top_left_radius.clone();
+            style.border_top_right_radius      = src.border_top_right_radius.clone();
+            style.border_bottom_right_radius   = src.border_bottom_right_radius.clone();
+            style.border_bottom_left_radius    = src.border_bottom_left_radius.clone();
+            style.border_top_left_radius_y     = src.border_top_left_radius_y.clone();
+            style.border_top_right_radius_y    = src.border_top_right_radius_y.clone();
+            style.border_bottom_right_radius_y = src.border_bottom_right_radius_y.clone();
+            style.border_bottom_left_radius_y  = src.border_bottom_left_radius_y.clone();
         }
         // CSS Lists L3 §3 — не наследуются; Inherit пуллит из inherited,
         // прочие — initial (пустой Vec).
@@ -13493,6 +13495,17 @@ fn resolve_box_length(val: &str, em_basis: f32, viewport: Size, is_quirks: bool)
     match len {
         Length::Percent(_) => None,
         other => other.resolve(em_basis, None, viewport),
+    }
+}
+
+/// Парсит значение border-radius. Абсолютные единицы (px, em, rem, vw, vh и т.д.)
+/// резолвятся в `Length::Px` сразу. `%` сохраняется как `Length::Percent` — резолвинг
+/// откладывается до момента рисования, когда известен border-box (CSS Backgrounds L3 §5.5).
+fn parse_radius_length(val: &str, em_basis: f32, viewport: Size, is_quirks: bool) -> Option<Length> {
+    let len = parse_length_q(val, is_quirks)?;
+    match len {
+        Length::Percent(p) => Some(Length::Percent(p.max(0.0))),
+        other => other.resolve(em_basis, None, viewport).map(|v| Length::Px(v.max(0.0))),
     }
 }
 
@@ -21258,14 +21271,14 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.root()).children[0];
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        assert_eq!(s.border_top_left_radius,       10.0);
-        assert_eq!(s.border_top_left_radius_y,     10.0);
-        assert_eq!(s.border_top_right_radius,      10.0);
-        assert_eq!(s.border_top_right_radius_y,    10.0);
-        assert_eq!(s.border_bottom_right_radius,   10.0);
-        assert_eq!(s.border_bottom_right_radius_y, 10.0);
-        assert_eq!(s.border_bottom_left_radius,    10.0);
-        assert_eq!(s.border_bottom_left_radius_y,  10.0);
+        assert_eq!(s.border_top_left_radius,       Length::Px(10.0));
+        assert_eq!(s.border_top_left_radius_y,     Length::Px(10.0));
+        assert_eq!(s.border_top_right_radius,      Length::Px(10.0));
+        assert_eq!(s.border_top_right_radius_y,    Length::Px(10.0));
+        assert_eq!(s.border_bottom_right_radius,   Length::Px(10.0));
+        assert_eq!(s.border_bottom_right_radius_y, Length::Px(10.0));
+        assert_eq!(s.border_bottom_left_radius,    Length::Px(10.0));
+        assert_eq!(s.border_bottom_left_radius_y,  Length::Px(10.0));
     }
 
     #[test]
@@ -21276,14 +21289,14 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.root()).children[0];
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        assert_eq!(s.border_top_left_radius,       20.0);
-        assert_eq!(s.border_top_left_radius_y,     10.0);
-        assert_eq!(s.border_top_right_radius,      20.0);
-        assert_eq!(s.border_top_right_radius_y,    10.0);
-        assert_eq!(s.border_bottom_right_radius,   20.0);
-        assert_eq!(s.border_bottom_right_radius_y, 10.0);
-        assert_eq!(s.border_bottom_left_radius,    20.0);
-        assert_eq!(s.border_bottom_left_radius_y,  10.0);
+        assert_eq!(s.border_top_left_radius,       Length::Px(20.0));
+        assert_eq!(s.border_top_left_radius_y,     Length::Px(10.0));
+        assert_eq!(s.border_top_right_radius,      Length::Px(20.0));
+        assert_eq!(s.border_top_right_radius_y,    Length::Px(10.0));
+        assert_eq!(s.border_bottom_right_radius,   Length::Px(20.0));
+        assert_eq!(s.border_bottom_right_radius_y, Length::Px(10.0));
+        assert_eq!(s.border_bottom_left_radius,    Length::Px(20.0));
+        assert_eq!(s.border_bottom_left_radius_y,  Length::Px(10.0));
     }
 
     #[test]
@@ -21294,14 +21307,14 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.root()).children[0];
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        assert_eq!(s.border_top_left_radius,        10.0); // TL rx
-        assert_eq!(s.border_top_left_radius_y,       5.0); // TL ry
-        assert_eq!(s.border_top_right_radius,       20.0); // TR rx
-        assert_eq!(s.border_top_right_radius_y,     15.0); // TR ry
-        assert_eq!(s.border_bottom_right_radius,    10.0); // BR rx (mirrors TL)
-        assert_eq!(s.border_bottom_right_radius_y,   5.0); // BR ry (mirrors TL)
-        assert_eq!(s.border_bottom_left_radius,     20.0); // BL rx (mirrors TR)
-        assert_eq!(s.border_bottom_left_radius_y,   15.0); // BL ry (mirrors TR)
+        assert_eq!(s.border_top_left_radius,        Length::Px(10.0)); // TL rx
+        assert_eq!(s.border_top_left_radius_y,      Length::Px(5.0));  // TL ry
+        assert_eq!(s.border_top_right_radius,       Length::Px(20.0)); // TR rx
+        assert_eq!(s.border_top_right_radius_y,     Length::Px(15.0)); // TR ry
+        assert_eq!(s.border_bottom_right_radius,    Length::Px(10.0)); // BR rx (mirrors TL)
+        assert_eq!(s.border_bottom_right_radius_y,  Length::Px(5.0));  // BR ry (mirrors TL)
+        assert_eq!(s.border_bottom_left_radius,     Length::Px(20.0)); // BL rx (mirrors TR)
+        assert_eq!(s.border_bottom_left_radius_y,   Length::Px(15.0)); // BL ry (mirrors TR)
     }
 
     #[test]
@@ -21312,11 +21325,11 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.root()).children[0];
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        assert_eq!(s.border_top_left_radius,   30.0);
-        assert_eq!(s.border_top_left_radius_y, 15.0);
+        assert_eq!(s.border_top_left_radius,   Length::Px(30.0));
+        assert_eq!(s.border_top_left_radius_y, Length::Px(15.0));
         // Other corners untouched.
-        assert_eq!(s.border_top_right_radius,      0.0);
-        assert_eq!(s.border_top_right_radius_y,    0.0);
+        assert_eq!(s.border_top_right_radius,   Length::Px(0.0));
+        assert_eq!(s.border_top_right_radius_y, Length::Px(0.0));
     }
 
     #[test]
@@ -21327,8 +21340,8 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.root()).children[0];
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        assert_eq!(s.border_top_right_radius,   8.0);
-        assert_eq!(s.border_top_right_radius_y, 8.0);
+        assert_eq!(s.border_top_right_radius,   Length::Px(8.0));
+        assert_eq!(s.border_top_right_radius_y, Length::Px(8.0));
     }
 
     #[test]
@@ -21339,14 +21352,32 @@ mod tests {
         let root = ComputedStyle::root();
         let div = doc.get(doc.root()).children[0];
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
-        assert_eq!(s.border_top_left_radius,        1.0);
-        assert_eq!(s.border_top_right_radius,       2.0);
-        assert_eq!(s.border_bottom_right_radius,    3.0);
-        assert_eq!(s.border_bottom_left_radius,     4.0);
-        assert_eq!(s.border_top_left_radius_y,      5.0);
-        assert_eq!(s.border_top_right_radius_y,     6.0);
-        assert_eq!(s.border_bottom_right_radius_y,  7.0);
-        assert_eq!(s.border_bottom_left_radius_y,   8.0);
+        assert_eq!(s.border_top_left_radius,        Length::Px(1.0));
+        assert_eq!(s.border_top_right_radius,       Length::Px(2.0));
+        assert_eq!(s.border_bottom_right_radius,    Length::Px(3.0));
+        assert_eq!(s.border_bottom_left_radius,     Length::Px(4.0));
+        assert_eq!(s.border_top_left_radius_y,      Length::Px(5.0));
+        assert_eq!(s.border_top_right_radius_y,     Length::Px(6.0));
+        assert_eq!(s.border_bottom_right_radius_y,  Length::Px(7.0));
+        assert_eq!(s.border_bottom_left_radius_y,   Length::Px(8.0));
+    }
+
+    #[test]
+    fn border_radius_percent_stored_deferred() {
+        // `border-radius: 50%` — хранится как Length::Percent, резолвинг на paint-time.
+        let doc = lumen_html_parser::parse("<div></div>");
+        let sheet = lumen_css_parser::parse("div { border-radius: 50%; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.root()).children[0];
+        let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        assert_eq!(s.border_top_left_radius,       Length::Percent(50.0));
+        assert_eq!(s.border_top_left_radius_y,     Length::Percent(50.0));
+        assert_eq!(s.border_top_right_radius,      Length::Percent(50.0));
+        assert_eq!(s.border_top_right_radius_y,    Length::Percent(50.0));
+        assert_eq!(s.border_bottom_right_radius,   Length::Percent(50.0));
+        assert_eq!(s.border_bottom_right_radius_y, Length::Percent(50.0));
+        assert_eq!(s.border_bottom_left_radius,    Length::Percent(50.0));
+        assert_eq!(s.border_bottom_left_radius_y,  Length::Percent(50.0));
     }
 
     #[test]

@@ -5060,20 +5060,20 @@ mod tests {
     fn border_radius_default_zero() {
         let root = lay("<p>x</p>", "");
         let p = first_element_child(&root);
-        assert_eq!(p.style.border_top_left_radius, 0.0);
-        assert_eq!(p.style.border_top_right_radius, 0.0);
-        assert_eq!(p.style.border_bottom_right_radius, 0.0);
-        assert_eq!(p.style.border_bottom_left_radius, 0.0);
+        assert_eq!(p.style.border_top_left_radius, Length::Px(0.0));
+        assert_eq!(p.style.border_top_right_radius, Length::Px(0.0));
+        assert_eq!(p.style.border_bottom_right_radius, Length::Px(0.0));
+        assert_eq!(p.style.border_bottom_left_radius, Length::Px(0.0));
     }
 
     #[test]
     fn border_radius_shorthand_one_value() {
         let root = lay("<p>x</p>", "p { border-radius: 8px; }");
         let p = first_element_child(&root);
-        assert_eq!(p.style.border_top_left_radius, 8.0);
-        assert_eq!(p.style.border_top_right_radius, 8.0);
-        assert_eq!(p.style.border_bottom_right_radius, 8.0);
-        assert_eq!(p.style.border_bottom_left_radius, 8.0);
+        assert_eq!(p.style.border_top_left_radius, Length::Px(8.0));
+        assert_eq!(p.style.border_top_right_radius, Length::Px(8.0));
+        assert_eq!(p.style.border_bottom_right_radius, Length::Px(8.0));
+        assert_eq!(p.style.border_bottom_left_radius, Length::Px(8.0));
     }
 
     #[test]
@@ -5081,10 +5081,10 @@ mod tests {
         // 2 значения: TL/BR одинаковы, TR/BL одинаковы.
         let root = lay("<p>x</p>", "p { border-radius: 4px 12px; }");
         let p = first_element_child(&root);
-        assert_eq!(p.style.border_top_left_radius, 4.0);
-        assert_eq!(p.style.border_top_right_radius, 12.0);
-        assert_eq!(p.style.border_bottom_right_radius, 4.0);
-        assert_eq!(p.style.border_bottom_left_radius, 12.0);
+        assert_eq!(p.style.border_top_left_radius, Length::Px(4.0));
+        assert_eq!(p.style.border_top_right_radius, Length::Px(12.0));
+        assert_eq!(p.style.border_bottom_right_radius, Length::Px(4.0));
+        assert_eq!(p.style.border_bottom_left_radius, Length::Px(12.0));
     }
 
     #[test]
@@ -5094,10 +5094,10 @@ mod tests {
             "p { border-radius: 1px 2px 3px 4px; }",
         );
         let p = first_element_child(&root);
-        assert_eq!(p.style.border_top_left_radius, 1.0);
-        assert_eq!(p.style.border_top_right_radius, 2.0);
-        assert_eq!(p.style.border_bottom_right_radius, 3.0);
-        assert_eq!(p.style.border_bottom_left_radius, 4.0);
+        assert_eq!(p.style.border_top_left_radius, Length::Px(1.0));
+        assert_eq!(p.style.border_top_right_radius, Length::Px(2.0));
+        assert_eq!(p.style.border_bottom_right_radius, Length::Px(3.0));
+        assert_eq!(p.style.border_bottom_left_radius, Length::Px(4.0));
     }
 
     #[test]
@@ -5107,18 +5107,18 @@ mod tests {
             "p { border-top-left-radius: 5px; border-bottom-right-radius: 10px; }",
         );
         let p = first_element_child(&root);
-        assert_eq!(p.style.border_top_left_radius, 5.0);
-        assert_eq!(p.style.border_top_right_radius, 0.0);
-        assert_eq!(p.style.border_bottom_right_radius, 10.0);
-        assert_eq!(p.style.border_bottom_left_radius, 0.0);
+        assert_eq!(p.style.border_top_left_radius, Length::Px(5.0));
+        assert_eq!(p.style.border_top_right_radius, Length::Px(0.0));
+        assert_eq!(p.style.border_bottom_right_radius, Length::Px(10.0));
+        assert_eq!(p.style.border_bottom_left_radius, Length::Px(0.0));
     }
 
     #[test]
     fn border_radius_em_resolves() {
-        // 1em при default fs 16 = 16px.
+        // 1em при default fs 16 = 16px; em резолвится сразу в Px.
         let root = lay("<p>x</p>", "p { border-radius: 1em; }");
         let p = first_element_child(&root);
-        assert!((p.style.border_top_left_radius - 16.0).abs() < 0.01);
+        assert!(matches!(p.style.border_top_left_radius, Length::Px(v) if (v - 16.0).abs() < 0.01));
     }
 
     #[test]
@@ -5130,16 +5130,15 @@ mod tests {
             "p { border-radius: 5px / 10px; }",
         );
         let p = first_element_child(&root);
-        assert_eq!(p.style.border_top_left_radius, 5.0);
+        assert_eq!(p.style.border_top_left_radius, Length::Px(5.0));
     }
 
     #[test]
     fn border_radius_negative_clamped_to_zero() {
         let root = lay("<p>x</p>", "p { border-radius: -10px; }");
         let p = first_element_child(&root);
-        // Невалидное (отрицательное) — clamp до 0 после resolve.
-        // Наш resolve_box_length вернёт -10, мы делаем max(0.0).
-        assert_eq!(p.style.border_top_left_radius, 0.0);
+        // Невалидное (отрицательное) — clamp до 0 в parse_radius_length.
+        assert_eq!(p.style.border_top_left_radius, Length::Px(0.0));
     }
 
     #[test]
@@ -5150,8 +5149,19 @@ mod tests {
         );
         let div = first_element_child(&root);
         let p = first_element_child(div);
-        assert_eq!(div.style.border_top_left_radius, 5.0);
-        assert_eq!(p.style.border_top_left_radius, 0.0);
+        assert_eq!(div.style.border_top_left_radius, Length::Px(5.0));
+        assert_eq!(p.style.border_top_left_radius, Length::Px(0.0));
+    }
+
+    #[test]
+    fn border_radius_percent_stored_as_percent() {
+        // `border-radius: 50%` резолвинг откладывается до paint-time (known box dims).
+        let root = lay("<p>x</p>", "p { border-radius: 50%; }");
+        let p = first_element_child(&root);
+        assert_eq!(p.style.border_top_left_radius,     Length::Percent(50.0));
+        assert_eq!(p.style.border_top_right_radius,    Length::Percent(50.0));
+        assert_eq!(p.style.border_bottom_right_radius, Length::Percent(50.0));
+        assert_eq!(p.style.border_bottom_left_radius,  Length::Percent(50.0));
     }
 
     // ── text-overflow (CSS UI L4 §10.1) ─────────────────────────────────────
