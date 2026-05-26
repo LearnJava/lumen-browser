@@ -43,7 +43,7 @@ Exception: Claude memory (`~/.claude/projects/.../memory/`) lives outside the re
 
 ## Developer assignments
 
-Four parallel developers (4 Claude Code sessions, each in its own `git worktree`). Each owns a domain to minimize merge conflicts. Former P4 role (shell + JS + runtime + UI) is merged into P3. New P4 role covers **all CSS work** — P1/P2/P3 do not write CSS properties.
+Five parallel developers (5 Claude Code sessions, each in its own `git worktree`). Each owns a domain to minimize merge conflicts. Former P4 role (shell + JS + runtime + UI) is merged into P3. P4 role covers **all CSS work**. **P5 owns all bug fixes** — P1/P2/P3/P4 do not fix bugs, they only build new features.
 
 **If the user says "you are developer N" at session start — read `STATUS-PN.md` and take the first item from "Next". If "In progress" is set — continue that task. If all your tasks are taken — ask the user which task to take next.**
 
@@ -55,12 +55,30 @@ Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `fo
 | **P2** | Backend rendering: layout tree → pixels | `font`, `paint`, `image` |
 | **P3** | Runtime + system: everything outside the engine | `shell`, `network`, `storage`, `knowledge`, `core::ext` |
 | **P4** | **All CSS**: parsing, ComputedStyle, cascade, every property end-to-end | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) — cross-domain |
+| **P5** | **All bug fixes**: BUGS.md OPEN items, graphic test regressions, cross-crate | any crate — read-only access to all domains |
 
 Full subsystem breakdown per role — [lumen-plan.md](lumen-plan.md) §developer-assignments.
 
 > **Multi-marker subtasks** (`[P1+P2]` etc.) are common due to cross-domain runtime. **First marker = primary owner**; others contribute via review / interface / separate branches. `[P3]` now covers former `[P4]` tasks; historical commits keep `[P4]` unchanged.
 >
 > **P4 coordination rule:** before touching `style.rs` — check `STATUS-P1.md`; before touching `display_list.rs` / `renderer.rs` — leave a note in the commit message for P2. Merge to `main` after each property to minimize divergence.
+
+### Bug ownership: P5 only
+
+**P1, P2, P3, P4 do not fix bugs.** When a developer discovers a bug while working:
+
+1. Add a line to `BUGS.md` as `OPEN` with the next BUG-NNN number
+2. Optionally add a `// BUG-NNN` comment at the call site
+3. Continue the current feature task — do not context-switch
+
+**P5 workflow:**
+1. Run `python graphic_tests/run.py --continue-on-fail` → identify failing tests
+2. Pick highest-deviation OPEN item from `BUGS.md`
+3. Locate code via `SYMBOLS.md` + targeted grep (do not read whole files)
+4. Fix + add regression test + mark `BUGS.md`: `OPEN → FIXED <date>`
+5. `cargo clippy -p <crate> --all-targets -- -D warnings` → `cargo test -p <crate>` → commit
+
+P5 branch prefix: `p5-<bug-id>`, e.g. `p5-bug023-opacity`.
 
 ### CSS ownership: P4 only
 
