@@ -11116,7 +11116,7 @@ mod tests {
     }
 
     /// `<picture><source srcset="hd.webp"><img src="sd.jpg"></picture>` →
-    /// picker выбирает source-кандидата.
+    /// picker выбирает source-кандидата (нет атрибута type → тип неизвестен, не фильтруется).
     #[test]
     fn collect_picture_source_wins_over_img_src() {
         let doc = lumen_html_parser::parse(
@@ -11125,6 +11125,37 @@ mod tests {
         let reqs = collect_image_requests(&doc, vp());
         assert_eq!(reqs.len(), 1);
         assert_eq!(reqs[0].url, "hd.webp");
+    }
+
+    /// `<picture><source type="image/webp" srcset="hero.webp"><img src="hero.jpg"></picture>` →
+    /// webp нет в `supported_mime_types()` → picker пропускает source → fallback на `<img src>`.
+    #[test]
+    fn collect_picture_unsupported_type_falls_back() {
+        let doc = lumen_html_parser::parse(concat!(
+            r#"<body><picture>"#,
+            r#"<source type="image/webp" srcset="hero.webp">"#,
+            r#"<img src="hero.jpg">"#,
+            r#"</picture></body>"#,
+        ));
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 1, "должен быть один запрос — fallback PNG/JPEG");
+        assert_eq!(reqs[0].url, "hero.jpg", "webp source скипается, выбирается img src");
+    }
+
+    /// `<picture>` с первым поддерживаемым `<source type="image/jpeg">` →
+    /// picker выбирает этот source, а не img src.
+    #[test]
+    fn collect_picture_supported_type_picked() {
+        let doc = lumen_html_parser::parse(concat!(
+            r#"<body><picture>"#,
+            r#"<source type="image/webp" srcset="hero.webp">"#,
+            r#"<source type="image/jpeg" srcset="hero.jpg">"#,
+            r#"<img src="fallback.png">"#,
+            r#"</picture></body>"#,
+        ));
+        let reqs = collect_image_requests(&doc, vp());
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].url, "hero.jpg", "первый поддерживаемый source — JPEG");
     }
 
     /// Несколько `<img>` → несколько запросов.

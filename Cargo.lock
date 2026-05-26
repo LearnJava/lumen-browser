@@ -1135,6 +1135,7 @@ dependencies = [
  "lumen-css-parser",
  "lumen-dom",
  "lumen-html-parser",
+ "lumen-image",
 ]
 
 [[package]]

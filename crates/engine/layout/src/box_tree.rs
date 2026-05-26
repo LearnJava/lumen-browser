@@ -179,10 +179,10 @@ fn collect_requests_inner(doc: &Document, id: NodeId, viewport: Size, out: &mut 
 ///     лучше отрисовать пустую коробку, чем ничего.
 ///
 /// Phase 0: DPR=1.0 (layout не знает про device pixel ratio renderer-а —
-/// это интегрирует P3 при relayout-on-resize), фильтр MIME-типов
-/// выключен (`supported_types: None`), `prefers_dark` = false. Когда
-/// эти значения появятся в layout-pipeline — заменим без изменения
-/// сигнатуры picker-ов.
+/// это интегрирует P3 при relayout-on-resize), `prefers_dark` = false.
+/// `supported_types` заполняется из `lumen_image::supported_mime_types()`:
+/// picker пропускает `<source type="image/webp">` и аналогичные пока
+/// неподдерживаемые форматы вместо того чтобы выбирать их и показывать пустую коробку.
 fn resolve_image_source(doc: &Document, img_id: NodeId, viewport: Size) -> ImageSource {
     let sizes_vp = SizesViewport {
         width_px: viewport.width,
@@ -190,7 +190,11 @@ fn resolve_image_source(doc: &Document, img_id: NodeId, viewport: Size) -> Image
         root_font_size_px: 16.0,
         prefers_dark: false,
     };
-    let params = PictureParams { viewport: sizes_vp, dpr: 1.0, supported_types: None };
+    let params = PictureParams {
+        viewport: sizes_vp,
+        dpr: 1.0,
+        supported_types: Some(lumen_image::supported_mime_types()),
+    };
 
     if let Some(parent_id) = doc.get(img_id).parent
         && is_picture_element(doc, parent_id)

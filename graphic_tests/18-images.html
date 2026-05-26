@@ -51,6 +51,32 @@
   <div class="cell"><div class="frame" style="background: #3182ce;">
     <img src="../samples/images/sad_brain.png" width="160" height="120" alt="">
   </div></div>
+
+  <!-- row 4: <picture> media / type picking + <img srcset> -->
+  <!-- cell A: media query (min-width:500px) matches 1024px viewport → agi_illustration -->
+  <div class="cell"><div class="frame">
+    <picture>
+      <source media="(min-width: 500px)" srcset="../samples/images/agi_illustration.png" width="200" height="150">
+      <img src="../samples/images/perceptron.png" width="200" height="150" alt="">
+    </picture>
+  </div></div>
+  <!-- cell B: type="image/webp" → filtered by supported_mime_types → falls back to img src (perceptron) -->
+  <div class="cell"><div class="frame">
+    <picture>
+      <source type="image/webp" srcset="../samples/images/agi_illustration.png">
+      <img src="../samples/images/perceptron.png" width="200" height="150" alt="">
+    </picture>
+  </div></div>
+  <!-- cell C: srcset width descriptors — sizes="200px", 480w candidate closest → agi_illustration -->
+  <div class="cell"><div class="frame">
+    <img srcset="../samples/images/agi_illustration.png 480w, ../samples/images/perceptron.png 1024w"
+         sizes="200px" width="200" height="150" alt="">
+  </div></div>
+  <!-- cell D: srcset density descriptor — 1x candidate at DPR=1.0 → sad_brain -->
+  <div class="cell"><div class="frame">
+    <img srcset="../samples/images/sad_brain.png 1x, ../samples/images/agi_illustration.png 2x"
+         width="160" height="120" alt="">
+  </div></div>
   </div>
 </body>
 </html>

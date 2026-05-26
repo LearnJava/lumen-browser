@@ -455,6 +455,38 @@
   <div class="it-box" style="translate:8px;rotate:20deg;scale:1.2;background:#f4a261;"></div>
 </div>
 
+<!-- picture/srcset — media query + type filter + width descriptors -->
+<style>
+  .ps-row { display:flex; gap:8px; margin-top:10px; align-items:flex-start; }
+  .ps-frame { background:#0d1520; padding:2px; }
+</style>
+<div class="ps-row">
+  <!-- media (min-width:500px) → agi_illustration at 1024px viewport -->
+  <div class="ps-frame">
+    <picture>
+      <source media="(min-width: 500px)" srcset="../samples/images/agi_illustration.png" width="100" height="75">
+      <img src="../samples/images/perceptron.png" width="100" height="75" alt="">
+    </picture>
+  </div>
+  <!-- type="image/webp" filtered → perceptron fallback -->
+  <div class="ps-frame">
+    <picture>
+      <source type="image/webp" srcset="../samples/images/agi_illustration.png">
+      <img src="../samples/images/perceptron.png" width="100" height="75" alt="">
+    </picture>
+  </div>
+  <!-- srcset 480w/1024w, sizes=100px → 480w candidate (agi_illustration) -->
+  <div class="ps-frame">
+    <img srcset="../samples/images/agi_illustration.png 480w, ../samples/images/perceptron.png 1024w"
+         sizes="100px" width="100" height="75" alt="">
+  </div>
+  <!-- srcset 1x/2x, DPR=1.0 → 1x = sad_brain -->
+  <div class="ps-frame">
+    <img srcset="../samples/images/sad_brain.png 1x, ../samples/images/agi_illustration.png 2x"
+         width="80" height="60" alt="">
+  </div>
+</div>
+
 </div><!-- /card -->
 </body>
 </html>
