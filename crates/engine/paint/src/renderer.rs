@@ -1211,7 +1211,6 @@ pub struct Renderer {
     /// CSS Filter Effects L1 — color filter pipeline (grayscale/sepia/brightness/etc.).
     filter_bgl: wgpu::BindGroupLayout,
     filter_pipeline: wgpu::RenderPipeline,
-    filter_uniform: wgpu::Buffer,
     /// CSS Filter Effects L1 — separable Gaussian blur pipeline (one pass: H or V).
     blur_bgl: wgpu::BindGroupLayout,
     blur_pipeline: wgpu::RenderPipeline,
@@ -2069,12 +2068,6 @@ impl Renderer {
                 },
             ],
         });
-        let filter_uniform = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("filter-uniform"),
-            size: std::mem::size_of::<FilterParamsCpu>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
         let filter_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("filter-shader"),
             source: wgpu::ShaderSource::Wgsl(FILTER_SHADER_SRC.into()),
@@ -2334,7 +2327,6 @@ impl Renderer {
             mask_composite_pipeline,
             filter_bgl,
             filter_pipeline,
-            filter_uniform,
             blur_bgl,
             blur_pipeline,
             blur_uniform,
@@ -4333,6 +4325,11 @@ impl Renderer {
             };
         }
 
+        // Per-pass filter param buffers — one per filter/backdrop-filter render pass.
+        // Using a single shared buffer caused all passes to see the last write_buffer
+        // value (wgpu batches all write_buffer calls before any encoder commands run).
+        let mut filter_param_bufs: Vec<wgpu::Buffer> = Vec::new();
+
         for item in &render_plan {
             match item {
                 RenderPlanItem::Draw(batch) => {
@@ -4747,7 +4744,7 @@ impl Renderer {
                         count: color_count, _pad0: 0, _pad1: 0, _pad2: 0,
                         entries,
                     };
-                    self.queue.write_buffer(&self.filter_uniform, 0, as_bytes(&[filter_params]));
+                    let fp_buf = make_filter_param_buf(&self.device, &filter_params);
 
                     let dst_view = if plan.from_level == 1 {
                         &frame_view
@@ -4761,9 +4758,10 @@ impl Renderer {
                         entries: &[
                             wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src_view_f) },
                             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
-                            wgpu::BindGroupEntry { binding: 2, resource: self.filter_uniform.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 2, resource: fp_buf.as_entire_binding() },
                         ],
                     });
+                    filter_param_bufs.push(fp_buf);
                     {
                         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("filter-pass"),
@@ -4901,7 +4899,7 @@ impl Renderer {
                         count: bd_color_count, _pad0: 0, _pad1: 0, _pad2: 0,
                         entries: bd_entries,
                     };
-                    self.queue.write_buffer(&self.filter_uniform, 0, as_bytes(&[bd_filter_params]));
+                    let bd_fp_buf = make_filter_param_buf(&self.device, &bd_filter_params);
                     let parent_dst_view = &self.layer_textures[parent_idx].view;
                     let scratch_src_view = &self.scratch_layer.as_ref().unwrap().view;
                     let bd_blit_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -4910,9 +4908,10 @@ impl Renderer {
                         entries: &[
                             wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(scratch_src_view) },
                             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
-                            wgpu::BindGroupEntry { binding: 2, resource: self.filter_uniform.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 2, resource: bd_fp_buf.as_entire_binding() },
                         ],
                     });
+                    filter_param_bufs.push(bd_fp_buf);
                     {
                         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("backdrop-blit-pass"),
@@ -4939,7 +4938,7 @@ impl Renderer {
                         count: 0, _pad0: 0, _pad1: 0, _pad2: 0,
                         entries: [FilterEntryCpu { kind: 0, amount: 0.0, _p0: 0, _p1: 0 }; 8],
                     };
-                    self.queue.write_buffer(&self.filter_uniform, 0, as_bytes(&[elem_filter_params]));
+                    let elem_fp_buf = make_filter_param_buf(&self.device, &elem_filter_params);
                     let elem_src_view = &self.layer_textures[plan.from_level - 1].view;
                     let elem_filter_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                         label: Some("backdrop-elem-composite-bg"),
@@ -4947,9 +4946,10 @@ impl Renderer {
                         entries: &[
                             wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(elem_src_view) },
                             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&self.layer_sampler) },
-                            wgpu::BindGroupEntry { binding: 2, resource: self.filter_uniform.as_entire_binding() },
+                            wgpu::BindGroupEntry { binding: 2, resource: elem_fp_buf.as_entire_binding() },
                         ],
                     });
+                    filter_param_bufs.push(elem_fp_buf);
                     {
                         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                             label: Some("backdrop-elem-composite-pass"),
@@ -5975,6 +5975,23 @@ pub(crate) fn css_rect_to_device_scissor(
         width: cx1.saturating_sub(cx0),
         height: cy1.saturating_sub(cy0),
     }
+}
+
+/// Создаёт отдельный UNIFORM-буфер с параметрами одного filter pass.
+/// Каждый filter render pass должен иметь СОБСТВЕННЫЙ буфер, так как
+/// wgpu батчит все `queue.write_buffer` перед encoder-командами: записи
+/// в один shared буфер переписывают друг друга и все проходы видят
+/// только последнее значение.
+fn make_filter_param_buf(device: &wgpu::Device, params: &FilterParamsCpu) -> wgpu::Buffer {
+    let buf = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("filter-pass-param"),
+        size: std::mem::size_of::<FilterParamsCpu>() as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: true,
+    });
+    buf.slice(..).get_mapped_range_mut().copy_from_slice(as_bytes(std::slice::from_ref(params)));
+    buf.unmap();
+    buf
 }
 
 // SAFETY: T: Copy + #[repr(C)] плюс отсутствие padding-байт делают этот
