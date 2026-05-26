@@ -1,4 +1,5 @@
-In progress: —
+In progress: fix-list-markers-test32  branch: p5-fix-list-markers-test32
+Next step: fix ListStylePosition::Inside in lay_out_block  box_tree.rs:1804
 
 Role: P5 owns ALL bug fixes across the entire codebase.
   P1/P2/P3/P4 do NOT fix bugs — they build new features only.

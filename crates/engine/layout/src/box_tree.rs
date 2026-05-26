@@ -1784,6 +1784,9 @@ fn lay_out(
                 // Adjacent Block/FlowRoot siblings collapse their margins (gap = max, not sum).
                 // Inline runs, replaced elements, and floats break the collapsing chain.
                 let mut prev_block_mb: f32 = 0.0;
+                // CSS Lists L3 §2.4: pending indent from an inside ::marker (em units).
+                // Consumed by the first normal-flow content child after the marker.
+                let mut inside_marker_w: f32 = 0.0;
                 for (i, child) in b.children.iter_mut().enumerate() {
                     if matches!(child.style.position, Position::Absolute | Position::Fixed) {
                         abs_deferred.push((i, content_x, child_y));
@@ -1802,8 +1805,11 @@ fn lay_out(
                                 child.rect = Rect::new(content_x - marker_w, child_y, marker_w, line_h);
                             }
                             ListStylePosition::Inside => {
+                                // CSS Lists L3 §2.4: inside marker shares the first line with
+                                // content. Place at content_x; record indent for the next child.
                                 child.rect = Rect::new(content_x, child_y, marker_w, line_h);
-                                child_y += line_h;
+                                inside_marker_w = marker_w;
+                                // Do NOT advance child_y — marker is inline with content.
                             }
                         }
                         continue;
@@ -1862,7 +1868,14 @@ fn lay_out(
                     // Normal flow: narrow x/width for active floats.
                     let flow_left  = fc.left_edge_at(child_y, content_x);
                     let flow_right = fc.right_edge_at(child_y, container_right);
-                    let flow_w = (flow_right - flow_left).max(0.0);
+                    // Apply inside-marker indent to the first normal-flow content child.
+                    let (eff_left, eff_w) = if inside_marker_w > 0.0 {
+                        let l = flow_left + inside_marker_w;
+                        inside_marker_w = 0.0;
+                        (l, (flow_right - l).max(0.0))
+                    } else {
+                        (flow_left, (flow_right - flow_left).max(0.0))
+                    };
 
                     // CSS 2.1 §8.3.1: collapse adjacent sibling block margins.
                     // Only Block/FlowRoot participate; other kinds break the chain.
@@ -1870,14 +1883,14 @@ fn lay_out(
                     // so that lay_out's internal "+mt" yields child_y + max(prev_mb, mt).
                     let is_block = matches!(&child.kind, BoxKind::Block | BoxKind::FlowRoot);
                     let mt = child.style.margin_top
-                        .resolve_or_zero(child.style.font_size, flow_w, viewport);
+                        .resolve_or_zero(child.style.font_size, eff_w, viewport);
                     let start_y = if is_block {
                         child_y - prev_block_mb.min(mt.max(0.0))
                     } else {
                         child_y
                     };
 
-                    lay_out(child, flow_left, start_y, flow_w,
+                    lay_out(child, eff_left, start_y, eff_w,
                             children_available_height, measurer, viewport, children_pcb, hp);
                     if matches!(child.kind, BoxKind::Skip) {
                         // Zero-height; does not break the collapsing chain.

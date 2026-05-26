@@ -50,6 +50,7 @@ BUG-034 | FIXED 2026-05-22 | layout          | transform-origin 50% 50% default 
 BUG-035 | FIXED 2026-05-22 | layout          | ::before/::after pseudo-elements не генерируются в box_tree (реализация частичная)
 BUG-036 | FIXED 2026-05-26 | layout          | border-radius: % значения (50%, etc.) не резолвятся → radius=0; только px работает
 BUG-037 | FIXED 2026-05-26 | paint           | CSS filter effects не применяются визуально (grayscale/sepia/blur/etc.) — shared filter_uniform перезаписывался; fix: per-pass буфер через mapped_at_creation
+BUG-038 | FIXED 2026-05-26 | layout          | list-style-position: inside — маркер занимал отдельную строку; li высотой 2× от нормы; fix: не продвигать child_y, сдвигать InlineRun вправо на marker_w
 ```
 
 ---
