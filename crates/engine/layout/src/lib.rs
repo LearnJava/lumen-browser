@@ -11908,19 +11908,26 @@ mod tests {
         assert!(marker.rect.x < content.rect.x, "marker must be left of content");
     }
 
+    /// BUG-038: list-style-position: inside — marker must share the first line with content,
+    /// not occupy a separate block line. li height must equal one line-height.
     #[test]
-    fn marker_inside_in_flow() {
+    fn marker_inside_shares_line_with_content() {
         let root = lay(
             "<ul><li>item</li></ul>",
-            "li { list-style-position: inside; font-size: 16px; line-height: 1; }",
+            "ul { padding-left: 0; } \
+             li { list-style-position: inside; font-size: 16px; line-height: 1; }",
         );
         let ul = first_element_child(&root);
         let li = ul.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
         let marker = li.children.iter().find(|c| matches!(&c.kind, BoxKind::Marker { .. })).unwrap();
         let content = li.children.iter().find(|c| matches!(&c.kind, BoxKind::InlineRun { .. })).unwrap();
-        // Inside: marker participates in flow, content starts below it.
-        assert!(content.rect.y >= marker.rect.y + marker.rect.height - 0.01,
-            "content must start at or after inside marker");
+        // Marker and content must be on the same line.
+        assert_eq!(marker.rect.y, content.rect.y, "inside marker and content must share the same y");
+        // Content must start to the right of the marker.
+        assert!(content.rect.x > marker.rect.x, "inside marker must be left of content");
+        // li height must be one line-height (16 * 1.0 = 16px), not two.
+        assert!((li.rect.height - 16.0).abs() < 1.0,
+            "li height should be one line (16px), got {}", li.rect.height);
     }
 
     // ─── CSS 2.1 §9.5 — float + clear ────────────────────────────────────────
