@@ -32,7 +32,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 15-box-shadow.html | Тени блоков | 8 | box-shadow: offset · blur · spread · color · multiple · negative offset |
 | 16-outline.html | Обводка снаружи | 9 | outline-width · outline-color · outline-offset (positive / negative) · layout не сдвигается |
 | 17-calc.html | CSS math | 14 | calc() · min() · max() · clamp() · sqrt() · cos() · abs() · hypot() · nested |
-| 18-images.html | Растровые изображения | 16 | \<img\> PNG/JPEG · CSS width/height · transparent PNG on colored bg · \<picture\> media/type picking · \<img srcset\> width/density descriptors |
+| 18-images.html | Растровые изображения | 17 | \<img\> PNG/JPEG/WebP · CSS width/height · transparent PNG on colored bg · \<picture\> media/type picking · \<img srcset\> width/density descriptors · WebP VP8L |
 | 19-object-fit.html | Вписывание изображения | 9 | object-fit: fill/contain/cover/none/scale-down · object-position |
 | 20-quirks-bgcolor.html | Устаревший bgcolor (Quirks mode) | 15 | CSS hashless hex · bgcolor attr on \<td\> · legacy color parsing |
 | 21-border-style.html | Стили border: dashed/dotted/double | 16 | border-style: dashed · dotted · double (2/4/8/16px) · per-side mix · double thin fallback |
