@@ -1,4 +1,4 @@
-In progress: —
+In progress: fix-bug020-overflow-axis-coerce  branch: p5-bug020-overflow-axis-coerce
 
 Role: P5 owns ALL bug fixes across the entire codebase.
   P1/P2/P3/P4 do NOT fix bugs — they build new features only.
