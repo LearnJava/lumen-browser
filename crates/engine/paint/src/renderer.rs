@@ -3183,99 +3183,37 @@ impl Renderer {
                         let cb_arr = apply_alpha_to_color(color_to_array(cb), alpha);
                         let cl_arr = apply_alpha_to_color(color_to_array(cl), alpha);
 
-                        // Top side. Dashed and Dotted span full box width (Chrome/Edge: pattern
-                        // covers corners naturally, first/last dot anchored at box edges).
-                        // Other styles: trimmed straight portion + explicit solid corner fills.
+                        // All styles span full box width/height including corners.
+                        // Chrome/Edge draws each side at full extent; adjacent sides overlap
+                        // at corners, with later-drawn sides overwriting earlier ones.
+                        // Rendering order: top → right → bottom → left (left wins at corners).
                         if *wt > 0.0 {
-                            if matches!(*st, BorderStyle::Dashed | BorderStyle::Dotted) {
-                                emit_border_side(
-                                    &mut fill_vertices, &mut circle_vertices,
-                                    Rect::new(r.x, r.y, r.width, *wt),
-                                    true, *wt, ct_arr, *st,
-                                );
-                            } else {
-                                let x0 = r.x + *wl;
-                                let x1 = r.x + r.width - *wr;
-                                if x1 > x0 {
-                                    emit_border_side(
-                                        &mut fill_vertices, &mut circle_vertices,
-                                        Rect::new(x0, r.y, x1 - x0, *wt),
-                                        true, *wt, ct_arr, *st,
-                                    );
-                                }
-                                if *wl > 0.0 {
-                                    push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, *wl, *wt), ct_arr);
-                                }
-                                if *wr > 0.0 {
-                                    push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - *wr, r.y, *wr, *wt), ct_arr);
-                                }
-                            }
+                            emit_border_side(
+                                &mut fill_vertices, &mut circle_vertices,
+                                Rect::new(r.x, r.y, r.width, *wt),
+                                true, *wt, ct_arr, *st,
+                            );
                         }
-                        // Right side. Dashed and Dotted span full height; Solid/Double are trimmed.
                         if *wr > 0.0 {
-                            if matches!(*sr, BorderStyle::Dashed | BorderStyle::Dotted) {
-                                emit_border_side(
-                                    &mut fill_vertices, &mut circle_vertices,
-                                    Rect::new(r.x + r.width - *wr, r.y, *wr, r.height),
-                                    false, *wr, cr_arr, *sr,
-                                );
-                            } else {
-                                let y0 = r.y + *wt;
-                                let y1 = r.y + r.height - *wb;
-                                if y1 > y0 {
-                                    emit_border_side(
-                                        &mut fill_vertices, &mut circle_vertices,
-                                        Rect::new(r.x + r.width - *wr, y0, *wr, y1 - y0),
-                                        false, *wr, cr_arr, *sr,
-                                    );
-                                }
-                            }
+                            emit_border_side(
+                                &mut fill_vertices, &mut circle_vertices,
+                                Rect::new(r.x + r.width - *wr, r.y, *wr, r.height),
+                                false, *wr, cr_arr, *sr,
+                            );
                         }
-                        // Bottom side. Dashed and Dotted span full width; others trimmed + corner fills.
                         if *wb > 0.0 {
-                            if matches!(*sb, BorderStyle::Dashed | BorderStyle::Dotted) {
-                                emit_border_side(
-                                    &mut fill_vertices, &mut circle_vertices,
-                                    Rect::new(r.x, r.y + r.height - *wb, r.width, *wb),
-                                    true, *wb, cb_arr, *sb,
-                                );
-                            } else {
-                                let x0 = r.x + *wl;
-                                let x1 = r.x + r.width - *wr;
-                                if x1 > x0 {
-                                    emit_border_side(
-                                        &mut fill_vertices, &mut circle_vertices,
-                                        Rect::new(x0, r.y + r.height - *wb, x1 - x0, *wb),
-                                        true, *wb, cb_arr, *sb,
-                                    );
-                                }
-                                if *wl > 0.0 {
-                                    push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y + r.height - *wb, *wl, *wb), cb_arr);
-                                }
-                                if *wr > 0.0 {
-                                    push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - *wr, r.y + r.height - *wb, *wr, *wb), cb_arr);
-                                }
-                            }
+                            emit_border_side(
+                                &mut fill_vertices, &mut circle_vertices,
+                                Rect::new(r.x, r.y + r.height - *wb, r.width, *wb),
+                                true, *wb, cb_arr, *sb,
+                            );
                         }
-                        // Left side. Dashed and Dotted span full height; Solid/Double are trimmed.
                         if *wl > 0.0 {
-                            if matches!(*sl, BorderStyle::Dashed | BorderStyle::Dotted) {
-                                emit_border_side(
-                                    &mut fill_vertices, &mut circle_vertices,
-                                    Rect::new(r.x, r.y, *wl, r.height),
-                                    false, *wl, cl_arr, *sl,
-                                );
-                            } else {
-                                let y0 = r.y + *wt;
-                                let y1 = r.y + r.height - *wb;
-                                if y1 > y0 {
-                                    emit_border_side(
-                                        &mut fill_vertices, &mut circle_vertices,
-                                        Rect::new(r.x, y0, *wl, y1 - y0),
-                                        false, *wl, cl_arr, *sl,
-                                    );
-                                }
-                            }
+                            emit_border_side(
+                                &mut fill_vertices, &mut circle_vertices,
+                                Rect::new(r.x, r.y, *wl, r.height),
+                                false, *wl, cl_arr, *sl,
+                            );
                         }
                     } else {
                         // CSS Backgrounds L3 §5 + §6.3 — стороны укорочены у углов;
@@ -5921,6 +5859,7 @@ fn emit_border_side(
             //   2px→n=18, 4px→n=15, 8px→n=8, 16px→n=4 on a 180px side.
             // Dash size is fixed (native); only gap (step) is adjusted to anchor the last
             // dash end exactly at total. This matches Skia's dash rendering more closely.
+            // Positions use floor() to match Chrome/Edge pixel-snapping behaviour.
             let target_dash = (width * 2.0).max(6.0);
             let target_gap = width.max(4.0);
             let target_period = target_dash + target_gap;
@@ -5928,7 +5867,7 @@ fn emit_border_side(
             // Step between dash start positions; last dash end is clamped to total.
             let step = if n > 1 { (total - target_dash) / (n - 1) as f32 } else { 0.0 };
             for i in 0..n {
-                let offset = (i as f32 * step).round();
+                let offset = (i as f32 * step).floor();
                 let seg_end = (offset + target_dash).min(total);
                 if seg_end > offset {
                     let seg = if horizontal {
@@ -5941,14 +5880,27 @@ fn emit_border_side(
             }
         }
         BorderStyle::Dotted => {
-            // Chrome/Edge (Skia): first dot anchored at offset=0, last dot anchored at
-            // offset=total-dot. n=round(total/period). Equal gaps between all dots.
+            // Chrome/Edge (Skia): n = floor(total/period) + 1 dots evenly distributed.
+            // Symmetric placement: floor(i*step) for first half, span-floor((n-1-i)*step)
+            // for second half. This matches the symmetric Bresenham pattern Edge uses,
+            // where the "short" gaps appear at both ends, all middle gaps are equal.
+            //   2px→n=46, 4px→n=23, 8px→n=12, 16px→n=6 on a 180px side.
+            // For dot_len ≤ 2px: use fill_quad (rectangle) instead of SDF circle —
+            // Chrome/Edge renders thin dotted borders as squares, not antialiased circles.
             let dot_len = width.max(1.0);
             let period = dot_len * 2.0;
-            let n = ((total / period).round() as usize).max(1);
-            let step = if n > 1 { (total - dot_len) / (n - 1) as f32 } else { 0.0 };
+            let n = ((total / period).floor() as usize + 1).max(1);
+            let span = total - dot_len;
+            let step = if n > 1 { span / (n - 1) as f32 } else { 0.0 };
+            let mid = if n > 0 { (n - 1) / 2 } else { 0 };
+            let use_rect = dot_len <= 2.0;
             for i in 0..n {
-                let offset = (i as f32 * step).round();
+                let offset = if i <= mid {
+                    (i as f32 * step).floor()
+                } else {
+                    let j = (n - 1 - i) as f32;
+                    span.floor() - (j * step).floor()
+                };
                 let seg_end = (offset + dot_len).min(total);
                 if seg_end > offset {
                     let seg = if horizontal {
@@ -5956,7 +5908,11 @@ fn emit_border_side(
                     } else {
                         Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, seg_end - offset)
                     };
-                    push_circle_quad(circle_out, seg, color);
+                    if use_rect {
+                        push_fill_quad(out, seg, color);
+                    } else {
+                        push_circle_quad(circle_out, seg, color);
+                    }
                 }
             }
         }
@@ -6599,17 +6555,31 @@ mod tests {
 
     #[test]
     fn emit_border_side_dotted_circle_segments() {
-        // Dotted → SDF-circles (circle_verts), not fill quads.
-        // width=4 → dot=4; horizontal side 40 wide → 5 dots.
+        // Dotted width≥3 → SDF-circles (circle_verts), not fill quads.
+        // width=4 → dot=4, period=8; side=40 → n=floor(40/8)+1=6 dots.
         // Each quad is expanded 0.5px on each side: height = 4+1 = 5.
         let r = Rect::new(0.0, 0.0, 40.0, 4.0);
         let fill_quads = collect_border_fill_quads(r, true, 4.0, BorderStyle::Dotted);
         let circle_quads = collect_border_circle_quads(r, true, 4.0, BorderStyle::Dotted);
-        assert_eq!(fill_quads.len(), 0, "dotted must NOT produce fill quads");
+        assert_eq!(fill_quads.len(), 0, "dotted width=4 must NOT produce fill quads");
         assert!(circle_quads.len() > 1, "dotted must produce circle quads");
+        assert_eq!(circle_quads.len(), 6, "dotted: n=floor(total/period)+1=6");
         for q in &circle_quads {
             assert_eq!(q.height, 5.0, "expanded quad: dot_size + 1 = 5.0");
         }
+    }
+
+    #[test]
+    fn emit_border_side_dotted_thin_uses_fill_quads() {
+        // Dotted width≤2px → fill_quad rectangles (no SDF circles), matching
+        // Chrome/Edge behavior of rendering thin dotted borders as squares.
+        // width=2 → dot=2, period=4; side=20 → n=floor(20/4)+1=6 quads.
+        let r = Rect::new(0.0, 0.0, 20.0, 2.0);
+        let fill_quads = collect_border_fill_quads(r, true, 2.0, BorderStyle::Dotted);
+        let circle_quads = collect_border_circle_quads(r, true, 2.0, BorderStyle::Dotted);
+        assert_eq!(circle_quads.len(), 0, "thin dotted must NOT produce circle quads");
+        assert!(fill_quads.len() > 1, "thin dotted must produce fill quads");
+        assert_eq!(fill_quads.len(), 6, "thin dotted: n=floor(20/4)+1=6");
     }
 
     #[test]
