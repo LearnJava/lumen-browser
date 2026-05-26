@@ -10,6 +10,19 @@ pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x
 /// JPEG SOI + начало следующего маркера: `FF D8 FF`.
 pub const JPEG_SIGNATURE_PREFIX: [u8; 3] = [0xFF, 0xD8, 0xFF];
 
+/// MIME-типы изображений, которые `decode` умеет декодировать.
+///
+/// Передаётся в `PictureParams::supported_types` через `lumen-layout`, чтобы
+/// `<source type="image/webp">` (и любой другой неподдерживаемый формат)
+/// пропускался picker-ом — иначе picker выбирает недекодируемый источник
+/// и показывает пустую коробку вместо PNG/JPEG fallback-а.
+///
+/// Расширяется при добавлении декодеров (WebP, AVIF, GIF, …).
+#[must_use]
+pub fn supported_mime_types() -> &'static [&'static str] {
+    &["image/png", "image/jpeg", "image/jpg"]
+}
+
 /// Декодирует растровое изображение по сигнатуре первых байтов.
 ///
 /// # Errors

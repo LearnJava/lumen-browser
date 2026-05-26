@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: picture-srcset-gpu  branch: p2-picture-srcset-gpu
+Next step: supported_mime_types() в lumen-image + wire в resolve_image_source  crates/engine/image/src/lib.rs:1
 
 Bug fixes rule: P2 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 

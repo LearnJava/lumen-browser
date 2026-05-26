@@ -32,7 +32,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 15-box-shadow.html | Тени блоков | 8 | box-shadow: offset · blur · spread · color · multiple · negative offset |
 | 16-outline.html | Обводка снаружи | 9 | outline-width · outline-color · outline-offset (positive / negative) · layout не сдвигается |
 | 17-calc.html | CSS math | 14 | calc() · min() · max() · clamp() · sqrt() · cos() · abs() · hypot() · nested |
-| 18-images.html | Растровые изображения | 12 | \<img\> PNG/JPEG · CSS width/height · transparent PNG on colored bg |
+| 18-images.html | Растровые изображения | 16 | \<img\> PNG/JPEG · CSS width/height · transparent PNG on colored bg · \<picture\> media/type picking · \<img srcset\> width/density descriptors |
 | 19-object-fit.html | Вписывание изображения | 9 | object-fit: fill/contain/cover/none/scale-down · object-position |
 | 20-quirks-bgcolor.html | Устаревший bgcolor (Quirks mode) | 15 | CSS hashless hex · bgcolor attr on \<td\> · legacy color parsing |
 | 21-border-style.html | Стили border: dashed/dotted/double | 16 | border-style: dashed · dotted · double (2/4/8/16px) · per-side mix · double thin fallback |
@@ -107,6 +107,10 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | \<img\> PNG / JPEG | 18 | — |
 | \<img\> масштаб CSS width/height | 18 | — |
 | transparent PNG на цветном фоне | 18 | — |
+| \<picture\> media query picking | 18 | — |
+| \<picture\> type filter (skip unsupported MIME) | 18 | — |
+| \<img srcset\> width descriptors (Nw) | 18 | — |
+| \<img srcset\> density descriptors (Nx) | 18 | — |
 | object-fit (5 режимов) | 19 | — |
 | object-position | 19 | — |
 | legacy bgcolor / hashless hex | 20 | — |
