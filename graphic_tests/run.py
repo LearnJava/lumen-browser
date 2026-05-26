@@ -87,6 +87,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('43', '43-intrinsic-sizing.html',   0.5, 'CSS Intrinsic Sizing L3 — width: max-content / min-content / fit-content'),
     ('44', '44-media-queries.html',      0.5, 'Media Queries L3 — @media screen/print/min-width(em)/orientation/aspect-ratio'),
     ('45', '45-multiple-backgrounds.html', 0.5, 'CSS Backgrounds L3 §3 — multiple background layers, position/size/repeat/clip/origin'),
+    ('46', '46-individual-transforms.html', 0.5, 'CSS Transforms L2 — individual translate / rotate / scale properties'),
 ]
 
 # --- PNG reader (stdlib only) ---

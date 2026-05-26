@@ -74,7 +74,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | ✅ | min-content/max-content/fit-content/fit-content(L) for width/height/min-max; 11 tests 2026-05-24 | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
 | CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last; hyphens:auto | **#23** |
-| CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | perspective/3D; individual translate/rotate/scale props | **#24** |
+| CSS Transforms L2 | [css-transforms-2](https://www.w3.org/TR/css-transforms-2/) | 🟡 | individual translate/rotate/scale ✅ 2026-05-26; perspective/3D ⬜ | **#24** |
 | CSS Values L4/L5 | [css-values-4](https://www.w3.org/TR/css-values-4/) | 🟡 | env(); attr() with type; cq* units | **#25** |
 
 ### Tier 3 — Spec compliance (affect specific use-cases)
@@ -286,7 +286,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `transform-style` | 🟡 | flat/preserve-3d; 3D context ⬜ |
 | `perspective` / `perspective-origin` | 🟡 | parsed; 3D projection ⬜ |
 | `backface-visibility` | 🟡 | parsed; 3D flip ⬜ |
-| `translate` / `rotate` / `scale` | ⬜ | individual props (Transforms L2) |
+| `translate` / `rotate` / `scale` | ✅ | individual props (Transforms L2); compose before `transform` ✅ 2026-05-26 |
 
 ### [T0] Logical Properties
 
@@ -485,7 +485,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `perspective` / `perspective-origin` | 🟡 | parsed; 3D projection ⬜ |
 | `transform-style: preserve-3d` | 🟡 | parsed; 3D context ⬜ |
 | `backface-visibility` | 🟡 | parsed; 3D flip ⬜ |
-| `translate` / `rotate` / `scale` (individual) | ⬜ | CSS Transforms L2 |
+| `translate` / `rotate` / `scale` (individual) | ✅ | CSS Transforms L2; compose before `transform` 2026-05-26 |
 
 ### [T2] Values (advanced)
 
