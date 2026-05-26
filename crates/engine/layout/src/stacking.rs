@@ -191,7 +191,11 @@ pub fn creates_stacking_context(style: &ComputedStyle) -> bool {
     if style.opacity < 1.0 {
         return true;
     }
-    if !style.transform.is_empty() {
+    if !style.transform.is_empty()
+        || style.translate.is_some()
+        || style.rotate.is_some()
+        || style.scale.is_some()
+    {
         return true;
     }
     if !style.filter.is_empty() {

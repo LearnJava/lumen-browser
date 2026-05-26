@@ -7281,6 +7281,72 @@ mod tests {
     }
 
     #[test]
+    fn translate_prop_xy() {
+        let root = lay("<p>x</p>", "p { translate: 10px 20px; }");
+        assert_eq!(first_p_style(&root).translate, Some((10.0, 20.0)));
+    }
+
+    #[test]
+    fn translate_prop_single_value_defaults_y_to_zero() {
+        let root = lay("<p>x</p>", "p { translate: 5px; }");
+        assert_eq!(first_p_style(&root).translate, Some((5.0, 0.0)));
+    }
+
+    #[test]
+    fn translate_prop_none_clears() {
+        let root = lay("<p>x</p>", "p { translate: 10px; translate: none; }");
+        assert_eq!(first_p_style(&root).translate, None);
+    }
+
+    #[test]
+    fn rotate_prop_degrees() {
+        let root = lay("<p>x</p>", "p { rotate: 90deg; }");
+        let r = first_p_style(&root).rotate.expect("rotate should be Some");
+        assert!((r - std::f32::consts::FRAC_PI_2).abs() < 1e-4, "expected π/2, got {r}");
+    }
+
+    #[test]
+    fn rotate_prop_none_clears() {
+        let root = lay("<p>x</p>", "p { rotate: 45deg; rotate: none; }");
+        assert_eq!(first_p_style(&root).rotate, None);
+    }
+
+    #[test]
+    fn scale_prop_uniform() {
+        let root = lay("<p>x</p>", "p { scale: 2; }");
+        assert_eq!(first_p_style(&root).scale, Some((2.0, 2.0)));
+    }
+
+    #[test]
+    fn scale_prop_non_uniform() {
+        let root = lay("<p>x</p>", "p { scale: 1.5 0.5; }");
+        assert_eq!(first_p_style(&root).scale, Some((1.5, 0.5)));
+    }
+
+    #[test]
+    fn scale_prop_none_clears() {
+        let root = lay("<p>x</p>", "p { scale: 2; scale: none; }");
+        assert_eq!(first_p_style(&root).scale, None);
+    }
+
+    #[test]
+    fn individual_transforms_not_inherited() {
+        // div has all three individual props; nested p should NOT inherit them
+        let root = lay(
+            "<div><p>x</p></div>",
+            "div { translate: 10px; rotate: 45deg; scale: 2; } p { color: red; }",
+        );
+        // first_p_style returns the first Block child = the div wrapper
+        // then its child = the p block. We need the p inside div.
+        let div_box = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).expect("div");
+        assert_eq!(div_box.style.translate, Some((10.0, 0.0)));
+        let p_box = div_box.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).expect("p");
+        assert_eq!(p_box.style.translate, None, "translate must not be inherited");
+        assert_eq!(p_box.style.rotate, None, "rotate must not be inherited");
+        assert_eq!(p_box.style.scale, None, "scale must not be inherited");
+    }
+
+    #[test]
     fn filter_blur() {
         let root = lay("<p>x</p>", "p { filter: blur(5px); }");
         let f = first_p_style(&root).filter.clone();

@@ -1922,7 +1922,9 @@ impl Lumen {
         self.prev_styles = new_styles;
         self.layout_box = Some(lb);
         self.animation_scheduler.clear();
-        self.transition_scheduler = lumen_layout::TransitionScheduler::new();
+        // Do NOT reset transition_scheduler here: active transitions must survive
+        // relayout (viewport resize, DOM mutations) so that in-flight animations
+        // continue smoothly. reset happens only on page load (apply_loaded_page).
         self.anim_frame = None;
         self.scroll_y = clamp_scroll(self.scroll_y, self.max_scroll());
         self.scroll_x = clamp_scroll(self.scroll_x, self.max_scroll_x());

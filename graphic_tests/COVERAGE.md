@@ -149,3 +149,5 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **filter** — ✅ реализован (grayscale/sepia/brightness/invert/contrast/saturate/opacity/hue-rotate + blur), тест 30
 - **backdrop-filter** — ✅ реализован (blur/grayscale/brightness/invert/combo; Phase 0: требует parent stacking context), тест 30
 - **clip-path** — ✅ реализован (inset/circle/ellipse/polygon bounding-box clip), тест 31
+
+- **translate / rotate / scale** (individual CSS Transforms L2 props) — ✅ реализованы как отдельные свойства, compose перед transform в matrix (translate → rotate → scale → transform), тест 46

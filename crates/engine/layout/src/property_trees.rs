@@ -466,13 +466,29 @@ pub fn compute_local_transform(fns: &[TransformFn], origin: (f32, f32, f32)) -> 
 /// матрицу (forward), а не обратную.
 #[must_use]
 pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
-    if b.style.transform.is_empty() {
+    let has_individual = b.style.translate.is_some()
+        || b.style.rotate.is_some()
+        || b.style.scale.is_some();
+    if b.style.transform.is_empty() && !has_individual {
         return None;
     }
     let (ox, oy, _) = b.style.transform_origin;
     let pivot_x = b.rect.x + ox.resolve(b.rect.width);
     let pivot_y = b.rect.y + oy.resolve(b.rect.height);
     let mut m = Mat4::IDENTITY;
+
+    // CSS Transforms L2 §2.4: individual properties compose before `transform`,
+    // in order: translate → rotate → scale → transform.
+    if let Some((tx, ty)) = b.style.translate {
+        m = m.multiply(&Mat4::translation_2d(tx, ty));
+    }
+    if let Some(angle) = b.style.rotate {
+        m = m.multiply(&Mat4::rotate_2d(angle));
+    }
+    if let Some((sx, sy)) = b.style.scale {
+        m = m.multiply(&Mat4::scale_2d(sx, sy));
+    }
+
     for f in &b.style.transform {
         let step = match *f {
             TransformFn::Translate(x, y) => Mat4::translation_2d(x, y),

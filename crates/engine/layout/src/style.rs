@@ -1924,9 +1924,20 @@ pub struct ComputedStyle {
     pub clip_path: Option<ClipPath>,
     /// CSS Transforms L1 §2 — `transform: <transform-list> | none`.
     /// Список функций — каждая `TransformFn` хранит параметры. Не
-    /// наследуется. Phase 0: parsing only — apply matrix к paint —
-    /// отложено.
+    /// наследуется.
     pub transform: Vec<TransformFn>,
+    /// CSS Transforms L2 §2 — `translate: none | <tx> [<ty>]`.
+    /// Individual translate in px; composed BEFORE `transform` in the final matrix.
+    /// `None` = `none` (identity). Not inherited.
+    pub translate: Option<(f32, f32)>,
+    /// CSS Transforms L2 §2 — `rotate: none | <angle>`.
+    /// Individual 2D rotation in radians; composed BEFORE `transform`.
+    /// `None` = `none` (identity). Not inherited.
+    pub rotate: Option<f32>,
+    /// CSS Transforms L2 §2 — `scale: none | <sx> [<sy>]`.
+    /// Individual scale factors; composed BEFORE `transform`.
+    /// `None` = `none` (identity). Not inherited.
+    pub scale: Option<(f32, f32)>,
     /// CSS Filter Effects L1 §3 — `filter: <filter-function-list> | none`.
     /// Список функций — blur/brightness/contrast/grayscale/etc. Не
     /// наследуется. Phase 0: parsing only.
@@ -3973,6 +3984,9 @@ impl ComputedStyle {
             counter_increment: Vec::new(),
             clip_path: None,
             transform: Vec::new(),
+            translate: None,
+            rotate: None,
+            scale: None,
             filter: Vec::new(),
             row_gap: Length::Px(0.0),
             column_gap: Length::Px(0.0),
@@ -4203,6 +4217,9 @@ pub fn compute_style(
         // CSS Masking / Transforms / Filter — не наследуются.
         clip_path: None,
         transform: Vec::new(),
+        translate: None,
+        rotate: None,
+        scale: None,
         filter: Vec::new(),
         // Box Alignment gap / Sizing aspect-ratio — не наследуются.
         row_gap: Length::Px(0.0),
@@ -9414,6 +9431,41 @@ fn apply_declaration(
                 style.transform = parse_transform_list(trimmed);
             }
         }
+        "translate" => {
+            // CSS Transforms L2 §2 — `none | <tx> [<ty>]`. px values; % deferred.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.translate = None;
+            } else {
+                let mut it = trimmed.split_whitespace();
+                if let Some(tx) = it.next().and_then(parse_length_px) {
+                    let ty = it.next().and_then(parse_length_px).unwrap_or(0.0);
+                    style.translate = Some((tx, ty));
+                }
+            }
+        }
+        "rotate" => {
+            // CSS Transforms L2 §2 — `none | <angle>`. Axis-angle form deferred.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.rotate = None;
+            } else {
+                style.rotate = parse_angle_to_radians(trimmed);
+            }
+        }
+        "scale" => {
+            // CSS Transforms L2 §2 — `none | <sx> [<sy>]`.
+            let trimmed = val.trim();
+            if trimmed.eq_ignore_ascii_case("none") {
+                style.scale = None;
+            } else {
+                let mut it = trimmed.split_whitespace();
+                if let Some(sx) = it.next().and_then(|s| s.parse::<f32>().ok()) {
+                    let sy = it.next().and_then(|s| s.parse::<f32>().ok()).unwrap_or(sx);
+                    style.scale = Some((sx, sy));
+                }
+            }
+        }
         "filter" => {
             // CSS Filter Effects L1 §3 — `none | <filter-function-list>`.
             let trimmed = val.trim();
@@ -12088,6 +12140,15 @@ fn apply_css_wide_keyword(
         }
         "transform" => {
             style.transform = if inh_only_inherit { inherited.transform.clone() } else { init.transform.clone() };
+        }
+        "translate" => {
+            style.translate = if inh_only_inherit { inherited.translate } else { init.translate };
+        }
+        "rotate" => {
+            style.rotate = if inh_only_inherit { inherited.rotate } else { init.rotate };
+        }
+        "scale" => {
+            style.scale = if inh_only_inherit { inherited.scale } else { init.scale };
         }
         "filter" => {
             style.filter = if inh_only_inherit { inherited.filter.clone() } else { init.filter.clone() };
