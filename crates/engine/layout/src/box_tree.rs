@@ -253,6 +253,25 @@ pub struct InlineSegment {
     /// True when this segment represents a forced line break (CSS §4.1: newline
     /// in white-space: pre / pre-wrap text). `text` is empty in this case.
     pub forced_break: bool,
+    /// CSS structural pseudo-element role of this segment.
+    /// Split out by `collect_inline_segments` before wrapping.
+    /// // CSS: ::first-letter — P4 wires: look up `::first-letter` rule, override style of
+    /// segments where `pseudo_kind == PseudoKind::FirstLetter`.
+    pub pseudo_kind: PseudoKind,
+}
+
+/// Marks an inline segment as the target of a CSS structural pseudo-element.
+/// P4 uses this to apply `::first-letter` styles without touching layout geometry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum PseudoKind {
+    /// Regular content — no pseudo-element style override.
+    #[default]
+    None,
+    /// CSS Pseudo-elements L4 §5.1 — typographic first letter of the block.
+    /// Split from the first non-whitespace text node by `collect_inline_segments`.
+    /// P4 entry point: `compute_pseudo_element_style(node, "first-letter")` → override `seg.style`.
+    // CSS: ::first-letter
+    FirstLetter,
 }
 
 /// Позиционированный текстовый фрагмент в строке (после layout).
@@ -279,6 +298,11 @@ pub struct InlineFrag {
     /// Non-None when this frag represents an inline-replaced `<img>`.
     /// `text` holds the alt attribute; `width` is the rendered pixel width.
     pub img_src: Option<String>,
+    /// True when this fragment lies on the first formatted line of its block container.
+    /// Set by `lay_out` after `wrap_inline_run` completes.
+    /// // CSS: ::first-line — P4 wires: `compute_pseudo_element_style(node, "first-line")` →
+    /// override `frag.style` for all frags where `is_first_line = true`.
+    pub is_first_line: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -556,6 +580,12 @@ fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<Layout
 }
 
 /// Рекурсивно собирает `InlineSegment`-ы из поддерева inline-контента.
+///
+/// `need_first_letter` — starts `true` for the first call on a block container; set to `false`
+/// once the first non-whitespace text character is split into a `PseudoKind::FirstLetter` segment.
+/// Callers must initialize to `true` and pass through all recursive calls within the same run.
+// CSS: ::first-letter — P4 wires: after this function, check segments for PseudoKind::FirstLetter
+// and apply compute_pseudo_element_style(node, "first-letter") to override that segment's style.
 #[allow(clippy::too_many_arguments)]
 fn collect_inline_segments(
     doc: &Document,
@@ -566,6 +596,7 @@ fn collect_inline_segments(
     out: &mut Vec<InlineSegment>,
     flat: &FlatTree,
     counters: &CounterMap,
+    need_first_letter: &mut bool,
 ) {
     match &doc.get(id).data {
         NodeData::Text(s) if inherited.white_space.preserves_whitespace() => {
@@ -583,6 +614,7 @@ fn collect_inline_segments(
                         img_src: None,
                         img_width: 0.0,
                         forced_break: true,
+                        pseudo_kind: PseudoKind::None,
                     });
                 }
                 if !line.is_empty() {
@@ -595,6 +627,7 @@ fn collect_inline_segments(
                         img_src: None,
                         img_width: 0.0,
                         forced_break: false,
+                        pseudo_kind: PseudoKind::None,
                     });
                 }
             }
@@ -603,6 +636,17 @@ fn collect_inline_segments(
             // text-transform применяется здесь, до wrapping и paint —
             // measurer считает ширину уже после преобразования.
             let text = inherited.text_transform.apply(s);
+            // CSS Pseudo-elements L4 §5.1: the first text segment in this inline run
+            // is the candidate for ::first-letter. Mark it so P4 can look up the
+            // ::first-letter rule and extract the first grapheme at render time.
+            // We mark the whole first non-whitespace segment; P4 splits at the character
+            // boundary when building the display list, using the full text metrics.
+            let kind = if *need_first_letter && !text.trim().is_empty() {
+                *need_first_letter = false;
+                PseudoKind::FirstLetter
+            } else {
+                PseudoKind::None
+            };
             out.push(InlineSegment {
                 text,
                 style: inherited.clone(),
@@ -612,6 +656,7 @@ fn collect_inline_segments(
                 img_src: None,
                 img_width: 0.0,
                 forced_break: false,
+                pseudo_kind: kind,
             });
         }
         NodeData::Text(_) => {}
@@ -645,6 +690,7 @@ fn collect_inline_segments(
                     img_src: Some(src.url),
                     img_width: w,
                     forced_break: false,
+                    pseudo_kind: PseudoKind::None,
                 });
                 return;
             }
@@ -674,7 +720,7 @@ fn collect_inline_segments(
             }
             let children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
             for child_id in children {
-                collect_inline_segments(doc, sheet, child_id, &s, viewport, out, flat, counters);
+                collect_inline_segments(doc, sheet, child_id, &s, viewport, out, flat, counters, need_first_letter);
             }
             // CSS Pseudo-elements L4 §4 — ::after in inline formatting context.
             if let Some(ps) =
@@ -825,6 +871,7 @@ fn content_to_inline_segments(
         img_src: None,
         img_width: 0.0,
         forced_break: false,
+        pseudo_kind: PseudoKind::None,
     }]
 }
 
@@ -1104,6 +1151,10 @@ fn build_box(
                 // CSS §4.1.2 white-space collapsing: whitespace between
                 // inline-level siblings collapses to a single space.
                 let mut had_ws = false;
+                // CSS Pseudo-elements L4 §5.1: first letter of this inline run hasn't been
+                // split out yet. Passed through all collect_inline_segments calls in this loop.
+                // CSS: ::first-letter — P4 wires style to the PseudoKind::FirstLetter segment.
+                let mut need_first_letter = true;
 
                 loop {
                     if i >= dom_children.len() {
@@ -1123,7 +1174,7 @@ fn build_box(
                         _ => {}
                     }
                     if is_inline_content(doc, sheet, cid, &style, viewport) {
-                        collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat, counters);
+                        collect_inline_segments(doc, sheet, cid, &style, viewport, &mut pending, flat, counters, &mut need_first_letter);
                         had_ws = false;
                         i += 1;
                     } else if is_inline_block(doc, sheet, cid, &style, viewport) {
@@ -1699,6 +1750,15 @@ fn lay_out(
             }
         } else {
             *lines = one_line_fallback(segments);
+        }
+        // CSS Pseudo-elements L4 §3.1: ::first-line applies to the first formatted line.
+        // Mark frags on lines[0] so P4 can apply ::first-line style overrides.
+        // CSS: ::first-line — P4 wires: compute_pseudo_element_style(node, "first-line") →
+        // override style of each frag where is_first_line = true.
+        if let Some(first_line) = lines.first_mut() {
+            for frag in first_line.iter_mut() {
+                frag.is_first_line = true;
+            }
         }
         let line_count = lines.len().max(1);
         b.rect.height = line_count as f32 * (s.font_size * s.line_height);
@@ -3687,6 +3747,7 @@ fn wrap_inline_run(
                 padding_right: pad_r,
                 is_element_box: seg.is_element_box,
                 img_src: None,
+                is_first_line: false,
             });
             current_x += frag_w + seg.post_space;
             continue;
@@ -3715,6 +3776,7 @@ fn wrap_inline_run(
                 padding_right: pad_r,
                 is_element_box: true,
                 img_src: Some(img_src.clone()),
+                is_first_line: false,
             });
             current_x += img_w + seg.post_space;
             continue;
@@ -3784,6 +3846,7 @@ fn wrap_inline_run(
                         padding_right: 0.0,
                         is_element_box: seg.is_element_box,
                         img_src: None,
+                        is_first_line: false,
                     });
                     result.push(std::mem::take(&mut current_line));
                     current_x = 0.0;
@@ -3799,6 +3862,7 @@ fn wrap_inline_run(
                         padding_right: if is_seg_last { pad_r } else { 0.0 },
                         is_element_box: seg.is_element_box,
                         img_src: None,
+                        is_first_line: false,
                     });
                     current_x += sfx_w + post;
                     continue;
@@ -3828,6 +3892,7 @@ fn wrap_inline_run(
                                 padding_right: if tail.is_empty() && is_seg_last { pad_r } else { 0.0 },
                                 is_element_box: seg.is_element_box,
                                 img_src: None,
+                                is_first_line: false,
                             });
                             current_x += head_w;
                             first_chunk = false;
@@ -3875,6 +3940,7 @@ fn wrap_inline_run(
                             padding_right: if tail.is_empty() && is_seg_last { pad_r } else { 0.0 },
                             is_element_box: seg.is_element_box,
                             img_src: None,
+                            is_first_line: false,
                         });
                         current_x += head_w;
                         first_chunk = false;
@@ -3925,6 +3991,7 @@ fn wrap_inline_run(
                     padding_right: if is_seg_last { pad_r } else { 0.0 },
                     is_element_box: seg.is_element_box,
                     img_src: None,
+                    is_first_line: false,
                 });
                 current_x += word_w;
             }
@@ -4038,6 +4105,7 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 padding_right: 0.0,
                 is_element_box: true,
                 img_src: Some(img_src.clone()),
+                is_first_line: false,
             });
             continue;
         }
@@ -4067,6 +4135,7 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 padding_right: 0.0,
                 is_element_box: seg.is_element_box,
                 img_src: None,
+                is_first_line: false,
             });
         }
     }
@@ -4413,7 +4482,7 @@ mod tests {
     #[test]
     fn wrap_inline_run_soft_hyphen_breaks_word_on_manual() {
         use lumen_core::ext::NullHyphenationProvider;
-        use super::{InlineSegment, wrap_inline_run};
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
         use crate::style::{ComputedStyle, Hyphens};
         use lumen_core::geom::Size;
 
@@ -4436,6 +4505,7 @@ mod tests {
             img_src: None,
             img_width: 0.0,
             forced_break: false,
+            pseudo_kind: PseudoKind::None,
         };
 
         let m = Fixed10;
@@ -4453,7 +4523,7 @@ mod tests {
     #[test]
     fn wrap_inline_run_hyphens_none_no_break_on_shy() {
         use lumen_core::ext::NullHyphenationProvider;
-        use super::{InlineSegment, wrap_inline_run};
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
         use crate::style::{ComputedStyle, Hyphens};
         use lumen_core::geom::Size;
 
@@ -4473,6 +4543,7 @@ mod tests {
             img_src: None,
             img_width: 0.0,
             forced_break: false,
+            pseudo_kind: PseudoKind::None,
         };
         let m = Fixed10;
         let hp = NullHyphenationProvider;
@@ -4548,7 +4619,7 @@ mod tests {
     #[test]
     fn overflow_wrap_break_word_splits_long_word() {
         use lumen_core::ext::NullHyphenationProvider;
-        use super::{InlineSegment, wrap_inline_run};
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
         use crate::style::{ComputedStyle, Hyphens, OverflowWrap, WordBreak};
         use lumen_core::geom::Size;
 
@@ -4569,6 +4640,7 @@ mod tests {
             img_src: None,
             img_width: 0.0,
             forced_break: false,
+            pseudo_kind: PseudoKind::None,
         };
 
         let m = Fixed10;
@@ -4600,7 +4672,7 @@ mod tests {
     #[test]
     fn word_break_break_all_breaks_at_current_position() {
         use lumen_core::ext::NullHyphenationProvider;
-        use super::{InlineSegment, wrap_inline_run};
+        use super::{InlineSegment, PseudoKind, wrap_inline_run};
         use crate::style::{ComputedStyle, Hyphens, OverflowWrap, WordBreak};
         use lumen_core::geom::Size;
 
@@ -4624,6 +4696,7 @@ mod tests {
             img_src: None,
             img_width: 0.0,
             forced_break: false,
+            pseudo_kind: PseudoKind::None,
         };
 
         let m = Fixed10;
@@ -4888,5 +4961,103 @@ mod tests {
         assert!(!reqs[0].is_lazy, "first img (no attr) must not be lazy");
         assert!(reqs[1].is_lazy, "second img (loading=lazy) must be lazy");
         assert!(!reqs[2].is_lazy, "third img (no attr) must not be lazy");
+    }
+
+    // ── ::first-letter / ::first-line structural markers ─────────────────────
+
+    #[test]
+    fn first_letter_segment_marked_on_plain_paragraph() {
+        // The first text segment in a block should be marked as FirstLetter.
+        let root = super::layout(
+            &lumen_html_parser::parse("<p>Hello world</p>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+            for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
+            None
+        }
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { segments, .. } = &run.kind {
+            assert!(!segments.is_empty(), "expected at least one segment");
+            assert_eq!(
+                segments[0].pseudo_kind,
+                super::PseudoKind::FirstLetter,
+                "first segment must be PseudoKind::FirstLetter"
+            );
+            // Remaining segments have no pseudo kind.
+            for seg in segments.iter().skip(1) {
+                assert_eq!(seg.pseudo_kind, super::PseudoKind::None, "only first seg is FirstLetter");
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
+    }
+
+    #[test]
+    fn first_letter_not_marked_on_second_paragraph() {
+        // Each block creates its own inline run; each run's first seg is marked.
+        let root = super::layout(
+            &lumen_html_parser::parse("<p>One</p><p>Two</p>"),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(800.0, 600.0),
+        );
+        fn collect_runs<'a>(b: &'a super::LayoutBox, out: &mut Vec<&'a super::LayoutBox>) {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { out.push(b); }
+            for c in &b.children { collect_runs(c, out); }
+        }
+        let mut runs = Vec::new();
+        collect_runs(&root, &mut runs);
+        assert!(runs.len() >= 2, "expected at least 2 inline runs");
+        for run in &runs {
+            if let super::BoxKind::InlineRun { segments, .. } = &run.kind {
+                if !segments.is_empty() {
+                    assert_eq!(
+                        segments[0].pseudo_kind,
+                        super::PseudoKind::FirstLetter,
+                        "each run's first seg should be FirstLetter"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn first_line_frags_marked_after_wrap() {
+        // After lay_out, frags on lines[0] must have is_first_line = true;
+        // frags on subsequent lines must have is_first_line = false.
+        // Uses Fixed8 measurer (8px/char): "one two" = 7×8=56 ≤ 60px; "three" = 5×8=40,
+        // 56+8+40=104 > 60 → wraps. 60px viewport ensures at least 2 lines.
+        struct Fixed8;
+        impl super::super::TextMeasurer for Fixed8 {
+            fn char_width(&self, _: char, _: f32) -> f32 { 8.0 }
+        }
+        let html = "<p>one two three four five</p>";
+        let root = super::layout_measured(
+            &lumen_html_parser::parse(html),
+            &lumen_css_parser::parse(""),
+            lumen_core::geom::Size::new(60.0, 600.0),
+            &Fixed8,
+        );
+        fn find_run(b: &super::LayoutBox) -> Option<&super::LayoutBox> {
+            if matches!(b.kind, super::BoxKind::InlineRun { .. }) { return Some(b); }
+            for c in &b.children { if let Some(f) = find_run(c) { return Some(f); } }
+            None
+        }
+        let run = find_run(&root).expect("InlineRun not found");
+        if let super::BoxKind::InlineRun { lines, .. } = &run.kind {
+            assert!(lines.len() >= 2, "expected multiple lines, got {}", lines.len());
+            for frag in &lines[0] {
+                assert!(frag.is_first_line, "line 0 frag must be is_first_line=true");
+            }
+            for line in lines.iter().skip(1) {
+                for frag in line {
+                    assert!(!frag.is_first_line, "lines 1+ frags must be is_first_line=false");
+                }
+            }
+        } else {
+            panic!("expected InlineRun");
+        }
     }
 }
