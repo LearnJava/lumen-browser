@@ -1952,20 +1952,20 @@ fn lay_out(
             // Фаза 2: применяем вертикальное выравнивание внутри каждой строки.
             //
             // rows: (row_y, row_max_h, Vec<child_index>)
-            // IFC strut (CSS §10.8): descent шрифта родителя добавляется к
-            // высоте строки только если в строке есть текстовый InlineRun.
-            // Для строк из одних inline-block / replaced элементов strut не
-            // нужен — их вертикальные размеры заданы margin-box, а Edge/Blink
-            // в таких случаях strut'ом не расширяют line box, иначе ряды
-            // inline-block-ов накапливают descender-зазор (BUG-023).
+            // IFC strut (CSS §10.8 / верифицировано pixel-diff TEST-11/TEST-12):
+            // strut_descent добавляется к высоте строки только если в строке есть
+            // хотя бы один элемент с vertical-align: baseline (явный или InlineRun).
+            // Для строк, где все элементы используют top/bottom/middle, strut не
+            // нужен — baseline вообще не задействован (Edge/Blink подтверждено).
             let strut_descent = measurer.map_or(0.0, |m| m.descent_px(b.style.font_size));
-            let mut rows: Vec<(f32, f32, Vec<usize>)> = Vec::new();
+            // rows: (row_y, row_max_h, has_baseline, Vec<child_index>)
+            let mut rows: Vec<(f32, f32, bool, Vec<usize>)> = Vec::new();
             let mut cur_x = content_x;
             let mut cur_y = content_y;
             let mut row_max_h: f32 = 0.0;
             let mut row_y = cur_y;
             let mut cur_row: Vec<usize> = Vec::new();
-            let mut row_has_text = false;
+            let mut row_has_baseline = false;
             let mut total_h: f32 = 0.0;
 
             for i in 0..b.children.len() {
@@ -1993,35 +1993,40 @@ fn lay_out(
                 let child_full_h = child_mt + b.children[i].rect.height + child_mb;
 
                 if !is_run && child_right > content_x + content_width && cur_x > content_x {
-                    // Строка завершена. row_spacing включает strut_descent
-                    // только если в строке был текст (см. комментарий выше).
-                    let row_spacing = row_max_h + if row_has_text { strut_descent } else { 0.0 };
-                    rows.push((row_y, row_max_h, std::mem::take(&mut cur_row)));
+                    let row_strut = if row_has_baseline { strut_descent } else { 0.0 };
+                    let row_spacing = row_max_h + row_strut;
+                    rows.push((row_y, row_max_h, row_has_baseline, std::mem::take(&mut cur_row)));
                     total_h += row_spacing;
                     cur_y += row_spacing;
                     row_y = cur_y;
                     cur_x = content_x;
                     row_max_h = 0.0;
-                    row_has_text = false;
+                    row_has_baseline = false;
                     lay_out(&mut b.children[i], cur_x, cur_y, content_width, None, measurer, viewport, children_pcb, hp);
                 }
                 cur_row.push(i);
-                if is_run {
-                    row_has_text = true;
+                let child_is_baseline = is_run
+                    || matches!(b.children[i].style.vertical_align, VerticalAlign::Baseline);
+                if child_is_baseline {
+                    row_has_baseline = true;
                 }
                 cur_x = b.children[i].rect.x + b.children[i].rect.width + child_mr;
                 row_max_h = row_max_h.max(child_full_h);
             }
             if !cur_row.is_empty() {
-                rows.push((row_y, row_max_h, cur_row));
+                rows.push((row_y, row_max_h, row_has_baseline, cur_row));
             }
-            b.rect.height = total_h + row_max_h + if row_has_text { strut_descent } else { 0.0 };
+            let last_row_strut = if row_has_baseline { strut_descent } else { 0.0 };
+            b.rect.height = total_h + row_max_h + last_row_strut;
 
-            // Фаза 2: vertical-align. Для пустых inline-block элементов
-            // baseline = нижний край margin-box (CSS 2.1 §10.8.1), поэтому
-            // Baseline обрабатывается так же как Bottom.
+            // Фаза 2: vertical-align (CSS 2.1 §10.8.1).
+            // row_h = row_max_h (без strut); row_full_h = row_h + row_strut.
+            // Baseline: dy = row_h - child_h  (bottom at baseline, strut below).
+            // Bottom: dy = row_full_h - child_h (bottom at line-box bottom).
             let mut adjustments: Vec<(usize, f32)> = Vec::new();
-            for (_, row_h, child_idxs) in &rows {
+            for (_, row_h, has_baseline, child_idxs) in &rows {
+                let row_strut = if *has_baseline { strut_descent } else { 0.0 };
+                let row_full_h = row_h + row_strut;
                 for &idx in child_idxs {
                     let child = &b.children[idx];
                     let c_em = child.style.font_size;
@@ -2029,11 +2034,10 @@ fn lay_out(
                     let child_mb = child.style.margin_bottom.resolve_or_zero(c_em, content_width, viewport);
                     let child_full_h = child_mt + child.rect.height + child_mb;
                     let dy = match child.style.vertical_align {
-                        VerticalAlign::Bottom | VerticalAlign::TextBottom | VerticalAlign::Baseline => {
-                            row_h - child_full_h
-                        }
+                        VerticalAlign::Baseline => row_h - child_full_h,
+                        VerticalAlign::Bottom | VerticalAlign::TextBottom => row_full_h - child_full_h,
                         VerticalAlign::Top | VerticalAlign::TextTop => 0.0,
-                        VerticalAlign::Middle => (row_h - child_full_h) / 2.0,
+                        VerticalAlign::Middle => (row_full_h - child_full_h) / 2.0,
                         _ => 0.0,
                     };
                     if dy > 0.001 {
