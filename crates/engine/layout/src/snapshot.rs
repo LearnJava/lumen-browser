@@ -380,19 +380,35 @@ fn write_text_style_attrs(out: &mut String, s: &ComputedStyle) {
     if !s.text_shadow.is_empty() {
         let _ = write!(out, " text-shadow={}", s.text_shadow.len());
     }
-    if s.border_top_left_radius > 0.0
-        || s.border_top_right_radius > 0.0
-        || s.border_bottom_right_radius > 0.0
-        || s.border_bottom_left_radius > 0.0
+    if radius_nonzero(&s.border_top_left_radius)
+        || radius_nonzero(&s.border_top_right_radius)
+        || radius_nonzero(&s.border_bottom_right_radius)
+        || radius_nonzero(&s.border_bottom_left_radius)
     {
         let _ = write!(
             out,
-            " border-radius=({:.2},{:.2},{:.2},{:.2})",
-            s.border_top_left_radius,
-            s.border_top_right_radius,
-            s.border_bottom_right_radius,
-            s.border_bottom_left_radius,
+            " border-radius=({},{},{},{})",
+            radius_display(&s.border_top_left_radius),
+            radius_display(&s.border_top_right_radius),
+            radius_display(&s.border_bottom_right_radius),
+            radius_display(&s.border_bottom_left_radius),
         );
+    }
+}
+
+fn radius_nonzero(len: &Length) -> bool {
+    match len {
+        Length::Px(v) => *v != 0.0,
+        Length::Percent(p) => *p != 0.0,
+        _ => true,
+    }
+}
+
+fn radius_display(len: &Length) -> String {
+    match len {
+        Length::Px(v) => format!("{:.2}", v),
+        Length::Percent(p) => format!("{:.2}%", p),
+        _ => "?".to_owned(),
     }
 }
 

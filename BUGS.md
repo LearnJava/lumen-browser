@@ -48,7 +48,7 @@ BUG-032 | FIXED 2026-05-22 | paint/image     | object-fit image quality ~16%: ar
 BUG-033 | FIXED 2026-05-22 | paint           | box-shadow: нет Gaussian blur — рендерится solid прямоугольник вместо размытой тени
 BUG-034 | FIXED 2026-05-22 | layout          | transform-origin 50% 50% default not resolved against box size — pivot at (0,0) instead of center
 BUG-035 | FIXED 2026-05-22 | layout          | ::before/::after pseudo-elements не генерируются в box_tree (реализация частичная)
-BUG-036 | OPEN  [P4]       | layout          | border-radius: % значения (50%, etc.) не резолвятся → radius=0; только px работает
+BUG-036 | FIXED 2026-05-26 | layout          | border-radius: % значения (50%, etc.) не резолвятся → radius=0; только px работает
 BUG-037 | FIXED 2026-05-26 | paint           | CSS filter effects не применяются визуально (grayscale/sepia/blur/etc.) — shared filter_uniform перезаписывался; fix: per-pass буфер через mapped_at_creation
 ```
 

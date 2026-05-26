@@ -12,7 +12,7 @@ use lumen_layout::{
     BackgroundClip, BackgroundImage, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, FilterFn, FontStyle, FontWeight,
     FormControlKind,
-    GradientStop, ImageRendering, ListStyleType, ParsedGradient,
+    GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, Position, PositionComponent,
     StackingContextId, StackingTree, TextDecorationStyle, TextDecorationThickness,
@@ -119,18 +119,35 @@ impl CornerRadii {
             && self.tl_y == 0.0 && self.tr_y == 0.0 && self.br_y == 0.0 && self.bl_y == 0.0
     }
 
-    /// Builds `CornerRadii` from a `ComputedStyle`, copying both x and y radii.
-    pub fn from_style(s: &ComputedStyle) -> Self {
-        Self {
-            tl:   s.border_top_left_radius,
-            tl_y: s.border_top_left_radius_y,
-            tr:   s.border_top_right_radius,
-            tr_y: s.border_top_right_radius_y,
-            br:   s.border_bottom_right_radius,
-            br_y: s.border_bottom_right_radius_y,
-            bl:   s.border_bottom_left_radius,
-            bl_y: s.border_bottom_left_radius_y,
+    fn resolve_radius(len: &Length, basis: f32) -> f32 {
+        match len {
+            Length::Px(v) => *v,
+            Length::Percent(p) => p / 100.0 * basis,
+            _ => 0.0,
         }
+    }
+
+    /// Builds `CornerRadii` from a `ComputedStyle` and the element's border-box dimensions.
+    /// `border_w` / `border_h` resolve `border-radius: N%` per CSS Backgrounds L3 §5.5:
+    /// H radii use width as basis, V radii use height.
+    pub fn from_style_and_box(s: &ComputedStyle, border_w: f32, border_h: f32) -> Self {
+        Self {
+            tl:   Self::resolve_radius(&s.border_top_left_radius,     border_w),
+            tl_y: Self::resolve_radius(&s.border_top_left_radius_y,   border_h),
+            tr:   Self::resolve_radius(&s.border_top_right_radius,    border_w),
+            tr_y: Self::resolve_radius(&s.border_top_right_radius_y,  border_h),
+            br:   Self::resolve_radius(&s.border_bottom_right_radius,   border_w),
+            br_y: Self::resolve_radius(&s.border_bottom_right_radius_y, border_h),
+            bl:   Self::resolve_radius(&s.border_bottom_left_radius,   border_w),
+            bl_y: Self::resolve_radius(&s.border_bottom_left_radius_y, border_h),
+        }
+    }
+
+    /// Builds `CornerRadii` from a `ComputedStyle`. `border-radius: N%` values are
+    /// resolved as 0 because box dimensions are unavailable here. Prefer
+    /// `from_style_and_box` when the border-box rect is known.
+    pub fn from_style(s: &ComputedStyle) -> Self {
+        Self::from_style_and_box(s, 0.0, 0.0)
     }
 }
 
@@ -1535,7 +1552,7 @@ fn emit_inline_frag_box(
     let box_h = line_h;
     let box_y = line_y;
 
-    let radii = CornerRadii::from_style(s);
+    let radii = CornerRadii::from_style_and_box(s, box_w, box_h);
 
     // Background (CSS Backgrounds L3: painted over padding+border area).
     if let Some(CssColor::Rgba(bg)) = s.background_color
@@ -2178,7 +2195,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             }
             emit_box_shadows(b, out);
             let s = &b.style;
-            let radii = CornerRadii::from_style(s);
+            let radii = CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height);
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
@@ -2238,7 +2255,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             }
             emit_box_shadows(b, out);
             let s = &b.style;
-            let radii = CornerRadii::from_style(s);
+            let radii = CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height);
             if let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
                 && bg.a > 0
             {
@@ -2327,7 +2344,7 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                         s.border_bottom_style,
                         s.border_left_style,
                     ],
-                    radii: CornerRadii::from_style(s),
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
             out.push(DisplayCommand::DrawImage {
@@ -2431,7 +2448,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                             s.border_top_style, s.border_right_style,
                             s.border_bottom_style, s.border_left_style,
                         ],
-                        radii: CornerRadii::from_style(s),
+                        radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                     });
                 }
                 emit_column_rules(b, out);
@@ -2520,7 +2537,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         s.border_top_style, s.border_right_style,
                         s.border_bottom_style, s.border_left_style,
                     ],
-                    radii: CornerRadii::from_style(s),
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
             emit_outline(b, out);
@@ -2580,7 +2597,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                         s.border_top_style, s.border_right_style,
                         s.border_bottom_style, s.border_left_style,
                     ],
-                    radii: CornerRadii::from_style(s),
+                    radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                 });
             }
             // Image content внутри padding/border-области; в Phase 0
@@ -2879,7 +2896,7 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
                             s.border_top_style, s.border_right_style,
                             s.border_bottom_style, s.border_left_style,
                         ],
-                        radii: CornerRadii::from_style(s),
+                        radii: CornerRadii::from_style_and_box(s, b.rect.width, b.rect.height),
                     });
                 }
                 emit_column_rules(b, out);
