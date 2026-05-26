@@ -404,6 +404,24 @@ trait PersistentJs {
     /// Shell requests another redraw when this returns `true` so animation loops
     /// continue without busy-polling.
     fn take_raf_pending(&self) -> bool;
+    /// Push a fresh snapshot of layout bounding rects into the JS runtime.
+    ///
+    /// Called after every `relayout_page`. The JS side uses this for
+    /// `getBoundingClientRect`, `ResizeObserver`, and `IntersectionObserver`.
+    #[allow(dead_code)] // called only from #[cfg(feature = "quickjs")] blocks
+    fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>);
+    /// Update the current viewport dimensions in the JS runtime.
+    ///
+    /// Called after every resize and on initial load.
+    #[allow(dead_code)] // called only from #[cfg(feature = "quickjs")] blocks
+    fn update_viewport_size(&self, width: f32, height: f32);
+    /// Call `_lumen_deliver_resize_observers()` and
+    /// `_lumen_deliver_intersection_observers()` in JS.
+    ///
+    /// Must be called after `update_layout_rects` so that observers read fresh
+    /// geometry. Called by the shell after every `relayout_page`.
+    #[allow(dead_code)] // called only from #[cfg(feature = "quickjs")] blocks
+    fn deliver_layout_observers(&self);
 }
 
 #[cfg(feature = "quickjs")]
@@ -442,6 +460,15 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn take_raf_pending(&self) -> bool {
         self.rt.take_raf_pending()
+    }
+    fn update_layout_rects(&self, rects: HashMap<u32, [f32; 4]>) {
+        self.rt.update_layout_rects(rects);
+    }
+    fn update_viewport_size(&self, width: f32, height: f32) {
+        self.rt.update_viewport_size(width, height);
+    }
+    fn deliver_layout_observers(&self) {
+        self.eval_js("_lumen_deliver_resize_observers();_lumen_deliver_intersection_observers();");
     }
 }
 
@@ -1304,6 +1331,26 @@ fn collect_box_styles(lb: &LayoutBox, map: &mut HashMap<NodeId, ComputedStyle>) 
     }
 }
 
+/// Рекурсивно собирает bounding rects всех layout-боксов в плоскую карту
+/// `NodeId → [x, y, width, height]` (border-box, viewport-relative CSS px).
+/// Используется JS-runtime-ом для `getBoundingClientRect` / `ResizeObserver`
+/// / `IntersectionObserver`.
+#[cfg(feature = "quickjs")]
+fn collect_layout_rects(lb: &LayoutBox) -> HashMap<u32, [f32; 4]> {
+    let mut map = HashMap::new();
+    collect_layout_rects_rec(lb, &mut map);
+    map
+}
+
+#[cfg(feature = "quickjs")]
+fn collect_layout_rects_rec(lb: &LayoutBox, map: &mut HashMap<u32, [f32; 4]>) {
+    let r = &lb.rect;
+    map.insert(lb.node.index() as u32, [r.x, r.y, r.width, r.height]);
+    for child in &lb.children {
+        collect_layout_rects_rec(child, map);
+    }
+}
+
 /// Строит display list с правильным painting order (CSS 2.1 Appendix E, z-index stacking).
 fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
     let tree = StackingTree::build(layout);
@@ -1854,6 +1901,14 @@ impl Lumen {
         self.anim_frame = None;
         self.scroll_y = clamp_scroll(self.scroll_y, self.max_scroll());
         self.scroll_x = clamp_scroll(self.scroll_x, self.max_scroll_x());
+        // Notify JS observers about the new layout geometry (ResizeObserver /
+        // IntersectionObserver / getBoundingClientRect).
+        #[cfg(feature = "quickjs")]
+        if let (Some(js), Some(lb_ref)) = (&self.js_ctx, self.layout_box.as_ref()) {
+            js.update_layout_rects(collect_layout_rects(lb_ref));
+            js.update_viewport_size(viewport.width, viewport.height);
+            js.deliver_layout_observers();
+        }
         if let Some(w) = self.window.as_ref() {
             w.request_redraw();
         }
@@ -1930,6 +1985,13 @@ impl Lumen {
                 self.prev_styles.clear();
                 collect_box_styles(&page.layout_box, &mut self.prev_styles);
                 self.layout_box = Some(page.layout_box);
+                // Push initial layout geometry so JS can query bounding rects
+                // immediately after page load (before the first relayout).
+                #[cfg(feature = "quickjs")]
+                if let (Some(js), Some(lb_ref)) = (&self.js_ctx, self.layout_box.as_ref()) {
+                    js.update_layout_rects(collect_layout_rects(lb_ref));
+                    js.update_viewport_size(viewport.width, viewport.height);
+                }
                 self.title = page.title;
                 self.anim_frame = None;
                 // Display list другой → старые match-rect-ы невалидны.
@@ -2283,10 +2345,9 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     r.resize(size.width, size.height);
                 }
                 self.relayout();
-                // HTML §8.1.5.1, шаг 13: ResizeObserver delivery. В Phase 0
-                // никто не зарегистрирован (JS engine отсутствует), но
-                // future-proof: когда подключим QuickJS, JS-callback-и
-                // получат сигнал автоматически.
+                // HTML §8.1.5.1, шаг 13: ResizeObserver delivery.
+                // JS-observers are delivered inside relayout() via deliver_layout_observers().
+                // The shell runtime.deliver_observer_records delivers Rust-level observers.
                 self.runtime
                     .deliver_observer_records(runtime::ObserverKind::Resize);
             }
@@ -2598,14 +2659,17 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // HTML §8.1.5.1 «Update the rendering» — правильный порядок:
-                //   1. style flush        (не реализован, нет CSS-invalidation)
-                //   2. layout             (не реализован, нет DOM-мутаций)
+                // HTML §8.1.5.1 «Update the rendering» — текущий порядок:
+                //   1. style flush        (нет, нет CSS-invalidation)
+                //   2. layout             (нет; DOM-мутации → relayout в шаге 6)
                 //   3. scroll             ← advance_scroll_anim + advance_momentum
-                //   4. ResizeObserver     (выполняется на Resized-событии, не здесь)
-                //   5. rAF callbacks      ← run_rendering_step
-                //   6. layout invalidation (stub: если rAF изменил DOM — relayout)
-                //   7. paint              ← r.render(...)
+                //   4. ResizeObserver     ← delivered in relayout() after every layout
+                //      IntersectionObserver ← same (deliver_layout_observers)
+                //   5. rAF callbacks      ← run_rendering_step + JS run_animation_frame
+                //   6. layout invalidation ← relayout() если dom_dirty после rAF
+                //      после relayout → deliver_layout_observers() (ResizeObserver повторно)
+                //   7. MutationObserver   ← _lumen_flush_mutation_observers() после dispatch
+                //   8. paint              ← r.render(...)
                 //
                 // Scroll обновляется ДО rAF, чтобы callback-и читали актуальный
                 // scroll_y/scroll_x (важно когда подключим scroll-events в JS).
