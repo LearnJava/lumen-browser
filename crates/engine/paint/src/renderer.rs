@@ -124,6 +124,10 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 
 /// SDF-круг: UV (-1..1) из центра; фрагменты за радиусом 1.0 discarded.
 /// Anti-aliasing через smoothstep(0.9, 1.0, dist).
+/// SDF-круг: Skia-compatible 1px linear AA: coverage = clamp(0.5 + r - dist_px, 0, 1).
+/// Quad расширен на 0.5px с каждой стороны, UV=±1 соответствует r+0.5 px от центра.
+/// `radius_px` (loc 3) — CSS-радиус точки. Формула совпадает с Skia, что минимизирует
+/// разницу с Chrome/Edge (пиксельный pixel-diff для dotted border ≈ sub-pixel noise).
 const CIRCLE_SHADER_SRC: &str = r#"
 struct Uniforms {
     viewport: vec2<f32>,
@@ -132,15 +136,17 @@ struct Uniforms {
 @group(0) @binding(0) var<uniform> u: Uniforms;
 
 struct VIn {
-    @location(0) pos: vec2<f32>,
-    @location(1) uv:  vec2<f32>,
-    @location(2) color: vec4<f32>,
+    @location(0) pos:       vec2<f32>,
+    @location(1) uv:        vec2<f32>,
+    @location(2) color:     vec4<f32>,
+    @location(3) radius_px: f32,
 };
 
 struct VOut {
     @builtin(position) clip: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-    @location(1) color: vec4<f32>,
+    @location(0) uv:        vec2<f32>,
+    @location(1) color:     vec4<f32>,
+    @location(2) radius_px: f32,
 };
 
 @vertex
@@ -150,16 +156,18 @@ fn vs_main(in: VIn) -> VOut {
         1.0 - in.pos.y / u.viewport.y * 2.0,
     );
     var out: VOut;
-    out.clip = vec4<f32>(ndc, 0.0, 1.0);
-    out.uv = in.uv;
-    out.color = in.color;
+    out.clip      = vec4<f32>(ndc, 0.0, 1.0);
+    out.uv        = in.uv;
+    out.color     = in.color;
+    out.radius_px = in.radius_px;
     return out;
 }
 
 @fragment
 fn fs_main(in: VOut) -> @location(0) vec4<f32> {
-    let dist = length(in.uv);
-    let alpha = 1.0 - smoothstep(0.8, 1.0, dist);
+    // Quad spans (r+0.5) px in each direction from center, so dist_px = |uv| * (r+0.5).
+    let dist_px = length(in.uv) * (in.radius_px + 0.5);
+    let alpha = clamp(0.5 + in.radius_px - dist_px, 0.0, 1.0);
     if alpha <= 0.0 { discard; }
     return vec4<f32>(in.color.rgb, in.color.a * alpha);
 }
@@ -888,13 +896,20 @@ struct ImageVertex {
     alpha: f32,
 }
 
-/// Вершина для SDF-круга. `uv` — нормализованные координаты (-1..1) от центра.
+/// Вершина для SDF-круга. `uv` — нормализованные координаты (-1..1) от центра
+/// (quad расширен на 0.5px в каждую сторону). `radius_px` — CSS-радиус точки.
+/// Layout: pos(8) + uv(8) + color(16) + radius_px(4) = 36 bytes.
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct CircleVertex {
+    /// Screen position in CSS pixels.
     pos: [f32; 2],
+    /// UV in [-1,1] over the expanded quad (CSS_radius + 0.5 in each direction).
     uv: [f32; 2],
+    /// RGBA color.
     color: [f32; 4],
+    /// CSS radius of the dot in pixels (= border_width / 2).
+    radius_px: f32,
 }
 
 /// Вершина для SDF-скруглённого прямоугольника (`RRECT_SHADER_SRC`).
@@ -1508,6 +1523,11 @@ impl Renderer {
                             format: wgpu::VertexFormat::Float32x4,
                             offset: 16,
                             shader_location: 2,
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 32,
+                            shader_location: 3,
                         },
                     ],
                 }],
@@ -3163,68 +3183,119 @@ impl Renderer {
                         let cb_arr = apply_alpha_to_color(color_to_array(cb), alpha);
                         let cl_arr = apply_alpha_to_color(color_to_array(cl), alpha);
 
-                        // Top side (straight portion, trimmed by TL and TR corner squares).
+                        // Top side. Dashed spans full box width (Chrome/Edge — pattern covers
+                        // corners naturally). Other styles: trimmed + explicit corner fills.
+                        // Dotted corners use circle quads to match Edge's round dots at corners.
                         if *wt > 0.0 {
-                            let x0 = r.x + *wl;
-                            let x1 = r.x + r.width - *wr;
-                            if x1 > x0 {
+                            if *st == BorderStyle::Dashed {
                                 emit_border_side(
                                     &mut fill_vertices, &mut circle_vertices,
-                                    Rect::new(x0, r.y, x1 - x0, *wt),
+                                    Rect::new(r.x, r.y, r.width, *wt),
                                     true, *wt, ct_arr, *st,
                                 );
-                            }
-                            // TL corner solid fill (top border color).
-                            if *wl > 0.0 {
-                                push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, *wl, *wt), ct_arr);
-                            }
-                            // TR corner solid fill (top border color).
-                            if *wr > 0.0 {
-                                push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - *wr, r.y, *wr, *wt), ct_arr);
+                            } else {
+                                let x0 = r.x + *wl;
+                                let x1 = r.x + r.width - *wr;
+                                if x1 > x0 {
+                                    emit_border_side(
+                                        &mut fill_vertices, &mut circle_vertices,
+                                        Rect::new(x0, r.y, x1 - x0, *wt),
+                                        true, *wt, ct_arr, *st,
+                                    );
+                                }
+                                // TL corner: circle for Dotted, solid fill for everything else.
+                                if *wl > 0.0 {
+                                    if *st == BorderStyle::Dotted {
+                                        push_circle_quad(&mut circle_vertices, Rect::new(r.x, r.y, *wl, *wt), ct_arr);
+                                    } else {
+                                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y, *wl, *wt), ct_arr);
+                                    }
+                                }
+                                // TR corner.
+                                if *wr > 0.0 {
+                                    if *st == BorderStyle::Dotted {
+                                        push_circle_quad(&mut circle_vertices, Rect::new(r.x + r.width - *wr, r.y, *wr, *wt), ct_arr);
+                                    } else {
+                                        push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - *wr, r.y, *wr, *wt), ct_arr);
+                                    }
+                                }
                             }
                         }
-                        // Right side (straight portion, trimmed by TR and BR corner squares).
+                        // Right side. Dashed spans full box height (same rationale as top).
                         if *wr > 0.0 {
-                            let y0 = r.y + *wt;
-                            let y1 = r.y + r.height - *wb;
-                            if y1 > y0 {
+                            if *sr == BorderStyle::Dashed {
                                 emit_border_side(
                                     &mut fill_vertices, &mut circle_vertices,
-                                    Rect::new(r.x + r.width - *wr, y0, *wr, y1 - y0),
+                                    Rect::new(r.x + r.width - *wr, r.y, *wr, r.height),
                                     false, *wr, cr_arr, *sr,
                                 );
+                            } else {
+                                let y0 = r.y + *wt;
+                                let y1 = r.y + r.height - *wb;
+                                if y1 > y0 {
+                                    emit_border_side(
+                                        &mut fill_vertices, &mut circle_vertices,
+                                        Rect::new(r.x + r.width - *wr, y0, *wr, y1 - y0),
+                                        false, *wr, cr_arr, *sr,
+                                    );
+                                }
                             }
                         }
-                        // Bottom side (straight portion, trimmed by BL and BR corner squares).
+                        // Bottom side. Same as top: dashed spans full width, no corner fills;
+                        // dotted gets circle corner quads.
                         if *wb > 0.0 {
-                            let x0 = r.x + *wl;
-                            let x1 = r.x + r.width - *wr;
-                            if x1 > x0 {
+                            if *sb == BorderStyle::Dashed {
                                 emit_border_side(
                                     &mut fill_vertices, &mut circle_vertices,
-                                    Rect::new(x0, r.y + r.height - *wb, x1 - x0, *wb),
+                                    Rect::new(r.x, r.y + r.height - *wb, r.width, *wb),
                                     true, *wb, cb_arr, *sb,
                                 );
-                            }
-                            // BL corner solid fill (bottom border color).
-                            if *wl > 0.0 {
-                                push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y + r.height - *wb, *wl, *wb), cb_arr);
-                            }
-                            // BR corner solid fill (bottom border color).
-                            if *wr > 0.0 {
-                                push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - *wr, r.y + r.height - *wb, *wr, *wb), cb_arr);
+                            } else {
+                                let x0 = r.x + *wl;
+                                let x1 = r.x + r.width - *wr;
+                                if x1 > x0 {
+                                    emit_border_side(
+                                        &mut fill_vertices, &mut circle_vertices,
+                                        Rect::new(x0, r.y + r.height - *wb, x1 - x0, *wb),
+                                        true, *wb, cb_arr, *sb,
+                                    );
+                                }
+                                // BL corner.
+                                if *wl > 0.0 {
+                                    if *sb == BorderStyle::Dotted {
+                                        push_circle_quad(&mut circle_vertices, Rect::new(r.x, r.y + r.height - *wb, *wl, *wb), cb_arr);
+                                    } else {
+                                        push_fill_quad(&mut fill_vertices, Rect::new(r.x, r.y + r.height - *wb, *wl, *wb), cb_arr);
+                                    }
+                                }
+                                // BR corner.
+                                if *wr > 0.0 {
+                                    if *sb == BorderStyle::Dotted {
+                                        push_circle_quad(&mut circle_vertices, Rect::new(r.x + r.width - *wr, r.y + r.height - *wb, *wr, *wb), cb_arr);
+                                    } else {
+                                        push_fill_quad(&mut fill_vertices, Rect::new(r.x + r.width - *wr, r.y + r.height - *wb, *wr, *wb), cb_arr);
+                                    }
+                                }
                             }
                         }
-                        // Left side (straight portion, trimmed by TL and BL corner squares).
+                        // Left side. Dashed spans full box height (same rationale as top).
                         if *wl > 0.0 {
-                            let y0 = r.y + *wt;
-                            let y1 = r.y + r.height - *wb;
-                            if y1 > y0 {
+                            if *sl == BorderStyle::Dashed {
                                 emit_border_side(
                                     &mut fill_vertices, &mut circle_vertices,
-                                    Rect::new(r.x, y0, *wl, y1 - y0),
+                                    Rect::new(r.x, r.y, *wl, r.height),
                                     false, *wl, cl_arr, *sl,
                                 );
+                            } else {
+                                let y0 = r.y + *wt;
+                                let y1 = r.y + r.height - *wb;
+                                if y1 > y0 {
+                                    emit_border_side(
+                                        &mut fill_vertices, &mut circle_vertices,
+                                        Rect::new(r.x, y0, *wl, y1 - y0),
+                                        false, *wl, cl_arr, *sl,
+                                    );
+                                }
                             }
                         }
                     } else {
@@ -5138,20 +5209,24 @@ fn apply_affine_to_verts<V: VertexPos>(verts: &mut [V], m: &Mat4) {
     }
 }
 
-/// Эмитирует квад для SDF-круга. UV (-1..1) передаются шейдеру
-/// для discard-а за пределами окружности.
+/// Эмитирует квад для SDF-круга.
+///
+/// Quad расширяется на 0.5 CSS-px в каждую сторону от `rect`, чтобы шейдер
+/// мог рисовать внешнюю половину 1px AA-полосы (Skia-compatible linear AA).
+/// UV = ±1 соответствует CSS_radius + 0.5 px от центра.
 fn push_circle_quad(out: &mut Vec<CircleVertex>, rect: Rect, color: [f32; 4]) {
-    let x0 = rect.x;
-    let y0 = rect.y;
-    let x1 = rect.x + rect.width;
-    let y1 = rect.y + rect.height;
+    let radius_px = rect.width * 0.5;
+    let x0 = rect.x - 0.5;
+    let y0 = rect.y - 0.5;
+    let x1 = rect.x + rect.width + 0.5;
+    let y1 = rect.y + rect.height + 0.5;
     out.extend_from_slice(&[
-        CircleVertex { pos: [x0, y0], uv: [-1.0, -1.0], color },
-        CircleVertex { pos: [x1, y0], uv: [ 1.0, -1.0], color },
-        CircleVertex { pos: [x1, y1], uv: [ 1.0,  1.0], color },
-        CircleVertex { pos: [x0, y0], uv: [-1.0, -1.0], color },
-        CircleVertex { pos: [x1, y1], uv: [ 1.0,  1.0], color },
-        CircleVertex { pos: [x0, y1], uv: [-1.0,  1.0], color },
+        CircleVertex { pos: [x0, y0], uv: [-1.0, -1.0], color, radius_px },
+        CircleVertex { pos: [x1, y0], uv: [ 1.0, -1.0], color, radius_px },
+        CircleVertex { pos: [x1, y1], uv: [ 1.0,  1.0], color, radius_px },
+        CircleVertex { pos: [x0, y0], uv: [-1.0, -1.0], color, radius_px },
+        CircleVertex { pos: [x1, y1], uv: [ 1.0,  1.0], color, radius_px },
+        CircleVertex { pos: [x0, y1], uv: [-1.0,  1.0], color, radius_px },
     ]);
 }
 
@@ -5805,19 +5880,13 @@ pub(crate) fn apply_alpha_to_color(color: [f32; 4], alpha: f32) -> [f32; 4] {
 }
 
 /// Разбивает полосу длиной `total_length` на серию dash-сегментов
-/// `(offset, length)` по pattern-у `(dash_len, gap_len)`. Используется
-/// для outline-style Dashed/Dotted. Сегменты центрируются: если общая
-/// длина пользованного pattern-а меньше `total_length`, leftover делится
-/// поровну в leading/trailing — визуально аккуратные углы.
+/// `(offset, length)` по pattern-у `(dash_len, gap_len)`. Совпадает с
+/// Chrome/Edge (Skia): `n = floor(total / period)`, `leading = gap / 2`.
 ///
 /// Возвращает empty при degenerate-входе: `total_length <= 0`,
 /// `dash_len <= 0`. При `gap_len <= 0` возвращает один full-length сегмент
-/// (= Solid fallback, защищает от деления на ноль).
-///
-/// `n_dashes` — `floor((total_length + gap_len) / (dash_len + gap_len))`
-/// округлено вниз до >= 1. Последний даш обрезается до `total_length`,
-/// если pattern не помещается ровно (например, total=10, dash=3, gap=2 →
-/// 3 даша на 13 пытались бы, helper зажимает до 10 — обрезка финального).
+/// (= Solid fallback). Если полоса короче одного даша, возвращает один
+/// сегмент с offset=0.
 pub(crate) fn dash_segments(
     total_length: f32,
     dash_len: f32,
@@ -5830,10 +5899,11 @@ pub(crate) fn dash_segments(
         return vec![(0.0, total_length)];
     }
     let period = dash_len + gap_len;
-    let n_floor = ((total_length + gap_len) / period).floor() as i32;
+    let n_floor = (total_length / period).floor() as i32;
     let n_dashes = n_floor.max(1) as usize;
-    let used = n_dashes as f32 * dash_len + (n_dashes.saturating_sub(1)) as f32 * gap_len;
-    let leading = ((total_length - used) * 0.5).max(0.0);
+    // leading=gap/2 matches Chrome/Edge (Skia) phase offset.
+    // For too-short fallback (n_floor<1) start at corner (offset=0).
+    let leading = if n_floor >= 1 { gap_len * 0.5 } else { 0.0 };
     let mut out = Vec::with_capacity(n_dashes);
     let mut x = leading;
     for _ in 0..n_dashes {
@@ -5867,16 +5937,29 @@ fn emit_border_side(
     let total = if horizontal { side_rect.width } else { side_rect.height };
     match style {
         BorderStyle::Dashed => {
-            // 3:3 ratio matches Chrome/Edge (Skia) behavior: dash=3w, gap=3w.
-            let dash_len = (width * 3.0).max(1.0);
-            let gap_len = (width * 3.0).max(1.0);
-            for (offset, len) in dash_segments(total, dash_len, gap_len) {
-                let seg = if horizontal {
-                    Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
-                } else {
-                    Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, len)
-                };
-                push_fill_quad(out, seg, color);
+            // Chrome/Edge (Skia): full side width, n=round(total/period), leading=0.
+            // Dash=max(6,2w) and gap=max(4,w) reproduce Edge's observed n values:
+            //   2px→n=18, 4px→n=15, 8px→n=8, 16px→n=4 on a 180px side.
+            // Last dash is anchored to the far edge so no trailing gap (Skia-style).
+            let target_dash = (width * 2.0).max(6.0);
+            let target_gap = width.max(4.0);
+            let target_period = target_dash + target_gap;
+            let n = ((total / target_period).round() as usize).max(1);
+            let adjusted_period = total / n as f32;
+            let actual_dash = (target_dash / target_period * adjusted_period).round().max(1.0);
+            // Use period between starts = (total−D)/(n−1) so last dash ends exactly at total.
+            let step = if n > 1 { (total - actual_dash) / (n - 1) as f32 } else { 0.0 };
+            for i in 0..n {
+                let offset = (i as f32 * step).round();
+                let seg_end = (offset + actual_dash).min(total);
+                if seg_end > offset {
+                    let seg = if horizontal {
+                        Rect::new(side_rect.x + offset, side_rect.y, seg_end - offset, side_rect.height)
+                    } else {
+                        Rect::new(side_rect.x, side_rect.y + offset, side_rect.width, seg_end - offset)
+                    };
+                    push_fill_quad(out, seg, color);
+                }
             }
         }
         BorderStyle::Dotted => {
@@ -5937,7 +6020,7 @@ fn emit_outline_side(
     match style {
         OutlineStyle::Dashed => {
             let dash_len = (width * 3.0).max(1.0);
-            let gap_len = (width * 3.0).max(1.0);
+            let gap_len = width.max(1.0);
             for (offset, len) in dash_segments(total, dash_len, gap_len) {
                 let seg = if horizontal {
                     Rect::new(side_rect.x + offset, side_rect.y, len, side_rect.height)
@@ -6405,41 +6488,37 @@ mod tests {
 
     #[test]
     fn dash_segments_exact_fit() {
-        // dash=4, gap=2 → period=6; total=10 → (10+2)/6=2 dashes;
-        // used = 2*4 + 1*2 = 10; leading=(10-10)/2 = 0.
-        // Сегменты: (0, 4), (6, 4).
+        // dash=4, gap=2 → period=6; total=10 → floor(10/6)=1 dash;
+        // leading=gap/2=1; сегмент: (1, 4).
         let segs = dash_segments(10.0, 4.0, 2.0);
-        assert_eq!(segs.len(), 2);
-        assert!((segs[0].0 - 0.0).abs() < 1e-6);
+        assert_eq!(segs.len(), 1);
+        assert!((segs[0].0 - 1.0).abs() < 1e-6);
         assert!((segs[0].1 - 4.0).abs() < 1e-6);
-        assert!((segs[1].0 - 6.0).abs() < 1e-6);
-        assert!((segs[1].1 - 4.0).abs() < 1e-6);
     }
 
     #[test]
     fn dash_segments_centered_leftover() {
-        // dash=2, gap=2 → period=4; total=10 → (10+2)/4=3 dashes;
-        // used = 3*2 + 2*2 = 10; leading=0; сегменты (0,2),(4,2),(8,2).
+        // dash=2, gap=2 → period=4; total=10 → floor(10/4)=2 dashes;
+        // leading=gap/2=1; сегменты (1,2),(5,2).
         let segs = dash_segments(10.0, 2.0, 2.0);
-        assert_eq!(segs.len(), 3);
-        assert_eq!(segs[0], (0.0, 2.0));
-        assert_eq!(segs[1], (4.0, 2.0));
-        assert_eq!(segs[2], (8.0, 2.0));
+        assert_eq!(segs.len(), 2);
+        assert_eq!(segs[0], (1.0, 2.0));
+        assert_eq!(segs[1], (5.0, 2.0));
     }
 
     #[test]
     fn dash_segments_with_leftover_centers() {
-        // dash=2, gap=2 → period=4; total=11 → (11+2)/4=3 dashes;
-        // used=10; leading=(11-10)/2=0.5.
+        // dash=2, gap=2 → period=4; total=11 → floor(11/4)=2 dashes;
+        // leading=gap/2=1; segs[0].0=1.0.
         let segs = dash_segments(11.0, 2.0, 2.0);
-        assert_eq!(segs.len(), 3);
-        assert!((segs[0].0 - 0.5).abs() < 1e-6);
+        assert_eq!(segs.len(), 2);
+        assert!((segs[0].0 - 1.0).abs() < 1e-6);
     }
 
     #[test]
     fn dash_segments_too_short_one_dash() {
-        // total=3, dash=4, gap=2 — n_floor=(3+2)/6=0 → max(1)=1; used=4;
-        // leading=max((3-4)/2, 0)=0; сегмент (0,3) обрезается до total.
+        // total=3, dash=4, gap=2 — n_floor=floor(3/6)=0 → max(1)=1;
+        // leading=0 (too-short fallback); сегмент (0,3) обрезается до total.
         let segs = dash_segments(3.0, 4.0, 2.0);
         assert_eq!(segs.len(), 1);
         assert_eq!(segs[0].0, 0.0);
@@ -6448,17 +6527,18 @@ mod tests {
 
     #[test]
     fn dash_segments_dotted_pattern() {
-        // dot_len=2, gap=2 (как Dotted с width=2): total=10 → 3 точки на (0,2),(4,2),(8,2).
+        // dot_len=2, gap=2 (Dotted width=2): total=10 → floor(10/4)=2 dots;
+        // leading=1; dots at (1,2),(5,2).
         let segs = dash_segments(10.0, 2.0, 2.0);
-        assert_eq!(segs.len(), 3);
+        assert_eq!(segs.len(), 2);
     }
 
     #[test]
     fn dash_segments_count_for_typical_outline() {
         // Outline width=2, dashed: dash=4, gap=2; полоса 100 px.
-        // n=(100+2)/6=17 dashes; used=17*4 + 16*2 = 68+32 = 100; leading=0.
+        // n=floor(100/6)=16 dashes; leading=1.
         let segs = dash_segments(100.0, 4.0, 2.0);
-        assert_eq!(segs.len(), 17);
+        assert_eq!(segs.len(), 16);
     }
 
     // ── emit_border_side ──────────────────────────────────────────────────
@@ -6521,7 +6601,8 @@ mod tests {
 
     #[test]
     fn emit_border_side_dashed_produces_multiple_quads() {
-        // width=4 → dash=12, gap=12 (3:3 ratio); side 100 wide → several segments.
+        // width=4: target_dash=max(6,8)=8, target_gap=max(5,4)=5, period=13
+        // side=100 → n=round(100/13)=8 segments.
         let r = Rect::new(0.0, 0.0, 100.0, 4.0);
         let quads = collect_border_fill_quads(r, true, 4.0, BorderStyle::Dashed);
         assert!(quads.len() > 1, "dashed must produce multiple segments");
@@ -6534,13 +6615,14 @@ mod tests {
     fn emit_border_side_dotted_circle_segments() {
         // Dotted → SDF-circles (circle_verts), not fill quads.
         // width=4 → dot=4; horizontal side 40 wide → 5 dots.
+        // Each quad is expanded 0.5px on each side: height = 4+1 = 5.
         let r = Rect::new(0.0, 0.0, 40.0, 4.0);
         let fill_quads = collect_border_fill_quads(r, true, 4.0, BorderStyle::Dotted);
         let circle_quads = collect_border_circle_quads(r, true, 4.0, BorderStyle::Dotted);
         assert_eq!(fill_quads.len(), 0, "dotted must NOT produce fill quads");
         assert!(circle_quads.len() > 1, "dotted must produce circle quads");
         for q in &circle_quads {
-            assert_eq!(q.height, 4.0);
+            assert_eq!(q.height, 5.0, "expanded quad: dot_size + 1 = 5.0");
         }
     }
 
