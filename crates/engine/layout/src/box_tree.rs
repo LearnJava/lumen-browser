@@ -1997,12 +1997,16 @@ fn lay_out(
                     continue;
                 }
                 let is_run = matches!(b.children[i].kind, BoxKind::InlineRun { .. });
+                // Snap inline-block x to integer CSS pixels (Chrome/Edge behaviour at DPR=1).
+                // InlineSpace uses float advance (font metrics); accumulated sub-pixel error
+                // would shift all subsequent elements by up to 1px relative to Edge.
+                let place_x = if is_run { cur_x } else { cur_x.floor() };
                 let child_avail = if is_run {
                     (content_width - (cur_x - content_x)).max(0.0)
                 } else {
                     content_width
                 };
-                lay_out(&mut b.children[i], cur_x, cur_y, child_avail, None, measurer, viewport, children_pcb, hp);
+                lay_out(&mut b.children[i], place_x, cur_y, child_avail, None, measurer, viewport, children_pcb, hp);
                 if matches!(b.children[i].kind, BoxKind::Skip) {
                     continue;
                 }
@@ -2017,8 +2021,14 @@ fn lay_out(
                     let row_strut = if row_has_baseline { strut_descent } else { 0.0 };
                     let row_spacing = row_max_h + row_strut;
                     rows.push((row_y, row_max_h, row_has_baseline, std::mem::take(&mut cur_row)));
-                    total_h += row_spacing;
-                    cur_y += row_spacing;
+                    // Snap to integer CSS pixels (Chrome/Edge DPR=1 behaviour): fractional
+                    // IFC strut from font metrics (descent_px) would otherwise drift row
+                    // y-positions by sub-pixel amounts relative to a browser with a different
+                    // default font.
+                    let new_y = (cur_y + row_spacing).round();
+                    let actual_spacing = new_y - cur_y;
+                    total_h += actual_spacing;
+                    cur_y = new_y;
                     row_y = cur_y;
                     cur_x = content_x;
                     row_max_h = 0.0;
