@@ -1650,7 +1650,13 @@ fn lay_out(
     let contain_establishes_cb = s.contain.0
         & (ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0 | ContainFlags::STRICT.0) != 0;
     let children_pcb = if is_positioned || contain_establishes_cb {
-        Rect::new(b.rect.x, b.rect.y, b.rect.width, 0.0)
+        // CSS Position L3 §2.2: CB for absolute descendants = padding edge of the element.
+        Rect::new(
+            b.rect.x + s.border_left_width,
+            b.rect.y + s.border_top_width,
+            (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+            0.0,
+        )
     } else {
         pcb
     };
@@ -2136,8 +2142,13 @@ fn lay_out(
     // Обрабатываем после finalize b.rect.height, чтобы знать высоту containing block.
     if !abs_deferred.is_empty() {
         let my_pcb = if is_positioned {
-            // Padding-edge box (упрощение: border-edge, достаточно для Phase 1).
-            Rect::new(b.rect.x, b.rect.y, b.rect.width, b.rect.height)
+            // CSS Position L3 §2.2: CB for absolute descendants = padding edge.
+            Rect::new(
+                b.rect.x + s.border_left_width,
+                b.rect.y + s.border_top_width,
+                (b.rect.width - s.border_left_width - s.border_right_width).max(0.0),
+                (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0),
+            )
         } else {
             pcb
         };
@@ -2706,7 +2717,26 @@ fn lay_out_flex(
             let m_b = is.margin_bottom.resolve_or_zero(iem, cb, viewport);
             match &is.flex_basis {
                 FlexBasis::Auto | FlexBasis::Content => {
-                    if is_column { item.rect.height + m_t + m_b } else { item.rect.width + m_l + m_r }
+                    if is_column {
+                        item.rect.height + m_t + m_b
+                    } else {
+                        // CSS Flexbox §9.2: for auto flex-basis with no explicit width,
+                        // use the max-content main size. Approximate by finding the
+                        // widest child that has an explicit CSS width, rather than
+                        // using the container-stretched width from the preliminary pass.
+                        let w = if is.width.is_none() {
+                            let max_child_w = item
+                                .children
+                                .iter()
+                                .filter(|c| !matches!(c.kind, BoxKind::Skip) && c.style.width.is_some())
+                                .map(|c| c.rect.width)
+                                .fold(0.0_f32, f32::max);
+                            if max_child_w > 0.0 { max_child_w } else { item.rect.width }
+                        } else {
+                            item.rect.width
+                        };
+                        w + m_l + m_r
+                    }
                 }
                 FlexBasis::Length(l) => {
                     let base = l.resolve(iem, Some(cb), viewport).unwrap_or(0.0).max(0.0);

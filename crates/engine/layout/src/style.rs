@@ -8806,8 +8806,20 @@ fn apply_declaration(
                 None => {}
             }
         }
-        "background-color" | "background" => {
+        "background-color" => {
             if let Some(c) = parse_css_color_legacy(val, is_quirks) {
+                style.background_color = Some(c);
+            }
+        }
+        "background" => {
+            // CSS Backgrounds L3 §3.1 shorthand: <image> | <color>.
+            // Only simple single-layer values are handled here.
+            let trimmed = val.trim();
+            if is_gradient_function(trimmed) {
+                style.background_image = BackgroundImage::Gradient(parse_background_gradient(trimmed));
+            } else if let Some(url) = parse_url_value(trimmed) {
+                style.background_image = BackgroundImage::Url(url);
+            } else if let Some(c) = parse_css_color_legacy(trimmed, is_quirks) {
                 style.background_color = Some(c);
             }
         }
