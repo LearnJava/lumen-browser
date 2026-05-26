@@ -1,4 +1,5 @@
-In progress: —
+In progress: phase0-close  branch: p1-phase0-close
+Next step: обновить маркеры 🟡→✅ в lumen-plan.md для html-parser/css-parser/layout, объявить Phase 0 закрытой
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
