@@ -374,7 +374,9 @@ struct VOut {
 
 @fragment fn fs_main(in: VOut) -> @location(0) vec4<f32> {
     let c = textureSample(t_layer, s_layer, in.uv);
-    return vec4<f32>(c.rgb, c.a * in.alpha);
+    // Off-screen layers accumulate premultiplied-alpha content (ALPHA_BLENDING onto clear).
+    // Apply opacity to both rgb and alpha so premultiplied invariant is preserved.
+    return vec4<f32>(c.rgb * in.alpha, c.a * in.alpha);
 }
 "#;
 
@@ -1833,7 +1835,9 @@ impl Renderer {
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    // Premultiplied-alpha blend: off-screen layers store premultiplied content.
+                    // Shader multiplies rgb*opacity so "one * src + (1-src.a) * dst" is correct.
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
