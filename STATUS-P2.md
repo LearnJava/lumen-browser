@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: webp-decoder  branch: p2-webp-decoder
+Next step: ImageDecoder trait в lumen-core::ext + image-webp dep + decode_webp()  crates/engine/image/src/lib.rs
 
 Bug fixes rule: P2 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
