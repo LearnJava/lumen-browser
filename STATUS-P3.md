@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: observers-api  branch: p3-observers-api
+Next step: MutationObserver + ResizeObserver + IntersectionObserver + getBoundingClientRect  crates/js/src/dom.rs
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
