@@ -7025,33 +7025,40 @@ mod tests {
 
     #[test]
     fn inline_block_row_without_text_has_no_strut_descent() {
-        // BUG-023 regression: ряд из одних пустых inline-block-ов не должен
-        // получать font-baseline strut (~font_size*0.2). Без фикса каждый
-        // ряд накапливал +3.2px (Fixed8: descent_px default = 16*0.2 = 3.2)
-        // и смещал последующие блоки вниз.
-        let root = lay_measured(
+        // CSS §10.8 / Edge-верификация (TEST-11/TEST-12):
+        // ряд из baseline-aligned inline-block-ов получает strut_descent (3.2px).
+        // ряд из bottom-aligned inline-block-ов strut НЕ получает.
+        let root_baseline = lay_measured(
             "<div><span></span><span></span></div>",
             "span { display: inline-block; width: 50px; height: 80px; }",
-        body_w_or_default(),
+            body_w_or_default(),
         );
-        let div = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let div = root_baseline.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
         let row = div.children.iter().find(|c| matches!(&c.kind, BoxKind::InlineBlockRow)).unwrap();
-        // Без strut высота строки = max child margin-box = 80px.
+        // Default vertical-align = baseline → strut 3.2px добавляется. height = 83.2.
         assert!(
-            (row.rect.height - 80.0).abs() < 0.01,
-            "InlineBlockRow без текста должен иметь высоту 80 (без strut), got {}",
+            (row.rect.height - 83.2).abs() < 0.1,
+            "baseline-ряд: 83.2px (80+strut), got {}",
             row.rect.height
+        );
+        // bottom-aligned row: no strut.
+        let root_bottom = lay_measured(
+            "<div><span></span><span></span></div>",
+            "span { display: inline-block; width: 50px; height: 80px; vertical-align: bottom; }",
+            body_w_or_default(),
+        );
+        let div2 = root_bottom.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        let row2 = div2.children.iter().find(|c| matches!(&c.kind, BoxKind::InlineBlockRow)).unwrap();
+        assert!(
+            (row2.rect.height - 80.0).abs() < 0.1,
+            "bottom-ряд: 80px (нет strut), got {}",
+            row2.rect.height
         );
     }
 
     #[test]
     fn inline_block_row_with_text_keeps_strut_descent() {
-        // Контрольный случай: если в ряду есть текст (InlineRun), strut
-        // обязан добавлять descent под baseline, иначе сломается выравнивание
-        // текста с inline-block-ами по baseline. Сравниваем парную раскладку:
-        // ряд без текста должен быть ниже ряда с текстом, потому что
-        // в текстовом ряду InlineRun сам приносит ascent+descent, а strut
-        // дополнительно резервирует место под descent шрифта родителя.
+        // InlineRun всегда baseline-aligned → strut добавляется к ряду с текстом.
         let css = "span { display: inline-block; width: 50px; height: 20px; } \
                    div { font-size: 16px; }";
         let no_text = lay_measured("<div><span></span></div>", css, body_w_or_default());
@@ -7060,23 +7067,24 @@ mod tests {
             .find(|c| matches!(&c.kind, BoxKind::InlineBlockRow)).unwrap();
         let row_with_text = with_text.children[0].children.iter()
             .find(|c| matches!(&c.kind, BoxKind::InlineBlockRow)).unwrap();
+        // span default va=baseline → strut в обоих случаях. Оба ≥ 23.2.
+        let expected_min = 20.0 + 16.0 * 0.2;
         assert!(
-            (row_no_text.rect.height - 20.0).abs() < 0.01,
-            "Ряд без текста: 20px (inline-block.height), got {}",
+            row_no_text.rect.height >= expected_min - 0.1,
+            "Ряд без текста: ≥{expected_min:.1}px, got {}",
             row_no_text.rect.height
         );
         assert!(
-            row_with_text.rect.height > row_no_text.rect.height,
-            "Ряд с текстом должен быть выше ряда без текста (есть strut), got {} vs {}",
-            row_with_text.rect.height, row_no_text.rect.height
+            row_with_text.rect.height >= expected_min - 0.1,
+            "Ряд с текстом: ≥{expected_min:.1}px, got {}",
+            row_with_text.rect.height
         );
     }
 
     #[test]
     fn inline_block_rows_no_drift_after_block_sep() {
-        // BUG-023: при чередовании InlineBlockRow без текста и блоков-разделителей
-        // позиция последующего ряда не должна смещаться из-за phantom-descent
-        // в предыдущем ряду.
+        // baseline-aligned ряды добавляют strut_descent, bottom-aligned — нет.
+        // Fixed8 strut = 16*0.2 = 3.2. row1(83.2) + sep(40) + row2(83.2) = 206.4.
         let root = lay_measured(
             "<div>\
               <div class=ib></div><div class=ib></div>\
@@ -7088,11 +7096,28 @@ mod tests {
             body_w_or_default(),
         );
         let outer = root.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
-        // Ожидаемая раскладка: row1 (80) + sep (40) + row2 (80) = 200px.
+        // Default va=baseline → strut: row1(83.2) + sep(40) + row2(83.2) = 206.4.
         assert!(
-            (outer.rect.height - 200.0).abs() < 0.01,
-            "Сумма высот должна быть 200 (без накопления strut), got {}",
+            (outer.rect.height - 206.4).abs() < 0.2,
+            "baseline-ряды: 206.4px (2×strut 3.2px), got {}",
             outer.rect.height
+        );
+        // bottom-aligned ряды: нет strut → row1(80) + sep(40) + row2(80) = 200.
+        let root_bot = lay_measured(
+            "<div>\
+              <div class=ib></div><div class=ib></div>\
+              <div class=sep></div>\
+              <div class=ib></div><div class=ib></div>\
+             </div>",
+            ".ib { display: inline-block; width: 50px; height: 80px; vertical-align: bottom; } \
+             .sep { height: 40px; }",
+            body_w_or_default(),
+        );
+        let outer_bot = root_bot.children.iter().find(|c| matches!(&c.kind, BoxKind::Block)).unwrap();
+        assert!(
+            (outer_bot.rect.height - 200.0).abs() < 0.1,
+            "bottom-ряды: 200px (без strut), got {}",
+            outer_bot.rect.height
         );
     }
 
