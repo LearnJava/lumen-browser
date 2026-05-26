@@ -8,6 +8,23 @@ Role: P4 owns ALL CSS work. P1/P2/P3 do not write CSS properties.
 Full property roadmap and work queue — CSS-SPECS.md (P4 Priority Queue section).
 
 Needs wiring (algorithm ready, CSS not connected):
+  — ::first-letter / ::first-line structural markers (P1, branch p1-css-first-line-letter).
+    P4 task (::first-letter): look up `::first-letter` rule via
+    compute_pseudo_element_style(node, "first-letter"). Find segments where
+    `pseudo_kind == PseudoKind::FirstLetter` in InlineRun.segments. Override seg.style
+    with the resolved ::first-letter styles. Note: the whole first-text-node segment is
+    marked; P4 must split the first grapheme at display-list time if font-size changes.
+    Wire point: lay_out() in box_tree.rs, after wrap_inline_run() — see comment
+    "// CSS: ::first-letter — P4 wires: ...".
+
+  — ::first-line structural markers (P1, branch p1-css-first-line-letter).
+    P4 task (::first-line): look up `::first-line` rule via
+    compute_pseudo_element_style(node, "first-line"). Find InlineFrag entries where
+    `is_first_line == true` in InlineRun.lines[0]. Override frag.style with ::first-line
+    styles. Only inheritable properties apply per CSS spec.
+    Wire point: lay_out() in box_tree.rs, after wrap_inline_run() — see comment
+    "// CSS: ::first-line — P4 wires: ...".
+
   — :host / ::slotted pseudo-classes (Shadow DOM cascade + composed tree merged).
     P4 task: implement :host selector matching in `matches_complex` (matches shadow
     host from inside shadow tree) + ::slotted() functional pseudo-element matching.
