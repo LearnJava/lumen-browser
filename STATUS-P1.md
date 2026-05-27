@@ -1,4 +1,5 @@
-In progress: —
+In progress: selection-range  branch: p1-selection-range
+Next step: Selection + Range типы в lumen-dom/src/selection.rs  crates/engine/dom/src/lib.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
