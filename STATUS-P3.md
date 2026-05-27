@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: http-tls-client  branch: p3-http-tls-client
+Next step: wire BrotliContentDecoder + add Ctrl+L address bar  crates/shell/src/main.rs:619
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
