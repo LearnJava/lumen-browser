@@ -1,5 +1,7 @@
 In progress: —
-Next step: graphic-tests-migration (8A.6) — Rust structural tests for 22 HTML test files
+Next step: graphic-tests-migration (8A.6) — Rust structural tests for 22 HTML test files + PNG snapshots
+
+Recent (Wave 2 - 8A tasks): shell-as-driver-client-8a7-phase4b (GpuSession impl + render_to_gpu) 2026-05-28
 
 Phase 4 (shell-as-driver-client): completed 4a-4b
   ✓ 4a: GpuSession trait created (RenderedPage, gpu_session.rs)
