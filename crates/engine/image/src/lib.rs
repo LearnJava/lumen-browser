@@ -431,7 +431,7 @@ mod tests {
     fn area_avg_2x1_downscale_averages_correctly() {
         // 2×1 → 1×1: два горизонтальных пикселя, разный цвет.
         let data = vec![100, 0, 0, 255, 200, 0, 0, 255];
-        let src = Image { width: 2, height: 1, format: PixelFormat::Rgba8, data };
+        let src = Image { width: 2, height: 1, format: PixelFormat::Rgba8, data, icc_profile: None };
         let dst = resize_area_avg(&src, 1, 1);
         assert_eq!(dst.data[0], 150); // (100+200)/2
     }
