@@ -195,17 +195,17 @@ fn extract_title(doc: &lumen_dom::Document) -> Option<String> {
 
 fn walk_find_title(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> Option<String> {
     let node = doc.get(id);
-    if let lumen_dom::NodeData::Element { name, .. } = &node.data {
-        if name.local == "title" {
-            // Собрать весь текст внутри <title>
-            let mut text = String::new();
-            for &child in &node.children {
-                if let lumen_dom::NodeData::Text(s) = &doc.get(child).data {
-                    text.push_str(s);
-                }
+    if let lumen_dom::NodeData::Element { name, .. } = &node.data
+        && name.local == "title"
+    {
+        // Собрать весь текст внутри <title>
+        let mut text = String::new();
+        for &child in &node.children {
+            if let lumen_dom::NodeData::Text(s) = &doc.get(child).data {
+                text.push_str(s);
             }
-            return if text.is_empty() { None } else { Some(text) };
         }
+        return if text.is_empty() { None } else { Some(text) };
     }
     for &child in &node.children {
         if let Some(title) = walk_find_title(doc, child) {
@@ -214,6 +214,7 @@ fn walk_find_title(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> Option<S
     }
     None
 }
+
 
 /// Извлечь все <img> элементы из документа и их src.
 fn extract_images(doc: &lumen_dom::Document) -> Vec<(String, lumen_image::Image)> {
@@ -228,27 +229,27 @@ fn walk_collect_images(
     images: &mut Vec<(String, lumen_image::Image)>,
 ) {
     let node = doc.get(id);
-    if let lumen_dom::NodeData::Element { name, attrs, .. } = &node.data {
-        if name.local == "img" {
-            // Найти src атрибут
-            if let Some(src) = attrs.iter().find_map(|attr| {
-                if attr.name.local == "src" {
-                    Some(attr.value.clone())
-                } else {
-                    None
-                }
-            }) {
-                // Для Phase 4b: пока просто используем пустой Image placeholder.
-                // В Phase 4c будет реальная загрузка и декодирование изображений.
-                let placeholder = lumen_image::Image {
-                    width: 1,
-                    height: 1,
-                    format: lumen_image::PixelFormat::Rgba8,
-                    data: vec![0, 0, 0, 255], // 1x1 transparent pixel
-                    icc_profile: None,
-                };
-                images.push((src, placeholder));
+    if let lumen_dom::NodeData::Element { name, attrs, .. } = &node.data
+        && name.local == "img"
+    {
+        // Найти src атрибут
+        if let Some(src) = attrs.iter().find_map(|attr| {
+            if attr.name.local == "src" {
+                Some(attr.value.clone())
+            } else {
+                None
             }
+        }) {
+            // Для Phase 4b: пока просто используем пустой Image placeholder.
+            // В Phase 4c будет реальная загрузка и декодирование изображений.
+            let placeholder = lumen_image::Image {
+                width: 1,
+                height: 1,
+                format: lumen_image::PixelFormat::Rgba8,
+                data: vec![0, 0, 0, 255], // 1x1 transparent pixel
+                icc_profile: None,
+            };
+            images.push((src, placeholder));
         }
     }
     for &child in &node.children {
@@ -858,7 +859,7 @@ impl crate::GpuSession for WinitSession {
 
     fn navigate_streaming<F>(&mut self, url: &str, _on_chunk: F) -> crate::Result<()>
     where
-        F: FnMut(crate::RenderedPage) -> (),
+        F: FnMut(crate::RenderedPage),
     {
         // Phase 4: streaming is not yet implemented (требует event-loop).
         // For now, just do a normal navigate.

@@ -32,3 +32,5 @@ lumen-network = { workspace = true }
 lumen-storage = { workspace = true }
 # Exception #1: winit for OS windowing
 winit.workspace = true
+# Why this dependency (serde): serialization for network transport (MCP, BiDi) — permanent.
+serde = { version = "1.0", features = ["derive"] }

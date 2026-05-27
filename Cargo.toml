@@ -5,6 +5,7 @@ members = [
     "crates/core",
     "crates/devtools",
     "crates/driver",
+    "crates/mcp",
     "crates/js",
     "crates/network",
     "crates/storage",

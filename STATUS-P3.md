@@ -1,9 +1,10 @@
 In progress: —
 Next step: (Wave 3 tasks — automation API / anti-detection / tier lifecycle — see Queue below)
 
-Recent (Wave 2 - 8A tasks): 
-  - graphic-tests-migration-8a6 (50 Rust tests + PNG snapshots in crates/driver/tests/) 2026-05-28
+Recent (Wave 2/3 - automation API): 
+  - lumen-mcp-server-8b (Model Context Protocol transport, 5 resources + 7 tools, stdio server) 2026-05-28
   - shell-as-driver-client-8a7-phase4b (GpuSession impl + render_to_gpu) 2026-05-28
+  - graphic-tests-migration-8a6 (50 Rust tests + PNG snapshots in crates/driver/tests/) 2026-05-28
 
 Phase 4 (shell-as-driver-client): completed 4a-4b
   ✓ 4a: GpuSession trait created (RenderedPage, gpu_session.rs)
