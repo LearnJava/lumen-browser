@@ -37,6 +37,7 @@ use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
 use crate::display_list::{fit_image_quad, fit_image_rect, BlendMode, CornerRadii};
+use crate::fingerprint::GpuFingerprint;
 use lumen_image::{resize_area_avg, resize_bilinear};
 use crate::DisplayCommand;
 
@@ -1308,6 +1309,8 @@ pub struct Renderer {
     /// Maintains free textures keyed by (width, height) for reuse instead of
     /// allocating a new `wgpu::Texture` for each layer.
     texture_pool: crate::texture_pool::TexturePool,
+    /// Normalized GPU fingerprint: prevents WebGL renderer/vendor fingerprinting (ADR-007).
+    gpu_fingerprint: GpuFingerprint,
 }
 
 impl Renderer {
@@ -1369,6 +1372,9 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
+        let adapter_info = adapter.get_info();
+        let gpu_fingerprint = GpuFingerprint::from_adapter_info(&adapter_info);
+
         Self::init_pipelines(
             device,
             queue,
@@ -1379,6 +1385,7 @@ impl Renderer {
             0,
             0,
             scale_factor,
+            gpu_fingerprint,
         )
     }
 
@@ -1421,6 +1428,9 @@ impl Renderer {
         // and matches lumen_image::PixelFormat::Rgba8 for zero-copy readback.
         let format = wgpu::TextureFormat::Rgba8Unorm;
 
+        let adapter_info = adapter.get_info();
+        let gpu_fingerprint = GpuFingerprint::from_adapter_info(&adapter_info);
+
         Self::init_pipelines(
             device,
             queue,
@@ -1431,6 +1441,7 @@ impl Renderer {
             width.max(1),
             height.max(1),
             1.0,
+            gpu_fingerprint,
         )
     }
 
@@ -1448,6 +1459,7 @@ impl Renderer {
         headless_w: u32,
         headless_h: u32,
         scale_factor: f64,
+        gpu_fingerprint: GpuFingerprint,
     ) -> Result<Self, Box<dyn std::error::Error>> {
         // ── Uniform bind group (viewport) — общий для fill и text ──────────
         let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2474,6 +2486,7 @@ impl Renderer {
             cached_glyphs: HashMap::new(),
             pending_readback: None,
             texture_pool: crate::texture_pool::TexturePool::new(),
+            gpu_fingerprint,
         })
     }
 
@@ -2510,6 +2523,14 @@ impl Renderer {
                 FontStyle::Normal,
             );
         }
+    }
+
+    /// Returns the normalized GPU fingerprint (vendor/renderer strings).
+    ///
+    /// Returns ("WebKit", "Generic GPU") regardless of actual adapter to prevent
+    /// WebGL fingerprinting attacks (ADR-007 Layer 4).
+    pub fn gpu_fingerprint(&self) -> &GpuFingerprint {
+        &self.gpu_fingerprint
     }
 
     /// Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color

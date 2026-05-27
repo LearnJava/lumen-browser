@@ -320,7 +320,7 @@
 | 9C.5 | ⬜ Client Hints handling (опционально, выключено на Strict) | `network/src/http/client_hints.rs` | — |
 | 9D | ⬜ **`[P3+P2]` Layer 4: rendering fingerprint** (Phase 2) | Canvas/WebGL/audio randomization, Battery API disable, WebRTC mDNS-only | `lumen-canvas`, `lumen-paint`, `lumen-js` |
 | 9D.1 | ✅ Canvas randomization (Brave-style per-session seed) | `canvas/src/fp_noise.rs` | — |
-| 9D.2 | ⬜ WebGL renderer/vendor normalization | `js/src/webgl_bindings.rs` | — |
+| 9D.2 | 🟡 WebGL renderer/vendor normalization | `js/src/webgl_bindings.rs` | P1 done: GpuFingerprint normalization (paint/fingerprint.rs), JS stub (_LUMEN_GPU_VENDOR/_RENDERER); P3 pending: wire to getParameter(UNMASKED_VENDOR/RENDERER_WEBGL) |
 | 9D.3 | ⬜ AudioContext fingerprint noise | `js/src/audio_bindings.rs` | — |
 | 9D.4 | ⬜ Battery API disable on Strict | `js/src/battery_bindings.rs` | — |
 | 9D.5 | ⬜ WebRTC mDNS-only host candidates | `network/src/webrtc/candidates.rs` | при наличии WebRTC; иначе noop |
