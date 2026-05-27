@@ -1,5 +1,5 @@
 In progress: fts-omnibox  branch: p1-fts-omnibox
-Next step: Explore lumen-knowledge crate structure and History API storage  lumen-knowledge/src/history.rs
+Next step: Integrate HistoryWithFts with lumen-storage::History — add hooks for record_visit/delete  crates/knowledge/src/history.rs:54
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
