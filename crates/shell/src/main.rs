@@ -38,8 +38,9 @@ use lumen_core::event::{Event, FetchPriority, SubresourceKind};
 use lumen_core::ext::EventSink;
 use lumen_core::geom::{Point, Rect, Size};
 use lumen_devtools::DevToolsServer;
+use lumen_knowledge::HistoryFts;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
-use lumen_storage::{BfCache, BfCacheEntry};
+use lumen_storage::{BfCache, BfCacheEntry, SearchHistory};
 use lumen_dom::{
     Document, NodeData, NodeId, check_form_gate, check_navigation_gate,
     collect_iframes, check_popup_gate,
@@ -247,6 +248,10 @@ fn run_window_mode(
         no_scrollbar,
         first_paint_delivered: false,
         first_contentful_paint_delivered: false,
+        history_fts: HistoryFts::open_in_memory()
+            .unwrap_or_else(|_| HistoryFts::open_in_memory().expect("history_fts init")),
+        search_history: SearchHistory::open_in_memory()
+            .unwrap_or_else(|_| SearchHistory::open_in_memory().expect("search_history init")),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -2060,6 +2065,12 @@ struct Lumen {
     first_paint_delivered: bool,
     /// `true` once `first-contentful-paint` has been delivered to JS.
     first_contentful_paint_delivered: bool,
+    /// FTS5-индекс по тексту посещённых страниц — используется omnibox (@history).
+    /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
+    history_fts: HistoryFts,
+    /// История поисковых запросов для prefix-match autocomplete в omnibox.
+    /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
+    search_history: SearchHistory,
 }
 
 impl Lumen {
@@ -3422,7 +3433,7 @@ impl Lumen {
         key_event: &KeyEvent,
         event_loop: &ActiveEventLoop,
     ) {
-        let _ = event_loop; // зарезервировано на случай будущих action-ов
+        let _ = event_loop;
         match code {
             KeyCode::Escape if !key_event.repeat => {
                 self.address_bar.close();
@@ -3430,12 +3441,30 @@ impl Lumen {
             }
             KeyCode::Enter if !key_event.repeat => {
                 self.address_bar.commit();
-                if let Some(url) = self.address_bar.take_commit() {
-                    self.navigate_to(PageSource::from_arg(Some(&url)));
+                if let Some(value) = self.address_bar.take_commit() {
+                    // Записываем в search_history если это не URL.
+                    if !value.contains("://") && !value.starts_with('@') {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .unwrap_or_default()
+                            .as_secs() as i64;
+                        let _ = self.search_history.record(&value, now);
+                    }
+                    self.navigate_to(PageSource::from_arg(Some(&value)));
                 }
+            }
+            KeyCode::ArrowDown if !key_event.repeat => {
+                self.address_bar.select_next();
+                self.request_redraw();
+            }
+            KeyCode::ArrowUp if !key_event.repeat => {
+                self.address_bar.select_prev();
+                self.request_redraw();
             }
             KeyCode::Backspace => {
                 self.address_bar.backspace();
+                let sugg = self.query_omnibox_suggestions();
+                self.address_bar.set_suggestions(sugg);
                 self.request_redraw();
             }
             _ => {
@@ -3443,10 +3472,66 @@ impl Lumen {
                     && !text.is_empty()
                 {
                     self.address_bar.append_str(text);
+                    let sugg = self.query_omnibox_suggestions();
+                    self.address_bar.set_suggestions(sugg);
                     self.request_redraw();
                 }
             }
         }
+    }
+
+    /// Запрашивает подсказки для текущего ввода в адресной строке.
+    ///
+    /// `@history <query>` → FTS5-поиск по истории страниц.
+    /// Обычный ввод → prefix-match по search_history + FTS5.
+    fn query_omnibox_suggestions(&self) -> Vec<address_bar::OmniboxSuggestion> {
+        use address_bar::{OmniboxPrefix, OmniboxSuggestion, parse_omnibox_prefix};
+
+        let input = self.address_bar.input();
+        if input.is_empty() {
+            return Vec::new();
+        }
+
+        let (prefix, query) = parse_omnibox_prefix(input);
+        let mut suggestions = Vec::new();
+
+        match prefix {
+            OmniboxPrefix::History => {
+                // @history <query> — только FTS.
+                if !query.is_empty() && let Ok(hits) = self.history_fts.search(query, 7) {
+                    for hit in hits {
+                        suggestions.push(OmniboxSuggestion::HistoryFts {
+                            url: hit.url,
+                            title: hit.title,
+                            snippet: hit.snippet,
+                        });
+                    }
+                }
+            }
+            OmniboxPrefix::Plain => {
+                // prefix-match по search_history (до 4 строк).
+                if let Ok(queries) = self.search_history.prefix_match(query, 4) {
+                    for q in queries {
+                        suggestions.push(OmniboxSuggestion::SearchQuery {
+                            query: q.query,
+                            frequency: q.frequency,
+                        });
+                    }
+                }
+                // FTS5 по истории страниц (до 4 строк, итого ≤ 8).
+                if let Ok(hits) = self.history_fts.search(query, 4) {
+                    for hit in hits {
+                        suggestions.push(OmniboxSuggestion::HistoryFts {
+                            url: hit.url,
+                            title: hit.title,
+                            snippet: hit.snippet,
+                        });
+                    }
+                }
+            }
+        }
+
+        suggestions
     }
 
     fn handle_find_key(&mut self, code: KeyCode, key_event: &KeyEvent) {
