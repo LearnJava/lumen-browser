@@ -188,3 +188,30 @@ pub enum InputCommand {
     /// Обновляет позицию скролла и создаёт scroll событие с isTrusted=true.
     Scroll { delta_x: f32, delta_y: f32 },
 }
+
+/// Профиль отпечатка браузера (fingerprint profile) для BrowserSession.
+///
+/// Определяет уровень приватности и анти-детектирующие меры:
+/// - TLS cipher suite ordering (соответствие Chrome, rustls defaults, или Tor Browser).
+/// - HTTP header order и User-Agent.
+/// - JS API returns (canvas randomization, WebGL strings, etc.) — реализуется в Phase 2.
+///
+/// По ADR-007 §6, профили распределены:
+/// - **Standard** (default) — базовая приватность, выглядит как Chrome.
+/// - **Strict** — высокая приватность, похожа на Firefox Strict / Tor Browser.
+/// - **Tor** — Tor Browser fingerprint pinning (для будущей интеграции).
+///
+/// # Примеры
+/// ```ignore
+/// let mut session = InProcessSession::new();
+/// session.set_fingerprint_profile(FingerprintProfile::Strict)?;
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FingerprintProfile {
+    /// Стандартный профиль (по умолчанию): выглядит как текущий Chrome, не вызывает внимание.
+    Standard,
+    /// Строгий профиль: высокая приватность, похожа на Firefox/Tor, может быть медленнее из-за дополнительных проверок.
+    Strict,
+    /// Tor Browser профиль: pinned JA3 + UA + screen + fonts (Phase 3+).
+    Tor,
+}
