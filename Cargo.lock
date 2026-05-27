@@ -1255,6 +1255,7 @@ dependencies = [
  "lumen-html-parser",
  "lumen-image",
  "lumen-layout",
+ "tiny-skia",
  "wgpu",
  "winit",
 ]
@@ -2365,6 +2366,7 @@ dependencies = [
  "bytemuck",
  "cfg-if",
  "log",
+ "png",
  "tiny-skia-path",
 ]
 
