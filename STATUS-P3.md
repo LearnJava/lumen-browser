@@ -1,5 +1,5 @@
-In progress: mock-http-client (8E.1) — MockTransport для перехвата HTTP в тестах  branch: p3-mock-http-client
-Next step: реализовать pub struct MockTransport с методом add_fixture  crates/network/src/lib.rs
+In progress: —
+Next step: mock-http-client (8E.1+P2) → решено 2026-05-27; branch: p3-mock-http-client (готов к мержу)
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
