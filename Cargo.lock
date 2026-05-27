@@ -1210,6 +1210,7 @@ dependencies = [
  "lumen-html-parser",
  "lumen-image",
  "lumen-js",
+ "lumen-knowledge",
  "lumen-layout",
  "lumen-network",
  "lumen-paint",

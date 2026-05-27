@@ -17,6 +17,7 @@ pub mod box_tree;
 pub mod counters;
 pub mod property_trees;
 pub mod selection;
+pub mod selector_query;
 pub mod snapshot;
 pub mod stacking;
 pub mod style;
@@ -41,6 +42,9 @@ pub use property_trees::{
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
 pub use selection::{caret_at_point, selection_rects};
+pub use selector_query::{
+    computed_style_by_selector, find_all_by_selector, find_box_by_selector, ComputedStyleSnapshot,
+};
 pub use text_iter::{collect_visible_text, TextFragment};
 pub use snapshot::serialize_layout_tree;
 pub use stacking::{

@@ -982,6 +982,13 @@ pub fn parse_inline_style(input: &str) -> Vec<Declaration> {
     Parser::new(input).parse_declaration_block()
 }
 
+/// Парсит строку CSS selector list (через запятую) и возвращает разобранные
+/// `ComplexSelector`-ы. Невалидные или неизвестные части молча пропускаются.
+/// Используется lumen-layout для selector-based lookup (find_box_by_selector).
+pub fn parse_selector_list(input: &str) -> Vec<ComplexSelector> {
+    Parser::new(input).parse_selector_list()
+}
+
 enum AtRuleOutcome {
     Property(PropertyRule),
     Media(MediaRule),
