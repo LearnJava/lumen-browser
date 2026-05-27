@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: sandbox-dom-apply  branch: p3-sandbox-dom-apply
+Next step: add IframeInfo + collect_iframes() to dom, check_popup_gate(), wire shell  dom/src/lib.rs:1370
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
@@ -9,10 +9,9 @@ CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
 Bug fixes rule: P3 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
 Next:
-- sandbox-dom-apply: применить SandboxFlags из <iframe sandbox> в shell при навигации iframe — ограничить JS/forms/popups; SandboxFlags::parse_sandbox_value готов
+- fts-omnibox: интегрировать lumen-knowledge::HistoryFts с omnibox — @history prefix + Porter stemmer для русского языка
 
 Queue (Wave 2):
-- fts-omnibox: интегрировать lumen-knowledge::HistoryFts с omnibox — @history prefix + Porter stemmer для русского языка
 - http2-client: HTTP/2 через h2 crate (provisional) — multiplexing для реальных сайтов; бэкэнд-замена HttpClient без смены публичного API
 - preconnect-hints: обработать <link rel=preconnect> из preload_scanner — открыть TCP+TLS соединение заранее
 
