@@ -69,6 +69,8 @@ regex = "1"
 # Graduation: permanent (используется во всех крейтах где нужен snapshot/IPC).
 serde = { version = "1", features = ["derive"] }
 bincode = "1"
+# Provisional: flate2 для ICC profile decompression в PNG (iCCP chunk uses deflate).
+flate2 = "1"
 
 [profile.dev]
 opt-level = 1

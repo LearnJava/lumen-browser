@@ -86,6 +86,7 @@ pub fn decode_gif(bytes: &[u8]) -> Result<Image, GifError> {
         height,
         format: PixelFormat::Rgba8,
         data: buffer,
+        icc_profile: None,
     })
 }
 

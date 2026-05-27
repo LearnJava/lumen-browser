@@ -48,7 +48,7 @@ pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
     }
     if is_webp(bytes) {
         let (width, height, data) = decode_webp(bytes).map_err(ImageError::Webp)?;
-        return Ok(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None });
+        return Ok(Image { width, height, format: PixelFormat::Rgba8, data });
     }
     Err(ImageError::UnknownFormat)
 }
@@ -95,23 +95,6 @@ impl From<GifError> for ImageError {
     fn from(e: GifError) -> Self { Self::Gif(e) }
 }
 
-/// ICC профиль изображения (опциональный).
-///
-/// Содержит сырые данные ICC профиля.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct IccProfile {
-    /// Сырые байты ICC профиля.
-    pub data: Vec<u8>,
-}
-
-impl IccProfile {
-    /// Проверяет минимальный размер ICC профиля (128 байт).
-    #[must_use]
-    pub fn is_valid(&self) -> bool {
-        self.data.len() >= 128
-    }
-}
-
 /// Декодированное растровое изображение в плотной row-major упаковке.
 /// Длина `data` равна `width * height * bytes_per_pixel(format)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,8 +103,6 @@ pub struct Image {
     pub height: u32,
     pub format: PixelFormat,
     pub data: Vec<u8>,
-    /// Опциональный ICC профиль изображения.
-    pub icc_profile: Option<IccProfile>,
 }
 
 impl Image {
@@ -194,7 +175,7 @@ pub fn resize_bilinear(src: &Image, dst_w: u32, dst_h: u32) -> Image {
         }
     }
 
-    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out, icc_profile: None }
+    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out }
 }
 
 /// Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter).
@@ -259,7 +240,7 @@ pub fn resize_area_avg(src: &Image, dst_w: u32, dst_h: u32) -> Image {
         }
     }
 
-    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out, icc_profile: None }
+    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out }
 }
 
 /// Формат пикселя декодированного изображения. Все варианты — 8 бит на канал.
@@ -408,7 +389,7 @@ mod tests {
 
     fn solid_image(w: u32, h: u32, r: u8, g: u8, b: u8, a: u8) -> Image {
         let data = vec![r, g, b, a].into_iter().cycle().take((w * h * 4) as usize).collect();
-        Image { width: w, height: h, format: PixelFormat::Rgba8, data, icc_profile: None }
+        Image { width: w, height: h, format: PixelFormat::Rgba8, data }
     }
 
     #[test]
@@ -431,7 +412,7 @@ mod tests {
     fn area_avg_2x1_downscale_averages_correctly() {
         // 2×1 → 1×1: два горизонтальных пикселя, разный цвет.
         let data = vec![100, 0, 0, 255, 200, 0, 0, 255];
-        let src = Image { width: 2, height: 1, format: PixelFormat::Rgba8, data, icc_profile: None };
+        let src = Image { width: 2, height: 1, format: PixelFormat::Rgba8, data };
         let dst = resize_area_avg(&src, 1, 1);
         assert_eq!(dst.data[0], 150); // (100+200)/2
     }
