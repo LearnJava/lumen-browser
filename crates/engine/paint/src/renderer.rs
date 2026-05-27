@@ -1197,7 +1197,11 @@ struct ParsedFace<'a> {
 }
 
 pub struct Renderer {
-    surface: wgpu::Surface<'static>,
+    /// Winit surface — `None` in headless mode (created via [`Renderer::new_headless`]).
+    surface: Option<wgpu::Surface<'static>>,
+    /// Persistent render target for headless mode. `None` when using a winit surface.
+    /// Размер совпадает с `config.width × config.height`; пересоздаётся при `resize`.
+    headless_texture: Option<wgpu::Texture>,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -1347,6 +1351,95 @@ impl Renderer {
         };
         surface.configure(&device, &config);
 
+        Self::new_impl(Some(surface), None, device, queue, config, scale_factor, format, font_bytes).await
+    }
+
+    /// Создаёт рендер без winit-окна для BrowserSession::screenshot() и in-process
+    /// pixel snapshots в graphic_tests. Использует headless wgpu adapter без surface.
+    ///
+    /// `width` × `height` — размер render target в физических пикселях.
+    /// Scale factor в headless режиме равен 1.0 (1 CSS px = 1 device px).
+    /// После создания вызывай [`Self::render_to_image`] вместо [`Self::render`].
+    pub fn new_headless(
+        width: u32,
+        height: u32,
+        font_bytes: Vec<u8>,
+    ) -> Result<Self, Box<dyn Error>> {
+        Font::parse(&font_bytes).map_err(|e| format!("парсинг шрифта: {e}"))?;
+        block_on(Self::new_headless_async(width, height, font_bytes))
+    }
+
+    async fn new_headless_async(
+        width: u32,
+        height: u32,
+        font_bytes: Vec<u8>,
+    ) -> Result<Self, Box<dyn Error>> {
+        let width = width.max(1);
+        let height = height.max(1);
+
+        let instance = wgpu::Instance::default();
+        // Headless: без совместимого surface — адаптер выбирается без ограничений.
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::None,
+                compatible_surface: None,
+                force_fallback_adapter: false,
+            })
+            .await?;
+        let (device, queue) = adapter
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("lumen-headless-device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::downlevel_defaults(),
+                memory_hints: wgpu::MemoryHints::default(),
+                trace: wgpu::Trace::Off,
+            })
+            .await?;
+
+        // Rgba8Unorm — портабельный формат: RENDER_ATTACHMENT + COPY_SRC на всех
+        // desktop-бэкэндах (DX12/Vulkan/Metal). Байтовый порядок: R G B A.
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format,
+            width,
+            height,
+            present_mode: wgpu::PresentMode::Fifo,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: vec![],
+            desired_maximum_frame_latency: 2,
+        };
+
+        let headless_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("headless-target"),
+            size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            // RENDER_ATTACHMENT: рендер пишет сюда вместо surface.
+            // COPY_SRC: render_to_image читает пиксели через staging buffer.
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+
+        Self::new_impl(None, Some(headless_texture), device, queue, config, 1.0, format, font_bytes).await
+    }
+
+    /// Общий путь создания GPU объектов для windowed и headless режимов.
+    /// Вызывается из [`new_async`] и [`new_headless_async`] после платформо-специфичного
+    /// setup-а. `surface` = `None` в headless; `headless_texture` = `None` в windowed.
+    #[allow(clippy::too_many_arguments)]
+    async fn new_impl(
+        surface: Option<wgpu::Surface<'static>>,
+        headless_texture: Option<wgpu::Texture>,
+        device: wgpu::Device,
+        queue: wgpu::Queue,
+        config: wgpu::SurfaceConfiguration,
+        scale_factor: f64,
+        format: wgpu::TextureFormat,
+        font_bytes: Vec<u8>,
+    ) -> Result<Self, Box<dyn Error>> {
         // ── Uniform bind group (viewport) — общий для fill и text ──────────
         let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("uniform-bgl"),
@@ -2323,6 +2416,7 @@ impl Renderer {
 
         Ok(Self {
             surface,
+            headless_texture,
             device,
             queue,
             config,
@@ -2754,8 +2848,23 @@ impl Renderer {
         if width > 0 && height > 0 {
             self.config.width = width;
             self.config.height = height;
-            self.surface.configure(&self.device, &self.config);
+            if let Some(ref surface) = self.surface {
+                surface.configure(&self.device, &self.config);
+            }
             self.layer_textures.clear();
+            // Headless: пересоздаём render target нового размера.
+            if self.headless_texture.is_some() {
+                self.headless_texture = Some(self.device.create_texture(&wgpu::TextureDescriptor {
+                    label: Some("headless-target"),
+                    size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: self.surface_format,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                    view_formats: &[],
+                }));
+            }
         }
     }
 
@@ -4274,10 +4383,18 @@ impl Renderer {
         let mut temp_grad_textures: Vec<(wgpu::Texture, wgpu::TextureView)> = Vec::new();
 
         // ── Frame ─────────────────────────────────────────────────────────
-        let frame = self.surface.get_current_texture()?;
-        let frame_view = frame
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        // Windowed mode: получаем текущий swap-chain texture от surface.
+        // Headless mode: рендерим в pre-allocated headless_texture (RENDER_ATTACHMENT).
+        let frame_opt: Option<wgpu::SurfaceTexture> = if let Some(ref surface) = self.surface {
+            Some(surface.get_current_texture()?)
+        } else {
+            None
+        };
+        let frame_view: wgpu::TextureView = match (&frame_opt, &self.headless_texture) {
+            (Some(frame), _) => frame.texture.create_view(&wgpu::TextureViewDescriptor::default()),
+            (None, Some(tex)) => tex.create_view(&wgpu::TextureViewDescriptor::default()),
+            (None, None) => return Err(wgpu::SurfaceError::Lost),
+        };
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -5005,8 +5122,100 @@ impl Renderer {
         }
 
         self.queue.submit([encoder.finish()]);
-        frame.present();
+        if let Some(frame) = frame_opt {
+            frame.present();
+        }
         Ok(())
+    }
+
+    /// Рендерит display list в CPU-буфер без отображения в окне.
+    ///
+    /// Требует headless-режима (создан через [`Self::new_headless`]).
+    /// Рендерит в внутреннюю headless-текстуру, затем копирует пиксели
+    /// через wgpu staging buffer. Возвращает [`lumen_image::Image`] формата
+    /// `Rgba8` размером `width × height` (как в конструкторе [`Self::new_headless`]).
+    ///
+    /// Используется для `BrowserSession::screenshot()` и in-process pixel
+    /// сравнений в graphic_tests без winit/gdigrab/ffmpeg.
+    pub fn render_to_image(
+        &mut self,
+        content: &[DisplayCommand],
+        overlay: &[DisplayCommand],
+        scroll_y: f32,
+        scroll_x: f32,
+    ) -> Result<lumen_image::Image, Box<dyn Error>> {
+        if self.headless_texture.is_none() {
+            return Err("render_to_image требует headless-режима (new_headless)".into());
+        }
+
+        self.render(content, overlay, scroll_y, scroll_x)
+            .map_err(|e| format!("рендер: {e:?}"))?;
+
+        let tex = self.headless_texture.as_ref().expect("checked above");
+        let width = self.config.width;
+        let height = self.config.height;
+
+        // wgpu требует bytes_per_row кратного 256.
+        let bytes_per_row_unpadded = width * 4;
+        let bytes_per_row = (bytes_per_row_unpadded + 255) & !255;
+        let buf_size = u64::from(bytes_per_row) * u64::from(height);
+
+        let staging_buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("headless-readback"),
+            size: buf_size,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+
+        let mut enc = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("readback-encoder"),
+        });
+        enc.copy_texture_to_buffer(
+            wgpu::TexelCopyTextureInfo {
+                texture: tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            wgpu::TexelCopyBufferInfo {
+                buffer: &staging_buf,
+                layout: wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(bytes_per_row),
+                    rows_per_image: Some(height),
+                },
+            },
+            wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
+        );
+        self.queue.submit([enc.finish()]);
+
+        // Ожидаем завершения GPU перед map.
+        let slice = staging_buf.slice(..);
+        let (tx, rx) = std::sync::mpsc::channel();
+        slice.map_async(wgpu::MapMode::Read, move |r| {
+            let _ = tx.send(r);
+        });
+        self.device.poll(wgpu::PollType::Wait)?;
+        rx.recv()
+            .map_err(|e| format!("readback channel: {e}"))?
+            .map_err(|e| format!("map_async: {e:?}"))?;
+
+        let raw = slice.get_mapped_range();
+        let row_bytes = (width * 4) as usize;
+        let padded = bytes_per_row as usize;
+        let mut pixels: Vec<u8> = Vec::with_capacity(row_bytes * height as usize);
+        for row in 0..height as usize {
+            pixels.extend_from_slice(&raw[row * padded..row * padded + row_bytes]);
+        }
+        drop(raw);
+        staging_buf.unmap();
+
+        Ok(lumen_image::Image {
+            width,
+            height,
+            format: lumen_image::PixelFormat::Rgba8,
+            data: pixels,
+        })
     }
 }
 
