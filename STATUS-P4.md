@@ -32,6 +32,12 @@ Needs wiring (algorithm ready, CSS not connected):
     "// CSS: :host, ::slotted — P4 wires shadow-scoped styles here".
     Branch: new branch for this P4 task.
 
+  — SVG presentational attributes fill/stroke/stroke-width/stroke-opacity/fill-opacity
+    (P1, branch p1-svg-layout-basic). P4 task: add fill/stroke fields to ComputedStyle,
+    parse in apply_declaration(), read in emit_svg_shape() in display_list.rs instead of
+    hardcoded Color::BLACK. SVG shape boxes expose shape params via SvgShapeKind.
+    Wire point: display_list.rs emit_svg_shape() — see comments "// CSS: fill, stroke — P4 wires".
+
   — @font-face registry wired in shell (branch: font-face-loading).
     P4 task: wire font-weight/font-style/font-stretch descriptors from
     FontFaceRule into FontRegistry::register_from_bytes calls.

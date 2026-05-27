@@ -49,6 +49,37 @@ fn is_picture_element(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// SVG `viewBox="min-x min-y width height"` attribute. Maps SVG user-unit space
+/// to the CSS pixel rect of the `<svg>` element. All four values are in SVG user units.
+#[derive(Debug, Clone)]
+pub struct ViewBox {
+    /// Left edge of the SVG viewport in user units.
+    pub min_x: f32,
+    /// Top edge of the SVG viewport in user units.
+    pub min_y: f32,
+    /// Width of the SVG viewport in user units (> 0).
+    pub width: f32,
+    /// Height of the SVG viewport in user units (> 0).
+    pub height: f32,
+}
+
+/// Geometric primitive for an SVG shape element in SVG user units (before viewBox scaling).
+/// Coordinate origin: top-left of the SVG viewport.
+#[derive(Debug, Clone)]
+pub enum SvgShapeKind {
+    /// `<rect x y width height rx ry>`. Corner radii `rx`/`ry` default to 0 (sharp corners).
+    Rect { x: f32, y: f32, width: f32, height: f32, rx: f32, ry: f32 },
+    /// `<circle cx cy r>`. Center at (cx, cy), radius r.
+    Circle { cx: f32, cy: f32, r: f32 },
+    /// `<ellipse cx cy rx ry>`. Center at (cx, cy), horizontal radius rx, vertical ry.
+    Ellipse { cx: f32, cy: f32, rx: f32, ry: f32 },
+    /// `<line x1 y1 x2 y2>`. Segment from (x1,y1) to (x2,y2).
+    Line { x1: f32, y1: f32, x2: f32, y2: f32 },
+    /// `<path d="...">`. SVG path data string; bounding box computed by paint.
+    /// CSS: fill, stroke, stroke-width — P4 wires via ComputedStyle svg_fill/svg_stroke.
+    Path { d: String },
+}
+
 /// Вид form control — используется в `BoxKind::FormControl` для paint-специализаций
 /// (фокус-рамка, checkbox/radio indicator, placeholder, стрелка select и т.д.).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,6 +111,276 @@ struct ImageSource {
     url: String,
     intrinsic_width: Option<u32>,
     intrinsic_height: Option<u32>,
+}
+
+// ─── SVG helpers ─────────────────────────────────────────────────────────────
+
+/// Returns `true` when `id` is an `<svg>` element.
+/// Note: the HTML5 parser does not yet implement foreign-content mode, so all
+/// elements (including SVG ones) are created with `Namespace::Html`. We detect
+/// SVG elements by local name until the parser gains full foreign-content support.
+fn is_svg_root(doc: &Document, id: NodeId) -> bool {
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local.eq_ignore_ascii_case("svg")
+    )
+}
+
+/// Parses a float attribute from the given element; returns 0.0 if absent or non-numeric.
+fn svg_attr_f32(doc: &Document, id: NodeId, attr: &str) -> f32 {
+    doc.get(id)
+        .get_attr(attr)
+        .and_then(|v| v.trim().parse::<f32>().ok())
+        .unwrap_or(0.0)
+}
+
+/// Parses the SVG `viewBox="min-x min-y width height"` attribute.
+/// Returns `None` if the attribute is absent or malformed.
+fn parse_view_box(doc: &Document, id: NodeId) -> Option<ViewBox> {
+    let s = doc.get(id).get_attr("viewBox")?;
+    let vals: Vec<f32> = s
+        .split(|c: char| c.is_whitespace() || c == ',')
+        .filter(|p| !p.is_empty())
+        .filter_map(|p| p.parse::<f32>().ok())
+        .collect();
+    if vals.len() < 4 || vals[2] <= 0.0 || vals[3] <= 0.0 {
+        return None;
+    }
+    Some(ViewBox { min_x: vals[0], min_y: vals[1], width: vals[2], height: vals[3] })
+}
+
+/// Builds `SvgShape` and `Block` (for `<g>`) layout boxes for the SVG subtree rooted at
+/// `parent_id`. Because the HTML5 parser does not implement SVG foreign-content mode, self-
+/// closing SVG tags like `<rect/>` are treated as open tags and subsequent siblings become
+/// DOM children. This function performs a depth-first recursive scan, collecting SVG shape
+/// elements wherever they appear in the subtree.
+fn build_svg_children(
+    doc: &Document,
+    sheet: &Stylesheet,
+    parent_id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+) -> Vec<LayoutBox> {
+    let mut out = Vec::new();
+    collect_svg_shapes(doc, sheet, parent_id, inherited, viewport, flat, &mut out);
+    out
+}
+
+/// Recursively collects SVG shape and group boxes from the DOM subtree of `parent_id`.
+/// Handles the HTML5 parser's incorrect nesting of self-closing SVG tags: when a `<rect/>`
+/// is parsed as an open element, its DOM children (intended siblings) are also scanned.
+fn collect_svg_shapes(
+    doc: &Document,
+    sheet: &Stylesheet,
+    parent_id: NodeId,
+    inherited: &ComputedStyle,
+    viewport: Size,
+    flat: &FlatTree,
+    out: &mut Vec<LayoutBox>,
+) {
+    for child_id in flat.children_of(doc, parent_id) {
+        let child_id = *child_id;
+        let Some(name) = doc.get(child_id).element_name() else {
+            continue; // text node / comment / etc.
+        };
+        let style = crate::style::compute_style(doc, child_id, sheet, inherited, viewport);
+        if style.display == crate::style::Display::None {
+            continue;
+        }
+        match name.local.as_str() {
+            "rect" => {
+                out.push(LayoutBox {
+                    node: child_id, rect: Rect::ZERO, style,
+                    kind: BoxKind::SvgShape {
+                        shape: SvgShapeKind::Rect {
+                            x: svg_attr_f32(doc, child_id, "x"),
+                            y: svg_attr_f32(doc, child_id, "y"),
+                            width: svg_attr_f32(doc, child_id, "width"),
+                            height: svg_attr_f32(doc, child_id, "height"),
+                            rx: svg_attr_f32(doc, child_id, "rx"),
+                            ry: svg_attr_f32(doc, child_id, "ry"),
+                        },
+                    },
+                    children: vec![], col_span: 1, row_span: 1,
+                });
+                // Recurse: incorrectly-nested siblings (HTML5 parser wraps them inside rect).
+                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+            }
+            "circle" => {
+                out.push(LayoutBox {
+                    node: child_id, rect: Rect::ZERO, style,
+                    kind: BoxKind::SvgShape {
+                        shape: SvgShapeKind::Circle {
+                            cx: svg_attr_f32(doc, child_id, "cx"),
+                            cy: svg_attr_f32(doc, child_id, "cy"),
+                            r: svg_attr_f32(doc, child_id, "r"),
+                        },
+                    },
+                    children: vec![], col_span: 1, row_span: 1,
+                });
+                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+            }
+            "ellipse" => {
+                out.push(LayoutBox {
+                    node: child_id, rect: Rect::ZERO, style,
+                    kind: BoxKind::SvgShape {
+                        shape: SvgShapeKind::Ellipse {
+                            cx: svg_attr_f32(doc, child_id, "cx"),
+                            cy: svg_attr_f32(doc, child_id, "cy"),
+                            rx: svg_attr_f32(doc, child_id, "rx"),
+                            ry: svg_attr_f32(doc, child_id, "ry"),
+                        },
+                    },
+                    children: vec![], col_span: 1, row_span: 1,
+                });
+                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+            }
+            "line" => {
+                out.push(LayoutBox {
+                    node: child_id, rect: Rect::ZERO, style,
+                    kind: BoxKind::SvgShape {
+                        shape: SvgShapeKind::Line {
+                            x1: svg_attr_f32(doc, child_id, "x1"),
+                            y1: svg_attr_f32(doc, child_id, "y1"),
+                            x2: svg_attr_f32(doc, child_id, "x2"),
+                            y2: svg_attr_f32(doc, child_id, "y2"),
+                        },
+                    },
+                    children: vec![], col_span: 1, row_span: 1,
+                });
+                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+            }
+            "path" => {
+                let d = doc.get(child_id).get_attr("d").unwrap_or("").to_string();
+                out.push(LayoutBox {
+                    node: child_id, rect: Rect::ZERO, style,
+                    kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d } },
+                    children: vec![], col_span: 1, row_span: 1,
+                });
+                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+            }
+            "g" => {
+                // Group: collect children shapes, then wrap in a Block box.
+                let mut group_children: Vec<LayoutBox> = Vec::new();
+                collect_svg_shapes(doc, sheet, child_id, &style, viewport, flat, &mut group_children);
+                out.push(LayoutBox {
+                    node: child_id, rect: Rect::ZERO, style,
+                    kind: BoxKind::Block,
+                    children: group_children, col_span: 1, row_span: 1,
+                });
+            }
+            _ => {
+                // Unknown SVG element: skip self, but scan children for shapes.
+                collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
+            }
+        }
+    }
+}
+
+// ─── SVG layout ──────────────────────────────────────────────────────────────
+
+/// Lays out an `SvgRoot` box: computes its CSS rect, then positions SVG shape children
+/// in document coordinates by applying the viewBox-to-CSS-pixel transform.
+fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, avail_w: f32, avail_h: Option<f32>, viewport: Size) {
+    let s = &b.style;
+    let em = s.font_size;
+    let cb = avail_w;
+    let margin_left = s.margin_left.resolve_or_zero(em, cb, viewport);
+    let margin_top  = s.margin_top.resolve_or_zero(em, cb, viewport);
+    b.rect.x = start_x + margin_left;
+    b.rect.y = start_y + margin_top;
+
+    let view_box = if let BoxKind::SvgRoot { view_box } = &b.kind { view_box.clone() } else { None };
+
+    // SVG intrinsic size: CSS width/height wins, then viewBox dimensions, then SVG defaults.
+    let svg_w = s.width.as_ref()
+        .and_then(|l| l.resolve(em, Some(cb), viewport))
+        .or_else(|| view_box.as_ref().map(|vb| vb.width))
+        .unwrap_or(300.0)
+        .max(0.0);
+    let svg_h = s.height.as_ref()
+        .and_then(|l| l.resolve(em, avail_h, viewport))
+        .or_else(|| view_box.as_ref().map(|vb| vb.height))
+        .unwrap_or(150.0)
+        .max(0.0);
+    b.rect.width  = svg_w;
+    b.rect.height = svg_h;
+
+    // viewBox → CSS-px transform: scale + origin offset.
+    let (scale_x, scale_y, origin_x, origin_y) = match &view_box {
+        Some(vb) if vb.width > 0.0 && vb.height > 0.0 => (
+            svg_w / vb.width,
+            svg_h / vb.height,
+            b.rect.x - vb.min_x * svg_w / vb.width,
+            b.rect.y - vb.min_y * svg_h / vb.height,
+        ),
+        _ => (1.0, 1.0, b.rect.x, b.rect.y),
+    };
+    lay_out_svg_children_positions(&mut b.children, origin_x, origin_y, scale_x, scale_y);
+}
+
+/// Recursively positions SVG shape boxes (and `<g>` group children) using the
+/// viewBox-to-document-coordinate transform `(origin_x, origin_y, scale_x, scale_y)`.
+fn lay_out_svg_children_positions(children: &mut [LayoutBox], ox: f32, oy: f32, sx: f32, sy: f32) {
+    for child in children.iter_mut() {
+        lay_out_svg_element_position(child, ox, oy, sx, sy);
+    }
+}
+
+fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy: f32) {
+    if let BoxKind::SvgShape { ref shape } = b.kind {
+        b.rect = svg_shape_bbox(shape, ox, oy, sx, sy);
+    } else if matches!(b.kind, BoxKind::Block) {
+        // <g> group: position its children, then compute the union bounding box.
+        lay_out_svg_children_positions(&mut b.children, ox, oy, sx, sy);
+        b.rect = svg_children_union_bbox(&b.children);
+    }
+}
+
+/// Bounding box of an SVG shape in document coordinates.
+/// `ox`/`oy` — document-space origin of the SVG viewport (after viewBox min_x/min_y offset).
+/// `sx`/`sy` — CSS-px / SVG-user-unit scale factors.
+fn svg_shape_bbox(shape: &SvgShapeKind, ox: f32, oy: f32, sx: f32, sy: f32) -> Rect {
+    match *shape {
+        SvgShapeKind::Rect { x, y, width, height, .. } =>
+            Rect::new(ox + x * sx, oy + y * sy, width * sx, height * sy),
+        SvgShapeKind::Circle { cx, cy, r } =>
+            Rect::new(ox + (cx - r) * sx, oy + (cy - r) * sy, 2.0 * r * sx, 2.0 * r * sy),
+        SvgShapeKind::Ellipse { cx, cy, rx, ry } =>
+            Rect::new(ox + (cx - rx) * sx, oy + (cy - ry) * sy, 2.0 * rx * sx, 2.0 * ry * sy),
+        SvgShapeKind::Line { x1, y1, x2, y2 } => {
+            // Bounding rect of the line segment; minimum 1 CSS px on each axis so the
+            // painter can clip-test against it.
+            let lx = x1.min(x2);
+            let ly = y1.min(y2);
+            let rw = (x2 - x1).abs().max(1.0 / sx);
+            let rh = (y2 - y1).abs().max(1.0 / sy);
+            Rect::new(ox + lx * sx, oy + ly * sy, rw * sx, rh * sy)
+        }
+        SvgShapeKind::Path { .. } =>
+            // Path bounding box requires full path-data parsing — deferred to paint.
+            // CSS: fill, stroke — P4 wires; P2 renders via GPU path commands.
+            Rect::ZERO,
+    }
+}
+
+/// Union bounding box of a slice of already-positioned layout boxes.
+/// Returns `Rect::ZERO` when all children have zero-area rects.
+fn svg_children_union_bbox(children: &[LayoutBox]) -> Rect {
+    let mut min_x = f32::INFINITY;
+    let mut min_y = f32::INFINITY;
+    let mut max_x = f32::NEG_INFINITY;
+    let mut max_y = f32::NEG_INFINITY;
+    for c in children {
+        if c.rect.width > 0.0 || c.rect.height > 0.0 {
+            min_x = min_x.min(c.rect.x);
+            min_y = min_y.min(c.rect.y);
+            max_x = max_x.max(c.rect.x + c.rect.width);
+            max_y = max_y.max(c.rect.y + c.rect.height);
+        }
+    }
+    if min_x == f32::INFINITY { Rect::ZERO } else { Rect::new(min_x, min_y, max_x - min_x, max_y - min_y) }
 }
 
 /// Запрос на предзагрузку изображения: URL после picking-а по
@@ -383,6 +684,23 @@ pub enum BoxKind {
     /// `table-footer-group`). Rendered as a transparent wrapper; rows inside are
     /// collected by the parent `Table` box during column-width computation.
     TableRowGroup,
+    /// SVG root element (`<svg>`). Acts as a replaced element in CSS flow:
+    /// `rect` is its border-box in document coordinates (CSS width × height).
+    /// `view_box` maps SVG user-unit space to this rect for shape coordinate transforms.
+    /// Children are `SvgShape` and `Block` (for `<g>` groups) boxes.
+    /// CSS: width, height (from attributes as presentational hints), fill, stroke — P4 wires.
+    SvgRoot {
+        /// Parsed `viewBox` attribute. `None` when attribute absent: shapes use 1:1 px mapping.
+        view_box: Option<ViewBox>,
+    },
+    /// Individual SVG shape (`<rect>`, `<circle>`, `<ellipse>`, `<line>`, `<path>`).
+    /// `LayoutBox.rect` is the bounding box in *document coordinates* (post-viewBox scaling).
+    /// `shape` carries the original SVG user-unit geometry for accurate paint-side rendering.
+    /// CSS: fill, stroke, stroke-width, opacity — P4 wires via ComputedStyle SVG fields.
+    SvgShape {
+        /// Geometric primitive in SVG user units (before viewBox scaling).
+        shape: SvgShapeKind,
+    },
 }
 
 pub fn layout(doc: &Document, sheet: &Stylesheet, viewport: Size) -> LayoutBox {
@@ -1121,6 +1439,20 @@ fn build_box(
                 BoxKind::FlowRoot
             } else if matches!(style.display, Display::Contents) {
                 BoxKind::Contents
+            } else if is_svg_root(doc, id) {
+                // SVG root: apply width/height attributes as presentational hints.
+                // CSS: width, height — if author CSS is absent, attribute values are used.
+                if style.width.is_none()
+                    && let Some(w) = doc.get(id).get_attr("width").and_then(|v| v.trim().parse::<f32>().ok())
+                {
+                    style.width = Some(crate::style::Length::Px(w));
+                }
+                if style.height.is_none()
+                    && let Some(h) = doc.get(id).get_attr("height").and_then(|v| v.trim().parse::<f32>().ok())
+                {
+                    style.height = Some(crate::style::Length::Px(h));
+                }
+                BoxKind::SvgRoot { view_box: parse_view_box(doc, id) }
             } else {
                 BoxKind::Block
             }
@@ -1266,6 +1598,11 @@ fn build_box(
         // ::after on the contents element itself are preserved inside the box.
         flatten_contents(&mut children);
         } // end else (non-item-container)
+    }
+
+    // SVG root: build SVG shape children (separate from HTML box-tree flow).
+    if matches!(kind, BoxKind::SvgRoot { .. }) {
+        children = build_svg_children(doc, sheet, id, &style, viewport, flat);
     }
 
     // Read HTML colspan/rowspan attributes for table-cell elements.
@@ -1595,6 +1932,13 @@ fn lay_out(
 ) {
     if matches!(b.kind, BoxKind::Skip) {
         b.rect = Rect::new(start_x, start_y, 0.0, 0.0);
+        return;
+    }
+
+    // SVG root dispatches to its own layout algorithm: replaced-element sizing
+    // from CSS width/height (or viewBox fallback), then SVG-coordinate shape positioning.
+    if matches!(b.kind, BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. }) {
+        lay_out_svg_root(b, start_x, start_y, available_width, available_height, viewport);
         return;
     }
 
@@ -2257,6 +2601,8 @@ fn lay_out(
         BoxKind::Marker { .. } => {
             // Rect is set by the parent's block-flow loop; nothing to do here.
         }
+        // SvgRoot and SvgShape are dispatched before this match (early return above).
+        BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } => unreachable!(),
     }
 
     // CSS Positioned Layout L3 §4 — абсолютное / фиксированное позиционирование.

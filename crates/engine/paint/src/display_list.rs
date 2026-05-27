@@ -11,7 +11,7 @@ use lumen_layout::{
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, FilterFn, FontStyle, FontWeight,
-    FormControlKind,
+    FormControlKind, SvgShapeKind,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
     OutlineColor, OutlineStyle, Overflow, PaintOrder, PaintPhase, Position, PositionComponent,
@@ -2374,6 +2374,8 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
             });
             emit_outline(b, out);
         }
+        // SVG elements: second-pass self-paint not needed (handled in walk).
+        BoxKind::SvgRoot { .. } | BoxKind::SvgShape { .. } => {}
     }
 }
 
@@ -2632,9 +2634,67 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             });
             emit_outline(b, out);
         }
+        BoxKind::SvgRoot { .. } => {
+            // SVG root: draw optional background/border, then recurse into shape children.
+            if is_paint_visible(b)
+                && let Some(bg) = b.style.background_color.and_then(|c| c.to_color_opt())
+                && bg.a > 0
+            {
+                out.push(DisplayCommand::FillRect { rect: b.rect, color: bg });
+            }
+            for child in &b.children {
+                walk(child, out);
+            }
+        }
+        BoxKind::SvgShape { shape } => {
+            // CSS: fill, stroke, stroke-width — P4 wires ComputedStyle svg_fill/svg_stroke fields.
+            // Default SVG presentation: fill=black (SVG spec §11.2), no stroke.
+            emit_svg_shape(b, shape, out);
+        }
     }
     if is_sticky {
         out.push(DisplayCommand::EndStickyLayer);
+    }
+}
+
+/// Emits paint commands for a single SVG shape using its pre-computed document-space rect.
+/// Uses SVG default presentation: fill=black, no stroke.
+/// CSS: fill, stroke, stroke-width, opacity — P4 wires via ComputedStyle SVG fields.
+fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
+    if b.rect.width <= 0.0 && b.rect.height <= 0.0 {
+        return;
+    }
+    // SVG spec §11.2: default fill is black; CSS `fill` property overrides (P4).
+    let fill = Color::BLACK;
+    match shape {
+        SvgShapeKind::Rect { rx, ry, .. } => {
+            if *rx > 0.0 || *ry > 0.0 {
+                // Round the corners using the scaled rx/ry in document pixels.
+                // The bbox rect already encodes the shape position, so we use its
+                // dimensions as the rounded-rect radii (clamped to half-size).
+                let r = (*rx).min(b.rect.width / 2.0);
+                let r_y = (*ry).min(b.rect.height / 2.0);
+                let radii = CornerRadii { tl: r, tl_y: r_y, tr: r, tr_y: r_y, br: r, br_y: r_y, bl: r, bl_y: r_y };
+                out.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fill, radii });
+            } else {
+                out.push(DisplayCommand::FillRect { rect: b.rect, color: fill });
+            }
+        }
+        SvgShapeKind::Circle { .. } | SvgShapeKind::Ellipse { .. } => {
+            // Approximate circle/ellipse as a rounded rect with 50% radii.
+            let rx_px = b.rect.width / 2.0;
+            let ry_px = b.rect.height / 2.0;
+            let radii = CornerRadii { tl: rx_px, tl_y: ry_px, tr: rx_px, tr_y: ry_px, br: rx_px, br_y: ry_px, bl: rx_px, bl_y: ry_px };
+            out.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fill, radii });
+        }
+        SvgShapeKind::Line { .. } => {
+            // Line rendered as a 1-px-minimum thin filled rect.
+            out.push(DisplayCommand::FillRect { rect: b.rect, color: fill });
+        }
+        SvgShapeKind::Path { .. } => {
+            // Full path rendering requires GPU path commands — deferred to P2.
+            // CSS: fill, stroke — P4 wires; P2 renders via GPU path commands.
+        }
     }
 }
 
