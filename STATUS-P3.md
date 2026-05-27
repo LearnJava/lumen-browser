@@ -1,5 +1,5 @@
-In progress: —
-Next step: shell-as-driver-client (8A.7, W2, next priority after graphic-tests-migration completion)
+In progress: shell-as-driver-client (8A.7)  branch: p3-shell-as-driver-client
+Next step: understand current shell.rs architecture and BrowserSession trait API  lumen-plan.md §8A.7
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
