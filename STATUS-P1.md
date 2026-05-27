@@ -1,5 +1,5 @@
-In progress: gpu-layer-lru (10F Phase 1 ✅)  branch: p1-gpu-layer-lru
-Next step: Phase 2 (10F.2) texture pool recycling + viewport eviction triggers  paint/src/layer_cache.rs
+In progress: none (ready for next task)
+Next step: (check lumen-plan.md Phase 2 ADR-007 — antidetect-webgl-normalize 9D.2 or Phase 2 ADR-008 gpu-layer-lru 10F.2 texture pool)
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
