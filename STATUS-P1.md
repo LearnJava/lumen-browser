@@ -9,6 +9,7 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
 Recent:
+- print-pdf-pagination (5++, Phase 1): PaginationContext + Page + PageFragment, paginate() algorithm for break-before/after/avoid, 7 unit tests, exports in lib.rs, clippy clean 2026-05-28
 - bench-ram-axis (9G.5, ADR-008 performance gate): cross-platform RSS measurement (getrusage on Unix, GetProcessMemoryInfo on Windows), baseline.json established, UPDATE.md documentation 2026-05-28
 - antidetect-webgl-normalize (9D.2, ADR-007 Layer 4): GpuFingerprint struct in paint/src/fingerprint.rs, from_adapter_info() normalization (always "WebKit"/"Generic GPU"), Renderer.gpu_fingerprint field, install_webgl_bindings() in js/src/webgl_bindings.rs stores _LUMEN_GPU_VENDOR/_RENDERER globals, 5 tests, P1 complete 2026-05-28 — P3 integration pending
 - gpu-layer-lru (10F, Phase 1): LayerCache struct in paint/src/layer_cache.rs, LRU-tracked GPU layer metadata (LayerKey + LayerEntry), get_lru_candidates() for eviction, remove_keys() for memory reclaim, 256 MB default budget, 7 unit tests + Renderer integration, Phase 2 (10F.2) texture pool recycling pending 2026-05-28
