@@ -8,6 +8,7 @@
 //! Один бинарь, без criterion: запускаем pipeline `decode → parse html →
 //! parse css → layout → paint::build_display_list` нужное число итераций,
 //! печатаем агрегаты (min / median / mean / p95 / max) на фазу и total.
+//! Также измеряем RSS (resident set size) для отслеживания регрессий памяти.
 //!
 //! Запуск:
 //!   cargo run -p lumen-bench --release
@@ -81,6 +82,8 @@ fn main() {
     print_phase("paint     ", &mut samples.paint);
     println!();
     print_phase("TOTAL     ", &mut samples.total);
+    println!();
+    print_rss_stats(&mut samples.rss_bytes);
 }
 
 struct PipelineResult {
@@ -93,6 +96,51 @@ struct PipelineResult {
     dom_nodes: usize,
     css_rules: usize,
     paint_cmds: usize,
+    rss_bytes: u64,
+}
+
+/// Get current RSS (resident set size) in bytes.
+/// Cross-platform: uses getrusage on Unix, GetProcessMemoryInfo on Windows.
+fn get_rss_bytes() -> u64 {
+    #[cfg(unix)]
+    unsafe {
+        let mut rusage = std::mem::zeroed::<libc::rusage>();
+        if libc::getrusage(libc::RUSAGE_SELF, &mut rusage) == 0 {
+            #[cfg(target_os = "macos")]
+            {
+                // macOS reports in bytes
+                rusage.ru_maxrss as u64
+            }
+            #[cfg(not(target_os = "macos"))]
+            {
+                // Linux and other Unix systems report in kilobytes
+                (rusage.ru_maxrss as u64) * 1024
+            }
+        } else {
+            0
+        }
+    }
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use winapi::um::processthreadsapi::GetCurrentProcess;
+        use winapi::um::psapi::GetProcessMemoryInfo;
+        use winapi::um::psapi::PROCESS_MEMORY_COUNTERS;
+
+        let mut pmc = std::mem::zeroed::<PROCESS_MEMORY_COUNTERS>();
+        pmc.cb = std::mem::size_of::<PROCESS_MEMORY_COUNTERS>() as u32;
+
+        let h_process = GetCurrentProcess();
+        if GetProcessMemoryInfo(h_process, &mut pmc, pmc.cb) != 0 {
+            pmc.WorkingSetSize as u64
+        } else {
+            0
+        }
+    }
+    #[cfg(not(any(unix, target_os = "windows")))]
+    {
+        // Unsupported platform
+        0
+    }
 }
 
 fn run_pipeline(measurer: &lumen_paint::FontMeasurer<'_>) -> PipelineResult {
@@ -125,6 +173,7 @@ fn run_pipeline(measurer: &lumen_paint::FontMeasurer<'_>) -> PipelineResult {
     let paint = t.elapsed();
 
     let total = total_start.elapsed();
+    let rss_bytes = get_rss_bytes();
 
     let dom_nodes = doc.len();
     let css_rules = sheet.rules.len();
@@ -145,6 +194,7 @@ fn run_pipeline(measurer: &lumen_paint::FontMeasurer<'_>) -> PipelineResult {
         dom_nodes,
         css_rules,
         paint_cmds,
+        rss_bytes,
     }
 }
 
@@ -155,6 +205,7 @@ struct Samples {
     layout: Vec<Duration>,
     paint: Vec<Duration>,
     total: Vec<Duration>,
+    rss_bytes: Vec<u64>,
 }
 
 impl Samples {
@@ -166,6 +217,7 @@ impl Samples {
             layout: Vec::with_capacity(cap),
             paint: Vec::with_capacity(cap),
             total: Vec::with_capacity(cap),
+            rss_bytes: Vec::with_capacity(cap),
         }
     }
 
@@ -176,6 +228,7 @@ impl Samples {
         self.layout.push(r.layout);
         self.paint.push(r.paint);
         self.total.push(r.total);
+        self.rss_bytes.push(r.rss_bytes);
     }
 }
 
@@ -214,6 +267,47 @@ fn fmt(d: Duration) -> String {
     } else {
         format!("{:.2} ms", ns as f64 / 1_000_000.0)
     }
+}
+
+/// Format bytes in appropriate unit (B / KB / MB / GB).
+fn fmt_bytes(bytes: u64) -> String {
+    const KB: u64 = 1024;
+    const MB: u64 = KB * 1024;
+    const GB: u64 = MB * 1024;
+
+    if bytes < KB {
+        format!("{} B", bytes)
+    } else if bytes < MB {
+        format!("{:.1} KB", bytes as f64 / KB as f64)
+    } else if bytes < GB {
+        format!("{:.2} MB", bytes as f64 / MB as f64)
+    } else {
+        format!("{:.3} GB", bytes as f64 / GB as f64)
+    }
+}
+
+fn print_rss_stats(samples: &mut [u64]) {
+    if samples.is_empty() {
+        return;
+    }
+    samples.sort();
+    let n = samples.len();
+    let min = samples[0];
+    let max = samples[n - 1];
+    let median = samples[n / 2];
+    // p95: индекс по правилу `ceil(0.95 * n) - 1`, clamp в диапазон.
+    let p95_idx = ((n as f64 * 0.95).ceil() as usize).saturating_sub(1).min(n - 1);
+    let p95 = samples[p95_idx];
+    let mean = samples.iter().sum::<u64>() / (n as u64);
+
+    println!(
+        "  RSS       min {:>8}  med {:>8}  mean {:>8}  p95 {:>8}  max {:>8}",
+        fmt_bytes(min),
+        fmt_bytes(median),
+        fmt_bytes(mean),
+        fmt_bytes(p95),
+        fmt_bytes(max)
+    );
 }
 
 fn extract_style_blocks(doc: &Document) -> String {

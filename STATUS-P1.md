@@ -1,5 +1,5 @@
-In progress: none (ready for next task)
-Next step: (check lumen-plan.md Phase 2 — next P1 from ADR-007 or ADR-008 tracks, or Wave 2 Queue)
+In progress: bench-ram-axis (9G.5 ADR-008 performance gate)  branch: p1-bench-ram-axis
+Next step: add peak_rss, steady_state_rss, tier_transition_rss metrics to lumen-bench  crates/bench/src/lib.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.

@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "timestamp": "2026-05-28",
+  "environment": "Windows 10, Rust 1.95 stable, MSVC",
+  "metrics": {
+    "time_axis": {
+      "decode_ms": {"median": 0.0013, "p95": 0.0015},
+      "parse_html_ms": {"median": 0.0225, "p95": 0.0339},
+      "parse_css_ms": {"median": 0.0095, "p95": 0.0128},
+      "layout_ms": {"median": 0.1694, "p95": 0.2594},
+      "paint_ms": {"median": 0.0023, "p95": 0.0111},
+      "total_ms": {"median": 0.2064, "p95": 0.294}
+    },
+    "ram_axis": {
+      "peak_rss_mb": {"median": 4.29, "p95": 4.32},
+      "steady_state_mb": 4.29
+    }
+  },
+  "notes": "Baseline established for ADR-008 performance gate. RAM metrics required for tier transition monitoring."
+}
