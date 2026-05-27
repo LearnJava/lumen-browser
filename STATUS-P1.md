@@ -1,4 +1,5 @@
-In progress: —
+In progress: forms-validity  branch: p1-forms-validity
+Next step: ValidityState struct in lumen-dom/src/lib.rs  crates/engine/dom/src/lib.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
