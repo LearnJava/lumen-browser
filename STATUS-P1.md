@@ -1,5 +1,5 @@
-In progress: none (ready for next task)
-Next step: (check lumen-plan.md Phase 2 — next P1 from Wave 2 Queue or Phase 2 system tasks)
+In progress: extras-p2 Phase 2 (Print PDF rendering + page-break display commands + shell print integration)  branch: p1-extras-p2-phase2
+Next step: Реализовать Print PDF Phase 2: PageBreakCommand в display_list, отрендерить по страницам в shell, протестировать на heavy.html (150MB target). Начать с layout/src/pagination.rs:123
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
