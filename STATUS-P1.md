@@ -1,5 +1,5 @@
-In progress: (empty — completed icc-color-profiles; next from Next)
-Next step: (Next list shows fts-omnibox which is P3; Wave 1 P2-tasks complete)
+In progress: lumen-a11y-full (8G, [P1+P3])  branch: p1-a11y-full
+Next step: read ADR-006 + current accessibility-aria tests, then implement HTML-AAM accname computation
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
