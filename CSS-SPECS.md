@@ -94,7 +94,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Conditional L4 | [css-conditional-4](https://www.w3.org/TR/css-conditional-4/) | 🟡 | @supports full feature detection | **#36** |
 | CSS Color Adjust L1 | [css-color-adjust-1](https://www.w3.org/TR/css-color-adjust-1/) | 🟡 | color-scheme UA switching | **#37** |
 | CSS Box Sizing L4 | [css-sizing-4](https://www.w3.org/TR/css-sizing-4/) | 🟡 | contain-intrinsic-size; interpolate-size | **#38** |
-| CSS Overflow L4 | [css-overflow-4](https://www.w3.org/TR/css-overflow-4/) | 🟡 | line-clamp multi-line truncation | **#39** |
+| CSS Overflow L4 | [css-overflow-4](https://www.w3.org/TR/css-overflow-4/) | ✅ | line-clamp multi-line truncation (layout algorithm done; -webkit-line-clamp/line-clamp, ellipsis, N-line truncation) | **#39** |
 | CSS Easing L1 | [css-easing-1](https://www.w3.org/TR/css-easing-1/) | 🟡 | cubic-bezier/steps interpolation wiring | **#40** |
 
 ### Tier 4 — Advanced / future
@@ -182,7 +182,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `text-overflow` | ✅ | clip, ellipsis |
 | `float` | ✅ | left/right/none — FloatContext placement; shrink-to-fit width |
 | `clear` | ✅ | left/right/both — FloatContext.clear_y() clearance |
-| `-webkit-line-clamp` / `line-clamp` | 🟡 | parsed; multi-line truncation ⬜ |
+| `-webkit-line-clamp` / `line-clamp` | ✅ | parsed + layout algorithm: truncate lines, ellipsis, priority over text-overflow |
 | `contain-intrinsic-size` | 🟡 | parsed; intrinsic size hint ⬜ |
 
 ### [T0] Borders & Outlines

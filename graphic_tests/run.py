@@ -89,6 +89,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('45', '45-multiple-backgrounds.html', 0.5, 'CSS Backgrounds L3 §3 — multiple background layers, position/size/repeat/clip/origin'),
     ('46', '46-individual-transforms.html', 0.5, 'CSS Transforms L2 — individual translate / rotate / scale properties'),
     ('47', '47-svg-basic.html',             0.5, 'SVG basic shapes — rect/circle/ellipse/line in document flow, viewBox scale'),
+    ('48', '48-line-clamp.html',            0.5, 'CSS Overflow L4 §3.2 — -webkit-line-clamp / line-clamp multi-line truncation, staircase heights 1–4 lines'),
 ]
 
 # --- PNG reader (stdlib only) ---
