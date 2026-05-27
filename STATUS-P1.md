@@ -1,5 +1,6 @@
-In progress: none (ready for next task)
-Next step: (check lumen-plan.md Phase 2 ADR-007 — antidetect-webgl-normalize 9D.2 or Phase 2 ADR-008 gpu-layer-lru 10F.2 texture pool)
+In progress: gpu-layer-lru Phase 2 (10F.2) — texture pool recycling
+Next step: Create TexturePool in paint/src/texture_pool.rs, integrate with create_layer_texture + LayerCache removal
+Branch: p1-gpu-layer-texture-pool
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
