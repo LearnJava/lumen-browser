@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: gif-decoder (GIF87a/89a decoder + static frame 0)  branch: p1-gif-decoder
+Next step: set up lumen-image crate scaffold + decoder skeleton  crates/engine/image/src/gif.rs:1
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -8,20 +8,12 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
-Next (Wave 0 — критично для graphic_tests на своём браузере; ADR-006 + ADR-008):
-  P3 владеет lumen-driver / lumen-mcp / lumen-bidi (см. STATUS-P3.md, треки 8/9/10).
-  P1 покрывает всю engine-часть (фронт + бэк), включая бывший P2-домен paint/font/image,
-  поэтому ниже — все cross-domain подзадачи из треков 8/9/10, где P3 нужна поддержка
-  со стороны движка.
-
-Next (Wave 0 — ADR-008 структурные инварианты, критично ДО Phase 1 finalize lumen-dom / lumen-layout / lumen-paint, иначе ретрофит 5-10×):
-- dom-arena-audit (10B Invariant 1, [P1+P3]): audit lumen-dom — убедиться что node graph хранится на NodeId(u32) индексах без Rc<RefCell> в графе; добавить bincode::serialize/deserialize для DOM snapshot (используется T3 hibernation); clippy lint запрещает Rc<RefCell> в lumen-dom::node модулях. Binding по ADR-008 Invariant 1. → lumen-plan.md трек 10B + ADR-008.
-- layout-pure-audit (10D.1 Invariant 3): audit lumen-layout на отсутствие `static MUT` / `lazy_static` / `OnceCell` внутри hot path. Allowed exception: cross-tab кэши (glyph atlas, font metrics, image decode) — отдельные крейты с явным eviction API. Если есть hidden state — вытащить наружу как explicit parameter. → lumen-plan.md трек 10D.1 + ADR-008.
-- paint-pure-audit (10D.2 Invariant 3, бывший [P2] → P1): audit lumen-paint::display_list на pure-function от (LayoutTree, viewport). Никакого `static MUT` / `lazy_static` / `OnceCell` внутри hot path. Allowed exception — cross-tab кэши (glyph atlas в lumen-font, image decode в lumen-image) — отдельные крейты с explicit eviction API. Без этого T2→T0 restore работает некорректно. → lumen-plan.md трек 10D.2 + ADR-008.
+Recent (Wave 0 — ADR-008 структурные инварианты, завершено):
+- dom-arena-audit (10B Invariant 1, [P1+P3]): serde+bincode snapshot, DomSnapshotError, #[deny(clippy::rc_buffer)]+INVARIANT(10B/ADR-008) 2026-05-27
+- layout-pure-audit (10D.1 Invariant 3): audit на отсутствие static MUT / lazy_static / OnceCell в hot path 2026-05-27
+- paint-pure-audit (10D.2 Invariant 3): audit lumen-paint::display_list на pure-function requirement 2026-05-27
 
 Next (Wave 1 — бывшие P2-задачи):
-- gif-decoder: GIF87a/89a (LZW + frame loop); статичные кадры frame 0; анимация — Wave 3
-  → STATUS-P2.md:4
 - font-stretch-matcher: font-stretch % matching в FontRegistry::find_best_match (CSS Fonts L4 §5.2)
   → STATUS-P2.md:5
 - font-variable-opsz: opsz axis wiring — font-optical-sizing из ComputedStyle → VariationCoords
