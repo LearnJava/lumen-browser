@@ -13,6 +13,7 @@ pub mod compositor;
 pub mod display_list;
 pub mod fallback;
 pub mod hit_test;
+pub mod layer_cache;
 pub mod renderer;
 pub mod scroll_snap;
 
@@ -31,6 +32,7 @@ pub use display_list::{
     serialize_display_list, BlendMode, CornerRadii, DisplayCommand, DisplayList,
 };
 pub use hit_test::{hit_test, HitTestResult};
+pub use layer_cache::{LayerCache, LayerKey};
 pub use renderer::{ImageRegisterError, Renderer, SnapshotUploadError};
 pub use scroll_snap::{find_scroll_snap_y, find_scroll_snap_y_proximity};
 

@@ -1273,6 +1273,9 @@ pub struct Renderer {
     /// Cache GPU-снимков слоёв per-id. Заполняется compositor-ом через
     /// [`Renderer::upload_layer_snapshot`] для кеширования неизменных слоёв.
     layer_snapshots: HashMap<u64, GpuLayerSnapshot>,
+    /// GPU layer cache with LRU eviction (ADR-008 Phase 2).
+    /// Tracks layer textures by stacking context ID + size for off-viewport eviction.
+    layer_cache: crate::layer_cache::LayerCache,
 
     atlas: GlyphAtlas,
     /// Загруженные face-ы. `faces[0]` — default (bundled), используется когда
@@ -2434,6 +2437,7 @@ impl Renderer {
             raw_images: HashMap::new(),
             images: HashMap::new(),
             layer_snapshots: HashMap::new(),
+            layer_cache: crate::layer_cache::LayerCache::new(),
             composite_pipeline,
             composite_bgl,
             blend_pipeline,
@@ -2835,6 +2839,34 @@ impl Renderer {
     #[must_use]
     pub fn has_layer_snapshot(&self, id: u64) -> bool {
         self.layer_snapshots.contains_key(&id)
+    }
+
+    /// Получить ссылку на layer cache для статистики / монитора GPU памяти.
+    pub fn layer_cache(&self) -> &crate::layer_cache::LayerCache {
+        &self.layer_cache
+    }
+
+    /// Получить мutable ссылку для прямого управления кэшем (advanced usage).
+    pub fn layer_cache_mut(&mut self) -> &mut crate::layer_cache::LayerCache {
+        &mut self.layer_cache
+    }
+
+    /// Отметить layer как используемый текущим render pass.
+    /// Обновляет LRU timestamp, предотвращая эвикцию активных layers.
+    pub fn access_layer(&mut self, key: crate::layer_cache::LayerKey) {
+        self.layer_cache.access(key);
+    }
+
+    /// Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated.
+    /// Caller должна убедиться, что layer-текстура выделена в GPU
+    /// (обычно через `create_layer_texture`).
+    pub fn cache_layer(&mut self, key: crate::layer_cache::LayerKey, memory_bytes: u32) -> bool {
+        self.layer_cache.insert(key, memory_bytes)
+    }
+
+    /// Очистить весь layer cache (полная эвикция).
+    pub fn clear_layer_cache(&mut self) {
+        self.layer_cache.clear();
     }
 
     /// Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован.
