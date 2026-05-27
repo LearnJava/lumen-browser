@@ -28,9 +28,20 @@ use crate::{
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 
 /// Состояние после успешной загрузки страницы.
+///
+/// Содержит полный результат pipeline (parse → CSS → layout → paint),
+/// включая GPU-специфичные данные для рендеринга через wgpu.
 struct WinitSessionState {
     doc: Document,
     layout_root: LayoutBox,
+    /// Display list for GPU rendering via wgpu.
+    display_list: lumen_paint::DisplayList,
+    /// Page title from `<title>` tag.
+    title: Option<String>,
+    /// Decoded images ready for GPU upload.
+    images: Vec<(String, lumen_image::Image)>,
+    /// Font provider for page-specific @font-face declarations.
+    font_registry: std::sync::Arc<dyn lumen_core::FontProvider>,
 }
 
 /// Оконная сессия браузера.
@@ -58,6 +69,10 @@ pub struct WinitSession {
     net_log: Vec<NetworkEntry>,
     /// Журнал console.log/warn/error с последней навигации.
     con_log: Vec<ConsoleEntry>,
+    /// Current vertical scroll position in logical pixels.
+    scroll_y: f32,
+    /// Current horizontal scroll position in logical pixels.
+    scroll_x: f32,
 }
 
 impl WinitSession {
@@ -69,6 +84,8 @@ impl WinitSession {
             state: None,
             net_log: Vec::new(),
             con_log: Vec::new(),
+            scroll_y: 0.0,
+            scroll_x: 0.0,
         }
     }
 
@@ -80,6 +97,8 @@ impl WinitSession {
             state: None,
             net_log: Vec::new(),
             con_log: Vec::new(),
+            scroll_y: 0.0,
+            scroll_x: 0.0,
         }
     }
 
@@ -100,7 +119,7 @@ impl Default for WinitSession {
 }
 
 impl WinitSession {
-    /// Запустить полный pipeline (HTML parse -> CSS -> layout).
+    /// Запустить полный pipeline (HTML parse -> CSS -> layout -> paint).
     fn run_pipeline(&mut self, bytes: &[u8], content_type: Option<&str>, url: String) -> Result<()> {
         let encoding = lumen_encoding::detect(bytes, content_type);
         let source = lumen_encoding::decode(encoding, bytes);
@@ -116,11 +135,30 @@ impl WinitSession {
 
         let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
 
+        // TODO(8A.7-p4b): Create display_list via lumen_paint::build_display_list_ordered
+        let display_list = lumen_paint::DisplayList::new();
+
+        // TODO(8A.7-p4b): Extract images from DOM and decode them
+        let images = Vec::new();
+
+        // TODO(8A.7-p4b): Extract page title
+        let title = None;
+
+        // TODO(8A.7-p4b): Create font_registry for @font-face declarations
+        let font_registry: std::sync::Arc<dyn lumen_core::FontProvider> =
+            std::sync::Arc::new(lumen_font::SystemFontIndex::new());
+
         self.current_url = url;
         self.state = Some(Arc::new(Mutex::new(WinitSessionState {
             doc,
             layout_root,
+            display_list,
+            title,
+            images,
+            font_registry,
         })));
+        self.scroll_x = 0.0;
+        self.scroll_y = 0.0;
         Ok(())
     }
 }
