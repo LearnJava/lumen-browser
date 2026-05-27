@@ -13,9 +13,11 @@
 mod color;
 mod path;
 mod rasterize;
+pub mod fp_noise;
 
 pub use color::CanvasColor;
 pub use path::{PathCommand, PathSegment};
+pub use fp_noise::CanvasNoiseGenerator;
 
 
 /// HTML Canvas 2D rendering context.
@@ -23,6 +25,10 @@ pub use path::{PathCommand, PathSegment};
 /// Each `Context2D` owns a RGBA pixel buffer of dimensions `width × height`.
 /// Drawing operations write directly to this buffer; call [`Context2D::pixels`]
 /// to read the result for upload to GPU.
+///
+/// Optional fingerprint randomization: when a `noise_generator` is set,
+/// [`get_image_data()`] applies per-session noise to pixel data before returning.
+/// This is used for anti-detection fingerprint randomization (ADR-007).
 #[derive(Debug, Clone)]
 pub struct Context2D {
     width: u32,
@@ -40,6 +46,10 @@ pub struct Context2D {
     path: Vec<PathSegment>,
     path_start: Option<(f32, f32)>,
     pen: (f32, f32),
+
+    /// Optional per-session noise generator for canvas fingerprint randomization.
+    /// Set by BrowserSession when creating a context; if set, getImageData() applies noise.
+    noise_generator: Option<CanvasNoiseGenerator>,
 }
 
 impl Context2D {
@@ -57,7 +67,28 @@ impl Context2D {
             path: Vec::new(),
             path_start: None,
             pen: (0.0, 0.0),
+            noise_generator: None,
         }
+    }
+
+    /// Set the optional noise generator for fingerprint randomization.
+    ///
+    /// Called by BrowserSession with a per-session seed.
+    /// When set, `get_image_data()` will apply noise to returned pixel data.
+    pub fn set_noise_generator(&mut self, generator: CanvasNoiseGenerator) {
+        self.noise_generator = Some(generator);
+    }
+
+    /// Get a copy of pixel data with optional noise applied (for `getImageData()`).
+    ///
+    /// If a noise generator is set, returns a noisy copy; otherwise returns raw pixels.
+    /// P3 calls this when implementing `CanvasRenderingContext2D.getImageData()` in JS.
+    pub fn get_image_data(&self) -> Vec<u8> {
+        let mut data = self.pixels.clone();
+        if let Some(mut noise_gen) = self.noise_generator.clone() {
+            noise_gen.apply_noise_to_buffer(&mut data);
+        }
+        data
     }
 
     pub fn width(&self) -> u32 { self.width }
@@ -338,5 +369,50 @@ mod tests {
         assert!(ctx.pixels().iter().all(|&b| b == 0));
         assert_eq!(ctx.width(), 8);
         assert_eq!(ctx.height(), 8);
+    }
+
+    #[test]
+    fn get_image_data_without_noise() {
+        let mut ctx = Context2D::new(4, 4);
+        ctx.fill_style = CanvasColor::rgba(100, 150, 200, 255);
+        ctx.fill_rect(0.0, 0.0, 4.0, 4.0);
+        let data = ctx.get_image_data();
+        // Without noise generator, should match raw pixels
+        assert_eq!(data, ctx.pixels());
+    }
+
+    #[test]
+    fn get_image_data_with_noise() {
+        let mut ctx = Context2D::new(4, 4);
+        ctx.fill_style = CanvasColor::rgba(100, 150, 200, 255);
+        ctx.fill_rect(0.0, 0.0, 4.0, 4.0);
+
+        // Set noise generator with seed 42
+        ctx.set_noise_generator(CanvasNoiseGenerator::new(42));
+        let data = ctx.get_image_data();
+
+        // Noised data should differ from raw pixels (very likely)
+        assert_ne!(data, ctx.pixels(), "noised data should differ from raw pixels");
+
+        // But alpha channel (index 3, 7, 11, 15) should be unchanged
+        for i in 0..4 {
+            assert_eq!(data[i * 4 + 3], 255, "pixel {} alpha must be unchanged", i);
+        }
+    }
+
+    #[test]
+    fn get_image_data_noise_deterministic() {
+        let mut ctx1 = Context2D::new(2, 2);
+        ctx1.fill_style = CanvasColor::rgba(100, 150, 200, 255);
+        ctx1.fill_rect(0.0, 0.0, 2.0, 2.0);
+        ctx1.set_noise_generator(CanvasNoiseGenerator::new(42));
+
+        let mut ctx2 = Context2D::new(2, 2);
+        ctx2.fill_style = CanvasColor::rgba(100, 150, 200, 255);
+        ctx2.fill_rect(0.0, 0.0, 2.0, 2.0);
+        ctx2.set_noise_generator(CanvasNoiseGenerator::new(42));
+
+        // Same seed should produce same noise
+        assert_eq!(ctx1.get_image_data(), ctx2.get_image_data());
     }
 }
