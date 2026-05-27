@@ -21,7 +21,7 @@ use lumen_layout::LayoutBox;
 
 use crate::{
     A11yNode, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
-    ConsoleEntry, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
+    ConsoleEntry, InputCommand, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
 };
 
 /// Встроенный шрифт Inter-Regular (SIL OFL 1.1).
@@ -744,17 +744,33 @@ impl BrowserSession for WinitSession {
     fn click(&mut self, target: &Target) -> Result<()> {
         let state = self.state()?;
         let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
-        let _point = resolve_target_point(&state, target)?;
-        // Phase 0: headless click не диспатчит event; используется для hit-test
-        // проверки, что элемент виден. Полный click через event-loop — задача 8C.
+        let (x, y) = resolve_target_point(&state, target)?;
+
+        // Phase 1 (8C): native input injection для mouse click.
+        //
+        // Требуется: WinitSessionHandler integration с event loop для обработки InputCommand.
+        // Текущая реализация: заглушка (проверяет что элемент виден по координатам).
+        // Полная реализация: injekt MouseClick в event loop → hit-test → JS dispatch с isTrusted=true.
+        let _cmd = InputCommand::MouseClick { x, y };
+        // TODO: enqueue в event loop через channel Sender<InputCommand>
+
         Ok(())
     }
 
-    fn type_text(&mut self, target: &Target, _text: &str) -> Result<()> {
+    fn type_text(&mut self, target: &Target, text: &str) -> Result<()> {
         let state = self.state()?;
         let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
-        let _ = resolve_target_point(&state, target)?;
-        // Ввод текста через event-loop — задача 8C (native-input-injection).
+        let _point = resolve_target_point(&state, target)?;
+
+        // Phase 1 (8C): native input injection для keyboard input.
+        //
+        // Требуется: WinitSessionHandler integration с event loop для обработки InputCommand.
+        // Текущая реализация: заглушка (проверяет что target найден).
+        // Полная реализация: injekt KeyPress per char в event loop → input с isTrusted=true.
+        for ch in text.chars() {
+            let _cmd = InputCommand::KeyPress { char: ch };
+            // TODO: enqueue в event loop через channel Sender<InputCommand>
+        }
         Ok(())
     }
 

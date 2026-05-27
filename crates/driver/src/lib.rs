@@ -30,8 +30,8 @@ pub mod winit_session;
 pub mod gpu_session;
 
 pub use types::{
-    A11yNode, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel, NetworkEntry, NodeRef,
-    ScrollDelta, Target, WaitCondition,
+    A11yNode, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel, InputCommand, NetworkEntry,
+    NodeRef, ScrollDelta, Target, WaitCondition,
 };
 pub use session::InProcessSession;
 pub use winit_session::WinitSession;
