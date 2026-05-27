@@ -19,9 +19,9 @@ fn red_rect_dl(w: f32, h: f32) -> Vec<DisplayCommand> {
 #[test]
 #[ignore = "requires GPU adapter"]
 fn headless_render_dimensions() {
-    let mut r = Renderer::new_headless(64, 48, INTER.to_vec())
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 48)
         .expect("headless renderer");
-    let img = r.render_to_image(&red_rect_dl(64.0, 48.0), &[], 0.0, 0.0)
+    let img = r.render_to_image(&red_rect_dl(64.0, 48.0), 0.0, 0.0)
         .expect("render_to_image");
     assert_eq!(img.width, 64);
     assert_eq!(img.height, 48);
@@ -31,10 +31,10 @@ fn headless_render_dimensions() {
 #[test]
 #[ignore = "requires GPU adapter"]
 fn headless_render_red_rect() {
-    let mut r = Renderer::new_headless(64, 64, INTER.to_vec())
+    let mut r = Renderer::new_headless(INTER.to_vec(), 64, 64)
         .expect("headless renderer");
     r.set_font_provider(None);
-    let img = r.render_to_image(&red_rect_dl(64.0, 64.0), &[], 0.0, 0.0)
+    let img = r.render_to_image(&red_rect_dl(64.0, 64.0), 0.0, 0.0)
         .expect("render_to_image");
 
     // Centre pixel should be red (R=255 G=0 B=0 A=255).
@@ -50,10 +50,10 @@ fn headless_render_red_rect() {
 #[test]
 #[ignore = "requires GPU adapter"]
 fn headless_resize_updates_dimensions() {
-    let mut r = Renderer::new_headless(32, 32, INTER.to_vec())
+    let mut r = Renderer::new_headless(INTER.to_vec(), 32, 32)
         .expect("headless renderer");
     r.resize(128, 96);
-    let img = r.render_to_image(&red_rect_dl(128.0, 96.0), &[], 0.0, 0.0)
+    let img = r.render_to_image(&red_rect_dl(128.0, 96.0), 0.0, 0.0)
         .expect("render_to_image after resize");
     assert_eq!(img.width, 128);
     assert_eq!(img.height, 96);

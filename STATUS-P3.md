@@ -1,5 +1,5 @@
 In progress: —
-Next step: (следующая задача из Wave 2 — см. Queue ниже)
+Next step: graphic-tests-migration (8A.6) или другая Wave 2 задача из Queue
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
