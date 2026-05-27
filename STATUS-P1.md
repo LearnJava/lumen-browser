@@ -1,4 +1,5 @@
-In progress: —
+In progress: svg-layout-basic  branch: p1-svg-layout-basic
+Next step: Add ViewBox/SvgShapeKind/BoxKind::SvgRoot variants  crates/engine/layout/src/box_tree.rs:314
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
