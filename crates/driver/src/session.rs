@@ -79,6 +79,11 @@ impl InProcessSession {
         }
     }
 
+    /// Загрузить HTML-строку без навигации по URL. Используется для тестов.
+    pub fn navigate_html(&mut self, html: &str) -> Result<()> {
+        self.run_pipeline(html.as_bytes(), Some("text/html"), "about:blank".to_owned())
+    }
+
     /// Загрузить байты по URL и запустить pipeline. Внутренняя реализация
     /// навигации, используемая также для тестов с прямой передачей HTML.
     fn run_pipeline(&mut self, bytes: &[u8], content_type: Option<&str>, url: String) -> Result<()> {
@@ -272,6 +277,77 @@ impl BrowserSession for InProcessSession {
                 bounding_rect,
             });
         }
+        Ok(out)
+    }
+
+    fn layout_box_by_selector(&self, selector: &str) -> Result<Option<BoxModel>> {
+        let state = self.state()?;
+        let Some(lb) = lumen_layout::find_box_by_selector(&state.layout_root, &state.doc, selector) else {
+            return Ok(None);
+        };
+
+        let tag_name = {
+            let node = state.doc.get(lb.node);
+            match &node.data {
+                NodeData::Element { name, .. } => name.local.to_string(),
+                _ => String::new(),
+            }
+        };
+
+        let r = lb.rect;
+        let mt = lb.style.margin_top.to_px_opt().unwrap_or(0.0);
+        let mr = lb.style.margin_right.to_px_opt().unwrap_or(0.0);
+        let mb = lb.style.margin_bottom.to_px_opt().unwrap_or(0.0);
+        let ml = lb.style.margin_left.to_px_opt().unwrap_or(0.0);
+        let margin_box = Rect {
+            x: r.x - ml,
+            y: r.y - mt,
+            width: r.width + ml + mr,
+            height: r.height + mt + mb,
+        };
+
+        Ok(Some(BoxModel {
+            node_id: lb.node.index() as u32,
+            tag_name,
+            border_box: r,
+            margin_box,
+        }))
+    }
+
+    fn all_layout_boxes_by_selector(&self, selector: &str) -> Result<Vec<BoxModel>> {
+        let state = self.state()?;
+        let boxes = lumen_layout::find_all_by_selector(&state.layout_root, &state.doc, selector);
+        let mut out = Vec::with_capacity(boxes.len());
+
+        for lb in boxes {
+            let tag_name = {
+                let node = state.doc.get(lb.node);
+                match &node.data {
+                    NodeData::Element { name, .. } => name.local.to_string(),
+                    _ => String::new(),
+                }
+            };
+
+            let r = lb.rect;
+            let mt = lb.style.margin_top.to_px_opt().unwrap_or(0.0);
+            let mr = lb.style.margin_right.to_px_opt().unwrap_or(0.0);
+            let mb = lb.style.margin_bottom.to_px_opt().unwrap_or(0.0);
+            let ml = lb.style.margin_left.to_px_opt().unwrap_or(0.0);
+            let margin_box = Rect {
+                x: r.x - ml,
+                y: r.y - mt,
+                width: r.width + ml + mr,
+                height: r.height + mt + mb,
+            };
+
+            out.push(BoxModel {
+                node_id: lb.node.index() as u32,
+                tag_name,
+                border_box: r,
+                margin_box,
+            });
+        }
+
         Ok(out)
     }
 }

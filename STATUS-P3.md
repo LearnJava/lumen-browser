@@ -1,5 +1,5 @@
-In progress: —
-Next step: (следующая задача из Wave 2 — см. Queue ниже)
+In progress: structural-getters (8A.4, [P3+P1])  branch: p3-structural-getters
+Next step: analyze lumen-layout + lumen-dom, design pub accessor APIs  crates/layout/src/lib.rs
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.

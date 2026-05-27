@@ -79,6 +79,19 @@ pub trait BrowserSession {
     /// (инлайн-элементы в Phase 0).
     fn computed_style_snapshot(&self, selector: &str) -> Result<Option<ComputedStyleSnapshot>>;
 
+    /// Box-model первого элемента, совпадающего с `selector`.
+    ///
+    /// Удобный getter для получения позиции и размера одного элемента без
+    /// итерации по всему layout_snapshot(). Эквивалентен поиску в layout_snapshot().
+    ///
+    /// Возвращает `Ok(None)` если элемент не найден или не имеет layout-бокса.
+    fn layout_box_by_selector(&self, selector: &str) -> Result<Option<BoxModel>>;
+
+    /// Все box-модели элементов, совпадающих с `selector`.
+    ///
+    /// Возвращает пустой вектор, если ни один элемент не совпал.
+    fn all_layout_boxes_by_selector(&self, selector: &str) -> Result<Vec<BoxModel>>;
+
     /// Журнал сетевых запросов с момента последней навигации.
     fn network_log(&self) -> Result<Vec<NetworkEntry>>;
 
