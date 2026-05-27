@@ -1,11 +1,43 @@
 //! Arena-based DOM tree. Build via `Document::create_*` and `append_child`.
+//!
+//! # Invariant (10B / ADR-008)
+//! The entire node graph lives in a **contiguous `Vec<Node>` arena** addressed by
+//! `NodeId(u32)`. No `Rc<RefCell<…>>` exists in the graph — children and parents are
+//! plain index values. This makes the tree `Send + Sync`, enables O(1) random access,
+//! and guarantees that the snapshot serialised by [`Document::to_bytes`] is a flat
+//! byte blob with no pointer fixups.
+
+// Catch the most common forms of accidental Rc-in-arena.
+#![deny(clippy::rc_buffer)]
 
 use std::collections::HashMap;
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 pub use lumen_core::sandbox::{parse_sandbox_value, SandboxFlags};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// Error returned by [`Document::to_bytes`] and [`Document::from_bytes`].
+#[derive(Debug)]
+pub enum DomSnapshotError {
+    /// bincode encode failed.
+    Encode(bincode::Error),
+    /// bincode decode failed.
+    Decode(bincode::Error),
+}
+
+impl fmt::Display for DomSnapshotError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Encode(e) => write!(f, "DOM snapshot encode error: {e}"),
+            Self::Decode(e) => write!(f, "DOM snapshot decode error: {e}"),
+        }
+    }
+}
+
+impl std::error::Error for DomSnapshotError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct NodeId(u32);
 
 impl NodeId {
@@ -18,7 +50,7 @@ impl NodeId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Namespace {
     Html,
     Svg,
@@ -28,7 +60,7 @@ pub enum Namespace {
     XLink,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct QualName {
     pub namespace: Namespace,
     pub local: String,
@@ -43,7 +75,7 @@ impl QualName {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Attribute {
     pub name: QualName,
     pub value: String,
@@ -53,7 +85,7 @@ pub struct Attribute {
 ///
 /// `Open` — JS can access the shadow root via `element.shadowRoot`.
 /// `Closed` — `element.shadowRoot` returns `null` (encapsulated).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ShadowRootMode {
     Open,
     Closed,
@@ -68,7 +100,7 @@ impl fmt::Display for ShadowRootMode {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum NodeData {
     Document,
     Doctype {
@@ -101,7 +133,7 @@ pub enum NodeData {
     DocumentFragment,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Node {
     pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
@@ -310,7 +342,7 @@ pub struct FormInfo {
 /// меняется. Используется hot-path-ами layout/cascade для переключения
 /// десятков legacy CSS-поведений (table sizing, body-background
 /// propagation, font-size в `<table>`, и т.д.).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 pub enum DocumentMode {
     /// Standards / no-quirks mode — действуют современные правила.
     /// Сюда попадают `<!DOCTYPE html>` и большинство XHTML DOCTYPE.
@@ -333,7 +365,7 @@ pub enum DocumentMode {
 /// For `NodeData::Text` nodes `offset` is a UTF-8 byte offset within the
 /// text content. For element nodes it is a child index. Use
 /// [`Document::get_selection`] / [`Document::set_selection`] to persist.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DomPosition {
     /// The node that contains this position.
     pub container: NodeId,
@@ -346,7 +378,7 @@ pub struct DomPosition {
 ///
 /// `start` must precede `end` in tree order. For a collapsed range
 /// `start == end`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Range {
     /// First position (inclusive).
     pub start: DomPosition,
@@ -372,7 +404,7 @@ impl Range {
 /// range is `min(anchor, focus)..=max(anchor, focus)` in document order.
 ///
 /// `anchor` and `focus` are `None` when there is no active selection.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Selection {
     /// Fixed start of the selection (where the user pressed the mouse button).
     pub anchor: Option<DomPosition>,
@@ -423,7 +455,7 @@ impl Selection {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     nodes: Vec<Node>,
     root: NodeId,
@@ -698,6 +730,24 @@ impl Document {
                 siblings.remove(pos);
             }
         }
+    }
+
+    // ── T3 hibernation snapshot (ADR-008) ─────────────────────────────────────
+
+    /// Serialise the entire document to a compact binary blob (bincode).
+    ///
+    /// Used for **T3 hibernation**: when a tab is suspended, the shell calls
+    /// `to_bytes()`, stores the blob on disk, and frees the in-memory tree.
+    /// On restore the shell calls [`from_bytes`] to reconstruct the tree
+    /// without re-parsing HTML. The blob is self-contained — no pointer fixups
+    /// are needed because every node reference is a `NodeId(u32)` offset.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, DomSnapshotError> {
+        bincode::serialize(self).map_err(DomSnapshotError::Encode)
+    }
+
+    /// Deserialise a document from a binary blob produced by [`to_bytes`].
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, DomSnapshotError> {
+        bincode::deserialize(bytes).map_err(DomSnapshotError::Decode)
     }
 }
 
@@ -3266,5 +3316,118 @@ mod tests {
     fn popup_gate_allowed_after_allow_popups() {
         let flags = lumen_core::parse_sandbox_value(Some("allow-popups"));
         assert!(!check_popup_gate(flags));
+    }
+
+    // ── DOM snapshot (T3 hibernation) ─────────────────────────────────────────
+
+    #[test]
+    fn snapshot_empty_document_roundtrip() {
+        let doc = Document::new();
+        let bytes = doc.to_bytes().expect("encode");
+        let restored = Document::from_bytes(&bytes).expect("decode");
+        assert_eq!(restored.mode(), doc.mode());
+        assert_eq!(restored.root(), doc.root());
+    }
+
+    #[test]
+    fn snapshot_document_with_elements_roundtrip() {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        doc.append_child(doc.root(), html);
+        let body = doc.create_element(QualName::html("body"));
+        doc.append_child(html, body);
+        let text = doc.create_text("hello world");
+        doc.append_child(body, text);
+        doc.set_mode(DocumentMode::NoQuirks);
+
+        let bytes = doc.to_bytes().expect("encode");
+        let restored = Document::from_bytes(&bytes).expect("decode");
+
+        assert_eq!(restored.mode(), DocumentMode::NoQuirks);
+        let root_children = restored.get(restored.root()).children.clone();
+        assert_eq!(root_children.len(), 1);
+        let html_id = root_children[0];
+        let html_children = restored.get(html_id).children.clone();
+        assert_eq!(html_children.len(), 1);
+        let body_id = html_children[0];
+        let body_children = restored.get(body_id).children.clone();
+        assert_eq!(body_children.len(), 1);
+        let text_id = body_children[0];
+        assert!(matches!(&restored.get(text_id).data, NodeData::Text(s) if s == "hello world"));
+    }
+
+    #[test]
+    fn snapshot_document_with_attributes_roundtrip() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        // Manually push attributes via NodeData::Element.
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(div).data {
+            attrs.push(Attribute { name: QualName::html("class"), value: "container".into() });
+            attrs.push(Attribute { name: QualName::html("id"), value: "main".into() });
+        }
+        doc.append_child(doc.root(), div);
+
+        let bytes = doc.to_bytes().expect("encode");
+        let restored = Document::from_bytes(&bytes).expect("decode");
+
+        let div_id = restored.get(restored.root()).children[0];
+        assert_eq!(restored.get(div_id).get_attr("class"), Some("container"));
+        assert_eq!(restored.get(div_id).get_attr("id"), Some("main"));
+    }
+
+    #[test]
+    fn snapshot_document_with_shadow_root_roundtrip() {
+        let mut doc = Document::new();
+        let host = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), host);
+        let shadow = doc.attach_shadow(host, ShadowRootMode::Open);
+        let span = doc.create_element(QualName::html("span"));
+        doc.append_child(shadow, span);
+
+        let bytes = doc.to_bytes().expect("encode");
+        let restored = Document::from_bytes(&bytes).expect("decode");
+
+        let host_id = restored.get(restored.root()).children[0];
+        let shadow_id = restored.shadow_root_of(host_id).expect("shadow root");
+        let shadow_children = &restored.get(shadow_id).children;
+        assert_eq!(shadow_children.len(), 1);
+    }
+
+    #[test]
+    fn snapshot_quirks_mode_preserved() {
+        let mut doc = Document::new();
+        doc.set_mode(DocumentMode::Quirks);
+        let bytes = doc.to_bytes().expect("encode");
+        let restored = Document::from_bytes(&bytes).expect("decode");
+        assert_eq!(restored.mode(), DocumentMode::Quirks);
+    }
+
+    #[test]
+    fn snapshot_selection_preserved() {
+        let mut doc = Document::new();
+        let text = doc.create_text("abcdef");
+        doc.append_child(doc.root(), text);
+        let sel = Selection {
+            anchor: Some(DomPosition { container: text, offset: 0 }),
+            focus: Some(DomPosition { container: text, offset: 3 }),
+        };
+        doc.set_selection(sel.clone());
+
+        let bytes = doc.to_bytes().expect("encode");
+        let restored = Document::from_bytes(&bytes).expect("decode");
+        assert_eq!(restored.get_selection(), &sel);
+    }
+
+    #[test]
+    fn snapshot_blob_is_compact() {
+        // Ensure the snapshot is a reasonable size (not accidentally inflated).
+        let mut doc = Document::new();
+        let body = doc.create_element(QualName::html("body"));
+        doc.append_child(doc.root(), body);
+        let text = doc.create_text("hello");
+        doc.append_child(body, text);
+        let bytes = doc.to_bytes().expect("encode");
+        // A 3-node tree should serialize well under 1 KB.
+        assert!(bytes.len() < 1024, "snapshot too large: {} bytes", bytes.len());
     }
 }

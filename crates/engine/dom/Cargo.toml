@@ -9,3 +9,5 @@ description = "Lumen: DOM tree (arena-based)"
 
 [dependencies]
 lumen-core = { workspace = true }
+serde = { workspace = true }
+bincode = { workspace = true }

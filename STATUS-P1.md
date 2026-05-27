@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: dom-arena-audit  branch: p1-dom-arena-audit
+Next step: update SUBSYSTEMS.md + lumen-plan.md markers → merge
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -13,7 +13,6 @@ Next (Wave 0 — критично для graphic_tests на своём брау�
   P1 покрывает всю engine-часть (фронт + бэк), включая бывший P2-домен paint/font/image,
   поэтому ниже — все cross-domain подзадачи из треков 8/9/10, где P3 нужна поддержка
   со стороны движка.
-- layout-find-by-selector (8A.4, [P1+P3]): добавить `pub fn find_box_by_selector(&LayoutTree, sel: &str) -> Option<LayoutBox>` + `pub fn computed_style_by_selector(...) -> Option<ComputedStyleSnapshot>` в lumen-layout. Минимальный selector matching: #id, .class, tag (без :hover / nth-child в первой версии — lumen-css-parser уже имеет selector AST). **Разблокирует** P3 8A.2 InProcessSession и уровни 2-3 тестовой пирамиды §15 — без этого graphic_tests остаются на ffmpeg+gdigrab+Edge и Windows-only. Координация с P3 в lumen-driver. → lumen-plan.md трек 8A.4.
 
 Next (Wave 0 — ADR-008 структурные инварианты, критично ДО Phase 1 finalize lumen-dom / lumen-layout / lumen-paint, иначе ретрофит 5-10×):
 - dom-arena-audit (10B Invariant 1, [P1+P3]): audit lumen-dom — убедиться что node graph хранится на NodeId(u32) индексах без Rc<RefCell> в графе; добавить bincode::serialize/deserialize для DOM snapshot (используется T3 hibernation); clippy lint запрещает Rc<RefCell> в lumen-dom::node модулях. Binding по ADR-008 Invariant 1. → lumen-plan.md трек 10B + ADR-008.
