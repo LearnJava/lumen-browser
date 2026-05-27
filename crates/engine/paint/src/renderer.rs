@@ -1077,12 +1077,17 @@ struct GpuImage {
 /// `ensure_layer_textures`; переиспользуется пока размер surface не меняется.
 /// `texture` хранится pub чтобы можно было использовать в
 /// `encoder.copy_texture_to_texture` для blend-mode compositing.
-struct OffscreenLayer {
-    texture: wgpu::Texture,
-    view: wgpu::TextureView,
-    bind_group: wgpu::BindGroup,
-    width: u32,
-    height: u32,
+pub struct OffscreenLayer {
+    /// GPU texture resource.
+    pub texture: wgpu::Texture,
+    /// Texture view for rendering operations.
+    pub view: wgpu::TextureView,
+    /// Bind group for composite operations.
+    pub bind_group: wgpu::BindGroup,
+    /// Width in physical pixels.
+    pub width: u32,
+    /// Height in physical pixels.
+    pub height: u32,
 }
 
 /// GPU-снимок слоя, загруженный из CPU-пикселей через
@@ -1299,6 +1304,10 @@ pub struct Renderer {
     /// by the most recent `render()` call. Kept alive between `render()` and
     /// `render_to_image()` pixel readback, then dropped.
     pending_readback: Option<wgpu::Texture>,
+    /// GPU texture pool for layer recycling (ADR-008 Phase 2).
+    /// Maintains free textures keyed by (width, height) for reuse instead of
+    /// allocating a new `wgpu::Texture` for each layer.
+    texture_pool: crate::texture_pool::TexturePool,
 }
 
 impl Renderer {
@@ -2464,6 +2473,7 @@ impl Renderer {
             font_provider: Some(Arc::new(SystemFontIndex::new())),
             cached_glyphs: HashMap::new(),
             pending_readback: None,
+            texture_pool: crate::texture_pool::TexturePool::new(),
         })
     }
 
@@ -2864,9 +2874,38 @@ impl Renderer {
         self.layer_cache.insert(key, memory_bytes)
     }
 
-    /// Очистить весь layer cache (полная эвикция).
+    /// Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008).
+    /// Used when a layer is no longer needed and its texture can be reused for another layer.
+    pub fn return_layer_to_pool(&mut self, layer: OffscreenLayer) {
+        let pooled = crate::texture_pool::PooledTexture {
+            texture: layer.texture,
+            view: layer.view,
+            bind_group: layer.bind_group,
+            width: layer.width,
+            height: layer.height,
+        };
+        self.texture_pool.release(pooled);
+    }
+
+    /// Очистить весь layer cache (полная эвикция) и очистить texture pool.
     pub fn clear_layer_cache(&mut self) {
         self.layer_cache.clear();
+        self.texture_pool.clear();
+    }
+
+    /// Get the number of free textures in the pool (for diagnostics).
+    pub fn texture_pool_len(&self) -> usize {
+        self.texture_pool.len()
+    }
+
+    /// Get the number of free textures of a specific size (for diagnostics).
+    pub fn texture_pool_len_for_size(&self, width: u32, height: u32) -> usize {
+        self.texture_pool.len_for_size(width, height)
+    }
+
+    /// Clear all pooled textures (e.g., when resizing or memory pressure is high).
+    pub fn clear_texture_pool(&mut self) {
+        self.texture_pool.clear();
     }
 
     /// Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован.
@@ -2890,6 +2929,8 @@ impl Renderer {
                 self.headless_h = height;
             }
             self.layer_textures.clear();
+            // Clear pooled textures on resize (Phase 2 ADR-008) to avoid size mismatches.
+            self.texture_pool.clear();
         }
     }
 
@@ -2932,7 +2973,19 @@ impl Renderer {
         }
     }
 
-    fn create_layer_texture(&self, width: u32, height: u32) -> OffscreenLayer {
+    fn create_layer_texture(&mut self, width: u32, height: u32) -> OffscreenLayer {
+        // Try to acquire a texture from the pool before creating a new one (Phase 2).
+        if let Some(pooled) = self.texture_pool.acquire(width, height) {
+            return OffscreenLayer {
+                texture: pooled.texture,
+                view: pooled.view,
+                bind_group: pooled.bind_group,
+                width: pooled.width,
+                height: pooled.height,
+            };
+        }
+
+        // Pool miss: allocate a new texture.
         let texture = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("opacity-layer"),
             size: wgpu::Extent3d { width, height, depth_or_array_layers: 1 },
@@ -2961,6 +3014,7 @@ impl Renderer {
                 },
             ],
         });
+        self.texture_pool.update_size(1); // Track new allocation.
         OffscreenLayer { texture, view, bind_group, width, height }
     }
 
