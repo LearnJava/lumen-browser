@@ -1,5 +1,5 @@
-In progress: —
-Next step: (Wave 3 automation API) Pick next: auto-wait-engine (8D), per-context-isolation (8E), or deterministic-mode (8F) — all Phase 1 foundational.
+In progress: per-context-isolation (8E)  branch: p3-per-context-isolation-8e
+Next step: Design isolation scope for BrowserSession — cookies/storage/cache/viewport/UA/fingerprint per session. Audit current BrowserSession trait (lumen-driver/src/session.rs) and identify integration points.
 
 Recent (Wave 2/3 - automation API):
   - native-input-injection-8c (Phase 1 skeleton: InputCommand enum + click/type_text + shell/src/input.rs) 2026-05-28 
