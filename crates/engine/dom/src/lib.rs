@@ -630,6 +630,127 @@ pub fn check_form_gate(doc: &Document, sandbox: SandboxFlags) -> usize {
     0
 }
 
+/// Найти ближайший предок `<form>` для узла `node`.
+///
+/// Реализует шаг «find the form owner» из HTML LS §form-associated elements:
+/// поднимаемся вверх по цепочке родителей до первого элемента с тегом `form`.
+/// Возвращает `None` если узел не вложен ни в какую форму.
+pub fn find_ancestor_form(doc: &Document, mut node: NodeId) -> Option<NodeId> {
+    while let Some(parent) = doc.get(node).parent {
+        if doc.get(parent).element_name()
+            .map(|q| q.local.eq_ignore_ascii_case("form"))
+            .unwrap_or(false)
+        {
+            return Some(parent);
+        }
+        node = parent;
+    }
+    None
+}
+
+/// Собрать имена и значения submittable-контролов формы из DOM-атрибутов.
+///
+/// Обходит потомков `form_id` depth-first и возвращает `(name, value)` для
+/// каждого `<input>`, `<textarea>`, `<select>` у которых есть атрибут `name`
+/// и который не является disabled. `<input type="submit">` и `<input type="reset">`
+/// не включаются в набор данных (они не submittable в смысле HTML LS).
+///
+/// Значения берутся из DOM-атрибута `value`. Для актуальных runtime-значений
+/// (что пользователь набрал) — вызывающий код в shell должен наложить
+/// `FormState` поверх результата.
+pub fn collect_dom_form_fields(doc: &Document, form_id: NodeId) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    collect_fields_in(doc, form_id, form_id, &mut out);
+    out
+}
+
+fn collect_fields_in(doc: &Document, id: NodeId, form_id: NodeId, out: &mut Vec<(String, String)>) {
+    let node = doc.get(id);
+    let tag = node.element_name().map(|q| q.local.as_str()).unwrap_or("");
+    match tag {
+        "input" => {
+            let itype = node
+                .get_attr("type")
+                .unwrap_or("text")
+                .to_ascii_lowercase();
+            // submit/reset/button/image не включаются в набор данных.
+            if matches!(itype.as_str(), "submit" | "reset" | "button" | "image") {
+                return;
+            }
+            if node.get_attr("disabled").is_some() {
+                return;
+            }
+            if let Some(name) = node.get_attr("name").filter(|n| !n.is_empty()) {
+                // checkbox и radio включаются только если checked.
+                if matches!(itype.as_str(), "checkbox" | "radio") {
+                    if node.get_attr("checked").is_none() {
+                        return;
+                    }
+                    let value = node.get_attr("value").unwrap_or("on").to_string();
+                    out.push((name.to_string(), value));
+                } else {
+                    let value = node.get_attr("value").unwrap_or("").to_string();
+                    out.push((name.to_string(), value));
+                }
+            }
+        }
+        "textarea" => {
+            if node.get_attr("disabled").is_some() {
+                return;
+            }
+            if let Some(name) = node.get_attr("name").filter(|n| !n.is_empty()) {
+                let value = node.get_attr("value").unwrap_or("").to_string();
+                out.push((name.to_string(), value));
+            }
+        }
+        "select" => {
+            if node.get_attr("disabled").is_some() {
+                return;
+            }
+            if let Some(name) = node.get_attr("name").filter(|n| !n.is_empty()) {
+                // Ищем первый выбранный <option>; если нет — первый <option>.
+                let selected = find_selected_option(doc, id);
+                out.push((name.to_string(), selected));
+            }
+        }
+        // Не рекурсируем внутрь вложенных форм (HTML LS не поддерживает
+        // nested forms, но такие страницы встречаются).
+        "form" if id != form_id => return,
+        _ => {}
+    }
+    for &child in &node.children.clone() {
+        collect_fields_in(doc, child, form_id, out);
+    }
+}
+
+fn find_selected_option(doc: &Document, select_id: NodeId) -> String {
+    let node = doc.get(select_id);
+    let mut first_value = String::new();
+    for &child in &node.children.clone() {
+        let ch = doc.get(child);
+        if ch.element_name().map(|q| q.local.eq_ignore_ascii_case("option")).unwrap_or(false) {
+            let val = ch.get_attr("value")
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| {
+                    ch.children.first().and_then(|&t| {
+                        if let NodeData::Text(data) = &doc.get(t).data {
+                            Some(data.clone())
+                        } else {
+                            None
+                        }
+                    }).unwrap_or_default()
+                });
+            if first_value.is_empty() {
+                first_value = val.clone();
+            }
+            if ch.get_attr("selected").is_some() {
+                return val;
+            }
+        }
+    }
+    first_value
+}
+
 /// Информация об якорной ссылке (`<a href>`), найденной в документе.
 pub struct AnchorInfo {
     /// Значение атрибута `href`.
@@ -1592,5 +1713,172 @@ mod tests {
         let (doc, _, _) = build_shadow_host();
         let s = doc.to_string();
         assert!(s.contains("#shadow-root (open)"));
+    }
+
+    // ── form submission helpers ──────────────────────────────────────────────
+
+    fn make_form_doc() -> (Document, NodeId, NodeId, NodeId) {
+        // <form action="/send" method="post">
+        //   <input name="user" value="alice">
+        //   <input type="submit">
+        // </form>
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(form).data {
+            attrs.push(Attribute { name: QualName::html("action"), value: "/send".into() });
+            attrs.push(Attribute { name: QualName::html("method"), value: "post".into() });
+        }
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("name"), value: "user".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "alice".into() });
+        }
+        let submit = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(submit).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "submit".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, input);
+        doc.append_child(form, submit);
+        (doc, form, input, submit)
+    }
+
+    #[test]
+    fn find_ancestor_form_direct_child() {
+        let (doc, form, input, _) = make_form_doc();
+        assert_eq!(find_ancestor_form(&doc, input), Some(form));
+    }
+
+    #[test]
+    fn find_ancestor_form_nested() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let div = doc.create_element(QualName::html("div"));
+        let input = doc.create_element(QualName::html("input"));
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, div);
+        doc.append_child(div, input);
+        assert_eq!(find_ancestor_form(&doc, input), Some(form));
+    }
+
+    #[test]
+    fn find_ancestor_form_no_form() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        let input = doc.create_element(QualName::html("input"));
+        doc.append_child(doc.root(), div);
+        doc.append_child(div, input);
+        assert_eq!(find_ancestor_form(&doc, input), None);
+    }
+
+    #[test]
+    fn collect_dom_form_fields_basic() {
+        let (doc, form, _, _) = make_form_doc();
+        let fields = collect_dom_form_fields(&doc, form);
+        // submit input должен быть исключён; только "user" должен попасть
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].0, "user");
+        assert_eq!(fields[0].1, "alice");
+    }
+
+    #[test]
+    fn collect_dom_form_fields_skips_disabled() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("name"), value: "x".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "v".into() });
+            attrs.push(Attribute { name: QualName::html("disabled"), value: String::new() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, input);
+        let fields = collect_dom_form_fields(&doc, form);
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn collect_dom_form_fields_skips_nameless() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("value"), value: "v".into() });
+            // no "name" attribute
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, input);
+        let fields = collect_dom_form_fields(&doc, form);
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn collect_dom_form_fields_unchecked_checkbox_excluded() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let cb = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(cb).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "checkbox".into() });
+            attrs.push(Attribute { name: QualName::html("name"), value: "agree".into() });
+            // no "checked" attribute — не отмечен
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, cb);
+        let fields = collect_dom_form_fields(&doc, form);
+        assert!(fields.is_empty());
+    }
+
+    #[test]
+    fn collect_dom_form_fields_checked_checkbox_included() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let cb = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(cb).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "checkbox".into() });
+            attrs.push(Attribute { name: QualName::html("name"), value: "agree".into() });
+            attrs.push(Attribute { name: QualName::html("checked"), value: String::new() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, cb);
+        let fields = collect_dom_form_fields(&doc, form);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].0, "agree");
+        assert_eq!(fields[0].1, "on"); // default checkbox value
+    }
+
+    #[test]
+    fn collect_dom_form_fields_textarea() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let ta = doc.create_element(QualName::html("textarea"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(ta).data {
+            attrs.push(Attribute { name: QualName::html("name"), value: "msg".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "hello".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, ta);
+        let fields = collect_dom_form_fields(&doc, form);
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0], ("msg".into(), "hello".into()));
+    }
+
+    #[test]
+    fn collect_dom_form_fields_multiple() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        for (name, val) in [("a", "1"), ("b", "2"), ("c", "3")] {
+            let inp = doc.create_element(QualName::html("input"));
+            if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+                attrs.push(Attribute { name: QualName::html("name"), value: name.into() });
+                attrs.push(Attribute { name: QualName::html("value"), value: val.into() });
+            }
+            doc.append_child(form, inp);
+        }
+        doc.append_child(doc.root(), form);
+        let fields = collect_dom_form_fields(&doc, form);
+        assert_eq!(fields.len(), 3);
+        assert_eq!(fields[0], ("a".into(), "1".into()));
+        assert_eq!(fields[1], ("b".into(), "2".into()));
+        assert_eq!(fields[2], ("c".into(), "3".into()));
     }
 }

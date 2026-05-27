@@ -93,6 +93,19 @@ pub enum Event {
     /// Финальный символ зафиксирован (Ime::Commit).
     /// JS: `compositionend` с `data = committed_text`.
     ImeCompositionEnded { tab_id: TabId, data: String },
+    /// HTML LS §form-submission: пользователь нажал submit-кнопку, валидация
+    /// прошла. Для GET-форм `body` нужно добавить к `action` как query-строку;
+    /// для POST — отправить как тело запроса с Content-Type urlencoded.
+    FormSubmit {
+        tab_id: TabId,
+        /// Целевой URL формы (значение атрибута `action`; пустая строка если
+        /// атрибут отсутствует — навигация к текущей странице).
+        action: String,
+        /// HTTP-метод: `"get"` или `"post"` (нижний регистр).
+        method: String,
+        /// Сериализованные данные формы (application/x-www-form-urlencoded).
+        body: String,
+    },
 }
 
 #[cfg(test)]
