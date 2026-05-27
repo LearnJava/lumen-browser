@@ -3,6 +3,15 @@
 //! он рендерит то, что ему говорят.
 //!
 //! Координаты — экранные пиксели от верхнего левого угла окна.
+//!
+//! **ADR-008 Invariant 3 note (paint-pure-audit 10D.2, 2026-05-27):**
+//! All display list builder functions (`build_display_list`, `build_display_list_with_anim`,
+//! `build_display_list_ordered`, `build_display_list_ordered_with_anim`) are pure functions:
+//! they depend only on their function parameters (LayoutBox, optional compositor anim frame,
+//! optional stacking tree) and do not depend on hidden global state, thread-locals, or
+//! environment variables. No `static mut` / `lazy_static!` / `OnceCell` found in this module.
+//! Renderer caching (glyph atlas, image cache, layer snapshots) lives in separate crates
+//! (lumen-font, lumen-image) with explicit eviction APIs.
 
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::InputType;
