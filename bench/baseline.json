@@ -1,0 +1,66 @@
+{
+  "timestamp": "2026-05-28T00:35:00Z",
+  "env": {
+    "LUMEN_BENCH_ITERS": 100,
+    "lumen_version": "Phase 0 prototype"
+  },
+  "note": "Conservative baseline with +15% margin to handle system noise. Update quarterly via bench/UPDATE.md",
+  "metrics": {
+    "decode": {
+      "unit": "microseconds",
+      "min": 1.0,
+      "median": 1.5,
+      "mean": 1.8,
+      "p95": 2.5,
+      "max": 12.0
+    },
+    "parse_html": {
+      "unit": "microseconds",
+      "min": 20.0,
+      "median": 29.0,
+      "mean": 31.0,
+      "p95": 45.0,
+      "max": 77.0
+    },
+    "parse_css": {
+      "unit": "microseconds",
+      "min": 7.0,
+      "median": 11.0,
+      "mean": 12.0,
+      "p95": 17.0,
+      "max": 46.0
+    },
+    "layout": {
+      "unit": "microseconds",
+      "min": 145.0,
+      "median": 192.0,
+      "mean": 213.0,
+      "p95": 289.0,
+      "max": 405.0
+    },
+    "paint": {
+      "unit": "microseconds",
+      "min": 1.5,
+      "median": 2.5,
+      "mean": 3.0,
+      "p95": 15.0,
+      "max": 35.0
+    },
+    "TOTAL": {
+      "unit": "microseconds",
+      "min": 175.0,
+      "median": 238.0,
+      "mean": 261.0,
+      "p95": 360.0,
+      "max": 500.0
+    }
+  },
+  "page_info": {
+    "file": "samples/page.html",
+    "html_bytes": 667,
+    "css_bytes": 300,
+    "dom_nodes": 45,
+    "css_rules": 7,
+    "paint_cmds": 22
+  }
+}

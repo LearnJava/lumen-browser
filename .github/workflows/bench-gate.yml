@@ -1,0 +1,78 @@
+name: Benchmark Gate
+
+on:
+  pull_request:
+    paths:
+      # Core engine & runtime crates that affect performance
+      - 'crates/driver/**'
+      - 'crates/mcp/**'
+      - 'crates/bidi/**'
+      - 'crates/network/**'
+      - 'crates/canvas/**'
+      - 'crates/js/**'
+      - 'crates/storage/**'
+      - 'crates/shell/**'
+      # Pipeline components
+      - 'crates/engine/**'
+      - 'crates/bench/**'
+      - 'bench/**'
+      - '.github/workflows/bench-gate.yml'
+
+jobs:
+  benchmark:
+    name: Performance Regression Gate
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache Cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-index-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache Cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-build-target-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Run benchmark & compare against baseline
+        run: python bench/compare.py
+        shell: bash
+        env:
+          # Ensure Python finds our bench directory
+          PYTHONPATH: .
+
+      - name: Comment PR with results
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '❌ **Benchmark gate failed**: Performance regression detected (> 5%). See logs above.'
+            })
+
+      - name: Comment PR on success
+        if: success()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '✅ **Benchmark gate passed**: No performance regressions detected.'
+            })
