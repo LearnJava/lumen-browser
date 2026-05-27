@@ -166,7 +166,6 @@ pub fn paginate(layout_box: &LayoutBox, context: &PaginationContext) -> Vec<Page
                         content_height: current_page_y,
                     });
                     current_page_number += 1;
-                    current_page_y = 0.0;
                     current_fragments.clear();
                 }
                 current_fragments.push(PageFragment {
