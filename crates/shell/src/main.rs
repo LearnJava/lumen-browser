@@ -16,6 +16,7 @@
 //! Внешние CSS: `<link rel="stylesheet" href="...">` загружается с диска или
 //! по сети — в зависимости от того, каким способом загружена страница.
 
+mod address_bar;
 mod animation_scheduler;
 mod find;
 mod forms;
@@ -210,6 +211,7 @@ fn run_window_mode(
         layout_box: None,
         epoch: std::time::Instant::now(),
         find: find::FindState::default(),
+        address_bar: address_bar::AddressBarState::default(),
         scroll_y: initial_scroll.1,
         scroll_x: initial_scroll.0,
         content_height: 0.0,
@@ -619,10 +621,12 @@ impl PageSource {
             PageSource::Url(url) => {
                 use lumen_core::ext::NetworkTransport;
                 use lumen_core::url::Url;
-                use lumen_network::HttpClient;
+                use lumen_network::{BrotliContentDecoder, HttpClient};
 
                 let lumen_url = Url::parse(url)?;
-                let client = HttpClient::new().with_sink(sink);
+                let client = HttpClient::new()
+                    .with_sink(sink)
+                    .with_content_decoder(std::sync::Arc::new(BrotliContentDecoder::new()));
                 let bytes = client.fetch(&lumen_url)?;
                 eprintln!("Получено {} байт", bytes.len());
                 Ok(RawPage {
@@ -790,6 +794,9 @@ enum KeyCommand {
     Reload,
     Exit,
     FindOpen,
+    /// Открыть адресную строку (Ctrl+L / F6). Позволяет ввести URL или
+    /// поисковый запрос прямо в браузере без перезапуска из CLI.
+    OpenAddressBar,
     /// Навигация назад (Alt+Left). Восстанавливает из bfcache если возможно.
     HistoryBack,
     /// Навигация вперёд (Alt+Right). Восстанавливает из bfcache если возможно.
@@ -839,6 +846,8 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::Escape if no_mods => Some(KeyCommand::Exit),
         KeyCode::KeyW if ctrl_only => Some(KeyCommand::Exit),
         KeyCode::KeyF if ctrl_only => Some(KeyCommand::FindOpen),
+        KeyCode::KeyL if ctrl_only => Some(KeyCommand::OpenAddressBar),
+        KeyCode::F6 if no_mods => Some(KeyCommand::OpenAddressBar),
         KeyCode::ArrowLeft if alt_only => Some(KeyCommand::HistoryBack),
         KeyCode::ArrowRight if alt_only => Some(KeyCommand::HistoryForward),
         KeyCode::ArrowDown if no_mods => Some(KeyCommand::ScrollLineDown),
@@ -918,8 +927,10 @@ impl ResourceBase {
         &self,
         sink: Arc<dyn EventSink>,
     ) -> lumen_network::HttpClient {
-        use lumen_network::{HttpClient, MixedContentMode};
-        let client = HttpClient::new().with_sink(sink);
+        use lumen_network::{BrotliContentDecoder, HttpClient, MixedContentMode};
+        let client = HttpClient::new()
+            .with_sink(sink)
+            .with_content_decoder(Arc::new(BrotliContentDecoder::new()));
         if let Some(origin) = self.origin()
             && origin.is_potentially_trustworthy()
         {
@@ -1892,6 +1903,9 @@ struct Lumen {
     /// (close() полностью очищает state); это сознательно: после reload
     /// display list другой, и старые позиции совпадений уже невалидны.
     find: find::FindState,
+    /// Состояние Ctrl+L адресной строки. Открыт ли бар и текущий ввод.
+    /// Закрывается при навигации (commit) и при Esc.
+    address_bar: address_bar::AddressBarState,
     /// Текущее вертикальное смещение страницы (CSS px). 0 — верх документа.
     /// Растёт вниз, клампится в `[0, max(0, content_height − viewport_height)]`.
     /// На load/reload сбрасывается в 0.
@@ -2185,6 +2199,7 @@ impl Lumen {
                 // Closing полностью сбрасывает query/active — пользователю
                 // нужно открыть find заново после reload, что естественно.
                 self.find.close();
+                self.address_bar.close();
                 // Новая страница — показываем сверху-слева.
                 self.scroll_y = 0.0;
                 self.scroll_x = 0.0;
@@ -2327,6 +2342,7 @@ impl Lumen {
         self.title = page.title;
         self.anim_frame = None;
         self.find.close();
+        self.address_bar.close();
         self.scroll_y = 0.0;
         self.scroll_x = 0.0;
         self.scroll_drag = None;
@@ -3034,6 +3050,20 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     overlay_buf = picker;
                 }
 
+                // Адресная строка (Ctrl+L) — рисуется поверх всего остального.
+                if self.address_bar.is_open() {
+                    let win_size = self.window.as_ref().map_or((1024, 720), |w| {
+                        let s = w.inner_size();
+                        (s.width, s.height)
+                    });
+                    let mut bar = address_bar::build_bar_overlay(
+                        &self.address_bar,
+                        address_bar::BarOverlay { window_size: win_size },
+                    );
+                    bar.append(&mut overlay_buf);
+                    overlay_buf = bar;
+                }
+
                 // Compositor offload: если есть активные анимации с opacity/transform —
                 // пересобираем display list из layout_box с overrides, минуя relayout.
                 // color/background-color остаются в anim_frame на будущее (требуют relayout).
@@ -3077,6 +3107,13 @@ impl Lumen {
         let PhysicalKey::Code(code) = key_event.physical_key else {
             return;
         };
+
+        // Адресная строка (Ctrl+L) перехватывает ввод первой: Esc=close,
+        // Enter=navigate, Backspace=удалить символ, иначе — текст URL.
+        if self.address_bar.is_open() {
+            self.handle_address_bar_key(code, key_event, event_loop);
+            return;
+        }
 
         // Когда find bar открыт — все клавиши идут в него: ввод символов,
         // Esc=close, Backspace=стирание, Enter/F3=next (Shift=prev). Это не
@@ -3122,6 +3159,11 @@ impl Lumen {
             KeyCommand::Exit => event_loop.exit(),
             KeyCommand::FindOpen => {
                 self.find.open();
+                self.request_redraw();
+            }
+            KeyCommand::OpenAddressBar => {
+                let current = self.source.url_str().unwrap_or("").to_owned();
+                self.address_bar.open(&current);
                 self.request_redraw();
             }
             KeyCommand::HistoryBack => self.navigate_back(),
@@ -3290,6 +3332,39 @@ impl Lumen {
                 if self.ime_composing.take().is_some() {
                     self.event_sink
                         .emit(&Event::ImeCompositionEnded { tab_id, data: String::new() });
+                }
+            }
+        }
+    }
+
+    fn handle_address_bar_key(
+        &mut self,
+        code: KeyCode,
+        key_event: &KeyEvent,
+        event_loop: &ActiveEventLoop,
+    ) {
+        let _ = event_loop; // зарезервировано на случай будущих action-ов
+        match code {
+            KeyCode::Escape if !key_event.repeat => {
+                self.address_bar.close();
+                self.request_redraw();
+            }
+            KeyCode::Enter if !key_event.repeat => {
+                self.address_bar.commit();
+                if let Some(url) = self.address_bar.take_commit() {
+                    self.navigate_to(PageSource::from_arg(Some(&url)));
+                }
+            }
+            KeyCode::Backspace => {
+                self.address_bar.backspace();
+                self.request_redraw();
+            }
+            _ => {
+                if let Some(text) = key_event.text.as_ref()
+                    && !text.is_empty()
+                {
+                    self.address_bar.append_str(text);
+                    self.request_redraw();
                 }
             }
         }
@@ -4189,6 +4264,22 @@ mod tests {
         assert_eq!(
             keybinding_for(KeyCode::KeyF, ModifiersState::CONTROL),
             Some(KeyCommand::FindOpen),
+        );
+    }
+
+    #[test]
+    fn keybinding_ctrl_l_opens_address_bar() {
+        assert_eq!(
+            keybinding_for(KeyCode::KeyL, ModifiersState::CONTROL),
+            Some(KeyCommand::OpenAddressBar),
+        );
+    }
+
+    #[test]
+    fn keybinding_f6_opens_address_bar() {
+        assert_eq!(
+            keybinding_for(KeyCode::F6, ModifiersState::empty()),
+            Some(KeyCommand::OpenAddressBar),
         );
     }
 
