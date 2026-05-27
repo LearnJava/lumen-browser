@@ -565,6 +565,13 @@ pub struct InlineSegment {
     /// // CSS: ::first-letter — P4 wires: look up `::first-letter` rule, override style of
     /// segments where `pseudo_kind == PseudoKind::FirstLetter`.
     pub pseudo_kind: PseudoKind,
+    /// DOM text node that produced this segment, for Selection/Range mapping.
+    /// `NodeId(0)` (document root) for generated content with no DOM origin.
+    pub source_node: NodeId,
+    /// UTF-8 byte offset of `text[0]` within the source text node's content.
+    /// Always 0 for non-pre text (whole text node → one segment after whitespace
+    /// collapsing); non-zero for pre/pre-wrap segments split at `\n`.
+    pub source_char_offset: u32,
 }
 
 /// Marks an inline segment as the target of a CSS structural pseudo-element.
@@ -610,6 +617,13 @@ pub struct InlineFrag {
     /// // CSS: ::first-line — P4 wires: `compute_pseudo_element_style(node, "first-line")` →
     /// override `frag.style` for all frags where `is_first_line = true`.
     pub is_first_line: bool,
+    /// DOM text node that produced this fragment (for Selection/Range mapping).
+    /// Matches the source `InlineSegment::source_node`. `NodeId(0)` for
+    /// generated/anonymous content with no direct DOM text node.
+    pub source_node: NodeId,
+    /// UTF-8 byte offset of `text[0]` within the source text node's content.
+    /// Computed in `wrap_inline_run` as words are taken from the segment.
+    pub source_char_offset: u32,
 }
 
 #[derive(Debug, Clone)]
@@ -931,6 +945,7 @@ fn collect_inline_segments(
             // CSS Text L3 §4.1: white-space: pre/pre-wrap — preserve tabs and
             // newlines. Split on \n to produce forced-break segments.
             let style = inherited.clone();
+            let mut byte_offset: u32 = 0;
             for (i, line) in s.split('\n').enumerate() {
                 if i > 0 {
                     out.push(InlineSegment {
@@ -943,7 +958,10 @@ fn collect_inline_segments(
                         img_width: 0.0,
                         forced_break: true,
                         pseudo_kind: PseudoKind::None,
+                        source_node: id,
+                        source_char_offset: byte_offset,
                     });
+                    byte_offset += 1; // the \n character
                 }
                 if !line.is_empty() {
                     out.push(InlineSegment {
@@ -956,8 +974,11 @@ fn collect_inline_segments(
                         img_width: 0.0,
                         forced_break: false,
                         pseudo_kind: PseudoKind::None,
+                        source_node: id,
+                        source_char_offset: byte_offset,
                     });
                 }
+                byte_offset += line.len() as u32;
             }
         }
         NodeData::Text(s) if !s.chars().all(char::is_whitespace) => {
@@ -985,6 +1006,8 @@ fn collect_inline_segments(
                 img_width: 0.0,
                 forced_break: false,
                 pseudo_kind: kind,
+                source_node: id,
+                source_char_offset: 0,
             });
         }
         NodeData::Text(_) => {}
@@ -1019,6 +1042,8 @@ fn collect_inline_segments(
                     img_width: w,
                     forced_break: false,
                     pseudo_kind: PseudoKind::None,
+                    source_node: id,
+                    source_char_offset: 0,
                 });
                 return;
             }
@@ -1202,6 +1227,8 @@ fn content_to_inline_segments(
         img_width: 0.0,
         forced_break: false,
         pseudo_kind: PseudoKind::None,
+        source_node: owner_id,
+        source_char_offset: 0,
     }]
 }
 
@@ -4301,6 +4328,8 @@ fn wrap_inline_run(
                 is_element_box: seg.is_element_box,
                 img_src: None,
                 is_first_line: false,
+                source_node: seg.source_node,
+                source_char_offset: seg.source_char_offset,
             });
             current_x += frag_w + seg.post_space;
             continue;
@@ -4330,6 +4359,8 @@ fn wrap_inline_run(
                 is_element_box: true,
                 img_src: Some(img_src.clone()),
                 is_first_line: false,
+                source_node: seg.source_node,
+                source_char_offset: seg.source_char_offset,
             });
             current_x += img_w + seg.post_space;
             continue;
@@ -4357,6 +4388,19 @@ fn wrap_inline_run(
 
             // Strip soft hyphens for display + collect hyphenation break positions.
             let (display_word, shy_positions) = strip_soft_hyphens(raw_word);
+
+            // Byte offset of this word within seg.text — used for Selection/Range mapping.
+            // raw_word is a subslice produced by split_whitespace(), so pointer arithmetic is valid.
+            let frag_source_offset = {
+                let raw_ptr = raw_word.as_ptr() as usize;
+                let seg_ptr = seg.text.as_ptr() as usize;
+                let word_off = if raw_ptr >= seg_ptr && raw_ptr <= seg_ptr + seg.text.len() {
+                    (raw_ptr - seg_ptr) as u32
+                } else {
+                    0u32
+                };
+                seg.source_char_offset.saturating_add(word_off)
+            };
 
             // Space that the inline box model contributes at the word boundaries.
             let pre = if is_seg_first { seg.pre_space } else { 0.0 };
@@ -4400,6 +4444,8 @@ fn wrap_inline_run(
                         is_element_box: seg.is_element_box,
                         img_src: None,
                         is_first_line: false,
+                        source_node: seg.source_node,
+                        source_char_offset: frag_source_offset,
                     });
                     result.push(std::mem::take(&mut current_line));
                     current_x = 0.0;
@@ -4416,6 +4462,8 @@ fn wrap_inline_run(
                         is_element_box: seg.is_element_box,
                         img_src: None,
                         is_first_line: false,
+                        source_node: seg.source_node,
+                        source_char_offset: frag_source_offset,
                     });
                     current_x += sfx_w + post;
                     continue;
@@ -4446,6 +4494,8 @@ fn wrap_inline_run(
                                 is_element_box: seg.is_element_box,
                                 img_src: None,
                                 is_first_line: false,
+                                source_node: seg.source_node,
+                                source_char_offset: frag_source_offset,
                             });
                             current_x += head_w;
                             first_chunk = false;
@@ -4494,6 +4544,8 @@ fn wrap_inline_run(
                             is_element_box: seg.is_element_box,
                             img_src: None,
                             is_first_line: false,
+                            source_node: seg.source_node,
+                            source_char_offset: frag_source_offset,
                         });
                         current_x += head_w;
                         first_chunk = false;
@@ -4545,6 +4597,8 @@ fn wrap_inline_run(
                     is_element_box: seg.is_element_box,
                     img_src: None,
                     is_first_line: false,
+                    source_node: seg.source_node,
+                    source_char_offset: frag_source_offset,
                 });
                 current_x += word_w;
             }
@@ -4659,6 +4713,8 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 is_element_box: true,
                 img_src: Some(img_src.clone()),
                 is_first_line: false,
+                source_node: seg.source_node,
+                source_char_offset: seg.source_char_offset,
             });
             continue;
         }
@@ -4689,6 +4745,8 @@ fn one_line_fallback(segments: &[InlineSegment]) -> Vec<Vec<InlineFrag>> {
                 is_element_box: seg.is_element_box,
                 img_src: None,
                 is_first_line: false,
+                source_node: seg.source_node,
+                source_char_offset: seg.source_char_offset,
             });
         }
     }
@@ -5038,6 +5096,7 @@ mod tests {
         use super::{InlineSegment, PseudoKind, wrap_inline_run};
         use crate::style::{ComputedStyle, Hyphens};
         use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
 
         struct Fixed10;
         impl super::super::TextMeasurer for Fixed10 {
@@ -5059,6 +5118,8 @@ mod tests {
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
         };
 
         let m = Fixed10;
@@ -5079,6 +5140,7 @@ mod tests {
         use super::{InlineSegment, PseudoKind, wrap_inline_run};
         use crate::style::{ComputedStyle, Hyphens};
         use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
 
         struct Fixed10;
         impl super::super::TextMeasurer for Fixed10 {
@@ -5097,6 +5159,8 @@ mod tests {
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
         };
         let m = Fixed10;
         let hp = NullHyphenationProvider;
@@ -5175,6 +5239,7 @@ mod tests {
         use super::{InlineSegment, PseudoKind, wrap_inline_run};
         use crate::style::{ComputedStyle, Hyphens, OverflowWrap, WordBreak};
         use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
 
         struct Fixed10;
         impl super::super::TextMeasurer for Fixed10 {
@@ -5194,6 +5259,8 @@ mod tests {
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
         };
 
         let m = Fixed10;
@@ -5228,6 +5295,7 @@ mod tests {
         use super::{InlineSegment, PseudoKind, wrap_inline_run};
         use crate::style::{ComputedStyle, Hyphens, OverflowWrap, WordBreak};
         use lumen_core::geom::Size;
+        use lumen_dom::NodeId;
 
         struct Fixed10;
         impl super::super::TextMeasurer for Fixed10 {
@@ -5250,6 +5318,8 @@ mod tests {
             img_width: 0.0,
             forced_break: false,
             pseudo_kind: PseudoKind::None,
+            source_node: NodeId::from_index(0),
+            source_char_offset: 0,
         };
 
         let m = Fixed10;
