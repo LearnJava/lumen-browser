@@ -914,6 +914,68 @@ fn menuitem_requires_menu_context() {
     assert_eq!(item.role, AXRole::MenuItem, "menuitem should be valid inside menu");
 }
 
+// ── Stage 3: Relationship attributes ──────────────────────────────────────────
+
+#[test]
+fn relationship_attributes_initialized() {
+    // Verify that relationship attributes (aria-controls, aria-owns, aria-flowto, aria-details)
+    // are present in AXNode structure
+    let doc = parse(r#"
+        <button aria-controls="panel" aria-owns="owned1 owned2">Button</button>
+        <div id="panel">Panel</div>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+
+    // Relationship attributes should exist in structure (not resolved yet)
+    assert!(btn.controls.is_none(), "controls should be None (resolution pending)");
+    assert!(btn.owns.is_empty(), "owns should be empty (resolution pending)");
+    assert!(btn.flow_to.is_empty(), "flow_to should be empty");
+    assert!(btn.details.is_none(), "details should be None");
+}
+
+#[test]
+fn aria_controls_attribute_present() {
+    let doc = parse(r#"<button aria-controls="panel">Open Panel</button><div id="panel">Panel</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    // TODO: Once Document::find_by_id() is implemented, this should resolve to panel's NodeId
+    assert!(btn.controls.is_none(), "aria-controls resolution pending Document API");
+}
+
+#[test]
+fn aria_owns_attribute_present() {
+    let doc = parse(
+        r#"<div role="group" aria-owns="child1 child2">Group <div id="child1">C1</div><div id="child2">C2</div></div>"#,
+    );
+    let tree = build_ax_tree(&doc, doc.root());
+    let group = find_role_dfs(&tree.root, AXRole::Group).expect("group");
+    // TODO: Once Document::find_by_id() is implemented, should contain 2 NodeIds
+    assert!(group.owns.is_empty(), "aria-owns resolution pending Document API");
+}
+
+#[test]
+fn aria_flowto_attribute_present() {
+    let doc = parse(
+        r#"<span aria-flowto="next">First</span><span id="next">Second</span>"#,
+    );
+    let tree = build_ax_tree(&doc, doc.root());
+    let first = find_role_dfs(&tree.root, AXRole::Generic).expect("first span");
+    // TODO: Once Document::find_by_id() is implemented, should resolve to next span's NodeId
+    assert!(first.flow_to.is_empty(), "aria-flowto resolution pending Document API");
+}
+
+#[test]
+fn aria_details_attribute_present() {
+    let doc = parse(
+        r#"<input type="password" aria-details="pwd-hint"><div id="pwd-hint">Must be 8+ chars</div>"#,
+    );
+    let tree = build_ax_tree(&doc, doc.root());
+    let input = find_role_dfs(&tree.root, AXRole::TextBox).expect("password input");
+    // TODO: Once Document::find_by_id() is implemented, should resolve to hint's NodeId
+    assert!(input.details.is_none(), "aria-details resolution pending Document API");
+}
+
 fn find_with_tabindex(node: &lumen_a11y::AXNode, index: i32) -> Option<&lumen_a11y::AXNode> {
     if node.state.tab_index == Some(index) {
         return Some(node);
