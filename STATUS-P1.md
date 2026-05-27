@@ -1,5 +1,5 @@
-In progress: none (ready for next task)
-Next step: [P4] CSS properties roadmap (CSS-SPECS.md) — start with highest-priority features (display, position, padding, margin, background)
+In progress: fts-omnibox  branch: p1-fts-omnibox
+Next step: Explore lumen-knowledge crate structure and History API storage  lumen-knowledge/src/history.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
