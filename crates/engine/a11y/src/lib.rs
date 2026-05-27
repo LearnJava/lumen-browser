@@ -125,6 +125,14 @@ pub struct AXNode {
     pub state: AXState,
     /// Direct children in the accessibility tree (aria-hidden subtrees excluded).
     pub children: Vec<AXNode>,
+    /// `aria-controls` — NodeId of element controlled by this one. None if absent.
+    pub controls: Option<NodeId>,
+    /// `aria-owns` — NodeIds of elements owned by this one. Order preserved per spec.
+    pub owns: Vec<NodeId>,
+    /// `aria-flowto` — NodeIds indicating reading order continuation. Order preserved.
+    pub flow_to: Vec<NodeId>,
+    /// `aria-details` — NodeId of element with additional details. None if absent.
+    pub details: Option<NodeId>,
 }
 
 // ── AXTree ───────────────────────────────────────────────────────────────────
@@ -176,7 +184,14 @@ fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>) -> A
         .map(|&child_id| build_node(doc, child_id, Some(role)))
         .collect();
 
-    AXNode { node_id, role, name, description, placeholder, state, children }
+    // TODO: Resolve aria-* relationship attributes to target node IDs.
+    // Requires Document::find_by_id() or similar lookup mechanism.
+    let controls = None;
+    let owns = Vec::new();
+    let flow_to = Vec::new();
+    let details = None;
+
+    AXNode { node_id, role, name, description, placeholder, state, children, controls, owns, flow_to, details }
 }
 
 fn resolve_role(node: &lumen_dom::Node, parent_role: Option<AXRole>) -> AXRole {
