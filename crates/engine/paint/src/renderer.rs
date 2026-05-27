@@ -5762,6 +5762,8 @@ fn normalize_variation_axes(face: &ParsedFace<'_>, axes: &[([u8; 4], f32)]) -> V
         };
         coords.push(avar.normalize(axis_idx, linear));
     }
+    // CSS: font-optical-sizing — P4 wires: after this loop, if font-optical-sizing
+    // is set in ComputedStyle, inject opsz value into coords[opsz_axis_index]
     coords
 }
 
