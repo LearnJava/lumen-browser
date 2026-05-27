@@ -13,6 +13,7 @@
 //! - Each Page contains positioned LayoutBox fragments that fit on it
 
 use crate::box_tree::LayoutBox;
+use crate::style::BreakValue;
 
 /// Parameters for print pagination.
 ///
@@ -123,6 +124,44 @@ pub fn paginate(layout_box: &LayoutBox, _context: &PaginationContext) -> Vec<Pag
         }],
         content_height: layout_box.rect.height,
     }]
+}
+
+/// Check if a box should force a page break before it.
+///
+/// Returns true if `break-before` is `Always` or `Page`.
+#[allow(dead_code)]
+fn should_break_before(layout_box: &LayoutBox) -> bool {
+    match layout_box.style.break_before {
+        BreakValue::Always | BreakValue::Page => true,
+        _ => false,
+    }
+}
+
+/// Check if a box should force a page break after it.
+///
+/// Returns true if `break-after` is `Always` or `Page`.
+#[allow(dead_code)]
+fn should_break_after(layout_box: &LayoutBox) -> bool {
+    match layout_box.style.break_after {
+        BreakValue::Always | BreakValue::Page => true,
+        _ => false,
+    }
+}
+
+/// Check if we should try to avoid breaking before this box.
+///
+/// Returns true if `break-before` is `Avoid`.
+#[allow(dead_code)]
+fn should_avoid_break_before(layout_box: &LayoutBox) -> bool {
+    matches!(layout_box.style.break_before, BreakValue::Avoid)
+}
+
+/// Check if we should try to avoid breaking after this box.
+///
+/// Returns true if `break-after` is `Avoid`.
+#[allow(dead_code)]
+fn should_avoid_break_after(layout_box: &LayoutBox) -> bool {
+    matches!(layout_box.style.break_after, BreakValue::Avoid)
 }
 
 #[cfg(test)]
