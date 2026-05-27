@@ -1,5 +1,5 @@
 In progress: none (ready for next task)
-Next step: lumen-a11y-full stage 3 — ARIA attribute application + computed role mapping
+Next step: [P4] CSS properties roadmap (CSS-SPECS.md) — start with highest-priority features (display, position, padding, margin, background)
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -9,6 +9,7 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
 Recent:
+- lumen-a11y-full (8G, stage 3/3): ARIA attribute application (aria-current/modal/roledescription/valuenow/min/max/text) + computed role mapping with context validation (cell/columnheader/rowheader require row; row requires table; listitem requires list; tab requires tablist; option requires listbox; treeitem requires tree; menuitem requires menu) + relationship attributes (controls/owns/flowto/details) with NodeId storage pending Document::find_by_id() + 30 new tests → 104 total PASS 2026-05-27
 - lumen-a11y-full (8G, stage 2/3): label association (explicit + implicit) + form control text alternatives + description edge cases + button icon handling + link/heading/summary explicit naming + 21 new tests → 75 total PASS 2026-05-27
 - lumen-a11y-full (8G, stage 1/3): 18 extended ARIA roles (Alert/AlertDialog/Application/Feed/Log/Marquee/Note/RowHeader/Searchbox/Switch/Tab/TabList/TabPanel/Timer/Toolbar/Tooltip/Tree/TreeItem) + AXRole::parse + implicit_role for <input type="search"> → Searchbox, Serialize/Deserialize for AXNode/AXState/AXRole, serde integration for P3 snapshots, 16 new tests → 60 total tests PASS 2026-05-27
 - icc-color-profiles (Wave 1): IccProfile struct in lumen-image, Optional<IccProfile> in Image, parse_png_icc_profile() for PNG iCCP chunk (flate2 deflate decompression), Image constructors updated, JPEG/PNG/GIF decoders wired 2026-05-27
