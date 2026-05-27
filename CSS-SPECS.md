@@ -65,7 +65,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 |--------|------|--------|--------------|---------|
 | Filter Effects L1 | [filter-effects](https://www.w3.org/TR/filter-effects/) | ✅ | backdrop-filter GPU compositing: PushBackdropFilter/PopBackdropFilter + 4 display-list tests + 6 layout tests + graphic test 30 2026-05-24 | **#13** |
 | CSS Masking | [css-masking](https://www.w3.org/TR/css-masking/) | 🟡 | mask-image GPU compositing | **#14** |
-| Compositing & Blending | [compositing](https://www.w3.org/TR/compositing/) | 🟡 | mix-blend-mode blend pipeline | **#15** |
+| Compositing & Blending | [compositing](https://www.w3.org/TR/compositing/) | ✅ | mix-blend-mode blend pipeline ✅; background-blend-mode comma-list cycling ✅ 2026-05-27 | **#15** |
 | CSS Pseudo-Elements L4 | [css-pseudo-4](https://www.w3.org/TR/css-pseudo-4/) | 🟡 | ::first-line/::first-letter split; ::marker; ::selection | **#16** |
 | CSS Images L3 | [css3-images](https://www.w3.org/TR/css3-images/) | ✅ | conic-gradient() ✅ 2026-05-24; multiple bg layers ✅ 2026-05-26 | **#17** |
 | CSS Images L4 | [css4-images](https://www.w3.org/TR/css4-images/) | ⬜ | image-set(), cross-fade() | **#18** |
@@ -427,7 +427,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 
 | Property | Status | Notes |
 |----------|--------|-------|
-| `mix-blend-mode` | 🟡 | 16 modes parsed; blend pipeline ⬜ |
+| `mix-blend-mode` | ✅ | 17 modes; GPU blend pipeline; stacking context isolation 2026-05-27 |
+| `background-blend-mode` | ✅ | 17 modes; comma-list cycling over bg layers; PushBlendMode/PopBlendMode per layer 2026-05-27 |
 | `isolation` | 🟡 | auto/isolate; stacking context ⬜ |
 
 ### [T2] Pseudo-Elements
@@ -688,7 +689,7 @@ Ordered list of 🟡→✅ promotions for the P4 developer. One item = one featu
 | 11 | `@media` resize hook re-evaluation | S | shell event |
 | 12 | `filter` GPU offscreen pass | L | wgpu pipeline |
 | 13 | `clip-path` basic shapes (inset/circle/ellipse/polygon) | M | none |
-| 14 | `mix-blend-mode` blend pipeline | L | compositing |
+| 14 | `mix-blend-mode` + `background-blend-mode` | ✅ | 17 GPU blend modes + comma-list cycling 2026-05-27 |
 | 15 | `::first-letter` / `::first-line` line split | M | inline layout |
 | 16 | `::marker` rendering | S | float/list |
 | 17 | `conic-gradient()` | ✅ | ParsedGradient::Conic + DrawConicGradient + WGSL kind=2 + 9 tests + graphic test 40 2026-05-24 |

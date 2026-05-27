@@ -1675,6 +1675,10 @@ fn background_color_clip(b: &LayoutBox) -> BackgroundClip {
 }
 
 /// Эмитит одну background-layer команду.
+///
+/// CSS Compositing L1 §8.3: если `layer.blend_mode != Normal`, оборачивает
+/// draw-команду в PushBlendMode/PopBlendMode. Слои рисуются снизу вверх,
+/// каждый с указанным blend mode относительно уже нарисованных слоёв ниже.
 fn emit_background_layer(
     out: &mut Vec<DisplayCommand>,
     b: &LayoutBox,
@@ -1683,6 +1687,10 @@ fn emit_background_layer(
     let clip = background_clip_rect(b, layer.clip);
     if clip.width <= 0.0 || clip.height <= 0.0 {
         return;
+    }
+    let use_blend = layer.blend_mode != LayoutBlendMode::Normal;
+    if use_blend {
+        out.push(DisplayCommand::PushBlendMode { mode: map_blend_mode(layer.blend_mode) });
     }
     match &layer.image {
         BackgroundImage::Url(src) if !src.is_empty() => {
@@ -1725,6 +1733,9 @@ fn emit_background_layer(
             });
         }
         _ => {}
+    }
+    if use_blend {
+        out.push(DisplayCommand::PopBlendMode);
     }
 }
 
@@ -6455,5 +6466,63 @@ mod tests {
             _ => None,
         }).collect();
         assert_eq!(alpha_texts.len(), 2, "lower-alpha markers: expected 'a. ' and 'b. '");
+    }
+
+    // ── CSS Compositing L1 §8.3 — background-blend-mode ──
+
+    /// Normal blend mode → no PushBlendMode/PopBlendMode emitted.
+    #[test]
+    fn background_blend_mode_normal_no_blend_commands() {
+        let dl = build(
+            r#"<div style="background-image:linear-gradient(red,blue);background-blend-mode:normal;width:100px;height:100px"></div>"#,
+            "",
+        );
+        let blend_cmds: Vec<_> = dl.iter().filter(|c| {
+            matches!(c, DisplayCommand::PushBlendMode { .. } | DisplayCommand::PopBlendMode)
+        }).collect();
+        assert!(blend_cmds.is_empty(), "normal blend mode must not emit any blend commands");
+    }
+
+    /// Non-normal blend mode → PushBlendMode emitted before the gradient, PopBlendMode after.
+    #[test]
+    fn background_blend_mode_multiply_wraps_gradient() {
+        let dl = build(
+            r#"<div style="background-image:linear-gradient(red,blue);background-blend-mode:multiply;width:100px;height:100px"></div>"#,
+            "",
+        );
+        let idx_push = dl.iter().position(|c| matches!(c, DisplayCommand::PushBlendMode { mode: BlendMode::Multiply }));
+        let idx_grad = dl.iter().position(|c| matches!(c, DisplayCommand::DrawLinearGradient { .. }));
+        let idx_pop  = dl.iter().position(|c| matches!(c, DisplayCommand::PopBlendMode));
+        assert!(idx_push.is_some(), "PushBlendMode(Multiply) expected");
+        assert!(idx_grad.is_some(), "DrawLinearGradient expected");
+        assert!(idx_pop.is_some(),  "PopBlendMode expected");
+        assert!(idx_push.unwrap() < idx_grad.unwrap(), "PushBlendMode must precede DrawLinearGradient");
+        assert!(idx_grad.unwrap() < idx_pop.unwrap(),  "DrawLinearGradient must precede PopBlendMode");
+    }
+
+    /// Two layers: first has multiply, second normal → one blend pair for first layer only.
+    #[test]
+    fn background_blend_mode_two_layers_only_first_blended() {
+        let dl = build(
+            r#"<div style="background-image:linear-gradient(red,blue),linear-gradient(green,yellow);background-blend-mode:multiply,normal;width:100px;height:100px"></div>"#,
+            "",
+        );
+        // Exactly one PushBlendMode and one PopBlendMode total.
+        let push_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushBlendMode { .. })).count();
+        let pop_count  = dl.iter().filter(|c| matches!(c, DisplayCommand::PopBlendMode)).count();
+        assert_eq!(push_count, 1, "only one layer with non-normal blend mode → one PushBlendMode");
+        assert_eq!(pop_count,  1, "matching PopBlendMode count");
+    }
+
+    /// background-blend-mode cycles when fewer values than layers.
+    #[test]
+    fn background_blend_mode_cycling() {
+        // 3 layers, 1 value → all three get multiply.
+        let dl = build(
+            r#"<div style="background-image:linear-gradient(red,blue),linear-gradient(green,yellow),linear-gradient(cyan,magenta);background-blend-mode:multiply;width:100px;height:100px"></div>"#,
+            "",
+        );
+        let push_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushBlendMode { mode: BlendMode::Multiply })).count();
+        assert_eq!(push_count, 3, "cycling: 1 value for 3 layers → all 3 get multiply");
     }
 }

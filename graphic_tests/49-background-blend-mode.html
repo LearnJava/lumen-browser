@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<!-- TEST-49: CSS Compositing & Blending L1 §8.3 — background-blend-mode -->
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: #ff00ff; width: 1024px; height: 720px; }
+  .__f { background: #1a1a2e; width: 1022px; height: 718px; margin: 1px; overflow: hidden; padding: 24px; }
+
+  .row { display: flex; gap: 16px; margin-bottom: 20px; }
+  .box { width: 180px; height: 120px; }
+
+  /* Normal: baseline — no blending */
+  .normal {
+    background:
+      linear-gradient(135deg, #e74c3c 0%, #c0392b 100%),
+      linear-gradient(to bottom, #3498db, #1a5276);
+    background-blend-mode: normal;
+  }
+
+  /* Multiply: darkens overlapping areas */
+  .multiply {
+    background:
+      linear-gradient(135deg, #e74c3c 0%, #c0392b 100%),
+      linear-gradient(to bottom, #3498db, #1a5276);
+    background-blend-mode: multiply;
+  }
+
+  /* Screen: brightens — inverse of multiply */
+  .screen {
+    background:
+      linear-gradient(135deg, #e74c3c 0%, #c0392b 100%),
+      linear-gradient(to bottom, #3498db, #1a5276);
+    background-blend-mode: screen;
+  }
+
+  /* Overlay: contrast boost */
+  .overlay {
+    background:
+      linear-gradient(135deg, #e74c3c 0%, #c0392b 100%),
+      linear-gradient(to bottom, #3498db, #1a5276);
+    background-blend-mode: overlay;
+  }
+
+  /* Darken: min of channels */
+  .darken {
+    background:
+      linear-gradient(135deg, #e74c3c 0%, #c0392b 100%),
+      linear-gradient(to bottom, #3498db, #1a5276);
+    background-blend-mode: darken;
+  }
+
+  /* Lighten: max of channels */
+  .lighten {
+    background:
+      linear-gradient(135deg, #e74c3c 0%, #c0392b 100%),
+      linear-gradient(to bottom, #3498db, #1a5276);
+    background-blend-mode: lighten;
+  }
+
+  /* Difference: subtract */
+  .difference {
+    background:
+      linear-gradient(135deg, #e74c3c 0%, #c0392b 100%),
+      linear-gradient(to bottom, #3498db, #1a5276);
+    background-blend-mode: difference;
+  }
+
+  /* Exclusion: softer subtract */
+  .exclusion {
+    background:
+      linear-gradient(135deg, #e74c3c 0%, #c0392b 100%),
+      linear-gradient(to bottom, #3498db, #1a5276);
+    background-blend-mode: exclusion;
+  }
+
+  /* Color-dodge: brightens base using top layer */
+  .color-dodge {
+    background:
+      radial-gradient(circle at center, rgba(255,200,100,0.8) 0%, transparent 70%),
+      linear-gradient(to bottom, #1a3a6b, #0a1a3b);
+    background-blend-mode: color-dodge;
+  }
+
+  /* Luminosity: hue+saturation from base, luminosity from top */
+  .luminosity {
+    background:
+      linear-gradient(135deg, rgba(255,255,0,0.8) 0%, rgba(255,0,255,0.8) 100%),
+      linear-gradient(to bottom, #2ecc71, #27ae60);
+    background-blend-mode: luminosity;
+  }
+
+  /* Multi-layer cycling: 3 layers, 2 blend modes (third cycles to multiply) */
+  .multi-cycling {
+    background:
+      linear-gradient(to right, rgba(255,0,0,0.5), transparent),
+      linear-gradient(to bottom, rgba(0,255,0,0.5), transparent),
+      linear-gradient(135deg, #3498db, #9b59b6);
+    background-blend-mode: multiply, screen;
+  }
+</style>
+<body>
+  <div class="__f">
+    <div class="row">
+      <div class="box normal"></div>
+      <div class="box multiply"></div>
+      <div class="box screen"></div>
+      <div class="box overlay"></div>
+      <div class="box darken"></div>
+    </div>
+    <div class="row">
+      <div class="box lighten"></div>
+      <div class="box difference"></div>
+      <div class="box exclusion"></div>
+      <div class="box color-dodge"></div>
+      <div class="box luminosity"></div>
+    </div>
+    <div class="row">
+      <div class="box multi-cycling"></div>
+    </div>
+  </div>
+</body>

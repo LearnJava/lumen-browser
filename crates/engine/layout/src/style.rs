@@ -3152,6 +3152,10 @@ pub struct BackgroundLayer {
     pub origin: BackgroundOrigin,
     /// `background-clip` для этого слоя.
     pub clip: BackgroundClip,
+    /// CSS Compositing L1 §8.3 — `background-blend-mode` для этого слоя.
+    /// Initial: normal. Не наследуется. Применяется при слиянии background
+    /// layers между собой (не с контентом элемента).
+    pub blend_mode: MixBlendMode,
 }
 
 impl Default for BackgroundLayer {
@@ -3164,6 +3168,7 @@ impl Default for BackgroundLayer {
             attachment: BackgroundAttachment::Scroll,
             origin: BackgroundOrigin::PaddingBox,
             clip: BackgroundClip::BorderBox,
+            blend_mode: MixBlendMode::Normal,
         }
     }
 }
@@ -9839,6 +9844,21 @@ fn apply_declaration(
                 layer.clip = clips[i % n];
             }
         }
+        "background-blend-mode" => {
+            // CSS Compositing L1 §8.3 — comma-separated list (cycling over layers).
+            let pieces = split_top_level_commas(val.trim());
+            let modes: Vec<MixBlendMode> = pieces.iter()
+                .filter_map(|s| MixBlendMode::parse(s.trim()))
+                .collect();
+            if modes.is_empty() { return; }
+            if style.background_layers.is_empty() {
+                style.background_layers.push(BackgroundLayer::default());
+            }
+            let n = modes.len();
+            for (i, layer) in style.background_layers.iter_mut().enumerate() {
+                layer.blend_mode = modes[i % n];
+            }
+        }
         "background-position" => {
             // CSS Backgrounds L3 §3.5 — comma-separated list (cycling).
             // Парсер `<position>` переиспользуется с `object-position`,
@@ -12203,10 +12223,10 @@ fn apply_css_wide_keyword(
                 init.vertical_align
             };
         }
-        // CSS Backgrounds L3 §3 — background-* non-inherited: reset to initial/inherit.
+        // CSS Backgrounds L3 §3 + CSS Compositing L1 §8.3 — background-* non-inherited.
         "background-position" | "background-origin" | "background-clip"
         | "background-size" | "background-repeat" | "background-attachment"
-        | "background-image" => {
+        | "background-image" | "background-blend-mode" => {
             // Все background-* не наследуются: initial = пустые слои.
             style.background_layers = if inh_only_inherit {
                 inherited.background_layers.clone()
@@ -21924,5 +21944,80 @@ mod tests {
         let (ox, oy) = coerce_overflow_axes(Overflow::Auto, Overflow::Visible);
         assert_eq!(ox, Overflow::Auto);
         assert_eq!(oy, Overflow::Auto);
+    }
+
+    // ── CSS Compositing L1 §8.3 — background-blend-mode ──
+
+    #[test]
+    fn background_blend_mode_default_is_normal() {
+        let layer = BackgroundLayer::default();
+        assert_eq!(layer.blend_mode, MixBlendMode::Normal);
+    }
+
+    #[test]
+    fn background_blend_mode_parse_all_keywords() {
+        // MixBlendMode::parse covers all CSS keywords for background-blend-mode.
+        let cases = [
+            ("normal", MixBlendMode::Normal),
+            ("multiply", MixBlendMode::Multiply),
+            ("screen", MixBlendMode::Screen),
+            ("overlay", MixBlendMode::Overlay),
+            ("darken", MixBlendMode::Darken),
+            ("lighten", MixBlendMode::Lighten),
+            ("color-dodge", MixBlendMode::ColorDodge),
+            ("color-burn", MixBlendMode::ColorBurn),
+            ("hard-light", MixBlendMode::HardLight),
+            ("soft-light", MixBlendMode::SoftLight),
+            ("difference", MixBlendMode::Difference),
+            ("exclusion", MixBlendMode::Exclusion),
+            ("hue", MixBlendMode::Hue),
+            ("saturation", MixBlendMode::Saturation),
+            ("color", MixBlendMode::Color),
+            ("luminosity", MixBlendMode::Luminosity),
+            ("plus-lighter", MixBlendMode::PlusLighter),
+        ];
+        for (kw, expected) in cases {
+            assert_eq!(MixBlendMode::parse(kw), Some(expected), "keyword: {kw}");
+        }
+    }
+
+    #[test]
+    fn background_blend_mode_parse_invalid_returns_none() {
+        assert_eq!(MixBlendMode::parse("bogus"), None);
+        assert_eq!(MixBlendMode::parse("color_dodge"), None);
+        assert_eq!(MixBlendMode::parse(""), None);
+    }
+
+    #[test]
+    fn background_blend_mode_parse_case_insensitive() {
+        assert_eq!(MixBlendMode::parse("MULTIPLY"), Some(MixBlendMode::Multiply));
+        assert_eq!(MixBlendMode::parse("Color-Dodge"), Some(MixBlendMode::ColorDodge));
+    }
+
+    #[test]
+    fn background_blend_mode_cycling_direct() {
+        // Verify that BackgroundLayer stores blend_mode and it cycles correctly.
+        let mut layers: Vec<BackgroundLayer> = (0..3)
+            .map(|_| BackgroundLayer::default())
+            .collect();
+        let modes = [MixBlendMode::Multiply, MixBlendMode::Screen];
+        let n = modes.len();
+        for (i, layer) in layers.iter_mut().enumerate() {
+            layer.blend_mode = modes[i % n];
+        }
+        assert_eq!(layers[0].blend_mode, MixBlendMode::Multiply);
+        assert_eq!(layers[1].blend_mode, MixBlendMode::Screen);
+        assert_eq!(layers[2].blend_mode, MixBlendMode::Multiply);
+    }
+
+    #[test]
+    fn background_blend_mode_field_roundtrip() {
+        // BackgroundLayer preserves blend_mode through clone (used by ..old spread in bg-image).
+        let layer = BackgroundLayer { blend_mode: MixBlendMode::Overlay, ..BackgroundLayer::default() };
+        let cloned = layer.clone();
+        assert_eq!(cloned.blend_mode, MixBlendMode::Overlay);
+        // Spread syntax: new layer from old preserves blend_mode.
+        let new_layer = BackgroundLayer { image: BackgroundImage::None, ..cloned };
+        assert_eq!(new_layer.blend_mode, MixBlendMode::Overlay);
     }
 }
