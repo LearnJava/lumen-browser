@@ -16,6 +16,7 @@ pub mod animation;
 pub mod box_tree;
 pub mod counters;
 pub mod property_trees;
+pub mod selection;
 pub mod snapshot;
 pub mod stacking;
 pub mod style;
@@ -31,13 +32,14 @@ pub use box_tree::{
     apply_container_styles,
     collect_background_image_requests, collect_image_requests, layout, layout_measured,
     layout_measured_hyp, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
-    SvgShapeKind, ViewBox,
+    PseudoKind, SvgShapeKind, ViewBox,
 };
 pub use property_trees::{
     compute_local_transform, forward_box_transform, transform_fns_to_matrix,
     ClipNode, ClipTree, EffectNode, EffectTree,
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
+pub use selection::{caret_at_point, selection_rects};
 pub use snapshot::serialize_layout_tree;
 pub use stacking::{
     box_can_own_stacking_context, creates_stacking_context, PaintOrder, PaintPhase,

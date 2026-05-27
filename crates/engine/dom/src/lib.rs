@@ -326,6 +326,103 @@ pub enum DocumentMode {
     LimitedQuirks,
 }
 
+// ── Selection / Range ─────────────────────────────────────────────────────────
+
+/// A position within the document (WHATWG DOM §4.4).
+///
+/// For `NodeData::Text` nodes `offset` is a UTF-8 byte offset within the
+/// text content. For element nodes it is a child index. Use
+/// [`Document::get_selection`] / [`Document::set_selection`] to persist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DomPosition {
+    /// The node that contains this position.
+    pub container: NodeId,
+    /// Byte offset within the text content (text nodes) or child index
+    /// (element nodes).
+    pub offset: u32,
+}
+
+/// A contiguous range of document content (WHATWG DOM §4.5).
+///
+/// `start` must precede `end` in tree order. For a collapsed range
+/// `start == end`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Range {
+    /// First position (inclusive).
+    pub start: DomPosition,
+    /// Last position (exclusive).
+    pub end: DomPosition,
+}
+
+impl Range {
+    /// Collapsed range: both endpoints at `pos`.
+    pub fn collapsed(pos: DomPosition) -> Self {
+        Self { start: pos, end: pos }
+    }
+
+    /// True when start and end are the same position.
+    pub fn is_collapsed(&self) -> bool {
+        self.start == self.end
+    }
+}
+
+/// The current document text selection (WHATWG Selection API).
+///
+/// Tracks anchor (mousedown) and focus (mousemove/mouseup). The selection
+/// range is `min(anchor, focus)..=max(anchor, focus)` in document order.
+///
+/// `anchor` and `focus` are `None` when there is no active selection.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Selection {
+    /// Fixed start of the selection (where the user pressed the mouse button).
+    pub anchor: Option<DomPosition>,
+    /// Moving end of the selection (where the user released / dragged to).
+    pub focus: Option<DomPosition>,
+}
+
+impl Selection {
+    /// True when anchor == focus (or no selection).
+    pub fn is_collapsed(&self) -> bool {
+        match (&self.anchor, &self.focus) {
+            (Some(a), Some(f)) => a == f,
+            _ => true,
+        }
+    }
+
+    /// The selection as a normalised Range (start ≤ end in node order).
+    /// Returns `None` when there is no selection.
+    pub fn get_range(&self) -> Option<Range> {
+        let a = self.anchor?;
+        let f = self.focus?;
+        // Normalise so start is the position with the lower container index
+        // or lower offset within the same container.
+        if a.container.index() < f.container.index()
+            || (a.container == f.container && a.offset <= f.offset)
+        {
+            Some(Range { start: a, end: f })
+        } else {
+            Some(Range { start: f, end: a })
+        }
+    }
+
+    /// Collapse the selection to a single point.
+    pub fn collapse(&mut self, pos: DomPosition) {
+        self.anchor = Some(pos);
+        self.focus = Some(pos);
+    }
+
+    /// Extend the focus end to `pos` (anchor stays fixed).
+    pub fn extend_focus(&mut self, pos: DomPosition) {
+        self.focus = Some(pos);
+    }
+
+    /// Remove the selection entirely.
+    pub fn clear(&mut self) {
+        self.anchor = None;
+        self.focus = None;
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Document {
     nodes: Vec<Node>,
@@ -344,6 +441,9 @@ pub struct Document {
     /// template element — `template.children` is always empty. Callers access
     /// template content via [`Document::template_content`].
     template_contents: HashMap<NodeId, NodeId>,
+    /// The current text selection. Updated by the shell on mouse events;
+    /// read by layout for `selection_rects` and by JS via `window.getSelection()`.
+    selection: Selection,
 }
 
 impl Default for Document {
@@ -366,6 +466,7 @@ impl Document {
             target_id: None,
             shadow_roots: HashMap::new(),
             template_contents: HashMap::new(),
+            selection: Selection::default(),
         }
     }
 
@@ -385,6 +486,22 @@ impl Document {
     /// документа — пользовательский код вызывает редко.
     pub fn set_mode(&mut self, mode: DocumentMode) {
         self.mode = mode;
+    }
+
+    /// Current selection. The shell updates this on mouse events; JS reads it
+    /// via `window.getSelection()`.
+    pub fn get_selection(&self) -> &Selection {
+        &self.selection
+    }
+
+    /// Replace the current selection.
+    pub fn set_selection(&mut self, sel: Selection) {
+        self.selection = sel;
+    }
+
+    /// Clear the selection.
+    pub fn clear_selection(&mut self) {
+        self.selection.clear();
     }
 
     /// Текущий target — id из URL fragment (без ведущего `#`), к которому

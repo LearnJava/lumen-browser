@@ -246,7 +246,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/devtools/src/ws.rs:104` **fn** `read_text_frame` — Прочитать один WebSocket фрейм (RFC 6455 §5.2)
 `crates/devtools/src/ws.rs:125` **fn** `write_text_frame` — Отправить text фрейм (server→client, без маски)
 
-## lumen-dom  (54 symbols)
+## lumen-dom  (67 symbols)
 
 `crates/engine/dom/src/lib.rs:9` **struct** `NodeId`
 `crates/engine/dom/src/lib.rs:12` **fn** `index`
@@ -269,39 +269,52 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/lib.rs:286` **fn** `is_button_like` — Кнопочная семантика — submit/reset/button/image, рендерится
 `crates/engine/dom/src/lib.rs:296` **struct** `FormInfo` — Данные `<form>` элемента — URL назначения, метод и число полей ввода
 `crates/engine/dom/src/lib.rs:314` **enum** `DocumentMode` — Парсинг-режим документа по HTML5 §13.2.6.2 «The insertion mode»
-`crates/engine/dom/src/lib.rs:330` **struct** `Document`
-`crates/engine/dom/src/lib.rs:356` **fn** `new`
-`crates/engine/dom/src/lib.rs:372` **fn** `root`
-`crates/engine/dom/src/lib.rs:380` **fn** `mode` — Текущий парсинг-режим. Tree builder выставляет его при
-`crates/engine/dom/src/lib.rs:386` **fn** `set_mode` — Установить режим. Использует tree builder при инициализации
-`crates/engine/dom/src/lib.rs:401` **fn** `target` — Текущий target — id из URL fragment (без ведущего `#`), к которому
-`crates/engine/dom/src/lib.rs:408` **fn** `set_target` — Установить current target (id без `#`). `None` — нет fragment-а в URL
-`crates/engine/dom/src/lib.rs:420` **fn** `attach_shadow` — Attach a shadow root to `host` and return its `NodeId`
-`crates/engine/dom/src/lib.rs:427` **fn** `shadow_root_of` — Return the shadow root attached to `host`, or `None` if not a shadow host
-`crates/engine/dom/src/lib.rs:432` **fn** `is_shadow_host` — Whether `id` is a shadow host (has an attached shadow root)
-`crates/engine/dom/src/lib.rs:436` **fn** `get`
-`crates/engine/dom/src/lib.rs:440` **fn** `get_mut`
-`crates/engine/dom/src/lib.rs:444` **fn** `len`
-`crates/engine/dom/src/lib.rs:448` **fn** `is_empty`
-`crates/engine/dom/src/lib.rs:460` **fn** `base_href` — HTML5 §4.2.3 — найти первый `<base href="...">` в документе и
-`crates/engine/dom/src/lib.rs:472` **fn** `find_first_element` — Найти первый элемент, удовлетворяющий предикату. Pre-order обход
-`crates/engine/dom/src/lib.rs:498` **fn** `create_element`
-`crates/engine/dom/src/lib.rs:505` **fn** `create_text`
-`crates/engine/dom/src/lib.rs:509` **fn** `create_comment`
-`crates/engine/dom/src/lib.rs:519` **fn** `create_fragment` — Allocate a `DocumentFragment` node in the arena
-`crates/engine/dom/src/lib.rs:527` **fn** `set_template_content` — Register `fragment` as the content container for `template`
-`crates/engine/dom/src/lib.rs:533` **fn** `template_content` — Return the content `DocumentFragment` for a `<template>` element, or
-`crates/engine/dom/src/lib.rs:537` **fn** `create_doctype`
-`crates/engine/dom/src/lib.rs:551` **fn** `append_child` — Append `child` as the last child of `parent`. If `child` already has a parent, it is detached first
-`crates/engine/dom/src/lib.rs:559` **fn** `detach` — Remove `node` from its current parent. The node itself stays in the arena and can be re-attached
-`crates/engine/dom/src/lib.rs:662` **fn** `check_form_gate` — Гейт отправки форм по sandbox-флагу HTML §7.6.5
-`crates/engine/dom/src/lib.rs:683` **fn** `find_ancestor_form` — Найти ближайший предок `<form>` для узла `node`
-`crates/engine/dom/src/lib.rs:706` **fn** `collect_dom_form_fields` — Собрать имена и значения submittable-контролов формы из DOM-атрибутов
-`crates/engine/dom/src/lib.rs:800` **struct** `AnchorInfo` — Информация об якорной ссылке (`<a href>`), найденной в документе
-`crates/engine/dom/src/lib.rs:833` **struct** `FlatTree` — Pre-computed composed tree (flat tree) for Shadow DOM layout traversal
-`crates/engine/dom/src/lib.rs:843` **fn** `children_of` — Composed-tree children of `id`
-`crates/engine/dom/src/lib.rs:858` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
-`crates/engine/dom/src/lib.rs:953` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
+`crates/engine/dom/src/lib.rs:337` **struct** `DomPosition` — A position within the document (WHATWG DOM §4.4)
+`crates/engine/dom/src/lib.rs:350` **struct** `Range` — A contiguous range of document content (WHATWG DOM §4.5)
+`crates/engine/dom/src/lib.rs:359` **fn** `collapsed` — Collapsed range: both endpoints at `pos`
+`crates/engine/dom/src/lib.rs:364` **fn** `is_collapsed` — True when start and end are the same position
+`crates/engine/dom/src/lib.rs:376` **struct** `Selection` — The current document text selection (WHATWG Selection API)
+`crates/engine/dom/src/lib.rs:385` **fn** `is_collapsed` — True when anchor == focus (or no selection)
+`crates/engine/dom/src/lib.rs:394` **fn** `get_range` — The selection as a normalised Range (start ≤ end in node order)
+`crates/engine/dom/src/lib.rs:409` **fn** `collapse` — Collapse the selection to a single point
+`crates/engine/dom/src/lib.rs:415` **fn** `extend_focus` — Extend the focus end to `pos` (anchor stays fixed)
+`crates/engine/dom/src/lib.rs:420` **fn** `clear` — Remove the selection entirely
+`crates/engine/dom/src/lib.rs:427` **struct** `Document`
+`crates/engine/dom/src/lib.rs:456` **fn** `new`
+`crates/engine/dom/src/lib.rs:473` **fn** `root`
+`crates/engine/dom/src/lib.rs:481` **fn** `mode` — Текущий парсинг-режим. Tree builder выставляет его при
+`crates/engine/dom/src/lib.rs:487` **fn** `set_mode` — Установить режим. Использует tree builder при инициализации
+`crates/engine/dom/src/lib.rs:493` **fn** `get_selection` — Current selection. The shell updates this on mouse events; JS reads it
+`crates/engine/dom/src/lib.rs:498` **fn** `set_selection` — Replace the current selection
+`crates/engine/dom/src/lib.rs:503` **fn** `clear_selection` — Clear the selection
+`crates/engine/dom/src/lib.rs:518` **fn** `target` — Текущий target — id из URL fragment (без ведущего `#`), к которому
+`crates/engine/dom/src/lib.rs:525` **fn** `set_target` — Установить current target (id без `#`). `None` — нет fragment-а в URL
+`crates/engine/dom/src/lib.rs:537` **fn** `attach_shadow` — Attach a shadow root to `host` and return its `NodeId`
+`crates/engine/dom/src/lib.rs:544` **fn** `shadow_root_of` — Return the shadow root attached to `host`, or `None` if not a shadow host
+`crates/engine/dom/src/lib.rs:549` **fn** `is_shadow_host` — Whether `id` is a shadow host (has an attached shadow root)
+`crates/engine/dom/src/lib.rs:553` **fn** `get`
+`crates/engine/dom/src/lib.rs:557` **fn** `get_mut`
+`crates/engine/dom/src/lib.rs:561` **fn** `len`
+`crates/engine/dom/src/lib.rs:565` **fn** `is_empty`
+`crates/engine/dom/src/lib.rs:577` **fn** `base_href` — HTML5 §4.2.3 — найти первый `<base href="...">` в документе и
+`crates/engine/dom/src/lib.rs:589` **fn** `find_first_element` — Найти первый элемент, удовлетворяющий предикату. Pre-order обход
+`crates/engine/dom/src/lib.rs:615` **fn** `create_element`
+`crates/engine/dom/src/lib.rs:622` **fn** `create_text`
+`crates/engine/dom/src/lib.rs:626` **fn** `create_comment`
+`crates/engine/dom/src/lib.rs:636` **fn** `create_fragment` — Allocate a `DocumentFragment` node in the arena
+`crates/engine/dom/src/lib.rs:644` **fn** `set_template_content` — Register `fragment` as the content container for `template`
+`crates/engine/dom/src/lib.rs:650` **fn** `template_content` — Return the content `DocumentFragment` for a `<template>` element, or
+`crates/engine/dom/src/lib.rs:654` **fn** `create_doctype`
+`crates/engine/dom/src/lib.rs:668` **fn** `append_child` — Append `child` as the last child of `parent`. If `child` already has a parent, it is detached first
+`crates/engine/dom/src/lib.rs:676` **fn** `detach` — Remove `node` from its current parent. The node itself stays in the arena and can be re-attached
+`crates/engine/dom/src/lib.rs:779` **fn** `check_form_gate` — Гейт отправки форм по sandbox-флагу HTML §7.6.5
+`crates/engine/dom/src/lib.rs:800` **fn** `find_ancestor_form` — Найти ближайший предок `<form>` для узла `node`
+`crates/engine/dom/src/lib.rs:823` **fn** `collect_dom_form_fields` — Собрать имена и значения submittable-контролов формы из DOM-атрибутов
+`crates/engine/dom/src/lib.rs:917` **struct** `AnchorInfo` — Информация об якорной ссылке (`<a href>`), найденной в документе
+`crates/engine/dom/src/lib.rs:950` **struct** `FlatTree` — Pre-computed composed tree (flat tree) for Shadow DOM layout traversal
+`crates/engine/dom/src/lib.rs:960` **fn** `children_of` — Composed-tree children of `id`
+`crates/engine/dom/src/lib.rs:975` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
+`crates/engine/dom/src/lib.rs:1070` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
 
 ## lumen-encoding  (11 symbols)
 
@@ -517,13 +530,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/html-parser/src/tokenizer.rs:71` **fn** `with_state` — Создаёт tokenizer с заранее заданным `text_only`-состоянием
 `crates/engine/html-parser/src/tokenizer.rs:81` **fn** `pos` — Текущая позиция курсора (в байтах от начала `input`). Используется
 `crates/engine/html-parser/src/tokenizer.rs:87` **fn** `text_only_state` — Текущее `text_only`-состояние. После исчерпания iterator-а это
-`crates/engine/html-parser/src/tree_builder.rs:44` **fn** `parse` — Парсит вход целиком в pull-режиме и возвращает построенный
-`crates/engine/html-parser/src/tree_builder.rs:105` **struct** `IncrementalTreeBuilder` — Push-режим tree builder-а: принимает HTML chunk-ами, держит
-`crates/engine/html-parser/src/tree_builder.rs:141` **fn** `new` — Создаёт пустой builder в insertion mode `Initial`
-`crates/engine/html-parser/src/tree_builder.rs:161` **fn** `feed` — Скармливает chunk push-токенизатору и применяет полученные
-`crates/engine/html-parser/src/tree_builder.rs:168` **fn** `feed_bytes` — Вариант [`feed`][Self::feed] для сырых байт
-`crates/engine/html-parser/src/tree_builder.rs:175` **fn** `as_doc` — Возвращает ссылку на текущее состояние DOM
-`crates/engine/html-parser/src/tree_builder.rs:184` **fn** `finish` — Финализирует ввод. Хвост push-tokenizer-а токенизируется как
+`crates/engine/html-parser/src/tree_builder.rs:45` **fn** `parse` — Парсит вход целиком в pull-режиме и возвращает построенный
+`crates/engine/html-parser/src/tree_builder.rs:119` **struct** `IncrementalTreeBuilder` — Push-режим tree builder-а: принимает HTML chunk-ами, держит
+`crates/engine/html-parser/src/tree_builder.rs:160` **fn** `new` — Создаёт пустой builder в insertion mode `Initial`
+`crates/engine/html-parser/src/tree_builder.rs:181` **fn** `feed` — Скармливает chunk push-токенизатору и применяет полученные
+`crates/engine/html-parser/src/tree_builder.rs:188` **fn** `feed_bytes` — Вариант [`feed`][Self::feed] для сырых байт
+`crates/engine/html-parser/src/tree_builder.rs:195` **fn** `as_doc` — Возвращает ссылку на текущее состояние DOM
+`crates/engine/html-parser/src/tree_builder.rs:204` **fn** `finish` — Финализирует ввод. Хвост push-tokenizer-а токенизируется как
 
 ## lumen-image  (16 symbols)
 
@@ -599,7 +612,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/read_later.rs:346` **fn** `delete`
 `crates/knowledge/src/read_later.rs:356` **fn** `count`
 
-## lumen-layout  (298 symbols)
+## lumen-layout  (300 symbols)
 
 `crates/engine/layout/src/animation.rs:36` **struct** `AnimatedStyle` — Sparse animated values for one element — scheduler output per node per frame
 `crates/engine/layout/src/animation.rs:46` **struct** `AnimationFrame` — Output of `AnimationScheduler::tick` — per-node animated values for one frame
@@ -634,18 +647,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:424` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
 `crates/engine/layout/src/box_tree.rs:524` **struct** `LayoutBox`
 `crates/engine/layout/src/box_tree.rs:542` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
-`crates/engine/layout/src/box_tree.rs:573` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
-`crates/engine/layout/src/box_tree.rs:591` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
-`crates/engine/layout/src/box_tree.rs:616` **enum** `BoxKind`
-`crates/engine/layout/src/box_tree.rs:706` **fn** `layout`
-`crates/engine/layout/src/box_tree.rs:720` **fn** `layout_measured`
-`crates/engine/layout/src/box_tree.rs:731` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:4781` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:580` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
+`crates/engine/layout/src/box_tree.rs:598` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
+`crates/engine/layout/src/box_tree.rs:630` **enum** `BoxKind`
+`crates/engine/layout/src/box_tree.rs:720` **fn** `layout`
+`crates/engine/layout/src/box_tree.rs:734` **fn** `layout_measured`
+`crates/engine/layout/src/box_tree.rs:745` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
+`crates/engine/layout/src/box_tree.rs:4839` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/counters.rs:33` **type** `CounterSnapshot` — Per-element counter stacks snapshot
 `crates/engine/layout/src/counters.rs:37` **type** `CounterMap` — Maps each element `NodeId` to its counter snapshot (after own reset/increment,
 `crates/engine/layout/src/counters.rs:90` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
 `crates/engine/layout/src/counters.rs:152` **fn** `format_counter` — Format a counter integer value according to the given `list-style-type` keyword
-`crates/engine/layout/src/lib.rs:75` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
+`crates/engine/layout/src/lib.rs:77` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
 `crates/engine/layout/src/property_trees.rs:39` **struct** `PropertyTreeNodeId` — Идентификатор узла в любом из четырёх деревьев. Уникален в пределах своего
 `crates/engine/layout/src/property_trees.rs:45` **fn** `raw`
 `crates/engine/layout/src/property_trees.rs:54` **struct** `Mat4` — 4×4 матрица в column-major порядке (как принято в OpenGL / WebGPU)
@@ -682,6 +695,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/property_trees.rs:429` **fn** `compute_local_transform` — Вычислить локальную transform-матрицу элемента. CSS Transforms L1 §13:
 `crates/engine/layout/src/property_trees.rs:468` **fn** `forward_box_transform` — Forward-матрица бокса в viewport-координатах. CSS Transforms L1 §13:
 `crates/engine/layout/src/property_trees.rs:524` **fn** `transform_fns_to_matrix` — Build the forward transform matrix from a list of TransformFn with a pivot point
+`crates/engine/layout/src/selection.rs:16` **fn** `caret_at_point` — Find the caret position (DOM node + UTF-8 byte offset) closest to a pixel point
+`crates/engine/layout/src/selection.rs:95` **fn** `selection_rects` — Compute pixel rectangles that cover the selected `range` within the layout tree
 `crates/engine/layout/src/snapshot.rs:63` **fn** `serialize_layout_tree` — Корневой entry-point: рекурсивно сериализует всё дерево
 `crates/engine/layout/src/stacking.rs:29` **struct** `StackingContextId` — Идентификатор stacking context-а. Монотонно растёт от 0; 0 = root
 `crates/engine/layout/src/stacking.rs:35` **fn** `raw`
@@ -1628,4 +1643,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 1572 symbols in 17 crates*
+*Total: 1587 symbols in 17 crates*
