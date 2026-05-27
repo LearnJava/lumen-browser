@@ -1,5 +1,5 @@
 In progress: none (ready for next task)
-Next step: (check lumen-plan.md Phase 2 — next P1 from Wave 2 Queue or Phase 2 system tasks)
+Next step: lumen-a11y-full (8G, Phase 1, ADR-006) — A11y tree first-class for accessibility-driven testing. P1 owns tree construction, P3 owns BrowserSession integration. Start with crate expansion + role mapping + text alternatives computation (stage 1 of 3).
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -7,6 +7,9 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   the call site and add a line to STATUS-P4.md "Needs wiring".
 
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
+
+Note: fts-omnibox (Wave 1, P3-задача по домену) перенесена в STATUS-P3.md Queue (это не P1-домен, это knowledge/omnibox).
+Note: Wave 2 очередь содержит P2-задачи (extras-p2, avif-decoder, webgl-context, font-hinting, svg-rasterizer) — они пока не для P1. Wave 2 P3-задачи (http2-client, preconnect-hints) тоже в P3 очереди. P1 берёт следующее из Phase 1/Phase 2 своих задач.
 
 Recent:
 - click-hint-overlay (7B.2): enhance collect_clickable_elements with <details> support — add ClickableKind::Details variant, is_details_element() helper, comprehensive unit tests (6 new tests for link/button/input/details/mixed), P1 complete 2026-05-28 — P3 integration pending
@@ -34,28 +37,10 @@ Next (Wave 1 — бывшие P2-задачи):
 (All completed — next waves in Queue)
 
 Next (Wave 1 — бывшие P3-задачи):
-- fts-omnibox: lumen-knowledge::HistoryFts + omnibox @history prefix + Porter stemmer для RU
-  → STATUS-P3.md:12
+(All — fts-omnibox переместилась в STATUS-P3.md Queue как P3-домен задача)
 
-Queue (Wave 2 — бывший P2):
-- extras-p2: object-fit, variable fonts, Print PDF
-  → lumen-plan.md:195
-- avif-decoder: AVIF/AV1 декодер через rav1d (provisional dep)
-  → STATUS-P2.md:10
-- webgl-context: WebGL 1.0 поверх wgpu (WebGL API → wgpu calls)
-  → STATUS-P2.md:11
-- font-hinting: TrueType bytecode hinting в rasterizer
-  → STATUS-P2.md:12
-- subpixel-text: subpixel LCD rendering — RGB-stripe фильтр; toggleable prefers-reduced-motion
-  → STATUS-P2.md:13
-- svg-rasterizer: SVG basic shapes (path/circle/rect) через paint pipeline
-  → STATUS-P2.md:14
-
-Queue (Wave 2 — бывший P3):
-- http2-client: HTTP/2 через h2 crate — multiplexing; бэкэнд-замена HttpClient без смены API
-  → STATUS-P3.md:15
-- preconnect-hints: <link rel=preconnect> из preload_scanner — открыть TCP+TLS заранее
-  → STATUS-P3.md:16
+# Removed: Wave 2 (бывший P2 + бывший P3) — эти задачи не принадлежат P1 домену
+# Они находятся в соответствующих STATUS-P2.md и STATUS-P3.md очередях
 
 Queue (Phase 2 — системные P3-задачи):
 - sop-remaining: SOP checks при postMessage/storage/cookies; mixed-content блокировка до TCP;
