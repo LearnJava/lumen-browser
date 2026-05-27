@@ -1,5 +1,5 @@
-In progress: lumen-a11y-full stage 2 READY FOR MERGE  branch: p1-a11y-full-stage2
-Next step: stage 3 — ARIA attribute application + computed role mapping
+In progress: none (ready for next task)
+Next step: lumen-a11y-full stage 3 — ARIA attribute application + computed role mapping
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -9,6 +9,7 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
 Recent:
+- lumen-a11y-full (8G, stage 2/3): label association (explicit + implicit) + form control text alternatives + description edge cases + button icon handling + link/heading/summary explicit naming + 21 new tests → 75 total PASS 2026-05-27
 - lumen-a11y-full (8G, stage 1/3): 18 extended ARIA roles (Alert/AlertDialog/Application/Feed/Log/Marquee/Note/RowHeader/Searchbox/Switch/Tab/TabList/TabPanel/Timer/Toolbar/Tooltip/Tree/TreeItem) + AXRole::parse + implicit_role for <input type="search"> → Searchbox, Serialize/Deserialize for AXNode/AXState/AXRole, serde integration for P3 snapshots, 16 new tests → 60 total tests PASS 2026-05-27
 - icc-color-profiles (Wave 1): IccProfile struct in lumen-image, Optional<IccProfile> in Image, parse_png_icc_profile() for PNG iCCP chunk (flate2 deflate decompression), Image constructors updated, JPEG/PNG/GIF decoders wired 2026-05-27
 - font-variable-opsz (Wave 1): VariationCoords struct in lumen-font, from_css_settings() builder, set_axis_by_tag() for P4 to inject opsz, CSS integration points marked 2026-05-27
