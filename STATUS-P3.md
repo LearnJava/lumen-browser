@@ -1,5 +1,5 @@
 In progress: shell-as-driver-client (8A.7)  branch: p3-shell-as-driver-client
-Next step: implement navigate() in WinitSession + port core pipeline logic  crates/driver/src/winit_session.rs:155
+Next step: implement layout_snapshot/computed_style/screenshot + document HTTP Phase 2  crates/driver/src/winit_session.rs:90-140
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
