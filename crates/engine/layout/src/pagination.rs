@@ -102,28 +102,113 @@ pub struct PageFragment {
 /// - No float manipulation (assumes floats already laid out in input).
 /// - No media-relative units (vh, vw assumed absent).
 /// - Single-page assumed (no break-inside handling yet).
-pub fn paginate(layout_box: &LayoutBox, _context: &PaginationContext) -> Vec<Page> {
-    // TODO(P1): Implement full pagination algorithm.
-    // For now, return single page with entire content.
-    //
-    // Full algorithm would:
-    // 1. Clone layout_box and relayout with width = context.content_width()
-    // 2. Walk children of root, tracking y-offset
-    // 3. On each block-level box:
-    //    a. Check break-before → force new page?
-    //    b. Try to fit box on current page
-    //    c. If not fit: new page (respecting break-avoid)
-    //    d. Check break-after → force new page?
-    // 4. Return Vec<Page> with fragments clipped to page height
+pub fn paginate(layout_box: &LayoutBox, context: &PaginationContext) -> Vec<Page> {
+    let content_height = context.content_height();
+    let mut pages = vec![];
+    let mut current_page_number = 0;
+    let mut current_page_y = 0.0; // y-offset within current page
+    let mut current_fragments = vec![];
 
-    vec![Page {
-        number: 0,
-        fragments: vec![PageFragment {
-            layout_box: layout_box.clone(),
-            page_y_offset: 0.0,
-        }],
-        content_height: layout_box.rect.height,
-    }]
+    // Walk direct block children of the root
+    for child in &layout_box.children {
+        // Check if we should force a break before this child
+        if should_break_before(child) && !current_fragments.is_empty() {
+            // Save current page and start new one
+            pages.push(Page {
+                number: current_page_number,
+                fragments: current_fragments.clone(),
+                content_height: current_page_y,
+            });
+            current_page_number += 1;
+            current_page_y = 0.0;
+            current_fragments.clear();
+        }
+
+        // Try to fit this box on current page
+        let box_height = child.rect.height;
+        let available_height = content_height - current_page_y;
+
+        if box_height <= available_height {
+            // Fits on current page
+            current_fragments.push(PageFragment {
+                layout_box: child.clone(),
+                page_y_offset: current_page_y,
+            });
+            current_page_y += box_height;
+        } else {
+            // Doesn't fit; check if we can avoid breaking
+            if should_avoid_break_after(child) && !current_fragments.is_empty() {
+                // Start new page anyway (avoid handling is simplified in Phase 0)
+                pages.push(Page {
+                    number: current_page_number,
+                    fragments: current_fragments.clone(),
+                    content_height: current_page_y,
+                });
+                current_page_number += 1;
+                current_page_y = 0.0;
+                current_fragments.clear();
+            }
+
+            if box_height <= content_height {
+                // Box fits on fresh page
+                current_fragments.push(PageFragment {
+                    layout_box: child.clone(),
+                    page_y_offset: current_page_y,
+                });
+                current_page_y = box_height;
+            } else {
+                // Box taller than page height (overflow case)
+                // Phase 0: just put it on new page anyway
+                if !current_fragments.is_empty() {
+                    pages.push(Page {
+                        number: current_page_number,
+                        fragments: current_fragments.clone(),
+                        content_height: current_page_y,
+                    });
+                    current_page_number += 1;
+                    current_page_y = 0.0;
+                    current_fragments.clear();
+                }
+                current_fragments.push(PageFragment {
+                    layout_box: child.clone(),
+                    page_y_offset: 0.0,
+                });
+                current_page_y = box_height;
+            }
+        }
+
+        // Check if we should force a break after this child
+        if should_break_after(child) {
+            pages.push(Page {
+                number: current_page_number,
+                fragments: current_fragments.clone(),
+                content_height: current_page_y,
+            });
+            current_page_number += 1;
+            current_page_y = 0.0;
+            current_fragments.clear();
+        }
+    }
+
+    // Don't forget the last page
+    if !current_fragments.is_empty() {
+        pages.push(Page {
+            number: current_page_number,
+            fragments: current_fragments,
+            content_height: current_page_y,
+        });
+    }
+
+    if pages.is_empty() {
+        // No pages were created (shouldn't happen, but handle it)
+        pages.push(Page {
+            number: 0,
+            fragments: vec![],
+            content_height: 0.0,
+        });
+    }
+
+    pages
 }
 
 /// Check if a box should force a page break before it.
