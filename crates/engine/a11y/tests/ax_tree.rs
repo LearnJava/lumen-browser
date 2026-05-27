@@ -553,6 +553,157 @@ fn role_explicit_timer() {
     assert!(tm.is_some(), "expected Timer role");
 }
 
+// ── Label association tests ──────────────────────────────────────────────────
+
+#[test]
+fn label_explicit_association_via_for() {
+    let doc = parse(r#"
+        <label for="username">User name:</label>
+        <input type="text" id="username">
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    assert_eq!(tb.name, "User name:", "explicit <label for> should provide name");
+}
+
+#[test]
+fn label_implicit_association() {
+    let doc = parse(r#"
+        <label>
+            Email:
+            <input type="text">
+        </label>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    assert_eq!(tb.name, "Email:", "implicit <label> should provide name");
+}
+
+#[test]
+fn label_explicit_takes_priority_over_placeholder() {
+    let doc = parse(r#"
+        <label for="search">Search</label>
+        <input type="text" id="search" placeholder="Enter query">
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    assert_eq!(tb.name, "Search", "<label> should take priority over placeholder");
+}
+
+#[test]
+fn label_fallback_to_placeholder_when_no_label() {
+    let doc = parse(r#"<input type="text" placeholder="Enter text">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    assert_eq!(tb.name, "Enter text", "placeholder should be fallback when no label");
+}
+
+// ── Description computation edge cases ──────────────────────────────────────
+
+#[test]
+fn description_title_not_duplicated_as_name() {
+    let doc = parse(r#"<img src="x.png" alt="Logo" title="Company Logo">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let img = find_role_dfs(&tree.root, AXRole::Img).expect("img");
+    assert_eq!(img.name, "Logo", "name from alt");
+    assert_eq!(img.description, "Company Logo", "description from title");
+}
+
+#[test]
+fn description_title_not_used_when_same_as_name() {
+    let doc = parse(r#"<img src="x.png" alt="Logo" title="Logo">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let img = find_role_dfs(&tree.root, AXRole::Img).expect("img");
+    assert_eq!(img.name, "Logo");
+    assert_eq!(img.description, "", "title should not duplicate name");
+}
+
+#[test]
+fn form_control_textarea_with_label() {
+    let doc = parse(r#"
+        <label for="msg">Message:</label>
+        <textarea id="msg"></textarea>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    // textarea should map to Multiline TextBox role
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textarea as textbox");
+    assert_eq!(tb.name, "Message:", "textarea should get name from label");
+}
+
+#[test]
+fn form_control_select_with_label() {
+    let doc = parse(r#"
+        <label for="country">Country:</label>
+        <select id="country">
+            <option>USA</option>
+        </select>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let cb = find_role_dfs(&tree.root, AXRole::ComboBox).expect("select");
+    assert_eq!(cb.name, "Country:", "select should get name from label");
+}
+
+#[test]
+fn input_image_type_with_alt() {
+    let doc = parse(r#"<input type="image" src="btn.png" alt="Submit form">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("input[type=image]");
+    assert_eq!(btn.name, "Submit form", "input[type=image] should use alt as name");
+}
+
+#[test]
+fn button_with_icon_only() {
+    let doc = parse(r#"<button><img src="close.svg" alt="Close"></button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.name, "Close", "button with only img should use img alt");
+}
+
+#[test]
+fn button_with_icon_and_text() {
+    let doc = parse(r#"<button><img src="save.svg" alt=""> Save</button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.name, "Save", "button with text should use text, not img");
+}
+
+#[test]
+fn link_text_from_content() {
+    let doc = parse(r#"<a href="/page">Read more</a>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let link = find_role_dfs(&tree.root, AXRole::Link).expect("link");
+    assert_eq!(link.name, "Read more", "link should use text content");
+}
+
+#[test]
+fn link_empty_href_not_link_role() {
+    let doc = parse("<a>Not a link</a>");
+    let tree = build_ax_tree(&doc, doc.root());
+    let link = find_role_dfs(&tree.root, AXRole::Link);
+    assert!(link.is_none(), "link without href should not be Link role");
+}
+
+#[test]
+fn heading_text_from_content() {
+    let doc = parse("<h1>Main Title</h1>");
+    let tree = build_ax_tree(&doc, doc.root());
+    let heading = find_role_dfs(&tree.root, AXRole::Heading).expect("heading");
+    assert_eq!(heading.name, "Main Title", "heading should use text content");
+}
+
+#[test]
+fn summary_disclosure_widget() {
+    let doc = parse(r#"
+        <details>
+            <summary>Click to expand</summary>
+            <p>Hidden content</p>
+        </details>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("summary as button");
+    assert_eq!(btn.name, "Click to expand", "summary should use text content");
+}
+
 // ── Serialization tests ──────────────────────────────────────────────────────
 
 #[test]
