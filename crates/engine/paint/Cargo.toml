@@ -18,8 +18,14 @@ lumen-image.workspace = true
 winit.workspace = true
 wgpu.workspace = true
 
+# CPU-рендеринг для детерминистичных тестов без GPU (8A.5)
+tiny-skia = { version = "0.11", optional = true }
+
 [dev-dependencies]
 lumen-html-parser.workspace = true
 lumen-css-parser.workspace = true
 lumen-layout.workspace = true
 lumen-core.workspace = true
+
+[features]
+cpu-render = ["tiny-skia"]
