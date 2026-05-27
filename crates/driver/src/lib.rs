@@ -25,13 +25,14 @@
 //! ```
 
 mod types;
+pub mod context;
 pub mod session;
 pub mod winit_session;
 pub mod gpu_session;
 
 pub use types::{
-    A11yNode, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel, InputCommand, NetworkEntry,
-    NodeRef, ScrollDelta, Target, WaitCondition,
+    A11yNode, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel, FingerprintProfile,
+    InputCommand, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
 };
 pub use session::InProcessSession;
 pub use winit_session::WinitSession;
@@ -133,4 +134,37 @@ pub trait BrowserSession {
     /// Найти DOM-узлы по CSS-селектору. Возвращает пустой вектор, если
     /// ни один узел не совпал.
     fn query(&self, selector: &str) -> Result<Vec<NodeRef>>;
+
+    // ── Isolation & Fingerprinting (Phase 1: 8E/8F) ─────────────────────────
+
+    /// Текущий профиль отпечатка браузера (fingerprint profile).
+    ///
+    /// Возвращает профиль, который был установлен при создании сессии или
+    /// последним вызовом [`set_fingerprint_profile`](BrowserSession::set_fingerprint_profile).
+    /// По умолчанию: `FingerprintProfile::Standard`.
+    fn fingerprint_profile(&self) -> FingerprintProfile;
+
+    /// Установить профиль отпечатка браузера для будущих операций.
+    ///
+    /// Влияет на User-Agent, TLS cipher ordering (если поддерживается),
+    /// HTTP header order, и JS API returns (в Phase 2+).
+    /// По ADR-007 §6.
+    ///
+    /// # Примеры
+    /// ```ignore
+    /// session.set_fingerprint_profile(FingerprintProfile::Strict)?;
+    /// ```
+    fn set_fingerprint_profile(&mut self, profile: FingerprintProfile) -> Result<()>;
+
+    /// User-Agent строка для HTTP-запросов и JS `navigator.userAgent`.
+    ///
+    /// Возвращает установленную строку или default для текущего
+    /// [`fingerprint_profile`](BrowserSession::fingerprint_profile).
+    fn user_agent(&self) -> String;
+
+    /// Переопределить User-Agent для будущих запросов и JS.
+    ///
+    /// Если не вызвано, используется default для текущего профиля.
+    /// Переопределение сохраняется при смене профиля.
+    fn set_user_agent(&mut self, ua: &str) -> Result<()>;
 }

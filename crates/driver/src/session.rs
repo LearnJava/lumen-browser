@@ -14,7 +14,8 @@ use lumen_layout::{computed_style_by_selector, LayoutBox};
 
 use crate::{
     A11yNode, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
-    ConsoleEntry, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
+    ConsoleEntry, FingerprintProfile, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
+    context::SessionContext,
 };
 
 /// Встроенный шрифт Inter-Regular (SIL OFL 1.1).
@@ -54,6 +55,8 @@ pub struct InProcessSession {
     net_log: Vec<NetworkEntry>,
     /// Журнал console.log/warn/error с последней навигации.
     con_log: Vec<ConsoleEntry>,
+    /// Изолированный контекст сессии: cookies, storage, cache, fingerprint profile.
+    context: SessionContext,
 }
 
 impl InProcessSession {
@@ -65,6 +68,7 @@ impl InProcessSession {
             state: None,
             net_log: Vec::new(),
             con_log: Vec::new(),
+            context: SessionContext::new(),
         }
     }
 
@@ -76,6 +80,7 @@ impl InProcessSession {
             state: None,
             net_log: Vec::new(),
             con_log: Vec::new(),
+            context: SessionContext::new(),
         }
     }
 
@@ -358,6 +363,25 @@ impl BrowserSession for InProcessSession {
         }
 
         Ok(out)
+    }
+
+    // ── Isolation & Fingerprinting (Task 8E, Phase 1) ────────────────────────
+
+    fn fingerprint_profile(&self) -> FingerprintProfile {
+        self.context.fingerprint_profile()
+    }
+
+    fn set_fingerprint_profile(&mut self, profile: FingerprintProfile) -> Result<()> {
+        self.context.set_fingerprint_profile(profile);
+        Ok(())
+    }
+
+    fn user_agent(&self) -> String {
+        self.context.user_agent()
+    }
+
+    fn set_user_agent(&mut self, ua: &str) -> Result<()> {
+        self.context.set_user_agent(ua)
     }
 }
 
