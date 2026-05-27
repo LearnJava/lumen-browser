@@ -3437,6 +3437,12 @@ impl Lumen {
                     self.request_redraw();
                 }
             }
+            // Ctrl+R — переключить plain-text ↔ regex режим.
+            KeyCode::KeyR if ctrl_or_super && !key_event.repeat => {
+                self.find.toggle_regex_mode();
+                self.scroll_to_active_match();
+                self.request_redraw();
+            }
             _ => {
                 // Текстовый ввод. При модификаторах Ctrl/Cmd не вставляем —
                 // это shortcut в адрес find-а (или будущих чего-то ещё), не
@@ -3750,9 +3756,12 @@ impl Lumen {
         }
     }
 
-    /// Пересчитывает текущий список совпадений по `display_list` и `find.query`.
-    /// Возвращает пустой Vec, если bar закрыт или запрос пустой. Используется
-    /// и для рендера, и для счётчика `next`/`prev`.
+    /// Пересчитывает текущий список совпадений.
+    ///
+    /// - Plain-text режим: substring search по DrawText-командам display list.
+    /// - Regex режим (Ctrl+R): regex по [`TextFragment`][lumen_layout::TextFragment]
+    ///   из [`collect_visible_text`][lumen_layout::collect_visible_text]; позиции
+    ///   берутся из `TextFragment.rect`, `dl_index` — lookup по (x, y, text) в DL.
     fn current_matches(&self) -> Vec<find::FindMatch> {
         if !self.find.is_open() || self.find.query().is_empty() {
             return Vec::new();
@@ -3763,7 +3772,14 @@ impl Lumen {
         let Ok(measurer) = lumen_paint::FontMeasurer::new(&font) else {
             return Vec::new();
         };
-        find::find_matches(&self.display_list, self.find.query(), &measurer)
+        if self.find.is_regex_mode() {
+            let frags = self.layout_box.as_ref().map_or_else(Vec::new, |lb| {
+                lumen_layout::collect_visible_text(lb)
+            });
+            find::find_matches_regex(&frags, &self.display_list, self.find.query(), &measurer)
+        } else {
+            find::find_matches(&self.display_list, self.find.query(), &measurer)
+        }
     }
 
     /// Сохранить текущую вкладку в `last_session.lsession` при закрытии окна.

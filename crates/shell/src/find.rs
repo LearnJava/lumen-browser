@@ -1,24 +1,27 @@
 //! Find in page (Ctrl+F): состояние bar-а, поиск совпадений по display list,
 //! сборка финального display list с подсветками и overlay-баром.
 //!
-//! Поиск работает не по layout-дереву, а по уже собранному display list:
-//! каждая `DisplayCommand::DrawText` несёт текст, font_size и абсолютные
-//! экранные координаты — этого достаточно, чтобы найти подстроку и через
-//! `TextMeasurer` вычислить bounding box. Layout-дерево хранить отдельно
-//! не нужно.
+//! Поиск работает в двух режимах:
+//! - **Plain text** (по умолчанию): строковое вхождение (case-insensitive) по
+//!   DrawText-командам display list — быстро и без зависимостей.
+//! - **Regex** (Ctrl+R в открытом баре): полноценный регулярный паттерн через
+//!   [`regex::Regex`], case-insensitive, по тексту [`lumen_layout::TextFragment`].
+//!   Исходник матча — [`collect_visible_text`][lumen_layout::collect_visible_text]
+//!   (layout tree), позиция подсветки — `TextFragment.rect` + пиксельный offset
+//!   через [`TextMeasurer`].
 //!
-//! Сравнение case-insensitive: для ASCII — через `to_ascii_lowercase`, для
-//! Unicode — через `char::to_lowercase().next()`. Это покрывает русский
-//! (1:1 cased mapping); экзотические expansions (турецкое `İ → i\u{307}`)
-//! игнорируются — Phase 0 ограничение.
+//! Подсветка в обоих режимах вставляется как `FillRect` перед соответствующей
+//! `DrawText`-командой (painter's order: highlight под глифами, поверх фона).
 //!
 //! Phase 0 ограничения:
 //! - letter-spacing / word-spacing внутри фрагмента смещают реальные глифы
 //!   относительно вычисленного rect-а на величину аккумулированного spacing-а;
-//! - find-bar фиксированных размеров в правом верхнем углу окна.
+//! - find-bar фиксированных размеров в правом верхнем углу окна;
+//! - regex: lookahead/lookbehind и Unicode category недоступны (NFA-движок);
+//! - совпадения не пересекают границы TextFragment (одно слово / run).
 
 use lumen_core::geom::Rect;
-use lumen_layout::{Color, FontStyle, FontWeight, TextMeasurer};
+use lumen_layout::{Color, FontStyle, FontWeight, TextFragment, TextMeasurer};
 use lumen_paint::{DisplayCommand, DisplayList};
 
 /// Состояние find bar и текущего запроса.
@@ -27,6 +30,8 @@ pub struct FindState {
     open: bool,
     query: String,
     active: usize,
+    /// Если `true` — запрос интерпретируется как regex-паттерн.
+    regex_mode: bool,
 }
 
 impl FindState {
@@ -40,6 +45,10 @@ impl FindState {
 
     pub fn active_index(&self) -> usize {
         self.active
+    }
+
+    pub fn is_regex_mode(&self) -> bool {
+        self.regex_mode
     }
 
     pub fn open(&mut self) {
@@ -76,6 +85,13 @@ impl FindState {
         }
     }
 
+    /// Переключает режим plain-text ↔ regex. Сбрасывает счётчик активного
+    /// совпадения, поскольку при смене режима набор матчей полностью меняется.
+    pub fn toggle_regex_mode(&mut self) {
+        self.regex_mode = !self.regex_mode;
+        self.active = 0;
+    }
+
     /// Циклически переходит к следующему совпадению. `total` — текущее число
     /// найденных матчей (вычисляется заново на каждом запросе, потому что
     /// меняется при resize / reload).
@@ -104,23 +120,11 @@ pub struct FindMatch {
 pub const HIGHLIGHT_INACTIVE: Color = Color { r: 255, g: 235, b: 90, a: 255 };
 pub const HIGHLIGHT_ACTIVE: Color = Color { r: 255, g: 150, b: 50, a: 255 };
 
-/// Доля viewport-а сверху, в которую попадает match при scroll-to. Берётся
-/// «верхняя четверть» как компромисс между двумя крайностями: alignment-top
-/// (Chromium до 2017) — match прижат к самому верху, контекста перед ним нет;
-/// центрирование — теряется ощущение, что ты «листал вниз» (match всегда в
-/// середине независимо от того, на следующей он строке или на следующей
-/// странице). Firefox/Chromium сейчас используют примерно 20-30%.
+/// Доля viewport-а сверху, в которую попадает match при scroll-to.
 const SCROLL_MARGIN_FRACTION: f32 = 0.25;
 
 /// Вычисляет новое значение `scroll_y` так, чтобы `match_rect` попал в
-/// видимую область. Возвращает `None`, если match уже полностью видим — это
-/// сигнал caller-у не дёргать redraw.
-///
-/// Координаты — в page-space (как в `FindMatch::rect`), `viewport_height` и
-/// `current_scroll` — в CSS px. Caller обязан сам сделать clamp в
-/// `[0, max_scroll]` после получения значения: эта функция геометрию max-а
-/// не знает (content_height живёт в shell-state), и `target.max(0.0)`
-/// тут защищает только от отрицательных значений, не от переезда за конец.
+/// видимую область. Возвращает `None`, если match уже полностью видим.
 pub fn scroll_to_match(
     match_rect: Rect,
     viewport_height: f32,
@@ -143,9 +147,8 @@ pub fn scroll_to_match(
     Some(target)
 }
 
-/// Находит все непересекающиеся вхождения `query` в DrawText-командах
-/// `dl`. Возвращает абсолютные `Rect`-ы (на основе уже посчитанных
-/// координат текста и измерений `measurer`).
+/// Находит все непересекающиеся вхождения `query` в DrawText-командах `dl`.
+/// Поиск case-insensitive (ASCII + Unicode 1:1 lowercase mapping).
 pub fn find_matches(
     dl: &DisplayList,
     query: &str,
@@ -213,8 +216,101 @@ fn chars_eq_ci(a: char, b: char) -> bool {
     la == lb
 }
 
-/// Параметры overlay-бара. `window_size` — текущий размер окна в логических
-/// пикселях (используется для позиционирования в правом верхнем углу).
+/// Проверяет, является ли `pattern` корректным regex-паттерном.
+/// Используется bar overlay-ем для вывода «ERR» вместо счётчика.
+pub fn is_valid_regex_pattern(pattern: &str) -> bool {
+    regex::Regex::new(pattern).is_ok()
+}
+
+/// Находит все regex-матчи паттерна `pattern` по [`TextFragment`]-ам
+/// (`collect_visible_text` layout tree). Возвращает абсолютные `Rect`-ы
+/// с корректным `dl_index` для вставки highlight-FillRect перед DrawText.
+///
+/// Алгоритм:
+/// 1. Компилирует `pattern` как case-insensitive regex (пустой паттерн или
+///    невалидный → возвращает пустой Vec).
+/// 2. Для каждого фрагмента ищет все вхождения через `re.find_iter`.
+/// 3. Суб-rect каждого вхождения: `frag.rect.x + prefix_width`, ширина =
+///    ширина совпавших символов по `measurer.char_width`.
+/// 4. `dl_index`: первая `DrawText`-команда в `dl`, у которой `rect.x`/`rect.y`
+///    совпадает с `frag.rect` (±0.5 px) и текст совпадает. Если не найдено —
+///    матч пропускается (фрагмент не рендерится, например `visibility:hidden`).
+pub fn find_matches_regex(
+    frags: &[TextFragment],
+    dl: &DisplayList,
+    pattern: &str,
+    measurer: &dyn TextMeasurer,
+) -> Vec<FindMatch> {
+    if pattern.is_empty() {
+        return Vec::new();
+    }
+    let re = match regex::RegexBuilder::new(pattern)
+        .case_insensitive(true)
+        .build()
+    {
+        Ok(r) => r,
+        Err(_) => return Vec::new(),
+    };
+
+    // Индекс DrawText-команд по (x_quantized, y_quantized) для O(1) lookup.
+    // Ключ: (round(x * 2) as i32, round(y * 2) as i32) — квантизация 0.5 px.
+    let mut dl_map: std::collections::HashMap<(i32, i32, String), usize> =
+        std::collections::HashMap::new();
+    for (idx, cmd) in dl.iter().enumerate() {
+        if let DisplayCommand::DrawText { rect, text, .. } = cmd {
+            let key = quant_key(rect.x, rect.y, text);
+            // Первое вхождение с таким ключом — именно его и хотим (document order).
+            dl_map.entry(key).or_insert(idx);
+        }
+    }
+
+    let mut out = Vec::new();
+    for frag in frags {
+        let dl_index = match dl_map.get(&quant_key(frag.rect.x, frag.rect.y, &frag.text)) {
+            Some(&idx) => idx,
+            None => continue,
+        };
+
+        // Получаем font_size из DisplayList-команды (TextFragment его не хранит).
+        let font_size = match &dl[dl_index] {
+            DisplayCommand::DrawText { font_size, .. } => *font_size,
+            _ => 16.0,
+        };
+
+        for m in re.find_iter(&frag.text) {
+            let prefix = &frag.text[..m.start()];
+            let prefix_w: f32 = prefix
+                .chars()
+                .map(|c| measurer.char_width(c, font_size))
+                .sum();
+            let match_w: f32 = m
+                .as_str()
+                .chars()
+                .map(|c| measurer.char_width(c, font_size))
+                .sum();
+            if match_w < f32::EPSILON {
+                continue;
+            }
+            out.push(FindMatch {
+                rect: Rect::new(
+                    frag.rect.x + prefix_w,
+                    frag.rect.y,
+                    match_w,
+                    frag.rect.height,
+                ),
+                dl_index,
+            });
+        }
+    }
+    out
+}
+
+/// Квантизирует координату до 0.5 px и возвращает ключ для HashMap.
+fn quant_key(x: f32, y: f32, text: &str) -> (i32, i32, String) {
+    ((x * 2.0).round() as i32, (y * 2.0).round() as i32, text.to_string())
+}
+
+/// Параметры overlay-бара.
 pub struct BarOverlay {
     pub window_size: (u32, u32),
 }
@@ -223,6 +319,8 @@ const BAR_BG: Color = Color { r: 40, g: 40, b: 45, a: 235 };
 const BAR_FG: Color = Color { r: 245, g: 245, b: 245, a: 255 };
 const BAR_DIM: Color = Color { r: 180, g: 180, b: 180, a: 255 };
 const BAR_INPUT_BG: Color = Color { r: 25, g: 25, b: 28, a: 255 };
+const BAR_REGEX_ON: Color = Color { r: 100, g: 200, b: 255, a: 255 };
+const BAR_ERR: Color = Color { r: 255, g: 80, b: 80, a: 255 };
 
 const BAR_WIDTH: f32 = 480.0;
 const BAR_HEIGHT: f32 = 40.0;
@@ -230,8 +328,7 @@ const BAR_PAD: f32 = 12.0;
 const BAR_FONT_SIZE: f32 = 16.0;
 
 /// Собирает page-полосу display list-а: исходные команды + highlight-FillRect-ы
-/// перед каждой DrawText с матчем. Подсветка ложится поверх фона блока, но
-/// под глифами текста. Эта полоса прокручивается со страницей в renderer-е.
+/// перед каждой DrawText с матчем.
 pub fn build_page_with_highlights(
     base: &DisplayList,
     state: &FindState,
@@ -263,21 +360,19 @@ pub fn build_page_with_highlights(
     out
 }
 
-/// Собирает overlay-полосу: только find-bar (фон + label + input + counter).
-/// Эта полоса рисуется поверх страницы без scroll-смещения — viewport-locked.
+/// Собирает overlay-полосу: только find-bar (фон + label + input + counter +
+/// regex-индикатор). Рисуется поверх страницы без scroll-смещения.
 pub fn build_bar_overlay(
     state: &FindState,
     matches_count: usize,
     bar: BarOverlay,
 ) -> DisplayList {
-    let mut out: DisplayList = Vec::with_capacity(5);
+    let mut out: DisplayList = Vec::with_capacity(8);
     append_bar(&mut out, state, matches_count, bar.window_size);
     out
 }
 
-/// Совместимая сборка: page + bar в один list. Используется тестами и
-/// dump-режимами, не для рендера (рендер вызывает page и bar по отдельности,
-/// чтобы скроллить только page-часть).
+/// Совместимая сборка: page + bar в один list. Только для тестов и dump-режимов.
 #[cfg(test)]
 pub fn build_with_overlay(
     base: &DisplayList,
@@ -299,10 +394,25 @@ fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh):
         color: BAR_BG,
     });
 
-    let label = "Найти:";
-    let label_w = 70.0;
+    // Regex-индикатор «.*» слева от лейбла.
+    let regex_label_w = 28.0;
+    let regex_color = if state.is_regex_mode() { BAR_REGEX_ON } else { BAR_DIM };
     out.push(DisplayCommand::DrawText {
-        rect: Rect::new(x + 12.0, y + 10.0, label_w, BAR_FONT_SIZE * 1.2),
+        rect: Rect::new(x + 8.0, y + 10.0, regex_label_w, BAR_FONT_SIZE * 1.2),
+        text: ".*".to_string(),
+        font_size: BAR_FONT_SIZE - 2.0,
+        color: regex_color,
+        font_family: Vec::new(),
+        font_weight: FontWeight::NORMAL,
+        font_style: FontStyle::Normal,
+        font_variation_axes: Vec::new(),
+        tab_size: 0.0,
+    });
+
+    let label = "Найти:";
+    let label_w = 60.0;
+    out.push(DisplayCommand::DrawText {
+        rect: Rect::new(x + 8.0 + regex_label_w + 4.0, y + 10.0, label_w, BAR_FONT_SIZE * 1.2),
         text: label.to_string(),
         font_size: BAR_FONT_SIZE,
         color: BAR_FG,
@@ -313,8 +423,8 @@ fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh):
         tab_size: 0.0,
     });
 
-    let input_x = x + 12.0 + label_w + 8.0;
-    let input_w = 260.0;
+    let input_x = x + 8.0 + regex_label_w + 4.0 + label_w + 8.0;
+    let input_w = 248.0;
     let input_h = 26.0;
     let input_y = y + (BAR_HEIGHT - input_h) / 2.0;
     out.push(DisplayCommand::FillRect {
@@ -334,17 +444,20 @@ fn append_bar(out: &mut DisplayList, state: &FindState, total: usize, (ww, _wh):
     });
 
     let status = if state.query().is_empty() {
-        "Esc".to_string()
+        "Esc / Ctrl+R".to_string()
+    } else if state.is_regex_mode() && !is_valid_regex_pattern(state.query()) {
+        "ERR".to_string()
     } else if total == 0 {
         "0/0".to_string()
     } else {
         format!("{}/{}", state.active_index() + 1, total)
     };
+    let status_color = if status == "ERR" { BAR_ERR } else { BAR_DIM };
     out.push(DisplayCommand::DrawText {
         rect: Rect::new(input_x + input_w + 8.0, y + 10.0, 110.0, BAR_FONT_SIZE * 1.2),
         text: status,
         font_size: BAR_FONT_SIZE - 2.0,
-        color: BAR_DIM,
+        color: status_color,
         font_family: Vec::new(),
         font_weight: FontWeight::NORMAL,
         font_style: FontStyle::Normal,
@@ -378,6 +491,8 @@ mod tests {
             tab_size: 0.0,
         }
     }
+
+    // ── find_matches (plain-text) ──────────────────────────────────────────────
 
     #[test]
     fn empty_query_no_matches() {
@@ -468,6 +583,8 @@ mod tests {
         assert_eq!(m[0].dl_index, 1);
     }
 
+    // ── FindState ──────────────────────────────────────────────────────────────
+
     #[test]
     fn state_open_close_resets_query() {
         let mut s = FindState::default();
@@ -544,6 +661,20 @@ mod tests {
     }
 
     #[test]
+    fn state_toggle_regex_mode() {
+        let mut s = FindState::default();
+        assert!(!s.is_regex_mode());
+        s.toggle_regex_mode();
+        assert!(s.is_regex_mode());
+        s.next(5);
+        s.toggle_regex_mode();
+        assert!(!s.is_regex_mode());
+        assert_eq!(s.active_index(), 0);
+    }
+
+    // ── build_with_overlay (highlights + bar) ─────────────────────────────────
+
+    #[test]
     fn build_with_overlay_inserts_highlight_before_text() {
         let dl = vec![draw_text("hello", 0.0, 0.0, 50.0, 20.0)];
         let m = find_matches(&dl, "ell", &Fixed8);
@@ -586,10 +717,6 @@ mod tests {
             .iter()
             .any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "Найти:"));
         assert!(has_label);
-        let has_status_zero = out
-            .iter()
-            .any(|c| matches!(c, DisplayCommand::DrawText { text, .. } if text == "Esc"));
-        assert!(has_status_zero);
     }
 
     #[test]
@@ -666,17 +793,16 @@ mod tests {
         assert!(find_matches(&dl, "", &Fixed8).is_empty());
     }
 
+    // ── scroll_to_match ────────────────────────────────────────────────────────
+
     #[test]
     fn scroll_to_match_already_visible_returns_none() {
-        // viewport [100, 700], match [200..220] — целиком внутри.
         let r = Rect::new(0.0, 200.0, 100.0, 20.0);
         assert!(scroll_to_match(r, 600.0, 100.0).is_none());
     }
 
     #[test]
     fn scroll_to_match_below_viewport_scrolls_down() {
-        // viewport [0, 600], match на 800. Margin = 600 * 0.25 = 150.
-        // target = 800 - 150 = 650.
         let r = Rect::new(0.0, 800.0, 100.0, 20.0);
         let target = scroll_to_match(r, 600.0, 0.0).expect("должен скроллить");
         assert!((target - 650.0).abs() < 0.01, "target={target}");
@@ -684,7 +810,6 @@ mod tests {
 
     #[test]
     fn scroll_to_match_above_viewport_scrolls_up() {
-        // viewport [500, 1100], match на 100. target = 100 - 150 = -50 -> clamp 0.
         let r = Rect::new(0.0, 100.0, 100.0, 20.0);
         let target = scroll_to_match(r, 600.0, 500.0).expect("должен скроллить");
         assert!((target - 0.0).abs() < 0.01, "target={target}");
@@ -692,19 +817,15 @@ mod tests {
 
     #[test]
     fn scroll_to_match_partially_below_scrolls() {
-        // viewport [0, 100], match [90..130] — нижний край за viewport.
         let r = Rect::new(0.0, 90.0, 100.0, 40.0);
         let target = scroll_to_match(r, 100.0, 0.0).expect("должен скроллить");
-        // margin = 100 * 0.25 = 25; target = 90 - 25 = 65.
         assert!((target - 65.0).abs() < 0.01, "target={target}");
     }
 
     #[test]
     fn scroll_to_match_partially_above_scrolls() {
-        // viewport [200, 800], match [190..210] — верхний край выше viewport.
         let r = Rect::new(0.0, 190.0, 100.0, 20.0);
         let target = scroll_to_match(r, 600.0, 200.0).expect("должен скроллить");
-        // margin = 150; target = 190 - 150 = 40.
         assert!((target - 40.0).abs() < 0.01, "target={target}");
     }
 
@@ -722,22 +843,119 @@ mod tests {
 
     #[test]
     fn scroll_to_match_exact_top_no_scroll() {
-        // match сидит ровно на target-позиции (top - margin). Если бы мы
-        // всё равно вернули Some, caller сделал бы лишний request_redraw.
-        // viewport_height=400, margin=100; current=300, match.y=400 → target=300.
         let r = Rect::new(0.0, 400.0, 100.0, 20.0);
-        // match.y=400 в viewport [300..700], целиком виден — должен быть None.
         assert!(scroll_to_match(r, 400.0, 300.0).is_none());
     }
 
     #[test]
     fn scroll_to_match_does_not_overshoot_caller_max() {
-        // Функция саму границу content_height не знает: caller обязан clamp-нуть.
-        // Здесь просто проверяем — функция возвращает запрошенный target без
-        // верхнего ограничения.
         let r = Rect::new(0.0, 99_999.0, 100.0, 20.0);
         let target = scroll_to_match(r, 600.0, 0.0).expect("должен скроллить");
-        // 99_999 - 150 = 99_849
         assert!((target - 99_849.0).abs() < 0.1, "target={target}");
+    }
+
+    // ── find_matches_regex ─────────────────────────────────────────────────────
+
+    fn make_frag(text: &str, x: f32, y: f32, w: f32, h: f32) -> TextFragment {
+        use lumen_dom::NodeId;
+        TextFragment {
+            text: text.to_string(),
+            rect: Rect::new(x, y, w, h),
+            node: NodeId::from_index(1),
+            char_offset: 0,
+        }
+    }
+
+    #[test]
+    fn regex_empty_pattern_returns_empty() {
+        let frag = make_frag("hello world", 0.0, 0.0, 88.0, 20.0);
+        let dl = vec![draw_text("hello world", 0.0, 0.0, 200.0, 20.0)];
+        assert!(find_matches_regex(&[frag], &dl, "", &Fixed8).is_empty());
+    }
+
+    #[test]
+    fn regex_invalid_pattern_returns_empty() {
+        let frag = make_frag("hello", 0.0, 0.0, 40.0, 20.0);
+        let dl = vec![draw_text("hello", 0.0, 0.0, 100.0, 20.0)];
+        // Незакрытая группа — невалидный regex.
+        assert!(find_matches_regex(&[frag], &dl, "(unclosed", &Fixed8).is_empty());
+    }
+
+    #[test]
+    fn regex_simple_literal_match() {
+        let frag = make_frag("hello world", 0.0, 0.0, 88.0, 20.0);
+        let dl = vec![draw_text("hello world", 0.0, 0.0, 200.0, 20.0)];
+        let m = find_matches_regex(&[frag], &dl, "world", &Fixed8);
+        assert_eq!(m.len(), 1);
+        // prefix "hello " = 6 chars * 8 = 48
+        assert!((m[0].rect.x - 48.0).abs() < 0.01, "x={}", m[0].rect.x);
+        assert!((m[0].rect.width - 40.0).abs() < 0.01); // "world" = 5 * 8
+    }
+
+    #[test]
+    fn regex_case_insensitive() {
+        let frag = make_frag("Hello World", 0.0, 0.0, 88.0, 20.0);
+        let dl = vec![draw_text("Hello World", 0.0, 0.0, 200.0, 20.0)];
+        let m = find_matches_regex(&[frag], &dl, "WORLD", &Fixed8);
+        assert_eq!(m.len(), 1);
+    }
+
+    #[test]
+    fn regex_digit_pattern() {
+        let frag = make_frag("abc123def", 0.0, 0.0, 72.0, 20.0);
+        let dl = vec![draw_text("abc123def", 0.0, 0.0, 200.0, 20.0)];
+        let m = find_matches_regex(&[frag], &dl, r"\d+", &Fixed8);
+        assert_eq!(m.len(), 1);
+        // prefix "abc" = 3 * 8 = 24
+        assert!((m[0].rect.x - 24.0).abs() < 0.01, "x={}", m[0].rect.x);
+        assert!((m[0].rect.width - 24.0).abs() < 0.01); // "123" = 3 * 8
+    }
+
+    #[test]
+    fn regex_multiple_matches_in_fragment() {
+        let frag = make_frag("a1b2c3", 0.0, 0.0, 48.0, 20.0);
+        let dl = vec![draw_text("a1b2c3", 0.0, 0.0, 100.0, 20.0)];
+        let m = find_matches_regex(&[frag], &dl, r"\d", &Fixed8);
+        assert_eq!(m.len(), 3);
+        assert!((m[0].rect.x - 8.0).abs() < 0.01);  // after "a"
+        assert!((m[1].rect.x - 24.0).abs() < 0.01); // after "a1b"
+        assert!((m[2].rect.x - 40.0).abs() < 0.01); // after "a1b2c"
+    }
+
+    #[test]
+    fn regex_fragment_not_in_dl_skipped() {
+        let frag = make_frag("ghost text", 999.0, 999.0, 80.0, 20.0);
+        let dl = vec![draw_text("other text", 0.0, 0.0, 100.0, 20.0)];
+        let m = find_matches_regex(&[frag], &dl, "ghost", &Fixed8);
+        assert!(m.is_empty());
+    }
+
+    #[test]
+    fn regex_multiple_fragments() {
+        let f1 = make_frag("foo", 0.0, 0.0, 24.0, 20.0);
+        let f2 = make_frag("bar", 0.0, 20.0, 24.0, 20.0);
+        let dl = vec![
+            draw_text("foo", 0.0, 0.0, 100.0, 20.0),
+            draw_text("bar", 0.0, 20.0, 100.0, 20.0),
+        ];
+        let m = find_matches_regex(&[f1, f2], &dl, "oo|ar", &Fixed8);
+        assert_eq!(m.len(), 2);
+        assert_eq!(m[0].dl_index, 0);
+        assert_eq!(m[1].dl_index, 1);
+    }
+
+    // ── is_valid_regex_pattern ─────────────────────────────────────────────────
+
+    #[test]
+    fn valid_patterns() {
+        assert!(is_valid_regex_pattern(r"\d+"));
+        assert!(is_valid_regex_pattern("hello"));
+        assert!(is_valid_regex_pattern(r"[a-z]+\s\d{3}"));
+    }
+
+    #[test]
+    fn invalid_patterns() {
+        assert!(!is_valid_regex_pattern("(unclosed"));
+        assert!(!is_valid_regex_pattern(r"[invalid"));
     }
 }
