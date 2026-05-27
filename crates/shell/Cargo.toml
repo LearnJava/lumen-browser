@@ -33,3 +33,6 @@ lumen-image.workspace = true
 
 # Exception #1 из §5: OS event loop + окна.
 winit.workspace = true
+
+# Exception #6 из §5: regex — find-in-page с regex; стандарт де-факто в Rust.
+regex.workspace = true

@@ -59,6 +59,8 @@ webpki-roots = "0.26"
 # Chromium History, Safari). Feature `bundled` компилирует SQLite в бинарь —
 # нулевая runtime-зависимость от системного libsqlite3.
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Exception #6 (§5): regex — find-in-page regex matching; стандарт де-факто в Rust.
+regex = "1"
 
 [profile.dev]
 opt-level = 1
