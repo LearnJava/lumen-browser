@@ -759,6 +759,8 @@ impl LoadedPage {
                 style: lumen_layout::style::ComputedStyle::root(),
                 kind: lumen_layout::BoxKind::Block,
                 children: Vec::new(),
+                col_span: 1,
+                row_span: 1,
             },
             font_registry: Arc::new(lumen_font::SystemFontIndex::new()),
             js_navigate: None,
