@@ -1,5 +1,5 @@
-In progress: gif-decoder (GIF87a/89a decoder + static frame 0)  branch: p1-gif-decoder
-Next step: set up lumen-image crate scaffold + decoder skeleton  crates/engine/image/src/gif.rs:1
+In progress: font-stretch-matcher (font-stretch % matching in FontRegistry)  branch: p1-font-stretch-matcher
+Next step: add find_best_match_with_stretch to FontRegistry  crates/engine/font/src/registry.rs:120
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -8,14 +8,13 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
-Recent (Wave 0 — ADR-008 структурные инварианты, завершено):
-- dom-arena-audit (10B Invariant 1, [P1+P3]): serde+bincode snapshot, DomSnapshotError, #[deny(clippy::rc_buffer)]+INVARIANT(10B/ADR-008) 2026-05-27
-- layout-pure-audit (10D.1 Invariant 3): audit на отсутствие static MUT / lazy_static / OnceCell в hot path 2026-05-27
+Recent:
+- gif-decoder (Wave 1): skeleton GIF87a/89a decoder + frame 0 support (LZW decoding, palette→RGBA), animation Wave 3 2026-05-27
 - paint-pure-audit (10D.2 Invariant 3): audit lumen-paint::display_list на pure-function requirement 2026-05-27
+- layout-pure-audit (10D.1 Invariant 3): audit на отсутствие static MUT / lazy_static / OnceCell в hot path 2026-05-27
+- dom-arena-audit (10B Invariant 1, [P1+P3]): serde+bincode snapshot, DomSnapshotError, #[deny(clippy::rc_buffer)]+INVARIANT(10B/ADR-008) 2026-05-27
 
 Next (Wave 1 — бывшие P2-задачи):
-- font-stretch-matcher: font-stretch % matching в FontRegistry::find_best_match (CSS Fonts L4 §5.2)
-  → STATUS-P2.md:5
 - font-variable-opsz: opsz axis wiring — font-optical-sizing из ComputedStyle → VariationCoords
   → STATUS-P2.md:6
 - icc-color-profiles: ICC из JPEG APP2/PNG iCCP — sRGB passthrough + gamma; без полного CMS
