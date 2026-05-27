@@ -1,5 +1,5 @@
 In progress: —
-Next step: —
+Next step: off-screen-render (8A.3) needs rebase + manual merge conflict resolution, or take next from Queue
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
