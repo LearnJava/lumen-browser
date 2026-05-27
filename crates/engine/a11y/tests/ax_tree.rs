@@ -1,0 +1,373 @@
+//! Integration tests for lumen-a11y: AXTree construction from real HTML.
+
+use lumen_a11y::{AXRole, LiveRegion, build_ax_tree};
+use lumen_html_parser::parse;
+
+// ── Implicit role mapping ────────────────────────────────────────────────────
+
+#[test]
+fn role_nav() {
+    let doc = parse("<nav>Menu</nav>");
+    let tree = build_ax_tree(&doc, doc.root());
+    let nav = find_role_dfs(&tree.root, AXRole::Navigation);
+    assert!(nav.is_some(), "expected Navigation role for <nav>");
+}
+
+#[test]
+fn role_main() {
+    let doc = parse("<main>Content</main>");
+    let tree = build_ax_tree(&doc, doc.root());
+    let m = find_role_dfs(&tree.root, AXRole::Main);
+    assert!(m.is_some(), "expected Main role for <main>");
+}
+
+#[test]
+fn role_headings() {
+    for (tag, expected_level) in [("h1", 1u32), ("h2", 2), ("h3", 3), ("h4", 4), ("h5", 5), ("h6", 6)] {
+        let doc = parse(&format!("<{tag}>Title</{tag}>"));
+        let tree = build_ax_tree(&doc, doc.root());
+        let h = find_role_dfs(&tree.root, AXRole::Heading);
+        assert!(h.is_some(), "expected Heading role for <{tag}>");
+        assert_eq!(h.unwrap().state.level, Some(expected_level), "<{tag}> level");
+    }
+}
+
+#[test]
+fn role_link_with_href() {
+    let doc = parse(r#"<a href="/page">Click</a>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let link = find_role_dfs(&tree.root, AXRole::Link);
+    assert!(link.is_some(), "expected Link role for <a href>");
+}
+
+#[test]
+fn role_a_without_href_is_generic() {
+    let doc = parse("<a>Not a link</a>");
+    let tree = build_ax_tree(&doc, doc.root());
+    let link = find_role_dfs(&tree.root, AXRole::Link);
+    assert!(link.is_none(), "<a> without href should not be Link");
+}
+
+#[test]
+fn role_img_with_alt() {
+    let doc = parse(r#"<img src="x.png" alt="A photo">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let img = find_role_dfs(&tree.root, AXRole::Img);
+    assert!(img.is_some(), "expected Img role for <img alt='...'>");
+    assert_eq!(img.unwrap().name, "A photo");
+}
+
+#[test]
+fn role_img_empty_alt_is_presentation() {
+    let doc = parse(r#"<img src="x.png" alt="">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let pres = find_role_dfs(&tree.root, AXRole::Presentation);
+    assert!(pres.is_some(), "expected Presentation role for <img alt=''>");
+}
+
+#[test]
+fn role_button() {
+    let doc = parse("<button>OK</button>");
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button);
+    assert!(btn.is_some(), "expected Button role for <button>");
+    assert_eq!(btn.unwrap().name, "OK");
+}
+
+#[test]
+fn role_input_checkbox() {
+    let doc = parse(r#"<input type="checkbox">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let cb = find_role_dfs(&tree.root, AXRole::Checkbox);
+    assert!(cb.is_some(), "expected Checkbox role for <input type='checkbox'>");
+}
+
+#[test]
+fn role_input_radio() {
+    let doc = parse(r#"<input type="radio">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let r = find_role_dfs(&tree.root, AXRole::Radio);
+    assert!(r.is_some(), "expected Radio role for <input type='radio'>");
+}
+
+#[test]
+fn role_input_text() {
+    let doc = parse(r#"<input type="text">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let t = find_role_dfs(&tree.root, AXRole::TextBox);
+    assert!(t.is_some(), "expected TextBox for <input type='text'>");
+}
+
+#[test]
+fn role_input_submit() {
+    let doc = parse(r#"<input type="submit" value="Send">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button);
+    assert!(btn.is_some(), "expected Button for <input type='submit'>");
+    assert_eq!(btn.unwrap().name, "Send");
+}
+
+#[test]
+fn role_select_combobox() {
+    let doc = parse("<select><option>A</option></select>");
+    let tree = build_ax_tree(&doc, doc.root());
+    let cb = find_role_dfs(&tree.root, AXRole::ComboBox);
+    assert!(cb.is_some(), "expected ComboBox for <select>");
+}
+
+#[test]
+fn role_select_multiple_listbox() {
+    let doc = parse("<select multiple><option>A</option></select>");
+    let tree = build_ax_tree(&doc, doc.root());
+    let lb = find_role_dfs(&tree.root, AXRole::ListBox);
+    assert!(lb.is_some(), "expected ListBox for <select multiple>");
+}
+
+#[test]
+fn role_table_row_cell() {
+    let doc = parse("<table><tr><td>Cell</td></tr></table>");
+    let tree = build_ax_tree(&doc, doc.root());
+    assert!(find_role_dfs(&tree.root, AXRole::Table).is_some(), "expected Table");
+    assert!(find_role_dfs(&tree.root, AXRole::Row).is_some(), "expected Row");
+    assert!(find_role_dfs(&tree.root, AXRole::Cell).is_some(), "expected Cell");
+}
+
+#[test]
+fn role_list_and_listitem() {
+    let doc = parse("<ul><li>Item</li></ul>");
+    let tree = build_ax_tree(&doc, doc.root());
+    assert!(find_role_dfs(&tree.root, AXRole::List).is_some(), "expected List");
+    assert!(find_role_dfs(&tree.root, AXRole::ListItem).is_some(), "expected ListItem");
+}
+
+// ── Explicit role override ────────────────────────────────────────────────────
+
+#[test]
+fn explicit_role_overrides_implicit() {
+    // A <div> with role="button" should become Button, not Generic.
+    let doc = parse(r#"<div role="button">Click me</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button);
+    assert!(btn.is_some(), "explicit role='button' should override div's Generic role");
+}
+
+#[test]
+fn explicit_role_none_maps_to_none() {
+    let doc = parse(r#"<img src="x.png" role="none">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let none = find_role_dfs(&tree.root, AXRole::None);
+    assert!(none.is_some(), "role='none' should map to AXRole::None");
+}
+
+// ── Accessible name computation ───────────────────────────────────────────────
+
+#[test]
+fn name_from_aria_label() {
+    let doc = parse(r#"<button aria-label="Close dialog">X</button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.name, "Close dialog");
+}
+
+#[test]
+fn name_from_aria_labelledby() {
+    let doc = parse(r#"<div id="lbl">First name</div><input aria-labelledby="lbl">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    assert_eq!(tb.name, "First name");
+}
+
+#[test]
+fn name_from_text_content() {
+    let doc = parse("<button>Submit</button>");
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.name, "Submit");
+}
+
+#[test]
+fn name_from_alt() {
+    let doc = parse(r#"<img src="x.png" alt="Company logo">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let img = find_role_dfs(&tree.root, AXRole::Img).expect("img");
+    assert_eq!(img.name, "Company logo");
+}
+
+#[test]
+fn name_aria_label_takes_priority_over_text() {
+    let doc = parse(r#"<button aria-label="Close">X</button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.name, "Close");
+}
+
+// ── State flags ───────────────────────────────────────────────────────────────
+
+#[test]
+fn state_disabled_from_html_attr() {
+    let doc = parse(r#"<button disabled>Send</button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert!(btn.state.disabled, "button with disabled attr should have disabled=true");
+}
+
+#[test]
+fn state_aria_disabled() {
+    let doc = parse(r#"<div role="button" aria-disabled="true">Send</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert!(btn.state.disabled);
+}
+
+#[test]
+fn state_required_from_html_attr() {
+    let doc = parse(r#"<input type="text" required>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    assert!(tb.state.required);
+}
+
+#[test]
+fn state_checked_checkbox_html() {
+    let doc = parse(r#"<input type="checkbox" checked>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let cb = find_role_dfs(&tree.root, AXRole::Checkbox).expect("checkbox");
+    assert_eq!(cb.state.checked, Some(Some(true)));
+}
+
+#[test]
+fn state_unchecked_checkbox() {
+    let doc = parse(r#"<input type="checkbox">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let cb = find_role_dfs(&tree.root, AXRole::Checkbox).expect("checkbox");
+    assert_eq!(cb.state.checked, Some(Some(false)));
+}
+
+#[test]
+fn state_aria_checked_mixed() {
+    let doc = parse(r#"<div role="checkbox" aria-checked="mixed">Partially</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let cb = find_role_dfs(&tree.root, AXRole::Checkbox).expect("checkbox");
+    assert_eq!(cb.state.checked, Some(None));
+}
+
+#[test]
+fn state_expanded_true() {
+    let doc = parse(r#"<button aria-expanded="true">Menu</button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.state.expanded, Some(true));
+}
+
+#[test]
+fn state_tab_index() {
+    let doc = parse(r#"<div tabindex="0">Focusable</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    // There may be multiple Generic nodes (div, span, etc.); find the one with tabindex.
+    let focusable = find_with_tabindex(&tree.root, 0);
+    assert!(focusable.is_some(), "expected a node with tabindex=0");
+}
+
+#[test]
+fn state_aria_hidden_excludes_subtree() {
+    let doc = parse(r#"<div><button aria-hidden="true">Hidden</button><button>Visible</button></div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    // There should be exactly one Button in the tree (the hidden one is excluded).
+    let buttons: Vec<_> = collect_role_dfs(&tree.root, AXRole::Button);
+    assert_eq!(buttons.len(), 1, "aria-hidden button should be excluded from AX tree");
+    assert_eq!(buttons[0].name, "Visible");
+}
+
+#[test]
+fn state_live_polite() {
+    let doc = parse(r#"<div aria-live="polite">Status</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let live = find_with_live(&tree.root);
+    assert_eq!(live, Some(LiveRegion::Polite));
+}
+
+#[test]
+fn state_level_h2() {
+    let doc = parse("<h2>Chapter</h2>");
+    let tree = build_ax_tree(&doc, doc.root());
+    let h = find_role_dfs(&tree.root, AXRole::Heading).expect("heading");
+    assert_eq!(h.state.level, Some(2));
+}
+
+#[test]
+fn state_aria_level_override() {
+    let doc = parse(r#"<h1 aria-level="3">Override</h1>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let h = find_role_dfs(&tree.root, AXRole::Heading).expect("heading");
+    // aria-level takes priority over implicit heading level.
+    assert_eq!(h.state.level, Some(3));
+}
+
+// ── Description ───────────────────────────────────────────────────────────────
+
+#[test]
+fn description_from_aria_describedby() {
+    let doc = parse(r#"<div id="desc">Enter your full name</div><input aria-describedby="desc">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    assert_eq!(tb.description, "Enter your full name");
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+/// Depth-first search for the first node with the given role.
+fn find_role_dfs(node: &lumen_a11y::AXNode, role: AXRole) -> Option<&lumen_a11y::AXNode> {
+    if node.role == role {
+        return Some(node);
+    }
+    for child in &node.children {
+        if let Some(found) = find_role_dfs(child, role) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Collect all nodes with the given role (DFS).
+fn collect_role_dfs(node: &lumen_a11y::AXNode, role: AXRole) -> Vec<&lumen_a11y::AXNode> {
+    let mut results = Vec::new();
+    collect_role_recursive(node, role, &mut results);
+    results
+}
+
+fn collect_role_recursive<'a>(
+    node: &'a lumen_a11y::AXNode,
+    role: AXRole,
+    out: &mut Vec<&'a lumen_a11y::AXNode>,
+) {
+    if node.role == role {
+        out.push(node);
+    }
+    for child in &node.children {
+        collect_role_recursive(child, role, out);
+    }
+}
+
+fn find_with_live(node: &lumen_a11y::AXNode) -> Option<LiveRegion> {
+    if node.state.live.is_some() {
+        return node.state.live;
+    }
+    for child in &node.children {
+        if let Some(lr) = find_with_live(child) {
+            return Some(lr);
+        }
+    }
+    None
+}
+
+fn find_with_tabindex(node: &lumen_a11y::AXNode, index: i32) -> Option<&lumen_a11y::AXNode> {
+    if node.state.tab_index == Some(index) {
+        return Some(node);
+    }
+    for child in &node.children {
+        if let Some(found) = find_with_tabindex(child, index) {
+            return Some(found);
+        }
+    }
+    None
+}
