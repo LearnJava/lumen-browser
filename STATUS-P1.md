@@ -1,5 +1,5 @@
 In progress: none (ready for next task)
-Next step: lumen-a11y-full (8G, Phase 1, ADR-006) — A11y tree first-class for accessibility-driven testing. P1 owns tree construction, P3 owns BrowserSession integration. Start with crate expansion + role mapping + text alternatives computation (stage 1 of 3).
+Next step: animation-keyframe-easing (6.6, Phase 2) — full timing functions (ease/ease-in/ease-out/ease-in-out/cubic-bezier/steps) support in AnimationInterpolator + AnimValue. Build on Phase 0 Web Animations foundation (TimingFunction + interpolate logic).
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
