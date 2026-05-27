@@ -164,7 +164,36 @@
 | 5.3 | ✅ grapheme_boundaries impl | `encoding/src/unicode_provider.rs` | — |
 | 5.4 | ✅ word_boundaries impl | `encoding/src/unicode_provider.rs` | — |
 | 5.5 | ✅ bidi_runs impl | `encoding/src/unicode_provider.rs` | — |
-| 6+ | ⬜ **`[P1+P3]` Shadow DOM / Accessibility / Forms / GC** (Phase 2-3) | Phase 2-3 | — |
+
+#### Phase 1 (in progress)
+
+| # | Задача | impl / Разблокирует | Дата |
+|---|---|---|---|
+| 8G.1 | ⬜ **`[P1+P3]` lumen-a11y-full stage 1** | ARIA role mapping (60+ variants), text alternatives (accname §4) | Phase 1 |
+| 8G.2 | ⬜ **`[P1+P3]` lumen-a11y-full stage 2** | ARIA attributes (aria-current/modal/roledescription/valuenow/controls/owns/flowto/details), NodeId storage | Phase 1 |
+| 8G.3 | ⬜ **`[P1+P3]` lumen-a11y-full stage 3** | Full computed role mapping HTML-AAM, focus model, form control text alternatives | Phase 1 |
+| 10B | ⬜ **`[P1+P3]` Invariant 1: DOM arena serialization** | NodeId(u32) no Rc<RefCell>, bincode::serialize/deserialize for T3 snapshot | ADR-008 Phase 1 |
+| 10D.1 | ⬜ **`[P1]` Invariant 3a: layout pure audit** | No static MUT / lazy_static / OnceCell in hot path | ADR-008 Phase 1 |
+| 10D.2 | ⬜ **`[P1]` Invariant 3b: paint pure audit** | display_list pure-function requirement for serialization | ADR-008 Phase 1 |
+| 9D.1 | ⬜ **`[P1+P2]` Canvas randomization** | Brave-style per-session seed noise, getImageData RGBA modification | ADR-007 Phase 1 |
+| 9D.2 | ⬜ **`[P1+P2]` WebGL normalize** | Renderer/vendor strings to generic "WebKit"/"Generic GPU" | ADR-007 Phase 1 |
+| 10F | ⬜ **`[P1+P2+P3]` GPU layer LRU** | LayerCache with LRU + GPU memory budget, texture pool recycling | ADR-008 Phase 1 |
+| 10G | ⬜ **`[P1+P2+P3]` Glyph atlas eviction** | LRU eviction of rarely-used glyphs from atlas | ADR-008 Phase 1 |
+
+#### Phase 2-3 (planned)
+
+| # | Задача | impl / Разблокирует | Дата |
+|---|---|---|---|
+| 6+ | ⬜ **`[P1+P3]` Shadow DOM / Accessibility / Forms / GC extended** | Advanced contenteditable, form validation, accessibility full integration | Phase 2-3 |
+| 6.1 | ⬜ contenteditable drag-drop + paste + undo/redo | Input dispatch coordination with shell | Phase 2 |
+| 6.2 | ⬜ accessibility forms validation + visualization | Constraint validation in accessibility tree | Phase 2 |
+| 6.3 | ⬜ ime-input composition events + ranges | Keyboard input for CJK/Cyrillic | Phase 2 |
+| 6.4 | ⬜ svg-layout advanced transforms + viewport nesting | SVG aspect-ratio preservation | Phase 2 |
+| 6.5 | ⬜ print-pdf advanced @page margin boxes + headers/footers | Full print pipeline from margin-box content | Phase 2 |
+| 6.6 | ⬜ animation keyframe easing (cubic-bezier/steps) | Full timing functions support | Phase 2 |
+| 6.7 | ⬜ transition advanced (interrupted/fill-mode/grouped) | Animation lifecycle completeness | Phase 2 |
+| 6.8 | ⬜ **`[P1+P3]` font-loading API** | @font-face lifecycle, FontFace interface, document.fonts | Phase 2 |
+| 6.9 | ⬜ performance-observer timing | Layout/paint timing capture | Phase 2 |
 
 #### Track P2 — Backend rendering
 
