@@ -1,4 +1,5 @@
-In progress: —
+In progress: background-blend-mode (CSS Compositing & Blending L1 #15)  branch: p4-background-blend-mode
+Next step: добавить blend_mode в BackgroundLayer + парсинг  style.rs:3140
 
 Next:
 
