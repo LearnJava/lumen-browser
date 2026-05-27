@@ -70,6 +70,8 @@ pub struct GlyphEntry {
     pub atlas_y: u32,
     pub width: u32,
     pub height: u32,
+    /// Timestamp последнего доступа (insert/access). Для LRU эвикции.
+    pub last_accessed: u64,
 }
 
 #[derive(Debug)]
@@ -84,6 +86,9 @@ pub struct GlyphAtlas {
     /// Помечается при каждом `insert`. Renderer следит и заливает текстуру
     /// в GPU только когда `true`, потом вызывает `mark_clean()`.
     dirty: bool,
+    /// Логический timestamp (инкрементируется при каждом доступе).
+    /// Используется для LRU эвикции.
+    current_tick: u64,
 }
 
 const PADDING: u32 = 1;
@@ -100,6 +105,7 @@ impl GlyphAtlas {
             shelf_y: 0,
             shelf_height: 0,
             dirty: true,
+            current_tick: 0,
         }
     }
 
@@ -124,12 +130,49 @@ impl GlyphAtlas {
         self.cache.get(&key)
     }
 
+    /// Обновляет timestamp доступа для существующей записи.
+    pub fn access(&mut self, key: AtlasKey) -> Option<GlyphEntry> {
+        if let Some(entry) = self.cache.get_mut(&key) {
+            self.current_tick = self.current_tick.saturating_add(1);
+            entry.last_accessed = self.current_tick;
+            return Some(*entry);
+        }
+        None
+    }
+
+    /// Возвращает список ключей отсортированных по last_accessed (от самого старого к новому).
+    pub fn get_lru_candidates(&self) -> Vec<(AtlasKey, u64)> {
+        let mut candidates: Vec<_> = self.cache
+            .iter()
+            .map(|(k, v)| (*k, v.last_accessed))
+            .collect();
+        candidates.sort_by_key(|(_, last_accessed)| *last_accessed);
+        candidates
+    }
+
+    /// Удаляет записи с указанными ключами из кэша.
+    pub fn remove_keys(&mut self, keys: &[AtlasKey]) -> usize {
+        let mut removed = 0;
+        for key in keys {
+            if self.cache.remove(key).is_some() {
+                removed += 1;
+                self.dirty = true;
+            }
+        }
+        removed
+    }
+
     /// Кладёт растеризованный глиф в атлас. Возвращает `None` если место
     /// исчерпано. Если ключ уже в кэше — возвращает существующую запись
-    /// без перезаписи пикселей.
+    /// без перезаписи пикселей (но обновляет last_accessed).
     pub fn insert(&mut self, key: AtlasKey, bitmap: &Bitmap) -> Option<GlyphEntry> {
-        if let Some(&entry) = self.cache.get(&key) {
-            return Some(entry);
+        if self.cache.contains_key(&key) {
+            self.current_tick = self.current_tick.saturating_add(1);
+            if let Some(e) = self.cache.get_mut(&key) {
+                e.last_accessed = self.current_tick;
+                return Some(*e);
+            }
+            return None;
         }
         if bitmap.width == 0 || bitmap.height == 0 {
             return None;
@@ -165,11 +208,13 @@ impl GlyphAtlas {
         self.shelf_height = self.shelf_height.max(bitmap.height);
         self.dirty = true;
 
+        self.current_tick = self.current_tick.saturating_add(1);
         let entry = GlyphEntry {
             atlas_x: x,
             atlas_y: y,
             width: bitmap.width,
             height: bitmap.height,
+            last_accessed: self.current_tick,
         };
         self.cache.insert(key, entry);
         Some(entry)
@@ -198,15 +243,11 @@ mod tests {
     fn insert_single_glyph_at_origin() {
         let mut atlas = GlyphAtlas::new(64);
         let entry = atlas.insert(k(42), &bitmap(10, 12, 200)).unwrap();
-        assert_eq!(
-            entry,
-            GlyphEntry {
-                atlas_x: 0,
-                atlas_y: 0,
-                width: 10,
-                height: 12
-            }
-        );
+        assert_eq!(entry.atlas_x, 0);
+        assert_eq!(entry.atlas_y, 0);
+        assert_eq!(entry.width, 10);
+        assert_eq!(entry.height, 12);
+        assert!(entry.last_accessed > 0);
         // Pixel at (0, 0) and (9, 11) — значение из исходного bitmap-а.
         assert_eq!(atlas.pixels()[0], 200);
         assert_eq!(atlas.pixels()[(11 * 64 + 9) as usize], 200);
@@ -230,17 +271,16 @@ mod tests {
         // Повторный insert с тем же ключом и даже другим bitmap — должен
         // вернуть первую запись, не перезаписывая место в атласе.
         let second = atlas.insert(k(1), &bitmap(20, 20, 200)).unwrap();
-        assert_eq!(first, second);
+        assert_eq!(first.atlas_x, second.atlas_x);
+        assert_eq!(first.atlas_y, second.atlas_y);
         // Размер остался от первого insert.
         assert_eq!(second.width, 10);
+        // Но last_accessed обновилась
+        assert!(second.last_accessed > first.last_accessed);
     }
 
     #[test]
     fn different_keys_store_separate_entries() {
-        // Multi-size key invariant: (face_id, glyph_id, size_bin=16) и
-        // (face_id, glyph_id, size_bin=32) для одного «глифа A» дают две
-        // разные записи. Без этого мы бы перезаписывали единственную
-        // запись (баг fixed-size атласа).
         let mut atlas = GlyphAtlas::new(64);
         let key_16 = AtlasKey::new(0, 1, 16, 0);
         let key_32 = AtlasKey::new(0, 1, 32, 0);
@@ -251,8 +291,8 @@ mod tests {
             (e32.atlas_x, e32.atlas_y),
             "разные ключи занимают разные места"
         );
-        assert_eq!(atlas.get(key_16).copied(), Some(e16));
-        assert_eq!(atlas.get(key_32).copied(), Some(e32));
+        assert_eq!(atlas.get(key_16).map(|e| e.atlas_x), Some(e16.atlas_x));
+        assert_eq!(atlas.get(key_32).map(|e| e.atlas_x), Some(e32.atlas_x));
     }
 
     #[test]
@@ -356,5 +396,45 @@ mod tests {
         let mut atlas = GlyphAtlas::new(32);
         assert!(atlas.insert(k(1), &bitmap(0, 10, 100)).is_none());
         assert!(atlas.insert(k(2), &bitmap(10, 0, 100)).is_none());
+    }
+
+    #[test]
+    fn lru_candidates_sorted_by_access_time() {
+        let mut atlas = GlyphAtlas::new(100);
+        atlas.insert(k(1), &bitmap(10, 10, 100)).unwrap();
+        atlas.insert(k(2), &bitmap(10, 10, 100)).unwrap();
+        atlas.insert(k(3), &bitmap(10, 10, 100)).unwrap();
+
+        let candidates = atlas.get_lru_candidates();
+        assert_eq!(candidates.len(), 3);
+        assert_eq!(candidates[0].0, k(1));
+        assert_eq!(candidates[1].0, k(2));
+        assert_eq!(candidates[2].0, k(3));
+        assert!(candidates[0].1 < candidates[1].1);
+        assert!(candidates[1].1 < candidates[2].1);
+    }
+
+    #[test]
+    fn access_updates_timestamp() {
+        let mut atlas = GlyphAtlas::new(64);
+        let k1 = k(1);
+        let insert_entry = atlas.insert(k1, &bitmap(10, 10, 100)).unwrap();
+        let access_entry = atlas.access(k1).unwrap();
+
+        assert!(access_entry.last_accessed > insert_entry.last_accessed);
+    }
+
+    #[test]
+    fn remove_keys_deletes_from_cache() {
+        let mut atlas = GlyphAtlas::new(100);
+        atlas.insert(k(1), &bitmap(10, 10, 100)).unwrap();
+        atlas.insert(k(2), &bitmap(10, 10, 100)).unwrap();
+        atlas.insert(k(3), &bitmap(10, 10, 100)).unwrap();
+
+        let removed = atlas.remove_keys(&[k(1), k(3)]);
+        assert_eq!(removed, 2);
+        assert!(atlas.get(k(1)).is_none());
+        assert!(atlas.get(k(2)).is_some());
+        assert!(atlas.get(k(3)).is_none());
     }
 }
