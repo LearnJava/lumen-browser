@@ -1,5 +1,5 @@
-In progress: graphic-tests-migration (8A.6)  branch: p3-graphic-tests-migration
-Next step: expand Rust test suite to all HTML tests + PNG snapshots
+In progress: —
+Next step: shell-as-driver-client (8A.7, W2, next priority after graphic-tests-migration completion)
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
