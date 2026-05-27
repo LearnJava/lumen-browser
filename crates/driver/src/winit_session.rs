@@ -779,17 +779,34 @@ impl BrowserSession for WinitSession {
         Ok(())
     }
 
-    fn wait(&mut self, cond: WaitCondition, _timeout_ms: u64) -> Result<()> {
-        match cond {
-            // В headless-режиме document всегда ready после navigate().
-            WaitCondition::DocumentReady => Ok(()),
-            // Остальные условия требуют event-loop — задача 8D (auto-wait-engine).
-            WaitCondition::Visible(_)
-            | WaitCondition::Stable(_)
-            | WaitCondition::NetworkIdle
-            | WaitCondition::JsIdle => Err(Error::Other(
-                "wait conditions кроме DocumentReady требуют event-loop (задача 8D)".into(),
-            )),
+    fn wait(&mut self, cond: WaitCondition, timeout_ms: u64) -> Result<()> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+        const POLL_INTERVAL_MS: u64 = 10;
+
+        loop {
+            // Проверить условие
+            if self.check_wait_condition(&cond)? {
+                return Ok(());
+            }
+
+            // Проверить timeout
+            if start.elapsed().as_millis() as u64 >= timeout_ms {
+                return Err(Error::Other(format!(
+                    "wait timeout после {timeout_ms} мс для условия {:?}",
+                    match &cond {
+                        WaitCondition::DocumentReady => "DocumentReady".to_string(),
+                        WaitCondition::Visible(s) => format!("Visible({})", s),
+                        WaitCondition::Stable(s) => format!("Stable({})", s),
+                        WaitCondition::NetworkIdle => "NetworkIdle".to_string(),
+                        WaitCondition::JsIdle => "JsIdle".to_string(),
+                    }
+                )));
+            }
+
+            // Подождать до следующей проверки
+            std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
         }
     }
 
@@ -824,6 +841,43 @@ impl BrowserSession for WinitSession {
             });
         }
         Ok(out)
+    }
+}
+
+impl WinitSession {
+    /// Проверить выполнение условия ожидания.
+    fn check_wait_condition(&self, cond: &WaitCondition) -> Result<bool> {
+        match cond {
+            WaitCondition::DocumentReady => {
+                // После navigate() state установлен и document готов.
+                Ok(self.state.is_some())
+            }
+            WaitCondition::Visible(selector) => {
+                // Проверить что элемент присутствует в layout и видим.
+                // В Phase 1 WinitSession: если layout_box существует, элемент видим
+                // (нет CSS-скрытых элементов до полной реализации CSS properties).
+                self.layout_box_by_selector(selector).map(|opt| opt.is_some())
+            }
+            WaitCondition::Stable(selector) => {
+                // Стабильность layout: проверить что элемент есть в layout.
+                // Для Phase 1: если элемент есть, то layout стабилен
+                // (нет animation/JS изменений в Phase 1). Реальная проверка стабильности —
+                // отслеживание layout-change ticks (ADR-008 §15) — в следующих фазах.
+                Ok(self.layout_box_by_selector(selector)?.is_some())
+            }
+            WaitCondition::NetworkIdle => {
+                // Нет активных network запросов. Для Phase 1: все fetch() синхронны и
+                // завершаются до возврата navigate(). Поэтому всегда idle.
+                // (Реальная проверка через NetworkTransport events + event sink — задача 8D.2)
+                Ok(true)
+            }
+            WaitCondition::JsIdle => {
+                // JS event loop пуст: нет pending microtasks, tasks, rAF.
+                // Для Phase 1: нет JS engine (persistent-js-runtime — задача 8A.7).
+                // Поэтому всегда idle.
+                Ok(true)
+            }
+        }
     }
 }
 

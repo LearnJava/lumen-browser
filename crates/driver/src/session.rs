@@ -243,17 +243,34 @@ impl BrowserSession for InProcessSession {
         Ok(())
     }
 
-    fn wait(&mut self, cond: WaitCondition, _timeout_ms: u64) -> Result<()> {
-        match cond {
-            // В headless-режиме document всегда ready после navigate().
-            WaitCondition::DocumentReady => Ok(()),
-            // Остальные условия требуют event-loop — задача 8D (auto-wait-engine).
-            WaitCondition::Visible(_)
-            | WaitCondition::Stable(_)
-            | WaitCondition::NetworkIdle
-            | WaitCondition::JsIdle => Err(Error::Other(
-                "wait conditions кроме DocumentReady требуют event-loop (задача 8D)".into(),
-            )),
+    fn wait(&mut self, cond: WaitCondition, timeout_ms: u64) -> Result<()> {
+        use std::time::Instant;
+
+        let start = Instant::now();
+        const POLL_INTERVAL_MS: u64 = 10;
+
+        loop {
+            // Проверить условие
+            if self.check_wait_condition(&cond)? {
+                return Ok(());
+            }
+
+            // Проверить timeout
+            if start.elapsed().as_millis() as u64 >= timeout_ms {
+                return Err(Error::Other(format!(
+                    "wait timeout после {timeout_ms} мс для условия {:?}",
+                    match &cond {
+                        WaitCondition::DocumentReady => "DocumentReady".to_string(),
+                        WaitCondition::Visible(s) => format!("Visible({})", s),
+                        WaitCondition::Stable(s) => format!("Stable({})", s),
+                        WaitCondition::NetworkIdle => "NetworkIdle".to_string(),
+                        WaitCondition::JsIdle => "JsIdle".to_string(),
+                    }
+                )));
+            }
+
+            // Подождать до следующей проверки
+            std::thread::sleep(std::time::Duration::from_millis(POLL_INTERVAL_MS));
         }
     }
 
@@ -705,6 +722,45 @@ fn resolve_target_point(state: &SessionState, target: &Target) -> Result<(f32, f
     }
 }
 
+impl InProcessSession {
+    /// Проверить выполнение условия ожидания.
+    fn check_wait_condition(&self, cond: &WaitCondition) -> Result<bool> {
+        match cond {
+            WaitCondition::DocumentReady => {
+                // В headless-режиме document всегда ready после navigate().
+                Ok(self.state.is_some())
+            }
+            WaitCondition::Visible(selector) => {
+                // Проверить что элемент с этим селектором присутствует в layout
+                // и видим (не display:none). В Phase 0 headless нет CSS-свойств видимости,
+                // поэтому просто проверяем наличие layout-бокса.
+                self.layout_box_by_selector(selector).map(|opt| opt.is_some())
+            }
+            WaitCondition::Stable(selector) => {
+                // Стабильность layout: в headless нет animation или JavaScript,
+                // поэтому layout стабилен с самого начала. Для Phase 1 — всегда true.
+                // (Реальная реализация через layout-change tracking — в WinitSession + shell)
+                // Сначала проверяем что элемент существует в DOM, затем report stable.
+                let state = self.state()?;
+                let doc = &state.doc;
+                let ids = find_all_by_selector(doc, selector);
+                Ok(!ids.is_empty())
+            }
+            WaitCondition::NetworkIdle => {
+                // Нет network запросов в headless. Phase 0/Phase 1 сеть — через fetch(),
+                // который синхронен и завершается до возврата navigate().
+                // Для Phase 1 — всегда true (нет активных запросов).
+                Ok(true)
+            }
+            WaitCondition::JsIdle => {
+                // Нет JS engine в Phase 0/Phase 1 headless (task persistent-js-runtime).
+                // Для Phase 1 — всегда true.
+                Ok(true)
+            }
+        }
+    }
+}
+
 // ── Тесты ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -818,5 +874,56 @@ mod tests {
         let sel = parse_simple_selector("span.red.big");
         assert_eq!(sel.tag, Some("span"));
         assert_eq!(sel.classes, vec!["red", "big"]);
+    }
+
+    #[test]
+    fn wait_document_ready_succeeds_after_navigate() {
+        let mut s = InProcessSession::new();
+        s.run_pipeline(b"<html><body>text</body></html>", Some("text/html"), "file:///test".into())
+            .expect("pipeline");
+        // DocumentReady должен быть успешен сразу после navigate
+        s.wait(WaitCondition::DocumentReady, 1000)
+            .expect("wait DocumentReady");
+    }
+
+    #[test]
+    fn wait_visible_element_succeeds() {
+        let mut s = make_session(r#"<html><body><div id="box" style="width:100px;height:50px"></div></body></html>"#);
+        // Элемент существует в layout, поэтому Visible должна быть true
+        s.wait(WaitCondition::Visible("#box".into()), 1000)
+            .expect("wait Visible");
+    }
+
+    #[test]
+    fn wait_visible_nonexistent_element_times_out() {
+        let mut s = make_session(r#"<html><body><div id="box"></div></body></html>"#);
+        // Элемента с id="missing" нет, поэтому timeout
+        let result = s.wait(WaitCondition::Visible("#missing".into()), 100);
+        assert!(result.is_err(), "wait должен вернуть timeout");
+        assert!(result.unwrap_err().to_string().contains("timeout"));
+    }
+
+    #[test]
+    fn wait_stable_element_succeeds() {
+        let mut s = make_session(r#"<html><body><span class="text">Hello</span></body></html>"#);
+        // Layout стабилен с самого начала в headless
+        s.wait(WaitCondition::Stable(".text".into()), 1000)
+            .expect("wait Stable");
+    }
+
+    #[test]
+    fn wait_network_idle_succeeds() {
+        let mut s = make_session("<html><body>test</body></html>");
+        // Network всегда idle в headless (нет async network)
+        s.wait(WaitCondition::NetworkIdle, 1000)
+            .expect("wait NetworkIdle");
+    }
+
+    #[test]
+    fn wait_js_idle_succeeds() {
+        let mut s = make_session("<html><body>test</body></html>");
+        // JS всегда idle в Phase 1 headless (нет JS engine)
+        s.wait(WaitCondition::JsIdle, 1000)
+            .expect("wait JsIdle");
     }
 }
