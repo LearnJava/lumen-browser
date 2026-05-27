@@ -1,5 +1,5 @@
-In progress: (empty — next item from Next)
-Next step: (Wave 1 items below; start with font-variable-opsz)
+In progress: (empty — completed icc-color-profiles; next from Next)
+Next step: (Next list shows fts-omnibox which is P3; Wave 1 P2-tasks complete)
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -9,6 +9,7 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
 Recent:
+- icc-color-profiles (Wave 1): IccProfile struct in lumen-image, Optional<IccProfile> in Image, parse_png_icc_profile() for PNG iCCP chunk (flate2 deflate decompression), Image constructors updated, JPEG/PNG/GIF decoders wired 2026-05-27
 - font-variable-opsz (Wave 1): VariationCoords struct in lumen-font, from_css_settings() builder, set_axis_by_tag() for P4 to inject opsz, CSS integration points marked 2026-05-27
 - font-stretch-matcher (Wave 1, stage 2): FaceRecord::stretch field, 3-step match_face filter (stretch→style→weight), 5 stretch tests, CSS Fonts L4 §5.2 compliance 2026-05-27
 - font-stretch-matcher (Wave 1, stage 1): Os2::width_class field, stretch_percent() method, 5 tests 2026-05-27
@@ -18,8 +19,7 @@ Recent:
 - dom-arena-audit (10B Invariant 1, [P1+P3]): serde+bincode snapshot, DomSnapshotError, #[deny(clippy::rc_buffer)]+INVARIANT(10B/ADR-008) 2026-05-27
 
 Next (Wave 1 — бывшие P2-задачи):
-- icc-color-profiles: ICC из JPEG APP2/PNG iCCP — sRGB passthrough + gamma; без полного CMS
-  → STATUS-P2.md:7
+(All completed — next waves in Queue)
 
 Next (Wave 1 — бывшие P3-задачи):
 - fts-omnibox: lumen-knowledge::HistoryFts + omnibox @history prefix + Porter stemmer для RU
