@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: graphic-tests-migration (8A.6)  branch: p3-graphic-tests-migration
+Next step: analyze test structure + add first Rust test suite
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
