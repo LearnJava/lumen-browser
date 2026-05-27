@@ -90,5 +90,5 @@ pub trait GpuSession: BrowserSession {
     /// This allows progressive rendering while HTML is still being parsed.
     fn navigate_streaming<F>(&mut self, url: &str, on_chunk: F) -> Result<()>
     where
-        F: FnMut(RenderedPage) -> ();
+        F: FnMut(RenderedPage);
 }
