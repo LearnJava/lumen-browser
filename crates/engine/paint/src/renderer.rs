@@ -5217,6 +5217,97 @@ impl Renderer {
             data: pixels,
         })
     }
+
+    /// CPU-рендеринг через tiny-skia для детерминистичных тестов без GPU.
+    /// Требует feature `cpu-render`. Поддерживает: FillRect, FillRoundedRect (как rect).
+    /// Используется в graphic_tests для CI без GPU адаптера.
+    #[cfg(feature = "cpu-render")]
+    pub fn render_to_image_cpu(
+        width: u32,
+        height: u32,
+        content: &[DisplayCommand],
+        _overlay: &[DisplayCommand],
+        _scroll_y: f32,
+        _scroll_x: f32,
+    ) -> Result<lumen_image::Image, Box<dyn Error>> {
+        use tiny_skia::Pixmap;
+
+        let width_usize = width as usize;
+
+        let mut pixmap = Pixmap::new(width, height)
+            .ok_or("tiny-skia: не удалось создать pixmap")?;
+
+        // Заполняем фон белым (как background браузера по умолчанию).
+        for pixel in pixmap.data_mut().chunks_exact_mut(4) {
+            pixel[0] = 255; // R
+            pixel[1] = 255; // G
+            pixel[2] = 255; // B
+            pixel[3] = 255; // A
+        }
+
+        // Рендерим DisplayCommand-ы.
+        for cmd in content {
+            match cmd {
+                DisplayCommand::FillRect { rect, color } => {
+                    let x = rect.x as i32;
+                    let y = rect.y as i32;
+                    let w = rect.width.max(0.0) as u32;
+                    let h = rect.height.max(0.0) as u32;
+
+                    // Клип к границам pixmap.
+                    let x_start = x.max(0) as usize;
+                    let y_start = y.max(0) as usize;
+                    let x_end = ((x + w as i32).min(width as i32)) as usize;
+                    let y_end = ((y + h as i32).min(height as i32)) as usize;
+
+                    if x_start < x_end && y_start < y_end {
+                        for py in y_start..y_end {
+                            for px in x_start..x_end {
+                                let idx = (py * width_usize + px) * 4;
+                                pixmap.data_mut()[idx] = color.r;
+                                pixmap.data_mut()[idx + 1] = color.g;
+                                pixmap.data_mut()[idx + 2] = color.b;
+                                pixmap.data_mut()[idx + 3] = color.a;
+                            }
+                        }
+                    }
+                }
+                DisplayCommand::FillRoundedRect { rect, color, radii: _ } => {
+                    // Упрощено: рендерим как обычный rect (без скругления).
+                    let x = rect.x as i32;
+                    let y = rect.y as i32;
+                    let w = rect.width.max(0.0) as u32;
+                    let h = rect.height.max(0.0) as u32;
+
+                    let x_start = x.max(0) as usize;
+                    let y_start = y.max(0) as usize;
+                    let x_end = ((x + w as i32).min(width as i32)) as usize;
+                    let y_end = ((y + h as i32).min(height as i32)) as usize;
+
+                    if x_start < x_end && y_start < y_end {
+                        for py in y_start..y_end {
+                            for px in x_start..x_end {
+                                let idx = (py * width_usize + px) * 4;
+                                pixmap.data_mut()[idx] = color.r;
+                                pixmap.data_mut()[idx + 1] = color.g;
+                                pixmap.data_mut()[idx + 2] = color.b;
+                                pixmap.data_mut()[idx + 3] = color.a;
+                            }
+                        }
+                    }
+                }
+                // Остальные команды пока не поддерживаются; игнорируем.
+                _ => {}
+            }
+        }
+
+        Ok(lumen_image::Image {
+            width,
+            height,
+            format: lumen_image::PixelFormat::Rgba8,
+            data: pixmap.data().to_vec(),
+        })
+    }
 }
 
 /// CSS Positioning L3 §6.3 — computes the effective `dy` for a sticky-positioned
