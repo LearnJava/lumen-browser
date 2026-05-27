@@ -90,6 +90,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('46', '46-individual-transforms.html', 0.5, 'CSS Transforms L2 — individual translate / rotate / scale properties'),
     ('47', '47-svg-basic.html',             0.5, 'SVG basic shapes — rect/circle/ellipse/line in document flow, viewBox scale'),
     ('48', '48-line-clamp.html',            0.5, 'CSS Overflow L4 §3.2 — -webkit-line-clamp / line-clamp multi-line truncation, staircase heights 1–4 lines'),
+    ('49', '49-background-blend-mode.html', 0.5, 'CSS Compositing L1 §8.3 — background-blend-mode: multiply/screen/overlay/darken/lighten/difference/exclusion/color-dodge/luminosity'),
 ]
 
 # --- PNG reader (stdlib only) ---
