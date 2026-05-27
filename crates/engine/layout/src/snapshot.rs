@@ -450,10 +450,32 @@ mod tests {
     use crate::layout;
     use lumen_core::geom::Size;
 
+    /// Navigate root → html → body and return the body `LayoutBox`.
+    /// Adapts tests written before the HTML5 parser started injecting
+    /// implicit html/head/body wrappers.
+    fn body_layout_box(mut root: LayoutBox) -> LayoutBox {
+        if let Some(html_idx) = root
+            .children
+            .iter()
+            .position(|c| matches!(c.kind, BoxKind::Block))
+        {
+            let mut html_box = root.children.remove(html_idx);
+            if let Some(body_idx) = html_box
+                .children
+                .iter()
+                .position(|c| matches!(c.kind, BoxKind::Block))
+            {
+                return html_box.children.remove(body_idx);
+            }
+            return html_box;
+        }
+        root
+    }
+
     fn lay(html: &str, css: &str) -> LayoutBox {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        layout(&doc, &sheet, Size::new(800.0, 600.0))
+        body_layout_box(layout(&doc, &sheet, Size::new(800.0, 600.0)))
     }
 
     #[test]

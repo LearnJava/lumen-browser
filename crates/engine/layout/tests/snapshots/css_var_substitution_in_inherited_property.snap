@@ -1,7 +1,6 @@
 Block rect=(0.00, 0.00, 800.00, 19.20)
-  Block rect=(0.00, 0.00, 800.00, 19.20)
-    Block rect=(0.00, 0.00, 800.00, 19.20) color=#ff0000ff
-      InlineRun rect=(0.00, 0.00, 800.00, 19.20) color=#ff0000ff
-        seg[0] "x" color=#ff0000ff
-        line[0]:
-          frag[0] x=0.00 "x"
+  Block rect=(0.00, 0.00, 800.00, 19.20) color=#ff0000ff
+    InlineRun rect=(0.00, 0.00, 800.00, 19.20) color=#ff0000ff
+      seg[0] "x" color=#ff0000ff
+      line[0]:
+        frag[0] x=0.00 "x"

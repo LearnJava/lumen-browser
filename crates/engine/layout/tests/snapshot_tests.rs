@@ -46,11 +46,29 @@ fn assert_snapshot(name: &str, actual: &str) {
 
 // ── helpers ─────────────────────────────────────────────────────────────────
 
+/// Extracts the `<body>` layout box from the full layout tree.
+/// The HTML5 parser wraps content in `document → html → head + body`,
+/// so `layout()` returns a tree rooted at the document block, not the body.
+/// Tests work at body level, so we strip the wrappers here.
+fn body_layout_box(mut root: lumen_layout::LayoutBox) -> lumen_layout::LayoutBox {
+    use lumen_layout::BoxKind;
+    if let Some(html_idx) = root.children.iter()
+        .position(|c| matches!(c.kind, BoxKind::Block)) {
+        let mut html_box = root.children.remove(html_idx);
+        if let Some(body_idx) = html_box.children.iter()
+            .position(|c| matches!(c.kind, BoxKind::Block)) {
+            return html_box.children.remove(body_idx);
+        }
+        return html_box;
+    }
+    root
+}
+
 fn build(html: &str, css: &str, width: f32) -> String {
     let doc = lumen_html_parser::parse(html);
     let sheet = lumen_css_parser::parse(css);
     let tree = lumen_layout::layout(&doc, &sheet, Size::new(width, 600.0));
-    lumen_layout::serialize_layout_tree(&tree)
+    lumen_layout::serialize_layout_tree(&body_layout_box(tree))
 }
 
 struct Fixed8;
@@ -64,7 +82,7 @@ fn build_measured(html: &str, css: &str, width: f32) -> String {
     let doc = lumen_html_parser::parse(html);
     let sheet = lumen_css_parser::parse(css);
     let tree = lumen_layout::layout_measured(&doc, &sheet, Size::new(width, 600.0), &Fixed8);
-    lumen_layout::serialize_layout_tree(&tree)
+    lumen_layout::serialize_layout_tree(&body_layout_box(tree))
 }
 
 // ── тесты ───────────────────────────────────────────────────────────────────

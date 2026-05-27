@@ -15711,7 +15711,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><p>x</p></div>");
         let sheet = lumen_css_parser::parse("div { text-decoration-color: red; }");
         let root_style = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
         assert_eq!(div_style.text_decoration_color, CssColor::Rgba(Color { r: 255, g: 0, b: 0, a: 255 }));
         let p = doc.get(div).children[0];
@@ -15798,7 +15798,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><p>x</p></div>");
         let sheet = lumen_css_parser::parse("div { text-decoration-style: dotted; }");
         let root_style = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
         assert_eq!(div_style.text_decoration_style, TextDecorationStyle::Dotted);
         let p = doc.get(div).children[0];
@@ -15884,7 +15884,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><p>x</p></div>");
         let sheet = lumen_css_parser::parse("div { text-decoration-thickness: 4px; }");
         let root_style = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
         let p = doc.get(div).children[0];
         let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -15915,7 +15915,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<p>x</p>");
         let sheet = lumen_css_parser::parse(&format!("p {{ {css} }}"));
         let root_style = ComputedStyle::root();
-        let p = doc.get(doc.root()).children[0];
+        let p = doc.get(doc.body().unwrap()).children[0];
         compute_style(&doc, p, &sheet, &root_style, Size::new(800.0, 600.0))
     }
 
@@ -16052,7 +16052,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><p>x</p></div>");
         let sheet = lumen_css_parser::parse("div { box-sizing: border-box; }");
         let root_style = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let p = doc.get(div).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
         let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -16152,7 +16152,7 @@ mod tests {
         let sheet =
             lumen_css_parser::parse("div { --main: green; } p { color: var(--main); }");
         let root_style = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let p = doc.get(div).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
         let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -16199,7 +16199,7 @@ mod tests {
             "p { --c: red !important; } .a { --c: blue; } p { color: var(--c); }",
         );
         let root_style = ComputedStyle::root();
-        let p = doc.get(doc.root()).children[0];
+        let p = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, p, &sheet, &root_style, Size::new(800.0, 600.0));
         assert_eq!(s.color, Color { r: 255, g: 0, b: 0, a: 255 });
     }
@@ -16232,15 +16232,19 @@ mod tests {
 
     // ──────────────── CSS Properties and Values L1 §1.1: @property ────────────────
 
-    /// Прогоняет каскад вдоль `path` от root до целевого узла,
+    /// Прогоняет каскад вдоль `path` от `<body>` до целевого узла,
     /// возвращая ComputedStyle конкретного узла. Каждый шаг — реальный
     /// `compute_style` с inherited от предыдущего шага. Это позволяет
     /// проверить inherits-семантику @property на двухуровневом дереве.
+    /// Путь `&[0]` означает первый child `<body>`, `&[0, 1]` — второй child
+    /// первого child, и т.д.
     fn cascade_at(html: &str, css: &str, path: &[usize]) -> ComputedStyle {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
         let viewport = Size::new(800.0, 600.0);
-        let mut id = doc.root();
+        // Start from <body> so that path[0]=0 refers to the first user element,
+        // not to the implicit <html> wrapper injected by the HTML5 parser.
+        let mut id = doc.body().unwrap_or_else(|| doc.root());
         let mut style =
             compute_style(&doc, id, &sheet, &ComputedStyle::root(), viewport);
         for &idx in path {
@@ -19210,12 +19214,34 @@ mod tests {
     // ── apply_bgcolor_presentational_hint integration ────────────────────
 
     fn doc_root_child_style(html: &str) -> ComputedStyle {
-        // Берём первого ребёнка document root (`<body>` / `<table>` / ...),
-        // считаем для него ComputedStyle с пустым CSS.
+        // With the HTML5 parser, elements are placed inside html→body.
+        // Tests that pass "<body ...>" get the body element itself.
+        // Tests that pass "<table ...>" or "<div ...>" get the first child of body.
+        // We pick the outermost user element: if the html string starts with a
+        // non-body/html tag, we take body.children[0]; otherwise we take body.
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse("");
         let root_style = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let body_id = doc.body().unwrap_or_else(|| doc.root());
+        // If the first child of body exists and is a non-body element, use it.
+        // (handles "<table>...", "<div>...", "<p>..." etc. directly)
+        let node = {
+            let body_children = &doc.get(body_id).children;
+            if !body_children.is_empty() {
+                let first = body_children[0];
+                if let lumen_dom::NodeData::Element { name, .. } = &doc.get(first).data {
+                    if name.local != "body" && name.local != "html" {
+                        first
+                    } else {
+                        body_id
+                    }
+                } else {
+                    body_id
+                }
+            } else {
+                body_id
+            }
+        };
         compute_style(&doc, node, &sheet, &root_style, Size::new(800.0, 600.0))
     }
 
@@ -19267,7 +19293,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<body bgcolor=\"red\"></body>");
         let sheet = lumen_css_parser::parse("body { background-color: blue; }");
         let root_style = ComputedStyle::root();
-        let body = doc.get(doc.root()).children[0];
+        let body = doc.body().unwrap();
         let s = compute_style(&doc, body, &sheet, &root_style, Size::new(800.0, 600.0));
         assert_eq!(s.background_color, Some(CssColor::Rgba(rgba(0, 0, 255, 255))));
     }
@@ -19278,9 +19304,10 @@ mod tests {
         let doc = lumen_html_parser::parse("<table><tr><td bgcolor=\"#abcdef\">x</td></tr></table>");
         let sheet = lumen_css_parser::parse("");
         let root_style = ComputedStyle::root();
-        // Найдём td через обход.
-        let table = doc.get(doc.root()).children[0];
-        let tr = doc.get(table).children[0];
+        // HTML5 parser inserts implicit <tbody>: body → table → tbody → tr → td.
+        let table = doc.get(doc.body().unwrap()).children[0];
+        let tbody = doc.get(table).children[0]; // implicit tbody
+        let tr = doc.get(tbody).children[0];
         let td = doc.get(tr).children[0];
         let s = compute_style(&doc, td, &sheet, &root_style, Size::new(800.0, 600.0));
         assert_eq!(s.background_color, Some(CssColor::Rgba(rgba(0xab, 0xcd, 0xef, 255))));
@@ -19330,7 +19357,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<body text=\"red\"></body>");
         let sheet = lumen_css_parser::parse("body { color: blue; }");
         let root_style = ComputedStyle::root();
-        let body = doc.get(doc.root()).children[0];
+        let body = doc.body().unwrap();
         let s = compute_style(&doc, body, &sheet, &root_style, Size::new(800.0, 600.0));
         assert_eq!(s.color, rgba(0, 0, 255, 255));
     }
@@ -19342,8 +19369,8 @@ mod tests {
         let doc = lumen_html_parser::parse("<body text=\"red\"><div>x</div></body>");
         let sheet = lumen_css_parser::parse("");
         let root_style = ComputedStyle::root();
-        let body = doc.get(doc.root()).children[0];
-        let div = doc.get(body).children[0];
+        let body = doc.body().unwrap();
+        let div = doc.get(body).children[0]; // first child of body = <div>
         let body_style = compute_style(&doc, body, &sheet, &root_style, Size::new(800.0, 600.0));
         let div_style = compute_style(&doc, div, &sheet, &body_style, Size::new(800.0, 600.0));
         assert_eq!(div_style.color, rgba(255, 0, 0, 255));
@@ -19403,7 +19430,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div color=\"red\">x</div>");
         let sheet = lumen_css_parser::parse("");
         let root_style = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, div, &sheet, &root_style, Size::new(800.0, 600.0));
         assert_eq!(s.color, Color::BLACK);
     }
@@ -19430,7 +19457,7 @@ mod tests {
     // ── matches_defined (CSS Selectors L4 §6.4.1 / HTML LS §4.13.5) ──────
 
     fn first_child_of_root(doc: &lumen_dom::Document) -> lumen_dom::NodeId {
-        doc.get(doc.root()).children[0]
+        doc.get(doc.body().unwrap()).children[0]
     }
 
     #[test]
@@ -19477,9 +19504,9 @@ mod tests {
         let sheet =
             lumen_css_parser::parse(":not(:defined) { display: none; }");
         let root_style = ComputedStyle::root();
-        let root = doc.get(doc.root());
-        let my_card = root.children[0];
-        let div = root.children[1];
+        let body = doc.body().unwrap();
+        let my_card = doc.get(body).children[0];
+        let div = doc.get(body).children[1];
         let my_card_style =
             compute_style(&doc, my_card, &sheet, &root_style, Size::new(800.0, 600.0));
         let div_style =
@@ -19495,7 +19522,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_direction, FlexDirection::Row);
     }
@@ -19513,7 +19540,7 @@ mod tests {
             let sheet =
                 lumen_css_parser::parse(&format!("div {{ flex-direction: {css_val}; }}"));
             let root = ComputedStyle::root();
-            let node = doc.get(doc.root()).children[0];
+            let node = doc.get(doc.body().unwrap()).children[0];
             let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
             assert_eq!(s.flex_direction, expected, "flex-direction: {css_val}");
         }
@@ -19524,7 +19551,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { flex-direction: column; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -19537,7 +19564,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex-direction: diagonal; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_direction, FlexDirection::Row);
     }
@@ -19549,7 +19576,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_wrap, FlexWrap::Nowrap);
     }
@@ -19565,7 +19592,7 @@ mod tests {
             let doc = lumen_html_parser::parse("<div></div>");
             let sheet = lumen_css_parser::parse(&format!("div {{ flex-wrap: {css_val}; }}"));
             let root = ComputedStyle::root();
-            let node = doc.get(doc.root()).children[0];
+            let node = doc.get(doc.body().unwrap()).children[0];
             let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
             assert_eq!(s.flex_wrap, expected, "flex-wrap: {css_val}");
         }
@@ -19576,7 +19603,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { flex-wrap: wrap; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -19589,7 +19616,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex-wrap: yes; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_wrap, FlexWrap::Nowrap);
     }
@@ -19601,7 +19628,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex-flow: column wrap; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_direction, FlexDirection::Column);
         assert_eq!(s.flex_wrap, FlexWrap::Wrap);
@@ -19612,7 +19639,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex-flow: row-reverse; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_direction, FlexDirection::RowReverse);
         assert_eq!(s.flex_wrap, FlexWrap::Nowrap); // reset to initial
@@ -19623,7 +19650,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex-flow: wrap-reverse; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_direction, FlexDirection::Row); // reset to initial
         assert_eq!(s.flex_wrap, FlexWrap::WrapReverse);
@@ -19636,7 +19663,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_grow, 0.0);
     }
@@ -19646,7 +19673,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex-grow: 2.5; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_grow, 2.5);
     }
@@ -19656,7 +19683,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex-grow: -1; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_grow, 0.0); // initial, negative rejected
     }
@@ -19666,7 +19693,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { flex-grow: 3; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
         let div_s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span_s = compute_style(&doc, span, &sheet, &div_s, Size::new(800.0, 600.0));
@@ -19681,7 +19708,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_shrink, 1.0);
     }
@@ -19691,7 +19718,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex-shrink: 0; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_shrink, 0.0);
     }
@@ -19701,7 +19728,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex-shrink: -0.5; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_shrink, 1.0); // initial
     }
@@ -19711,7 +19738,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { flex-shrink: 4; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
         let div_s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span_s = compute_style(&doc, span, &sheet, &div_s, Size::new(800.0, 600.0));
@@ -19726,7 +19753,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_basis, FlexBasis::Auto);
     }
@@ -19736,7 +19763,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex-basis: content; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_basis, FlexBasis::Content);
     }
@@ -19746,7 +19773,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex-basis: 120px; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_basis, FlexBasis::Length(Length::Px(120.0)));
     }
@@ -19756,7 +19783,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { flex-basis: 50px; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
         let div_s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span_s = compute_style(&doc, span, &sheet, &div_s, Size::new(800.0, 600.0));
@@ -19771,7 +19798,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex: none; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_grow, 0.0);
         assert_eq!(s.flex_shrink, 0.0);
@@ -19783,7 +19810,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex: auto; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_grow, 1.0);
         assert_eq!(s.flex_shrink, 1.0);
@@ -19796,7 +19823,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex: 3; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_grow, 3.0);
         assert_eq!(s.flex_shrink, 1.0);
@@ -19808,7 +19835,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { flex: 2 1 100px; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.flex_grow, 2.0);
         assert_eq!(s.flex_shrink, 1.0);
@@ -19854,7 +19881,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert!(s.font_variation_settings.is_empty());
     }
@@ -19864,7 +19891,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { font-variation-settings: \"wght\" 900; }");
         let root = ComputedStyle::root();
-        let node = doc.get(doc.root()).children[0];
+        let node = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, node, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.font_variation_settings, vec![
             FontVariationSetting { tag: *b"wght", value: 900.0 }
@@ -19877,7 +19904,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { font-variation-settings: \"wght\" 800; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -19895,7 +19922,7 @@ mod tests {
              span { font-variation-settings: \"wght\" 400; }"
         );
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -19909,7 +19936,8 @@ mod tests {
     #[test]
     fn td_width_attr_quirks_mode_sets_min_width() {
         // Без DOCTYPE → quirks mode; CSS Quirks §4.1: width attr → min-width.
-        let s = cascade_at("<table><tr><td width=\"200\">", "", &[0, 0, 0]);
+        // HTML5 parser inserts implicit tbody: body→table→tbody→tr→td = path [0,0,0,0].
+        let s = cascade_at("<table><tr><td width=\"200\">", "", &[0, 0, 0, 0]);
         assert_eq!(s.width, None);
         assert_eq!(s.min_width, Some(Length::Px(200.0)));
     }
@@ -19917,8 +19945,9 @@ mod tests {
     #[test]
     fn td_width_attr_standards_mode_sets_width() {
         // <!DOCTYPE html> → standards mode; width attr → CSS width.
-        // DOCTYPE добавляется как Document.children[0], поэтому <table> — [1].
-        let s = cascade_at("<!DOCTYPE html><table><tr><td width=\"200\">", "", &[1, 0, 0]);
+        // cascade_at starts from body, so table is at index 0 (not 1).
+        // HTML5 parser inserts implicit tbody: body→table→tbody→tr→td = path [0,0,0,0].
+        let s = cascade_at("<!DOCTYPE html><table><tr><td width=\"200\">", "", &[0, 0, 0, 0]);
         assert_eq!(s.width, Some(Length::Px(200.0)));
         assert_eq!(s.min_width, None);
     }
@@ -19926,7 +19955,8 @@ mod tests {
     #[test]
     fn th_width_attr_quirks_mode_sets_min_width() {
         // <th> аналогично <td> — тот же quirk.
-        let s = cascade_at("<table><tr><th width=\"120\">", "", &[0, 0, 0]);
+        // HTML5 parser inserts implicit tbody: body→table→tbody→tr→th = path [0,0,0,0].
+        let s = cascade_at("<table><tr><th width=\"120\">", "", &[0, 0, 0, 0]);
         assert_eq!(s.width, None);
         assert_eq!(s.min_width, Some(Length::Px(120.0)));
     }
@@ -19934,7 +19964,8 @@ mod tests {
     #[test]
     fn td_width_attr_percent_quirks_mode_sets_min_width_percent() {
         // Процентное значение тоже обрабатывается.
-        let s = cascade_at("<table><tr><td width=\"50%\">", "", &[0, 0, 0]);
+        // HTML5 parser inserts implicit tbody: body→table→tbody→tr→td = path [0,0,0,0].
+        let s = cascade_at("<table><tr><td width=\"50%\">", "", &[0, 0, 0, 0]);
         assert_eq!(s.width, None);
         assert_eq!(s.min_width, Some(Length::Percent(50.0)));
     }
@@ -19942,37 +19973,41 @@ mod tests {
     #[test]
     fn table_width_attr_sets_width_in_quirks_mode() {
         // <table width="..."> → CSS width (quirk только для td/th).
+        // cascade_at starts from body; table is at body.children[0].
         let s = cascade_at("<table width=\"800\"><tr><td>", "", &[0]);
         assert_eq!(s.width, Some(Length::Px(800.0)));
     }
 
     #[test]
     fn table_width_attr_sets_width_in_standards_mode() {
-        // DOCTYPE → standards mode; <table> теперь Document.children[1].
-        let s = cascade_at("<!DOCTYPE html><table width=\"800\"><tr><td>", "", &[1]);
+        // DOCTYPE → standards mode; cascade_at starts from body, table is at index 0.
+        let s = cascade_at("<!DOCTYPE html><table width=\"800\"><tr><td>", "", &[0]);
         assert_eq!(s.width, Some(Length::Px(800.0)));
     }
 
     #[test]
     fn td_height_attr_sets_height_quirks_mode() {
         // height attr → CSS height без quirks-варианта.
-        let s = cascade_at("<table><tr><td height=\"50\">", "", &[0, 0, 0]);
+        // HTML5 parser inserts implicit tbody: body→table→tbody→tr→td = path [0,0,0,0].
+        let s = cascade_at("<table><tr><td height=\"50\">", "", &[0, 0, 0, 0]);
         assert_eq!(s.height, Some(Length::Px(50.0)));
     }
 
     #[test]
     fn td_height_attr_sets_height_standards_mode() {
-        let s = cascade_at("<!DOCTYPE html><table><tr><td height=\"50\">", "", &[1, 0, 0]);
+        // cascade_at starts from body; table at [0], implicit tbody at [0,0].
+        let s = cascade_at("<!DOCTYPE html><table><tr><td height=\"50\">", "", &[0, 0, 0, 0]);
         assert_eq!(s.height, Some(Length::Px(50.0)));
     }
 
     #[test]
     fn td_width_author_css_overrides_quirks_hint() {
         // Author CSS width перекрывает min-width presentational hint.
+        // HTML5 parser inserts implicit tbody: body→table→tbody→tr→td = path [0,0,0,0].
         let s = cascade_at(
             "<table><tr><td width=\"200\">",
             "td { width: 300px; }",
-            &[0, 0, 0],
+            &[0, 0, 0, 0],
         );
         // Author CSS устанавливает width; hint установил min_width.
         assert_eq!(s.width, Some(Length::Px(300.0)));
@@ -19991,7 +20026,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { -webkit-line-clamp: 3; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.line_clamp, Some(3));
     }
@@ -20001,7 +20036,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { line-clamp: 5; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.line_clamp, Some(5));
     }
@@ -20011,7 +20046,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.line_clamp, None);
     }
@@ -20021,7 +20056,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { -webkit-line-clamp: none; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.line_clamp, None);
     }
@@ -20031,7 +20066,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { -webkit-line-clamp: 2; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -20044,7 +20079,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { -webkit-line-clamp: 0; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.line_clamp, None);
     }
@@ -20054,7 +20089,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.orphans, 2);
     }
@@ -20064,7 +20099,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.widows, 2);
     }
@@ -20074,7 +20109,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { orphans: 4; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.orphans, 4);
     }
@@ -20084,7 +20119,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { widows: 3; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.widows, 3);
     }
@@ -20094,7 +20129,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><p></p></div>");
         let sheet = lumen_css_parser::parse("div { orphans: 5; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let p = doc.get(div).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -20107,7 +20142,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><p></p></div>");
         let sheet = lumen_css_parser::parse("div { widows: 6; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let p = doc.get(div).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let p_style = compute_style(&doc, p, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -20121,7 +20156,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { orphans: 0; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.orphans, 2);
     }
@@ -20131,7 +20166,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { widows: 0; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.widows, 2);
     }
@@ -20265,7 +20300,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_underline_position, TextUnderlinePosition::Auto);
     }
@@ -20275,7 +20310,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { text-underline-position: from-font; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_underline_position, TextUnderlinePosition::FromFont);
     }
@@ -20285,7 +20320,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { text-underline-position: under; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_underline_position, TextUnderlinePosition::Under);
     }
@@ -20296,8 +20331,8 @@ mod tests {
         let left_sheet = lumen_css_parser::parse("span { text-underline-position: left; }");
         let right_sheet = lumen_css_parser::parse("em { text-underline-position: right; }");
         let root = ComputedStyle::root();
-        let span = doc.get(doc.root()).children[0];
-        let em = doc.get(doc.root()).children[1];
+        let span = doc.get(doc.body().unwrap()).children[0];
+        let em = doc.get(doc.body().unwrap()).children[1];
         let left_style = compute_style(&doc, span, &left_sheet, &root, Size::new(800.0, 600.0));
         let right_style = compute_style(&doc, em, &right_sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(left_style.text_underline_position, TextUnderlinePosition::Left);
@@ -20309,7 +20344,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { text-underline-position: under; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let span = doc.get(div).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -20322,7 +20357,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { text-underline-position: banana; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_underline_position, TextUnderlinePosition::Auto);
     }
@@ -20340,7 +20375,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { color-scheme: light; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.color_scheme, ColorScheme::Light);
     }
@@ -20350,7 +20385,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { color-scheme: dark; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.color_scheme, ColorScheme::Dark);
     }
@@ -20361,8 +20396,8 @@ mod tests {
         let ld_sheet = lumen_css_parser::parse("span { color-scheme: light dark; }");
         let dl_sheet = lumen_css_parser::parse("em { color-scheme: dark light; }");
         let root = ComputedStyle::root();
-        let span = doc.get(doc.root()).children[0];
-        let em = doc.get(doc.root()).children[1];
+        let span = doc.get(doc.body().unwrap()).children[0];
+        let em = doc.get(doc.body().unwrap()).children[1];
         let ld = compute_style(&doc, span, &ld_sheet, &root, Size::new(800.0, 600.0));
         let dl = compute_style(&doc, em, &dl_sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(ld.color_scheme, ColorScheme::LightDark);
@@ -20375,8 +20410,8 @@ mod tests {
         let ol_sheet = lumen_css_parser::parse("span { color-scheme: only light; }");
         let od_sheet = lumen_css_parser::parse("em { color-scheme: only dark; }");
         let root = ComputedStyle::root();
-        let span = doc.get(doc.root()).children[0];
-        let em = doc.get(doc.root()).children[1];
+        let span = doc.get(doc.body().unwrap()).children[0];
+        let em = doc.get(doc.body().unwrap()).children[1];
         let ol = compute_style(&doc, span, &ol_sheet, &root, Size::new(800.0, 600.0));
         let od = compute_style(&doc, em, &od_sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(ol.color_scheme, ColorScheme::OnlyLight);
@@ -20388,7 +20423,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { color-scheme: dark; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -20401,7 +20436,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { color-scheme: rainbow; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.color_scheme, ColorScheme::Normal);
     }
@@ -20505,7 +20540,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { forced-color-adjust: none; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.forced_color_adjust, ForcedColorAdjust::None);
     }
@@ -20515,7 +20550,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { forced-color-adjust: preserve-parent-color; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.forced_color_adjust, ForcedColorAdjust::PreserveParentColor);
     }
@@ -20525,7 +20560,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { forced-color-adjust: none; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -20538,7 +20573,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { forced-color-adjust: always; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.forced_color_adjust, ForcedColorAdjust::Auto);
     }
@@ -20556,7 +20591,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { order: 3; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.order, 3);
     }
@@ -20566,7 +20601,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { order: -1; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.order, -1);
     }
@@ -20576,7 +20611,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { order: 5; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -20589,7 +20624,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { order: auto; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.order, 0);
     }
@@ -20607,7 +20642,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { resize: both; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.resize, Resize::Both);
     }
@@ -20618,8 +20653,8 @@ mod tests {
         let hs = lumen_css_parser::parse("span { resize: horizontal; }");
         let vs = lumen_css_parser::parse("em { resize: vertical; }");
         let root = ComputedStyle::root();
-        let span = doc.get(doc.root()).children[0];
-        let em = doc.get(doc.root()).children[1];
+        let span = doc.get(doc.body().unwrap()).children[0];
+        let em = doc.get(doc.body().unwrap()).children[1];
         let h = compute_style(&doc, span, &hs, &root, Size::new(800.0, 600.0));
         let v = compute_style(&doc, em, &vs, &root, Size::new(800.0, 600.0));
         assert_eq!(h.resize, Resize::Horizontal);
@@ -20631,7 +20666,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { resize: both; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -20644,7 +20679,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { resize: all; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.resize, Resize::None);
     }
@@ -20662,7 +20697,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { line-break: strict; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.line_break, LineBreak::Strict);
     }
@@ -20678,7 +20713,7 @@ mod tests {
             let doc = lumen_html_parser::parse("<div></div>");
             let sheet = lumen_css_parser::parse(&format!("div {{ line-break: {css}; }}"));
             let root = ComputedStyle::root();
-            let div = doc.get(doc.root()).children[0];
+            let div = doc.get(doc.body().unwrap()).children[0];
             let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
             assert_eq!(style.line_break, expected, "css={css}");
         }
@@ -20689,7 +20724,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { line-break: strict; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -20702,7 +20737,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { line-break: always; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.line_break, LineBreak::Auto);
     }
@@ -20714,7 +20749,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { text-align-last: justify; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_align_last, TextAlignLast::Justify);
     }
@@ -20724,7 +20759,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_align_last, TextAlignLast::Auto);
     }
@@ -20734,7 +20769,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { text-align-last: right; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -20747,7 +20782,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { text-align-last: bogus; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_align_last, TextAlignLast::Auto);
     }
@@ -20759,7 +20794,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { touch-action: none; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.touch_action, TouchAction::None);
     }
@@ -20769,7 +20804,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.touch_action, TouchAction::Auto);
     }
@@ -20779,7 +20814,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { touch-action: manipulation; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -20792,7 +20827,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { touch-action: pan-y; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.touch_action, TouchAction::PanY);
     }
@@ -20804,7 +20839,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { appearance: none; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.appearance, Appearance::None);
     }
@@ -20814,7 +20849,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.appearance, Appearance::Auto);
     }
@@ -20824,7 +20859,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { appearance: none; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -20837,7 +20872,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { -webkit-appearance: none; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.appearance, Appearance::None);
     }
@@ -20849,7 +20884,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { display: flow-root; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.display, Display::FlowRoot);
     }
@@ -20859,7 +20894,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { display: contents; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.display, Display::Contents);
     }
@@ -20869,7 +20904,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { display: table; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.display, Display::Table);
     }
@@ -20879,7 +20914,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { display: table-cell; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.display, Display::TableCell);
     }
@@ -20889,7 +20924,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { display: list-item; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.display, Display::ListItem);
     }
@@ -20899,7 +20934,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<table></table>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let table = doc.get(doc.root()).children[0];
+        let table = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, table, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.display, Display::Table);
     }
@@ -20909,7 +20944,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<li></li>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let li = doc.get(doc.root()).children[0];
+        let li = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, li, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.display, Display::ListItem);
     }
@@ -20919,7 +20954,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { display: bogus-value; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.display, Display::Block);
     }
@@ -20931,7 +20966,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { contain: none; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.contain, ContainFlags::NONE);
     }
@@ -20941,7 +20976,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { contain: strict; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.contain, ContainFlags::STRICT);
     }
@@ -20951,7 +20986,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { contain: layout paint; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let expected = ContainFlags(ContainFlags::LAYOUT.0 | ContainFlags::PAINT.0);
         assert_eq!(style.contain, expected);
@@ -20962,7 +20997,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { contain: content; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -20977,7 +21012,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { content-visibility: hidden; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.content_visibility, ContentVisibility::Hidden);
     }
@@ -20987,7 +21022,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { content-visibility: auto; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.content_visibility, ContentVisibility::Auto);
     }
@@ -20997,7 +21032,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.content_visibility, ContentVisibility::Visible);
     }
@@ -21007,7 +21042,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { content-visibility: hidden; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -21022,7 +21057,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { container-type: inline-size; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.container_type, ContainerType::InlineSize);
     }
@@ -21032,7 +21067,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.container_type, ContainerType::Normal);
     }
@@ -21042,7 +21077,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { container-name: sidebar; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.container_name, vec!["sidebar"]);
     }
@@ -21052,7 +21087,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { container: sidebar / inline-size; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.container_name, vec!["sidebar"]);
         assert_eq!(style.container_type, ContainerType::InlineSize);
@@ -21065,7 +21100,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { backdrop-filter: blur(4px); }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert!(!style.backdrop_filter.is_empty());
         assert!(matches!(style.backdrop_filter[0], FilterFn::Blur(_)));
@@ -21076,7 +21111,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { backdrop-filter: none; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert!(style.backdrop_filter.is_empty());
     }
@@ -21086,7 +21121,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert!(style.backdrop_filter.is_empty());
     }
@@ -21096,7 +21131,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { backdrop-filter: blur(4px); }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -21111,7 +21146,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { print-color-adjust: exact; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.print_color_adjust, PrintColorAdjust::Exact);
     }
@@ -21121,7 +21156,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.print_color_adjust, PrintColorAdjust::Economy);
     }
@@ -21131,7 +21166,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { color-adjust: exact; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.print_color_adjust, PrintColorAdjust::Exact);
     }
@@ -21141,7 +21176,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { print-color-adjust: exact; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -21156,7 +21191,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { font-size-adjust: 0.5; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.font_size_adjust, FontSizeAdjust::Value(0.5));
     }
@@ -21166,7 +21201,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.font_size_adjust, FontSizeAdjust::None);
     }
@@ -21176,7 +21211,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { font-size-adjust: 0.47; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -21189,7 +21224,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { font-size-adjust: auto; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.font_size_adjust, FontSizeAdjust::Auto);
     }
@@ -21201,7 +21236,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.writing_mode, WritingMode::HorizontalTb);
     }
@@ -21211,7 +21246,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.writing_mode, WritingMode::VerticalRl);
     }
@@ -21221,7 +21256,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { writing-mode: vertical-lr; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.writing_mode, WritingMode::VerticalLr);
     }
@@ -21231,7 +21266,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -21244,7 +21279,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { writing-mode: tb-rl; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.writing_mode, WritingMode::VerticalRl);
     }
@@ -21256,7 +21291,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_orientation, TextOrientation::Mixed);
     }
@@ -21266,7 +21301,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { text-orientation: upright; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_orientation, TextOrientation::Upright);
     }
@@ -21276,7 +21311,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { text-orientation: sideways; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.text_orientation, TextOrientation::Sideways);
     }
@@ -21286,7 +21321,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { writing-mode: vertical-rl; text-orientation: upright; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -21301,7 +21336,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<input type=\"text\">");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let input = doc.get(doc.root()).children[0];
+        let input = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.width, Some(Length::Px(174.0)));
         assert_eq!(style.height, Some(Length::Px(21.0)));
@@ -21313,7 +21348,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<input type=\"hidden\">");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let input = doc.get(doc.root()).children[0];
+        let input = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.display, Display::None);
     }
@@ -21323,7 +21358,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<input type=\"checkbox\">");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let input = doc.get(doc.root()).children[0];
+        let input = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.width, Some(Length::Px(13.0)));
         assert_eq!(style.height, Some(Length::Px(13.0)));
@@ -21334,7 +21369,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<textarea></textarea>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let ta = doc.get(doc.root()).children[0];
+        let ta = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, ta, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.width, Some(Length::Px(200.0)));
         assert_eq!(style.height, Some(Length::Px(48.0)));
@@ -21346,7 +21381,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<button>OK</button>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let btn = doc.get(doc.root()).children[0];
+        let btn = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, btn, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.height, Some(Length::Px(21.0)));
         assert_eq!(style.border_top_width, 1.0);
@@ -21357,7 +21392,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<select></select>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let sel = doc.get(doc.root()).children[0];
+        let sel = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, sel, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.height, Some(Length::Px(21.0)));
         assert_eq!(style.border_top_width, 1.0);
@@ -21368,7 +21403,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<input type=\"text\">");
         let sheet = lumen_css_parser::parse("input { width: 300px; height: 40px; }");
         let root = ComputedStyle::root();
-        let input = doc.get(doc.root()).children[0];
+        let input = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, input, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.width, Some(Length::Px(300.0)));
         assert_eq!(style.height, Some(Length::Px(40.0)));
@@ -21380,7 +21415,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.shape_outside, ShapeOutside::None);
     }
@@ -21390,7 +21425,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { shape-outside: circle(50%); }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.shape_outside, ShapeOutside::Value("circle(50%)".to_string()));
     }
@@ -21400,7 +21435,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { shape-outside: circle(50%); }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -21413,7 +21448,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { shape-outside: none; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.shape_outside, ShapeOutside::None);
     }
@@ -21424,7 +21459,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.shape_margin, Length::Px(0.0));
     }
@@ -21434,7 +21469,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { shape-margin: 10px; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.shape_margin, Length::Px(10.0));
     }
@@ -21444,7 +21479,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { shape-margin: 5px; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -21457,7 +21492,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { shape-margin: -5px; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         // Negative shape-margin is invalid per spec — ignored.
         assert_eq!(style.shape_margin, Length::Px(0.0));
@@ -21469,7 +21504,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert!((style.shape_image_threshold - 0.0).abs() < f32::EPSILON);
     }
@@ -21479,7 +21514,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { shape-image-threshold: 0.5; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert!((style.shape_image_threshold - 0.5).abs() < 1e-5);
     }
@@ -21489,7 +21524,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { shape-image-threshold: 1.5; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert!((style.shape_image_threshold - 1.0).abs() < f32::EPSILON);
     }
@@ -21499,7 +21534,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { shape-image-threshold: 0.8; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -21513,7 +21548,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.offset_path, None);
     }
@@ -21523,7 +21558,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse(r#"div { offset-path: path("M 0 0 L 100 100"); }"#);
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert!(style.offset_path.is_some());
     }
@@ -21533,7 +21568,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse(r#"div { offset-path: none; }"#);
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.offset_path, None);
     }
@@ -21543,7 +21578,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse(r#"div { offset-path: path("M0 0 L100 0"); }"#);
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -21557,7 +21592,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.offset_distance, Length::Px(0.0));
     }
@@ -21567,7 +21602,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { offset-distance: 50px; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.offset_distance, Length::Px(50.0));
     }
@@ -21577,7 +21612,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { offset-distance: 20px; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -21590,7 +21625,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { offset-distance: bogus; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.offset_distance, Length::Px(0.0));
     }
@@ -21601,7 +21636,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.offset_rotate, OffsetRotate::Auto);
     }
@@ -21611,7 +21646,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { offset-rotate: reverse; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.offset_rotate, OffsetRotate::Reverse);
     }
@@ -21621,7 +21656,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { offset-rotate: 90deg; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         if let OffsetRotate::Angle(rad) = style.offset_rotate {
             assert!((rad - std::f32::consts::FRAC_PI_2).abs() < 1e-4);
@@ -21635,7 +21670,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { offset-rotate: reverse; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -21649,7 +21684,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.offset_anchor, None);
     }
@@ -21659,7 +21694,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { offset-anchor: auto; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.offset_anchor, None);
     }
@@ -21669,7 +21704,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><span></span></div>");
         let sheet = lumen_css_parser::parse("div { offset-anchor: 50% 50%; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         let span = doc.get(div).children[0];
         let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
@@ -21682,7 +21717,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { offset-anchor: bogus; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(style.offset_anchor, None);
     }
@@ -21695,7 +21730,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { border-radius: 10px; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.border_top_left_radius,       Length::Px(10.0));
         assert_eq!(s.border_top_left_radius_y,     Length::Px(10.0));
@@ -21713,7 +21748,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { border-radius: 20px / 10px; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.border_top_left_radius,       Length::Px(20.0));
         assert_eq!(s.border_top_left_radius_y,     Length::Px(10.0));
@@ -21731,7 +21766,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { border-radius: 10px 20px / 5px 15px; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.border_top_left_radius,        Length::Px(10.0)); // TL rx
         assert_eq!(s.border_top_left_radius_y,      Length::Px(5.0));  // TL ry
@@ -21749,7 +21784,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { border-top-left-radius: 30px 15px; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.border_top_left_radius,   Length::Px(30.0));
         assert_eq!(s.border_top_left_radius_y, Length::Px(15.0));
@@ -21764,7 +21799,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { border-top-right-radius: 8px; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.border_top_right_radius,   Length::Px(8.0));
         assert_eq!(s.border_top_right_radius_y, Length::Px(8.0));
@@ -21776,7 +21811,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { border-radius: 1px 2px 3px 4px / 5px 6px 7px 8px; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.border_top_left_radius,        Length::Px(1.0));
         assert_eq!(s.border_top_right_radius,       Length::Px(2.0));
@@ -21794,7 +21829,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div></div>");
         let sheet = lumen_css_parser::parse("div { border-radius: 50%; }");
         let root = ComputedStyle::root();
-        let div = doc.get(doc.root()).children[0];
+        let div = doc.get(doc.body().unwrap()).children[0];
         let s = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
         assert_eq!(s.border_top_left_radius,       Length::Percent(50.0));
         assert_eq!(s.border_top_left_radius_y,     Length::Percent(50.0));

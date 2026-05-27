@@ -450,6 +450,17 @@ impl Document {
         .and_then(|n| n.get_attr("href"))
     }
 
+    /// Returns the `<body>` element's `NodeId`, walking root → `<html>` → `<body>`.
+    /// Returns `None` for documents that have no `<html>` or no `<body>` child.
+    pub fn body(&self) -> Option<NodeId> {
+        let html = self.get(self.root).children.iter().copied().find(|&c| {
+            matches!(&self.get(c).data, NodeData::Element { name, .. } if name.local == "html")
+        })?;
+        self.get(html).children.iter().copied().find(|&c| {
+            matches!(&self.get(c).data, NodeData::Element { name, .. } if name.local == "body")
+        })
+    }
+
     /// Найти первый элемент, удовлетворяющий предикату. Pre-order обход
     /// от root. Используется для `base_href` и подобных «глобальных»
     /// HTML-помощников.
