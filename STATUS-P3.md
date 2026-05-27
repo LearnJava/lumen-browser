@@ -1,8 +1,8 @@
-In progress: per-context-isolation (8E)  branch: p3-per-context-isolation-8e
-Next step: Phase 1b — wire cookies/storage/cache isolation. Currently completed Phase 1 foundation: SessionContext struct, FingerprintProfile enum, BrowserSession trait methods, 10 integration tests. See crates/driver/ISOLATION.md for scope.
+In progress: —
+Next step: (Wave 3) Pick next: deterministic-mode (8F), or a11y-tree-via-driver (8G, [P3+P1]), or antidetect-surface-api (9A)
 
-Recent (Wave 2/3 - automation API):
-  - per-context-isolation-8e (Phase 1 foundation: SessionContext + FingerprintProfile + trait methods + 10 tests) 2026-05-28
+Recent (Wave 3 - automation API):
+  - per-context-isolation-8e (Phase 1 complete: SessionContext + FingerprintProfile + cookies/storage/HTTP cache + 13 tests) 2026-05-28
   - native-input-injection-8c (Phase 1 skeleton: InputCommand enum + click/type_text + shell/src/input.rs) 2026-05-28 
   - lumen-mcp-server-8b (Model Context Protocol transport, 5 resources + 7 tools, stdio server) 2026-05-28
   - shell-as-driver-client-8a7-phase4b (GpuSession impl + render_to_gpu) 2026-05-28
