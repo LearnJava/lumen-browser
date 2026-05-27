@@ -1,15 +1,20 @@
-//! SVG layout tests: viewBox, basic shapes (rect/circle/ellipse/line/path).
-//! Phase 2 — verifies that SVG root and shape boxes are positioned correctly
-//! in document coordinates after the viewBox-to-CSS-px transform.
+//! SVG layout tests: viewBox, basic shapes (rect/circle/ellipse/line/path),
+//! and SVG presentational attributes fill/stroke/fill-opacity/stroke-opacity/stroke-width.
 
 use lumen_core::geom::Size;
-use lumen_layout::{layout, BoxKind, SvgShapeKind};
+use lumen_layout::{layout, BoxKind, Color, SvgPaint, SvgShapeKind};
 use lumen_html_parser::parse as parse_html;
 use lumen_css_parser::parse as parse_css;
 
 fn do_layout(html: &str) -> lumen_layout::LayoutBox {
     let doc = parse_html(html);
     let sheet = parse_css("");
+    layout(&doc, &sheet, Size::new(800.0, 600.0))
+}
+
+fn do_layout_css(html: &str, css: &str) -> lumen_layout::LayoutBox {
+    let doc = parse_html(html);
+    let sheet = parse_css(css);
     layout(&doc, &sheet, Size::new(800.0, 600.0))
 }
 
@@ -182,6 +187,93 @@ fn svg_g_group_contains_children() {
     // Group should be Block-kind with 2 children
     let group = svg.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).expect("group not found");
     assert_eq!(group.children.len(), 2, "group must have 2 shape children");
+}
+
+// ── SVG fill / stroke presentation attributes ────────────────────────────────
+
+#[test]
+fn svg_fill_explicit_color() {
+    let tree = do_layout(r#"<svg width="100" height="100"><rect x="0" y="0" width="50" height="50" style="fill: #ff0000"/></svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    assert_eq!(shape.style.svg_fill, SvgPaint::Color(Color { r: 255, g: 0, b: 0, a: 255 }));
+}
+
+#[test]
+fn svg_fill_none() {
+    let tree = do_layout(r#"<svg width="100" height="100"><circle cx="50" cy="50" r="20" style="fill: none"/></svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    assert_eq!(shape.style.svg_fill, SvgPaint::None);
+}
+
+#[test]
+fn svg_fill_currentcolor() {
+    let tree = do_layout(r#"<svg width="100" height="100"><rect x="0" y="0" width="50" height="50" style="fill: currentColor"/></svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    assert_eq!(shape.style.svg_fill, SvgPaint::CurrentColor);
+}
+
+#[test]
+fn svg_fill_default_is_black() {
+    let tree = do_layout(r#"<svg width="100" height="100"><rect x="0" y="0" width="50" height="50"/></svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    assert_eq!(shape.style.svg_fill, SvgPaint::Color(Color::BLACK));
+}
+
+#[test]
+fn svg_stroke_explicit_color() {
+    let tree = do_layout(r#"<svg width="100" height="100"><rect x="0" y="0" width="50" height="50" style="stroke: #0000ff"/></svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    assert_eq!(shape.style.svg_stroke, SvgPaint::Color(Color { r: 0, g: 0, b: 255, a: 255 }));
+}
+
+#[test]
+fn svg_stroke_default_is_none() {
+    let tree = do_layout(r#"<svg width="100" height="100"><rect x="0" y="0" width="50" height="50"/></svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    assert_eq!(shape.style.svg_stroke, SvgPaint::None);
+}
+
+#[test]
+fn svg_fill_opacity() {
+    let tree = do_layout(r#"<svg width="100" height="100"><circle cx="50" cy="50" r="20" style="fill: red; fill-opacity: 0.5"/></svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    assert!((shape.style.svg_fill_opacity - 0.5).abs() < 0.001);
+}
+
+#[test]
+fn svg_stroke_opacity() {
+    let tree = do_layout(r#"<svg width="100" height="100"><rect x="0" y="0" width="50" height="50" style="stroke: blue; stroke-opacity: 0.3"/></svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    assert!((shape.style.svg_stroke_opacity - 0.3).abs() < 0.001);
+}
+
+#[test]
+fn svg_stroke_width_px() {
+    let tree = do_layout(r#"<svg width="100" height="100"><rect x="0" y="0" width="50" height="50" style="stroke-width: 4px"/></svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    assert!((shape.style.svg_stroke_width - 4.0).abs() < 0.01);
+}
+
+#[test]
+fn svg_fill_inherited_from_parent() {
+    // fill on <g> is inherited by <rect> inside it.
+    let tree = do_layout(r#"<svg width="100" height="100">
+        <g style="fill: #00ff00">
+            <rect x="0" y="0" width="50" height="50"/>
+        </g>
+    </svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    assert_eq!(shape.style.svg_fill, SvgPaint::Color(Color { r: 0, g: 255, b: 0, a: 255 }));
+}
+
+#[test]
+fn svg_fill_css_rule() {
+    let tree = do_layout_css(
+        r#"<svg width="100" height="100"><rect class="r" x="0" y="0" width="50" height="50"/></svg>"#,
+        ".r { fill: #aabbcc; }",
+    );
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    assert_eq!(shape.style.svg_fill, SvgPaint::Color(Color { r: 0xaa, g: 0xbb, b: 0xcc, a: 255 }));
 }
 
 // ── multiple shapes ───────────────────────────────────────────────────────────

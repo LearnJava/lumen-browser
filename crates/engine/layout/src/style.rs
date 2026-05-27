@@ -811,6 +811,37 @@ impl CssColor {
     }
 }
 
+/// SVG Presentation §11.2 — `fill` / `stroke` paint value (`<paint>` type).
+/// Used by SVG shape elements. Inherited by descendants.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum SvgPaint {
+    /// `none` — shape not painted (fully transparent).
+    None,
+    /// `currentColor` — resolves to the element's computed CSS `color`.
+    CurrentColor,
+    /// Explicit sRGB color value.
+    Color(Color),
+}
+
+impl Default for SvgPaint {
+    /// SVG §11.2 default fill is black; stroke default is none.
+    /// For fill fields use `SvgPaint::Color(Color::BLACK)`; for stroke use `SvgPaint::None`.
+    fn default() -> Self {
+        SvgPaint::None
+    }
+}
+
+impl SvgPaint {
+    /// Resolves the paint value to a concrete `Color`. Returns `None` if paint is `none`.
+    pub fn resolve(self, current_color: Color) -> Option<Color> {
+        match self {
+            SvgPaint::None => None,
+            SvgPaint::CurrentColor => Some(current_color),
+            SvgPaint::Color(c) => Some(c),
+        }
+    }
+}
+
 /// Стиль линии CSS border. None = рамка не отображается (как `display: none`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum BorderStyle {
@@ -2240,6 +2271,17 @@ pub struct ComputedStyle {
     pub offset_rotate: OffsetRotate,
     /// CSS Motion Path L1 §3 — `offset-anchor`: auto | `<position>`. NOT inherited. Initial: `Auto` (None).
     pub offset_anchor: Option<ObjectPosition>,
+    /// SVG §11.2 — `fill`. Inherited. Initial: `Color(Color::BLACK)` per SVG spec.
+    /// Overrides the SVG default presentation fill for shape elements.
+    pub svg_fill: SvgPaint,
+    /// SVG §11.3 — `fill-opacity`. Inherited. Range 0.0–1.0. Initial: 1.0.
+    pub svg_fill_opacity: f32,
+    /// SVG §11.2 — `stroke`. Inherited. Initial: `None` (no stroke per SVG spec).
+    pub svg_stroke: SvgPaint,
+    /// SVG §11.3 — `stroke-opacity`. Inherited. Range 0.0–1.0. Initial: 1.0.
+    pub svg_stroke_opacity: f32,
+    /// SVG §11.4 — `stroke-width`. Inherited. In resolved px. Initial: 1.0.
+    pub svg_stroke_width: f32,
 }
 
 /// CSS Content L3 — value свойства `content`.
@@ -4101,6 +4143,12 @@ impl ComputedStyle {
             offset_distance: Length::Px(0.0),
             offset_rotate: OffsetRotate::Auto,
             offset_anchor: None,
+            // SVG presentation attributes — inherited. Initial per SVG §11.2/11.3/11.4.
+            svg_fill: SvgPaint::Color(Color::BLACK),
+            svg_fill_opacity: 1.0,
+            svg_stroke: SvgPaint::None,
+            svg_stroke_opacity: 1.0,
+            svg_stroke_width: 1.0,
         }
     }
 }
@@ -4362,6 +4410,12 @@ pub fn compute_style(
         offset_distance: Length::Px(0.0),
         offset_rotate: OffsetRotate::Auto,
         offset_anchor: None,
+        // SVG presentation attributes — all inherited per SVG spec §11.
+        svg_fill: inherited.svg_fill,
+        svg_fill_opacity: inherited.svg_fill_opacity,
+        svg_stroke: inherited.svg_stroke,
+        svg_stroke_opacity: inherited.svg_stroke_opacity,
+        svg_stroke_width: inherited.svg_stroke_width,
     };
 
     // CSS Properties and Values L1 §1.1 — registry зарегистрированных
@@ -10434,6 +10488,54 @@ fn apply_declaration(
                 style.opacity = o.clamp(0.0, 1.0);
             }
         }
+        // SVG Presentation Attributes §11.2/11.3/11.4 — fill/stroke paint + opacity + width.
+        "fill" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("none") {
+                style.svg_fill = SvgPaint::None;
+            } else if v.eq_ignore_ascii_case("currentcolor") {
+                style.svg_fill = SvgPaint::CurrentColor;
+            } else if let Some(c) = parse_color_legacy(v, is_quirks) {
+                style.svg_fill = SvgPaint::Color(c);
+            }
+        }
+        "fill-opacity" => {
+            let v = val.trim();
+            let parsed = if let Some(pct) = v.strip_suffix('%') {
+                pct.trim().parse::<f32>().ok().map(|n| n / 100.0)
+            } else {
+                v.parse::<f32>().ok()
+            };
+            if let Some(o) = parsed {
+                style.svg_fill_opacity = o.clamp(0.0, 1.0);
+            }
+        }
+        "stroke" => {
+            let v = val.trim();
+            if v.eq_ignore_ascii_case("none") {
+                style.svg_stroke = SvgPaint::None;
+            } else if v.eq_ignore_ascii_case("currentcolor") {
+                style.svg_stroke = SvgPaint::CurrentColor;
+            } else if let Some(c) = parse_color_legacy(v, is_quirks) {
+                style.svg_stroke = SvgPaint::Color(c);
+            }
+        }
+        "stroke-opacity" => {
+            let v = val.trim();
+            let parsed = if let Some(pct) = v.strip_suffix('%') {
+                pct.trim().parse::<f32>().ok().map(|n| n / 100.0)
+            } else {
+                v.parse::<f32>().ok()
+            };
+            if let Some(o) = parsed {
+                style.svg_stroke_opacity = o.clamp(0.0, 1.0);
+            }
+        }
+        "stroke-width" => {
+            if let Some(w) = resolve_box_length(val, em_basis, viewport, is_quirks) {
+                style.svg_stroke_width = w.max(0.0);
+            }
+        }
         "line-height" => {
             // `1.5` (unitless) — коэффициент. `1.5em` — то же самое.
             // `150%` — то же самое. `24px` / `5vh` — конкретная высота,
@@ -11768,6 +11870,21 @@ fn apply_css_wide_keyword(
         }
         "opacity" => {
             style.opacity = if inh_only_inherit { inherited.opacity } else { init.opacity };
+        }
+        "fill" => {
+            style.svg_fill = if inh_only_inherit { inherited.svg_fill } else { init.svg_fill };
+        }
+        "fill-opacity" => {
+            style.svg_fill_opacity = if inh_only_inherit { inherited.svg_fill_opacity } else { init.svg_fill_opacity };
+        }
+        "stroke" => {
+            style.svg_stroke = if inh_only_inherit { inherited.svg_stroke } else { init.svg_stroke };
+        }
+        "stroke-opacity" => {
+            style.svg_stroke_opacity = if inh_only_inherit { inherited.svg_stroke_opacity } else { init.svg_stroke_opacity };
+        }
+        "stroke-width" => {
+            style.svg_stroke_width = if inh_only_inherit { inherited.svg_stroke_width } else { init.svg_stroke_width };
         }
         "overflow" => {
             let (x, y) = if inh_only_inherit {
