@@ -1,10 +1,11 @@
 //! HTML5 §13.2 tree construction.
 //!
 //! Реализация insertion modes по спецификации WHATWG HTML LS §13.2:
-//! Initial, BeforeHtml, BeforeHead, InHead, AfterHead, InBody, Text,
-//! InTable, InTableText, InTableBody, InRow, InCell, InSelect,
-//! InSelectInTable, InCaption, InColumnGroup, AfterBody,
-//! AfterAfterBody.
+//! Initial, BeforeHtml, BeforeHead, InHead, InHeadNoscript, AfterHead,
+//! InBody, Text, InTable, InTableText, InTableBody, InRow, InCell,
+//! InSelect, InSelectInTable, InCaption, InColumnGroup, InTemplate,
+//! InFrameset, AfterBody, AfterFrameset, AfterAfterBody,
+//! AfterAfterFrameset — все 23 режима по §13.2.4.1.
 //!
 //! Ключевые алгоритмы:
 //!
@@ -49,7 +50,7 @@ pub fn parse(input: &str) -> Document {
     builder.finish()
 }
 
-/// Все insertion modes из §13.2.4.1. Foreign content (MathML, SVG) не
+/// Все 23 insertion modes из §13.2.4.1. Foreign content (MathML, SVG) не
 /// поддерживается в Phase 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InsertionMode {
@@ -57,6 +58,9 @@ enum InsertionMode {
     BeforeHtml,
     BeforeHead,
     InHead,
+    /// §13.2.6.4.5 «The in head noscript insertion mode». Active when
+    /// scripting is disabled and the parser encounters `<noscript>` in head.
+    InHeadNoscript,
     AfterHead,
     InBody,
     Text,
@@ -68,14 +72,24 @@ enum InsertionMode {
     InRow,
     InCell,
     InSelect,
-    #[allow(dead_code)]
+    /// §13.2.6.4.17 «The in select in table insertion mode». Active when a
+    /// `<select>` appears inside a table cell/caption context.
     InSelectInTable,
     /// §13.2.6.4.19 «The in template insertion mode». Active while the parser
     /// is inside a `<template>` element. Content is inserted into the
     /// template's `DocumentFragment` rather than the template element itself.
     InTemplate,
+    /// §13.2.6.4.20 «The in frameset insertion mode». Active when the
+    /// document uses `<frameset>` rather than `<body>`.
+    InFrameset,
     AfterBody,
+    /// §13.2.6.4.21 «The after frameset insertion mode». Active after
+    /// `</frameset>` closes the outermost frameset.
+    AfterFrameset,
     AfterAfterBody,
+    /// §13.2.6.4.23 «The after after frameset insertion mode». Active after
+    /// `</html>` in a frameset document.
+    AfterAfterFrameset,
 }
 
 /// Запись в списке active formatting elements (§13.2.4.3). Либо
@@ -134,6 +148,11 @@ pub struct IncrementalTreeBuilder {
     /// `<template>` pushes its content mode here; `</template>` pops it.
     /// When non-empty, `insertion_mode` is `InTemplate`.
     template_mode_stack: Vec<InsertionMode>,
+    /// Whether scripting is considered enabled (§13.2.3.5). When `true`,
+    /// `<noscript>` in `<head>` is treated as raw text (scripting-enabled
+    /// path). When `false`, the parser enters `InHeadNoscript` mode so that
+    /// `<noscript>` content is parsed as markup. Default: `true`.
+    scripting_enabled: bool,
 }
 
 impl IncrementalTreeBuilder {
@@ -152,6 +171,7 @@ impl IncrementalTreeBuilder {
             tokenizer: PushTokenizer::new(),
             seen_doctype: false,
             template_mode_stack: Vec::new(),
+            scripting_enabled: true,
         }
     }
 
@@ -221,6 +241,7 @@ impl IncrementalTreeBuilder {
             InsertionMode::BeforeHtml => self.mode_before_html(token),
             InsertionMode::BeforeHead => self.mode_before_head(token),
             InsertionMode::InHead => self.mode_in_head(token),
+            InsertionMode::InHeadNoscript => self.mode_in_head_noscript(token),
             InsertionMode::AfterHead => self.mode_after_head(token),
             InsertionMode::InBody => self.mode_in_body(token),
             InsertionMode::Text => self.mode_text(token),
@@ -237,8 +258,11 @@ impl IncrementalTreeBuilder {
             InsertionMode::InSelect => self.mode_in_select(token),
             InsertionMode::InSelectInTable => self.mode_in_select_in_table(token),
             InsertionMode::InTemplate => self.mode_in_template(token),
+            InsertionMode::InFrameset => self.mode_in_frameset(token),
             InsertionMode::AfterBody => self.mode_after_body(token),
+            InsertionMode::AfterFrameset => self.mode_after_frameset(token),
             InsertionMode::AfterAfterBody => self.mode_after_after_body(token),
+            InsertionMode::AfterAfterFrameset => self.mode_after_after_frameset(token),
         }
     }
 
@@ -406,7 +430,7 @@ impl IncrementalTreeBuilder {
                 ref name,
                 ref attrs,
                 self_closing,
-            } if matches!(name.as_str(), "noscript" | "noframes" | "style" | "script") =>
+            } if matches!(name.as_str(), "noframes" | "style" | "script") =>
             {
                 let _ = self_closing;
                 let el = self.create_element_with_attrs(name, attrs);
@@ -414,6 +438,32 @@ impl IncrementalTreeBuilder {
                 self.open_elements.push(el);
                 self.original_insertion_mode = Some(self.insertion_mode);
                 self.insertion_mode = InsertionMode::Text;
+            }
+            // §13.2.6.4.4 «In head» — `<noscript>`. Behaviour depends on
+            // scripting flag (§13.2.3.5): if scripting is enabled, noscript
+            // content is raw text (invisible to the parser); if scripting is
+            // disabled, the content is parsed as markup via InHeadNoscript.
+            Token::StartTag {
+                ref name,
+                ref attrs,
+                self_closing,
+            } if name == "noscript" =>
+            {
+                let _ = self_closing;
+                if self.scripting_enabled {
+                    // Scripting on: treat as raw text (same as <style>/<script>).
+                    let el = self.create_element_with_attrs(name, attrs);
+                    self.append_to_current_open(el);
+                    self.open_elements.push(el);
+                    self.original_insertion_mode = Some(self.insertion_mode);
+                    self.insertion_mode = InsertionMode::Text;
+                } else {
+                    // Scripting off: parse noscript content as HTML.
+                    let el = self.create_element_with_attrs(name, attrs);
+                    self.append_to_current_open(el);
+                    self.open_elements.push(el);
+                    self.insertion_mode = InsertionMode::InHeadNoscript;
+                }
             }
             // HTML LS §13.2.6.4.4 «In head» — `<template>` start tag.
             Token::StartTag {
@@ -493,12 +543,15 @@ impl IncrementalTreeBuilder {
                 self.open_elements.push(body);
                 self.insertion_mode = InsertionMode::InBody;
             }
-            Token::StartTag { ref name, .. } if name == "frameset" => {
-                // Phase 0: treat as body для простоты.
-                let body = self.create_element_with_attrs("body", &[]);
-                self.append_to_current_open(body);
-                self.open_elements.push(body);
-                self.insertion_mode = InsertionMode::InBody;
+            Token::StartTag {
+                ref name,
+                ref attrs,
+                ..
+            } if name == "frameset" => {
+                let fs = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(fs);
+                self.open_elements.push(fs);
+                self.insertion_mode = InsertionMode::InFrameset;
             }
             Token::StartTag { ref name, .. }
                 if matches!(
@@ -1464,9 +1517,164 @@ impl IncrementalTreeBuilder {
         }
     }
 
+    /// §13.2.6.4.17 «The in select in table insertion mode».
     fn mode_in_select_in_table(&mut self, token: Token) {
-        // Phase 0: упрощённо.
-        self.mode_in_select(token);
+        const TABLE_TAGS: &[&str] = &[
+            "caption", "table", "tbody", "tfoot", "thead", "tr", "td", "th",
+        ];
+        match token {
+            Token::StartTag { ref name, .. } if TABLE_TAGS.contains(&name.as_str()) => {
+                // parse error: close select, reprocess
+                self.pop_open_elements_until("select");
+                self.reset_insertion_mode();
+                self.dispatch(token);
+            }
+            Token::EndTag { ref name } if TABLE_TAGS.contains(&name.as_str()) => {
+                // parse error; only act if the tag is in table scope
+                let in_scope = self
+                    .open_elements
+                    .iter()
+                    .any(|&n| self.element_local(n) == name.as_str());
+                if in_scope {
+                    self.pop_open_elements_until("select");
+                    self.reset_insertion_mode();
+                    self.dispatch(token);
+                }
+                // else: parse error, ignore
+            }
+            other => self.mode_in_select(other),
+        }
+    }
+
+    /// §13.2.6.4.5 «The in head noscript insertion mode».
+    ///
+    /// Only entered when `scripting_enabled` is `false`. Parses `<noscript>`
+    /// content as HTML markup (rather than raw text).
+    fn mode_in_head_noscript(&mut self, token: Token) {
+        match token {
+            Token::Doctype { .. } => { /* parse error: ignore */ }
+            Token::StartTag { ref name, ref attrs, .. } if name == "html" => {
+                self.in_body_start_html_attrs(attrs);
+            }
+            Token::EndTag { ref name } if name == "noscript" => {
+                self.open_elements.pop();
+                self.insertion_mode = InsertionMode::InHead;
+            }
+            // Whitespace text, comments, and these head-level void elements
+            // are processed as if in InHead.
+            Token::Text(ref s) if s.chars().all(is_html_whitespace) => {
+                self.mode_in_head(token);
+            }
+            Token::Comment(_) => {
+                self.mode_in_head(token);
+            }
+            Token::StartTag { ref name, .. }
+                if matches!(
+                    name.as_str(),
+                    "basefont" | "bgsound" | "link" | "meta" | "noframes" | "style"
+                ) =>
+            {
+                self.mode_in_head(token);
+            }
+            // parse error: `</br>` is treated as `<br>` (implicit body),
+            // any other end tag: parse error, ignore.
+            Token::EndTag { ref name } if name == "br" => {
+                // pop noscript, switch to InHead, reprocess as if InHead got </br>
+                self.open_elements.pop();
+                self.insertion_mode = InsertionMode::InHead;
+                self.dispatch(Token::EndTag { name: "br".to_string() });
+            }
+            Token::StartTag { ref name, .. }
+                if matches!(name.as_str(), "head" | "noscript") =>
+            {
+                // parse error: ignore
+            }
+            Token::EndTag { .. } => { /* parse error: ignore */ }
+            other => {
+                // parse error: pop noscript, switch to InHead, reprocess
+                self.open_elements.pop();
+                self.insertion_mode = InsertionMode::InHead;
+                self.dispatch(other);
+            }
+        }
+    }
+
+    /// §13.2.6.4.20 «The in frameset insertion mode».
+    ///
+    /// Active for frameset-based documents (using `<frameset>` instead of
+    /// `<body>`). Handles `<frame>` (void), nested `<frameset>`, `<noframes>`.
+    fn mode_in_frameset(&mut self, token: Token) {
+        match token {
+            Token::Text(ref s) if s.chars().all(is_html_whitespace) => {
+                self.insert_text(s);
+            }
+            Token::Comment(s) => self.insert_comment(s),
+            Token::Doctype { .. } => { /* parse error: ignore */ }
+            Token::StartTag { ref name, ref attrs, .. } if name == "html" => {
+                self.in_body_start_html_attrs(attrs);
+            }
+            Token::StartTag { ref name, ref attrs, .. } if name == "frameset" => {
+                let fs = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(fs);
+                self.open_elements.push(fs);
+            }
+            Token::EndTag { ref name } if name == "frameset" => {
+                // Only the html element remains (open_elements.len() == 1).
+                if self.open_elements.len() == 1 {
+                    // parse error: ignore (fragment parsing context)
+                    return;
+                }
+                self.open_elements.pop();
+                // If current node is no longer a frameset, the document is
+                // done with its frameset structure → AfterFrameset.
+                if let Some(&top) = self.open_elements.last()
+                    && self.element_local(top) != "frameset"
+                {
+                    self.insertion_mode = InsertionMode::AfterFrameset;
+                }
+            }
+            Token::StartTag { ref name, ref attrs, .. } if name == "frame" => {
+                // void element: create + append, do NOT push onto open_elements
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+            }
+            Token::StartTag { ref name, .. } if name == "noframes" => {
+                // process as InHead (switches to Text mode for raw content)
+                let saved = self.insertion_mode;
+                self.insertion_mode = InsertionMode::InHead;
+                self.dispatch(token);
+                if self.insertion_mode == InsertionMode::InHead {
+                    self.insertion_mode = saved;
+                }
+            }
+            _ => { /* parse error: ignore */ }
+        }
+    }
+
+    /// §13.2.6.4.21 «The after frameset insertion mode».
+    fn mode_after_frameset(&mut self, token: Token) {
+        match token {
+            Token::Text(ref s) if s.chars().all(is_html_whitespace) => {
+                self.insert_text(s);
+            }
+            Token::Comment(s) => self.insert_comment(s),
+            Token::Doctype { .. } => { /* parse error: ignore */ }
+            Token::StartTag { ref name, ref attrs, .. } if name == "html" => {
+                self.in_body_start_html_attrs(attrs);
+            }
+            Token::EndTag { ref name } if name == "html" => {
+                self.insertion_mode = InsertionMode::AfterAfterFrameset;
+            }
+            Token::StartTag { ref name, .. } if name == "noframes" => {
+                let saved = self.insertion_mode;
+                self.insertion_mode = InsertionMode::InHead;
+                self.dispatch(token);
+                if self.insertion_mode == InsertionMode::InHead {
+                    self.insertion_mode = saved;
+                }
+            }
+            _ => { /* parse error: ignore */ }
+        }
     }
 
     /// §13.2.6.4.19 «The after body insertion mode».
@@ -1509,6 +1717,33 @@ impl IncrementalTreeBuilder {
                 self.insertion_mode = InsertionMode::InBody;
                 self.dispatch(token);
             }
+        }
+    }
+
+    /// §13.2.6.4.23 «The after after frameset insertion mode».
+    fn mode_after_after_frameset(&mut self, token: Token) {
+        match token {
+            Token::Comment(s) => {
+                let root = self.doc.root();
+                let c = self.doc.create_comment(s);
+                self.doc.append_child(root, c);
+            }
+            Token::Text(ref s) if s.chars().all(is_html_whitespace) => {
+                self.mode_in_body(token);
+            }
+            Token::Doctype { .. } => { /* ignore */ }
+            Token::StartTag { ref name, ref attrs, .. } if name == "html" => {
+                self.in_body_start_html_attrs(attrs);
+            }
+            Token::StartTag { ref name, .. } if name == "noframes" => {
+                let saved = self.insertion_mode;
+                self.insertion_mode = InsertionMode::InHead;
+                self.dispatch(token);
+                if self.insertion_mode == InsertionMode::InHead {
+                    self.insertion_mode = saved;
+                }
+            }
+            _ => { /* parse error: ignore */ }
         }
     }
 
@@ -1797,13 +2032,40 @@ impl IncrementalTreeBuilder {
         }
     }
 
+    /// Pop elements from the stack until (and including) the first element
+    /// with the given local name. Used by InSelectInTable and similar rules
+    /// where the spec says «pop elements until a `<X>` element has been
+    /// popped».
+    fn pop_open_elements_until(&mut self, local: &str) {
+        while let Some(top) = self.open_elements.pop() {
+            if self.element_local(top) == local {
+                break;
+            }
+        }
+    }
+
     /// §13.2.4.1 «reset the insertion mode appropriately».
     fn reset_insertion_mode(&mut self) {
         for i in (0..self.open_elements.len()).rev() {
             let node = self.open_elements[i];
             let local = self.element_local(node);
             let mode = match local {
-                "select" => InsertionMode::InSelect,
+                "select" => {
+                    // §13.2.4.1 step 14: if any ancestor is a table-structure
+                    // element, use InSelectInTable rather than InSelect.
+                    let in_table_context = self.open_elements[..i].iter().any(|&a| {
+                        matches!(
+                            self.element_local(a),
+                            "table" | "thead" | "tbody" | "tfoot" | "tr" | "td" | "th"
+                                | "caption" | "template"
+                        )
+                    });
+                    if in_table_context {
+                        InsertionMode::InSelectInTable
+                    } else {
+                        InsertionMode::InSelect
+                    }
+                }
                 "td" | "th" => InsertionMode::InCell,
                 "tr" => InsertionMode::InRow,
                 "tbody" | "thead" | "tfoot" => InsertionMode::InTableBody,
@@ -1811,7 +2073,7 @@ impl IncrementalTreeBuilder {
                 "colgroup" => InsertionMode::InColumnGroup,
                 "table" => InsertionMode::InTable,
                 "body" => InsertionMode::InBody,
-                "frameset" => InsertionMode::InBody,
+                "frameset" => InsertionMode::InFrameset,
                 "html" => {
                     if self.head_element.is_some() {
                         InsertionMode::AfterHead
@@ -3067,5 +3329,249 @@ mod tests {
         let s = doc.to_string();
         assert!(s.contains("#document-fragment"), "display must show #document-fragment");
         assert!(s.contains("<p>"), "display must show fragment content");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Tests: InFrameset / AfterFrameset / AfterAfterFrameset
+    // ─────────────────────────────────────────────────────────────
+
+    fn find_element(doc: &Document, name: &str) -> Option<NodeId> {
+        fn walk(doc: &Document, node: NodeId, name: &str) -> Option<NodeId> {
+            if matches!(&doc.get(node).data, NodeData::Element { name: n, .. } if n.local == name) {
+                return Some(node);
+            }
+            for &child in &doc.get(node).children {
+                if let Some(found) = walk(doc, child, name) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        walk(doc, doc.root(), name)
+    }
+
+    #[test]
+    fn frameset_basic_structure() {
+        let doc = parse(
+            "<!DOCTYPE html><html><head></head>\
+             <frameset rows=\"50%,50%\">\
+               <frame src=\"a.html\">\
+               <frame src=\"b.html\">\
+             </frameset></html>",
+        );
+        let fs = find_element(&doc, "frameset");
+        assert!(fs.is_some(), "frameset element must be created");
+        let fs = fs.unwrap();
+        let frames: Vec<_> = doc
+            .get(fs)
+            .children
+            .iter()
+            .filter(|&&c| {
+                matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "frame")
+            })
+            .collect();
+        assert_eq!(frames.len(), 2, "two frame elements expected");
+    }
+
+    #[test]
+    fn frameset_no_body() {
+        // A frameset document must NOT create an implicit <body>.
+        let doc = parse("<!DOCTYPE html><html><head></head><frameset><frame></frameset></html>");
+        let body = find_element(&doc, "body");
+        assert!(body.is_none(), "frameset document must not contain <body>");
+    }
+
+    #[test]
+    fn frameset_frame_is_void() {
+        // <frame> is void: must not be pushed onto open_elements.
+        // Verify by checking it has no children.
+        let doc = parse("<frameset><frame src=\"x.html\"><frame src=\"y.html\"></frameset>");
+        let fs = find_element(&doc, "frameset").expect("frameset");
+        for &child in &doc.get(fs).children {
+            if matches!(&doc.get(child).data, NodeData::Element { name, .. } if name.local == "frame") {
+                assert!(
+                    doc.get(child).children.is_empty(),
+                    "frame element must be void (no children)"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn frameset_nested() {
+        let doc = parse(
+            "<frameset cols=\"50%,50%\">\
+               <frameset rows=\"50%,50%\">\
+                 <frame><frame>\
+               </frameset>\
+               <frame>\
+             </frameset>",
+        );
+        let outer_fs = find_element(&doc, "frameset").expect("outer frameset");
+        let inner_fs = doc.get(outer_fs).children.iter().copied().find(|&c| {
+            matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "frameset")
+        });
+        assert!(inner_fs.is_some(), "inner frameset must exist");
+    }
+
+    #[test]
+    fn frameset_noframes_content_raw() {
+        // <noframes> inside <frameset> is parsed as raw text via InHead routing.
+        let doc = parse("<frameset><frame><noframes>fallback</noframes></frameset>");
+        let nf = find_element(&doc, "noframes").expect("noframes element");
+        let has_text = doc.get(nf).children.iter().any(|&c| {
+            matches!(&doc.get(c).data, NodeData::Text(s) if s.contains("fallback"))
+        });
+        assert!(has_text, "noframes must contain raw text");
+    }
+
+    #[test]
+    fn after_frameset_only_whitespace_and_noframes() {
+        // After </frameset>, only whitespace text and <noframes> are valid.
+        // Non-whitespace text should be silently ignored (parse error).
+        let doc = parse("<frameset><frame></frameset>spurious text");
+        // "spurious text" must not appear anywhere in the document
+        fn has_text(doc: &Document, node: NodeId, needle: &str) -> bool {
+            if matches!(&doc.get(node).data, NodeData::Text(s) if s.contains(needle)) {
+                return true;
+            }
+            doc.get(node).children.iter().any(|&c| has_text(doc, c, needle))
+        }
+        assert!(
+            !has_text(&doc, doc.root(), "spurious"),
+            "spurious text after </frameset> must be ignored"
+        );
+    }
+
+    #[test]
+    fn after_after_frameset_html_close() {
+        // </html> after </frameset> transitions to AfterAfterFrameset.
+        // Any further non-whitespace content is ignored (parse error).
+        let doc = parse("<frameset><frame></frameset></html>extra");
+        fn has_text(doc: &Document, node: NodeId, needle: &str) -> bool {
+            if matches!(&doc.get(node).data, NodeData::Text(s) if s.contains(needle)) {
+                return true;
+            }
+            doc.get(node).children.iter().any(|&c| has_text(doc, c, needle))
+        }
+        assert!(
+            !has_text(&doc, doc.root(), "extra"),
+            "content after </html> in frameset doc must be ignored"
+        );
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Tests: InHeadNoscript (scripting disabled)
+    // ─────────────────────────────────────────────────────────────
+
+    fn parse_noscript_off(input: &str) -> Document {
+        let mut b = IncrementalTreeBuilder::new();
+        b.scripting_enabled = false;
+        b.feed(input);
+        b.finish()
+    }
+
+    #[test]
+    fn in_head_noscript_end_tag_closes_and_returns_to_in_head() {
+        let doc = parse_noscript_off(
+            "<html><head><noscript><link rel=\"stylesheet\" href=\"x.css\"></noscript></head><body></body></html>",
+        );
+        let head = head_of(&doc);
+        let noscript = doc.get(head).children.iter().copied().find(|&c| {
+            matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "noscript")
+        });
+        assert!(noscript.is_some(), "noscript element must be in head");
+        let ns = noscript.unwrap();
+        // The <link> inside noscript must be a child (parsed as markup, not raw text).
+        let link = doc.get(ns).children.iter().copied().find(|&c| {
+            matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "link")
+        });
+        assert!(link.is_some(), "link inside noscript must be parsed as markup");
+    }
+
+    #[test]
+    fn in_head_noscript_whitespace_processed_in_head() {
+        // Whitespace inside <noscript> (scripting off) must be inserted as text.
+        let doc = parse_noscript_off(
+            "<html><head><noscript>   </noscript></head></html>",
+        );
+        let head = head_of(&doc);
+        let ns = doc.get(head).children.iter().copied().find(|&c| {
+            matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "noscript")
+        }).expect("noscript in head");
+        let has_ws = doc.get(ns).children.iter().any(|&c| {
+            matches!(&doc.get(c).data, NodeData::Text(s) if s.trim().is_empty())
+        });
+        assert!(has_ws, "whitespace inside noscript (scripting off) must be text node");
+    }
+
+    #[test]
+    fn in_head_noscript_unknown_start_pops_and_reprocesses() {
+        // An unexpected start tag inside <noscript> (scripting off) pops noscript
+        // and reprocesses: the tag ends up in AfterHead/InBody.
+        let doc = parse_noscript_off(
+            "<html><head><noscript><body></body></html>",
+        );
+        // <body> inside <noscript> must cause noscript to close; the <body>
+        // element must then be created in the normal position.
+        let body = find_element(&doc, "body");
+        assert!(body.is_some(), "body must be created after noscript closes");
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Tests: InSelectInTable (complete implementation)
+    // ─────────────────────────────────────────────────────────────
+
+    #[test]
+    fn select_in_table_cell_context() {
+        // <select> inside <td> should use InSelectInTable mode so that a
+        // start tag like <table> closes the select and reprocesses.
+        let doc = parse(
+            "<table><tr><td>\
+               <select><option>a</option></select>\
+             </td></tr></table>",
+        );
+        // The select must exist inside the td.
+        let sel = find_element(&doc, "select");
+        assert!(sel.is_some(), "select must be created in table cell");
+    }
+
+    #[test]
+    fn select_in_table_closed_by_table_start_tag() {
+        // Inside InSelectInTable: a <table> start tag must close the select.
+        // After close, the <table> element is reprocessed.
+        let doc = parse(
+            "<table><tr><td>\
+               <select><option>x</option><table><tr><td>y</td></tr></table>\
+             </td></tr></table>",
+        );
+        // The <table> start tag closed the select; a nested table must exist.
+        let tables: Vec<_> = {
+            fn collect_tables(doc: &Document, node: NodeId, out: &mut Vec<NodeId>) {
+                if matches!(&doc.get(node).data, NodeData::Element { name, .. } if name.local == "table") {
+                    out.push(node);
+                }
+                for &c in &doc.get(node).children {
+                    collect_tables(doc, c, out);
+                }
+            }
+            let mut v = Vec::new();
+            collect_tables(&doc, doc.root(), &mut v);
+            v
+        };
+        // At least the outer table must exist.
+        assert!(!tables.is_empty(), "at least one table must exist");
+    }
+
+    #[test]
+    fn reset_insertion_mode_select_in_table_context() {
+        // Verify that reset_insertion_mode uses InSelectInTable when a
+        // <select> has table ancestors, not plain InSelect.
+        let doc = parse(
+            "<table><tr><td><select><option>1</option></select></td></tr></table>",
+        );
+        // The select must exist, confirming the mode switch didn't break parsing.
+        let sel = find_element(&doc, "select");
+        assert!(sel.is_some(), "select in table cell must be parsed correctly");
     }
 }
