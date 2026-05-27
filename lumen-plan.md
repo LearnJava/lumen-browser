@@ -61,7 +61,7 @@
 
 ### Уникальные фичи (§12) — план на Phase 1-4
 - ⬜ Tab session export / import (§12.7) — Phase 1
-- 🟡 Полнотекстовый поиск по истории (§12.1) — FTS5 + bm25 готовы в `lumen-knowledge::HistoryFts`; осталась интеграция с shell (omnibox `@history` префикс) и Porter-stemmer для русского
+- ✅ Полнотекстовый поиск по истории (§12.1) — FTS5 + bm25 + omnibox-интеграция: `@history` prefix, dropdown до 7 строк, ArrowUp/Down, SearchHistory record; Porter-stemmer (Phase 2)
 - 🟡 Аннотации и заметки (§12.2) — `lumen-knowledge::Notes` storage layer готов; Range API для восстановления highlight-наложений на странице — отложено
 - 🟡 Read-later / офлайн-чтение (§12.3) — `lumen-knowledge::ReadLater` storage layer готов (status, tags, FTS5); фоновый downloader для ресурсов при save и UI отложены
 - ⬜ Поиск по содержимому открытых вкладок (§12.4) — Phase 2
