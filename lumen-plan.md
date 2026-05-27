@@ -11,7 +11,6 @@
 Формат строки резервации: `- 🔄 <имя задачи> [PN] — <имя ветки> — <YYYY-MM-DD>`.
 
 - 🔄 SUBSYSTEMS.md: split per-crate + translate to English [P3] — subsystems-split — 2026-05-19
-- 🔄 forms-validity: ValidityState + constraint validation blocking submit [P1] — p1-forms-validity — 2026-05-27
 
 ## Статус реализации
 
