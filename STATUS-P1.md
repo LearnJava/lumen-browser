@@ -1,4 +1,4 @@
-In progress: —
+In progress: visible-text-iter  branch: p1-visible-text-iter
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.

@@ -20,6 +20,7 @@ pub mod selection;
 pub mod snapshot;
 pub mod stacking;
 pub mod style;
+pub mod text_iter;
 
 pub use counters::{format_counter, precompute_counters, CounterMap, CounterSnapshot};
 pub use animation::{
@@ -40,6 +41,7 @@ pub use property_trees::{
     Mat4, PropertyTreeNodeId, PropertyTrees, ScrollNode, ScrollTree, TransformNode, TransformTree,
 };
 pub use selection::{caret_at_point, selection_rects};
+pub use text_iter::{collect_visible_text, TextFragment};
 pub use snapshot::serialize_layout_tree;
 pub use stacking::{
     box_can_own_stacking_context, creates_stacking_context, PaintOrder, PaintPhase,

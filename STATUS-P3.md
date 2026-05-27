@@ -12,6 +12,7 @@ Next:
 - click-hint-overlay (7B.2): lumen_layout::collect_clickable_elements() готов (P1 done 2026-05-27). P3 wire-up: вызвать после layout, построить overlay FillRect на каждый ClickableElement, клавиша-подсказки (f + hint-key) активируют клик по NodeId.
 
 Queue (Wave 2):
+- find-in-page-regex (7B.5): lumen_layout::collect_visible_text() + TextFragment готовы (P1 done 2026-05-27, branch p1-visible-text-iter). P3 wire-up: regex UI строки + highlight через FillRect overlay поверх найденных TextFragment.rect; next/prev cycling; case-insensitive regex matching по TextFragment.text.
 - mixed-content-enforcement: применить lumen-network::classify_subresource_request в HttpClient — блокировать blockable mixed-content до TCP connect; classifier готов, enforcement нет
 - sandbox-dom-apply: применить SandboxFlags из <iframe sandbox> в shell при навигации iframe — ограничить JS/forms/popups; SandboxFlags::parse_sandbox_value готов
 - fts-omnibox: интегрировать lumen-knowledge::HistoryFts с omnibox — @history prefix + Porter stemmer для русского языка
