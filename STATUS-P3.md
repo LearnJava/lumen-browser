@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: click-hint-overlay (7B.2)  branch: p3-click-hint-overlay
+Next step: DONE — hints.rs + handle_hint_key + activate_node + overlay paint
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.

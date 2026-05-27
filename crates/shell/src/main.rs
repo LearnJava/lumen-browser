@@ -20,6 +20,7 @@ mod address_bar;
 mod animation_scheduler;
 mod find;
 mod forms;
+mod hints;
 mod links;
 mod momentum_anim;
 mod runtime;
@@ -212,6 +213,7 @@ fn run_window_mode(
         epoch: std::time::Instant::now(),
         find: find::FindState::default(),
         address_bar: address_bar::AddressBarState::default(),
+        hint: hints::HintState::default(),
         scroll_y: initial_scroll.1,
         scroll_x: initial_scroll.0,
         content_height: 0.0,
@@ -817,6 +819,8 @@ enum KeyCommand {
     ScrollLineRight,
     /// Горизонтальный скролл на одну колонку влево (стрелка влево).
     ScrollLineLeft,
+    /// Открыть hint-режим: показать kbd-бейджи на всех кликабельных элементах (F).
+    HintModeOpen,
 }
 
 /// Маппинг физической клавиши + модификаторов на shell-action.
@@ -826,6 +830,7 @@ enum KeyCommand {
 /// Esc без модификаторов → Exit.
 /// Ctrl+W                → Exit.
 /// Ctrl+F                → FindOpen.
+/// F (без модификаторов) → HintModeOpen (kbd-навигация по ссылкам/кнопкам).
 /// ↓ / ↑                 → ScrollLineDown / ScrollLineUp (без модификаторов).
 /// → / ←                 → ScrollLineRight / ScrollLineLeft (без модификаторов).
 /// PageDown / PageUp     → ScrollPageDown / ScrollPageUp.
@@ -846,6 +851,7 @@ fn keybinding_for(code: KeyCode, mods: ModifiersState) -> Option<KeyCommand> {
         KeyCode::Escape if no_mods => Some(KeyCommand::Exit),
         KeyCode::KeyW if ctrl_only => Some(KeyCommand::Exit),
         KeyCode::KeyF if ctrl_only => Some(KeyCommand::FindOpen),
+        KeyCode::KeyF if no_mods => Some(KeyCommand::HintModeOpen),
         KeyCode::KeyL if ctrl_only => Some(KeyCommand::OpenAddressBar),
         KeyCode::F6 if no_mods => Some(KeyCommand::OpenAddressBar),
         KeyCode::ArrowLeft if alt_only => Some(KeyCommand::HistoryBack),
@@ -1906,6 +1912,10 @@ struct Lumen {
     /// Состояние Ctrl+L адресной строки. Открыт ли бар и текущий ввод.
     /// Закрывается при навигации (commit) и при Esc.
     address_bar: address_bar::AddressBarState,
+    /// Click-hint overlay: vimium-style kbd-навигация по кликабельным элементам.
+    /// Открывается клавишей F; закрывается Escape, успешной активацией,
+    /// открытием find/address bar или переходом на другую страницу.
+    hint: hints::HintState,
     /// Текущее вертикальное смещение страницы (CSS px). 0 — верх документа.
     /// Растёт вниз, клампится в `[0, max(0, content_height − viewport_height)]`.
     /// На load/reload сбрасывается в 0.
@@ -3083,6 +3093,14 @@ impl ApplicationHandler<LoadEvent> for Lumen {
 
                 let scroll_y = self.scroll_y;
                 let scroll_x = self.scroll_x;
+
+                // Hint overlay: viewport-locked бейджи kbd-навигации.
+                // Добавляются последними → рисуются поверх scrollbar/tooltip.
+                if self.hint.is_active() {
+                    let mut hint_cmds = hints::build_hints_overlay(&self.hint, scroll_x, scroll_y);
+                    overlay_buf.append(&mut hint_cmds);
+                }
+
                 if let Some(r) = self.renderer.as_mut() {
                     // Priority: animated DL > find-highlighted DL > base DL.
                     let page: &[lumen_paint::DisplayCommand] = anim_dl
@@ -3123,6 +3141,13 @@ impl Lumen {
             return;
         }
 
+        // Hint-режим: все клавиши идут в него пока активен.
+        // Esc=close, буква=сужение/активация хинта.
+        if self.hint.is_active() {
+            self.handle_hint_key(code, key_event);
+            return;
+        }
+
         let Some(cmd) = keybinding_for(code, self.modifiers) else {
             return;
         };
@@ -3158,13 +3183,28 @@ impl Lumen {
             }
             KeyCommand::Exit => event_loop.exit(),
             KeyCommand::FindOpen => {
+                self.hint.close();
                 self.find.open();
                 self.request_redraw();
             }
             KeyCommand::OpenAddressBar => {
+                self.hint.close();
                 let current = self.source.url_str().unwrap_or("").to_owned();
                 self.address_bar.open(&current);
                 self.request_redraw();
+            }
+            KeyCommand::HintModeOpen => {
+                if let (Some(lb), Some(src)) =
+                    (self.layout_box.as_ref(), self.layout_source.as_ref())
+                {
+                    let doc = src.document.lock().unwrap();
+                    let elements = lumen_layout::collect_clickable_elements(lb, &doc);
+                    drop(doc);
+                    if !elements.is_empty() {
+                        self.hint.open(elements);
+                        self.request_redraw();
+                    }
+                }
             }
             KeyCommand::HistoryBack => self.navigate_back(),
             KeyCommand::HistoryForward => self.navigate_forward(),
@@ -3189,6 +3229,7 @@ impl Lumen {
     /// затем загрузить `source` как новую страницу.
     /// Очищает `nav_fwd` (аналог браузера при навигации вперёд из середины истории).
     fn navigate_to(&mut self, source: PageSource) {
+        self.hint.close();
         // Snapshot current page into bfcache if it has an HTML source.
         if let Some(ref ls) = self.layout_source
             && let Some(ref html) = ls.html_source
@@ -3410,6 +3451,90 @@ impl Lumen {
                     self.find.append_str(text);
                     self.scroll_to_active_match();
                     self.request_redraw();
+                }
+            }
+        }
+    }
+
+    /// Обрабатывает клавишный ввод пока hint-режим активен.
+    ///
+    /// `Escape` — закрыть overlay. Любой одиночный символ (строчный ASCII) —
+    /// передаётся в `HintState::push_char`; при уникальном совпадении вызывается
+    /// `activate_node`. Нераспознанные клавиши игнорируются.
+    fn handle_hint_key(&mut self, code: KeyCode, key_event: &KeyEvent) {
+        if matches!(code, KeyCode::Escape) && !key_event.repeat {
+            self.hint.close();
+            self.request_redraw();
+            return;
+        }
+        if let Some(text) = key_event.text.as_ref() {
+            for c in text.chars() {
+                if c.is_ascii_lowercase() {
+                    match self.hint.push_char(c) {
+                        hints::HintResult::Activate(node_id) => {
+                            self.activate_node(node_id);
+                        }
+                        hints::HintResult::Partial | hints::HintResult::NoMatch => {}
+                    }
+                    self.request_redraw();
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Активировать DOM-узел `node_id` как будто по нему кликнули мышью.
+    ///
+    /// Диспатчит JS click-событие, обрабатывает form-действие (checkbox/radio),
+    /// и навигирует по ссылке если узел внутри `<a href>`. Используется
+    /// hint-режимом для активации элемента без участия мыши.
+    fn activate_node(&mut self, node_id: NodeId) {
+        // JS click dispatch (bubbling от узла до document).
+        #[cfg(feature = "quickjs")]
+        if let Some(ctx) = self.js_ctx.as_ref() {
+            let script = format!("_lumen_dispatch_bubble({}, 'click')", node_id.index());
+            ctx.eval_js(&script);
+            if let Some(nav) = ctx.take_navigate_request() {
+                self.pending_js_navigate = Some(nav);
+            }
+        }
+        // Form action classification.
+        let form_action = if let Some(src) = self.layout_source.as_ref() {
+            forms::classify_click(&src.document.lock().unwrap(), node_id)
+        } else {
+            forms::FormClickAction::Nothing
+        };
+        match form_action {
+            forms::FormClickAction::ToggleCheckbox(id) => {
+                if let Some(src) = self.layout_source.as_mut() {
+                    forms::toggle_checkbox(&mut src.document.lock().unwrap(), id);
+                }
+                self.relayout();
+            }
+            forms::FormClickAction::ToggleRadio { clicked, .. } => {
+                if let Some(src) = self.layout_source.as_mut() {
+                    forms::toggle_checkbox(&mut src.document.lock().unwrap(), clicked);
+                }
+                self.relayout();
+            }
+            forms::FormClickAction::OpenColorPicker(id) => {
+                self.color_picker_node = Some(id);
+                if let Some(w) = self.window.as_ref() {
+                    w.request_redraw();
+                }
+            }
+            forms::FormClickAction::SubmitForm(_) | forms::FormClickAction::Nothing => {
+                // Link navigation.
+                let href = self.layout_source.as_ref().and_then(|src| {
+                    links::find_link_href(&src.document.lock().unwrap(), node_id)
+                });
+                if let Some(href) = href {
+                    if let Some(frag) = links::fragment_only(&href) {
+                        self.navigate_fragment(frag.to_owned());
+                    } else if links::is_navigable_href(&href) {
+                        let resolved = self.source.resolve_href(&href);
+                        self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                    }
                 }
             }
         }
@@ -4284,10 +4409,12 @@ mod tests {
     }
 
     #[test]
-    fn keybinding_plain_f_is_none() {
-        // Без Ctrl — обычная буква, не команда. Иначе посимвольный ввод
-        // не работал бы (например, в будущем omnibox).
-        assert_eq!(keybinding_for(KeyCode::KeyF, ModifiersState::empty()), None);
+    fn keybinding_plain_f_opens_hints() {
+        // F без модификаторов открывает hint-режим kbd-навигации.
+        assert_eq!(
+            keybinding_for(KeyCode::KeyF, ModifiersState::empty()),
+            Some(KeyCommand::HintModeOpen)
+        );
     }
 
     #[test]

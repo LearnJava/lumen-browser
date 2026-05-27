@@ -1182,7 +1182,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/scroll_snap.rs:33` **fn** `find_scroll_snap_y` — CSS Scroll Snap L1 — returns the Y scroll offset to snap to, or `None`
 `crates/engine/paint/src/scroll_snap.rs:54` **fn** `find_scroll_snap_y_proximity` — CSS Scroll Snap L1 — same as [`find_scroll_snap_y`] but restricts candidates
 
-## lumen-shell  (116 symbols)
+## lumen-shell  (126 symbols)
 
 `crates/shell/src/address_bar.rs:33` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
 `crates/shell/src/address_bar.rs:43` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
@@ -1231,6 +1231,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/forms.rs:359` **fn** `build_color_picker` — Build a color-swatch picker anchored below `anchor` (document coordinates)
 `crates/shell/src/forms.rs:396` **fn** `hit_color_swatch` — If viewport-space point `(px, py)` lands on a swatch, return its `[r, g, b]`
 `crates/shell/src/forms.rs:417` **fn** `swatch_to_css_color` — Format `[r, g, b]` as CSS `#rrggbb`
+`crates/shell/src/hints.rs:18` **struct** `HintItem` — Hint badge for one clickable element
+`crates/shell/src/hints.rs:27` **struct** `HintState` — Keyboard hint mode state machine
+`crates/shell/src/hints.rs:38` **enum** `HintResult` — Result returned by [`HintState::push_char`]
+`crates/shell/src/hints.rs:49` **fn** `is_active` — Whether the hint overlay is currently visible
+`crates/shell/src/hints.rs:54` **fn** `open` — Open hint mode with a snapshot of the current page's clickable elements
+`crates/shell/src/hints.rs:63` **fn** `close` — Dismiss the overlay without activating anything
+`crates/shell/src/hints.rs:71` **fn** `push_char` — Record one typed character and return the resulting state
+`crates/shell/src/hints.rs:99` **fn** `typed` — Characters typed so far — used to dim non-matching badges
+`crates/shell/src/hints.rs:107` **fn** `items` — Compute viewport-space hint items for the current scroll offsets
+`crates/shell/src/hints.rs:172` **fn** `build_hints_overlay` — Build the viewport-locked overlay display list for all active hint badges
 `crates/shell/src/links.rs:15` **fn** `find_link_href` — Walk up the ancestor chain from `node_id` to find the nearest `<a>` element
 `crates/shell/src/links.rs:43` **fn** `is_navigable_href` — Return true if `href` is a URL scheme the browser should navigate to
 `crates/shell/src/links.rs:53` **fn** `fragment_only` — If `href` is a fragment-only reference (starts with `#`), return the
@@ -1676,4 +1686,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 1620 symbols in 17 crates*
+*Total: 1630 symbols in 17 crates*
