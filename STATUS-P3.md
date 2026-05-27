@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: shadow-dom-js  branch: p3-shadow-dom-js
+Next step: add _lumen_attach_shadow / _lumen_get_shadow_root natives + JS shim  crates/js/src/dom.rs
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.

@@ -14,7 +14,7 @@ use std::sync::{
 };
 
 use lumen_core::ext::{JsFetchProvider, JsWebSocketProvider, JsWsEvent};
-use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName};
+use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName, ShadowRootMode};
 use rquickjs::{Ctx, Function, Result as QjResult};
 
 use lumen_core::WebStorage;
@@ -904,6 +904,54 @@ fn install_primitives(
         });
     }
 
+    // ── Shadow DOM ───────────────────────────────────────────────────────────────
+    // Attaches a new shadow root to `nid` and returns the shadow root NodeId.
+    // `mode`: "open" | "closed".  Triggers layout dirty so the composed tree rebuilds.
+    {
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        reg!("_lumen_attach_shadow", move |nid: u32, mode: String| -> u32 {
+            let mut doc = d.lock().unwrap();
+            let host = NodeId::from_index(nid as usize);
+            let m = if mode == "closed" {
+                ShadowRootMode::Closed
+            } else {
+                ShadowRootMode::Open
+            };
+            let shadow = doc.attach_shadow(host, m);
+            dirty.store(true, Ordering::Relaxed);
+            shadow.index() as u32
+        });
+    }
+    // Returns the shadow root NodeId for `nid` if the root is Open, else None.
+    // Closed roots are intentionally hidden from JS (encapsulation contract).
+    {
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_shadow_root", move |nid: u32| -> Option<u32> {
+            let doc = d.lock().unwrap();
+            let host = NodeId::from_index(nid as usize);
+            doc.shadow_root_of(host).and_then(|sr| {
+                if matches!(
+                    doc.get(sr).data,
+                    NodeData::ShadowRoot { mode: ShadowRootMode::Open }
+                ) {
+                    Some(sr.index() as u32)
+                } else {
+                    None
+                }
+            })
+        });
+    }
+    // Returns true when `nid` is a shadow-root node (useful for JS wrapper dispatch).
+    {
+        let d = Arc::clone(&doc);
+        reg!("_lumen_is_shadow_root", move |nid: u32| -> bool {
+            let doc = d.lock().unwrap();
+            let id = NodeId::from_index(nid as usize);
+            matches!(doc.get(id).data, NodeData::ShadowRoot { .. })
+        });
+    }
+
     Ok(())
 }
 
@@ -1256,6 +1304,63 @@ function _lumen_make_style(nid) {
     });
 }
 
+// ── ShadowRoot wrapper ────────────────────────────────────────────────────────
+// Wraps a shadow-root NodeId as a DocumentFragment-like ShadowRoot object.
+// `mode`     : 'open' | 'closed' (stored for the `.mode` property)
+// `host_nid` : NodeId of the shadow host element
+
+function _lumen_make_shadow_root(nid, mode, host_nid) {
+    var _style = _lumen_make_style(nid);
+    var sr = {
+        __nid__:          nid,
+        __isShadowRoot__: true,
+        mode:             mode,
+        get host()        { return _lumen_make_element(host_nid); },
+        get innerHTML()   { return _lumen_get_inner_html(nid); },
+        set innerHTML(v)  { _lumen_set_inner_html(nid, String(v)); },
+        get textContent() { return _lumen_get_text_content(nid); },
+        set textContent(v){ _lumen_set_text_content(nid, String(v)); },
+        get style()       { return _style; },
+        querySelector:    function(sel) {
+            var n = _lumen_u2n(_lumen_query_selector(String(sel)));
+            return n !== null ? _lumen_make_element(n) : null;
+        },
+        querySelectorAll: function(sel) {
+            return _lumen_query_selector_all(String(sel)).map(_lumen_make_element);
+        },
+        getElementById:   function(id) {
+            var n = _lumen_u2n(_lumen_get_element_by_id(String(id)));
+            return n !== null ? _lumen_make_element(n) : null;
+        },
+        appendChild:      function(c) {
+            if (c && c.__nid__ !== undefined) {
+                _lumen_append_child(nid, c.__nid__);
+                _lumen_ce_maybe_connected(c);
+            }
+            return c;
+        },
+        removeChild:      function(c) {
+            if (c && c.__nid__ !== undefined) {
+                _lumen_remove_child(nid, c.__nid__);
+                _lumen_ce_maybe_disconnected(c);
+            }
+            return c;
+        },
+        addEventListener:    function(type, fn) { _lumen_add_listener(nid, type, fn); },
+        removeEventListener: function(type, fn) { _lumen_rm_listener(nid, type, fn); },
+        dispatchEvent:       function(evt) {
+            if (!evt) return true;
+            evt.target = this; evt.currentTarget = this;
+            return _lumen_dispatch(nid, evt);
+        },
+    };
+    Object.defineProperty(sr, 'children', {
+        get: function() { return _lumen_get_children(nid).map(_lumen_make_element); },
+        enumerable: false, configurable: true,
+    });
+    return sr;
+}
+
 // ── Element factory ───────────────────────────────────────────────────────────
 
 function _lumen_make_element(nid) {
@@ -1278,15 +1383,26 @@ function _lumen_make_element(nid) {
         get innerHTML()      { return _lumen_get_inner_html(nid); },
         set innerHTML(v)     { _lumen_set_inner_html(nid, String(v)); },
         getAttribute:    function(n)    { return _lumen_u2n(_lumen_get_attr(nid, String(n))); },
-        setAttribute:    function(n, v) { _lumen_set_attr(nid, String(n), String(v)); },
+        setAttribute:    function(n, v) {
+            var attrName = String(n);
+            var oldVal   = _lumen_u2n(_lumen_get_attr(nid, attrName));
+            _lumen_set_attr(nid, attrName, String(v));
+            _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, String(v));
+        },
         removeAttribute: function(n)    { _lumen_remove_attr(nid, String(n)); },
         hasAttribute:    function(n)    { return _lumen_get_attr(nid, String(n)) !== undefined; },
         appendChild:     function(c) {
-            if (c && c.__nid__ !== undefined) _lumen_append_child(nid, c.__nid__);
+            if (c && c.__nid__ !== undefined) {
+                _lumen_append_child(nid, c.__nid__);
+                _lumen_ce_maybe_connected(c);
+            }
             return c;
         },
         removeChild:     function(c) {
-            if (c && c.__nid__ !== undefined) _lumen_remove_child(nid, c.__nid__);
+            if (c && c.__nid__ !== undefined) {
+                _lumen_remove_child(nid, c.__nid__);
+                _lumen_ce_maybe_disconnected(c);
+            }
             return c;
         },
         querySelector:    function(sel) {
@@ -1318,7 +1434,19 @@ function _lumen_make_element(nid) {
             }
             return null;
         },
+        attachShadow: function(init) {
+            var m = (init && init.mode === 'closed') ? 'closed' : 'open';
+            var sr_nid = _lumen_attach_shadow(nid, m);
+            return _lumen_make_shadow_root(sr_nid, m, nid);
+        },
     };
+    Object.defineProperty(_obj, 'shadowRoot', {
+        get: function() {
+            var sr_nid = _lumen_u2n(_lumen_get_shadow_root(nid));
+            return sr_nid !== null ? _lumen_make_shadow_root(sr_nid, 'open', nid) : null;
+        },
+        enumerable: false, configurable: true,
+    });
     Object.defineProperty(_obj, 'parentElement', {
         get: function() {
             var pid = _lumen_u2n(_lumen_get_parent(nid));
@@ -1379,6 +1507,117 @@ var document = {
 var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
 var confirm  = function()  { return false; };
 var prompt   = function()  { return null; };
+
+// ── Custom Elements registry ──────────────────────────────────────────────────
+// Maps lower-case tag name → { ctor, observedAttributes: string[] }
+var _lumen_ce_registry = {};
+// Maps tag name → array of resolve callbacks for whenDefined().
+var _lumen_ce_pending  = {};
+
+// Calls connectedCallback on `el` if its tag is in the registry.
+function _lumen_ce_maybe_connected(el) {
+    if (!el || el.__nid__ === undefined) return;
+    var tag   = _lumen_get_tag_name(el.__nid__).toLowerCase();
+    var entry = _lumen_ce_registry[tag];
+    if (!entry) return;
+    if (!el.__ceUpgraded__) {
+        el.__ceUpgraded__ = true;
+    }
+    if (typeof entry.ctor.prototype.connectedCallback === 'function') {
+        try { entry.ctor.prototype.connectedCallback.call(el); } catch(e) {
+            _lumen_console_error('CE connectedCallback: ' + e);
+        }
+    }
+}
+
+// Calls disconnectedCallback on `el` if its tag is in the registry.
+function _lumen_ce_maybe_disconnected(el) {
+    if (!el || el.__nid__ === undefined) return;
+    var tag   = _lumen_get_tag_name(el.__nid__).toLowerCase();
+    var entry = _lumen_ce_registry[tag];
+    if (!entry) return;
+    if (typeof entry.ctor.prototype.disconnectedCallback === 'function') {
+        try { entry.ctor.prototype.disconnectedCallback.call(el); } catch(e) {
+            _lumen_console_error('CE disconnectedCallback: ' + e);
+        }
+    }
+}
+
+// Calls attributeChangedCallback on the element at `nid` if applicable.
+function _lumen_ce_maybe_attr_changed(nid, attrName, oldVal, newVal) {
+    var tag   = _lumen_get_tag_name(nid).toLowerCase();
+    var entry = _lumen_ce_registry[tag];
+    if (!entry) return;
+    if (entry.observedAttributes.indexOf(attrName) < 0) return;
+    if (typeof entry.ctor.prototype.attributeChangedCallback === 'function') {
+        try {
+            entry.ctor.prototype.attributeChangedCallback.call(
+                _lumen_make_element(nid), attrName, oldVal, newVal
+            );
+        } catch(e) {
+            _lumen_console_error('CE attributeChangedCallback: ' + e);
+        }
+    }
+}
+
+// Upgrades a single element wrapper: marks upgraded and calls connectedCallback.
+function _lumen_ce_upgrade_element(el, entry) {
+    if (!el || el.__ceUpgraded__) return;
+    el.__ceUpgraded__ = true;
+    if (typeof entry.ctor.prototype.connectedCallback === 'function') {
+        try { entry.ctor.prototype.connectedCallback.call(el); } catch(e) {
+            _lumen_console_error('CE connectedCallback (upgrade): ' + e);
+        }
+    }
+}
+
+// Upgrades all DOM elements matching `tag` that haven't been upgraded yet.
+function _lumen_ce_upgrade_all(tag) {
+    var nids = _lumen_query_selector_all(tag);
+    var entry = _lumen_ce_registry[tag];
+    if (!entry) return;
+    for (var i = 0; i < nids.length; i++) {
+        _lumen_ce_upgrade_element(_lumen_make_element(nids[i]), entry);
+    }
+}
+
+var customElements = {
+    define: function(name, ctor, options) {
+        name = String(name).toLowerCase();
+        if (_lumen_ce_registry[name]) return;
+        var observed = (ctor.observedAttributes && ctor.observedAttributes.length)
+            ? ctor.observedAttributes.slice()
+            : [];
+        _lumen_ce_registry[name] = { ctor: ctor, observedAttributes: observed };
+        _lumen_ce_upgrade_all(name);
+        var pending = _lumen_ce_pending[name];
+        if (pending) {
+            for (var i = 0; i < pending.length; i++) {
+                try { pending[i](ctor); } catch(e) {}
+            }
+            delete _lumen_ce_pending[name];
+        }
+    },
+    get: function(name) {
+        var entry = _lumen_ce_registry[String(name).toLowerCase()];
+        return entry ? entry.ctor : undefined;
+    },
+    whenDefined: function(name) {
+        name = String(name).toLowerCase();
+        var entry = _lumen_ce_registry[name];
+        if (entry) return Promise.resolve(entry.ctor);
+        return new Promise(function(resolve) {
+            if (!_lumen_ce_pending[name]) _lumen_ce_pending[name] = [];
+            _lumen_ce_pending[name].push(resolve);
+        });
+    },
+    upgrade: function(element) {
+        if (!element || element.__nid__ === undefined) return;
+        var tag   = _lumen_get_tag_name(element.__nid__).toLowerCase();
+        var entry = _lumen_ce_registry[tag];
+        if (entry) _lumen_ce_upgrade_element(element, entry);
+    },
+};
 
 // ── location (HTML LS §7.7 + WHATWG URL §8) ──────────────────────────────────
 // _LUMEN_PAGE_URL injected by Rust before this shim runs.
@@ -4822,5 +5061,161 @@ mod tests {
         let reqs2 = rt.take_lazy_image_requests();
         assert_eq!(reqs2.len(), 1);
         assert_eq!(reqs2[0].1, "dup.png", "first registration URL must win");
+    }
+
+    // ── Shadow DOM JS bindings ────────────────────────────────────────────────
+
+    #[test]
+    fn attach_shadow_returns_shadow_root() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(r#"
+            var host = document.createElement('div');
+            document.body.appendChild(host);
+            var sr = host.attachShadow({ mode: 'open' });
+            sr !== null && sr.__isShadowRoot__ === true && sr.mode === 'open'
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn shadow_root_getter_returns_open_root() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(r#"
+            var h2 = document.createElement('section');
+            document.body.appendChild(h2);
+            h2.attachShadow({ mode: 'open' });
+            h2.shadowRoot !== null && h2.shadowRoot.__isShadowRoot__ === true
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn shadow_root_getter_null_for_closed() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(r#"
+            var h3 = document.createElement('article');
+            document.body.appendChild(h3);
+            h3.attachShadow({ mode: 'closed' });
+            h3.shadowRoot === null
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn shadow_root_append_child_works() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(r#"
+            var host = document.createElement('div');
+            document.body.appendChild(host);
+            var sr = host.attachShadow({ mode: 'open' });
+            var inner = document.createElement('span');
+            sr.appendChild(inner);
+            sr.children.length === 1
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    // ── Custom Elements registry ──────────────────────────────────────────────
+
+    #[test]
+    fn custom_elements_define_and_get() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(r#"
+            function MyEl() {}
+            customElements.define('my-el', MyEl);
+            customElements.get('my-el') === MyEl
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn custom_elements_define_duplicate_ignored() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(r#"
+            function ElA() {}
+            function ElB() {}
+            customElements.define('dup-el', ElA);
+            customElements.define('dup-el', ElB); // should be ignored
+            customElements.get('dup-el') === ElA
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn custom_elements_connected_callback_called_on_define() {
+        let rt = runtime_with_dom(make_doc());
+        // Inject a custom element into DOM *before* define(); upgrade must fire.
+        rt.eval(r#"
+            var _connected_count = 0;
+            var _ce_el = document.createElement('x-counter');
+            document.body.appendChild(_ce_el);
+        "#).unwrap();
+        let result = rt.eval(r#"
+            function XCounter() {}
+            XCounter.prototype.connectedCallback = function() { _connected_count++; };
+            customElements.define('x-counter', XCounter);
+            _connected_count === 1
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn custom_elements_connected_callback_called_on_append() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(r#"
+            var _cb_count = 0;
+            function XBtn() {}
+            XBtn.prototype.connectedCallback = function() { _cb_count++; };
+            customElements.define('x-btn', XBtn);
+            var el = document.createElement('x-btn');
+            document.body.appendChild(el);
+            _cb_count === 1
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn custom_elements_attribute_changed_callback() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(r#"
+            var _attr_log = [];
+            function XCard() {}
+            XCard.observedAttributes = ['title', 'color'];
+            XCard.prototype.attributeChangedCallback = function(name, old, next) {
+                _attr_log.push(name + ':' + old + '->' + next);
+            };
+            customElements.define('x-card', XCard);
+            var card = document.createElement('x-card');
+            document.body.appendChild(card);
+            card.setAttribute('title', 'hello');
+            card.setAttribute('color', 'red');
+            card.setAttribute('ignored', 'yes'); // not in observedAttributes
+            _attr_log.join('|') === 'title:null->hello|color:null->red'
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn custom_elements_when_defined_returns_promise() {
+        let rt = runtime_with_dom(make_doc());
+        // whenDefined for an already-registered element must return a Promise.
+        let result = rt.eval(r#"
+            function XBox() {}
+            customElements.define('x-box', XBox);
+            var p = customElements.whenDefined('x-box');
+            typeof p === 'object' && typeof p.then === 'function'
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn custom_elements_when_defined_pending_returns_promise() {
+        let rt = runtime_with_dom(make_doc());
+        // whenDefined for an unknown element must also return a Promise.
+        let result = rt.eval(r#"
+            var p2 = customElements.whenDefined('x-future');
+            typeof p2 === 'object' && typeof p2.then === 'function'
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
 }
