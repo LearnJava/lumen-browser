@@ -1,5 +1,5 @@
-In progress: none (ready for next task)
-Next step: (check lumen-plan.md for Phase 2 roadmap — all P1 Wave 2 ready for pickup)
+In progress: extras-p2 (object-fit, variable fonts, Print PDF)  branch: p1-extras-p2
+Next step: Phase 2 — Implement full pagination algorithm (block tree walker, page generation)
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.

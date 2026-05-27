@@ -15,6 +15,7 @@
 pub mod animation;
 pub mod box_tree;
 pub mod counters;
+pub mod pagination;
 pub mod property_trees;
 pub mod selection;
 pub mod selector_query;
@@ -36,6 +37,7 @@ pub use box_tree::{
     layout_measured_hyp, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
     PseudoKind, SvgShapeKind, ViewBox,
 };
+pub use pagination::{paginate, Page, PageFragment, PaginationContext};
 pub use property_trees::{
     compute_local_transform, forward_box_transform, transform_fns_to_matrix,
     ClipNode, ClipTree, EffectNode, EffectTree,
