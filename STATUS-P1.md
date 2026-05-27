@@ -1,5 +1,5 @@
-In progress: extras-p2 (object-fit, variable fonts, Print PDF)  branch: p1-extras-p2
-Next step: Phase 2 — Implement full pagination algorithm (block tree walker, page generation)
+In progress: none (ready for next task)
+Next step: (check lumen-plan.md Wave 2 queue — avif-decoder, webgl-context, etc.)
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -9,6 +9,7 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
 Recent:
+- extras-p2 (5++): object-fit ✅ + variable fonts ✅ + Print PDF Phase 1 (pagination module) 2026-05-27
 - glyph-atlas-eviction (10G.1): LRU tracking + get_lru_candidates() + remove_keys() для эвикции, 4 новых теста, Phase 1 завершена 2026-05-27
 - fts-omnibox (8F.1, Wave 1): HistoryWithFts integration with lumen-storage::History — record_visit_with_text() + delete_with_fts() automatic sync hooks, 3 integration tests → 49 total PASS 2026-05-27
 - lumen-a11y-full (8G, stage 3/3): ARIA attribute application (aria-current/modal/roledescription/valuenow/min/max/text) + computed role mapping with context validation (cell/columnheader/rowheader require row; row requires table; listitem requires list; tab requires tablist; option requires listbox; treeitem requires tree; menuitem requires menu) + relationship attributes (controls/owns/flowto/details) with NodeId storage pending Document::find_by_id() + 30 new tests → 104 total PASS 2026-05-27
