@@ -10,11 +10,13 @@ use lumen_core::error::{Error, Result};
 use lumen_core::ext::NoopEventSink;
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::{Document, NodeData, NodeId};
-use lumen_layout::LayoutBox;
+use lumen_layout::{
+    computed_style_by_selector, find_box_by_selector, query_all, LayoutBox,
+};
 
 use crate::{
-    A11yNode, BoxModel, BrowserSession, ComputedProperties, ConsoleEntry, NetworkEntry, NodeRef,
-    ScrollDelta, Target, WaitCondition,
+    A11yNode, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
+    ConsoleEntry, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
 };
 
 /// Встроенный шрифт Inter-Regular (SIL OFL 1.1).
@@ -156,14 +158,15 @@ impl BrowserSession for InProcessSession {
 
     fn computed_style(&self, selector: &str) -> Result<Option<ComputedProperties>> {
         let state = self.state()?;
-        let Some(node_id) = find_first_by_selector(&state.doc, selector) else {
-            return Ok(None);
-        };
-        // Найти LayoutBox для этого node_id.
-        let Some(lb) = find_layout_box(&state.layout_root, node_id) else {
+        let Some(lb) = find_box_by_selector(&state.layout_root, &state.doc, selector) else {
             return Ok(None);
         };
         Ok(Some(style_to_properties(&lb.style)))
+    }
+
+    fn computed_style_snapshot(&self, selector: &str) -> Result<Option<ComputedStyleSnapshot>> {
+        let state = self.state()?;
+        Ok(computed_style_by_selector(&state.layout_root, &state.doc, selector))
     }
 
     fn network_log(&self) -> Result<Vec<NetworkEntry>> {
@@ -252,7 +255,9 @@ impl BrowserSession for InProcessSession {
 
     fn query(&self, selector: &str) -> Result<Vec<NodeRef>> {
         let state = self.state()?;
-        let ids = find_all_by_selector(&state.doc, selector);
+        // query_all traverses the DOM (not the layout tree) so inline elements
+        // and elements without layout boxes are included — matches querySelectorAll.
+        let ids = query_all(&state.doc, selector);
         let mut out = Vec::with_capacity(ids.len());
         for id in ids {
             let node = state.doc.get(id);
@@ -261,7 +266,8 @@ impl BrowserSession for InProcessSession {
                 _ => String::new(),
             };
             let text_content = collect_text(&state.doc, id);
-            let bounding_rect = find_layout_box(&state.layout_root, id)
+            // Inline elements have no LayoutBox in Phase 0; fall back to ZERO.
+            let bounding_rect = find_box_by_node(&state.layout_root, id)
                 .map(|lb| lb.rect)
                 .unwrap_or(Rect::ZERO);
             out.push(NodeRef {
@@ -334,136 +340,20 @@ fn collect_boxes(lb: &LayoutBox, doc: &Document, out: &mut Vec<BoxModel>) {
     }
 }
 
-/// Найти первый LayoutBox, принадлежащий узлу с данным NodeId.
-fn find_layout_box(root: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
+/// Найти LayoutBox по числовому NodeId (используется для Target::NodeId).
+///
+/// В отличие от `lumen_layout::find_box_by_selector`, работает по прямому ID,
+/// без разбора CSS-селектора.
+fn find_box_by_node(root: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
     if root.node == id {
         return Some(root);
     }
     for child in &root.children {
-        if let Some(found) = find_layout_box(child, id) {
+        if let Some(found) = find_box_by_node(child, id) {
             return Some(found);
         }
     }
     None
-}
-
-/// Простой парсер CSS-селектора — поддерживает основные формы Phase 0.
-///
-/// Поддерживаемые паттерны:
-/// - `"div"` — по тегу
-/// - `"#id"` — по id
-/// - `".class"` — по классу
-/// - `"tag#id"`, `"tag.class"` — комбинации тега с id/классом
-/// - `"tag.class1.class2"` — несколько классов
-#[derive(Debug, Default)]
-struct SimpleSelector<'a> {
-    tag: Option<&'a str>,
-    id: Option<&'a str>,
-    classes: Vec<&'a str>,
-}
-
-fn parse_simple_selector(s: &str) -> SimpleSelector<'_> {
-    let mut sel = SimpleSelector::default();
-    let mut rest = s;
-
-    // Тег: всё до первого '#' или '.'
-    let tag_end = rest.find(['#', '.']).unwrap_or(rest.len());
-    if tag_end > 0 {
-        sel.tag = Some(&rest[..tag_end]);
-    }
-    rest = &rest[tag_end..];
-
-    // ID и классы
-    while !rest.is_empty() {
-        if let Some(r) = rest.strip_prefix('#') {
-            let end = r.find(['#', '.']).unwrap_or(r.len());
-            sel.id = Some(&r[..end]);
-            rest = &r[end..];
-        } else if let Some(r) = rest.strip_prefix('.') {
-            let end = r.find(['#', '.']).unwrap_or(r.len());
-            sel.classes.push(&r[..end]);
-            rest = &r[end..];
-        } else {
-            break;
-        }
-    }
-
-    sel
-}
-
-fn node_matches_selector(doc: &Document, id: NodeId, sel: &SimpleSelector<'_>) -> bool {
-    let node = doc.get(id);
-    let NodeData::Element { name, attrs } = &node.data else {
-        return false;
-    };
-
-    if let Some(tag) = sel.tag
-        && !name.local.eq_ignore_ascii_case(tag)
-    {
-        return false;
-    }
-
-    if let Some(wanted_id) = sel.id {
-        let actual_id = attrs
-            .iter()
-            .find(|a| a.name.local.eq_ignore_ascii_case("id"))
-            .map(|a| a.value.as_str())
-            .unwrap_or("");
-        if actual_id != wanted_id {
-            return false;
-        }
-    }
-
-    if !sel.classes.is_empty() {
-        let class_attr = attrs
-            .iter()
-            .find(|a| a.name.local.eq_ignore_ascii_case("class"))
-            .map(|a| a.value.as_str())
-            .unwrap_or("");
-        let actual_classes: Vec<&str> = class_attr.split_whitespace().collect();
-        for wanted in &sel.classes {
-            if !actual_classes.iter().any(|c| c == wanted) {
-                return false;
-            }
-        }
-    }
-
-    true
-}
-
-/// Найти первый узел в документе, совпадающий с `selector`.
-fn find_first_by_selector(doc: &Document, selector: &str) -> Option<NodeId> {
-    let sel = parse_simple_selector(selector);
-    find_first_match(doc, doc.root(), &sel)
-}
-
-fn find_first_match(doc: &Document, id: NodeId, sel: &SimpleSelector<'_>) -> Option<NodeId> {
-    if node_matches_selector(doc, id, sel) {
-        return Some(id);
-    }
-    for &child in &doc.get(id).children.clone() {
-        if let Some(found) = find_first_match(doc, child, sel) {
-            return Some(found);
-        }
-    }
-    None
-}
-
-/// Найти все узлы, совпадающие с `selector`.
-fn find_all_by_selector(doc: &Document, selector: &str) -> Vec<NodeId> {
-    let sel = parse_simple_selector(selector);
-    let mut out = Vec::new();
-    find_all_match(doc, doc.root(), &sel, &mut out);
-    out
-}
-
-fn find_all_match(doc: &Document, id: NodeId, sel: &SimpleSelector<'_>, out: &mut Vec<NodeId>) {
-    if node_matches_selector(doc, id, sel) {
-        out.push(id);
-    }
-    for &child in &doc.get(id).children.clone() {
-        find_all_match(doc, child, sel, out);
-    }
 }
 
 /// Собрать текстовое содержимое поддерева.
@@ -601,17 +491,13 @@ fn resolve_target_point(state: &SessionState, target: &Target) -> Result<(f32, f
     match target {
         Target::Point { x, y } => Ok((*x, *y)),
         Target::Selector(sel) => {
-            let id = find_first_by_selector(&state.doc, sel).ok_or_else(|| {
-                Error::NotFound(format!("элемент не найден: {sel}"))
-            })?;
-            let lb = find_layout_box(&state.layout_root, id).ok_or_else(|| {
-                Error::NotFound(format!("layout-бокс не найден для: {sel}"))
-            })?;
+            let lb = find_box_by_selector(&state.layout_root, &state.doc, sel)
+                .ok_or_else(|| Error::NotFound(format!("элемент не найден: {sel}")))?;
             Ok((lb.rect.x + lb.rect.width / 2.0, lb.rect.y + lb.rect.height / 2.0))
         }
         Target::NodeId(raw_id) => {
             let id = NodeId::from_index(*raw_id as usize);
-            let lb = find_layout_box(&state.layout_root, id).ok_or_else(|| {
+            let lb = find_box_by_node(&state.layout_root, id).ok_or_else(|| {
                 Error::NotFound(format!("layout-бокс не найден для node_id={raw_id}"))
             })?;
             Ok((lb.rect.x + lb.rect.width / 2.0, lb.rect.y + lb.rect.height / 2.0))
@@ -705,32 +591,55 @@ mod tests {
         assert_eq!(s.current_url(), "file:///my/page.html");
     }
 
+    // ── computed_style_snapshot ──────────────────────────────────────────────
+
     #[test]
-    fn parse_simple_selector_tag_only() {
-        let sel = parse_simple_selector("div");
-        assert_eq!(sel.tag, Some("div"));
-        assert!(sel.id.is_none());
-        assert!(sel.classes.is_empty());
+    fn computed_style_snapshot_returns_typed_fields() {
+        let s = make_session(r#"<html><body><div id="box" style="opacity:0.4"></div></body></html>"#);
+        let snap = s.computed_style_snapshot("#box").expect("css snapshot");
+        assert!(snap.is_some());
+        let snap = snap.unwrap();
+        assert!((snap.opacity - 0.4).abs() < 0.001, "opacity={}", snap.opacity);
     }
 
     #[test]
-    fn parse_simple_selector_id() {
-        let sel = parse_simple_selector("#hero");
-        assert!(sel.tag.is_none());
-        assert_eq!(sel.id, Some("hero"));
+    fn computed_style_snapshot_none_for_missing() {
+        let s = make_session("<html><body><div>x</div></body></html>");
+        let snap = s.computed_style_snapshot("#nonexistent").expect("no err");
+        assert!(snap.is_none());
+    }
+
+    // ── CSS3 full selector engine ────────────────────────────────────────────
+
+    #[test]
+    fn query_descendant_combinator() {
+        let s = make_session(r#"<html><body><section><p id="inner">x</p></section></body></html>"#);
+        let nodes = s.query("section p").expect("query");
+        assert!(!nodes.is_empty(), "section p не найден");
     }
 
     #[test]
-    fn parse_simple_selector_class() {
-        let sel = parse_simple_selector(".red");
-        assert!(sel.tag.is_none());
-        assert_eq!(sel.classes, vec!["red"]);
+    fn query_compound_tag_and_class() {
+        let s = make_session(r#"<html><body><div class="hero">x</div></body></html>"#);
+        let nodes = s.query("div.hero").expect("query");
+        assert_eq!(nodes.len(), 1);
+        let empty = s.query("span.hero").expect("query");
+        assert!(empty.is_empty(), "span.hero не должен совпадать");
     }
 
     #[test]
-    fn parse_simple_selector_tag_and_class() {
-        let sel = parse_simple_selector("span.red.big");
-        assert_eq!(sel.tag, Some("span"));
-        assert_eq!(sel.classes, vec!["red", "big"]);
+    fn query_comma_selector() {
+        let s = make_session(r#"<html><body><div id="a">A</div><div id="b">B</div></body></html>"#);
+        let nodes = s.query("#a, #b").expect("query");
+        assert_eq!(nodes.len(), 2);
+    }
+
+    #[test]
+    fn computed_style_snapshot_font_weight() {
+        let s = make_session(
+            r#"<html><body><p id="t" style="font-weight:700">text</p></body></html>"#,
+        );
+        let snap = s.computed_style_snapshot("#t").expect("snap").unwrap();
+        assert_eq!(snap.font_weight.0, 700);
     }
 }
