@@ -238,6 +238,8 @@ fn run_window_mode(
         ls_storage: HashMap::new(),
         js_ctx: None,
         no_scrollbar,
+        first_paint_delivered: false,
+        first_contentful_paint_delivered: false,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -464,6 +466,13 @@ trait PersistentJs {
     /// Returns `(node_id, url)` pairs for images that entered the lazy-load margin.
     #[allow(dead_code)]
     fn take_lazy_image_requests(&self) -> Vec<(u32, String)>;
+    /// Deliver a PerformancePaintTiming entry to JS PerformanceObservers.
+    ///
+    /// `name` is `"first-paint"` or `"first-contentful-paint"`;
+    /// `start_ms` is the DOMHighResTimeStamp relative to performance.timeOrigin.
+    /// Calls `_lumen_deliver_paint_entry(name, start_ms)` in QuickJS.
+    #[allow(dead_code)]
+    fn deliver_paint_timing(&self, name: &str, start_ms: f64);
 }
 
 #[cfg(feature = "quickjs")]
@@ -528,6 +537,12 @@ impl PersistentJs for QuickPersistentJs {
     }
     fn take_lazy_image_requests(&self) -> Vec<(u32, String)> {
         self.rt.take_lazy_image_requests()
+    }
+    fn deliver_paint_timing(&self, name: &str, start_ms: f64) {
+        self.eval_js(&format!(
+            "_lumen_deliver_paint_entry({}, {start_ms})",
+            js_string_literal(name),
+        ));
     }
 }
 
@@ -1978,6 +1993,11 @@ struct Lumen {
     /// Set by `--no-scrollbar` CLI flag; used by graphic test pipeline to
     /// avoid scrollbar pixels contaminating the diff against Edge headless.
     no_scrollbar: bool,
+    /// Guards for PerformancePaintTiming entries (W3C Paint Timing §2).
+    /// `true` once the entry has been delivered to JS so we don't double-fire.
+    first_paint_delivered: bool,
+    /// `true` once `first-contentful-paint` has been delivered to JS.
+    first_contentful_paint_delivered: bool,
 }
 
 impl Lumen {
@@ -2316,6 +2336,9 @@ impl Lumen {
         self.form_state.clear();
         self.validation_tooltip = None;
         self.color_picker_node = None;
+        // Reset paint timing guards so new page fires fresh PerformancePaintTiming entries.
+        self.first_paint_delivered = false;
+        self.first_contentful_paint_delivered = false;
         if let Some(r) = self.renderer.as_mut() {
             r.set_font_provider(Some(page.font_registry.clone()));
             r.clear_images();
@@ -2865,24 +2888,22 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // HTML §8.1.5.1 «Update the rendering» — текущий порядок:
-                //   1. style flush        (нет, нет CSS-invalidation)
-                //   2. layout             (нет; DOM-мутации → relayout в шаге 6)
-                //   3. scroll             ← advance_scroll_anim + advance_momentum
-                //   4. ResizeObserver     ← delivered in relayout() after every layout
-                //      IntersectionObserver ← same (deliver_layout_observers)
-                //   5. rAF callbacks      ← run_rendering_step + JS run_animation_frame
-                //   6. layout invalidation ← relayout() если dom_dirty после rAF
-                //      после relayout → deliver_layout_observers() (ResizeObserver повторно)
-                //   7. MutationObserver   ← _lumen_flush_mutation_observers() после dispatch
-                //   8. paint              ← r.render(...)
+                // HTML §8.1.5.1 «Update the rendering» — spec-correct order:
+                //   1. scroll             ← advance_scroll_anim + advance_momentum
+                //   2. CSS Animations + Transitions tick  (spec: update animations before rAF)
+                //   3. rAF callbacks      ← runtime.run_rendering_step + JS run_animation_frame
+                //   4. layout invalidation ← relayout() if dom_dirty after rAF
+                //      → deliver_layout_observers() (ResizeObserver + IntersectionObserver)
+                //   5. paint timing       ← PerformanceObserver 'paint' entries
+                //   6. paint              ← r.render(...)
                 //
-                // Scroll обновляется ДО rAF, чтобы callback-и читали актуальный
-                // scroll_y/scroll_x (важно когда подключим scroll-events в JS).
+                // Scroll before CSS/rAF so callbacks read current scroll position.
+                // CSS animations/transitions before rAF: spec §8.1.5.1 step «update
+                // animations and send events» precedes «run animation frame callbacks».
                 let timestamp_ms =
                     self.epoch.elapsed().as_secs_f64() * 1000.0;
 
-                // Шаг 3: scroll update.
+                // Step 1: scroll update.
                 if self.advance_scroll_anim() {
                     self.request_redraw();
                 }
@@ -2890,10 +2911,28 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     self.request_redraw();
                 }
 
-                // Шаг 5: rAF callbacks + microtask checkpoint.
+                // Step 2: CSS Animations + Transitions tick (spec order: before rAF).
+                // Both schedulers are ticked once per frame and merged into a single
+                // AnimationFrame. Transition values override @keyframes when both apply.
+                if let (Some(lb), Some(src)) = (&self.layout_box, &self.layout_source) {
+                    let mut frame = self.animation_scheduler.tick(
+                        timestamp_ms,
+                        lb,
+                        &src.stylesheet,
+                    );
+                    let now_s = (timestamp_ms / 1000.0) as f32;
+                    let trans_frame = self.transition_scheduler.tick(now_s);
+                    frame.merge_from(trans_frame);
+                    if frame.has_active {
+                        self.request_redraw();
+                    }
+                    self.anim_frame = if frame.overrides.is_empty() { None } else { Some(frame) };
+                }
+
+                // Step 3: rAF callbacks + microtask checkpoint.
                 self.runtime.run_rendering_step(timestamp_ms);
 
-                // Шаг 5.1: JS requestAnimationFrame callbacks.
+                // Step 3.1: JS requestAnimationFrame callbacks.
                 // Snapshot-pattern: callbacks registered during this call go into
                 // the next frame. If any new rAF was registered (animation loop),
                 // request another redraw immediately.
@@ -2904,50 +2943,34 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     }
                 }
 
-                // Шаг 5.5: CSS Animations + Transitions tick.
-                // Анимации и переходы тикаются вместе; фреймы сливаются перед рендером.
-                // has_active в любом из них → следующий кадр запрашивается автоматически.
-                if let (Some(lb), Some(src)) = (&self.layout_box, &self.layout_source) {
-                    let mut frame = self.animation_scheduler.tick(
-                        timestamp_ms,
-                        lb,
-                        &src.stylesheet,
-                    );
-                    // CSS Transitions L1: тикаем переходы и сливаем в тот же frame.
-                    let now_s = (timestamp_ms / 1000.0) as f32;
-                    let trans_frame = self.transition_scheduler.tick(now_s);
-                    frame.merge_from(trans_frame);
-                    if frame.has_active {
-                        self.request_redraw();
-                    }
-                    self.anim_frame = if frame.overrides.is_empty() { None } else { Some(frame) };
-                }
-
-                // Шаг 5.6: CSS Transitions tick.
-                // Transitions are reactive: P4 calls sync() after computed-style
-                // changes. Here we tick each frame so active transitions produce
-                // overrides. Transition values take precedence over @keyframes.
-                // CSS: transition-* (P4 wires transition properties + calls sync())
-                {
-                    let ts_frame = self.transition_scheduler.tick(timestamp_ms as f32 / 1000.0);
-                    if ts_frame.has_active {
-                        self.request_redraw();
-                    }
-                    if !ts_frame.overrides.is_empty() {
-                        match self.anim_frame.as_mut() {
-                            Some(f) => f.merge(ts_frame),
-                            None => self.anim_frame = Some(ts_frame),
-                        }
-                    }
-                }
-
-                // Шаг 6: layout invalidation — если rAF-callback изменил DOM
+                // Step 4: layout invalidation — если rAF-callback изменил DOM
                 // (setAttribute/textContent/appendChild/etc.), делаем relayout
                 // прежде чем красить, чтобы paint отражал актуальный DOM.
+                // relayout() also delivers ResizeObserver + IntersectionObserver.
                 if self.js_ctx.as_ref().is_some_and(|j| j.take_dom_dirty()) {
                     self.relayout();
                 }
 
+                // Step 5: PerformancePaintTiming (W3C Paint Timing §2).
+                // Delivered once per page load; subsequent frames skip this block.
+                // first-paint = first frame with any painted pixel (non-default bg).
+                // first-contentful-paint = first frame with text, image, canvas, etc.
+                // Phase 0: both fire on the first non-empty display list since
+                // a page load. A page load resets both flags in apply_loaded_page.
+                #[cfg(feature = "quickjs")]
+                if let Some(js) = &self.js_ctx {
+                    let has_content = !self.display_list.is_empty();
+                    if has_content && !self.first_paint_delivered {
+                        self.first_paint_delivered = true;
+                        js.deliver_paint_timing("first-paint", timestamp_ms);
+                    }
+                    if has_content && !self.first_contentful_paint_delivered {
+                        self.first_contentful_paint_delivered = true;
+                        js.deliver_paint_timing("first-contentful-paint", timestamp_ms);
+                    }
+                }
+
+                // Step 6 (paint): build display list buffers and call renderer.
                 // Page-полоса: исходный display list + highlight-FillRect-ы
                 // перед своими DrawText (когда find открыт). Прокручивается.
                 // Overlay-полоса: find-bar + scrollbar — viewport-locked.
