@@ -734,6 +734,186 @@ fn node_name_preservation() {
     assert_eq!(btn.name, "Custom name", "aria-label should override button text");
 }
 
+// ── Stage 3: ARIA attribute application ──────────────────────────────────────
+
+#[test]
+fn aria_current_page() {
+    let doc = parse(r#"<a href="/" aria-current="page">Home</a>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let link = find_role_dfs(&tree.root, AXRole::Link).expect("link");
+    assert_eq!(link.state.current, Some(lumen_a11y::AriaCurrent::Page), "aria-current=page");
+}
+
+#[test]
+fn aria_current_step() {
+    let doc = parse(r#"<a href="/step2" aria-current="step">Step 2</a>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let node = find_role_dfs(&tree.root, AXRole::Link).expect("link");
+    assert_eq!(node.state.current, Some(lumen_a11y::AriaCurrent::Step), "aria-current=step");
+}
+
+#[test]
+fn aria_current_location() {
+    let doc = parse("<a href=\"#section\" aria-current=\"location\">Section</a>");
+    let tree = build_ax_tree(&doc, doc.root());
+    let link = find_role_dfs(&tree.root, AXRole::Link).expect("link");
+    assert_eq!(
+        link.state.current,
+        Some(lumen_a11y::AriaCurrent::Location),
+        "aria-current=location"
+    );
+}
+
+#[test]
+fn aria_current_date() {
+    let doc = parse(r#"<span role="button" aria-current="date">May 27</span>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.state.current, Some(lumen_a11y::AriaCurrent::Date), "aria-current=date");
+}
+
+#[test]
+fn aria_current_true_maps_to_page() {
+    let doc = parse(r#"<a href="/" aria-current="true">Home</a>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let link = find_role_dfs(&tree.root, AXRole::Link).expect("link");
+    assert_eq!(
+        link.state.current,
+        Some(lumen_a11y::AriaCurrent::Page),
+        "aria-current=true maps to page"
+    );
+}
+
+#[test]
+fn aria_modal() {
+    let doc = parse(r#"<div role="dialog" aria-modal="true">Modal</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let dialog = find_role_dfs(&tree.root, AXRole::Dialog).expect("dialog");
+    assert!(dialog.state.modal, "aria-modal should be true");
+}
+
+#[test]
+fn aria_roledescription() {
+    let doc = parse(r#"<div role="button" aria-roledescription="play button">Play</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.state.role_description, "play button", "aria-roledescription");
+}
+
+#[test]
+fn aria_valuenow_valuemin_valuemax() {
+    let doc = parse(r#"<input type="range" aria-valuenow="50" aria-valuemin="0" aria-valuemax="100">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let slider = find_role_dfs(&tree.root, AXRole::Slider).expect("slider");
+    assert_eq!(slider.state.value_now, "50", "aria-valuenow");
+    assert_eq!(slider.state.value_min, "0", "aria-valuemin");
+    assert_eq!(slider.state.value_max, "100", "aria-valuemax");
+}
+
+#[test]
+fn aria_valuetext() {
+    let doc = parse(r#"<div role="slider" aria-valuetext="50 degrees">Temperature</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let slider = find_role_dfs(&tree.root, AXRole::Slider).expect("slider");
+    assert_eq!(slider.state.value_text, "50 degrees", "aria-valuetext");
+}
+
+// ── Stage 3: Computed role mapping ───────────────────────────────────────────
+
+#[test]
+fn role_row_requires_table_context() {
+    let doc = parse(r#"
+        <table>
+            <tr><td>Cell</td></tr>
+        </table>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let row = find_role_dfs(&tree.root, AXRole::Row).expect("row in table");
+    assert_eq!(row.role, AXRole::Row, "row should be valid inside table");
+}
+
+#[test]
+fn role_cell_requires_row_context() {
+    let doc = parse(r#"
+        <table>
+            <tr><td>Cell</td></tr>
+        </table>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let cell = find_role_dfs(&tree.root, AXRole::Cell).expect("cell in row");
+    assert_eq!(cell.role, AXRole::Cell, "cell should be valid inside row");
+}
+
+#[test]
+fn role_listitem_requires_list_context() {
+    let doc = parse(r#"
+        <ul>
+            <li>Item 1</li>
+        </ul>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let item = find_role_dfs(&tree.root, AXRole::ListItem).expect("list item");
+    assert_eq!(item.role, AXRole::ListItem, "listitem should be valid inside list");
+}
+
+#[test]
+fn role_tab_requires_tablist_context() {
+    let doc = parse(r#"
+        <div role="tablist">
+            <button role="tab">Tab 1</button>
+        </div>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tab = find_role_dfs(&tree.root, AXRole::Tab).expect("tab");
+    assert_eq!(tab.role, AXRole::Tab, "tab should be valid inside tablist");
+}
+
+#[test]
+fn role_option_requires_listbox_context() {
+    let doc = parse(r#"
+        <div role="listbox">
+            <div role="option">Option 1</div>
+        </div>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let option = find_role_dfs(&tree.root, AXRole::Option).expect("option");
+    assert_eq!(option.role, AXRole::Option, "option should be valid inside listbox");
+}
+
+#[test]
+fn role_treeitem_requires_tree_context() {
+    let doc = parse(r#"
+        <div role="tree">
+            <div role="treeitem">Item 1</div>
+        </div>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let item = find_role_dfs(&tree.root, AXRole::TreeItem).expect("treeitem");
+    assert_eq!(item.role, AXRole::TreeItem, "treeitem should be valid inside tree");
+}
+
+#[test]
+fn invalid_role_falls_back_to_implicit() {
+    // role="row" outside of table context should fall back to implicit role
+    let doc = parse(r#"<div role="row">Not in table</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let node = find_role_dfs(&tree.root, AXRole::Row);
+    // Should fall back to implicit role (Generic) instead of Row
+    assert!(node.is_none(), "row outside table should not have Row role");
+}
+
+#[test]
+fn menuitem_requires_menu_context() {
+    let doc = parse(r#"
+        <div role="menu">
+            <div role="menuitem">Item 1</div>
+        </div>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let item = find_role_dfs(&tree.root, AXRole::MenuItem).expect("menuitem");
+    assert_eq!(item.role, AXRole::MenuItem, "menuitem should be valid inside menu");
+}
+
 fn find_with_tabindex(node: &lumen_a11y::AXNode, index: i32) -> Option<&lumen_a11y::AXNode> {
     if node.state.tab_index == Some(index) {
         return Some(node);
