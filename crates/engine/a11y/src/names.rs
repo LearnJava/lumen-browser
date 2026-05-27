@@ -105,6 +105,21 @@ pub fn compute_name(doc: &Document, node_id: NodeId) -> String {
                     return fc_text;
                 }
             }
+            "a" if node.get_attr("href").is_some() => {
+                // Link text is the text content if href is present.
+                // Links without href are not accessible links.
+                let text_content = collect_text_content(doc, node_id);
+                if !text_content.is_empty() {
+                    return text_content;
+                }
+            }
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => {
+                // Heading text is the text content recursively.
+                let text_content = collect_text_content(doc, node_id);
+                if !text_content.is_empty() {
+                    return text_content;
+                }
+            }
             "button" => {
                 // Button text comes from text content recursively.
                 // Special case: if button contains only an <img>, use img's alt.

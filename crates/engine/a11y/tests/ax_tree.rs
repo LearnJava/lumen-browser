@@ -667,6 +667,30 @@ fn button_with_icon_and_text() {
     assert_eq!(btn.name, "Save", "button with text should use text, not img");
 }
 
+#[test]
+fn link_text_from_content() {
+    let doc = parse(r#"<a href="/page">Read more</a>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let link = find_role_dfs(&tree.root, AXRole::Link).expect("link");
+    assert_eq!(link.name, "Read more", "link should use text content");
+}
+
+#[test]
+fn link_empty_href_not_link_role() {
+    let doc = parse("<a>Not a link</a>");
+    let tree = build_ax_tree(&doc, doc.root());
+    let link = find_role_dfs(&tree.root, AXRole::Link);
+    assert!(link.is_none(), "link without href should not be Link role");
+}
+
+#[test]
+fn heading_text_from_content() {
+    let doc = parse("<h1>Main Title</h1>");
+    let tree = build_ax_tree(&doc, doc.root());
+    let heading = find_role_dfs(&tree.root, AXRole::Heading).expect("heading");
+    assert_eq!(heading.name, "Main Title", "heading should use text content");
+}
+
 // ── Serialization tests ──────────────────────────────────────────────────────
 
 #[test]
