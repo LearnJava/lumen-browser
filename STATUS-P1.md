@@ -8,6 +8,120 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
-Next:
+Next (Wave 1 — бывшие P2-задачи):
+- gif-decoder: GIF87a/89a (LZW + frame loop); статичные кадры frame 0; анимация — Wave 3
+  → STATUS-P2.md:4
+- font-stretch-matcher: font-stretch % matching в FontRegistry::find_best_match (CSS Fonts L4 §5.2)
+  → STATUS-P2.md:5
+- font-variable-opsz: opsz axis wiring — font-optical-sizing из ComputedStyle → VariationCoords
+  → STATUS-P2.md:6
+- icc-color-profiles: ICC из JPEG APP2/PNG iCCP — sRGB passthrough + gamma; без полного CMS
+  → STATUS-P2.md:7
+
+Next (Wave 1 — бывшие P3-задачи):
+- fts-omnibox: lumen-knowledge::HistoryFts + omnibox @history prefix + Porter stemmer для RU
+  → STATUS-P3.md:12
+
+Queue (Wave 2 — бывший P2):
+- extras-p2: object-fit, variable fonts, Print PDF
+  → lumen-plan.md:195
+- avif-decoder: AVIF/AV1 декодер через rav1d (provisional dep)
+  → STATUS-P2.md:10
+- webgl-context: WebGL 1.0 поверх wgpu (WebGL API → wgpu calls)
+  → STATUS-P2.md:11
+- font-hinting: TrueType bytecode hinting в rasterizer
+  → STATUS-P2.md:12
+- subpixel-text: subpixel LCD rendering — RGB-stripe фильтр; toggleable prefers-reduced-motion
+  → STATUS-P2.md:13
+- svg-rasterizer: SVG basic shapes (path/circle/rect) через paint pipeline
+  → STATUS-P2.md:14
+
+Queue (Wave 2 — бывший P3):
+- http2-client: HTTP/2 через h2 crate — multiplexing; бэкэнд-замена HttpClient без смены API
+  → STATUS-P3.md:15
+- preconnect-hints: <link rel=preconnect> из preload_scanner — открыть TCP+TLS заранее
+  → STATUS-P3.md:16
+
+Queue (Phase 2 — системные P3-задачи):
+- sop-remaining: SOP checks при postMessage/storage/cookies; mixed-content блокировка до TCP;
+  DOM-применение sandbox в shell (CORS preflight ✅, enforcement остался)
+  → lumen-plan.md:202 (таблица), lumen-plan.md:324-325 (детали)
+- forms-ui: native pickers, autofill popup, validation tooltip UI (P1-логика ValidityState ✅)
+  → lumen-plan.md:332
+- picture-lazy-intersect: IntersectionObserver event source для loading="lazy" +
+  shell GPU image upload integration (P1-парсер ✅)
+  → lumen-plan.md:333
+- ime-input: IME composition events через winit IME API (compositionstart/update/end)
+  → lumen-plan.md:334
+- shadow-dom-bindings: JS bindings Element.attachShadow/customElements (P1 FlatTree ✅)
+  → lumen-plan.md:330
+
+Queue (Phase 2 — Tab UX, [P3] 7A):
+- vertical-tabs: Vertical tabs panel (toggle, drag-reorder, collapse) → shell/src/tabs/vertical.rs
+  → lumen-plan.md:237
+- tree-tabs: Tree-style tabs (parent-child) → shell/src/tabs/tree.rs
+  → lumen-plan.md:238
+- workspaces: Workspaces (изолированные группы) → shell + storage/src/workspaces.rs
+  → lumen-plan.md:239
+- split-view: Split view 2-4 viewport → shell + paint multi-viewport (координация с бывшим P2)
+  → lumen-plan.md:240
+- tab-auto-archive: Tab auto-archive (hibernate по возрасту) → shell/src/tabs/archive.rs
+  → lumen-plan.md:241
+
+Queue (Phase 2-3 — Power-user input, [P3] 7B):
+- vim-keys: Vim-style key bindings (modal) → shell/src/input/vim.rs
+  → lumen-plan.md:243
+- click-hint-overlay: Click-hint vimium-style overlay (layout-итератор clickable готов)
+  → lumen-plan.md:244
+- mouse-gestures: Mouse gestures → shell/src/input/gestures.rs
+  → lumen-plan.md:245
+- omnibox-aliases: Custom omnibox aliases → shell + user config
+  → lumen-plan.md:246
+- find-in-page-regex: regex UI + highlight overlay (collect_visible_text P1 ✅)
+  → lumen-plan.md:247
+
+Queue (Phase 2 — Privacy UX, [P3] 7C):
+- block-list-engine: EasyList + hosts files → network/src/filter/easylist.rs (impl RequestFilter)
+  → lumen-plan.md:249
+- per-site-permissions: Per-site permission UI panel → shell/src/site_settings/
+  → lumen-plan.md:250
+- cookie-banner: Cookie-banner auto-dismiss → shell/src/cookies/banner.rs (JsRuntime)
+  → lumen-plan.md:251
+- shields-widget: Shields toolbar widget (счётчик блокировок) → shell/src/toolbar/shields.rs
+  → lumen-plan.md:252
+
+Queue (Phase 2-3 — Web platform baseline, [P3] 7D):
+- webauthn: Passkeys/WebAuthn CTAP2 + navigator.credentials → network/src/webauthn.rs
+  → lumen-plan.md:254
+- tab-containers: Tab containers (storage partitioning) → storage/src/partition.rs
+  → lumen-plan.md:255
+- sidebar-panels: Sidebar web panels → shell/src/sidebar/web_panel.rs
+  → lumen-plan.md:256
+
+Queue (Phase 3+ — бывший P3):
+- service-workers: Service Worker API (fetch intercept + cache API + background sync)
+  → STATUS-P3.md:19
+- push-api: Web Push + Notifications API (VAPID, push subscription)
+  → STATUS-P3.md:20
+- profiles-system: multi-profile — cookies/history/storage per profile
+  → STATUS-P3.md:21
+- devtools-protocol: CDP subset — Elements + Console + Network
+  → STATUS-P3.md:23
+
+Queue (Phase 4+ — DevTools полный, [P3] 7E):
+- dom-inspector: DOM inspector panel (tree + attributes) → devtools + lumen-dom
+  → lumen-plan.md:258
+- computed-styles-panel: Computed styles panel → сериализация ComputedStyle (P4 expose JSON)
+  → lumen-plan.md:259
+- box-model-overlay: Box model overlay (margin/border/padding) → DisplayCommand overlay
+  → lumen-plan.md:260
+- network-panel: Network panel (live request log) → devtools слушает NetworkTransport events
+  → lumen-plan.md:261
+- js-console: JS console (eval в контексте страницы) → devtools + JsRuntime::eval
+  → lumen-plan.md:262
+
+Queue (Phase 2-3 — оригинальный P1 backlog):
+- shadow-dom-accessibility-forms-gc: Shadow DOM / Accessibility / Forms / GC
+  → lumen-plan.md:160
 
 Recent: line-clamp-layout (apply_line_clamp() в box_tree.rs: CSS Overflow L4 §3.2 multi-line truncation + ellipsis, приоритет над text-overflow:ellipsis; 6 тестов; graphic test 48) 2026-05-27, visible-text-iter (collect_visible_text + TextFragment в lumen-layout::text_iter, 10 тестов; P3 ready for find-in-page-regex) 2026-05-27, contenteditable-dom-mutations (EditInputType 12 вариантов §4.1.3, InputEvent, split_text_node, insert_text_at, delete_range, insert_paragraph_break, Document::insert_after; 15 тестов → 105 итого) 2026-05-27, details-clickable (<details>/<summary> open/closed rendering HTML5 §4.11.1: build_box filters non-summary children when open absent; collect_clickable_elements(LayoutBox, Document) → Vec<ClickableElement> для P3 click-hint overlay; ClickableKind::Link/Button/Input/Generic; 7 тестов) 2026-05-27, forms-validity (ValidityState HTML5 §4.10.21 в lumen-dom: valueMissing/typeMismatch/tooLong/tooShort/rangeUnderflow/rangeOverflow + check_validity_form + invalid_controls_in_form, build_form_submit блокирует невалидный submit, form_validity делегирует в dom, 21 тест → 89 итого) 2026-05-27, selection-range (DomPosition+Range+Selection в lumen-dom, source_node+source_char_offset в InlineSegment+InlineFrag, caret_at_point+selection_rects в lumen-layout/selection.rs, 26 тестов) 2026-05-27, html5-insertion-modes-remaining (InsertionMode 23 из 23: InHeadNoscript+InFrameset+AfterFrameset+AfterAfterFrameset, InSelectInTable полная, reset_insertion_mode frameset/select-in-table, scripting_enabled flag, 15 новых тестов → 374 всего) 2026-05-27, accessibility-aria (crate lumen-a11y: AXRole 60+ variant, AXState 17 полей, AXNode, AXTree, build_ax_tree, compute_name, compute_description, implicit_role HTML-AAM, 36 тестов) 2026-05-27, svg-layout-basic (BoxKind::SvgRoot/SvgShape, SvgShapeKind rect/circle/ellipse/line/path, ViewBox scale+offset, collect_svg_shapes flat traversal, lay_out_svg_root replaced-element sizing, paint emit_svg_shape stub, 12 тестов, graphic test 47) 2026-05-27, colspan-rowspan (col_span/row_span на LayoutBox, span-aware column width + placement + rowspan height post-fix, 7 тестов) 2026-05-27, html-template-content (DocumentFragment + InTemplate mode + <template> парсинг content во fragment, 12 тестов) 2026-05-27, form-submit (Event::FormSubmit + find_ancestor_form + collect_dom_form_fields + build_form_submit + make_get_url + GET-навигация, 20 тестов) 2026-05-27, css-first-line-letter (PseudoKind::FirstLetter на первом тексте, is_first_line на lines[0], 3 новых теста) 2026-05-27, html-loading-lazy (loading="lazy" ImageRequest.is_lazy + JS _lumen_init_lazy_images/_lumen_deliver_lazy_images + shell proximity fetch, 9 тестов) 2026-05-26, html-full-tree-builder (HTML5 §13.2 insertion modes + adoption agency, 17 режимов, AAA, 349 тестов) 2026-05-26, phase0-close (Phase 0 закрыта, маркеры ✅ для html-parser/css-parser/layout) 2026-05-26, fix-inline-block-baseline (BUG-023 P1-часть — strut только для baseline-строк; TEST-12 PASS 0.18%, TEST-13 PASS 0.24%) 2026-05-26, fix-max-height (BUG-025 подтверждён в layout — release-бинарь был устаревшим, TEST-11 PASS 0.43%, unit tests для max-height/min-height/vertical-align:bottom добавлены) 2026-05-25, full HTML5 named entities WHATWG 2125 (gen_entities.py + бинпоиск + 338 тестов) 2026-05-25, push-tokenizer feed_bytes(&[u8]) с буферизацией partial UTF-8, 7 тестов (342 итого) 2026-05-25, ADR-инфраструктура docs/decisions/ (TEMPLATE.md + README + ADR-001..005) 2026-05-25
