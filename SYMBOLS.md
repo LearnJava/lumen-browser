@@ -44,7 +44,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:4` **fn** `fill_path` — Fill `path` using the even-odd scanline algorithm
 `crates/engine/canvas/src/rasterize.rs:41` **fn** `stroke_path` — Stroke `path` by drawing each line segment as a thick rectangle
 
-## lumen-core  (137 symbols)
+## lumen-core  (138 symbols)
 
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
@@ -69,45 +69,46 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/ext.rs:221` **struct** `HttpAuthChallenge` — Запрос учётных данных от credential-провайдера. Передаётся в
 `crates/core/src/ext.rs:234` **struct** `HttpCredentials` — Учётные данные для HTTP auth: username + plaintext password
 `crates/core/src/ext.rs:257` **trait** `HttpCredentialProvider` — Поставщик учётных данных HTTP-auth
-`crates/core/src/ext.rs:263` **trait** `EncodingDetector` — Определение кодировки HTML-документа. Для кириллицы критично уметь
-`crates/core/src/ext.rs:273` **enum** `FontStyle` — Начертание face-а: `font-style` из CSS Fonts L4. Phase 0 — три
-`crates/core/src/ext.rs:282` **fn** `parse_keyword` — Парсит CSS-ключевое слово `normal | italic | oblique` (case-insensitive)
-`crates/core/src/ext.rs:303` **struct** `FaceRecord` — Метаданные одного face-а в индексе шрифтов
-`crates/core/src/ext.rs:339` **trait** `FontProvider` — Источник системных шрифтов. Реализация — в `lumen-font::system_fonts`
-`crates/core/src/ext.rs:393` **fn** `match_face` — CSS Fonts L4 §5.2 алгоритм матчинга — извлечён из trait-а в свободную
-`crates/core/src/ext.rs:626` **trait** `JsRuntime` — JavaScript runtime — исполнение JS-кода (HTML inline scripts, `eval`,
-`crates/core/src/ext.rs:647` **enum** `JsValue` — Простые JSON-совместимые типы для передачи через trait-границу
-`crates/core/src/ext.rs:660` **fn** `object` — Хелпер: построить object из key-value пар
-`crates/core/src/ext.rs:670` **enum** `JsError` — Ошибка исполнения JavaScript: либо syntax error (parse), либо runtime
-`crates/core/src/ext.rs:691` **type** `JsResult`
-`crates/core/src/ext.rs:696` **struct** `NullJsRuntime` — Null implementation — всегда возвращает `JsError::NotImplemented`
-`crates/core/src/ext.rs:734` **trait** `UnicodeProvider` — Unicode-таблицы: line break (UAX #14), grapheme/word segmentation
-`crates/core/src/ext.rs:759` **struct** `NullUnicodeProvider` — Null-реализация `UnicodeProvider` — все методы возвращают пустые векторы
-`crates/core/src/ext.rs:787` **trait** `IdnaProvider` — IDN (Internationalized Domain Names) полный UTS #46. Свой Punycode-encoder
-`crates/core/src/ext.rs:797` **struct** `NullIdnaProvider` — Null-реализация `IdnaProvider` — все методы возвращают `None`. Потребитель
-`crates/core/src/ext.rs:822` **trait** `PublicSuffixList` — Public Suffix List — отделение публичных суффиксов от регистрируемых
-`crates/core/src/ext.rs:843` **struct** `NullPublicSuffixList` — Null-реализация `PublicSuffixList` — все запросы возвращают `None`/`false`
-`crates/core/src/ext.rs:869` **trait** `ContentDecoder` — HTTP `Content-Encoding` декодер. Один экземпляр trait-а = один кодек
-`crates/core/src/ext.rs:884` **struct** `UnsupportedContentDecoder` — Stub-реализация `ContentDecoder` для encoding-а, на который нет
-`crates/core/src/ext.rs:915` **trait** `FontFormat` — Декодер альтернативных файловых форматов шрифта (WOFF2, WOFF) в raw
-`crates/core/src/ext.rs:933` **struct** `NullFontFormat` — Null-реализация `FontFormat` — `can_decode` всегда `false`,
-`crates/core/src/ext.rs:958` **trait** `ImageDecoder` — Plug-in декодер растровых изображений для форматов, не встроенных в
-`crates/core/src/ext.rs:985` **trait** `SpellChecker` — Spell checker — проверка орфографии для form field / contenteditable
-`crates/core/src/ext.rs:999` **struct** `NullSpellChecker` — Null-реализация `SpellChecker` — `check` всегда возвращает `true`, чтобы
-`crates/core/src/ext.rs:1016` **trait** `HyphenationProvider` — Hyphenation — поиск позиций мягких переносов для CSS `hyphens: auto`
-`crates/core/src/ext.rs:1027` **struct** `NullHyphenationProvider` — Null-реализация `HyphenationProvider` — никаких переносов не предлагается
-`crates/core/src/ext.rs:1044` **enum** `WsMessage` — Сообщение, полученное от WebSocket-сервера (RFC 6455 §5.6)
-`crates/core/src/ext.rs:1060` **trait** `WebSocketSession` — Открытое WebSocket-соединение. Объект владеет TCP/TLS-стримом
-`crates/core/src/ext.rs:1076` **trait** `WebSocketProvider` — Фабрика WebSocket-соединений. Реализуется `lumen-network::HttpClient`
-`crates/core/src/ext.rs:1094` **struct** `SseEvent` — Полностью разобранное SSE-событие (HTML Living Standard §9.2.6)
-`crates/core/src/ext.rs:1110` **trait** `SseSession` — Открытое SSE-соединение (EventSource). Блокирующий интерфейс
-`crates/core/src/ext.rs:1127` **trait** `SseProvider` — Фабрика SSE-соединений. Реализуется `lumen-network::HttpClient`
-`crates/core/src/ext.rs:1154` **trait** `FetchInterceptor` — Перехватчик fetch-запросов уровня Service Worker
-`crates/core/src/ext.rs:1166` **struct** `JsFetchResult` — Full HTTP response for a synchronous JS `fetch()` call
-`crates/core/src/ext.rs:1184` **trait** `JsFetchProvider` — Synchronous HTTP fetch bridge for the JS runtime
-`crates/core/src/ext.rs:1195` **enum** `JsWsEvent` — A single queued event from a WebSocket connection, ready for delivery to JS
-`crates/core/src/ext.rs:1225` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
-`crates/core/src/ext.rs:1240` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
+`crates/core/src/ext.rs:266` **trait** `CookieProvider` — HTTP cookie storage provider. Bridges lumen-network (fetch pipeline) to
+`crates/core/src/ext.rs:305` **trait** `EncodingDetector` — Определение кодировки HTML-документа. Для кириллицы критично уметь
+`crates/core/src/ext.rs:315` **enum** `FontStyle` — Начертание face-а: `font-style` из CSS Fonts L4. Phase 0 — три
+`crates/core/src/ext.rs:324` **fn** `parse_keyword` — Парсит CSS-ключевое слово `normal | italic | oblique` (case-insensitive)
+`crates/core/src/ext.rs:345` **struct** `FaceRecord` — Метаданные одного face-а в индексе шрифтов
+`crates/core/src/ext.rs:381` **trait** `FontProvider` — Источник системных шрифтов. Реализация — в `lumen-font::system_fonts`
+`crates/core/src/ext.rs:435` **fn** `match_face` — CSS Fonts L4 §5.2 алгоритм матчинга — извлечён из trait-а в свободную
+`crates/core/src/ext.rs:668` **trait** `JsRuntime` — JavaScript runtime — исполнение JS-кода (HTML inline scripts, `eval`,
+`crates/core/src/ext.rs:689` **enum** `JsValue` — Простые JSON-совместимые типы для передачи через trait-границу
+`crates/core/src/ext.rs:702` **fn** `object` — Хелпер: построить object из key-value пар
+`crates/core/src/ext.rs:712` **enum** `JsError` — Ошибка исполнения JavaScript: либо syntax error (parse), либо runtime
+`crates/core/src/ext.rs:733` **type** `JsResult`
+`crates/core/src/ext.rs:738` **struct** `NullJsRuntime` — Null implementation — всегда возвращает `JsError::NotImplemented`
+`crates/core/src/ext.rs:776` **trait** `UnicodeProvider` — Unicode-таблицы: line break (UAX #14), grapheme/word segmentation
+`crates/core/src/ext.rs:801` **struct** `NullUnicodeProvider` — Null-реализация `UnicodeProvider` — все методы возвращают пустые векторы
+`crates/core/src/ext.rs:829` **trait** `IdnaProvider` — IDN (Internationalized Domain Names) полный UTS #46. Свой Punycode-encoder
+`crates/core/src/ext.rs:839` **struct** `NullIdnaProvider` — Null-реализация `IdnaProvider` — все методы возвращают `None`. Потребитель
+`crates/core/src/ext.rs:864` **trait** `PublicSuffixList` — Public Suffix List — отделение публичных суффиксов от регистрируемых
+`crates/core/src/ext.rs:885` **struct** `NullPublicSuffixList` — Null-реализация `PublicSuffixList` — все запросы возвращают `None`/`false`
+`crates/core/src/ext.rs:911` **trait** `ContentDecoder` — HTTP `Content-Encoding` декодер. Один экземпляр trait-а = один кодек
+`crates/core/src/ext.rs:926` **struct** `UnsupportedContentDecoder` — Stub-реализация `ContentDecoder` для encoding-а, на который нет
+`crates/core/src/ext.rs:957` **trait** `FontFormat` — Декодер альтернативных файловых форматов шрифта (WOFF2, WOFF) в raw
+`crates/core/src/ext.rs:975` **struct** `NullFontFormat` — Null-реализация `FontFormat` — `can_decode` всегда `false`,
+`crates/core/src/ext.rs:1000` **trait** `ImageDecoder` — Plug-in декодер растровых изображений для форматов, не встроенных в
+`crates/core/src/ext.rs:1027` **trait** `SpellChecker` — Spell checker — проверка орфографии для form field / contenteditable
+`crates/core/src/ext.rs:1041` **struct** `NullSpellChecker` — Null-реализация `SpellChecker` — `check` всегда возвращает `true`, чтобы
+`crates/core/src/ext.rs:1058` **trait** `HyphenationProvider` — Hyphenation — поиск позиций мягких переносов для CSS `hyphens: auto`
+`crates/core/src/ext.rs:1069` **struct** `NullHyphenationProvider` — Null-реализация `HyphenationProvider` — никаких переносов не предлагается
+`crates/core/src/ext.rs:1086` **enum** `WsMessage` — Сообщение, полученное от WebSocket-сервера (RFC 6455 §5.6)
+`crates/core/src/ext.rs:1102` **trait** `WebSocketSession` — Открытое WebSocket-соединение. Объект владеет TCP/TLS-стримом
+`crates/core/src/ext.rs:1118` **trait** `WebSocketProvider` — Фабрика WebSocket-соединений. Реализуется `lumen-network::HttpClient`
+`crates/core/src/ext.rs:1136` **struct** `SseEvent` — Полностью разобранное SSE-событие (HTML Living Standard §9.2.6)
+`crates/core/src/ext.rs:1152` **trait** `SseSession` — Открытое SSE-соединение (EventSource). Блокирующий интерфейс
+`crates/core/src/ext.rs:1169` **trait** `SseProvider` — Фабрика SSE-соединений. Реализуется `lumen-network::HttpClient`
+`crates/core/src/ext.rs:1196` **trait** `FetchInterceptor` — Перехватчик fetch-запросов уровня Service Worker
+`crates/core/src/ext.rs:1208` **struct** `JsFetchResult` — Full HTTP response for a synchronous JS `fetch()` call
+`crates/core/src/ext.rs:1226` **trait** `JsFetchProvider` — Synchronous HTTP fetch bridge for the JS runtime
+`crates/core/src/ext.rs:1237` **enum** `JsWsEvent` — A single queued event from a WebSocket connection, ready for delivery to JS
+`crates/core/src/ext.rs:1267` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
+`crates/core/src/ext.rs:1282` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
 `crates/core/src/form.rs:15` **struct** `FormEntry` — Запись формы — пара (name, value) с опциональным filename (для multipart)
 `crates/core/src/form.rs:21` **enum** `FormValue`
 `crates/core/src/form.rs:33` **fn** `text`
@@ -564,18 +565,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 ## lumen-js  (12 symbols)
 
-`crates/js/src/dom.rs:96` **enum** `NavigateRequest` — Navigation request emitted by JS (`location.href =`, `location.assign()`,
-`crates/js/src/dom.rs:130` **fn** `install_dom_api` — Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`
+`crates/js/src/dom.rs:97` **enum** `NavigateRequest` — Navigation request emitted by JS (`location.href =`, `location.assign()`,
+`crates/js/src/dom.rs:132` **fn** `install_dom_api` — Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`
 `crates/js/src/lib.rs:19` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
 `crates/js/src/lib.rs:62` **fn** `new`
 `crates/js/src/lib.rs:90` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:125` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:133` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:142` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:151` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:160` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:168` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:177` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:126` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:134` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:143` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:152` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:161` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:169` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:178` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
 
 ## lumen-knowledge  (37 symbols)
 
@@ -617,7 +618,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/read_later.rs:346` **fn** `delete`
 `crates/knowledge/src/read_later.rs:356` **fn** `count`
 
-## lumen-layout  (300 symbols)
+## lumen-layout  (303 symbols)
 
 `crates/engine/layout/src/animation.rs:36` **struct** `AnimatedStyle` — Sparse animated values for one element — scheduler output per node per frame
 `crates/engine/layout/src/animation.rs:46` **struct** `AnimationFrame` — Output of `AnimationScheduler::tick` — per-node animated values for one frame
@@ -647,23 +648,26 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:55` **struct** `ViewBox` — SVG `viewBox="min-x min-y width height"` attribute. Maps SVG user-unit space
 `crates/engine/layout/src/box_tree.rs:69` **enum** `SvgShapeKind` — Geometric primitive for an SVG shape element in SVG user units (before viewBox scaling)
 `crates/engine/layout/src/box_tree.rs:86` **enum** `FormControlKind` — Вид form control — используется в `BoxKind::FormControl` для paint-специализаций
-`crates/engine/layout/src/box_tree.rs:389` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
-`crates/engine/layout/src/box_tree.rs:404` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
-`crates/engine/layout/src/box_tree.rs:424` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
-`crates/engine/layout/src/box_tree.rs:524` **struct** `LayoutBox`
-`crates/engine/layout/src/box_tree.rs:542` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
-`crates/engine/layout/src/box_tree.rs:580` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
-`crates/engine/layout/src/box_tree.rs:598` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
-`crates/engine/layout/src/box_tree.rs:630` **enum** `BoxKind`
-`crates/engine/layout/src/box_tree.rs:720` **fn** `layout`
-`crates/engine/layout/src/box_tree.rs:734` **fn** `layout_measured`
-`crates/engine/layout/src/box_tree.rs:745` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:4839` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:399` **struct** `ImageRequest` — Запрос на предзагрузку изображения: URL после picking-а по
+`crates/engine/layout/src/box_tree.rs:414` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
+`crates/engine/layout/src/box_tree.rs:434` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
+`crates/engine/layout/src/box_tree.rs:534` **struct** `LayoutBox`
+`crates/engine/layout/src/box_tree.rs:552` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
+`crates/engine/layout/src/box_tree.rs:590` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
+`crates/engine/layout/src/box_tree.rs:608` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
+`crates/engine/layout/src/box_tree.rs:640` **enum** `BoxKind`
+`crates/engine/layout/src/box_tree.rs:730` **fn** `layout`
+`crates/engine/layout/src/box_tree.rs:744` **fn** `layout_measured`
+`crates/engine/layout/src/box_tree.rs:755` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
+`crates/engine/layout/src/box_tree.rs:4861` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/counters.rs:33` **type** `CounterSnapshot` — Per-element counter stacks snapshot
 `crates/engine/layout/src/counters.rs:37` **type** `CounterMap` — Maps each element `NodeId` to its counter snapshot (after own reset/increment,
 `crates/engine/layout/src/counters.rs:90` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
 `crates/engine/layout/src/counters.rs:152` **fn** `format_counter` — Format a counter integer value according to the given `list-style-type` keyword
 `crates/engine/layout/src/lib.rs:77` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
+`crates/engine/layout/src/lib.rs:102` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
+`crates/engine/layout/src/lib.rs:121` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
+`crates/engine/layout/src/lib.rs:142` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
 `crates/engine/layout/src/property_trees.rs:39` **struct** `PropertyTreeNodeId` — Идентификатор узла в любом из четырёх деревьев. Уникален в пределах своего
 `crates/engine/layout/src/property_trees.rs:45` **fn** `raw`
 `crates/engine/layout/src/property_trees.rs:54` **struct** `Mat4` — 4×4 матрица в column-major порядке (как принято в OpenGL / WebGPU)
@@ -920,7 +924,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/style.rs:13507` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
 `crates/engine/layout/src/style.rs:14081` **fn** `parse_color`
 
-## lumen-network  (164 symbols)
+## lumen-network  (165 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -1022,28 +1026,29 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/http_cache.rs:286` **fn** `is_empty`
 `crates/network/src/http_cache.rs:301` **struct** `CacheEntrySnapshot` — Owned snapshot of a cache entry returned by `HttpCache::get`
 `crates/network/src/http_cache.rs:315` **enum** `CacheLookup` — `CacheLookup` is unused externally; we use `get()` which returns `Option<CacheEntrySnapshot>`
-`crates/network/src/lib.rs:1233` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
-`crates/network/src/lib.rs:1251` **fn** `new`
-`crates/network/src/lib.rs:1271` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
-`crates/network/src/lib.rs:1282` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
-`crates/network/src/lib.rs:1294` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
-`crates/network/src/lib.rs:1303` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
-`crates/network/src/lib.rs:1313` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
-`crates/network/src/lib.rs:1322` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
-`crates/network/src/lib.rs:1339` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
-`crates/network/src/lib.rs:1355` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
-`crates/network/src/lib.rs:1366` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
-`crates/network/src/lib.rs:1386` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
-`crates/network/src/lib.rs:1410` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
-`crates/network/src/lib.rs:1456` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
-`crates/network/src/lib.rs:1475` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
-`crates/network/src/lib.rs:1510` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
-`crates/network/src/lib.rs:1552` **fn** `fetch_range`
-`crates/network/src/lib.rs:1613` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
-`crates/network/src/lib.rs:1693` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
-`crates/network/src/lib.rs:2066` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
-`crates/network/src/lib.rs:2072` **fn** `new`
-`crates/network/src/lib.rs:2079` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
+`crates/network/src/lib.rs:1281` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
+`crates/network/src/lib.rs:1303` **fn** `new`
+`crates/network/src/lib.rs:1325` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
+`crates/network/src/lib.rs:1336` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
+`crates/network/src/lib.rs:1348` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
+`crates/network/src/lib.rs:1357` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
+`crates/network/src/lib.rs:1367` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
+`crates/network/src/lib.rs:1376` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
+`crates/network/src/lib.rs:1393` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
+`crates/network/src/lib.rs:1409` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
+`crates/network/src/lib.rs:1420` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
+`crates/network/src/lib.rs:1440` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
+`crates/network/src/lib.rs:1464` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
+`crates/network/src/lib.rs:1510` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
+`crates/network/src/lib.rs:1522` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
+`crates/network/src/lib.rs:1546` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
+`crates/network/src/lib.rs:1581` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
+`crates/network/src/lib.rs:1625` **fn** `fetch_range`
+`crates/network/src/lib.rs:1688` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
+`crates/network/src/lib.rs:1770` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
+`crates/network/src/lib.rs:2153` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
+`crates/network/src/lib.rs:2159` **fn** `new`
+`crates/network/src/lib.rs:2166` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
 `crates/network/src/mixed_content.rs:33` **enum** `RequestDestination` — Назначение подресурса по Fetch spec §3.2.7 «request destination» —
 `crates/network/src/mixed_content.rs:59` **enum** `MixedContentLevel` — Mixed-content уровень для запроса в secure-контексте
 `crates/network/src/mixed_content.rs:75` **fn** `is_strict_blocked` — Должны ли мы блокировать запрос по строгому режиму. По умолчанию
@@ -1167,8 +1172,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/scroll_snap.rs:33` **fn** `find_scroll_snap_y` — CSS Scroll Snap L1 — returns the Y scroll offset to snap to, or `None`
 `crates/engine/paint/src/scroll_snap.rs:54` **fn** `find_scroll_snap_y_proximity` — CSS Scroll Snap L1 — same as [`find_scroll_snap_y`] but restricts candidates
 
-## lumen-shell  (105 symbols)
+## lumen-shell  (116 symbols)
 
+`crates/shell/src/address_bar.rs:33` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
+`crates/shell/src/address_bar.rs:43` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
+`crates/shell/src/address_bar.rs:49` **fn** `close`
+`crates/shell/src/address_bar.rs:55` **fn** `is_open`
+`crates/shell/src/address_bar.rs:59` **fn** `input`
+`crates/shell/src/address_bar.rs:64` **fn** `append_str` — Добавить непечатаемые символы (printable chars из keyboard event)
+`crates/shell/src/address_bar.rs:76` **fn** `backspace` — Backspace — удалить последний Unicode-символ
+`crates/shell/src/address_bar.rs:84` **fn** `commit` — Зафиксировать текущий ввод: закрыть бар и, если ввод непуст, выставить
+`crates/shell/src/address_bar.rs:95` **fn** `take_commit` — Вернуть зафиксированный URL (если есть) и сбросить его
+`crates/shell/src/address_bar.rs:103` **struct** `BarOverlay` — Параметры для сборки overlay display list
+`crates/shell/src/address_bar.rs:111` **fn** `build_bar_overlay` — Собирает display list адресной строки. Вызывается каждый кадр, пока
 `crates/shell/src/animation_scheduler.rs:49` **struct** `AnimationScheduler` — Планировщик CSS-анимаций. Хранит timing-состояние между кадрами
 `crates/shell/src/animation_scheduler.rs:54` **fn** `new`
 `crates/shell/src/animation_scheduler.rs:62` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
@@ -1275,7 +1291,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/scrollbar.rs:191` **fn** `new`
 `crates/shell/src/scrollbar.rs:199` **fn** `scroll_for` — Желаемый `scroll_y` при текущей позиции курсора. Если scrollbar
 
-## lumen-storage  (369 symbols)
+## lumen-storage  (371 symbols)
 
 `crates/storage/src/autofill.rs:17` **struct** `AutofillEntry`
 `crates/storage/src/autofill.rs:25` **struct** `Autofill`
@@ -1349,6 +1365,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/cookies.rs:217` **fn** `get_for_request` — Получить все cookies, применимые к данному запросу. Фильтрация:
 `crates/storage/src/cookies.rs:339` **fn** `parse_set_cookie` — Распарсить значение HTTP-заголовка `Set-Cookie` в `Cookie`. Без PSL
 `crates/storage/src/cookies.rs:368` **fn** `parse_set_cookie_with_psl` — Расширенная версия [`parse_set_cookie`] с опциональной проверкой
+`crates/storage/src/cookies.rs:554` **struct** `CookieJarProvider` — Implements [`CookieProvider`] using a shared [`CookieJar`]
+`crates/storage/src/cookies.rs:561` **fn** `new` — Create a provider backed by the given jar
 `crates/storage/src/csp_policies.rs:28` **fn** `parse_csp_header` — Парсит CSP-заголовок в map `directive → sources`
 `crates/storage/src/csp_policies.rs:43` **struct** `CspPolicy`
 `crates/storage/src/csp_policies.rs:52` **struct** `CspPolicies`
@@ -1648,4 +1666,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 1592 symbols in 17 crates*
+*Total: 1610 symbols in 17 crates*
