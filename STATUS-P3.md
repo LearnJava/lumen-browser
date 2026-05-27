@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: fts-omnibox  branch: p3-fts-omnibox
+Next step: extend address_bar.rs + wire HistoryFts + SearchHistory  address_bar.rs:1
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
