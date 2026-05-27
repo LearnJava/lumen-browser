@@ -364,7 +364,7 @@
 | 10E.4 | ⬜ Scroll-discard: при удалении от viewport на >3 экрана — handle освобождается | `shell/src/scroll/decode_gating.rs` | — |
 | 10F | 🟡 **`[P1+P3]` T0 экономия: GPU layer LRU + texture recycling** (Phase 2) | Off-viewport stacking contexts освобождают textures | `paint/src/layer_cache.rs` |
 | 10F.1 | ✅ `LayerCache` с LRU + GPU memory budget | `paint/src/layer_cache.rs` | — |
-| 10F.2 | ⬜ Texture pool recycling (одна `wgpu::Texture` переиспользуется для разных layers) | `paint/src/texture_pool.rs` | P3 lifecycle integration pending |
+| 10F.2 | ✅ Texture pool recycling (одна `wgpu::Texture` переиспользуется для разных layers) | `paint/src/texture_pool.rs` | P3 lifecycle integration pending |
 | 10G | ⬜ **`[P3+P2]` T0 экономия: glyph atlas LRU eviction** (Phase 2) | Атлас не растёт безгранично | `font/src/atlas.rs` |
 | 10H | ⬜ **`[P3]` `MemoryPressureSource` trait** (Phase 1) | OS-сигналы памяти управляют tier-переходами | `core/src/ext/memory_pressure.rs` |
 | 10H.1 | ⬜ Trait + `enum MemoryPressureLevel { Low, Medium, High }` + listeners | `core/src/ext/memory_pressure.rs` | — |
