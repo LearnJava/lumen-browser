@@ -24,8 +24,8 @@ pub fn find_box_by_selector(
 
     boxes.iter().find(|b| {
         // Match by size if specified
-        let width_matches = expected_width.map_or(true, |w| (b.border_box.width - w).abs() < 1.0);
-        let height_matches = expected_height.map_or(true, |h| (b.border_box.height - h).abs() < 1.0);
+        let width_matches = expected_width.is_none_or(|w| (b.border_box.width - w).abs() < 1.0);
+        let height_matches = expected_height.is_none_or(|h| (b.border_box.height - h).abs() < 1.0);
         width_matches && height_matches
     }).cloned()
 }

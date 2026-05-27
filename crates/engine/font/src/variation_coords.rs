@@ -124,13 +124,14 @@ impl VariationCoords {
     /// Used by P4 to inject optical sizing (`opsz` axis) or other CSS-driven
     /// variations.
     pub fn set_axis_by_tag(&mut self, fvar: &Fvar, tag: [u8; 4], value: f32) -> bool {
-        if let Some(idx) = fvar.axes.iter().position(|a| a.tag == tag) {
-            if idx < self.0.len() {
-                self.0[idx] = value;
-                return true;
-            }
+        if let Some(idx) = fvar.axes.iter().position(|a| a.tag == tag)
+            && idx < self.0.len()
+        {
+            self.0[idx] = value;
+            true
+        } else {
+            false
         }
-        false
     }
 }
 

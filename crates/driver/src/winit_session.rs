@@ -18,18 +18,19 @@ use lumen_core::error::{Error, Result};
 use lumen_core::geom::Size;
 use lumen_dom::{Document, NodeData, NodeId};
 use lumen_layout::LayoutBox;
-use lumen_paint::Renderer;
 
 use crate::{
     A11yNode, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
     ConsoleEntry, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
 };
 
+/// Встроенный шрифт Inter-Regular (SIL OFL 1.1).
+const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+
 /// Состояние после успешной загрузки страницы.
 struct WinitSessionState {
     doc: Document,
     layout_root: LayoutBox,
-    renderer: Option<Renderer>,
 }
 
 /// Оконная сессия браузера.
@@ -101,11 +102,6 @@ impl Default for WinitSession {
 impl WinitSession {
     /// Запустить полный pipeline (HTML parse -> CSS -> layout).
     fn run_pipeline(&mut self, bytes: &[u8], content_type: Option<&str>, url: String) -> Result<()> {
-        // Временная реализация, использующая тот же код что и InProcessSession
-        // TODO: вынести в общий helpers модуль
-
-        const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
-
         let encoding = lumen_encoding::detect(bytes, content_type);
         let source = lumen_encoding::decode(encoding, bytes);
 
@@ -124,7 +120,6 @@ impl WinitSession {
         self.state = Some(Arc::new(Mutex::new(WinitSessionState {
             doc,
             layout_root,
-            renderer: None,
         })));
         Ok(())
     }
@@ -155,46 +150,387 @@ fn walk_style_blocks(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut
     }
 }
 
+// ── Вспомогательные функции ─────────────────────────────────────────────────
+
+/// Рекурсивно собрать все LayoutBox в плоский список BoxModel.
+fn collect_boxes(lb: &LayoutBox, doc: &Document, out: &mut Vec<BoxModel>) {
+    let tag_name = {
+        let node = doc.get(lb.node);
+        match &node.data {
+            NodeData::Element { name, .. } => name.local.to_string(),
+            _ => String::new(),
+        }
+    };
+    let r = lb.rect;
+    let mt = lb.style.margin_top.to_px_opt().unwrap_or(0.0);
+    let mr = lb.style.margin_right.to_px_opt().unwrap_or(0.0);
+    let mb = lb.style.margin_bottom.to_px_opt().unwrap_or(0.0);
+    let ml = lb.style.margin_left.to_px_opt().unwrap_or(0.0);
+    let margin_box = lumen_core::geom::Rect {
+        x: r.x - ml,
+        y: r.y - mt,
+        width: r.width + ml + mr,
+        height: r.height + mt + mb,
+    };
+    out.push(BoxModel {
+        node_id: lb.node.index() as u32,
+        tag_name,
+        border_box: lb.rect,
+        margin_box,
+    });
+    for child in &lb.children {
+        collect_boxes(child, doc, out);
+    }
+}
+
+/// Найти первый LayoutBox, принадлежащий узлу с данным NodeId.
+fn find_layout_box(root: &LayoutBox, id: NodeId) -> Option<&LayoutBox> {
+    if root.node == id {
+        return Some(root);
+    }
+    for child in &root.children {
+        if let Some(found) = find_layout_box(child, id) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Простой парсер CSS-селектора — поддерживает основные формы Phase 0.
+#[derive(Debug, Default)]
+struct SimpleSelector<'a> {
+    tag: Option<&'a str>,
+    id: Option<&'a str>,
+    classes: Vec<&'a str>,
+}
+
+fn parse_simple_selector(s: &str) -> SimpleSelector<'_> {
+    let mut sel = SimpleSelector::default();
+    let mut rest = s;
+
+    let tag_end = rest.find(['#', '.']).unwrap_or(rest.len());
+    if tag_end > 0 {
+        sel.tag = Some(&rest[..tag_end]);
+    }
+    rest = &rest[tag_end..];
+
+    while !rest.is_empty() {
+        if let Some(r) = rest.strip_prefix('#') {
+            let end = r.find(['#', '.']).unwrap_or(r.len());
+            sel.id = Some(&r[..end]);
+            rest = &r[end..];
+        } else if let Some(r) = rest.strip_prefix('.') {
+            let end = r.find(['#', '.']).unwrap_or(r.len());
+            sel.classes.push(&r[..end]);
+            rest = &r[end..];
+        } else {
+            break;
+        }
+    }
+
+    sel
+}
+
+fn node_matches_selector(doc: &Document, id: NodeId, sel: &SimpleSelector<'_>) -> bool {
+    let node = doc.get(id);
+    let NodeData::Element { name, attrs } = &node.data else {
+        return false;
+    };
+
+    if let Some(tag) = sel.tag
+        && !name.local.eq_ignore_ascii_case(tag)
+    {
+        return false;
+    }
+
+    if let Some(wanted_id) = sel.id {
+        let actual_id = attrs
+            .iter()
+            .find(|a| a.name.local.eq_ignore_ascii_case("id"))
+            .map(|a| a.value.as_str())
+            .unwrap_or("");
+        if actual_id != wanted_id {
+            return false;
+        }
+    }
+
+    if !sel.classes.is_empty() {
+        let class_attr = attrs
+            .iter()
+            .find(|a| a.name.local.eq_ignore_ascii_case("class"))
+            .map(|a| a.value.as_str())
+            .unwrap_or("");
+        let actual_classes: Vec<&str> = class_attr.split_whitespace().collect();
+        for wanted in &sel.classes {
+            if !actual_classes.iter().any(|c| c == wanted) {
+                return false;
+            }
+        }
+    }
+
+    true
+}
+
+/// Найти первый узел в документе, совпадающий с `selector`.
+fn find_first_by_selector(doc: &Document, selector: &str) -> Option<NodeId> {
+    let sel = parse_simple_selector(selector);
+    find_first_match(doc, doc.root(), &sel)
+}
+
+fn find_first_match(doc: &Document, id: NodeId, sel: &SimpleSelector<'_>) -> Option<NodeId> {
+    if node_matches_selector(doc, id, sel) {
+        return Some(id);
+    }
+    for &child in &doc.get(id).children.clone() {
+        if let Some(found) = find_first_match(doc, child, sel) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Преобразовать ComputedStyle в карту свойство → строка.
+fn style_to_properties(style: &lumen_layout::ComputedStyle) -> ComputedProperties {
+    let mut m = std::collections::HashMap::new();
+
+    m.insert("display".into(), format!("{:?}", style.display).to_lowercase());
+    m.insert("color".into(), format_color(&style.color));
+    m.insert(
+        "background-color".into(),
+        style
+            .background_color
+            .as_ref()
+            .and_then(|c| (*c).to_color_opt())
+            .map(|c| format!("rgba({},{},{},{})", c.r, c.g, c.b, c.a))
+            .unwrap_or_else(|| "transparent".into()),
+    );
+    m.insert("font-size".into(), format!("{:.2}px", style.font_size));
+    m.insert("font-weight".into(), format!("{}", style.font_weight.0));
+    m.insert("width".into(), format_opt_length(style.width.as_ref()));
+    m.insert("height".into(), format_opt_length(style.height.as_ref()));
+    m.insert("margin-top".into(), format_length_or_auto(&style.margin_top));
+    m.insert("margin-right".into(), format_length_or_auto(&style.margin_right));
+    m.insert("margin-bottom".into(), format_length_or_auto(&style.margin_bottom));
+    m.insert("margin-left".into(), format_length_or_auto(&style.margin_left));
+    m.insert("padding-top".into(), format_length(&style.padding_top));
+    m.insert("padding-right".into(), format_length(&style.padding_right));
+    m.insert("padding-bottom".into(), format_length(&style.padding_bottom));
+    m.insert("padding-left".into(), format_length(&style.padding_left));
+
+    ComputedProperties { properties: m }
+}
+
+fn format_color(c: &lumen_layout::Color) -> String {
+    format!("rgba({},{},{},{})", c.r, c.g, c.b, c.a)
+}
+
+fn format_length(l: &lumen_layout::Length) -> String {
+    match l {
+        lumen_layout::Length::Px(v) => format!("{:.2}px", v),
+        lumen_layout::Length::Percent(v) => format!("{:.2}%", v),
+        lumen_layout::Length::Em(v) => format!("{:.2}em", v),
+        lumen_layout::Length::Rem(v) => format!("{:.2}rem", v),
+        other => format!("{other:?}"),
+    }
+}
+
+fn format_opt_length(l: Option<&lumen_layout::Length>) -> String {
+    match l {
+        None => "auto".into(),
+        Some(len) => format_length(len),
+    }
+}
+
+fn format_length_or_auto(l: &lumen_layout::LengthOrAuto) -> String {
+    match l {
+        lumen_layout::LengthOrAuto::Auto => "auto".into(),
+        lumen_layout::LengthOrAuto::Length(len) => format_length(len),
+    }
+}
+
+/// Построить accessibility-дерево из DOM-структуры.
+fn build_a11y_node(doc: &Document, id: NodeId) -> A11yNode {
+    let node = doc.get(id);
+    let (role, name) = match &node.data {
+        NodeData::Element { name, attrs } => {
+            let role = aria_role_for_tag(name.local.as_ref());
+            let label = attrs
+                .iter()
+                .find(|a| a.name.local.eq_ignore_ascii_case("aria-label"))
+                .or_else(|| attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case("alt")))
+                .map(|a| a.value.clone())
+                .unwrap_or_default();
+            (role, label)
+        }
+        NodeData::Text(s) => ("text".into(), s.clone()),
+        NodeData::Document => ("document".into(), String::new()),
+        _ => (String::new(), String::new()),
+    };
+
+    let children = node
+        .children
+        .clone()
+        .into_iter()
+        .map(|child| build_a11y_node(doc, child))
+        .filter(|n| !n.role.is_empty())
+        .collect();
+
+    A11yNode { role, name, children }
+}
+
+fn aria_role_for_tag(tag: &str) -> String {
+    match tag {
+        "button" => "button",
+        "a" => "link",
+        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "heading",
+        "input" => "textbox",
+        "img" => "img",
+        "ul" | "ol" => "list",
+        "li" => "listitem",
+        "nav" => "navigation",
+        "main" => "main",
+        "header" => "banner",
+        "footer" => "contentinfo",
+        "section" | "article" => "region",
+        "table" => "table",
+        "tr" => "row",
+        "td" | "th" => "cell",
+        "form" => "form",
+        "p" | "div" | "span" | "body" | "html" | "head" => "generic",
+        _ => "",
+    }
+    .into()
+}
+
 impl BrowserSession for WinitSession {
     // ── Ресурсы ────────────────────────────────────────────────────────────
 
     fn screenshot(&self) -> Result<Vec<u8>> {
-        // TODO: реализовать в 8A.7
-        // - Получить LayoutBox из state
-        // - Построить DisplayList
-        // - Отрендерить через headless renderer (как в InProcessSession)
-        // - Закодировать в PNG
-        Err(Error::Other("screenshot: WinitSession не реализована в 8A.7".into()))
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+
+        let display_list = lumen_paint::build_display_list(&state.layout_root);
+        let width = self.viewport.width as u32;
+        let height = self.viewport.height as u32;
+        let mut renderer = lumen_paint::Renderer::new_headless(INTER_FONT.to_vec(), width, height)
+            .map_err(|e| Error::Other(format!("headless renderer: {e}")))?;
+
+        let image = renderer
+            .render_to_image(&display_list, 0.0, 0.0)
+            .map_err(|e| Error::Other(format!("render_to_image: {e}")))?;
+
+        lumen_image::encode_png_rgba8(&image)
+            .map_err(|e| Error::Other(format!("PNG encoding: {e}")))
     }
 
     fn a11y_tree(&self) -> Result<A11yNode> {
-        // TODO: реализовать в 8A.7
-        Err(Error::Other("a11y_tree: WinitSession не реализована в 8A.7".into()))
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        Ok(build_a11y_node(&state.doc, state.doc.root()))
     }
 
     fn layout_snapshot(&self) -> Result<Vec<BoxModel>> {
-        // TODO: реализовать в 8A.7
-        Err(Error::Other("layout_snapshot: WinitSession не реализована в 8A.7".into()))
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let mut out = Vec::new();
+        collect_boxes(&state.layout_root, &state.doc, &mut out);
+        Ok(out)
     }
 
-    fn computed_style(&self, _selector: &str) -> Result<Option<ComputedProperties>> {
-        // TODO: реализовать в 8A.7
-        Err(Error::Other("computed_style: WinitSession не реализована в 8A.7".into()))
+    fn computed_style(&self, selector: &str) -> Result<Option<ComputedProperties>> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let Some(node_id) = find_first_by_selector(&state.doc, selector) else {
+            return Ok(None);
+        };
+        let Some(lb) = find_layout_box(&state.layout_root, node_id) else {
+            return Ok(None);
+        };
+        Ok(Some(style_to_properties(&lb.style)))
     }
 
-    fn computed_style_snapshot(&self, _selector: &str) -> Result<Option<ComputedStyleSnapshot>> {
-        // TODO: реализовать в 8A.7
-        Err(Error::Other("computed_style_snapshot: WinitSession не реализована в 8A.7".into()))
+    fn computed_style_snapshot(&self, selector: &str) -> Result<Option<ComputedStyleSnapshot>> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        Ok(lumen_layout::computed_style_by_selector(
+            &state.layout_root,
+            &state.doc,
+            selector,
+        ))
     }
 
-    fn layout_box_by_selector(&self, _selector: &str) -> Result<Option<BoxModel>> {
-        // TODO: реализовать в 8A.7
-        Err(Error::Other("layout_box_by_selector: WinitSession не реализована в 8A.7".into()))
+    fn layout_box_by_selector(&self, selector: &str) -> Result<Option<BoxModel>> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let Some(lb) = lumen_layout::find_box_by_selector(&state.layout_root, &state.doc, selector)
+        else {
+            return Ok(None);
+        };
+
+        let tag_name = {
+            let node = state.doc.get(lb.node);
+            match &node.data {
+                NodeData::Element { name, .. } => name.local.to_string(),
+                _ => String::new(),
+            }
+        };
+
+        let r = lb.rect;
+        let mt = lb.style.margin_top.to_px_opt().unwrap_or(0.0);
+        let mr = lb.style.margin_right.to_px_opt().unwrap_or(0.0);
+        let mb = lb.style.margin_bottom.to_px_opt().unwrap_or(0.0);
+        let ml = lb.style.margin_left.to_px_opt().unwrap_or(0.0);
+        let margin_box = lumen_core::geom::Rect {
+            x: r.x - ml,
+            y: r.y - mt,
+            width: r.width + ml + mr,
+            height: r.height + mt + mb,
+        };
+
+        Ok(Some(BoxModel {
+            node_id: lb.node.index() as u32,
+            tag_name,
+            border_box: r,
+            margin_box,
+        }))
     }
 
-    fn all_layout_boxes_by_selector(&self, _selector: &str) -> Result<Vec<BoxModel>> {
-        // TODO: реализовать в 8A.7
-        Err(Error::Other("all_layout_boxes_by_selector: WinitSession не реализована в 8A.7".into()))
+    fn all_layout_boxes_by_selector(&self, selector: &str) -> Result<Vec<BoxModel>> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let boxes = lumen_layout::find_all_by_selector(&state.layout_root, &state.doc, selector);
+        let mut out = Vec::with_capacity(boxes.len());
+
+        for lb in boxes {
+            let tag_name = {
+                let node = state.doc.get(lb.node);
+                match &node.data {
+                    NodeData::Element { name, .. } => name.local.to_string(),
+                    _ => String::new(),
+                }
+            };
+
+            let r = lb.rect;
+            let mt = lb.style.margin_top.to_px_opt().unwrap_or(0.0);
+            let mr = lb.style.margin_right.to_px_opt().unwrap_or(0.0);
+            let mb = lb.style.margin_bottom.to_px_opt().unwrap_or(0.0);
+            let ml = lb.style.margin_left.to_px_opt().unwrap_or(0.0);
+            let margin_box = lumen_core::geom::Rect {
+                x: r.x - ml,
+                y: r.y - mt,
+                width: r.width + ml + mr,
+                height: r.height + mt + mb,
+            };
+
+            out.push(BoxModel {
+                node_id: lb.node.index() as u32,
+                tag_name,
+                border_box: r,
+                margin_box,
+            });
+        }
+
+        Ok(out)
     }
 
     fn network_log(&self) -> Result<Vec<NetworkEntry>> {
@@ -212,20 +548,33 @@ impl BrowserSession for WinitSession {
     // ── Инструменты ────────────────────────────────────────────────────────
 
     fn navigate(&mut self, url: &str) -> Result<()> {
-        // Phase 1: support file:// URLs only
-        // Phase 2: add HTTP(S) support via NetworkTransport
+        self.net_log.clear();
+        self.con_log.clear();
 
-        if url.starts_with("file://") {
-            let path = &url[7..]; // strip "file://"
+        if let Some(path) = url.strip_prefix("file://") {
             let bytes = std::fs::read(path)
-                .map_err(|e| Error::Other(format!("ошибка чтения файла {}: {}", path, e)))?;
-            self.run_pipeline(&bytes, Some("text/html"), url.to_owned())
-        } else if url.starts_with("http://") || url.starts_with("https://") {
-            // TODO (Phase 2): implement HTTP loading
-            Err(Error::Other("HTTP navigation не реализована в 8A.7".into()))
-        } else {
-            Err(Error::Other(format!("неподдерживаемый URL scheme: {}", url)))
+                .map_err(|e| Error::Io(format!("не удалось прочитать {path}: {e}")))?;
+            return self.run_pipeline(&bytes, None, url.to_owned());
         }
+
+        if url.starts_with("http://") || url.starts_with("https://") {
+            use lumen_core::ext::NetworkTransport;
+            let lumen_url = lumen_core::url::Url::parse(url)
+                .map_err(|e| Error::InvalidUrl(format!("{url}: {e}")))?;
+            let sink = std::sync::Arc::new(lumen_core::ext::NoopEventSink);
+            let client = lumen_network::HttpClient::new()
+                .with_sink(sink)
+                .with_content_decoder(std::sync::Arc::new(
+                    lumen_network::BrotliContentDecoder::new(),
+                ));
+            let bytes = client.fetch(&lumen_url)?;
+            return self.run_pipeline(&bytes, Some("text/html"), url.to_owned());
+        }
+
+        // Допускаем прямой файловый путь без схемы.
+        let bytes = std::fs::read(url)
+            .map_err(|e| Error::Io(format!("не удалось прочитать {url}: {e}")))?;
+        self.run_pipeline(&bytes, None, format!("file://{url}"))
     }
 
     fn click(&mut self, _target: &Target) -> Result<()> {

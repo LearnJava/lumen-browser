@@ -62,6 +62,6 @@ fn test_01_sanity() {
         "Square Y position should be ~261px, got {}", square_box.border_box.y);
 
     // Verify white background color
-    assert!(matches!(square_style.background_color, Some(_)),
+    assert!(square_style.background_color.is_some(),
         "Square should have background color");
 }
