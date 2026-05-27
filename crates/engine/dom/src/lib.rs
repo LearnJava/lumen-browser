@@ -2543,6 +2543,102 @@ mod tests {
     }
 
     #[test]
+    fn flat_tree_nested_shadow_with_slot_delegation() {
+        // Scenario:
+        // <custom-component>
+        //   #shadow-root(open)
+        //     <slot name="item"></slot>
+        //   <custom-item slot="item">
+        //     #shadow-root(open)
+        //       <div>Item content</div>
+        //   </custom-item>
+        //
+        // Expected flat tree:
+        // - custom-component's composed children = [custom-item (from shadow root)]
+        // - slot's composed children = [custom-item (from light tree assignment)]
+        // - custom-item's composed children = [<div>Item content</div> (from its shadow root)]
+
+        let mut doc = Document::new();
+
+        // Create outer component with shadow tree
+        let outer_host = doc.create_element(QualName::html("custom-component"));
+        doc.append_child(doc.root(), outer_host);
+
+        let outer_shadow = doc.attach_shadow(outer_host, ShadowRootMode::Open);
+        let outer_slot = doc.create_element(QualName::html("slot"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(outer_slot).data {
+            attrs.push(Attribute {
+                name: QualName::html("name"),
+                value: "item".into(),
+            });
+        }
+        doc.append_child(outer_shadow, outer_slot);
+
+        // Create inner component with shadow tree and slot attribute
+        let inner_host = doc.create_element(QualName::html("custom-item"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inner_host).data {
+            attrs.push(Attribute {
+                name: QualName::html("slot"),
+                value: "item".into(),
+            });
+        }
+        doc.append_child(outer_host, inner_host); // Light tree child of outer
+
+        let inner_shadow = doc.attach_shadow(inner_host, ShadowRootMode::Open);
+        let inner_content = doc.create_element(QualName::html("div"));
+        doc.append_child(inner_shadow, inner_content);
+
+        let flat = build_flat_tree(&doc);
+
+        // Outer host should have shadow root children (which includes slot)
+        assert_eq!(flat.children_of(&doc, outer_host), &[outer_slot]);
+
+        // Outer slot should have inner_host as its assigned child
+        assert_eq!(flat.children_of(&doc, outer_slot), &[inner_host]);
+
+        // Inner host should have inner_content as its composed child (from its shadow root)
+        assert_eq!(flat.children_of(&doc, inner_host), &[inner_content]);
+    }
+
+    #[test]
+    fn flat_tree_nested_slot_fallback() {
+        // Scenario:
+        // <outer-component>
+        //   #shadow-root(open)
+        //     <slot name="header">
+        //       <default-header></default-header>
+        //     </slot>
+        //   <!-- light tree: no child with slot="header", so fallback is used -->
+        //
+        // Expected: slot should have its DOM child (default-header) as composed children.
+
+        let mut doc = Document::new();
+
+        let outer_host = doc.create_element(QualName::html("outer-component"));
+        doc.append_child(doc.root(), outer_host);
+
+        let outer_shadow = doc.attach_shadow(outer_host, ShadowRootMode::Open);
+        let slot = doc.create_element(QualName::html("slot"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(slot).data {
+            attrs.push(Attribute {
+                name: QualName::html("name"),
+                value: "header".into(),
+            });
+        }
+        doc.append_child(outer_shadow, slot);
+
+        let fallback = doc.create_element(QualName::html("default-header"));
+        doc.append_child(slot, fallback);
+
+        // No light-tree children with slot="header", so fallback should be used.
+
+        let flat = build_flat_tree(&doc);
+
+        // Slot should have fallback as its composed children (no assignment).
+        assert_eq!(flat.children_of(&doc, slot), &[fallback]);
+    }
+
+    #[test]
     fn shadow_root_printed_in_display() {
         let (doc, _, _) = build_shadow_host();
         let s = doc.to_string();
