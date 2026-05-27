@@ -82,6 +82,8 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
         BoxKind::Marker { .. } => "Marker",
         BoxKind::FlowRoot => "FlowRoot",
         BoxKind::Contents => "Contents",
+        BoxKind::SvgRoot { .. } => "SvgRoot",
+        BoxKind::SvgShape { .. } => "SvgShape",
     };
     let _ = write!(
         out,
@@ -90,6 +92,21 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
     );
     if let BoxKind::Image { src, alt } = &b.kind {
         let _ = write!(out, " src={src:?} alt={alt:?}");
+    }
+    if let BoxKind::SvgShape { shape } = &b.kind {
+        use crate::box_tree::SvgShapeKind;
+        match shape {
+            SvgShapeKind::Rect { x, y, width, height, rx, ry } =>
+                { let _ = write!(out, " rect({x},{y},{width},{height}) rx={rx} ry={ry}"); }
+            SvgShapeKind::Circle { cx, cy, r } =>
+                { let _ = write!(out, " circle({cx},{cy}) r={r}"); }
+            SvgShapeKind::Ellipse { cx, cy, rx, ry } =>
+                { let _ = write!(out, " ellipse({cx},{cy}) rx={rx} ry={ry}"); }
+            SvgShapeKind::Line { x1, y1, x2, y2 } =>
+                { let _ = write!(out, " line({x1},{y1}→{x2},{y2})"); }
+            SvgShapeKind::Path { d } =>
+                { let _ = write!(out, " path d={d:?}"); }
+        }
     }
     write_style_attrs(out, &b.style);
     out.push('\n');
