@@ -1,7 +1,7 @@
 //! Utility for generating PNG snapshots from graphic_tests HTML files
 //! Run with: SAVE_SNAPSHOTS=1 cargo test -p lumen-driver snapshot_generator
 
-use lumen_driver::InProcessSession;
+use lumen_driver::{BrowserSession, InProcessSession};
 use std::fs;
 use std::path::Path;
 
