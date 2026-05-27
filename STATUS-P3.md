@@ -1,5 +1,5 @@
 In progress: —
-Next step: mock-http-client (8E.1+P2) для тестирования HTTP → запросы перехватываются и возвращаются fixtures  lumen-network::mock_transport
+Next step: mock-http-client (8E.1+P2) → решено 2026-05-27; branch: p3-mock-http-client (готов к мержу)
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
