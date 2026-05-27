@@ -1,4 +1,5 @@
-In progress: —
+In progress: html5-insertion-modes-remaining  branch: p1-html5-insertion-modes
+Next step: implement InFrameset/AfterFrameset/AfterAfterFrameset/InHeadNoscript + complete InSelectInTable  crates/engine/html-parser/src/tree_builder.rs:55
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
