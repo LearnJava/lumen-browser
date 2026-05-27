@@ -10,6 +10,7 @@ Bug fixes rule: P3 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 pi
 
 Next:
 - http-tls-client: HTTP/1.1 + TLS через rustls — загрузка реальных URL (не только file://); provisional dep rustls + tokio; интегрировать в HttpClient + shell navigation
+- click-hint-overlay (7B.2): lumen_layout::collect_clickable_elements() готов (P1 done 2026-05-27). P3 wire-up: вызвать после layout, построить overlay FillRect на каждый ClickableElement, клавиша-подсказки (f + hint-key) активируют клик по NodeId.
 
 Queue (Wave 2):
 - mixed-content-enforcement: применить lumen-network::classify_subresource_request в HttpClient — блокировать blockable mixed-content до TCP connect; classifier готов, enforcement нет

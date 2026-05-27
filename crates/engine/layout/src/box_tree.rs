@@ -126,6 +126,16 @@ fn is_svg_root(doc: &Document, id: NodeId) -> bool {
     )
 }
 
+/// Returns `true` when `id` is a `<details>` element.
+fn is_details_element(doc: &Document, id: NodeId) -> bool {
+    matches!(&doc.get(id).data, NodeData::Element { name, .. } if name.local == "details")
+}
+
+/// Returns `true` when `id` is a `<summary>` element.
+fn is_summary_element(doc: &Document, id: NodeId) -> bool {
+    matches!(&doc.get(id).data, NodeData::Element { name, .. } if name.local == "summary")
+}
+
 /// Parses a float attribute from the given element; returns 0.0 if absent or non-numeric.
 fn svg_attr_f32(doc: &Document, id: NodeId, attr: &str) -> f32 {
     doc.get(id)
@@ -1489,7 +1499,19 @@ fn build_box(
     let mut children = Vec::new();
     if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup) {
         // CSS: :host, ::slotted — P4 wires shadow-scoped styles here
-        let dom_children: Vec<NodeId> = flat.children_of(doc, id).to_vec();
+        // HTML5 §4.11.1 — <details>: when `open` attribute absent, only <summary> is rendered.
+        // P3 wires: clicking <summary> should toggle `open` attribute + relayout.
+        let dom_children: Vec<NodeId> = if is_details_element(doc, id)
+            && doc.get(id).get_attr("open").is_none()
+        {
+            flat.children_of(doc, id)
+                .iter()
+                .copied()
+                .filter(|&cid| is_summary_element(doc, cid))
+                .collect()
+        } else {
+            flat.children_of(doc, id).to_vec()
+        };
         // CSS Grid L1 §6: all direct children of a grid/flex container are
         // "blockified" — they participate as individual items, not wrapped in
         // InlineRun. Skip the inline-collection logic for these containers.
