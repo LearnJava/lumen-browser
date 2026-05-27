@@ -1,5 +1,5 @@
-In progress: none (ready for next task)
-Next step: transition-advanced (6.7, Phase 2) — grouped properties, interrupted transitions, animation-fill-mode lifecycle. Extends Phase 0 transition infrastructure + animation-keyframe-easing timing functions.
+In progress: transition-advanced (6.7, Phase 2)  branch: p1-transition-advanced
+Next step: TransitionState struct + interrupted-transition tracking (animation-fill-mode lifecycle completion)  crates/engine/dom/src/animation/mod.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
