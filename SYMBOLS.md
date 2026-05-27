@@ -1185,19 +1185,30 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/scroll_snap.rs:33` **fn** `find_scroll_snap_y` — CSS Scroll Snap L1 — returns the Y scroll offset to snap to, or `None`
 `crates/engine/paint/src/scroll_snap.rs:54` **fn** `find_scroll_snap_y_proximity` — CSS Scroll Snap L1 — same as [`find_scroll_snap_y`] but restricts candidates
 
-## lumen-shell  (130 symbols)
+## lumen-shell  (141 symbols)
 
-`crates/shell/src/address_bar.rs:33` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
-`crates/shell/src/address_bar.rs:43` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
-`crates/shell/src/address_bar.rs:49` **fn** `close`
-`crates/shell/src/address_bar.rs:55` **fn** `is_open`
-`crates/shell/src/address_bar.rs:59` **fn** `input`
-`crates/shell/src/address_bar.rs:64` **fn** `append_str` — Добавить непечатаемые символы (printable chars из keyboard event)
-`crates/shell/src/address_bar.rs:76` **fn** `backspace` — Backspace — удалить последний Unicode-символ
-`crates/shell/src/address_bar.rs:84` **fn** `commit` — Зафиксировать текущий ввод: закрыть бар и, если ввод непуст, выставить
-`crates/shell/src/address_bar.rs:95` **fn** `take_commit` — Вернуть зафиксированный URL (если есть) и сбросить его
-`crates/shell/src/address_bar.rs:103` **struct** `BarOverlay` — Параметры для сборки overlay display list
-`crates/shell/src/address_bar.rs:111` **fn** `build_bar_overlay` — Собирает display list адресной строки. Вызывается каждый кадр, пока
+`crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
+`crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
+`crates/shell/src/address_bar.rs:79` **enum** `OmniboxSuggestion` — Одна строка autocomplete в dropdown omnibox
+`crates/shell/src/address_bar.rs:101` **fn** `commit_value` — Строка, которая будет зафиксирована при выборе этой подсказки
+`crates/shell/src/address_bar.rs:109` **fn** `label` — Основной текст строки dropdown
+`crates/shell/src/address_bar.rs:121` **fn** `sub_label` — Дополнительный текст под основным label
+`crates/shell/src/address_bar.rs:154` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
+`crates/shell/src/address_bar.rs:169` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
+`crates/shell/src/address_bar.rs:177` **fn** `close`
+`crates/shell/src/address_bar.rs:185` **fn** `is_open`
+`crates/shell/src/address_bar.rs:189` **fn** `input`
+`crates/shell/src/address_bar.rs:194` **fn** `suggestions` — Текущий список подсказок (для рендера и клавиатурной навигации)
+`crates/shell/src/address_bar.rs:199` **fn** `selected_idx` — Индекс выделенной подсказки. `None` — ни одна не выделена
+`crates/shell/src/address_bar.rs:205` **fn** `set_suggestions` — Установить новый список подсказок и сбросить выделение
+`crates/shell/src/address_bar.rs:211` **fn** `select_next` — Перейти к следующей (вниз) подсказке
+`crates/shell/src/address_bar.rs:222` **fn** `select_prev` — Перейти к предыдущей (вверх) подсказке. `None` если уже на первой
+`crates/shell/src/address_bar.rs:230` **fn** `append_str` — Добавить непечатаемые символы (printable chars из keyboard event)
+`crates/shell/src/address_bar.rs:244` **fn** `backspace` — Backspace — удалить последний Unicode-символ
+`crates/shell/src/address_bar.rs:254` **fn** `commit` — Зафиксировать текущий ввод или выделенную подсказку: закрыть бар и,
+`crates/shell/src/address_bar.rs:271` **fn** `take_commit` — Вернуть зафиксированный URL/запрос (если есть) и сбросить его
+`crates/shell/src/address_bar.rs:279` **struct** `BarOverlay` — Параметры для сборки overlay display list
+`crates/shell/src/address_bar.rs:287` **fn** `build_bar_overlay` — Собирает display list адресной строки. Вызывается каждый кадр, пока
 `crates/shell/src/animation_scheduler.rs:49` **struct** `AnimationScheduler` — Планировщик CSS-анимаций. Хранит timing-состояние между кадрами
 `crates/shell/src/animation_scheduler.rs:54` **fn** `new`
 `crates/shell/src/animation_scheduler.rs:62` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
@@ -1693,4 +1704,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 1637 symbols in 17 crates*
+*Total: 1648 symbols in 17 crates*
