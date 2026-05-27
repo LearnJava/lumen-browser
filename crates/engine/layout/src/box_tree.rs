@@ -1048,7 +1048,7 @@ fn build_box(
     let kind = match &doc.get(id).data {
         // Shadow root nodes are infrastructure — never rendered directly.
         // The flat tree already maps host children to shadow root's children.
-        NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. } | NodeData::ShadowRoot { .. } => BoxKind::Skip,
+        NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. } | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => BoxKind::Skip,
         NodeData::Document | NodeData::Element { .. } => {
             if style.display == Display::None {
                 BoxKind::Skip
@@ -5011,14 +5011,14 @@ mod tests {
         collect_runs(&root, &mut runs);
         assert!(runs.len() >= 2, "expected at least 2 inline runs");
         for run in &runs {
-            if let super::BoxKind::InlineRun { segments, .. } = &run.kind {
-                if !segments.is_empty() {
-                    assert_eq!(
-                        segments[0].pseudo_kind,
-                        super::PseudoKind::FirstLetter,
-                        "each run's first seg should be FirstLetter"
-                    );
-                }
+            if let super::BoxKind::InlineRun { segments, .. } = &run.kind
+                && !segments.is_empty()
+            {
+                assert_eq!(
+                    segments[0].pseudo_kind,
+                    super::PseudoKind::FirstLetter,
+                    "each run's first seg should be FirstLetter"
+                );
             }
         }
     }

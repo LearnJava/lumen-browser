@@ -90,6 +90,15 @@ pub enum NodeData {
     },
     Text(String),
     Comment(String),
+    /// Inert subtree used as the content container for `<template>` elements.
+    ///
+    /// DOM Living Standard §4.5: a DocumentFragment has no parent and is not
+    /// rendered directly. The `<template>` element stores its content here;
+    /// callers clone the fragment into the live tree via `deep_clone`.
+    ///
+    /// Stored in the arena like any node. The mapping `template → fragment` is
+    /// kept in `Document::template_contents`.
+    DocumentFragment,
 }
 
 #[derive(Debug, Clone)]
@@ -329,6 +338,12 @@ pub struct Document {
     /// DOM children of the host. The flat tree (see `build_flat_tree`) uses
     /// this map to route layout traversal through shadow trees.
     shadow_roots: HashMap<NodeId, NodeId>,
+    /// Maps each `<template>` element `NodeId` to its content `DocumentFragment` `NodeId`.
+    ///
+    /// The fragment is stored in the arena but is not a DOM child of the
+    /// template element — `template.children` is always empty. Callers access
+    /// template content via [`Document::template_content`].
+    template_contents: HashMap<NodeId, NodeId>,
 }
 
 impl Default for Document {
@@ -350,6 +365,7 @@ impl Document {
             mode: DocumentMode::default(),
             target_id: None,
             shadow_roots: HashMap::new(),
+            template_contents: HashMap::new(),
         }
     }
 
@@ -494,6 +510,30 @@ impl Document {
         self.alloc(NodeData::Comment(content.into()))
     }
 
+    /// Allocate a `DocumentFragment` node in the arena.
+    ///
+    /// Used by the tree builder to hold `<template>` content. The fragment is
+    /// an inert container: it is never a DOM child of any node and is not
+    /// rendered. Register it as a template's content via
+    /// [`set_template_content`][Self::set_template_content].
+    pub fn create_fragment(&mut self) -> NodeId {
+        self.alloc(NodeData::DocumentFragment)
+    }
+
+    /// Register `fragment` as the content container for `template`.
+    ///
+    /// Overwrites any previous mapping. Caller must ensure `fragment` was
+    /// created with [`create_fragment`][Self::create_fragment].
+    pub fn set_template_content(&mut self, template: NodeId, fragment: NodeId) {
+        self.template_contents.insert(template, fragment);
+    }
+
+    /// Return the content `DocumentFragment` for a `<template>` element, or
+    /// `None` if `template` has no associated content (not a template element).
+    pub fn template_content(&self, template: NodeId) -> Option<NodeId> {
+        self.template_contents.get(&template).copied()
+    }
+
     pub fn create_doctype(
         &mut self,
         name: impl Into<String>,
@@ -542,6 +582,7 @@ fn write_tree(doc: &Document, id: NodeId, depth: usize, f: &mut fmt::Formatter<'
         NodeData::Document => writeln!(f, "#document")?,
         NodeData::Doctype { name, .. } => writeln!(f, "<!DOCTYPE {name}>")?,
         NodeData::ShadowRoot { mode } => writeln!(f, "#shadow-root ({mode})")?,
+        NodeData::DocumentFragment => writeln!(f, "#document-fragment")?,
         NodeData::Element { name, attrs } => {
             write!(f, "<{}", name.local)?;
             for a in attrs {
@@ -558,6 +599,10 @@ fn write_tree(doc: &Document, id: NodeId, depth: usize, f: &mut fmt::Formatter<'
     // Shadow roots are not DOM children — print them after light-tree children.
     if let Some(sr) = doc.shadow_root_of(id) {
         write_tree(doc, sr, depth + 1, f)?;
+    }
+    // Template content fragments are not DOM children — print inline for debugging.
+    if let Some(frag) = doc.template_content(id) {
+        write_tree(doc, frag, depth + 1, f)?;
     }
     Ok(())
 }
