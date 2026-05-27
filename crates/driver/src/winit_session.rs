@@ -15,7 +15,6 @@
 use std::sync::{Arc, Mutex};
 
 use lumen_core::error::{Error, Result};
-use lumen_core::ext::NoopEventSink;
 use lumen_core::geom::Size;
 use lumen_dom::Document;
 use lumen_layout::LayoutBox;
@@ -121,22 +120,22 @@ impl BrowserSession for WinitSession {
         Err(Error::Other("layout_snapshot: WinitSession не реализована в 8A.7".into()))
     }
 
-    fn computed_style(&self, selector: &str) -> Result<Option<ComputedProperties>> {
+    fn computed_style(&self, _selector: &str) -> Result<Option<ComputedProperties>> {
         // TODO: реализовать в 8A.7
         Err(Error::Other("computed_style: WinitSession не реализована в 8A.7".into()))
     }
 
-    fn computed_style_snapshot(&self, selector: &str) -> Result<Option<ComputedStyleSnapshot>> {
+    fn computed_style_snapshot(&self, _selector: &str) -> Result<Option<ComputedStyleSnapshot>> {
         // TODO: реализовать в 8A.7
         Err(Error::Other("computed_style_snapshot: WinitSession не реализована в 8A.7".into()))
     }
 
-    fn layout_box_by_selector(&self, selector: &str) -> Result<Option<BoxModel>> {
+    fn layout_box_by_selector(&self, _selector: &str) -> Result<Option<BoxModel>> {
         // TODO: реализовать в 8A.7
         Err(Error::Other("layout_box_by_selector: WinitSession не реализована в 8A.7".into()))
     }
 
-    fn all_layout_boxes_by_selector(&self, selector: &str) -> Result<Vec<BoxModel>> {
+    fn all_layout_boxes_by_selector(&self, _selector: &str) -> Result<Vec<BoxModel>> {
         // TODO: реализовать в 8A.7
         Err(Error::Other("all_layout_boxes_by_selector: WinitSession не реализована в 8A.7".into()))
     }
@@ -164,32 +163,32 @@ impl BrowserSession for WinitSession {
         Ok(())
     }
 
-    fn click(&mut self, target: &Target) -> Result<()> {
+    fn click(&mut self, _target: &Target) -> Result<()> {
         // TODO: реализовать в 8A.7
         Err(Error::Other("click: WinitSession не реализована в 8A.7".into()))
     }
 
-    fn type_text(&mut self, target: &Target, text: &str) -> Result<()> {
+    fn type_text(&mut self, _target: &Target, _text: &str) -> Result<()> {
         // TODO: реализовать в 8A.7
         Err(Error::Other("type_text: WinitSession не реализована в 8A.7".into()))
     }
 
-    fn scroll(&mut self, target: &Target, delta: ScrollDelta) -> Result<()> {
+    fn scroll(&mut self, _target: &Target, _delta: ScrollDelta) -> Result<()> {
         // TODO: реализовать в 8A.7
         Err(Error::Other("scroll: WinitSession не реализована в 8A.7".into()))
     }
 
-    fn wait(&mut self, cond: WaitCondition, timeout_ms: u64) -> Result<()> {
+    fn wait(&mut self, _cond: WaitCondition, _timeout_ms: u64) -> Result<()> {
         // TODO: реализовать в 8A.7
         Err(Error::Other("wait: WinitSession не реализована в 8A.7".into()))
     }
 
-    fn eval(&self, js: &str) -> Result<String> {
+    fn eval(&self, _js: &str) -> Result<String> {
         // TODO: реализовать в 8A.7
         Err(Error::Other("eval: WinitSession не реализована в 8A.7".into()))
     }
 
-    fn query(&self, selector: &str) -> Result<Vec<NodeRef>> {
+    fn query(&self, _selector: &str) -> Result<Vec<NodeRef>> {
         // TODO: реализовать в 8A.7
         Err(Error::Other("query: WinitSession не реализована в 8A.7".into()))
     }
