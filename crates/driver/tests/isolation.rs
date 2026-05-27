@@ -56,7 +56,6 @@ fn test_user_agent_default_tor() {
 #[test]
 fn test_user_agent_override() {
     let mut session = InProcessSession::new();
-    let original_ua = session.user_agent();
 
     let custom_ua = "CustomBot/1.0";
     assert!(session.set_user_agent(custom_ua).is_ok());
@@ -83,7 +82,7 @@ fn test_user_agent_empty_rejected() {
 #[test]
 fn test_sessions_have_independent_contexts() {
     let mut session1 = InProcessSession::new();
-    let mut session2 = InProcessSession::new();
+    let session2 = InProcessSession::new();
 
     // Change session1's profile
     session1.set_fingerprint_profile(FingerprintProfile::Strict).unwrap();
