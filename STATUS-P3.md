@@ -1,5 +1,6 @@
-In progress: —
-Next step: (Wave 3) Pick next: deterministic-mode (8F), or a11y-tree-via-driver (8G, [P3+P1]), or antidetect-surface-api (9A)
+In progress: deterministic-mode (8F) — set_clock / set_rng_seed / freeze_fingerprint for repeatable tests
+Next step: Design SessionContext extension + add methods to BrowserSession trait crates/driver/src/browser.rs
+Branch: p3-deterministic-mode-8f
 
 Recent (Wave 3 - automation API):
   - per-context-isolation-8e (Phase 1 complete: SessionContext + FingerprintProfile + cookies/storage/HTTP cache + 13 tests) 2026-05-28
