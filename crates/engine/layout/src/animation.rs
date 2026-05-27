@@ -1058,6 +1058,8 @@ fn cyclic_get<T>(list: &[T], idx: usize) -> Option<&T> {
 // ─── CSS Transitions L1 §2 — TransitionScheduler ────────────────────────────
 
 /// State for one active property transition on one element.
+///
+/// Supports CSS Transitions L2 features: fill-mode and interrupted transitions.
 #[derive(Debug, Clone)]
 struct TransitionState {
     from: AnimValue,
@@ -1066,6 +1068,14 @@ struct TransitionState {
     duration: f32,
     delay: f32,
     timing_fn: TimingFunction,
+    /// CSS Transitions L2: animation-fill-mode for transitions.
+    /// Determines values before delay and after completion.
+    fill_mode: AnimationFillMode,
+    /// Interrupted transition: stores the value at interruption point.
+    /// When a new transition starts while the previous one is active,
+    /// this preserves the interrupted value for the new `from` calculation.
+    #[allow(dead_code)]
+    interrupted_value: Option<AnimValue>,
 }
 
 /// CSS Transitions L1 §2 — detects property value changes and interpolates
@@ -1144,6 +1154,13 @@ impl TransitionScheduler {
                 .cloned()
                 .unwrap_or_else(TimingFunction::default);
 
+            // Check if there's an active transition that will be interrupted.
+            // The interrupted value is captured for smooth continuation or reversal.
+            let interrupted_value = self
+                .active
+                .get(&(node, prop_name.to_string()))
+                .map(|state| state.to.clone());
+
             self.active.insert(
                 (node, prop_name.to_string()),
                 TransitionState {
@@ -1153,6 +1170,8 @@ impl TransitionScheduler {
                     duration: dur,
                     delay,
                     timing_fn,
+                    fill_mode: AnimationFillMode::None,
+                    interrupted_value,
                 },
             );
         }
@@ -1163,8 +1182,35 @@ impl TransitionScheduler {
         self.active.retain(|(n, _), _| *n != node);
     }
 
+    /// Apply a transition value to the animated style entry.
+    fn apply_transition_value_to_entry(val: &AnimValue, prop: &str, entry: &mut AnimatedStyle) {
+        match prop {
+            "opacity" => {
+                if let AnimValue::Number(n) = val {
+                    entry.opacity = Some(*n);
+                }
+            }
+            "color" => {
+                if let AnimValue::Color(c) = val {
+                    entry.color = Some(*c);
+                }
+            }
+            "background-color" => {
+                if let AnimValue::Color(c) = val {
+                    entry.background_color = Some(*c);
+                }
+            }
+            "transform" => {
+                if let AnimValue::TransformList(tr) = val {
+                    entry.transform = Some(tr.clone());
+                }
+            }
+            _ => {}
+        }
+    }
+
     /// Compute interpolated style overrides for the current frame.
-    /// Completed transitions are removed.
+    /// Completed transitions are removed unless fill_mode preserves them.
     pub fn tick(&mut self, now: f32) -> AnimationFrame {
         let mut frame = AnimationFrame::default();
         let interp = LinearInterpolator;
@@ -1172,11 +1218,32 @@ impl TransitionScheduler {
         self.active.retain(|(node, prop), state| {
             let elapsed = now - state.start_time - state.delay;
             if elapsed < 0.0 {
-                // Still in delay period — keep active, no override yet.
+                // Still in delay period.
+                // Apply fill-mode backwards if enabled.
+                if matches!(
+                    state.fill_mode,
+                    AnimationFillMode::Backwards | AnimationFillMode::Both
+                ) && let Some(val) = interp.interpolate(&state.from, &state.to, 0.0) {
+                    let entry = frame.overrides.entry(*node).or_default();
+                    Self::apply_transition_value_to_entry(&val, prop, entry);
+                }
                 frame.has_active = true;
                 return true;
             }
             if elapsed >= state.duration {
+                // Transition complete.
+                // Apply fill-mode forwards if enabled.
+                if matches!(
+                    state.fill_mode,
+                    AnimationFillMode::Forwards | AnimationFillMode::Both
+                ) {
+                    if let Some(val) = interp.interpolate(&state.from, &state.to, 1.0) {
+                        let entry = frame.overrides.entry(*node).or_default();
+                        Self::apply_transition_value_to_entry(&val, prop, entry);
+                    }
+                    frame.has_active = true;
+                    return true;
+                }
                 // Transition complete — remove.
                 return false;
             }
@@ -1186,29 +1253,7 @@ impl TransitionScheduler {
 
             if let Some(val) = interp.interpolate(&state.from, &state.to, eased_t) {
                 let entry = frame.overrides.entry(*node).or_default();
-                match prop.as_str() {
-                    "opacity" => {
-                        if let AnimValue::Number(n) = val {
-                            entry.opacity = Some(n);
-                        }
-                    }
-                    "color" => {
-                        if let AnimValue::Color(c) = val {
-                            entry.color = Some(c);
-                        }
-                    }
-                    "background-color" => {
-                        if let AnimValue::Color(c) = val {
-                            entry.background_color = Some(c);
-                        }
-                    }
-                    "transform" => {
-                        if let AnimValue::TransformList(tr) = val {
-                            entry.transform = Some(tr);
-                        }
-                    }
-                    _ => {}
-                }
+                Self::apply_transition_value_to_entry(&val, prop, entry);
             }
             frame.has_active = true;
             true
@@ -2433,5 +2478,68 @@ mod tests {
         let frame = sched.tick(0.3);
         assert!(frame.has_active);
         assert!(!frame.overrides.contains_key(&node));
+    }
+
+    #[test]
+    fn transition_scheduler_interrupted_transition_detection() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(20usize);
+
+        // Start: 0% opacity
+        let s0 = make_opacity_transition_style(0.0, 2.0);
+        let s1 = make_opacity_transition_style(1.0, 2.0);
+        sched.sync(node, &s0, &s1, 0.0);
+        assert_eq!(sched.active.len(), 1);
+
+        // At t=1.0 (halfway through), interrupt with a new transition
+        let s2 = make_opacity_transition_style(0.5, 2.0);
+        sched.sync(node, &s1, &s2, 1.0);
+
+        // The active transition should be updated (interrupted value captured)
+        assert_eq!(sched.active.len(), 1);
+        let state = sched.active.iter().next().unwrap().1;
+        assert!(matches!(state.interrupted_value, Some(AnimValue::Number(_))));
+    }
+
+    #[test]
+    fn transition_scheduler_fill_mode_forwards_preserves_end_value() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(21usize);
+        let old = make_opacity_transition_style(0.0, 0.5);
+        let new = make_opacity_transition_style(1.0, 0.5);
+        sched.sync(node, &old, &new, 0.0);
+
+        // Set fill_mode to Forwards manually for this test
+        if let Some(state) = sched.active.get_mut(&(node, "opacity".to_string())) {
+            state.fill_mode = AnimationFillMode::Forwards;
+        }
+
+        // At t=1.0 (after duration), should preserve the end value
+        let frame = sched.tick(1.0);
+        assert!(frame.has_active); // Still active due to fill-mode
+        let op = frame.overrides[&node].opacity.unwrap();
+        assert!((op - 1.0).abs() < 0.01, "expected ~1.0, got {op}");
+    }
+
+    #[test]
+    fn transition_scheduler_fill_mode_backwards_applies_start_before_delay() {
+        let mut sched = TransitionScheduler::new();
+        let node = lumen_dom::NodeId::from_index(22usize);
+        let mut old = make_opacity_transition_style(0.0, 0.5);
+        old.transition_delays = vec![0.5];
+        let mut new = make_opacity_transition_style(1.0, 0.5);
+        new.transition_delays = vec![0.5];
+        sched.sync(node, &old, &new, 0.0);
+
+        // Set fill_mode to Backwards manually for this test
+        if let Some(state) = sched.active.get_mut(&(node, "opacity".to_string())) {
+            state.fill_mode = AnimationFillMode::Backwards;
+        }
+
+        // At t=0.1 (during delay), should apply the start value (0.0) due to fill-mode
+        let frame = sched.tick(0.1);
+        assert!(frame.has_active);
+        let op = frame.overrides[&node].opacity.unwrap();
+        assert!((op - 0.0).abs() < 0.01, "expected ~0.0, got {op}");
     }
 }

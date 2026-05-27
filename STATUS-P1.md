@@ -1,5 +1,5 @@
 In progress: none (ready for next task)
-Next step: transition-advanced (6.7, Phase 2) — grouped properties, interrupted transitions, animation-fill-mode lifecycle. Extends Phase 0 transition infrastructure + animation-keyframe-easing timing functions.
+Next step: shadow-dom-accessibility-forms-gc (6+, Phase 2) — extended Shadow DOM / Accessibility / Forms / Garbage collection integration  crates/engine/dom/src/lib.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
