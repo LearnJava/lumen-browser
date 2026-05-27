@@ -339,8 +339,9 @@ impl FontStyle {
 /// Метаданные одного face-а в индексе шрифтов.
 ///
 /// Один family может иметь несколько face-ов (Regular / Bold / Italic /
-/// Bold Italic / Light / ExtraBold / …). Этот struct — то, что matcher
-/// использует, чтобы выбрать face под `font-style` + `font-weight` из CSS.
+/// Bold Italic / Light / ExtraBold / … / Condensed / Expanded / …).
+/// Этот struct — то, что matcher использует, чтобы выбрать face под
+/// `font-style` + `font-weight` + `font-stretch` из CSS.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FaceRecord {
     /// Family name, нормализованный к тому же регистру, в котором лежит
@@ -352,6 +353,10 @@ pub struct FaceRecord {
     pub weight: u16,
     /// `font-style` face-а — Normal / Italic / Oblique.
     pub style: FontStyle,
+    /// `usWidthClass` из OS/2 преобразованный в CSS percent (50..200).
+    /// Соответствует `font-stretch`: 50% (ultra-condensed) .. 200% (ultra-expanded).
+    /// По умолчанию `100` (normal), если OS/2 нет.
+    pub stretch: u16,
     /// Путь к файлу шрифта (`.ttf` / `.otf`).
     pub path: PathBuf,
 }
@@ -399,6 +404,7 @@ pub trait FontProvider: Send + Sync {
                 family: family.to_string(),
                 weight: 400,
                 style: FontStyle::Normal,
+                stretch: 100,
                 path,
             })
             .collect()
@@ -411,7 +417,7 @@ pub trait FontProvider: Send + Sync {
     /// CoreText / Fontconfig).
     fn pick_face(&self, family: &str, weight: u16, style: FontStyle) -> Option<FaceRecord> {
         let faces = self.lookup_faces(family);
-        match_face(&faces, weight, style).cloned()
+        match_face(&faces, weight, style, 100).cloned()
     }
 
     /// Байты шрифта для face-а по виртуальному пути.
@@ -428,26 +434,68 @@ pub trait FontProvider: Send + Sync {
 /// функцию, чтобы потребитель мог звать его на собственной коллекции face-ов
 /// (например, для FaceCascade в font-fallback chain).
 ///
-/// Порядок: сначала фильтр по `style` (italic > oblique > normal приоритет
-/// зависит от desired), затем weight по правилам §5 — для desired ≤ 400
-/// сначала меньшие, затем большие; для ≥ 600 — наоборот; 400 и 500 имеют
-/// особый «swap» (400 пробует 500 первым, 500 — 400).
+/// Порядок: сначала фильтр по `stretch` (width-class из OS/2), затем по `style`,
+/// затем weight. Для каждого параметра выбираем лучшее совпадение; если точного
+/// нет, выбираем ближайшее (по CSS Fonts L4 §5.2 алгоритму).
 pub fn match_face(
     faces: &[FaceRecord],
     desired_weight: u16,
     desired_style: FontStyle,
+    desired_stretch: u16,
 ) -> Option<&FaceRecord> {
     if faces.is_empty() {
         return None;
     }
-    let min_style_pri = faces
+
+    // Шаг 1: фильтруем по stretch (width-class)
+    let min_stretch_pri = faces
+        .iter()
+        .map(|f| stretch_priority(f.stretch, desired_stretch))
+        .min()?;
+    let stretch_filtered: Vec<_> = faces
+        .iter()
+        .filter(|f| stretch_priority(f.stretch, desired_stretch) == min_stretch_pri)
+        .collect();
+
+    if stretch_filtered.is_empty() {
+        return None;
+    }
+
+    // Шаг 2: фильтруем по style
+    let min_style_pri = stretch_filtered
         .iter()
         .map(|f| style_priority(f.style, desired_style))
         .min()?;
-    faces
+    stretch_filtered
         .iter()
         .filter(|f| style_priority(f.style, desired_style) == min_style_pri)
         .min_by_key(|f| weight_priority(f.weight, desired_weight))
+        .copied()
+}
+
+/// Legacy функция match_face для backward compatibility (без stretch).
+/// Новый код должен использовать match_face с параметром desired_stretch.
+#[deprecated(since = "0.1.0", note = "use match_face with desired_stretch parameter")]
+pub fn match_face_no_stretch(
+    faces: &[FaceRecord],
+    desired_weight: u16,
+    desired_style: FontStyle,
+) -> Option<&FaceRecord> {
+    match_face(faces, desired_weight, desired_style, 100)
+}
+
+/// Приоритет face-stretch для desired-stretch. Меньше — лучше.
+/// Соответствует CSS Fonts L4 §5.2: предпочитаем точное совпадение, потом
+/// ближайший меньший значок, потом больший.
+fn stretch_priority(face: u16, desired: u16) -> (u8, u32) {
+    if face == desired {
+        return (0, 0); // точное совпадение — лучшее
+    }
+    if face < desired {
+        (1, u32::from(desired - face)) // меньший (second-choice)
+    } else {
+        (2, u32::from(face - desired)) // больший (third-choice)
+    }
 }
 
 /// Приоритет face-style для заданного desired-style. Меньше — лучше.
@@ -517,7 +565,23 @@ mod font_provider_tests {
             family: family.to_string(),
             weight,
             style,
+            stretch: 100,
             path: PathBuf::from(format!("{family}-{weight}-{style:?}.ttf")),
+        }
+    }
+
+    fn face_with_stretch(
+        family: &str,
+        weight: u16,
+        style: FontStyle,
+        stretch: u16,
+    ) -> FaceRecord {
+        FaceRecord {
+            family: family.to_string(),
+            weight,
+            style,
+            stretch,
+            path: PathBuf::from(format!("{family}-{weight}-{style:?}-{stretch}.ttf")),
         }
     }
 
@@ -541,7 +605,7 @@ mod font_provider_tests {
             face("Inter", 700, FontStyle::Normal),
             face("Inter", 400, FontStyle::Italic),
         ];
-        let m = match_face(&faces, 700, FontStyle::Normal).unwrap();
+        let m = match_face(&faces, 700, FontStyle::Normal, 100).unwrap();
         assert_eq!(m.weight, 700);
         assert_eq!(m.style, FontStyle::Normal);
     }
@@ -553,7 +617,7 @@ mod font_provider_tests {
             face("F", 300, FontStyle::Normal),
             face("F", 500, FontStyle::Normal),
         ];
-        let m = match_face(&faces, 400, FontStyle::Normal).unwrap();
+        let m = match_face(&faces, 400, FontStyle::Normal, 100).unwrap();
         assert_eq!(m.weight, 500);
     }
 
@@ -563,7 +627,7 @@ mod font_provider_tests {
             face("F", 400, FontStyle::Normal),
             face("F", 600, FontStyle::Normal),
         ];
-        let m = match_face(&faces, 500, FontStyle::Normal).unwrap();
+        let m = match_face(&faces, 500, FontStyle::Normal, 100).unwrap();
         assert_eq!(m.weight, 400);
     }
 
@@ -575,7 +639,7 @@ mod font_provider_tests {
             face("F", 100, FontStyle::Normal),
             face("F", 500, FontStyle::Normal),
         ];
-        let m = match_face(&faces, 300, FontStyle::Normal).unwrap();
+        let m = match_face(&faces, 300, FontStyle::Normal, 100).unwrap();
         assert_eq!(m.weight, 100);
     }
 
@@ -586,7 +650,7 @@ mod font_provider_tests {
             face("F", 400, FontStyle::Normal),
             face("F", 900, FontStyle::Normal),
         ];
-        let m = match_face(&faces, 700, FontStyle::Normal).unwrap();
+        let m = match_face(&faces, 700, FontStyle::Normal, 100).unwrap();
         assert_eq!(m.weight, 900);
     }
 
@@ -598,7 +662,7 @@ mod font_provider_tests {
             face("F", 700, FontStyle::Normal),  // exact weight, but normal
             face("F", 100, FontStyle::Italic),  // wrong weight, but italic
         ];
-        let m = match_face(&faces, 700, FontStyle::Italic).unwrap();
+        let m = match_face(&faces, 700, FontStyle::Italic, 100).unwrap();
         assert_eq!(m.style, FontStyle::Italic);
         assert_eq!(m.weight, 100);
     }
@@ -609,11 +673,11 @@ mod font_provider_tests {
             face("F", 400, FontStyle::Normal),
             face("F", 400, FontStyle::Oblique),
         ];
-        let m = match_face(&faces_with_oblique, 400, FontStyle::Italic).unwrap();
+        let m = match_face(&faces_with_oblique, 400, FontStyle::Italic, 100).unwrap();
         assert_eq!(m.style, FontStyle::Oblique);
 
         let faces_normal_only = vec![face("F", 400, FontStyle::Normal)];
-        let m = match_face(&faces_normal_only, 400, FontStyle::Italic).unwrap();
+        let m = match_face(&faces_normal_only, 400, FontStyle::Italic, 100).unwrap();
         assert_eq!(m.style, FontStyle::Normal);
     }
 
@@ -623,14 +687,14 @@ mod font_provider_tests {
             face("F", 400, FontStyle::Italic),
             face("F", 400, FontStyle::Oblique),
         ];
-        let m = match_face(&faces, 400, FontStyle::Normal).unwrap();
+        let m = match_face(&faces, 400, FontStyle::Normal, 100).unwrap();
         assert_eq!(m.style, FontStyle::Oblique);
     }
 
     #[test]
     fn match_face_empty_returns_none() {
         let faces: Vec<FaceRecord> = Vec::new();
-        assert!(match_face(&faces, 400, FontStyle::Normal).is_none());
+        assert!(match_face(&faces, 400, FontStyle::Normal, 100).is_none());
     }
 
     #[test]
@@ -640,16 +704,63 @@ mod font_provider_tests {
         let mut faces: Vec<FaceRecord> =
             weights.iter().map(|&w| face("F", w, FontStyle::Normal)).collect();
         // 500 first
-        let m = match_face(&faces, 400, FontStyle::Normal).unwrap();
+        let m = match_face(&faces, 400, FontStyle::Normal, 100).unwrap();
         assert_eq!(m.weight, 500);
         // remove 500, expect 300
         faces.retain(|f| f.weight != 500);
-        let m = match_face(&faces, 400, FontStyle::Normal).unwrap();
+        let m = match_face(&faces, 400, FontStyle::Normal, 100).unwrap();
         assert_eq!(m.weight, 300);
         // remove 300/200/100, expect 600
         faces.retain(|f| f.weight > 500);
-        let m = match_face(&faces, 400, FontStyle::Normal).unwrap();
+        let m = match_face(&faces, 400, FontStyle::Normal, 100).unwrap();
         assert_eq!(m.weight, 600);
+    }
+
+    #[test]
+    fn match_face_stretch_exact_match() {
+        // Точное совпадение по stretch должно иметь приоритет.
+        let faces = vec![
+            face_with_stretch("F", 400, FontStyle::Normal, 75),   // condensed
+            face_with_stretch("F", 400, FontStyle::Normal, 100),  // normal
+            face_with_stretch("F", 400, FontStyle::Normal, 125),  // expanded
+        ];
+        let m = match_face(&faces, 400, FontStyle::Normal, 75).unwrap();
+        assert_eq!(m.stretch, 75);
+    }
+
+    #[test]
+    fn match_face_stretch_falls_back_to_narrower() {
+        // Если точное совпадение есть, но мы запросили больший stretch,
+        // должны выбрать ближайший меньший (второй выбор).
+        let faces = vec![
+            face_with_stretch("F", 400, FontStyle::Normal, 75),  // condensed
+            face_with_stretch("F", 400, FontStyle::Normal, 125), // expanded
+        ];
+        let m = match_face(&faces, 400, FontStyle::Normal, 100).unwrap();
+        assert_eq!(m.stretch, 75); // ближе к 100 чем 125
+    }
+
+    #[test]
+    fn match_face_stretch_falls_back_to_wider() {
+        // Если ближайший меньший не найден, выбираем больший.
+        let faces = vec![
+            face_with_stretch("F", 400, FontStyle::Normal, 100), // normal
+            face_with_stretch("F", 400, FontStyle::Normal, 150), // extra-expanded
+        ];
+        let m = match_face(&faces, 400, FontStyle::Normal, 75).unwrap();
+        assert_eq!(m.stretch, 100); // ближайший больший
+    }
+
+    #[test]
+    fn match_face_stretch_filter_strict_over_weight() {
+        // Stretch имеет приоритет над weight.
+        let faces = vec![
+            face_with_stretch("F", 700, FontStyle::Normal, 100), // exact weight, wrong stretch
+            face_with_stretch("F", 100, FontStyle::Normal, 75),  // wrong weight, exact stretch
+        ];
+        let m = match_face(&faces, 400, FontStyle::Normal, 75).unwrap();
+        assert_eq!(m.stretch, 75);
+        assert_eq!(m.weight, 100);
     }
 }
 
