@@ -247,7 +247,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/devtools/src/ws.rs:104` **fn** `read_text_frame` — Прочитать один WebSocket фрейм (RFC 6455 §5.2)
 `crates/devtools/src/ws.rs:125` **fn** `write_text_frame` — Отправить text фрейм (server→client, без маски)
 
-## lumen-dom  (80 symbols)
+## lumen-dom  (83 symbols)
 
 `crates/engine/dom/src/lib.rs:9` **struct** `NodeId`
 `crates/engine/dom/src/lib.rs:12` **fn** `index`
@@ -322,13 +322,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/lib.rs:1246` **fn** `children_of` — Composed-tree children of `id`
 `crates/engine/dom/src/lib.rs:1261` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
 `crates/engine/dom/src/lib.rs:1356` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
-`crates/engine/dom/src/lib.rs:1383` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
-`crates/engine/dom/src/lib.rs:1414` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
-`crates/engine/dom/src/lib.rs:1437` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
-`crates/engine/dom/src/lib.rs:1461` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
-`crates/engine/dom/src/lib.rs:1503` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
-`crates/engine/dom/src/lib.rs:1561` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
-`crates/engine/dom/src/lib.rs:1615` **fn** `insert_paragraph_break`
+`crates/engine/dom/src/lib.rs:1380` **struct** `IframeInfo` — Данные `<iframe>` элемента — URL содержимого и sandbox-ограничения
+`crates/engine/dom/src/lib.rs:1411` **fn** `collect_iframes` — Собрать все `<iframe>` элементы документа с их sandbox-ограничениями
+`crates/engine/dom/src/lib.rs:1422` **fn** `check_popup_gate` — Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5
+`crates/engine/dom/src/lib.rs:1441` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
+`crates/engine/dom/src/lib.rs:1472` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
+`crates/engine/dom/src/lib.rs:1495` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
+`crates/engine/dom/src/lib.rs:1519` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
+`crates/engine/dom/src/lib.rs:1561` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
+`crates/engine/dom/src/lib.rs:1619` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
+`crates/engine/dom/src/lib.rs:1673` **fn** `insert_paragraph_break`
 
 ## lumen-encoding  (11 symbols)
 
@@ -1182,7 +1185,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/scroll_snap.rs:33` **fn** `find_scroll_snap_y` — CSS Scroll Snap L1 — returns the Y scroll offset to snap to, or `None`
 `crates/engine/paint/src/scroll_snap.rs:54` **fn** `find_scroll_snap_y_proximity` — CSS Scroll Snap L1 — same as [`find_scroll_snap_y`] but restricts candidates
 
-## lumen-shell  (126 symbols)
+## lumen-shell  (130 symbols)
 
 `crates/shell/src/address_bar.rs:33` **struct** `AddressBarState` — Состояние адресной строки. Хранится в `Lumen` struct наряду с `FindState`
 `crates/shell/src/address_bar.rs:43` **fn** `open` — Открыть бар, предзаполнив поле текущим URL страницы
@@ -1199,23 +1202,27 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/animation_scheduler.rs:54` **fn** `new`
 `crates/shell/src/animation_scheduler.rs:62` **fn** `tick` — Тик планировщика: обходит layout-дерево, для каждой активной анимации
 `crates/shell/src/animation_scheduler.rs:75` **fn** `clear` — Удалить все записи для элементов, которых больше нет в дереве
-`crates/shell/src/find.rs:26` **struct** `FindState` — Состояние find bar и текущего запроса
-`crates/shell/src/find.rs:33` **fn** `is_open`
-`crates/shell/src/find.rs:37` **fn** `query`
-`crates/shell/src/find.rs:41` **fn** `active_index`
-`crates/shell/src/find.rs:45` **fn** `open`
-`crates/shell/src/find.rs:49` **fn** `close`
-`crates/shell/src/find.rs:55` **fn** `append_str`
-`crates/shell/src/find.rs:70` **fn** `backspace`
-`crates/shell/src/find.rs:82` **fn** `next` — Циклически переходит к следующему совпадению. `total` — текущее число
-`crates/shell/src/find.rs:88` **fn** `prev`
-`crates/shell/src/find.rs:99` **struct** `FindMatch` — Найденный матч: bounding box в координатах окна и индекс DrawText-команды
-`crates/shell/src/find.rs:124` **fn** `scroll_to_match` — Вычисляет новое значение `scroll_y` так, чтобы `match_rect` попал в
-`crates/shell/src/find.rs:149` **fn** `find_matches` — Находит все непересекающиеся вхождения `query` в DrawText-командах
-`crates/shell/src/find.rs:218` **struct** `BarOverlay` — Параметры overlay-бара. `window_size` — текущий размер окна в логических
-`crates/shell/src/find.rs:235` **fn** `build_page_with_highlights` — Собирает page-полосу display list-а: исходные команды + highlight-FillRect-ы
-`crates/shell/src/find.rs:268` **fn** `build_bar_overlay` — Собирает overlay-полосу: только find-bar (фон + label + input + counter)
-`crates/shell/src/find.rs:282` **fn** `build_with_overlay` — Совместимая сборка: page + bar в один list. Используется тестами и
+`crates/shell/src/find.rs:29` **struct** `FindState` — Состояние find bar и текущего запроса
+`crates/shell/src/find.rs:38` **fn** `is_open`
+`crates/shell/src/find.rs:42` **fn** `query`
+`crates/shell/src/find.rs:46` **fn** `active_index`
+`crates/shell/src/find.rs:50` **fn** `is_regex_mode`
+`crates/shell/src/find.rs:54` **fn** `open`
+`crates/shell/src/find.rs:58` **fn** `close`
+`crates/shell/src/find.rs:64` **fn** `append_str`
+`crates/shell/src/find.rs:79` **fn** `backspace`
+`crates/shell/src/find.rs:90` **fn** `toggle_regex_mode` — Переключает режим plain-text ↔ regex. Сбрасывает счётчик активного
+`crates/shell/src/find.rs:98` **fn** `next` — Циклически переходит к следующему совпадению. `total` — текущее число
+`crates/shell/src/find.rs:104` **fn** `prev`
+`crates/shell/src/find.rs:115` **struct** `FindMatch` — Найденный матч: bounding box в координатах окна и индекс DrawText-команды
+`crates/shell/src/find.rs:128` **fn** `scroll_to_match` — Вычисляет новое значение `scroll_y` так, чтобы `match_rect` попал в
+`crates/shell/src/find.rs:152` **fn** `find_matches` — Находит все непересекающиеся вхождения `query` в DrawText-командах `dl`
+`crates/shell/src/find.rs:221` **fn** `is_valid_regex_pattern` — Проверяет, является ли `pattern` корректным regex-паттерном
+`crates/shell/src/find.rs:238` **fn** `find_matches_regex` — Находит все regex-матчи паттерна `pattern` по [`TextFragment`]-ам
+`crates/shell/src/find.rs:314` **struct** `BarOverlay` — Параметры overlay-бара
+`crates/shell/src/find.rs:332` **fn** `build_page_with_highlights` — Собирает page-полосу display list-а: исходные команды + highlight-FillRect-ы
+`crates/shell/src/find.rs:365` **fn** `build_bar_overlay` — Собирает overlay-полосу: только find-bar (фон + label + input + counter +
+`crates/shell/src/find.rs:377` **fn** `build_with_overlay` — Совместимая сборка: page + bar в один list. Только для тестов и dump-режимов
 `crates/shell/src/forms.rs:30` **struct** `FormControlState` — Mutable runtime state for a single form control
 `crates/shell/src/forms.rs:40` **type** `FormState` — `NodeId` → mutable state map for all form controls on the current page
 `crates/shell/src/forms.rs:48` **enum** `FormClickAction` — What the shell should do after a left-click on `node`
@@ -1686,4 +1693,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 1630 symbols in 17 crates*
+*Total: 1637 symbols in 17 crates*

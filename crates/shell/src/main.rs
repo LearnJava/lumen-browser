@@ -40,7 +40,10 @@ use lumen_core::geom::{Point, Rect, Size};
 use lumen_devtools::DevToolsServer;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
 use lumen_storage::{BfCache, BfCacheEntry};
-use lumen_dom::{Document, NodeData, NodeId, check_form_gate, check_navigation_gate};
+use lumen_dom::{
+    Document, NodeData, NodeId, check_form_gate, check_navigation_gate,
+    collect_iframes, check_popup_gate,
+};
 use std::collections::HashMap;
 use lumen_layout::{LayoutBox, PaintOrder, StackingTree, TransitionScheduler};
 use lumen_layout::style::ComputedStyle;
@@ -1270,6 +1273,10 @@ fn parse_and_layout(
         check_form_gate(&d, lumen_core::SandboxFlags::empty());
         // Гейт навигации: Phase 0 — top-level документ не sandboxed.
         check_navigation_gate(&d, lumen_core::SandboxFlags::empty());
+        // Применяем sandbox-ограничения из <iframe sandbox> элементов.
+        // Phase 0: iframe sub-документы не загружаются — применяем гейты
+        // к самому iframe-элементу, логируем ограничения для будущего Phase 1.
+        apply_iframe_sandbox_gates(&d);
     }
 
     // Fetch + decode <img src>. Должно идти ДО layout, потому что intrinsic
@@ -1691,6 +1698,37 @@ fn collect_inline_scripts(doc: &Document, id: NodeId, out: &mut Vec<String>) {
     }
     for &child in &node.children {
         collect_inline_scripts(doc, child, out);
+    }
+}
+
+/// Применить sandbox-ограничения для всех `<iframe sandbox>` элементов документа.
+///
+/// Для каждого sandboxed iframe вызывает соответствующие gate-функции:
+/// - [`check_form_gate`] с `SandboxFlags::FORMS` если формы запрещены
+/// - [`check_navigation_gate`] с `SandboxFlags::NAVIGATION` если навигация запрещена
+/// - [`check_popup_gate`] с `SandboxFlags::AUXILIARY_NAVIGATION` если popups запрещены
+///
+/// Phase 0: iframe sub-документы не загружаются; гейты применяются к самому
+/// iframe-элементу через его sandbox-флаги. Логируют ограничения в stderr.
+fn apply_iframe_sandbox_gates(doc: &Document) {
+    let iframes = collect_iframes(doc);
+    for info in &iframes {
+        if !info.is_sandboxed {
+            continue;
+        }
+        let sb = info.sandbox;
+        let src = info.src.as_deref().unwrap_or("<no src>");
+        if sb.contains(lumen_core::SandboxFlags::SCRIPTS) {
+            eprintln!("sandbox: iframe '{src}' — скрипты запрещены (sandbox=scripts)");
+        }
+        if sb.contains(lumen_core::SandboxFlags::FORMS) {
+            eprintln!("sandbox: iframe '{src}' — формы запрещены (sandbox=forms)");
+            check_form_gate(doc, sb);
+        }
+        if sb.contains(lumen_core::SandboxFlags::NAVIGATION) {
+            check_navigation_gate(doc, sb);
+        }
+        check_popup_gate(sb);
     }
 }
 
