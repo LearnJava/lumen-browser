@@ -26,12 +26,14 @@
 
 mod types;
 pub mod session;
+pub mod winit_session;
 
 pub use types::{
     A11yNode, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel, NetworkEntry, NodeRef,
     ScrollDelta, Target, WaitCondition,
 };
 pub use session::InProcessSession;
+pub use winit_session::WinitSession;
 /// Типизированный снимок вычисленных CSS-свойств из lumen-layout.
 ///
 /// Возвращается [`BrowserSession::computed_style_snapshot`]; предпочтительнее

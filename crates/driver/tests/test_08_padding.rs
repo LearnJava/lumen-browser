@@ -16,7 +16,7 @@ fn test_08_padding() {
     session.navigate(&url).expect("Failed to navigate");
 
     // Get padding style from first padded element
-    let padding_style = session
+    let _padding_style = session
         .computed_style_snapshot(".outer")
         .expect("Failed to get style")
         .expect("Padding element style not found");

@@ -15,6 +15,9 @@ rust-version.workspace = true
 # Why this dependency (lumen-paint): build DisplayList, hit_test for click targeting — permanent.
 # Why this dependency (lumen-network): HTTP client for URL navigation — permanent.
 # Why this dependency (lumen-image): encode screenshots to PNG — permanent.
+# Why this dependency (winit): OS event loop for WinitSession (display/graphics transport) — permanent.
+# Why this dependency (lumen-paint): GPU rendering for screenshots and visualization — permanent.
+# Why this dependency (lumen-storage): session state, history, cookies persistence — permanent.
 [dependencies]
 lumen-core = { workspace = true }
 lumen-encoding = { workspace = true }
@@ -26,3 +29,6 @@ lumen-paint = { workspace = true }
 lumen-font = { workspace = true }
 lumen-image = { workspace = true }
 lumen-network = { workspace = true }
+lumen-storage = { workspace = true }
+# Exception #1: winit for OS windowing
+winit.workspace = true
