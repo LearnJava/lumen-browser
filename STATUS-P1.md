@@ -1,5 +1,5 @@
-In progress: none (ready for next task)
-Next step: shadow-dom-accessibility-forms-gc (6+, Phase 2) — extended Shadow DOM / Accessibility / Forms / Garbage collection integration  crates/engine/dom/src/lib.rs
+In progress: shadow-dom-accessibility-forms-gc (6+, Phase 2B)  branch: p1-shadow-dom-accessibility-forms-gc
+Next step: Phase 2C — ARIA role mapping across shadow boundaries, attribute inheritance in composed tree; verify ComputedStyle propagation through FlatTree, update layout algorithms that depend on role context. crates/engine/layout/src/style.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -12,6 +12,7 @@ Note: fts-omnibox (Wave 1, P3-задача по домену) перенесен
 Note: Wave 2 очередь содержит P2-задачи (extras-p2, avif-decoder, webgl-context, font-hinting, svg-rasterizer) — они пока не для P1. Wave 2 P3-задачи (http2-client, preconnect-hints) тоже в P3 очереди. P1 берёт следующее из Phase 1/Phase 2 своих задач.
 
 Recent:
+- shadow-dom-accessibility-forms-gc (6+, Phase 2B): accessibility tree composition in nested shadow trees — Document::find_by_id() for ARIA relationship resolution, modified build_ax_tree() to accept &FlatTree, resolved aria-controls/owns/flowto/details attributes, 108 total tests PASS (4 new), clippy clean 2026-05-28
 - click-hint-overlay (7B.2): enhance collect_clickable_elements with <details> support — add ClickableKind::Details variant, is_details_element() helper, comprehensive unit tests (6 new tests for link/button/input/details/mixed), P1 complete 2026-05-28 — P3 integration pending
 - print-pdf-pagination (5++, Phase 1): PaginationContext + Page + PageFragment, paginate() algorithm for break-before/after/avoid, 7 unit tests, exports in lib.rs, clippy clean 2026-05-28
 - bench-ram-axis (9G.5, ADR-008 performance gate): cross-platform RSS measurement (getrusage on Unix, GetProcessMemoryInfo on Windows), baseline.json established, UPDATE.md documentation 2026-05-28
@@ -70,7 +71,7 @@ Recent:
 ### Phase 2 (in progress / planned)
 29. ✅ animation-keyframe-easing (6.6) — full timing functions (ease/cubic-bezier/steps) complete in Phase 0 (2026-05-20)
 30. ⬜ transition-advanced — grouped properties, interrupted transitions, animation-fill-mode complete
-31. ⬜ shadow-dom-accessibility-forms-gc (6+) — Extended Shadow DOM / Accessibility / Forms / Garbage collection integration
+31. 🟡 shadow-dom-accessibility-forms-gc (6+) — Phase 2A: slot delegation + fallback ✅; Phase 2B: accessibility tree composition + FlatTree integration + ARIA relationships ✅ (2026-05-28); Phase 2C: ARIA roles across boundaries (in progress)
 32. ⬜ contenteditable-advanced — drag-drop, paste, undo/redo coordination with shell
 33. ⬜ accessibility-forms-validation — full constraint validation visualization, form submission with accessibility tree
 34. ⬜ ime-input ([P1+P3]) — IME composition events through DOM, composition ranges, virtual keyboard interaction
