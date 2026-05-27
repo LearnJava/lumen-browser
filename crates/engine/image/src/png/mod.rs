@@ -1,4 +1,3 @@
-use std::io::Write;
 use zune_core::bytestream::ZCursor;
 use zune_core::options::DecoderOptions;
 use zune_core::result::DecodingResult;
