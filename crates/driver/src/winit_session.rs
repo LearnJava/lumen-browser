@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use lumen_core::error::{Error, Result};
 use lumen_core::geom::Size;
-use lumen_dom::Document;
+use lumen_dom::{Document, NodeData, NodeId};
 use lumen_layout::LayoutBox;
 use lumen_paint::Renderer;
 
@@ -98,6 +98,63 @@ impl Default for WinitSession {
     }
 }
 
+impl WinitSession {
+    /// Запустить полный pipeline (HTML parse -> CSS -> layout).
+    fn run_pipeline(&mut self, bytes: &[u8], content_type: Option<&str>, url: String) -> Result<()> {
+        // Временная реализация, использующая тот же код что и InProcessSession
+        // TODO: вынести в общий helpers модуль
+
+        const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
+
+        let encoding = lumen_encoding::detect(bytes, content_type);
+        let source = lumen_encoding::decode(encoding, bytes);
+
+        let doc = lumen_html_parser::parse(&source);
+        let css = extract_style_blocks(&doc);
+        let sheet = lumen_css_parser::parse(&css);
+
+        let font = lumen_font::Font::parse(INTER_FONT)
+            .map_err(|e| Error::Other(format!("ошибка разбора Inter: {e}")))?;
+        let measurer = lumen_paint::FontMeasurer::new(&font)
+            .map_err(|e| Error::Other(format!("ошибка метрик Inter: {e}")))?;
+
+        let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
+
+        self.current_url = url;
+        self.state = Some(Arc::new(Mutex::new(WinitSessionState {
+            doc,
+            layout_root,
+            renderer: None,
+        })));
+        Ok(())
+    }
+}
+
+/// Извлечь содержимое всех <style> блоков из документа.
+fn extract_style_blocks(doc: &lumen_dom::Document) -> String {
+    let mut out = String::new();
+    walk_style_blocks(doc, doc.root(), &mut out);
+    out
+}
+
+fn walk_style_blocks(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut String) {
+    let node = doc.get(id);
+    if let lumen_dom::NodeData::Element { name, .. } = &node.data
+        && name.local == "style"
+    {
+        for &child in &node.children {
+            if let lumen_dom::NodeData::Text(s) = &doc.get(child).data {
+                out.push_str(s);
+                out.push('\n');
+            }
+        }
+        return;
+    }
+    for &child in &node.children {
+        walk_style_blocks(doc, child, out);
+    }
+}
+
 impl BrowserSession for WinitSession {
     // ── Ресурсы ────────────────────────────────────────────────────────────
 
@@ -155,12 +212,20 @@ impl BrowserSession for WinitSession {
     // ── Инструменты ────────────────────────────────────────────────────────
 
     fn navigate(&mut self, url: &str) -> Result<()> {
-        // TODO: реализовать в 8A.7
-        // - Загрузить URL через NetworkTransport
-        // - Запустить полный pipeline (парсинг, CSS, layout)
-        // - Сохранить в state
-        self.current_url = url.to_owned();
-        Ok(())
+        // Phase 1: support file:// URLs only
+        // Phase 2: add HTTP(S) support via NetworkTransport
+
+        if url.starts_with("file://") {
+            let path = &url[7..]; // strip "file://"
+            let bytes = std::fs::read(path)
+                .map_err(|e| Error::Other(format!("ошибка чтения файла {}: {}", path, e)))?;
+            self.run_pipeline(&bytes, Some("text/html"), url.to_owned())
+        } else if url.starts_with("http://") || url.starts_with("https://") {
+            // TODO (Phase 2): implement HTTP loading
+            Err(Error::Other("HTTP navigation не реализована в 8A.7".into()))
+        } else {
+            Err(Error::Other(format!("неподдерживаемый URL scheme: {}", url)))
+        }
     }
 
     fn click(&mut self, _target: &Target) -> Result<()> {
