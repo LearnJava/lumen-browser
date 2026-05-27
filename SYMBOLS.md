@@ -334,6 +334,23 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/lib.rs:1619` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
 `crates/engine/dom/src/lib.rs:1673` **fn** `insert_paragraph_break`
 
+## lumen-driver  (14 symbols)
+
+`crates/driver/src/lib.rs:47` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
+`crates/driver/src/session.rs:46` **struct** `InProcessSession` — Headless in-process сессия браузера
+`crates/driver/src/session.rs:61` **fn** `new` — Создать сессию с viewport 1024×720
+`crates/driver/src/session.rs:72` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
+`crates/driver/src/types.rs:14` **struct** `NodeRef` — Ссылка на DOM-узел, возвращаемая [`BrowserSession::query`]
+`crates/driver/src/types.rs:29` **enum** `Target` — Цель для команд [`BrowserSession::click`], [`type_text`](BrowserSession::type_text),
+`crates/driver/src/types.rs:40` **struct** `ScrollDelta` — Дельта скролла для [`BrowserSession::scroll`]
+`crates/driver/src/types.rs:49` **enum** `WaitCondition` — Условие ожидания для [`BrowserSession::wait`]
+`crates/driver/src/types.rs:64` **struct** `BoxModel` — Box-model одного узла из [`BrowserSession::layout_snapshot`]
+`crates/driver/src/types.rs:81` **struct** `A11yNode` — Узел accessibility-дерева из [`BrowserSession::a11y_tree`]
+`crates/driver/src/types.rs:93` **struct** `NetworkEntry` — Запись из сетевого лога [`BrowserSession::network_log`]
+`crates/driver/src/types.rs:106` **struct** `ConsoleEntry` — Запись из консоли [`BrowserSession::console_log`]
+`crates/driver/src/types.rs:115` **enum** `ConsoleLevel` — Уровень console-сообщения
+`crates/driver/src/types.rs:127` **struct** `ComputedProperties` — Значения вычисленных CSS-свойств элемента из [`BrowserSession::computed_style`]
+
 ## lumen-encoding  (11 symbols)
 
 `crates/engine/encoding/src/decoder.rs:14` **fn** `decode` — Декодирует байты в строку. Алиас для [`decode_to_string`], короткий и
@@ -1112,7 +1129,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/sse.rs:53` **fn** `push_bytes` — Feed a chunk of bytes from the stream; returns any events that
 `crates/network/src/sse.rs:175` **fn** `last_event_id` — Current last-event-id (persists across dispatched events, needed for
 
-## lumen-paint  (77 symbols)
+## lumen-paint  (79 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
@@ -1170,25 +1187,27 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer.rs:1106` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
 `crates/engine/paint/src/renderer.rs:1135` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
 `crates/engine/paint/src/renderer.rs:1199` **struct** `Renderer`
-`crates/engine/paint/src/renderer.rs:1292` **fn** `new`
-`crates/engine/paint/src/renderer.rs:2377` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
-`crates/engine/paint/src/renderer.rs:2385` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
-`crates/engine/paint/src/renderer.rs:2398` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
-`crates/engine/paint/src/renderer.rs:2417` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
-`crates/engine/paint/src/renderer.rs:2494` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
-`crates/engine/paint/src/renderer.rs:2631` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
-`crates/engine/paint/src/renderer.rs:2640` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
-`crates/engine/paint/src/renderer.rs:2647` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
-`crates/engine/paint/src/renderer.rs:2665` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
-`crates/engine/paint/src/renderer.rs:2732` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
-`crates/engine/paint/src/renderer.rs:2737` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
-`crates/engine/paint/src/renderer.rs:2743` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
-`crates/engine/paint/src/renderer.rs:2749` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
-`crates/engine/paint/src/renderer.rs:2753` **fn** `resize`
-`crates/engine/paint/src/renderer.rs:2769` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
-`crates/engine/paint/src/renderer.rs:2778` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
-`crates/engine/paint/src/renderer.rs:2785` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
-`crates/engine/paint/src/renderer.rs:2904` **fn** `render` — Рендерит две полосы display list-а одним кадром:
+`crates/engine/paint/src/renderer.rs:1296` **fn** `new`
+`crates/engine/paint/src/renderer.rs:1363` **fn** `new_headless` — Создаёт рендер без winit-окна для BrowserSession::screenshot() и in-process
+`crates/engine/paint/src/renderer.rs:2471` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
+`crates/engine/paint/src/renderer.rs:2479` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
+`crates/engine/paint/src/renderer.rs:2492` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
+`crates/engine/paint/src/renderer.rs:2511` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
+`crates/engine/paint/src/renderer.rs:2588` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
+`crates/engine/paint/src/renderer.rs:2725` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
+`crates/engine/paint/src/renderer.rs:2734` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
+`crates/engine/paint/src/renderer.rs:2741` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
+`crates/engine/paint/src/renderer.rs:2759` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
+`crates/engine/paint/src/renderer.rs:2826` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
+`crates/engine/paint/src/renderer.rs:2831` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
+`crates/engine/paint/src/renderer.rs:2837` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
+`crates/engine/paint/src/renderer.rs:2843` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
+`crates/engine/paint/src/renderer.rs:2847` **fn** `resize`
+`crates/engine/paint/src/renderer.rs:2878` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
+`crates/engine/paint/src/renderer.rs:2887` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
+`crates/engine/paint/src/renderer.rs:2894` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
+`crates/engine/paint/src/renderer.rs:3013` **fn** `render` — Рендерит две полосы display list-а одним кадром:
+`crates/engine/paint/src/renderer.rs:5140` **fn** `render_to_image` — Рендерит display list в CPU-буфер без отображения в окне
 `crates/engine/paint/src/scroll_snap.rs:33` **fn** `find_scroll_snap_y` — CSS Scroll Snap L1 — returns the Y scroll offset to snap to, or `None`
 `crates/engine/paint/src/scroll_snap.rs:54` **fn** `find_scroll_snap_y_proximity` — CSS Scroll Snap L1 — same as [`find_scroll_snap_y`] but restricts candidates
 
@@ -1711,4 +1730,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 1655 symbols in 17 crates*
+*Total: 1671 symbols in 18 crates*
