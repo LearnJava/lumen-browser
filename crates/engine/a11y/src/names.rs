@@ -120,6 +120,13 @@ pub fn compute_name(doc: &Document, node_id: NodeId) -> String {
                     return text_content;
                 }
             }
+            "summary" => {
+                // Summary (disclosure widget label) uses text content.
+                let text_content = collect_text_content(doc, node_id);
+                if !text_content.is_empty() {
+                    return text_content;
+                }
+            }
             "button" => {
                 // Button text comes from text content recursively.
                 // Special case: if button contains only an <img>, use img's alt.

@@ -691,6 +691,19 @@ fn heading_text_from_content() {
     assert_eq!(heading.name, "Main Title", "heading should use text content");
 }
 
+#[test]
+fn summary_disclosure_widget() {
+    let doc = parse(r#"
+        <details>
+            <summary>Click to expand</summary>
+            <p>Hidden content</p>
+        </details>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("summary as button");
+    assert_eq!(btn.name, "Click to expand", "summary should use text content");
+}
+
 // ── Serialization tests ──────────────────────────────────────────────────────
 
 #[test]
