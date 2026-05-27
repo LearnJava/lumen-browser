@@ -319,7 +319,7 @@
 | 9C.4 | ⬜ Accept-Language default `en-US,en;q=0.9` (не палит реальную локаль) | `network/src/http/headers.rs` | — |
 | 9C.5 | ⬜ Client Hints handling (опционально, выключено на Strict) | `network/src/http/client_hints.rs` | — |
 | 9D | ⬜ **`[P3+P2]` Layer 4: rendering fingerprint** (Phase 2) | Canvas/WebGL/audio randomization, Battery API disable, WebRTC mDNS-only | `lumen-canvas`, `lumen-paint`, `lumen-js` |
-| 9D.1 | ⬜ Canvas randomization (Brave-style per-session seed) | `canvas/src/fp_noise.rs` | — |
+| 9D.1 | ✅ Canvas randomization (Brave-style per-session seed) | `canvas/src/fp_noise.rs` | — |
 | 9D.2 | ⬜ WebGL renderer/vendor normalization | `js/src/webgl_bindings.rs` | — |
 | 9D.3 | ⬜ AudioContext fingerprint noise | `js/src/audio_bindings.rs` | — |
 | 9D.4 | ⬜ Battery API disable on Strict | `js/src/battery_bindings.rs` | — |
