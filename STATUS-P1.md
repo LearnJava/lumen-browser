@@ -1,4 +1,5 @@
-In progress: —
+In progress: form-submit  branch: p1-form-submit
+Next step: add FormSubmit event variant  crates/core/src/event.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.

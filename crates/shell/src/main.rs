@@ -106,6 +106,13 @@ impl EventSink for StdoutEventSink {
                 };
                 eprintln!("⤷ preload {label} [{prio}] {url}");
             }
+            Event::FormSubmit { method, action, body, .. } => {
+                if body.is_empty() {
+                    eprintln!("⊢ form {method} {action}");
+                } else {
+                    eprintln!("⊢ form {method} {action} body={body}");
+                }
+            }
             _ => {}
         }
     }
@@ -2716,10 +2723,35 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                         if let Some(w) = self.window.as_ref() {
                                             w.request_redraw();
                                         }
-                                    } else {
-                                        eprintln!(
-                                            "[forms] submit {submit_node:?}: OK (Phase 0: no network POST)"
-                                        );
+                                    } else if let Some(src) = self.layout_source.as_ref() {
+                                        let doc = src.document.lock().unwrap();
+                                        if let Some((action, method, body)) =
+                                            forms::build_form_submit(&doc, submit_node, &self.form_state)
+                                        {
+                                            use lumen_core::event::{Event, TabId};
+                                            self.event_sink.emit(&Event::FormSubmit {
+                                                tab_id: TabId(0),
+                                                action: action.clone(),
+                                                method: method.clone(),
+                                                body: body.clone(),
+                                            });
+                                            match method.as_str() {
+                                                "get" => {
+                                                    // HTML LS §form-submission step 23: navigate
+                                                    // to action + query-string.
+                                                    let get_url = forms::make_get_url(&action, &body);
+                                                    let resolved = self.source.resolve_href(&get_url);
+                                                    drop(doc);
+                                                    self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                                                }
+                                                _ => {
+                                                    // POST: emit event; real network send is P3 task.
+                                                    eprintln!(
+                                                        "[forms] POST {action} body={body}"
+                                                    );
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                                 forms::FormClickAction::Nothing => {
