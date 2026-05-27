@@ -1,5 +1,5 @@
-In progress: —
-Next step: shell-as-driver-client Phase 4 (shell integration) or bench-gate-ci (9G.3)  see Wave 2 queue below
+In progress: shell-as-driver-client Phase 4 (shell integration)  branch: p3-shell-as-driver-client-phase4
+Next step: refactor lumen-shell::App to use BrowserSession instead of direct pipeline  crates/shell/src/app.rs:80
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
