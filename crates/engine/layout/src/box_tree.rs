@@ -2172,10 +2172,14 @@ fn lay_out(
             align_lines(lines, content_width, s.text_align, s.direction);
             let line_h = s.font_size * s.line_height;
             apply_inline_vertical_align(lines, line_h);
-            // CSS UI L4 §10.1: text-overflow: ellipsis требует overflow != visible.
-            if s.text_overflow == TextOverflow::Ellipsis
+            // CSS Overflow L4 §3.2: -webkit-line-clamp / line-clamp — multi-line truncation.
+            // Takes priority over text-overflow:ellipsis (both cannot apply simultaneously).
+            if let Some(n) = s.line_clamp.filter(|&n| n > 0) {
+                apply_line_clamp(lines, n, content_width, s.font_size, m);
+            } else if s.text_overflow == TextOverflow::Ellipsis
                 && (s.overflow_x != Overflow::Visible || s.overflow_y != Overflow::Visible)
             {
+                // CSS UI L4 §10.1: text-overflow: ellipsis требует overflow != visible.
                 apply_text_overflow_ellipsis(lines, content_width, s.font_size, m);
             }
         } else {
@@ -4844,6 +4848,67 @@ fn truncate_frag_with_ellipsis(
     buf.push(ellipsis);
     frag.text = buf;
     frag.width = w + ellipsis_w;
+}
+
+/// CSS Overflow L4 §3.2 / CSS Display L3 §7.2 — `-webkit-line-clamp` / `line-clamp`.
+///
+/// Truncates `lines` to at most `max_lines` entries. If truncation occurred, forces
+/// an ellipsis (U+2026) onto the *last* visible line to signal omitted content.
+/// The ellipsis is appended to the last fragment if the line fits within `max_width`,
+/// or replaces overflowing text if the line is already too wide.
+///
+/// Called only when a text measurer is available (same guard as `text-overflow: ellipsis`).
+fn apply_line_clamp(
+    lines: &mut Vec<Vec<InlineFrag>>,
+    max_lines: u32,
+    max_width: f32,
+    font_size: f32,
+    m: &dyn TextMeasurer,
+) {
+    let n = max_lines as usize;
+    if lines.len() <= n {
+        return;
+    }
+    lines.truncate(n);
+
+    let ellipsis = '\u{2026}';
+    let ellipsis_w = m.char_width(ellipsis, font_size);
+    let last = match lines.last_mut() {
+        Some(l) => l,
+        None => return,
+    };
+    if last.is_empty() {
+        return;
+    }
+
+    let line_end = last.last().map(|f| f.x + f.width).unwrap_or(0.0);
+    if line_end + ellipsis_w <= max_width {
+        // Line fits: append "…" by extending the last fragment.
+        let last_frag = last.last_mut().unwrap();
+        last_frag.text.push(ellipsis);
+        last_frag.width += ellipsis_w;
+    } else {
+        // Line overflows: truncate from the right to make room for "…".
+        let budget = (max_width - ellipsis_w).max(0.0);
+        let cut = last.iter().position(|f| f.x > budget);
+        match cut {
+            Some(0) => {
+                last[0].text = ellipsis.to_string();
+                last[0].width = ellipsis_w;
+                last.truncate(1);
+            }
+            Some(fi) => {
+                let avail = budget - last[fi - 1].x;
+                truncate_frag_with_ellipsis(&mut last[fi - 1], avail, font_size, m, ellipsis, ellipsis_w);
+                last.truncate(fi);
+            }
+            None => {
+                let idx = last.len() - 1;
+                let avail = budget - last[idx].x;
+                truncate_frag_with_ellipsis(&mut last[idx], avail, font_size, m, ellipsis, ellipsis_w);
+            }
+        }
+    }
 }
 
 /// CSS Container Queries L1: second-pass after layout.

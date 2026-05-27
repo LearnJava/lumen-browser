@@ -13166,4 +13166,98 @@ mod tests {
         );
     }
 
+    // ── line-clamp layout tests ───────────────────────────────────────────────
+
+    fn find_inline_run_in(b: &box_tree::LayoutBox) -> Option<&box_tree::LayoutBox> {
+        if matches!(b.kind, box_tree::BoxKind::InlineRun { .. }) { return Some(b); }
+        for c in &b.children { if let Some(r) = find_inline_run_in(c) { return Some(r); } }
+        None
+    }
+
+    fn inline_line_count(root: &box_tree::LayoutBox) -> usize {
+        let Some(run) = find_inline_run_in(root) else { return 0; };
+        let box_tree::BoxKind::InlineRun { lines, .. } = &run.kind else { return 0; };
+        lines.len()
+    }
+
+    fn inline_last_text(root: &box_tree::LayoutBox) -> String {
+        let Some(run) = find_inline_run_in(root) else { return String::new(); };
+        let box_tree::BoxKind::InlineRun { lines, .. } = &run.kind else { return String::new(); };
+        let Some(last_line) = lines.last() else { return String::new(); };
+        last_line.iter().map(|f| f.text.as_str()).collect()
+    }
+
+    /// line-clamp: 2 на контейнере с длинным текстом → показываем только 2 строки.
+    #[test]
+    fn line_clamp_truncates_to_n_lines() {
+        // 300px wide, font ~16px — слово "word" ~4×8.8=35.2px, 8 слов/строку.
+        // 40 слов → ~5 строк. Ожидаем ровно 2 после clamp.
+        let words = "word ".repeat(40);
+        let html = format!("<p>{words}</p>");
+        let doc = lumen_html_parser::parse(&html);
+        let sheet = lumen_css_parser::parse("p { width: 300px; -webkit-line-clamp: 2; font-size: 16px; }");
+        let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        assert_eq!(inline_line_count(&root), 2, "must have exactly 2 lines after clamp");
+    }
+
+    /// line-clamp: 2 → последняя строка оканчивается на «…».
+    #[test]
+    fn line_clamp_last_line_ends_with_ellipsis() {
+        let words = "word ".repeat(40);
+        let html = format!("<p>{words}</p>");
+        let doc = lumen_html_parser::parse(&html);
+        let sheet = lumen_css_parser::parse("p { width: 300px; -webkit-line-clamp: 2; font-size: 16px; }");
+        let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        let last = inline_last_text(&root);
+        assert!(last.ends_with('\u{2026}'), "last line must end with '…', got: {last:?}");
+    }
+
+    /// line-clamp: 1 → одна строка, совпадает с text-overflow поведением.
+    #[test]
+    fn line_clamp_one_line() {
+        let words = "alpha beta gamma delta epsilon zeta eta theta iota kappa";
+        let html = format!("<p>{words}</p>");
+        let doc = lumen_html_parser::parse(&html);
+        let sheet = lumen_css_parser::parse("p { width: 300px; -webkit-line-clamp: 1; font-size: 16px; }");
+        let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        assert_eq!(inline_line_count(&root), 1, "must have exactly 1 line");
+        let last = inline_last_text(&root);
+        assert!(last.ends_with('\u{2026}'), "single line must end with '…', got: {last:?}");
+    }
+
+    /// line-clamp без усечения (строк меньше N) → всё отображается, без «…».
+    #[test]
+    fn line_clamp_no_truncation_when_fewer_lines() {
+        let doc = lumen_html_parser::parse("<p>Short text</p>");
+        let sheet = lumen_css_parser::parse("p { width: 600px; -webkit-line-clamp: 5; font-size: 16px; }");
+        let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        // Текст помещается в одну строку — clamp не должен добавлять «…».
+        let last = inline_last_text(&root);
+        assert!(!last.ends_with('\u{2026}'), "no ellipsis when content fits: {last:?}");
+    }
+
+    /// standard `line-clamp` (без webkit-префикса) тоже работает.
+    #[test]
+    fn line_clamp_standard_property_works() {
+        let words = "word ".repeat(40);
+        let html = format!("<p>{words}</p>");
+        let doc = lumen_html_parser::parse(&html);
+        let sheet = lumen_css_parser::parse("p { width: 300px; line-clamp: 3; font-size: 16px; }");
+        let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        assert_eq!(inline_line_count(&root), 3);
+    }
+
+    /// line-clamp совместим с явной высотой блока.
+    #[test]
+    fn line_clamp_with_explicit_height() {
+        let words = "word ".repeat(40);
+        let html = format!("<p>{words}</p>");
+        let doc = lumen_html_parser::parse(&html);
+        let sheet = lumen_css_parser::parse(
+            "p { width: 300px; height: 100px; -webkit-line-clamp: 2; font-size: 16px; }",
+        );
+        let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
+        assert_eq!(inline_line_count(&root), 2);
+    }
+
 }

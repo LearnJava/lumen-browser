@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>TEST-48: line-clamp / -webkit-line-clamp</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; }
+    .__f {
+      background: #0f172a;
+      width: 1022px; height: 718px;
+      margin: 1px;
+      padding: 32px 24px;
+      overflow: hidden;
+    }
+
+    /* Row 1 title row */
+    .row-labels {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 12px;
+    }
+    .lbl {
+      flex: 1;
+      height: 20px;
+      background: #334155;
+    }
+
+    /* Clamped text boxes — color:transparent so no glyph divergence.
+       Each line-box contributes exactly 40px (explicit line-height).
+       Clamp N → container height = N × 40px. */
+    .row-boxes {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .box {
+      flex: 1;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-box-orient: vertical;
+      font-size: 18px;
+      line-height: 40px;
+      color: transparent;
+    }
+    /* Four distinct background colors for visual differentiation */
+    .b1 { background: #e63946; -webkit-line-clamp: 1; line-clamp: 1; }
+    .b2 { background: #2a9d8f; -webkit-line-clamp: 2; line-clamp: 2; }
+    .b3 { background: #e9c46a; -webkit-line-clamp: 3; line-clamp: 3; }
+    .b4 { background: #457b9d; -webkit-line-clamp: 4; line-clamp: 4; }
+
+    /* Row 2: unclamped reference boxes with overflow:hidden + explicit height.
+       Height = 5 × 40px = 200px — same for all, proves baseline height. */
+    .row-ref {
+      display: flex;
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .ref {
+      flex: 1;
+      height: 200px;
+      overflow: hidden;
+      font-size: 18px;
+      line-height: 40px;
+      color: transparent;
+    }
+    .r1 { background: #e63946; }
+    .r2 { background: #2a9d8f; }
+    .r3 { background: #e9c46a; }
+    .r4 { background: #457b9d; }
+
+    /* Separator */
+    .sep { height: 4px; background: #475569; margin-bottom: 24px; }
+
+    /* Row 3: staircase check — 4 boxes of heights 40/80/120/160 side by side.
+       Their bottom edges form a staircase proving clamp values are 1/2/3/4. */
+    .row-stair {
+      display: flex;
+      align-items: flex-start;
+      gap: 16px;
+    }
+    .stair {
+      flex: 1;
+      background: #7c3aed;
+    }
+    .s1 { height:  40px; }
+    .s2 { height:  80px; }
+    .s3 { height: 120px; }
+    .s4 { height: 160px; }
+  </style>
+</head>
+<body>
+<div class="__f">
+
+  <!-- Row 1: label placeholders -->
+  <div class="row-labels">
+    <div class="lbl"></div>
+    <div class="lbl"></div>
+    <div class="lbl"></div>
+    <div class="lbl"></div>
+  </div>
+
+  <!-- Row 2: clamped boxes — 1/2/3/4 lines × 40px each -->
+  <div class="row-boxes">
+    <div class="box b1">
+      Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod
+      tempor incididunt ut labore et dolore magna aliqua ut enim ad minim
+      veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea
+      commodo consequat duis aute irure dolor in reprehenderit in voluptate
+      velit esse cillum dolore eu fugiat nulla pariatur excepteur sint
+    </div>
+    <div class="box b2">
+      Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod
+      tempor incididunt ut labore et dolore magna aliqua ut enim ad minim
+      veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea
+      commodo consequat duis aute irure dolor in reprehenderit in voluptate
+      velit esse cillum dolore eu fugiat nulla pariatur excepteur sint
+    </div>
+    <div class="box b3">
+      Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod
+      tempor incididunt ut labore et dolore magna aliqua ut enim ad minim
+      veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea
+      commodo consequat duis aute irure dolor in reprehenderit in voluptate
+      velit esse cillum dolore eu fugiat nulla pariatur excepteur sint
+    </div>
+    <div class="box b4">
+      Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod
+      tempor incididunt ut labore et dolore magna aliqua ut enim ad minim
+      veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea
+      commodo consequat duis aute irure dolor in reprehenderit in voluptate
+      velit esse cillum dolore eu fugiat nulla pariatur excepteur sint
+    </div>
+  </div>
+
+  <div class="sep"></div>
+
+  <!-- Row 3: unclamped reference boxes (explicit 200px height) -->
+  <div class="row-ref">
+    <div class="ref r1">
+      Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod
+      tempor incididunt ut labore et dolore magna aliqua ut enim ad minim
+      veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea
+      commodo consequat duis aute irure dolor in reprehenderit in voluptate
+      velit esse cillum dolore eu fugiat nulla pariatur excepteur sint
+    </div>
+    <div class="ref r2">
+      Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod
+      tempor incididunt ut labore et dolore magna aliqua ut enim ad minim
+      veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea
+      commodo consequat duis aute irure dolor in reprehenderit in voluptate
+      velit esse cillum dolore eu fugiat nulla pariatur excepteur sint
+    </div>
+    <div class="ref r3">
+      Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod
+      tempor incididunt ut labore et dolore magna aliqua ut enim ad minim
+      veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea
+      commodo consequat duis aute irure dolor in reprehenderit in voluptate
+      velit esse cillum dolore eu fugiat nulla pariatur excepteur sint
+    </div>
+    <div class="ref r4">
+      Lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod
+      tempor incididunt ut labore et dolore magna aliqua ut enim ad minim
+      veniam quis nostrud exercitation ullamco laboris nisi ut aliquip ex ea
+      commodo consequat duis aute irure dolor in reprehenderit in voluptate
+      velit esse cillum dolore eu fugiat nulla pariatur excepteur sint
+    </div>
+  </div>
+
+  <div class="sep"></div>
+
+  <!-- Row 4: explicit staircase reference (heights 40/80/120/160) -->
+  <div class="row-stair">
+    <div class="stair s1"></div>
+    <div class="stair s2"></div>
+    <div class="stair s3"></div>
+    <div class="stair s4"></div>
+  </div>
+
+</div>
+</body>
+</html>
