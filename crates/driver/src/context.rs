@@ -17,12 +17,20 @@ type HttpCache = HashMap<String, Vec<u8>>;
 /// Isolated context for a single BrowserSession.
 /// # Phase 1b (8E, May 2026)
 /// Implements: fingerprint profile, User-Agent, cookies, HTTP cache, storage
+/// # Phase 1c (8F, May 2026)
+/// Extends: deterministic mode (frozen clock, RNG seed, fingerprint lock)
 pub struct SessionContext {
     fingerprint_profile: FingerprintProfile,
     user_agent_override: Option<String>,
     cookies: CookieStore,
     http_cache: HttpCache,
     storage: HashMap<String, HashMap<String, Vec<u8>>>,
+    /// Frozen clock timestamp (ms since epoch). None = use system clock.
+    frozen_clock_ms: Option<u64>,
+    /// RNG seed for deterministic randomness. None = use OS entropy.
+    rng_seed: Option<u64>,
+    /// If true, fingerprint profile changes are rejected (freeze current profile).
+    fingerprint_frozen: bool,
 }
 
 impl SessionContext {
@@ -33,6 +41,9 @@ impl SessionContext {
             cookies: CookieStore::new(),
             http_cache: HttpCache::new(),
             storage: HashMap::new(),
+            frozen_clock_ms: None,
+            rng_seed: None,
+            fingerprint_frozen: false,
         }
     }
 
@@ -43,6 +54,9 @@ impl SessionContext {
             cookies: CookieStore::new(),
             http_cache: HttpCache::new(),
             storage: HashMap::new(),
+            frozen_clock_ms: None,
+            rng_seed: None,
+            fingerprint_frozen: false,
         }
     }
 
@@ -50,8 +64,14 @@ impl SessionContext {
         self.fingerprint_profile
     }
 
-    pub fn set_fingerprint_profile(&mut self, profile: FingerprintProfile) {
+    pub fn set_fingerprint_profile(&mut self, profile: FingerprintProfile) -> Result<()> {
+        if self.fingerprint_frozen {
+            return Err(lumen_core::error::Error::Other(
+                "Fingerprint profile is frozen".to_string(),
+            ));
+        }
         self.fingerprint_profile = profile;
+        Ok(())
     }
 
     pub fn user_agent(&self) -> String {
@@ -72,6 +92,54 @@ impl SessionContext {
 
     pub fn clear_user_agent_override(&mut self) {
         self.user_agent_override = None;
+    }
+
+    /// Get current frozen clock timestamp (ms since epoch), or None if system clock is used.
+    pub fn frozen_clock_ms(&self) -> Option<u64> {
+        self.frozen_clock_ms
+    }
+
+    /// Set frozen clock to a specific timestamp (ms since epoch) for deterministic testing.
+    /// Once set, all `Date.now()` / `performance.now()` calls use this value (not advancing).
+    pub fn set_frozen_clock(&mut self, timestamp_ms: u64) {
+        self.frozen_clock_ms = Some(timestamp_ms);
+    }
+
+    /// Clear frozen clock; resume using system time.
+    pub fn clear_frozen_clock(&mut self) {
+        self.frozen_clock_ms = None;
+    }
+
+    /// Get RNG seed for deterministic randomness, or None if OS entropy is used.
+    pub fn rng_seed(&self) -> Option<u64> {
+        self.rng_seed
+    }
+
+    /// Set RNG seed for deterministic random numbers in JS Math.random() and crypto.getRandomValues().
+    /// Used for repeatable test automation.
+    pub fn set_rng_seed(&mut self, seed: u64) {
+        self.rng_seed = Some(seed);
+    }
+
+    /// Clear RNG seed; resume using OS entropy.
+    pub fn clear_rng_seed(&mut self) {
+        self.rng_seed = None;
+    }
+
+    /// Check if fingerprint profile is frozen (cannot be changed).
+    pub fn is_fingerprint_frozen(&self) -> bool {
+        self.fingerprint_frozen
+    }
+
+    /// Freeze current fingerprint profile: prevent further changes to set_fingerprint_profile().
+    /// Used to ensure consistent fingerprint across multiple test iterations.
+    pub fn freeze_fingerprint(&mut self) {
+        self.fingerprint_frozen = true;
+    }
+
+    /// Unfreeze fingerprint profile; allow changes again.
+    pub fn unfreeze_fingerprint(&mut self) {
+        self.fingerprint_frozen = false;
     }
 
     pub fn get_cookies_for_request(&self, origin: &str, path: &str) -> String {

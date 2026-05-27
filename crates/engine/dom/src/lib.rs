@@ -645,6 +645,28 @@ impl Document {
         None
     }
 
+    /// Find a node by its `id` attribute (case-sensitive, per HTML spec).
+    ///
+    /// Returns the `NodeId` of the first element with matching `id`, or `None` if not found.
+    /// Used by accessibility tree and ARIA relationship attributes (aria-labelledby, aria-controls, etc.)
+    /// to resolve references.
+    pub fn find_by_id(&self, id: &str) -> Option<NodeId> {
+        let mut stack: Vec<NodeId> = vec![self.root];
+        while let Some(node_id) = stack.pop() {
+            let node = self.get(node_id);
+            if matches!(node.data, NodeData::Element { .. })
+                && node.get_attr("id").is_some_and(|attr_id| attr_id == id)
+            {
+                return Some(node_id);
+            }
+            // Push children в обратном порядке для source-order traversal
+            for &child in node.children.iter().rev() {
+                stack.push(child);
+            }
+        }
+        None
+    }
+
     fn alloc(&mut self, data: NodeData) -> NodeId {
         let id = NodeId(self.nodes.len() as u32);
         self.nodes.push(Node {

@@ -14,7 +14,7 @@ mod roles;
 pub use names::{compute_description, compute_name};
 pub use roles::{implicit_role, AXRole};
 
-use lumen_dom::{Document, InputType, NodeData, NodeId};
+use lumen_dom::{Document, FlatTree, InputType, NodeData, NodeId};
 use serde::{Deserialize, Serialize};
 
 // ── State flags ──────────────────────────────────────────────────────────────
@@ -153,13 +153,17 @@ pub struct AXTree {
 ///
 /// Use the `<body>` NodeId for a normal page. `aria-hidden="true"` subtrees
 /// and pure comment/text nodes are excluded from the result.
-pub fn build_ax_tree(doc: &Document, root_id: NodeId) -> AXTree {
+///
+/// The `flat_tree` parameter handles Shadow DOM composed tree traversal:
+/// instead of following DOM children, `build_node` uses `flat_tree.children_of()`
+/// to respect slot assignments and shadow boundaries.
+pub fn build_ax_tree(doc: &Document, root_id: NodeId, flat_tree: &FlatTree) -> AXTree {
     AXTree {
-        root: build_node(doc, root_id, None),
+        root: build_node(doc, root_id, None, flat_tree),
     }
 }
 
-fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>) -> AXNode {
+fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>, flat_tree: &FlatTree) -> AXNode {
     let node = doc.get(node_id);
     let state = compute_state(node);
     let role = resolve_role(node, parent_role);
@@ -167,8 +171,9 @@ fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>) -> A
     let description = names::compute_description(doc, node_id);
     let placeholder = node.get_attr("placeholder").unwrap_or("").to_owned();
 
-    let children = node
-        .children
+    // Use flat_tree to get composed children (respects shadow DOM boundaries and slot assignments)
+    let composed_children = flat_tree.children_of(doc, node_id);
+    let children = composed_children
         .iter()
         .filter(|&&child_id| {
             let child = doc.get(child_id);
@@ -181,15 +186,35 @@ fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>) -> A
                 .get_attr("aria-hidden")
                 .is_some_and(|v| v.eq_ignore_ascii_case("true"))
         })
-        .map(|&child_id| build_node(doc, child_id, Some(role)))
+        .map(|&child_id| build_node(doc, child_id, Some(role), flat_tree))
         .collect();
 
-    // TODO: Resolve aria-* relationship attributes to target node IDs.
-    // Requires Document::find_by_id() or similar lookup mechanism.
-    let controls = None;
-    let owns = Vec::new();
-    let flow_to = Vec::new();
-    let details = None;
+    // Resolve aria-* relationship attributes using document id lookups
+    let controls = node
+        .get_attr("aria-controls")
+        .and_then(|id_ref| doc.find_by_id(id_ref));
+
+    let owns = if let Some(id_list) = node.get_attr("aria-owns") {
+        id_list
+            .split_ascii_whitespace()
+            .filter_map(|id_ref| doc.find_by_id(id_ref))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let flow_to = if let Some(id_list) = node.get_attr("aria-flowto") {
+        id_list
+            .split_ascii_whitespace()
+            .filter_map(|id_ref| doc.find_by_id(id_ref))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    let details = node
+        .get_attr("aria-details")
+        .and_then(|id_ref| doc.find_by_id(id_ref));
 
     AXNode { node_id, role, name, description, placeholder, state, children, controls, owns, flow_to, details }
 }
