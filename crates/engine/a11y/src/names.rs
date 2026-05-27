@@ -107,6 +107,18 @@ pub fn compute_name(doc: &Document, node_id: NodeId) -> String {
             }
             "button" => {
                 // Button text comes from text content recursively.
+                // Special case: if button contains only an <img>, use img's alt.
+                let children = &doc.get(node_id).children;
+                if children.len() == 1 {
+                    let child = doc.get(children[0]);
+                    if child.element_name().is_some_and(|n| n.local.eq_ignore_ascii_case("img"))
+                        && let Some(alt) = child.get_attr("alt")
+                        && !alt.is_empty()
+                    {
+                        return alt.to_owned();
+                    }
+                }
+                // Otherwise, use text content.
                 let text_content = collect_text_content(doc, node_id);
                 if !text_content.is_empty() {
                     return text_content;
@@ -116,7 +128,8 @@ pub fn compute_name(doc: &Document, node_id: NodeId) -> String {
         }
     }
 
-    // 4. Text content (innerText equivalent for block elements).
+    // 4. Recursive text content (innerText-like). For most elements, this is the fallback.
+    // For elements like <button>, this is the primary source of the name.
     let text_content = collect_text_content(doc, node_id);
     if !text_content.is_empty() {
         return text_content;

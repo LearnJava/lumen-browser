@@ -651,6 +651,22 @@ fn input_image_type_with_alt() {
     assert_eq!(btn.name, "Submit form", "input[type=image] should use alt as name");
 }
 
+#[test]
+fn button_with_icon_only() {
+    let doc = parse(r#"<button><img src="close.svg" alt="Close"></button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.name, "Close", "button with only img should use img alt");
+}
+
+#[test]
+fn button_with_icon_and_text() {
+    let doc = parse(r#"<button><img src="save.svg" alt=""> Save</button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.name, "Save", "button with text should use text, not img");
+}
+
 // ── Serialization tests ──────────────────────────────────────────────────────
 
 #[test]
