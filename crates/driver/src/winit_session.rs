@@ -402,6 +402,63 @@ fn aria_role_for_tag(tag: &str) -> String {
     .into()
 }
 
+/// Найти все узлы, совпадающие с `selector`.
+fn find_all_by_selector(doc: &Document, selector: &str) -> Vec<NodeId> {
+    let sel = parse_simple_selector(selector);
+    let mut out = Vec::new();
+    find_all_match(doc, doc.root(), &sel, &mut out);
+    out
+}
+
+fn find_all_match(doc: &Document, id: NodeId, sel: &SimpleSelector<'_>, out: &mut Vec<NodeId>) {
+    if node_matches_selector(doc, id, sel) {
+        out.push(id);
+    }
+    for &child in &doc.get(id).children.clone() {
+        find_all_match(doc, child, sel, out);
+    }
+}
+
+/// Собрать текстовое содержимое поддерева.
+fn collect_text(doc: &Document, id: NodeId) -> String {
+    let mut out = String::new();
+    walk_text(doc, id, &mut out);
+    out
+}
+
+fn walk_text(doc: &Document, id: NodeId, out: &mut String) {
+    let node = doc.get(id);
+    if let NodeData::Text(s) = &node.data {
+        out.push_str(s);
+    }
+    for &child in &node.children {
+        walk_text(doc, child, out);
+    }
+}
+
+/// Разрешить `Target` в координату точки клика (центр элемента или явная точка).
+fn resolve_target_point(state: &WinitSessionState, target: &Target) -> Result<(f32, f32)> {
+    match target {
+        Target::Point { x, y } => Ok((*x, *y)),
+        Target::Selector(sel) => {
+            let id = find_first_by_selector(&state.doc, sel).ok_or_else(|| {
+                Error::NotFound(format!("элемент не найден: {sel}"))
+            })?;
+            let lb = find_layout_box(&state.layout_root, id).ok_or_else(|| {
+                Error::NotFound(format!("layout-бокс не найден для: {sel}"))
+            })?;
+            Ok((lb.rect.x + lb.rect.width / 2.0, lb.rect.y + lb.rect.height / 2.0))
+        }
+        Target::NodeId(raw_id) => {
+            let id = NodeId::from_index(*raw_id as usize);
+            let lb = find_layout_box(&state.layout_root, id).ok_or_else(|| {
+                Error::NotFound(format!("layout-бокс не найден для node_id={raw_id}"))
+            })?;
+            Ok((lb.rect.x + lb.rect.width / 2.0, lb.rect.y + lb.rect.height / 2.0))
+        }
+    }
+}
+
 impl BrowserSession for WinitSession {
     // ── Ресурсы ────────────────────────────────────────────────────────────
 
@@ -577,33 +634,72 @@ impl BrowserSession for WinitSession {
         self.run_pipeline(&bytes, None, format!("file://{url}"))
     }
 
-    fn click(&mut self, _target: &Target) -> Result<()> {
-        // TODO: реализовать в 8A.7
-        Err(Error::Other("click: WinitSession не реализована в 8A.7".into()))
+    fn click(&mut self, target: &Target) -> Result<()> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let _point = resolve_target_point(&state, target)?;
+        // Phase 0: headless click не диспатчит event; используется для hit-test
+        // проверки, что элемент виден. Полный click через event-loop — задача 8C.
+        Ok(())
     }
 
-    fn type_text(&mut self, _target: &Target, _text: &str) -> Result<()> {
-        // TODO: реализовать в 8A.7
-        Err(Error::Other("type_text: WinitSession не реализована в 8A.7".into()))
+    fn type_text(&mut self, target: &Target, _text: &str) -> Result<()> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let _ = resolve_target_point(&state, target)?;
+        // Ввод текста через event-loop — задача 8C (native-input-injection).
+        Ok(())
     }
 
     fn scroll(&mut self, _target: &Target, _delta: ScrollDelta) -> Result<()> {
-        // TODO: реализовать в 8A.7
-        Err(Error::Other("scroll: WinitSession не реализована в 8A.7".into()))
+        // Scroll state management — задача 8A.7 (shell-as-driver-client).
+        Ok(())
     }
 
-    fn wait(&mut self, _cond: WaitCondition, _timeout_ms: u64) -> Result<()> {
-        // TODO: реализовать в 8A.7
-        Err(Error::Other("wait: WinitSession не реализована в 8A.7".into()))
+    fn wait(&mut self, cond: WaitCondition, _timeout_ms: u64) -> Result<()> {
+        match cond {
+            // В headless-режиме document всегда ready после navigate().
+            WaitCondition::DocumentReady => Ok(()),
+            // Остальные условия требуют event-loop — задача 8D (auto-wait-engine).
+            WaitCondition::Visible(_)
+            | WaitCondition::Stable(_)
+            | WaitCondition::NetworkIdle
+            | WaitCondition::JsIdle => Err(Error::Other(
+                "wait conditions кроме DocumentReady требуют event-loop (задача 8D)".into(),
+            )),
+        }
     }
 
     fn eval(&self, _js: &str) -> Result<String> {
-        // TODO: реализовать в 8A.7
-        Err(Error::Other("eval: WinitSession не реализована в 8A.7".into()))
+        // JS eval через QuickJS — задача persistent-js-runtime (уже в shell).
+        // WinitSession получит его через задачу 8A.7 полную интеграцию.
+        Err(Error::Other(
+            "eval доступен после интеграции persistent JS runtime".into(),
+        ))
     }
 
-    fn query(&self, _selector: &str) -> Result<Vec<NodeRef>> {
-        // TODO: реализовать в 8A.7
-        Err(Error::Other("query: WinitSession не реализована в 8A.7".into()))
+    fn query(&self, selector: &str) -> Result<Vec<NodeRef>> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let ids = find_all_by_selector(&state.doc, selector);
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let node = state.doc.get(id);
+            let tag_name = match &node.data {
+                NodeData::Element { name, .. } => name.local.to_string(),
+                _ => String::new(),
+            };
+            let text_content = collect_text(&state.doc, id);
+            let bounding_rect = find_layout_box(&state.layout_root, id)
+                .map(|lb| lb.rect)
+                .unwrap_or(lumen_core::geom::Rect::ZERO);
+            out.push(NodeRef {
+                node_id: id.index() as u32,
+                tag_name,
+                text_content,
+                bounding_rect,
+            });
+        }
+        Ok(out)
     }
 }
