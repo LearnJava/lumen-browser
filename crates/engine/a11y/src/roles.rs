@@ -4,12 +4,13 @@
 //! and window roles). The `implicit_role` function implements the
 //! "Implicit WAI-ARIA Semantics" table from the HTML-AAM specification.
 
+use serde::{Deserialize, Serialize};
 use lumen_dom::{InputType, Node};
 
 /// All WAI-ARIA 1.2 roles.
 ///
 /// Roles not listed in this enum fall back to `AXRole::Generic`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum AXRole {
     // ── Landmark roles ───────────────────────────────────────────────────────
     /// `<nav>` — set of navigation links.
@@ -132,6 +133,44 @@ pub enum AXRole {
     // Mapped to `img` role; children are `<area>` links.
     /// Disclosure summary (already mapped via Button above for <summary>).
 
+    // ── Widget roles (continued) ──────────────────────────────────────────────
+    /// `role="alert"` — error/warning message.
+    Alert,
+    /// `role="alertdialog"` — alert dialog.
+    AlertDialog,
+    /// `role="application"` — application widget.
+    Application,
+    /// `role="feed"` — dynamic content feed (e.g. social media).
+    Feed,
+    /// `role="log"` — live log region.
+    Log,
+    /// `role="marquee"` — scrolling text.
+    Marquee,
+    /// `role="note"` — supplementary note.
+    Note,
+    /// `role="rowheader"` — row header cell (like <th scope="row">).
+    RowHeader,
+    /// `role="searchbox"` — search field (like <input type="search">).
+    Searchbox,
+    /// `role="switch"` — toggle switch (like <input type="checkbox"> styled as switch).
+    Switch,
+    /// `role="tab"` — tab in a tablist.
+    Tab,
+    /// `role="tablist"` — container for tabs.
+    TabList,
+    /// `role="tabpanel"` — panel associated with a tab.
+    TabPanel,
+    /// `role="timer"` — countdown/elapsed time display.
+    Timer,
+    /// `role="toolbar"` — toolbar widget.
+    Toolbar,
+    /// `role="tooltip"` — tooltip widget.
+    Tooltip,
+    /// `role="tree"` — tree widget.
+    Tree,
+    /// `role="treeitem"` — item in a tree widget.
+    TreeItem,
+
     // ── Generic / fallback ────────────────────────────────────────────────────
     /// Any element with no meaningful ARIA role (div, span, p, etc.).
     Generic,
@@ -199,6 +238,24 @@ impl AXRole {
             s if s.eq_ignore_ascii_case("dialog") => Self::Dialog,
             s if s.eq_ignore_ascii_case("menu") => Self::Menu,
             s if s.eq_ignore_ascii_case("menuitem") => Self::MenuItem,
+            s if s.eq_ignore_ascii_case("alert") => Self::Alert,
+            s if s.eq_ignore_ascii_case("alertdialog") => Self::AlertDialog,
+            s if s.eq_ignore_ascii_case("application") => Self::Application,
+            s if s.eq_ignore_ascii_case("feed") => Self::Feed,
+            s if s.eq_ignore_ascii_case("log") => Self::Log,
+            s if s.eq_ignore_ascii_case("marquee") => Self::Marquee,
+            s if s.eq_ignore_ascii_case("note") => Self::Note,
+            s if s.eq_ignore_ascii_case("rowheader") => Self::RowHeader,
+            s if s.eq_ignore_ascii_case("searchbox") => Self::Searchbox,
+            s if s.eq_ignore_ascii_case("switch") => Self::Switch,
+            s if s.eq_ignore_ascii_case("tab") => Self::Tab,
+            s if s.eq_ignore_ascii_case("tablist") => Self::TabList,
+            s if s.eq_ignore_ascii_case("tabpanel") => Self::TabPanel,
+            s if s.eq_ignore_ascii_case("timer") => Self::Timer,
+            s if s.eq_ignore_ascii_case("toolbar") => Self::Toolbar,
+            s if s.eq_ignore_ascii_case("tooltip") => Self::Tooltip,
+            s if s.eq_ignore_ascii_case("tree") => Self::Tree,
+            s if s.eq_ignore_ascii_case("treeitem") => Self::TreeItem,
             s if s.eq_ignore_ascii_case("generic") => Self::Generic,
             s if s.eq_ignore_ascii_case("document") => Self::Document,
             _ => return None,
@@ -324,7 +381,9 @@ fn input_role(node: &Node) -> AXRole {
         Some(InputType::Color) => AXRole::ComboBox,
         // Hidden inputs are not in the AX tree.
         Some(InputType::Hidden) => AXRole::Presentation,
-        // text, email, password, tel, url, search, date, time, … → textbox.
+        // Search input is explicitly searchbox.
+        Some(InputType::Search) => AXRole::Searchbox,
+        // text, email, password, tel, url, date, time, … → textbox.
         _ => AXRole::TextBox,
     }
 }

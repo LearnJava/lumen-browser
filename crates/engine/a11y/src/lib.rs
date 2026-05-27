@@ -15,11 +15,12 @@ pub use names::{compute_description, compute_name};
 pub use roles::{implicit_role, AXRole};
 
 use lumen_dom::{Document, InputType, NodeData, NodeId};
+use serde::{Deserialize, Serialize};
 
 // ── State flags ──────────────────────────────────────────────────────────────
 
 /// `aria-live` values per WAI-ARIA §6.6.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LiveRegion {
     /// Live updates announced when user is idle.
     Polite,
@@ -32,7 +33,7 @@ pub enum LiveRegion {
 /// Each field corresponds to a WAI-ARIA state/property or equivalent HTML
 /// attribute. Tri-state fields use `Option<bool>`: `None` = not applicable
 /// or "mixed", `Some(true/false)` = explicit value.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AXState {
     /// `aria-checked` / HTML `checked`. `None` = not a checkable role.
     /// `Some(None)` = mixed (indeterminate). `Some(Some(b))` = checked/unchecked.
@@ -79,7 +80,7 @@ pub struct AXState {
 ///
 /// Mirrors the DOM tree but carries semantic information rather than layout
 /// geometry. Platform bridges map this to OS-specific accessibility APIs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AXNode {
     /// Corresponding DOM node identifier.
     pub node_id: NodeId,
@@ -103,7 +104,7 @@ pub struct AXNode {
 ///
 /// Built by `build_ax_tree`. Contains one `AXNode` per semantically meaningful
 /// DOM element, in document order. `aria-hidden` subtrees are omitted entirely.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AXTree {
     /// Root accessibility node — typically the `<body>` element.
     pub root: AXNode,

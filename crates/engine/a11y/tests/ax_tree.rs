@@ -360,6 +360,229 @@ fn find_with_live(node: &lumen_a11y::AXNode) -> Option<LiveRegion> {
     None
 }
 
+// ── Extended HTML-AAM coverage tests ─────────────────────────────────────────────
+
+#[test]
+fn name_from_multiple_labelledby() {
+    let doc = parse(
+        r#"<div id="first">First</div><div id="second">Last</div><input aria-labelledby="first second">"#,
+    );
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    assert_eq!(tb.name, "First Last");
+}
+
+#[test]
+fn description_from_title() {
+    let doc = parse(r#"<button title="Close dialog">X</button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.description, "Close dialog");
+}
+
+#[test]
+fn input_type_email_is_textbox() {
+    let doc = parse(r#"<input type="email">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox);
+    assert!(tb.is_some());
+}
+
+#[test]
+fn state_readonly() {
+    let doc = parse(r#"<input type="text" readonly>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    assert!(tb.state.readonly);
+}
+
+#[test]
+fn state_invalid() {
+    let doc = parse(r#"<input type="text" aria-invalid="true">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    assert!(tb.state.invalid);
+}
+
+#[test]
+fn state_aria_busy_on_status() {
+    let doc = parse(r#"<output aria-busy="true">Processing...</output>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let status = find_role_dfs(&tree.root, AXRole::Status);
+    assert!(status.is_some());
+    assert!(status.unwrap().state.busy);
+}
+
+// ── Extended ARIA roles (Wave 2) ─────────────────────────────────────────────
+
+#[test]
+fn role_explicit_alert() {
+    let doc = parse(r#"<div role="alert">Error message</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let alert = find_role_dfs(&tree.root, AXRole::Alert);
+    assert!(alert.is_some(), "expected Alert role");
+}
+
+#[test]
+fn role_explicit_alertdialog() {
+    let doc = parse(r#"<div role="alertdialog">Warning</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let ad = find_role_dfs(&tree.root, AXRole::AlertDialog);
+    assert!(ad.is_some(), "expected AlertDialog role");
+}
+
+#[test]
+fn role_explicit_feed() {
+    let doc = parse(r#"<div role="feed">Social feed</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let feed = find_role_dfs(&tree.root, AXRole::Feed);
+    assert!(feed.is_some(), "expected Feed role");
+}
+
+#[test]
+fn role_explicit_log() {
+    let doc = parse(r#"<div role="log">Log output</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let log = find_role_dfs(&tree.root, AXRole::Log);
+    assert!(log.is_some(), "expected Log role");
+}
+
+#[test]
+fn role_explicit_note() {
+    let doc = parse(r#"<div role="note">Additional note</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let note = find_role_dfs(&tree.root, AXRole::Note);
+    assert!(note.is_some(), "expected Note role");
+}
+
+#[test]
+fn role_input_search() {
+    let doc = parse(r#"<input type="search">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let sb = find_role_dfs(&tree.root, AXRole::Searchbox);
+    assert!(sb.is_some(), "expected Searchbox role for <input type='search'>");
+}
+
+#[test]
+fn role_explicit_switch() {
+    let doc = parse(r#"<input type="checkbox" role="switch">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let sw = find_role_dfs(&tree.root, AXRole::Switch);
+    assert!(sw.is_some(), "expected Switch role");
+}
+
+#[test]
+fn role_explicit_tablist() {
+    let doc = parse(r#"<div role="tablist">
+        <div role="tab">Tab 1</div>
+        <div role="tab">Tab 2</div>
+    </div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tablist = find_role_dfs(&tree.root, AXRole::TabList);
+    assert!(tablist.is_some(), "expected TabList role");
+    let tabs: Vec<_> = collect_roles_dfs(&tree.root, AXRole::Tab);
+    assert_eq!(tabs.len(), 2, "expected 2 Tab roles");
+}
+
+#[test]
+fn role_explicit_tabpanel() {
+    let doc = parse(r#"<div role="tabpanel">Content</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tp = find_role_dfs(&tree.root, AXRole::TabPanel);
+    assert!(tp.is_some(), "expected TabPanel role");
+}
+
+#[test]
+fn role_explicit_tree() {
+    let doc = parse(r#"<div role="tree">
+        <div role="treeitem">Item 1</div>
+        <div role="treeitem">Item 2</div>
+    </div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tree_role = find_role_dfs(&tree.root, AXRole::Tree);
+    assert!(tree_role.is_some(), "expected Tree role");
+    let items: Vec<_> = collect_roles_dfs(&tree.root, AXRole::TreeItem);
+    assert_eq!(items.len(), 2, "expected 2 TreeItem roles");
+}
+
+#[test]
+fn role_explicit_toolbar() {
+    let doc = parse(r#"<div role="toolbar">Tool buttons</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::Toolbar);
+    assert!(tb.is_some(), "expected Toolbar role");
+}
+
+#[test]
+fn role_explicit_tooltip() {
+    let doc = parse(r#"<div role="tooltip">Helpful hint</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tt = find_role_dfs(&tree.root, AXRole::Tooltip);
+    assert!(tt.is_some(), "expected Tooltip role");
+}
+
+#[test]
+fn role_explicit_rowheader() {
+    let doc = parse(r#"<table><tr><th role="rowheader">Header</th></tr></table>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let rh = find_role_dfs(&tree.root, AXRole::RowHeader);
+    assert!(rh.is_some(), "expected RowHeader role");
+}
+
+#[test]
+fn role_explicit_marquee() {
+    let doc = parse(r#"<div role="marquee">Scrolling text</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let mq = find_role_dfs(&tree.root, AXRole::Marquee);
+    assert!(mq.is_some(), "expected Marquee role");
+}
+
+#[test]
+fn role_explicit_application() {
+    let doc = parse(r#"<div role="application">Web app</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let app = find_role_dfs(&tree.root, AXRole::Application);
+    assert!(app.is_some(), "expected Application role");
+}
+
+#[test]
+fn role_explicit_timer() {
+    let doc = parse(r#"<div role="timer">1:00</div>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tm = find_role_dfs(&tree.root, AXRole::Timer);
+    assert!(tm.is_some(), "expected Timer role");
+}
+
+// ── Serialization tests ──────────────────────────────────────────────────────
+
+#[test]
+fn tree_serialization() {
+    let doc = parse(r#"
+        <nav>Navigation</nav>
+        <main>
+            <article>Content</article>
+        </main>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+
+    // Test that the tree can be serialized with serde
+    let json_str = serde_json::to_string(&tree).expect("tree serialization");
+    assert!(!json_str.is_empty(), "serialization should produce non-empty JSON");
+
+    // Test roundtrip: serialize and deserialize
+    let deserialized: lumen_a11y::AXTree =
+        serde_json::from_str(&json_str).expect("deserialization");
+    assert_eq!(tree.root.role, deserialized.root.role, "role should match after roundtrip");
+}
+
+#[test]
+fn node_name_preservation() {
+    let doc = parse(r#"<button aria-label="Custom name">Default</button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.name, "Custom name", "aria-label should override button text");
+}
+
 fn find_with_tabindex(node: &lumen_a11y::AXNode, index: i32) -> Option<&lumen_a11y::AXNode> {
     if node.state.tab_index == Some(index) {
         return Some(node);
@@ -370,4 +593,18 @@ fn find_with_tabindex(node: &lumen_a11y::AXNode, index: i32) -> Option<&lumen_a1
         }
     }
     None
+}
+
+fn collect_roles_dfs(
+    node: &lumen_a11y::AXNode,
+    target_role: AXRole,
+) -> Vec<&lumen_a11y::AXNode> {
+    let mut result = Vec::new();
+    if node.role == target_role {
+        result.push(node);
+    }
+    for child in &node.children {
+        result.extend(collect_roles_dfs(child, target_role));
+    }
+    result
 }
