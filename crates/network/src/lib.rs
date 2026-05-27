@@ -12,6 +12,10 @@
 //! URL парсится в `lumen_core::url::Url` — никакого собственного парсера здесь
 //! не держим. Из `Url` берём scheme, host (Punycode для DNS/TLS/Host header
 //! через `host_ascii`), effective_port и `path_and_query` для request line.
+//!
+//! **Для тестирования:** используй [`MockTransport`] — реализация [`NetworkTransport`]
+//! (через `lumen_core::ext`), которая возвращает заранее зарегистрированные
+//! fixture-данные вместо реальных HTTP-запросов.
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
@@ -40,6 +44,7 @@ pub mod h2;
 pub mod http_cache;
 mod hsts;
 mod mixed_content;
+mod mock;
 mod origin;
 mod pool;
 mod range;
@@ -49,6 +54,7 @@ pub(crate) mod websocket;
 pub use auth::StaticCredentialProvider;
 pub use brotli::BrotliContentDecoder;
 pub use http_cache::HttpCache;
+pub use mock::MockTransport;
 pub use cors::{
     CorsError, CorsRequest, CredentialsMode, DEFAULT_PREFLIGHT_MAX_AGE_SECONDS,
     MAX_SAFELISTED_HEADER_VALUE_LEN, PreflightCache, PreflightResult, build_preflight_headers,
