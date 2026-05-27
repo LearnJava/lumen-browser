@@ -3,7 +3,7 @@ mod png;
 pub mod webp;
 
 pub use jpeg::{decode_jpeg, JpegError};
-pub use png::decode_png;
+pub use png::{decode_png, encode_png_rgba8};
 pub use webp::{WebpError, WebpImageDecoder, decode_webp, is_webp};
 
 /// PNG-сигнатура: `89 50 4E 47 0D 0A 1A 0A` (PNG §5.2).

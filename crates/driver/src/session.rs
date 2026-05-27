@@ -119,10 +119,27 @@ impl BrowserSession for InProcessSession {
     // ── Ресурсы ────────────────────────────────────────────────────────────
 
     fn screenshot(&self) -> Result<Vec<u8>> {
-        // CPU-рендер появится в задаче 8A.5 (tinyskia-cpu-raster).
-        Err(Error::Other(
-            "screenshot требует GPU контекст; в headless-режиме доступен после задачи 8A.5".into(),
-        ))
+        let state = self.state()?;
+
+        // Build display lists from layout tree.
+        let page_list = lumen_paint::build_display_list(&state.layout_root);
+        let overlay_list = Vec::new(); // No overlays in headless mode.
+
+        // Create headless renderer for off-screen rendering.
+        let width = self.viewport.width as u32;
+        let height = self.viewport.height as u32;
+        let mut renderer =
+            lumen_paint::Renderer::new_headless(width, height, INTER_FONT.to_vec())
+                .map_err(|e| Error::Other(format!("headless renderer: {e}")))?;
+
+        // Render to image (RGBA8).
+        let image = renderer
+            .render_to_image(&page_list, &overlay_list, 0.0, 0.0)
+            .map_err(|e| Error::Other(format!("render_to_image: {e}")))?;
+
+        // Encode to PNG.
+        lumen_image::encode_png_rgba8(&image)
+            .map_err(|e| Error::Other(format!("PNG encoding: {e}")))
     }
 
     fn a11y_tree(&self) -> Result<A11yNode> {
@@ -672,9 +689,12 @@ mod tests {
     }
 
     #[test]
-    fn screenshot_returns_error_in_headless() {
-        let s = make_session("<html><body></body></html>");
-        assert!(s.screenshot().is_err());
+    fn screenshot_returns_png() {
+        let s = make_session("<html><body><div style='background:red; width:100px; height:100px;'></div></body></html>");
+        let png_bytes = s.screenshot().expect("screenshot should succeed");
+        // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+        assert!(png_bytes.len() > 8, "PNG should have content");
+        assert_eq!(&png_bytes[0..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], "PNG signature");
     }
 
     #[test]

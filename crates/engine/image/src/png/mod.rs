@@ -1,3 +1,4 @@
+use std::io::Write;
 use zune_core::bytestream::ZCursor;
 use zune_core::options::DecoderOptions;
 use zune_core::result::DecodingResult;
@@ -39,4 +40,29 @@ pub fn decode_png(bytes: &[u8]) -> Result<Image, DecodeError> {
     };
 
     Ok(Image { width: width as u32, height: height as u32, format, data: pixels })
+}
+
+/// Кодирует RGBA8 изображение в PNG формат.
+///
+/// # Errors
+/// Returns `Err` if the image format is not RGBA8 or if PNG encoding fails.
+pub fn encode_png_rgba8(img: &Image) -> Result<Vec<u8>, crate::ImageError> {
+    if img.format != PixelFormat::Rgba8 {
+        return Err(crate::ImageError::UnknownFormat);
+    }
+
+    let mut out = Vec::new();
+    let mut encoder = png::Encoder::new(&mut out, img.width, img.height);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    let mut writer = encoder
+        .write_header()
+        .map_err(|e| crate::ImageError::Png(crate::DecodeError::Decode(e.to_string())))?;
+    writer
+        .write_image_data(&img.data)
+        .map_err(|e| crate::ImageError::Png(crate::DecodeError::Decode(e.to_string())))?;
+    writer
+        .finish()
+        .map_err(|e| crate::ImageError::Png(crate::DecodeError::Decode(e.to_string())))?;
+    Ok(out)
 }
