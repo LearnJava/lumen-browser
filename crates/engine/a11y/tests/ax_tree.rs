@@ -360,6 +360,59 @@ fn find_with_live(node: &lumen_a11y::AXNode) -> Option<LiveRegion> {
     None
 }
 
+// ── Extended HTML-AAM coverage tests ─────────────────────────────────────────────
+
+#[test]
+fn name_from_multiple_labelledby() {
+    let doc = parse(
+        r#"<div id="first">First</div><div id="second">Last</div><input aria-labelledby="first second">"#,
+    );
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    assert_eq!(tb.name, "First Last");
+}
+
+#[test]
+fn description_from_title() {
+    let doc = parse(r#"<button title="Close dialog">X</button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.description, "Close dialog");
+}
+
+#[test]
+fn input_type_email_is_textbox() {
+    let doc = parse(r#"<input type="email">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox);
+    assert!(tb.is_some());
+}
+
+#[test]
+fn state_readonly() {
+    let doc = parse(r#"<input type="text" readonly>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    assert!(tb.state.readonly);
+}
+
+#[test]
+fn state_invalid() {
+    let doc = parse(r#"<input type="text" aria-invalid="true">"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    assert!(tb.state.invalid);
+}
+
+#[test]
+fn state_aria_busy_on_status() {
+    let doc = parse(r#"<output aria-busy="true">Processing...</output>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let status = find_role_dfs(&tree.root, AXRole::Status);
+    assert!(status.is_some());
+    assert!(status.unwrap().state.busy);
+}
+
 fn find_with_tabindex(node: &lumen_a11y::AXNode, index: i32) -> Option<&lumen_a11y::AXNode> {
     if node.state.tab_index == Some(index) {
         return Some(node);
