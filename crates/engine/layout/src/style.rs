@@ -5026,7 +5026,7 @@ fn matches_syntax_custom_ident(value: &str) -> bool {
 
 // ──────────────── selector matching ────────────────
 
-fn matches_complex(complex: &ComplexSelector, doc: &Document, node: NodeId) -> bool {
+pub(crate) fn matches_complex(complex: &ComplexSelector, doc: &Document, node: NodeId) -> bool {
     // Справа налево с back-tracking. Алгоритм:
     //   1. Складываем (compounds, combinators) в массивы.
     //   2. Рекурсивно: матчим последний compound на текущем `node`; если ОК
