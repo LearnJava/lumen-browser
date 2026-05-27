@@ -4,18 +4,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 **Usage:** grep for a symbol → get `file:line` → `Read file offset=N limit=30`.
 
-## lumen-a11y  (10 symbols)
+## lumen-a11y  (11 symbols)
 
-`crates/engine/a11y/src/lib.rs:23` **enum** `LiveRegion` — `aria-live` values per WAI-ARIA §6.6
-`crates/engine/a11y/src/lib.rs:36` **struct** `AXState` — ARIA state and property flags for one accessibility node
-`crates/engine/a11y/src/lib.rs:83` **struct** `AXNode` — One node in the accessibility tree
-`crates/engine/a11y/src/lib.rs:107` **struct** `AXTree` — Accessibility tree rooted at a document node
-`crates/engine/a11y/src/lib.rs:118` **fn** `build_ax_tree` — Build an `AXTree` from a `Document` starting at `root_id`
+`crates/engine/a11y/src/lib.rs:24` **enum** `LiveRegion` — `aria-live` values per WAI-ARIA §6.6
+`crates/engine/a11y/src/lib.rs:33` **enum** `AriaCurrent` — `aria-current` values per WAI-ARIA §5.4.1
+`crates/engine/a11y/src/lib.rs:52` **struct** `AXState` — ARIA state and property flags for one accessibility node
+`crates/engine/a11y/src/lib.rs:113` **struct** `AXNode` — One node in the accessibility tree
+`crates/engine/a11y/src/lib.rs:145` **struct** `AXTree` — Accessibility tree rooted at a document node
+`crates/engine/a11y/src/lib.rs:156` **fn** `build_ax_tree` — Build an `AXTree` from a `Document` starting at `root_id`
 `crates/engine/a11y/src/names.rs:18` **fn** `compute_name` — Compute the accessible name for a DOM node (ACCNAME-1.2 §4.3)
-`crates/engine/a11y/src/names.rs:103` **fn** `compute_description` — Compute the accessible description for a DOM node (ACCNAME-1.2 §4.3.2)
-`crates/engine/a11y/src/roles.rs:13` **enum** `AXRole` — All WAI-ARIA 1.2 roles
-`crates/engine/a11y/src/roles.rs:148` **fn** `parse` — Parse a WAI-ARIA role string (case-insensitive)
-`crates/engine/a11y/src/roles.rs:213` **fn** `implicit_role` — Compute the implicit WAI-ARIA role for a DOM node per HTML-AAM §5
+`crates/engine/a11y/src/names.rs:176` **fn** `compute_description` — Compute the accessible description for a DOM node (ACCNAME-1.2 §4.3.2)
+`crates/engine/a11y/src/roles.rs:14` **enum** `AXRole` — All WAI-ARIA 1.2 roles
+`crates/engine/a11y/src/roles.rs:187` **fn** `parse` — Parse a WAI-ARIA role string (case-insensitive)
+`crates/engine/a11y/src/roles.rs:270` **fn** `implicit_role` — Compute the implicit WAI-ARIA role for a DOM node per HTML-AAM §5
 
 ## lumen-canvas  (24 symbols)
 
@@ -44,7 +45,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:4` **fn** `fill_path` — Fill `path` using the even-odd scanline algorithm
 `crates/engine/canvas/src/rasterize.rs:41` **fn** `stroke_path` — Stroke `path` by drawing each line segment as a thick rectangle
 
-## lumen-core  (138 symbols)
+## lumen-core  (139 symbols)
 
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
@@ -73,42 +74,43 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/ext.rs:305` **trait** `EncodingDetector` — Определение кодировки HTML-документа. Для кириллицы критично уметь
 `crates/core/src/ext.rs:315` **enum** `FontStyle` — Начертание face-а: `font-style` из CSS Fonts L4. Phase 0 — три
 `crates/core/src/ext.rs:324` **fn** `parse_keyword` — Парсит CSS-ключевое слово `normal | italic | oblique` (case-insensitive)
-`crates/core/src/ext.rs:345` **struct** `FaceRecord` — Метаданные одного face-а в индексе шрифтов
-`crates/core/src/ext.rs:381` **trait** `FontProvider` — Источник системных шрифтов. Реализация — в `lumen-font::system_fonts`
-`crates/core/src/ext.rs:435` **fn** `match_face` — CSS Fonts L4 §5.2 алгоритм матчинга — извлечён из trait-а в свободную
-`crates/core/src/ext.rs:668` **trait** `JsRuntime` — JavaScript runtime — исполнение JS-кода (HTML inline scripts, `eval`,
-`crates/core/src/ext.rs:689` **enum** `JsValue` — Простые JSON-совместимые типы для передачи через trait-границу
-`crates/core/src/ext.rs:702` **fn** `object` — Хелпер: построить object из key-value пар
-`crates/core/src/ext.rs:712` **enum** `JsError` — Ошибка исполнения JavaScript: либо syntax error (parse), либо runtime
-`crates/core/src/ext.rs:733` **type** `JsResult`
-`crates/core/src/ext.rs:738` **struct** `NullJsRuntime` — Null implementation — всегда возвращает `JsError::NotImplemented`
-`crates/core/src/ext.rs:776` **trait** `UnicodeProvider` — Unicode-таблицы: line break (UAX #14), grapheme/word segmentation
-`crates/core/src/ext.rs:801` **struct** `NullUnicodeProvider` — Null-реализация `UnicodeProvider` — все методы возвращают пустые векторы
-`crates/core/src/ext.rs:829` **trait** `IdnaProvider` — IDN (Internationalized Domain Names) полный UTS #46. Свой Punycode-encoder
-`crates/core/src/ext.rs:839` **struct** `NullIdnaProvider` — Null-реализация `IdnaProvider` — все методы возвращают `None`. Потребитель
-`crates/core/src/ext.rs:864` **trait** `PublicSuffixList` — Public Suffix List — отделение публичных суффиксов от регистрируемых
-`crates/core/src/ext.rs:885` **struct** `NullPublicSuffixList` — Null-реализация `PublicSuffixList` — все запросы возвращают `None`/`false`
-`crates/core/src/ext.rs:911` **trait** `ContentDecoder` — HTTP `Content-Encoding` декодер. Один экземпляр trait-а = один кодек
-`crates/core/src/ext.rs:926` **struct** `UnsupportedContentDecoder` — Stub-реализация `ContentDecoder` для encoding-а, на который нет
-`crates/core/src/ext.rs:957` **trait** `FontFormat` — Декодер альтернативных файловых форматов шрифта (WOFF2, WOFF) в raw
-`crates/core/src/ext.rs:975` **struct** `NullFontFormat` — Null-реализация `FontFormat` — `can_decode` всегда `false`,
-`crates/core/src/ext.rs:1000` **trait** `ImageDecoder` — Plug-in декодер растровых изображений для форматов, не встроенных в
-`crates/core/src/ext.rs:1027` **trait** `SpellChecker` — Spell checker — проверка орфографии для form field / contenteditable
-`crates/core/src/ext.rs:1041` **struct** `NullSpellChecker` — Null-реализация `SpellChecker` — `check` всегда возвращает `true`, чтобы
-`crates/core/src/ext.rs:1058` **trait** `HyphenationProvider` — Hyphenation — поиск позиций мягких переносов для CSS `hyphens: auto`
-`crates/core/src/ext.rs:1069` **struct** `NullHyphenationProvider` — Null-реализация `HyphenationProvider` — никаких переносов не предлагается
-`crates/core/src/ext.rs:1086` **enum** `WsMessage` — Сообщение, полученное от WebSocket-сервера (RFC 6455 §5.6)
-`crates/core/src/ext.rs:1102` **trait** `WebSocketSession` — Открытое WebSocket-соединение. Объект владеет TCP/TLS-стримом
-`crates/core/src/ext.rs:1118` **trait** `WebSocketProvider` — Фабрика WebSocket-соединений. Реализуется `lumen-network::HttpClient`
-`crates/core/src/ext.rs:1136` **struct** `SseEvent` — Полностью разобранное SSE-событие (HTML Living Standard §9.2.6)
-`crates/core/src/ext.rs:1152` **trait** `SseSession` — Открытое SSE-соединение (EventSource). Блокирующий интерфейс
-`crates/core/src/ext.rs:1169` **trait** `SseProvider` — Фабрика SSE-соединений. Реализуется `lumen-network::HttpClient`
-`crates/core/src/ext.rs:1196` **trait** `FetchInterceptor` — Перехватчик fetch-запросов уровня Service Worker
-`crates/core/src/ext.rs:1208` **struct** `JsFetchResult` — Full HTTP response for a synchronous JS `fetch()` call
-`crates/core/src/ext.rs:1226` **trait** `JsFetchProvider` — Synchronous HTTP fetch bridge for the JS runtime
-`crates/core/src/ext.rs:1237` **enum** `JsWsEvent` — A single queued event from a WebSocket connection, ready for delivery to JS
-`crates/core/src/ext.rs:1267` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
-`crates/core/src/ext.rs:1282` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
+`crates/core/src/ext.rs:346` **struct** `FaceRecord` — Метаданные одного face-а в индексе шрифтов
+`crates/core/src/ext.rs:386` **trait** `FontProvider` — Источник системных шрифтов. Реализация — в `lumen-font::system_fonts`
+`crates/core/src/ext.rs:440` **fn** `match_face` — CSS Fonts L4 §5.2 алгоритм матчинга — извлечён из trait-а в свободную
+`crates/core/src/ext.rs:479` **fn** `match_face_no_stretch` — Legacy функция match_face для backward compatibility (без stretch)
+`crates/core/src/ext.rs:779` **trait** `JsRuntime` — JavaScript runtime — исполнение JS-кода (HTML inline scripts, `eval`,
+`crates/core/src/ext.rs:800` **enum** `JsValue` — Простые JSON-совместимые типы для передачи через trait-границу
+`crates/core/src/ext.rs:813` **fn** `object` — Хелпер: построить object из key-value пар
+`crates/core/src/ext.rs:823` **enum** `JsError` — Ошибка исполнения JavaScript: либо syntax error (parse), либо runtime
+`crates/core/src/ext.rs:844` **type** `JsResult`
+`crates/core/src/ext.rs:849` **struct** `NullJsRuntime` — Null implementation — всегда возвращает `JsError::NotImplemented`
+`crates/core/src/ext.rs:887` **trait** `UnicodeProvider` — Unicode-таблицы: line break (UAX #14), grapheme/word segmentation
+`crates/core/src/ext.rs:912` **struct** `NullUnicodeProvider` — Null-реализация `UnicodeProvider` — все методы возвращают пустые векторы
+`crates/core/src/ext.rs:940` **trait** `IdnaProvider` — IDN (Internationalized Domain Names) полный UTS #46. Свой Punycode-encoder
+`crates/core/src/ext.rs:950` **struct** `NullIdnaProvider` — Null-реализация `IdnaProvider` — все методы возвращают `None`. Потребитель
+`crates/core/src/ext.rs:975` **trait** `PublicSuffixList` — Public Suffix List — отделение публичных суффиксов от регистрируемых
+`crates/core/src/ext.rs:996` **struct** `NullPublicSuffixList` — Null-реализация `PublicSuffixList` — все запросы возвращают `None`/`false`
+`crates/core/src/ext.rs:1022` **trait** `ContentDecoder` — HTTP `Content-Encoding` декодер. Один экземпляр trait-а = один кодек
+`crates/core/src/ext.rs:1037` **struct** `UnsupportedContentDecoder` — Stub-реализация `ContentDecoder` для encoding-а, на который нет
+`crates/core/src/ext.rs:1068` **trait** `FontFormat` — Декодер альтернативных файловых форматов шрифта (WOFF2, WOFF) в raw
+`crates/core/src/ext.rs:1086` **struct** `NullFontFormat` — Null-реализация `FontFormat` — `can_decode` всегда `false`,
+`crates/core/src/ext.rs:1111` **trait** `ImageDecoder` — Plug-in декодер растровых изображений для форматов, не встроенных в
+`crates/core/src/ext.rs:1138` **trait** `SpellChecker` — Spell checker — проверка орфографии для form field / contenteditable
+`crates/core/src/ext.rs:1152` **struct** `NullSpellChecker` — Null-реализация `SpellChecker` — `check` всегда возвращает `true`, чтобы
+`crates/core/src/ext.rs:1169` **trait** `HyphenationProvider` — Hyphenation — поиск позиций мягких переносов для CSS `hyphens: auto`
+`crates/core/src/ext.rs:1180` **struct** `NullHyphenationProvider` — Null-реализация `HyphenationProvider` — никаких переносов не предлагается
+`crates/core/src/ext.rs:1197` **enum** `WsMessage` — Сообщение, полученное от WebSocket-сервера (RFC 6455 §5.6)
+`crates/core/src/ext.rs:1213` **trait** `WebSocketSession` — Открытое WebSocket-соединение. Объект владеет TCP/TLS-стримом
+`crates/core/src/ext.rs:1229` **trait** `WebSocketProvider` — Фабрика WebSocket-соединений. Реализуется `lumen-network::HttpClient`
+`crates/core/src/ext.rs:1247` **struct** `SseEvent` — Полностью разобранное SSE-событие (HTML Living Standard §9.2.6)
+`crates/core/src/ext.rs:1263` **trait** `SseSession` — Открытое SSE-соединение (EventSource). Блокирующий интерфейс
+`crates/core/src/ext.rs:1280` **trait** `SseProvider` — Фабрика SSE-соединений. Реализуется `lumen-network::HttpClient`
+`crates/core/src/ext.rs:1307` **trait** `FetchInterceptor` — Перехватчик fetch-запросов уровня Service Worker
+`crates/core/src/ext.rs:1319` **struct** `JsFetchResult` — Full HTTP response for a synchronous JS `fetch()` call
+`crates/core/src/ext.rs:1337` **trait** `JsFetchProvider` — Synchronous HTTP fetch bridge for the JS runtime
+`crates/core/src/ext.rs:1348` **enum** `JsWsEvent` — A single queued event from a WebSocket connection, ready for delivery to JS
+`crates/core/src/ext.rs:1378` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
+`crates/core/src/ext.rs:1393` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
 `crates/core/src/form.rs:15` **struct** `FormEntry` — Запись формы — пара (name, value) с опциональным filename (для multipart)
 `crates/core/src/form.rs:21` **enum** `FormValue`
 `crates/core/src/form.rs:33` **fn** `text`
@@ -248,95 +250,99 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/devtools/src/ws.rs:104` **fn** `read_text_frame` — Прочитать один WebSocket фрейм (RFC 6455 §5.2)
 `crates/devtools/src/ws.rs:125` **fn** `write_text_frame` — Отправить text фрейм (server→client, без маски)
 
-## lumen-dom  (83 symbols)
+## lumen-dom  (87 symbols)
 
-`crates/engine/dom/src/lib.rs:9` **struct** `NodeId`
-`crates/engine/dom/src/lib.rs:12` **fn** `index`
-`crates/engine/dom/src/lib.rs:16` **fn** `from_index`
-`crates/engine/dom/src/lib.rs:22` **enum** `Namespace`
-`crates/engine/dom/src/lib.rs:32` **struct** `QualName`
-`crates/engine/dom/src/lib.rs:38` **fn** `html`
-`crates/engine/dom/src/lib.rs:47` **struct** `Attribute`
-`crates/engine/dom/src/lib.rs:57` **enum** `ShadowRootMode` — Shadow root mode per Shadow DOM spec §4.2
-`crates/engine/dom/src/lib.rs:72` **enum** `NodeData`
-`crates/engine/dom/src/lib.rs:105` **struct** `Node`
-`crates/engine/dom/src/lib.rs:112` **fn** `element_name`
-`crates/engine/dom/src/lib.rs:121` **fn** `get_attr` — Возвращает значение атрибута по имени (ASCII case-insensitive). На
-`crates/engine/dom/src/lib.rs:137` **fn** `sandbox_flags` — Sandbox-ограничения для `<iframe sandbox="...">` по HTML LS §7.6.5
-`crates/engine/dom/src/lib.rs:149` **fn** `input_type` — HTML5 form input type для `<input type="...">`. Возвращает None
-`crates/engine/dom/src/lib.rs:164` **enum** `InputType` — HTML5 form input types (HTML Standard §4.10.5). Спека определяет
-`crates/engine/dom/src/lib.rs:216` **fn** `parse` — Распарсить значение `type`-атрибута. Case-insensitive по
-`crates/engine/dom/src/lib.rs:245` **fn** `as_str`
-`crates/engine/dom/src/lib.rs:276` **fn** `is_textual` — Текстовая семантика — поле с буквенным контентом, на котором
-`crates/engine/dom/src/lib.rs:286` **fn** `is_button_like` — Кнопочная семантика — submit/reset/button/image, рендерится
-`crates/engine/dom/src/lib.rs:296` **struct** `FormInfo` — Данные `<form>` элемента — URL назначения, метод и число полей ввода
-`crates/engine/dom/src/lib.rs:314` **enum** `DocumentMode` — Парсинг-режим документа по HTML5 §13.2.6.2 «The insertion mode»
-`crates/engine/dom/src/lib.rs:337` **struct** `DomPosition` — A position within the document (WHATWG DOM §4.4)
-`crates/engine/dom/src/lib.rs:350` **struct** `Range` — A contiguous range of document content (WHATWG DOM §4.5)
-`crates/engine/dom/src/lib.rs:359` **fn** `collapsed` — Collapsed range: both endpoints at `pos`
-`crates/engine/dom/src/lib.rs:364` **fn** `is_collapsed` — True when start and end are the same position
-`crates/engine/dom/src/lib.rs:376` **struct** `Selection` — The current document text selection (WHATWG Selection API)
-`crates/engine/dom/src/lib.rs:385` **fn** `is_collapsed` — True when anchor == focus (or no selection)
-`crates/engine/dom/src/lib.rs:394` **fn** `get_range` — The selection as a normalised Range (start ≤ end in node order)
-`crates/engine/dom/src/lib.rs:409` **fn** `collapse` — Collapse the selection to a single point
-`crates/engine/dom/src/lib.rs:415` **fn** `extend_focus` — Extend the focus end to `pos` (anchor stays fixed)
-`crates/engine/dom/src/lib.rs:420` **fn** `clear` — Remove the selection entirely
-`crates/engine/dom/src/lib.rs:427` **struct** `Document`
-`crates/engine/dom/src/lib.rs:456` **fn** `new`
-`crates/engine/dom/src/lib.rs:473` **fn** `root`
-`crates/engine/dom/src/lib.rs:481` **fn** `mode` — Текущий парсинг-режим. Tree builder выставляет его при
-`crates/engine/dom/src/lib.rs:487` **fn** `set_mode` — Установить режим. Использует tree builder при инициализации
-`crates/engine/dom/src/lib.rs:493` **fn** `get_selection` — Current selection. The shell updates this on mouse events; JS reads it
-`crates/engine/dom/src/lib.rs:498` **fn** `set_selection` — Replace the current selection
-`crates/engine/dom/src/lib.rs:503` **fn** `clear_selection` — Clear the selection
-`crates/engine/dom/src/lib.rs:518` **fn** `target` — Текущий target — id из URL fragment (без ведущего `#`), к которому
-`crates/engine/dom/src/lib.rs:525` **fn** `set_target` — Установить current target (id без `#`). `None` — нет fragment-а в URL
-`crates/engine/dom/src/lib.rs:537` **fn** `attach_shadow` — Attach a shadow root to `host` and return its `NodeId`
-`crates/engine/dom/src/lib.rs:544` **fn** `shadow_root_of` — Return the shadow root attached to `host`, or `None` if not a shadow host
-`crates/engine/dom/src/lib.rs:549` **fn** `is_shadow_host` — Whether `id` is a shadow host (has an attached shadow root)
-`crates/engine/dom/src/lib.rs:553` **fn** `get`
-`crates/engine/dom/src/lib.rs:557` **fn** `get_mut`
-`crates/engine/dom/src/lib.rs:561` **fn** `len`
-`crates/engine/dom/src/lib.rs:565` **fn** `is_empty`
-`crates/engine/dom/src/lib.rs:577` **fn** `base_href` — HTML5 §4.2.3 — найти первый `<base href="...">` в документе и
-`crates/engine/dom/src/lib.rs:589` **fn** `find_first_element` — Найти первый элемент, удовлетворяющий предикату. Pre-order обход
-`crates/engine/dom/src/lib.rs:615` **fn** `create_element`
-`crates/engine/dom/src/lib.rs:622` **fn** `create_text`
-`crates/engine/dom/src/lib.rs:626` **fn** `create_comment`
-`crates/engine/dom/src/lib.rs:636` **fn** `create_fragment` — Allocate a `DocumentFragment` node in the arena
-`crates/engine/dom/src/lib.rs:644` **fn** `set_template_content` — Register `fragment` as the content container for `template`
-`crates/engine/dom/src/lib.rs:650` **fn** `template_content` — Return the content `DocumentFragment` for a `<template>` element, or
-`crates/engine/dom/src/lib.rs:654` **fn** `create_doctype`
-`crates/engine/dom/src/lib.rs:668` **fn** `append_child` — Append `child` as the last child of `parent`. If `child` already has a parent, it is detached first
-`crates/engine/dom/src/lib.rs:680` **fn** `insert_after` — Insert `new_node` immediately after `reference` in their shared parent
-`crates/engine/dom/src/lib.rs:693` **fn** `detach` — Remove `node` from its current parent. The node itself stays in the arena and can be re-attached
-`crates/engine/dom/src/lib.rs:796` **fn** `check_form_gate` — Гейт отправки форм по sandbox-флагу HTML §7.6.5
-`crates/engine/dom/src/lib.rs:817` **fn** `find_ancestor_form` — Найти ближайший предок `<form>` для узла `node`
-`crates/engine/dom/src/lib.rs:840` **fn** `collect_dom_form_fields` — Собрать имена и значения submittable-контролов формы из DOM-атрибутов
-`crates/engine/dom/src/lib.rs:942` **struct** `ValidityState` — Validity state for a form control — HTML5 §4.10.21.1 `ValidityState` interface
-`crates/engine/dom/src/lib.rs:967` **fn** `valid` — Returns `true` when all flags are `false` (element satisfies all constraints)
-`crates/engine/dom/src/lib.rs:988` **fn** `element_validity` — Returns the validity state for `node`, or `None` if the node is not a
-`crates/engine/dom/src/lib.rs:1091` **fn** `check_validity_form` — Returns `true` if all submittable controls in `form_id` satisfy their
-`crates/engine/dom/src/lib.rs:1099` **fn** `invalid_controls_in_form` — Returns the `NodeId`s of all invalid (failing constraint validation) controls
-`crates/engine/dom/src/lib.rs:1203` **struct** `AnchorInfo` — Информация об якорной ссылке (`<a href>`), найденной в документе
-`crates/engine/dom/src/lib.rs:1236` **struct** `FlatTree` — Pre-computed composed tree (flat tree) for Shadow DOM layout traversal
-`crates/engine/dom/src/lib.rs:1246` **fn** `children_of` — Composed-tree children of `id`
-`crates/engine/dom/src/lib.rs:1261` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
-`crates/engine/dom/src/lib.rs:1356` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
-`crates/engine/dom/src/lib.rs:1380` **struct** `IframeInfo` — Данные `<iframe>` элемента — URL содержимого и sandbox-ограничения
-`crates/engine/dom/src/lib.rs:1411` **fn** `collect_iframes` — Собрать все `<iframe>` элементы документа с их sandbox-ограничениями
-`crates/engine/dom/src/lib.rs:1422` **fn** `check_popup_gate` — Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5
-`crates/engine/dom/src/lib.rs:1441` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
-`crates/engine/dom/src/lib.rs:1472` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
-`crates/engine/dom/src/lib.rs:1495` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
-`crates/engine/dom/src/lib.rs:1519` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
-`crates/engine/dom/src/lib.rs:1561` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
-`crates/engine/dom/src/lib.rs:1619` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
-`crates/engine/dom/src/lib.rs:1673` **fn** `insert_paragraph_break`
+`crates/engine/dom/src/lib.rs:22` **enum** `DomSnapshotError` — Error returned by [`Document::to_bytes`] and [`Document::from_bytes`]
+`crates/engine/dom/src/lib.rs:41` **struct** `NodeId`
+`crates/engine/dom/src/lib.rs:44` **fn** `index`
+`crates/engine/dom/src/lib.rs:48` **fn** `from_index`
+`crates/engine/dom/src/lib.rs:54` **enum** `Namespace`
+`crates/engine/dom/src/lib.rs:64` **struct** `QualName`
+`crates/engine/dom/src/lib.rs:70` **fn** `html`
+`crates/engine/dom/src/lib.rs:79` **struct** `Attribute`
+`crates/engine/dom/src/lib.rs:89` **enum** `ShadowRootMode` — Shadow root mode per Shadow DOM spec §4.2
+`crates/engine/dom/src/lib.rs:104` **enum** `NodeData`
+`crates/engine/dom/src/lib.rs:137` **struct** `Node`
+`crates/engine/dom/src/lib.rs:144` **fn** `element_name`
+`crates/engine/dom/src/lib.rs:153` **fn** `get_attr` — Возвращает значение атрибута по имени (ASCII case-insensitive). На
+`crates/engine/dom/src/lib.rs:169` **fn** `sandbox_flags` — Sandbox-ограничения для `<iframe sandbox="...">` по HTML LS §7.6.5
+`crates/engine/dom/src/lib.rs:181` **fn** `input_type` — HTML5 form input type для `<input type="...">`. Возвращает None
+`crates/engine/dom/src/lib.rs:196` **enum** `InputType` — HTML5 form input types (HTML Standard §4.10.5). Спека определяет
+`crates/engine/dom/src/lib.rs:248` **fn** `parse` — Распарсить значение `type`-атрибута. Case-insensitive по
+`crates/engine/dom/src/lib.rs:277` **fn** `as_str`
+`crates/engine/dom/src/lib.rs:308` **fn** `is_textual` — Текстовая семантика — поле с буквенным контентом, на котором
+`crates/engine/dom/src/lib.rs:318` **fn** `is_button_like` — Кнопочная семантика — submit/reset/button/image, рендерится
+`crates/engine/dom/src/lib.rs:328` **struct** `FormInfo` — Данные `<form>` элемента — URL назначения, метод и число полей ввода
+`crates/engine/dom/src/lib.rs:346` **enum** `DocumentMode` — Парсинг-режим документа по HTML5 §13.2.6.2 «The insertion mode»
+`crates/engine/dom/src/lib.rs:369` **struct** `DomPosition` — A position within the document (WHATWG DOM §4.4)
+`crates/engine/dom/src/lib.rs:382` **struct** `Range` — A contiguous range of document content (WHATWG DOM §4.5)
+`crates/engine/dom/src/lib.rs:391` **fn** `collapsed` — Collapsed range: both endpoints at `pos`
+`crates/engine/dom/src/lib.rs:396` **fn** `is_collapsed` — True when start and end are the same position
+`crates/engine/dom/src/lib.rs:408` **struct** `Selection` — The current document text selection (WHATWG Selection API)
+`crates/engine/dom/src/lib.rs:417` **fn** `is_collapsed` — True when anchor == focus (or no selection)
+`crates/engine/dom/src/lib.rs:426` **fn** `get_range` — The selection as a normalised Range (start ≤ end in node order)
+`crates/engine/dom/src/lib.rs:441` **fn** `collapse` — Collapse the selection to a single point
+`crates/engine/dom/src/lib.rs:447` **fn** `extend_focus` — Extend the focus end to `pos` (anchor stays fixed)
+`crates/engine/dom/src/lib.rs:452` **fn** `clear` — Remove the selection entirely
+`crates/engine/dom/src/lib.rs:459` **struct** `Document`
+`crates/engine/dom/src/lib.rs:488` **fn** `new`
+`crates/engine/dom/src/lib.rs:505` **fn** `root`
+`crates/engine/dom/src/lib.rs:513` **fn** `mode` — Текущий парсинг-режим. Tree builder выставляет его при
+`crates/engine/dom/src/lib.rs:519` **fn** `set_mode` — Установить режим. Использует tree builder при инициализации
+`crates/engine/dom/src/lib.rs:525` **fn** `get_selection` — Current selection. The shell updates this on mouse events; JS reads it
+`crates/engine/dom/src/lib.rs:530` **fn** `set_selection` — Replace the current selection
+`crates/engine/dom/src/lib.rs:535` **fn** `clear_selection` — Clear the selection
+`crates/engine/dom/src/lib.rs:550` **fn** `target` — Текущий target — id из URL fragment (без ведущего `#`), к которому
+`crates/engine/dom/src/lib.rs:557` **fn** `set_target` — Установить current target (id без `#`). `None` — нет fragment-а в URL
+`crates/engine/dom/src/lib.rs:569` **fn** `attach_shadow` — Attach a shadow root to `host` and return its `NodeId`
+`crates/engine/dom/src/lib.rs:576` **fn** `shadow_root_of` — Return the shadow root attached to `host`, or `None` if not a shadow host
+`crates/engine/dom/src/lib.rs:581` **fn** `is_shadow_host` — Whether `id` is a shadow host (has an attached shadow root)
+`crates/engine/dom/src/lib.rs:585` **fn** `get`
+`crates/engine/dom/src/lib.rs:589` **fn** `get_mut`
+`crates/engine/dom/src/lib.rs:593` **fn** `len`
+`crates/engine/dom/src/lib.rs:597` **fn** `is_empty`
+`crates/engine/dom/src/lib.rs:609` **fn** `base_href` — HTML5 §4.2.3 — найти первый `<base href="...">` в документе и
+`crates/engine/dom/src/lib.rs:620` **fn** `body` — Returns the `<body>` element's `NodeId`, walking root → `<html>` → `<body>`
+`crates/engine/dom/src/lib.rs:632` **fn** `find_first_element` — Найти первый элемент, удовлетворяющий предикату. Pre-order обход
+`crates/engine/dom/src/lib.rs:658` **fn** `create_element`
+`crates/engine/dom/src/lib.rs:665` **fn** `create_text`
+`crates/engine/dom/src/lib.rs:669` **fn** `create_comment`
+`crates/engine/dom/src/lib.rs:679` **fn** `create_fragment` — Allocate a `DocumentFragment` node in the arena
+`crates/engine/dom/src/lib.rs:687` **fn** `set_template_content` — Register `fragment` as the content container for `template`
+`crates/engine/dom/src/lib.rs:693` **fn** `template_content` — Return the content `DocumentFragment` for a `<template>` element, or
+`crates/engine/dom/src/lib.rs:697` **fn** `create_doctype`
+`crates/engine/dom/src/lib.rs:711` **fn** `append_child` — Append `child` as the last child of `parent`. If `child` already has a parent, it is detached first
+`crates/engine/dom/src/lib.rs:723` **fn** `insert_after` — Insert `new_node` immediately after `reference` in their shared parent
+`crates/engine/dom/src/lib.rs:736` **fn** `detach` — Remove `node` from its current parent. The node itself stays in the arena and can be re-attached
+`crates/engine/dom/src/lib.rs:755` **fn** `to_bytes` — Serialise the entire document to a compact binary blob (bincode)
+`crates/engine/dom/src/lib.rs:760` **fn** `from_bytes` — Deserialise a document from a binary blob produced by [`to_bytes`]
+`crates/engine/dom/src/lib.rs:857` **fn** `check_form_gate` — Гейт отправки форм по sandbox-флагу HTML §7.6.5
+`crates/engine/dom/src/lib.rs:878` **fn** `find_ancestor_form` — Найти ближайший предок `<form>` для узла `node`
+`crates/engine/dom/src/lib.rs:901` **fn** `collect_dom_form_fields` — Собрать имена и значения submittable-контролов формы из DOM-атрибутов
+`crates/engine/dom/src/lib.rs:1003` **struct** `ValidityState` — Validity state for a form control — HTML5 §4.10.21.1 `ValidityState` interface
+`crates/engine/dom/src/lib.rs:1028` **fn** `valid` — Returns `true` when all flags are `false` (element satisfies all constraints)
+`crates/engine/dom/src/lib.rs:1049` **fn** `element_validity` — Returns the validity state for `node`, or `None` if the node is not a
+`crates/engine/dom/src/lib.rs:1152` **fn** `check_validity_form` — Returns `true` if all submittable controls in `form_id` satisfy their
+`crates/engine/dom/src/lib.rs:1160` **fn** `invalid_controls_in_form` — Returns the `NodeId`s of all invalid (failing constraint validation) controls
+`crates/engine/dom/src/lib.rs:1264` **struct** `AnchorInfo` — Информация об якорной ссылке (`<a href>`), найденной в документе
+`crates/engine/dom/src/lib.rs:1297` **struct** `FlatTree` — Pre-computed composed tree (flat tree) for Shadow DOM layout traversal
+`crates/engine/dom/src/lib.rs:1307` **fn** `children_of` — Composed-tree children of `id`
+`crates/engine/dom/src/lib.rs:1322` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
+`crates/engine/dom/src/lib.rs:1417` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
+`crates/engine/dom/src/lib.rs:1441` **struct** `IframeInfo` — Данные `<iframe>` элемента — URL содержимого и sandbox-ограничения
+`crates/engine/dom/src/lib.rs:1472` **fn** `collect_iframes` — Собрать все `<iframe>` элементы документа с их sandbox-ограничениями
+`crates/engine/dom/src/lib.rs:1483` **fn** `check_popup_gate` — Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5
+`crates/engine/dom/src/lib.rs:1502` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
+`crates/engine/dom/src/lib.rs:1533` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
+`crates/engine/dom/src/lib.rs:1556` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
+`crates/engine/dom/src/lib.rs:1580` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
+`crates/engine/dom/src/lib.rs:1622` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
+`crates/engine/dom/src/lib.rs:1680` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
+`crates/engine/dom/src/lib.rs:1734` **fn** `insert_paragraph_break`
 
 ## lumen-driver  (14 symbols)
 
-`crates/driver/src/lib.rs:47` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
+`crates/driver/src/lib.rs:53` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
 `crates/driver/src/session.rs:46` **struct** `InProcessSession` — Headless in-process сессия браузера
 `crates/driver/src/session.rs:61` **fn** `new` — Создать сессию с viewport 1024×720
 `crates/driver/src/session.rs:72` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
@@ -365,7 +371,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/encoding/src/unicode_provider.rs:31` **fn** `new` — Создаёт провайдер с auto-режимом (LSTM/dictionary для CJK/Thai/etc)
 `crates/engine/encoding/src/unicode_provider.rs:40` **fn** `new_latin` — Облегчённая версия — только Latin + UAX #14 rules, без LSTM
 
-## lumen-font  (159 symbols)
+## lumen-font  (169 symbols)
 
 `crates/engine/font/src/avar.rs:32` **struct** `AxisValueMap` — Одна пара (fromCoord → toCoord) в segment map оси. Координаты в
 `crates/engine/font/src/avar.rs:44` **struct** `SegmentMap` — Segment map для одной оси: список пар, отсортированных по `from`
@@ -425,7 +431,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/font_registry.rs:19` **struct** `FontRegistry` — Провайдер шрифтов с поддержкой @font-face: системные шрифты + URL-буферы
 `crates/engine/font/src/font_registry.rs:28` **fn** `new`
 `crates/engine/font/src/font_registry.rs:42` **fn** `register_from_bytes` — Регистрирует шрифт из байт-буфера (TrueType / sfnt после декодирования
-`crates/engine/font/src/font_registry.rs:77` **fn** `custom_face_count` — Количество зарегистрированных @font-face face-ов. Для тестов
+`crates/engine/font/src/font_registry.rs:78` **fn** `custom_face_count` — Количество зарегистрированных @font-face face-ов. Для тестов
 `crates/engine/font/src/fvar.rs:25` **struct** `VariationAxis` — Одна variation axis. Все значения в native axis units (не CSS-нормализо-
 `crates/engine/font/src/fvar.rs:53` **fn** `is_hidden`
 `crates/engine/font/src/fvar.rs:60` **fn** `clamp` — Зажать значение в `[min, max]`. Полезно при подаче CSS-уровневого
@@ -495,10 +501,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/name.rs:55` **fn** `parse`
 `crates/engine/font/src/name.rs:85` **fn** `best_family` — «Лучшее» family name: typographic, если есть, иначе обычный family
 `crates/engine/font/src/os2.rs:32` **struct** `Os2` — Расширенный набор полей `OS/2`
-`crates/engine/font/src/os2.rs:106` **fn** `is_italic` — Italic flag из `fsSelection`
-`crates/engine/font/src/os2.rs:111` **fn** `is_oblique` — Oblique flag (OS/2 v4+)
-`crates/engine/font/src/os2.rs:117` **fn** `is_bold` — Bold flag из `fsSelection`. Не источник истины для веса —
-`crates/engine/font/src/os2.rs:121` **fn** `parse`
+`crates/engine/font/src/os2.rs:112` **fn** `is_italic` — Italic flag из `fsSelection`
+`crates/engine/font/src/os2.rs:117` **fn** `is_oblique` — Oblique flag (OS/2 v4+)
+`crates/engine/font/src/os2.rs:123` **fn** `is_bold` — Bold flag из `fsSelection`. Не источник истины для веса —
+`crates/engine/font/src/os2.rs:129` **fn** `stretch_percent` — Возвращает stretch в процентах (от 50 до 200)
+`crates/engine/font/src/os2.rs:144` **fn** `parse`
 `crates/engine/font/src/post.rs:18` **struct** `Post`
 `crates/engine/font/src/post.rs:47` **fn** `parse`
 `crates/engine/font/src/post.rs:71` **fn** `is_italic` — `true` если italic_angle != 0 (шрифт имеет slant). Удобный
@@ -512,6 +519,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/system_fonts.rs:53` **fn** `with_dirs` — Индекс с явно заданным списком директорий — для тестов и
 `crates/engine/font/src/system_fonts.rs:66` **fn** `family_count` — Сколько family-имён зарегистрировано. Для тестов и диагностики;
 `crates/engine/font/src/variation.rs:80` **fn** `apply_variations_to_simple_outline` — Применяет набор `TupleVariation` к outline-контурам, имитируя
+`crates/engine/font/src/variation_coords.rs:28` **struct** `VariationCoords` — Normalized variation coordinates for a font instance. Stores one f32 per axis
+`crates/engine/font/src/variation_coords.rs:33` **fn** `empty` — Creates an empty coordinate vector (no variations applied; uses default
+`crates/engine/font/src/variation_coords.rs:45` **fn** `from_css_settings` — Builds normalized coordinates from CSS `font-variation-settings` values
+`crates/engine/font/src/variation_coords.rs:92` **fn** `as_slice` — Returns the coordinate vector as a slice
+`crates/engine/font/src/variation_coords.rs:97` **fn** `as_mut_slice` — Returns the coordinate vector as a mutable slice (for P4 to update optical sizing)
+`crates/engine/font/src/variation_coords.rs:102` **fn** `is_empty` — Returns true if no coordinates are set (default instance)
+`crates/engine/font/src/variation_coords.rs:107` **fn** `len` — Returns the number of axes
+`crates/engine/font/src/variation_coords.rs:114` **fn** `get_axis_by_tag` — Gets coordinate for a specific axis by tag (for debugging / CSS property hookup)
+`crates/engine/font/src/variation_coords.rs:126` **fn** `set_axis_by_tag` — Sets a specific axis coordinate by tag
 `crates/engine/font/src/vvar.rs:31` **struct** `Vvar`
 `crates/engine/font/src/vvar.rs:45` **fn** `parse`
 `crates/engine/font/src/vvar.rs:80` **fn** `advance_height_index` — `(outer, inner)`-индекс для advance height variations glyph_id
@@ -573,20 +589,26 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/html-parser/src/tree_builder.rs:195` **fn** `as_doc` — Возвращает ссылку на текущее состояние DOM
 `crates/engine/html-parser/src/tree_builder.rs:204` **fn** `finish` — Финализирует ввод. Хвост push-tokenizer-а токенизируется как
 
-## lumen-image  (16 symbols)
+## lumen-image  (22 symbols)
 
+`crates/engine/image/src/gif.rs:12` **enum** `GifError` — Ошибки декодирования GIF
+`crates/engine/image/src/gif.rs:37` **fn** `is_gif` — Проверяет, является ли начало `bytes` валидной GIF сигнатурой (GIF87a или GIF89a)
+`crates/engine/image/src/gif.rs:53` **fn** `decode_gif` — Декодирует GIF файл и возвращает первый кадр
 `crates/engine/image/src/jpeg/mod.rs:8` **fn** `decode_jpeg`
 `crates/engine/image/src/jpeg/mod.rs:39` **struct** `JpegError` — Ошибка декодирования JPEG (обёртка над zune-jpeg)
-`crates/engine/image/src/lib.rs:23` **fn** `supported_mime_types` — MIME-типы изображений, которые `decode` умеет декодировать
-`crates/engine/image/src/lib.rs:34` **fn** `decode` — Декодирует растровое изображение по сигнатуре первых байтов
-`crates/engine/image/src/lib.rs:52` **enum** `ImageError` — Ошибка `decode`
-`crates/engine/image/src/lib.rs:88` **struct** `Image` — Декодированное растровое изображение в плотной row-major упаковке
-`crates/engine/image/src/lib.rs:98` **fn** `to_rgba8` — Возвращает пиксели в формате RGBA8 (4 байта на пиксель)
-`crates/engine/image/src/lib.rs:124` **fn** `resize_bilinear` — Масштабирует `src` до `(dst_w × dst_h)` билинейной интерполяцией
-`crates/engine/image/src/lib.rs:176` **fn** `resize_area_avg` — Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter)
-`crates/engine/image/src/lib.rs:235` **enum** `PixelFormat` — Формат пикселя декодированного изображения. Все варианты — 8 бит на канал
-`crates/engine/image/src/lib.rs:259` **enum** `DecodeError` — Ошибки декодирования PNG
-`crates/engine/image/src/png/mod.rs:8` **fn** `decode_png`
+`crates/engine/image/src/lib.rs:25` **fn** `supported_mime_types` — MIME-типы изображений, которые `decode` умеет декодировать
+`crates/engine/image/src/lib.rs:37` **fn** `decode` — Декодирует растровое изображение по сигнатуре первых байтов
+`crates/engine/image/src/lib.rs:58` **enum** `ImageError` — Ошибка `decode`
+`crates/engine/image/src/lib.rs:102` **struct** `IccProfile` — ICC профиль изображения (опциональный)
+`crates/engine/image/src/lib.rs:110` **fn** `is_valid` — Проверяет минимальный размер ICC профиля (128 байт)
+`crates/engine/image/src/lib.rs:118` **struct** `Image` — Декодированное растровое изображение в плотной row-major упаковке
+`crates/engine/image/src/lib.rs:130` **fn** `to_rgba8` — Возвращает пиксели в формате RGBA8 (4 байта на пиксель)
+`crates/engine/image/src/lib.rs:156` **fn** `resize_bilinear` — Масштабирует `src` до `(dst_w × dst_h)` билинейной интерполяцией
+`crates/engine/image/src/lib.rs:208` **fn** `resize_area_avg` — Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter)
+`crates/engine/image/src/lib.rs:267` **enum** `PixelFormat` — Формат пикселя декодированного изображения. Все варианты — 8 бит на канал
+`crates/engine/image/src/lib.rs:291` **enum** `DecodeError` — Ошибки декодирования PNG
+`crates/engine/image/src/png/mod.rs:54` **fn** `decode_png`
+`crates/engine/image/src/png/mod.rs:96` **fn** `encode_png_rgba8` — Кодирует RGBA8 изображение в PNG формат
 `crates/engine/image/src/webp/mod.rs:24` **struct** `WebpError` — Ошибка декодирования WebP
 `crates/engine/image/src/webp/mod.rs:39` **fn** `is_webp` — Проверяет WebP-сигнатуру без полной валидации
 `crates/engine/image/src/webp/mod.rs:52` **fn** `decode_webp` — Декодирует WebP-файл в RGBA8 (4 байта на пиксель, row-major)
@@ -647,7 +669,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/read_later.rs:346` **fn** `delete`
 `crates/knowledge/src/read_later.rs:356` **fn** `count`
 
-## lumen-layout  (311 symbols)
+## lumen-layout  (312 symbols)
 
 `crates/engine/layout/src/animation.rs:36` **struct** `AnimatedStyle` — Sparse animated values for one element — scheduler output per node per frame
 `crates/engine/layout/src/animation.rs:46` **struct** `AnimationFrame` — Output of `AnimationScheduler::tick` — per-node animated values for one frame
@@ -693,10 +715,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/counters.rs:37` **type** `CounterMap` — Maps each element `NodeId` to its counter snapshot (after own reset/increment,
 `crates/engine/layout/src/counters.rs:90` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
 `crates/engine/layout/src/counters.rs:152` **fn** `format_counter` — Format a counter integer value according to the given `list-style-type` keyword
-`crates/engine/layout/src/lib.rs:83` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
-`crates/engine/layout/src/lib.rs:108` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
-`crates/engine/layout/src/lib.rs:127` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
-`crates/engine/layout/src/lib.rs:148` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:84` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
+`crates/engine/layout/src/lib.rs:109` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
+`crates/engine/layout/src/lib.rs:128` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
+`crates/engine/layout/src/lib.rs:149` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
 `crates/engine/layout/src/property_trees.rs:39` **struct** `PropertyTreeNodeId` — Идентификатор узла в любом из четырёх деревьев. Уникален в пределах своего
 `crates/engine/layout/src/property_trees.rs:45` **fn** `raw`
 `crates/engine/layout/src/property_trees.rs:54` **struct** `Mat4` — 4×4 матрица в column-major порядке (как принято в OpenGL / WebGPU)
@@ -739,6 +761,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/selector_query.rs:160` **fn** `find_box_by_selector` — Returns a reference to the first `LayoutBox` in document order whose
 `crates/engine/layout/src/selector_query.rs:218` **fn** `computed_style_by_selector` — Returns the computed style snapshot of the first matching `LayoutBox`
 `crates/engine/layout/src/selector_query.rs:234` **fn** `find_all_by_selector` — Returns references to **all** `LayoutBox`es (in document order) whose
+`crates/engine/layout/src/selector_query.rs:275` **fn** `query_all` — Returns all [`NodeId`]s in the document that match `sel`
 `crates/engine/layout/src/snapshot.rs:63` **fn** `serialize_layout_tree` — Корневой entry-point: рекурсивно сериализует всё дерево
 `crates/engine/layout/src/stacking.rs:29` **struct** `StackingContextId` — Идентификатор stacking context-а. Монотонно растёт от 0; 0 = root
 `crates/engine/layout/src/stacking.rs:35` **fn** `raw`
@@ -936,32 +959,32 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/style.rs:4970` **fn** `validate_against_syntax` — CSS Properties and Values L1 §2 — упрощённая валидация значения
 `crates/engine/layout/src/style.rs:7237` **fn** `parse_font_family` — Парсит `font-family: a, "b c", d` в Vec<String>. Запятые разделяют
 `crates/engine/layout/src/style.rs:7300` **fn** `parse_font_variation_settings` — Парсит CSS `font-variation-settings` (CSS Fonts L4 §7)
-`crates/engine/layout/src/style.rs:7385` **fn** `set_cq_context` — Sets the nearest-container size for `cq*` unit resolution during the container re-layout pass
-`crates/engine/layout/src/style.rs:7390` **fn** `clear_cq_context` — Clears the `cq*` context after the container re-layout pass completes
-`crates/engine/layout/src/style.rs:7398` **enum** `LengthOrAuto` — CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
-`crates/engine/layout/src/style.rs:7406` **fn** `is_auto`
-`crates/engine/layout/src/style.rs:7413` **fn** `to_px_opt` — Returns the raw pixel value for `Length::Px` variants; `Auto` and all
-`crates/engine/layout/src/style.rs:7423` **fn** `resolve` — Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`
-`crates/engine/layout/src/style.rs:7431` **fn** `resolve_or_zero` — Резолвит в пиксели; для `Auto` и нерезолвируемых значений → 0.0
-`crates/engine/layout/src/style.rs:7442` **enum** `Length` — Типизированная длина CSS до резолва в пиксели
-`crates/engine/layout/src/style.rs:7507` **enum** `CalcNode` — CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
-`crates/engine/layout/src/style.rs:7536` **enum** `MathFn` — CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
-`crates/engine/layout/src/style.rs:7565` **enum** `RoundStrategy` — CSS Values L4 §10.5.1 — стратегия округления для `round()`
-`crates/engine/layout/src/style.rs:7589` **fn** `resolve` — Резолвит выражение в `f32`-пиксели по тем же правилам, что
-`crates/engine/layout/src/style.rs:7787` **fn** `resolve` — Возвращает длину в пикселях. `em_basis` — fs, относительно которого
-`crates/engine/layout/src/style.rs:7827` **fn** `is_intrinsic` — Returns `true` if this is an intrinsic sizing keyword (min-content,
-`crates/engine/layout/src/style.rs:7833` **fn** `resolve_or_zero` — Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче
-`crates/engine/layout/src/style.rs:7839` **fn** `px` — Извлекает пиксельное значение для уже-разрешённых `Px`-значений
-`crates/engine/layout/src/style.rs:7994` **fn** `parse_length`
-`crates/engine/layout/src/style.rs:12553` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
-`crates/engine/layout/src/style.rs:13372` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
-`crates/engine/layout/src/style.rs:13452` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
-`crates/engine/layout/src/style.rs:13644` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
-`crates/engine/layout/src/style.rs:14218` **fn** `parse_color`
+`crates/engine/layout/src/style.rs:7392` **fn** `set_cq_context` — Sets the nearest-container size for `cq*` unit resolution during the container re-layout pass
+`crates/engine/layout/src/style.rs:7397` **fn** `clear_cq_context` — Clears the `cq*` context after the container re-layout pass completes
+`crates/engine/layout/src/style.rs:7405` **enum** `LengthOrAuto` — CSS `<length> | auto` — для margin и offset-свойств, где `auto` имеет
+`crates/engine/layout/src/style.rs:7413` **fn** `is_auto`
+`crates/engine/layout/src/style.rs:7420` **fn** `to_px_opt` — Returns the raw pixel value for `Length::Px` variants; `Auto` and all
+`crates/engine/layout/src/style.rs:7430` **fn** `resolve` — Резолвит в пиксели. `Auto` → `None`; нерезолвируемый `%` → `None`
+`crates/engine/layout/src/style.rs:7438` **fn** `resolve_or_zero` — Резолвит в пиксели; для `Auto` и нерезолвируемых значений → 0.0
+`crates/engine/layout/src/style.rs:7449` **enum** `Length` — Типизированная длина CSS до резолва в пиксели
+`crates/engine/layout/src/style.rs:7514` **enum** `CalcNode` — CSS Values L4 §10 — AST `calc()`-выражения. Хранится как двоичное дерево
+`crates/engine/layout/src/style.rs:7543` **enum** `MathFn` — CSS Values L4 §10.7-10.9 — научные math-функции. Имена case-insensitive
+`crates/engine/layout/src/style.rs:7572` **enum** `RoundStrategy` — CSS Values L4 §10.5.1 — стратегия округления для `round()`
+`crates/engine/layout/src/style.rs:7596` **fn** `resolve` — Резолвит выражение в `f32`-пиксели по тем же правилам, что
+`crates/engine/layout/src/style.rs:7794` **fn** `resolve` — Возвращает длину в пикселях. `em_basis` — fs, относительно которого
+`crates/engine/layout/src/style.rs:7834` **fn** `is_intrinsic` — Returns `true` if this is an intrinsic sizing keyword (min-content,
+`crates/engine/layout/src/style.rs:7840` **fn** `resolve_or_zero` — Резолвит с `cb_width` как percent_basis; возвращает 0.0 при неудаче
+`crates/engine/layout/src/style.rs:7846` **fn** `px` — Извлекает пиксельное значение для уже-разрешённых `Px`-значений
+`crates/engine/layout/src/style.rs:8001` **fn** `parse_length`
+`crates/engine/layout/src/style.rs:12560` **fn** `parse_transform_list` — Парсит `<transform-list>` — последовательность `func(args)` через
+`crates/engine/layout/src/style.rs:13379` **fn** `parse_grid_template_areas` — CSS Grid L1 §7.3 — parse `grid-template-areas` value
+`crates/engine/layout/src/style.rs:13459` **fn** `parse_background_gradient` — CSS Images L3/L4 §3.3/§3.7 — parses color stops from a CSS gradient string
+`crates/engine/layout/src/style.rs:13651` **fn** `parse_gradient_stops` — The leading direction / angle / shape argument (e.g. `to right`,
+`crates/engine/layout/src/style.rs:14225` **fn** `parse_color`
 `crates/engine/layout/src/text_iter.rs:17` **struct** `TextFragment` — A visible text fragment with its absolute screen rectangle
 `crates/engine/layout/src/text_iter.rs:37` **fn** `collect_visible_text` — Walk the layout tree and collect all visible text fragments with screen coordinates
 
-## lumen-network  (165 symbols)
+## lumen-network  (169 symbols)
 
 `crates/network/src/auth.rs:52` **fn** `get`
 `crates/network/src/auth.rs:619` **struct** `StaticCredentialProvider` — Простой credential-провайдер с фиксированной табличкой `(origin, realm) →
@@ -1063,29 +1086,29 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/http_cache.rs:286` **fn** `is_empty`
 `crates/network/src/http_cache.rs:301` **struct** `CacheEntrySnapshot` — Owned snapshot of a cache entry returned by `HttpCache::get`
 `crates/network/src/http_cache.rs:315` **enum** `CacheLookup` — `CacheLookup` is unused externally; we use `get()` which returns `Option<CacheEntrySnapshot>`
-`crates/network/src/lib.rs:1281` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
-`crates/network/src/lib.rs:1303` **fn** `new`
-`crates/network/src/lib.rs:1325` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
-`crates/network/src/lib.rs:1336` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
-`crates/network/src/lib.rs:1348` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
-`crates/network/src/lib.rs:1357` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
-`crates/network/src/lib.rs:1367` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
-`crates/network/src/lib.rs:1376` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
-`crates/network/src/lib.rs:1393` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
-`crates/network/src/lib.rs:1409` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
-`crates/network/src/lib.rs:1420` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
-`crates/network/src/lib.rs:1440` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
-`crates/network/src/lib.rs:1464` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
-`crates/network/src/lib.rs:1510` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
-`crates/network/src/lib.rs:1522` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
-`crates/network/src/lib.rs:1546` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
-`crates/network/src/lib.rs:1581` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
-`crates/network/src/lib.rs:1625` **fn** `fetch_range`
-`crates/network/src/lib.rs:1688` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
-`crates/network/src/lib.rs:1770` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
-`crates/network/src/lib.rs:2153` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
-`crates/network/src/lib.rs:2159` **fn** `new`
-`crates/network/src/lib.rs:2166` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
+`crates/network/src/lib.rs:1287` **struct** `HttpClient` — HTTP/1.1 + HTTPS клиент
+`crates/network/src/lib.rs:1309` **fn** `new`
+`crates/network/src/lib.rs:1331` **fn** `with_sink` — Подключить EventSink. По умолчанию sink-а нет (события не эмитятся)
+`crates/network/src/lib.rs:1342` **fn** `with_filter` — Подключить RequestFilter. По умолчанию фильтра нет — `fetch` всегда
+`crates/network/src/lib.rs:1354` **fn** `with_interceptor` — Подключить Service Worker перехватчик fetch-запросов. Проверяется
+`crates/network/src/lib.rs:1363` **fn** `with_pool` — Подключить shared `ConnectionPool`. По умолчанию у каждого `HttpClient`
+`crates/network/src/lib.rs:1373` **fn** `with_h2_pool` — Подключить shared `H2Pool` (RFC 9113 §9.1.1). По умолчанию HTTP/2
+`crates/network/src/lib.rs:1382` **fn** `with_dns_resolver` — Подключить DNS-резолвер. По умолчанию — `SystemDnsResolver` (через
+`crates/network/src/lib.rs:1399` **fn** `with_hsts` — Подключить HSTS-store (RFC 6797). По умолчанию — нет:
+`crates/network/src/lib.rs:1415` **fn** `with_credentials` — Подключить credential-провайдер для HTTP authentication (RFC 7235 /
+`crates/network/src/lib.rs:1426` **fn** `with_tab` — Указать `TabId`, который попадёт в каждое emit-ое событие. В Phase 0
+`crates/network/src/lib.rs:1446` **fn** `with_mixed_content_policy` — Подключить mixed-content policy (W3C Mixed Content §5). По умолчанию
+`crates/network/src/lib.rs:1470` **fn** `with_content_decoder` — Зарегистрировать `ContentDecoder` для одного encoding. Декодер попадает
+`crates/network/src/lib.rs:1516` **fn** `with_cors_cache` — Запросить только диапазон байт ресурса (RFC 7233). Если сервер
+`crates/network/src/lib.rs:1528` **fn** `with_cookie_jar` — Attach a cookie store. The provider receives `Cookie:` injection
+`crates/network/src/lib.rs:1552` **fn** `with_http_cache` — Подключить HTTP response cache (RFC 7234)
+`crates/network/src/lib.rs:1587` **fn** `fetch_cors` — CORS-enabled fetch для cross-origin subresource (Fetch §3-§4)
+`crates/network/src/lib.rs:1631` **fn** `fetch_range`
+`crates/network/src/lib.rs:1694` **fn** `fetch_multi_range` — Multi-range запрос (RFC 7233 §4.1). Один request на несколько
+`crates/network/src/lib.rs:1776` **fn** `fetch_subresource` — Загрузить подресурс с проверкой mixed-content по подключённой
+`crates/network/src/lib.rs:2159` **struct** `InMemoryFetchInterceptor` — In-memory реализация `FetchInterceptor` для тестов без SQLite
+`crates/network/src/lib.rs:2165` **fn** `new`
+`crates/network/src/lib.rs:2172` **fn** `insert` — Добавить запись: ответ для (origin, url) берётся из кэша без сети
 `crates/network/src/mixed_content.rs:33` **enum** `RequestDestination` — Назначение подресурса по Fetch spec §3.2.7 «request destination» —
 `crates/network/src/mixed_content.rs:59` **enum** `MixedContentLevel` — Mixed-content уровень для запроса в secure-контексте
 `crates/network/src/mixed_content.rs:75` **fn** `is_strict_blocked` — Должны ли мы блокировать запрос по строгому режиму. По умолчанию
@@ -1098,6 +1121,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/mixed_content.rs:181` **fn** `mode`
 `crates/network/src/mixed_content.rs:188` **fn** `evaluate` — Возвращает `Some(level)`, если запрос подресурса должен быть
 `crates/network/src/mixed_content.rs:209` **fn** `block_reason` — Текстовая причина для `Event::RequestBlocked.reason` — стабильный формат
+`crates/network/src/mock.rs:32` **struct** `MockTransport` — Mock HTTP транспорт — перехватывает запросы и возвращает fixture-данные
+`crates/network/src/mock.rs:38` **fn** `new` — Создать пустой mock транспорт без зарегистрированных фиксатур
+`crates/network/src/mock.rs:52` **fn** `add_fixture` — Зарегистрировать fixture-данные для URL
+`crates/network/src/mock.rs:62` **fn** `fixture_count` — Получить текущее количество зарегистрированных фиксатур
 `crates/network/src/origin.rs:28` **struct** `Origin` — «Tuple origin» = `(scheme, host, port)`. Сравнение — компонент-к-компоненту,
 `crates/network/src/origin.rs:36` **enum** `OriginError` — Ошибки извлечения origin из URL
 `crates/network/src/origin.rs:61` **fn** `from_url` — Извлечь tuple origin из `Url`. Возвращает `Err(OriginError::Opaque)`
@@ -1165,21 +1192,21 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/compositor.rs:526` **struct** `CompositorThread` — Реальный compositor thread: отдельный OS-поток с vsync tick-loop
 `crates/engine/paint/src/compositor.rs:535` **fn** `spawn` — Запускает compositor thread. `handle` — разделяемый доступ к state
 `crates/engine/paint/src/compositor.rs:550` **fn** `shutdown` — Запрашивает завершение потока и блокируется до его выхода
-`crates/engine/paint/src/display_list.rs:31` **enum** `BlendMode` — CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
-`crates/engine/paint/src/display_list.rs:59` **fn** `from_keyword` — Парсит CSS-keyword `mix-blend-mode` / `background-blend-mode` (CSS
-`crates/engine/paint/src/display_list.rs:95` **struct** `CornerRadii` — Corner radii for CSS `border-radius`. Values are in CSS pixels, clamped to ≥ 0
-`crates/engine/paint/src/display_list.rs:117` **fn** `all_zero` — Returns `true` if all eight radii are zero (no rounding needed)
-`crates/engine/paint/src/display_list.rs:133` **fn** `from_style_and_box` — Builds `CornerRadii` from a `ComputedStyle` and the element's border-box dimensions
-`crates/engine/paint/src/display_list.rs:149` **fn** `from_style` — Builds `CornerRadii` from a `ComputedStyle`. `border-radius: N%` values are
-`crates/engine/paint/src/display_list.rs:155` **enum** `DisplayCommand`
-`crates/engine/paint/src/display_list.rs:475` **type** `DisplayList`
-`crates/engine/paint/src/display_list.rs:504` **fn** `fit_image_rect` — CSS Images L3 §5.5 — `object-fit` placement: где располагается
-`crates/engine/paint/src/display_list.rs:559` **fn** `fit_image_quad` — Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
-`crates/engine/paint/src/display_list.rs:617` **fn** `serialize_display_list`
-`crates/engine/paint/src/display_list.rs:923` **fn** `build_display_list`
-`crates/engine/paint/src/display_list.rs:938` **fn** `build_display_list_with_anim` — Like `build_display_list` but applies compositor animation overrides per node
-`crates/engine/paint/src/display_list.rs:978` **fn** `build_display_list_ordered` — Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E)
-`crates/engine/paint/src/display_list.rs:1019` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
+`crates/engine/paint/src/display_list.rs:40` **enum** `BlendMode` — CSS Compositing & Blending L1 §5 — blend mode. Phase 0 содержит только
+`crates/engine/paint/src/display_list.rs:68` **fn** `from_keyword` — Парсит CSS-keyword `mix-blend-mode` / `background-blend-mode` (CSS
+`crates/engine/paint/src/display_list.rs:104` **struct** `CornerRadii` — Corner radii for CSS `border-radius`. Values are in CSS pixels, clamped to ≥ 0
+`crates/engine/paint/src/display_list.rs:126` **fn** `all_zero` — Returns `true` if all eight radii are zero (no rounding needed)
+`crates/engine/paint/src/display_list.rs:142` **fn** `from_style_and_box` — Builds `CornerRadii` from a `ComputedStyle` and the element's border-box dimensions
+`crates/engine/paint/src/display_list.rs:158` **fn** `from_style` — Builds `CornerRadii` from a `ComputedStyle`. `border-radius: N%` values are
+`crates/engine/paint/src/display_list.rs:164` **enum** `DisplayCommand`
+`crates/engine/paint/src/display_list.rs:485` **type** `DisplayList`
+`crates/engine/paint/src/display_list.rs:514` **fn** `fit_image_rect` — CSS Images L3 §5.5 — `object-fit` placement: где располагается
+`crates/engine/paint/src/display_list.rs:569` **fn** `fit_image_quad` — Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
+`crates/engine/paint/src/display_list.rs:627` **fn** `serialize_display_list`
+`crates/engine/paint/src/display_list.rs:933` **fn** `build_display_list`
+`crates/engine/paint/src/display_list.rs:948` **fn** `build_display_list_with_anim` — Like `build_display_list` but applies compositor animation overrides per node
+`crates/engine/paint/src/display_list.rs:988` **fn** `build_display_list_ordered` — Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E)
+`crates/engine/paint/src/display_list.rs:1029` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
 `crates/engine/paint/src/hit_test.rs:48` **struct** `HitTestResult` — Результат hit-теста
 `crates/engine/paint/src/hit_test.rs:71` **fn** `hit_test` — Hit-тест точки в viewport-координатах. `root` — layout-дерево из
 `crates/engine/paint/src/lib.rs:47` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
@@ -1187,27 +1214,27 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer.rs:1106` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
 `crates/engine/paint/src/renderer.rs:1135` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
 `crates/engine/paint/src/renderer.rs:1199` **struct** `Renderer`
-`crates/engine/paint/src/renderer.rs:1296` **fn** `new`
-`crates/engine/paint/src/renderer.rs:1363` **fn** `new_headless` — Создаёт рендер без winit-окна для BrowserSession::screenshot() и in-process
-`crates/engine/paint/src/renderer.rs:2471` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
-`crates/engine/paint/src/renderer.rs:2479` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
-`crates/engine/paint/src/renderer.rs:2492` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
-`crates/engine/paint/src/renderer.rs:2511` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
-`crates/engine/paint/src/renderer.rs:2588` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
-`crates/engine/paint/src/renderer.rs:2725` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
-`crates/engine/paint/src/renderer.rs:2734` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
-`crates/engine/paint/src/renderer.rs:2741` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
-`crates/engine/paint/src/renderer.rs:2759` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
-`crates/engine/paint/src/renderer.rs:2826` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
-`crates/engine/paint/src/renderer.rs:2831` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
-`crates/engine/paint/src/renderer.rs:2837` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
-`crates/engine/paint/src/renderer.rs:2843` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
-`crates/engine/paint/src/renderer.rs:2847` **fn** `resize`
-`crates/engine/paint/src/renderer.rs:2878` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
-`crates/engine/paint/src/renderer.rs:2887` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
-`crates/engine/paint/src/renderer.rs:2894` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
-`crates/engine/paint/src/renderer.rs:3013` **fn** `render` — Рендерит две полосы display list-а одним кадром:
-`crates/engine/paint/src/renderer.rs:5140` **fn** `render_to_image` — Рендерит display list в CPU-буфер без отображения в окне
+`crates/engine/paint/src/renderer.rs:1302` **fn** `new`
+`crates/engine/paint/src/renderer.rs:1379` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
+`crates/engine/paint/src/renderer.rs:2470` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
+`crates/engine/paint/src/renderer.rs:2478` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
+`crates/engine/paint/src/renderer.rs:2491` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
+`crates/engine/paint/src/renderer.rs:2510` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
+`crates/engine/paint/src/renderer.rs:2587` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
+`crates/engine/paint/src/renderer.rs:2724` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
+`crates/engine/paint/src/renderer.rs:2733` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
+`crates/engine/paint/src/renderer.rs:2740` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
+`crates/engine/paint/src/renderer.rs:2758` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
+`crates/engine/paint/src/renderer.rs:2825` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
+`crates/engine/paint/src/renderer.rs:2830` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
+`crates/engine/paint/src/renderer.rs:2836` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
+`crates/engine/paint/src/renderer.rs:2842` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
+`crates/engine/paint/src/renderer.rs:2848` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
+`crates/engine/paint/src/renderer.rs:2871` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
+`crates/engine/paint/src/renderer.rs:2880` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
+`crates/engine/paint/src/renderer.rs:2887` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
+`crates/engine/paint/src/renderer.rs:3017` **fn** `render` — Рендерит две полосы display list-а одним кадром:
+`crates/engine/paint/src/renderer.rs:5163` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
 `crates/engine/paint/src/scroll_snap.rs:33` **fn** `find_scroll_snap_y` — CSS Scroll Snap L1 — returns the Y scroll offset to snap to, or `None`
 `crates/engine/paint/src/scroll_snap.rs:54` **fn** `find_scroll_snap_y_proximity` — CSS Scroll Snap L1 — same as [`find_scroll_snap_y`] but restricts candidates
 
@@ -1730,4 +1757,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 1671 symbols in 18 crates*
+*Total: 1698 symbols in 18 crates*
