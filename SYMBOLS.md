@@ -4,6 +4,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 **Usage:** grep for a symbol → get `file:line` → `Read file offset=N limit=30`.
 
+## lumen-a11y  (10 symbols)
+
+`crates/engine/a11y/src/lib.rs:23` **enum** `LiveRegion` — `aria-live` values per WAI-ARIA §6.6
+`crates/engine/a11y/src/lib.rs:36` **struct** `AXState` — ARIA state and property flags for one accessibility node
+`crates/engine/a11y/src/lib.rs:83` **struct** `AXNode` — One node in the accessibility tree
+`crates/engine/a11y/src/lib.rs:107` **struct** `AXTree` — Accessibility tree rooted at a document node
+`crates/engine/a11y/src/lib.rs:118` **fn** `build_ax_tree` — Build an `AXTree` from a `Document` starting at `root_id`
+`crates/engine/a11y/src/names.rs:18` **fn** `compute_name` — Compute the accessible name for a DOM node (ACCNAME-1.2 §4.3)
+`crates/engine/a11y/src/names.rs:103` **fn** `compute_description` — Compute the accessible description for a DOM node (ACCNAME-1.2 §4.3.2)
+`crates/engine/a11y/src/roles.rs:13` **enum** `AXRole` — All WAI-ARIA 1.2 roles
+`crates/engine/a11y/src/roles.rs:148` **fn** `parse` — Parse a WAI-ARIA role string (case-insensitive)
+`crates/engine/a11y/src/roles.rs:213` **fn** `implicit_role` — Compute the implicit WAI-ARIA role for a DOM node per HTML-AAM §5
+
 ## lumen-canvas  (24 symbols)
 
 `crates/engine/canvas/src/color.rs:3` **struct** `CanvasColor` — RGBA color used by the Canvas 2D API
@@ -1615,4 +1628,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 1562 symbols in 16 crates*
+*Total: 1572 symbols in 17 crates*
