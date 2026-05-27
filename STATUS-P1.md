@@ -1,5 +1,5 @@
 In progress: font-stretch-matcher (font-stretch % matching in FontRegistry)  branch: p1-font-stretch-matcher
-Next step: add find_best_match_with_stretch to FontRegistry  crates/engine/font/src/registry.rs:120
+Next step: add stretch field to FaceRecord + implement find_best_match()  crates/core/src/ext.rs:30
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -9,6 +9,7 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
 Recent:
+- font-stretch-matcher (Wave 1, stage 1): Os2::width_class field, stretch_percent() method, 5 tests 2026-05-27
 - gif-decoder (Wave 1): skeleton GIF87a/89a decoder + frame 0 support (LZW decoding, palette→RGBA), animation Wave 3 2026-05-27
 - paint-pure-audit (10D.2 Invariant 3): audit lumen-paint::display_list на pure-function requirement 2026-05-27
 - layout-pure-audit (10D.1 Invariant 3): audit на отсутствие static MUT / lazy_static / OnceCell в hot path 2026-05-27
