@@ -58,8 +58,13 @@
 - ⬜ Trait-ы для 4 exceptions: `WindowingBackend`, `RenderBackend`, `TlsBackend`, `JsRuntime` — задокументированы как future в `lumen-core::ext`, code-уровень добавим при первом использовании
 - ⬜ `KnowledgeStore` (§12) — FTS / read-later / notes. Phase 2
 - ⬜ `AiBackend` (§12.5) — embed / generate, опционально. Phase 3+
+- ⬜ **`MemoryPressureSource`** (ADR-008, task 10H) — OS-сигналы памяти (Win32 `QueryMemoryResourceNotification`, Linux `/proc/pressure/memory` PSI, macOS `dispatch_source MEMORYPRESSURE`) → `Low/Medium/High` events. Кэши (image, glyph, layer) подписываются для tier-driven eviction. Phase 1.
+- ⬜ **`JsRuntime` расширение** (ADR-008, task 10C, дополняет существующий trait из ADR-004) — `pause()` / `unpause()` / `suspend() -> SuspendedHeap` / `resume(SuspendedHeap)` для tier'ных переходов T0↔T1↔T2. **QuickJS-only** в Phase 0-2; V8 в Phase 3 — только при доказанной возможности через snapshot API.
 
 ### Уникальные фичи (§12) — план на Phase 1-4
+- ⬜ **Automation API first-class (§6.11, ADR-006)** — `BrowserSession` trait в `lumen-driver` + три транспорта (in-process / MCP / WebDriver BiDi); a11y-tree как primary locator; native input; auto-wait внутри движка; deterministic mode. **Phase 0**: trait + in-process для собственных `graphic_tests/`. **Phase 1**: MCP-сервер для AI-агентов. **Phase 2**: BiDi-сервер для Playwright/Selenium/Cypress.
+- ⬜ **Anti-detection privacy stack (§9.5, ADR-007)** — 6-слойный privacy-stack по умолчанию: surface API без automation-маркеров, TLS JA3 как у Chrome, HTTP/HTTP2 layer matching Chrome, Brave-style rendering fp, opt-in behavioral mimicry для automation тестов, профили Standard/Strict/Tor. Цель: обычный юзер с Lumen не помечен как бот на Cloudflare/DataDome/Akamai. **Red lines**: нет CAPTCHA-solver, нет built-in IP rotation, нет anti-fraud-bypass.
+- ⬜ **Tab lifecycle: пятитайерная RAM-модель (§11.4, ADR-008)** — T0 Active / T1 Background-recent / T2 Background-old / T3 Hibernated / T4 Closed-recoverable; transitions по timer + OS memory pressure + LRU. **Цель**: 50 открытых вкладок в Lumen ~400 MB vs Chrome 6-10 GB. **Структурные инварианты**: DOM arena serializable (не Rc<RefCell>), JsRuntime suspend/resume, layout/paint pure functions. **Restore SLO**: T1→T0 ≤ 50ms, T2→T0 ≤ 200ms, T3→T0 ≤ 1.5s. Главный продуктовый дифференциатор по RAM наряду с приватностью.
 - ⬜ Tab session export / import (§12.7) — Phase 1
 - 🟡 Полнотекстовый поиск по истории (§12.1) — FTS5 + bm25 готовы в `lumen-knowledge::HistoryFts`; осталась интеграция с shell (omnibox `@history` префикс) и Porter-stemmer для русского
 - 🟡 Аннотации и заметки (§12.2) — `lumen-knowledge::Notes` storage layer готов; Range API для восстановления highlight-наложений на странице — отложено
@@ -95,6 +100,8 @@
 - ✅ lumen-image — PNG (8/16-bit + palette + tRNS + Adam7) + JPEG baseline (DCT/Huffman/YCbCr) + WebP (VP8 lossy + VP8L lossless, `image-webp`) декодеры; `ImageDecoder` trait в `lumen-core::ext`; `supported_mime_types()` для `<picture>` type-filter; AVIF/GIF — отдельными задачами
 - ⬜ Composite glyphs в lumen-font (Cyrillic 'А' и другие)
 - ⬜ Свой HTTP/1.1 + TLS через `rustls` — для загрузки внешней страницы
+- ⬜ **`lumen-driver` крейт + `BrowserSession` trait + `InProcessSession`** — fundament для миграции `graphic_tests/` на structural-assert + in-process snapshot (§15 уровни 2-3, §6.11, [ADR-006](docs/decisions/ADR-006-automation-api.md)). Критичен для Phase 0 — без него тесты остаются завязаны на ffmpeg/gdigrab/Edge и Windows-only.
+- ⬜ **Tab lifecycle инварианты** (§11.4, [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)): (1) DOM arena с `NodeId(u32)` без `Rc<RefCell>` (P1, audit `lumen-dom`); (2) `JsRuntime` расширен `pause/unpause/suspend/resume` (P3, через QuickJS); (3) `lumen-layout` + `lumen-paint` — pure functions без `static MUT` / `lazy_static` (P1/P2, audit). **Принимать до Phase 1 finalize** соответствующих крейтов — иначе ретрофит 5-10× по часам. Главный продуктовый дифференциатор Lumen по RAM (цель: 50 вкладок ~400 MB vs Chrome 6-10 GB).
 
 ---
 
@@ -238,7 +245,7 @@
 | 7A.2 | ⬜ Tree-style tabs (parent-child) | `shell/src/tabs/tree.rs` | — |
 | 7A.3 | ⬜ Workspaces (изолированные группы) | `shell` + `storage/src/workspaces.rs` | — |
 | 7A.4 | ⬜ **`[P3+P2]` Split view** (2-4 viewport на окно) | `shell` + `paint` multi-viewport | требует координации с P2 |
-| 7A.5 | ⬜ Tab auto-archive (hibernate по возрасту) | `shell/src/tabs/archive.rs` | — |
+| 7A.5 | ⬜ Tab auto-archive (UX-фича: убрать вкладки старше 12 ч из tab strip в @archive) | `shell/src/tabs/archive.rs` | **семантика отделена от трека 10**: 7A.5 — UI-скрытие, **трек 10** — RAM-выгрузка по tier'ам |
 | 7B | ⬜ **`[P3]` Power-user input** (§12.14, Phase 2-3) | Keyboard-first аудитория | `shell/src/input/` |
 | 7B.1 | ⬜ Vim-style key bindings (modal) | `shell/src/input/vim.rs` | — |
 | 7B.2 | ⬜ **`[P3+P1]` Click-hint overlay** | `shell` + layout-итератор clickable | требует P1: iterator по clickable в `lumen-layout` |
@@ -260,6 +267,125 @@
 | 7E.3 | ⬜ **`[P3+P2]` Box model overlay** (margin/border/padding overlay) | через display list | P2: overlay primitive в `DisplayCommand` |
 | 7E.4 | ⬜ Network panel (live request log) | `devtools` слушает `NetworkTransport` events | — |
 | 7E.5 | ⬜ JS console (eval в контексте страницы) | `devtools` + `JsRuntime::eval` | — |
+| 8 | ⬜ **`[P3]` Automation API** (§6.11, [ADR-006](docs/decisions/ADR-006-automation-api.md)) | First-class automation surface, фундамент собственных тестов и внешних клиентов | `lumen-driver`, `lumen-mcp-server`, `lumen-bidi-server` |
+| 8A | ⬜ **`[P3]` `lumen-driver` крейт + `BrowserSession` trait + `InProcessSession`** (Phase 0, **критичный для тестирования пораньше**) | Уровни 2-3 тестирования (§15), embed-сценарии | `crates/driver/` |
+| 8A.1 | ⬜ `BrowserSession` trait в `lumen-core::ext` (sigs + todo!()) | `core/src/ext/automation.rs` | — |
+| 8A.2 | ⬜ `InProcessSession` impl (переиспользует существующий pipeline из `lumen-shell`) | `driver/src/in_process.rs` | — |
+| 8A.3 | ⬜ **`[P3+P2]` Off-screen рендер** (`Renderer::render_to_image() -> Image`) | `paint/src/renderer.rs` | P2: отдельный wgpu surface без winit |
+| 8A.4 | ⬜ **`[P3+P1]` Structural getters**: `layout_box`, `computed_style` через handle / selector | `driver` + `layout` exposers | P1: pub API на LayoutBox / ComputedStyle accessor по селектору |
+| 8A.5 | ⬜ Software rasterizer для тестов (`tiny-skia` opt-in под `cfg(test)`) | `paint/src/cpu_raster.rs` | детерминизм пикселей Windows/macOS/Linux CI |
+| 8A.6 | ⬜ Миграция `graphic_tests/`: structural-assert Rust-тесты + `graphic_tests/snapshots/*.png` эталоны | `driver/tests/graphic_*.rs` + `graphic_tests/snapshots/` | каждый из 22 текущих HTML-тестов |
+| 8A.7 | ⬜ Шелл переписать как первого клиента trait-а (winit/wgpu → один из транспортов) | `shell/src/main.rs` | — |
+| 8B | ⬜ **`[P3]` `lumen-mcp-server` крейт** (Phase 1) | AI-агенты (Claude/GPT/Browser Use) без обёрток | `crates/mcp/` |
+| 8B.1 | ⬜ JSON-RPC over stdio + UNIX/TCP socket transport | `mcp/src/transport.rs` | — |
+| 8B.2 | ⬜ Resources: `screenshot`, `a11y_tree`, `layout`, `console`, `network` | `mcp/src/resources/` | — |
+| 8B.3 | ⬜ Tools: `click`, `type`, `scroll`, `navigate`, `wait`, `eval`, `query` | `mcp/src/tools/` | — |
+| 8B.4 | ⬜ `lumen --mcp` / `--mcp-port N` CLI flags | `shell/src/cli.rs` | — |
+| 8C | ⬜ **`[P3+shell]` Native input injection** (Phase 1) | Не-distinguishable от пользователя input, для AI-агентов и тестов | `shell/src/input/native.rs` |
+| 8C.1 | ⬜ Mouse/keyboard events идут в event loop тем же путём, что winit-события от ОС | `shell/src/main.rs` | НЕ через JS `dispatchEvent` |
+| 8C.2 | ⬜ `event.isTrusted = true` для native-injected events (DOM-сторона) | `[P3+P1]` `lumen-dom` event model | — |
+| 8D | ⬜ **`[P3]` Auto-wait inside engine** (Phase 1) | Anti-flake, замена SDK retry-loops | `driver/src/wait.rs` |
+| 8D.1 | ⬜ `wait_for(Cond::Visible)` — visibility + layout stability tick | layout-аware | — |
+| 8D.2 | ⬜ `wait_for(Cond::NetworkIdle)` — слушает `NetworkTransport` events | network-аware | — |
+| 8D.3 | ⬜ `wait_for(Cond::JsIdle)` — event loop microtask queue empty | shell runtime-аware | — |
+| 8E | ⬜ **`[P3]` Per-context isolation by default** (Phase 1) | Cookies/storage/cache/viewport/UA/fingerprint per session | `driver/src/context.rs` |
+| 8F | ⬜ **`[P3]` Deterministic mode** (Phase 1) | Repeatable tests, опирается на §9.5 anti-fp инфраструктуру | `driver/src/determinism.rs` |
+| 8F.1 | ⬜ `set_clock(ClockMode::Frozen / Real / Monotonic)` | shell timers + Performance.now bridge | — |
+| 8F.2 | ⬜ `set_rng_seed(u64)` — детерминированный `Math.random()` | JS runtime hook | — |
+| 8F.3 | ⬜ `freeze_fingerprint(profile)` — фиксированные canvas/WebGL/audio/font enumeration | §9.5 anti-fp + bundled-only fonts mode | — |
+| 8G | ⬜ **`[P3+P1]` A11y tree first-class** (Phase 1, **зависит от P1 `lumen-a11y`**) | Semantic locator surface для tests + AI agents | `lumen-a11y` published interface |
+| 8G.1 | ⬜ A11y tree доступна через `BrowserSession::a11y_tree()` | `driver` reads `lumen-a11y` snapshot | P1 owns construction |
+| 8G.2 | ⬜ `Query::Role { role, name }` matching по a11y-tree (Playwright-стиль `getByRole`) | `driver/src/query.rs` | — |
+| 8H | ⬜ **`[P3]` `lumen-bidi-server` крейт** (Phase 2) | Playwright/Selenium 5/Cypress «из коробки» | `crates/bidi/` |
+| 8H.1 | ⬜ WebSocket transport + W3C BiDi handshake | `bidi/src/transport.rs` | — |
+| 8H.2 | ⬜ BiDi modules core: `session`, `browsingContext`, `script`, `network`, `input` | `bidi/src/modules/` | W3C Working Draft, May 2026 |
+| 8H.3 | ⬜ **Ship BiDi gaps** (см. ADR-006): response body, locale/timezone/offline, per-context UA, viewport-before-popup, preload per-context, download lifecycle, cookie change events, per-origin clear | `bidi/src/extensions.rs` | gap-mapping в `subsystems/lumen-bidi-server.md` |
+| 8H.4 | ⬜ `lumen --bidi-port N` CLI flag | `shell/src/cli.rs` | — |
+| 8I | ⬜ **`[P3]` `lumen-cdp-shim` крейт** (Phase 3+, **opt-in, по реальному запросу**) | Legacy Puppeteer-совместимость | `crates/cdp-shim/` |
+| 9 | ⬜ **`[P3]` Anti-detection privacy stack** (§9.5, [ADR-007](docs/decisions/ADR-007-anti-detection-stack.md)) | Privacy by default; устойчивость к Cloudflare/DataDome/Akamai false-positive | `lumen-network`, `lumen-js`, `lumen-shell`, `lumen-paint` (минимально), `lumen-canvas` |
+| 9A | ⬜ **`[P3]` Layer 1: surface API без automation-маркеров** (Phase 1, **из коробки от ADR-006**) | navigator.webdriver отсутствует; нет chrome.runtime/cdc_*/__playwright/etc.; event.isTrusted=true для native input | `lumen-js` bindings audit |
+| 9A.1 | ⬜ Audit JS bindings на отсутствие automation hooks (taint-test для каждого) | `js/tests/no_automation_markers.rs` | — |
+| 9A.2 | ⬜ Negative tests: `assert!(!window.has("webdriver"))` etc. в integration-тестах | `driver/tests/surface_api.rs` | — |
+| 9B | ⬜ **`[P3]` Layer 2: TLS fingerprint Chrome-matching** (Phase 1) | JA3/JA4 как у current stable Chrome; per-profile override | `lumen-network` rustls config |
+| 9B.1 | ⬜ Cipher suite ordering matching Chrome | `network/src/tls/fingerprint.rs` | — |
+| 9B.2 | ⬜ Extension list + supported groups matching Chrome | `network/src/tls/fingerprint.rs` | — |
+| 9B.3 | ⬜ ALPN order `h2`, `http/1.1` matching Chrome | `network/src/tls/fingerprint.rs` | — |
+| 9B.4 | ⬜ JA3/JA4 snapshot test против известных Chrome JA3 | `network/tests/ja3_match.rs` | обновляется per Chrome major release |
+| 9B.5 | ⬜ Per-profile TLS config (Standard / Strict / Tor) | `network/src/tls/profiles.rs` | — |
+| 9C | ⬜ **`[P3]` Layer 3: HTTP fingerprint Chrome-matching** (Phase 1) | Header order + casing + HTTP/2 SETTINGS как у Chrome | `lumen-network` http/h2 |
+| 9C.1 | ⬜ HTTP/1.1 header order + casing matching Chrome | `network/src/http/headers.rs` | — |
+| 9C.2 | ⬜ HTTP/2 SETTINGS frame values matching Chrome | `network/src/h2/settings.rs` | — |
+| 9C.3 | ⬜ HTTP/2 stream priority pattern matching Chrome | `network/src/h2/priority.rs` | — |
+| 9C.4 | ⬜ Accept-Language default `en-US,en;q=0.9` (не палит реальную локаль) | `network/src/http/headers.rs` | — |
+| 9C.5 | ⬜ Client Hints handling (опционально, выключено на Strict) | `network/src/http/client_hints.rs` | — |
+| 9D | ⬜ **`[P3+P2]` Layer 4: rendering fingerprint** (Phase 2) | Canvas/WebGL/audio randomization, Battery API disable, WebRTC mDNS-only | `lumen-canvas`, `lumen-paint`, `lumen-js` |
+| 9D.1 | ⬜ Canvas randomization (Brave-style per-session seed) | `canvas/src/fp_noise.rs` | — |
+| 9D.2 | ⬜ WebGL renderer/vendor normalization | `js/src/webgl_bindings.rs` | — |
+| 9D.3 | ⬜ AudioContext fingerprint noise | `js/src/audio_bindings.rs` | — |
+| 9D.4 | ⬜ Battery API disable on Strict | `js/src/battery_bindings.rs` | — |
+| 9D.5 | ⬜ WebRTC mDNS-only host candidates | `network/src/webrtc/candidates.rs` | при наличии WebRTC; иначе noop |
+| 9D.6 | ⬜ Hardware concurrency / screen / timezone normalization per profile | `js/src/navigator_bindings.rs` | — |
+| 9E | ⬜ **`[P3]` Layer 5: behavioral mimicry (opt-in)** (Phase 1, **для automation API**) | `InputMode::HumanLike` для тестировщиков | `shell/src/input/humanlike.rs` |
+| 9E.1 | ⬜ Bézier-curve mouse paths between coordinates | `shell/src/input/humanlike.rs` | — |
+| 9E.2 | ⬜ Variable inter-keystroke timing (Gaussian) | `shell/src/input/humanlike.rs` | — |
+| 9E.3 | ⬜ Pre-click dwell time | `shell/src/input/humanlike.rs` | — |
+| 9F | ⬜ **`[P3]` Layer 6: профили Standard/Strict/Tor** (Phase 2) | Per-profile config + per-context override через BrowserSession | `lumen-storage/src/profiles/fingerprint.rs` |
+| 9F.1 | ⬜ Профильный конфиг fingerprint (объединяет слои 2/3/4) | `storage/src/profiles/fingerprint.rs` | — |
+| 9F.2 | ⬜ `BrowserSession::set_fingerprint_profile(profile)` per-context override | `driver` + `core::ext` | связка с ADR-006 task 8F.3 |
+| 9F.3 | ⬜ Tor-mode профиль (Tor circuit + Tor Browser JA3/UA/screen/fonts pinning + no persistent state) | `storage` + `network` + `shell` | Phase 3, отдельная задача |
+| 9G | ⬜ **Red lines + perf gate — code-level enforcement** | Чтобы trigger-PR случайно не нарушил ADR-006 / ADR-007 | — |
+| 9G.1 | ⬜ CI lint: запрет имён `*captcha*`, `*solver*`, `*ip_rotation*`, `*proxy_pool*` в crate-names | `.github/workflows/lint.yml` | — |
+| 9G.2 | ⬜ README / маркетинговые тексты не используют «scraping», «stealth», «bypass» — линтер в CI | `.github/workflows/marketing-words.yml` | — |
+| 9G.3 | ⬜ **CI bench gate**: `cargo run -p lumen-bench --release` + сравнение с `bench/baseline.json` (median, p95) → fail PR при регрессе >5% в default-сборке. Применяется к PR, затрагивающим `lumen-driver` / `lumen-mcp-server` / `lumen-bidi-server` / `lumen-network` / `lumen-canvas` / `lumen-js` / `lumen-storage::profiles` / `lumen-shell::input` | `.github/workflows/bench-gate.yml` + `bench/baseline.json` + `bench/compare.py` | binding по ADR-006 §«Performance gate» и ADR-007 §«Performance gate» |
+| 9G.4 | ⬜ **`bench/baseline.json` обновление-процедура**: разработчик руками `cargo run -p lumen-bench --release > bench/baseline.json` после accepted-регрессии; коммит документирует архитектурное обоснование | `bench/UPDATE.md` | — |
+| 9G.5 | ⬜ **`lumen-bench` RAM-axis расширение** (требование [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)): добавить замеры `peak_rss`, `steady_state_rss`, `tier_transition_rss` к существующим time-метрикам; CI gate фейлит PR также при > 5% регрессе RAM, не только time. Бенчмарк tier-переходов (T1→T0, T2→T0, T3→T0): regression > 20% — release-blocker | `bench/src/memory.rs` + `bench/src/tier_transitions.rs` | binding по ADR-008 §«Performance gate» |
+| 10 | ⬜ **`[P3]` Tab lifecycle: пятитайерная модель** (§11.4, [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)) | Главный продуктовый дифференциатор по RAM: 50 вкладок ~400 MB vs Chrome 6-10 GB | `lumen-shell::tab_lifecycle`, `lumen-storage::tab_snapshot`, `lumen-core::ext::MemoryPressureSource` |
+| 10A | ⬜ **`[P3]` `TabState` enum + state machine T0-T4** (Phase 1) | Базовая модель + transition triggers | `shell/src/tab_lifecycle/state.rs` |
+| 10A.1 | ⬜ `enum TabState { Active, BackgroundRecent, BackgroundOld, Hibernated }` + transitions | `shell/src/tab_lifecycle/state.rs` | — |
+| 10A.2 | ⬜ OR-of-conditions trigger: idle timeout + memory pressure + LRU within budget | `shell/src/tab_lifecycle/trigger.rs` | — |
+| 10A.3 | ⬜ Per-user конфигурация таймаутов (5 мин / 30 мин / pinned-never) | `storage/src/profiles/tabs.rs` | — |
+| 10B | ⬜ **`[P3+P1]` Invariant 1: DOM arena serialization** (Phase 1, **архитектурный**) | T3 hibernation работает только при serializable DOM | `lumen-dom/src/arena.rs` |
+| 10B.1 | ⬜ Audit `lumen-dom` на отсутствие `Rc<RefCell<Node>>` в node graph; всё на `NodeId(u32)` | `dom/src/lib.rs` | **binding по ADR-008 Invariant 1**; coordination с P1 |
+| 10B.2 | ⬜ `bincode::serialize(&arena)` / `bincode::deserialize` для DOM snapshot | `dom/src/serialize.rs` | — |
+| 10B.3 | ⬜ Anti-pattern guard: clippy lint запрещает `Rc<RefCell>` в `lumen-dom::node` модулях | `.cargo/config.toml` + custom lint | — |
+| 10C | ⬜ **`[P3]` Invariant 2: JsRuntime suspend/resume API** (Phase 1) | T1 pause + T2 heap snapshot + T3 full drop | `core/src/ext/js.rs` + `lumen-js` |
+| 10C.1 | ⬜ Расширить `JsRuntime` trait: `pause()` / `unpause()` / `suspend()` / `resume()` | `core/src/ext/js.rs` | — |
+| 10C.2 | ⬜ Имплементация для `rquickjs` через `JS_WriteObject` / `JS_ReadObject` | `js/src/quickjs/suspend.rs` | QuickJS поддерживает natively |
+| 10C.3 | ⬜ zstd-сжатие heap snapshot; cap 5 MB/tab disk (overflow → drop heap, accept slower T3→T0) | `js/src/quickjs/snapshot.rs` | — |
+| 10C.4 | ⬜ V8 compatibility note: при миграции в Phase 3 prototype V8 snapshot API; если невозможно — ADR-004 revisit | `docs/decisions/` | check before Phase 3 |
+| 10D | ⬜ **`[P3+P1+P2]` Invariant 3: pure layout + paint** (Phase 1) | T2→T0 = просто пере-вызов функции | `lumen-layout` + `lumen-paint` audit |
+| 10D.1 | ⬜ Audit `lumen-layout` на отсутствие `static MUT` / `lazy_static` / `OnceCell` внутри layout pass | `layout/src/lib.rs` | **binding по ADR-008 Invariant 3**; P1 coordination |
+| 10D.2 | ⬜ Audit `lumen-paint::display_list` на pure-function-ность | `paint/src/display_list.rs` | P2 coordination |
+| 10D.3 | ⬜ Cross-tab caches (glyph atlas, font metrics, image decode) — отдельный crate с явным eviction API | `font/src/atlas.rs` + `image/src/decode_cache.rs` | — |
+| 10E | ⬜ **`[P3]` T0 экономия: image decode cache LRU + viewport-gating** (Phase 1, **главный источник экономии**) | Декодировать только viewport ± buffer; при скролле — decode/discard | `image/src/decode_cache.rs` |
+| 10E.1 | ⬜ `ImageDecoder::decode(...)` возвращает `ImageHandle` (тонкий ref), а не `DecodedImage` | `image/src/lib.rs` | binding по ADR-008 §«ImageDecoder с handle» |
+| 10E.2 | ⬜ `ImageDecodeCache` с LRU + memory budget (256 MB default) | `image/src/decode_cache.rs` | — |
+| 10E.3 | ⬜ Viewport-gating в layout: image decode triggered только для bounding box ∈ viewport ± 2 экрана | `layout/src/image_gating.rs` | — |
+| 10E.4 | ⬜ Scroll-discard: при удалении от viewport на >3 экрана — handle освобождается | `shell/src/scroll/decode_gating.rs` | — |
+| 10F | ⬜ **`[P3+P2]` T0 экономия: GPU layer LRU + texture recycling** (Phase 2) | Off-viewport stacking contexts освобождают textures | `paint/src/layer_cache.rs` |
+| 10F.1 | ⬜ `LayerCache` с LRU + GPU memory budget | `paint/src/layer_cache.rs` | P2 coordination |
+| 10F.2 | ⬜ Texture pool recycling (одна `wgpu::Texture` переиспользуется для разных layers) | `paint/src/texture_pool.rs` | — |
+| 10G | ⬜ **`[P3+P2]` T0 экономия: glyph atlas LRU eviction** (Phase 2) | Атлас не растёт безгранично | `font/src/atlas.rs` |
+| 10H | ⬜ **`[P3]` `MemoryPressureSource` trait** (Phase 1) | OS-сигналы памяти управляют tier-переходами | `core/src/ext/memory_pressure.rs` |
+| 10H.1 | ⬜ Trait + `enum MemoryPressureLevel { Low, Medium, High }` + listeners | `core/src/ext/memory_pressure.rs` | — |
+| 10H.2 | ⬜ Win32 impl: `QueryMemoryResourceNotification` + `MEMORYSTATUSEX` polling | `core/src/ext/memory_pressure/win32.rs` | — |
+| 10H.3 | ⬜ Linux impl: `/proc/pressure/memory` PSI events (kernel ≥ 4.20) | `core/src/ext/memory_pressure/linux.rs` | — |
+| 10H.4 | ⬜ macOS impl: `dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE)` | `core/src/ext/memory_pressure/macos.rs` | — |
+| 10H.5 | ⬜ Подписка кэшей (image, glyph, layer) на pressure events | `image/src/decode_cache.rs`, `font/src/atlas.rs`, `paint/src/layer_cache.rs` | — |
+| 10I | ⬜ **`[P3]` T2 → SQLite JS heap snapshot persistence** (Phase 2) | JS heap на диск при T2; restore при T0 | `storage/src/tab_snapshot.rs` |
+| 10I.1 | ⬜ Schema: `tab_snapshots(tab_id, js_heap_blob, dom_blob, scroll, form_state, ts)` | `storage/migrations/0NN_tab_snapshots.sql` | — |
+| 10I.2 | ⬜ Async-save при T1→T2 (без блокирования UI) | `shell/src/tab_lifecycle/persist.rs` | — |
+| 10I.3 | ⬜ Async-load при T2→T0 (с indeterminate UI hint если > 100 ms) | `shell/src/tab_lifecycle/restore.rs` | — |
+| 10J | ⬜ **`[P3]` T3 hibernation: full DOM serialization** (Phase 2) | DOM в SQLite, в RAM только TabMetadata | `storage/src/tab_snapshot.rs` |
+| 10J.1 | ⬜ DOM arena → bincode → zstd → SQLite blob | `dom/src/serialize.rs` + `storage/src/tab_snapshot.rs` | uses 10B.2 |
+| 10J.2 | ⬜ `TabMetadata { url, title, scroll, favicon }` остаётся в RAM | `shell/src/tab_metadata.rs` | <200 KB target |
+| 10J.3 | ⬜ Restore: deserialize → re-run scripts → full layout+paint (target ≤ 1500 ms) | `shell/src/tab_lifecycle/restore.rs` | — |
+| 10K | ⬜ **`[P3]` UI affordance: индикация tier'а в tab strip** (Phase 2) | Пользователь видит, что вкладка спит | `shell/src/tabs/strip_ui.rs` |
+| 10K.1 | ⬜ Иконка "Z" / fade-opacity на T2/T3 tabs | `shell/src/tabs/strip_ui.rs` | — |
+| 10K.2 | ⬜ Tooltip "Вкладка спит — клик восстановит за ~1 сек" с показом tier'а | `shell/src/tabs/tooltip.rs` | — |
+| 10K.3 | ⬜ Loading-spinner при restore > 200 ms | `shell/src/tabs/restore_ui.rs` | — |
+| 10L | ⬜ **`[P3]` JS heap GC tuning per tier** (Phase 2) | Активная — мягкий GC, idle — агрессивный | `js/src/gc_policy.rs` |
+| 10M | ⬜ **`[P3]` `samples/heavy.html`** — Habr-style тестовая страница для бенчей T0-heavy | `samples/heavy.html` | используется в `lumen-bench` |
 
 ---
 
@@ -285,9 +411,14 @@
 | `lumen-html-parser`, `lumen-css-parser`, `lumen-dom`, `lumen-layout`, `lumen-encoding` | P1 | P3 — wrapper hooks для GC (по согласованию) |
 | `lumen-paint`, `lumen-font`, `lumen-image` | P2 | — |
 | `lumen-network`, `lumen-storage`, `lumen-knowledge`, `lumen-shell`, `lumen-js`, `lumen-ai` | P3 | — |
+| `lumen-driver`, `lumen-mcp-server`, `lumen-bidi-server`, `lumen-cdp-shim` (когда появится) | P3 | P1 — accessor expose из `lumen-layout` / `lumen-a11y` (по согласованию); P2 — `Renderer::render_to_image()` off-screen path (по согласованию) |
+| `lumen-a11y` | P1 | P3 — читает snapshot для `BrowserSession::a11y_tree()` |
 | `lumen-core::ext` | P3 | P1/P2 — добавляют trait если им нужно (sole-author commit, post-factum review) |
 | `lumen-paint::display_list` (`DisplayCommand` enum) | P2 | P1 — добавляет варианты для новых layout-фич (например, для Grid) — P2 ревьюит |
 | `samples/page.html`, snapshot tests | Кто меняет — тот и трогает | — |
+| `graphic_tests/snapshots/*.png` (Уровень 3 эталоны, §15) | Кто реализует свойство — тот и обновляет (через `cargo test --update-snapshots`) | — |
+| `lumen-shell::tab_lifecycle`, `lumen-storage::tab_snapshot`, `lumen-bench::memory` + `tier_transitions` | P3 (трек 10, ADR-008) | P1 — DOM arena serialization (10B); P2 — pure paint audit (10D.2), GPU layer cache (10F); P1+P2 — glyph atlas eviction (10G) |
+| `lumen-core::ext::MemoryPressureSource` (новый trait-anchor, ADR-008 task 10H) | P3 | OS-specific impls: win32/linux/macos в одном крейте |
 
 **Главное правило:** новый PR трогает крейты **только одного владельца**, кроме редко согласованных кросс-крейтных стыковок выше.
 
@@ -307,6 +438,7 @@
 | `hyphenation` | P1 (Phase 2-3) | При типографике | `HyphenationProvider` |
 | `hunspell-rs` / `spellbook` | P3 (Phase 3) | При spell-check | `SpellChecker` |
 | `quinn` (HTTP/3) | P3 (никогда в обозримом) | — | расширение `NetworkTransport` |
+| `tiny-skia` (CPU rasterizer, **только под `cfg(test)`**) | P2 (Phase 0, opt-in) | Для in-process pixel snapshot tests (§15 уровень 3) — детерминизм между Windows/macOS/Linux CI. Не попадает в release-бинарь. | расширение `Renderer` (off-screen CPU path) |
 
 ---
 
@@ -990,6 +1122,62 @@ CI-чек на новые `[dependencies]`-строки добавим, когд
 
 ---
 
+### 6.11 Automation API (lumen-driver)
+
+Полное обоснование архитектурных решений — [ADR-006](docs/decisions/ADR-006-automation-api.md).
+
+Automation — **first-class поверхность движка**, не пристройка debug-протокола. Один внутренний trait `BrowserSession` в крейте `lumen-driver`, три транспорта поверх него (in-process Rust / MCP / WebDriver BiDi). Это даёт три эффекта одновременно:
+
+1. **Собственное тестирование изнутри** — `graphic_tests/` мигрируют с пиксельных diff-ов против Edge на структурные числовые ассерты (`box.border_box.width == 200.0`) плюс in-process snapshot tests без ffmpeg / gdigrab / Windows-only crop offsets. Запускается за миллисекунды, кросс-платформенно, на любом CI.
+2. **Эмбеддинг как библиотека** — `cargo add lumen-driver` даёт чужому Rust-приложению полноценный браузерный движок с API «открой → проверь layout → кликни», без отдельного процесса.
+3. **Внешние клиенты автоматизации** — AI-агенты через MCP, Playwright/Selenium/Cypress через BiDi, без специальных обёрток.
+
+#### `BrowserSession` trait — поверхность
+
+| Группа | Методы |
+|---|---|
+| **Lifecycle** | `new(opts)`, `navigate(url)`, `reload()`, `close()` |
+| **Computer-use primitives** (vision-агенты) | `screenshot(opts)`, `input_event(ev)` — нативная инжекция, **не** synthetic JS, `viewport(w, h)` |
+| **Semantic surface** | `a11y_tree()`, `query(Query::Role/Name/Text/Css)`, `layout_box(handle)`, `computed_style(handle)`, `eval_js(code)` |
+| **Wait conditions** (auto-wait внутри движка) | `wait_for(Cond::Visible/Stable/NetworkIdle/JsIdle)` |
+| **Observability** | `network_log()`, `console()`, `display_list()` |
+| **Determinism** | `set_clock(ClockMode)`, `set_rng_seed(u64)`, `freeze_fingerprint(profile)` |
+| **Storage / context** | `cookies()`, `local_storage()`, изоляция per-session по умолчанию |
+
+#### Транспорты (поверх trait-а)
+
+| Крейт | Протокол | Кто потребляет |
+|---|---|---|
+| `lumen-driver` | Rust API in-process | Свои `graphic_tests/`, embed-пользователи |
+| `lumen-mcp-server` | Model Context Protocol (JSON-RPC over stdio/socket) | Claude Computer Use, OpenAI Operator/CUA, Browser Use, локальные LLM-агенты |
+| `lumen-bidi-server` | WebDriver BiDi (W3C, WebSocket) | Playwright, Selenium 5, Cypress |
+| `lumen-cdp-shim` (опционально, **по запросу**) | Chrome DevTools Protocol subset | Legacy Puppeteer — только если будет реальный спрос |
+
+#### Что Lumen даёт сверх BiDi-спеки
+
+W3C BiDi на май 2026 — Working Draft с известными пробелами (см. blocker-issues Playwright #32577 и Cypress #30447). Lumen реализует их **с первого дня**, потому что контролирует свой стек:
+
+- Полный доступ к response body и `resourceType` в network events
+- Locale / timezone / offline emulation
+- Per-context user-agent и extra HTTP headers
+- Viewport до загрузки popup / new tab
+- Preload-скрипты per browsing context
+- Полный download lifecycle (begin → progress → complete + body)
+- Cookie change events, per-origin storage clear
+- Дешёвая network interception (не «prohibitively expensive» как в текущей BiDi)
+
+#### Что Lumen **не** делает
+
+- **WebDriver Classic** — мёртвый HTTP request-response протокол, в проект не входит.
+- **CDP как primary** — Lightpanda пошёл этим путём и теперь несёт груз нестабильного API. У нас CDP может появиться **только как thin shim** в Phase 3+ при реальном спросе.
+- **DOM-селекторы как primary локаторы** — поддерживаются как fallback, но рекомендуются role+name запросы по a11y-tree. Это снимает 70% maintenance-боли тестов (industry data 2026).
+- **Synthetic JS events (dispatchEvent) для input** — анти-боты их распознают, реальные сайты с `event.isTrusted` ведут себя иначе. Только нативная инжекция через event loop шелла.
+- **Wait-логика в клиенте** — auto-wait живёт в движке (на тик layout/network/JS-idle), не в SDK retry-loop.
+
+**Crates:** `lumen-driver` (P3 owner), `lumen-mcp-server` (P3), `lumen-bidi-server` (P3). A11y tree строится в `lumen-a11y` (P1 owner) — automation использует её как готовую структуру, не дублирует.
+
+---
+
 ## 7. Web APIs
 
 Реализуем по приоритету.
@@ -1141,20 +1329,68 @@ CI-чек на новые `[dependencies]`-строки добавим, когд
 - Cosmetic filtering (скрытие элементов) — через стили, инжектится в renderer.
 - Per-site disable — пользовательский whitelist.
 
-### 9.5 Anti-fingerprinting
+### 9.5 Anti-fingerprinting / Anti-detection privacy stack
 
-- **Canvas randomization** — Canvas.getImageData возвращает данные с микро-шумом (как в Brave). Per-session seed.
-- **WebGL renderer / vendor strings** — обобщённые («Generic GPU», «WebKit»).
+Полное архитектурное обоснование и red lines — [ADR-007](docs/decisions/ADR-007-anti-detection-stack.md).
+
+**Принцип:** пользователь имеет право посещать публичный сайт со своего устройства. Lumen — user agent в интересах пользователя, не сайта-оператора. Privacy-stack устанавливается **по умолчанию для всех** (как в Firefox Strict / Brave / Tor), не как opt-in «stealth mode». Побочный эффект — устойчивость к anti-bot системам (Cloudflare/DataDome/Akamai/PerimeterX/Kasada/Imperva), которые иначе ложно-помечают любой не-Chrome браузер.
+
+Anti-detection покрывает **шесть слоёв**, потому что современные детекторы 2026 работают глубже, чем «canvas pixel hash»:
+
+#### Слой 1 — Surface API: нет automation-маркеров (always-on, default)
+
+- `navigator.webdriver` **не существует** (не `false`, а отсутствует — как в clean Chrome без `--enable-automation`).
+- Нет `chrome.runtime`, `__playwright`, `__puppeteer`, `cdc_*` (ChromeDriver), `_phantom`, `callPhantom`, `Buffer`, `emit`-on-window и других классических маркеров.
+- JS-runtime (`rquickjs` Phase 0, V8 Phase 3+) **не инструментирован** для automation. Автоматизация идёт через `BrowserSession` (см. §6.11, ADR-006) — она не касается JS-окружения, если страница сама к нему не обращается.
+- `event.isTrusted = true` для native-injected input — события приходят в event loop тем же путём, что от ОС.
+
+#### Слой 2 — TLS fingerprint (default + per-profile)
+
+- `rustls` сконфигурирован с **cipher suite ordering, extension list и supported groups, совпадающими с current stable Chrome** (default profile). ALPN: `h2`, `http/1.1` — порядок Chrome-овский.
+- Цель: сайт не должен мочь выделить юзера Lumen только потому, что мы выбрали другую Rust-TLS библиотеку, — мы конфигурируем `rustls` так, как `rustls` уже умеет конфигурироваться.
+- **Per-profile**: privacy-strict профиль использует `rustls`-defaults, корпоративный — pinned JA3, Tor-profile — JA3 Tor Browser.
+- **Что мы не делаем:** не патчим криптографию, не имитируем «быть» Chrome поверх собственной идентичности (UA остаётся `Lumen/0.x`).
+
+#### Слой 3 — HTTP layer (default + per-profile)
+
+- **HTTP/1.1**: порядок и casing заголовков (`User-Agent`, `Accept`, `Accept-Encoding`, `Accept-Language`, ...) — как у текущего Chrome.
+- **HTTP/2**: `SETTINGS` frame values (`SETTINGS_HEADER_TABLE_SIZE = 65536`, `SETTINGS_MAX_CONCURRENT_STREAMS = 1000`, `SETTINGS_INITIAL_WINDOW_SIZE = 6291456`, …), stream priority frames — как у Chrome.
+- `Accept-Language` по умолчанию `en-US,en;q=0.9` (не палит реальную локаль юзера); пользователь может переопределить вручную.
+- Client Hints (`Sec-CH-UA`, etc.) — отдаём свой UA на запрос, либо ничего на Strict (как Tor).
+
+#### Слой 4 — Rendering fingerprint (Brave-style, default)
+
+Старый §9.5 — оставлен и формализован:
+
+- **Canvas randomization** — `Canvas.getImageData` с микро-шумом, per-session deterministic seed (как Brave).
+- **WebGL renderer / vendor** — обобщённые строки («Generic GPU», «WebKit»); shader compilation timing нормализован.
 - **AudioContext fingerprint** — мизерный шум.
-- **Fonts enumeration** — белый список из системных шрифтов, без эксклюзивов.
-- **Timezone** — опция «использовать UTC».
-- **Screen resolution** — опция округления до 100px.
-- **Hardware concurrency** — фиксируем на 2 или 4.
+- **Fonts enumeration** — белый список + только bundled fonts на Strict.
+- **Timezone** — опция UTC на Strict; иначе реальный.
+- **Screen resolution** — округление до 100px на Strict.
+- **Hardware concurrency** — фиксированное значение на Strict.
+- **Battery API** — отключён (no information) на Strict.
+- **WebRTC** — только mDNS host candidates, без public IP leak (как Brave/Safari).
 
-Три пресета:
-- **Standard** — total cookie protection, adblock, strip URL params. Сайты работают.
-- **Strict** — + fingerprinting protection, JS-блокировка на сомнительных доменах.
-- **Tor-mode** — + через Tor, фиксированный fingerprint, никаких persistent данных.
+#### Слой 5 — Behavioral input (opt-in **только для automation API**)
+
+- `BrowserSession::input_event()` (см. §6.11 / ADR-006 task 8C) принимает `InputMode::HumanLike` опционально — Bézier-кривые движения мыши, variable inter-keystroke timing, малые dwell-time перед кликами.
+- **Назначение** — тестировщики, которые хотят чтобы автотесты проходили те же code paths, что реальный юзер (event coalescing, hover transitions, slow-pointer logic). Это **не stealth-фича**, реальный человеческий input через шелл — уже человеческий и mimicry не требует.
+
+#### Слой 6 — Профили (расширение существующих трёх)
+
+- **Standard** (default) — Слои 1+2+3 + слой 4 на низкой интенсивности + total cookie protection + adblock + strip URL params. Сайты работают.
+- **Strict** — Слои 1+2+3 + слой 4 на высокой интенсивности + WebRTC mDNS-only + Client Hints отключены + JS-блокировка на сомнительных доменах.
+- **Tor-mode** — Strict + Tor circuit + Tor Browser JA3/UA/screen/font pinning + zero persistent state.
+- **Per-context override** — `BrowserSession::set_fingerprint_profile(profile)` для automation-юзеров с конкретной identity (ADR-006 task 8F.3 уже включает `freeze_fingerprint`).
+
+#### Red lines (никогда не делаем — см. ADR-007 «Consequences»)
+
+- ❌ **CAPTCHA-solver** (on-device или через сервис) — у сайтов есть legitimate interest в human-verification для определённых функций.
+- ❌ **Built-in IP rotation / residential proxy integration** — network identity это выбор и ответственность юзера, не функция движка.
+- ❌ **Anti-fraud-detection bypass для банков, платежей, госуслуг** — эти системы защищают от реального вреда.
+- ❌ **Marketing как «scraping browser» / «stealth automation»** — Lumen позиционируется как privacy-браузер; то что он чистая automation-поверхность (ADR-006), коммуницируется в техдоках разработчикам, не в продуктовом маркетинге.
+- ❌ **Платный «stealth-tier»** — инвертирует экономику и создаёт стимул держать юзеров blocked-by-default.
 
 ### 9.6 Прозрачность
 
@@ -1712,26 +1948,187 @@ Capability-модель плагинов (§11.4) расширяется:
 - Бенчмарки в CI: layout простой страницы, парсинг HTML 10 МБ, JS Speedometer.
 - Tracking регрессий — графики по коммитам.
 
+### 11.4 Memory budget per tab — пятитайерная модель ([ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md))
+
+Главный продуктовый дифференциатор Lumen наряду с приватностью — **RAM-нагрузка на вкладку**. Цель: 50 открытых вкладок в Lumen занимают ~400 MB, в Chrome — 6-10 GB. Достигается за счёт явной модели жизненного цикла вкладки с пятью tier'ами и тремя структурными инвариантами на подсистемы.
+
+#### Tier'ы T0–T4 и переходы
+
+| Tier | Когда | Что в RAM | Бюджет (v0.1) |
+|---|---|---|---|
+| **T0 Active** | foreground, видимая | JS heap, DOM, layout, paint, image cache, GPU textures | 80-200 MB |
+| **T1 Background-recent** | скрыта < 5 мин | JS heap paused, остальное retained | 40 MB |
+| **T2 Background-old** | скрыта 5-30 мин | JS heap → snapshot на диск, image/GPU cache drop, layout retained | 15 MB |
+| **T3 Hibernated** | скрыта >30 мин или memory pressure | DOM → сериализован в SQLite; в RAM только TabMetadata (URL, title, scroll, favicon) | 200 KB |
+| **T4 Closed-recoverable** | закрыта пользователем | 0 RAM (entry в session history) | 0 |
+
+Переходы между tier'ами — **OR трёх условий**: idle timeout + OS memory pressure + LRU within global budget. Pinned вкладки не уходят за T1 (явный пользовательский opt-in).
+
+#### Restore SLO (binding)
+
+| Переход | Цель |
+|---|---|
+| T1 → T0 | ≤ 50 ms (resume JS event loop) |
+| T2 → T0 | ≤ 200 ms (restore JS heap + re-decode visible images) |
+| T3 → T0 | ≤ 1500 ms (deserialize DOM, re-run scripts, full layout+paint) |
+| T4 → T0 | network-bound (fresh navigation) |
+
+Регрессия > 20% на любом переходе — release-blocker (см. `lumen-bench` RAM-axis, задача 9G.3).
+
+#### Три структурных инварианта (binding на subsystems)
+
+Эти инварианты **должны быть приняты до Phase 1 finalize** соответствующих крейтов, иначе ретрофит обойдётся в 5-10× по часам (см. ADR-008 «Context»).
+
+1. **DOM = arena с `NodeId(u32)`, не `Rc<RefCell<Node>>` граф.** Сериализуется через `bincode` для T3. `lumen-dom` уже движется в эту сторону — ADR делает это формально-обязательным.
+2. **JsRuntime поддерживает `suspend()` / `resume()` / `pause()` / `unpause()`** через `lumen-core::ext::JsRuntime` trait. QuickJS это умеет, V8 — нет out-of-the-box. **Закрепляет QuickJS как обязательный Phase 0-2 выбор**; миграция на V8 в Phase 3 (ADR-004) допустима только при доказанной возможности suspend через V8 snapshot API.
+3. **Layout и paint — pure functions от `(DOM, stylesheet, viewport)`.** Никаких `static MUT`, никаких lazy_static / OnceCell в `lumen-layout` / `lumen-paint`. T2→T0 = просто пере-вызов функции. Исключение — cross-tab кэши (glyph atlas, font metrics, image decode) живут в своих крейтах с явным eviction API.
+
+#### Техники экономии на активной вкладке (T0)
+
+Не отложены на hibernation — работают **постоянно** для уменьшения T0:
+
+- **Image decode cache LRU + viewport-gating.** Декодировать только то, что в viewport ± buffer. При скролле — decode/discard. `1920×1080 RGBA = 8 MB`; страница с 30 картинками без gating = 240 MB только на изображениях.
+- **GPU layer LRU + texture recycling.** Off-viewport stacking contexts освобождают свои textures когда удалены от viewport больше N экранов.
+- **Glyph atlas LRU eviction.** Атлас не растёт безгранично; редко используемые глифы вытесняются.
+- **JS heap GC tuning.** QuickJS GC thresholds настраиваются per-tab; pinned tabs получают более мягкий GC, идлящие — более агрессивный.
+- **`MemoryPressureSource` trait** (`lumen-core::ext`, новый) — слушает OS-сигналы (Win32 `QueryMemoryResourceNotification`, Linux PSI `/proc/pressure/memory`, macOS `dispatch_source MEMORYPRESSURE`) и эмитит `Low / Medium / High` события. Подсистемы (caches, GPU layers, decoders) подписываются.
+
+#### Сводные RAM-targets
+
+Расширение §14.1 (binding numbers vs `bench/baseline.json`):
+
+| Сценарий | Soft v0.1 | Hard v0.1 | Soft v1.0 | Hard v1.0 |
+|---|---|---|---|---|
+| T0 simple page (samples/page.html) | 80 MB | 100 MB | 150 MB | 200 MB |
+| T0 heavy page (samples/heavy.html, Habr-style) | 150 MB | 200 MB | 250 MB | 350 MB |
+| T1 per tab | 40 MB | 60 MB | 60 MB | 100 MB |
+| T2 per tab | 15 MB | 25 MB | 25 MB | 40 MB |
+| T3 per tab | 200 KB | 1 MB | 200 KB | 2 MB |
+| 50 вкладок (1 active, остальные mixed T1/T2/T3) | 400 MB | 600 MB | 800 MB | 1200 MB |
+
 ---
 
 ## 15. Тестирование
 
-### 12.1 Уровни
+### 15.1 Пирамида тестов
 
-1. **Unit-тесты** для каждого crate (`cargo test`).
-2. **Парсер-тесты:**
-   - `html5lib-tests` для HTML parser.
-   - WPT-style тесты для CSS parser.
-3. ✅ **Render snapshot tests** — рендерим страницу, сравниваем display list (не пиксели, так стабильнее). Реализовано: `serialize_display_list` + 6 golden-файлов в `lumen-paint/tests/snapshots/`. `UPDATE_SNAPSHOTS=1` для регенерации.
-4. **Pixel snapshot tests** — для финальной картинки, с допуском.
-5. **Web Platform Tests** — берём подмножество (DOM, CSS, fetch). Цель: 60% pass к v1.0.
-6. **Integration tests** — запуск браузера, тест UI через `egui`-test-harness или внешний driver.
-7. **Fuzzing** в CI.
-8. **Top 1000 sites test** — на каждом релизе автоматический прогон, скриншоты, сравнение с Chromium как baseline.
+Lumen использует пять уровней с разной стоимостью и зоной ответственности. Чем выше уровень — тем дороже и реже запуск, тем шире зона покрытия. Реализация автоматизации через `lumen-driver` (§6.11, [ADR-006](docs/decisions/ADR-006-automation-api.md)) — обязательная база для уровней 2-4.
 
-### 12.2 CI
+```
+┌────────────────────────────────────────────────────────────┐
+│ 5. Top sites / WPT — раз в релиз     ~минуты на тест       │
+├────────────────────────────────────────────────────────────┤
+│ 4. Cross-browser vs Edge — ночной job ~секунды на тест     │
+├────────────────────────────────────────────────────────────┤
+│ 3. Snapshot pixel in-process — на PR  ~миллисекунды        │
+├────────────────────────────────────────────────────────────┤
+│ 2. Structural asserts (via lumen-driver) — на cargo test   │
+│                                       ~миллисекунды        │
+├────────────────────────────────────────────────────────────┤
+│ 1. Unit + парсер-тесты — на cargo check ~микросекунды      │
+└────────────────────────────────────────────────────────────┘
+```
 
-GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy -- -D warnings` + `cargo deny` + fuzzing 10 минут на PR.
+#### Уровень 1 — Unit-тесты и парсер-тесты
+
+- `cargo test` per-crate. Inline `#[test]` + integration tests в `tests/`.
+- Парсер-тесты: `html5lib-tests` для HTML, WPT-style для CSS.
+- ✅ **Display-list snapshot tests** (legacy уровень 1.5): `serialize_display_list` + 6 golden-файлов в `lumen-paint/tests/snapshots/`. `UPDATE_SNAPSHOTS=1` для регенерации. Остаётся как тонкий слой между unit и in-process pixel snapshot.
+
+#### Уровень 2 — Structural asserts через `lumen-driver` (новое, основной слой)
+
+Через `BrowserSession` trait (§6.11) тест получает структуры **прямо из движка**, без процесса/окна/пикселей. Локализация бага — до поля в `ComputedStyle` или координаты `LayoutBox`.
+
+```rust
+#[test]
+fn test_05_margin() {
+    let mut s = InProcessSession::new();
+    s.navigate("file://graphic_tests/05-margin.html");
+
+    let box1 = s.layout_box("#box1").unwrap();
+    assert_eq!(box1.margin.top, 16.0);
+    assert_eq!(box1.border_box.width, 200.0);
+
+    let style = s.computed_style("#box1");
+    assert_eq!(style.background_color, Color::rgb(0xff, 0x00, 0x00));
+
+    let tree = s.a11y_tree();
+    assert_eq!(tree.find_by_role("button").unwrap().name, "Submit");
+}
+```
+
+Бегает на каждый `cargo test` (миллисекунды). Не зависит от шрифтов, GPU, антиалиасинга, ОС.
+
+#### Уровень 3 — In-process pixel snapshot
+
+`session.screenshot()` рендерит в off-screen surface, возвращает `Image` в RAM. Сравнение с PNG-эталоном в `graphic_tests/snapshots/`. Никакого ffmpeg, gdigrab, title bar offsets, calibration TEST-00 — буфер байт-точный.
+
+Для кросс-OS детерминизма (избежать ±1 LSB от GPU драйверов) — software rasterizer (`tiny-skia`, opt-in dep) под `cfg(test)`. См. ADR-006 «Consequences → tiny-skia».
+
+```rust
+#[test]
+fn test_05_margin_visual() {
+    let mut s = InProcessSession::new();
+    s.navigate("file://graphic_tests/05-margin.html");
+    assert_snapshot!(s.screenshot(), "05-margin.png");
+}
+```
+
+Файл-эталон коммитится в репо (`graphic_tests/snapshots/*.png`). При несовпадении тест сохраняет `*.actual.png` и `*.diff.png` рядом. Обновление: `cargo test --update-snapshots` (помечается в PR описании).
+
+#### Уровень 4 — Cross-browser vs Edge
+
+Текущая схема (`graphic_tests/run.py`) сохраняется, **но переходит в отдельный ночной CI-job** — не основной gate. Цель — обнаружение «оба дня неправильно одинаково» (когда уровень 3 не ловит, потому что snapshot закрепил баг). Edge как внешний якорь.
+
+#### Уровень 5 — Top 1000 sites + Web Platform Tests
+
+- **WPT subset** — DOM, CSS, fetch. Цель: 60% pass к v1.0.
+- **Top sites test** — на каждом релизе автоматический прогон, скриншоты, сравнение с Chromium как baseline.
+- **Fuzzing** — 10 минут на PR.
+
+#### Что значит «тестирование пораньше»
+
+Уровни 2 и 3 — это **прямое требование** к Phase 0 (см. §16). Они существуют **для нас самих**: мы пишем `lumen-layout`, мы и тестируем его структурными ассертами, без процесс-запусков и пиксельных сравнений. Это не «отдадим тестерам потом», это «работает уже сейчас, пока движок растёт». Phase 0 не закрыт без них.
+
+### 15.2 CI
+
+GitHub Actions: Linux / macOS / Windows, debug + release, `cargo test` (уровни 1-3) + `cargo clippy -- -D warnings` + `cargo deny` + fuzzing 10 минут на PR. Уровень 4 (cross-browser) — отдельный ночной workflow. Уровень 5 (top sites, WPT) — релизный workflow.
+
+### 15.3 Performance gate
+
+`lumen-bench` (см. §16 Phase 1, §11.4) — обязательный regression-guard в CI для PR-ов, затрагивающих automation, anti-detection, tab lifecycle или сетевые слои. Baseline (`bench/baseline.json`) включает **две оси**: time и RAM.
+
+**Time-axis baseline:** cold start ≤ 300 ms на `samples/page.html`, ≤ 500 ms на `samples/heavy.html`.
+
+**RAM-axis baseline (расширено [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)):**
+
+| Метрика | Baseline |
+|---|---|
+| T0 simple page (`samples/page.html`) peak RSS | ≤ 100 MB |
+| T0 heavy page (`samples/heavy.html`) peak RSS | ≤ 200 MB |
+| T2 steady-state RSS per tab | ≤ 25 MB |
+| T1 → T0 restore | ≤ 50 ms |
+| T2 → T0 restore | ≤ 200 ms |
+| T3 → T0 restore | ≤ 1500 ms |
+
+**Правило (binding по [ADR-006](docs/decisions/ADR-006-automation-api.md), [ADR-007](docs/decisions/ADR-007-anti-detection-stack.md), [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)):** PR фейлится в CI при **любом** из условий:
+
+- > 5% регресс time-median или time-p95.
+- > 5% регресс peak_rss или steady_state_rss.
+- > 20% регресс любого tier-transition restore time.
+- Hard budget из таблицы §11.4 превышен.
+
+Это применяется к **default-сборке** без `--mcp` / `--bidi-port` / `--cdp-port` и без Strict / Tor профилей. Default — то, что получает каждый пользователь, и оно должно оставаться лёгким.
+
+Если PR регрессирует:
+
+1. Перенести стоимость за runtime-флаг (транспорт не активен → нулевая стоимость) или за `cargo` feature с `default = false`.
+2. Lazy-evaluate (считать только при вызове JS API, не на каждый paint-tick).
+3. Снизить интенсивность на Standard, более тяжёлый вариант оставить на Strict.
+4. Перевести данные за tier'ную границу (например, dropped image cache при переходе в T2 уже даёт RAM-экономию).
+5. Если ни один путь не работает — явное архитектурное обоснование в PR-body и reviewer sign-off.
+
+CI gate (задачи 9G.3 + 9G.5 в Roadmap): `cargo run -p lumen-bench --release` + сравнение time + RAM axes + tier transitions с `bench/baseline.json` → fail при регрессе. Обновление baseline — отдельный коммит с обоснованием (задача 9G.4, процедура в `bench/UPDATE.md`).
 
 ---
 
@@ -1746,7 +2143,17 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
 - 🟡 Paint: FillRect через wgpu готов; глифы — позже.
 - 🟡 UI: одно окно (готово), вкладки и адресная строка — нет.
 - ⬜ HTTP/1.1 + HTTPS.
-- **Цель:** открыть простую текстовую статью без стилей. Доказательство концепции.
+- ⬜ **Automation foundation (ADR-006, §6.11)** — критично для собственного тестирования, **не отложить на потом**:
+  - **`lumen-driver` крейт** с trait `BrowserSession` и `InProcessSession`. Шелл переписать как первый клиент trait-а (окно/winit/wgpu становятся одним из транспортов, не центром).
+  - **Off-screen рендер** в `lumen-paint` (`Renderer::render_to_image() -> Image`) для `session.screenshot()` без winit-окна.
+  - **Software rasterizer для тестов** (`tiny-skia`, opt-in под `cfg(test)`) — детерминизм пикселей между Windows/macOS/Linux CI.
+  - **Тестовая пирамида уровни 2-3 включены** (§15): структурные ассерты + in-process snapshot вместо текущей ffmpeg/gdigrab-схемы. Уровень 4 (vs Edge) переезжает в ночной job.
+  - **Миграция `graphic_tests/`**: каждый из 22 текущих HTML-тестов получает (а) Rust-тест в `crates/lumen-driver/tests/` со структурными ассертами по `COVERAGE.md`, (б) PNG-эталон в `graphic_tests/snapshots/`.
+- ⬜ **Tab lifecycle архитектурные инварианты** (§11.4, [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)) — **обязательно до Phase 1 finalize**, иначе ретрофит 5-10×:
+  - **Invariant 1: DOM arena** — `lumen-dom` audit: убедиться что node graph на `NodeId(u32)` без `Rc<RefCell>`; добавить `bincode::serialize` для DOM snapshot; clippy lint запрещает `Rc<RefCell>` в node-модулях (трек 10B).
+  - **Invariant 2: JsRuntime suspend/resume API** — расширить trait в `lumen-core::ext::JsRuntime` методами `pause()` / `unpause()` / `suspend()` / `resume()`; имплементация для `rquickjs` через `JS_WriteObject`/`JS_ReadObject` (трек 10C).
+  - **Invariant 3: pure layout + paint** — audit `lumen-layout` и `lumen-paint::display_list` на отсутствие `static MUT` / `lazy_static` / `OnceCell` внутри hot path; cross-tab кэши (glyph atlas, image decode) — отдельные крейты с explicit eviction (трек 10D).
+- **Цель:** открыть простую текстовую статью без стилей. Доказательство концепции, **проверяемое из Rust без запуска отдельного процесса**, с зафиксированными tier-инвариантами для будущей лёгкости вкладки.
 
 ### Фаза 1 — v0.1 «Reader» (9 месяцев от старта)
 - **Базовая пригодность shell** — без этого «открыть Habr-статью» невозможно как демо:
@@ -1776,7 +2183,19 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
   - **Same-Origin Policy enforcement + CORS preflight** (`[P3]`) — SOP checks при fetch/postMessage/storage; OPTIONS preflight для non-simple requests.
   - **Mixed-content blocking + `<iframe sandbox>`** (`[P3]`) — HTTPS не грузит HTTP-script; sandbox flags.
   - **Preload scanner** (`[P1+P4]`) — отдельный pre-parser стартует fetch до DOM construction. Особенно важно над streaming pipeline. P1 — отдельный mode tokenizer-а; P4 — shell оркестрация.
-- **Цель:** ежедневный браузер для чтения статей.
+- **Automation Phase 1 (ADR-006, §6.11):**
+  - **`lumen-mcp-server` крейт** — Model Context Protocol over stdio/UNIX socket. Resources: `screenshot`, `a11y_tree`, `layout`, `console`, `network`. Tools: `click`, `type`, `scroll`, `navigate`, `wait`, `eval`. Запуск через `lumen --mcp` или `lumen --mcp-port N`. Это первый внешний транспорт — фастрастущий сегмент AI-агентов (Claude Computer Use, OpenAI Operator, Browser Use). MCP проще BiDi: JSON-RPC, маленькая спека.
+  - **Native input injection** в шелле — `BrowserSession::input_event()` подаёт события в event loop тем же путём, что winit-события от ОС. Никаких `dispatchEvent` синтетических.
+  - **Auto-wait внутри движка** — `wait_for(Cond::Visible/Stable/NetworkIdle/JsIdle)` на тиках layout/network/JS, не в SDK retry-loop.
+  - **Per-context isolation по умолчанию** — каждая `BrowserSession` изолирована (cookies/storage/cache/viewport/UA/fingerprint).
+  - **Deterministic mode** — `set_clock` / `set_rng_seed` / `freeze_fingerprint` для repeatable-тестов. Опирается на §9.5 anti-fingerprinting инфраструктуру.
+  - **A11y tree first-class** — крейт `lumen-a11y` (P1) поднимается до уровня semantic locator surface; `BrowserSession::query(Role/Name/Text)` использует его, а не DOM-селекторы.
+- **Tab lifecycle Phase 1** (§11.4, [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)):
+  - **`TabState` enum + state machine T0-T4** (трек 10A) — состояния, transitions, per-user конфиг таймаутов.
+  - **`MemoryPressureSource` trait** + три OS-impls (Win32 / Linux PSI / macOS dispatch) (трек 10H).
+  - **Image decode cache LRU + viewport-gating** (трек 10E) — главный источник экономии T0: `ImageHandle` индирекция вместо прямых `DecodedImage` ссылок; decode только viewport ± 2 экрана; scroll-discard.
+  - **Базовый T1 (paused)** — JS event loop pause/unpause при hide/show вкладки.
+- **Цель:** ежедневный браузер для чтения статей; AI-агенты могут управлять Lumen через MCP без обёрток; **простая вкладка занимает ≤ 100 MB peak RSS**.
 
 ### Фаза 2 — v0.5 «Interactive» (18–24 месяца)
 - QuickJS интеграция.
@@ -1806,7 +2225,18 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
   - **Find in page (Ctrl+F)** (`[P4]`).
   - **DevTools / Inspector минимум через CDP** (`[P4]`) — DOM tree + computed styles + network log. Без этого debug собственного движка невозможен.
   - **`mix-blend-mode` / `backdrop-filter` / `isolation`** (`[P1+P2]`) — нужны isolation groups в compositor pipeline. P1 — parsing + stacking model; P2 — paint pipeline + isolation groups.
-- **Цель:** публичная альфа, форумы и простые SPA, в Lumen начинают **жить** долго.
+- **Automation Phase 2 (ADR-006, §6.11):**
+  - **`lumen-bidi-server` крейт** — WebDriver BiDi subset over WebSocket. Цель: `playwright.connect('ws://localhost:9222/session')` работает из коробки. Запуск через `lumen --bidi-port N`.
+  - **Ship BiDi-gaps как built-in** — то, чего нет в W3C Working Draft (см. Playwright #32577, Cypress #30447): full response body access, `resourceType`, locale/timezone/offline emulation, per-context UA + extra headers, viewport-before-popup, per-context preload scripts, full download lifecycle, cookie change events, per-origin storage clear, дешёвая network interception. Документировать gap-mapping в `subsystems/lumen-bidi-server.md`.
+  - **Espresso/Computer-use bridge для тестировщиков** — заранее закладывается accessibility-tree query API через MCP, аналогичный Playwright `getByRole`, чтобы тесты не зависели от CSS-классов и переживали DOM-рефакторы.
+- **Tab lifecycle Phase 2** (§11.4, [ADR-008](docs/decisions/ADR-008-tab-lifecycle-memory-tiers.md)):
+  - **T2 (JS heap snapshot)** — async-save в SQLite при T1→T2 (трек 10I); async-load с indeterminate UI hint при > 100ms; zstd compression; cap 5 MB/tab disk.
+  - **T3 (full hibernation)** — DOM serialization через `bincode + zstd` в SQLite (трек 10J); в RAM остаётся только `TabMetadata` (URL, title, scroll, favicon) <200 KB/tab.
+  - **GPU layer LRU + texture recycling** (трек 10F) — `wgpu::Texture` pool для off-viewport stacking contexts.
+  - **Glyph atlas LRU eviction** (трек 10G).
+  - **UI affordance** (трек 10K) — иконка "Z" / fade-opacity на спящих вкладках в tab strip, tooltip с tier-info, loading-spinner при restore > 200ms.
+  - **JS heap GC tuning per tier** (трек 10L) — мягкий GC для активной, агрессивный для idle.
+- **Цель:** публичная альфа, форумы и простые SPA, в Lumen начинают **жить** долго; Playwright/Selenium/Cypress тесты сторонних команд работают на Lumen; **50 открытых вкладок ≤ 600 MB total RAM**.
 
 ### Фаза 3 — v1.0 (36–48 месяцев)
 - Переход на V8 (`rusty_v8`).
@@ -1836,6 +2266,8 @@ GitHub Actions: Linux/macOS/Windows, debug+release, `cargo test` + `cargo clippy
   - **GC integration JS ↔ DOM** (`[P1+P4]`) — cycle collector между Rust DOM и JS engine. Архитектурная задача при интеграции QuickJS / V8. P1 — DOM wrapper hooks; P4 — JS engine integration + cycle collector algorithm.
   - **Permission prompt UI + Download UI** (`[P4]`) поверх существующего permissions/downloads storage.
   - **GPU process / sandbox** (`[P4]`) — seccomp / AppContainer / App Sandbox, расширение site isolation.
+- **Automation Phase 3 (опционально, по запросу):**
+  - **`lumen-cdp-shim` крейт** — Chrome DevTools Protocol subset как **thin adapter** поверх `BrowserSession`. Triggered only by real named demand from a legacy Puppeteer-using project. До этого CDP-кода в Lumen нет (см. ADR-006 «Graduation triggers»).
 - **Цель:** стабильный релиз.
 
 ### Фаза 4 — После 1.0
