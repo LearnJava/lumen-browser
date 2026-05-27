@@ -1,5 +1,5 @@
-In progress: lumen-a11y-full stage 2 (8G, [P1+P3])  branch: p1-a11y-full-stage2
-Next step: implement accname §4 algorithm + text alternative computation for form controls + title fallback chain
+In progress: lumen-a11y-full stage 2 READY FOR MERGE  branch: p1-a11y-full-stage2
+Next step: stage 3 — ARIA attribute application + computed role mapping
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
