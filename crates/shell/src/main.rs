@@ -21,6 +21,7 @@ mod animation_scheduler;
 mod find;
 mod forms;
 mod hints;
+mod input;
 mod links;
 mod momentum_anim;
 mod runtime;

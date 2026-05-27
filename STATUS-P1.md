@@ -1,5 +1,5 @@
 In progress: none (ready for next task)
-Next step: lumen-a11y-full (8G, Phase 1, ADR-006) — stage 1 of 3: role computation + text alternatives + ARIA semantics
+Next step: lumen-a11y-full (8G, Phase 1, ADR-006) — A11y tree first-class for accessibility-driven testing. P1 owns tree construction, P3 owns BrowserSession integration. Start with crate expansion + role mapping + text alternatives computation (stage 1 of 3).
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -7,6 +7,31 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   the call site and add a line to STATUS-P4.md "Needs wiring".
 
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
+
+Note: fts-omnibox (Wave 1, P3-задача по домену) перенесена в STATUS-P3.md Queue (это не P1-домен, это knowledge/omnibox).
+Note: Wave 2 очередь содержит P2-задачи (extras-p2, avif-decoder, webgl-context, font-hinting, svg-rasterizer) — они пока не для P1. Wave 2 P3-задачи (http2-client, preconnect-hints) тоже в P3 очереди. P1 берёт следующее из Phase 1/Phase 2 своих задач.
+
+Recent:
+- click-hint-overlay (7B.2): enhance collect_clickable_elements with <details> support — add ClickableKind::Details variant, is_details_element() helper, comprehensive unit tests (6 new tests for link/button/input/details/mixed), P1 complete 2026-05-28 — P3 integration pending
+- print-pdf-pagination (5++, Phase 1): PaginationContext + Page + PageFragment, paginate() algorithm for break-before/after/avoid, 7 unit tests, exports in lib.rs, clippy clean 2026-05-28
+- bench-ram-axis (9G.5, ADR-008 performance gate): cross-platform RSS measurement (getrusage on Unix, GetProcessMemoryInfo on Windows), baseline.json established, UPDATE.md documentation 2026-05-28
+- antidetect-webgl-normalize (9D.2, ADR-007 Layer 4): GpuFingerprint struct in paint/src/fingerprint.rs, from_adapter_info() normalization (always "WebKit"/"Generic GPU"), Renderer.gpu_fingerprint field, install_webgl_bindings() in js/src/webgl_bindings.rs stores _LUMEN_GPU_VENDOR/_RENDERER globals, 5 tests, P1 complete 2026-05-28 — P3 integration pending
+- gpu-layer-lru (10F, Phase 1): LayerCache struct in paint/src/layer_cache.rs, LRU-tracked GPU layer metadata (LayerKey + LayerEntry), get_lru_candidates() for eviction, remove_keys() for memory reclaim, 256 MB default budget, 7 unit tests + Renderer integration, Phase 2 (10F.2) texture pool recycling pending 2026-05-28
+- antidetect-canvas-randomization (9D.1): CanvasNoiseGenerator LCG RNG в canvas/src/fp_noise.rs, per-session deterministic XOR-noise R/G/B, Context2D::set_noise_generator() + get_image_data() stub для P3 JS-интеграции, 20 тестов 2026-05-28
+- extras-p2 (5++): object-fit ✅ + variable fonts ✅ + Print PDF Phase 1 (pagination module) 2026-05-27
+- glyph-atlas-eviction (10G.1): LRU tracking + get_lru_candidates() + remove_keys() для эвикции, 4 новых теста, Phase 1 завершена 2026-05-27
+- fts-omnibox (8F.1, Wave 1): HistoryWithFts integration with lumen-storage::History — record_visit_with_text() + delete_with_fts() automatic sync hooks, 3 integration tests → 49 total PASS 2026-05-27
+- lumen-a11y-full (8G, stage 3/3): ARIA attribute application (aria-current/modal/roledescription/valuenow/min/max/text) + computed role mapping with context validation (cell/columnheader/rowheader require row; row requires table; listitem requires list; tab requires tablist; option requires listbox; treeitem requires tree; menuitem requires menu) + relationship attributes (controls/owns/flowto/details) with NodeId storage pending Document::find_by_id() + 30 new tests → 104 total PASS 2026-05-27
+- lumen-a11y-full (8G, stage 2/3): label association (explicit + implicit) + form control text alternatives + description edge cases + button icon handling + link/heading/summary explicit naming + 21 new tests → 75 total PASS 2026-05-27
+- lumen-a11y-full (8G, stage 1/3): 18 extended ARIA roles (Alert/AlertDialog/Application/Feed/Log/Marquee/Note/RowHeader/Searchbox/Switch/Tab/TabList/TabPanel/Timer/Toolbar/Tooltip/Tree/TreeItem) + AXRole::parse + implicit_role for <input type="search"> → Searchbox, Serialize/Deserialize for AXNode/AXState/AXRole, serde integration for P3 snapshots, 16 new tests → 60 total tests PASS 2026-05-27
+- icc-color-profiles (Wave 1): IccProfile struct in lumen-image, Optional<IccProfile> in Image, parse_png_icc_profile() for PNG iCCP chunk (flate2 deflate decompression), Image constructors updated, JPEG/PNG/GIF decoders wired 2026-05-27
+- font-variable-opsz (Wave 1): VariationCoords struct in lumen-font, from_css_settings() builder, set_axis_by_tag() for P4 to inject opsz, CSS integration points marked 2026-05-27
+- font-stretch-matcher (Wave 1, stage 2): FaceRecord::stretch field, 3-step match_face filter (stretch→style→weight), 5 stretch tests, CSS Fonts L4 §5.2 compliance 2026-05-27
+- font-stretch-matcher (Wave 1, stage 1): Os2::width_class field, stretch_percent() method, 5 tests 2026-05-27
+- gif-decoder (Wave 1): skeleton GIF87a/89a decoder + frame 0 support (LZW decoding, palette→RGBA), animation Wave 3 2026-05-27
+- paint-pure-audit (10D.2 Invariant 3): audit lumen-paint::display_list на pure-function requirement 2026-05-27
+- layout-pure-audit (10D.1 Invariant 3): audit на отсутствие static MUT / lazy_static / OnceCell в hot path 2026-05-27
+- dom-arena-audit (10B Invariant 1, [P1+P3]): serde+bincode snapshot, DomSnapshotError, #[deny(clippy::rc_buffer)]+INVARIANT(10B/ADR-008) 2026-05-27
 
 ## P1 Roadmap: 40 prioritized tasks (Phase 0–3)
 
@@ -32,6 +57,7 @@ Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 pi
 19. ✅ Print pipeline (P1 part): pagination algorithm (break-before/after/avoid, orphans/widows)
 20. ✅ Preload scanner: scan_preload_hints for early fetch hints in background
 
+<<<<<<< HEAD
 ### Phase 1 (in progress / planned)
 21. ⬜ lumen-a11y-full (8G, [P1+P3]) — stage 1: ARIA role mapping (60+ variants), text alternative computation (accname §4), CSS pseudo-classes for accessibility
 22. ⬜ lumen-a11y-full (8G, stage 2) — ARIA attribute application (aria-current/modal/roledescription/valuenow/controls/owns/flowto/details), relationship attributes, NodeId storage for find_by_id
@@ -57,6 +83,13 @@ Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 pi
 40. ⬜ performance-observer-timing — PerformanceObserver for layout/paint timings, resource timing
 
 ## Notes
+=======
+Next (Wave 1 — бывшие P3-задачи):
+(All — fts-omnibox переместилась в STATUS-P3.md Queue как P3-домен задача)
+
+# Removed: Wave 2 (бывший P2 + бывший P3) — эти задачи не принадлежат P1 домену
+# Они находятся в соответствующих STATUS-P2.md и STATUS-P3.md очередях
+>>>>>>> p3-native-input-injection
 
 - fts-omnibox (Wave 1, P3-domain) moved to STATUS-P3.md Queue — knowledge/omnibox is P3 domain, not P1
 - Wave 2 (former P2/P3) queues removed — handled in respective STATUS-P2.md / STATUS-P3.md

@@ -1,9 +1,8 @@
-In progress: native-input-injection-8c  branch: p3-native-input-injection
-Next step: mouse/keyboard events via event loop with isTrusted=true  lumen-shell/src/input.rs
+In progress: —
+Next step: (Wave 3 automation API) Pick next: auto-wait-engine (8D), per-context-isolation (8E), or deterministic-mode (8F) — all Phase 1 foundational.
 
-After native-input-injection completion (→ P3 ready for Wave 3): Pick next from Queue below. Candidate: auto-wait-engine (8D, Phase 1) — foundational for anti-flake in automation API; enables all Phase 1 testing improvements.
-
-Recent (Wave 2/3 - automation API): 
+Recent (Wave 2/3 - automation API):
+  - native-input-injection-8c (Phase 1 skeleton: InputCommand enum + click/type_text + shell/src/input.rs) 2026-05-28 
   - lumen-mcp-server-8b (Model Context Protocol transport, 5 resources + 7 tools, stdio server) 2026-05-28
   - shell-as-driver-client-8a7-phase4b (GpuSession impl + render_to_gpu) 2026-05-28
   - graphic-tests-migration-8a6 (50 Rust tests + PNG snapshots in crates/driver/tests/) 2026-05-28
