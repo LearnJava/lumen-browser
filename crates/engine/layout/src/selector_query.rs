@@ -7,7 +7,7 @@
 //! combinators, `:nth-*`, `:not()`, `:is()`, `:where()`).
 
 use lumen_css_parser::{parse_selector_list, ComplexSelector};
-use lumen_dom::Document;
+use lumen_dom::{Document, NodeId};
 
 use crate::box_tree::{BoxKind, LayoutBox};
 use crate::style::{
@@ -259,6 +259,41 @@ fn find_all_rec<'a>(
     }
     for child in &b.children {
         find_all_rec(child, doc, selectors, out);
+    }
+}
+
+// ──────────────── query_all ────────────────
+
+/// Returns all [`NodeId`]s in the document that match `sel`.
+///
+/// Traverses the entire DOM tree (not just the layout tree), so inline elements
+/// and other nodes without a dedicated [`LayoutBox`] are included. Non-element
+/// nodes (text, comments, processing instructions) never match any selector.
+///
+/// Implements `document.querySelectorAll` semantics. Returns an empty Vec when
+/// `sel` is empty, all selectors are invalid, or no node matches.
+pub fn query_all(doc: &Document, sel: &str) -> Vec<NodeId> {
+    let selectors = parse_selector_list(sel);
+    if selectors.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    query_all_rec(doc, doc.root(), &selectors, &mut out);
+    out
+}
+
+fn query_all_rec(
+    doc: &Document,
+    id: NodeId,
+    selectors: &[ComplexSelector],
+    out: &mut Vec<NodeId>,
+) {
+    // matches_complex returns false for non-element nodes internally.
+    if node_matches(id, doc, selectors) {
+        out.push(id);
+    }
+    for &child in &doc.get(id).children.clone() {
+        query_all_rec(doc, child, selectors, out);
     }
 }
 

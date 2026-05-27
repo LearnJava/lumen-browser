@@ -32,6 +32,12 @@ pub use types::{
     ScrollDelta, Target, WaitCondition,
 };
 pub use session::InProcessSession;
+/// Типизированный снимок вычисленных CSS-свойств из lumen-layout.
+///
+/// Возвращается [`BrowserSession::computed_style_snapshot`]; предпочтительнее
+/// [`ComputedProperties`] для структурных ассертов в тестах, потому что поля
+/// типизированы, а не сериализованы в строки.
+pub use lumen_layout::ComputedStyleSnapshot;
 
 use lumen_core::error::Result;
 
@@ -61,6 +67,17 @@ pub trait BrowserSession {
     /// Вычисленные CSS-свойства первого элемента, совпадающего с `selector`.
     /// Возвращает `Ok(None)` если элемент не найден.
     fn computed_style(&self, selector: &str) -> Result<Option<ComputedProperties>>;
+
+    /// Типизированный снимок вычисленных CSS-свойств первого элемента,
+    /// совпадающего с `selector`. Использует полный CSS3-движок селекторов.
+    ///
+    /// В отличие от [`computed_style`](BrowserSession::computed_style), возвращает
+    /// [`ComputedStyleSnapshot`] — структуру с типизированными полями, пригодную
+    /// для структурных ассертов в тестах.
+    ///
+    /// Возвращает `Ok(None)` если элемент не найден или не имеет layout-бокса
+    /// (инлайн-элементы в Phase 0).
+    fn computed_style_snapshot(&self, selector: &str) -> Result<Option<ComputedStyleSnapshot>>;
 
     /// Журнал сетевых запросов с момента последней навигации.
     fn network_log(&self) -> Result<Vec<NetworkEntry>>;

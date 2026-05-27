@@ -43,7 +43,8 @@ pub use property_trees::{
 };
 pub use selection::{caret_at_point, selection_rects};
 pub use selector_query::{
-    computed_style_by_selector, find_all_by_selector, find_box_by_selector, ComputedStyleSnapshot,
+    computed_style_by_selector, find_all_by_selector, find_box_by_selector, query_all,
+    ComputedStyleSnapshot,
 };
 pub use text_iter::{collect_visible_text, TextFragment};
 pub use snapshot::serialize_layout_tree;
