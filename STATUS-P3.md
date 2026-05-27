@@ -1,5 +1,5 @@
 In progress: shell-as-driver-client Phase 4 (shell integration)  branch: p3-shell-as-driver-client-phase4
-Next step: Phase 4c - migrate lumen-shell::reload() to use render_to_gpu(), then full shell integration
+Next step: Phase 4c - refactor lumen-shell to use WinitSession instead of manual pipeline (crates/shell/src/main.rs:2233)
 
 Phase 4 progress:
   ✓ 4a: GpuSession trait created (RenderedPage, gpu_session.rs)
