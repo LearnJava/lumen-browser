@@ -1,8 +1,8 @@
-In progress: deterministic-mode (8F) — set_clock / set_rng_seed / freeze_fingerprint for repeatable tests
-Next step: Design SessionContext extension + add methods to BrowserSession trait crates/driver/src/browser.rs
-Branch: p3-deterministic-mode-8f
+In progress: —
+Next step: (Wave 3) Pick next: a11y-tree-via-driver (8G, [P3+P1]), or antidetect-surface-api (9A)
 
 Recent (Wave 3 - automation API):
+  - deterministic-mode-8f (Phase 1 complete: frozen_clock_ms / rng_seed / freeze_fingerprint in SessionContext + BrowserSession trait + 9 methods + 5 tests) 2026-05-28
   - per-context-isolation-8e (Phase 1 complete: SessionContext + FingerprintProfile + cookies/storage/HTTP cache + 13 tests) 2026-05-28
   - native-input-injection-8c (Phase 1 skeleton: InputCommand enum + click/type_text + shell/src/input.rs) 2026-05-28 
   - lumen-mcp-server-8b (Model Context Protocol transport, 5 resources + 7 tools, stdio server) 2026-05-28
