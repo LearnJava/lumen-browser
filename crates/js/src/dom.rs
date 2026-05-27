@@ -13,7 +13,8 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use lumen_core::ext::{JsFetchProvider, JsWebSocketProvider, JsWsEvent};
+use lumen_core::ext::{CookieProvider, JsFetchProvider, JsWebSocketProvider, JsWsEvent};
+use lumen_core::url::Url;
 use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName, ShadowRootMode};
 use rquickjs::{Ctx, Function, Result as QjResult};
 
@@ -125,6 +126,7 @@ pub enum NavigateRequest {
 ///              `NodeId` index → `[x, y, width, height]` in viewport-relative CSS px.
 /// `viewport_size` — shared `[width, height]` updated by the shell on resize.
 /// `lazy_img_requests` — queue written by `_lumen_request_lazy_image_load`; drained by shell.
+/// `cookie_jar` — optional cookie store for `document.cookie` get/set.
 /// Pass `None` for providers in sandboxed contexts or tests.
 #[allow(clippy::too_many_arguments)]
 pub fn install_dom_api(
@@ -142,8 +144,9 @@ pub fn install_dom_api(
     layout_rects: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     viewport_size: Arc<Mutex<[f32; 2]>>,
     lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
+    cookie_jar: Option<Arc<dyn CookieProvider>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -168,6 +171,8 @@ fn install_primitives(
     layout_rects: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     viewport_size: Arc<Mutex<[f32; 2]>>,
     lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
+    page_url: String,
+    cookie_jar: Option<Arc<dyn CookieProvider>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -952,6 +957,32 @@ fn install_primitives(
         });
     }
 
+    // ── document.cookie (RFC 6265 §5.3-5.4) ─────────────────────────────────
+    // The getter/setter wrap CookieProvider using host/scheme derived from
+    // page_url parsed once at install time. Best-effort: if the URL cannot be
+    // parsed (e.g. file://) we skip cookie injection silently.
+    {
+        let parsed = Url::parse(&page_url).ok();
+        let host = parsed.as_ref().map(|u| u.host().to_ascii_lowercase()).unwrap_or_default();
+        let is_secure = parsed.as_ref().map(|u| u.scheme() == "https").unwrap_or(false);
+
+        if let Some(jar) = cookie_jar {
+            let jar_get = Arc::clone(&jar);
+            let host_get = host.clone();
+            reg!("_lumen_cookie_get", move || -> String {
+                jar_get.get_for_request(&host_get, "/", is_secure, None, false)
+            });
+
+            let host_set = host;
+            reg!("_lumen_cookie_set", move |cookie_str: String| {
+                jar.process_set_cookie(&cookie_str, &host_set, "/", is_secure, None);
+            });
+        } else {
+            reg!("_lumen_cookie_get", move || -> String { String::new() });
+            reg!("_lumen_cookie_set", move |_: String| {});
+        }
+    }
+
     Ok(())
 }
 
@@ -1474,6 +1505,8 @@ var console = {
 var document = {
     get title()  { return _lumen_get_document_title(); },
     set title(v) { _lumen_set_document_title(String(v)); },
+    get cookie()  { return _lumen_cookie_get(); },
+    set cookie(v) { _lumen_cookie_set(String(v)); },
     get body()   {
         var bid = _lumen_u2n(_lumen_get_body());
         return bid !== null ? _lumen_make_element(bid) : null;
@@ -2600,9 +2633,13 @@ function _lumen_deliver_intersection_observers() {
     }
 }
 
+// ── postMessage (HTML LS §7.7.4) ─────────────────────────────────────────────
+var _message_listeners = [];
+
 var window = {
     history: history,
     onpopstate: null,
+    onmessage: null,
     onpageshow: null,
     onpagehide: null,
     location: location,
@@ -2644,6 +2681,8 @@ var window = {
             _pageshow_listeners.push(fn);
         } else if (type === 'pagehide') {
             _pagehide_listeners.push(fn);
+        } else if (type === 'message') {
+            _message_listeners.push(fn);
         }
     },
     removeEventListener: function(type, fn) {
@@ -2651,11 +2690,34 @@ var window = {
         if (type === 'popstate') arr = _popstate_listeners;
         else if (type === 'pageshow') arr = _pageshow_listeners;
         else if (type === 'pagehide') arr = _pagehide_listeners;
+        else if (type === 'message') arr = _message_listeners;
         else return;
         var idx = arr.indexOf(fn);
         if (idx >= 0) arr.splice(idx, 1);
     },
     dispatchEvent: function() { return true; },
+    /// postMessage (HTML LS §7.7.4): dispatch a MessageEvent to this window.
+    /// targetOrigin '*' → always deliver; '/' → same-origin only;
+    /// any other string → must equal location.origin.
+    postMessage: function(message, targetOrigin) {
+        var origin = location.origin;
+        if (targetOrigin !== '*') {
+            var target = (targetOrigin === '/') ? origin : String(targetOrigin);
+            if (target !== origin) return;
+        }
+        var ev = new MessageEvent(message);
+        ev.origin = origin;
+        ev.source = window;
+        // Spec §7.7.4 step 5: dispatch as a task (asynchronously).
+        setTimeout(function() {
+            if (typeof window.onmessage === 'function') {
+                try { window.onmessage(ev); } catch(e) {}
+            }
+            for (var i = 0; i < _message_listeners.length; i++) {
+                try { _message_listeners[i](ev); } catch(e) {}
+            }
+        }, 0);
+    },
 };
 
 // ── queueMicrotask (HTML LS §8.1.4.4) ────────────────────────────────────────

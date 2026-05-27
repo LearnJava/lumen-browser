@@ -114,6 +114,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.layout_rects),
                 Arc::clone(&self.viewport_size),
                 Arc::clone(&self.lazy_img_requests),
+                None,
             )
             .map_err(|e| rq_err(&ctx, e))
         })

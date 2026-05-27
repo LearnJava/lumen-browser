@@ -51,7 +51,7 @@ pub use bfcache::{BfCache, BfCacheEntry};
 pub use bookmarks::{Bookmark, Bookmarks};
 pub use broadcast_channels::{BroadcastChannels, ChannelRegistration};
 pub use cache_storage::{CacheStorage, CachedEntry};
-pub use cookies::{parse_set_cookie, parse_set_cookie_with_psl, Cookie, CookieJar, SameSite};
+pub use cookies::{parse_set_cookie, parse_set_cookie_with_psl, Cookie, CookieJar, CookieJarProvider, SameSite};
 pub use csp_policies::{parse_csp_header, CspPolicies, CspPolicy};
 pub use hsts::{parse_sts_header, HstsEntry, HstsStore};
 pub use cached_dns::{CachedDnsResolver, Clock, SystemClock};

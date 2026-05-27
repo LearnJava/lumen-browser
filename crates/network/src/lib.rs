@@ -23,8 +23,8 @@ use rustls::pki_types::ServerName;
 use lumen_core::error::{Error, Result};
 use lumen_core::event::{Event, TabId};
 use lumen_core::ext::{
-    ContentDecoder, DnsResolver, EventSink, FetchInterceptor, HstsEnforcement, HttpAuthScheme,
-    HttpCredentialProvider, JsFetchProvider, JsFetchResult, JsWebSocketProvider,
+    ContentDecoder, CookieProvider, DnsResolver, EventSink, FetchInterceptor, HstsEnforcement,
+    HttpAuthScheme, HttpCredentialProvider, JsFetchProvider, JsFetchResult, JsWebSocketProvider,
     JsWebSocketSession, JsWsEvent, NetworkTransport, NoopEventSink, RequestFilter, SseProvider,
     SseSession, WebSocketProvider, WebSocketSession,
 };
@@ -250,6 +250,19 @@ fn header_value<'a>(headers: &'a [(String, String)], name: &str) -> Option<&'a s
     headers
         .iter()
         .find(|(k, _)| k.to_ascii_lowercase() == name_lc)
+        .map(|(_, v)| v.as_str())
+}
+
+/// Returns an iterator over all values for the given header name (case-insensitive).
+/// `Set-Cookie` may appear multiple times per RFC 7230 §3.2.2.
+fn all_header_values<'a>(
+    headers: &'a [(String, String)],
+    name: &str,
+) -> impl Iterator<Item = &'a str> {
+    let name_lc = name.to_ascii_lowercase();
+    headers
+        .iter()
+        .filter(move |(k, _)| k.to_ascii_lowercase() == name_lc)
         .map(|(_, v)| v.as_str())
 }
 
@@ -888,6 +901,8 @@ fn fetch_with_redirect(
     cors_ctx: Option<&CorsContext<'_>>,
     // Extra headers for HTTP cache conditional GETs (If-None-Match / If-Modified-Since).
     cache_extra_headers: &str,
+    cookie_jar: Option<&dyn CookieProvider>,
+    top_level_site: Option<&str>,
 ) -> Result<Response> {
     if hops_left == 0 {
         return Err(Error::Network("too many redirects".to_owned()));
@@ -1050,6 +1065,27 @@ fn fetch_with_redirect(
         if !cache_extra_headers.is_empty() {
             h.push_str(cache_extra_headers);
         }
+        // Inject Cookie header (RFC 6265 §5.4). Cross-site is true when
+        // top_level_site is set and differs from the request host (covers
+        // both SameSite enforcement and Total Cookie Protection).
+        if let Some(jar) = cookie_jar {
+            let is_cross_site = match top_level_site {
+                Some(tls) => !host_ascii.ends_with(tls) && host_ascii != tls,
+                None => false,
+            };
+            let cookie_val = jar.get_for_request(
+                &host_ascii,
+                &url.path_and_query(),
+                is_tls,
+                top_level_site,
+                is_cross_site,
+            );
+            if !cookie_val.is_empty() {
+                h.push_str("Cookie: ");
+                h.push_str(&cookie_val);
+                h.push_str("\r\n");
+            }
+        }
         h
     };
 
@@ -1126,6 +1162,16 @@ fn fetch_with_redirect(
             return Err(emit_cors_blocked(sink, tab_id, url, "response", &err));
         }
 
+        // Persist Set-Cookie headers (RFC 6265 §5.3) on every hop.
+        // Best-effort: cookie errors never fail the fetch.
+        if let Some(jar) = cookie_jar {
+            let req_path = url.path_and_query();
+            let default_path = req_path.split('?').next().unwrap_or("/");
+            for val in all_header_values(&resp.headers, "set-cookie") {
+                jar.process_set_cookie(val, &host_ascii, default_path, is_tls, top_level_site);
+            }
+        }
+
         match resp.status {
             200..=299 => {
                 // Content-Encoding decoding: применяется только к финальному
@@ -1176,6 +1222,8 @@ fn fetch_with_redirect(
                     // after a redirect the new URL may have different cache state.
                     // Drop conditional headers on redirect to avoid 304 surprises.
                     "",
+                    cookie_jar,
+                    top_level_site,
                 );
             }
             401 if authorization.is_none() && credentials.is_some() => {
@@ -1245,6 +1293,10 @@ pub struct HttpClient {
     cors_cache: Option<Arc<cors::PreflightCache>>,
     /// RFC 7234 response cache. Optional — without it every request goes to the network.
     http_cache: Option<Arc<http_cache::HttpCache>>,
+    /// RFC 6265 cookie jar. Injects `Cookie:` headers and persists `Set-Cookie:` responses.
+    cookie_jar: Option<Arc<dyn CookieProvider>>,
+    /// Registrable domain of the top-level page, used for Total Cookie Protection partitioning.
+    top_level_site: Option<String>,
 }
 
 impl HttpClient {
@@ -1263,6 +1315,8 @@ impl HttpClient {
             mixed_content: None,
             cors_cache: None,
             http_cache: None,
+            cookie_jar: None,
+            top_level_site: None,
         }
     }
 
@@ -1458,6 +1512,23 @@ impl HttpClient {
         self
     }
 
+    /// Attach a cookie store. The provider receives `Cookie:` injection
+    /// requests and `Set-Cookie:` responses on every fetch.
+    ///
+    /// `top_level_site` — registrable domain of the top-level document (used
+    /// for Total Cookie Protection partitioning and SameSite evaluation).
+    /// Pass `None` when no top-level context is known (e.g. background fetch).
+    #[must_use]
+    pub fn with_cookie_jar(
+        mut self,
+        jar: Arc<dyn CookieProvider>,
+        top_level_site: Option<String>,
+    ) -> Self {
+        self.cookie_jar = Some(jar);
+        self.top_level_site = top_level_site;
+        self
+    }
+
     /// Подключить HTTP response cache (RFC 7234).
     ///
     /// Кэш проверяется до выхода в сеть. Свежие записи возвращаются сразу.
@@ -1545,6 +1616,8 @@ impl HttpClient {
             Some(&cors_ctx),
             // CORS requests are not cached (credentials/Vary complications).
             "",
+            self.cookie_jar.as_deref(),
+            self.top_level_site.as_deref(),
         )
         .map(|resp| resp.body)
     }
@@ -1577,6 +1650,8 @@ impl HttpClient {
             None,
             // Range requests are not cached.
             "",
+            self.cookie_jar.as_deref(),
+            self.top_level_site.as_deref(),
         )?;
         let content_range = if resp.status == 206 {
             header_value(&resp.headers, "content-range").and_then(parse_content_range)
@@ -1643,6 +1718,8 @@ impl HttpClient {
             None,
             // Multi-range requests are not cached.
             "",
+            self.cookie_jar.as_deref(),
+            self.top_level_site.as_deref(),
         )?;
         Ok(parse_multi_range_response(resp))
     }
@@ -1726,6 +1803,8 @@ impl HttpClient {
                     Some(destination),
                     None,
                     &snap.conditional_headers,
+                    self.cookie_jar.as_deref(),
+                    self.top_level_site.as_deref(),
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -1755,6 +1834,8 @@ impl HttpClient {
             Some(destination),
             None,
             "",
+            self.cookie_jar.as_deref(),
+            self.top_level_site.as_deref(),
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -1809,6 +1890,8 @@ impl NetworkTransport for HttpClient {
                     destination,
                     None,
                     &snap.conditional_headers,
+                    self.cookie_jar.as_deref(),
+                    self.top_level_site.as_deref(),
                 )?;
                 if resp.status == 304 {
                     cache.revalidate(&url_str, &resp.headers);
@@ -1838,6 +1921,8 @@ impl NetworkTransport for HttpClient {
             destination,
             None,
             "",
+            self.cookie_jar.as_deref(),
+            self.top_level_site.as_deref(),
         )?;
         if let Some(cache) = &self.http_cache {
             cache.store(&url_str, resp.status, resp.body.clone(), &resp.headers);
@@ -1907,6 +1992,8 @@ impl JsFetchProvider for HttpClient {
             destination,
             None,
             "",
+            self.cookie_jar.as_deref(),
+            self.top_level_site.as_deref(),
         )?;
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),

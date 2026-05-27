@@ -17,9 +17,9 @@
 //! типы и матчинг.
 
 use std::path::Path;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
-use lumen_core::ext::PublicSuffixList;
+use lumen_core::ext::{CookieProvider, PublicSuffixList};
 use lumen_core::{Error, Result};
 use rusqlite::{params, Connection};
 
@@ -542,6 +542,90 @@ fn civil_to_unix(y: i32, m: u32, d: u32, hh: u32, mm: u32, ss: u32) -> i64 {
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
     let days = era as i64 * 146097 + doe - 719468;
     days * 86400 + hh as i64 * 3600 + mm as i64 * 60 + ss as i64
+}
+
+// ── CookieProvider bridge ─────────────────────────────────────────────────────
+
+/// Implements [`CookieProvider`] using a shared [`CookieJar`].
+///
+/// Used by `HttpClient` (in lumen-network) to inject `Cookie:` headers and
+/// persist `Set-Cookie:` responses without creating a circular dependency
+/// between lumen-network and lumen-storage.
+pub struct CookieJarProvider {
+    /// Shared cookie store (Arc so it can be cloned to HttpClient + JsRuntime).
+    pub jar: Arc<CookieJar>,
+}
+
+impl CookieJarProvider {
+    /// Create a provider backed by the given jar.
+    pub fn new(jar: Arc<CookieJar>) -> Self {
+        Self { jar }
+    }
+}
+
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs() as i64
+}
+
+impl CookieProvider for CookieJarProvider {
+    fn get_for_request(
+        &self,
+        host: &str,
+        path: &str,
+        is_secure: bool,
+        top_level_site: Option<&str>,
+        is_cross_site: bool,
+    ) -> String {
+        let now = now_unix();
+        let Ok(cookies) = self.jar.get_for_request(host, path, is_secure, now, top_level_site)
+        else {
+            return String::new();
+        };
+        let mut parts: Vec<String> = Vec::new();
+        for c in &cookies {
+            // SameSite enforcement per RFC 6265bis §5.4:
+            //   Strict → only same-site context
+            //   Lax    → allowed for cross-site only if this is a top-level safe request
+            //             (the calller sets is_cross_site; subresources are always blocked)
+            //   None   → unrestricted (but requires Secure, enforced at Set-Cookie time)
+            if is_cross_site && c.same_site == SameSite::Strict {
+                continue;
+            }
+            if is_cross_site && c.same_site == SameSite::Lax {
+                // For subresource cross-site requests, skip Lax cookies.
+                // (We don't distinguish top-level navigation here; Phase 0 conservative.)
+                continue;
+            }
+            parts.push(format!("{}={}", c.name, c.value));
+        }
+        parts.join("; ")
+    }
+
+    fn process_set_cookie(
+        &self,
+        header: &str,
+        host: &str,
+        default_path: &str,
+        is_secure: bool,
+        top_level_site: Option<&str>,
+    ) {
+        let now = now_unix();
+        let Some(cookie) = parse_set_cookie(header, host, default_path, now) else {
+            return;
+        };
+        // RFC 6265bis §5.2: SameSite=None requires Secure attribute.
+        if cookie.same_site == SameSite::None && !cookie.secure {
+            return;
+        }
+        // RFC 6265 §5.3 step 8: Secure-flagged cookies are only set via secure requests.
+        if cookie.secure && !is_secure {
+            return;
+        }
+        let _ = self.jar.set(cookie, top_level_site);
+    }
 }
 
 #[cfg(test)]

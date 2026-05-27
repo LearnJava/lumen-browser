@@ -258,6 +258,48 @@ pub trait HttpCredentialProvider: Send + Sync {
     fn credentials(&self, challenge: &HttpAuthChallenge) -> Option<HttpCredentials>;
 }
 
+/// HTTP cookie storage provider. Bridges lumen-network (fetch pipeline) to
+/// lumen-storage (CookieJar) without creating a circular dependency.
+///
+/// Implementors: `CookieJarProvider` in `lumen-storage`. Pass `None` in tests
+/// or sandboxed contexts without cookie support.
+pub trait CookieProvider: Send + Sync {
+    /// Build the `Cookie:` header value for a request.
+    ///
+    /// Returns an empty string when no matching cookies exist.
+    /// SameSite enforcement is the caller's responsibility via `is_cross_site`.
+    ///
+    /// `host` — request host (lowercase), `path` — request path,
+    /// `is_secure` — whether the request goes over HTTPS (for Secure-flag
+    /// filtering), `top_level_site` — the registrable domain of the top-level
+    /// page (used for Total Cookie Protection partitioning).
+    /// `is_cross_site` — true when the request host differs from the
+    /// top-level site; controls SameSite enforcement.
+    fn get_for_request(
+        &self,
+        host: &str,
+        path: &str,
+        is_secure: bool,
+        top_level_site: Option<&str>,
+        is_cross_site: bool,
+    ) -> String;
+
+    /// Process a `Set-Cookie` header received from a response.
+    ///
+    /// `host` — request host (the domain used to derive the cookie domain),
+    /// `default_path` — request path used as the default cookie path,
+    /// `is_secure` — whether the request was over HTTPS,
+    /// `top_level_site` — registrable domain of the top-level page.
+    fn process_set_cookie(
+        &self,
+        header: &str,
+        host: &str,
+        default_path: &str,
+        is_secure: bool,
+        top_level_site: Option<&str>,
+    );
+}
+
 /// Определение кодировки HTML-документа. Для кириллицы критично уметь
 /// детектировать Windows-1251 и KOI8-R (см. §10.1).
 pub trait EncodingDetector: Send + Sync {

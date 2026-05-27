@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: sop-enforcement  branch: p3-sop-enforcement
+Next step: window.postMessage с targetOrigin check + cookie-jar SOP в HttpClient  crates/js/src/dom.rs, crates/network/src/lib.rs
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
