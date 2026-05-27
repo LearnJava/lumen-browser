@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: paint-pure-audit (10D.2 Invariant 3)  branch: p1-paint-pure-audit
+Next step: audit lumen-paint::display_list on pure-function requirement  crates/engine/paint/src/display_list.rs:1
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
