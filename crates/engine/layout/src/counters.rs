@@ -112,9 +112,9 @@ fn walk(
     map: &mut CounterMap,
 ) {
     match &doc.get(id).data {
-        // Text / comment / doctype — no counter properties, no children to visit.
+        // Text / comment / doctype / fragment — no counter properties, no children.
         NodeData::Text(_) | NodeData::Comment(_) | NodeData::Doctype { .. }
-        | NodeData::ShadowRoot { .. } => return,
+        | NodeData::ShadowRoot { .. } | NodeData::DocumentFragment => return,
 
         // Document node: has no style of its own; just recurse into children.
         NodeData::Document => {

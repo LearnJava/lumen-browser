@@ -259,6 +259,7 @@ fn install_primitives(
                 NodeData::Comment(_) => "#comment".into(),
                 NodeData::Doctype { .. } => "html".into(),
                 NodeData::ShadowRoot { .. } => "#shadow-root".into(),
+                NodeData::DocumentFragment => "#document-fragment".into(),
             }
         });
         let d = Arc::clone(&doc);

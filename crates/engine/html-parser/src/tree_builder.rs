@@ -49,8 +49,8 @@ pub fn parse(input: &str) -> Document {
     builder.finish()
 }
 
-/// Все insertion modes из §13.2.4.1. Foreign content (MathML, SVG) и
-/// `InTemplate` Phase 0 не поддерживает.
+/// Все insertion modes из §13.2.4.1. Foreign content (MathML, SVG) не
+/// поддерживается в Phase 0.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InsertionMode {
     Initial,
@@ -70,6 +70,10 @@ enum InsertionMode {
     InSelect,
     #[allow(dead_code)]
     InSelectInTable,
+    /// §13.2.6.4.19 «The in template insertion mode». Active while the parser
+    /// is inside a `<template>` element. Content is inserted into the
+    /// template's `DocumentFragment` rather than the template element itself.
+    InTemplate,
     AfterBody,
     AfterAfterBody,
 }
@@ -126,6 +130,10 @@ pub struct IncrementalTreeBuilder {
     tokenizer: PushTokenizer,
     /// Виделся ли DOCTYPE — для fallback Quirks при `finish()`.
     seen_doctype: bool,
+    /// Stack of per-template insertion modes (§13.2.6.4.19). Each open
+    /// `<template>` pushes its content mode here; `</template>` pops it.
+    /// When non-empty, `insertion_mode` is `InTemplate`.
+    template_mode_stack: Vec<InsertionMode>,
 }
 
 impl IncrementalTreeBuilder {
@@ -143,6 +151,7 @@ impl IncrementalTreeBuilder {
             pending_table_text_has_nonspace: false,
             tokenizer: PushTokenizer::new(),
             seen_doctype: false,
+            template_mode_stack: Vec::new(),
         }
     }
 
@@ -227,6 +236,7 @@ impl IncrementalTreeBuilder {
             InsertionMode::InCell => self.mode_in_cell(token),
             InsertionMode::InSelect => self.mode_in_select(token),
             InsertionMode::InSelectInTable => self.mode_in_select_in_table(token),
+            InsertionMode::InTemplate => self.mode_in_template(token),
             InsertionMode::AfterBody => self.mode_after_body(token),
             InsertionMode::AfterAfterBody => self.mode_after_after_body(token),
         }
@@ -405,6 +415,28 @@ impl IncrementalTreeBuilder {
                 self.original_insertion_mode = Some(self.insertion_mode);
                 self.insertion_mode = InsertionMode::Text;
             }
+            // HTML LS §13.2.6.4.4 «In head» — `<template>` start tag.
+            Token::StartTag {
+                ref name,
+                ref attrs,
+                ..
+            } if name == "template" => {
+                let el = self.create_element_with_attrs(name, attrs);
+                self.append_to_current_open(el);
+                self.open_elements.push(el);
+                // Create the content fragment and associate it with the element.
+                let frag = self.doc.create_fragment();
+                self.doc.set_template_content(el, frag);
+                // Push an active formatting marker so AAA doesn't cross template boundary.
+                self.active_formatting.push(ActiveFormattingEntry::Marker);
+                // The template content will be parsed in InBody mode (per spec §13.2.6.4.19).
+                self.template_mode_stack.push(InsertionMode::InBody);
+                self.insertion_mode = InsertionMode::InTemplate;
+            }
+            // HTML LS §13.2.6.4.4 «In head» — `</template>` end tag.
+            Token::EndTag { ref name } if name == "template" => {
+                self.process_template_end_tag();
+            }
             Token::EndTag { ref name } if name == "head" => {
                 self.open_elements.pop();
                 self.insertion_mode = InsertionMode::AfterHead;
@@ -493,7 +525,10 @@ impl IncrementalTreeBuilder {
                     if let Some(pos) = self.open_elements.iter().position(|&n| n == head) {
                         self.open_elements.remove(pos);
                     }
-                    self.insertion_mode = saved;
+                    // Restore only if InHead didn't switch us to InTemplate.
+                    if self.insertion_mode == InsertionMode::InHead {
+                        self.insertion_mode = saved;
+                    }
                 } else {
                     // Без head — implicit body.
                     self.implicit_body_and_dispatch(token);
@@ -571,15 +606,34 @@ impl IncrementalTreeBuilder {
                         | "noframes"
                         | "script"
                         | "style"
-                        | "template"
                         | "title"
                 ) =>
             {
-                // Process as in InHead.
+                // Process as in InHead (mode restored after dispatch).
                 let saved = self.insertion_mode;
                 self.insertion_mode = InsertionMode::InHead;
                 self.dispatch(token);
                 self.insertion_mode = saved;
+            }
+            // `<template>` in body: delegate to InHead processing which switches
+            // to InTemplate — do NOT restore mode afterwards.
+            Token::StartTag { ref name, ref attrs, .. } if name == "template" => {
+                let saved = self.insertion_mode;
+                self.insertion_mode = InsertionMode::InHead;
+                self.dispatch(token);
+                // InHead moved us to InTemplate; only restore if it didn't.
+                if self.insertion_mode == InsertionMode::InHead {
+                    self.insertion_mode = saved;
+                }
+            }
+            // `</template>` in body: delegate to InHead.
+            Token::EndTag { ref name } if name == "template" => {
+                let saved = self.insertion_mode;
+                self.insertion_mode = InsertionMode::InHead;
+                self.dispatch(token);
+                if self.insertion_mode == InsertionMode::InHead {
+                    self.insertion_mode = saved;
+                }
             }
             Token::StartTag {
                 ref name, ref attrs, ..
@@ -883,6 +937,90 @@ impl IncrementalTreeBuilder {
                 }
             }
             _ => { /* EOF / etc. — parse error, ignore */ }
+        }
+    }
+
+    /// §13.2.6.4.19 «The in template insertion mode».
+    ///
+    /// Handles tokens while the parser is inside a `<template>` element.
+    /// All content is inserted into the template's `DocumentFragment` via
+    /// `current_insertion_parent()` redirect. Head-level tags and `</template>`
+    /// are forwarded to `mode_in_head`.
+    fn mode_in_template(&mut self, token: Token) {
+        let is_end_template = matches!(&token, Token::EndTag { name } if name == "template");
+        let is_head_tag = matches!(
+            &token,
+            Token::StartTag { name, .. }
+                if matches!(
+                    name.as_str(),
+                    "base" | "basefont" | "bgsound" | "link" | "meta"
+                        | "noframes" | "script" | "style" | "template" | "title"
+                )
+        );
+
+        if is_end_template || is_head_tag {
+            // Delegate to InHead; it will either close the template (switching
+            // us away from InTemplate) or handle the head-level tag.
+            self.insertion_mode = InsertionMode::InHead;
+            self.dispatch(token);
+            // If InHead didn't transition us, we must stay in InTemplate.
+            if self.insertion_mode == InsertionMode::InHead {
+                self.insertion_mode = InsertionMode::InTemplate;
+            }
+            return;
+        }
+
+        // All other tokens: process using the template content mode (InBody by
+        // default). The current_insertion_parent() redirect ensures nodes land
+        // in the fragment, not in the template element.
+        let content_mode = self
+            .template_mode_stack
+            .last()
+            .copied()
+            .unwrap_or(InsertionMode::InBody);
+        self.insertion_mode = content_mode;
+        self.dispatch(token);
+        // Restore InTemplate if content mode dispatch didn't switch to something
+        // else (e.g. a nested InTemplate for a nested <template>).
+        if self.insertion_mode == content_mode {
+            self.insertion_mode = InsertionMode::InTemplate;
+        }
+    }
+
+    /// Process `</template>` end tag — shared by InHead and InTemplate.
+    ///
+    /// Pops open elements up to and including `<template>`, clears active
+    /// formatting up to the last marker, pops the template mode stack, and
+    /// resets the insertion mode (§13.2.6.4.4 «In head», end-tag `template`).
+    fn process_template_end_tag(&mut self) {
+        // Find template on stack.
+        let pos = self
+            .open_elements
+            .iter()
+            .rposition(|&n| self.element_local(n) == "template");
+        let Some(pos) = pos else {
+            // Parse error: no matching template on stack — ignore.
+            return;
+        };
+
+        // Generate implied end tags (not excluding template).
+        self.generate_implied_end_tags(None);
+
+        // Pop down to and including the template element.
+        self.open_elements.truncate(pos);
+
+        // Clear active formatting list up to the last marker.
+        self.clear_active_formatting_to_marker();
+
+        // Pop the template content mode.
+        self.template_mode_stack.pop();
+
+        // Reset insertion mode: if still in nested templates stay InTemplate,
+        // otherwise fall back to InBody (simplified reset_insertion_mode).
+        if self.template_mode_stack.is_empty() {
+            self.insertion_mode = InsertionMode::InBody;
+        } else {
+            self.insertion_mode = InsertionMode::InTemplate;
         }
     }
 
@@ -1451,14 +1589,32 @@ impl IncrementalTreeBuilder {
         id
     }
 
-    /// Вставляет узел в текущий «open insertion point» — top of
-    /// open_elements или, если стек пуст, в Document root.
-    fn append_to_current_open(&mut self, node: NodeId) {
-        let parent = if let Some(&top) = self.open_elements.last() {
+    /// Resolve the current insertion parent.
+    ///
+    /// Normally this is `open_elements.last()`. When the stack top is a
+    /// `<template>` element, insertions are redirected to its content
+    /// `DocumentFragment` so that template content is stored separately from
+    /// the template element's DOM children (HTML LS §13.2.6.1).
+    fn current_insertion_parent(&self) -> NodeId {
+        if let Some(&top) = self.open_elements.last() {
+            if self.element_local(top) == "template"
+                && let Some(frag) = self.doc.template_content(top)
+            {
+                return frag;
+            }
             top
         } else {
             self.doc.root()
-        };
+        }
+    }
+
+    /// Вставляет узел в текущий «open insertion point» — top of
+    /// open_elements или, если стек пуст, в Document root.
+    ///
+    /// Если top — `<template>`, вставка перенаправляется в content fragment
+    /// (см. [`current_insertion_parent`][Self::current_insertion_parent]).
+    fn append_to_current_open(&mut self, node: NodeId) {
+        let parent = self.current_insertion_parent();
         self.doc.append_child(parent, node);
     }
 
@@ -1468,11 +1624,7 @@ impl IncrementalTreeBuilder {
         if s.is_empty() {
             return;
         }
-        let parent = if let Some(&top) = self.open_elements.last() {
-            top
-        } else {
-            self.doc.root()
-        };
+        let parent = self.current_insertion_parent();
         let last_child = self.doc.get(parent).children.last().copied();
         if let Some(child) = last_child
             && let NodeData::Text(existing) = &mut self.doc.get_mut(child).data
@@ -1486,11 +1638,7 @@ impl IncrementalTreeBuilder {
 
     /// Вставка комментария — в текущий open insertion point.
     fn insert_comment(&mut self, s: String) {
-        let parent = if let Some(&top) = self.open_elements.last() {
-            top
-        } else {
-            self.doc.root()
-        };
+        let parent = self.current_insertion_parent();
         let c = self.doc.create_comment(s);
         self.doc.append_child(parent, c);
     }
@@ -2759,5 +2907,165 @@ mod tests {
         assert_eq!(bytes_1, pull);
         let bytes_2 = parse_feed_bytes_chunks(input, 2).to_string();
         assert_eq!(bytes_2, pull);
+    }
+
+    // ──────── <template> element ────────
+
+    /// Helper: find a `<template>` element node in body.
+    fn find_template(doc: &Document) -> Option<NodeId> {
+        let body = body_of(doc);
+        fn search(doc: &Document, id: NodeId) -> Option<NodeId> {
+            let node = doc.get(id);
+            if matches!(&node.data, NodeData::Element { name, .. } if name.local == "template") {
+                return Some(id);
+            }
+            for &child in &node.children {
+                if let Some(found) = search(doc, child) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        search(doc, body)
+    }
+
+    #[test]
+    fn template_element_exists_in_dom() {
+        let doc = parse("<body><template id=\"t\"><p>content</p></template></body>");
+        let tmpl = find_template(&doc);
+        assert!(tmpl.is_some(), "template element must be in DOM");
+    }
+
+    #[test]
+    fn template_element_has_no_dom_children() {
+        // Template content goes to fragment, not to template's DOM children.
+        let doc = parse("<body><template><p>content</p></template></body>");
+        let tmpl = find_template(&doc).expect("template not found");
+        let children = &doc.get(tmpl).children;
+        assert!(
+            children.is_empty(),
+            "template DOM children must be empty, got {children:?}"
+        );
+    }
+
+    #[test]
+    fn template_has_content_fragment() {
+        let doc = parse("<body><template><p>hello</p></template></body>");
+        let tmpl = find_template(&doc).expect("template not found");
+        let frag = doc.template_content(tmpl);
+        assert!(frag.is_some(), "template must have a content fragment");
+    }
+
+    #[test]
+    fn template_content_contains_child_elements() {
+        let doc = parse("<body><template><p>hello</p><span>world</span></template></body>");
+        let tmpl = find_template(&doc).expect("template not found");
+        let frag = doc.template_content(tmpl).expect("no content fragment");
+        let children = &doc.get(frag).children;
+        assert_eq!(children.len(), 2, "fragment must have 2 children (p, span)");
+        let p_name = doc.get(children[0]).element_name().map(|q| q.local.as_str());
+        assert_eq!(p_name, Some("p"));
+        let span_name = doc.get(children[1]).element_name().map(|q| q.local.as_str());
+        assert_eq!(span_name, Some("span"));
+    }
+
+    #[test]
+    fn template_content_text_preserved() {
+        let doc = parse("<body><template>hello world</template></body>");
+        let tmpl = find_template(&doc).expect("template not found");
+        let frag = doc.template_content(tmpl).expect("no content fragment");
+        let children = &doc.get(frag).children;
+        assert!(!children.is_empty(), "text must be in fragment");
+        let text = match &doc.get(children[0]).data {
+            NodeData::Text(s) => s.clone(),
+            other => panic!("expected text, got {other:?}"),
+        };
+        assert_eq!(text.trim(), "hello world");
+    }
+
+    #[test]
+    fn template_sibling_content_after_template_is_in_body() {
+        let doc = parse("<body><template><p>in-template</p></template><div>after</div></body>");
+        let body = body_of(&doc);
+        // The <div> must be a direct child of body, not inside the template.
+        let div = doc.get(body).children.iter().find(|&&c| {
+            matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "div")
+        });
+        assert!(div.is_some(), "<div> must be a body child, not inside template");
+    }
+
+    #[test]
+    fn template_in_head() {
+        // <template> in <head> is also valid HTML.
+        let doc = parse("<html><head><template><style>body{}</style></template></head><body></body></html>");
+        let head = head_of(&doc);
+        let tmpl = {
+            let mut found = None;
+            for &c in &doc.get(head).children {
+                if matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "template") {
+                    found = Some(c);
+                    break;
+                }
+            }
+            found
+        };
+        assert!(tmpl.is_some(), "template in head must be present");
+        let tmpl = tmpl.unwrap();
+        assert!(doc.get(tmpl).children.is_empty(), "template DOM children must be empty");
+        let frag = doc.template_content(tmpl).expect("no content fragment");
+        assert!(!doc.get(frag).children.is_empty(), "fragment must have children");
+    }
+
+    #[test]
+    fn template_attributes_preserved() {
+        let doc = parse(r#"<body><template id="foo" data-x="bar"></template></body>"#);
+        let tmpl = find_template(&doc).expect("template not found");
+        let id_val = doc.get(tmpl).get_attr("id");
+        assert_eq!(id_val, Some("foo"));
+        let data_val = doc.get(tmpl).get_attr("data-x");
+        assert_eq!(data_val, Some("bar"));
+    }
+
+    #[test]
+    fn template_content_fragment_is_document_fragment() {
+        let doc = parse("<body><template><p>x</p></template></body>");
+        let tmpl = find_template(&doc).expect("template not found");
+        let frag = doc.template_content(tmpl).expect("no content fragment");
+        assert!(
+            matches!(doc.get(frag).data, NodeData::DocumentFragment),
+            "content must be DocumentFragment, got {:?}",
+            doc.get(frag).data
+        );
+    }
+
+    #[test]
+    fn nested_template_outer_content_in_outer_fragment() {
+        // Outer template's fragment should contain the inner template element.
+        let doc = parse("<body><template><template id=\"inner\"><p>deep</p></template></template></body>");
+        let outer = find_template(&doc).expect("outer template not found");
+        let outer_frag = doc.template_content(outer).expect("no outer fragment");
+        // outer fragment must contain the inner template element
+        let inner = doc.get(outer_frag).children.iter().find(|&&c| {
+            matches!(&doc.get(c).data, NodeData::Element { name, .. } if name.local == "template")
+        });
+        assert!(inner.is_some(), "inner template must be in outer fragment");
+    }
+
+    #[test]
+    fn template_empty_is_valid() {
+        let doc = parse("<body><template></template></body>");
+        let tmpl = find_template(&doc).expect("template not found");
+        assert!(doc.get(tmpl).children.is_empty());
+        let frag = doc.template_content(tmpl).expect("no content fragment");
+        assert!(doc.get(frag).children.is_empty(), "empty template fragment must have no children");
+    }
+
+    #[test]
+    fn template_display_includes_fragment() {
+        // Document::fmt must include the template content fragment in its output.
+        let doc = parse("<body><template><p>displayed</p></template></body>");
+        let s = doc.to_string();
+        assert!(s.contains("#document-fragment"), "display must show #document-fragment");
+        assert!(s.contains("<p>"), "display must show fragment content");
     }
 }
