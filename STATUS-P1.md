@@ -1,5 +1,5 @@
-In progress: none (ready for next task)
-Next step: (All P1 Wave 1 completed — check lumen-plan.md for Phase 2 roadmap)
+In progress: glyph-atlas-eviction (10G.1)  branch: p1-glyph-atlas-lru
+Next step: add LRU tracking to GlyphAtlas + implement evict_oldest()  crates/engine/paint/src/atlas.rs:67
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
