@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: layout-pure-audit (10D.1 Invariant 3)  branch: p1-layout-pure-audit
+Next step: remove thread_local! CONTAINER_CQ from style.rs, thread cq_ctx explicitly through Length::resolve / CalcNode::resolve / lay_out  style.rs:7375
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
