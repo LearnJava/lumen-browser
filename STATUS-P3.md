@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: rendering-steps-order  branch: p3-rendering-steps-order
+Next step: fix duplicate transition tick + reorder CSS anim before rAF + PerformanceObserver  main.rs:2907, dom.rs:2841
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
