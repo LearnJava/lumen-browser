@@ -63,6 +63,12 @@ webpki-roots = "0.26"
 rusqlite = { version = "0.32", features = ["bundled"] }
 # Exception #6 (§5): regex — find-in-page regex matching; стандарт де-факто в Rust.
 regex = "1"
+# Exception #7 (§5): serde + bincode — DOM snapshot serialization для T3 hibernation
+# (ADR-008 Invariant 1). serde — де-факто стандарт сериализации в Rust. bincode —
+# compact binary format без heap-allocation на decode; размер снимка ~5× меньше JSON.
+# Graduation: permanent (используется во всех крейтах где нужен snapshot/IPC).
+serde = { version = "1", features = ["derive"] }
+bincode = "1"
 
 [profile.dev]
 opt-level = 1
