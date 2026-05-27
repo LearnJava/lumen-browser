@@ -1,5 +1,5 @@
-In progress: —
-Next step: shell-as-driver-client Phase 4 (shell integration) or bench-gate-ci (9G.3)  see Wave 2 queue below
+In progress: bench-gate-ci (9G.3)  branch: p3-bench-gate-ci
+Next step: 1. Run cargo run -p lumen-bench --release to establish baseline; 2. Create bench/baseline.json; 3. Write bench/compare.py
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
