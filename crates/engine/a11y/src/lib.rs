@@ -15,11 +15,12 @@ pub use names::{compute_description, compute_name};
 pub use roles::{implicit_role, AXRole};
 
 use lumen_dom::{Document, InputType, NodeData, NodeId};
+use serde::{Deserialize, Serialize};
 
 // ── State flags ──────────────────────────────────────────────────────────────
 
 /// `aria-live` values per WAI-ARIA §6.6.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum LiveRegion {
     /// Live updates announced when user is idle.
     Polite,
@@ -27,12 +28,27 @@ pub enum LiveRegion {
     Assertive,
 }
 
+/// `aria-current` values per WAI-ARIA §5.4.1.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AriaCurrent {
+    /// Page the user is currently viewing.
+    Page,
+    /// Step in a multi-step process.
+    Step,
+    /// Location within a structure.
+    Location,
+    /// Date in a calendar.
+    Date,
+    /// Time in a time picker.
+    Time,
+}
+
 /// ARIA state and property flags for one accessibility node.
 ///
 /// Each field corresponds to a WAI-ARIA state/property or equivalent HTML
 /// attribute. Tri-state fields use `Option<bool>`: `None` = not applicable
 /// or "mixed", `Some(true/false)` = explicit value.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AXState {
     /// `aria-checked` / HTML `checked`. `None` = not a checkable role.
     /// `Some(None)` = mixed (indeterminate). `Some(Some(b))` = checked/unchecked.
@@ -71,6 +87,20 @@ pub struct AXState {
     pub multiselectable: bool,
     /// `aria-orientation`: `Some(true)` = horizontal, `Some(false)` = vertical.
     pub horizontal: Option<bool>,
+    /// `aria-current` — marks the element as current in a set of options.
+    pub current: Option<AriaCurrent>,
+    /// `aria-modal="true"` — element is modal.
+    pub modal: bool,
+    /// `aria-roledescription` — custom role description text.
+    pub role_description: String,
+    /// `aria-valuenow` — current value for range widgets.
+    pub value_now: String,
+    /// `aria-valuemin` — minimum value for range widgets.
+    pub value_min: String,
+    /// `aria-valuemax` — maximum value for range widgets.
+    pub value_max: String,
+    /// `aria-valuetext` — human-readable value for range widgets.
+    pub value_text: String,
 }
 
 // ── AXNode ───────────────────────────────────────────────────────────────────
@@ -79,7 +109,7 @@ pub struct AXState {
 ///
 /// Mirrors the DOM tree but carries semantic information rather than layout
 /// geometry. Platform bridges map this to OS-specific accessibility APIs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AXNode {
     /// Corresponding DOM node identifier.
     pub node_id: NodeId,
@@ -95,6 +125,14 @@ pub struct AXNode {
     pub state: AXState,
     /// Direct children in the accessibility tree (aria-hidden subtrees excluded).
     pub children: Vec<AXNode>,
+    /// `aria-controls` — NodeId of element controlled by this one. None if absent.
+    pub controls: Option<NodeId>,
+    /// `aria-owns` — NodeIds of elements owned by this one. Order preserved per spec.
+    pub owns: Vec<NodeId>,
+    /// `aria-flowto` — NodeIds indicating reading order continuation. Order preserved.
+    pub flow_to: Vec<NodeId>,
+    /// `aria-details` — NodeId of element with additional details. None if absent.
+    pub details: Option<NodeId>,
 }
 
 // ── AXTree ───────────────────────────────────────────────────────────────────
@@ -103,7 +141,7 @@ pub struct AXNode {
 ///
 /// Built by `build_ax_tree`. Contains one `AXNode` per semantically meaningful
 /// DOM element, in document order. `aria-hidden` subtrees are omitted entirely.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AXTree {
     /// Root accessibility node — typically the `<body>` element.
     pub root: AXNode,
@@ -117,14 +155,14 @@ pub struct AXTree {
 /// and pure comment/text nodes are excluded from the result.
 pub fn build_ax_tree(doc: &Document, root_id: NodeId) -> AXTree {
     AXTree {
-        root: build_node(doc, root_id),
+        root: build_node(doc, root_id, None),
     }
 }
 
-fn build_node(doc: &Document, node_id: NodeId) -> AXNode {
+fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>) -> AXNode {
     let node = doc.get(node_id);
     let state = compute_state(node);
-    let role = resolve_role(node);
+    let role = resolve_role(node, parent_role);
     let name = names::compute_name(doc, node_id);
     let description = names::compute_description(doc, node_id);
     let placeholder = node.get_attr("placeholder").unwrap_or("").to_owned();
@@ -143,21 +181,33 @@ fn build_node(doc: &Document, node_id: NodeId) -> AXNode {
                 .get_attr("aria-hidden")
                 .is_some_and(|v| v.eq_ignore_ascii_case("true"))
         })
-        .map(|&child_id| build_node(doc, child_id))
+        .map(|&child_id| build_node(doc, child_id, Some(role)))
         .collect();
 
-    AXNode { node_id, role, name, description, placeholder, state, children }
+    // TODO: Resolve aria-* relationship attributes to target node IDs.
+    // Requires Document::find_by_id() or similar lookup mechanism.
+    let controls = None;
+    let owns = Vec::new();
+    let flow_to = Vec::new();
+    let details = None;
+
+    AXNode { node_id, role, name, description, placeholder, state, children, controls, owns, flow_to, details }
 }
 
-fn resolve_role(node: &lumen_dom::Node) -> AXRole {
+fn resolve_role(node: &lumen_dom::Node, parent_role: Option<AXRole>) -> AXRole {
+    // Step 1: Check explicit role attribute and validate against parent context.
     if let Some(role_attr) = node.get_attr("role") {
         // The `role` attribute is a space-separated list; take the first valid value.
         for token in role_attr.split_ascii_whitespace() {
             if let Some(r) = AXRole::parse(token) {
-                return r;
+                // Validate role in parent context. If invalid, fall back to implicit.
+                if is_role_valid_in_context(r, parent_role) {
+                    return r;
+                }
             }
         }
     }
+    // Step 2: Fall back to implicit role from HTML tag.
     implicit_role(node)
 }
 
@@ -227,6 +277,23 @@ fn compute_state(node: &lumen_dom::Node) -> AXState {
             Some(v) if v.eq_ignore_ascii_case("vertical") => Some(false),
             _ => None,
         },
+        current: match node.get_attr("aria-current") {
+            Some(v) if v.eq_ignore_ascii_case("page") => Some(AriaCurrent::Page),
+            Some(v) if v.eq_ignore_ascii_case("step") => Some(AriaCurrent::Step),
+            Some(v) if v.eq_ignore_ascii_case("location") => Some(AriaCurrent::Location),
+            Some(v) if v.eq_ignore_ascii_case("date") => Some(AriaCurrent::Date),
+            Some(v) if v.eq_ignore_ascii_case("time") => Some(AriaCurrent::Time),
+            Some(v) if v.eq_ignore_ascii_case("true") => Some(AriaCurrent::Page),
+            _ => None,
+        },
+        modal: node
+            .get_attr("aria-modal")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true")),
+        role_description: node.get_attr("aria-roledescription").unwrap_or("").to_owned(),
+        value_now: node.get_attr("aria-valuenow").unwrap_or("").to_owned(),
+        value_min: node.get_attr("aria-valuemin").unwrap_or("").to_owned(),
+        value_max: node.get_attr("aria-valuemax").unwrap_or("").to_owned(),
+        value_text: node.get_attr("aria-valuetext").unwrap_or("").to_owned(),
     }
 }
 
@@ -254,5 +321,57 @@ fn parse_bool_attr(node: &lumen_dom::Node, attr: &str) -> Option<bool> {
         Some(v) if v.eq_ignore_ascii_case("true") => Some(true),
         Some(v) if v.eq_ignore_ascii_case("false") => Some(false),
         _ => None,
+    }
+}
+
+/// Check if a role is valid in the given parent role context per HTML-AAM.
+///
+/// Some roles have strict parent requirements (e.g., `row` requires a `table`-like parent).
+/// If parent_role is `None`, the role is at the document root and most roles are allowed.
+/// Returns `true` if the role is permitted in this context.
+fn is_role_valid_in_context(role: AXRole, parent_role: Option<AXRole>) -> bool {
+    use crate::roles::AXRole;
+
+    let parent = match parent_role {
+        Some(p) => p,
+        None => return true, // Most roles allowed at document root
+    };
+
+    match role {
+        // Table-related roles require table parent
+        AXRole::Cell | AXRole::ColumnHeader | AXRole::RowHeader => {
+            parent == AXRole::Row
+        }
+        AXRole::Row => {
+            parent == AXRole::Table
+        }
+
+        // List item requires list parent
+        AXRole::ListItem => {
+            parent == AXRole::List
+        }
+
+        // Menu item requires menu parent
+        AXRole::MenuItem => {
+            parent == AXRole::Menu
+        }
+
+        // Tab requires tablist parent
+        AXRole::Tab => {
+            parent == AXRole::TabList
+        }
+
+        // Option requires listbox parent
+        AXRole::Option => {
+            parent == AXRole::ListBox
+        }
+
+        // TreeItem requires tree parent
+        AXRole::TreeItem => {
+            parent == AXRole::Tree
+        }
+
+        // By default, most roles are allowed anywhere (permissive fallback)
+        _ => true,
     }
 }

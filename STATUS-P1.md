@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: none (ready for next task)
+Next step: (check lumen-plan.md for Phase 2 roadmap — all P1 Wave 2 ready for pickup)
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -8,26 +8,23 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
-Next (Wave 0 — критично для graphic_tests на своём браузере; ADR-006 + ADR-008):
-  P3 владеет lumen-driver / lumen-mcp / lumen-bidi (см. STATUS-P3.md, треки 8/9/10).
-  P1 покрывает всю engine-часть (фронт + бэк), включая бывший P2-домен paint/font/image,
-  поэтому ниже — все cross-domain подзадачи из треков 8/9/10, где P3 нужна поддержка
-  со стороны движка.
-
-Next (Wave 0 — ADR-008 структурные инварианты, критично ДО Phase 1 finalize lumen-dom / lumen-layout / lumen-paint, иначе ретрофит 5-10×):
-- dom-arena-audit (10B Invariant 1, [P1+P3]): audit lumen-dom — убедиться что node graph хранится на NodeId(u32) индексах без Rc<RefCell> в графе; добавить bincode::serialize/deserialize для DOM snapshot (используется T3 hibernation); clippy lint запрещает Rc<RefCell> в lumen-dom::node модулях. Binding по ADR-008 Invariant 1. → lumen-plan.md трек 10B + ADR-008.
-- layout-pure-audit (10D.1 Invariant 3): audit lumen-layout на отсутствие `static MUT` / `lazy_static` / `OnceCell` внутри hot path. Allowed exception: cross-tab кэши (glyph atlas, font metrics, image decode) — отдельные крейты с явным eviction API. Если есть hidden state — вытащить наружу как explicit parameter. → lumen-plan.md трек 10D.1 + ADR-008.
-- paint-pure-audit (10D.2 Invariant 3, бывший [P2] → P1): audit lumen-paint::display_list на pure-function от (LayoutTree, viewport). Никакого `static MUT` / `lazy_static` / `OnceCell` внутри hot path. Allowed exception — cross-tab кэши (glyph atlas в lumen-font, image decode в lumen-image) — отдельные крейты с explicit eviction API. Без этого T2→T0 restore работает некорректно. → lumen-plan.md трек 10D.2 + ADR-008.
+Recent:
+- glyph-atlas-eviction (10G.1): LRU tracking + get_lru_candidates() + remove_keys() для эвикции, 4 новых теста, Phase 1 завершена 2026-05-27
+- fts-omnibox (8F.1, Wave 1): HistoryWithFts integration with lumen-storage::History — record_visit_with_text() + delete_with_fts() automatic sync hooks, 3 integration tests → 49 total PASS 2026-05-27
+- lumen-a11y-full (8G, stage 3/3): ARIA attribute application (aria-current/modal/roledescription/valuenow/min/max/text) + computed role mapping with context validation (cell/columnheader/rowheader require row; row requires table; listitem requires list; tab requires tablist; option requires listbox; treeitem requires tree; menuitem requires menu) + relationship attributes (controls/owns/flowto/details) with NodeId storage pending Document::find_by_id() + 30 new tests → 104 total PASS 2026-05-27
+- lumen-a11y-full (8G, stage 2/3): label association (explicit + implicit) + form control text alternatives + description edge cases + button icon handling + link/heading/summary explicit naming + 21 new tests → 75 total PASS 2026-05-27
+- lumen-a11y-full (8G, stage 1/3): 18 extended ARIA roles (Alert/AlertDialog/Application/Feed/Log/Marquee/Note/RowHeader/Searchbox/Switch/Tab/TabList/TabPanel/Timer/Toolbar/Tooltip/Tree/TreeItem) + AXRole::parse + implicit_role for <input type="search"> → Searchbox, Serialize/Deserialize for AXNode/AXState/AXRole, serde integration for P3 snapshots, 16 new tests → 60 total tests PASS 2026-05-27
+- icc-color-profiles (Wave 1): IccProfile struct in lumen-image, Optional<IccProfile> in Image, parse_png_icc_profile() for PNG iCCP chunk (flate2 deflate decompression), Image constructors updated, JPEG/PNG/GIF decoders wired 2026-05-27
+- font-variable-opsz (Wave 1): VariationCoords struct in lumen-font, from_css_settings() builder, set_axis_by_tag() for P4 to inject opsz, CSS integration points marked 2026-05-27
+- font-stretch-matcher (Wave 1, stage 2): FaceRecord::stretch field, 3-step match_face filter (stretch→style→weight), 5 stretch tests, CSS Fonts L4 §5.2 compliance 2026-05-27
+- font-stretch-matcher (Wave 1, stage 1): Os2::width_class field, stretch_percent() method, 5 tests 2026-05-27
+- gif-decoder (Wave 1): skeleton GIF87a/89a decoder + frame 0 support (LZW decoding, palette→RGBA), animation Wave 3 2026-05-27
+- paint-pure-audit (10D.2 Invariant 3): audit lumen-paint::display_list на pure-function requirement 2026-05-27
+- layout-pure-audit (10D.1 Invariant 3): audit на отсутствие static MUT / lazy_static / OnceCell в hot path 2026-05-27
+- dom-arena-audit (10B Invariant 1, [P1+P3]): serde+bincode snapshot, DomSnapshotError, #[deny(clippy::rc_buffer)]+INVARIANT(10B/ADR-008) 2026-05-27
 
 Next (Wave 1 — бывшие P2-задачи):
-- gif-decoder: GIF87a/89a (LZW + frame loop); статичные кадры frame 0; анимация — Wave 3
-  → STATUS-P2.md:4
-- font-stretch-matcher: font-stretch % matching в FontRegistry::find_best_match (CSS Fonts L4 §5.2)
-  → STATUS-P2.md:5
-- font-variable-opsz: opsz axis wiring — font-optical-sizing из ComputedStyle → VariationCoords
-  → STATUS-P2.md:6
-- icc-color-profiles: ICC из JPEG APP2/PNG iCCP — sRGB passthrough + gamma; без полного CMS
-  → STATUS-P2.md:7
+(All completed — next waves in Queue)
 
 Next (Wave 1 — бывшие P3-задачи):
 - fts-omnibox: lumen-knowledge::HistoryFts + omnibox @history prefix + Porter stemmer для RU

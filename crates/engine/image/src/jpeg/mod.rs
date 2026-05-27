@@ -31,7 +31,7 @@ pub fn decode_jpeg(bytes: &[u8]) -> Result<Image, JpegError> {
 
     let format = if is_gray { PixelFormat::Gray8 } else { PixelFormat::Rgb8 };
 
-    Ok(Image { width: width as u32, height: height as u32, format, data: pixels })
+    Ok(Image { width: width as u32, height: height as u32, format, data: pixels, icc_profile: None })
 }
 
 /// Ошибка декодирования JPEG (обёртка над zune-jpeg).

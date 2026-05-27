@@ -1,10 +1,12 @@
 mod jpeg;
 mod png;
 pub mod webp;
+mod gif;
 
 pub use jpeg::{decode_jpeg, JpegError};
-pub use png::decode_png;
+pub use png::{decode_png, encode_png_rgba8};
 pub use webp::{WebpError, WebpImageDecoder, decode_webp, is_webp};
+pub use gif::{decode_gif, GifError, is_gif};
 
 /// PNG-сигнатура: `89 50 4E 47 0D 0A 1A 0A` (PNG §5.2).
 pub const PNG_SIGNATURE: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
@@ -18,10 +20,10 @@ pub const JPEG_SIGNATURE_PREFIX: [u8; 3] = [0xFF, 0xD8, 0xFF];
 /// неподдерживаемые `<source type="...">` пропускались picker-ом и браузер
 /// выбирал подходящий fallback вместо пустой коробки.
 ///
-/// Расширяется при добавлении декодеров (AVIF, GIF, …).
+/// Расширяется при добавлении декодеров (AVIF, …).
 #[must_use]
 pub fn supported_mime_types() -> &'static [&'static str] {
-    &["image/png", "image/jpeg", "image/jpg", "image/webp"]
+    &["image/png", "image/jpeg", "image/jpg", "image/gif", "image/webp"]
 }
 
 /// Декодирует растровое изображение по сигнатуре первых байтов.
@@ -30,6 +32,7 @@ pub fn supported_mime_types() -> &'static [&'static str] {
 /// - [`ImageError::UnknownFormat`] — сигнатура не распознана.
 /// - [`ImageError::Png`] — PNG-сигнатура совпала, но декодер выдал ошибку.
 /// - [`ImageError::Jpeg`] — JPEG-сигнатура совпала, но декодер выдал ошибку.
+/// - [`ImageError::Gif`] — GIF-сигнатура (GIF87a/GIF89a) совпала, но декодер выдал ошибку.
 /// - [`ImageError::Webp`] — WebP-сигнатура (RIFF/WEBP) совпала, но декодер выдал ошибку.
 pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
     if bytes.len() >= PNG_SIGNATURE.len() && bytes[..PNG_SIGNATURE.len()] == PNG_SIGNATURE {
@@ -40,9 +43,12 @@ pub fn decode(bytes: &[u8]) -> Result<Image, ImageError> {
     {
         return decode_jpeg(bytes).map_err(ImageError::Jpeg);
     }
+    if is_gif(bytes) {
+        return decode_gif(bytes).map_err(ImageError::Gif);
+    }
     if is_webp(bytes) {
         let (width, height, data) = decode_webp(bytes).map_err(ImageError::Webp)?;
-        return Ok(Image { width, height, format: PixelFormat::Rgba8, data });
+        return Ok(Image { width, height, format: PixelFormat::Rgba8, data, icc_profile: None });
     }
     Err(ImageError::UnknownFormat)
 }
@@ -55,6 +61,8 @@ pub enum ImageError {
     Jpeg(JpegError),
     /// WebP-контейнер распознан (RIFF/WEBP), но декодирование не удалось.
     Webp(WebpError),
+    /// GIF-сигнатура распознана (GIF87a/GIF89a), но декодирование не удалось.
+    Gif(GifError),
 }
 
 impl core::fmt::Display for ImageError {
@@ -64,6 +72,7 @@ impl core::fmt::Display for ImageError {
             Self::Png(e) => write!(f, "PNG: {e}"),
             Self::Jpeg(e) => write!(f, "JPEG: {e}"),
             Self::Webp(e) => write!(f, "WebP: {e}"),
+            Self::Gif(e) => write!(f, "GIF: {e}"),
         }
     }
 }
@@ -82,6 +91,27 @@ impl From<WebpError> for ImageError {
     fn from(e: WebpError) -> Self { Self::Webp(e) }
 }
 
+impl From<GifError> for ImageError {
+    fn from(e: GifError) -> Self { Self::Gif(e) }
+}
+
+/// ICC профиль изображения (опциональный).
+///
+/// Содержит сырые данные ICC профиля.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IccProfile {
+    /// Сырые байты ICC профиля.
+    pub data: Vec<u8>,
+}
+
+impl IccProfile {
+    /// Проверяет минимальный размер ICC профиля (128 байт).
+    #[must_use]
+    pub fn is_valid(&self) -> bool {
+        self.data.len() >= 128
+    }
+}
+
 /// Декодированное растровое изображение в плотной row-major упаковке.
 /// Длина `data` равна `width * height * bytes_per_pixel(format)`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,6 +120,8 @@ pub struct Image {
     pub height: u32,
     pub format: PixelFormat,
     pub data: Vec<u8>,
+    /// Опциональный ICC профиль изображения.
+    pub icc_profile: Option<IccProfile>,
 }
 
 impl Image {
@@ -162,7 +194,7 @@ pub fn resize_bilinear(src: &Image, dst_w: u32, dst_h: u32) -> Image {
         }
     }
 
-    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out }
+    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out, icc_profile: None }
 }
 
 /// Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter).
@@ -227,7 +259,7 @@ pub fn resize_area_avg(src: &Image, dst_w: u32, dst_h: u32) -> Image {
         }
     }
 
-    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out }
+    Image { width: dst_w, height: dst_h, format: PixelFormat::Rgba8, data: out, icc_profile: None }
 }
 
 /// Формат пикселя декодированного изображения. Все варианты — 8 бит на канал.
@@ -341,9 +373,42 @@ mod tests {
         assert!(!s.is_empty());
     }
 
+    #[test]
+    fn gif_signature_dispatches_to_gif_decoder() {
+        let bytes = b"GIF89a\x00\x00\x00\x00\x00\x00";
+        let err = decode(bytes).unwrap_err();
+        assert!(matches!(err, ImageError::Gif(_)), "ожидалась Gif(_), получено {err:?}");
+    }
+
+    #[test]
+    fn gif87a_signature_dispatches_to_gif_decoder() {
+        let bytes = b"GIF87a\x00\x00\x00\x00\x00\x00";
+        let err = decode(bytes).unwrap_err();
+        assert!(matches!(err, ImageError::Gif(_)), "ожидалась Gif(_), получено {err:?}");
+    }
+
+    #[test]
+    fn image_error_from_gif_error() {
+        let err: ImageError = GifError::InvalidSignature.into();
+        assert!(matches!(err, ImageError::Gif(GifError::InvalidSignature)));
+    }
+
+    #[test]
+    fn image_error_display_gif() {
+        let err = ImageError::Gif(GifError::InvalidSignature);
+        let s = format!("{err}");
+        assert!(s.starts_with("GIF:"), "Display должен начинаться с GIF: — получено {s:?}");
+    }
+
+    #[test]
+    fn supported_mime_types_includes_gif() {
+        let types = supported_mime_types();
+        assert!(types.contains(&"image/gif"), "image/gif должен быть в поддерживаемых типах");
+    }
+
     fn solid_image(w: u32, h: u32, r: u8, g: u8, b: u8, a: u8) -> Image {
         let data = vec![r, g, b, a].into_iter().cycle().take((w * h * 4) as usize).collect();
-        Image { width: w, height: h, format: PixelFormat::Rgba8, data }
+        Image { width: w, height: h, format: PixelFormat::Rgba8, data, icc_profile: None }
     }
 
     #[test]
@@ -366,7 +431,7 @@ mod tests {
     fn area_avg_2x1_downscale_averages_correctly() {
         // 2×1 → 1×1: два горизонтальных пикселя, разный цвет.
         let data = vec![100, 0, 0, 255, 200, 0, 0, 255];
-        let src = Image { width: 2, height: 1, format: PixelFormat::Rgba8, data };
+        let src = Image { width: 2, height: 1, format: PixelFormat::Rgba8, data, icc_profile: None };
         let dst = resize_area_avg(&src, 1, 1);
         assert_eq!(dst.data[0], 150); // (100+200)/2
     }

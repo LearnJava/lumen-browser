@@ -13,3 +13,6 @@ zune-jpeg = "0.5"
 zune-png = "0.5"
 zune-core = "0.5"
 image-webp = "0.2"
+png = "0.17"
+gif = "0.14"
+flate2.workspace = true

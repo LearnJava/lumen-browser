@@ -10,11 +10,11 @@ use lumen_core::error::{Error, Result};
 use lumen_core::ext::NoopEventSink;
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::{Document, NodeData, NodeId};
-use lumen_layout::LayoutBox;
+use lumen_layout::{computed_style_by_selector, LayoutBox};
 
 use crate::{
-    A11yNode, BoxModel, BrowserSession, ComputedProperties, ConsoleEntry, NetworkEntry, NodeRef,
-    ScrollDelta, Target, WaitCondition,
+    A11yNode, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
+    ConsoleEntry, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
 };
 
 /// Встроенный шрифт Inter-Regular (SIL OFL 1.1).
@@ -79,6 +79,11 @@ impl InProcessSession {
         }
     }
 
+    /// Загрузить HTML-строку без навигации по URL. Используется для тестов.
+    pub fn navigate_html(&mut self, html: &str) -> Result<()> {
+        self.run_pipeline(html.as_bytes(), Some("text/html"), "about:blank".to_owned())
+    }
+
     /// Загрузить байты по URL и запустить pipeline. Внутренняя реализация
     /// навигации, используемая также для тестов с прямой передачей HTML.
     fn run_pipeline(&mut self, bytes: &[u8], content_type: Option<&str>, url: String) -> Result<()> {
@@ -119,10 +124,23 @@ impl BrowserSession for InProcessSession {
     // ── Ресурсы ────────────────────────────────────────────────────────────
 
     fn screenshot(&self) -> Result<Vec<u8>> {
-        // CPU-рендер появится в задаче 8A.5 (tinyskia-cpu-raster).
-        Err(Error::Other(
-            "screenshot требует GPU контекст; в headless-режиме доступен после задачи 8A.5".into(),
-        ))
+        let state = self.state()?;
+
+        // Build display list from layout tree.
+        let display_list = lumen_paint::build_display_list(&state.layout_root);
+
+        // Create headless renderer for off-screen rendering.
+        let width = self.viewport.width as u32;
+        let height = self.viewport.height as u32;
+        let mut renderer = lumen_paint::Renderer::new_headless(INTER_FONT.to_vec(), width, height)
+            .map_err(|e| Error::Other(format!("headless renderer: {e}")))?;
+
+        // Render to image (RGBA8).
+        let image = renderer.render_to_image(&display_list, 0.0, 0.0)
+            .map_err(|e| Error::Other(format!("render_to_image: {e}")))?;
+
+        // Encode to PNG.
+        lumen_image::encode_png_rgba8(&image).map_err(|e| Error::Other(format!("PNG encoding: {e}")))
     }
 
     fn a11y_tree(&self) -> Result<A11yNode> {
@@ -155,6 +173,11 @@ impl BrowserSession for InProcessSession {
 
     fn console_log(&self) -> Result<Vec<ConsoleEntry>> {
         Ok(self.con_log.clone())
+    }
+
+    fn computed_style_snapshot(&self, selector: &str) -> Result<Option<ComputedStyleSnapshot>> {
+        let state = self.state()?;
+        Ok(computed_style_by_selector(&state.layout_root, &state.doc, selector))
     }
 
     fn current_url(&self) -> &str {
@@ -254,6 +277,77 @@ impl BrowserSession for InProcessSession {
                 bounding_rect,
             });
         }
+        Ok(out)
+    }
+
+    fn layout_box_by_selector(&self, selector: &str) -> Result<Option<BoxModel>> {
+        let state = self.state()?;
+        let Some(lb) = lumen_layout::find_box_by_selector(&state.layout_root, &state.doc, selector) else {
+            return Ok(None);
+        };
+
+        let tag_name = {
+            let node = state.doc.get(lb.node);
+            match &node.data {
+                NodeData::Element { name, .. } => name.local.to_string(),
+                _ => String::new(),
+            }
+        };
+
+        let r = lb.rect;
+        let mt = lb.style.margin_top.to_px_opt().unwrap_or(0.0);
+        let mr = lb.style.margin_right.to_px_opt().unwrap_or(0.0);
+        let mb = lb.style.margin_bottom.to_px_opt().unwrap_or(0.0);
+        let ml = lb.style.margin_left.to_px_opt().unwrap_or(0.0);
+        let margin_box = Rect {
+            x: r.x - ml,
+            y: r.y - mt,
+            width: r.width + ml + mr,
+            height: r.height + mt + mb,
+        };
+
+        Ok(Some(BoxModel {
+            node_id: lb.node.index() as u32,
+            tag_name,
+            border_box: r,
+            margin_box,
+        }))
+    }
+
+    fn all_layout_boxes_by_selector(&self, selector: &str) -> Result<Vec<BoxModel>> {
+        let state = self.state()?;
+        let boxes = lumen_layout::find_all_by_selector(&state.layout_root, &state.doc, selector);
+        let mut out = Vec::with_capacity(boxes.len());
+
+        for lb in boxes {
+            let tag_name = {
+                let node = state.doc.get(lb.node);
+                match &node.data {
+                    NodeData::Element { name, .. } => name.local.to_string(),
+                    _ => String::new(),
+                }
+            };
+
+            let r = lb.rect;
+            let mt = lb.style.margin_top.to_px_opt().unwrap_or(0.0);
+            let mr = lb.style.margin_right.to_px_opt().unwrap_or(0.0);
+            let mb = lb.style.margin_bottom.to_px_opt().unwrap_or(0.0);
+            let ml = lb.style.margin_left.to_px_opt().unwrap_or(0.0);
+            let margin_box = Rect {
+                x: r.x - ml,
+                y: r.y - mt,
+                width: r.width + ml + mr,
+                height: r.height + mt + mb,
+            };
+
+            out.push(BoxModel {
+                node_id: lb.node.index() as u32,
+                tag_name,
+                border_box: r,
+                margin_box,
+            });
+        }
+
         Ok(out)
     }
 }
@@ -672,9 +766,12 @@ mod tests {
     }
 
     #[test]
-    fn screenshot_returns_error_in_headless() {
-        let s = make_session("<html><body></body></html>");
-        assert!(s.screenshot().is_err());
+    fn screenshot_returns_png() {
+        let s = make_session("<html><body><div style='background:red; width:100px; height:100px;'></div></body></html>");
+        let png_bytes = s.screenshot().expect("screenshot should succeed");
+        // PNG signature: 89 50 4E 47 0D 0A 1A 0A
+        assert!(png_bytes.len() > 8, "PNG should have content");
+        assert_eq!(&png_bytes[0..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A], "PNG signature");
     }
 
     #[test]

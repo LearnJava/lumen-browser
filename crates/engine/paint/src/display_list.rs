@@ -3,6 +3,15 @@
 //! он рендерит то, что ему говорят.
 //!
 //! Координаты — экранные пиксели от верхнего левого угла окна.
+//!
+//! **ADR-008 Invariant 3 note (paint-pure-audit 10D.2, 2026-05-27):**
+//! All display list builder functions (`build_display_list`, `build_display_list_with_anim`,
+//! `build_display_list_ordered`, `build_display_list_ordered_with_anim`) are pure functions:
+//! they depend only on their function parameters (LayoutBox, optional compositor anim frame,
+//! optional stacking tree) and do not depend on hidden global state, thread-locals, or
+//! environment variables. No `static mut` / `lazy_static!` / `OnceCell` found in this module.
+//! Renderer caching (glyph atlas, image cache, layer snapshots) lives in separate crates
+//! (lumen-font, lumen-image) with explicit eviction APIs.
 
 use lumen_core::geom::{Rect, Size};
 use lumen_dom::InputType;
@@ -216,6 +225,7 @@ pub enum DisplayCommand {
         /// Пары `(tag, value)` в user units — нормализация через fvar+avar
         /// выполняется в renderer-е, который имеет доступ к шрифтовым таблицам.
         /// Пустой Vec = `normal` (default-instance без variation deltas).
+        /// CSS: font-optical-sizing — P4 должен добавить opsz значение в этот Vec.
         font_variation_axes: Vec<([u8; 4], f32)>,
         /// CSS Text L3 §10.1 — pixel width for a tab character (\t).
         /// 0.0 means no tab characters in text (renderer skips tab expansion).
@@ -1620,6 +1630,8 @@ fn emit_text_shadows(
             font_family: frag.style.font_family.clone(),
             font_weight: frag.style.font_weight,
             font_style: frag.style.font_style,
+            // CSS: font-optical-sizing — P4 wires: if frag.style has font_optical_sizing field,
+            // append (b"opsz", optical_sizing_value) to the collected axes before returning.
             font_variation_axes: frag.style.font_variation_settings
                 .iter().map(|s| (s.tag, s.value)).collect(),
             tab_size: frag.style.tab_size,

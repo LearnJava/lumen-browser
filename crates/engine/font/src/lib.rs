@@ -35,6 +35,7 @@ pub mod rasterizer;
 pub mod font_registry;
 pub mod system_fonts;
 pub mod variation;
+pub mod variation_coords;
 pub mod vvar;
 
 pub use avar::{Avar, AxisValueMap, SegmentMap};
@@ -65,5 +66,6 @@ pub use rasterizer::{Bitmap, Rasterizer};
 pub use font_registry::FontRegistry;
 pub use system_fonts::SystemFontIndex;
 pub use variation::apply_variations_to_simple_outline;
+pub use variation_coords::VariationCoords;
 pub use vvar::Vvar;
 pub use woff2::{decode_woff1, decode_woff2, is_woff1, is_woff2, maybe_decode_font};

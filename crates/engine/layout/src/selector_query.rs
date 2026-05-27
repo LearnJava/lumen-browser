@@ -7,7 +7,7 @@
 //! combinators, `:nth-*`, `:not()`, `:is()`, `:where()`).
 
 use lumen_css_parser::{parse_selector_list, ComplexSelector};
-use lumen_dom::Document;
+use lumen_dom::{Document, NodeId};
 
 use crate::box_tree::{BoxKind, LayoutBox};
 use crate::style::{
@@ -16,6 +16,60 @@ use crate::style::{
     TextDecorationLine, TextDecorationStyle, TextEmphasisStyle, TextTransform, Visibility,
     WhiteSpace, ComputedStyle,
 };
+
+// ──────────────── LayoutBox extension methods ────────────────
+
+impl LayoutBox {
+    /// Finds the first descendant LayoutBox matching the given selector.
+    ///
+    /// Searches this box's descendants in document order. Returns `None` if
+    /// `sel` is empty, invalid, or no descendant matches.
+    ///
+    /// # Arguments
+    /// * `doc` - The Document for selector matching
+    /// * `sel` - CSS selector string (tag, .class, #id, compound, combinators, pseudo-classes)
+    ///
+    /// # Example
+    /// ```ignore
+    /// let found = root_box.find_descendant_by_selector(&doc, "div.container > p");
+    /// ```
+    pub fn find_descendant_by_selector<'a>(
+        &'a self,
+        doc: &Document,
+        sel: &str,
+    ) -> Option<&'a LayoutBox> {
+        find_box_by_selector(self, doc, sel)
+    }
+
+    /// Finds all descendant LayoutBoxes matching the given selector.
+    ///
+    /// Traverses this box's descendants in document order. Returns an empty
+    /// Vec if `sel` is empty, invalid, or no descendants match.
+    ///
+    /// # Arguments
+    /// * `doc` - The Document for selector matching
+    /// * `sel` - CSS selector string (tag, .class, #id, compound, combinators, pseudo-classes)
+    ///
+    /// # Example
+    /// ```ignore
+    /// let items = container_box.find_all_descendants_by_selector(&doc, ".item");
+    /// ```
+    pub fn find_all_descendants_by_selector<'a>(
+        &'a self,
+        doc: &Document,
+        sel: &str,
+    ) -> Vec<&'a LayoutBox> {
+        find_all_by_selector(self, doc, sel)
+    }
+
+    /// Returns the computed style snapshot for this box.
+    ///
+    /// Converts the internal ComputedStyle to a snapshot suitable for
+    /// driver assertions and debugging.
+    pub fn style_snapshot(&self) -> ComputedStyleSnapshot {
+        ComputedStyleSnapshot::from(&self.style)
+    }
+}
 
 // ──────────────── ComputedStyleSnapshot ────────────────
 
@@ -262,6 +316,41 @@ fn find_all_rec<'a>(
     }
 }
 
+// ──────────────── query_all ────────────────
+
+/// Returns all [`NodeId`]s in the document that match `sel`.
+///
+/// Traverses the entire DOM tree (not just the layout tree), so inline elements
+/// and other nodes without a dedicated [`LayoutBox`] are included. Non-element
+/// nodes (text, comments, processing instructions) never match any selector.
+///
+/// Implements `document.querySelectorAll` semantics. Returns an empty Vec when
+/// `sel` is empty, all selectors are invalid, or no node matches.
+pub fn query_all(doc: &Document, sel: &str) -> Vec<NodeId> {
+    let selectors = parse_selector_list(sel);
+    if selectors.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    query_all_rec(doc, doc.root(), &selectors, &mut out);
+    out
+}
+
+fn query_all_rec(
+    doc: &Document,
+    id: NodeId,
+    selectors: &[ComplexSelector],
+    out: &mut Vec<NodeId>,
+) {
+    // matches_complex returns false for non-element nodes internally.
+    if node_matches(id, doc, selectors) {
+        out.push(id);
+    }
+    for &child in &doc.get(id).children.clone() {
+        query_all_rec(doc, child, selectors, out);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,5 +471,37 @@ mod tests {
     fn find_all_empty_for_no_match() {
         let (doc, tree) = layout_tree("<p>text</p>", "");
         assert!(find_all_by_selector(&tree, &doc, "h1").is_empty());
+    }
+
+    #[test]
+    fn layout_box_method_find_descendant() {
+        let (doc, tree) = layout_tree(
+            r#"<div class="container"><p id="target">text</p></div>"#,
+            "",
+        );
+        let found = tree.find_descendant_by_selector(&doc, "#target");
+        assert!(found.is_some());
+    }
+
+    #[test]
+    fn layout_box_method_find_all_descendants() {
+        let (doc, tree) = layout_tree(
+            "<div><p class=\"item\">a</p><p class=\"item\">b</p></div>",
+            "",
+        );
+        let all = tree.find_all_descendants_by_selector(&doc, ".item");
+        assert_eq!(all.len(), 2);
+    }
+
+    #[test]
+    fn layout_box_method_style_snapshot() {
+        let (doc, tree) = layout_tree(
+            r#"<div id="box">text</div>"#,
+            "#box { opacity: 0.5; }",
+        );
+        let found = tree.find_descendant_by_selector(&doc, "#box");
+        assert!(found.is_some());
+        let snap = found.unwrap().style_snapshot();
+        assert!((snap.opacity - 0.5).abs() < 0.001);
     }
 }

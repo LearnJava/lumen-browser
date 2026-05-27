@@ -56,6 +56,7 @@ impl FontRegistry {
             family: family.to_owned(),
             weight,
             style,
+            stretch: 100, // @font-face не явно указывает stretch
             path: virt_path.clone(),
         };
 

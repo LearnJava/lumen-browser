@@ -7377,6 +7377,13 @@ thread_local! {
     /// Set by `set_cq_context` before re-laying out container children; cleared afterwards.
     /// Tuple: (inline_size_px, block_size_px). Block size is 0.0 when not queryable
     /// (container-type: inline-size only exposes inline axis).
+    ///
+    /// **ADR-008 Invariant 3 note (layout-pure-audit 10D.1):**
+    /// This thread-local violates the requirement that `layout()` be a pure function
+    /// (depends on hidden state not in function signature).
+    /// Refactor to explicit `cq_context: Option<(f32, f32)>` parameter:
+    /// see STATUS-P1.md Wave 1 for scheduled refactor (~3-4h, affects 20+ call sites).
+    /// Current phase 0 risk: low (container queries Phase 2+, not in simple test pages).
     static CONTAINER_CQ: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
 }
 
