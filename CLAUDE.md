@@ -51,9 +51,9 @@ Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `fo
 
 | Developer | Domain | Crates |
 |---|---|---|
-| **P1** | Frontend engine: source → layout tree | `html-parser`, `css-parser`, `dom`, `layout`, `encoding` |
+| **P1** | Frontend engine: source → layout tree | `html-parser`, `css-parser`, `dom`, `layout`, `encoding`, `a11y` |
 | **P2** | Backend rendering: layout tree → pixels | `font`, `paint`, `image` |
-| **P3** | Runtime + system: everything outside the engine | `shell`, `network`, `storage`, `knowledge`, `core::ext` |
+| **P3** | Runtime + system: everything outside the engine + **automation API** | `shell`, `network`, `storage`, `knowledge`, `core::ext`, `driver`, `mcp`, `bidi` |
 | **P4** | **All CSS**: parsing, ComputedStyle, cascade, every property end-to-end | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) — cross-domain |
 | **P5** | **All bug fixes**: BUGS.md OPEN items, graphic test regressions, cross-crate | any crate — read-only access to all domains |
 
