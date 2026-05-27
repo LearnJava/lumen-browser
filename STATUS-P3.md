@@ -1,13 +1,15 @@
 In progress: shell-as-driver-client Phase 4 (shell integration)  branch: p3-shell-as-driver-client-phase4
-Next step: Phase 4b - implement GpuSession for WinitSession and migrate lumen-shell::reload()
+Next step: Phase 4c - migrate lumen-shell::reload() to use render_to_gpu(), then full shell integration
 
 Phase 4 progress:
   ✓ 4a: GpuSession trait created (RenderedPage, gpu_session.rs)
   ✓ 4a: WinitSessionState extended with GPU data (display_list, title, images, font_registry)
-  - 4b: Implement render_to_gpu() method in WinitSession (requires build_display_list)
-  - 4b: Migrate lumen-shell::reload() to use render_to_gpu() instead of source.load()
-  - 4c: Migrate navigation methods to use GpuSession
-  - 4d: Event dispatch (click, type_text, scroll through GpuSession)
+  ✓ 4b: Implement render_to_gpu() method in WinitSession (build_display_list, extract title/images)
+  ✓ 4b: GpuSession trait impl for WinitSession (set_scroll, viewport, navigate_streaming)
+  ✓ 4b: Helper functions (extract_title, extract_images, walk_find_title, walk_collect_images)
+  ✓ 4b: Tests for GpuSession (test_gpu_session_render_to_gpu, scroll_position, viewport)
+  - 4c: Migrate lumen-shell::reload() to use render_to_gpu() instead of direct pipeline
+  - 4d: Integrate WinitSession into lumen-shell as primary rendering path
   - 4e: Testing & cleanup
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
