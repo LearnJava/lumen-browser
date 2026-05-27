@@ -326,16 +326,41 @@ mod tests {
     use crate::style::{compute_style, VerticalAlign};
     use lumen_core::geom::Size;
 
+    /// Navigate the document layout tree root → html → body and return the
+    /// body `LayoutBox`. Tests were written for the old flat DOM structure
+    /// (before the HTML5 parser started injecting implicit html/head/body
+    /// wrappers). This helper adapts them without touching production code.
+    fn body_layout_box(mut root: LayoutBox) -> LayoutBox {
+        // root children: [html block, ...]
+        if let Some(html_idx) = root
+            .children
+            .iter()
+            .position(|c| matches!(c.kind, BoxKind::Block))
+        {
+            let mut html_box = root.children.remove(html_idx);
+            // html children: [body block, ...]
+            if let Some(body_idx) = html_box
+                .children
+                .iter()
+                .position(|c| matches!(c.kind, BoxKind::Block))
+            {
+                return html_box.children.remove(body_idx);
+            }
+            return html_box;
+        }
+        root
+    }
+
     fn lay(html: &str, css: &str) -> LayoutBox {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        layout(&doc, &sheet, Size::new(800.0, 600.0))
+        body_layout_box(layout(&doc, &sheet, Size::new(800.0, 600.0)))
     }
 
     fn lay_viewport(html: &str, css: &str, vp: Size) -> LayoutBox {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        layout(&doc, &sheet, vp)
+        body_layout_box(layout(&doc, &sheet, vp))
     }
 
     /// Измеритель с фиксированной шириной 8px на символ.
@@ -349,7 +374,16 @@ mod tests {
     fn lay_measured(html: &str, css: &str, width: f32) -> LayoutBox {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        layout_measured(&doc, &sheet, Size::new(width, 600.0), &Fixed8)
+        body_layout_box(layout_measured(&doc, &sheet, Size::new(width, 600.0), &Fixed8))
+    }
+
+    /// Like `lay()` but returns the full layout tree root (document box),
+    /// not the body box. Use when a test explicitly needs to inspect
+    /// the `<html>` or `<body>` layout boxes.
+    fn lay_full(html: &str, css: &str) -> LayoutBox {
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse(css);
+        layout(&doc, &sheet, Size::new(800.0, 600.0))
     }
 
     fn first_element_child(b: &LayoutBox) -> &LayoutBox {
@@ -683,10 +717,11 @@ mod tests {
     }
 
     /// Утилита: layout + Document, чтобы можно было искать элемент по тегу.
+    /// Возвращает LayoutBox тела документа (<body>), а не корня.
     fn lay_with_doc(html: &str, css: &str) -> (LayoutBox, lumen_dom::Document) {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse(css);
-        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let root = body_layout_box(layout(&doc, &sheet, Size::new(800.0, 600.0)));
         (root, doc)
     }
 
@@ -2766,9 +2801,10 @@ mod tests {
     #[test]
     fn not_with_compound_excludes_full() {
         // :not(p.hl) — исключает только p с классом hl, не любой <p> и не любой `.hl`.
+        // Используем scope через body-класс чтобы не загрязнять html/body.
         let (root, doc) = lay_with_doc(
-            r#"<p>x</p><p class="hl">y</p><div class="hl">z</div>"#,
-            "*:not(p.hl) { color: red; }",
+            r#"<body class="t"><p>x</p><p class="hl">y</p><div class="hl">z</div></body>"#,
+            "body.t *:not(p.hl) { color: red; }",
         );
         let ps = block_children_by_tag(&root, &doc, "p");
         let divs = block_children_by_tag(&root, &doc, "div");
@@ -3854,7 +3890,7 @@ mod tests {
         for tag in ["i", "cite", "dfn", "address", "var"] {
             let html = format!("<{tag}>x</{tag}>");
             let doc = lumen_html_parser::parse(&html);
-            let id = doc.get(doc.root()).children[0];
+            let id = doc.get(doc.body().unwrap()).children[0];
             let style = crate::style::compute_style(
                 &doc,
                 id,
@@ -3916,7 +3952,7 @@ mod tests {
         for tag in ["b", "strong", "h1", "h2", "h3", "h4", "h5", "h6", "th"] {
             let html = format!("<{tag}>x</{tag}>");
             let doc = lumen_html_parser::parse(&html);
-            let id = doc.get(doc.root()).children[0];
+            let id = doc.get(doc.body().unwrap()).children[0];
             let style = crate::style::compute_style(
                 &doc,
                 id,
@@ -5561,7 +5597,10 @@ mod tests {
     /// в InlineRun-ы; проверяем напрямую).
     #[test]
     fn selector_nested_same_tag_descendants() {
-        let doc = lumen_html_parser::parse(r#"<a><a><span>x</span></a></a>"#);
+        // HTML5 parser re-normalizes nested <a> tags (inner <a> closes outer).
+        // Use <div><a><div><a><span>x</span></a></div></a></div> which produces
+        // two independent a-ancestors of span.
+        let doc = lumen_html_parser::parse(r#"<div><a><div><a><span>x</span></a></div></a></div>"#);
         let span_id = find_first_by_tag(&doc, doc.root(), "span").expect("span");
         let style = crate::style::compute_style(
             &doc,
@@ -5837,9 +5876,10 @@ mod tests {
         let doc = lumen_html_parser::parse("<div><h2>A</h2><p>x</p></div><div><h2>B</h2></div>");
         let sheet = lumen_css_parser::parse("h2:has(+ p) { color: red; }");
         let root_style = ComputedStyle::root();
-        let div1 = doc.get(doc.root()).children[0];
+        let body = doc.body().unwrap();
+        let div1 = doc.get(body).children[0];
         let h2_a = doc.get(div1).children[0];
-        let div2 = doc.get(doc.root()).children[1];
+        let div2 = doc.get(body).children[1];
         let h2_b = doc.get(div2).children[0];
         let style_a = crate::style::compute_style(
             &doc, h2_a, &sheet, &root_style, Size::new(800.0, 600.0));
@@ -6944,7 +6984,7 @@ mod tests {
         let document: Document = lumen_html_parser::parse(html);
         let stylesheet = lumen_css_parser::parse(css);
         let viewport = Size { width: vw, height: vh };
-        crate::layout(&document, &stylesheet, viewport)
+        body_layout_box(crate::layout(&document, &stylesheet, viewport))
     }
 
     #[test]
@@ -9507,7 +9547,7 @@ mod tests {
             "<body><table><tr><td>x</td></tr></table></body>",
             "body { font-size: 30px; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         assert!(
             (body.style.font_size - 30.0).abs() < 0.01,
@@ -9528,7 +9568,7 @@ mod tests {
             "<!DOCTYPE html><body><table><tr><td>x</td></tr></table></body>",
             "body { font-size: 30px; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         assert!(
             (table.style.font_size - 30.0).abs() < 0.01,
@@ -9544,7 +9584,7 @@ mod tests {
             "<body><table><tr><td>x</td></tr></table></body>",
             "body { color: red; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         assert_eq!(body.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
         assert_eq!(table.style.color, Color::BLACK);
@@ -9557,7 +9597,7 @@ mod tests {
             "<!DOCTYPE html><body><table><tr><td>x</td></tr></table></body>",
             "body { color: red; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         assert_eq!(table.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
     }
@@ -9569,7 +9609,7 @@ mod tests {
             "<body><table><tr><td>x</td></tr></table></body>",
             "body { font-weight: bold; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         assert_eq!(body.style.font_weight, FontWeight::BOLD);
         assert_eq!(table.style.font_weight, FontWeight::NORMAL);
@@ -9582,7 +9622,7 @@ mod tests {
             "<body><table><tr><td>x</td></tr></table></body>",
             "body { font-style: italic; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         assert_eq!(body.style.font_style, FontStyle::Italic);
         assert_eq!(table.style.font_style, FontStyle::Normal);
@@ -9595,7 +9635,7 @@ mod tests {
             "<body><table><tr><td>x</td></tr></table></body>",
             "body { text-align: center; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         assert_eq!(body.style.text_align, TextAlign::Center);
         assert_eq!(table.style.text_align, TextAlign::Start);
@@ -9608,7 +9648,7 @@ mod tests {
             "<body><table><tr><td>x</td></tr></table></body>",
             "body { white-space: nowrap; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         assert_eq!(body.style.white_space, WhiteSpace::Nowrap);
         assert_eq!(table.style.white_space, WhiteSpace::Normal);
@@ -9622,7 +9662,7 @@ mod tests {
             "<body><table><tr><td>x</td></tr></table></body>",
             "body { font-size: 30px; } table { font-size: 24px; color: blue; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         assert!(
             (table.style.font_size - 24.0).abs() < 0.01,
@@ -9640,14 +9680,13 @@ mod tests {
             "<body><table><tr><td>x</td></tr></table></body>",
             "body { font-size: 30px; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
-        // <tbody> wrap: html-parser сам не добавляет implicit `<tbody>`,
-        // поэтому <tr> может быть прямым ребёнком <table>. <td> внутри.
-        // Идём вглубь, пока не найдём td.
+        // HTML5 parser inserts implicit <tbody>: table → tbody → tr → td.
+        // Идём вглубь, пока не найдём td (Block inside a TableRow).
         fn find_td(b: &LayoutBox) -> Option<&LayoutBox> {
             for c in &b.children {
-                if matches!(&c.kind, BoxKind::TableRow) {
+                if matches!(&c.kind, BoxKind::TableRow | BoxKind::TableRowGroup) {
                     if let Some(td) = find_td(c) {
                         return Some(td);
                     }
@@ -9675,7 +9714,7 @@ mod tests {
             "<body><p>x</p></body>",
             "body { font-size: 30px; color: red; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let p = first_element_child(body);
         assert!(
             (p.style.font_size - 30.0).abs() < 0.01,
@@ -9693,7 +9732,7 @@ mod tests {
             "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\" \"http://www.w3.org/TR/html4/loose.dtd\"><body><table><tr><td>x</td></tr></table></body>",
             "body { font-size: 30px; color: red; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         assert!(
             (table.style.font_size - 30.0).abs() < 0.01,
@@ -9713,7 +9752,7 @@ mod tests {
             "<body><p>x</p></body>",
             "p { color: ff0000; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let p = first_element_child(body);
         assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
     }
@@ -9726,7 +9765,7 @@ mod tests {
             "<!DOCTYPE html><body><p>x</p></body>",
             "p { color: ff0000; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let p = first_element_child(body);
         // ff0000 без `#` — невалидно в Standards, color остаётся inherited
         // от body (BLACK).
@@ -9740,7 +9779,7 @@ mod tests {
             "<body><p>x</p></body>",
             "p { background-color: 00ff00; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let p = first_element_child(body);
         assert_eq!(p.style.background_color, Some(CssColor::Rgba(Color { r: 0, g: 255, b: 0, a: 255 })));
     }
@@ -9752,7 +9791,7 @@ mod tests {
             "<body><p>x</p></body>",
             "p { color: f00; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let p = first_element_child(body);
         assert_eq!(p.style.color, Color { r: 255, g: 0, b: 0, a: 255 });
     }
@@ -9764,7 +9803,7 @@ mod tests {
             "<body><p>x</p></body>",
             "p { border: 1px solid 0000ff; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let p = first_element_child(body);
         assert_eq!(
             p.style.border_top_color,
@@ -9780,7 +9819,7 @@ mod tests {
             "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\" \"http://www.w3.org/TR/html4/loose.dtd\"><body><p>x</p></body>",
             "p { color: ff0000; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let p = first_element_child(body);
         // В LimitedQuirks bare hex — invalid, как в Standards.
         assert_eq!(p.style.color, Color::BLACK);
@@ -9792,7 +9831,7 @@ mod tests {
     /// его rect.height равен высоте viewport (600.0 в тестовом lay).
     #[test]
     fn quirks_html_height_equals_viewport() {
-        let root = lay("<html><body><p>x</p></body></html>", "");
+        let root = lay_full("<html><body><p>x</p></body></html>", "");
         let (html, _body) = html_and_body(&root);
         assert!(
             (html.rect.height - 600.0).abs() < 0.1,
@@ -9805,7 +9844,7 @@ mod tests {
     /// через html-box с высотой 100vh.
     #[test]
     fn quirks_body_height_100pct_resolves_to_viewport() {
-        let root = lay(
+        let root = lay_full(
             "<html><body></body></html>",
             "body { height: 100%; }",
         );
@@ -9821,7 +9860,7 @@ mod tests {
     /// НЕ получает 100vh — высота определяется контентом (маленькая).
     #[test]
     fn standards_html_height_is_content_not_viewport() {
-        let root = lay(
+        let root = lay_full(
             "<!DOCTYPE html><html><body><p style=\"height:20px\">x</p></body></html>",
             "",
         );
@@ -9837,7 +9876,7 @@ mod tests {
     /// В quirks-mode author CSS на `<html>` перекрывает UA-правило 100vh.
     #[test]
     fn quirks_html_author_height_overrides_ua_rule() {
-        let root = lay(
+        let root = lay_full(
             "<html><body></body></html>",
             "html { height: 300px; }",
         );
@@ -9853,7 +9892,7 @@ mod tests {
     /// §3.5 НЕ применяется — только full quirks mode.
     #[test]
     fn limited_quirks_html_height_is_content_not_viewport() {
-        let root = lay(
+        let root = lay_full(
             "<!DOCTYPE HTML PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\" \
              \"http://www.w3.org/TR/html4/loose.dtd\">\
              <html><body><p style=\"height:20px\">x</p></body></html>",
@@ -10068,7 +10107,7 @@ mod tests {
 
     #[test]
     fn body_bg_propagates_to_html_when_html_has_none() {
-        let root = lay(
+        let root = lay_full(
             "<html><body><p>x</p></body></html>",
             "body { background-color: red; }",
         );
@@ -10086,7 +10125,7 @@ mod tests {
 
     #[test]
     fn html_with_own_bg_blocks_propagation() {
-        let root = lay(
+        let root = lay_full(
             "<html><body><p>x</p></body></html>",
             "html { background-color: blue; } body { background-color: red; }",
         );
@@ -10105,7 +10144,7 @@ mod tests {
 
     #[test]
     fn body_bg_image_propagates_when_html_has_none() {
-        let root = lay(
+        let root = lay_full(
             "<html><body><p>x</p></body></html>",
             "body { background-image: url(\"bg.png\"); }",
         );
@@ -10123,7 +10162,7 @@ mod tests {
     fn html_image_blocks_propagation_even_if_color_empty() {
         // У html есть background-image (color=None) — propagation НЕ должна
         // сработать, у body свой фон остаётся.
-        let root = lay(
+        let root = lay_full(
             "<html><body><p>x</p></body></html>",
             "html { background-image: url(\"h.png\"); } body { background-color: red; }",
         );
@@ -10165,7 +10204,7 @@ mod tests {
     /// После canvas-propagation фон переходит на html-box.
     #[test]
     fn body_bgcolor_attr_sets_background() {
-        let root = lay("<html><body bgcolor=\"red\"><p>x</p></body></html>", "");
+        let root = lay_full("<html><body bgcolor=\"red\"><p>x</p></body></html>", "");
         let (html, body) = html_and_body(&root);
         assert_eq!(
             html.style.background_color,
@@ -10179,7 +10218,7 @@ mod tests {
     /// legacy color algorithm.
     #[test]
     fn body_bgcolor_hashless_hex_accepted() {
-        let root = lay("<html><body bgcolor=\"ff0000\"><p>x</p></body></html>", "");
+        let root = lay_full("<html><body bgcolor=\"ff0000\"><p>x</p></body></html>", "");
         let (html, _body) = html_and_body(&root);
         assert_eq!(
             html.style.background_color,
@@ -10192,7 +10231,7 @@ mod tests {
     #[test]
     fn table_bgcolor_attr_sets_background() {
         let root = lay("<body><table bgcolor=\"navy\"><tr><td>x</td></tr></table></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         assert_eq!(
             table.style.background_color,
@@ -10205,9 +10244,11 @@ mod tests {
     #[test]
     fn tr_bgcolor_attr_sets_background() {
         let root = lay("<body><table><tr bgcolor=\"lime\"><td>x</td></tr></table></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
-        let tr = first_element_child(table);
+        // HTML5 parser inserts implicit <tbody>; navigate through it.
+        let tbody = first_element_child(table);
+        let tr = first_element_child(tbody);
         assert_eq!(
             tr.style.background_color,
             Some(CssColor::Rgba(Color { r: 0, g: 255, b: 0, a: 255 })),
@@ -10219,9 +10260,11 @@ mod tests {
     #[test]
     fn td_bgcolor_attr_sets_background() {
         let root = lay("<body><table><tr><td bgcolor=\"#00f\">x</td></tr></table></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
-        let tr = first_element_child(table);
+        // HTML5 parser inserts implicit <tbody>; navigate through it.
+        let tbody = first_element_child(table);
+        let tr = first_element_child(tbody);
         let td = first_element_child(tr);
         assert_eq!(
             td.style.background_color,
@@ -10242,9 +10285,11 @@ mod tests {
              </tr></table></body>",
             "body,table,tr,td { margin:0; padding:0; border:0 }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
-        let tr = first_element_child(table);
+        // HTML5 parser inserts implicit <tbody>; navigate through it.
+        let tbody = first_element_child(table);
+        let tr = first_element_child(tbody);
         assert!(
             matches!(tr.kind, BoxKind::TableRow),
             "<tr> должен иметь BoxKind::TableRow"
@@ -10273,9 +10318,11 @@ mod tests {
                          <tr><td style=\"width:100px;height:60px\"></td></tr></table></body>",
             "body,table,tr,td { margin:0; padding:0; border:0 }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
-        let rows: Vec<_> = table
+        // HTML5 parser inserts implicit <tbody>; navigate through it.
+        let tbody = first_element_child(table);
+        let rows: Vec<_> = tbody
             .children
             .iter()
             .filter(|c| matches!(c.kind, BoxKind::TableRow))
@@ -10301,10 +10348,12 @@ mod tests {
              </tr></table></body>",
             "body,table,tr,td { margin:0; padding:0; border:0 }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         assert!(matches!(table.kind, BoxKind::Table), "table должен иметь BoxKind::Table");
-        let rows: Vec<_> = table.children.iter().filter(|c| matches!(c.kind, BoxKind::TableRow)).collect();
+        // HTML5 parser inserts implicit <tbody>; rows are inside it.
+        let tbody = first_element_child(table);
+        let rows: Vec<_> = tbody.children.iter().filter(|c| matches!(c.kind, BoxKind::TableRow)).collect();
         assert_eq!(rows.len(), 2);
         let r1_cells: Vec<_> = rows[0].children.iter().filter(|c| matches!(c.kind, BoxKind::Block)).collect();
         let r2_cells: Vec<_> = rows[1].children.iter().filter(|c| matches!(c.kind, BoxKind::Block)).collect();
@@ -10320,7 +10369,7 @@ mod tests {
     #[test]
     fn table_has_boxkind_table() {
         let root = lay("<body><table><tr><td>x</td></tr></table></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         assert!(
             matches!(table.kind, BoxKind::Table),
@@ -10332,7 +10381,7 @@ mod tests {
     #[test]
     fn tbody_has_boxkind_tablerowgroup() {
         let root = lay("<body><table><tbody><tr><td>x</td></tr></tbody></table></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         let tbody = first_element_child(table);
         assert!(
@@ -10351,7 +10400,7 @@ mod tests {
              </tbody></table></body>",
             "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         let tbody = first_element_child(table);
         let rows: Vec<_> = tbody.children.iter().filter(|c| matches!(c.kind, BoxKind::TableRow)).collect();
@@ -10370,7 +10419,7 @@ mod tests {
              </table></body>",
             "",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         let groups: Vec<_> = table.children.iter()
             .filter(|c| matches!(c.kind, BoxKind::TableRowGroup))
@@ -10391,7 +10440,7 @@ mod tests {
              </tr></tbody></table></body>",
             "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let table = first_element_child(body);
         let tbody = first_element_child(table);
         let rows: Vec<_> = tbody.children.iter().filter(|c| matches!(c.kind, BoxKind::TableRow)).collect();
@@ -10650,7 +10699,7 @@ mod tests {
     /// Author CSS `background-color` выигрывает у presentational hint `bgcolor`.
     #[test]
     fn author_css_overrides_bgcolor_hint() {
-        let root = lay(
+        let root = lay_full(
             "<html><body bgcolor=\"red\"><p>x</p></body></html>",
             "body { background-color: blue; }",
         );
@@ -10666,7 +10715,7 @@ mod tests {
     /// ошибкой; атрибут игнорируется, фон остаётся None.
     #[test]
     fn body_bgcolor_transparent_is_ignored() {
-        let root = lay("<html><body bgcolor=\"transparent\"><p>x</p></body></html>", "");
+        let root = lay_full("<html><body bgcolor=\"transparent\"><p>x</p></body></html>", "");
         let (html, body) = html_and_body(&root);
         assert_eq!(html.style.background_color, None, "transparent bgcolor должен игнорироваться");
         assert_eq!(body.style.background_color, None);
@@ -10675,7 +10724,7 @@ mod tests {
     /// `<body bgcolor="olive">` — named color через HTML5 legacy-парсер.
     #[test]
     fn body_bgcolor_named_color() {
-        let root = lay("<html><body bgcolor=\"olive\"><p>x</p></body></html>", "");
+        let root = lay_full("<html><body bgcolor=\"olive\"><p>x</p></body></html>", "");
         let (html, _body) = html_and_body(&root);
         assert_eq!(
             html.style.background_color,
@@ -10689,7 +10738,7 @@ mod tests {
     /// `<body text="red">` → body.color = red.
     #[test]
     fn body_text_attr_sets_color() {
-        let root = lay("<html><body text=\"red\"><p>x</p></body></html>", "");
+        let root = lay_full("<html><body text=\"red\"><p>x</p></body></html>", "");
         let (_html, body) = html_and_body(&root);
         assert_eq!(
             body.style.color,
@@ -10701,7 +10750,7 @@ mod tests {
     /// `<body text="blue">` — цвет наследуется дочерними элементами.
     #[test]
     fn body_text_color_inherited_by_child() {
-        let root = lay("<html><body text=\"blue\"><p>x</p></body></html>", "");
+        let root = lay_full("<html><body text=\"blue\"><p>x</p></body></html>", "");
         let (_html, body) = html_and_body(&root);
         let p = first_element_child(body);
         assert_eq!(
@@ -10714,7 +10763,7 @@ mod tests {
     /// Author CSS `color` выигрывает у presentational hint `text=`.
     #[test]
     fn author_css_overrides_body_text_hint() {
-        let root = lay(
+        let root = lay_full(
             "<html><body text=\"red\"><p>x</p></body></html>",
             "body { color: green; }",
         );
@@ -10730,7 +10779,7 @@ mod tests {
     #[test]
     fn font_color_attr_sets_color() {
         let root = lay("<body><font color=\"red\">x</font></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let font = first_element_child(body);
         assert_eq!(
             font.style.color,
@@ -10743,7 +10792,7 @@ mod tests {
     #[test]
     fn font_color_hash_long_hex() {
         let root = lay("<body><font color=\"#0000ff\">x</font></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let font = first_element_child(body);
         assert_eq!(
             font.style.color,
@@ -10759,7 +10808,7 @@ mod tests {
             "<body><font color=\"red\">x</font></body>",
             "font { color: blue; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let font = first_element_child(body);
         assert_eq!(
             font.style.color,
@@ -10774,7 +10823,7 @@ mod tests {
     #[test]
     fn font_size_attr_medium() {
         let root = lay("<body><font size=\"3\">x</font></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let font = first_element_child(body);
         assert_eq!(
             font.style.font_size, 16.0,
@@ -10786,7 +10835,7 @@ mod tests {
     #[test]
     fn font_size_attr_xxsmall() {
         let root = lay("<body><font size=\"1\">x</font></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let font = first_element_child(body);
         assert_eq!(
             font.style.font_size, 10.0,
@@ -10798,7 +10847,7 @@ mod tests {
     #[test]
     fn font_size_attr_xxxlarge() {
         let root = lay("<body><font size=\"7\">x</font></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let font = first_element_child(body);
         assert_eq!(
             font.style.font_size, 48.0,
@@ -10810,7 +10859,7 @@ mod tests {
     #[test]
     fn font_size_attr_relative_plus() {
         let root = lay("<body><font size=\"+2\">x</font></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let font = first_element_child(body);
         assert_eq!(
             font.style.font_size, 24.0,
@@ -10822,7 +10871,7 @@ mod tests {
     #[test]
     fn font_size_attr_relative_minus() {
         let root = lay("<body><font size=\"-1\">x</font></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let font = first_element_child(body);
         assert_eq!(
             font.style.font_size, 13.0,
@@ -10834,7 +10883,7 @@ mod tests {
     #[test]
     fn font_size_attr_clamp_max() {
         let root = lay("<body><font size=\"99\">x</font></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let font = first_element_child(body);
         assert_eq!(
             font.style.font_size, 48.0,
@@ -10849,7 +10898,7 @@ mod tests {
             "<body><font size=\"7\">x</font></body>",
             "font { font-size: 20px; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let font = first_element_child(body);
         assert_eq!(
             font.style.font_size, 20.0,
@@ -10861,7 +10910,7 @@ mod tests {
     #[test]
     fn font_face_attr_sets_font_family() {
         let root = lay("<body><font face=\"Arial, sans-serif\">x</font></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let font = first_element_child(body);
         assert!(
             font.style.font_family.contains(&"Arial".to_string()),
@@ -10936,7 +10985,7 @@ mod tests {
     #[test]
     fn div_align_center_attr() {
         let root = lay("<body><div align=\"center\">x</div></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         assert_eq!(
             div.style.text_align,
@@ -10949,7 +10998,7 @@ mod tests {
     #[test]
     fn p_align_right_attr() {
         let root = lay("<body><p align=\"right\">x</p></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let p = first_element_child(body);
         assert_eq!(
             p.style.text_align,
@@ -10962,7 +11011,7 @@ mod tests {
     #[test]
     fn h1_align_middle_is_center() {
         let root = lay("<body><h1 align=\"middle\">x</h1></body>", "");
-        let body = first_element_child(&root);
+        let body = &root;
         let h1 = first_element_child(body);
         assert_eq!(
             h1.style.text_align,
@@ -10978,7 +11027,7 @@ mod tests {
             "<body><div align=\"center\">x</div></body>",
             "div { text-align: right; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         assert_eq!(
             div.style.text_align,
@@ -10996,7 +11045,7 @@ mod tests {
             "<body><div></div></body>",
             "div { display: grid; grid-template-columns: 100px 200px 300px; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         assert_eq!(div.style.grid_template_columns.len(), 3);
         assert_eq!(div.style.grid_template_columns[0], GridTrackSize::Length(Length::Px(100.0)));
@@ -11011,7 +11060,7 @@ mod tests {
             "<body><div></div></body>",
             "div { display: grid; grid-template-columns: 1fr 2fr; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         assert_eq!(div.style.grid_template_columns.len(), 2);
         assert_eq!(div.style.grid_template_columns[0], GridTrackSize::Fr(1.0));
@@ -11025,7 +11074,7 @@ mod tests {
             "<body><div></div></body>",
             "div { display: grid; grid-template-columns: repeat(3, 100px); }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         assert_eq!(div.style.grid_template_columns.len(), 3);
         for ts in &div.style.grid_template_columns {
@@ -11040,7 +11089,7 @@ mod tests {
             "<body><div></div></body>",
             "div { grid-column: 2 / 4; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         assert_eq!(div.style.grid_column_start, GridLine::Line(2));
         assert_eq!(div.style.grid_column_end, GridLine::Line(4));
@@ -11053,7 +11102,7 @@ mod tests {
             "<body><div></div></body>",
             "div { grid-row: 1 / span 2; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         assert_eq!(div.style.grid_row_start, GridLine::Line(1));
         assert_eq!(div.style.grid_row_end, GridLine::Span(2));
@@ -11067,7 +11116,7 @@ mod tests {
             "div { display: grid; grid-template-columns: 1fr 1fr; width: 400px; } \
              span { height: 50px; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         let items: Vec<_> = div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect();
         assert_eq!(items.len(), 2, "должно быть 2 grid-item");
@@ -11085,7 +11134,7 @@ mod tests {
             "div { display: grid; grid-template-columns: 100px 100px 100px; width: 300px; } \
              a { height: 30px; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         let items: Vec<_> = div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect();
         assert_eq!(items.len(), 4);
@@ -11107,7 +11156,7 @@ mod tests {
                    grid-template-rows: 50px 50px; width: 300px; } \
              a { grid-column: 3; grid-row: 2; height: 40px; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         let item = div.children.iter().find(|c| !matches!(c.kind, BoxKind::Skip)).unwrap();
         // item at column 3, row 2 → x ≈ 200, y ≈ 50.
@@ -11124,7 +11173,7 @@ mod tests {
                    column-gap: 20px; width: 220px; } \
              a { height: 30px; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         let items: Vec<_> = div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect();
         assert_eq!(items.len(), 2);
@@ -11142,7 +11191,7 @@ mod tests {
                    grid-auto-flow: column; width: 300px; } \
              a { width: 80px; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         let items: Vec<_> = div.children.iter().filter(|c| !matches!(c.kind, BoxKind::Skip)).collect();
         assert_eq!(items.len(), 3);
@@ -11158,7 +11207,7 @@ mod tests {
             "<body><div></div></body>",
             "div { display: grid; grid-template-columns: minmax(50px, 1fr); }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         assert_eq!(div.style.grid_template_columns.len(), 1);
         assert!(matches!(div.style.grid_template_columns[0], GridTrackSize::Minmax(_, _)));
@@ -11171,7 +11220,7 @@ mod tests {
             "<body><div></div></body>",
             "div { grid-area: 2 / 1 / 4 / 3; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         assert_eq!(div.style.grid_row_start, GridLine::Line(2));
         assert_eq!(div.style.grid_column_start, GridLine::Line(1));
@@ -11186,7 +11235,7 @@ mod tests {
             "<body><div></div></body>",
             "div { display: grid; grid-template-columns: 100px 100px; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         assert_eq!(div.rect.height, 0.0, "empty grid should have 0 height");
     }
@@ -11199,7 +11248,7 @@ mod tests {
             "div { display: grid; grid-template-columns: 100px; width: 100px; } \
              a { height: 80px; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         // Container height should accommodate the 80px item.
         assert!(div.rect.height >= 80.0, "grid height should be ≥80px, got {}", div.rect.height);
@@ -11260,7 +11309,7 @@ mod tests {
             "<body><div></div></body>",
             "div { grid-area: main; }",
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         assert_eq!(div.style.grid_row_start,    GridLine::Named("main".into()));
         assert_eq!(div.style.grid_row_end,      GridLine::Named("main".into()));
@@ -11275,7 +11324,7 @@ mod tests {
             "<body><div></div></body>",
             r#"div { display: grid; grid-template-areas: "header header" "sidebar main"; }"#,
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         let areas = &div.style.grid_template_areas;
         assert_eq!(areas.len(), 2, "should have 2 rows");
@@ -11314,7 +11363,7 @@ mod tests {
             #c { grid-area: c; }
             "#,
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         let items: Vec<_> = div
             .children
@@ -11358,7 +11407,7 @@ mod tests {
             #s { grid-area: sidebar; }
             "#,
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let div = first_element_child(body);
         let items: Vec<_> = div
             .children
@@ -11414,7 +11463,7 @@ mod tests {
             /* c, d: auto 1×1 */
             "#,
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let grid = first_element_child(body);
         let items: Vec<_> = grid.children.iter()
             .filter(|c| !matches!(c.kind, BoxKind::Skip))
@@ -11470,7 +11519,7 @@ mod tests {
             #b { grid-column: span 2; }
             "#,
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let grid = first_element_child(body);
         let items: Vec<_> = grid.children.iter()
             .filter(|c| !matches!(c.kind, BoxKind::Skip))
@@ -11515,7 +11564,7 @@ mod tests {
             /* c: auto 1×1 */
             "#,
         );
-        let body = first_element_child(&root);
+        let body = &root;
         let grid = first_element_child(body);
         let items: Vec<_> = grid.children.iter()
             .filter(|c| !matches!(c.kind, BoxKind::Skip))
@@ -12858,7 +12907,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div class='x'>a</div>");
         let vp = Size { width: 800.0, height: 600.0 };
         use crate::style::Length;
-        let children = doc.get(doc.root()).children.clone();
+        let children = doc.get(doc.body().unwrap()).children.clone();
         let div_id = children.into_iter().find(|&id| {
             matches!(&doc.get(id).data, lumen_dom::NodeData::Element { name, .. } if name.local == "div")
         }).unwrap();
@@ -12877,7 +12926,7 @@ mod tests {
         let root_style = ComputedStyle::root();
         let vp = Size { width: 800.0, height: 600.0 };
         use crate::style::Length;
-        let children = doc.get(doc.root()).children.clone();
+        let children = doc.get(doc.body().unwrap()).children.clone();
         let mut it = children.into_iter().filter(|&id| matches!(&doc.get(id).data, lumen_dom::NodeData::Element { .. }));
         let a_id = it.next().unwrap();
         let b_id = it.next().unwrap();
@@ -12894,7 +12943,7 @@ mod tests {
         let doc = lumen_html_parser::parse("<div class='x'>a</div>");
         let vp = Size { width: 800.0, height: 600.0 };
         use crate::style::Length;
-        let children = doc.get(doc.root()).children.clone();
+        let children = doc.get(doc.body().unwrap()).children.clone();
         let div_id = children.into_iter().find(|&id| {
             matches!(&doc.get(id).data, lumen_dom::NodeData::Element { name, .. } if name.local == "div")
         }).unwrap();
