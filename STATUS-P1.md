@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: layout-find-by-selector  branch: p1-layout-find-by-selector
+Next step: реализовать selector_query.rs + ComputedStyleSnapshot + тесты  crates/engine/layout/src/selector_query.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
