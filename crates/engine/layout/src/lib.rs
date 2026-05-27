@@ -118,6 +118,8 @@ pub enum ClickableKind {
     Button,
     /// Text/number/file/etc. `<input>`, `<textarea>`, `<select>`.
     Input,
+    /// `<details>` disclosure element (opening/closing the summary).
+    Details,
     /// Element with `tabindex` >= 0 that doesn't fit other categories.
     Generic,
 }
@@ -191,6 +193,13 @@ fn collect_clickable_rec(
                     rect: b.rect,
                     hint_text: first_text_content(doc, b.node),
                     kind: ClickableKind::Link { href },
+                });
+            } else if is_details_element(doc, b.node) {
+                out.push(ClickableElement {
+                    node_id: b.node,
+                    rect: b.rect,
+                    hint_text: first_text_content(doc, b.node),
+                    kind: ClickableKind::Details,
                 });
             } else if has_tabindex(doc, b.node) {
                 out.push(ClickableElement {
@@ -321,6 +330,15 @@ fn first_text_content(
         }
     }
     None
+}
+
+/// Returns `true` if element `id` is a `<details>` element (disclosure widget).
+fn is_details_element(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> bool {
+    use lumen_dom::NodeData;
+    matches!(
+        &doc.get(id).data,
+        NodeData::Element { name, .. } if name.local == "details"
+    )
 }
 
 #[cfg(test)]
@@ -13314,6 +13332,94 @@ mod tests {
         );
         let root = layout_measured(&doc, &sheet, Size::new(800.0, 600.0), &Fixed8);
         assert_eq!(inline_line_count(&root), 2);
+    }
+
+    // ─── collect_clickable_elements tests ──────────────────────────────────────
+
+    #[test]
+    fn collect_clickable_empty_document() {
+        let doc = lumen_html_parser::parse("<p>No interactive elements</p>");
+        let root = lay_full("<p>No interactive elements</p>", "");
+        let clickables = collect_clickable_elements(&root, &doc);
+        assert_eq!(clickables.len(), 0);
+    }
+
+    #[test]
+    fn collect_clickable_link_block_level() {
+        let doc = lumen_html_parser::parse("<a href=\"http://example.com\">Example Link</a>");
+        let root = lay_full("<a href=\"http://example.com\">Example Link</a>", "");
+        let clickables = collect_clickable_elements(&root, &doc);
+        assert_eq!(clickables.len(), 1);
+        assert!(
+            matches!(clickables[0].kind, ClickableKind::Link { ref href } if href == "http://example.com"),
+            "Expected link with href, got {:?}",
+            clickables[0].kind
+        );
+    }
+
+    #[test]
+    fn collect_clickable_button_element() {
+        let doc = lumen_html_parser::parse("<button>Click me</button>");
+        let root = lay_full("<button>Click me</button>", "");
+        let clickables = collect_clickable_elements(&root, &doc);
+        assert!(
+            clickables.iter().any(|c| matches!(c.kind, ClickableKind::Button)),
+            "Expected button element"
+        );
+    }
+
+    #[test]
+    fn collect_clickable_input_text() {
+        let doc = lumen_html_parser::parse("<input type=\"text\" placeholder=\"Enter text\">");
+        let root = lay_full("<input type=\"text\" placeholder=\"Enter text\">", "");
+        let clickables = collect_clickable_elements(&root, &doc);
+        assert!(
+            clickables.iter().any(|c| matches!(c.kind, ClickableKind::Input)),
+            "Expected input element"
+        );
+    }
+
+    #[test]
+    fn collect_clickable_details_element() {
+        let doc = lumen_html_parser::parse("<details><summary>Details</summary><p>Content</p></details>");
+        let root = lay_full("<details><summary>Details</summary><p>Content</p></details>", "");
+        let clickables = collect_clickable_elements(&root, &doc);
+        assert!(
+            clickables.iter().any(|c| matches!(c.kind, ClickableKind::Details)),
+            "Expected details element"
+        );
+    }
+
+    #[test]
+    fn collect_clickable_mixed_elements() {
+        let doc = lumen_html_parser::parse(
+            r#"
+            <a href="/home">Home</a>
+            <button>Submit</button>
+            <input type="text">
+            <details><summary>Info</summary></details>
+            "#,
+        );
+        let root = lay_full(
+            r#"
+            <a href="/home">Home</a>
+            <button>Submit</button>
+            <input type="text">
+            <details><summary>Info</summary></details>
+            "#,
+            "",
+        );
+        let clickables = collect_clickable_elements(&root, &doc);
+        assert!(
+            clickables.len() >= 4,
+            "Expected at least 4 clickable elements, got {}",
+            clickables.len()
+        );
+        // Verify each type is present
+        assert!(clickables.iter().any(|c| matches!(c.kind, ClickableKind::Link { .. })));
+        assert!(clickables.iter().any(|c| matches!(c.kind, ClickableKind::Button)));
+        assert!(clickables.iter().any(|c| matches!(c.kind, ClickableKind::Input)));
+        assert!(clickables.iter().any(|c| matches!(c.kind, ClickableKind::Details)));
     }
 
 }
