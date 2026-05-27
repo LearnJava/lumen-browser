@@ -228,6 +228,12 @@ pub struct LayoutBox {
     pub style: ComputedStyle,
     pub kind: BoxKind,
     pub children: Vec<LayoutBox>,
+    /// HTML `colspan` attribute (table cells only). Number of columns this cell spans.
+    /// Always ≥ 1; defaults to 1 for non-table-cell boxes.
+    pub col_span: u32,
+    /// HTML `rowspan` attribute (table cells only). Number of rows this cell spans.
+    /// Always ≥ 1; defaults to 1 for non-table-cell boxes.
+    pub row_span: u32,
 }
 
 /// Отрезок inline-контента с собственным стилем (до layout).
@@ -566,6 +572,8 @@ fn anon_inline_run(node: NodeId, parent: &ComputedStyle, segs: Vec<InlineSegment
         style: anon_style(parent),
         kind: BoxKind::InlineRun { segments: segs, lines: vec![] },
         children: vec![],
+        col_span: 1,
+        row_span: 1,
     }
 }
 
@@ -576,6 +584,8 @@ fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<Layout
         style: anon_style(parent),
         kind: BoxKind::InlineBlockRow,
         children: items,
+        col_span: 1,
+        row_span: 1,
     }
 }
 
@@ -805,6 +815,8 @@ fn inject_pseudo(
                 style: ps,
                 kind: BoxKind::Block,
                 children: inner,
+                col_span: 1,
+                row_span: 1,
             };
             if is_before {
                 children.insert(0, b);
@@ -1007,6 +1019,8 @@ fn inject_marker(parent_id: NodeId, children: &mut Vec<LayoutBox>, style: &Compu
             list_style_type: style.list_style_type,
         },
         children: vec![],
+        col_span: 1,
+        row_span: 1,
     });
 }
 
@@ -1193,6 +1207,8 @@ fn build_box(
                                 style: anon_style(&style),
                                 kind: BoxKind::InlineSpace,
                                 children: vec![],
+                                col_span: 1,
+                                row_span: 1,
                             });
                         }
                         row_items.push(build_box(doc, sheet, cid, &style, viewport, flat, counters));
@@ -1252,12 +1268,33 @@ fn build_box(
         } // end else (non-item-container)
     }
 
+    // Read HTML colspan/rowspan attributes for table-cell elements.
+    let (col_span, row_span) = if style.display == Display::TableCell {
+        let cs = doc
+            .get(id)
+            .get_attr("colspan")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1)
+            .max(1);
+        let rs = doc
+            .get(id)
+            .get_attr("rowspan")
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1)
+            .max(1);
+        (cs, rs)
+    } else {
+        (1, 1)
+    };
+
     LayoutBox {
         node: id,
         rect: Rect::ZERO,
         style,
         kind,
         children,
+        col_span,
+        row_span,
     }
 }
 
@@ -2157,7 +2194,7 @@ fn lay_out(
             // CSS 2.1 §17.5 — table row: ячейки раскладываются горизонтально.
             // col_widths=None → per-row auto-distribution (standalone <tr> outside <table>).
             let row_h = lay_out_table_row(
-                b, content_x, content_y, content_width, None, measurer, viewport, children_pcb, hp,
+                b, content_x, content_y, content_width, None, None, measurer, viewport, children_pcb, hp,
             );
             b.rect.height = if let Some(h_len) = &s.height
                 && let Some(h) = h_len.resolve(em, available_height, viewport)
@@ -2262,14 +2299,17 @@ fn lay_out(
     }
 }
 
-/// CSS 2.1 §17.5 — simplified automatic table layout for a single row.
+/// CSS 2.1 §17.5 — table row layout with colspan/rowspan support.
 ///
-/// Алгоритм:
-/// 1. Ячейки с явным CSS `width` используют его (content-box/border-box).
-/// 2. Оставшаяся ширина делится поровну между ячейками без явной ширины.
-/// 3. После layout все ячейки выравниваются по максимальной высоте строки.
+/// Algorithm:
+/// 1. Map each cell to its starting column (skipping rowspan-occupied columns).
+/// 2. Determine cell width: sum of spanned `col_widths` columns, or explicit CSS width.
+/// 3. Place cells horizontally; use column-position x when `col_widths` is present.
+/// 4. Normalise heights: non-rowspan cells all get the max row height.
+///    Rowspan cells keep their laid-out height; `lay_out_table` fixes them after all rows.
+/// 5. Register new rowspan occupancy in `rowspan_map` (caller decrements after the row).
 ///
-/// Возвращает высоту строки (content height, без padding/border родителя).
+/// Returns content height (without the row's own padding/border).
 #[allow(clippy::too_many_arguments)]
 fn lay_out_table_row(
     b: &mut LayoutBox,
@@ -2277,6 +2317,8 @@ fn lay_out_table_row(
     content_y: f32,
     content_width: f32,
     col_widths: Option<&[f32]>,
+    // None for standalone <tr> outside <table>; caller must call decrement_rowspan_map after return.
+    rowspan_map: Option<&mut Vec<u32>>,
     measurer: Option<&dyn TextMeasurer>,
     viewport: Size,
     pcb: Rect,
@@ -2295,23 +2337,41 @@ fn lay_out_table_row(
         return 0.0;
     }
 
-    // Шаг 1: определяем ширины ячеек — из col_widths если они переданы,
-    // иначе вычисляем из явных CSS-ширин ячеек текущей строки.
-    let resolved_w: Vec<f32> = if let Some(cw) = col_widths {
-        // Pre-computed table-wide column widths; take min(n, cw.len()) columns.
-        (0..n).map(|j| cw.get(j).copied().unwrap_or(0.0)).collect()
+    // Step 1 + 2: map cells to (col_start, cell_width).
+    // `cell_cols[j]` = (starting column index, border-box width to allocate).
+    let cell_cols: Vec<(usize, f32)> = if let Some(cw) = col_widths {
+        // Pre-computed table-wide column widths are authoritative.
+        // Skip columns occupied by rowspan cells from prior rows.
+        let empty: Vec<u32> = Vec::new();
+        let rsmap: &[u32] = rowspan_map
+            .as_deref()
+            .map(|v: &Vec<u32>| v.as_slice())
+            .unwrap_or(empty.as_slice());
+        let mut col_pos = 0usize;
+        let mut result = Vec::with_capacity(n);
+        for &i in &cell_idxs {
+            while col_pos < rsmap.len() && rsmap[col_pos] > 0 {
+                col_pos += 1;
+            }
+            let span = b.children[i].col_span.max(1) as usize;
+            let w: f32 = (col_pos..col_pos + span)
+                .map(|c| cw.get(c).copied().unwrap_or(0.0))
+                .sum();
+            result.push((col_pos, w));
+            col_pos += span;
+        }
+        result
     } else {
+        // No pre-computed widths: derive from each cell's explicit CSS width.
         let mut explicit_w: Vec<Option<f32>> = Vec::with_capacity(n);
         let mut total_explicit = 0.0_f32;
         let mut auto_count: usize = 0;
-
         for &i in &cell_idxs {
             let c = &b.children[i];
             let em = c.style.font_size;
             if let Some(w_len) = &c.style.width
                 && let Some(w) = w_len.resolve(em, Some(content_width), viewport)
             {
-                // Приводим к border-box, чтобы суммировать с другими ячейками.
                 let border_w = match c.style.box_sizing {
                     BoxSizing::ContentBox => {
                         let pl = c.style.padding_left.resolve_or_zero(em, content_width, viewport);
@@ -2327,49 +2387,103 @@ fn lay_out_table_row(
             explicit_w.push(None);
             auto_count += 1;
         }
-
         let auto_share = if auto_count > 0 {
             ((content_width - total_explicit) / auto_count as f32).max(0.0)
         } else {
             0.0
         };
-        explicit_w.iter().map(|w| w.unwrap_or(auto_share)).collect()
+        // Standalone row: sequential column assignment (cell j → column j).
+        (0..n)
+            .map(|j| (j, explicit_w[j].unwrap_or(auto_share)))
+            .collect()
     };
 
-    // Шаг 2: раскладываем ячейки горизонтально.
-    // When col_widths are pre-computed (table layout), the column width is
-    // authoritative — cell's CSS `width` was only a hint for column computation.
-    // Temporarily clear it so lay_out uses avail (the column width) as final width.
+    // Step 3: lay out each cell at its column x position.
+    // When col_widths is present, the column width is authoritative — clear the cell's CSS
+    // `width` temporarily so lay_out uses `avail` as the final width.
     let use_global = col_widths.is_some();
-    let mut cur_x = content_x;
     for (j, &i) in cell_idxs.iter().enumerate() {
-        let avail = resolved_w[j];
+        let (col_start, avail) = cell_cols[j];
+        let cell_x = if use_global {
+            // Exact x from column positions.
+            content_x
+                + (0..col_start)
+                    .map(|c| col_widths.and_then(|cw| cw.get(c)).copied().unwrap_or(0.0))
+                    .sum::<f32>()
+        } else {
+            // Standalone row: use prior cell's right edge.
+            if j == 0 {
+                content_x
+            } else {
+                let prev_i = cell_idxs[j - 1];
+                let c = &b.children[prev_i];
+                let c_em = c.style.font_size;
+                let mr = c.style.margin_right.resolve_or_zero(c_em, content_width, viewport);
+                c.rect.x + c.rect.width + mr
+            }
+        };
         let saved_width = if use_global { b.children[i].style.width.take() } else { None };
-        lay_out(&mut b.children[i], cur_x, content_y, avail, None, measurer, viewport, pcb, hp);
+        lay_out(
+            &mut b.children[i],
+            cell_x,
+            content_y,
+            avail,
+            None,
+            measurer,
+            viewport,
+            pcb,
+            hp,
+        );
         if use_global {
             b.children[i].style.width = saved_width;
         }
-        let c = &b.children[i];
-        let c_em = c.style.font_size;
-        let mr = c.style.margin_right.resolve_or_zero(c_em, content_width, viewport);
-        cur_x = c.rect.x + c.rect.width + mr;
     }
 
-    // Шаг 3: нормализуем высоту — все ячейки = max высота строки.
+    // Register rowspan occupancy. Value = row_span (not row_span-1) because the caller
+    // calls decrement_rowspan_map after this row, leaving row_span-1 remaining rows occupied.
+    if let Some(rsmap) = rowspan_map {
+        for (j, &i) in cell_idxs.iter().enumerate() {
+            if b.children[i].row_span > 1 {
+                let (col_start, _) = cell_cols[j];
+                let span = b.children[i].col_span.max(1) as usize;
+                let end_col = col_start + span;
+                if end_col > rsmap.len() {
+                    rsmap.resize(end_col, 0);
+                }
+                let rs = b.children[i].row_span;
+                for v in rsmap.iter_mut().skip(col_start).take(span) {
+                    if *v < rs {
+                        *v = rs;
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 4: normalise heights — non-rowspan cells all become the max row height.
+    // Rowspan > 1 cells keep their own height; lay_out_table patches them later.
     let row_h = cell_idxs
         .iter()
+        .filter(|&&i| b.children[i].row_span == 1)
         .map(|&i| b.children[i].rect.height)
         .fold(0.0_f32, f32::max);
     for &i in &cell_idxs {
-        b.children[i].rect.height = row_h;
+        if b.children[i].row_span == 1 {
+            b.children[i].rect.height = row_h;
+        }
     }
 
     row_h
 }
 
-/// CSS 2.1 §17 — table layout. Computes global column widths across all rows
-/// (through `TableRowGroup` and direct `TableRow` children), then lays out
-/// rows top-to-bottom in DOM order. Returns content height.
+/// CSS 2.1 §17 — table layout with colspan/rowspan support.
+///
+/// Pass 1: compute column widths (span-aware), lay out rows top-to-bottom while tracking
+/// rowspan occupancy and collecting spanning cells.
+/// Pass 2: fix spanning cell heights — each rowspan cell's height is extended to cover
+/// the bottom edge of its last spanned row.
+///
+/// Returns content height.
 #[allow(clippy::too_many_arguments)]
 fn lay_out_table(
     b: &mut LayoutBox,
@@ -2384,21 +2498,31 @@ fn lay_out_table(
     let col_widths = compute_table_col_widths(b, content_width, viewport);
 
     let mut cur_y = content_y;
+    let mut rowspan_map: Vec<u32> = Vec::new();
+
+    // flat_row_rects[k] = (y, height) for the k-th row in DOM order (across all groups).
+    let mut flat_row_rects: Vec<(f32, f32)> = Vec::new();
+
+    // Spanning cells that need height post-fix:
+    // (group: Option<usize>, row_in_group: usize, child_idx: usize, start_flat: usize, span: u32)
+    let mut span_fixes: Vec<(Option<usize>, usize, usize, usize, u32)> = Vec::new();
+
     let n = b.children.len();
     for i in 0..n {
         match b.children[i].kind {
             BoxKind::TableRow => {
                 let c_em = b.children[i].style.font_size;
                 let c_mt = b.children[i].style.margin_top.resolve_or_zero(c_em, content_width, viewport);
-                let row_x = content_x;
                 let row_y = cur_y + c_mt;
-                b.children[i].rect.x = row_x;
+                b.children[i].rect.x = content_x;
                 b.children[i].rect.y = row_y;
                 b.children[i].rect.width = content_width;
+                let flat_idx = flat_row_rects.len();
                 let row_h = lay_out_table_row(
                     &mut b.children[i],
-                    row_x, row_y, content_width,
+                    content_x, row_y, content_width,
                     Some(&col_widths),
+                    Some(&mut rowspan_map),
                     measurer, viewport, pcb, hp,
                 );
                 let row_style_h = {
@@ -2419,8 +2543,16 @@ fn lay_out_table(
                     }
                 };
                 b.children[i].rect.height = row_style_h;
+                flat_row_rects.push((b.children[i].rect.y, row_style_h));
+                // Collect spanning cells for post-fix.
+                for (ci, child) in b.children[i].children.iter().enumerate() {
+                    if !matches!(child.kind, BoxKind::Skip) && child.row_span > 1 {
+                        span_fixes.push((None, i, ci, flat_idx, child.row_span));
+                    }
+                }
                 let c_mb = b.children[i].style.margin_bottom.resolve_or_zero(b.children[i].style.font_size, content_width, viewport);
                 cur_y = b.children[i].rect.y + b.children[i].rect.height + c_mb;
+                decrement_rowspan_map(&mut rowspan_map);
             }
             BoxKind::TableRowGroup => {
                 let group_em = b.children[i].style.font_size;
@@ -2435,6 +2567,7 @@ fn lay_out_table(
                     if !matches!(b.children[i].children[r].kind, BoxKind::TableRow) {
                         continue;
                     }
+                    let flat_idx = flat_row_rects.len();
                     let r_em = b.children[i].children[r].style.font_size;
                     let r_mt = b.children[i].children[r].style.margin_top.resolve_or_zero(r_em, content_width, viewport);
                     b.children[i].children[r].rect.x = content_x;
@@ -2444,14 +2577,24 @@ fn lay_out_table(
                         &mut b.children[i].children[r],
                         content_x, row_y + r_mt, content_width,
                         Some(&col_widths),
+                        Some(&mut rowspan_map),
                         measurer, viewport, pcb, hp,
                     );
                     let r_pt = b.children[i].children[r].style.padding_top.resolve_or_zero(r_em, content_width, viewport);
                     let r_pb = b.children[i].children[r].style.padding_bottom.resolve_or_zero(r_em, content_width, viewport);
                     let r_bor = b.children[i].children[r].style.border_top_width + b.children[i].children[r].style.border_bottom_width;
-                    b.children[i].children[r].rect.height = row_h + r_pt + r_pb + r_bor;
+                    let row_style_h = row_h + r_pt + r_pb + r_bor;
+                    b.children[i].children[r].rect.height = row_style_h;
+                    flat_row_rects.push((b.children[i].children[r].rect.y, row_style_h));
+                    // Collect spanning cells for post-fix.
+                    for (ci, child) in b.children[i].children[r].children.iter().enumerate() {
+                        if !matches!(child.kind, BoxKind::Skip) && child.row_span > 1 {
+                            span_fixes.push((Some(i), r, ci, flat_idx, child.row_span));
+                        }
+                    }
                     let r_mb = b.children[i].children[r].style.margin_bottom.resolve_or_zero(r_em, content_width, viewport);
                     row_y = b.children[i].children[r].rect.y + b.children[i].children[r].rect.height + r_mb;
+                    decrement_rowspan_map(&mut rowspan_map);
                 }
                 let g_pt = b.children[i].style.padding_top.resolve_or_zero(group_em, content_width, viewport);
                 let g_pb = b.children[i].style.padding_bottom.resolve_or_zero(group_em, content_width, viewport);
@@ -2463,14 +2606,35 @@ fn lay_out_table(
             _ => {}
         }
     }
+
+    // Pass 2: fix rowspan cell heights.
+    // Each spanning cell's height is extended to reach the bottom of its last spanned row.
+    for (group, row, child_idx, start_flat, span) in span_fixes {
+        let end_flat = (start_flat + span as usize).min(flat_row_rects.len());
+        if end_flat == 0 {
+            continue;
+        }
+        let (last_y, last_h) = flat_row_rects[end_flat - 1];
+        let target_bottom = last_y + last_h;
+        let cell = match group {
+            None => &mut b.children[row].children[child_idx],
+            Some(g) => &mut b.children[g].children[row].children[child_idx],
+        };
+        let new_h = (target_bottom - cell.rect.y).max(cell.rect.height);
+        cell.rect.height = new_h;
+    }
+
     (cur_y - content_y).max(0.0)
 }
 
-/// Scans `b`'s cells and updates `col_explicit` with the max explicit border-box
-/// width for each column. Called once per row during the pre-layout scan.
+/// Scans `row`'s cells and updates `col_explicit` with per-column explicit border-box
+/// widths. Colspan cells distribute their width evenly across spanned columns.
+/// Rowspan cells register occupancy in `rowspan_map` for subsequent rows.
+/// Caller must call `decrement_rowspan_map` after processing each row.
 fn scan_row_explicit_widths(
     row: &LayoutBox,
     col_explicit: &mut Vec<Option<f32>>,
+    rowspan_map: &mut Vec<u32>,
     content_width: f32,
     viewport: Size,
 ) {
@@ -2479,7 +2643,15 @@ fn scan_row_explicit_widths(
         .iter()
         .filter(|c| !matches!(c.kind, BoxKind::Skip))
         .collect();
-    for (j, cell) in cells.iter().enumerate() {
+
+    let mut col_pos = 0usize;
+    for cell in &cells {
+        // Skip columns occupied by rowspan cells from prior rows.
+        while col_pos < rowspan_map.len() && rowspan_map[col_pos] > 0 {
+            col_pos += 1;
+        }
+
+        let span = cell.col_span.max(1) as usize;
         let em = cell.style.font_size;
         let w_border = if let Some(w_len) = &cell.style.width
             && let Some(w) = w_len.resolve(em, Some(content_width), viewport)
@@ -2496,32 +2668,67 @@ fn scan_row_explicit_widths(
         } else {
             None
         };
-        if j >= col_explicit.len() {
-            col_explicit.resize(j + 1, None);
+
+        let end_col = col_pos + span;
+        if end_col > col_explicit.len() {
+            col_explicit.resize(end_col, None);
         }
-        col_explicit[j] = match (col_explicit[j], w_border) {
-            (Some(existing), Some(new)) => Some(existing.max(new)),
-            (Some(existing), None) => Some(existing),
-            (None, v) => v,
-        };
+        // Distribute the cell's explicit width evenly across its spanned columns.
+        if let Some(total_w) = w_border {
+            let per_col = total_w / span as f32;
+            for slot in col_explicit.iter_mut().skip(col_pos).take(span) {
+                *slot = Some(match *slot {
+                    Some(existing) => existing.max(per_col),
+                    None => per_col,
+                });
+            }
+        }
+
+        // Register rowspan occupancy. Value = row_span (decrement_rowspan_map brings it to
+        // row_span-1 after this row, meaning row_span-1 subsequent rows remain occupied).
+        if cell.row_span > 1 {
+            if end_col > rowspan_map.len() {
+                rowspan_map.resize(end_col, 0);
+            }
+            let rs = cell.row_span;
+            for v in rowspan_map.iter_mut().skip(col_pos).take(span) {
+                if *v < rs {
+                    *v = rs;
+                }
+            }
+        }
+
+        col_pos = end_col;
+    }
+}
+
+/// Decrements each entry in `rowspan_map` by 1 (clamped to 0). Call after each row.
+fn decrement_rowspan_map(map: &mut [u32]) {
+    for v in map.iter_mut() {
+        *v = v.saturating_sub(1);
     }
 }
 
 /// Computes per-column widths for a `BoxKind::Table` element by scanning all rows
-/// (direct and inside `TableRowGroup` children). Returns a `Vec<f32>` of border-box
+/// (direct and inside `TableRowGroup` children). Colspan/rowspan-aware: cells with
+/// `colspan > 1` distribute their width across columns; `rowspan > 1` cells block
+/// subsequent rows from reusing those columns. Returns a `Vec<f32>` of border-box
 /// widths, one per column.
 fn compute_table_col_widths(b: &LayoutBox, content_width: f32, viewport: Size) -> Vec<f32> {
     let mut col_explicit: Vec<Option<f32>> = Vec::new();
+    let mut rowspan_map: Vec<u32> = Vec::new();
 
     for child in &b.children {
         match &child.kind {
             BoxKind::TableRow => {
-                scan_row_explicit_widths(child, &mut col_explicit, content_width, viewport);
+                scan_row_explicit_widths(child, &mut col_explicit, &mut rowspan_map, content_width, viewport);
+                decrement_rowspan_map(&mut rowspan_map);
             }
             BoxKind::TableRowGroup => {
                 for row in &child.children {
                     if matches!(row.kind, BoxKind::TableRow) {
-                        scan_row_explicit_widths(row, &mut col_explicit, content_width, viewport);
+                        scan_row_explicit_widths(row, &mut col_explicit, &mut rowspan_map, content_width, viewport);
+                        decrement_rowspan_map(&mut rowspan_map);
                     }
                 }
             }

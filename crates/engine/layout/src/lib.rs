@@ -138,6 +138,19 @@ mod tests {
             .expect("expected at least one element child")
     }
 
+    /// DFS search: first box in tree (including `b` itself) matching the predicate.
+    fn find_box(b: &LayoutBox, pred: impl Fn(&BoxKind) -> bool + Copy) -> Option<&LayoutBox> {
+        if pred(&b.kind) {
+            return Some(b);
+        }
+        for c in &b.children {
+            if let Some(found) = find_box(c, pred) {
+                return Some(found);
+            }
+        }
+        None
+    }
+
     #[test]
     fn empty_document() {
         let root = lay("", "");
@@ -10164,6 +10177,248 @@ mod tests {
         assert!((r2[1].rect.width - 150.0).abs() < 0.01, "r2 col1=150 (global), got {}", r2[1].rect.width);
     }
 
+    // ── colspan / rowspan ────────────────────────────────────────────────────
+    // All table tests use explicit <tbody> because html-full-tree-builder
+    // correctly injects implicit <tbody> for bare <table><tr> markup (BUG-040).
+
+    /// `col_span` and `row_span` are stored on the LayoutBox from HTML attrs.
+    #[test]
+    fn table_cell_col_span_row_span_stored() {
+        let root = lay(
+            "<body><table><tbody><tr>\
+               <td colspan=\"3\" rowspan=\"2\"></td>\
+             </tr></tbody></table></body>",
+            "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        );
+        let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
+        let tbody = find_box(table, |k| matches!(k, BoxKind::TableRowGroup)).unwrap();
+        let row = find_box(tbody, |k| matches!(k, BoxKind::TableRow)).unwrap();
+        let cell = row.children.iter().find(|c| matches!(c.kind, BoxKind::Block)).unwrap();
+        assert_eq!(cell.col_span, 3, "colspan=3 must be stored");
+        assert_eq!(cell.row_span, 2, "rowspan=2 must be stored");
+    }
+
+    /// Non-cell boxes have col_span=1, row_span=1 by default.
+    #[test]
+    fn non_cell_col_row_span_defaults_to_one() {
+        let root = lay("<body><div></div></body>", "");
+        let body = first_element_child(&root);
+        let div = first_element_child(body);
+        assert_eq!(div.col_span, 1);
+        assert_eq!(div.row_span, 1);
+    }
+
+    /// `<td colspan="2">` spanning two equal-width columns gets combined width.
+    #[test]
+    fn table_colspan2_cell_width() {
+        // Row 1 sets col widths: col0=100, col1=100.
+        // Row 2 has a single cell with colspan=2 → width should be 200.
+        let root = lay(
+            "<body><table><tbody>\
+               <tr><td style=\"width:100px;height:20px\"></td>\
+                   <td style=\"width:100px;height:20px\"></td></tr>\
+               <tr><td colspan=\"2\" style=\"height:30px\"></td></tr>\
+             </tbody></table></body>",
+            "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        );
+        let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
+        let tbody = find_box(table, |k| matches!(k, BoxKind::TableRowGroup)).unwrap();
+        let rows: Vec<_> = tbody
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, BoxKind::TableRow))
+            .collect();
+        assert_eq!(rows.len(), 2);
+        let r2_cells: Vec<_> = rows[1]
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, BoxKind::Block))
+            .collect();
+        assert_eq!(r2_cells.len(), 1, "colspan=2 row must have exactly 1 DOM cell");
+        assert!(
+            (r2_cells[0].rect.width - 200.0).abs() < 0.01,
+            "colspan=2 cell width should be 200px, got {}",
+            r2_cells[0].rect.width
+        );
+        assert!(
+            (r2_cells[0].rect.x - 0.0).abs() < 0.01,
+            "colspan=2 cell x should be 0, got {}",
+            r2_cells[0].rect.x
+        );
+    }
+
+    /// Cell after a `colspan=2` cell starts at column 2 (x = col0+col1).
+    #[test]
+    fn table_cell_after_colspan2_x_position() {
+        // Row 1: col0=60, col1=80, col2=50.
+        // Row 2: [colspan=2 cell → cols 0-1, width=140], [cell at col2, width=50].
+        let root = lay(
+            "<body><table><tbody>\
+               <tr><td style=\"width:60px;height:20px\"></td>\
+                   <td style=\"width:80px;height:20px\"></td>\
+                   <td style=\"width:50px;height:20px\"></td></tr>\
+               <tr><td colspan=\"2\" style=\"height:20px\"></td>\
+                   <td style=\"height:20px\"></td></tr>\
+             </tbody></table></body>",
+            "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        );
+        let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
+        let tbody = find_box(table, |k| matches!(k, BoxKind::TableRowGroup)).unwrap();
+        let rows: Vec<_> = tbody
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, BoxKind::TableRow))
+            .collect();
+        let r2_cells: Vec<_> = rows[1]
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, BoxKind::Block))
+            .collect();
+        assert_eq!(r2_cells.len(), 2, "row 2 should have 2 DOM cells");
+        assert!(
+            (r2_cells[0].rect.x - 0.0).abs() < 0.01,
+            "colspan cell x=0, got {}",
+            r2_cells[0].rect.x
+        );
+        assert!(
+            (r2_cells[0].rect.width - 140.0).abs() < 0.01,
+            "colspan=2 width=140, got {}",
+            r2_cells[0].rect.width
+        );
+        assert!(
+            (r2_cells[1].rect.x - 140.0).abs() < 0.01,
+            "cell after colspan x=140, got {}",
+            r2_cells[1].rect.x
+        );
+        assert!(
+            (r2_cells[1].rect.width - 50.0).abs() < 0.01,
+            "cell after colspan width=50, got {}",
+            r2_cells[1].rect.width
+        );
+    }
+
+    /// `colspan=2 width=200` distributes 100px hint per column;
+    /// an explicit 120px col0 in another row wins over the 100px hint.
+    #[test]
+    fn table_colspan_distributes_width_hint() {
+        let root = lay(
+            "<body><table><tbody>\
+               <tr><td style=\"width:120px;height:20px\"></td>\
+                   <td style=\"height:20px\"></td></tr>\
+               <tr><td colspan=\"2\" style=\"width:200px;height:20px\"></td></tr>\
+             </tbody></table></body>",
+            "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        );
+        let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
+        let tbody = find_box(table, |k| matches!(k, BoxKind::TableRowGroup)).unwrap();
+        let rows: Vec<_> = tbody
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, BoxKind::TableRow))
+            .collect();
+        let r1_cells: Vec<_> = rows[0]
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, BoxKind::Block))
+            .collect();
+        // col0 = max(120, 100) = 120; col1 = max(auto→0, 100) = 100
+        assert!(
+            (r1_cells[0].rect.width - 120.0).abs() < 0.01,
+            "col0 should be 120, got {}",
+            r1_cells[0].rect.width
+        );
+        assert!(
+            (r1_cells[1].rect.width - 100.0).abs() < 0.01,
+            "col1 hint from colspan should be 100, got {}",
+            r1_cells[1].rect.width
+        );
+    }
+
+    /// `rowspan=2` in row 1 occupies col0 for both rows;
+    /// row 2's cell must be placed at col1, not col0.
+    #[test]
+    fn table_rowspan2_second_row_skips_occupied_column() {
+        let root = lay(
+            "<body><table><tbody>\
+               <tr><td rowspan=\"2\" style=\"width:80px;height:20px\"></td>\
+                   <td style=\"width:60px;height:20px\"></td></tr>\
+               <tr><td style=\"width:60px;height:20px\"></td></tr>\
+             </tbody></table></body>",
+            "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        );
+        let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
+        let tbody = find_box(table, |k| matches!(k, BoxKind::TableRowGroup)).unwrap();
+        let rows: Vec<_> = tbody
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, BoxKind::TableRow))
+            .collect();
+        let r2_cells: Vec<_> = rows[1]
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, BoxKind::Block))
+            .collect();
+        assert_eq!(r2_cells.len(), 1, "row 2 has 1 DOM cell");
+        assert!(
+            (r2_cells[0].rect.x - 80.0).abs() < 0.01,
+            "row2 cell must start at x=80 (col1), got {}",
+            r2_cells[0].rect.x
+        );
+        assert!(
+            (r2_cells[0].rect.width - 60.0).abs() < 0.01,
+            "row2 cell width=60, got {}",
+            r2_cells[0].rect.width
+        );
+    }
+
+    /// After layout, a `rowspan=2` cell's height is patched to cover both rows.
+    #[test]
+    fn table_rowspan2_cell_height_spans_two_rows() {
+        // Row1: [A(rowspan=2,h=10), B(h=30)] → row1_h=30.
+        // Row2: [C(h=40)] → row2_h=40.
+        // A.height post-fix = row1.y+row1.h + row2.h - A.y = 30+40 = 70.
+        let root = lay(
+            "<body><table><tbody>\
+               <tr><td rowspan=\"2\" style=\"width:50px;height:10px\"></td>\
+                   <td style=\"width:50px;height:30px\"></td></tr>\
+               <tr><td style=\"width:50px;height:40px\"></td></tr>\
+             </tbody></table></body>",
+            "body,table,tbody,tr,td { margin:0; padding:0; border:0 }",
+        );
+        let table = find_box(&root, |k| matches!(k, BoxKind::Table)).unwrap();
+        let tbody = find_box(table, |k| matches!(k, BoxKind::TableRowGroup)).unwrap();
+        let rows: Vec<_> = tbody
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, BoxKind::TableRow))
+            .collect();
+        let row1_cells: Vec<_> = rows[0]
+            .children
+            .iter()
+            .filter(|c| matches!(c.kind, BoxKind::Block))
+            .collect();
+        let cell_a = row1_cells[0];
+        let row1_h = rows[0].rect.height;
+        let row2_h = rows[1].rect.height;
+        assert!(
+            (row1_h - 30.0).abs() < 0.01,
+            "row1 height should be 30 (from B), got {}",
+            row1_h
+        );
+        assert!(
+            (row2_h - 40.0).abs() < 0.01,
+            "row2 height should be 40 (from C), got {}",
+            row2_h
+        );
+        let expected_a_h = row1_h + row2_h;
+        assert!(
+            (cell_a.rect.height - expected_a_h).abs() < 0.01,
+            "rowspan=2 cell A height should be {}, got {}",
+            expected_a_h,
+            cell_a.rect.height
+        );
+    }
+
     /// Author CSS `background-color` выигрывает у presentational hint `bgcolor`.
     #[test]
     fn author_css_overrides_bgcolor_hint() {
@@ -12571,4 +12826,5 @@ mod tests {
         assert_eq!(outer_text, "1", "outer li counter should be 1");
         assert!(inner_found, "inner li should also have counter text");
     }
+
 }

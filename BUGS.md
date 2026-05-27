@@ -52,6 +52,7 @@ BUG-036 | FIXED 2026-05-26 | layout          | border-radius: % значения
 BUG-037 | FIXED 2026-05-26 | paint           | CSS filter effects не применяются визуально (grayscale/sepia/blur/etc.) — shared filter_uniform перезаписывался; fix: per-pass буфер через mapped_at_creation
 BUG-038 | FIXED 2026-05-26 | layout          | list-style-position: inside — маркер занимал отдельную строку; li высотой 2× от нормы; fix: не продвигать child_y, сдвигать InlineRun вправо на marker_w
 BUG-039 | FIXED 2026-05-26 | paint           | dashed/dotted border mismatch vs Chrome/Edge: dash ratio 3:1→Skia algo, corner squares→circle quads for dotted, 1px linear SDF AA
+BUG-040 | OPEN  | layout          | table layout unit tests assume direct <tr> children of <table>; html-full-tree-builder now injects implicit <tbody> breaking them | layout/src/lib.rs:9996
 ```
 
 ---
