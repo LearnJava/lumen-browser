@@ -199,7 +199,7 @@
 | 5A | ✅ **Canvas 2D basic context** — CPU rasterizer, `CanvasRenderingContext2D` Phase 0 | `engine/canvas/` | 2026-05-22 |
 | 5B | ✅ **WOFF2/WOFF1 decoder** — brotli + zlib, glyf transform, sfnt rebuild | `engine/font/src/woff2.rs` | 2026-05-22 |
 | 5+ | ✅ **GPU linear/radial gradient pipeline** — WGSL шейдер + CPU uniform + DrawOp::Gradient | `paint/src/renderer.rs` | 2026-05-22 |
-| 5++ | 🟡 **Extras**: object-fit ✅, variable fonts ✅, Print PDF (🟡 pagination module) | `layout/src/pagination.rs` | 2026-05-27 |
+| 5++ | ✅ **Extras**: object-fit ✅, variable fonts ✅, Print PDF Phase 1 (✅ pagination module) | `layout/src/pagination.rs` | 2026-05-28 |
 
 #### Track P3 — Runtime + system (объединённый домен — больше треков, но всё параллельно)
 
