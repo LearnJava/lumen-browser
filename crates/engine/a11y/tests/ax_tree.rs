@@ -976,6 +976,99 @@ fn aria_details_attribute_present() {
     assert!(input.details.is_none(), "aria-details resolution pending Document API");
 }
 
+#[test]
+fn columnheader_requires_row_context() {
+    let doc = parse(r#"
+        <table>
+            <tr>
+                <th>Name</th>
+                <th>Age</th>
+            </tr>
+        </table>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let header = find_role_dfs(&tree.root, AXRole::ColumnHeader).expect("columnheader");
+    assert_eq!(header.role, AXRole::ColumnHeader, "columnheader valid in row");
+}
+
+#[test]
+fn rowheader_or_columnheader_in_table() {
+    let doc = parse(r#"
+        <table>
+            <tr>
+                <th scope="row">Item</th>
+                <td>Data</td>
+            </tr>
+        </table>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    // <th> becomes either RowHeader or ColumnHeader depending on scope/position
+    let headers = collect_roles_dfs(&tree.root, AXRole::RowHeader);
+    let col_headers = collect_roles_dfs(&tree.root, AXRole::ColumnHeader);
+    assert!(
+        !headers.is_empty() || !col_headers.is_empty(),
+        "table header should be rowheader or columnheader"
+    );
+}
+
+#[test]
+fn aria_current_on_non_link() {
+    // aria-current should work on any element, not just links
+    let doc = parse(r#"<button aria-current="page">Current Page</button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.state.current, Some(lumen_a11y::AriaCurrent::Page), "aria-current on button");
+}
+
+#[test]
+fn role_attributes_with_empty_string_ignored() {
+    // Empty role attribute should not affect implicit role
+    let doc = parse(r#"<button role="">Click</button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button");
+    assert_eq!(btn.role, AXRole::Button, "button role preserved with empty role attr");
+}
+
+#[test]
+fn explicit_role_none_semantics() {
+    // role="none" / role="presentation" removes semantics
+    let doc = parse(r#"<button role="none">Not a button</button>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let btn = find_role_dfs(&tree.root, AXRole::Button);
+    assert!(btn.is_none(), "role=none overrides button implicit role");
+    let generic = find_role_dfs(&tree.root, AXRole::Generic);
+    // Should have some role, but not Button
+    assert!(generic.is_some() || find_role_dfs(&tree.root, AXRole::None).is_some());
+}
+
+#[test]
+fn nested_table_row_is_valid() {
+    // Row in nested table should still be valid
+    let doc = parse(r#"
+        <table>
+            <tr>
+                <td>
+                    <table>
+                        <tr><td>Nested</td></tr>
+                    </table>
+                </td>
+            </tr>
+        </table>
+    "#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let rows = collect_roles_dfs(&tree.root, AXRole::Row);
+    assert_eq!(rows.len(), 2, "both outer and nested rows should exist");
+}
+
+#[test]
+fn aria_current_false_not_present() {
+    // aria-current="false" should result in None, not Some(false)
+    let doc = parse(r#"<a href="/" aria-current="false">Not Current</a>"#);
+    let tree = build_ax_tree(&doc, doc.root());
+    let link = find_role_dfs(&tree.root, AXRole::Link).expect("link");
+    assert!(link.state.current.is_none(), "aria-current=false should be None");
+}
+
 fn find_with_tabindex(node: &lumen_a11y::AXNode, index: i32) -> Option<&lumen_a11y::AXNode> {
     if node.state.tab_index == Some(index) {
         return Some(node);

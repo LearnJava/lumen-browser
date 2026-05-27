@@ -1,5 +1,5 @@
 In progress: lumen-a11y-full stage 3 — ARIA attribute application + computed role mapping  branch: p1-a11y-full-stage3
-Next step: Extend AXState with ARIA properties (aria-controls, aria-owns, aria-flowto, aria-current, aria-details, aria-roledescription, aria-modal, aria-valuenow/min/max/text); implement computed-role-mapping with context validation and fallback rules per HTML-AAM  crates/engine/a11y/src/lib.rs:125
+Next step: Relationship resolution via Document::find_by_id() for aria-controls/owns/flowto/details (currently TODO); additional role context rules per HTML-AAM 5.3  crates/engine/a11y/src/lib.rs:312
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
