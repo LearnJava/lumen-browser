@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use lumen_core::form::{encode_form_urlencoded, FormEntry};
 use lumen_core::geom::Rect;
 use lumen_dom::{
-    collect_dom_form_fields, find_ancestor_form, Attribute, Document, InputType, NodeData,
-    NodeId, QualName,
+    check_validity_form, collect_dom_form_fields, find_ancestor_form, invalid_controls_in_form,
+    Attribute, Document, InputType, NodeData, NodeId, QualName,
 };
 use lumen_layout::{BorderStyle, BoxKind, Color, FontStyle, FontWeight, LayoutBox};
 use lumen_paint::{DisplayCommand, DisplayList};
@@ -271,7 +271,11 @@ pub fn collect_form_entries(
 
 /// Построить параметры отправки формы: `(action, method, body)`.
 ///
-/// Возвращает `None` если submit-кнопка не вложена ни в какую `<form>`.
+/// Возвращает `None` если:
+/// - submit-кнопка не вложена ни в какую `<form>`, или
+/// - форма не проходит constraint validation (HTML5 §4.10.22.3 step 5).
+///
+/// Во втором случае выводит список невалидных контролов в stderr.
 ///
 /// - `action` — значение атрибута `action` формы (пустая строка если
 ///   атрибут отсутствует; вызывающий код должен резолвить к текущему URL).
@@ -286,6 +290,17 @@ pub fn build_form_submit(
     form_state: &FormState,
 ) -> Option<(String, String, String)> {
     let form_id = find_ancestor_form(doc, submit_node)?;
+
+    // HTML5 §4.10.22.3 step 5: interactive validation — block submit if invalid.
+    if !check_validity_form(doc, form_id) {
+        let invalid = invalid_controls_in_form(doc, form_id);
+        eprintln!(
+            "forms: submit blocked — {} control(s) failed constraint validation",
+            invalid.len()
+        );
+        return None;
+    }
+
     let form_node = doc.get(form_id);
     let action = form_node.get_attr("action").unwrap_or("").to_string();
     let method = form_node

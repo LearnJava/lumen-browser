@@ -913,6 +913,275 @@ fn find_selected_option(doc: &Document, select_id: NodeId) -> String {
     first_value
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// HTML5 Constraint Validation API (§4.10.21)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Validity state for a form control — HTML5 §4.10.21.1 `ValidityState` interface.
+///
+/// Phase 0: `pattern_mismatch`, `step_mismatch`, `bad_input`, `custom_error`
+/// are always `false` (require runtime state or regex engine).
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct ValidityState {
+    /// Required field with no value / unchecked checkbox.
+    pub value_missing: bool,
+    /// `type=email` or `type=url` with syntactically wrong value.
+    pub type_mismatch: bool,
+    /// `pattern` attribute not matched — Phase 0: always false.
+    pub pattern_mismatch: bool,
+    /// Value length exceeds `maxlength`.
+    pub too_long: bool,
+    /// Value length is less than `minlength`.
+    pub too_short: bool,
+    /// Numeric value is less than `min`.
+    pub range_underflow: bool,
+    /// Numeric value is greater than `max`.
+    pub range_overflow: bool,
+    /// Value doesn't match `step` — Phase 0: always false.
+    pub step_mismatch: bool,
+    /// User agent can't convert the input — Phase 0: always false.
+    pub bad_input: bool,
+    /// `setCustomValidity("")` was called with non-empty string — Phase 0: always false.
+    pub custom_error: bool,
+}
+
+impl ValidityState {
+    /// Returns `true` when all flags are `false` (element satisfies all constraints).
+    pub fn valid(&self) -> bool {
+        !self.value_missing
+            && !self.type_mismatch
+            && !self.pattern_mismatch
+            && !self.too_long
+            && !self.too_short
+            && !self.range_underflow
+            && !self.range_overflow
+            && !self.step_mismatch
+            && !self.bad_input
+            && !self.custom_error
+    }
+}
+
+/// Returns the validity state for `node`, or `None` if the node is not a
+/// form-associated element subject to constraint validation (HTML5 §4.10.21.2).
+///
+/// "Barred" conditions (return `None`):
+///   - Not an `<input>`, `<select>`, or `<textarea>`.
+///   - `<input type="hidden|button|submit|reset|image">`.
+///   - Any element with the `disabled` attribute.
+pub fn element_validity(doc: &Document, node: NodeId) -> Option<ValidityState> {
+    let node_ref = doc.get(node);
+    let tag = node_ref.element_name()?.local.as_str().to_ascii_lowercase();
+    let tag = tag.as_str();
+
+    let t_lower;
+    let (is_input, itype) = match tag {
+        "input" => {
+            t_lower = node_ref
+                .get_attr("type")
+                .map(|t| t.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty())
+                .unwrap_or_else(|| "text".to_string());
+            let t = t_lower.as_str();
+            // Barred input types per HTML5 §4.10.21.2.
+            if matches!(t, "hidden" | "button" | "submit" | "reset" | "image") {
+                return None;
+            }
+            (true, t)
+        }
+        "select" | "textarea" => (false, tag),
+        _ => return None,
+    };
+
+    if node_ref.get_attr("disabled").is_some() {
+        return None;
+    }
+
+    let mut vs = ValidityState::default();
+
+    // --- valueMissing (HTML5 §4.10.21.4.1) ---
+    if node_ref.get_attr("required").is_some() {
+        let missing = if is_input {
+            match itype {
+                "checkbox" | "radio" => node_ref.get_attr("checked").is_none(),
+                _ => node_ref.get_attr("value").unwrap_or("").trim().is_empty(),
+            }
+        } else if tag == "textarea" {
+            dom_text_content(doc, node).trim().is_empty()
+        } else {
+            // select: simplified — checks for non-empty selected value.
+            node_ref.get_attr("value").unwrap_or("").trim().is_empty()
+        };
+        vs.value_missing = missing;
+    }
+
+    if is_input {
+        let value = node_ref.get_attr("value").unwrap_or("");
+
+        // --- typeMismatch (HTML5 §4.10.21.4.2) ---
+        if !value.is_empty() {
+            if itype == "email" {
+                vs.type_mismatch = !is_valid_email_dom(value);
+            } else if itype == "url" {
+                vs.type_mismatch = !is_valid_url_dom(value);
+            }
+        }
+
+        // --- rangeUnderflow / rangeOverflow (HTML5 §4.10.21.4.6-7) ---
+        let supports_range = matches!(itype, "number" | "range" | "date" | "time");
+        if supports_range {
+            if let Some(val_num) = parse_html_float(value) {
+                let min_num = node_ref.get_attr("min").and_then(parse_html_float);
+                let max_num = node_ref.get_attr("max").and_then(parse_html_float);
+                if let Some(min) = min_num {
+                    vs.range_underflow = val_num < min;
+                }
+                if let Some(max) = max_num {
+                    vs.range_overflow = val_num > max;
+                }
+            } else if itype == "range" {
+                // range with no/invalid value uses default mid-point — never under/overflow.
+            }
+        }
+
+        // --- tooLong (HTML5 §4.10.21.4.8) ---
+        if let Some(max_len) = node_ref.get_attr("maxlength").and_then(|v| v.trim().parse::<usize>().ok()) {
+            vs.too_long = value.chars().count() > max_len;
+        }
+
+        // --- tooShort (HTML5 §4.10.21.4.9): only when field has a value ---
+        if let Some(min_len) = node_ref.get_attr("minlength").and_then(|v| v.trim().parse::<usize>().ok()) {
+            vs.too_short = !value.is_empty() && value.chars().count() < min_len;
+        }
+    } else if tag == "textarea" {
+        let value = dom_text_content(doc, node);
+        if let Some(max_len) = node_ref.get_attr("maxlength").and_then(|v| v.trim().parse::<usize>().ok()) {
+            vs.too_long = value.chars().count() > max_len;
+        }
+        if let Some(min_len) = node_ref.get_attr("minlength").and_then(|v| v.trim().parse::<usize>().ok()) {
+            vs.too_short = !value.is_empty() && value.chars().count() < min_len;
+        }
+    }
+
+    Some(vs)
+}
+
+/// Returns `true` if all submittable controls in `form_id` satisfy their
+/// constraints (HTML5 §4.10.22.3 «statically validate the constraints»).
+///
+/// Returns `false` as soon as one invalid control is found.
+/// All controls are barred controls — `check_validity_form` returns `true`
+/// (vacuously valid — HTML5: «an element satisfies its constraints» when barred).
+pub fn check_validity_form(doc: &Document, form_id: NodeId) -> bool {
+    let mut all_valid = true;
+    collect_validity_in(doc, form_id, form_id, &mut all_valid);
+    all_valid
+}
+
+/// Returns the `NodeId`s of all invalid (failing constraint validation) controls
+/// inside `form_id`, in DOM order.
+pub fn invalid_controls_in_form(doc: &Document, form_id: NodeId) -> Vec<NodeId> {
+    let mut out = Vec::new();
+    collect_invalid_in(doc, form_id, form_id, &mut out);
+    out
+}
+
+fn collect_validity_in(doc: &Document, id: NodeId, form_id: NodeId, all_valid: &mut bool) {
+    if !*all_valid {
+        return; // early exit on first failure
+    }
+    let tag = doc.get(id).element_name().map(|q| q.local.as_str().to_ascii_lowercase()).unwrap_or_default();
+    if matches!(tag.as_str(), "input" | "select" | "textarea")
+        && element_validity(doc, id).is_some_and(|vs| !vs.valid())
+    {
+        *all_valid = false;
+        return;
+    }
+    if tag == "form" && id != form_id {
+        return; // don't cross into nested forms
+    }
+    for &child in &doc.get(id).children.clone() {
+        collect_validity_in(doc, child, form_id, all_valid);
+        if !*all_valid {
+            return;
+        }
+    }
+}
+
+fn collect_invalid_in(doc: &Document, id: NodeId, form_id: NodeId, out: &mut Vec<NodeId>) {
+    let tag = doc.get(id).element_name().map(|q| q.local.as_str().to_ascii_lowercase()).unwrap_or_default();
+    if matches!(tag.as_str(), "input" | "select" | "textarea")
+        && element_validity(doc, id).is_some_and(|vs| !vs.valid())
+    {
+        out.push(id);
+    }
+    if tag == "form" && id != form_id {
+        return;
+    }
+    for &child in &doc.get(id).children.clone() {
+        collect_invalid_in(doc, child, form_id, out);
+    }
+}
+
+/// Collects all text content of an element (all Text descendants in DOM order).
+fn dom_text_content(doc: &Document, node: NodeId) -> String {
+    let mut out = String::new();
+    dom_collect_text(doc, node, &mut out);
+    out
+}
+
+fn dom_collect_text(doc: &Document, node: NodeId, out: &mut String) {
+    for &child in &doc.get(node).children {
+        match &doc.get(child).data {
+            NodeData::Text(s) => out.push_str(s),
+            NodeData::Element { .. } => dom_collect_text(doc, child, out),
+            _ => {}
+        }
+    }
+}
+
+/// Parses an HTML5 valid floating-point number (§2.5.5).
+/// Rejects leading `+`, NaN, and ±∞.
+fn parse_html_float(s: &str) -> Option<f64> {
+    let s = s.trim();
+    if s.is_empty() || s.starts_with('+') {
+        return None;
+    }
+    let v: f64 = s.parse().ok()?;
+    if v.is_finite() { Some(v) } else { None }
+}
+
+/// Basic email syntax check (HTML5 §4.10.5.1.5 «valid e-mail address»).
+/// Phase 0: non-empty local-part + `@` + domain with at least one `.`.
+fn is_valid_email_dom(value: &str) -> bool {
+    let value = value.trim();
+    let Some(at_pos) = value.rfind('@') else { return false; };
+    let local = &value[..at_pos];
+    let domain = &value[at_pos + 1..];
+    if local.is_empty() || domain.is_empty() {
+        return false;
+    }
+    let parts: Vec<&str> = domain.split('.').collect();
+    parts.len() >= 2 && parts.iter().all(|p| !p.is_empty())
+}
+
+/// Basic URL syntax check (HTML5 §4.10.5.1.15 «valid URL»).
+/// Phase 0: presence of `<scheme>://` or known schemeless URIs.
+fn is_valid_url_dom(value: &str) -> bool {
+    let value = value.trim();
+    if let Some(pos) = value.find("://") {
+        let scheme = &value[..pos];
+        return !scheme.is_empty()
+            && scheme.chars().all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '-' || c == '.');
+    }
+    if let Some(pos) = value.find(':') {
+        let scheme = &value[..pos];
+        if matches!(scheme, "data" | "mailto" | "tel") {
+            return !value[pos + 1..].is_empty();
+        }
+    }
+    false
+}
+
 /// Информация об якорной ссылке (`<a href>`), найденной в документе.
 pub struct AnchorInfo {
     /// Значение атрибута `href`.
@@ -2042,5 +2311,227 @@ mod tests {
         assert_eq!(fields[0], ("a".into(), "1".into()));
         assert_eq!(fields[1], ("b".into(), "2".into()));
         assert_eq!(fields[2], ("c".into(), "3".into()));
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // ValidityState tests
+    // ──────────────────────────────────────────────────────────────────────────
+
+    fn make_input(attrs: &[(&str, &str)]) -> (Document, NodeId, NodeId) {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs: a, .. } = &mut doc.get_mut(inp).data {
+            for &(name, val) in attrs {
+                a.push(Attribute { name: QualName::html(name), value: val.into() });
+            }
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp);
+        (doc, form, inp)
+    }
+
+    #[test]
+    fn validity_non_form_element_returns_none() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), div);
+        assert_eq!(element_validity(&doc, div), None);
+    }
+
+    #[test]
+    fn validity_hidden_input_returns_none() {
+        let (doc, _, inp) = make_input(&[("type", "hidden"), ("required", "")]);
+        assert_eq!(element_validity(&doc, inp), None);
+    }
+
+    #[test]
+    fn validity_submit_input_returns_none() {
+        let (doc, _, inp) = make_input(&[("type", "submit")]);
+        assert_eq!(element_validity(&doc, inp), None);
+    }
+
+    #[test]
+    fn validity_disabled_input_returns_none() {
+        let (doc, _, inp) = make_input(&[("required", ""), ("disabled", "")]);
+        assert_eq!(element_validity(&doc, inp), None);
+    }
+
+    #[test]
+    fn validity_required_empty_value_missing() {
+        let (doc, _, inp) = make_input(&[("required", ""), ("value", "")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(vs.value_missing);
+        assert!(!vs.valid());
+    }
+
+    #[test]
+    fn validity_required_with_value_not_missing() {
+        let (doc, _, inp) = make_input(&[("required", ""), ("value", "alice")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(!vs.value_missing);
+        assert!(vs.valid());
+    }
+
+    #[test]
+    fn validity_required_checkbox_unchecked_missing() {
+        let (doc, _, inp) = make_input(&[("type", "checkbox"), ("required", "")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(vs.value_missing);
+    }
+
+    #[test]
+    fn validity_required_checkbox_checked_ok() {
+        let (doc, _, inp) = make_input(&[("type", "checkbox"), ("required", ""), ("checked", "")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(!vs.value_missing);
+        assert!(vs.valid());
+    }
+
+    #[test]
+    fn validity_email_type_mismatch() {
+        let (doc, _, inp) = make_input(&[("type", "email"), ("value", "notanemail")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(vs.type_mismatch);
+        assert!(!vs.valid());
+    }
+
+    #[test]
+    fn validity_email_valid() {
+        let (doc, _, inp) = make_input(&[("type", "email"), ("value", "user@example.com")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(!vs.type_mismatch);
+        assert!(vs.valid());
+    }
+
+    #[test]
+    fn validity_url_type_mismatch() {
+        let (doc, _, inp) = make_input(&[("type", "url"), ("value", "notaurl")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(vs.type_mismatch);
+    }
+
+    #[test]
+    fn validity_url_valid() {
+        let (doc, _, inp) = make_input(&[("type", "url"), ("value", "https://example.com")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(!vs.type_mismatch);
+        assert!(vs.valid());
+    }
+
+    #[test]
+    fn validity_range_underflow() {
+        let (doc, _, inp) = make_input(&[("type", "number"), ("min", "10"), ("value", "5")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(vs.range_underflow);
+        assert!(!vs.range_overflow);
+        assert!(!vs.valid());
+    }
+
+    #[test]
+    fn validity_range_overflow() {
+        let (doc, _, inp) = make_input(&[("type", "number"), ("max", "10"), ("value", "20")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(vs.range_overflow);
+        assert!(!vs.range_underflow);
+        assert!(!vs.valid());
+    }
+
+    #[test]
+    fn validity_number_in_range() {
+        let (doc, _, inp) = make_input(&[("type", "number"), ("min", "0"), ("max", "100"), ("value", "50")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(!vs.range_underflow);
+        assert!(!vs.range_overflow);
+        assert!(vs.valid());
+    }
+
+    #[test]
+    fn validity_too_long() {
+        let (doc, _, inp) = make_input(&[("maxlength", "3"), ("value", "hello")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(vs.too_long);
+        assert!(!vs.valid());
+    }
+
+    #[test]
+    fn validity_too_short() {
+        let (doc, _, inp) = make_input(&[("minlength", "5"), ("value", "hi")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(vs.too_short);
+        assert!(!vs.valid());
+    }
+
+    #[test]
+    fn validity_length_ok() {
+        let (doc, _, inp) = make_input(&[("minlength", "2"), ("maxlength", "10"), ("value", "hello")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(!vs.too_short);
+        assert!(!vs.too_long);
+        assert!(vs.valid());
+    }
+
+    #[test]
+    fn validity_empty_value_not_too_short() {
+        // tooShort only applies when field has a value; empty is valueMissing territory.
+        let (doc, _, inp) = make_input(&[("minlength", "5"), ("value", "")]);
+        let vs = element_validity(&doc, inp).unwrap();
+        assert!(!vs.too_short);
+    }
+
+    #[test]
+    fn check_validity_form_all_valid() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("required"), value: "".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "filled".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp);
+        assert!(check_validity_form(&doc, form));
+    }
+
+    #[test]
+    fn check_validity_form_one_invalid() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        // valid input
+        let inp1 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp1).data {
+            attrs.push(Attribute { name: QualName::html("value"), value: "ok".into() });
+        }
+        // invalid input: required but empty
+        let inp2 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp2).data {
+            attrs.push(Attribute { name: QualName::html("required"), value: "".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp1);
+        doc.append_child(form, inp2);
+        assert!(!check_validity_form(&doc, form));
+    }
+
+    #[test]
+    fn invalid_controls_in_form_finds_them() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let inp1 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp1).data {
+            attrs.push(Attribute { name: QualName::html("value"), value: "ok".into() });
+        }
+        let inp2 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp2).data {
+            attrs.push(Attribute { name: QualName::html("required"), value: "".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp1);
+        doc.append_child(form, inp2);
+        let invalid = invalid_controls_in_form(&doc, form);
+        assert_eq!(invalid.len(), 1);
+        assert_eq!(invalid[0], inp2);
     }
 }
