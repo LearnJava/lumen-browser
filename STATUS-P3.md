@@ -1,5 +1,5 @@
 In progress: shell-as-driver-client (8A.7)  branch: p3-shell-as-driver-client
-Next step: Phase 3 input methods (click, type_text, scroll) + wait conditions  crates/driver/src/winit_session.rs:280-320
+Next step: Phase 4 shell integration (Lumen → WinitSession migration)  crates/shell/src/main.rs
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
