@@ -8,6 +8,15 @@ Role: P4 owns ALL CSS work. P1/P2/P3 do not write CSS properties.
 Full property roadmap and work queue — CSS-SPECS.md (P4 Priority Queue section).
 
 Needs wiring (algorithm ready, CSS not connected):
+  — font-optical-sizing (P1, branch p1-font-variable-opsz).
+    P4 task: add `font_optical_sizing: Option<f32>` to ComputedStyle (none/auto/auto-compat/inherit,
+    value in CSS user units — typically 6..72pt). Apply via apply_declaration("font-optical-sizing").
+    Wire point: emit_text_shadows (display_list.rs:1636) — append (b"opsz", optical_sizing_value)
+    to font_variation_axes Vec if present. Also in emit_text_frags (display_list.rs line TBD).
+    Also in renderer.rs:normalize_variation_axes (line 5826+) — inject normalized opsz after
+    CSS axes normalization.
+    P1 has created VariationCoords struct in lumen-font to manage normalized axis storage.
+
   — ::first-letter / ::first-line structural markers (P1, branch p1-css-first-line-letter).
     P4 task (::first-letter): look up `::first-letter` rule via
     compute_pseudo_element_style(node, "first-letter"). Find segments where

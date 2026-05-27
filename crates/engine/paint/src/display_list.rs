@@ -225,6 +225,7 @@ pub enum DisplayCommand {
         /// Пары `(tag, value)` в user units — нормализация через fvar+avar
         /// выполняется в renderer-е, который имеет доступ к шрифтовым таблицам.
         /// Пустой Vec = `normal` (default-instance без variation deltas).
+        /// CSS: font-optical-sizing — P4 должен добавить opsz значение в этот Vec.
         font_variation_axes: Vec<([u8; 4], f32)>,
         /// CSS Text L3 §10.1 — pixel width for a tab character (\t).
         /// 0.0 means no tab characters in text (renderer skips tab expansion).
@@ -1629,6 +1630,8 @@ fn emit_text_shadows(
             font_family: frag.style.font_family.clone(),
             font_weight: frag.style.font_weight,
             font_style: frag.style.font_style,
+            // CSS: font-optical-sizing — P4 wires: if frag.style has font_optical_sizing field,
+            // append (b"opsz", optical_sizing_value) to the collected axes before returning.
             font_variation_axes: frag.style.font_variation_settings
                 .iter().map(|s| (s.tag, s.value)).collect(),
             tab_size: frag.style.tab_size,
