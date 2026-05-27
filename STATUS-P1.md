@@ -8,6 +8,19 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
+Next (Wave 0 — критично для graphic_tests на своём браузере; ADR-006 + ADR-008):
+  P3 владеет lumen-driver / lumen-mcp / lumen-bidi (см. STATUS-P3.md, треки 8/9/10).
+  P1 покрывает всю engine-часть (фронт + бэк), включая бывший P2-домен paint/font/image,
+  поэтому ниже — все cross-domain подзадачи из треков 8/9/10, где P3 нужна поддержка
+  со стороны движка.
+- layout-find-by-selector (8A.4, [P1+P3]): добавить `pub fn find_box_by_selector(&LayoutTree, sel: &str) -> Option<LayoutBox>` + `pub fn computed_style_by_selector(...) -> Option<ComputedStyleSnapshot>` в lumen-layout. Минимальный selector matching: #id, .class, tag (без :hover / nth-child в первой версии — lumen-css-parser уже имеет selector AST). **Разблокирует** P3 8A.2 InProcessSession и уровни 2-3 тестовой пирамиды §15 — без этого graphic_tests остаются на ffmpeg+gdigrab+Edge и Windows-only. Координация с P3 в lumen-driver. → lumen-plan.md трек 8A.4.
+- off-screen-render (8A.3, бывший [P2+P3] → P1+P3): `Renderer::render_to_image() -> Image` без winit-окна — отдельный wgpu surface path (headless адаптер существующего рендера). Нужно для BrowserSession::screenshot() и graphic_tests in-process pixel snapshots. Альтернатива/параллель — tiny-skia CPU rasterizer под cfg(test) (P3 может сделать сам в крейте driver, не блокирует P1). → lumen-plan.md трек 8A.3 + ADR-006.
+
+Next (Wave 0 — ADR-008 структурные инварианты, критично ДО Phase 1 finalize lumen-dom / lumen-layout / lumen-paint, иначе ретрофит 5-10×):
+- dom-arena-audit (10B Invariant 1, [P1+P3]): audit lumen-dom — убедиться что node graph хранится на NodeId(u32) индексах без Rc<RefCell> в графе; добавить bincode::serialize/deserialize для DOM snapshot (используется T3 hibernation); clippy lint запрещает Rc<RefCell> в lumen-dom::node модулях. Binding по ADR-008 Invariant 1. → lumen-plan.md трек 10B + ADR-008.
+- layout-pure-audit (10D.1 Invariant 3): audit lumen-layout на отсутствие `static MUT` / `lazy_static` / `OnceCell` внутри hot path. Allowed exception: cross-tab кэши (glyph atlas, font metrics, image decode) — отдельные крейты с явным eviction API. Если есть hidden state — вытащить наружу как explicit parameter. → lumen-plan.md трек 10D.1 + ADR-008.
+- paint-pure-audit (10D.2 Invariant 3, бывший [P2] → P1): audit lumen-paint::display_list на pure-function от (LayoutTree, viewport). Никакого `static MUT` / `lazy_static` / `OnceCell` внутри hot path. Allowed exception — cross-tab кэши (glyph atlas в lumen-font, image decode в lumen-image) — отдельные крейты с explicit eviction API. Без этого T2→T0 restore работает некорректно. → lumen-plan.md трек 10D.2 + ADR-008.
+
 Next (Wave 1 — бывшие P2-задачи):
 - gif-decoder: GIF87a/89a (LZW + frame loop); статичные кадры frame 0; анимация — Wave 3
   → STATUS-P2.md:4
@@ -119,6 +132,17 @@ Queue (Phase 4+ — DevTools полный, [P3] 7E):
   → lumen-plan.md:261
 - js-console: JS console (eval в контексте страницы) → devtools + JsRuntime::eval
   → lumen-plan.md:262
+
+Queue (Phase 1 — Automation API из ADR-006):
+- lumen-a11y-full (8G, [P1+P3]): расширить lumen-a11y crate до полного AccessibilityTree — text alternative computation (accname §4), ARIA attribute application, focus model, computed role mapping HTML-AAM полностью (базовая 36-тестовая accessibility-aria уже есть). Используется в BrowserSession::a11y_tree() + BrowserSession::query(Role/Name) — Playwright-стиль getByRole для тестов и AI-агентов. → lumen-plan.md трек 8G + ADR-006.
+
+Queue (Phase 2 — ADR-007 anti-detection, rendering fingerprint side; бывший [P3+P2] → P1+P3):
+- antidetect-canvas-randomization (9D.1): Brave-style canvas randomization — getImageData возвращает RGBA с per-session deterministic seed noise. P1 owns canvas/paint side (где данные читаются обратно из texture); P3 owns JS bindings к Canvas API. → lumen-plan.md трек 9D.1 + ADR-007.
+- antidetect-webgl-normalize (9D.2): WebGL renderer/vendor strings normalization (обобщённые «Generic GPU» / «WebKit»). P1 — где wgpu adapter info собирается; P3 — JS-side getParameter() handling. → lumen-plan.md трек 9D.2 + ADR-007.
+
+Queue (Phase 2 — ADR-008 tab lifecycle T0/T2 экономия; бывший [P3+P2] → P1+P3):
+- gpu-layer-lru (10F): LayerCache с LRU + GPU memory budget; texture pool recycling (одна wgpu::Texture переиспользуется для разных layers). Off-viewport stacking contexts освобождают textures при удалении от viewport на >3 экрана. P3 owns lifecycle integration (через MemoryPressureSource events); P1 owns wgpu/texture pool в lumen-paint. → lumen-plan.md трек 10F + ADR-008.
+- glyph-atlas-eviction (10G): LRU eviction редко используемых глифов из атласа. Атлас не растёт безгранично. P1 owns atlas data structure в lumen-font; P3 owns подписка на MemoryPressureSource events. → lumen-plan.md трек 10G + ADR-008.
 
 Queue (Phase 2-3 — оригинальный P1 backlog):
 - shadow-dom-accessibility-forms-gc: Shadow DOM / Accessibility / Forms / GC
