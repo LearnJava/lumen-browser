@@ -129,3 +129,62 @@ pub struct ComputedProperties {
     /// Карта `property → value` для запрошенного элемента.
     pub properties: std::collections::HashMap<String, String>,
 }
+
+/// Команда для injection в event-loop браузера с целью создания нативных DOM-событий.
+///
+/// Используется для реализации [`BrowserSession::click`], [`BrowserSession::type_text`],
+/// [`BrowserSession::scroll`] с иSтруsted = true в результирующих DOM-событиях (ADR-006 §8C).
+///
+/// # Архитектура
+///
+/// Injected события обрабатываются в WinitSessionHandler event loop точно так же,
+/// как OS-события от winit — без обхода через JS `dispatchEvent()`.
+#[derive(Debug, Clone)]
+pub enum InputCommand {
+    /// Клик мышью по координатам документа.
+    ///
+    /// Параметры: x, y в логических пикселях (document coordinates).
+    /// Создаёт mousedown → mouseup → click события на целевом элементе с isTrusted=true.
+    MouseClick { x: f32, y: f32 },
+
+    /// Движение мышью на координаты.
+    ///
+    /// Параметры: x, y в логических пикселях (document coordinates).
+    /// Создаёт mousemove событие с isTrusted=true.
+    MouseMove { x: f32, y: f32 },
+
+    /// Нажатие кнопки мышью.
+    ///
+    /// Параметры: x, y в логических пикселях; button (0=left, 1=middle, 2=right).
+    MouseDown { x: f32, y: f32, button: u8 },
+
+    /// Отпускание кнопки мышью.
+    ///
+    /// Параметры: x, y в логических пикселях; button (0=left, 1=middle, 2=right).
+    MouseUp { x: f32, y: f32, button: u8 },
+
+    /// Ввод одного символа с клавиатуры.
+    ///
+    /// Параметр: `char` для Unicode-символа (буквы, цифры, специальные);
+    /// используется для посимвольного ввода в текстовые поля.
+    /// Создаёт keydown → keypress → keyup → input события с isTrusted=true.
+    KeyPress { char: char },
+
+    /// Нажатие специальной клавиши (Backspace, Enter, Tab, etc.).
+    ///
+    /// Параметр: код клавиши (соответствует `winit::keyboard::KeyCode`);
+    /// примеры: "Backspace", "Enter", "Tab", "ArrowDown".
+    /// Создаёт keydown → keyup события с isTrusted=true.
+    KeyDown { code: String },
+
+    /// Отпускание специальной клавиши.
+    ///
+    /// Параметр: код клавиши (соответствует `winit::keyboard::KeyCode`).
+    KeyUp { code: String },
+
+    /// Скролл на величину в логических пикселях.
+    ///
+    /// Параметры: delta_x, delta_y (положительное — вправо/вниз).
+    /// Обновляет позицию скролла и создаёт scroll событие с isTrusted=true.
+    Scroll { delta_x: f32, delta_y: f32 },
+}
