@@ -1,5 +1,16 @@
 In progress: —
-Next step: shell-as-driver-client Phase 4 (shell integration)
+Next step: graphic-tests-migration (8A.6) — Rust structural tests for 22 HTML test files
+
+Phase 4 (shell-as-driver-client): completed 4a-4b
+  ✓ 4a: GpuSession trait created (RenderedPage, gpu_session.rs)
+  ✓ 4a: WinitSessionState extended with GPU data (display_list, title, images, font_registry)
+  ✓ 4b: Implement render_to_gpu() method in WinitSession (build_display_list, extract title/images)
+  ✓ 4b: GpuSession trait impl for WinitSession (set_scroll, viewport, navigate_streaming)
+  ✓ 4b: Helper functions (extract_title, extract_images, walk_find_title, walk_collect_images)
+  ✓ 4b: Tests for GpuSession (test_gpu_session_render_to_gpu, scroll_position, viewport)
+  - 4c: Migrate lumen-shell::reload() to use render_to_gpu() — next session (requires deep shell refactor)
+
+Recent: shell-as-driver-client-8a7-phase4b (GpuSession impl for WinitSession) 2026-05-28
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.

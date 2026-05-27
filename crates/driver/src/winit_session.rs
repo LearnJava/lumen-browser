@@ -28,9 +28,20 @@ use crate::{
 const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.ttf");
 
 /// Состояние после успешной загрузки страницы.
+///
+/// Содержит полный результат pipeline (parse → CSS → layout → paint),
+/// включая GPU-специфичные данные для рендеринга через wgpu.
 struct WinitSessionState {
     doc: Document,
     layout_root: LayoutBox,
+    /// Display list for GPU rendering via wgpu.
+    display_list: lumen_paint::DisplayList,
+    /// Page title from `<title>` tag.
+    title: Option<String>,
+    /// Decoded images ready for GPU upload.
+    images: Vec<(String, lumen_image::Image)>,
+    /// Font provider for page-specific @font-face declarations.
+    font_registry: std::sync::Arc<dyn lumen_core::FontProvider>,
 }
 
 /// Оконная сессия браузера.
@@ -58,6 +69,10 @@ pub struct WinitSession {
     net_log: Vec<NetworkEntry>,
     /// Журнал console.log/warn/error с последней навигации.
     con_log: Vec<ConsoleEntry>,
+    /// Current vertical scroll position in logical pixels.
+    scroll_y: f32,
+    /// Current horizontal scroll position in logical pixels.
+    scroll_x: f32,
 }
 
 impl WinitSession {
@@ -69,6 +84,8 @@ impl WinitSession {
             state: None,
             net_log: Vec::new(),
             con_log: Vec::new(),
+            scroll_y: 0.0,
+            scroll_x: 0.0,
         }
     }
 
@@ -80,6 +97,8 @@ impl WinitSession {
             state: None,
             net_log: Vec::new(),
             con_log: Vec::new(),
+            scroll_y: 0.0,
+            scroll_x: 0.0,
         }
     }
 
@@ -100,7 +119,7 @@ impl Default for WinitSession {
 }
 
 impl WinitSession {
-    /// Запустить полный pipeline (HTML parse -> CSS -> layout).
+    /// Запустить полный pipeline (HTML parse -> CSS -> layout -> paint).
     fn run_pipeline(&mut self, bytes: &[u8], content_type: Option<&str>, url: String) -> Result<()> {
         let encoding = lumen_encoding::detect(bytes, content_type);
         let source = lumen_encoding::decode(encoding, bytes);
@@ -116,11 +135,30 @@ impl WinitSession {
 
         let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
 
+        // Build display list from layout tree.
+        let display_list = lumen_paint::build_display_list(&layout_root);
+
+        // Extract images from DOM and decode them.
+        let images = extract_images(&doc);
+
+        // Extract page title from <title> tag.
+        let title = extract_title(&doc);
+
+        // Create font_registry for @font-face declarations.
+        let font_registry: std::sync::Arc<dyn lumen_core::FontProvider> =
+            std::sync::Arc::new(lumen_font::SystemFontIndex::new());
+
         self.current_url = url;
         self.state = Some(Arc::new(Mutex::new(WinitSessionState {
             doc,
             layout_root,
+            display_list,
+            title,
+            images,
+            font_registry,
         })));
+        self.scroll_x = 0.0;
+        self.scroll_y = 0.0;
         Ok(())
     }
 }
@@ -147,6 +185,74 @@ fn walk_style_blocks(doc: &lumen_dom::Document, id: lumen_dom::NodeId, out: &mut
     }
     for &child in &node.children {
         walk_style_blocks(doc, child, out);
+    }
+}
+
+/// Извлечь текст из <title> элемента.
+fn extract_title(doc: &lumen_dom::Document) -> Option<String> {
+    walk_find_title(doc, doc.root())
+}
+
+fn walk_find_title(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> Option<String> {
+    let node = doc.get(id);
+    if let lumen_dom::NodeData::Element { name, .. } = &node.data {
+        if name.local == "title" {
+            // Собрать весь текст внутри <title>
+            let mut text = String::new();
+            for &child in &node.children {
+                if let lumen_dom::NodeData::Text(s) = &doc.get(child).data {
+                    text.push_str(s);
+                }
+            }
+            return if text.is_empty() { None } else { Some(text) };
+        }
+    }
+    for &child in &node.children {
+        if let Some(title) = walk_find_title(doc, child) {
+            return Some(title);
+        }
+    }
+    None
+}
+
+/// Извлечь все <img> элементы из документа и их src.
+fn extract_images(doc: &lumen_dom::Document) -> Vec<(String, lumen_image::Image)> {
+    let mut images = Vec::new();
+    walk_collect_images(doc, doc.root(), &mut images);
+    images
+}
+
+fn walk_collect_images(
+    doc: &lumen_dom::Document,
+    id: lumen_dom::NodeId,
+    images: &mut Vec<(String, lumen_image::Image)>,
+) {
+    let node = doc.get(id);
+    if let lumen_dom::NodeData::Element { name, attrs, .. } = &node.data {
+        if name.local == "img" {
+            // Найти src атрибут
+            if let Some(src) = attrs.iter().find_map(|attr| {
+                if attr.name.local == "src" {
+                    Some(attr.value.clone())
+                } else {
+                    None
+                }
+            }) {
+                // Для Phase 4b: пока просто используем пустой Image placeholder.
+                // В Phase 4c будет реальная загрузка и декодирование изображений.
+                let placeholder = lumen_image::Image {
+                    width: 1,
+                    height: 1,
+                    format: lumen_image::PixelFormat::Rgba8,
+                    data: vec![0, 0, 0, 255], // 1x1 transparent pixel
+                    icc_profile: None,
+                };
+                images.push((src, placeholder));
+            }
+        }
+    }
+    for &child in &node.children {
+        walk_collect_images(doc, child, images);
     }
 }
 
@@ -701,5 +807,62 @@ impl BrowserSession for WinitSession {
             });
         }
         Ok(out)
+    }
+}
+
+impl crate::GpuSession for WinitSession {
+    fn render_to_gpu(&mut self) -> crate::Result<crate::RenderedPage> {
+        let state = self.state()?;
+        let state_locked = state.lock()
+            .map_err(|e| Error::Other(format!("mutex: {e}")))?;
+
+        Ok(crate::RenderedPage {
+            display_list: state_locked.display_list.clone(),
+            title: state_locked.title.clone(),
+            images: state_locked.images.clone(),
+            layout_box: state_locked.layout_root.clone(),
+            font_registry: state_locked.font_registry.clone(),
+            js_navigate: None, // Phase 4 doesn't support JS navigation yet (задача 8D)
+        })
+    }
+
+    fn set_scroll(&mut self, delta: crate::ScrollDelta) -> crate::Result<bool> {
+        // Apply relative scroll delta to current position (default behavior for ScrollDelta struct)
+        self.scroll_x += delta.x;
+        self.scroll_y += delta.y;
+        // Phase 4: no relayout needed for scroll in headless (задача 4c)
+        Ok(false)
+    }
+
+    fn scroll_position(&self) -> (f32, f32) {
+        (self.scroll_x, self.scroll_y)
+    }
+
+    fn viewport_size(&self) -> lumen_core::geom::Size {
+        self.viewport
+    }
+
+    fn set_viewport(&mut self, width: f32, height: f32) -> crate::Result<bool> {
+        let old_size = self.viewport;
+        self.viewport = lumen_core::geom::Size::new(width, height);
+
+        // Check if viewport actually changed
+        if old_size != self.viewport {
+            // Phase 4: relayout would be needed if page was already loaded
+            // For now, just return false since we don't have state
+            Ok(self.state.is_some())
+        } else {
+            Ok(false)
+        }
+    }
+
+    fn navigate_streaming<F>(&mut self, url: &str, _on_chunk: F) -> crate::Result<()>
+    where
+        F: FnMut(crate::RenderedPage) -> (),
+    {
+        // Phase 4: streaming is not yet implemented (требует event-loop).
+        // For now, just do a normal navigate.
+        self.navigate(url)?;
+        Ok(())
     }
 }
