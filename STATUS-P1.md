@@ -1,5 +1,5 @@
-In progress: none (ready for next task)
-Next step: (All P1 Wave 1 completed — check lumen-plan.md for Phase 2 roadmap)
+In progress: structural-getters (8A.4, Phase 1 remainder)  branch: p1-structural-getters-8a4
+Next step: pub API for LayoutBox/ComputedStyle accessor по селектору  lumen-layout/src/selector_query.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
