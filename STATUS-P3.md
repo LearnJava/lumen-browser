@@ -1,5 +1,5 @@
-In progress: graphic-tests-migration (8A.6) — Rust-тесты со structural-ассертами + PNG-эталоны  branch: p3-graphic-tests-migration
-Next step: expand test coverage to all 46 HTML files + implement PNG snapshot storage  crates/driver/tests/
+In progress: —
+Next step: mock-http-client (8E.1+P2) для тестирования HTTP → запросы перехватываются и возвращаются fixtures  lumen-network::mock_transport
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
