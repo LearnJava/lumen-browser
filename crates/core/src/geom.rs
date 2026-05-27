@@ -3,7 +3,9 @@
 //! Координатная система: ось X вправо, ось Y вниз (как принято в DOM/CSS).
 //! Единицы — логические пиксели (`f32`).
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Point {
     pub x: f32,
     pub y: f32,
@@ -17,7 +19,7 @@ impl Point {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Size {
     pub width: f32,
     pub height: f32,
@@ -34,7 +36,7 @@ impl Size {
     }
 }
 
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
     pub x: f32,
     pub y: f32,

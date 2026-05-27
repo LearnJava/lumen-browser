@@ -5,12 +5,13 @@
 //! (MCP, BiDi, CDP-shim) без изменения ABI.
 
 use lumen_core::geom::Rect;
+use serde::{Deserialize, Serialize};
 
 /// Ссылка на DOM-узел, возвращаемая [`BrowserSession::query`].
 ///
 /// `node_id` соответствует [`lumen_dom::NodeId`]; lifetime node-а — до
 /// следующей навигации или мутации DOM. Используется как аргумент [`Target`].
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct NodeRef {
     /// Числовой ID узла в DOM-арене (совпадает с `NodeId::raw()`).
     pub node_id: u32,
@@ -25,7 +26,7 @@ pub struct NodeRef {
 
 /// Цель для команд [`BrowserSession::click`], [`type_text`](BrowserSession::type_text),
 /// [`scroll`](BrowserSession::scroll).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Target {
     /// CSS-селектор: выбирается первый совпадающий элемент.
     Selector(String),
@@ -36,7 +37,7 @@ pub enum Target {
 }
 
 /// Дельта скролла для [`BrowserSession::scroll`].
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize)]
 pub struct ScrollDelta {
     /// Горизонтальная прокрутка (логические пиксели; положительное — вправо).
     pub x: f32,
@@ -45,7 +46,7 @@ pub struct ScrollDelta {
 }
 
 /// Условие ожидания для [`BrowserSession::wait`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum WaitCondition {
     /// `document.readyState == "complete"`.
     DocumentReady,
@@ -60,7 +61,7 @@ pub enum WaitCondition {
 }
 
 /// Box-model одного узла из [`BrowserSession::layout_snapshot`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BoxModel {
     /// ID узла в DOM-арене.
     pub node_id: u32,
@@ -77,7 +78,7 @@ pub struct BoxModel {
 ///
 /// Структура соответствует ARIA-роли; вложенные узлы — потомки в
 /// accessibility-дереве (не обязательно совпадают с DOM-деревом).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct A11yNode {
     /// ARIA-роль: `"button"`, `"link"`, `"heading"`, `"text"`, … Пусто для
     /// контейнеров без явной роли.
@@ -89,7 +90,7 @@ pub struct A11yNode {
 }
 
 /// Запись из сетевого лога [`BrowserSession::network_log`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NetworkEntry {
     /// URL запроса.
     pub url: String,
@@ -102,7 +103,7 @@ pub struct NetworkEntry {
 }
 
 /// Запись из консоли [`BrowserSession::console_log`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConsoleEntry {
     /// Уровень сообщения.
     pub level: ConsoleLevel,
@@ -111,7 +112,7 @@ pub struct ConsoleEntry {
 }
 
 /// Уровень console-сообщения.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConsoleLevel {
     Log,
     Info,
@@ -123,7 +124,7 @@ pub enum ConsoleLevel {
 ///
 /// Ключи — lowercase имена CSS-свойств (`"color"`, `"font-size"`, …),
 /// значения — строковое представление вычисленного значения.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct ComputedProperties {
     /// Карта `property → value` для запрошенного элемента.
     pub properties: std::collections::HashMap<String, String>,

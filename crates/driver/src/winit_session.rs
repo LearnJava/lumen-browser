@@ -215,6 +215,7 @@ fn walk_find_title(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> Option<S
     None
 }
 
+
 /// Извлечь все <img> элементы из документа и их src.
 fn extract_images(doc: &lumen_dom::Document) -> Vec<(String, lumen_image::Image)> {
     let mut images = Vec::new();
