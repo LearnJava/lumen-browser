@@ -37,6 +37,12 @@ pub struct Os2 {
     /// Значение `0` (некорректное по спеке, но встречается у битых файлов)
     /// принудительно поднимается до `400` (Regular) при парсинге.
     pub weight_class: u16,
+    /// `usWidthClass` — CSS-совместимая ширина шрифта (font-stretch).
+    /// 1 = ultracondensed (50%), 2 = extracondensed (62.5%), 3 = condensed (75%),
+    /// 4 = semicondensed (87.5%), 5 = normal/medium (100%), 6 = semiexpanded (112.5%),
+    /// 7 = expanded (125%), 8 = extraexpanded (150%), 9 = ultraexpanded (200%).
+    /// Значение `0` или >9 (некорректные) приводятся к 5 (normal) при парсинге.
+    pub width_class: u16,
     /// `fsSelection` — bitset. См. [`Os2::is_italic`] и [`Os2::is_bold`].
     pub fs_selection: u16,
 
@@ -118,6 +124,23 @@ impl Os2 {
         self.fs_selection & Self::FS_BOLD != 0
     }
 
+    /// Возвращает stretch в процентах (от 50 до 200).
+    /// CSS Fonts L4 §5.2: соответствие usWidthClass значениям.
+    pub fn stretch_percent(self) -> u16 {
+        match self.width_class {
+            1 => 50,            // ultracondensed
+            2 => 62,            // extracondensed (62.5%)
+            3 => 75,            // condensed
+            4 => 87,            // semicondensed (87.5%)
+            5 => 100,           // normal/medium
+            6 => 112,           // semiexpanded (112.5%)
+            7 => 125,           // expanded
+            8 => 150,           // extraexpanded
+            9 => 200,           // ultraexpanded
+            _ => 100,           // fallback: normal
+        }
+    }
+
     pub fn parse(data: &[u8]) -> Result<Self, FontError> {
         let mut r = BinaryReader::new(data);
         let version = r.read_u16().ok_or(FontError::InvalidTable(OS2))?;
@@ -128,8 +151,11 @@ impl Os2 {
         // файлах 0 встречается (особенно у старых .ttf с незаполненной OS/2);
         // приводим к Regular, чтобы matcher не падал.
         let weight_class = if raw_weight == 0 { 400 } else { raw_weight.min(1000) };
-        // usWidthClass (2) + fsType (2) — пропускаем.
-        r.skip(4).ok_or(FontError::InvalidTable(OS2))?;
+        // usWidthClass (2) — читаем для font-stretch matching.
+        let raw_width = r.read_u16().ok_or(FontError::InvalidTable(OS2))?;
+        let width_class = if raw_width == 0 || raw_width > 9 { 5 } else { raw_width };
+        // fsType (2) — пропускаем.
+        r.skip(2).ok_or(FontError::InvalidTable(OS2))?;
 
         // Subscript / Superscript / Strikeout (10 × i16 = 20 байт).
         let subscript_x_size = r.read_i16().ok_or(FontError::InvalidTable(OS2))?;
@@ -176,6 +202,7 @@ impl Os2 {
         Ok(Self {
             version,
             weight_class,
+            width_class,
             fs_selection,
             subscript_x_size,
             subscript_y_size,
@@ -239,7 +266,7 @@ mod tests {
         out.extend_from_slice(&version.to_be_bytes());
         out.extend_from_slice(&500i16.to_be_bytes()); // xAvgCharWidth
         out.extend_from_slice(&weight.to_be_bytes());
-        out.extend_from_slice(&5u16.to_be_bytes()); // usWidthClass
+        out.extend_from_slice(&5u16.to_be_bytes()); // usWidthClass = 5 (normal)
         out.extend_from_slice(&0u16.to_be_bytes()); // fsType
         // Sub/super/strikeout (10 × i16 = 20 байт).
         for v in [sub_x, sub_y, sub_xo, sub_yo, sup_x, sup_y, sup_xo, sup_yo, strk_size, strk_pos] {
@@ -463,5 +490,51 @@ mod tests {
         let data = build_os2_v0(400, 0);
         let os2 = Os2::parse(&data).unwrap();
         assert!(os2.typo_descender < 0);
+    }
+
+    #[test]
+    fn width_class_default_normal() {
+        let data = build_os2_v0(400, 0);
+        let os2 = Os2::parse(&data).unwrap();
+        assert_eq!(os2.width_class, 5); // build_os2_v0 hardcodes 5 (normal)
+    }
+
+    #[test]
+    fn stretch_percent_maps_correctly() {
+        let data = build_os2_v0(400, 0);
+        let os2 = Os2::parse(&data).unwrap();
+        assert_eq!(os2.stretch_percent(), 100); // width_class=5 → 100%
+    }
+
+    #[test]
+    fn stretch_percent_ultracondensed() {
+        // Создаём custom OS/2 с width_class=1
+        let mut data = build_os2_v0(400, 0);
+        // width_class находится на offset 6-7 (после version + xAvgCharWidth + weight)
+        data[6] = 0;
+        data[7] = 1; // usWidthClass = 1 (ultracondensed)
+        let os2 = Os2::parse(&data).unwrap();
+        assert_eq!(os2.width_class, 1);
+        assert_eq!(os2.stretch_percent(), 50);
+    }
+
+    #[test]
+    fn stretch_percent_expanded() {
+        let mut data = build_os2_v0(400, 0);
+        data[6] = 0;
+        data[7] = 7; // usWidthClass = 7 (expanded)
+        let os2 = Os2::parse(&data).unwrap();
+        assert_eq!(os2.width_class, 7);
+        assert_eq!(os2.stretch_percent(), 125);
+    }
+
+    #[test]
+    fn invalid_width_class_clamped_to_normal() {
+        let mut data = build_os2_v0(400, 0);
+        data[6] = 0;
+        data[7] = 99; // invalid: > 9
+        let os2 = Os2::parse(&data).unwrap();
+        assert_eq!(os2.width_class, 5); // clamped to normal
+        assert_eq!(os2.stretch_percent(), 100);
     }
 }
