@@ -2657,39 +2657,71 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
     }
 }
 
+/// Applies `opacity` (0..1) to the alpha channel of a `Color`.
+fn apply_opacity_to_color(color: Color, opacity: f32) -> Color {
+    Color { r: color.r, g: color.g, b: color.b, a: (color.a as f32 * opacity).round() as u8 }
+}
+
 /// Emits paint commands for a single SVG shape using its pre-computed document-space rect.
-/// Uses SVG default presentation: fill=black, no stroke.
-/// CSS: fill, stroke, stroke-width, opacity — P4 wires via ComputedStyle SVG fields.
+/// Reads `svg_fill` / `svg_stroke` / `svg_fill_opacity` / `svg_stroke_opacity` /
+/// `svg_stroke_width` from `ComputedStyle` — wired by P4 per SVG §11.2/11.3/11.4.
 fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
     if b.rect.width <= 0.0 && b.rect.height <= 0.0 {
         return;
     }
-    // SVG spec §11.2: default fill is black; CSS `fill` property overrides (P4).
-    let fill = Color::BLACK;
+    let current_color = b.style.color;
+    let fill_color = b.style.svg_fill.resolve(current_color)
+        .map(|c| apply_opacity_to_color(c, b.style.svg_fill_opacity));
+    let stroke_color = b.style.svg_stroke.resolve(current_color)
+        .map(|c| apply_opacity_to_color(c, b.style.svg_stroke_opacity));
+    let stroke_w = b.style.svg_stroke_width;
+
     match shape {
         SvgShapeKind::Rect { rx, ry, .. } => {
-            if *rx > 0.0 || *ry > 0.0 {
-                // Round the corners using the scaled rx/ry in document pixels.
-                // The bbox rect already encodes the shape position, so we use its
-                // dimensions as the rounded-rect radii (clamped to half-size).
-                let r = (*rx).min(b.rect.width / 2.0);
-                let r_y = (*ry).min(b.rect.height / 2.0);
-                let radii = CornerRadii { tl: r, tl_y: r_y, tr: r, tr_y: r_y, br: r, br_y: r_y, bl: r, bl_y: r_y };
-                out.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fill, radii });
-            } else {
-                out.push(DisplayCommand::FillRect { rect: b.rect, color: fill });
+            let has_radius = *rx > 0.0 || *ry > 0.0;
+            let r = (*rx).min(b.rect.width / 2.0);
+            let r_y = (*ry).min(b.rect.height / 2.0);
+            let radii = CornerRadii { tl: r, tl_y: r_y, tr: r, tr_y: r_y, br: r, br_y: r_y, bl: r, bl_y: r_y };
+            if let Some(fc) = fill_color {
+                if has_radius {
+                    out.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fc, radii });
+                } else {
+                    out.push(DisplayCommand::FillRect { rect: b.rect, color: fc });
+                }
+            }
+            if let Some(sc) = stroke_color && stroke_w > 0.0 {
+                let w = stroke_w;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [w, w, w, w],
+                    colors: [sc, sc, sc, sc],
+                    styles: [BorderStyle::Solid; 4],
+                    radii,
+                });
             }
         }
         SvgShapeKind::Circle { .. } | SvgShapeKind::Ellipse { .. } => {
-            // Approximate circle/ellipse as a rounded rect with 50% radii.
             let rx_px = b.rect.width / 2.0;
             let ry_px = b.rect.height / 2.0;
             let radii = CornerRadii { tl: rx_px, tl_y: ry_px, tr: rx_px, tr_y: ry_px, br: rx_px, br_y: ry_px, bl: rx_px, bl_y: ry_px };
-            out.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fill, radii });
+            if let Some(fc) = fill_color {
+                out.push(DisplayCommand::FillRoundedRect { rect: b.rect, color: fc, radii });
+            }
+            if let Some(sc) = stroke_color && stroke_w > 0.0 {
+                let w = stroke_w;
+                out.push(DisplayCommand::DrawBorder {
+                    rect: b.rect,
+                    widths: [w, w, w, w],
+                    colors: [sc, sc, sc, sc],
+                    styles: [BorderStyle::Solid; 4],
+                    radii,
+                });
+            }
         }
         SvgShapeKind::Line { .. } => {
-            // Line rendered as a 1-px-minimum thin filled rect.
-            out.push(DisplayCommand::FillRect { rect: b.rect, color: fill });
+            // SVG <line> has no fill; rendered as a stroke-width rect.
+            let color = stroke_color.or(fill_color).unwrap_or(Color::BLACK);
+            out.push(DisplayCommand::FillRect { rect: b.rect, color });
         }
         SvgShapeKind::Path { .. } => {
             // Full path rendering requires GPU path commands — deferred to P2.
