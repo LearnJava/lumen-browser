@@ -1370,6 +1370,64 @@ pub fn check_navigation_gate(doc: &Document, sandbox: SandboxFlags) -> usize {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// iframe sandbox
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Данные `<iframe>` элемента — URL содержимого и sandbox-ограничения.
+///
+/// `is_sandboxed` — `true` если у элемента есть атрибут `sandbox` (даже пустой).
+/// `sandbox` содержит распарсенные флаги (пустые = нет ограничений, все = максимум).
+pub struct IframeInfo {
+    /// Значение атрибута `src`, если задан.
+    pub src: Option<String>,
+    /// Sandbox-флаги согласно HTML §7.6.5. `SandboxFlags::empty()` если атрибута нет.
+    pub sandbox: SandboxFlags,
+    /// `true` если у элемента есть атрибут `sandbox` (независимо от значения).
+    pub is_sandboxed: bool,
+}
+
+fn collect_iframes_inner(doc: &Document, id: NodeId, out: &mut Vec<IframeInfo>) {
+    let node = doc.get(id);
+    if node
+        .element_name()
+        .map(|n| n.local.eq_ignore_ascii_case("iframe"))
+        .unwrap_or(false)
+    {
+        let src = node.get_attr("src").filter(|s| !s.is_empty()).map(str::to_owned);
+        let is_sandboxed = node.get_attr("sandbox").is_some();
+        let sandbox = node.sandbox_flags().unwrap_or_else(SandboxFlags::empty);
+        out.push(IframeInfo { src, sandbox, is_sandboxed });
+    }
+    for &child in &node.children.clone() {
+        collect_iframes_inner(doc, child, out);
+    }
+}
+
+/// Собрать все `<iframe>` элементы документа с их sandbox-ограничениями.
+///
+/// Каждый `<iframe>` — один `IframeInfo`. Элементы без атрибута `sandbox`
+/// включаются с `is_sandboxed = false` и `sandbox = SandboxFlags::empty()`.
+/// Порядок — depth-first обход дерева.
+pub fn collect_iframes(doc: &Document) -> Vec<IframeInfo> {
+    let mut out = Vec::new();
+    collect_iframes_inner(doc, doc.root(), &mut out);
+    out
+}
+
+/// Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5.
+///
+/// Возвращает `true` если `sandbox` содержит [`SandboxFlags::AUXILIARY_NAVIGATION`]
+/// (т.е. `allow-popups` не указан) — popup запрещён.
+/// `false` — popup разрешён (флаг снят или sandbox не активен).
+pub fn check_popup_gate(sandbox: SandboxFlags) -> bool {
+    if sandbox.contains(SandboxFlags::AUXILIARY_NAVIGATION) {
+        eprintln!("sandbox: заблокирован popup (sandbox=auxiliary-navigation, нет allow-popups)");
+        return true;
+    }
+    false
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // contenteditable: Input Events Level 2 (P1 part)
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -3086,5 +3144,127 @@ mod tests {
             _ => panic!("expected br"),
         }
         assert_eq!(new_pos.offset, 0);
+    }
+
+    // ── collect_iframes ───────────────────────────────────────────────────────
+
+    fn make_iframe(sandbox: Option<&str>, src: Option<&str>) -> Document {
+        let mut doc = Document::new();
+        let iframe = doc.create_element(QualName::html("iframe"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(iframe).data {
+            if let Some(s) = sandbox {
+                attrs.push(Attribute { name: QualName::html("sandbox"), value: s.to_string() });
+            }
+            if let Some(s) = src {
+                attrs.push(Attribute { name: QualName::html("src"), value: s.to_string() });
+            }
+        }
+        doc.append_child(doc.root(), iframe);
+        doc
+    }
+
+    #[test]
+    fn collect_iframes_empty_document() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), div);
+        assert!(collect_iframes(&doc).is_empty());
+    }
+
+    #[test]
+    fn collect_iframes_finds_iframe_without_sandbox() {
+        let doc = make_iframe(None, Some("https://example.com"));
+        let frames = collect_iframes(&doc);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].src.as_deref(), Some("https://example.com"));
+        assert!(!frames[0].is_sandboxed);
+        assert!(frames[0].sandbox.is_empty());
+    }
+
+    #[test]
+    fn collect_iframes_sandboxed_empty_attr_all_restrictions() {
+        let doc = make_iframe(Some(""), Some("page.html"));
+        let frames = collect_iframes(&doc);
+        assert_eq!(frames.len(), 1);
+        assert!(frames[0].is_sandboxed);
+        assert_eq!(frames[0].sandbox, SandboxFlags::all_restrictions());
+        assert!(frames[0].sandbox.contains(SandboxFlags::SCRIPTS));
+        assert!(frames[0].sandbox.contains(SandboxFlags::FORMS));
+        assert!(frames[0].sandbox.contains(SandboxFlags::AUXILIARY_NAVIGATION));
+    }
+
+    #[test]
+    fn collect_iframes_allow_scripts_lifts_scripts_flag() {
+        let doc = make_iframe(Some("allow-scripts"), Some("a.html"));
+        let frames = collect_iframes(&doc);
+        assert_eq!(frames.len(), 1);
+        assert!(frames[0].is_sandboxed);
+        assert!(!frames[0].sandbox.contains(SandboxFlags::SCRIPTS));
+        assert!(frames[0].sandbox.contains(SandboxFlags::FORMS));
+    }
+
+    #[test]
+    fn collect_iframes_multiple_iframes() {
+        let mut doc = Document::new();
+        let body = doc.create_element(QualName::html("body"));
+        doc.append_child(doc.root(), body);
+
+        // iframe 1: no sandbox
+        let f1 = doc.create_element(QualName::html("iframe"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(f1).data {
+            attrs.push(Attribute { name: QualName::html("src"), value: "a.html".to_string() });
+        }
+        doc.append_child(body, f1);
+
+        // iframe 2: allow-scripts allow-forms
+        let f2 = doc.create_element(QualName::html("iframe"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(f2).data {
+            attrs.push(Attribute {
+                name: QualName::html("sandbox"),
+                value: "allow-scripts allow-forms".to_string(),
+            });
+            attrs.push(Attribute { name: QualName::html("src"), value: "b.html".to_string() });
+        }
+        doc.append_child(body, f2);
+
+        // iframe 3: sandbox="" (all restrictions)
+        let f3 = doc.create_element(QualName::html("iframe"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(f3).data {
+            attrs.push(Attribute { name: QualName::html("sandbox"), value: String::new() });
+            attrs.push(Attribute { name: QualName::html("src"), value: "c.html".to_string() });
+        }
+        doc.append_child(body, f3);
+
+        let frames = collect_iframes(&doc);
+        assert_eq!(frames.len(), 3);
+        assert!(!frames[0].is_sandboxed);
+        assert!(frames[1].is_sandboxed);
+        assert!(!frames[1].sandbox.contains(SandboxFlags::SCRIPTS));
+        assert!(!frames[1].sandbox.contains(SandboxFlags::FORMS));
+        assert!(frames[2].is_sandboxed);
+        assert_eq!(frames[2].sandbox, SandboxFlags::all_restrictions());
+    }
+
+    // ── check_popup_gate ──────────────────────────────────────────────────────
+
+    #[test]
+    fn popup_gate_blocked_when_auxiliary_navigation_set() {
+        assert!(check_popup_gate(SandboxFlags::AUXILIARY_NAVIGATION));
+    }
+
+    #[test]
+    fn popup_gate_allowed_when_flag_not_set() {
+        assert!(!check_popup_gate(SandboxFlags::empty()));
+    }
+
+    #[test]
+    fn popup_gate_blocked_when_all_restrictions() {
+        assert!(check_popup_gate(SandboxFlags::all_restrictions()));
+    }
+
+    #[test]
+    fn popup_gate_allowed_after_allow_popups() {
+        let flags = lumen_core::parse_sandbox_value(Some("allow-popups"));
+        assert!(!check_popup_gate(flags));
     }
 }
