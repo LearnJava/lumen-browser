@@ -16,6 +16,9 @@ pub mod hit_test;
 pub mod renderer;
 pub mod scroll_snap;
 
+#[cfg(feature = "cpu-render")]
+pub mod cpu_raster;
+
 pub use atlas::{GlyphAtlas, GlyphEntry};
 pub use fallback::CURATED_FALLBACK_FAMILIES;
 pub use compositor::{

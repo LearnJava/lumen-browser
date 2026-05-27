@@ -5152,6 +5152,28 @@ impl Renderer {
         Ok(())
     }
 
+    /// CPU-based rasterization using tiny-skia (feature="cpu-render" only).
+    ///
+    /// Provides deterministic pixel output on Windows/macOS/Linux for CI testing.
+    /// No GPU required; does not depend on wgpu or windowing backend.
+    ///
+    /// # Errors
+    /// Returns `Err` if image creation fails or if display command processing fails.
+    #[cfg(feature = "cpu-render")]
+    pub fn render_to_image_cpu(
+        width: u32,
+        height: u32,
+        commands: &[crate::DisplayCommand],
+        _unused_layers: &[crate::BasicLayer],
+        scroll_x: f32,
+        scroll_y: f32,
+    ) -> Result<lumen_image::Image, Box<dyn std::error::Error>> {
+        crate::cpu_raster::rasterize_cpu(width, height, commands, scroll_x, scroll_y)
+    }
+
+    // Note: render_to_image for GPU path has different signature:
+    // &mut self, commands, scroll_y, scroll_x (3 params after self)
+
     /// Renders display commands and returns a CPU `Image` (RGBA8).
     ///
     /// Only valid when the renderer was created with [`new_headless`](Self::new_headless).
