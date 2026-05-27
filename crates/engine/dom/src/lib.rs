@@ -672,6 +672,23 @@ impl Document {
         self.nodes[parent.index()].children.push(child);
     }
 
+    /// Insert `new_node` immediately after `reference` in their shared parent.
+    ///
+    /// If `reference` has no parent, `new_node` is left without a parent (no-op
+    /// other than detaching any previous parent of `new_node`). If `reference` is
+    /// the last child, `new_node` is appended.
+    pub fn insert_after(&mut self, reference: NodeId, new_node: NodeId) {
+        self.detach(new_node);
+        let parent = match self.nodes[reference.index()].parent {
+            Some(p) => p,
+            None => return,
+        };
+        let siblings = &mut self.nodes[parent.index()].children;
+        let pos = siblings.iter().position(|&n| n == reference).unwrap_or(siblings.len() - 1);
+        siblings.insert(pos + 1, new_node);
+        self.nodes[new_node.index()].parent = Some(parent);
+    }
+
     /// Remove `node` from its current parent. The node itself stays in the arena and can be re-attached.
     pub fn detach(&mut self, node: NodeId) {
         let parent = self.nodes[node.index()].parent.take();
@@ -1350,6 +1367,273 @@ pub fn check_navigation_gate(doc: &Document, sandbox: SandboxFlags) -> usize {
         return anchors.len();
     }
     0
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// contenteditable: Input Events Level 2 (P1 part)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Input event type per Input Events Level 2 §4.1.3.
+///
+/// Each variant corresponds to one `inputType` string value that is dispatched
+/// with `beforeinput`/`input` events on a `contenteditable` host. P3 maps
+/// keyboard events to these variants; P1 uses them only as data types for the
+/// DOM mutation API.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EditInputType {
+    /// A printable character was typed (regular key press in contenteditable).
+    InsertText,
+    /// Enter key — split the current block into two paragraphs.
+    InsertParagraph,
+    /// Shift+Enter — insert a `<br>` line break without splitting a block.
+    InsertLineBreak,
+    /// Backspace — delete one character/grapheme cluster before the caret.
+    DeleteContentBackward,
+    /// Delete — delete one character/grapheme cluster after the caret.
+    DeleteContentForward,
+    /// Ctrl+Backspace — delete one word before the caret.
+    DeleteWordBackward,
+    /// Ctrl+Delete — delete one word after the caret.
+    DeleteWordForward,
+    /// Ctrl+V / drag-and-drop — insert content from the clipboard.
+    InsertFromPaste,
+    /// Ctrl+X — delete selected content and copy to clipboard.
+    DeleteByCut,
+    /// Ctrl+A — select all content (no DOM mutation).
+    SelectAll,
+    /// Ctrl+Z — undo the previous edit (managed by P3 undo stack).
+    HistoryUndo,
+    /// Ctrl+Y / Ctrl+Shift+Z — redo (managed by P3 undo stack).
+    HistoryRedo,
+}
+
+impl EditInputType {
+    /// The canonical `inputType` string for the `InputEvent` interface.
+    ///
+    /// Values match the Input Events Level 2 §4.1.3 enumeration.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InsertText => "insertText",
+            Self::InsertParagraph => "insertParagraph",
+            Self::InsertLineBreak => "insertLineBreak",
+            Self::DeleteContentBackward => "deleteContentBackward",
+            Self::DeleteContentForward => "deleteContentForward",
+            Self::DeleteWordBackward => "deleteWordBackward",
+            Self::DeleteWordForward => "deleteWordForward",
+            Self::InsertFromPaste => "insertFromPaste",
+            Self::DeleteByCut => "deleteByCut",
+            Self::SelectAll => "selectAll",
+            Self::HistoryUndo => "historyUndo",
+            Self::HistoryRedo => "historyRedo",
+        }
+    }
+}
+
+/// Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1).
+///
+/// P3 constructs this from keyboard / clipboard events and dispatches it to the
+/// JS runtime and the mutation functions below.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InputEvent {
+    /// The kind of edit operation that caused this event.
+    pub input_type: EditInputType,
+    /// Text that was inserted, or `None` for deletion/selection operations.
+    pub data: Option<String>,
+    /// `true` while an IME composition is in progress (not yet committed).
+    pub is_composing: bool,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// DOM mutation helpers for contenteditable editing
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Split a text node at `byte_offset`, creating a second text node with the
+/// suffix `[byte_offset..]` and inserting it immediately after the original.
+///
+/// Returns the `NodeId` of the newly created second node.
+/// If `byte_offset == 0` the first node becomes empty and all content moves to
+/// the second. If `byte_offset >= content.len()` the first node is unchanged
+/// and the second node is empty.
+///
+/// The caller is responsible for ensuring that `byte_offset` falls on a UTF-8
+/// character boundary; if not, the offset is rounded down to the nearest
+/// boundary to avoid producing invalid UTF-8.
+pub fn split_text_node(doc: &mut Document, node: NodeId, byte_offset: u32) -> NodeId {
+    let content = match &doc.get(node).data {
+        NodeData::Text(s) => s.clone(),
+        _ => return node, // not a text node — no-op, return self
+    };
+
+    // Clamp to a valid UTF-8 boundary.
+    let offset = byte_offset as usize;
+    let offset = if offset >= content.len() {
+        content.len()
+    } else {
+        // Walk back to a char boundary.
+        let mut b = offset;
+        while b > 0 && !content.is_char_boundary(b) {
+            b -= 1;
+        }
+        b
+    };
+
+    let first_part = content[..offset].to_string();
+    let second_part = content[offset..].to_string();
+
+    // Mutate the first (original) node in-place.
+    if let NodeData::Text(s) = &mut doc.get_mut(node).data {
+        *s = first_part;
+    }
+
+    // Allocate the second node and wire it into the parent.
+    let second = doc.create_text(second_part);
+    doc.insert_after(node, second);
+    second
+}
+
+/// Insert `text` into the text node at `pos`, returning the caret position
+/// immediately after the inserted text.
+///
+/// `pos.container` must point to a `NodeData::Text` node. If it points to an
+/// element instead, the function tries to use the first text-node child; if
+/// none exists it creates one and appends it.
+///
+/// `pos.offset` is a UTF-8 byte offset within the text content. If it exceeds
+/// the content length it is clamped to the end.
+pub fn insert_text_at(doc: &mut Document, pos: DomPosition, text: &str) -> DomPosition {
+    if text.is_empty() {
+        return pos;
+    }
+
+    // Resolve container to a text node.
+    let text_node = match &doc.get(pos.container).data {
+        NodeData::Text(_) => pos.container,
+        NodeData::Element { .. } | NodeData::DocumentFragment => {
+            // Find existing first text child or create one.
+            let first_text = doc.get(pos.container).children.iter().copied().find(|&c| {
+                matches!(doc.get(c).data, NodeData::Text(_))
+            });
+            match first_text {
+                Some(id) => id,
+                None => {
+                    let new_text = doc.create_text("");
+                    doc.append_child(pos.container, new_text);
+                    new_text
+                }
+            }
+        }
+        _ => return pos,
+    };
+
+    let content = match &doc.get(text_node).data {
+        NodeData::Text(s) => s.clone(),
+        _ => return pos,
+    };
+
+    let offset = pos.offset as usize;
+    let offset = offset.min(content.len());
+    // Snap to UTF-8 boundary.
+    let mut byte_off = offset;
+    while byte_off > 0 && !content.is_char_boundary(byte_off) {
+        byte_off -= 1;
+    }
+
+    let mut new_content = String::with_capacity(content.len() + text.len());
+    new_content.push_str(&content[..byte_off]);
+    new_content.push_str(text);
+    new_content.push_str(&content[byte_off..]);
+
+    let new_offset = (byte_off + text.len()) as u32;
+    if let NodeData::Text(s) = &mut doc.get_mut(text_node).data {
+        *s = new_content;
+    }
+
+    DomPosition { container: text_node, offset: new_offset }
+}
+
+/// Delete the content of `range` from the document, returning a collapsed
+/// `DomPosition` at the start of the deleted range.
+///
+/// Only same-container deletions are supported (both endpoints in the same
+/// text node). If `range.is_collapsed()` the function is a no-op.
+/// Cross-node ranges are not yet implemented and return the start position
+/// unchanged.
+pub fn delete_range(doc: &mut Document, range: &Range) -> DomPosition {
+    if range.is_collapsed() {
+        return range.start;
+    }
+
+    // Only handle same-container for now.
+    if range.start.container != range.end.container {
+        return range.start;
+    }
+
+    let container = range.start.container;
+    let content = match &doc.get(container).data {
+        NodeData::Text(s) => s.clone(),
+        _ => return range.start,
+    };
+
+    let start = (range.start.offset as usize).min(content.len());
+    let end = (range.end.offset as usize).min(content.len());
+    let (start, end) = if start <= end { (start, end) } else { (end, start) };
+
+    // Snap both offsets to UTF-8 boundaries.
+    let mut s = start;
+    while s > 0 && !content.is_char_boundary(s) {
+        s -= 1;
+    }
+    let mut e = end;
+    while e > 0 && !content.is_char_boundary(e) {
+        e -= 1;
+    }
+
+    let mut new_content = String::with_capacity(content.len() - (e - s));
+    new_content.push_str(&content[..s]);
+    new_content.push_str(&content[e..]);
+
+    if let NodeData::Text(c) = &mut doc.get_mut(container).data {
+        *c = new_content;
+    }
+
+    DomPosition { container, offset: s as u32 }
+}
+
+/// Insert a paragraph break (Enter key) at `pos` inside the `host`
+/// contenteditable element.
+///
+/// Splits the text node at `pos` and inserts a `<br>` element immediately after
+/// the split point. Returns a `DomPosition` at the start of the content after
+/// the break (i.e. offset 0 into the second part of the split text node).
+///
+/// If `pos.container` is not a text node, a `<br>` is appended to `host`
+/// directly and the position returned points to an empty text node after it.
+///
+/// `host` — the `contenteditable` root element (used as the insertion
+/// container when `pos.container` has no parent or is not a text node).
+// CSS: line-height, block formatting context for <p> splitting
+pub fn insert_paragraph_break(doc: &mut Document, pos: DomPosition, host: NodeId) -> DomPosition {
+    let is_text = matches!(doc.get(pos.container).data, NodeData::Text(_));
+
+    if is_text {
+        // Split text node at pos.
+        let second = split_text_node(doc, pos.container, pos.offset);
+
+        // Insert <br> between the two halves.
+        let br = doc.create_element(QualName::html("br"));
+        doc.insert_after(pos.container, br);
+        // Move second text node after <br>.
+        doc.insert_after(br, second);
+
+        DomPosition { container: second, offset: 0 }
+    } else {
+        // Fallback: just append a <br> and an empty text node to host.
+        let br = doc.create_element(QualName::html("br"));
+        doc.append_child(host, br);
+        let empty = doc.create_text("");
+        doc.append_child(host, empty);
+        DomPosition { container: empty, offset: 0 }
+    }
 }
 
 #[cfg(test)]
@@ -2533,5 +2817,274 @@ mod tests {
         let invalid = invalid_controls_in_form(&doc, form);
         assert_eq!(invalid.len(), 1);
         assert_eq!(invalid[0], inp2);
+    }
+
+    // ──────── EditInputType ────────
+
+    #[test]
+    fn edit_input_type_as_str_round_trip() {
+        let cases = [
+            (EditInputType::InsertText, "insertText"),
+            (EditInputType::InsertParagraph, "insertParagraph"),
+            (EditInputType::InsertLineBreak, "insertLineBreak"),
+            (EditInputType::DeleteContentBackward, "deleteContentBackward"),
+            (EditInputType::DeleteContentForward, "deleteContentForward"),
+            (EditInputType::DeleteWordBackward, "deleteWordBackward"),
+            (EditInputType::DeleteWordForward, "deleteWordForward"),
+            (EditInputType::InsertFromPaste, "insertFromPaste"),
+            (EditInputType::DeleteByCut, "deleteByCut"),
+            (EditInputType::SelectAll, "selectAll"),
+            (EditInputType::HistoryUndo, "historyUndo"),
+            (EditInputType::HistoryRedo, "historyRedo"),
+        ];
+        for (variant, expected) in cases {
+            assert_eq!(variant.as_str(), expected, "mismatch for {:?}", variant);
+        }
+    }
+
+    // ──────── insert_text_at ────────
+
+    fn make_text_doc(content: &str) -> (Document, NodeId, NodeId) {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        let text = doc.create_text(content);
+        doc.append_child(doc.root(), div);
+        doc.append_child(div, text);
+        (doc, div, text)
+    }
+
+    #[test]
+    fn insert_text_at_start() {
+        let (mut doc, _, text) = make_text_doc("world");
+        let pos = DomPosition { container: text, offset: 0 };
+        let new_pos = insert_text_at(&mut doc, pos, "Hello ");
+        match &doc.get(text).data {
+            NodeData::Text(s) => assert_eq!(s, "Hello world"),
+            _ => panic!("not a text node"),
+        }
+        assert_eq!(new_pos.container, text);
+        assert_eq!(new_pos.offset, 6);
+    }
+
+    #[test]
+    fn insert_text_at_end() {
+        let (mut doc, _, text) = make_text_doc("Hello");
+        let pos = DomPosition { container: text, offset: 5 };
+        let new_pos = insert_text_at(&mut doc, pos, " world");
+        match &doc.get(text).data {
+            NodeData::Text(s) => assert_eq!(s, "Hello world"),
+            _ => panic!("not a text node"),
+        }
+        assert_eq!(new_pos.offset, 11);
+    }
+
+    #[test]
+    fn insert_text_at_mid() {
+        let (mut doc, _, text) = make_text_doc("Helo");
+        let pos = DomPosition { container: text, offset: 3 };
+        let new_pos = insert_text_at(&mut doc, pos, "l");
+        match &doc.get(text).data {
+            NodeData::Text(s) => assert_eq!(s, "Hello"),
+            _ => panic!("not a text node"),
+        }
+        assert_eq!(new_pos.offset, 4);
+    }
+
+    #[test]
+    fn insert_text_at_empty_node() {
+        let (mut doc, _, text) = make_text_doc("");
+        let pos = DomPosition { container: text, offset: 0 };
+        let new_pos = insert_text_at(&mut doc, pos, "Hi");
+        match &doc.get(text).data {
+            NodeData::Text(s) => assert_eq!(s, "Hi"),
+            _ => panic!("not a text node"),
+        }
+        assert_eq!(new_pos.offset, 2);
+    }
+
+    #[test]
+    fn insert_text_at_element_creates_text_child() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), div);
+        let pos = DomPosition { container: div, offset: 0 };
+        let new_pos = insert_text_at(&mut doc, pos, "abc");
+        // A text child was created.
+        let children = &doc.get(div).children;
+        assert_eq!(children.len(), 1);
+        match &doc.get(children[0]).data {
+            NodeData::Text(s) => assert_eq!(s, "abc"),
+            _ => panic!("no text child created"),
+        }
+        assert_eq!(new_pos.offset, 3);
+    }
+
+    #[test]
+    fn insert_text_at_multibyte_utf8() {
+        // "Привет" — each Cyrillic char is 2 bytes in UTF-8.
+        // Char boundaries: П=0, р=2, и=4, в=6, е=8, т=10, end=12.
+        // offset 4 is exactly the start of "и" — insert X before "и".
+        let (mut doc, _, text) = make_text_doc("Привет");
+        let pos = DomPosition { container: text, offset: 4 };
+        let new_pos = insert_text_at(&mut doc, pos, "X");
+        match &doc.get(text).data {
+            NodeData::Text(s) => assert_eq!(s, "ПрXивет"),
+            _ => panic!("not a text node"),
+        }
+        // 4 bytes before + 1 byte "X" = offset 5.
+        assert_eq!(new_pos.offset, 5);
+    }
+
+    #[test]
+    fn insert_text_noop_when_empty_string() {
+        let (mut doc, _, text) = make_text_doc("abc");
+        let pos = DomPosition { container: text, offset: 1 };
+        let new_pos = insert_text_at(&mut doc, pos, "");
+        match &doc.get(text).data {
+            NodeData::Text(s) => assert_eq!(s, "abc"),
+            _ => panic!("not a text node"),
+        }
+        assert_eq!(new_pos, pos);
+    }
+
+    // ──────── delete_range ────────
+
+    #[test]
+    fn delete_range_same_node_full() {
+        let (mut doc, _, text) = make_text_doc("Hello");
+        let range = Range {
+            start: DomPosition { container: text, offset: 0 },
+            end:   DomPosition { container: text, offset: 5 },
+        };
+        let pos = delete_range(&mut doc, &range);
+        match &doc.get(text).data {
+            NodeData::Text(s) => assert!(s.is_empty()),
+            _ => panic!("not a text node"),
+        }
+        assert_eq!(pos.offset, 0);
+    }
+
+    #[test]
+    fn delete_range_same_node_partial() {
+        let (mut doc, _, text) = make_text_doc("Hello world");
+        let range = Range {
+            start: DomPosition { container: text, offset: 5 },
+            end:   DomPosition { container: text, offset: 11 },
+        };
+        let pos = delete_range(&mut doc, &range);
+        match &doc.get(text).data {
+            NodeData::Text(s) => assert_eq!(s, "Hello"),
+            _ => panic!("not a text node"),
+        }
+        assert_eq!(pos.offset, 5);
+    }
+
+    #[test]
+    fn delete_range_collapsed_noop() {
+        let (mut doc, _, text) = make_text_doc("abc");
+        let range = Range::collapsed(DomPosition { container: text, offset: 1 });
+        let pos = delete_range(&mut doc, &range);
+        match &doc.get(text).data {
+            NodeData::Text(s) => assert_eq!(s, "abc"),
+            _ => panic!("not a text node"),
+        }
+        assert_eq!(pos.offset, 1);
+    }
+
+    // ──────── split_text_node ────────
+
+    #[test]
+    fn split_text_node_basic() {
+        let (mut doc, div, text) = make_text_doc("Hello world");
+        let second = split_text_node(&mut doc, text, 5);
+        // First node: "Hello"
+        match &doc.get(text).data {
+            NodeData::Text(s) => assert_eq!(s, "Hello"),
+            _ => panic!(),
+        }
+        // Second node: " world"
+        match &doc.get(second).data {
+            NodeData::Text(s) => assert_eq!(s, " world"),
+            _ => panic!(),
+        }
+        // Parent has two text children in correct order.
+        let children = &doc.get(div).children;
+        assert_eq!(children, &[text, second]);
+    }
+
+    #[test]
+    fn split_text_node_at_start() {
+        let (mut doc, div, text) = make_text_doc("abc");
+        let second = split_text_node(&mut doc, text, 0);
+        match &doc.get(text).data {
+            NodeData::Text(s) => assert!(s.is_empty()),
+            _ => panic!(),
+        }
+        match &doc.get(second).data {
+            NodeData::Text(s) => assert_eq!(s, "abc"),
+            _ => panic!(),
+        }
+        assert_eq!(doc.get(div).children, vec![text, second]);
+    }
+
+    #[test]
+    fn split_text_node_at_end() {
+        let (mut doc, div, text) = make_text_doc("abc");
+        let second = split_text_node(&mut doc, text, 3);
+        match &doc.get(text).data {
+            NodeData::Text(s) => assert_eq!(s, "abc"),
+            _ => panic!(),
+        }
+        match &doc.get(second).data {
+            NodeData::Text(s) => assert!(s.is_empty()),
+            _ => panic!(),
+        }
+        assert_eq!(doc.get(div).children, vec![text, second]);
+    }
+
+    // ──────── insert_paragraph_break ────────
+
+    #[test]
+    fn insert_paragraph_break_creates_br() {
+        let (mut doc, div, text) = make_text_doc("Hello world");
+        let pos = DomPosition { container: text, offset: 5 };
+        let new_pos = insert_paragraph_break(&mut doc, pos, div);
+
+        // The div should now have: [text("Hello"), br, text(" world")]
+        let children = doc.get(div).children.clone();
+        assert_eq!(children.len(), 3);
+
+        match &doc.get(children[0]).data {
+            NodeData::Text(s) => assert_eq!(s, "Hello"),
+            _ => panic!("expected first text node"),
+        }
+        match &doc.get(children[1]).data {
+            NodeData::Element { name, .. } => assert_eq!(name.local, "br"),
+            _ => panic!("expected br element"),
+        }
+        match &doc.get(children[2]).data {
+            NodeData::Text(s) => assert_eq!(s, " world"),
+            _ => panic!("expected second text node"),
+        }
+        // New caret position is at the start of the second text node.
+        assert_eq!(new_pos.offset, 0);
+        assert_eq!(new_pos.container, children[2]);
+    }
+
+    #[test]
+    fn insert_paragraph_break_on_element_appends_br() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), div);
+        let pos = DomPosition { container: div, offset: 0 };
+        let new_pos = insert_paragraph_break(&mut doc, pos, div);
+        let children = doc.get(div).children.clone();
+        // Should have a <br> and an empty text node.
+        assert_eq!(children.len(), 2);
+        match &doc.get(children[0]).data {
+            NodeData::Element { name, .. } => assert_eq!(name.local, "br"),
+            _ => panic!("expected br"),
+        }
+        assert_eq!(new_pos.offset, 0);
     }
 }
