@@ -95,6 +95,225 @@ pub trait TextMeasurer {
     }
 }
 
+// ─── Clickable elements iterator (for P3 click-hint overlay, §12.14 task 7B.2) ──
+
+/// Classification of an interactive element found during layout-tree traversal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ClickableKind {
+    /// `<a href="…">` hyperlink (block-level or inline).
+    Link {
+        /// Raw `href` value, not yet resolved against base URL.
+        href: String,
+    },
+    /// `<button>` or `<input type=submit|button|reset>`.
+    Button,
+    /// Text/number/file/etc. `<input>`, `<textarea>`, `<select>`.
+    Input,
+    /// Element with `tabindex` >= 0 that doesn't fit other categories.
+    Generic,
+}
+
+/// An interactive element with its screen-space bounding rect.
+///
+/// `rect` is the border-box of the element in CSS px, as computed by layout.
+/// Used by P3's click-hint overlay to render keyboard-navigable hint badges.
+#[derive(Debug, Clone)]
+pub struct ClickableElement {
+    /// DOM node that owns this interactive region.
+    pub node_id: lumen_dom::NodeId,
+    /// Border-box rectangle in CSS px (document-relative, before scroll).
+    pub rect: lumen_core::geom::Rect,
+    /// Short text label for the hint badge (link text, button label, etc.).
+    /// `None` when no usable label could be extracted.
+    pub hint_text: Option<String>,
+    /// Interaction kind — used by P3 to assign the correct hint key and action.
+    pub kind: ClickableKind,
+}
+
+/// Collect all interactive elements from the layout tree in document order.
+///
+/// Walks the layout tree and returns every element that the user can
+/// activate: links, buttons, form controls, and elements with `tabindex`.
+/// Skipped boxes (`display: none`) and their children are omitted entirely.
+///
+/// For inline `<a href>` links, the returned `rect` is a bounding box of
+/// all inline fragments belonging to that link on its first line; multi-line
+/// links produce one entry per distinct link element (full-line bbox).
+pub fn collect_clickable_elements(
+    root: &LayoutBox,
+    doc: &lumen_dom::Document,
+) -> Vec<ClickableElement> {
+    let mut out = Vec::new();
+    collect_clickable_rec(root, doc, &mut out);
+    out
+}
+
+fn collect_clickable_rec(
+    b: &LayoutBox,
+    doc: &lumen_dom::Document,
+    out: &mut Vec<ClickableElement>,
+) {
+    use box_tree::{BoxKind, FormControlKind};
+    use lumen_core::geom::Rect;
+
+    if matches!(b.kind, BoxKind::Skip) {
+        return;
+    }
+
+    match &b.kind {
+        BoxKind::FormControl { kind } => {
+            let ck = match kind {
+                FormControlKind::Button => ClickableKind::Button,
+                FormControlKind::Input { .. }
+                | FormControlKind::Select
+                | FormControlKind::Textarea => ClickableKind::Input,
+            };
+            out.push(ClickableElement {
+                node_id: b.node,
+                rect: b.rect,
+                hint_text: None,
+                kind: ck,
+            });
+        }
+        BoxKind::Block | BoxKind::FlowRoot => {
+            if let Some(href) = element_href(doc, b.node) {
+                out.push(ClickableElement {
+                    node_id: b.node,
+                    rect: b.rect,
+                    hint_text: first_text_content(doc, b.node),
+                    kind: ClickableKind::Link { href },
+                });
+            } else if has_tabindex(doc, b.node) {
+                out.push(ClickableElement {
+                    node_id: b.node,
+                    rect: b.rect,
+                    hint_text: first_text_content(doc, b.node),
+                    kind: ClickableKind::Generic,
+                });
+            }
+        }
+        BoxKind::InlineRun { lines, .. } => {
+            // Collect rects for inline <a href> links by walking frag source_nodes.
+            // Groups consecutive frags with the same link ancestor into one entry.
+            let line_y_offset = b.rect.y;
+            let line_x_offset = b.rect.x;
+            for line in lines {
+                let mut cur_link_node: Option<lumen_dom::NodeId> = None;
+                let mut cur_href = String::new();
+                let mut cur_rect: Option<Rect> = None;
+                for frag in line {
+                    let link = link_ancestor(doc, frag.source_node);
+                    if link == cur_link_node {
+                        if let Some(ref mut r) = cur_rect {
+                            let fx = line_x_offset + frag.x;
+                            let fw = frag.width;
+                            let left = r.x.min(fx);
+                            let right = (r.x + r.width).max(fx + fw);
+                            r.x = left;
+                            r.width = right - left;
+                        }
+                    } else {
+                        // Flush previous link entry.
+                        if let (Some(nid), Some(r)) = (cur_link_node, cur_rect) {
+                            out.push(ClickableElement {
+                                node_id: nid,
+                                rect: r,
+                                hint_text: Some(cur_href.clone()),
+                                kind: ClickableKind::Link { href: cur_href.clone() },
+                            });
+                        }
+                        cur_link_node = link;
+                        if let Some(nid) = link {
+                            cur_href = element_href(doc, nid).unwrap_or_default();
+                            let line_height = line
+                                .iter()
+                                .map(|f| f.style.font_size)
+                                .fold(0.0_f32, f32::max);
+                            let fy = line_y_offset;
+                            cur_rect = Some(Rect::new(
+                                line_x_offset + frag.x,
+                                fy,
+                                frag.width,
+                                line_height,
+                            ));
+                        } else {
+                            cur_rect = None;
+                        }
+                    }
+                }
+                // Flush the last link.
+                if let (Some(nid), Some(r)) = (cur_link_node, cur_rect) {
+                    out.push(ClickableElement {
+                        node_id: nid,
+                        rect: r,
+                        hint_text: Some(cur_href.clone()),
+                        kind: ClickableKind::Link { href: cur_href },
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+
+    for child in &b.children {
+        collect_clickable_rec(child, doc, out);
+    }
+}
+
+/// Returns the `href` attribute of element `id` if it's an `<a>` element with a non-empty href.
+fn element_href(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> Option<String> {
+    use lumen_dom::NodeData;
+    match &doc.get(id).data {
+        NodeData::Element { name, attrs, .. } if name.local == "a" => {
+            attrs.iter().find(|a| a.name.local == "href").map(|a| a.value.clone())
+        }
+        _ => None,
+    }
+}
+
+/// Returns `true` if element `id` has a non-negative `tabindex` attribute.
+fn has_tabindex(doc: &lumen_dom::Document, id: lumen_dom::NodeId) -> bool {
+    doc.get(id)
+        .get_attr("tabindex")
+        .and_then(|v| v.trim().parse::<i32>().ok())
+        .is_some_and(|n| n >= 0)
+}
+
+/// Walk up from `id` to find the nearest `<a href>` ancestor (inclusive).
+fn link_ancestor(
+    doc: &lumen_dom::Document,
+    mut id: lumen_dom::NodeId,
+) -> Option<lumen_dom::NodeId> {
+    loop {
+        if element_href(doc, id).is_some() {
+            return Some(id);
+        }
+        match doc.get(id).parent {
+            Some(p) => id = p,
+            None => return None,
+        }
+    }
+}
+
+/// Get the text content of the first text-node descendant (for hint labels).
+fn first_text_content(
+    doc: &lumen_dom::Document,
+    id: lumen_dom::NodeId,
+) -> Option<String> {
+    use lumen_dom::NodeData;
+    let node = doc.get(id);
+    if let NodeData::Text(t) = &node.data {
+        let s = t.trim().to_string();
+        return if s.is_empty() { None } else { Some(s) };
+    }
+    for &child in &node.children {
+        if let Some(t) = first_text_content(doc, child) {
+            return Some(t);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -12828,6 +13047,121 @@ mod tests {
         collect(&root, 5, &mut outer_text, &mut inner_found);
         assert_eq!(outer_text, "1", "outer li counter should be 1");
         assert!(inner_found, "inner li should also have counter text");
+    }
+
+    // ─── <details>/<summary> tests ───────────────────────────────────────────
+
+    /// Count LayoutBox nodes with non-Skip kind under root.
+    fn count_visible_boxes(b: &LayoutBox) -> usize {
+        if matches!(b.kind, BoxKind::Skip) {
+            return 0;
+        }
+        1 + b.children.iter().map(count_visible_boxes).sum::<usize>()
+    }
+
+    #[test]
+    fn details_closed_hides_content() {
+        // Without `open` attribute, only <summary> should appear.
+        let closed = lay(
+            "<details><summary>Title</summary><p>Hidden content</p></details>",
+            "",
+        );
+        let open = lay(
+            r#"<details open><summary>Title</summary><p>Hidden content</p></details>"#,
+            "",
+        );
+        let closed_total = count_visible_boxes(&closed);
+        let open_total = count_visible_boxes(&open);
+        // Closed should have fewer visible boxes than open (the <p> is hidden).
+        assert!(
+            closed_total < open_total,
+            "closed <details> ({closed_total} boxes) should have fewer visible boxes than open ({open_total} boxes)"
+        );
+    }
+
+    #[test]
+    fn details_open_shows_content() {
+        // With `open` attribute, all children are visible.
+        let root = lay(
+            r#"<details open><summary>Title</summary><p>Visible content</p></details>"#,
+            "",
+        );
+        let total = count_visible_boxes(&root);
+        // Should include details + summary + "Title" inline + p + "Visible content" inline.
+        assert!(
+            total >= 5,
+            "open <details> should show all content, got {total} visible boxes"
+        );
+    }
+
+    #[test]
+    fn details_no_summary_closed() {
+        // <details> without <summary>: no summary child → nothing rendered when closed.
+        let closed = lay("<details><p>Secret</p></details>", "");
+        let open = lay(r#"<details open><p>Secret</p></details>"#, "");
+        // Closed hides all children (no summary to show); open shows them.
+        assert!(
+            count_visible_boxes(&closed) < count_visible_boxes(&open),
+            "closed <details> without <summary> should have fewer boxes than open"
+        );
+    }
+
+    // ─── collect_clickable_elements tests ────────────────────────────────────
+
+    #[test]
+    fn clickable_finds_block_link() {
+        let doc = lumen_html_parser::parse(r#"<a href="/page" style="display:block">Click me</a>"#);
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let elems = collect_clickable_elements(&root, &doc);
+        assert!(
+            elems.iter().any(|e| matches!(&e.kind, ClickableKind::Link { href } if href == "/page")),
+            "block-level <a href> should be collected"
+        );
+    }
+
+    #[test]
+    fn clickable_finds_form_controls() {
+        let doc = lumen_html_parser::parse(
+            "<form><input type=text><button>Submit</button><select><option>A</option></select></form>",
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let elems = collect_clickable_elements(&root, &doc);
+        let inputs = elems.iter().filter(|e| matches!(e.kind, ClickableKind::Input)).count();
+        let buttons = elems.iter().filter(|e| matches!(e.kind, ClickableKind::Button)).count();
+        assert!(inputs >= 2, "input + select should be collected as Input, got {inputs}");
+        assert!(buttons >= 1, "button should be collected, got {buttons}");
+    }
+
+    #[test]
+    fn clickable_finds_tabindex_element() {
+        let doc = lumen_html_parser::parse(r#"<div tabindex="0">Interactive</div>"#);
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let elems = collect_clickable_elements(&root, &doc);
+        assert!(
+            elems.iter().any(|e| e.kind == ClickableKind::Generic),
+            "element with tabindex=0 should be collected as Generic"
+        );
+    }
+
+    #[test]
+    fn clickable_skips_display_none() {
+        let doc = lumen_html_parser::parse(
+            r#"<a href="/hidden" style="display:none">Hidden</a><a href="/visible" style="display:block">Visible</a>"#,
+        );
+        let sheet = lumen_css_parser::parse("");
+        let root = layout(&doc, &sheet, Size::new(800.0, 600.0));
+        let elems = collect_clickable_elements(&root, &doc);
+        assert!(
+            !elems.iter().any(|e| matches!(&e.kind, ClickableKind::Link { href } if href == "/hidden")),
+            "display:none link should not be collected"
+        );
+        assert!(
+            elems.iter().any(|e| matches!(&e.kind, ClickableKind::Link { href } if href == "/visible")),
+            "display:block link should be collected"
+        );
     }
 
 }
