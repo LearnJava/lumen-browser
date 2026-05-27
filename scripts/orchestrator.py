@@ -284,7 +284,7 @@ def format_tool_use(block: dict) -> str:
     inp = block.get("input", {})
     if tool == "Bash":
         cmd = inp.get("command", "")
-        preview = cmd[:120].replace("\n", " ")
+        preview = cmd[:500].replace("\n", " ")
         return f"  $ {preview}"
     elif tool == "Read":
         return f"  Читает: {inp.get('file_path', '?')}"
@@ -313,8 +313,8 @@ def format_event(event: dict) -> list[str]:
     if ev_type == "result":
         result_text = event.get("result", "")
         if result_text:
-            preview = result_text[:200].replace("\n", " ")
-            if len(result_text) > 200:
+            preview = result_text[:500].replace("\n", " ")
+            if len(result_text) > 500:
                 preview += "..."
             lines.append(f"  Результат: {preview}")
         return lines
@@ -329,8 +329,8 @@ def format_event(event: dict) -> list[str]:
             elif btype == "text":
                 text = block.get("text", "")
                 if text:
-                    preview = text[:200].replace("\n", " ")
-                    if len(text) > 200:
+                    preview = text[:500].replace("\n", " ")
+                    if len(text) > 500:
                         preview += "..."
                     lines.append(f"  {preview}")
         return lines
@@ -400,13 +400,13 @@ def run_claude(
             # Детект rate limit в сыром выводе
             if "hit your limit" in line.lower() or "rate limit" in line.lower():
                 rate_limited = True
-                log(developer, f"  Rate limit: {line[:120]}")
+                log(developer, f"  Rate limit: {line[:500]}")
                 continue
 
             # Детект 403 / auth error в сыром выводе
             if "403" in line and ("forbidden" in line.lower() or "authenticate" in line.lower()):
                 auth_error = True
-                log(developer, f"  Auth error (403): {line[:120]}")
+                log(developer, f"  Auth error (403): {line[:500]}")
                 continue
 
             try:
@@ -415,10 +415,10 @@ def run_claude(
                 # Не-JSON строка — может быть сообщение от CLI
                 if "hit your limit" in line.lower() or "rate limit" in line.lower():
                     rate_limited = True
-                    log(developer, f"  Rate limit: {line[:120]}")
+                    log(developer, f"  Rate limit: {line[:500]}")
                 elif "403" in line and ("forbidden" in line.lower() or "authenticate" in line.lower()):
                     auth_error = True
-                    log(developer, f"  Auth error (403): {line[:120]}")
+                    log(developer, f"  Auth error (403): {line[:500]}")
                 continue
 
             # Захватить session_id из первого события, где он есть
