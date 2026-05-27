@@ -1,5 +1,5 @@
-In progress: —
-Next step: (следующая задача из Wave 2 — см. Queue ниже)
+In progress: tinyskia-cpu-raster (8A.5)  branch: p3-tinyskia-cpu-raster
+Next step: add tiny-skia dep under cfg(test), integrate into test pipeline  lumen-paint/Cargo.toml
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
