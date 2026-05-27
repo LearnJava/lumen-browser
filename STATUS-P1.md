@@ -1,5 +1,5 @@
-In progress: none (ready for next task)
-Next step: (check lumen-plan.md Phase 2 ADR-007 — antidetect-webgl-normalize 9D.2 or Phase 2 ADR-008 gpu-layer-lru 10F)
+In progress: gpu-layer-lru (10F Phase 1 ✅)  branch: p1-gpu-layer-lru
+Next step: Phase 2 (10F.2) texture pool recycling + viewport eviction triggers  paint/src/layer_cache.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -9,6 +9,7 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
 Recent:
+- gpu-layer-lru (10F, Phase 1): LayerCache struct in paint/src/layer_cache.rs, LRU-tracked GPU layer metadata (LayerKey + LayerEntry), get_lru_candidates() for eviction, remove_keys() for memory reclaim, 256 MB default budget, 7 unit tests + Renderer integration, Phase 2 (10F.2) texture pool recycling pending 2026-05-28
 - antidetect-canvas-randomization (9D.1): CanvasNoiseGenerator LCG RNG в canvas/src/fp_noise.rs, per-session deterministic XOR-noise R/G/B, Context2D::set_noise_generator() + get_image_data() stub для P3 JS-интеграции, 20 тестов 2026-05-28
 - extras-p2 (5++): object-fit ✅ + variable fonts ✅ + Print PDF Phase 1 (pagination module) 2026-05-27
 - glyph-atlas-eviction (10G.1): LRU tracking + get_lru_candidates() + remove_keys() для эвикции, 4 новых теста, Phase 1 завершена 2026-05-27
