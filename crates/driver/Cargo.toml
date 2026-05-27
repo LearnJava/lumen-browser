@@ -1,0 +1,26 @@
+[package]
+name = "lumen-driver"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+# Why this dependency (lumen-core): shared error types, URL, geom primitives — permanent.
+# Why this dependency (lumen-encoding): charset detection/decode for HTML bytes — permanent.
+# Why this dependency (lumen-html-parser): parse HTML bytes into Document — permanent.
+# Why this dependency (lumen-css-parser): parse stylesheets — permanent.
+# Why this dependency (lumen-dom): Document, NodeId for DOM traversal — permanent.
+# Why this dependency (lumen-layout): run layout pipeline, LayoutBox, ComputedStyle — permanent.
+# Why this dependency (lumen-paint): build DisplayList, hit_test for click targeting — permanent.
+# Why this dependency (lumen-network): HTTP client for URL navigation — permanent.
+[dependencies]
+lumen-core = { workspace = true }
+lumen-encoding = { workspace = true }
+lumen-html-parser = { workspace = true }
+lumen-css-parser = { workspace = true }
+lumen-dom = { workspace = true }
+lumen-layout = { workspace = true }
+lumen-paint = { workspace = true }
+lumen-font = { workspace = true }
+lumen-network = { workspace = true }
