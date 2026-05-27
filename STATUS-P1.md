@@ -1,4 +1,5 @@
-In progress: —
+In progress: contenteditable-dom-mutations  branch: p1-contenteditable-mutations
+Next step: готово, ожидает коммита
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
