@@ -21,7 +21,8 @@ use lumen_layout::LayoutBox;
 
 use crate::{
     A11yNode, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
-    ConsoleEntry, InputCommand, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
+    ConsoleEntry, FingerprintProfile, InputCommand, NetworkEntry, NodeRef, ScrollDelta, Target,
+    WaitCondition, context::SessionContext,
 };
 
 /// Встроенный шрифт Inter-Regular (SIL OFL 1.1).
@@ -73,6 +74,8 @@ pub struct WinitSession {
     scroll_y: f32,
     /// Current horizontal scroll position in logical pixels.
     scroll_x: f32,
+    /// Изолированный контекст сессии: cookies, storage, cache, fingerprint profile.
+    context: SessionContext,
 }
 
 impl WinitSession {
@@ -86,6 +89,7 @@ impl WinitSession {
             con_log: Vec::new(),
             scroll_y: 0.0,
             scroll_x: 0.0,
+            context: SessionContext::new(),
         }
     }
 
@@ -99,6 +103,7 @@ impl WinitSession {
             con_log: Vec::new(),
             scroll_y: 0.0,
             scroll_x: 0.0,
+            context: SessionContext::new(),
         }
     }
 
@@ -841,6 +846,25 @@ impl BrowserSession for WinitSession {
             });
         }
         Ok(out)
+    }
+
+    // ── Isolation & Fingerprinting (Task 8E, Phase 1) ────────────────────────
+
+    fn fingerprint_profile(&self) -> FingerprintProfile {
+        self.context.fingerprint_profile()
+    }
+
+    fn set_fingerprint_profile(&mut self, profile: FingerprintProfile) -> Result<()> {
+        self.context.set_fingerprint_profile(profile);
+        Ok(())
+    }
+
+    fn user_agent(&self) -> String {
+        self.context.user_agent()
+    }
+
+    fn set_user_agent(&mut self, ua: &str) -> Result<()> {
+        self.context.set_user_agent(ua)
     }
 }
 
