@@ -2838,21 +2838,134 @@ function URL(href, base) {
 URL.createObjectURL  = function() { return 'blob:lumen/unsupported'; };
 URL.revokeObjectURL  = function() {};
 
-// ── performance (HR Timer — W3C HR Time L2) ───────────────────────────────────
+// ── performance (HR Timer — W3C HR Time L2 + User Timing L3) ─────────────────
 // Time origin is the instant install_dom_api ran (injected by Rust).
 var _perf_origin_ms = typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0;
+// Internal entry store: array of {entryType, name, startTime, duration}.
+var _perf_entries = [];
 var performance = {
     timeOrigin: _perf_origin_ms,
     now: function() {
         return (typeof _lumen_now_ms === 'function' ? _lumen_now_ms() : 0) - _perf_origin_ms;
     },
-    mark:    function() {},
-    measure: function() {},
-    getEntriesByName: function() { return []; },
-    getEntriesByType: function() { return []; },
-    clearMarks:    function() {},
-    clearMeasures: function() {},
+    // User Timing L3 §4.2 — performance.mark(name, options?)
+    mark: function(name, opts) {
+        var start = (opts && typeof opts.startTime === 'number') ? opts.startTime : performance.now();
+        var entry = { entryType: 'mark', name: String(name), startTime: start, duration: 0 };
+        _perf_entries.push(entry);
+        _perf_observer_notify([entry]);
+        return entry;
+    },
+    // User Timing L3 §4.3 — performance.measure(name, start?, end?)
+    measure: function(name, startMark, endMark) {
+        var start = 0, end = performance.now();
+        if (typeof startMark === 'string') {
+            var sm = _perf_entries_by_name(startMark, 'mark');
+            if (sm.length > 0) start = sm[sm.length - 1].startTime;
+        } else if (typeof startMark === 'number') {
+            start = startMark;
+        }
+        if (typeof endMark === 'string') {
+            var em = _perf_entries_by_name(endMark, 'mark');
+            if (em.length > 0) end = em[em.length - 1].startTime;
+        } else if (typeof endMark === 'number') {
+            end = endMark;
+        }
+        var entry = { entryType: 'measure', name: String(name), startTime: start, duration: end - start };
+        _perf_entries.push(entry);
+        _perf_observer_notify([entry]);
+        return entry;
+    },
+    getEntriesByName: function(name, type) {
+        return _perf_entries_by_name(String(name), type);
+    },
+    getEntriesByType: function(type) {
+        var t = String(type);
+        return _perf_entries.filter(function(e) { return e.entryType === t; });
+    },
+    getEntries: function() { return _perf_entries.slice(); },
+    clearMarks: function(name) {
+        if (typeof name === 'string') {
+            _perf_entries = _perf_entries.filter(function(e) { return !(e.entryType === 'mark' && e.name === name); });
+        } else {
+            _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'mark'; });
+        }
+    },
+    clearMeasures: function(name) {
+        if (typeof name === 'string') {
+            _perf_entries = _perf_entries.filter(function(e) { return !(e.entryType === 'measure' && e.name === name); });
+        } else {
+            _perf_entries = _perf_entries.filter(function(e) { return e.entryType !== 'measure'; });
+        }
+    },
 };
+
+function _perf_entries_by_name(name, type) {
+    return _perf_entries.filter(function(e) {
+        return e.name === name && (type === undefined || e.entryType === type);
+    });
+}
+
+// ── PerformanceObserver (Performance Timeline L2 §5) ──────────────────────────
+// observe({entryTypes}) → registers callback for future entries of those types.
+// disconnect() → stops observing. Callback: fn(list, observer).
+var _perf_observers = [];
+
+function PerformanceObserver(callback) {
+    if (typeof callback !== 'function') throw new TypeError('PerformanceObserver: callback must be a function');
+    this._cb      = callback;
+    this._types   = [];
+    this._buffered = false;
+}
+PerformanceObserver.prototype.observe = function(opts) {
+    var types = (opts && Array.isArray(opts.entryTypes)) ? opts.entryTypes : [];
+    this._types = types;
+    this._buffered = !!(opts && opts.buffered);
+    // De-duplicate in global list.
+    var idx = _perf_observers.indexOf(this);
+    if (idx === -1) _perf_observers.push(this);
+    // If buffered: deliver already-existing matching entries immediately.
+    if (this._buffered && types.length > 0) {
+        var buffered = _perf_entries.filter(function(e) {
+            return types.indexOf(e.entryType) !== -1;
+        });
+        if (buffered.length > 0) {
+            _perf_deliver_to_observer(this, buffered);
+        }
+    }
+};
+PerformanceObserver.prototype.disconnect = function() {
+    var idx = _perf_observers.indexOf(this);
+    if (idx !== -1) _perf_observers.splice(idx, 1);
+};
+PerformanceObserver.prototype.takeRecords = function() { return []; };
+
+// Deliver a batch of entries to a single observer (wraps in EntryList).
+function _perf_deliver_to_observer(obs, entries) {
+    var list = {
+        getEntries:        function() { return entries.slice(); },
+        getEntriesByName:  function(n, t) { return entries.filter(function(e) { return e.name === n && (!t || e.entryType === t); }); },
+        getEntriesByType:  function(t) { return entries.filter(function(e) { return e.entryType === t; }); },
+    };
+    try { obs._cb(list, obs); } catch(e) {}
+}
+
+// Called internally when new entries are created (mark/measure/paint).
+function _perf_observer_notify(entries) {
+    for (var i = 0; i < _perf_observers.length; i++) {
+        var obs = _perf_observers[i];
+        var matching = entries.filter(function(e) { return obs._types.indexOf(e.entryType) !== -1; });
+        if (matching.length > 0) _perf_deliver_to_observer(obs, matching);
+    }
+}
+
+// Called by the shell after first paint / first contentful paint.
+// name = 'first-paint' | 'first-contentful-paint', start_ms = DOMHighResTimeStamp.
+function _lumen_deliver_paint_entry(name, start_ms) {
+    var entry = { entryType: 'paint', name: String(name), startTime: start_ms, duration: 0 };
+    _perf_entries.push(entry);
+    _perf_observer_notify([entry]);
+}
 
 // ── scheduler (Prioritized Task Scheduling API — W3C §2) ─────────────────────
 // scheduler.postTask(fn, {priority?, delay?}) → Promise
@@ -2890,6 +3003,7 @@ window.clearInterval         = clearInterval;
 window.MutationObserver      = MutationObserver;
 window.ResizeObserver        = ResizeObserver;
 window.IntersectionObserver  = IntersectionObserver;
+window.PerformanceObserver   = PerformanceObserver;
 
 // ── Lazy image loading (HTML LS §2.6.6.9) ──────────────────────────────────
 // Maps nid (u32 as string key) → url for images deferred by loading=\"lazy\".
@@ -4590,6 +4704,109 @@ mod tests {
     fn performance_on_window() {
         let rt = runtime_with_dom(make_doc());
         let r = rt.eval("typeof window.performance.now === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_mark_stores_entry() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("performance.mark('t1'); performance.getEntriesByType('mark').length").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(1.0));
+    }
+
+    #[test]
+    fn performance_mark_returns_entry_name() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("performance.mark('mymark').name").unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("mymark".into()));
+    }
+
+    #[test]
+    fn performance_measure_duration() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("performance.mark('s'); performance.mark('e', {startTime: performance.now()+10}); var m = performance.measure('d','s','e'); m.duration >= 0").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_get_entries_by_name() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("performance.mark('x'); performance.mark('x'); performance.getEntriesByName('x','mark').length").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(2.0));
+    }
+
+    #[test]
+    fn performance_clear_marks() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("performance.mark('a'); performance.clearMarks(); performance.getEntriesByType('mark').length").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(0.0));
+    }
+
+    #[test]
+    fn performance_observer_constructor_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof PerformanceObserver === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_observer_on_window() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.PerformanceObserver === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_observer_receives_mark_entry() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("\
+            var got = [];\
+            var po = new PerformanceObserver(function(list) { got = got.concat(list.getEntries()); });\
+            po.observe({entryTypes:['mark']});\
+            performance.mark('obs_test');\
+            got.length === 1 && got[0].name === 'obs_test'\
+        ").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_observer_disconnect_stops_delivery() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("\
+            var count = 0;\
+            var po = new PerformanceObserver(function() { count++; });\
+            po.observe({entryTypes:['mark']});\
+            performance.mark('before');\
+            po.disconnect();\
+            performance.mark('after');\
+            count === 1\
+        ").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_observer_paint_entry_via_lumen_deliver() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("\
+            var got = [];\
+            var po = new PerformanceObserver(function(list) { got = got.concat(list.getEntries()); });\
+            po.observe({entryTypes:['paint']});\
+            _lumen_deliver_paint_entry('first-paint', 42.0);\
+            got.length === 1 && got[0].name === 'first-paint' && got[0].startTime === 42.0\
+        ").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn performance_observer_buffered_delivers_existing() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("\
+            _lumen_deliver_paint_entry('first-paint', 10.0);\
+            var got = [];\
+            var po = new PerformanceObserver(function(list) { got = got.concat(list.getEntries()); });\
+            po.observe({entryTypes:['paint'], buffered: true});\
+            got.length === 1\
+        ").unwrap();
         assert_eq!(r, lumen_core::JsValue::Bool(true));
     }
 
