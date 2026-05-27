@@ -9,4 +9,5 @@ description = "Lumen: knowledge layer — полнотекстовый поис�
 
 [dependencies]
 lumen-core.workspace = true
+lumen-storage.workspace = true
 rusqlite.workspace = true
