@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: lumen-driver-trait (8A.1+8A.2)  branch: p3-lumen-driver-trait
+Next step: создать crates/driver/src/lib.rs с trait BrowserSession + InProcessSession stub
 
 CSS rule: P3 does NOT implement CSS properties. P4 owns all CSS.
   P3 exposes shell hooks (scroll events, OS APIs, network fetch) only.
