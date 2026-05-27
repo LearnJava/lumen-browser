@@ -1107,6 +1107,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lumen-driver"
+version = "0.0.1"
+dependencies = [
+ "lumen-core",
+ "lumen-css-parser",
+ "lumen-dom",
+ "lumen-encoding",
+ "lumen-font",
+ "lumen-html-parser",
+ "lumen-layout",
+ "lumen-network",
+ "lumen-paint",
+]
+
+[[package]]
 name = "lumen-encoding"
 version = "0.0.1"
 dependencies = [
@@ -1210,6 +1225,7 @@ dependencies = [
  "lumen-html-parser",
  "lumen-image",
  "lumen-js",
+ "lumen-knowledge",
  "lumen-layout",
  "lumen-network",
  "lumen-paint",

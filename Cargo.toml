@@ -4,6 +4,7 @@ members = [
     "crates/shell",
     "crates/core",
     "crates/devtools",
+    "crates/driver",
     "crates/js",
     "crates/network",
     "crates/storage",
@@ -33,6 +34,7 @@ lumen-core = { path = "crates/core" }
 lumen-devtools = { path = "crates/devtools" }
 lumen-js = { path = "crates/js" }
 lumen-network = { path = "crates/network" }
+lumen-driver = { path = "crates/driver" }
 lumen-storage = { path = "crates/storage" }
 lumen-knowledge = { path = "crates/knowledge" }
 lumen-html-parser = { path = "crates/engine/html-parser" }
