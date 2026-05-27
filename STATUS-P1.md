@@ -1,5 +1,5 @@
-In progress: —
-Next step: —
+In progress: off-screen-render (8A.3)  branch: p1-off-screen-render
+Next step: Renderer::new_headless + render_to_image  crates/engine/paint/src/renderer.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
