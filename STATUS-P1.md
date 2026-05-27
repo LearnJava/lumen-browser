@@ -1,5 +1,5 @@
 In progress: shadow-dom-accessibility-forms-gc (6+, Phase 2)  branch: p1-shadow-dom-accessibility-forms-gc
-Next step: Phase 2A — slot delegation + fallback content expansion for nested Shadow DOM trees; expand FlatTree compositing to handle nested slot assignments with explicit fallback. crates/engine/dom/src/lib.rs:1322
+Next step: Phase 2B — accessibility tree composition in nested shadow trees; extend build_ax_tree() to traverse FlatTree boundaries, map ARIA roles across host/slot boundaries. crates/engine/dom/src/lib.rs:1600
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -12,6 +12,7 @@ Note: fts-omnibox (Wave 1, P3-задача по домену) перенесен
 Note: Wave 2 очередь содержит P2-задачи (extras-p2, avif-decoder, webgl-context, font-hinting, svg-rasterizer) — они пока не для P1. Wave 2 P3-задачи (http2-client, preconnect-hints) тоже в P3 очереди. P1 берёт следующее из Phase 1/Phase 2 своих задач.
 
 Recent:
+- shadow-dom-accessibility-forms-gc (6+, Phase 2A): slot delegation + fallback expansion for nested Shadow DOM — collect_shadow_hosts() recursive traversal, build_flat_tree() processes nested hosts, wire_slot_overrides() fallback documentation, 2 new tests (flat_tree_nested_shadow_with_slot_delegation, flat_tree_nested_slot_fallback), 123 total tests PASS, clippy clean 2026-05-28
 - click-hint-overlay (7B.2): enhance collect_clickable_elements with <details> support — add ClickableKind::Details variant, is_details_element() helper, comprehensive unit tests (6 new tests for link/button/input/details/mixed), P1 complete 2026-05-28 — P3 integration pending
 - print-pdf-pagination (5++, Phase 1): PaginationContext + Page + PageFragment, paginate() algorithm for break-before/after/avoid, 7 unit tests, exports in lib.rs, clippy clean 2026-05-28
 - bench-ram-axis (9G.5, ADR-008 performance gate): cross-platform RSS measurement (getrusage on Unix, GetProcessMemoryInfo on Windows), baseline.json established, UPDATE.md documentation 2026-05-28
