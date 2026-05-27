@@ -158,7 +158,7 @@ fn read_face(path: &Path) -> Option<FaceRecord> {
     let family = name.best_family()?.to_owned();
     let subfamily = name.subfamily.as_deref().unwrap_or("");
 
-    let (weight, style) = match font.os2() {
+    let (weight, style, stretch) = match font.os2() {
         Ok(os2) => {
             let style = if os2.is_italic() {
                 FontStyle::Italic
@@ -167,15 +167,19 @@ fn read_face(path: &Path) -> Option<FaceRecord> {
             } else {
                 FontStyle::Normal
             };
-            (os2.weight_class, style)
+            (os2.weight_class, style, os2.stretch_percent())
         }
-        Err(_) => guess_from_subfamily(subfamily),
+        Err(_) => {
+            let (w, s) = guess_from_subfamily(subfamily);
+            (w, s, 100) // нет OS/2 → дефолт normal stretch
+        }
     };
 
     Some(FaceRecord {
         family,
         weight,
         style,
+        stretch,
         path: path.to_owned(),
     })
 }
