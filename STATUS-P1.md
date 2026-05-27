@@ -1,5 +1,5 @@
 In progress: none (ready for next task)
-Next step: animation-keyframe-easing (6.6, Phase 2) — full timing functions (ease/ease-in/ease-out/ease-in-out/cubic-bezier/steps) support in AnimationInterpolator + AnimValue. Build on Phase 0 Web Animations foundation (TimingFunction + interpolate logic).
+Next step: transition-advanced (6.7, Phase 2) — grouped properties, interrupted transitions, animation-fill-mode lifecycle. Extends Phase 0 transition infrastructure + animation-keyframe-easing timing functions.
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -57,39 +57,29 @@ Recent:
 19. ✅ Print pipeline (P1 part): pagination algorithm (break-before/after/avoid, orphans/widows)
 20. ✅ Preload scanner: scan_preload_hints for early fetch hints in background
 
-<<<<<<< HEAD
-### Phase 1 (in progress / planned)
-21. ⬜ lumen-a11y-full (8G, [P1+P3]) — stage 1: ARIA role mapping (60+ variants), text alternative computation (accname §4), CSS pseudo-classes for accessibility
-22. ⬜ lumen-a11y-full (8G, stage 2) — ARIA attribute application (aria-current/modal/roledescription/valuenow/controls/owns/flowto/details), relationship attributes, NodeId storage for find_by_id
-23. ⬜ lumen-a11y-full (8G, stage 3) — full computed role mapping HTML-AAM, focus model, form control text alternatives, edge cases
-24. ⬜ dom-arena-audit (10B Invariant 1, [P1+P3]) — audit lumen-dom: ensure no Rc<RefCell<Node>> in graph, all NodeId(u32)-based, add bincode::serialize/deserialize for snapshot, #[deny(clippy::rc_buffer)]
-25. ⬜ layout-pure-audit (10D.1 Invariant 3, [P1+P2+P3]) — audit lumen-layout: no static MUT / lazy_static / OnceCell in hot path, layout algorithm purity for T3 hibernation
-26. ⬜ paint-pure-audit (10D.2 Invariant 3, [P1+P2+P3]) — audit lumen-paint::display_list: pure function requirement for serialization
-27. ⬜ antidetect-canvas-randomization (9D.1, [P1+P2]) — Brave-style canvas randomization: getImageData returns RGBA with per-session deterministic seed noise (P1 texture read-back side)
-28. ⬜ antidetect-webgl-normalize (9D.2, [P1+P2]) — WebGL renderer/vendor strings normalization to generic "WebKit"/"Generic GPU" (P1 wgpu adapter info collection side)
-29. ⬜ gpu-layer-lru (10F, [P1+P2+P3]) — LayerCache with LRU + GPU memory budget; texture pool recycling for off-viewport stacking contexts (P1 wgpu texture pool in lumen-paint side)
-30. ⬜ glyph-atlas-eviction (10G, [P1+P2+P3]) — LRU eviction of rarely-used glyphs from atlas (P1 atlas data structure in lumen-font side)
+### Phase 1 ✅ (complete as of 2026-05-28)
+21. ✅ lumen-a11y-full (8G, [P1+P3]) — ARIA role mapping (60+ variants), text alternatives (accname §4), computed role mapping, 104 tests PASS 2026-05-27
+22. ✅ dom-arena-audit (10B Invariant 1, [P1+P3]) — NodeId(u32)-based, bincode snapshot, #[deny(clippy::rc_buffer)], 7 tests 2026-05-27
+23. ✅ layout-pure-audit (10D.1 Invariant 3, [P1]) — no static MUT / lazy_static / OnceCell in hot path 2026-05-27
+24. ✅ paint-pure-audit (10D.2 Invariant 3, [P1]) — display_list pure-function requirement 2026-05-27
+25. ✅ antidetect-canvas-randomization (9D.1, [P1+P2]) — CanvasNoiseGenerator LCG RNG, per-session seed, 20 tests 2026-05-28
+26. ✅ antidetect-webgl-normalize (9D.2, [P1+P2]) — GpuFingerprint struct, adapter normalization, 5 tests 2026-05-28
+27. ✅ gpu-layer-lru (10F, [P1+P2+P3]) — LayerCache LRU + GPU memory budget, 7 tests 2026-05-28
+28. ✅ glyph-atlas-eviction (10G, [P1+P2+P3]) — LRU eviction from atlas, 4 tests 2026-05-27
 
-### Phase 2 (planned)
+### Phase 2 (in progress / planned)
+29. ✅ animation-keyframe-easing (6.6) — full timing functions (ease/cubic-bezier/steps) complete in Phase 0 (2026-05-20)
+30. ⬜ transition-advanced — grouped properties, interrupted transitions, animation-fill-mode complete
 31. ⬜ shadow-dom-accessibility-forms-gc (6+) — Extended Shadow DOM / Accessibility / Forms / Garbage collection integration
 32. ⬜ contenteditable-advanced — drag-drop, paste, undo/redo coordination with shell
 33. ⬜ accessibility-forms-validation — full constraint validation visualization, form submission with accessibility tree
 34. ⬜ ime-input ([P1+P3]) — IME composition events through DOM, composition ranges, virtual keyboard interaction
 35. ⬜ svg-layout-advanced — SVG transforms, viewport nesting, aspect-ratio preservation
 36. ⬜ print-pdf-advanced — @page margin boxes, page numbers, headers/footers from margin-box content
-37. ⬜ animation-keyframe-easing — full timing functions (ease/ease-in/ease-out/ease-in-out/cubic-bezier/steps)
-38. ⬜ transition-advanced — grouped properties, interrupted transitions, animation-fill-mode complete
-39. ⬜ font-loading-api ([P1+P3]) — @font-face lifecycle, FontFace interface, document.fonts collection
-40. ⬜ performance-observer-timing — PerformanceObserver for layout/paint timings, resource timing
+37. ⬜ font-loading-api ([P1+P3]) — @font-face lifecycle, FontFace interface, document.fonts collection
+38. ⬜ performance-observer-timing — PerformanceObserver for layout/paint timings, resource timing
 
 ## Notes
-=======
-Next (Wave 1 — бывшие P3-задачи):
-(All — fts-omnibox переместилась в STATUS-P3.md Queue как P3-домен задача)
-
-# Removed: Wave 2 (бывший P2 + бывший P3) — эти задачи не принадлежат P1 домену
-# Они находятся в соответствующих STATUS-P2.md и STATUS-P3.md очередях
->>>>>>> p3-native-input-injection
 
 - fts-omnibox (Wave 1, P3-domain) moved to STATUS-P3.md Queue — knowledge/omnibox is P3 domain, not P1
 - Wave 2 (former P2/P3) queues removed — handled in respective STATUS-P2.md / STATUS-P3.md
