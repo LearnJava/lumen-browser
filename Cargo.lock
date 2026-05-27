@@ -1214,6 +1214,7 @@ dependencies = [
 name = "lumen-image"
 version = "0.0.1"
 dependencies = [
+ "flate2",
  "gif",
  "image-webp",
  "lumen-core",
