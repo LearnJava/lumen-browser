@@ -1,5 +1,5 @@
-In progress: none (ready for next task)
-Next step: (check lumen-plan.md Wave 2 queue — avif-decoder, webgl-context, etc.)
+In progress: antidetect-canvas-randomization (9D.1)  branch: p1-antidetect-canvas-9d1
+Next step: explore canvas architecture, find getImageData readback path, design per-session seed noise injection
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
