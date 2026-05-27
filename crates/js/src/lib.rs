@@ -1,4 +1,5 @@
 pub mod dom;
+pub mod webgl_bindings;
 
 use lumen_core::{JsError, JsResult, JsRuntime, JsValue};
 use lumen_dom::Document;
@@ -99,6 +100,15 @@ impl QuickJsRuntime {
         let ss = Arc::new(Mutex::new(WebStorage::default()));
         let guard = self.inner.lock().unwrap();
         guard.ctx.with(|ctx| {
+            // Install WebGL fingerprint bindings (ADR-007 Layer 4).
+            let fingerprint = lumen_paint::GpuFingerprint {
+                vendor: "WebKit".to_string(),
+                renderer: "Generic GPU".to_string(),
+            };
+            if let Err(e) = webgl_bindings::install_webgl_bindings(&ctx, &fingerprint) {
+                eprintln!("WebGL bindings init failed: {}", e);
+            }
+
             dom::install_dom_api(
                 &ctx,
                 doc,

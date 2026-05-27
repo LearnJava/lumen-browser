@@ -12,6 +12,8 @@ lumen-core = { workspace = true }
 # lumen-dom: needed for JS↔DOM bindings (task 4A). Not a new external dep —
 # already in the workspace. lumen-js is the natural owner of DOM/JS bridge code.
 lumen-dom = { workspace = true }
+# lumen-paint: needed for GpuFingerprint (ADR-007 Layer 4, WebGL fingerprinting prevention).
+lumen-paint = { workspace = true }
 # Permanent #5 (§5): JS engine. QuickJS for Phase 0–1; rusty_v8 planned for v1.0+.
 # Rationale: writing a JS engine from scratch is not in scope for Lumen.
 rquickjs = "0.11"

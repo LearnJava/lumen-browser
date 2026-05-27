@@ -12,6 +12,7 @@ pub mod atlas;
 pub mod compositor;
 pub mod display_list;
 pub mod fallback;
+pub mod fingerprint;
 pub mod hit_test;
 pub mod layer_cache;
 pub mod renderer;
@@ -32,6 +33,7 @@ pub use display_list::{
     build_display_list_with_anim,
     serialize_display_list, BlendMode, CornerRadii, DisplayCommand, DisplayList,
 };
+pub use fingerprint::GpuFingerprint;
 pub use hit_test::{hit_test, HitTestResult};
 pub use layer_cache::{LayerCache, LayerKey};
 pub use renderer::{ImageRegisterError, Renderer, SnapshotUploadError};

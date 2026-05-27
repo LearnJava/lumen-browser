@@ -18,28 +18,36 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/a11y/src/roles.rs:187` **fn** `parse` — Parse a WAI-ARIA role string (case-insensitive)
 `crates/engine/a11y/src/roles.rs:270` **fn** `implicit_role` — Compute the implicit WAI-ARIA role for a DOM node per HTML-AAM §5
 
-## lumen-canvas  (24 symbols)
+## lumen-canvas  (32 symbols)
 
 `crates/engine/canvas/src/color.rs:3` **struct** `CanvasColor` — RGBA color used by the Canvas 2D API
 `crates/engine/canvas/src/color.rs:11` **fn** `rgba`
 `crates/engine/canvas/src/color.rs:16` **fn** `with_alpha_mult` — Multiply `self.a` by `alpha` (0.0–1.0)
 `crates/engine/canvas/src/color.rs:25` **fn** `from_css_str` — Parse a CSS color string.  Supports:
-`crates/engine/canvas/src/lib.rs:27` **struct** `Context2D` — HTML Canvas 2D rendering context
-`crates/engine/canvas/src/lib.rs:47` **fn** `new` — Create a new context with a transparent black buffer
-`crates/engine/canvas/src/lib.rs:63` **fn** `width`
-`crates/engine/canvas/src/lib.rs:64` **fn** `height`
-`crates/engine/canvas/src/lib.rs:67` **fn** `pixels` — Raw RGBA8 pixel data
-`crates/engine/canvas/src/lib.rs:70` **fn** `resize` — Resize the canvas (clears the buffer)
-`crates/engine/canvas/src/lib.rs:82` **fn** `clear_rect` — `clearRect(x, y, w, h)` — erase region to transparent black
-`crates/engine/canvas/src/lib.rs:97` **fn** `fill_rect` — `fillRect(x, y, w, h)` — fill region with current `fillStyle`
-`crates/engine/canvas/src/lib.rs:103` **fn** `stroke_rect` — `strokeRect(x, y, w, h)` — stroke the outline of a rectangle
-`crates/engine/canvas/src/lib.rs:117` **fn** `begin_path` — `beginPath()` — discard current path
-`crates/engine/canvas/src/lib.rs:123` **fn** `move_to` — `moveTo(x, y)` — start a new sub-path
-`crates/engine/canvas/src/lib.rs:132` **fn** `line_to` — `lineTo(x, y)` — add a line segment
-`crates/engine/canvas/src/lib.rs:143` **fn** `close_path` — `closePath()` — add a line back to the sub-path start
-`crates/engine/canvas/src/lib.rs:153` **fn** `arc` — `arc(cx, cy, r, start_angle, end_angle[, anticlockwise])` — add an arc
-`crates/engine/canvas/src/lib.rs:173` **fn** `fill` — `fill()` — fill the current path with `fillStyle`
-`crates/engine/canvas/src/lib.rs:180` **fn** `stroke` — `stroke()` — stroke the current path with `strokeStyle`
+`crates/engine/canvas/src/fp_noise.rs:17` **struct** `CanvasNoiseGenerator` — Per-session canvas fingerprint noise generator
+`crates/engine/canvas/src/fp_noise.rs:27` **fn** `new` — Create a new noise generator with the given per-session seed
+`crates/engine/canvas/src/fp_noise.rs:48` **fn** `next_noise_u8` — Generate next noise byte (0..=255) clamped to safe range
+`crates/engine/canvas/src/fp_noise.rs:56` **fn** `apply_noise_to_pixel` — Add per-channel noise to an RGBA pixel
+`crates/engine/canvas/src/fp_noise.rs:66` **fn** `apply_noise_to_buffer` — Apply noise to an entire RGBA buffer (row-major, top-left origin)
+`crates/engine/canvas/src/fp_noise.rs:77` **fn** `reset` — Reset the RNG state to the seed (for reproducibility)
+`crates/engine/canvas/src/lib.rs:33` **struct** `Context2D` — HTML Canvas 2D rendering context
+`crates/engine/canvas/src/lib.rs:57` **fn** `new` — Create a new context with a transparent black buffer
+`crates/engine/canvas/src/lib.rs:78` **fn** `set_noise_generator` — Set the optional noise generator for fingerprint randomization
+`crates/engine/canvas/src/lib.rs:86` **fn** `get_image_data` — Get a copy of pixel data with optional noise applied (for `getImageData()`)
+`crates/engine/canvas/src/lib.rs:94` **fn** `width`
+`crates/engine/canvas/src/lib.rs:95` **fn** `height`
+`crates/engine/canvas/src/lib.rs:98` **fn** `pixels` — Raw RGBA8 pixel data
+`crates/engine/canvas/src/lib.rs:101` **fn** `resize` — Resize the canvas (clears the buffer)
+`crates/engine/canvas/src/lib.rs:113` **fn** `clear_rect` — `clearRect(x, y, w, h)` — erase region to transparent black
+`crates/engine/canvas/src/lib.rs:128` **fn** `fill_rect` — `fillRect(x, y, w, h)` — fill region with current `fillStyle`
+`crates/engine/canvas/src/lib.rs:134` **fn** `stroke_rect` — `strokeRect(x, y, w, h)` — stroke the outline of a rectangle
+`crates/engine/canvas/src/lib.rs:148` **fn** `begin_path` — `beginPath()` — discard current path
+`crates/engine/canvas/src/lib.rs:154` **fn** `move_to` — `moveTo(x, y)` — start a new sub-path
+`crates/engine/canvas/src/lib.rs:163` **fn** `line_to` — `lineTo(x, y)` — add a line segment
+`crates/engine/canvas/src/lib.rs:174` **fn** `close_path` — `closePath()` — add a line back to the sub-path start
+`crates/engine/canvas/src/lib.rs:184` **fn** `arc` — `arc(cx, cy, r, start_angle, end_angle[, anticlockwise])` — add an arc
+`crates/engine/canvas/src/lib.rs:204` **fn** `fill` — `fill()` — fill the current path with `fillStyle`
+`crates/engine/canvas/src/lib.rs:211` **fn** `stroke` — `stroke()` — stroke the current path with `strokeStyle`
 `crates/engine/canvas/src/path.rs:3` **enum** `PathSegment` — A single segment in a 2D path
 `crates/engine/canvas/src/path.rs:11` **type** `PathCommand` — Alias kept for API symmetry with the HTML spec (`PathCommand` = verb)
 `crates/engine/canvas/src/rasterize.rs:4` **fn** `fill_path` — Fill `path` using the even-odd scanline algorithm
@@ -340,12 +348,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/lib.rs:1680` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
 `crates/engine/dom/src/lib.rs:1734` **fn** `insert_paragraph_break`
 
-## lumen-driver  (14 symbols)
+## lumen-driver  (18 symbols)
 
-`crates/driver/src/lib.rs:53` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
+`crates/driver/src/lib.rs:55` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
 `crates/driver/src/session.rs:46` **struct** `InProcessSession` — Headless in-process сессия браузера
 `crates/driver/src/session.rs:61` **fn** `new` — Создать сессию с viewport 1024×720
 `crates/driver/src/session.rs:72` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
+`crates/driver/src/session.rs:83` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
 `crates/driver/src/types.rs:14` **struct** `NodeRef` — Ссылка на DOM-узел, возвращаемая [`BrowserSession::query`]
 `crates/driver/src/types.rs:29` **enum** `Target` — Цель для команд [`BrowserSession::click`], [`type_text`](BrowserSession::type_text),
 `crates/driver/src/types.rs:40` **struct** `ScrollDelta` — Дельта скролла для [`BrowserSession::scroll`]
@@ -356,6 +365,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/types.rs:106` **struct** `ConsoleEntry` — Запись из консоли [`BrowserSession::console_log`]
 `crates/driver/src/types.rs:115` **enum** `ConsoleLevel` — Уровень console-сообщения
 `crates/driver/src/types.rs:127` **struct** `ComputedProperties` — Значения вычисленных CSS-свойств элемента из [`BrowserSession::computed_style`]
+`crates/driver/src/winit_session.rs:50` **struct** `WinitSession` — Оконная сессия браузера
+`crates/driver/src/winit_session.rs:65` **fn** `new` — Создать сессию с viewport 1024×720
+`crates/driver/src/winit_session.rs:76` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
 
 ## lumen-encoding  (11 symbols)
 
@@ -614,22 +626,23 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/image/src/webp/mod.rs:52` **fn** `decode_webp` — Декодирует WebP-файл в RGBA8 (4 байта на пиксель, row-major)
 `crates/engine/image/src/webp/mod.rs:88` **struct** `WebpImageDecoder` — Реализация [`lumen_core::ext::ImageDecoder`] для WebP
 
-## lumen-js  (12 symbols)
+## lumen-js  (13 symbols)
 
 `crates/js/src/dom.rs:97` **enum** `NavigateRequest` — Navigation request emitted by JS (`location.href =`, `location.assign()`,
 `crates/js/src/dom.rs:132` **fn** `install_dom_api` — Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`
-`crates/js/src/lib.rs:19` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
-`crates/js/src/lib.rs:62` **fn** `new`
-`crates/js/src/lib.rs:90` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:126` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:134` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:143` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:152` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:161` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:169` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:178` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:20` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
+`crates/js/src/lib.rs:63` **fn** `new`
+`crates/js/src/lib.rs:91` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+`crates/js/src/lib.rs:136` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:144` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:153` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:162` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:171` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:179` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:188` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/webgl_bindings.rs:17` **fn** `install_webgl_bindings` — Install WebGL fingerprint bindings into the JS context
 
-## lumen-knowledge  (37 symbols)
+## lumen-knowledge  (46 symbols)
 
 `crates/knowledge/src/fts.rs:28` **struct** `SearchHit` — Результат полнотекстового поиска
 `crates/knowledge/src/fts.rs:43` **struct** `HistoryFts` — FTS5-индекс над `(url, title, text)`. Открывается отдельной БД-файлом
@@ -639,6 +652,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/fts.rs:111` **fn** `unindex` — Удалить запись по rowid
 `crates/knowledge/src/fts.rs:129` **fn** `search` — Полнотекстовый поиск по `text` с ранжированием bm25. `query` —
 `crates/knowledge/src/fts.rs:167` **fn** `clear` — Полная очистка индекса
+`crates/knowledge/src/history.rs:28` **struct** `HistoryWithFts` — История с интегрированным FTS-индексом. Оборачивает
+`crates/knowledge/src/history.rs:36` **fn** `open` — Открыть или создать FTS-индекс истории. Обычно открывается
+`crates/knowledge/src/history.rs:42` **fn** `open_in_memory` — Открыть in-memory FTS-индекс (для тестов)
+`crates/knowledge/src/history.rs:52` **fn** `index_text` — Индексировать запись истории в FTS. Обычно вызывается после
+`crates/knowledge/src/history.rs:58` **fn** `unindex` — Удалить запись из FTS-индекса. Обычно вызывается после
+`crates/knowledge/src/history.rs:69` **fn** `search` — Полнотекстовый поиск по истории. Возвращает совпадения,
+`crates/knowledge/src/history.rs:75` **fn** `clear` — Очистить весь FTS-индекс. Обычно вызывается при
+`crates/knowledge/src/history.rs:85` **fn** `record_visit_with_text` — Записать визит в History и автоматически индексировать текст в FTS
+`crates/knowledge/src/history.rs:106` **fn** `delete_with_fts` — Удалить запись из History и автоматически удалить из FTS
 `crates/knowledge/src/notes.rs:21` **struct** `Note` — Одна заметка пользователя
 `crates/knowledge/src/notes.rs:34` **struct** `NoteSearchHit`
 `crates/knowledge/src/notes.rs:41` **struct** `Notes`
@@ -669,7 +691,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/knowledge/src/read_later.rs:346` **fn** `delete`
 `crates/knowledge/src/read_later.rs:356` **fn** `count`
 
-## lumen-layout  (312 symbols)
+## lumen-layout  (322 symbols)
 
 `crates/engine/layout/src/animation.rs:36` **struct** `AnimatedStyle` — Sparse animated values for one element — scheduler output per node per frame
 `crates/engine/layout/src/animation.rs:46` **struct** `AnimationFrame` — Output of `AnimationScheduler::tick` — per-node animated values for one frame
@@ -715,10 +737,17 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/counters.rs:37` **type** `CounterMap` — Maps each element `NodeId` to its counter snapshot (after own reset/increment,
 `crates/engine/layout/src/counters.rs:90` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
 `crates/engine/layout/src/counters.rs:152` **fn** `format_counter` — Format a counter integer value according to the given `list-style-type` keyword
-`crates/engine/layout/src/lib.rs:84` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
-`crates/engine/layout/src/lib.rs:109` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
-`crates/engine/layout/src/lib.rs:128` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
-`crates/engine/layout/src/lib.rs:149` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:86` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
+`crates/engine/layout/src/lib.rs:111` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
+`crates/engine/layout/src/lib.rs:130` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
+`crates/engine/layout/src/lib.rs:151` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
+`crates/engine/layout/src/pagination.rs:22` **struct** `PaginationContext` — Parameters for print pagination
+`crates/engine/layout/src/pagination.rs:46` **fn** `content_width` — Content box width: page width minus left and right margins
+`crates/engine/layout/src/pagination.rs:51` **fn** `content_height` — Content box height: page height minus top and bottom margins
+`crates/engine/layout/src/pagination.rs:56` **fn** `content_origin` — Top-left corner of content box within page
+`crates/engine/layout/src/pagination.rs:66` **struct** `Page` — A single page with positioned content
+`crates/engine/layout/src/pagination.rs:81` **struct** `PageFragment` — A fragment of layout tree content positioned on a page
+`crates/engine/layout/src/pagination.rs:105` **fn** `paginate` — Pagination algorithm: split LayoutBox tree into pages
 `crates/engine/layout/src/property_trees.rs:39` **struct** `PropertyTreeNodeId` — Идентификатор узла в любом из четырёх деревьев. Уникален в пределах своего
 `crates/engine/layout/src/property_trees.rs:45` **fn** `raw`
 `crates/engine/layout/src/property_trees.rs:54` **struct** `Mat4` — 4×4 матрица в column-major порядке (как принято в OpenGL / WebGPU)
@@ -757,11 +786,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/property_trees.rs:524` **fn** `transform_fns_to_matrix` — Build the forward transform matrix from a list of TransformFn with a pivot point
 `crates/engine/layout/src/selection.rs:16` **fn** `caret_at_point` — Find the caret position (DOM node + UTF-8 byte offset) closest to a pixel point
 `crates/engine/layout/src/selection.rs:95` **fn** `selection_rects` — Compute pixel rectangles that cover the selected `range` within the layout tree
-`crates/engine/layout/src/selector_query.rs:28` **struct** `ComputedStyleSnapshot` — Flat snapshot of the most-queried CSS properties for in-process testing
-`crates/engine/layout/src/selector_query.rs:160` **fn** `find_box_by_selector` — Returns a reference to the first `LayoutBox` in document order whose
-`crates/engine/layout/src/selector_query.rs:218` **fn** `computed_style_by_selector` — Returns the computed style snapshot of the first matching `LayoutBox`
-`crates/engine/layout/src/selector_query.rs:234` **fn** `find_all_by_selector` — Returns references to **all** `LayoutBox`es (in document order) whose
-`crates/engine/layout/src/selector_query.rs:275` **fn** `query_all` — Returns all [`NodeId`]s in the document that match `sel`
+`crates/engine/layout/src/selector_query.rs:36` **fn** `find_descendant_by_selector` — Finds the first descendant LayoutBox matching the given selector
+`crates/engine/layout/src/selector_query.rs:57` **fn** `find_all_descendants_by_selector` — Finds all descendant LayoutBoxes matching the given selector
+`crates/engine/layout/src/selector_query.rs:69` **fn** `style_snapshot` — Returns the computed style snapshot for this box
+`crates/engine/layout/src/selector_query.rs:82` **struct** `ComputedStyleSnapshot` — Flat snapshot of the most-queried CSS properties for in-process testing
+`crates/engine/layout/src/selector_query.rs:214` **fn** `find_box_by_selector` — Returns a reference to the first `LayoutBox` in document order whose
+`crates/engine/layout/src/selector_query.rs:272` **fn** `computed_style_by_selector` — Returns the computed style snapshot of the first matching `LayoutBox`
+`crates/engine/layout/src/selector_query.rs:288` **fn** `find_all_by_selector` — Returns references to **all** `LayoutBox`es (in document order) whose
+`crates/engine/layout/src/selector_query.rs:329` **fn** `query_all` — Returns all [`NodeId`]s in the document that match `sel`
 `crates/engine/layout/src/snapshot.rs:63` **fn** `serialize_layout_tree` — Корневой entry-point: рекурсивно сериализует всё дерево
 `crates/engine/layout/src/stacking.rs:29` **struct** `StackingContextId` — Идентификатор stacking context-а. Монотонно растёт от 0; 0 = root
 `crates/engine/layout/src/stacking.rs:35` **fn** `raw`
@@ -1156,21 +1188,24 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/network/src/sse.rs:53` **fn** `push_bytes` — Feed a chunk of bytes from the stream; returns any events that
 `crates/network/src/sse.rs:175` **fn** `last_event_id` — Current last-event-id (persists across dispatched events, needed for
 
-## lumen-paint  (79 symbols)
+## lumen-paint  (128 symbols)
 
 `crates/engine/paint/src/atlas.rs:35` **struct** `AtlasKey` — Композитный ключ glyph-кэша. См. module-level docs
 `crates/engine/paint/src/atlas.rs:43` **fn** `new`
 `crates/engine/paint/src/atlas.rs:53` **fn** `hash_coords` — Стабильный 64-битный хэш normalized variation coords для cache key
 `crates/engine/paint/src/atlas.rs:67` **struct** `GlyphEntry`
-`crates/engine/paint/src/atlas.rs:76` **struct** `GlyphAtlas`
-`crates/engine/paint/src/atlas.rs:92` **fn** `new`
-`crates/engine/paint/src/atlas.rs:106` **fn** `width`
-`crates/engine/paint/src/atlas.rs:109` **fn** `height`
-`crates/engine/paint/src/atlas.rs:112` **fn** `pixels`
-`crates/engine/paint/src/atlas.rs:116` **fn** `dirty`
-`crates/engine/paint/src/atlas.rs:119` **fn** `mark_clean`
-`crates/engine/paint/src/atlas.rs:123` **fn** `get`
-`crates/engine/paint/src/atlas.rs:130` **fn** `insert` — Кладёт растеризованный глиф в атлас. Возвращает `None` если место
+`crates/engine/paint/src/atlas.rs:78` **struct** `GlyphAtlas`
+`crates/engine/paint/src/atlas.rs:97` **fn** `new`
+`crates/engine/paint/src/atlas.rs:112` **fn** `width`
+`crates/engine/paint/src/atlas.rs:115` **fn** `height`
+`crates/engine/paint/src/atlas.rs:118` **fn** `pixels`
+`crates/engine/paint/src/atlas.rs:122` **fn** `dirty`
+`crates/engine/paint/src/atlas.rs:125` **fn** `mark_clean`
+`crates/engine/paint/src/atlas.rs:129` **fn** `get`
+`crates/engine/paint/src/atlas.rs:134` **fn** `access` — Обновляет timestamp доступа для существующей записи
+`crates/engine/paint/src/atlas.rs:144` **fn** `get_lru_candidates` — Возвращает список ключей отсортированных по last_accessed (от самого старого к новому)
+`crates/engine/paint/src/atlas.rs:154` **fn** `remove_keys` — Удаляет записи с указанными ключами из кэша
+`crates/engine/paint/src/atlas.rs:168` **fn** `insert` — Кладёт растеризованный глиф в атлас. Возвращает `None` если место
 `crates/engine/paint/src/compositor.rs:63` **trait** `Layer` — Один layer: bbox + связь со stacking context-ом + локальный display list
 `crates/engine/paint/src/compositor.rs:71` **trait** `LayerTree` — Коллекция layer-ов. Trait-обстракция, чтобы compositor мог принимать
 `crates/engine/paint/src/compositor.rs:79` **struct** `BasicLayer` — Sprint 0 / Phase 0 concrete impl. Owned struct без интерлевания —
@@ -1207,36 +1242,82 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:948` **fn** `build_display_list_with_anim` — Like `build_display_list` but applies compositor animation overrides per node
 `crates/engine/paint/src/display_list.rs:988` **fn** `build_display_list_ordered` — Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E)
 `crates/engine/paint/src/display_list.rs:1029` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
+`crates/engine/paint/src/fingerprint.rs:19` **struct** `GpuFingerprint` — GPU fingerprint info: normailzed vendor and renderer strings
+`crates/engine/paint/src/fingerprint.rs:32` **fn** `from_adapter_info` — Create normalized GPU fingerprint from adapter info
+`crates/engine/paint/src/fingerprint.rs:40` **fn** `vendor` — Vendor string: always "WebKit"
+`crates/engine/paint/src/fingerprint.rs:45` **fn** `renderer` — Renderer string: always "Generic GPU"
 `crates/engine/paint/src/hit_test.rs:48` **struct** `HitTestResult` — Результат hit-теста
 `crates/engine/paint/src/hit_test.rs:71` **fn** `hit_test` — Hit-тест точки в viewport-координатах. `root` — layout-дерево из
-`crates/engine/paint/src/lib.rs:47` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
-`crates/engine/paint/src/lib.rs:57` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
-`crates/engine/paint/src/renderer.rs:1106` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
-`crates/engine/paint/src/renderer.rs:1135` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
-`crates/engine/paint/src/renderer.rs:1199` **struct** `Renderer`
-`crates/engine/paint/src/renderer.rs:1302` **fn** `new`
-`crates/engine/paint/src/renderer.rs:1379` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
-`crates/engine/paint/src/renderer.rs:2470` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
-`crates/engine/paint/src/renderer.rs:2478` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
-`crates/engine/paint/src/renderer.rs:2491` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
-`crates/engine/paint/src/renderer.rs:2510` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
-`crates/engine/paint/src/renderer.rs:2587` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
-`crates/engine/paint/src/renderer.rs:2724` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
-`crates/engine/paint/src/renderer.rs:2733` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
-`crates/engine/paint/src/renderer.rs:2740` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
-`crates/engine/paint/src/renderer.rs:2758` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
-`crates/engine/paint/src/renderer.rs:2825` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
-`crates/engine/paint/src/renderer.rs:2830` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
-`crates/engine/paint/src/renderer.rs:2836` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
-`crates/engine/paint/src/renderer.rs:2842` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
-`crates/engine/paint/src/renderer.rs:2848` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
-`crates/engine/paint/src/renderer.rs:2871` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
-`crates/engine/paint/src/renderer.rs:2880` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
-`crates/engine/paint/src/renderer.rs:2887` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
-`crates/engine/paint/src/renderer.rs:3017` **fn** `render` — Рендерит две полосы display list-а одним кадром:
-`crates/engine/paint/src/renderer.rs:5163` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
+`crates/engine/paint/src/layer_cache.rs:21` **struct** `LayerKey` — Layer identification key for cache lookup
+`crates/engine/paint/src/layer_cache.rs:31` **fn** `new` — Create a new layer cache key
+`crates/engine/paint/src/layer_cache.rs:38` **struct** `LayerEntry` — Metadata for a cached GPU layer texture
+`crates/engine/paint/src/layer_cache.rs:54` **struct** `LayerCache` — Layer cache managing GPU memory via LRU eviction
+`crates/engine/paint/src/layer_cache.rs:69` **fn** `new` — Create a new layer cache with default 256 MB GPU memory budget
+`crates/engine/paint/src/layer_cache.rs:79` **fn** `with_budget` — Create with custom GPU memory budget (in bytes)
+`crates/engine/paint/src/layer_cache.rs:89` **fn** `used_bytes` — Get the current GPU memory usage
+`crates/engine/paint/src/layer_cache.rs:94` **fn** `budget_bytes` — Get the GPU memory budget
+`crates/engine/paint/src/layer_cache.rs:99` **fn** `would_exceed_budget` — Check if adding a layer of given size would exceed budget
+`crates/engine/paint/src/layer_cache.rs:106` **fn** `insert` — Insert or update a cached layer
+`crates/engine/paint/src/layer_cache.rs:129` **fn** `access` — Mark a cached layer as accessed (used by current render)
+`crates/engine/paint/src/layer_cache.rs:139` **fn** `get_lru_candidates` — Get candidates for LRU eviction, sorted from least- to most-recently-used
+`crates/engine/paint/src/layer_cache.rs:148` **fn** `remove_keys` — Remove cached layers by key, freeing GPU memory
+`crates/engine/paint/src/layer_cache.rs:164` **fn** `clear` — Clear all cached entries (full eviction)
+`crates/engine/paint/src/layer_cache.rs:170` **fn** `len` — Get the number of cached layers
+`crates/engine/paint/src/layer_cache.rs:175` **fn** `is_empty` — Check if cache is empty
+`crates/engine/paint/src/layer_cache.rs:180` **fn** `contains` — Check if a specific layer is in cache
+`crates/engine/paint/src/lib.rs:55` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
+`crates/engine/paint/src/lib.rs:65` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
+`crates/engine/paint/src/renderer.rs:1081` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
+`crates/engine/paint/src/renderer.rs:1112` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
+`crates/engine/paint/src/renderer.rs:1141` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
+`crates/engine/paint/src/renderer.rs:1205` **struct** `Renderer`
+`crates/engine/paint/src/renderer.rs:1317` **fn** `new`
+`crates/engine/paint/src/renderer.rs:1398` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
+`crates/engine/paint/src/renderer.rs:2497` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
+`crates/engine/paint/src/renderer.rs:2505` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
+`crates/engine/paint/src/renderer.rs:2518` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
+`crates/engine/paint/src/renderer.rs:2532` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
+`crates/engine/paint/src/renderer.rs:2545` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
+`crates/engine/paint/src/renderer.rs:2622` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
+`crates/engine/paint/src/renderer.rs:2759` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
+`crates/engine/paint/src/renderer.rs:2768` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
+`crates/engine/paint/src/renderer.rs:2775` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
+`crates/engine/paint/src/renderer.rs:2793` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
+`crates/engine/paint/src/renderer.rs:2860` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
+`crates/engine/paint/src/renderer.rs:2865` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
+`crates/engine/paint/src/renderer.rs:2871` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
+`crates/engine/paint/src/renderer.rs:2876` **fn** `layer_cache` — Получить ссылку на layer cache для статистики / монитора GPU памяти
+`crates/engine/paint/src/renderer.rs:2881` **fn** `layer_cache_mut` — Получить мutable ссылку для прямого управления кэшем (advanced usage)
+`crates/engine/paint/src/renderer.rs:2887` **fn** `access_layer` — Отметить layer как используемый текущим render pass
+`crates/engine/paint/src/renderer.rs:2894` **fn** `cache_layer` — Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated
+`crates/engine/paint/src/renderer.rs:2900` **fn** `return_layer_to_pool` — Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008)
+`crates/engine/paint/src/renderer.rs:2912` **fn** `clear_layer_cache` — Очистить весь layer cache (полная эвикция) и очистить texture pool
+`crates/engine/paint/src/renderer.rs:2918` **fn** `texture_pool_len` — Get the number of free textures in the pool (for diagnostics)
+`crates/engine/paint/src/renderer.rs:2923` **fn** `texture_pool_len_for_size` — Get the number of free textures of a specific size (for diagnostics)
+`crates/engine/paint/src/renderer.rs:2928` **fn** `clear_texture_pool` — Clear all pooled textures (e.g., when resizing or memory pressure is high)
+`crates/engine/paint/src/renderer.rs:2934` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
+`crates/engine/paint/src/renderer.rs:2940` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
+`crates/engine/paint/src/renderer.rs:2965` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
+`crates/engine/paint/src/renderer.rs:2974` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
+`crates/engine/paint/src/renderer.rs:2981` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
+`crates/engine/paint/src/renderer.rs:3124` **fn** `render` — Рендерит две полосы display list-а одним кадром:
+`crates/engine/paint/src/renderer.rs:5270` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
+`crates/engine/paint/src/renderer.rs:5292` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
 `crates/engine/paint/src/scroll_snap.rs:33` **fn** `find_scroll_snap_y` — CSS Scroll Snap L1 — returns the Y scroll offset to snap to, or `None`
 `crates/engine/paint/src/scroll_snap.rs:54` **fn** `find_scroll_snap_y_proximity` — CSS Scroll Snap L1 — same as [`find_scroll_snap_y`] but restricts candidates
+`crates/engine/paint/src/texture_pool.rs:15` **struct** `TextureKey` — Key for a pool entry: texture dimensions
+`crates/engine/paint/src/texture_pool.rs:24` **fn** `new` — Create a new texture pool key
+`crates/engine/paint/src/texture_pool.rs:32` **struct** `PooledTexture` — A pooled GPU texture resource
+`crates/engine/paint/src/texture_pool.rs:51` **struct** `TexturePool` — Texture pool managing free textures for recycling
+`crates/engine/paint/src/texture_pool.rs:61` **fn** `new` — Create a new empty texture pool
+`crates/engine/paint/src/texture_pool.rs:71` **fn** `acquire` — Try to allocate a texture of the given size from the pool
+`crates/engine/paint/src/texture_pool.rs:80` **fn** `release` — Return a texture to the pool for reuse
+`crates/engine/paint/src/texture_pool.rs:86` **fn** `clear` — Clear all pooled textures, freeing GPU memory
+`crates/engine/paint/src/texture_pool.rs:92` **fn** `len` — Get the number of free textures in the pool (across all sizes)
+`crates/engine/paint/src/texture_pool.rs:97` **fn** `is_empty` — Check if the pool is empty
+`crates/engine/paint/src/texture_pool.rs:102` **fn** `len_for_size` — Get the number of free textures of a specific size
+`crates/engine/paint/src/texture_pool.rs:108` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
+`crates/engine/paint/src/texture_pool.rs:113` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
 
 ## lumen-shell  (141 symbols)
 
@@ -1757,4 +1838,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 1698 symbols in 18 crates*
+*Total: 1779 symbols in 18 crates*
