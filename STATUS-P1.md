@@ -1,5 +1,5 @@
-In progress: antidetect-webgl-normalize (9D.2, ADR-007 Layer 4)  branch: p1-antidetect-webgl-normalize
-Next step: P3 integration — connect GpuFingerprint to JS getParameter() for UNMASKED_VENDOR/RENDERER WebGL constants
+In progress: none (ready for next task)
+Next step: (check lumen-plan.md Phase 2 — next P1 from ADR-007 or ADR-008 tracks, or Wave 2 Queue)
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
