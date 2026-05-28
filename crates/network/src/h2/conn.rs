@@ -1,6 +1,8 @@
 //! HTTP/2 connection driver — RFC 9113 §3–6.
 //!
-//! 5A.4: preface exchange + SETTINGS negotiation + single-stream GET.
+//! 5A: ALPN negotiation (5A.1), frame codec (5A.2), HPACK (5A.3),
+//! connection + single-stream GET (5A.4), pool multiplexing (5A.5),
+//! flow control (5A.6), concurrent streams support (5A.4 extended).
 //!
 //! The connection is generic over any `Read + Write` stream so that unit tests
 //! can drive it without a real TLS socket (use `std::io::Cursor` / in-memory
@@ -15,26 +17,26 @@
 //!   │  (also: absorb WINDOW_UPDATE / SETTINGS ACK from server during setup)
 //!   └→ Ok(H2Conn { … })
 //!
+//! Single-stream fetch (synchronous):
 //! conn.fetch(method, scheme, authority, path, extra)
 //!   │  write: HEADERS (END_HEADERS | END_STREAM for GET)
 //!   │  read loop until END_STREAM on this stream:
-//!   │    SETTINGS      → ACK, continue
-//!   │    PING          → ACK, continue
-//!   │    WINDOW_UPDATE → update window, continue
-//!   │    HEADERS/CONTINUATION (our stream) → accumulate block_fragment
-//!   │    DATA          (our stream) → append body, check END_STREAM
-//!   │    GOAWAY        → Err
-//!   │    RST_STREAM    (our stream) → Err
-//!   │    _             → ignore (unknown extensions, other streams)
+//!   │    ... (same as before)
 //!   └→ Ok((status, headers, body))
+//!
+//! Concurrent-stream fetch (multiple requests on one connection):
+//! conn.send_request(method, scheme, authority, path, extra) → stream_id
+//! conn.send_request(...)  → stream_id
+//! conn.read_response_for_stream(stream_id) → (status, headers, body)
+//! conn.read_response_for_stream(...)  → (status, headers, body)
 //! ```
 //!
 //! ## Out of scope (deferred)
 //!
-//! - Concurrent streams (5A.5 pool multiplexing).
 //! - Send-side flow control (outbound window tracking) — Phase 0 issues only
 //!   GET requests with no request body, so send-window management is not needed.
 
+use std::collections::HashMap;
 use std::io::{Read, Write};
 
 use lumen_core::error::Error;
@@ -50,6 +52,35 @@ use crate::http::{H2Settings, HttpProfile};
 
 /// Decoded HTTP response from an H2 fetch: `(status, headers, body)`.
 pub type H2Response = (u16, Vec<(String, String)>, Vec<u8>);
+
+/// Tracks the state of a single concurrent stream during response accumulation.
+#[derive(Debug)]
+struct StreamState {
+    /// Accumulated header block (may span multiple CONTINUATION frames).
+    hdr_block: Vec<u8>,
+    /// Whether we've received all headers (END_HEADERS flag).
+    end_headers: bool,
+    /// Whether we've received the end of the response body (END_STREAM flag).
+    end_stream: bool,
+    /// Accumulated response body.
+    body: Vec<u8>,
+}
+
+impl StreamState {
+    fn new() -> Self {
+        Self {
+            hdr_block: Vec::new(),
+            end_headers: false,
+            end_stream: false,
+            body: Vec::new(),
+        }
+    }
+
+    /// Whether this stream is complete (both headers and body received).
+    fn is_complete(&self) -> bool {
+        self.end_headers && self.end_stream
+    }
+}
 
 // ── Constants ─────────────────────────────────────────────────────────────
 
@@ -68,7 +99,7 @@ const READ_CHUNK: usize = 8192;
 ///
 /// One instance per TCP+TLS socket. After construction the connection preface
 /// and SETTINGS exchange are complete; the caller can immediately call
-/// [`H2Conn::fetch`].
+/// [`H2Conn::fetch`] or [`H2Conn::send_request`]/[`H2Conn::read_response_for_stream`].
 pub struct H2Conn<S: Read + Write> {
     stream: S,
     /// Read-ahead buffer; frames are parsed from this.
@@ -86,6 +117,10 @@ pub struct H2Conn<S: Read + Write> {
     /// Our connection-level receive window (bytes the server may still send before
     /// we send WINDOW_UPDATE). RFC 9113 §6.9 — starts at INITIAL_WINDOW.
     conn_recv_window: u32,
+    /// Concurrent stream state: maps stream ID → StreamState for in-flight requests.
+    /// Empty when using single-stream [`fetch`]; populated when using
+    /// [`send_request`]/[`read_response_for_stream`].
+    pending_streams: HashMap<u32, StreamState>,
 }
 
 impl<S: Read + Write> H2Conn<S> {
@@ -126,6 +161,7 @@ impl<S: Read + Write> H2Conn<S> {
             remote_init_window: INITIAL_WINDOW,
             next_stream_id: 1,
             conn_recv_window: INITIAL_WINDOW,
+            pending_streams: HashMap::new(),
         };
 
         conn.await_server_settings()?;
@@ -389,6 +425,202 @@ impl<S: Read + Write> H2Conn<S> {
             .collect();
 
         Ok((status, headers, body))
+    }
+
+    /// Send a single HTTP/2 request without waiting for the response.
+    ///
+    /// This method is used for concurrent-stream workflows: send multiple requests,
+    /// then collect responses with [`read_response_for_stream`].
+    ///
+    /// Returns the stream ID assigned to this request. The stream will remain
+    /// in-flight until [`read_response_for_stream`] completes it.
+    ///
+    /// `extra_headers` — additional request headers as `(name, value)` byte
+    /// slices (lowercase names, no pseudo-headers).
+    pub fn send_request(
+        &mut self,
+        method: &str,
+        scheme: &str,
+        authority: &str,
+        path: &str,
+        extra_headers: &[(&[u8], &[u8])],
+    ) -> Result<u32, Error> {
+        let sid = self.allocate_stream_id();
+
+        // Initialize StreamState for this in-flight request.
+        self.pending_streams.insert(sid, StreamState::new());
+
+        // Build HPACK request header block.
+        let mut req: Vec<(&[u8], &[u8])> = vec![
+            (b":method", method.as_bytes()),
+            (b":scheme", scheme.as_bytes()),
+            (b":path", path.as_bytes()),
+            (b":authority", authority.as_bytes()),
+        ];
+        req.extend_from_slice(extra_headers);
+        let block = self.encoder.encode(&req);
+
+        // HEADERS with END_STREAM (GET / HEAD have no request body).
+        self.send_frame(&Frame::Headers {
+            stream_id: sid,
+            end_stream: true,
+            end_headers: true,
+            priority: None,
+            block_fragment: block,
+        })?;
+
+        Ok(sid)
+    }
+
+    /// Read and assemble the complete response for a specific stream ID.
+    ///
+    /// Reads frames from the connection until the response for this stream
+    /// is complete (both headers and body received, END_STREAM flag seen).
+    /// Handles connection-level frames (SETTINGS, PING, WINDOW_UPDATE) for
+    /// all streams automatically.
+    ///
+    /// Returns `(status_code, response_headers, body)`. Pseudo-headers
+    /// are stripped from the returned header list.
+    ///
+    /// After this method returns, the stream ID is invalid and may be reused
+    /// (by allocating a new one). Calling with a non-existent stream ID
+    /// returns an error.
+    pub fn read_response_for_stream(&mut self, sid: u32) -> Result<H2Response, Error> {
+        if !self.pending_streams.contains_key(&sid) {
+            return Err(Error::Network(format!("H2: no pending stream {sid}")));
+        }
+
+        while !self.pending_streams[&sid].is_complete() {
+            let frame = self.read_frame()?;
+            match frame {
+                // ── Connection-level housekeeping ──────────────────────────
+                Frame::Settings {
+                    ack: false,
+                    params,
+                } => {
+                    self.apply_remote_settings(&params);
+                    self.send_frame(&Frame::Settings {
+                        ack: true,
+                        params: vec![],
+                    })?;
+                }
+                Frame::Settings { ack: true, .. } => {}
+                Frame::WindowUpdate { .. } => {}
+                Frame::Ping {
+                    ack: false,
+                    opaque_data,
+                } => {
+                    self.send_frame(&Frame::Ping {
+                        ack: true,
+                        opaque_data,
+                    })?;
+                }
+                Frame::Ping { ack: true, .. } => {}
+                Frame::Priority { .. } => {}
+
+                // ── Response headers ───────────────────────────────────────
+                Frame::Headers {
+                    stream_id,
+                    end_stream: es,
+                    end_headers: eh,
+                    block_fragment,
+                    ..
+                } if stream_id == sid => {
+                    if let Some(stream) = self.pending_streams.get_mut(&sid) {
+                        stream.hdr_block.extend_from_slice(&block_fragment);
+                        stream.end_headers = eh;
+                        if es {
+                            stream.end_stream = true;
+                        }
+                    }
+                }
+                Frame::Continuation {
+                    stream_id,
+                    end_headers: eh,
+                    block_fragment,
+                } if stream_id == sid => {
+                    if let Some(stream) = self.pending_streams.get_mut(&sid) {
+                        stream.hdr_block.extend_from_slice(&block_fragment);
+                        stream.end_headers = eh;
+                    }
+                }
+
+                // ── Response body ──────────────────────────────────────────
+                Frame::Data {
+                    stream_id,
+                    end_stream: es,
+                    data,
+                } if stream_id == sid => {
+                    let consumed = data.len() as u32;
+                    if let Some(stream) = self.pending_streams.get_mut(&sid) {
+                        stream.body.extend_from_slice(&data);
+                        if es {
+                            stream.end_stream = true;
+                        }
+                    }
+                    // RFC 9113 §6.9: restore receive windows.
+                    if consumed > 0 {
+                        self.conn_recv_window =
+                            self.conn_recv_window.saturating_sub(consumed);
+                        self.send_frame(&Frame::WindowUpdate {
+                            stream_id: 0,
+                            increment: consumed,
+                        })?;
+                        self.send_frame(&Frame::WindowUpdate {
+                            stream_id: sid,
+                            increment: consumed,
+                        })?;
+                    }
+                }
+
+                // ── Error frames ───────────────────────────────────────────
+                Frame::Goaway { error_code, .. } => {
+                    return Err(Error::Network(format!(
+                        "H2 GOAWAY: error_code={error_code:#x}"
+                    )));
+                }
+                Frame::RstStream {
+                    stream_id,
+                    error_code,
+                } if stream_id == sid => {
+                    return Err(Error::Network(format!(
+                        "H2 RST_STREAM on stream {stream_id}: error_code={error_code:#x}"
+                    )));
+                }
+
+                // ── Everything else ────────────────────────────────────────
+                // Frames on other streams, PushPromise, Unknown extensions.
+                _ => {}
+            }
+        }
+
+        // Stream is complete; extract and return the response.
+        let stream = self.pending_streams.remove(&sid).unwrap();
+
+        let fields = self
+            .decoder
+            .decode(&stream.hdr_block)
+            .map_err(|e| Error::Network(format!("H2 HPACK decode: {e}")))?;
+
+        let status = fields
+            .iter()
+            .find(|f| f.name == b":status")
+            .and_then(|f| std::str::from_utf8(&f.value).ok())
+            .and_then(|s| s.parse::<u16>().ok())
+            .ok_or_else(|| Error::Network("H2: response missing :status".to_owned()))?;
+
+        let headers: Vec<(String, String)> = fields
+            .into_iter()
+            .filter(|f| !f.name.starts_with(b":"))
+            .map(|f| {
+                (
+                    String::from_utf8_lossy(&f.name).into_owned(),
+                    String::from_utf8_lossy(&f.value).into_owned(),
+                )
+            })
+            .collect();
+
+        Ok((status, headers, stream.body))
     }
 }
 
@@ -843,5 +1075,137 @@ mod tests {
         assert_eq!(conn_updates.iter().sum::<u32>(), 11, "conn increments: {conn_updates:?}");
         assert_eq!(stream_updates.iter().sum::<u32>(), 11, "stream increments: {stream_updates:?}");
         assert!(conn_updates.contains(&5) && conn_updates.contains(&6), "{conn_updates:?}");
+    }
+
+    #[test]
+    fn concurrent_send_request_allocates_stream_ids() {
+        let server_data = Vec::new();
+        let mut conn = make_connected_conn(server_data);
+
+        let sid1 = conn.send_request("GET", "https", "example.com", "/", &[]).unwrap();
+        let sid2 = conn.send_request("GET", "https", "example.com", "/page", &[]).unwrap();
+        let sid3 = conn.send_request("GET", "https", "example.com", "/api", &[]).unwrap();
+
+        // Client-initiated stream IDs are odd and sequential.
+        assert_eq!(sid1, 1);
+        assert_eq!(sid2, 3);
+        assert_eq!(sid3, 5);
+
+        // pending_streams should now contain these stream IDs.
+        assert!(conn.pending_streams.contains_key(&sid1));
+        assert!(conn.pending_streams.contains_key(&sid2));
+        assert!(conn.pending_streams.contains_key(&sid3));
+    }
+
+    #[test]
+    fn concurrent_send_request_sends_headers_frames() {
+        let server_data = Vec::new();
+        let mut conn = make_connected_conn(server_data);
+
+        let _sid1 = conn.send_request("GET", "https", "example.com", "/", &[]).unwrap();
+
+        // Check that a HEADERS frame was written.
+        let written = conn.stream.written();
+        // Skip the preface (24 bytes) + SETTINGS (9+30 bytes) + SETTINGS ACK (9 bytes).
+        let expected_offset = 24 + 39 + 9;
+        let frame = Frame::parse(&written[expected_offset..], MAX_FRAME_PAYLOAD_DEFAULT)
+            .unwrap()
+            .unwrap();
+        let (parsed_frame, _) = frame;
+
+        match parsed_frame {
+            Frame::Headers {
+                stream_id,
+                end_stream,
+                end_headers,
+                ..
+            } => {
+                assert_eq!(stream_id, 1);
+                assert!(end_stream, "GET requests should have END_STREAM");
+                assert!(end_headers, "Headers should be complete");
+            }
+            _ => panic!("Expected HEADERS frame, got {parsed_frame:?}"),
+        }
+    }
+
+    #[test]
+    fn concurrent_read_response_for_stream() {
+        let mut resp_bytes = Vec::new();
+        use crate::h2::hpack::Encoder;
+        // Response for stream 1: status 200, body "hello"
+        let block = Encoder::new().encode(&[(b":status", b"200")]);
+        Frame::Headers {
+            stream_id: 1,
+            end_stream: false,
+            end_headers: true,
+            priority: None,
+            block_fragment: block,
+        }
+        .encode(&mut resp_bytes)
+        .unwrap();
+        Frame::Data {
+            stream_id: 1,
+            end_stream: true,
+            data: b"hello".to_vec(),
+        }
+        .encode(&mut resp_bytes)
+        .unwrap();
+
+        let mut conn = make_connected_conn(resp_bytes);
+        let _sid = conn.send_request("GET", "https", "example.com", "/", &[]).unwrap();
+
+        let (status, headers, body) = conn.read_response_for_stream(1).unwrap();
+        assert_eq!(status, 200);
+        assert_eq!(body, b"hello");
+        assert!(!headers.iter().any(|(name, _)| name.starts_with(":")));
+
+        // Stream should no longer be pending.
+        assert!(!conn.pending_streams.contains_key(&1));
+    }
+
+    #[test]
+    fn concurrent_read_response_for_invalid_stream_errors() {
+        let server_data = Vec::new();
+        let mut conn = make_connected_conn(server_data);
+
+        let err = conn.read_response_for_stream(999).unwrap_err();
+        assert!(err.to_string().contains("no pending stream"));
+    }
+
+    #[test]
+    fn concurrent_multiple_streams_single_response() {
+        let mut resp_bytes = Vec::new();
+        use crate::h2::hpack::Encoder;
+        // Response for stream 1 only.
+        let block = Encoder::new().encode(&[(b":status", b"201")]);
+        Frame::Headers {
+            stream_id: 1,
+            end_stream: false,
+            end_headers: true,
+            priority: None,
+            block_fragment: block,
+        }
+        .encode(&mut resp_bytes)
+        .unwrap();
+        Frame::Data {
+            stream_id: 1,
+            end_stream: true,
+            data: b"resp1".to_vec(),
+        }
+        .encode(&mut resp_bytes)
+        .unwrap();
+
+        let mut conn = make_connected_conn(resp_bytes);
+        let sid1 = conn.send_request("GET", "https", "example.com", "/1", &[]).unwrap();
+        let _sid2 = conn.send_request("GET", "https", "example.com", "/2", &[]).unwrap();
+
+        // Read response for stream 1 (stream 2 is still pending).
+        let (status, _, body) = conn.read_response_for_stream(sid1).unwrap();
+        assert_eq!(status, 201);
+        assert_eq!(body, b"resp1");
+
+        // Stream 1 should be removed, stream 3 (allocated for sid2) should remain.
+        assert!(!conn.pending_streams.contains_key(&1));
+        assert!(conn.pending_streams.contains_key(&3));
     }
 }
