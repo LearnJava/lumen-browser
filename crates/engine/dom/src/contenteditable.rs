@@ -46,6 +46,24 @@ pub struct PasteData {
     pub files: Vec<String>,
 }
 
+/// Data transferred in a drag-drop operation.
+///
+/// When a user drags content from one location and drops it on contenteditable,
+/// this struct carries the transferred data.
+#[derive(Debug, Clone, Default)]
+pub struct DragData {
+    /// Plain text content.
+    pub text: Option<String>,
+    /// HTML content.
+    pub html: Option<String>,
+    /// URLs (from dragging links or images).
+    pub urls: Vec<String>,
+    /// File paths (from dragging files).
+    pub files: Vec<String>,
+    /// The source of the drag: true if from the same contenteditable (move), false (copy).
+    pub is_move: bool,
+}
+
 impl PasteData {
     /// Create empty paste data.
     pub fn new() -> Self {
@@ -67,6 +85,48 @@ impl PasteData {
     /// Add a file to the paste data.
     pub fn add_file(mut self, file: impl Into<String>) -> Self {
         self.files.push(file.into());
+        self
+    }
+
+    /// Preferred content for insertion: HTML (if available), else plain text.
+    pub fn preferred_content(&self) -> Option<&str> {
+        self.html.as_deref().or(self.text.as_deref())
+    }
+}
+
+impl DragData {
+    /// Create empty drag data.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set text content.
+    pub fn with_text(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self
+    }
+
+    /// Set HTML content.
+    pub fn with_html(mut self, html: impl Into<String>) -> Self {
+        self.html = Some(html.into());
+        self
+    }
+
+    /// Add a URL to the drag data.
+    pub fn add_url(mut self, url: impl Into<String>) -> Self {
+        self.urls.push(url.into());
+        self
+    }
+
+    /// Add a file to the drag data.
+    pub fn add_file(mut self, file: impl Into<String>) -> Self {
+        self.files.push(file.into());
+        self
+    }
+
+    /// Mark this as a move operation (not copy).
+    pub fn mark_move(mut self) -> Self {
+        self.is_move = true;
         self
     }
 
@@ -291,6 +351,38 @@ pub fn paste_into(
     }
 }
 
+/// Handle drop operation: insert drag data at drop position.
+///
+/// Similar to paste_into, but for drag-drop. If the drag is marked as a move
+/// and there is a current selection, the selected content is deleted after
+/// being moved (this would be handled by the caller in a full drag-drop impl).
+///
+/// For now, this performs the same operation as paste_into.
+pub fn drop_into(
+    history: &mut CommandHistory,
+    doc: &mut Document,
+    data: &DragData,
+) -> bool {
+    if let Some(content) = data.preferred_content() {
+        let selection = doc.get_selection().clone();
+
+        if let Some(range) = selection.get_range() {
+            // Replace selected content
+            history.replace_text(doc, range, content.to_string());
+        } else if let Some(pos) = selection.anchor {
+            // Insert at cursor position
+            history.insert_text(doc, pos, content.to_string());
+        } else {
+            // No selection and no cursor position — nothing to do
+            return false;
+        }
+
+        true
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -452,6 +544,55 @@ mod tests {
 
         let data = PasteData::new().with_text(" world");
         let result = paste_into(&mut history, &mut doc, &data);
+
+        assert!(result);
+        assert_eq!(history.current_pos(), 1);
+    }
+
+    #[test]
+    fn drag_data_construction() {
+        let data = DragData::new()
+            .with_text("hello")
+            .with_html("<p>hello</p>")
+            .add_url("https://example.com")
+            .add_file("test.txt")
+            .mark_move();
+
+        assert_eq!(data.text, Some("hello".to_string()));
+        assert_eq!(data.html, Some("<p>hello</p>".to_string()));
+        assert_eq!(data.urls, vec!["https://example.com"]);
+        assert_eq!(data.files, vec!["test.txt"]);
+        assert!(data.is_move);
+    }
+
+    #[test]
+    fn drag_data_preferred_content() {
+        let plain_only = DragData::new().with_text("plain");
+        assert_eq!(plain_only.preferred_content(), Some("plain"));
+
+        let html_preferred = DragData::new()
+            .with_text("plain")
+            .with_html("<b>bold</b>");
+        assert_eq!(html_preferred.preferred_content(), Some("<b>bold</b>"));
+    }
+
+    #[test]
+    fn drop_into_at_cursor() {
+        let mut doc = new_doc_with_text();
+        let mut history = CommandHistory::new();
+
+        // Set cursor at position 5
+        let pos = DomPosition {
+            container: NodeId(1),
+            offset: 5,
+        };
+        doc.set_selection(crate::Selection {
+            anchor: Some(pos),
+            focus: Some(pos),
+        });
+
+        let data = DragData::new().with_text(" dropped");
+        let result = drop_into(&mut history, &mut doc, &data);
 
         assert!(result);
         assert_eq!(history.current_pos(), 1);

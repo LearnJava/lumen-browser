@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 pub use lumen_core::sandbox::{parse_sandbox_value, SandboxFlags};
 
 pub mod contenteditable;
-pub use contenteditable::{CommandHistory, DomCommand, PasteData, paste_into};
+pub use contenteditable::{CommandHistory, DomCommand, DragData, PasteData, drop_into, paste_into};
 
 /// Error returned by [`Document::to_bytes`] and [`Document::from_bytes`].
 #[derive(Debug)]
