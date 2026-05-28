@@ -1,5 +1,5 @@
-In progress: none
-Next task: ime-input
+In progress: ime-input (6.3, Phase 2)  branch: p1-ime-input-phase2
+Next step: dispatch composition events (compositionstart/update/end) to DOM nodes  crates/engine/dom/src/lib.rs:804
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
