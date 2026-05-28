@@ -1,7 +1,11 @@
-In progress: invariant-3-pure-layout (10D, [P3+P1+P2]) — audit layout & paint for hidden state
-Next step: Grep lumen-layout & paint for static MUT, lazy_static, OnceCell; create audit report  branch: p3-invariant-3-pure-layout
+In progress: —
+Next step: Pick next task from Queue (Wave 2/3)
 
 Recent (Wave 2/3 - automation API + completed tasks):
+  - ✓ tab-lifecycle-invariants (10B/10C/10D, ADR-008): all three invariants verified/implemented:
+    · 10B (DOM arena): NodeId(u32) arena, Serialize/Deserialize, to_bytes/from_bytes ✓
+    · 10C (JS suspend): pause/unpause/suspend/resume + SuspendedHeap struct ✓
+    · 10D (pure-layout): audit complete, no hidden state, cache isolation ✓ 2026-05-28
   - ✓ invariant-2-js-suspend (10C, JsRuntime trait): pause/unpause/suspend/resume methods + SuspendedHeap struct for T2→T3 hibernation 2026-05-28
   - ✓ invariant-1-dom-arena (10B, [P3+P1], audit complete): NodeId(u32) arena verified, to_bytes/from_bytes tests exist, clippy::rc_buffer enforced 2026-05-28
   - shell-as-driver-client-8a7-phase4c (reload() migration to GpuSession: WinitSession integration in shell, backward-compatible fallback for Snapshot) 2026-05-28
