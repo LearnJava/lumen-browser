@@ -1,5 +1,5 @@
-In progress: none (ready for next task)
-Next step: lumen-a11y-full (8G, Phase 1, ADR-006) — A11y tree first-class for accessibility-driven testing. P1 owns tree construction, P3 owns BrowserSession integration. Start with crate expansion + role mapping + text alternatives computation (stage 1 of 3).
+In progress: none
+Next task: svg-layout-advanced Phase 1
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -12,6 +12,7 @@ Note: fts-omnibox (Wave 1, P3-задача по домену) перенесен
 Note: Wave 2 очередь содержит P2-задачи (extras-p2, avif-decoder, webgl-context, font-hinting, svg-rasterizer) — они пока не для P1. Wave 2 P3-задачи (http2-client, preconnect-hints) тоже в P3 очереди. P1 берёт следующее из Phase 1/Phase 2 своих задач.
 
 Recent:
+- accessibility-forms-validation (6.2, Phase 3): FormSubmitEvent enum (Valid/Invalid variants), submit_form() function executing HTML5 §4.10.22 form submission algorithm with constraint validation, 8 comprehensive unit tests (valid/invalid scenarios, field collection, defaults), 157 tests PASS, clippy clean 2026-05-28 — P3 dispatch integration pending
 - click-hint-overlay (7B.2): enhance collect_clickable_elements with <details> support — add ClickableKind::Details variant, is_details_element() helper, comprehensive unit tests (6 new tests for link/button/input/details/mixed), P1 complete 2026-05-28 — P3 integration pending
 - print-pdf-pagination (5++, Phase 1): PaginationContext + Page + PageFragment, paginate() algorithm for break-before/after/avoid, 7 unit tests, exports in lib.rs, clippy clean 2026-05-28
 - bench-ram-axis (9G.5, ADR-008 performance gate): cross-platform RSS measurement (getrusage on Unix, GetProcessMemoryInfo on Windows), baseline.json established, UPDATE.md documentation 2026-05-28
