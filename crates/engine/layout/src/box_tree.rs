@@ -63,6 +63,87 @@ pub struct ViewBox {
     pub height: f32,
 }
 
+/// SVG `preserveAspectRatio` attribute for aspect-ratio preservation.
+/// Controls how viewBox scales to fit the SVG's CSS width/height.
+/// Default is `xMidYMid` with uniform scaling.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PreserveAspectRatio {
+    /// Horizontal alignment: `xMin` (left), `xMid` (center), `xMax` (right).
+    pub align_x: SvgAlignX,
+    /// Vertical alignment: `YMin` (top), `YMid` (middle), `YMax` (bottom).
+    pub align_y: SvgAlignY,
+    /// Uniform scaling (`Uniform`) or stretch to fill (`NonUniform`).
+    pub meet_or_slice: SvgMeetOrSlice,
+}
+
+/// SVG preserveAspectRatio horizontal alignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SvgAlignX {
+    /// `xMin` — align viewBox to left edge.
+    Min,
+    /// `xMid` — align viewBox to center (default).
+    Mid,
+    /// `xMax` — align viewBox to right edge.
+    Max,
+}
+
+/// SVG preserveAspectRatio vertical alignment.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SvgAlignY {
+    /// `YMin` — align viewBox to top edge.
+    Min,
+    /// `YMid` — align viewBox to center (default).
+    Mid,
+    /// `YMax` — align viewBox to bottom edge.
+    Max,
+}
+
+/// SVG preserveAspectRatio meet-or-slice mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SvgMeetOrSlice {
+    /// `meet` (default) — uniform scale to fit inside, may have letterboxing.
+    Meet,
+    /// `slice` — uniform scale to cover, may clip.
+    Slice,
+}
+
+/// SVG transformation data from the `transform` presentation attribute.
+/// Stores parsed transform functions in order of application.
+#[derive(Debug, Clone, Default)]
+pub struct SvgTransform {
+    /// Transform matrix components: [a, b, c, d, e, f] representing the 2D transformation matrix.
+    /// Default is identity matrix [1, 0, 0, 1, 0, 0].
+    pub matrix: [f32; 6],
+}
+
+impl SvgTransform {
+    /// Creates an identity transform (no transformation).
+    pub fn identity() -> Self {
+        SvgTransform { matrix: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0] }
+    }
+
+    /// Multiplies this transform by another, composing them.
+    pub fn compose(&mut self, other: &SvgTransform) {
+        let [a, b, c, d, e, f] = self.matrix;
+        let [a2, b2, c2, d2, e2, f2] = other.matrix;
+        // Matrix multiplication: self × other
+        self.matrix = [
+            a * a2 + c * b2,
+            b * a2 + d * b2,
+            a * c2 + c * d2,
+            b * c2 + d * d2,
+            a * e2 + c * f2 + e,
+            b * e2 + d * f2 + f,
+        ];
+    }
+
+    /// Applies this transform to a point (x, y).
+    pub fn transform_point(&self, x: f32, y: f32) -> (f32, f32) {
+        let [a, b, c, d, e, f] = self.matrix;
+        (a * x + c * y + e, b * x + d * y + f)
+    }
+}
+
 /// Geometric primitive for an SVG shape element in SVG user units (before viewBox scaling).
 /// Coordinate origin: top-left of the SVG viewport.
 #[derive(Debug, Clone)]
@@ -157,6 +238,237 @@ fn parse_view_box(doc: &Document, id: NodeId) -> Option<ViewBox> {
         return None;
     }
     Some(ViewBox { min_x: vals[0], min_y: vals[1], width: vals[2], height: vals[3] })
+}
+
+/// Parses the SVG `preserveAspectRatio` attribute.
+/// Format: `[defer] <align> [meet|slice]`
+/// Default is `xMidYMid meet` (center, uniform scale, fit inside).
+fn parse_preserve_aspect_ratio(doc: &Document, id: NodeId) -> PreserveAspectRatio {
+    let s = match doc.get(id).get_attr("preserveAspectRatio") {
+        Some(s) => s.trim(),
+        None => "xMidYMid meet",
+    };
+
+    // Skip optional "defer" keyword at start.
+    let s = s.strip_prefix("defer ").unwrap_or(s);
+
+    // Parse align and meet-or-slice.
+    let parts: Vec<&str> = s.split_whitespace().collect();
+    let align_str = parts.first().copied().unwrap_or("xMidYMid");
+    let meet_or_slice_str = parts.get(1).copied().unwrap_or("meet");
+
+    // Parse alignment (e.g. "xMidYMid", "xMinYMin", etc.).
+    let (align_x, align_y) = if align_str == "none" {
+        // "none" means non-uniform scaling — not implemented yet, fall back to uniform.
+        (SvgAlignX::Mid, SvgAlignY::Mid)
+    } else {
+        // Extract x-align from prefix: xMin|xMid|xMax.
+        let align_x = if align_str.starts_with("xMin") {
+            SvgAlignX::Min
+        } else if align_str.starts_with("xMax") {
+            SvgAlignX::Max
+        } else {
+            SvgAlignX::Mid
+        };
+        // Extract y-align from suffix: YMin|YMid|YMax.
+        let align_y = if align_str.contains("YMin") {
+            SvgAlignY::Min
+        } else if align_str.contains("YMax") {
+            SvgAlignY::Max
+        } else {
+            SvgAlignY::Mid
+        };
+        (align_x, align_y)
+    };
+
+    let meet_or_slice = if meet_or_slice_str == "slice" {
+        SvgMeetOrSlice::Slice
+    } else {
+        SvgMeetOrSlice::Meet
+    };
+
+    PreserveAspectRatio { align_x, align_y, meet_or_slice }
+}
+
+/// Parses the SVG `transform` presentation attribute and returns a composed transform matrix.
+/// Syntax: `<transform-function> [ <transform-function> ]* | none`
+/// Supported functions: translate, scale, rotate, skewX, skewY, matrix.
+fn parse_svg_transform(attr: Option<&str>) -> SvgTransform {
+    let attr = match attr {
+        Some(s) => s.trim(),
+        None => return SvgTransform::identity(),
+    };
+
+    if attr.eq_ignore_ascii_case("none") {
+        return SvgTransform::identity();
+    }
+
+    let mut result = SvgTransform::identity();
+
+    // Simple regex-free parser: extract function names and their arguments.
+    let mut pos = 0;
+    let attr_bytes = attr.as_bytes();
+
+    while pos < attr_bytes.len() {
+        // Skip whitespace and commas.
+        while pos < attr_bytes.len() && (attr_bytes[pos] as char).is_whitespace() || attr_bytes[pos] == b',' {
+            pos += 1;
+        }
+
+        if pos >= attr_bytes.len() {
+            break;
+        }
+
+        // Extract function name.
+        let start = pos;
+        while pos < attr_bytes.len() && (attr_bytes[pos] as char).is_alphabetic() {
+            pos += 1;
+        }
+
+        let func_name = &attr[start..pos];
+
+        // Skip whitespace and opening paren.
+        while pos < attr_bytes.len() && (attr_bytes[pos] as char).is_whitespace() {
+            pos += 1;
+        }
+
+        if pos >= attr_bytes.len() || attr_bytes[pos] != b'(' {
+            continue;
+        }
+
+        pos += 1; // skip '('
+
+        // Extract arguments until closing paren.
+        let args_start = pos;
+        let mut depth = 1;
+        while pos < attr_bytes.len() && depth > 0 {
+            if attr_bytes[pos] == b'(' {
+                depth += 1;
+            } else if attr_bytes[pos] == b')' {
+                depth -= 1;
+            }
+            if depth > 0 {
+                pos += 1;
+            }
+        }
+
+        let args_str = attr[args_start..pos].trim();
+        let args: Vec<f32> = args_str
+            .split(|c: char| c.is_whitespace() || c == ',')
+            .filter(|s| !s.is_empty())
+            .filter_map(|s| s.parse::<f32>().ok())
+            .collect();
+
+        // Apply the transform function.
+        let fn_transform = match func_name.to_lowercase().as_str() {
+            "translate" => {
+                let tx = args.first().copied().unwrap_or(0.0);
+                let ty = args.get(1).copied().unwrap_or(0.0);
+                SvgTransform { matrix: [1.0, 0.0, 0.0, 1.0, tx, ty] }
+            }
+            "scale" => {
+                let sx = args.first().copied().unwrap_or(1.0);
+                let sy = args.get(1).copied().unwrap_or(sx);
+                SvgTransform { matrix: [sx, 0.0, 0.0, sy, 0.0, 0.0] }
+            }
+            "rotate" => {
+                let angle = args.first().copied().unwrap_or(0.0); // in degrees
+                let rad = angle.to_radians();
+                let cos = rad.cos();
+                let sin = rad.sin();
+                // Optional cx, cy for rotation center.
+                let cx = args.get(1).copied().unwrap_or(0.0);
+                let cy = args.get(2).copied().unwrap_or(0.0);
+                if cx.abs() < 0.001 && cy.abs() < 0.001 {
+                    SvgTransform { matrix: [cos, sin, -sin, cos, 0.0, 0.0] }
+                } else {
+                    // rotate(a cx cy) = translate(cx cy) rotate(a) translate(-cx -cy)
+                    let mut m = SvgTransform { matrix: [1.0, 0.0, 0.0, 1.0, cx, cy] };
+                    let mut rot = SvgTransform { matrix: [cos, sin, -sin, cos, 0.0, 0.0] };
+                    rot.compose(&m);
+                    m = SvgTransform { matrix: [1.0, 0.0, 0.0, 1.0, -cx, -cy] };
+                    rot.compose(&m);
+                    rot
+                }
+            }
+            "skewx" => {
+                let angle = args.first().copied().unwrap_or(0.0);
+                let tan = angle.to_radians().tan();
+                SvgTransform { matrix: [1.0, 0.0, tan, 1.0, 0.0, 0.0] }
+            }
+            "skewy" => {
+                let angle = args.first().copied().unwrap_or(0.0);
+                let tan = angle.to_radians().tan();
+                SvgTransform { matrix: [1.0, tan, 0.0, 1.0, 0.0, 0.0] }
+            }
+            "matrix" => {
+                if let [a, b, c, d, e, f, ..] = args.as_slice() {
+                    SvgTransform { matrix: [*a, *b, *c, *d, *e, *f] }
+                } else {
+                    SvgTransform::identity()
+                }
+            }
+            _ => SvgTransform::identity(),
+        };
+
+        result.compose(&fn_transform);
+
+        if pos < attr_bytes.len() && attr_bytes[pos] == b')' {
+            pos += 1;
+        }
+    }
+
+    result
+}
+
+/// Calculates SVG viewBox scaling and offset for aspect-ratio preservation.
+/// Returns `(scale_x, scale_y, offset_x, offset_y)` to transform viewBox → CSS px.
+fn compute_viewbox_transform(
+    view_box: &ViewBox,
+    svg_width: f32,
+    svg_height: f32,
+    preserve: &PreserveAspectRatio,
+) -> (f32, f32, f32, f32) {
+    let vb_width = view_box.width.max(0.001);
+    let vb_height = view_box.height.max(0.001);
+
+    // Base scale: how many CSS px per SVG user unit.
+    let scale_x = svg_width / vb_width;
+    let scale_y = svg_height / vb_height;
+
+    // Determine final scale based on meet-or-slice mode.
+    let (final_scale, scale_x_adj, scale_y_adj) = match preserve.meet_or_slice {
+        SvgMeetOrSlice::Meet => {
+            // Uniform scale that fits inside: use minimum scale.
+            let s = scale_x.min(scale_y);
+            (s, s, s)
+        }
+        SvgMeetOrSlice::Slice => {
+            // Uniform scale that covers: use maximum scale.
+            let s = scale_x.max(scale_y);
+            (s, s, s)
+        }
+    };
+
+    // Calculate scaled viewBox dimensions.
+    let scaled_vb_width = vb_width * final_scale;
+    let scaled_vb_height = vb_height * final_scale;
+
+    // Determine alignment offsets within the SVG's CSS rect.
+    let offset_x = match preserve.align_x {
+        SvgAlignX::Min => 0.0,
+        SvgAlignX::Mid => (svg_width - scaled_vb_width) / 2.0,
+        SvgAlignX::Max => svg_width - scaled_vb_width,
+    };
+
+    let offset_y = match preserve.align_y {
+        SvgAlignY::Min => 0.0,
+        SvgAlignY::Mid => (svg_height - scaled_vb_height) / 2.0,
+        SvgAlignY::Max => svg_height - scaled_vb_height,
+    };
+
+    // Return scale and origin offset due to viewBox min_x/min_y.
+    (scale_x_adj, scale_y_adj, offset_x - view_box.min_x * final_scale, offset_y - view_box.min_y * final_scale)
 }
 
 /// Builds `SvgShape` and `Block` (for `<g>`) layout boxes for the SVG subtree rooted at
@@ -301,7 +613,15 @@ fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, avail_w: f32,
     b.rect.x = start_x + margin_left;
     b.rect.y = start_y + margin_top;
 
-    let view_box = if let BoxKind::SvgRoot { view_box } = &b.kind { view_box.clone() } else { None };
+    let (view_box, preserve_aspect_ratio) = if let BoxKind::SvgRoot { view_box, preserve_aspect_ratio } = &b.kind {
+        (view_box.clone(), preserve_aspect_ratio.clone())
+    } else {
+        (None, PreserveAspectRatio {
+            align_x: SvgAlignX::Mid,
+            align_y: SvgAlignY::Mid,
+            meet_or_slice: SvgMeetOrSlice::Meet,
+        })
+    };
 
     // SVG intrinsic size: CSS width/height wins, then viewBox dimensions, then SVG defaults.
     let svg_w = s.width.as_ref()
@@ -317,14 +637,12 @@ fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, avail_w: f32,
     b.rect.width  = svg_w;
     b.rect.height = svg_h;
 
-    // viewBox → CSS-px transform: scale + origin offset.
+    // viewBox → CSS-px transform: scale + origin offset with aspect-ratio preservation.
     let (scale_x, scale_y, origin_x, origin_y) = match &view_box {
-        Some(vb) if vb.width > 0.0 && vb.height > 0.0 => (
-            svg_w / vb.width,
-            svg_h / vb.height,
-            b.rect.x - vb.min_x * svg_w / vb.width,
-            b.rect.y - vb.min_y * svg_h / vb.height,
-        ),
+        Some(vb) if vb.width > 0.0 && vb.height > 0.0 => {
+            let (sx, sy, ox_delta, oy_delta) = compute_viewbox_transform(vb, svg_w, svg_h, &preserve_aspect_ratio);
+            (sx, sy, b.rect.x + ox_delta, b.rect.y + oy_delta)
+        }
         _ => (1.0, 1.0, b.rect.x, b.rect.y),
     };
     lay_out_svg_children_positions(&mut b.children, origin_x, origin_y, scale_x, scale_y);
@@ -339,6 +657,13 @@ fn lay_out_svg_children_positions(children: &mut [LayoutBox], ox: f32, oy: f32, 
 }
 
 fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy: f32) {
+    // Parse and apply SVG transform attribute if present.
+    // Note: This is a placeholder integration. Full transform support including
+    // transform-origin and proper matrix composition will be in Phase 2.
+    // For now, we parse the attribute to prepare for wiring with CSS property.
+    // CSS: transform — P4 will wire this when ready.
+    let _ = parse_svg_transform(None); // Mark for P4 wiring
+
     if let BoxKind::SvgShape { ref shape } = b.kind {
         b.rect = svg_shape_bbox(shape, ox, oy, sx, sy);
     } else if matches!(b.kind, BoxKind::Block) {
@@ -716,6 +1041,8 @@ pub enum BoxKind {
     SvgRoot {
         /// Parsed `viewBox` attribute. `None` when attribute absent: shapes use 1:1 px mapping.
         view_box: Option<ViewBox>,
+        /// Parsed `preserveAspectRatio` attribute for aspect-ratio preservation.
+        preserve_aspect_ratio: PreserveAspectRatio,
     },
     /// Individual SVG shape (`<rect>`, `<circle>`, `<ellipse>`, `<line>`, `<path>`).
     /// `LayoutBox.rect` is the bounding box in *document coordinates* (post-viewBox scaling).
@@ -1489,7 +1816,10 @@ fn build_box(
                 {
                     style.height = Some(crate::style::Length::Px(h));
                 }
-                BoxKind::SvgRoot { view_box: parse_view_box(doc, id) }
+                BoxKind::SvgRoot {
+                    view_box: parse_view_box(doc, id),
+                    preserve_aspect_ratio: parse_preserve_aspect_ratio(doc, id),
+                }
             } else {
                 BoxKind::Block
             }
