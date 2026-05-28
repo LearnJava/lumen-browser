@@ -1,5 +1,5 @@
-In progress: none
-Next task: check Phase 2 queue for remaining layout/DOM work; most Phase 1-2 items await P3 JS integration or Phase 3+ work
+In progress: print-pdf-advanced Phase 4 (inline content rendering in margin-boxes)  branch: p1-print-pdf-margin-inline
+Next task: check remaining Phase 2+ layout work after Phase 4 completes; most Phase 1-2 items await P3 JS integration
 
 Recent merge: print-pdf-advanced Phase 3 ✅ — margin-box text layout (MarginBoxTextFragment, layout_text() method with word wrapping, 8 new tests), 39 page tests PASS, 2026-05-30
 Recent merge: svg-layout-advanced Phase 3 ✅ — nested SVG child propagation (SvgRoot now appears in child-bearing boxes), 5 unit tests PASS, 2026-05-30
