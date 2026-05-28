@@ -672,10 +672,57 @@ pub fn compute_page_properties(
         if let Some(height) = extract_length_property("height", &rule.declarations) {
             props.height = height;
         }
+
+        // Extract font-size (Phase 3)
+        if let Some(font_size) = extract_length_property("font-size", &rule.declarations) {
+            props.font_size = font_size;
+        }
     }
 
     props.compute_orientation();
     props
+}
+
+/// Creates a PageBox for a given page number with computed properties and layout.
+///
+/// **Steps:**
+/// 1. Match @page rules for this page number
+/// 2. Compute page properties (size, margins, font-size)
+/// 3. Create PageBox with layout margin-boxes
+/// 4. Apply content functions to margin-boxes
+/// 5. Layout text in margin-boxes
+///
+/// This function ties together all Phase 1-3 components for a single page.
+/// Phase 3 extension: includes text layout in margin-boxes.
+/// Default text layout parameters: letter_spacing=0.0, tab_size=4.0.
+pub fn create_page_box_with_text_layout(
+    page_number: u32,
+    total_pages: u32,
+    page_rules: &[PageRule],
+    content_map: &std::collections::HashMap<MarginBoxPosition, Vec<ContentFunction>>,
+    counters: &PageCounters,
+    measurer: &dyn crate::TextMeasurer,
+) -> PageBox {
+    // Step 1: Match @page rules for this page
+    let matching_rules = match_page_rules(page_rules, page_number, total_pages);
+
+    // Step 2: Compute page properties
+    let properties = compute_page_properties(&matching_rules, PageProperties::default_a4());
+
+    // Step 3: Create PageBox
+    let mut page = PageBox::new(page_number, properties);
+
+    // Step 3b: Layout margin-boxes (positions and sizes)
+    page.layout_margin_boxes();
+
+    // Step 4: Apply content functions
+    page.apply_margin_box_content(content_map, counters);
+
+    // Step 5: Layout text in margin-boxes (Phase 3)
+    // Default text layout parameters: letter_spacing=0.0, tab_size=4.0
+    page.layout_margin_box_text(0.0, 4.0, measurer);
+
+    page
 }
 
 /// Counter value for page numbering and related counters.
@@ -1593,5 +1640,59 @@ mod tests {
 
         // line_height should be font_size * 1.2 = 16 * 1.2 = 19.2
         assert!((layout.line_height - 19.2).abs() < 0.1);
+    }
+
+    #[test]
+    fn test_create_page_box_with_text_layout_full_integration() {
+        use lumen_css_parser::PageRule;
+
+        // Create a simple @page rule with font-size
+        let page_rule = PageRule {
+            selector: String::new(),
+            declarations: vec![lumen_css_parser::Declaration {
+                property: "font-size".to_string(),
+                value: "14".to_string(),
+                important: false,
+            }],
+        };
+
+        let page_rules = vec![page_rule];
+        let mut content_map = std::collections::HashMap::new();
+        content_map.insert(
+            MarginBoxPosition::BottomCenter,
+            vec![ContentFunction::Counter {
+                name: "page".to_string(),
+                style: "decimal".to_string(),
+            }],
+        );
+
+        let counters = PageCounters::new(0);
+        let measurer = FixedWidthMeasurer;
+
+        // Create page box with full integration
+        let page = create_page_box_with_text_layout(
+            0,
+            5,
+            &page_rules,
+            &content_map,
+            &counters,
+            &measurer,
+        );
+
+        // Verify page was created with correct number
+        assert_eq!(page.number, 0);
+
+        // Verify @page rule was applied (font-size should be 14)
+        assert_eq!(page.properties.font_size, 14.0);
+
+        // Verify margin-boxes were laid out
+        assert!(!page.margin_boxes.is_empty());
+
+        // Verify content was applied to bottom-center
+        let bottom_center = page.get_margin_box(MarginBoxPosition::BottomCenter).unwrap();
+        assert_eq!(bottom_center.content, Some("1".to_string()));
+
+        // Verify text was laid out
+        assert!(bottom_center.text_layout.is_some());
     }
 }
