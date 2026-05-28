@@ -1,5 +1,5 @@
-In progress: none
-Next task: ime-input
+In progress: ime-input  branch: p1-ime-input
+Next step: design IME composition events architecture  crates/dom/src/events.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
