@@ -1,5 +1,5 @@
 In progress: none
-Next task: accessibility-forms-validation
+Next task: ime-input
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -12,6 +12,7 @@ Note: fts-omnibox (Wave 1, P3-задача по домену) перенесен
 Note: Wave 2 очередь содержит P2-задачи (extras-p2, avif-decoder, webgl-context, font-hinting, svg-rasterizer) — они пока не для P1. Wave 2 P3-задачи (http2-client, preconnect-hints) тоже в P3 очереди. P1 берёт следующее из Phase 1/Phase 2 своих задач.
 
 Recent:
+- accessibility-forms-validation (6.2, Phase 2): find_validation_error() enhanced to use element_validity() for complete constraint validation (valueMissing/typeMismatch/tooLong/tooShort/rangeUnderflow/rangeOverflow/stepMismatch), find_all_validation_errors() for collecting all invalid controls, validation_error_message() with specialized error messages for each validation type (required/email/url/range/pattern), 5 new validation type tests (required/email/url/underflow/overflow), 15 tests PASS, clippy clean 2026-05-28
 - transition-advanced (6.7, Phase 2): fill-mode support (Backwards/Forwards/Both applied in delay/completion periods), interrupted transitions (captured value at interruption for smooth continuation), grouped property expansion (margin/padding/border/border-radius → component properties), 3 new unit tests (fill_mode_forwards, fill_mode_backwards, interrupted_detection), 90 tests PASS, clippy clean 2026-05-28
 - ime-input (6.3, Phase 1): IME composition events infrastructure — CompositionEventType/CompositionData/CompositionEvent structures, CompositionState in Document, public API (begin_composition/update_composition/end_composition/get_composition), 8 unit tests (composition lifecycle, serialization, full IME sequence), 121 tests PASS, clippy clean 2026-05-28 — P3 shell integration pending
 - accessibility-forms-validation (6.2, Phase 1): ValidityState integration in accessibility tree, compute_state() reads element_validity() to populate AXNode.invalid, aria-invalid="true" preserved as explicit override, 8 unit tests (required/email/length/valid scenarios), 125 tests PASS, clippy clean 2026-05-28
@@ -77,7 +78,7 @@ Recent:
 30. ✅ transition-advanced (6.7) — Phase 1: transition_fill_modes field + grouped property expansion ✅; Phase 2: fill-mode scheduling + interrupted transitions ✅; Phase 3: fill-mode tests ✅ (2026-05-28)
 31. ✅ shadow-dom-accessibility-forms-gc (6+) — Phase 2A: slot delegation + fallback ✅; Phase 2B: accessibility tree composition + FlatTree integration + ARIA relationships ✅; Phase 2C: transparent role handling across boundaries ✅ (2026-05-28)
 32. 🟡 contenteditable-advanced — undo/redo command history ✅; paste data support ✅; drag-drop support ✅; Phase 1-3 complete, P3 shell integration pending (2026-05-28)
-33. 🟡 accessibility-forms-validation — Phase 1: ValidityState in AXTree ✅ (2026-05-28); Phase 2: form submission + invalid controls visibility; Phase 3: submit algorithm integration
+33. 🟡 accessibility-forms-validation — Phase 1: ValidityState in AXTree ✅ (2026-05-28); Phase 2: enhanced constraint validation (all error types + custom messages) ✅ (2026-05-28); Phase 3: submit algorithm integration
 34. ⬜ ime-input ([P1+P3]) — IME composition events through DOM, composition ranges, virtual keyboard interaction
 35. ⬜ svg-layout-advanced — SVG transforms, viewport nesting, aspect-ratio preservation
 36. ⬜ print-pdf-advanced — @page margin boxes, page numbers, headers/footers from margin-box content
