@@ -1,5 +1,5 @@
 In progress: none
-Next task: font-loading-api Phase 1 (P1+P3 collaboration)
+Next task: performance-observer-timing Phase 1 (P1+P3 collaboration)
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -12,6 +12,7 @@ Note: fts-omnibox (Wave 1, P3-задача по домену) перенесен
 Note: Wave 2 очередь содержит P2-задачи (extras-p2, avif-decoder, webgl-context, font-hinting, svg-rasterizer) — они пока не для P1. Wave 2 P3-задачи (http2-client, preconnect-hints) тоже в P3 очереди. P1 берёт следующее из Phase 1/Phase 2 своих задач.
 
 Recent:
+- font-loading-api (6.8, Phase 1): FontFace/FontFaceStatus/FontFaceSet types in lumen-dom, document.fonts collection, rule_to_font_face() converter + extraction from stylesheets into Document.fonts, 7 unit tests PASS, clippy clean 2026-05-28 — Phase 2-3 P3 JS binding pending
 - print-pdf-advanced (36): Phase 1 ✅ @page rule matching + margin-box layout (17 tests, 2026-05-28); Phase 2 ✅ page counters + content generation (PageCounters, ContentFunction, resolve_content_function, 17 new tests, 31 total PASS, clippy clean 2026-05-29) — Phase 3 (margin-box text layout + inline content rendering) pending
 - svg-layout-advanced (35): Phase 1 ✅ (2026-05-28) PreserveAspectRatio + transform parser; Phase 2 ✅ nested SVG transforms (SvgTransform in BoxKind::SvgShape, svg_group_transform in LayoutBox, apply_transform_to_bbox, parent transform cascading, 5 new tests, 33 total PASS, clippy clean 2026-05-29) — Phase 3 pending
 - accessibility-forms-validation (6.2, Phase 3): FormSubmitEvent enum (Valid/Invalid variants), submit_form() function executing HTML5 §4.10.22 form submission algorithm with constraint validation, 8 comprehensive unit tests (valid/invalid scenarios, field collection, defaults), 157 tests PASS, clippy clean 2026-05-28 — P3 dispatch integration pending
@@ -84,7 +85,7 @@ Recent:
 34. 🟡 ime-input ([P1+P3]) — Phase 1: composition state tracking ✅ (2026-05-28); Phase 2: composition ranges + event data structures ✅ (2026-05-28); Phase 3: virtual keyboard hints and P3 shell integration pending
 35. 🟡 svg-layout-advanced — Phase 1: SVG transforms, aspect-ratio preservation ✅ (2026-05-28); Phase 2: nested SVG transforms ✅ (2026-05-29); Phase 3: nested SVG layout pending
 36. 🟡 print-pdf-advanced — Phase 1: @page matching, margin-box model ✅ (2026-05-28); Phase 2: page counters + content generation ✅ (2026-05-29); Phase 3: margin-box text layout + inline content rendering pending
-37. ⬜ font-loading-api ([P1+P3]) — @font-face lifecycle, FontFace interface, document.fonts collection
+37. 🟡 font-loading-api ([P1+P3]) — Phase 1: FontFace/FontFaceStatus/FontFaceSet types, document.fonts collection, @font-face extraction + population, 7 unit tests PASS 2026-05-28 — Phase 2-3 P3 JS binding pending
 38. ⬜ performance-observer-timing — PerformanceObserver for layout/paint timings, resource timing
 
 ## Notes

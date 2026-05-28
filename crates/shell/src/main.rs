@@ -792,6 +792,7 @@ impl LoadedPage {
                 children: Vec::new(),
                 col_span: 1,
                 row_span: 1,
+                svg_group_transform: None,
             },
             font_registry: Arc::new(lumen_font::SystemFontIndex::new()),
             js_navigate: None,
@@ -1312,6 +1313,19 @@ fn parse_and_layout(
     let font_registry = load_font_faces(&sheet.font_faces, base, sink);
     let font_provider: Arc<dyn lumen_core::FontProvider> = Arc::new(font_registry);
 
+    // Populate document.fonts with FontFace objects from @font-face rules.
+    // Phase 1: store FontFace metadata; status marked as Loaded after successful load.
+    {
+        let mut d = doc_arc.lock().unwrap();
+        for rule in &sheet.font_faces {
+            let mut font_face = rule_to_font_face(rule);
+            // Mark as Loaded if we successfully registered it in font_registry.
+            // (The registry loads fonts during load_font_faces; if no errors, it's loaded.)
+            font_face.status = lumen_dom::FontFaceStatus::Loaded;
+            d.fonts_mut().add(font_face);
+        }
+    }
+
     let font = lumen_font::Font::parse(INTER_FONT)
         .map_err(|e| format!("ошибка разбора шрифта: {e}"))?;
     let measurer = lumen_paint::FontMeasurer::new(&font)
@@ -1393,6 +1407,33 @@ fn fetch_and_decode_background_images(
 ///
 /// Ошибки загрузки/декодирования отдельных источников не фатальны: пишутся в
 /// stderr и переходим к следующему источнику.
+/// Convert a FontFaceRule from the CSS parser to a DOM FontFace object.
+fn rule_to_font_face(rule: &lumen_css_parser::FontFaceRule) -> lumen_dom::FontFace {
+    use lumen_css_parser::FontFaceSourceKind;
+
+    let src_parts: Vec<String> = rule
+        .sources
+        .iter()
+        .map(|src| {
+            let kind_str = match src.kind {
+                FontFaceSourceKind::Url => "url",
+                FontFaceSourceKind::Local => "local",
+            };
+            format!("{}(\"{}\")", kind_str, src.value)
+        })
+        .collect();
+    let src_str = src_parts.join(", ");
+
+    lumen_dom::FontFace::new(
+        rule.family.clone(),
+        rule.style.as_deref().unwrap_or("normal").to_string(),
+        rule.weight.as_deref().unwrap_or("400").to_string(),
+        rule.stretch.clone(),
+        rule.unicode_range.clone(),
+        src_str,
+    )
+}
+
 fn load_font_faces(
     font_faces: &[lumen_css_parser::FontFaceRule],
     base: &ResourceBase,

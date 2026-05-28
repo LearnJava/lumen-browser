@@ -508,6 +508,108 @@ pub struct CompositionState {
     pub selection: Option<(u32, u32)>,
 }
 
+/// The status of a FontFace: whether it's been loaded, is loading, or failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum FontFaceStatus {
+    /// The font has not yet been loaded.
+    Unloaded,
+    /// The font is currently loading.
+    Loading,
+    /// The font has been successfully loaded.
+    Loaded,
+    /// The font failed to load.
+    Error,
+}
+
+/// Represents a @font-face rule and its loading status.
+/// CSS Fonts Module Level 4 §11.1 — FontFace interface.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FontFace {
+    /// The font-family name (e.g., "Roboto", "Inter").
+    pub family: String,
+    /// The font-style descriptor: "normal", "italic", or "oblique".
+    pub style: String,
+    /// The font-weight descriptor: "400", "700", "400 700", etc.
+    pub weight: String,
+    /// The font-stretch descriptor (optional): "normal", "condensed", etc.
+    pub stretch: Option<String>,
+    /// The unicode-range descriptor (optional): defines which Unicode characters this face supports.
+    pub unicode_range: Option<String>,
+    /// The src descriptor: comma-separated list of sources with format hints.
+    pub src: String,
+    /// Whether this font has been successfully loaded.
+    pub status: FontFaceStatus,
+}
+
+impl FontFace {
+    /// Create a new FontFace from @font-face rule components.
+    pub fn new(
+        family: String,
+        style: String,
+        weight: String,
+        stretch: Option<String>,
+        unicode_range: Option<String>,
+        src: String,
+    ) -> Self {
+        Self {
+            family,
+            style,
+            weight,
+            stretch,
+            unicode_range,
+            src,
+            status: FontFaceStatus::Unloaded,
+        }
+    }
+}
+
+/// A collection of FontFace objects representing all @font-face rules in the document.
+/// CSS Fonts Module Level 4 §11.2 — FontFaceSet interface.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct FontFaceSet {
+    /// All FontFace objects extracted from stylesheets.
+    faces: Vec<FontFace>,
+}
+
+impl FontFaceSet {
+    /// Create a new empty FontFaceSet.
+    pub fn new() -> Self {
+        Self {
+            faces: Vec::new(),
+        }
+    }
+
+    /// Add a FontFace to the set.
+    pub fn add(&mut self, face: FontFace) {
+        self.faces.push(face);
+    }
+
+    /// Get the number of FontFaces in the set.
+    pub fn size(&self) -> usize {
+        self.faces.len()
+    }
+
+    /// Check if the set contains a FontFace with a specific family name.
+    pub fn has_family(&self, family: &str) -> bool {
+        self.faces.iter().any(|f| f.family == family)
+    }
+
+    /// Get all FontFaces with a specific family name.
+    pub fn get_by_family(&self, family: &str) -> Vec<&FontFace> {
+        self.faces.iter().filter(|f| f.family == family).collect()
+    }
+
+    /// Get all FontFaces.
+    pub fn all(&self) -> &[FontFace] {
+        &self.faces
+    }
+
+    /// Clear all FontFaces from the set.
+    pub fn clear(&mut self) {
+        self.faces.clear();
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     nodes: Vec<Node>,
@@ -533,6 +635,9 @@ pub struct Document {
     /// Tracks preedit text and range while the user is composing via an IME.
     /// Cleared when composition ends.
     composition: Option<CompositionState>,
+    /// Collection of FontFace objects from @font-face rules in stylesheets.
+    /// Populated when stylesheets are parsed; exposed to JS via document.fonts.
+    fonts: FontFaceSet,
 }
 
 impl Default for Document {
@@ -557,6 +662,7 @@ impl Document {
             template_contents: HashMap::new(),
             selection: Selection::default(),
             composition: None,
+            fonts: FontFaceSet::new(),
         }
     }
 
@@ -901,6 +1007,18 @@ impl Document {
     /// should dispatch composition events (compositionstart/update/end).
     pub fn get_composition_target(&self) -> Option<NodeId> {
         self.composition.as_ref().map(|comp| comp.node)
+    }
+
+    /// Get a reference to the document's FontFaceSet collection.
+    /// Contains all FontFace objects extracted from @font-face rules in stylesheets.
+    pub fn fonts(&self) -> &FontFaceSet {
+        &self.fonts
+    }
+
+    /// Get a mutable reference to the document's FontFaceSet collection.
+    /// Used internally to add FontFace objects as stylesheets are parsed.
+    pub fn fonts_mut(&mut self) -> &mut FontFaceSet {
+        &mut self.fonts
     }
 
     // ── T3 hibernation snapshot (ADR-008) ─────────────────────────────────────
@@ -4358,5 +4476,177 @@ mod tests {
         let mixed = CompositionEvent::update("😀text😀".to_string(), Some((0, 6)));
         // emoji(2) + t(1) + e(1) + x(1) + t(1) + emoji(2) = 8 UTF-16 units
         assert_eq!(mixed.data.range, Some((0, 6)));
+    }
+
+    // ──────── FontFace and FontFaceSet ────────
+
+    #[test]
+    fn font_face_creation() {
+        let face = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"roboto.ttf\")".to_string(),
+        );
+
+        assert_eq!(face.family, "Roboto");
+        assert_eq!(face.style, "normal");
+        assert_eq!(face.weight, "400");
+        assert_eq!(face.stretch, None);
+        assert_eq!(face.unicode_range, None);
+        assert_eq!(face.src, "url(\"roboto.ttf\")");
+        assert_eq!(face.status, FontFaceStatus::Unloaded);
+    }
+
+    #[test]
+    fn font_face_with_properties() {
+        let face = FontFace::new(
+            "Inter".to_string(),
+            "italic".to_string(),
+            "700".to_string(),
+            Some("condensed".to_string()),
+            Some("U+0000-FFFF".to_string()),
+            "url(\"inter-700i.woff2\") format(\"woff2\")".to_string(),
+        );
+
+        assert_eq!(face.family, "Inter");
+        assert_eq!(face.style, "italic");
+        assert_eq!(face.weight, "700");
+        assert_eq!(face.stretch, Some("condensed".to_string()));
+        assert_eq!(face.unicode_range, Some("U+0000-FFFF".to_string()));
+    }
+
+    #[test]
+    fn font_face_set_add_and_size() {
+        let mut set = FontFaceSet::new();
+        assert_eq!(set.size(), 0);
+
+        let face1 = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"roboto.ttf\")".to_string(),
+        );
+        set.add(face1);
+        assert_eq!(set.size(), 1);
+
+        let face2 = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "700".to_string(),
+            None,
+            None,
+            "url(\"roboto-bold.ttf\")".to_string(),
+        );
+        set.add(face2);
+        assert_eq!(set.size(), 2);
+    }
+
+    #[test]
+    fn font_face_set_has_family() {
+        let mut set = FontFaceSet::new();
+        assert!(!set.has_family("Roboto"));
+
+        let face = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"roboto.ttf\")".to_string(),
+        );
+        set.add(face);
+        assert!(set.has_family("Roboto"));
+        assert!(!set.has_family("Inter"));
+    }
+
+    #[test]
+    fn font_face_set_get_by_family() {
+        let mut set = FontFaceSet::new();
+
+        let face1 = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"roboto-400.ttf\")".to_string(),
+        );
+        set.add(face1);
+
+        let face2 = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "700".to_string(),
+            None,
+            None,
+            "url(\"roboto-700.ttf\")".to_string(),
+        );
+        set.add(face2);
+
+        let face3 = FontFace::new(
+            "Inter".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"inter-400.ttf\")".to_string(),
+        );
+        set.add(face3);
+
+        let roboto_faces = set.get_by_family("Roboto");
+        assert_eq!(roboto_faces.len(), 2);
+        assert_eq!(roboto_faces[0].weight, "400");
+        assert_eq!(roboto_faces[1].weight, "700");
+
+        let inter_faces = set.get_by_family("Inter");
+        assert_eq!(inter_faces.len(), 1);
+        assert_eq!(inter_faces[0].weight, "400");
+
+        let missing = set.get_by_family("Helvetica");
+        assert_eq!(missing.len(), 0);
+    }
+
+    #[test]
+    fn font_face_set_clear() {
+        let mut set = FontFaceSet::new();
+
+        let face = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"roboto.ttf\")".to_string(),
+        );
+        set.add(face);
+        assert_eq!(set.size(), 1);
+
+        set.clear();
+        assert_eq!(set.size(), 0);
+        assert!(!set.has_family("Roboto"));
+    }
+
+    #[test]
+    fn document_fonts_collection() {
+        let mut doc = Document::new();
+        assert_eq!(doc.fonts().size(), 0);
+
+        let face = FontFace::new(
+            "CustomFont".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"custom.ttf\")".to_string(),
+        );
+        doc.fonts_mut().add(face);
+
+        assert_eq!(doc.fonts().size(), 1);
+        assert!(doc.fonts().has_family("CustomFont"));
     }
 }
