@@ -4346,6 +4346,7 @@ pub fn compute_style(
         transition_durations: Vec::new(),
         transition_delays: Vec::new(),
         transition_timing_functions: Vec::new(),
+        transition_fill_modes: Vec::new(),
         animation_names: Vec::new(),
         animation_durations: Vec::new(),
         animation_timing_functions: Vec::new(),
@@ -10345,10 +10346,7 @@ fn apply_declaration(
                     if prop.is_empty() {
                         continue;
                     }
-                    // Expand grouped properties (e.g. margin → margin-top/right/bottom/left)
-                    for expanded in expand_grouped_transition_property(&prop) {
-                        props.push(expanded);
-                    }
+                    props.push(prop);
                 }
                 style.transition_properties = props;
             }

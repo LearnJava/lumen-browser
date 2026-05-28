@@ -1,5 +1,5 @@
-In progress: —
-Next step: (Wave 3 automation API) Pick next from remaining
+In progress: samples-heavy-html (10M)  branch: p3-samples-heavy-html
+Next step: create samples/heavy.html Habr-style page with ~150 realistic HTML elements + embedded CSS
 
 Recent (Wave 3 - automation API):
   - antidetect-http-fingerprint-9c (Phase 1 complete: HttpProfile enum + header order + build_request_headers + fingerprint_profile getter/setter + 6 integration tests) 2026-05-28
