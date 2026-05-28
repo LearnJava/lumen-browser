@@ -2669,7 +2669,7 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 walk(child, out);
             }
         }
-        BoxKind::SvgShape { shape } => {
+        BoxKind::SvgShape { shape, .. } => {
             // CSS: fill, stroke, stroke-width — P4 wires ComputedStyle svg_fill/svg_stroke fields.
             // Default SVG presentation: fill=black (SVG spec §11.2), no stroke.
             emit_svg_shape(b, shape, out);
