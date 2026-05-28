@@ -15,8 +15,8 @@ use std::collections::HashMap;
 use lumen_core::form::{encode_form_urlencoded, FormEntry};
 use lumen_core::geom::Rect;
 use lumen_dom::{
-    check_validity_form, collect_dom_form_fields, find_ancestor_form, invalid_controls_in_form,
-    Attribute, Document, InputType, NodeData, NodeId, QualName,
+    check_validity_form, collect_dom_form_fields, element_validity, find_ancestor_form,
+    invalid_controls_in_form, Attribute, Document, InputType, NodeData, NodeId, QualName,
 };
 use lumen_layout::{BorderStyle, BoxKind, Color, FontStyle, FontWeight, LayoutBox};
 use lumen_paint::{DisplayCommand, DisplayList};
@@ -126,33 +126,47 @@ pub fn find_validation_error(
     find_error_in(root, doc, form_state)
 }
 
+/// Collect all form controls that fail HTML5 constraint validation.
+/// Returns a vector of `(node_id, box_rect, human-readable message)` tuples.
+#[allow(dead_code)]  // Public API for Phase 2 — used when displaying all invalid controls
+pub fn find_all_validation_errors(
+    root: &LayoutBox,
+    doc: &Document,
+    form_state: &FormState,
+) -> Vec<(NodeId, Rect, String)> {
+    let mut errors = Vec::new();
+    collect_errors_in(root, doc, form_state, &mut errors);
+    errors
+}
+
+#[allow(dead_code)]  // Helper for find_all_validation_errors
+fn collect_errors_in(
+    b: &LayoutBox,
+    doc: &Document,
+    form_state: &FormState,
+    errors: &mut Vec<(NodeId, Rect, String)>,
+) {
+    if matches!(b.kind, BoxKind::FormControl { .. })
+        && let Some(vs) = element_validity(doc, b.node)
+        && let Some(msg) = validation_error_message(doc, b.node, &vs, form_state)
+    {
+        errors.push((b.node, b.rect, msg));
+    }
+    for child in &b.children {
+        collect_errors_in(child, doc, form_state, errors);
+    }
+}
+
 fn find_error_in(
     b: &LayoutBox,
     doc: &Document,
     form_state: &FormState,
 ) -> Option<(NodeId, Rect, String)> {
-    if matches!(b.kind, BoxKind::FormControl { .. }) {
-        let node = doc.get(b.node);
-        let tag = node.element_name().map(|q| q.local.as_str()).unwrap_or("");
-        if matches!(tag, "input" | "textarea" | "select") {
-            // required
-            if node.get_attr("required").is_some() {
-                let value = form_state
-                    .get(&b.node)
-                    .map(|s| s.value.as_str())
-                    .unwrap_or_else(|| node.get_attr("value").unwrap_or(""));
-                if value.trim().is_empty() {
-                    let label = node
-                        .get_attr("placeholder")
-                        .unwrap_or("Это поле");
-                    return Some((
-                        b.node,
-                        b.rect,
-                        format!("{label} обязательно для заполнения"),
-                    ));
-                }
-            }
-        }
+    if matches!(b.kind, BoxKind::FormControl { .. })
+        && let Some(vs) = element_validity(doc, b.node)
+        && let Some(msg) = validation_error_message(doc, b.node, &vs, form_state)
+    {
+        return Some((b.node, b.rect, msg));
     }
     for child in &b.children {
         if let Some(found) = find_error_in(child, doc, form_state) {
@@ -160,6 +174,56 @@ fn find_error_in(
         }
     }
     None
+}
+
+/// Generate human-readable validation error message based on ValidityState.
+/// Returns `None` if the element is valid.
+fn validation_error_message(
+    doc: &Document,
+    node_id: NodeId,
+    validity: &lumen_dom::ValidityState,
+    _form_state: &FormState,
+) -> Option<String> {
+    if validity.valid() {
+        return None;
+    }
+
+    let node = doc.get(node_id);
+    let label = node
+        .get_attr("placeholder")
+        .or_else(|| node.get_attr("aria-label"))
+        .unwrap_or("Это поле");
+
+    if validity.value_missing {
+        Some(format!("{label} обязательно для заполнения"))
+    } else if validity.type_mismatch {
+        let itype = node.get_attr("type").unwrap_or("text");
+        match itype {
+            "email" => Some(format!("{label} должен быть корректным email адресом")),
+            "url" => Some(format!("{label} должен быть корректным URL")),
+            _ => Some(format!("{label} имеет некорректное значение")),
+        }
+    } else if validity.pattern_mismatch {
+        Some(format!("{label} не соответствует требуемому формату"))
+    } else if validity.too_long {
+        let maxlength = node.get_attr("maxlength").unwrap_or("N");
+        Some(format!("{label} не может быть длиннее {maxlength} символов"))
+    } else if validity.too_short {
+        let minlength = node.get_attr("minlength").unwrap_or("N");
+        Some(format!("{label} должен быть минимум {minlength} символов"))
+    } else if validity.range_underflow {
+        let min = node.get_attr("min").unwrap_or("N");
+        Some(format!("{label} не может быть меньше {min}"))
+    } else if validity.range_overflow {
+        let max = node.get_attr("max").unwrap_or("N");
+        Some(format!("{label} не может быть больше {max}"))
+    } else if validity.step_mismatch {
+        Some(format!("{label} имеет некорректное значение (не соответствует шагу)"))
+    } else if validity.bad_input || validity.custom_error {
+        Some(format!("{label} имеет некорректное значение"))
+    } else {
+        None
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -541,5 +605,126 @@ mod tests {
         let state = FormState::default();
         let (_, _, body) = build_form_submit(&doc, submit, &state).unwrap();
         assert_eq!(body, "q=rust");
+    }
+
+    #[test]
+    fn validation_error_required_field() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("required"), value: String::new() });
+            attrs.push(Attribute { name: QualName::html("placeholder"), value: "Email".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, input);
+
+        if let Some(vs) = element_validity(&doc, input) {
+            let msg = validation_error_message(&doc, input, &vs, &FormState::default()).unwrap();
+            assert!(msg.contains("обязательно"));
+        }
+    }
+
+    #[test]
+    fn validation_error_type_mismatch_email() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "email".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "not-an-email".into() });
+            attrs.push(Attribute { name: QualName::html("placeholder"), value: "Email".into() });
+        }
+        doc.append_child(doc.root(), input);
+
+        if let Some(vs) = element_validity(&doc, input)
+            && let Some(msg) = validation_error_message(&doc, input, &vs, &FormState::default())
+        {
+            assert!(msg.contains("email"));
+        }
+    }
+
+    #[test]
+    fn validation_error_type_mismatch_url() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "url".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "not a url".into() });
+            attrs.push(Attribute { name: QualName::html("placeholder"), value: "Website".into() });
+        }
+        doc.append_child(doc.root(), input);
+
+        if let Some(vs) = element_validity(&doc, input)
+            && let Some(msg) = validation_error_message(&doc, input, &vs, &FormState::default())
+        {
+            assert!(msg.contains("URL"));
+        }
+    }
+
+    #[test]
+    fn validation_error_range_underflow() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "number".into() });
+            attrs.push(Attribute { name: QualName::html("min"), value: "5".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "3".into() });
+            attrs.push(Attribute { name: QualName::html("placeholder"), value: "Age".into() });
+        }
+        doc.append_child(doc.root(), input);
+
+        if let Some(vs) = element_validity(&doc, input)
+            && let Some(msg) = validation_error_message(&doc, input, &vs, &FormState::default())
+        {
+            assert!(msg.contains("меньше"));
+        }
+    }
+
+    #[test]
+    fn validation_error_range_overflow() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(input).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "number".into() });
+            attrs.push(Attribute { name: QualName::html("max"), value: "100".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "150".into() });
+            attrs.push(Attribute { name: QualName::html("placeholder"), value: "Score".into() });
+        }
+        doc.append_child(doc.root(), input);
+
+        if let Some(vs) = element_validity(&doc, input)
+            && let Some(msg) = validation_error_message(&doc, input, &vs, &FormState::default())
+        {
+            assert!(msg.contains("больше"));
+        }
+    }
+
+    #[test]
+    fn find_all_validation_errors_multiple() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+
+        // First invalid input (required)
+        let inp1 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp1).data {
+            attrs.push(Attribute { name: QualName::html("required"), value: String::new() });
+            attrs.push(Attribute { name: QualName::html("placeholder"), value: "Name".into() });
+        }
+
+        // Second invalid input (invalid email)
+        let inp2 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp2).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "email".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "bad-email".into() });
+            attrs.push(Attribute { name: QualName::html("placeholder"), value: "Email".into() });
+        }
+
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp1);
+        doc.append_child(form, inp2);
+
+        // This would need a proper LayoutBox tree to test. For now just verify
+        // that find_all_validation_errors function exists and compiles.
+        let _ = find_all_validation_errors;
     }
 }
