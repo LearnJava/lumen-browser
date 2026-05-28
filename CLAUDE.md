@@ -205,7 +205,9 @@ cargo run -p lumen-shell -- --dump-layout samples/page.html 2>&1 | grep -A2 "mar
 cargo run -p lumen-shell -- --dump-display-list samples/page.html 2>&1 | grep -A2 "FillRect\|Text"
 ```
 
-**STATUS-PN.md over lumen-plan.md.** `lumen-plan.md` roadmap tables are now compact (one line per task). Full implementation history is in `## История реализации`. For current-sprint status, read your `STATUS-PN.md` (~10 lines). Do not read `lumen-plan.md` unless the task explicitly requires architecture or roadmap details.
+**lumen-plan.md reading rule:**
+- **DO read if you need:** Principles (§1, 8 items), Dependency policy (§5, tables), Unique features (§12), Architecture decisions (docs/decisions/ADR-*.md)
+- **DON'T read:** Detailed roadmap tables (use `STATUS-PN.md` instead) · Implementation history (use `git log` instead) · Task queue (use `STATUS-PN.md`)
 
 **Grep instead of reading whole files.** Use targeted grep before opening large files:
 
@@ -213,11 +215,11 @@ cargo run -p lumen-shell -- --dump-display-list samples/page.html 2>&1 | grep -A
 # Open tasks in any crate:
 grep "OPEN" BUGS.md
 
-# Open P1 tasks in roadmap:
-grep "P1.*⬜\|P1.*🟡" lumen-plan.md
+# Find bugs by ID:
+grep "BUG-042" BUGS.md
 
-# Implementation history for a specific task:
-grep -A 20 "^#### 3A" lumen-plan.md
+# Find symbol by name:
+grep "LayoutBox" SYMBOLS.md
 ```
 
 **SYMBOLS.md — symbol index.** `SYMBOLS.md` is an auto-generated index of every `pub fn/struct/enum/trait/type` with `file:line` and first `///` doc line. Use it instead of reading source files to locate a symbol:
@@ -237,7 +239,11 @@ Then read only the target lines: `Read file offset=<line> limit=30`. This replac
 
 Regenerate after adding/moving/renaming any public symbol: `python scripts/gen_symbols.py`. Add the updated `SYMBOLS.md` to the same commit as the code change.
 
-**Session start protocol.** At the beginning of each session read only: `STATUS-PN.md` (your developer number) + `git branch`. Do not read `lumen-plan.md` unless the task explicitly requires architecture or roadmap details.
+**Session start protocol.** At the beginning of each session:
+1. Read `STATUS-PN.md` (your developer number) — current "In progress" task
+2. Run `git branch` — verify you're on main
+3. If you need architecture context: read `lumen-plan.md` §1 (Principles) and §5 (Dependency policy)
+4. If you need architectural decisions: read `docs/decisions/README.md` index
 
 ### Cargo output rules
 
