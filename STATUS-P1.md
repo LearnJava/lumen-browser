@@ -1,6 +1,7 @@
-In progress: 8A.1 BrowserSession trait + initial types
-Next step: trait definition in lumen-core::ext + ADR-006 Phase 0 method stubs
-Branch: 8a-automation-api
+In progress: none
+Next task: 8A.2 InProcessSession impl or await P3 coordination for driver API integration. CSS property wiring P4 integration ready for handoff.
+
+Recent completion: 8A.1 ✅ — BrowserSession trait in lumen-core::ext (12 methods, null stub, 4 unit tests, clippy clean, 172 tests PASS, 2026-05-28)
 
 Recent merge: :host/:slotted CSS selector parsing (P4 prep) ✅ — PseudoClass::Host(Option<Vec<ComplexSelector>>) for :host/:host(...), PseudoElementKind enum with Slotted(Option<Vec<ComplexSelector>>) for ::slotted(...), parse_functional_pseudo_element() + 7 unit tests (4 :host + 3 ::slotted), 263 total PASS, clippy clean 2026-05-28
 Recent merge: event.isTrusted (8C.2) ✅ — isTrusted field in Event constructor (false by default for synthetic events, true for native shell events), mark _lumen_dispatch_bubble/composition/page lifecycle/WebSocket events as trusted, 4 unit tests, 232 total PASS, clippy clean 2026-05-28
