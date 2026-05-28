@@ -101,7 +101,8 @@ impl MarginBoxPosition {
 
 /// Computed properties for a page from matching @page rules.
 ///
-/// Includes page size (width, height), orientation, and margin specifications.
+/// Includes page size (width, height), orientation, margin specifications,
+/// and font properties for margin-box text layout.
 /// These properties control pagination and margin-box layout.
 #[derive(Debug, Clone)]
 pub struct PageProperties {
@@ -126,10 +127,14 @@ pub struct PageProperties {
 
     /// Page margin-right in pixels.
     pub margin_right: f32,
+
+    /// Font size for margin-box text in pixels (default 12.0).
+    /// Can be specified in @page rules (Phase 3).
+    pub font_size: f32,
 }
 
 impl PageProperties {
-    /// Create default page properties (A4 size, 2cm margins).
+    /// Create default page properties (A4 size, 2cm margins, 12px font).
     pub fn default_a4() -> Self {
         let a4_width = 794.0; // 210mm at 96 DPI
         let a4_height = 1123.0; // 297mm at 96 DPI
@@ -143,6 +148,7 @@ impl PageProperties {
             margin_bottom: margin,
             margin_left: margin,
             margin_right: margin,
+            font_size: 12.0,
         }
     }
 
@@ -170,6 +176,7 @@ impl PageProperties {
 ///
 /// A margin-box is a CSS-generated or element-based content box
 /// positioned in one of the 16 margin-box positions around a page.
+/// Phase 3 adds text layout support for content rendering.
 #[derive(Debug, Clone)]
 pub struct MarginBox {
     /// Which margin-box position this occupies.
@@ -190,6 +197,11 @@ pub struct MarginBox {
     /// Generated content string (for page numbers, headers, footers, etc.).
     /// None if no content is assigned.
     pub content: Option<String>,
+
+    /// Text layout result for content (Phase 3).
+    /// Contains lines, dimensions after text wrapping.
+    /// None until layout_text() is called.
+    pub text_layout: Option<TextLayoutResult>,
 }
 
 impl MarginBox {
@@ -202,6 +214,7 @@ impl MarginBox {
             x,
             y,
             content: None,
+            text_layout: None,
         }
     }
 
@@ -209,6 +222,133 @@ impl MarginBox {
     pub fn with_content(mut self, content: String) -> Self {
         self.content = Some(content);
         self
+    }
+
+    /// Layout text content in this margin-box using a TextMeasurer.
+    ///
+    /// Measures text width, applies line-breaking if needed, and calculates
+    /// total height. Stores result in text_layout field.
+    ///
+    /// **Parameters:**
+    /// - font_size: font size in pixels
+    /// - letter_spacing: additional spacing between characters in pixels
+    /// - tab_size: width of a tab character in pixels
+    /// - measurer: text measurement provider (font metrics)
+    pub fn layout_text(
+        &mut self,
+        font_size: f32,
+        letter_spacing: f32,
+        tab_size: f32,
+        measurer: &dyn crate::TextMeasurer,
+    ) {
+        let text = match &self.content {
+            Some(s) => s,
+            None => {
+                self.text_layout = Some(TextLayoutResult::empty());
+                return;
+            }
+        };
+
+        if text.is_empty() {
+            self.text_layout = Some(TextLayoutResult::empty());
+            return;
+        }
+
+        // Line height is typically font_size * 1.2, but 1.5 * font_size for margin-box readability
+        let line_height = font_size * 1.2;
+
+        // Try to fit text in the margin-box width
+        let available_width = self.width;
+        if available_width <= 0.0 {
+            self.text_layout = Some(TextLayoutResult::empty());
+            return;
+        }
+
+        // Measure text width
+        let text_width = measure_text_w(text, font_size, letter_spacing, tab_size, measurer);
+
+        // If text fits on a single line, no wrapping needed
+        if text_width <= available_width {
+            self.text_layout = Some(TextLayoutResult::single_line(
+                text.clone(),
+                text_width,
+                line_height,
+            ));
+            return;
+        }
+
+        // Text needs wrapping: break into lines
+        let lines = break_text_into_lines(
+            text,
+            font_size,
+            letter_spacing,
+            tab_size,
+            available_width,
+            measurer,
+        );
+
+        if lines.is_empty() {
+            self.text_layout = Some(TextLayoutResult::empty());
+            return;
+        }
+
+        // Calculate max width and total height
+        let max_width = lines
+            .iter()
+            .map(|line| measure_text_w(line, font_size, letter_spacing, tab_size, measurer))
+            .fold(0.0, f32::max);
+
+        let height = line_height * lines.len() as f32;
+
+        self.text_layout = Some(TextLayoutResult {
+            lines,
+            width: max_width,
+            height,
+            line_height,
+        });
+    }
+}
+
+/// Text layout result for margin-box content.
+///
+/// Stores text broken into lines with computed width and height.
+/// Used in Phase 3 for text layout in margin-boxes.
+#[derive(Debug, Clone)]
+pub struct TextLayoutResult {
+    /// Text broken into lines (one String per line).
+    /// Empty if text is empty or width is 0.
+    pub lines: Vec<String>,
+
+    /// Computed width of the widest line in pixels.
+    pub width: f32,
+
+    /// Computed total height of all lines in pixels.
+    /// Calculated as: line_height * number_of_lines.
+    pub height: f32,
+
+    /// Height of a single line (typically font_size * 1.2 or similar).
+    pub line_height: f32,
+}
+
+impl TextLayoutResult {
+    /// Create an empty layout result.
+    pub fn empty() -> Self {
+        Self {
+            lines: vec![],
+            width: 0.0,
+            height: 0.0,
+            line_height: 0.0,
+        }
+    }
+
+    /// Create a layout result with a single line (no wrapping).
+    pub fn single_line(text: String, width: f32, line_height: f32) -> Self {
+        Self {
+            lines: vec![text],
+            width,
+            height: line_height,
+            line_height,
+        }
     }
 }
 
@@ -737,6 +877,89 @@ pub fn create_header_footer(header: Option<String>, footer: Option<String>) -> H
     content
 }
 
+/// Helper function: measure text width using TextMeasurer.
+///
+/// Sums character widths, accounting for tabs and letter-spacing.
+/// Synchronized with box_tree.rs measure_text_w logic.
+pub fn measure_text_w(text: &str, font_size: f32, letter_spacing: f32, tab_size: f32, m: &dyn crate::TextMeasurer) -> f32 {
+    if text.is_empty() {
+        return 0.0;
+    }
+    let total: f32 = text
+        .chars()
+        .map(|c| {
+            let cw = if c == '\t' { tab_size } else { m.char_width(c, font_size) };
+            cw + letter_spacing
+        })
+        .sum();
+    total - letter_spacing
+}
+
+/// Helper function: break text into lines that fit within a given width.
+///
+/// Implements greedy line-breaking:
+/// - Adds words to the current line until they overflow
+/// - Starts a new line when needed
+/// - Handles tabs and spaces as break opportunities
+///
+/// **Parameters:**
+/// - text: input string to break
+/// - font_size: font size in pixels
+/// - letter_spacing: letter spacing in pixels
+/// - tab_size: tab width in pixels
+/// - available_width: maximum line width in pixels
+/// - measurer: text measurement provider
+///
+/// **Returns:**
+/// - Vector of strings (one per line), or empty if available_width <= 0
+fn break_text_into_lines(
+    text: &str,
+    font_size: f32,
+    letter_spacing: f32,
+    tab_size: f32,
+    available_width: f32,
+    measurer: &dyn crate::TextMeasurer,
+) -> Vec<String> {
+    if available_width <= 0.0 {
+        return vec![];
+    }
+
+    let mut lines = vec![];
+    let mut current_line = String::new();
+
+    for word in text.split_whitespace() {
+        if current_line.is_empty() {
+            // First word on the line: force it on (even if it doesn't fit)
+            current_line = word.to_string();
+        } else {
+            let line_with_word_width = measure_text_w(
+                &format!("{} {}", current_line, word),
+                font_size,
+                letter_spacing,
+                tab_size,
+                measurer,
+            );
+
+            if line_with_word_width <= available_width {
+                // Word fits on the current line
+                current_line.push(' ');
+                current_line.push_str(word);
+            } else {
+                // Word doesn't fit: start a new line
+                lines.push(current_line);
+                current_line = word.to_string();
+            }
+        }
+    }
+
+    // Add the last line
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -817,6 +1040,7 @@ mod tests {
             margin_bottom: 50.0,
             margin_left: 50.0,
             margin_right: 50.0,
+            font_size: 12.0,
         };
         props.compute_orientation();
         assert_eq!(props.orientation, "landscape");
@@ -1105,5 +1329,159 @@ mod tests {
         assert!(content.contains_key(&MarginBoxPosition::TopCenter));
         assert!(!content.contains_key(&MarginBoxPosition::BottomCenter));
         assert_eq!(content.len(), 1);
+    }
+
+    // Phase 3 tests: text layout in margin-boxes
+
+    /// Mock TextMeasurer for testing. Each character has fixed width 8.0px.
+    struct FixedWidthMeasurer;
+    impl crate::TextMeasurer for FixedWidthMeasurer {
+        fn char_width(&self, _: char, _: f32) -> f32 {
+            8.0
+        }
+    }
+
+    #[test]
+    fn test_text_layout_result_empty() {
+        let result = TextLayoutResult::empty();
+        assert!(result.lines.is_empty());
+        assert_eq!(result.width, 0.0);
+        assert_eq!(result.height, 0.0);
+    }
+
+    #[test]
+    fn test_text_layout_result_single_line() {
+        let result = TextLayoutResult::single_line("Hello".to_string(), 40.0, 12.0);
+        assert_eq!(result.lines.len(), 1);
+        assert_eq!(result.lines[0], "Hello");
+        assert_eq!(result.width, 40.0);
+        assert_eq!(result.height, 12.0);
+    }
+
+    #[test]
+    fn test_page_properties_has_font_size() {
+        let props = PageProperties::default_a4();
+        assert_eq!(props.font_size, 12.0);
+    }
+
+    #[test]
+    fn test_margin_box_layout_text_empty_content() {
+        let mut mb = MarginBox::new(MarginBoxPosition::BottomCenter, 100.0, 50.0, 10.0, 0.0);
+        let measurer = FixedWidthMeasurer;
+
+        mb.layout_text(12.0, 0.0, 4.0, &measurer);
+
+        assert!(mb.text_layout.is_some());
+        let layout = mb.text_layout.unwrap();
+        assert!(layout.lines.is_empty());
+        assert_eq!(layout.height, 0.0);
+    }
+
+    #[test]
+    fn test_margin_box_layout_text_single_line_no_wrap() {
+        let mut mb = MarginBox::new(MarginBoxPosition::BottomCenter, 100.0, 50.0, 10.0, 0.0);
+        mb.content = Some("Page".to_string());
+        let measurer = FixedWidthMeasurer;
+
+        // "Page" = 4 chars * 8.0px = 32.0px, fits in 100.0px margin-box
+        mb.layout_text(12.0, 0.0, 4.0, &measurer);
+
+        assert!(mb.text_layout.is_some());
+        let layout = mb.text_layout.unwrap();
+        assert_eq!(layout.lines.len(), 1);
+        assert_eq!(layout.lines[0], "Page");
+        assert!(layout.width <= 100.0);
+        assert!(layout.height > 0.0);
+    }
+
+    #[test]
+    fn test_margin_box_layout_text_with_wrapping() {
+        let mut mb = MarginBox::new(MarginBoxPosition::BottomCenter, 40.0, 50.0, 10.0, 0.0);
+        mb.content = Some("Hello World Test".to_string());
+        let measurer = FixedWidthMeasurer;
+
+        // "Hello" = 5 chars * 8.0px = 40.0px (fits)
+        // "Hello World" = 11 chars + 1 space = 96.0px (doesn't fit in 40px)
+        // So should break into at least 2 lines
+        mb.layout_text(12.0, 0.0, 4.0, &measurer);
+
+        assert!(mb.text_layout.is_some());
+        let layout = mb.text_layout.unwrap();
+        assert!(layout.lines.len() >= 2);
+        assert!(layout.height > 0.0);
+    }
+
+    #[test]
+    fn test_margin_box_layout_text_zero_width() {
+        let mut mb = MarginBox::new(MarginBoxPosition::BottomCenter, 0.0, 50.0, 10.0, 0.0);
+        mb.content = Some("Text".to_string());
+        let measurer = FixedWidthMeasurer;
+
+        mb.layout_text(12.0, 0.0, 4.0, &measurer);
+
+        assert!(mb.text_layout.is_some());
+        let layout = mb.text_layout.unwrap();
+        assert!(layout.lines.is_empty());
+    }
+
+    #[test]
+    fn test_measure_text_w_empty() {
+        let measurer = FixedWidthMeasurer;
+        assert_eq!(measure_text_w("", 12.0, 0.0, 4.0, &measurer), 0.0);
+    }
+
+    #[test]
+    fn test_measure_text_w_single_char() {
+        let measurer = FixedWidthMeasurer;
+        // One char = 8.0px, no letter-spacing
+        assert_eq!(measure_text_w("A", 12.0, 0.0, 4.0, &measurer), 8.0);
+    }
+
+    #[test]
+    fn test_measure_text_w_with_spaces() {
+        let measurer = FixedWidthMeasurer;
+        // "A B" = 8.0 + 8.0 + 8.0 = 24.0px
+        assert_eq!(measure_text_w("A B", 12.0, 0.0, 4.0, &measurer), 24.0);
+    }
+
+    #[test]
+    fn test_measure_text_w_with_letter_spacing() {
+        let measurer = FixedWidthMeasurer;
+        // "AB" with 2px letter-spacing = 8.0 + 2.0 + 8.0 = 18.0px (no extra spacing after last char)
+        assert_eq!(measure_text_w("AB", 12.0, 2.0, 4.0, &measurer), 18.0);
+    }
+
+    #[test]
+    fn test_break_text_into_lines_fits_single_line() {
+        let measurer = FixedWidthMeasurer;
+        let lines = break_text_into_lines("Hello", 12.0, 0.0, 4.0, 100.0, &measurer);
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0], "Hello");
+    }
+
+    #[test]
+    fn test_break_text_into_lines_multiple_words() {
+        let measurer = FixedWidthMeasurer;
+        // Available width 40px fits one word (e.g., "Hello" = 40px),
+        // "Hello World" = 96px doesn't fit, so breaks into 2 lines
+        let lines = break_text_into_lines("Hello World", 12.0, 0.0, 4.0, 40.0, &measurer);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn test_break_text_into_lines_zero_width() {
+        let measurer = FixedWidthMeasurer;
+        let lines = break_text_into_lines("Hello", 12.0, 0.0, 4.0, 0.0, &measurer);
+        assert!(lines.is_empty());
+    }
+
+    #[test]
+    fn test_break_text_into_lines_three_words() {
+        let measurer = FixedWidthMeasurer;
+        // With 40px width, "Hello" (40px) fits on line 1
+        // "World" (40px) fits on line 2
+        // "Test" (32px) fits on line 3
+        let lines = break_text_into_lines("Hello World Test", 12.0, 0.0, 4.0, 40.0, &measurer);
+        assert_eq!(lines.len(), 3);
     }
 }
