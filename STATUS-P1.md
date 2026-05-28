@@ -1,6 +1,7 @@
 In progress: none
-Next task: 8A.2 InProcessSession impl or await P3 coordination for driver API integration. CSS property wiring P4 integration ready for handoff.
+Next task: CSS property wiring P4 integration ready for handoff. Next P1 feature TBD based on phase planning.
 
+Recent completion: 8A.2 ✅ — InProcessSession adapter for lumen-core::ext::BrowserSession (all 12 trait methods, 6 new unit tests, 27 total PASS, clippy clean, 2026-05-28)
 Recent completion: 8A.1 ✅ — BrowserSession trait in lumen-core::ext (12 methods, null stub, 4 unit tests, clippy clean, 172 tests PASS, 2026-05-28)
 
 Recent merge: :host/:slotted CSS selector parsing (P4 prep) ✅ — PseudoClass::Host(Option<Vec<ComplexSelector>>) for :host/:host(...), PseudoElementKind enum with Slotted(Option<Vec<ComplexSelector>>) for ::slotted(...), parse_functional_pseudo_element() + 7 unit tests (4 :host + 3 ::slotted), 263 total PASS, clippy clean 2026-05-28
