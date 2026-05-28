@@ -1,7 +1,8 @@
 In progress: —
-Next step: (Wave 3) Pick next: antidetect-surface-api (9A)
+Next step: (Wave 3) Pick next: antidetect-tls-fingerprint (9B) or auto-wait-engine (8D)
 
 Recent (Wave 3 - automation API):
+  - antidetect-surface-api (9A, Phase 1 complete: code-review audit + 8 negative tests for navigator.webdriver/chrome.runtime/cdc_*/__playwright/window.devtools absence) 2026-05-28
   - a11y-tree-via-driver (8G, Phase 1 complete: AxQuery enum + query_a11y/query_a11y_all + Role/NameContains matching + lumen-a11y integration) 2026-05-28
   - deterministic-mode-8f (Phase 1 complete: frozen_clock_ms / rng_seed / freeze_fingerprint in SessionContext + BrowserSession trait + 9 methods + 5 tests) 2026-05-28
   - per-context-isolation-8e (Phase 1 complete: SessionContext + FingerprintProfile + cookies/storage/HTTP cache + 13 tests) 2026-05-28
@@ -58,7 +59,7 @@ Queue (Wave 3 — Automation Phase 1 + Anti-detection Phase 1 + tier mechanics, 
 - per-context-isolation (8E): BrowserSession изолирована по умолчанию (cookies/storage/cache/viewport/UA/fingerprint per session). Phase 1.
 - deterministic-mode (8F): set_clock / set_rng_seed / freeze_fingerprint — repeatable tests. Опирается на anti-fingerprinting §9.5. Phase 1.
 - a11y-tree-via-driver (8G, [P3+P1]): BrowserSession::a11y_tree() читает snapshot из lumen-a11y (P1 owns construction); Query::Role { role, name } matching (Playwright-стиль getByRole). Phase 1, зависит от P1 lumen-a11y.
-- antidetect-surface-api (9A): audit JS bindings на отсутствие automation hooks (navigator.webdriver / chrome.runtime / cdc_* / __playwright / etc.) + negative tests в integration-suite. Phase 1, по сути уже встроено архитектурно через ADR-006 — но нужны тесты-стражники.
+- ✓ antidetect-surface-api (9A): audit JS bindings на отсутствие automation hooks (navigator.webdriver / chrome.runtime / cdc_* / __playwright / etc.) + negative tests в integration-suite. Phase 1, по сути уже встроено архитектурно через ADR-006 — но нужны тесты-стражники. Завершено 2026-05-28.
 - antidetect-tls-fingerprint (9B): cipher suite ordering + extension list + supported groups + ALPN order в rustls matching current Chrome. JA3/JA4 snapshot test против Chrome (обновляется per Chrome major release). Per-profile TLS config (Standard / Strict / Tor). Phase 1.
 - antidetect-http-fingerprint (9C): HTTP/1.1 header order + casing matching Chrome; HTTP/2 SETTINGS frame values matching Chrome; HTTP/2 stream priority pattern; Accept-Language default `en-US,en;q=0.9`; Client Hints handling per-profile. Phase 1.
 - behavioral-input-humanlike (9E, opt-in для automation API): InputMode::HumanLike в native input — Bézier mouse paths + Gaussian inter-keystroke timing + pre-click dwell. ДЛЯ ТЕСТИРОВЩИКОВ, не stealth-фича. Phase 1.
