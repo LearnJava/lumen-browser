@@ -31,7 +31,7 @@ pub mod winit_session;
 pub mod gpu_session;
 
 pub use types::{
-    A11yNode, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel, FingerprintProfile,
+    A11yNode, AxQuery, BoxModel, ComputedProperties, ConsoleEntry, ConsoleLevel, FingerprintProfile,
     InputCommand, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
 };
 pub use session::InProcessSession;
@@ -65,6 +65,25 @@ pub trait BrowserSession {
     /// Снимок accessibility-дерева. Опирается на lumen-a11y (задача P1);
     /// до его готовности возвращает дерево с ролями из DOM-тегов.
     fn a11y_tree(&self) -> Result<A11yNode>;
+
+    /// Найти первый узел в accessibility-дереве, совпадающий с запросом [`AxQuery`].
+    ///
+    /// # Примеры
+    /// ```ignore
+    /// let button = session.query_a11y(&AxQuery::Role {
+    ///     role: "button".into(),
+    ///     name: Some("Click".into()),
+    /// }).unwrap();
+    ///
+    /// let any_button = session.query_a11y(&AxQuery::Role {
+    ///     role: "button".into(),
+    ///     name: None,
+    /// }).unwrap();
+    /// ```
+    fn query_a11y(&self, query: &AxQuery) -> Result<Option<A11yNode>>;
+
+    /// Найти все узлы в accessibility-дереве, совпадающие с запросом [`AxQuery`].
+    fn query_a11y_all(&self, query: &AxQuery) -> Result<Vec<A11yNode>>;
 
     /// Box-model всех layout-блоков текущей страницы в координатах документа.
     fn layout_snapshot(&self) -> Result<Vec<BoxModel>>;

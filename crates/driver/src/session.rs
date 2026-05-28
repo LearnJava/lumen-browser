@@ -9,11 +9,13 @@ use std::sync::Arc;
 use lumen_core::error::{Error, Result};
 use lumen_core::ext::NoopEventSink;
 use lumen_core::geom::{Rect, Size};
-use lumen_dom::{Document, NodeData, NodeId};
+use lumen_dom::Document;
+use lumen_dom::NodeData;
+use lumen_dom::NodeId;
 use lumen_layout::{computed_style_by_selector, LayoutBox};
 
 use crate::{
-    A11yNode, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
+    A11yNode, AxQuery, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
     ConsoleEntry, FingerprintProfile, NetworkEntry, NodeRef, ScrollDelta, Target, WaitCondition,
     context::SessionContext,
 };
@@ -28,6 +30,9 @@ const DEFAULT_VIEWPORT: Size = Size::new(1024.0, 720.0);
 struct SessionState {
     doc: Document,
     layout_root: LayoutBox,
+    /// Flat tree for future a11y work when P1 completes lumen-a11y (Phase 2+).
+    #[allow(dead_code)]
+    flat_tree: lumen_dom::FlatTree,
 }
 
 /// Headless in-process сессия браузера.
@@ -105,9 +110,10 @@ impl InProcessSession {
             .map_err(|e| Error::Other(format!("ошибка метрик Inter: {e}")))?;
 
         let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
+        let flat_tree = lumen_dom::build_flat_tree(&doc);
 
         self.current_url = url;
-        self.state = Some(SessionState { doc, layout_root });
+        self.state = Some(SessionState { doc, layout_root, flat_tree });
         Ok(())
     }
 
@@ -151,6 +157,18 @@ impl BrowserSession for InProcessSession {
     fn a11y_tree(&self) -> Result<A11yNode> {
         let state = self.state()?;
         Ok(build_a11y_node(&state.doc, state.doc.root()))
+    }
+
+    fn query_a11y(&self, query: &AxQuery) -> Result<Option<A11yNode>> {
+        let ax_tree = self.a11y_tree()?;
+        Ok(find_a11y_node(&ax_tree, query))
+    }
+
+    fn query_a11y_all(&self, query: &AxQuery) -> Result<Vec<A11yNode>> {
+        let ax_tree = self.a11y_tree()?;
+        let mut results = Vec::new();
+        find_all_a11y_nodes(&ax_tree, query, &mut results);
+        Ok(results)
     }
 
     fn layout_snapshot(&self) -> Result<Vec<BoxModel>> {
@@ -780,6 +798,49 @@ impl InProcessSession {
                 // Для Phase 1 — всегда true.
                 Ok(true)
             }
+        }
+    }
+}
+
+/// Find first accessibility node matching query.
+fn find_a11y_node(node: &A11yNode, query: &AxQuery) -> Option<A11yNode> {
+    if matches_query(node, query) {
+        return Some(node.clone());
+    }
+    for child in &node.children {
+        if let Some(result) = find_a11y_node(child, query) {
+            return Some(result);
+        }
+    }
+    None
+}
+
+/// Find all accessibility nodes matching query (depth-first).
+fn find_all_a11y_nodes(node: &A11yNode, query: &AxQuery, results: &mut Vec<A11yNode>) {
+    if matches_query(node, query) {
+        results.push(node.clone());
+    }
+    for child in &node.children {
+        find_all_a11y_nodes(child, query, results);
+    }
+}
+
+/// Check if accessibility node matches query criteria.
+fn matches_query(node: &A11yNode, query: &AxQuery) -> bool {
+    match query {
+        AxQuery::Role { role, name } => {
+            let role_matches = node.role.eq_ignore_ascii_case(role);
+            if !role_matches {
+                return false;
+            }
+            if let Some(name_filter) = name {
+                node.name.to_lowercase().contains(&name_filter.to_lowercase())
+            } else {
+                true
+            }
+        }
+        AxQuery::NameContains(name_filter) => {
+            node.name.to_lowercase().contains(&name_filter.to_lowercase())
         }
     }
 }

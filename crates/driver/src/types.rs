@@ -189,6 +189,29 @@ pub enum InputCommand {
     Scroll { delta_x: f32, delta_y: f32 },
 }
 
+/// Запрос к accessibility-дереву для [`BrowserSession::query_a11y`] и [`query_a11y_all`](BrowserSession::query_a11y_all).
+///
+/// Позволяет находить узлы accessibility-дерева по роли и имени (Playwright-стиль getByRole).
+/// Роль сравнивается case-insensitive; имя проверяется case-insensitive substring-match.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum AxQuery {
+    /// Поиск по ARIA-роли и опциональному имени.
+    ///
+    /// # Примеры
+    /// ```ignore
+    /// AxQuery::Role { role: "button".to_string(), name: Some("Submit".to_string()) }
+    /// AxQuery::Role { role: "link".to_string(), name: None }  // любое имя
+    /// ```
+    Role {
+        /// ARIA-роль (case-insensitive): `"button"`, `"link"`, `"heading"`, etc.
+        role: String,
+        /// Опциональное имя или его часть (case-insensitive substring match).
+        name: Option<String>,
+    },
+    /// Поиск по подстроке в accessible name (case-insensitive).
+    NameContains(String),
+}
+
 /// Профиль отпечатка браузера (fingerprint profile) для BrowserSession.
 ///
 /// Определяет уровень приватности и анти-детектирующие меры:
