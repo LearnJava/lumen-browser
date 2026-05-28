@@ -50,13 +50,13 @@ mod pool;
 mod range;
 mod sandbox;
 pub mod sse;
-pub(crate) mod tls;
+pub mod tls;
 pub(crate) mod websocket;
 pub use auth::StaticCredentialProvider;
 pub use brotli::BrotliContentDecoder;
 pub use http_cache::HttpCache;
 pub use mock::MockTransport;
-pub use tls::{TlsProfile, TlsHandshakeInfo};
+pub use tls::{TlsProfile, TlsHandshakeInfo, CHROME_130_JA3_SNAPSHOT};
 pub use cors::{
     CorsError, CorsRequest, CredentialsMode, DEFAULT_PREFLIGHT_MAX_AGE_SECONDS,
     MAX_SAFELISTED_HEADER_VALUE_LEN, PreflightCache, PreflightResult, build_preflight_headers,
