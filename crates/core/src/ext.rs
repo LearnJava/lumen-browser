@@ -793,6 +793,62 @@ pub trait JsRuntime: Send + Sync {
     /// Имя движка для debug-вывода. Реализация: `"quickjs"`, `"v8"`,
     /// `"null"`.
     fn engine_name(&self) -> &'static str;
+
+    // ── ADR-008: Tab lifecycle suspension (Invariant 2) ──
+
+    /// Pause the JS event loop without freeing the heap (T0 → T1).
+    /// Existing handles remain valid. No microtasks or timers execute.
+    /// Call `unpause()` to resume.
+    fn pause(&mut self) -> JsResult<()> {
+        // Default: no-op for null/minimal runtimes.
+        Ok(())
+    }
+
+    /// Resume a paused event loop (T1 → T0). Microtasks and timers resume.
+    fn unpause(&mut self) -> JsResult<()> {
+        // Default: no-op for null/minimal runtimes.
+        Ok(())
+    }
+
+    /// Suspend execution and capture the entire heap to a serializable snapshot.
+    /// Pauses the event loop; all handles become invalid until `resume()` is called.
+    /// Used for T2 → T3 transitions: snapshot is zstd-compressed and saved to disk (≤5 MB).
+    fn suspend(&mut self) -> JsResult<SuspendedHeap> {
+        // Default: no-op for null/minimal runtimes.
+        Ok(SuspendedHeap::default())
+    }
+
+    /// Restore execution state from a snapshot produced by `suspend()`.
+    /// Issues new handles. Called during T3 → T0 restore.
+    fn resume(snapshot: SuspendedHeap) -> JsResult<Self>
+    where
+        Self: Sized;
+}
+
+/// Serialized JS heap snapshot for T2→T3 hibernation (ADR-008, Invariant 2).
+/// Contains full execution state (globals, closures, object graph) compressed
+/// with zstd. Capped at 5 MB per tab. Restored via `JsRuntime::resume()`.
+#[derive(Debug, Clone, Default)]
+pub struct SuspendedHeap {
+    /// zstd-compressed snapshot of heap state.
+    pub compressed: Vec<u8>,
+}
+
+impl SuspendedHeap {
+    /// Create a new suspended heap from compressed bytes.
+    pub fn new(compressed: Vec<u8>) -> Self {
+        Self { compressed }
+    }
+
+    /// Get the size in bytes of the compressed snapshot.
+    pub fn len(&self) -> usize {
+        self.compressed.len()
+    }
+
+    /// Check if the snapshot is empty.
+    pub fn is_empty(&self) -> bool {
+        self.compressed.is_empty()
+    }
 }
 
 /// Простые JSON-совместимые типы для передачи через trait-границу.
@@ -863,6 +919,18 @@ impl JsRuntime for NullJsRuntime {
     }
     fn engine_name(&self) -> &'static str {
         "null"
+    }
+    fn pause(&mut self) -> JsResult<()> {
+        Err(JsError::NotImplemented)
+    }
+    fn unpause(&mut self) -> JsResult<()> {
+        Err(JsError::NotImplemented)
+    }
+    fn suspend(&mut self) -> JsResult<SuspendedHeap> {
+        Err(JsError::NotImplemented)
+    }
+    fn resume(_: SuspendedHeap) -> JsResult<Self> {
+        Err(JsError::NotImplemented)
     }
 }
 
@@ -1817,5 +1885,39 @@ mod tests {
     fn browser_session_null_impl_is_send() {
         fn is_send<T: Send>() {}
         is_send::<NullBrowserSession>();
+    }
+
+    // --- ADR-008: Tab lifecycle suspension (Invariant 2) ---
+
+    #[test]
+    fn js_runtime_null_impl_pause_unpause_not_implemented() {
+        let mut rt = NullJsRuntime;
+        assert!(rt.pause().is_err());
+        assert!(rt.unpause().is_err());
+    }
+
+    #[test]
+    fn js_runtime_null_impl_suspend_resume_not_implemented() {
+        let mut rt = NullJsRuntime;
+        assert!(rt.suspend().is_err());
+        assert!(NullJsRuntime::resume(SuspendedHeap::default()).is_err());
+    }
+
+    #[test]
+    fn suspended_heap_len_and_empty() {
+        let empty = SuspendedHeap::default();
+        assert!(empty.is_empty());
+        assert_eq!(empty.len(), 0);
+
+        let with_data = SuspendedHeap::new(vec![1, 2, 3, 4, 5]);
+        assert!(!with_data.is_empty());
+        assert_eq!(with_data.len(), 5);
+    }
+
+    #[test]
+    fn suspended_heap_preserves_compressed_bytes() {
+        let data = vec![0x42, 0x43, 0x44];
+        let heap = SuspendedHeap::new(data.clone());
+        assert_eq!(heap.compressed, data);
     }
 }

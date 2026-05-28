@@ -1,5 +1,5 @@
-In progress: —
-Next step: Pick next task from Queue (Wave 2/3)
+In progress: invariant-2-js-suspend (10C) — extend JsRuntime trait for suspend/resume
+Next step: Add pause/unpause/suspend/resume methods to JsRuntime + SuspendedHeap type  branch: p3-invariant-2-js-suspend
 
 Recent (Wave 2/3 - automation API + completed tasks):
   - ✓ invariant-1-dom-arena (10B, [P3+P1], audit complete): NodeId(u32) arena verified, to_bytes/from_bytes tests exist, clippy::rc_buffer enforced 2026-05-28
