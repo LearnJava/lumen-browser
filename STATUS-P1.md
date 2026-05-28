@@ -1,5 +1,5 @@
-In progress: print-pdf-advanced Phase 3 — margin-box text layout + inline rendering  branch: p1-print-pdf-phase3
-Next step: integrate text layout into PageBox + pagination pipeline + Phase 3 tests  crates/engine/layout/src/page.rs:290
+In progress: none — ready to pick next task from roadmap
+Next step: see Roadmap Phase 2 queue
 
 Recent merge: svg-layout-advanced Phase 3 ✅ — nested SVG child propagation (SvgRoot now appears in child-bearing boxes), 5 unit tests PASS, 2026-05-30
 
@@ -87,7 +87,7 @@ Recent:
 33. 🟡 accessibility-forms-validation — Phase 1: ValidityState in AXTree ✅ (2026-05-28); Phase 2: enhanced constraint validation (all error types + custom messages) ✅ (2026-05-28); Phase 3: submit algorithm integration
 34. 🟡 ime-input ([P1+P3]) — Phase 1: composition state tracking ✅ (2026-05-28); Phase 2: composition ranges + event data structures ✅ (2026-05-28); Phase 3: virtual keyboard hints and P3 shell integration pending
 35. 🟡 svg-layout-advanced — Phase 1: SVG transforms, aspect-ratio preservation ✅ (2026-05-28); Phase 2: nested SVG transforms ✅ (2026-05-29); Phase 3: nested SVG layout (SvgRoot child propagation) ✅ (2026-05-30) — Phase 4 (paint/render for nested SVG viewBox+transforms) P2 pending
-36. 🟡 print-pdf-advanced — Phase 1: @page matching, margin-box model ✅ (2026-05-28); Phase 2: page counters + content generation ✅ (2026-05-29); Phase 3: margin-box text layout + inline content rendering pending
+36. 🟡 print-pdf-advanced — Phase 1: @page matching, margin-box model ✅ (2026-05-28); Phase 2: page counters + content generation ✅ (2026-05-29); Phase 3: margin-box text layout + PageBox integration ✅ (2026-05-31) — Phase 4 (P2: margin-box text rendering) pending
 37. 🟡 font-loading-api ([P1+P3]) — Phase 1: FontFace/FontFaceStatus/FontFaceSet types, document.fonts collection, @font-face extraction + population, 7 unit tests PASS 2026-05-28 — Phase 2-3 P3 JS binding pending
 38. 🟡 performance-observer-timing ([P1+P3]) — Phase 1: PerformanceEntry/PerformanceObserver/PerformanceEntries types, mark/measure methods, Document.performance integration, 16 unit tests PASS 2026-05-29 — Phase 2-3 P3 JS binding + observer callback delivery pending
 
@@ -100,7 +100,7 @@ Recent:
 - ADR-006 (automation), ADR-007 (anti-detection), ADR-008 (tab lifecycle) coordination embedded in tasks 21-30
 - Coordination points with P2 (paint/render side) and P3 (shell/runtime integration) noted in brackets [Pn]
 
-Recent: ime-input (6.3, Phase 2): composition range helpers (is_composing, get_composition_range, get_composition_target), fixed CompositionData.range semantics, extended CompositionEvent tests for P3 dispatching, P3 integration doc, 149 tests PASS 2026-05-28 — P3 shell integration pending; click-hint-overlay (7B.2, P1 complete 2026-05-28, P3 integration pending), print-pdf-pagination (Phase 1 complete, PaginationContext ready), bench-ram-axis (Phase 0 complete, cross-platform RSS baseline established)
+Recent: print-pdf-advanced (36, Phase 3): margin-box text layout (TextLayoutResult struct, MarginBox.layout_text method, word-based line-breaking), PageBox.layout_margin_box_text integration, create_page_box_with_text_layout function, 50 total tests PASS 2026-05-31 — P2 rendering pending; ime-input (6.3, Phase 2): composition range helpers, 149 tests PASS 2026-05-28 — P3 shell integration pending; click-hint-overlay (7B.2, P1 complete 2026-05-28, P3 integration pending)
 
 ## Recent (prior work history, last 30 days)
 
