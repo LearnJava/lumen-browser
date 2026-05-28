@@ -1,7 +1,8 @@
 In progress: —
-Next step: Pick next task from Queue (Wave 2)
+Next step: Pick next task from Queue (Wave 2/3)
 
-Recent (Wave 3 - automation API + completed tasks):
+Recent (Wave 2/3 - automation API + completed tasks):
+  - shell-as-driver-client-8a7-phase4c (reload() migration to GpuSession: WinitSession integration in shell, backward-compatible fallback for Snapshot) 2026-05-28
   - bench-ram-axis (9G.5, Phase 1 complete: peak_rss + steady_state_rss tracking in lumen-bench, compare.py update, baseline.json restructure) 2026-05-28
   - samples-heavy-html (10M, Phase 1 complete: Habr-style benchmark page with 35+ posts, sidebar, sticky header, 1258 lines, ~2273 DOM nodes) 2026-05-28
   - antidetect-http-fingerprint-9c (Phase 1 complete: HttpProfile enum + header order + build_request_headers + fingerprint_profile getter/setter + 6 integration tests) 2026-05-28
@@ -17,14 +18,14 @@ Recent (Wave 3 - automation API + completed tasks):
   - shell-as-driver-client-8a7-phase4b (GpuSession impl + render_to_gpu) 2026-05-28
   - graphic-tests-migration-8a6 (50 Rust tests + PNG snapshots in crates/driver/tests/) 2026-05-28
 
-Phase 4 (shell-as-driver-client): completed 4a-4b
+Phase 4 (shell-as-driver-client): completed 4a-4b-4c
   ✓ 4a: GpuSession trait created (RenderedPage, gpu_session.rs)
   ✓ 4a: WinitSessionState extended with GPU data (display_list, title, images, font_registry)
   ✓ 4b: Implement render_to_gpu() method in WinitSession (build_display_list, extract title/images)
   ✓ 4b: GpuSession trait impl for WinitSession (set_scroll, viewport, navigate_streaming)
   ✓ 4b: Helper functions (extract_title, extract_images, walk_find_title, walk_collect_images)
   ✓ 4b: Tests for GpuSession (test_gpu_session_render_to_gpu, scroll_position, viewport)
-  - 4c: Migrate lumen-shell::reload() to use render_to_gpu() — next session (requires deep shell refactor)
+  ✓ 4c: Migrate lumen-shell::reload() to use render_to_gpu() (reload_via_gpu_session() method, WinitSession integration, backward-compatible fallback for Snapshot)
 
 Recent: shell-as-driver-client-8a7-phase4b (GpuSession impl for WinitSession) 2026-05-28
 

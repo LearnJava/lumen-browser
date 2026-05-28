@@ -1,18 +1,5 @@
-In progress: none
-Next task: next P1 feature from Phase 2 roadmap TBD
-
-Recent completion: 6.8 ✅ — font-loading-api Phase 2 (_lumen_fonts_size/_get/_get_by_family/_has_family Rust functions, FontFaceSet JS object, document.fonts getter, 5 new unit tests, 237 total PASS lumen-js, clippy clean, 2026-05-28)
-Recent completion: 8A.3 ✅ — accessibility-forms-validation Phase 3 (submit_form() integration into shell dispatch, FormSubmitEvent::Valid/Invalid handling, encode_form_fields + find_control_rect_and_error helpers, 189 tests PASS lumen-dom, clippy clean, 2026-05-28)
-Recent completion: 8A.2 ✅ — InProcessSession adapter for lumen-core::ext::BrowserSession (all 12 trait methods, 6 new unit tests, 27 total PASS, clippy clean, 2026-05-28)
-Recent completion: 8A.1 ✅ — BrowserSession trait in lumen-core::ext (12 methods, null stub, 4 unit tests, clippy clean, 172 tests PASS, 2026-05-28)
-
-Recent merge: :host/:slotted CSS selector parsing (P4 prep) ✅ — PseudoClass::Host(Option<Vec<ComplexSelector>>) for :host/:host(...), PseudoElementKind enum with Slotted(Option<Vec<ComplexSelector>>) for ::slotted(...), parse_functional_pseudo_element() + 7 unit tests (4 :host + 3 ::slotted), 263 total PASS, clippy clean 2026-05-28
-Recent merge: event.isTrusted (8C.2) ✅ — isTrusted field in Event constructor (false by default for synthetic events, true for native shell events), mark _lumen_dispatch_bubble/composition/page lifecycle/WebSocket events as trusted, 4 unit tests, 232 total PASS, clippy clean 2026-05-28
-Recent merge: 8A.4 Structural getters ✅ — LayoutBox::find_descendant_by_selector/find_all_descendants_by_selector/style_snapshot methods + ComputedStyleSnapshot + find_box_by_selector/find_all_by_selector/computed_style_by_selector pub functions, selector matching via CSS3 engine, 3 integration tests, clippy clean 2026-05-27
-Recent merge: ime-input Phase 3 ✅ — virtual keyboard hints via InputMode enum (InputMode::parse, as_str, Node::input_mode for input/textarea), 9 unit tests, 189 total PASS, clippy clean 2026-05-31
-Recent merge: print-pdf-advanced Phase 4 ✅ — real font measurement in margin-boxes (TextMeasurer integration, measure_text_w in layout_text, apply_margin_box_content with font_size param), 42 page tests PASS, 2026-05-31
-Recent merge: print-pdf-advanced Phase 3 ✅ — margin-box text layout (MarginBoxTextFragment, layout_text() method with word wrapping, 8 new tests), 39 page tests PASS, 2026-05-30
-Recent merge: svg-layout-advanced Phase 3 ✅ — nested SVG child propagation (SvgRoot now appears in child-bearing boxes), 5 unit tests PASS, 2026-05-30
+In progress: extras-p2 Phase 2 (Print PDF rendering + page-break display commands + shell print integration)  branch: p1-extras-p2-phase2
+Next step: Реализовать Print PDF Phase 2: PageBreakCommand в display_list, отрендерить по страницам в shell, протестировать на heavy.html (150MB target). Начать с layout/src/pagination.rs:123
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -21,20 +8,7 @@ CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
 
 Bug fixes rule: P1 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
 
-Note: fts-omnibox (Wave 1, P3-задача по домену) перенесена в STATUS-P3.md Queue (это не P1-домен, это knowledge/omnibox).
-Note: Wave 2 очередь содержит P2-задачи (extras-p2, avif-decoder, webgl-context, font-hinting, svg-rasterizer) — они пока не для P1. Wave 2 P3-задачи (http2-client, preconnect-hints) тоже в P3 очереди. P1 берёт следующее из Phase 1/Phase 2 своих задач.
-
 Recent:
-- performance-observer-timing (6.9, Phase 1): PerformanceEntry/PerformanceObserver/PerformanceEntries types in lumen-dom, mark/measure methods in Document, PerformanceEntryType enum, Document.performance integration, shell ObserverKind::Performance variant, 16 unit tests PASS, clippy clean 2026-05-29 — Phase 2-3 P3 JS binding + observer callback delivery pending
-- font-loading-api (6.8, Phase 1): FontFace/FontFaceStatus/FontFaceSet types in lumen-dom, document.fonts collection, rule_to_font_face() converter + extraction from stylesheets into Document.fonts, 7 unit tests PASS, clippy clean 2026-05-28 — Phase 2-3 P3 JS binding pending
-- print-pdf-advanced (36): Phase 1 ✅ @page rule matching + margin-box layout (17 tests, 2026-05-28); Phase 2 ✅ page counters + content generation (PageCounters, ContentFunction, resolve_content_function, 17 new tests, 31 total PASS, clippy clean 2026-05-29) — Phase 3 (margin-box text layout + inline content rendering) pending
-- svg-layout-advanced (35): Phase 1 ✅ (2026-05-28) PreserveAspectRatio + transform parser; Phase 2 ✅ nested SVG transforms (SvgTransform in BoxKind::SvgShape, svg_group_transform in LayoutBox, apply_transform_to_bbox, parent transform cascading, 5 new tests, 33 total PASS, clippy clean 2026-05-29); Phase 3 ✅ SvgRoot child propagation (nested SVG elements now have children in layout tree), 3 unit tests PASS, clippy clean 2026-05-30 — Phase 4 (paint/render for nested SVG viewBox+transforms) pending
-- accessibility-forms-validation (6.2, Phase 3): FormSubmitEvent enum (Valid/Invalid variants), submit_form() function executing HTML5 §4.10.22 form submission algorithm with constraint validation, 8 comprehensive unit tests (valid/invalid scenarios, field collection, defaults), 157 tests PASS, clippy clean 2026-05-28 — P3 dispatch integration pending
-- transition-advanced (6.7, Phase 2): fill-mode support (Backwards/Forwards/Both applied in delay/completion periods), interrupted transitions (captured value at interruption for smooth continuation), grouped property expansion (margin/padding/border/border-radius → component properties), 3 new unit tests (fill_mode_forwards, fill_mode_backwards, interrupted_detection), 90 tests PASS, clippy clean 2026-05-28
-- ime-input (6.3, Phase 1): IME composition events infrastructure — CompositionEventType/CompositionData/CompositionEvent structures, CompositionState in Document, public API (begin_composition/update_composition/end_composition/get_composition), 8 unit tests (composition lifecycle, serialization, full IME sequence), 121 tests PASS, clippy clean 2026-05-28 — P3 shell integration pending
-- accessibility-forms-validation (6.2, Phase 1): ValidityState integration in accessibility tree, compute_state() reads element_validity() to populate AXNode.invalid, aria-invalid="true" preserved as explicit override, 8 unit tests (required/email/length/valid scenarios), 125 tests PASS, clippy clean 2026-05-28
-- contenteditable-advanced (32, Phase 2): undo/redo command history (DomCommand enum, CommandHistory struct, insert_text/delete_range/replace_text), paste support (PasteData with text/html/files, paste_into function), drag-drop support (DragData, drop_into function), 10 unit tests PASS, clippy clean 2026-05-28 — P3 shell integration pending
-- shadow-dom-accessibility-forms-gc (6+, Phase 2B+2C): Phase 2B — accessibility tree composition in nested shadow trees, Document::find_by_id() ARIA relationship resolution; Phase 2C — transparent role handling (Presentation/None/Generic/Group skipped in parent role context validation), proper ARIA role inheritance across shadow boundaries, 117 tests PASS, clippy clean 2026-05-28
 - click-hint-overlay (7B.2): enhance collect_clickable_elements with <details> support — add ClickableKind::Details variant, is_details_element() helper, comprehensive unit tests (6 new tests for link/button/input/details/mixed), P1 complete 2026-05-28 — P3 integration pending
 - print-pdf-pagination (5++, Phase 1): PaginationContext + Page + PageFragment, paginate() algorithm for break-before/after/avoid, 7 unit tests, exports in lib.rs, clippy clean 2026-05-28
 - bench-ram-axis (9G.5, ADR-008 performance gate): cross-platform RSS measurement (getrusage on Unix, GetProcessMemoryInfo on Windows), baseline.json established, UPDATE.md documentation 2026-05-28
@@ -56,79 +30,124 @@ Recent:
 - layout-pure-audit (10D.1 Invariant 3): audit на отсутствие static MUT / lazy_static / OnceCell в hot path 2026-05-27
 - dom-arena-audit (10B Invariant 1, [P1+P3]): serde+bincode snapshot, DomSnapshotError, #[deny(clippy::rc_buffer)]+INVARIANT(10B/ADR-008) 2026-05-27
 
-## P1 Roadmap: 40 prioritized tasks (Phase 0–3)
+Next (Wave 1 — бывшие P2-задачи):
+(All completed — next waves in Queue)
 
-### Phase 0 ✅ (complete as of 2026-05-26)
-01. ✅ HTML parser: full named entities, RAWTEXT/RCDATA, DOCTYPE/quirks, srcset/sizes, picture, preload scanner, push-tokenizer
-02. ✅ CSS parser: structural/functional/UI-state pseudo, :is/:where, @media, @property, custom properties, !important
-03. ✅ Layout block-flow + inline-flow + replaced + CSS cascade with specificity + stacking contexts
-04. ✅ Paint display list + wgpu rasterizer + glyph atlas + text rendering
-05. ✅ Shell integration: opens samples/page.html with backgrounds and text
-06. ✅ Quirks-mode application: table UA-reset, line-height replaced, unitless length, hashless hex color
-07. ✅ Typed Length/Color: ComputedStyle fully typed, values ready for P2/P3
-08. ✅ Stacking contexts impl: 7-level CSS Painting Order (background → border → descendants → floats → inline → positioned)
-09. ✅ Web Animations interpolation: AnimValue + AnimationInterpolator trait + NoopInterpolator stub
-10. ✅ Push-tokenizer + incremental tree builder: feed_bytes with partial UTF-8 buffering, Document state between chunks
-11. ✅ Picture/srcset/sizes finishing: parser + pickers ready, L4 nested media conditions
-12. ✅ CSS Grid + full Flexbox: layout algorithms for modern responsive sites
-13. ✅ CSS Positioned Layout: position: relative/absolute/fixed + inset properties
-14. ✅ ICU4x segmenter + linebreak stubs: CJK typography foundation
-15. ✅ Shadow DOM (P1 part): ShadowRootMode, NodeData::ShadowRoot, FlatTree, slot assignment
-16. ✅ Forms runtime (P1 part): ValidityState + all HTML5 §4.10.21 flags, validation pseudo-classes
-17. ✅ Contenteditable (P1 part): DOM mutations + Selection/Range API + beforeinput/input events
-18. ✅ Accessibility tree (P1 part): build_ax_tree, compute_name, compute_description, implicit_role HTML-AAM
-19. ✅ Print pipeline (P1 part): pagination algorithm (break-before/after/avoid, orphans/widows)
-20. ✅ Preload scanner: scan_preload_hints for early fetch hints in background
+Next (Wave 1 — бывшие P3-задачи):
+- fts-omnibox: lumen-knowledge::HistoryFts + omnibox @history prefix + Porter stemmer для RU
+  → STATUS-P3.md:12
 
-### Phase 1 ✅ (complete as of 2026-05-28)
-21. ✅ lumen-a11y-full (8G, [P1+P3]) — ARIA role mapping (60+ variants), text alternatives (accname §4), computed role mapping, 104 tests PASS 2026-05-27
-22. ✅ dom-arena-audit (10B Invariant 1, [P1+P3]) — NodeId(u32)-based, bincode snapshot, #[deny(clippy::rc_buffer)], 7 tests 2026-05-27
-23. ✅ layout-pure-audit (10D.1 Invariant 3, [P1]) — no static MUT / lazy_static / OnceCell in hot path 2026-05-27
-24. ✅ paint-pure-audit (10D.2 Invariant 3, [P1]) — display_list pure-function requirement 2026-05-27
-25. ✅ antidetect-canvas-randomization (9D.1, [P1+P2]) — CanvasNoiseGenerator LCG RNG, per-session seed, 20 tests 2026-05-28
-26. ✅ antidetect-webgl-normalize (9D.2, [P1+P2]) — GpuFingerprint struct, adapter normalization, 5 tests 2026-05-28
-27. ✅ gpu-layer-lru (10F, [P1+P2+P3]) — LayerCache LRU + GPU memory budget, 7 tests 2026-05-28
-28. ✅ glyph-atlas-eviction (10G, [P1+P2+P3]) — LRU eviction from atlas, 4 tests 2026-05-27
+Queue (Wave 2 — бывший P2):
+- extras-p2: object-fit, variable fonts, Print PDF
+  → lumen-plan.md:195
+- avif-decoder: AVIF/AV1 декодер через rav1d (provisional dep)
+  → STATUS-P2.md:10
+- webgl-context: WebGL 1.0 поверх wgpu (WebGL API → wgpu calls)
+  → STATUS-P2.md:11
+- font-hinting: TrueType bytecode hinting в rasterizer
+  → STATUS-P2.md:12
+- subpixel-text: subpixel LCD rendering — RGB-stripe фильтр; toggleable prefers-reduced-motion
+  → STATUS-P2.md:13
+- svg-rasterizer: SVG basic shapes (path/circle/rect) через paint pipeline
+  → STATUS-P2.md:14
 
-### Phase 2 (in progress / planned)
-29. ✅ animation-keyframe-easing (6.6) — full timing functions (ease/cubic-bezier/steps) complete in Phase 0 (2026-05-20)
-30. ✅ transition-advanced (6.7) — Phase 1: transition_fill_modes field + grouped property expansion ✅; Phase 2: fill-mode scheduling + interrupted transitions ✅; Phase 3: fill-mode tests ✅ (2026-05-28)
-31. ✅ shadow-dom-accessibility-forms-gc (6+) — Phase 2A: slot delegation + fallback ✅; Phase 2B: accessibility tree composition + FlatTree integration + ARIA relationships ✅; Phase 2C: transparent role handling across boundaries ✅ (2026-05-28)
-32. 🟡 contenteditable-advanced — undo/redo command history ✅; paste data support ✅; drag-drop support ✅; Phase 1-3 complete, P3 shell integration pending (2026-05-28)
-33. 🟡 accessibility-forms-validation — Phase 1: ValidityState in AXTree ✅ (2026-05-28); Phase 2: enhanced constraint validation (all error types + custom messages) ✅ (2026-05-28); Phase 3: submit algorithm integration
-34. ✅ ime-input ([P1+P3]) — Phase 1: composition state tracking ✅ (2026-05-28); Phase 2: composition ranges + event data structures ✅ (2026-05-28); Phase 3: virtual keyboard hints via InputMode enum ✅ (2026-05-31) — P3 shell integration (winit IME events) pending
-35. 🟡 svg-layout-advanced — Phase 1: SVG transforms, aspect-ratio preservation ✅ (2026-05-28); Phase 2: nested SVG transforms ✅ (2026-05-29); Phase 3: nested SVG layout (SvgRoot child propagation) ✅ (2026-05-30) — Phase 4 (paint/render for nested SVG viewBox+transforms) P2 pending
-36. ✅ print-pdf-advanced — Phase 1: @page matching, margin-box model ✅ (2026-05-28); Phase 2: page counters + content generation ✅ (2026-05-29); Phase 3: margin-box text layout (MarginBoxTextFragment, layout_text word wrapping) ✅ (2026-05-30); Phase 4: real font measurement in margin-boxes ✅ (2026-05-31) — P2 inline content rendering (text + images in margin-boxes) pending
-37. 🟡 font-loading-api ([P1+P3]) — Phase 1: FontFace/FontFaceStatus/FontFaceSet types, document.fonts collection, @font-face extraction + population, 7 unit tests PASS 2026-05-28 — Phase 2-3 P3 JS binding pending
-38. 🟡 performance-observer-timing ([P1+P3]) — Phase 1: PerformanceEntry/PerformanceObserver/PerformanceEntries types, mark/measure methods, Document.performance integration, 16 unit tests PASS 2026-05-29 — Phase 2-3 P3 JS binding + observer callback delivery pending
+Queue (Wave 2 — бывший P3):
+- http2-client: HTTP/2 через h2 crate — multiplexing; бэкэнд-замена HttpClient без смены API
+  → STATUS-P3.md:15
+- preconnect-hints: <link rel=preconnect> из preload_scanner — открыть TCP+TLS заранее
+  → STATUS-P3.md:16
 
-## Notes
+Queue (Phase 2 — системные P3-задачи):
+- sop-remaining: SOP checks при postMessage/storage/cookies; mixed-content блокировка до TCP;
+  DOM-применение sandbox в shell (CORS preflight ✅, enforcement остался)
+  → lumen-plan.md:202 (таблица), lumen-plan.md:324-325 (детали)
+- forms-ui: native pickers, autofill popup, validation tooltip UI (P1-логика ValidityState ✅)
+  → lumen-plan.md:332
+- picture-lazy-intersect: IntersectionObserver event source для loading="lazy" +
+  shell GPU image upload integration (P1-парсер ✅)
+  → lumen-plan.md:333
+- ime-input: IME composition events через winit IME API (compositionstart/update/end)
+  → lumen-plan.md:334
+- shadow-dom-bindings: JS bindings Element.attachShadow/customElements (P1 FlatTree ✅)
+  → lumen-plan.md:330
 
-- fts-omnibox (Wave 1, P3-domain) moved to STATUS-P3.md Queue — knowledge/omnibox is P3 domain, not P1
-- Wave 2 (former P2/P3) queues removed — handled in respective STATUS-P2.md / STATUS-P3.md
-- All Phase 0 items marked ✅ as complete per 2026-05-26 phase close
-- Phase 1-2 items (21–40) represent next ~6 months of P1 work
-- ADR-006 (automation), ADR-007 (anti-detection), ADR-008 (tab lifecycle) coordination embedded in tasks 21-30
-- Coordination points with P2 (paint/render side) and P3 (shell/runtime integration) noted in brackets [Pn]
+Queue (Phase 2 — Tab UX, [P3] 7A):
+- vertical-tabs: Vertical tabs panel (toggle, drag-reorder, collapse) → shell/src/tabs/vertical.rs
+  → lumen-plan.md:237
+- tree-tabs: Tree-style tabs (parent-child) → shell/src/tabs/tree.rs
+  → lumen-plan.md:238
+- workspaces: Workspaces (изолированные группы) → shell + storage/src/workspaces.rs
+  → lumen-plan.md:239
+- split-view: Split view 2-4 viewport → shell + paint multi-viewport (координация с бывшим P2)
+  → lumen-plan.md:240
+- tab-auto-archive: Tab auto-archive (hibernate по возрасту) → shell/src/tabs/archive.rs
+  → lumen-plan.md:241
 
-Recent: ime-input (6.3, Phase 2): composition range helpers (is_composing, get_composition_range, get_composition_target), fixed CompositionData.range semantics, extended CompositionEvent tests for P3 dispatching, P3 integration doc, 149 tests PASS 2026-05-28 — P3 shell integration pending; click-hint-overlay (7B.2, P1 complete 2026-05-28, P3 integration pending), print-pdf-pagination (Phase 1 complete, PaginationContext ready), bench-ram-axis (Phase 0 complete, cross-platform RSS baseline established)
+Queue (Phase 2-3 — Power-user input, [P3] 7B):
+- vim-keys: Vim-style key bindings (modal) → shell/src/input/vim.rs
+  → lumen-plan.md:243
+- click-hint-overlay: Click-hint vimium-style overlay (layout-итератор clickable готов)
+  → lumen-plan.md:244
+- mouse-gestures: Mouse gestures → shell/src/input/gestures.rs
+  → lumen-plan.md:245
+- omnibox-aliases: Custom omnibox aliases → shell + user config
+  → lumen-plan.md:246
+- find-in-page-regex: regex UI + highlight overlay (collect_visible_text P1 ✅)
+  → lumen-plan.md:247
 
-## Recent (prior work history, last 30 days)
+Queue (Phase 2 — Privacy UX, [P3] 7C):
+- block-list-engine: EasyList + hosts files → network/src/filter/easylist.rs (impl RequestFilter)
+  → lumen-plan.md:249
+- per-site-permissions: Per-site permission UI panel → shell/src/site_settings/
+  → lumen-plan.md:250
+- cookie-banner: Cookie-banner auto-dismiss → shell/src/cookies/banner.rs (JsRuntime)
+  → lumen-plan.md:251
+- shields-widget: Shields toolbar widget (счётчик блокировок) → shell/src/toolbar/shields.rs
+  → lumen-plan.md:252
 
-- 2026-05-28: event.isTrusted (8C.2, Phase 3): isTrusted field in Event constructor, mark native shell events as trusted, dispatchEvent events untrusted, 4 new tests → 232 total PASS
-- 2026-05-28: ime-input (6.3, Phase 2): composition range helpers, improved semantics, extended tests, 149 total PASS
-- 2026-05-28: click-hint-overlay (7B.2): <details>/<summary> support, 6 new tests
-- 2026-05-28: print-pdf-pagination (5++): PaginationContext + Page + PageFragment, 7 unit tests
-- 2026-05-28: bench-ram-axis (9G.5): cross-platform RSS measurement, baseline.json
-- 2026-05-28: antidetect-webgl-normalize (9D.2): GpuFingerprint struct, 5 tests
-- 2026-05-28: gpu-layer-lru (10F): LayerCache struct, LRU-tracked metadata, 7 tests
-- 2026-05-28: antidetect-canvas-randomization (9D.1): CanvasNoiseGenerator, 20 tests
-- 2026-05-27: extras-p2 complete: object-fit ✅ + variable fonts ✅ + Print PDF Phase 1 ✅
-- 2026-05-27: glyph-atlas-eviction (10G.1): LRU tracking + get_lru_candidates, 4 new tests
-- 2026-05-27: full HTML5 named entities WHATWG (2125): gen_entities.py + bin-search + 338 tests
-- 2026-05-26: phase-0-close: html-parser, css-parser, layout all marked ✅
-- 2026-05-25: html5-insertion-modes-remaining: 23/23 modes, AAA, 349 total tests
-- 2026-05-25: svg-layout-basic: SvgRoot/SvgShape, ViewBox scale+offset, 12 tests, graphic test 47
-- 2026-05-24: quirks-mode-detection: DOCTYPE + prefix rules, table UA-reset complete
-- 2026-05-20: web-animations-interpolation: AnimValue + AnimationInterpolator trait, NoopInterpolator
-- 2026-05-20: css-grid-flexbox-complete: block-flow + inline-flow + flex + grid + positioned layout
+Queue (Phase 2-3 — Web platform baseline, [P3] 7D):
+- webauthn: Passkeys/WebAuthn CTAP2 + navigator.credentials → network/src/webauthn.rs
+  → lumen-plan.md:254
+- tab-containers: Tab containers (storage partitioning) → storage/src/partition.rs
+  → lumen-plan.md:255
+- sidebar-panels: Sidebar web panels → shell/src/sidebar/web_panel.rs
+  → lumen-plan.md:256
+
+Queue (Phase 3+ — бывший P3):
+- service-workers: Service Worker API (fetch intercept + cache API + background sync)
+  → STATUS-P3.md:19
+- push-api: Web Push + Notifications API (VAPID, push subscription)
+  → STATUS-P3.md:20
+- profiles-system: multi-profile — cookies/history/storage per profile
+  → STATUS-P3.md:21
+- devtools-protocol: CDP subset — Elements + Console + Network
+  → STATUS-P3.md:23
+
+Queue (Phase 4+ — DevTools полный, [P3] 7E):
+- dom-inspector: DOM inspector panel (tree + attributes) → devtools + lumen-dom
+  → lumen-plan.md:258
+- computed-styles-panel: Computed styles panel → сериализация ComputedStyle (P4 expose JSON)
+  → lumen-plan.md:259
+- box-model-overlay: Box model overlay (margin/border/padding) → DisplayCommand overlay
+  → lumen-plan.md:260
+- network-panel: Network panel (live request log) → devtools слушает NetworkTransport events
+  → lumen-plan.md:261
+- js-console: JS console (eval в контексте страницы) → devtools + JsRuntime::eval
+  → lumen-plan.md:262
+
+Queue (Phase 1 — Automation API из ADR-006):
+- lumen-a11y-full (8G, [P1+P3]): расширить lumen-a11y crate до полного AccessibilityTree — text alternative computation (accname §4), ARIA attribute application, focus model, computed role mapping HTML-AAM полностью (базовая 36-тестовая accessibility-aria уже есть). Используется в BrowserSession::a11y_tree() + BrowserSession::query(Role/Name) — Playwright-стиль getByRole для тестов и AI-агентов. → lumen-plan.md трек 8G + ADR-006.
+
+Queue (Phase 2 — ADR-007 anti-detection, rendering fingerprint side; бывший [P3+P2] → P1+P3):
+- antidetect-canvas-randomization (9D.1): Brave-style canvas randomization — getImageData возвращает RGBA с per-session deterministic seed noise. P1 owns canvas/paint side (где данные читаются обратно из texture); P3 owns JS bindings к Canvas API. → lumen-plan.md трек 9D.1 + ADR-007.
+- antidetect-webgl-normalize (9D.2): WebGL renderer/vendor strings normalization (обобщённые «Generic GPU» / «WebKit»). P1 — где wgpu adapter info собирается; P3 — JS-side getParameter() handling. → lumen-plan.md трек 9D.2 + ADR-007.
+
+Queue (Phase 2 — ADR-008 tab lifecycle T0/T2 экономия; бывший [P3+P2] → P1+P3):
+- gpu-layer-lru (10F): LayerCache с LRU + GPU memory budget; texture pool recycling (одна wgpu::Texture переиспользуется для разных layers). Off-viewport stacking contexts освобождают textures при удалении от viewport на >3 экрана. P3 owns lifecycle integration (через MemoryPressureSource events); P1 owns wgpu/texture pool в lumen-paint. → lumen-plan.md трек 10F + ADR-008.
+- glyph-atlas-eviction (10G): LRU eviction редко используемых глифов из атласа. Атлас не растёт безгранично. P1 owns atlas data structure в lumen-font; P3 owns подписка на MemoryPressureSource events. → lumen-plan.md трек 10G + ADR-008.
+
+Queue (Phase 2-3 — оригинальный P1 backlog):
+- shadow-dom-accessibility-forms-gc: Shadow DOM / Accessibility / Forms / GC
+  → lumen-plan.md:160
+
+Recent: dom-arena-audit (serde+bincode snapshot для T3 hibernation, DomSnapshotError, #[deny(clippy::rc_buffer)]+INVARIANT(10B/ADR-008), 7 тестов roundtrip, 121 итого) 2026-05-27, off-screen-render (Renderer::new_headless + render_to_image: headless wgpu adapter, RENDER_ATTACHMENT+COPY_SRC texture, staging buffer readback, resize support; 3 ignored GPU тестов в headless_tests.rs) 2026-05-27, layout-find-by-selector (find_box_by_selector + computed_style_by_selector + find_all_by_selector + ComputedStyleSnapshot в lumen-layout::selector_query; parse_selector_list в lumen-css-parser; 14 тестов; разблокирует P3 8A.2) 2026-05-27, line-clamp-layout (apply_line_clamp() в box_tree.rs: CSS Overflow L4 §3.2 multi-line truncation + ellipsis, приоритет над text-overflow:ellipsis; 6 тестов; graphic test 48) 2026-05-27, visible-text-iter (collect_visible_text + TextFragment в lumen-layout::text_iter, 10 тестов; P3 ready for find-in-page-regex) 2026-05-27, contenteditable-dom-mutations (EditInputType 12 вариантов §4.1.3, InputEvent, split_text_node, insert_text_at, delete_range, insert_paragraph_break, Document::insert_after; 15 тестов → 105 итого) 2026-05-27, details-clickable (<details>/<summary> open/closed rendering HTML5 §4.11.1: build_box filters non-summary children when open absent; collect_clickable_elements(LayoutBox, Document) → Vec<ClickableElement> для P3 click-hint overlay; ClickableKind::Link/Button/Input/Generic; 7 тестов) 2026-05-27, forms-validity (ValidityState HTML5 §4.10.21 в lumen-dom: valueMissing/typeMismatch/tooLong/tooShort/rangeUnderflow/rangeOverflow + check_validity_form + invalid_controls_in_form, build_form_submit блокирует невалидный submit, form_validity делегирует в dom, 21 тест → 89 итого) 2026-05-27, selection-range (DomPosition+Range+Selection в lumen-dom, source_node+source_char_offset в InlineSegment+InlineFrag, caret_at_point+selection_rects в lumen-layout/selection.rs, 26 тестов) 2026-05-27, html5-insertion-modes-remaining (InsertionMode 23 из 23: InHeadNoscript+InFrameset+AfterFrameset+AfterAfterFrameset, InSelectInTable полная, reset_insertion_mode frameset/select-in-table, scripting_enabled flag, 15 новых тестов → 374 всего) 2026-05-27, accessibility-aria (crate lumen-a11y: AXRole 60+ variant, AXState 17 полей, AXNode, AXTree, build_ax_tree, compute_name, compute_description, implicit_role HTML-AAM, 36 тестов) 2026-05-27, svg-layout-basic (BoxKind::SvgRoot/SvgShape, SvgShapeKind rect/circle/ellipse/line/path, ViewBox scale+offset, collect_svg_shapes flat traversal, lay_out_svg_root replaced-element sizing, paint emit_svg_shape stub, 12 тестов, graphic test 47) 2026-05-27, colspan-rowspan (col_span/row_span на LayoutBox, span-aware column width + placement + rowspan height post-fix, 7 тестов) 2026-05-27, html-template-content (DocumentFragment + InTemplate mode + <template> парсинг content во fragment, 12 тестов) 2026-05-27, form-submit (Event::FormSubmit + find_ancestor_form + collect_dom_form_fields + build_form_submit + make_get_url + GET-навигация, 20 тестов) 2026-05-27, css-first-line-letter (PseudoKind::FirstLetter на первом тексте, is_first_line на lines[0], 3 новых теста) 2026-05-27, html-loading-lazy (loading="lazy" ImageRequest.is_lazy + JS _lumen_init_lazy_images/_lumen_deliver_lazy_images + shell proximity fetch, 9 тестов) 2026-05-26, html-full-tree-builder (HTML5 §13.2 insertion modes + adoption agency, 17 режимов, AAA, 349 тестов) 2026-05-26, phase0-close (Phase 0 закрыта, маркеры ✅ для html-parser/css-parser/layout) 2026-05-26, fix-inline-block-baseline (BUG-023 P1-часть — strut только для baseline-строк; TEST-12 PASS 0.18%, TEST-13 PASS 0.24%) 2026-05-26, fix-max-height (BUG-025 подтверждён в layout — release-бинарь был устаревшим, TEST-11 PASS 0.43%, unit tests для max-height/min-height/vertical-align:bottom добавлены) 2026-05-25, full HTML5 named entities WHATWG 2125 (gen_entities.py + бинпоиск + 338 тестов) 2026-05-25, push-tokenizer feed_bytes(&[u8]) с буферизацией partial UTF-8, 7 тестов (342 итого) 2026-05-25, ADR-инфраструктура docs/decisions/ (TEMPLATE.md + README + ADR-001..005) 2026-05-25, click-hint-overlay (7B.2): enhance collect_clickable_elements with <details> support — add ClickableKind::Details variant, is_details_element() helper, comprehensive unit tests (6 new tests for link/button/input/details/mixed), P1 complete 2026-05-28 — P3 integration pending

@@ -1325,6 +1325,7 @@ dependencies = [
  "lumen-css-parser",
  "lumen-devtools",
  "lumen-dom",
+ "lumen-driver",
  "lumen-encoding",
  "lumen-font",
  "lumen-html-parser",
