@@ -1,7 +1,8 @@
-In progress: http2-client (concurrent streams for HTTP/2 multiplexing)  branch: p3-http2-client-concurrent-streams
-Next step: Extend H2Conn::fetch to support multiple concurrent streams  crates/network/src/h2/conn.rs:1
+In progress: —
+Next step: Pick next task from Queue (Wave 2/3)
 
 Recent (Wave 2/3 - automation API + completed tasks):
+  - ✓ http2-client (5A.4 ext, concurrent streams): send_request/read_response_for_stream, StreamState mgmt, +5 tests 2026-05-28
   - ✓ tab-lifecycle-invariants (10B/10C/10D, ADR-008): all three invariants verified/implemented:
     · 10B (DOM arena): NodeId(u32) arena, Serialize/Deserialize, to_bytes/from_bytes ✓
     · 10C (JS suspend): pause/unpause/suspend/resume + SuspendedHeap struct ✓
@@ -62,7 +63,6 @@ Queue (Wave 2 — приоритет на тестирование изнутр�
   * **invariant-1-dom-arena (10B, [P3+P1])**: audit lumen-dom — убедиться что node graph на NodeId(u32) без Rc<RefCell>; добавить bincode::serialize/deserialize для DOM snapshot; clippy lint запрещает Rc<RefCell> в lumen-dom::node модулях. **P1 owns lumen-dom**, P3 координирует через коммит с обоснованием.
   * **invariant-2-js-suspend (10C)**: расширить lumen-core::ext::JsRuntime trait методами pause()/unpause()/suspend()/resume(); имплементация для rquickjs через JS_WriteObject/JS_ReadObject; zstd-сжатие snapshot; cap 5 MB/tab disk. V8 compatibility note для Phase 3.
   * **invariant-3-pure-layout (10D, [P3+P1+P2])**: audit lumen-layout (P1) и lumen-paint::display_list (P2) на отсутствие static MUT / lazy_static / OnceCell внутри hot path. Cross-tab кэши (glyph atlas, image decode) — отдельные крейты с explicit eviction API.
-- http2-client: HTTP/2 через h2 crate (provisional) — multiplexing для реальных сайтов; бэкэнд-замена HttpClient без смены публичного API
 - http-profiles-expansion (9C Phase 1.x): добавить профили браузеров за Chrome (следует за Wave 2 http-fingerprint):
   * firefox: Firefox 130+ SETTINGS, header order, TLS fingerprint (JA3 snapshot)
   * safari: Safari 18+ SETTINGS, minimal headers (Sec-* subset)

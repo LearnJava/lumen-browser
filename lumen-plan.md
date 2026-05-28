@@ -262,7 +262,7 @@
 | 5A.1 | ✅ ALPN h2 negotiation | `network/src/lib.rs` | h2 → Err placeholder, http/1.1 fallback |
 | 5A.2 | ✅ Frame codec (RFC 9113 §6) | `network/src/h2/frame.rs` | 10 типов + Unknown, padding strip, +46 тестов |
 | 5A.3 | ✅ HPACK (RFC 7541) | `network/src/h2/hpack.rs` | static+dynamic table, Huffman, integer enc, +24 тестов (RFC C.3/C.4 vectors) |
-| 5A.4 | ✅ Connection + single GET | `network/src/h2/conn.rs` | preface, SETTINGS, один stream, +11 тестов |
+| 5A.4 | ✅ Connection + concurrent streams | `network/src/h2/conn.rs` | preface, SETTINGS, fetch (single-stream), send_request + read_response_for_stream (concurrent), +16 тестов |
 | 5A.5 | ✅ Pool multiplexing | `network/src/h2/pool.rs` | H2Pool acquire/release/evict, интеграция в fetch_single |
 | 5A.6 | ✅ Flow control + WINDOW_UPDATE | `network/src/h2/conn.rs` | WINDOW_UPDATE после каждого DATA, +3 теста |
 | 5A.7 | ✅ HTTP response cache (RFC 7234) | `network/src/http_cache.rs` | Cache-Control + ETag + If-None-Match + heuristic freshness, +19 тестов |
