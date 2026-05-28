@@ -1,5 +1,5 @@
-In progress: none
-Next task: print-pdf-advanced Phase 2
+In progress: print-pdf-advanced Phase 2  branch: p1-print-pdf-phase2
+Next step: page counters system — margin-box content rendering with page-number values
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
