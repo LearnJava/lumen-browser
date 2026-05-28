@@ -6187,6 +6187,21 @@ mod tests {
     }
 
     #[test]
+    fn nested_svg_preserve_aspect_ratio() {
+        let html = r#"
+            <svg viewBox="0 0 100 100" width="100" height="100">
+                <svg viewBox="0 0 100 50" width="100" height="100" preserveAspectRatio="xMidYMid meet" x="0" y="0">
+                    <rect x="0" y="0" width="100" height="50" />
+                </svg>
+            </svg>
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, lumen_core::geom::Size::new(200.0, 200.0));
+        assert!(!root.children.is_empty());
+    }
+
+    #[test]
     fn deeply_nested_svg_viewbox_cascade() {
         let html = r#"
             <svg viewBox="0 0 200 200" width="200" height="200">
@@ -6200,6 +6215,23 @@ mod tests {
         let doc = lumen_html_parser::parse(html);
         let sheet = lumen_css_parser::parse("");
         let root = super::layout(&doc, &sheet, lumen_core::geom::Size::new(400.0, 400.0));
+        assert!(!root.children.is_empty());
+    }
+
+    #[test]
+    fn nested_svg_group_with_transform() {
+        let html = r#"
+            <svg viewBox="0 0 100 100" width="100" height="100">
+                <svg viewBox="0 0 50 50" width="50" height="50" x="0" y="0">
+                    <g transform="scale(2)">
+                        <rect x="0" y="0" width="10" height="10" />
+                    </g>
+                </svg>
+            </svg>
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, lumen_core::geom::Size::new(200.0, 200.0));
         assert!(!root.children.is_empty());
     }
 
