@@ -1,7 +1,8 @@
-In progress: fts-omnibox  branch: p3-fts-omnibox
-Next step: Integrate history_fts into apply_loaded_page + fix SearchHistory init  main.rs:254
+In progress: —
+Next step: Pick next task from Queue (Wave 2/3)
 
 Recent (Wave 2/3 - automation API + completed tasks):
+  - ✓ fts-omnibox (Wave 2): HistoryFts + SearchHistory integration in shell: @history prefix, dropdown, prefix-match, SearchHistory recording 2026-05-28
   - ✓ http2-client (5A.4 ext, concurrent streams): send_request/read_response_for_stream, StreamState mgmt, +5 tests 2026-05-28
   - ✓ tab-lifecycle-invariants (10B/10C/10D, ADR-008): all three invariants verified/implemented:
     · 10B (DOM arena): NodeId(u32) arena, Serialize/Deserialize, to_bytes/from_bytes ✓
@@ -50,7 +51,7 @@ Note: см. также STATUS-P1.md — туда переданы прежние
 Note (2026-05-28): fts-omnibox из STATUS-P1.md Wave 1 (P3-задача) переместили в P3 Queue ниже, т.к. это домен P3 (knowledge/omnibox). P1 берёт следующее из своих Phase 1 задач (lumen-a11y-full).
 
 Queue (Wave 2 — приоритет на тестирование изнутри + tab-lifecycle инварианты, см. lumen-plan.md §6.11 / §11.4 / §15 / ADR-006 / ADR-008):
-- fts-omnibox (Wave 1, переместилась из P1 в P3 домен): `lumen-knowledge::HistoryFts` + omnibox `@history` prefix + dropdown + ArrowUp/Down + SearchHistory recording. Porter-stemmer для RU отложен на Phase 2. Medium priority — фиксит UX пробел, но Phase 2 работа по существу (многоязычная стемматизация).
+- ✓ fts-omnibox (Wave 1, переместилась из P1 в P3 домен): `lumen-knowledge::HistoryFts` + omnibox `@history` prefix + dropdown + ArrowUp/Down + SearchHistory recording. Porter-stemmer для RU отложен на Phase 2. 2026-05-28
 - lumen-driver-trait (8A.1+8A.2): новый крейт crates/driver/ с trait BrowserSession (resources: screenshot, a11y_tree, layout, computed_style, network, console; tools: navigate, click, type, scroll, wait, eval, query) + InProcessSession impl, переиспользующая существующий pipeline lumen-shell. Высокий приоритет: открывает уровни 2-3 тестирования (§15) — структурные ассерты и in-process snapshot для graphic_tests/. Без этого тесты остаются завязаны на ffmpeg/gdigrab/Edge и Windows-only.
 - off-screen-render (8A.3, [P3+P2]): Renderer::render_to_image() -> Image без winit-окна. Координация с P2 — нужен отдельный wgpu surface path.
 - structural-getters (8A.4, [P3+P1]): pub accessors на LayoutBox / ComputedStyle по селектору в lumen-layout. Координация с P1.
