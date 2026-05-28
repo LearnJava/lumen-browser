@@ -1,6 +1,8 @@
 In progress: none
 Next task: check Phase 2 queue for remaining layout/DOM work; most Phase 1-2 items await P3 JS integration or Phase 3+ work
 
+Recent merge: svg-layout-advanced Phase 3 ✅ — nested SVG child propagation (SvgRoot now appears in child-bearing boxes), 5 unit tests PASS, 2026-05-30
+
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
   When a new algorithm needs a CSS property → add // CSS: <prop> comment at
@@ -84,7 +86,7 @@ Recent:
 32. 🟡 contenteditable-advanced — undo/redo command history ✅; paste data support ✅; drag-drop support ✅; Phase 1-3 complete, P3 shell integration pending (2026-05-28)
 33. 🟡 accessibility-forms-validation — Phase 1: ValidityState in AXTree ✅ (2026-05-28); Phase 2: enhanced constraint validation (all error types + custom messages) ✅ (2026-05-28); Phase 3: submit algorithm integration
 34. 🟡 ime-input ([P1+P3]) — Phase 1: composition state tracking ✅ (2026-05-28); Phase 2: composition ranges + event data structures ✅ (2026-05-28); Phase 3: virtual keyboard hints and P3 shell integration pending
-35. 🟡 svg-layout-advanced — Phase 1: SVG transforms, aspect-ratio preservation ✅ (2026-05-28); Phase 2: nested SVG transforms ✅ (2026-05-29); Phase 3: nested SVG layout pending
+35. 🟡 svg-layout-advanced — Phase 1: SVG transforms, aspect-ratio preservation ✅ (2026-05-28); Phase 2: nested SVG transforms ✅ (2026-05-29); Phase 3: nested SVG layout (SvgRoot child propagation) ✅ (2026-05-30) — Phase 4 (paint/render for nested SVG viewBox+transforms) P2 pending
 36. 🟡 print-pdf-advanced — Phase 1: @page matching, margin-box model ✅ (2026-05-28); Phase 2: page counters + content generation ✅ (2026-05-29); Phase 3: margin-box text layout + inline content rendering pending
 37. 🟡 font-loading-api ([P1+P3]) — Phase 1: FontFace/FontFaceStatus/FontFaceSet types, document.fonts collection, @font-face extraction + population, 7 unit tests PASS 2026-05-28 — Phase 2-3 P3 JS binding pending
 38. 🟡 performance-observer-timing ([P1+P3]) — Phase 1: PerformanceEntry/PerformanceObserver/PerformanceEntries types, mark/measure methods, Document.performance integration, 16 unit tests PASS 2026-05-29 — Phase 2-3 P3 JS binding + observer callback delivery pending
