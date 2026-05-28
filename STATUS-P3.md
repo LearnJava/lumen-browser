@@ -1,5 +1,5 @@
-In progress: —
-Next step: (Wave 3 automation API) Pick next: antidetect-tls-fingerprint (9B)
+In progress: antidetect-tls-fingerprint (9B)  branch: p3-antidetect-tls-fingerprint
+Next step: TLS fingerprinting: explore lumen-network, inspect rustls config, identify Chrome TLS parameters (cipher order, extensions, ALPN)  crates/network/src/http.rs
 
 Recent (Wave 3 - automation API):
   - auto-wait-engine-8d (Phase 1: polling-based wait_for(Visible/Stable/NetworkIdle/JsIdle) in InProcessSession + WinitSession, 6 unit tests) 2026-05-28
