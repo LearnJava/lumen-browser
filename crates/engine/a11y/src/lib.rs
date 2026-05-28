@@ -14,7 +14,7 @@ mod roles;
 pub use names::{compute_description, compute_name};
 pub use roles::{implicit_role, AXRole};
 
-use lumen_dom::{Document, FlatTree, InputType, NodeData, NodeId};
+use lumen_dom::{element_validity, Document, FlatTree, InputType, NodeData, NodeId};
 use serde::{Deserialize, Serialize};
 
 // ── State flags ──────────────────────────────────────────────────────────────
@@ -165,7 +165,7 @@ pub fn build_ax_tree(doc: &Document, root_id: NodeId, flat_tree: &FlatTree) -> A
 
 fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>, flat_tree: &FlatTree) -> AXNode {
     let node = doc.get(node_id);
-    let state = compute_state(node);
+    let state = compute_state(doc, node_id, node);
     let role = resolve_role(node, parent_role);
     let name = names::compute_name(doc, node_id);
     let description = names::compute_description(doc, node_id);
@@ -245,7 +245,16 @@ fn resolve_role(node: &lumen_dom::Node, parent_role: Option<AXRole>) -> AXRole {
     implicit_role(node)
 }
 
-fn compute_state(node: &lumen_dom::Node) -> AXState {
+fn compute_state(doc: &Document, node_id: NodeId, node: &lumen_dom::Node) -> AXState {
+    // Check if element is subject to constraint validation (form control).
+    // If validity check is available and element is invalid, mark as invalid.
+    let is_validity_invalid = element_validity(doc, node_id).is_some_and(|vs| !vs.valid());
+
+    // aria-invalid attribute takes explicit precedence; validity contributes if no aria-invalid.
+    let has_aria_invalid = node
+        .get_attr("aria-invalid")
+        .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+
     AXState {
         checked: checked_state(node),
         disabled: node
@@ -266,9 +275,9 @@ fn compute_state(node: &lumen_dom::Node) -> AXState {
             .get_attr("aria-readonly")
             .is_some_and(|v| v.eq_ignore_ascii_case("true"))
             || node.get_attr("readonly").is_some(),
-        invalid: node
-            .get_attr("aria-invalid")
-            .is_some_and(|v| v.eq_ignore_ascii_case("true")),
+        // HTML5 §4.10.21.1: invalid if aria-invalid="true" OR
+        // form element fails constraint validation (ValidityState.valid() = false).
+        invalid: has_aria_invalid || is_validity_invalid,
         busy: node
             .get_attr("aria-busy")
             .is_some_and(|v| v.eq_ignore_ascii_case("true")),

@@ -1,5 +1,11 @@
-In progress: none
-Next task: accessibility-forms-validation
+In progress: accessibility-forms-validation  branch: p1-accessibility-forms-validation-phase1
+Next step: Form submission integration + invalid controls visibility in AXTree
+
+Phase 1 (complete 2026-05-28): ValidityState integration in accessibility tree
+  - compute_state() reads element_validity() to populate AXNode.invalid
+  - aria-invalid="true" preserved as explicit override
+  - 8 unit tests: required/email/length validation + valid states
+  - 125 tests PASS, clippy clean
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
