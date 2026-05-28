@@ -1,5 +1,5 @@
-In progress: none
-Next task: contenteditable-advanced or accessibility-forms-validation
+In progress: contenteditable-advanced (32, Phase 2)  branch: p1-contenteditable-advanced
+Next step: Stage 1 — implement drag-drop on contenteditable root (MouseEvent handlers, DragData transfer), add paste event (clipboard access), basic undo/redo stack (DOMCommand history). crates/engine/dom/src/contenteditable.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
