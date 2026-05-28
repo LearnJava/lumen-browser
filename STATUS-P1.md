@@ -1,5 +1,5 @@
-In progress: none
-Next task: check Phase 2 queue for remaining layout/DOM work; most Phase 1-2 items await P3 JS integration
+In progress: svg-layout-advanced Phase 3 (nested SVG layout)  branch: p1-svg-layout-phase3
+Next task: identify which aspects of nested SVG layout remain unimplemented (viewBox cascade, transform stack, aspect-ratio inheritance)  crates/engine/layout/src/svg.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
