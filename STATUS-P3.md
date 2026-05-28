@@ -1,7 +1,8 @@
 In progress: —
-Next step: (Wave 3 automation API) Pick next: antidetect-http-fingerprint (9C) or tab-state-machine (10A)
+Next step: (Wave 3 automation API) Pick next from remaining
 
 Recent (Wave 3 - automation API):
+  - antidetect-http-fingerprint-9c (Phase 1 complete: HttpProfile enum + header order + build_request_headers + fingerprint_profile getter/setter + 6 integration tests) 2026-05-28
   - tab-state-machine-10a (Phase 1: TabState enum T0-T4 + state machine + transitions + idle timeout + memory pressure triggers + 5 tests) 2026-05-28
   - antidetect-tls-fingerprint-9b (Phase 1: TlsProfile enum + build_client_config + JA3 snapshot CHROME_130 + 10 tests) 2026-05-28
   - auto-wait-engine-8d (Phase 1: polling-based wait_for(Visible/Stable/NetworkIdle/JsIdle) in InProcessSession + WinitSession, 6 unit tests) 2026-05-28
