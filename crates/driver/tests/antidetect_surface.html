@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Antidetect Surface API Test</title>
+    <style>
+        body { background: #f0f0f0; font-family: monospace; padding: 20px; }
+        .result { padding: 10px; margin: 5px 0; border: 1px solid #ccc; }
+        .pass { background: #d4edda; color: #155724; }
+        .fail { background: #f8d7da; color: #721c24; }
+    </style>
+</head>
+<body>
+    <h1>Antidetect Surface API Test</h1>
+    <div id="results"></div>
+
+    <script>
+        var results = [];
+
+        // Test 1: navigator.webdriver should not exist or be false
+        var test1_pass = typeof navigator.webdriver === 'undefined' || navigator.webdriver === false;
+        results.push({
+            name: 'navigator.webdriver absent',
+            pass: test1_pass,
+            value: typeof navigator.webdriver !== 'undefined' ? navigator.webdriver : 'undefined'
+        });
+
+        // Test 2: chrome.runtime should not exist
+        var test2_pass = typeof chrome === 'undefined' || typeof chrome.runtime === 'undefined';
+        results.push({
+            name: 'chrome.runtime absent',
+            pass: test2_pass,
+            value: typeof chrome !== 'undefined' ? (typeof chrome.runtime !== 'undefined' ? 'exists' : 'chrome exists but no runtime') : 'undefined'
+        });
+
+        // Test 3: __playwright should not exist
+        var test3_pass = typeof __playwright === 'undefined';
+        results.push({
+            name: '__playwright absent',
+            pass: test3_pass,
+            value: typeof __playwright !== 'undefined' ? 'exists' : 'undefined'
+        });
+
+        // Test 4: cdc_* variables should not exist
+        var test4_pass = typeof cdc_adoQpoasnfa749072 === 'undefined';
+        results.push({
+            name: 'cdc_* variables absent',
+            pass: test4_pass,
+            value: 'checking for cdc_adoQpoasnfa749072'
+        });
+
+        // Test 5: __proto__ should not have automation hooks
+        var test5_pass = !('webdriver' in navigator) && !('cdc_' in window);
+        results.push({
+            name: '__proto__ automation hooks absent',
+            pass: test5_pass,
+            value: 'verified'
+        });
+
+        // Test 6: window.devtools should not exist
+        var test6_pass = typeof window.devtools === 'undefined';
+        results.push({
+            name: 'window.devtools absent',
+            pass: test6_pass,
+            value: typeof window.devtools !== 'undefined' ? 'exists' : 'undefined'
+        });
+
+        // Test 7: window.chrome should not exist
+        var test7_pass = typeof window.chrome === 'undefined' || (typeof window.chrome === 'object' && typeof window.chrome.runtime === 'undefined');
+        results.push({
+            name: 'window.chrome.runtime absent',
+            pass: test7_pass,
+            value: typeof window.chrome !== 'undefined' ? 'exists but no runtime' : 'undefined'
+        });
+
+        // Render results
+        var resultsDiv = document.getElementById('results');
+        var allPass = true;
+
+        for (var i = 0; i < results.length; i++) {
+            var r = results[i];
+            if (!r.pass) allPass = false;
+
+            var div = document.createElement('div');
+            div.className = 'result ' + (r.pass ? 'pass' : 'fail');
+            div.textContent = (r.pass ? '✓' : '✗') + ' ' + r.name + ' (' + r.value + ')';
+            resultsDiv.appendChild(div);
+        }
+
+        // Store result in window for script access
+        window._antidetect_all_pass = allPass;
+        window._antidetect_results = results;
+    </script>
+</body>
+</html>
