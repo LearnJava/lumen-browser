@@ -1,6 +1,7 @@
 In progress: none
 Next task: coordinate with P3 on Phase 3 automation tasks (8A–8H), or take 8C.3 if defined. Next major phase: CSS property wiring P4 integration. Phase 1–2 DOM/layout work finished (41 items ✅).
 
+Recent merge: event.isTrusted (8C.2) ✅ — isTrusted field in Event constructor (false by default for synthetic events, true for native shell events), mark _lumen_dispatch_bubble/composition/page lifecycle/WebSocket events as trusted, 4 unit tests, 232 total PASS, clippy clean 2026-05-28
 Recent merge: 8A.4 Structural getters ✅ — LayoutBox::find_descendant_by_selector/find_all_descendants_by_selector/style_snapshot methods + ComputedStyleSnapshot + find_box_by_selector/find_all_by_selector/computed_style_by_selector pub functions, selector matching via CSS3 engine, 3 integration tests, clippy clean 2026-05-27
 Recent merge: ime-input Phase 3 ✅ — virtual keyboard hints via InputMode enum (InputMode::parse, as_str, Node::input_mode for input/textarea), 9 unit tests, 189 total PASS, clippy clean 2026-05-31
 Recent merge: print-pdf-advanced Phase 4 ✅ — real font measurement in margin-boxes (TextMeasurer integration, measure_text_w in layout_text, apply_margin_box_content with font_size param), 42 page tests PASS, 2026-05-31
