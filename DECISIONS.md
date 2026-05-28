@@ -1,6 +1,10 @@
 # Decisions log Lumen
 
-Архитектурные решения и их обоснования: что приняли, почему, какие альтернативы рассмотрели и отвергли. Этот файл — место истины для «почему сделано именно так». При появлении нового решения обновляй здесь (а не в CLAUDE.md).
+⚠️ **DEPRECATED**: New architectural decisions are stored in [`docs/decisions/`](docs/decisions/) as ADR files (ADR-001 onwards). This file contains historical decisions (pre-ADR format) and is kept for reference only. **Do not add new entries here** — use `docs/decisions/TEMPLATE.md` for new decisions and update [`docs/decisions/README.md`](docs/decisions/README.md) index.
+
+---
+
+Архитектурные решения и их обоснования: что приняли, почему, какие альтернативы рассмотрели и отвергли. Этот файл — архив исторических решений, новые решения идут в `docs/decisions/ADR-*.md`.
 
 Полные обсуждения каждого решения — в commit-сообщениях и плане; здесь — краткое резюме.
 

@@ -1,7 +1,39 @@
-Bug fixes rule: P2 does NOT fix bugs. Discovered bugs → add to BUGS.md + P5 picks up.
+# STATUS-P2 — Feature Development
 
-Next: — (все задачи переданы P1 2026-05-27 → STATUS-P1.md)
+**Developer:** Программист 2 (Feature development — any subsystem from roadmap)
 
-Queue: — (см. STATUS-P1.md: Wave 1 строки 14-17, Wave 2 строки 35-40)
+---
 
-Recent: webp-decoder 2026-05-27, picture-srcset-gpu 2026-05-27, bug037-filter-uniform 2026-05-26, bug015-img-alt 2026-05-25, gradient-rendering 2026-05-22, border-radius-sdf 2026-05-22, bug033-box-shadow-blur 2026-05-22, animation-transition-engine 2026-05-22, multi-column-rendering 2026-05-22, @font-face-loading 2026-05-22, canvas2d-context 2026-05-22, woff2-decoder 2026-05-22, clip-path-rendering 2026-05-22, css-filter-pipeline 2026-05-22
+## In progress
+_(none)_
+
+## Next step
+1. Read [lumen-plan.md](lumen-plan.md) Track P1 section (§P1 roadmap)
+2. Check if your task is marked ⬜ (not started) or 🟡 (in progress by another session)
+3. Pick first available ⬜ item and create branch: `git checkout -b p2-<task-name>`
+4. In first commit: update this file with "In progress: <task>" + branch name
+
+---
+
+## Recent merges
+- webp-decoder (2026-05-27)
+- picture-srcset-gpu (2026-05-27)
+- gradient-rendering (2026-05-22)
+- border-radius-sdf (2026-05-22)
+- animation-transition-engine (2026-05-22)
+- multi-column-rendering (2026-05-22)
+- canvas2d-context (2026-05-22)
+- woff2-decoder (2026-05-22)
+- clip-path-rendering (2026-05-22)
+- css-filter-pipeline (2026-05-22)
+
+---
+
+## Notes
+
+- **Coordinate with P1:** Check STATUS-P1.md before starting cross-domain work
+- **CSS workflow:** If your algorithm needs a CSS property, add `// CSS: <property>` comment and note in STATUS-P4.md "Needs wiring"
+- **Bug discovery:** Don't fix bugs — add to BUGS.md with next BUG-NNN number, continue feature work
+- **All tasks tracked:** Use git branch prefix `p2-<task-name>` so parallel sessions don't duplicate
+
+See CLAUDE.md for full workflow details.

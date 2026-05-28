@@ -21,7 +21,7 @@ Current phase: **Phase 0 (prototype)**. Goal: open local HTML+CSS and render it 
 | `STATUS-P2.md` | P2 sprint: in-progress task, next items, recent merge. Read at session start if you are P2. |
 | `STATUS-P3.md` | P3 sprint: in-progress task, next items, recent merge. Read at session start if you are P3. |
 | `STATUS-P4.md` | P4 sprint: CSS spec compliance. Read at session start if you are P4. |
-| `lumen-plan.md` | Full design doc (~1200 lines, 22 chapters): principles, scope, architecture, phases. Read for architecture/history, not daily status. |
+| `lumen-plan.md` | Full design doc (~2400 lines, 22 chapters): principles, scope, architecture, phases, roadmap, implementation history. Read for architecture/history; for daily status use `STATUS-PN.md` instead. |
 | `CSS-SPECS.md` | Complete CSS property & spec roadmap: all W3C modules, per-property status (✅🟡⬜🚫), P4 priority queue. |
 | `CLAUDE.md` | (this file) Conventions and invariants for the assistant. |
 | `docs/decisions/` | Formal ADR files (one per architectural decision). See README.md + TEMPLATE.md inside. |
@@ -43,7 +43,7 @@ Exception: Claude memory (`~/.claude/projects/.../memory/`) lives outside the re
 
 ## Developer assignments
 
-Five parallel developers (5 Claude Code sessions, each in its own `git worktree`). Each owns a domain to minimize merge conflicts. Former P4 role (shell + JS + runtime + UI) is merged into P3. P4 role covers **all CSS work**. **P5 owns all bug fixes** — P1/P2/P3/P4 do not fix bugs, they only build new features.
+Four parallel developers (4 Claude Code sessions, each in its own `git worktree`). Each owns a distinct domain:
 
 **If the user says "you are developer N" at session start — read `STATUS-PN.md` and take the first item from "Next". If "In progress" is set — continue that task. If all your tasks are taken — ask the user which task to take next.**
 
@@ -51,34 +51,35 @@ Crates: `shell` | `core` | `dom` `html-parser` `css-parser` `layout` `paint` `fo
 
 | Developer | Domain | Crates |
 |---|---|---|
-| **P1** | Frontend engine: source → layout tree | `html-parser`, `css-parser`, `dom`, `layout`, `encoding`, `a11y` |
-| **P2** | Backend rendering: layout tree → pixels | `font`, `paint`, `image` |
-| **P3** | Runtime + system: everything outside the engine + **automation API** | `shell`, `network`, `storage`, `knowledge`, `core::ext`, `driver`, `mcp`, `bidi` |
-| **P4** | **All CSS**: parsing, ComputedStyle, cascade, every property end-to-end | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) — cross-domain |
-| **P5** | **All bug fixes**: BUGS.md OPEN items, graphic test regressions, cross-crate | any crate — read-only access to all domains |
+| **P1** | Feature development: any subsystem from roadmap (source → layout → paint → shell) | All crates (coordinated with P2/P4) |
+| **P2** | Feature development: any subsystem from roadmap (source → layout → paint → shell) | All crates (coordinated with P1/P4) |
+| **P3** | **Bug fixes ONLY**: BUGS.md OPEN items, graphic test regressions | All crates (read-only except bug fixes) |
+| **P4** | **CSS properties ONLY**: parsing, ComputedStyle, cascade, end-to-end wiring | `css-parser`, `layout` (style.rs), `paint` (display_list.rs) |
 
-Full subsystem breakdown per role — [lumen-plan.md](lumen-plan.md) §developer-assignments.
+### Feature development: P1 and P2 collaboration
 
-> **Multi-marker subtasks** (`[P1+P2]` etc.) are common due to cross-domain runtime. **First marker = primary owner**; others contribute via review / interface / separate branches. `[P3]` now covers former `[P4]` tasks; historical commits keep `[P4]` unchanged.
->
-> **P4 coordination rule:** before touching `style.rs` — check `STATUS-P1.md`; before touching `display_list.rs` / `renderer.rs` — leave a note in the commit message for P2. Merge to `main` after each property to minimize divergence.
+**P1 and P2 work on features from the roadmap in parallel.** Coordination:
+- **Before starting:** Check `STATUS-P1.md` and `STATUS-P2.md` to avoid duplicate task pickup
+- **When reserving a task:** Update your `STATUS-PN.md` first (add "In progress" with branch name)
+- **Cross-domain work** (layout + paint): Use separate branches, coordinate via commit messages
+- **Crate conflicts:** Check git branches before touching a crate. If conflict, one session delays start
 
-### Bug ownership: P5 only
+### Bug ownership: P3 only
 
-**P1, P2, P3, P4 do not fix bugs.** When a developer discovers a bug while working:
+**P1, P2, P4 do not fix bugs.** When discovering a bug while working:
 
 1. Add a line to `BUGS.md` as `OPEN` with the next BUG-NNN number
 2. Optionally add a `// BUG-NNN` comment at the call site
 3. Continue the current feature task — do not context-switch
 
-**P5 workflow:**
+**P3 workflow:**
 1. Run `python graphic_tests/run.py --continue-on-fail` → identify failing tests
 2. Pick highest-deviation OPEN item from `BUGS.md`
 3. Locate code via `SYMBOLS.md` + targeted grep (do not read whole files)
 4. Fix + add regression test + mark `BUGS.md`: `OPEN → FIXED <date>`
 5. `cargo clippy -p <crate> --all-targets -- -D warnings` → `cargo test -p <crate>` → commit
 
-P5 branch prefix: `p5-<bug-id>`, e.g. `p5-bug023-opacity`.
+P3 branch prefix: `p3-bug-<id>`, e.g. `p3-bug023-opacity`.
 
 ### CSS ownership: P4 only
 
@@ -91,12 +92,12 @@ P5 branch prefix: `p5-<bug-id>`, e.g. `p5-bug023-opacity`.
 - Wiring stored values to paint/display-list — P4
 - CSS at-rules: `@media`, `@keyframes`, `@container`, `@layer`, `@supports` — P4
 
-**The only CSS code P1/P2/P3 write** is the algorithm stub — when a new layout or render primitive is needed, they:
+**P1/P2 write algorithm stubs for P4 to wire.** When a new layout or render primitive is needed:
 
-1. Implement the algorithm / GPU primitive
+1. P1/P2 implements the algorithm / GPU primitive
 2. Expose a clean Rust interface (function or trait)
 3. Add `// CSS: <property-name>` comment marking where P4 should connect
-4. Do **not** add the property to `ComputedStyle` or `apply_declaration()` — that is P4's job
+4. **Do not** add the property to `ComputedStyle` or `apply_declaration()` — P4's job
 
 Example split for `float`:
 ```
@@ -109,6 +110,8 @@ Example split for `filter`:
 P2 writes:  fn apply_filter_pass(cmd: FilterCommand)  // CSS: filter, backdrop-filter
 P4 writes:  ComputedStyle.filter field + apply_declaration("filter") + emits FilterCommand
 ```
+
+**P4 workflow:** When P1/P2 add a `// CSS: <property>` comment, P4 picks it up from `STATUS-P4.md` "Needs wiring" section. P4 implements end-to-end, then moves to "Recent". Async workflow — no pre-coordination required.
 
 ### Collaboration rules
 
@@ -429,12 +432,24 @@ Branch names: short kebab-case. **Developer sessions (P1–P4) must prefix the b
 
 ### Parallel session coordination
 
-Multiple Claude Code sessions may work simultaneously. To avoid duplicate task pickup:
+Multiple Claude Code sessions may work simultaneously. Full workflow for task lifecycle:
 
-1. **Before starting** — read `STATUS-PN.md` + `git branch`. If "In progress" is already set — that task is taken, pick from "Next" instead.
-2. **Reserve a task**: create a feature branch and in the **first commit** set "In progress" in `STATUS-PN.md` with branch name and next step.
-3. **On merge to `main`** — clear "In progress", move task out of "Next", update "Recent" in `STATUS-PN.md`.
-4. **If work is cancelled** — delete the branch; remove the line in a `cleanup-<name>` branch, merge to main.
+**Step 1: Task startup (BEFORE coding)**
+1. Read `STATUS-PN.md` + `git branch` — check what's in progress
+2. If "In progress" is already set — that task is taken, pick from "Next" instead
+3. Create a feature branch and worktree: `git worktree add .claude/worktrees/<task-name> -b p<N>-task-name`
+4. In the **first commit**, update `STATUS-PN.md`: set "In progress: <task>" + branch name + next step
+5. Push the branch: `git push origin p<N>-task-name`
+
+**Step 2: During work** — see "Worktree isolation" section below
+
+**Step 3: Task completion (7 mandatory steps)** — see "Task completion checklist" section below
+
+**If work is cancelled:**
+- Delete the worktree: `git worktree remove .claude/worktrees/<task-name>`
+- Delete the branch: `git branch -D p<N>-task-name`
+- In a cleanup commit, remove the line from `STATUS-PN.md`
+- Push: `git push origin main`
 
 #### Worktree isolation — mandatory
 
@@ -474,6 +489,38 @@ git worktree remove <path>
 A dirty `main` worktree blocks all other sessions — git refuses `checkout main` with `fatal: 'main' is already used by worktree at <path>`.
 
 **Zombie worktree** (path doesn't match branch, e.g. `.claude/worktrees/css-foo/` on `[main]`): `git -C <path> checkout -B zombie-stale-wip && git -C <path> commit -m "wip"` — frees main. Full procedure with patch archive — `.claude/docs/zombie-worktree.md`.
+
+#### Task completion checklist (7 steps, all mandatory)
+
+**After task is done and ready to merge, execute ALL 7 steps in order. Missing even one step causes accumulated stale branches.**
+
+```bash
+# 1. Verify code is production-ready
+cargo clippy -p <crate> -- -D warnings
+cargo test -p <crate>
+
+# 2. Merge branch to main with --no-ff
+git checkout main
+git merge --no-ff p<N>-task-name -m "Merge p<N>-task-name: описание"
+
+# 3. Delete branch immediately after merge
+git branch -d p<N>-task-name
+
+# 4. Update STATUS-PN.md on main
+# — remove line from "In progress"
+# — move task to "Recent"
+git add STATUS-PN.md
+git commit -m "P<N>: отметить task-name как завершённую"
+
+# 5. Push to remote
+git push origin main
+
+# 6. Exit worktree and delete it (CRITICAL — blocks other sessions if left behind)
+git worktree remove .claude/worktrees/<task-name>
+# (session automatically returns to original directory)
+```
+
+**Why all 7 are mandatory:** Skipping delete-branch (step 3) or delete-worktree (step 6) leaves stale branches that accumulate. Skipping STATUS update (step 4) loses task history. Both cause confusion in parallel sessions and merge conflicts. As of 2026-05-28, 37 stale branches had accumulated due to incomplete cleanup. Commit to all 7 steps every time.
 
 ---
 

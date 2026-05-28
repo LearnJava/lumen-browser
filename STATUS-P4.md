@@ -1,65 +1,78 @@
-In progress: —
+# STATUS-P4 — CSS Properties
 
-Next:
+**Developer:** Программист 4 (CSS implementation ONLY)
 
-Queue (Wave 3+):
+---
 
-Role: P4 owns ALL CSS work. P1/P2/P3 do not write CSS properties.
-Full property roadmap and work queue — CSS-SPECS.md (P4 Priority Queue section).
+## In progress
+_(none)_
 
-Needs wiring (algorithm ready, CSS not connected):
-  — font-optical-sizing (P1, branch p1-font-variable-opsz).
-    P4 task: add `font_optical_sizing: Option<f32>` to ComputedStyle (none/auto/auto-compat/inherit,
-    value in CSS user units — typically 6..72pt). Apply via apply_declaration("font-optical-sizing").
-    Wire point: emit_text_shadows (display_list.rs:1636) — append (b"opsz", optical_sizing_value)
-    to font_variation_axes Vec if present. Also in emit_text_frags (display_list.rs line TBD).
-    Also in renderer.rs:normalize_variation_axes (line 5826+) — inject normalized opsz after
-    CSS axes normalization.
-    P1 has created VariationCoords struct in lumen-font to manage normalized axis storage.
+## Workflow
 
-  — ::first-letter / ::first-line structural markers (P1, branch p1-css-first-line-letter).
-    P4 task (::first-letter): look up `::first-letter` rule via
-    compute_pseudo_element_style(node, "first-letter"). Find segments where
-    `pseudo_kind == PseudoKind::FirstLetter` in InlineRun.segments. Override seg.style
-    with the resolved ::first-letter styles. Note: the whole first-text-node segment is
-    marked; P4 must split the first grapheme at display-list time if font-size changes.
-    Wire point: lay_out() in box_tree.rs, after wrap_inline_run() — see comment
-    "// CSS: ::first-letter — P4 wires: ...".
+1. **Check for "Needs wiring" section below** — P1/P2 algorithms ready for CSS connection
+2. **Read CSS-SPECS.md** P4 Priority Queue for next property to implement
+3. **Create branch:** `git checkout -b p4-<property-name>`, e.g. `p4-opacity-css`
+4. **Implement end-to-end:**
+   - Add field to `ComputedStyle` (lumen-layout/src/style.rs)
+   - Add parsing in `apply_declaration()` 
+   - Wire to `lay_out()` or `build_display_list()` as needed
+   - Add 3-5 unit tests
+   - Add visual test in `graphic_tests/`
 
-  — ::first-line structural markers (P1, branch p1-css-first-line-letter).
-    P4 task (::first-line): look up `::first-line` rule via
-    compute_pseudo_element_style(node, "first-line"). Find InlineFrag entries where
-    `is_first_line == true` in InlineRun.lines[0]. Override frag.style with ::first-line
-    styles. Only inheritable properties apply per CSS spec.
-    Wire point: lay_out() in box_tree.rs, after wrap_inline_run() — see comment
-    "// CSS: ::first-line — P4 wires: ...".
+5. **Merge:** After clippy + tests pass, merge to main
+   - Update this STATUS-P4.md: move from "Needs wiring" to "Recent"
+   - Update CSS-SPECS.md: mark property as ✅
 
-  — :host / ::slotted pseudo-classes (Shadow DOM cascade + composed tree merged).
-    P4 task: implement :host selector matching in `matches_complex` (matches shadow
-    host from inside shadow tree) + ::slotted() functional pseudo-element matching.
-    Wire point: build_box() in layout/src/box_tree.rs — see comment
-    "// CSS: :host, ::slotted — P4 wires shadow-scoped styles here".
-    Branch: new branch for this P4 task.
+---
 
-  — @font-face registry wired in shell (branch: font-face-loading).
-    P4 task: wire font-weight/font-style/font-stretch descriptors from
-    FontFaceRule into FontRegistry::register_from_bytes calls.
-    CSS: @font-face unicode-range, font-display — P4 deferred.
-  — CSS Transitions sync(): TransitionScheduler::tick() is wired into the
-    shell frame loop (P2, branch animation-transition-engine). P4 task: call
-    transition_scheduler.sync(node, &old_style, &new_style, now) after every
-    relayout or computed-style mutation so transitions actually fire.
-    Location: shell/src/main.rs — relayout() and apply_loaded_page().
-    CSS: transition-property / transition-duration / transition-delay /
-    transition-timing-function already in ComputedStyle (P4 2026-05-21).
+## Needs wiring (algorithm ready, CSS not connected)
 
-Coordination rules:
-  — Before touching style.rs: check STATUS-P1.md, avoid same property area
-  — Before touching display_list.rs / renderer.rs: notify P2 in commit message
-  — Use separate worktree for every task: .claude/worktrees/<task>/
-  — Merge to main after each property (keep divergence small)
-  — Compliance tracker: CSS-SPECS.md (единственный источник правды)
-  — P1/P2/P3 handoff: when they add a new algorithm stub marked // CSS: <prop>,
-    it appears in "Needs wiring" above — pick it up as a P4 task
+**P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
 
-Recent: background-blend-mode CSS Compositing L1 §8.3 blend_mode в BackgroundLayer+parse+apply_declaration+PushBlendMode/PopBlendMode в emit_background_layer+6 layout тестов+4 display-list теста+graphic test 49+CSS-SPECS.md #15 🟡→✅ 2026-05-27, SVG fill/stroke presentational attributes SvgPaint enum+svg_fill/svg_stroke/svg_fill_opacity/svg_stroke_opacity/svg_stroke_width in ComputedStyle+apply_declaration+emit_svg_shape wired+10 новых тестов+graphic test 47 расширен+CSS-SPECS.md #58 ⬜→🟡 ✅ 2026-05-27, CSS Transitions sync() fix — убран сброс TransitionScheduler в relayout(); переходы теперь выживают при ресайзе viewport ✅ 2026-05-26, CSS Transforms L2 individual translate/rotate/scale props ComputedStyle+apply_declaration+forward_box_transform compose (translate→rotate→scale→transform)+creates_stacking_context+9 тестов+graphic test 46+CSS-SPECS.md #24 🟡→✅ 2026-05-26, backdrop-filter GPU compositing Filter Effects L1 §2 PushBackdropFilter/PopBackdropFilter+BackdropFilterCompositePlan+copy_texture_to_texture+blur H/V+REPLACE blit bounded quad+backdrop_blit_pipeline+4 display-list tests+6 layout tests+graphic test 30+CSS-SPECS.md #13 🟡→✅ 2026-05-24, Media Queries L3 #12 width/height exact+aspect-ratio+em/rem units+prefers-reduced-motion+re-eval on resize ✅+8 css-parser tests+8 layout tests+graphic test 44 CSS-SPECS.md #12 🟡→✅ 2026-05-24, CSS Intrinsic Sizing L3 #21 min-content/max-content/fit-content/fit-content(L) для width/height/min-max+11 тестов+graphic test 43 CSS-SPECS.md #21 🟡→✅ 2026-05-24, CSS Lists L3 #9 geometric markers disc=FillRoundedRect(circle)/circle=DrawBorder(outline)/square=FillRect+list_style_type in BoxKind::Marker+7 тестов CSS-SPECS.md #9 🟡→✅ 2026-05-24, border-radius elliptical (rx≠ry) CSS Backgrounds L3 §5.5 border_{corner}_radius_y+split_border_radius_slash+split_radius_pair+RRectVertex radii_x/y+WGSL sdf_rrect эллиптический+12 тестов+graphic test 36 CSS-SPECS.md #23 ⬜→✅ 2026-05-24, CSS Positioning L3 §6.3 position:sticky BeginStickyLayer/EndStickyLayer+sticky_offset_dy/dx+to_px_opt()+5 тестов+graphic test 42 CSS-SPECS.md #6 🟡→✅ 2026-05-24, CSS Display L3 §17 table layout BoxKind::Table+TableRowGroup+lay_out_table+compute_table_col_widths global col widths+6 тестов+graphic test 41 CSS-SPECS.md #5 🟡→✅ 2026-05-24, CSS Images L4 §3.7 conic-gradient() ParsedGradient::Conic + parse_conic_gradient_params + parse_conic_stop_position (deg/rad/turn/grad→%) + DrawConicGradient + PushMaskConicGradient + GradParamsCpu.param0 + WGSL kind=2 (box-space atan2 + repeating tile-by-stop-span) + 9 unit tests (layout) + 3 display-list tests + graphic test 40 + CSS-SPECS.md #17 ⬜→✅ 2026-05-24, CSS Easing L2 linear() easing function TimingFunction::LinearStops+LinearEasingPoint+parse_linear_easing_stops+linear_stops_progress+13 тестов CSS-SPECS.md #48 ⬜→✅ 2026-05-24, z-index stacking context paint ordering StackingTree+PaintOrder+build_display_list_ordered wired in shell + build_display_list_ordered_with_anim + graphic test 38 ✅ 2026-05-23, float+clear CSS 2.1 §9.5 FloatContext+FloatSide+ClearSide+10 тестов ✅ 2026-05-22, CSS Grid L1 grid-template-areas + GridLine::Named + find_named_area + resolve_named_lines + 9 тестов ✅ 2026-05-22, CSS Nesting L1 implicit nesting + nested at-rules + NestedRule::Qualified/AtRule + 20 тестов ✅ 2026-05-22, @layer cascade ordering CSS Cascade L5 §6.4.5 layer_priority sort key + 6 tests ✅ 2026-05-22, CSS Transitions wire-up TransitionScheduler sync()+tick() in shell + CSS-SPECS.md #1/#2/#3 → ✅ 2026-05-22, CSS-SPECS.md sync filter/clip-path/column-rule/text-emphasis/scroll-snap/container ✅ 2026-05-22, tab-size rendering white-space:pre/pre-wrap + \t→tab_size + UA <pre> ✅ 2026-05-22, css-2026-compliance.md Grid/Position/Transform/hyphens/cursor актуализирован ✅ 2026-05-22, hyphens Manual/Auto wrap_inline_run+HyphenationProvider+layout_measured_hyp ✅ 2026-05-22, scroll-snap-* find_scroll_snap_y+proximity ✅ 2026-05-22, text-emphasis rendering emit_text_emphasis_marks per-char marks ✅ 2026-05-22, pointer-events+user-select wire-up UserSelect в HitTestResult ✅ 2026-05-22, @container queries matching ContainerContext+evaluate_container_condition+apply_container_styles 🟡 2026-05-22, CSS Containment enforcement contain:size/layout/paint 🟡+ 2026-05-22, direction+bidi layout wire-up TextAlign::Start/End+RTL mirroring 🟡+ 2026-05-21, mask-image/repeat/size PushMask*/PopMask+GPU mask_composite_pipeline 🟡 2026-05-21, image-rendering bilinear/nearest GPU sampler ✅ 2026-05-21, multi-column lay_out_multicol_children column-count/width/gap ✅ 2026-05-21, background-repeat/position/size 🟡→✅ DrawBackgroundImage+renderer 2026-05-21, cursor OS wire-up HitTestResult.cursor+css_cursor_to_winit 2026-05-21, background-image gradients ParsedGradient+DrawLinearGradient 2026-05-21, transition wire-up TransitionScheduler 2026-05-21, animation wire-up @keyframes→AnimationScheduler 2026-05-21, vertical-align inline y-offset 2026-05-21, ::before/::after pseudo-element generation 2026-05-21, @font-face L4 descriptors 2026-05-21, fix-tests-garbled 2026-05-21, css-shapes + motion-path 2026-05-21, writing-mode 2026-05-21, backdrop-filter + print-color-adjust + font-size-adjust 2026-05-21, color-scheme 2026-05-21, text-underline-position 2026-05-21, orphans-widows 2026-05-21, line-clamp 2026-05-21, transform-matrix 2026-05-21, display-ext 2026-05-21, containment + container-queries 2026-05-21, text-align-last + touch-action + appearance 2026-05-21, forced-color-adjust 2026-05-21, resize + line-break 2026-05-21
+### font-optical-sizing (P1 feature p1-font-variable-opsz)
+- **Status:** Algorithm ready (VariationCoords struct created in lumen-font)
+- **P4 task:** 
+  1. Add `font_optical_sizing: Option<f32>` to ComputedStyle
+  2. Parse in `apply_declaration("font-optical-sizing")`
+  3. Wire in `emit_text_shadows()` (display_list.rs:1636) → inject opsz into font_variation_axes
+  4. Normalize in `renderer.rs:normalize_variation_axes()`
+  5. 5 unit tests
+
+### ::first-letter pseudo-element (P1 feature p1-css-first-line-letter)
+- **Status:** Structural markers ready in InlineRun
+- **P4 task:**
+  1. Look up `::first-letter` rule via `compute_pseudo_element_style()`
+  2. Override segment.style for first grapheme
+  3. Wire in `lay_out()` (box_tree.rs) after wrap_inline_run()
+  4. Split first grapheme if font-size changes at display-list time
+
+### ::first-line pseudo-element (P1 feature p1-css-first-line-letter)
+- **Status:** Structural markers ready in InlineRun.lines[0]
+- **P4 task:**
+  1. Look up `::first-line` rule via `compute_pseudo_element_style()`
+  2. Override frag.style for first line (inheritable properties only)
+  3. Wire in `lay_out()` (box_tree.rs) after wrap_inline_run()
+
+### :host / ::slotted pseudo-classes (Shadow DOM)
+- **Status:** Selector matching needed in composed tree
+- **P4 task:**
+  1. Implement `:host` matching in `matches_complex()` (from inside shadow tree)
+  2. Implement `::slotted()` pseudo-element matching
+  3. Wire in `build_box()` (box_tree.rs)
+
+---
+
+## Recent merges
+_(completed CSS properties will be listed here)_
+
+---
+
+## Notes
+
+- **No algorithm work:** Don't write layout/paint algorithms — that's P1/P2
+- **CSS-only:** No shell integration, no runtime — strictly property definition
+- **One property per commit** to keep history clean
+- **Graphic tests required:** Every property needs a visual test in `graphic_tests/`
+- **Check CSS-SPECS.md:** For full property roadmap and spec references
+
+See CLAUDE.md §"CSS ownership: P4 only" for full workflow details.
