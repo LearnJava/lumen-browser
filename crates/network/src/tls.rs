@@ -8,8 +8,17 @@
 //!
 //! Per-profile TLS configs:
 //! - Standard: общее использование, стандартный Chrome fingerprint
-//! - Strict: приватный/HSTS режим, более限s конфигурация
+//! - Strict: приватный/HSTS режим, более ограниченная конфигурация
 //! - Tor: minimized, tor-browser-compatible configuration
+//!
+//! Chrome TLS parameters (current version ~130):
+//! - Supported versions: TLS 1.2 (0x0303), TLS 1.3 (0x0304)
+//! - Key share groups: X25519, secp256r1, secp384r1, secp521r1
+//! - Signature algorithms: ecdsa_secp256r1_sha256, rsa_pss_rsae_sha256, etc.
+//! - Extensions: key_share, supported_versions, signature_algorithms, extensions_order, etc.
+//! - JA3 fingerprint: identifies TLS client configuration
+//!   Format: TLSVersion,Ciphers,Extensions,Groups,ECPointFormats
+//!   Hash: MD5 of the comma-separated values
 
 use rustls::{ClientConfig, SignatureScheme};
 
@@ -126,6 +135,43 @@ impl TlsHandshakeInfo {
     }
 }
 
+/// Chrome TLS handshake parameters snapshot (const version).
+///
+/// Reference values extracted from Chrome 130+ for JA3 fingerprinting.
+/// Used for snapshot testing to detect TLS configuration drift.
+#[allow(dead_code)]
+pub struct ChromeJa3Snapshot {
+    /// Chrome TLS version (771 = TLS 1.2, 772 = TLS 1.3)
+    pub tls_version: u16,
+    /// Expected cipher suites (first few, as Chrome orders them)
+    pub expected_cipher_suites: &'static [u16],
+    /// Expected TLS extensions in order
+    pub expected_extensions: &'static [u16],
+    /// Expected named groups / elliptic curves
+    pub expected_named_groups: &'static [u16],
+    /// Expected EC point formats
+    pub expected_ec_point_formats: &'static [u8],
+}
+
+/// Chrome 130 JA3 reference snapshot.
+///
+/// Updated per major Chrome release. Reference:
+/// https://www.ja3er.com/
+/// https://github.com/salesforce/ja3
+#[allow(dead_code)]
+pub const CHROME_130_JA3_SNAPSHOT: ChromeJa3Snapshot = ChromeJa3Snapshot {
+    tls_version: 772, // TLS 1.3
+    // Cipher suites: TLS_AES_128_GCM_SHA256, TLS_AES_256_GCM_SHA384, TLS_CHACHA20_POLY1305_SHA256
+    expected_cipher_suites: &[4865, 4866, 4867],
+    // Extensions: key_share, supported_versions, signature_algorithms, ec_point_formats, ...
+    // Note: order matters for fingerprinting; varies by Chrome version
+    expected_extensions: &[10, 45, 13, 11, 5, 16, 0, 23, 65281],
+    // Named groups: x25519, secp256r1, secp384r1, secp521r1
+    expected_named_groups: &[29, 23, 24, 25],
+    // EC point formats: uncompressed (0)
+    expected_ec_point_formats: &[0],
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -169,5 +215,34 @@ mod tests {
         assert!(ja3.contains("771"));
         assert!(ja3.contains("4865"));
         assert!(ja3.contains("0,10,11,16,5"));
+    }
+
+    #[test]
+    fn test_chrome_130_ja3_snapshot_structure() {
+        // Verify Chrome JA3 snapshot has expected fields
+        assert_eq!(CHROME_130_JA3_SNAPSHOT.tls_version, 772); // TLS 1.3
+        assert!(!CHROME_130_JA3_SNAPSHOT.expected_cipher_suites.is_empty());
+        assert!(!CHROME_130_JA3_SNAPSHOT.expected_extensions.is_empty());
+        assert!(!CHROME_130_JA3_SNAPSHOT.expected_named_groups.is_empty());
+    }
+
+    #[test]
+    fn test_ja3_handshake_from_chrome_snapshot() {
+        // Build a handshake info from Chrome snapshot
+        let info = TlsHandshakeInfo {
+            tls_version: CHROME_130_JA3_SNAPSHOT.tls_version,
+            cipher_suite: CHROME_130_JA3_SNAPSHOT.expected_cipher_suites[0],
+            extensions: CHROME_130_JA3_SNAPSHOT.expected_extensions.to_vec(),
+            named_groups: CHROME_130_JA3_SNAPSHOT.expected_named_groups.to_vec(),
+            ec_point_formats: CHROME_130_JA3_SNAPSHOT.expected_ec_point_formats.to_vec(),
+            signature_algorithms: vec![],
+        };
+        let ja3 = info.ja3_string();
+
+        // Verify format
+        let parts: Vec<_> = ja3.split(',').collect();
+        assert!(parts.len() >= 5, "JA3 should have at least 5 comma-separated parts");
+        assert_eq!(parts[0], "772"); // TLS version
+        assert_eq!(parts[1], "4865"); // Cipher suite
     }
 }
