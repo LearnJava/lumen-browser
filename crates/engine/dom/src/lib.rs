@@ -4003,4 +4003,64 @@ mod tests {
         assert!(final_state.is_some());
         assert_eq!(final_state.unwrap().text, "чт");
     }
+
+    #[test]
+    fn composition_event_dispatching_ready() {
+        // Test CompositionEvent readiness for P3 dispatch (UI Events §5.2.5)
+        // P3 will serialize these events to JS runtime
+
+        // compositionstart event
+        let start_evt = CompositionEvent::start("初".to_string(), Some("zh".to_string()));
+        assert_eq!(start_evt.event_type, CompositionEventType::Start);
+        assert_eq!(start_evt.event_type.as_str(), "compositionstart");
+        assert_eq!(start_evt.data.data, "初");
+        assert_eq!(start_evt.data.locale, Some("zh".to_string()));
+
+        // compositionupdate events track user edits and cursor position
+        let update1 = CompositionEvent::update("初".to_string(), Some((0, 1)));
+        assert_eq!(update1.event_type.as_str(), "compositionupdate");
+        assert_eq!(update1.data.range, Some((0, 1))); // cursor at offset 0, length 1
+
+        let update2 = CompositionEvent::update("初中".to_string(), Some((0, 2)));
+        assert_eq!(update2.data.data, "初中");
+        assert_eq!(update2.data.range, Some((0, 2))); // preedit text spans 2 characters
+
+        // compositionend event with final committed text
+        let end_evt = CompositionEvent::end("初中文".to_string());
+        assert_eq!(end_evt.event_type.as_str(), "compositionend");
+        assert_eq!(end_evt.data.data, "初中文");
+        assert_eq!(end_evt.data.range, None); // no range on final commit
+    }
+
+    #[test]
+    fn composition_event_empty_data() {
+        // Edge case: some IMEs send compositionstart with empty data
+        let start_empty = CompositionEvent::start("".to_string(), Some("ja".to_string()));
+        assert_eq!(start_empty.data.data, "");
+        assert_eq!(start_empty.data.locale, Some("ja".to_string()));
+
+        // compositionupdate may not have locale info
+        let update = CompositionEvent::update("text".to_string(), Some((0, 4)));
+        assert_eq!(update.data.locale, None);
+
+        // compositionend may have empty data (commit cleared by IME)
+        let end_empty = CompositionEvent::end("".to_string());
+        assert_eq!(end_empty.data.data, "");
+        assert_eq!(end_empty.data.range, None);
+    }
+
+    #[test]
+    fn composition_multi_codepoint_range() {
+        // Test range handling with multi-byte UTF-16 characters
+        // Some characters (emoji, etc.) are 2 UTF-16 code units
+
+        // surrogate pair emoji: 👍 = 2 UTF-16 code units
+        let emoji_composition = CompositionEvent::update("👍".to_string(), Some((0, 2)));
+        assert_eq!(emoji_composition.data.range, Some((0, 2)));
+
+        // More complex: multiple characters with mixed widths
+        let mixed = CompositionEvent::update("😀text😀".to_string(), Some((0, 6)));
+        // emoji(2) + t(1) + e(1) + x(1) + t(1) + emoji(2) = 8 UTF-16 units
+        assert_eq!(mixed.data.range, Some((0, 6)));
+    }
 }
