@@ -241,10 +241,10 @@ impl MarginBox {
     /// Layout text content in this margin-box with word-wrapping.
     ///
     /// Takes a text string and lays it out within the margin-box width,
-    /// applying line breaks and measuring each fragment's dimensions.
-    /// **Note:** Phase 3 simplified implementation uses fixed 8px-per-character
-    /// measurement. Phase 4 should integrate with FontMeasurer for real fonts.
-    pub fn layout_text(&mut self, text: &str, line_height: f32) {
+    /// applying line breaks and measuring each fragment's dimensions using
+    /// the provided TextMeasurer for real font metrics.
+    /// Phase 4: Integrates with TextMeasurer for real glyph widths (replaces Phase 3 simplified 8px-per-character).
+    pub fn layout_text(&mut self, text: &str, font_size: f32, line_height: f32, measurer: &dyn lumen_core::ext::TextMeasurer) {
         if text.is_empty() {
             self.text_fragments.clear();
             return;
@@ -252,33 +252,28 @@ impl MarginBox {
 
         self.text_fragments.clear();
 
-        // Phase 3: Simplified measurement (8px per character).
-        // Phase 4: integrate with FontMeasurer for real glyph widths
-        let char_width = 8.0;
-        let max_chars_per_line = (self.width / char_width).max(1.0) as usize;
-
-        if max_chars_per_line == 0 {
-            return; // Box too narrow to fit any text
-        }
-
-        let mut current_y = 0.0;
         let words: Vec<&str> = text.split_whitespace().collect();
-
         if words.is_empty() {
             return;
         }
 
+        let mut current_y = 0.0;
         let mut current_line = String::new();
+        let letter_spacing = 0.0; // margin-boxes don't apply letter-spacing
+
         for word in words.iter() {
             let separator = if current_line.is_empty() { "" } else { " " };
             let tentative = format!("{}{}{}", current_line, separator, word);
 
-            if tentative.len() <= max_chars_per_line {
+            // Measure tentative line width using real font metrics
+            let tentative_w = crate::box_tree::measure_text_w(&tentative, font_size, letter_spacing, 0.0, measurer);
+
+            if tentative_w <= self.width {
                 current_line = tentative;
             } else {
                 // Current line is full; save it and start a new line
                 if !current_line.is_empty() {
-                    let frag_width = current_line.len() as f32 * char_width;
+                    let frag_width = crate::box_tree::measure_text_w(&current_line, font_size, letter_spacing, 0.0, measurer);
                     self.text_fragments.push(MarginBoxTextFragment {
                         text: current_line.clone(),
                         x: 0.0,
@@ -289,31 +284,58 @@ impl MarginBox {
                     current_y += line_height;
                 }
 
-                // If word itself is longer than a line, split it by characters
-                if word.len() > max_chars_per_line {
+                // Try word on its own line
+                let word_w = crate::box_tree::measure_text_w(word, font_size, letter_spacing, 0.0, measurer);
+                if word_w <= self.width {
+                    current_line = word.to_string();
+                } else {
+                    // Word is too long to fit on a single line; split it by characters
                     let word_chars: Vec<char> = word.chars().collect();
-                    for chunk in word_chars.chunks(max_chars_per_line) {
-                        let chunk_str: String = chunk.iter().collect();
-                        let frag_width = chunk_str.len() as f32 * char_width;
+                    let mut current_chunk = String::new();
+
+                    for ch in word_chars.iter() {
+                        let tentative_chunk = format!("{}{}", current_chunk, ch);
+                        let chunk_w = crate::box_tree::measure_text_w(&tentative_chunk, font_size, letter_spacing, 0.0, measurer);
+
+                        if chunk_w <= self.width {
+                            current_chunk = tentative_chunk;
+                        } else {
+                            // Current chunk is full
+                            if !current_chunk.is_empty() {
+                                let chunk_w = crate::box_tree::measure_text_w(&current_chunk, font_size, letter_spacing, 0.0, measurer);
+                                self.text_fragments.push(MarginBoxTextFragment {
+                                    text: current_chunk.clone(),
+                                    x: 0.0,
+                                    y: current_y,
+                                    width: chunk_w,
+                                    height: line_height,
+                                });
+                                current_y += line_height;
+                            }
+                            current_chunk = ch.to_string();
+                        }
+                    }
+
+                    // Don't forget the last chunk
+                    if !current_chunk.is_empty() {
+                        let chunk_w = crate::box_tree::measure_text_w(&current_chunk, font_size, letter_spacing, 0.0, measurer);
                         self.text_fragments.push(MarginBoxTextFragment {
-                            text: chunk_str,
+                            text: current_chunk,
                             x: 0.0,
                             y: current_y,
-                            width: frag_width,
+                            width: chunk_w,
                             height: line_height,
                         });
                         current_y += line_height;
                     }
                     current_line.clear();
-                } else {
-                    current_line = word.to_string();
                 }
             }
         }
 
         // Don't forget the last line
         if !current_line.is_empty() {
-            let frag_width = current_line.len() as f32 * char_width;
+            let frag_width = crate::box_tree::measure_text_w(&current_line, font_size, letter_spacing, 0.0, measurer);
             self.text_fragments.push(MarginBoxTextFragment {
                 text: current_line,
                 x: 0.0,
@@ -352,11 +374,13 @@ impl PageBox {
     ///
     /// Takes content specifications (content functions) and resolves them
     /// to actual text using the current page counters.
-    /// Phase 3: Also performs text layout with word-wrapping within each margin-box.
+    /// Phase 4: Performs text layout with word-wrapping and real font measurement.
     pub fn apply_margin_box_content(
         &mut self,
         content_map: &HashMap<MarginBoxPosition, Vec<ContentFunction>>,
         counters: &PageCounters,
+        font_size: f32,
+        measurer: &dyn lumen_core::ext::TextMeasurer,
     ) {
         for (position, functions) in content_map {
             let mut text_content = String::new();
@@ -367,8 +391,9 @@ impl PageBox {
                 && !text_content.is_empty()
             {
                 margin_box.content = Some(text_content.clone());
-                // Phase 3: Layout text within margin-box with 16px line height (default)
-                margin_box.layout_text(&text_content, 16.0);
+                // Phase 4: Layout text within margin-box with real font measurement
+                let line_height = font_size * 1.5; // Standard 1.5 line-height for margins
+                margin_box.layout_text(&text_content, font_size, line_height, measurer);
             }
         }
     }
@@ -856,6 +881,15 @@ pub fn create_header_footer(header: Option<String>, footer: Option<String>) -> H
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lumen_core::ext::TextMeasurer;
+
+    /// Simple text measurer: 8px per character (for testing).
+    struct Fixed8;
+    impl TextMeasurer for Fixed8 {
+        fn char_width(&self, _: char, _: f32) -> f32 {
+            8.0
+        }
+    }
 
     #[test]
     fn test_margin_box_position_names() {
@@ -1223,12 +1257,12 @@ mod tests {
         assert_eq!(content.len(), 1);
     }
 
-    // Phase 3: Text layout tests
+    // Phase 4: Text layout tests with real font measurement
 
     #[test]
     fn margin_box_layout_text_simple() {
         let mut mb = MarginBox::new(MarginBoxPosition::TopCenter, 200.0, 50.0, 100.0, 0.0);
-        mb.layout_text("Hello World", 16.0);
+        mb.layout_text("Hello World", 16.0, 16.0, &Fixed8);
 
         // Text should fit on one line (8px per char, 25 chars fit in 200px)
         assert_eq!(mb.text_fragments.len(), 1);
@@ -1240,7 +1274,7 @@ mod tests {
     #[test]
     fn margin_box_layout_text_wrapping() {
         let mut mb = MarginBox::new(MarginBoxPosition::BottomCenter, 80.0, 100.0, 100.0, 100.0);
-        mb.layout_text("Hello World Test", 16.0);
+        mb.layout_text("Hello World Test", 16.0, 16.0, &Fixed8);
 
         // With 80px width and 8px per char, max 10 chars per line
         // "Hello" (5) + " " = 6 fits
@@ -1253,7 +1287,7 @@ mod tests {
     #[test]
     fn margin_box_layout_text_empty() {
         let mut mb = MarginBox::new(MarginBoxPosition::TopCenter, 200.0, 50.0, 0.0, 0.0);
-        mb.layout_text("", 16.0);
+        mb.layout_text("", 16.0, 16.0, &Fixed8);
 
         assert!(mb.text_fragments.is_empty());
     }
@@ -1261,7 +1295,7 @@ mod tests {
     #[test]
     fn margin_box_layout_text_whitespace_only() {
         let mut mb = MarginBox::new(MarginBoxPosition::TopCenter, 200.0, 50.0, 0.0, 0.0);
-        mb.layout_text("   ", 16.0);
+        mb.layout_text("   ", 16.0, 16.0, &Fixed8);
 
         assert!(mb.text_fragments.is_empty());
     }
@@ -1269,7 +1303,7 @@ mod tests {
     #[test]
     fn margin_box_layout_text_line_height() {
         let mut mb = MarginBox::new(MarginBoxPosition::BottomCenter, 80.0, 100.0, 0.0, 0.0);
-        mb.layout_text("Hello World Test Multiple", 20.0);
+        mb.layout_text("Hello World Test Multiple", 16.0, 20.0, &Fixed8);
 
         // Verify line heights are set correctly
         for fragment in &mb.text_fragments {
@@ -1281,7 +1315,7 @@ mod tests {
     fn margin_box_layout_text_narrow_box() {
         let mut mb = MarginBox::new(MarginBoxPosition::TopCenter, 30.0, 100.0, 0.0, 0.0);
         // 30px width / 8px per char = 3.75 ≈ 3 chars max per line
-        mb.layout_text("Hello World", 16.0);
+        mb.layout_text("Hello World", 16.0, 16.0, &Fixed8);
 
         // "Hello" (5 chars) exceeds 3, should wrap
         assert!(mb.text_fragments.len() >= 2);
@@ -1290,7 +1324,7 @@ mod tests {
     #[test]
     fn margin_box_text_fragments_width_calculation() {
         let mut mb = MarginBox::new(MarginBoxPosition::TopCenter, 200.0, 50.0, 0.0, 0.0);
-        mb.layout_text("Test", 16.0);
+        mb.layout_text("Test", 16.0, 16.0, &Fixed8);
 
         assert_eq!(mb.text_fragments.len(), 1);
         // "Test" = 4 chars * 8px = 32px
@@ -1317,11 +1351,11 @@ mod tests {
             ],
         );
 
-        page.apply_margin_box_content(&content_map, &counters);
+        page.apply_margin_box_content(&content_map, &counters, 16.0, &Fixed8);
 
         let top_center = page.get_margin_box(MarginBoxPosition::TopCenter).unwrap();
         assert_eq!(top_center.content, Some("Chapter 6".to_string()));
-        // Phase 3: Check that text was laid out
+        // Phase 4: Check that text was laid out with real font measurement
         assert!(!top_center.text_fragments.is_empty());
         assert_eq!(top_center.text_fragments[0].text, "Chapter 6");
     }
