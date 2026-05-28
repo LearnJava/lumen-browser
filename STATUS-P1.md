@@ -1,5 +1,5 @@
 In progress: none
-Next task: check remaining Phase 2+ layout work; next items: contenteditable Phase 3 (shell integration, P3 work), svg-layout Phase 4 (P2 paint/render pending), print-pdf-advanced Phase 4 (inline content in margin-boxes)
+Next task: assess Phase 3 P1 layout/DOM work; pending items: contenteditable Phase 3 (P3 shell integration), svg-layout Phase 4 (P2 paint), print-pdf inline content (P2 paint), font-loading-api Phase 2 (P3 binding), performance-observer Phase 2 (P3 binding)
 
 Recent merge: ime-input Phase 3 ✅ — virtual keyboard hints via InputMode enum (InputMode::parse, as_str, Node::input_mode for input/textarea), 9 unit tests, 189 total PASS, clippy clean 2026-05-31
 Recent merge: print-pdf-advanced Phase 4 ✅ — real font measurement in margin-boxes (TextMeasurer integration, measure_text_w in layout_text, apply_margin_box_content with font_size param), 42 page tests PASS, 2026-05-31
@@ -90,7 +90,7 @@ Recent:
 33. 🟡 accessibility-forms-validation — Phase 1: ValidityState in AXTree ✅ (2026-05-28); Phase 2: enhanced constraint validation (all error types + custom messages) ✅ (2026-05-28); Phase 3: submit algorithm integration
 34. ✅ ime-input ([P1+P3]) — Phase 1: composition state tracking ✅ (2026-05-28); Phase 2: composition ranges + event data structures ✅ (2026-05-28); Phase 3: virtual keyboard hints via InputMode enum ✅ (2026-05-31) — P3 shell integration (winit IME events) pending
 35. 🟡 svg-layout-advanced — Phase 1: SVG transforms, aspect-ratio preservation ✅ (2026-05-28); Phase 2: nested SVG transforms ✅ (2026-05-29); Phase 3: nested SVG layout (SvgRoot child propagation) ✅ (2026-05-30) — Phase 4 (paint/render for nested SVG viewBox+transforms) P2 pending
-36. 🟡 print-pdf-advanced — Phase 1: @page matching, margin-box model ✅ (2026-05-28); Phase 2: page counters + content generation ✅ (2026-05-29); Phase 3: margin-box text layout (MarginBoxTextFragment, layout_text word wrapping) ✅ (2026-05-30) — Phase 4 (inline content rendering in margin-boxes) pending
+36. ✅ print-pdf-advanced — Phase 1: @page matching, margin-box model ✅ (2026-05-28); Phase 2: page counters + content generation ✅ (2026-05-29); Phase 3: margin-box text layout (MarginBoxTextFragment, layout_text word wrapping) ✅ (2026-05-30); Phase 4: real font measurement in margin-boxes ✅ (2026-05-31) — P2 inline content rendering (text + images in margin-boxes) pending
 37. 🟡 font-loading-api ([P1+P3]) — Phase 1: FontFace/FontFaceStatus/FontFaceSet types, document.fonts collection, @font-face extraction + population, 7 unit tests PASS 2026-05-28 — Phase 2-3 P3 JS binding pending
 38. 🟡 performance-observer-timing ([P1+P3]) — Phase 1: PerformanceEntry/PerformanceObserver/PerformanceEntries types, mark/measure methods, Document.performance integration, 16 unit tests PASS 2026-05-29 — Phase 2-3 P3 JS binding + observer callback delivery pending
 
