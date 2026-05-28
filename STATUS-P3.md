@@ -1,5 +1,5 @@
-In progress: http-profiles-expansion (9C Phase 1.x)  branch: p3-http-profiles-expansion
-Next step: Add Firefox, Safari, Edge, update Tor-native profiles; wire HttpProfile variants to headers/SETTINGS  crates/network/src/http/headers.rs
+In progress: —
+Next step: Pick next task from Queue (Wave 2/3)
 
 Recent (Wave 2/3 - automation API + completed tasks):
   - ✓ fts-omnibox (Wave 2): HistoryFts + SearchHistory integration in shell: @history prefix, dropdown, prefix-match, SearchHistory recording 2026-05-28
@@ -14,6 +14,7 @@ Recent (Wave 2/3 - automation API + completed tasks):
   - bench-ram-axis (9G.5, Phase 1 complete: peak_rss + steady_state_rss tracking in lumen-bench, compare.py update, baseline.json restructure) 2026-05-28
   - samples-heavy-html (10M, Phase 1 complete: Habr-style benchmark page with 35+ posts, sidebar, sticky header, 1258 lines, ~2273 DOM nodes) 2026-05-28
   - antidetect-http-fingerprint-9c (Phase 1 complete: HttpProfile enum + header order + build_request_headers + fingerprint_profile getter/setter + 6 integration tests) 2026-05-28
+  - ✓ http-profiles-expansion (9C Phase 1.x): Firefox 130+ / Safari 18+ / Edge 130+ / Tor-native profiles; profile-specific HTTP/1.1 headers + H2 SETTINGS; 8 new unit tests, all 583 tests pass 2026-05-28
   - tab-state-machine-10a (Phase 1: TabState enum T0-T4 + state machine + transitions + idle timeout + memory pressure triggers + 5 tests) 2026-05-28
   - antidetect-tls-fingerprint-9b (Phase 1: TlsProfile enum + build_client_config + JA3 snapshot CHROME_130 + 10 tests) 2026-05-28
   - auto-wait-engine-8d (Phase 1: polling-based wait_for(Visible/Stable/NetworkIdle/JsIdle) in InProcessSession + WinitSession, 6 unit tests) 2026-05-28
