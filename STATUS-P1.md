@@ -1,5 +1,5 @@
 In progress: none
-Next task: assess Phase 3 P1 layout/DOM work; pending items: contenteditable Phase 3 (P3 shell integration), svg-layout Phase 4 (P2 paint), print-pdf inline content (P2 paint), font-loading-api Phase 2 (P3 binding), performance-observer Phase 2 (P3 binding)
+Next task: Phase 3 P1 assessment complete. Phase 1–2 DOM/layout work finished (41 items ✅). Phase 3 pending: event.isTrusted for native-injected events (8C.2), CSS property wiring P4 integration, remaining cross-domain work awaits P2/P3 integration. Next: take 8C.2 or coordinate with P3 on P3-owned Phase 3 automation tasks (8A–8H).
 
 Recent merge: 8A.4 Structural getters ✅ — LayoutBox::find_descendant_by_selector/find_all_descendants_by_selector/style_snapshot methods + ComputedStyleSnapshot + find_box_by_selector/find_all_by_selector/computed_style_by_selector pub functions, selector matching via CSS3 engine, 3 integration tests, clippy clean 2026-05-27
 Recent merge: ime-input Phase 3 ✅ — virtual keyboard hints via InputMode enum (InputMode::parse, as_str, Node::input_mode for input/textarea), 9 unit tests, 189 total PASS, clippy clean 2026-05-31
