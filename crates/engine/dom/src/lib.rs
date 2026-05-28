@@ -460,8 +460,16 @@ impl Selection {
 
 /// Tracks the current IME composition session.
 ///
-/// When an IME begins composing, this stores the target node and interim text
-/// until the composition ends and the final text is committed.
+/// When an IME begins composing (e.g., CJK text input), this struct stores the
+/// target node and interim text until the composition ends and the final text
+/// is committed. Maintained by P1 (Document::begin/update/end_composition).
+///
+/// **P3 integration:** P3 shell receives IME events from the platform (winit) and
+/// calls Document methods to maintain this state. When composition changes, P3
+/// dispatches corresponding CompositionEvent(s) to the target node's event listeners.
+///
+/// **Layout integration:** P1's layout engine uses get_composition() to highlight
+/// the preedit range with an underline or background, per UI Events §5.2.5.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompositionState {
     /// The editable element (contenteditable/input/textarea) receiving IME input.
@@ -470,8 +478,9 @@ pub struct CompositionState {
     pub text: String,
     /// BCP 47 language tag (e.g., "ja", "zh-Hans"). `None` if not available.
     pub locale: Option<String>,
-    /// Selection range in UTF-16 code units (start offset, length).
-    /// Allows JS to highlight the composition range as the user types.
+    /// Selection range in UTF-16 code units: (offset, length).
+    /// Describes which part of the preedit text is highlighted (e.g., current
+    /// candidate). Allows JS to highlight the composition range as the user types.
     pub selection: Option<(u32, u32)>,
 }
 
@@ -842,8 +851,32 @@ impl Document {
     /// drawing selection underlines in the preedit range).
     ///
     /// Returns `None` if no composition is active.
-    pub fn get_composition(&self) -> &Option<CompositionState> {
-        &self.composition
+    pub fn get_composition(&self) -> Option<&CompositionState> {
+        self.composition.as_ref()
+    }
+
+    /// Check if an IME composition is currently active.
+    ///
+    /// Returns `true` if `begin_composition` has been called and
+    /// `end_composition` has not yet been called.
+    pub fn is_composing(&self) -> bool {
+        self.composition.is_some()
+    }
+
+    /// Get the composition range (offset and length) if composition is active.
+    ///
+    /// Returns `None` if no composition is active or if the selection range
+    /// has not been set yet.
+    pub fn get_composition_range(&self) -> Option<(u32, u32)> {
+        self.composition.as_ref().and_then(|comp| comp.selection)
+    }
+
+    /// Get the target node that is receiving composition input.
+    ///
+    /// Returns `None` if no composition is active. This is the element that
+    /// should dispatch composition events (compositionstart/update/end).
+    pub fn get_composition_target(&self) -> Option<NodeId> {
+        self.composition.as_ref().map(|comp| comp.node)
     }
 
     // ── T3 hibernation snapshot (ADR-008) ─────────────────────────────────────
@@ -1707,16 +1740,26 @@ pub struct CompositionData {
     pub data: String,
     /// BCP 47 language tag (e.g., "ja", "zh-Hans", "ru"). `None` if unknown.
     pub locale: Option<String>,
-    /// Text offset range in the contenteditable host (UTF-16 code units).
+    /// Composition range in the contenteditable host (UTF-16 code units).
     /// `None` if the range cannot be determined.
-    /// `(start, end)` where `start < end`.
+    /// `(offset, length)` where offset is the start position and length is the number
+    /// of characters in the composition range.
     pub range: Option<(u32, u32)>,
 }
 
 /// An IME composition event (compositionstart / update / end).
 ///
-/// Dispatched by P3 from winit IME callbacks. The DOM tracks composition state
-/// per node for virtual keyboard interaction and text alternatives.
+/// **P3 lifecycle:** P3 receives IME callbacks from winit (Ime::Preedit, Ime::Commit)
+/// and constructs CompositionEvent(s) to dispatch to the target node's listeners.
+/// - `compositionstart` → when IME begins (Document::begin_composition called)
+/// - `compositionupdate` → interim preedit changes (Document::update_composition)
+/// - `compositionend` → final commit (Document::end_composition returns state)
+///
+/// **JS exposure:** P3 serializes these events to the JS runtime, where JS can
+/// listen via `element.addEventListener("compositionstart", ...)`.
+///
+/// **Range semantics:** (offset, length) in UTF-16 code units, matching platform
+/// IME conventions and JS TextEvent / UIEvent.
 #[derive(Debug, Clone)]
 pub struct CompositionEvent {
     /// The kind of composition event.
@@ -3888,5 +3931,154 @@ mod tests {
         let restored_comp = restored_comp.unwrap();
         assert_eq!(restored_comp.text, "test");
         assert_eq!(restored_comp.locale, Some("en".to_string()));
+    }
+
+    #[test]
+    fn composition_helper_is_composing() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+
+        // Not composing initially
+        assert!(!doc.is_composing());
+
+        // Begin composition
+        doc.begin_composition(input, "あ".to_string(), Some("ja".to_string()));
+        assert!(doc.is_composing());
+
+        // End composition
+        doc.end_composition();
+        assert!(!doc.is_composing());
+    }
+
+    #[test]
+    fn composition_helper_get_range() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+
+        // No range initially
+        assert!(doc.get_composition_range().is_none());
+
+        // Begin composition without range
+        doc.begin_composition(input, "a".to_string(), None);
+        assert!(doc.get_composition_range().is_none());
+
+        // Update with range
+        doc.update_composition("ab".to_string(), Some((0, 2)));
+        assert_eq!(doc.get_composition_range(), Some((0, 2)));
+
+        // Update with different range
+        doc.update_composition("abc".to_string(), Some((0, 3)));
+        assert_eq!(doc.get_composition_range(), Some((0, 3)));
+
+        // End composition clears range
+        doc.end_composition();
+        assert!(doc.get_composition_range().is_none());
+    }
+
+    #[test]
+    fn composition_helper_get_target() {
+        let mut doc = Document::new();
+        let input1 = doc.create_element(QualName::html("input"));
+        let input2 = doc.create_element(QualName::html("textarea"));
+
+        // No target initially
+        assert!(doc.get_composition_target().is_none());
+
+        // Begin composition on input1
+        doc.begin_composition(input1, "text".to_string(), None);
+        assert_eq!(doc.get_composition_target(), Some(input1));
+
+        // End and start on input2
+        doc.end_composition();
+        doc.begin_composition(input2, "more".to_string(), None);
+        assert_eq!(doc.get_composition_target(), Some(input2));
+
+        // End composition clears target
+        doc.end_composition();
+        assert!(doc.get_composition_target().is_none());
+    }
+
+    #[test]
+    fn composition_helpers_with_ranges() {
+        let mut doc = Document::new();
+        let contenteditable = doc.create_element(QualName::html("div"));
+
+        // Simulate IME input with range tracking (UI Events §5.2.5)
+        doc.begin_composition(contenteditable, "c".to_string(), Some("ru".to_string()));
+        assert!(doc.is_composing());
+        assert_eq!(doc.get_composition_target(), Some(contenteditable));
+
+        // User updates composition
+        doc.update_composition("ч".to_string(), Some((0, 1)));
+        assert_eq!(doc.get_composition_range(), Some((0, 1)));
+
+        doc.update_composition("чт".to_string(), Some((0, 2)));
+        assert_eq!(doc.get_composition_range(), Some((0, 2)));
+
+        // Final commit
+        let final_state = doc.end_composition();
+        assert!(!doc.is_composing());
+        assert!(final_state.is_some());
+        assert_eq!(final_state.unwrap().text, "чт");
+    }
+
+    #[test]
+    fn composition_event_dispatching_ready() {
+        // Test CompositionEvent readiness for P3 dispatch (UI Events §5.2.5)
+        // P3 will serialize these events to JS runtime
+
+        // compositionstart event
+        let start_evt = CompositionEvent::start("初".to_string(), Some("zh".to_string()));
+        assert_eq!(start_evt.event_type, CompositionEventType::Start);
+        assert_eq!(start_evt.event_type.as_str(), "compositionstart");
+        assert_eq!(start_evt.data.data, "初");
+        assert_eq!(start_evt.data.locale, Some("zh".to_string()));
+
+        // compositionupdate events track user edits and cursor position
+        let update1 = CompositionEvent::update("初".to_string(), Some((0, 1)));
+        assert_eq!(update1.event_type.as_str(), "compositionupdate");
+        assert_eq!(update1.data.range, Some((0, 1))); // cursor at offset 0, length 1
+
+        let update2 = CompositionEvent::update("初中".to_string(), Some((0, 2)));
+        assert_eq!(update2.data.data, "初中");
+        assert_eq!(update2.data.range, Some((0, 2))); // preedit text spans 2 characters
+
+        // compositionend event with final committed text
+        let end_evt = CompositionEvent::end("初中文".to_string());
+        assert_eq!(end_evt.event_type.as_str(), "compositionend");
+        assert_eq!(end_evt.data.data, "初中文");
+        assert_eq!(end_evt.data.range, None); // no range on final commit
+    }
+
+    #[test]
+    fn composition_event_empty_data() {
+        // Edge case: some IMEs send compositionstart with empty data
+        let start_empty = CompositionEvent::start("".to_string(), Some("ja".to_string()));
+        assert_eq!(start_empty.data.data, "");
+        assert_eq!(start_empty.data.locale, Some("ja".to_string()));
+
+        // compositionupdate may not have locale info
+        let update = CompositionEvent::update("text".to_string(), Some((0, 4)));
+        assert_eq!(update.data.locale, None);
+
+        // compositionend may have empty data (commit cleared by IME)
+        let end_empty = CompositionEvent::end("".to_string());
+        assert_eq!(end_empty.data.data, "");
+        assert_eq!(end_empty.data.range, None);
+    }
+
+    #[test]
+    fn composition_multi_codepoint_range() {
+        // Test range handling with multi-byte UTF-16 characters
+        // Some characters (emoji, etc.) are 2 UTF-16 code units
+
+        // surrogate pair emoji: 👍 = 2 UTF-16 code units
+        let emoji_composition = CompositionEvent::update("👍".to_string(), Some((0, 2)));
+        assert_eq!(emoji_composition.data.range, Some((0, 2)));
+
+        // More complex: multiple characters with mixed widths
+        let mixed = CompositionEvent::update("😀text😀".to_string(), Some((0, 6)));
+        // emoji(2) + t(1) + e(1) + x(1) + t(1) + emoji(2) = 8 UTF-16 units
+        assert_eq!(mixed.data.range, Some((0, 6)));
     }
 }

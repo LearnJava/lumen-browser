@@ -1,5 +1,5 @@
 In progress: none
-Next task: ime-input
+Next task: accessibility-forms-validation Phase 3
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -79,7 +79,7 @@ Recent:
 31. ✅ shadow-dom-accessibility-forms-gc (6+) — Phase 2A: slot delegation + fallback ✅; Phase 2B: accessibility tree composition + FlatTree integration + ARIA relationships ✅; Phase 2C: transparent role handling across boundaries ✅ (2026-05-28)
 32. 🟡 contenteditable-advanced — undo/redo command history ✅; paste data support ✅; drag-drop support ✅; Phase 1-3 complete, P3 shell integration pending (2026-05-28)
 33. 🟡 accessibility-forms-validation — Phase 1: ValidityState in AXTree ✅ (2026-05-28); Phase 2: enhanced constraint validation (all error types + custom messages) ✅ (2026-05-28); Phase 3: submit algorithm integration
-34. ⬜ ime-input ([P1+P3]) — IME composition events through DOM, composition ranges, virtual keyboard interaction
+34. 🟡 ime-input ([P1+P3]) — Phase 1: composition state tracking ✅ (2026-05-28); Phase 2: composition ranges + event data structures ✅ (2026-05-28); Phase 3: virtual keyboard hints and P3 shell integration pending
 35. ⬜ svg-layout-advanced — SVG transforms, viewport nesting, aspect-ratio preservation
 36. ⬜ print-pdf-advanced — @page margin boxes, page numbers, headers/footers from margin-box content
 37. ⬜ font-loading-api ([P1+P3]) — @font-face lifecycle, FontFace interface, document.fonts collection
@@ -94,10 +94,11 @@ Recent:
 - ADR-006 (automation), ADR-007 (anti-detection), ADR-008 (tab lifecycle) coordination embedded in tasks 21-30
 - Coordination points with P2 (paint/render side) and P3 (shell/runtime integration) noted in brackets [Pn]
 
-Recent: click-hint-overlay (7B.2, P1 complete 2026-05-28, P3 integration pending), print-pdf-pagination (Phase 1 complete, PaginationContext ready), bench-ram-axis (Phase 0 complete, cross-platform RSS baseline established), antidetect-webgl-normalize (P1 complete, GPU fingerprint normalization, P3 integration pending), gpu-layer-lru (Phase 1 complete, LayerCache impl, Phase 2 pending), antidetect-canvas-randomization (P1 complete, CanvasNoiseGenerator LCG RNG, P3 JS integration pending), dom-arena-audit (serde+bincode snapshot infrastructure, 7 tests, 121 total), layout-find-by-selector (selector_query module, 14 tests, P3 blocking clear), line-clamp-layout (CSS Overflow §3.2 multi-line truncation, 6 tests, graphic test 48)
+Recent: ime-input (6.3, Phase 2): composition range helpers (is_composing, get_composition_range, get_composition_target), fixed CompositionData.range semantics, extended CompositionEvent tests for P3 dispatching, P3 integration doc, 149 tests PASS 2026-05-28 — P3 shell integration pending; click-hint-overlay (7B.2, P1 complete 2026-05-28, P3 integration pending), print-pdf-pagination (Phase 1 complete, PaginationContext ready), bench-ram-axis (Phase 0 complete, cross-platform RSS baseline established)
 
 ## Recent (prior work history, last 30 days)
 
+- 2026-05-28: ime-input (6.3, Phase 2): composition range helpers, improved semantics, extended tests, 149 total PASS
 - 2026-05-28: click-hint-overlay (7B.2): <details>/<summary> support, 6 new tests
 - 2026-05-28: print-pdf-pagination (5++): PaginationContext + Page + PageFragment, 7 unit tests
 - 2026-05-28: bench-ram-axis (9G.5): cross-platform RSS measurement, baseline.json
