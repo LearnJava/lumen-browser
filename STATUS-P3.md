@@ -1,5 +1,5 @@
-In progress: —
-Next step: (Wave 3 automation API) Pick next: auto-wait-engine (8D), per-context-isolation (8E), or deterministic-mode (8F) — all Phase 1 foundational.
+In progress: auto-wait-engine (8D)  branch: p3-auto-wait-engine
+Next step: Phase 1: wait_for() trait + Condition enum + layout/network/runtime event sources; test each condition  crates/driver/src/wait.rs
 
 Recent (Wave 2/3 - automation API):
   - native-input-injection-8c (Phase 1 skeleton: InputCommand enum + click/type_text + shell/src/input.rs) 2026-05-28 
