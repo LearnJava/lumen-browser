@@ -1,5 +1,5 @@
-In progress: —
-Next step: Pick next task from Queue (Wave 2/3)
+In progress: fts-omnibox  branch: p3-fts-omnibox
+Next step: Integrate history_fts into apply_loaded_page + fix SearchHistory init  main.rs:254
 
 Recent (Wave 2/3 - automation API + completed tasks):
   - ✓ http2-client (5A.4 ext, concurrent streams): send_request/read_response_for_stream, StreamState mgmt, +5 tests 2026-05-28
