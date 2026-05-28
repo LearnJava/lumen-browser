@@ -222,6 +222,67 @@ fn install_primitives(
         });
     }
 
+    // ── document.fonts (FontFaceSet) ──────────────────────────────────────────
+    {
+        let d = Arc::clone(&doc);
+        reg!("_lumen_fonts_size", move || -> u32 {
+            let doc = d.lock().unwrap();
+            doc.fonts().size() as u32
+        });
+        let d = Arc::clone(&doc);
+        reg!("_lumen_fonts_get", move |idx: u32| -> Option<String> {
+            let doc = d.lock().unwrap();
+            doc.fonts().all().get(idx as usize).map(|face| {
+                // Serialize FontFace to JSON manually
+                let family_esc = face.family.replace('\\', "\\\\").replace('"', "\\\"");
+                let style_esc = face.style.replace('\\', "\\\\").replace('"', "\\\"");
+                let weight_esc = face.weight.replace('\\', "\\\\").replace('"', "\\\"");
+                let stretch_esc = face.stretch.as_ref().map(|s| s.replace('\\', "\\\\").replace('"', "\\\"")).unwrap_or_default();
+                let unicode_range_esc = face.unicode_range.as_ref().map(|s| s.replace('\\', "\\\\").replace('"', "\\\"")).unwrap_or_default();
+                let src_esc = face.src.replace('\\', "\\\\").replace('"', "\\\"");
+                let status_str = match face.status {
+                    lumen_dom::FontFaceStatus::Unloaded => "unloaded",
+                    lumen_dom::FontFaceStatus::Loading => "loading",
+                    lumen_dom::FontFaceStatus::Loaded => "loaded",
+                    lumen_dom::FontFaceStatus::Error => "error",
+                };
+                format!(
+                    r#"{{"family":"{family_esc}","style":"{style_esc}","weight":"{weight_esc}","stretch":{stretch_json},"unicodeRange":{unicode_json},"src":"{src_esc}","status":"{status_str}"}}"#,
+                    stretch_json = if let Some(s) = &face.stretch { format!(r#""{}""#, stretch_esc) } else { "null".to_string() },
+                    unicode_json = if let Some(u) = &face.unicode_range { format!(r#""{}""#, unicode_range_esc) } else { "null".to_string() }
+                )
+            })
+        });
+        let d = Arc::clone(&doc);
+        reg!("_lumen_fonts_get_by_family", move |family: String| -> Vec<String> {
+            let doc = d.lock().unwrap();
+            doc.fonts().get_by_family(&family).iter().map(|face| {
+                let family_esc = face.family.replace('\\', "\\\\").replace('"', "\\\"");
+                let style_esc = face.style.replace('\\', "\\\\").replace('"', "\\\"");
+                let weight_esc = face.weight.replace('\\', "\\\\").replace('"', "\\\"");
+                let stretch_esc = face.stretch.as_ref().map(|s| s.replace('\\', "\\\\").replace('"', "\\\"")).unwrap_or_default();
+                let unicode_range_esc = face.unicode_range.as_ref().map(|s| s.replace('\\', "\\\\").replace('"', "\\\"")).unwrap_or_default();
+                let src_esc = face.src.replace('\\', "\\\\").replace('"', "\\\"");
+                let status_str = match face.status {
+                    lumen_dom::FontFaceStatus::Unloaded => "unloaded",
+                    lumen_dom::FontFaceStatus::Loading => "loading",
+                    lumen_dom::FontFaceStatus::Loaded => "loaded",
+                    lumen_dom::FontFaceStatus::Error => "error",
+                };
+                format!(
+                    r#"{{"family":"{family_esc}","style":"{style_esc}","weight":"{weight_esc}","stretch":{stretch_json},"unicodeRange":{unicode_json},"src":"{src_esc}","status":"{status_str}"}}"#,
+                    stretch_json = if let Some(s) = &face.stretch { format!(r#""{}""#, stretch_esc) } else { "null".to_string() },
+                    unicode_json = if let Some(u) = &face.unicode_range { format!(r#""{}""#, unicode_range_esc) } else { "null".to_string() }
+                )
+            }).collect()
+        });
+        let d = Arc::clone(&doc);
+        reg!("_lumen_fonts_has_family", move |family: String| -> bool {
+            let doc = d.lock().unwrap();
+            doc.fonts().has_family(&family)
+        });
+    }
+
     // ── node lookup ──────────────────────────────────────────────────────────
     {
         let d = Arc::clone(&doc);
@@ -1504,6 +1565,83 @@ var console = {
     debug: function() { _lumen_console_log(  Array.prototype.join.call(arguments, ' ')); },
 };
 
+// ── FontFace and FontFaceSet (CSS Fonts Module Level 4 §11) ─────────────────
+
+function _lumen_parse_font_face_json(jsonStr) {
+    try {
+        return JSON.parse(jsonStr);
+    } catch(e) {
+        return null;
+    }
+}
+
+function _lumen_get_fonts() {
+    var size = _lumen_fonts_size();
+    var faces = [];
+    for (var i = 0; i < size; i++) {
+        var jsonStr = _lumen_fonts_get(i);
+        if (jsonStr) {
+            var obj = _lumen_parse_font_face_json(jsonStr);
+            if (obj) {
+                faces.push(obj);
+            }
+        }
+    }
+    var fontSet = {
+        _faces: faces,
+        get length() { return this._faces.length; },
+        item: function(index) {
+            return this._faces[index] || null;
+        },
+        // Iterate over FontFace objects
+        entries: function() {
+            var self = this;
+            var idx = 0;
+            return {
+                next: function() {
+                    if (idx < self._faces.length) {
+                        return { value: [idx, self._faces[idx]], done: false };
+                    }
+                    return { done: true };
+                }
+            };
+        },
+        forEach: function(callback, thisArg) {
+            for (var i = 0; i < this._faces.length; i++) {
+                callback.call(thisArg, this._faces[i], i, this);
+            }
+        },
+        [Symbol.iterator]: function() {
+            var idx = 0;
+            var faces = this._faces;
+            return {
+                next: function() {
+                    if (idx < faces.length) {
+                        return { value: faces[idx++], done: false };
+                    }
+                    return { done: true };
+                }
+            };
+        },
+    };
+    // Symbol.iterator might not be available in all JS engines
+    if (typeof Symbol !== 'undefined' && typeof Symbol.iterator !== 'undefined') {
+        fontSet[Symbol.iterator] = function() {
+            var idx = 0;
+            var faces = this._faces;
+            return {
+                next: function() {
+                    if (idx < faces.length) {
+                        return { value: faces[idx++], done: false };
+                    }
+                    return { done: true };
+                }
+            };
+        };
+    }
+    return fontSet;
+}
+
 var document = {
     get title()  { return _lumen_get_document_title(); },
     set title(v) { _lumen_set_document_title(String(v)); },
@@ -1537,6 +1675,9 @@ var document = {
     addEventListener:    function(type, fn) { _lumen_add_listener(_LUMEN_DOC_LISTENER_NID, type, fn); },
     removeEventListener: function(type, fn) { _lumen_rm_listener(_LUMEN_DOC_LISTENER_NID, type, fn); },
     dispatchEvent:       function() { return true; },
+    get fonts() {
+        return _lumen_get_fonts();
+    },
 };
 
 var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
@@ -5379,6 +5520,53 @@ mod tests {
         let reqs2 = rt.take_lazy_image_requests();
         assert_eq!(reqs2.len(), 1);
         assert_eq!(reqs2[0].1, "dup.png", "first registration URL must win");
+    }
+
+    // ── FontFaceSet JS bindings (CSS Fonts Module Level 4 §11) ──────────────
+
+    #[test]
+    fn document_fonts_exists() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(r#"
+            typeof document.fonts === 'object' && document.fonts !== null
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_fonts_has_length_property() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(r#"
+            typeof document.fonts.length === 'number'
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_fonts_has_item_method() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(r#"
+            typeof document.fonts.item === 'function'
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_fonts_has_foreach_method() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(r#"
+            typeof document.fonts.forEach === 'function'
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn document_fonts_empty_by_default() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(r#"
+            document.fonts.length === 0 && document.fonts.item(0) === null
+        "#).unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
 
     // ── Shadow DOM JS bindings ────────────────────────────────────────────────
