@@ -1,7 +1,8 @@
-In progress: invariant-2-js-suspend (10C) — extend JsRuntime trait for suspend/resume
-Next step: Add pause/unpause/suspend/resume methods to JsRuntime + SuspendedHeap type  branch: p3-invariant-2-js-suspend
+In progress: invariant-3-pure-layout (10D, [P3+P1+P2]) — audit layout & paint for hidden state
+Next step: Grep lumen-layout & paint for static MUT, lazy_static, OnceCell; create audit report  branch: p3-invariant-3-pure-layout
 
 Recent (Wave 2/3 - automation API + completed tasks):
+  - ✓ invariant-2-js-suspend (10C, JsRuntime trait): pause/unpause/suspend/resume methods + SuspendedHeap struct for T2→T3 hibernation 2026-05-28
   - ✓ invariant-1-dom-arena (10B, [P3+P1], audit complete): NodeId(u32) arena verified, to_bytes/from_bytes tests exist, clippy::rc_buffer enforced 2026-05-28
   - shell-as-driver-client-8a7-phase4c (reload() migration to GpuSession: WinitSession integration in shell, backward-compatible fallback for Snapshot) 2026-05-28
   - bench-ram-axis (9G.5, Phase 1 complete: peak_rss + steady_state_rss tracking in lumen-bench, compare.py update, baseline.json restructure) 2026-05-28
