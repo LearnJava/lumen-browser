@@ -248,8 +248,8 @@ fn install_primitives(
                 };
                 format!(
                     r#"{{"family":"{family_esc}","style":"{style_esc}","weight":"{weight_esc}","stretch":{stretch_json},"unicodeRange":{unicode_json},"src":"{src_esc}","status":"{status_str}"}}"#,
-                    stretch_json = if let Some(s) = &face.stretch { format!(r#""{}""#, stretch_esc) } else { "null".to_string() },
-                    unicode_json = if let Some(u) = &face.unicode_range { format!(r#""{}""#, unicode_range_esc) } else { "null".to_string() }
+                    stretch_json = if face.stretch.is_some() { format!(r#""{}""#, stretch_esc) } else { "null".to_string() },
+                    unicode_json = if face.unicode_range.is_some() { format!(r#""{}""#, unicode_range_esc) } else { "null".to_string() }
                 )
             })
         });
@@ -271,8 +271,8 @@ fn install_primitives(
                 };
                 format!(
                     r#"{{"family":"{family_esc}","style":"{style_esc}","weight":"{weight_esc}","stretch":{stretch_json},"unicodeRange":{unicode_json},"src":"{src_esc}","status":"{status_str}"}}"#,
-                    stretch_json = if let Some(s) = &face.stretch { format!(r#""{}""#, stretch_esc) } else { "null".to_string() },
-                    unicode_json = if let Some(u) = &face.unicode_range { format!(r#""{}""#, unicode_range_esc) } else { "null".to_string() }
+                    stretch_json = if face.stretch.is_some() { format!(r#""{}""#, stretch_esc) } else { "null".to_string() },
+                    unicode_json = if face.unicode_range.is_some() { format!(r#""{}""#, unicode_range_esc) } else { "null".to_string() }
                 )
             }).collect()
         });
