@@ -1,7 +1,8 @@
 In progress: —
-Next step: (Wave 3) Pick next: antidetect-tls-fingerprint (9B) or auto-wait-engine (8D)
+Next step: (Wave 3 automation API) Pick next: antidetect-tls-fingerprint (9B)
 
 Recent (Wave 3 - automation API):
+  - auto-wait-engine-8d (Phase 1: polling-based wait_for(Visible/Stable/NetworkIdle/JsIdle) in InProcessSession + WinitSession, 6 unit tests) 2026-05-28
   - antidetect-surface-api (9A, Phase 1 complete: code-review audit + 8 negative tests for navigator.webdriver/chrome.runtime/cdc_*/__playwright/window.devtools absence) 2026-05-28
   - a11y-tree-via-driver (8G, Phase 1 complete: AxQuery enum + query_a11y/query_a11y_all + Role/NameContains matching + lumen-a11y integration) 2026-05-28
   - deterministic-mode-8f (Phase 1 complete: frozen_clock_ms / rng_seed / freeze_fingerprint in SessionContext + BrowserSession trait + 9 methods + 5 tests) 2026-05-28
