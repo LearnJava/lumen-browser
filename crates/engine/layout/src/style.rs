@@ -2103,6 +2103,10 @@ pub struct ComputedStyle {
     /// Per-property list; если длина короче `transition_properties`, при
     /// resolve-time spec велит cyclically reuse последний элемент.
     pub transition_timing_functions: Vec<TimingFunction>,
+    /// CSS Transitions L2 §3 — `transition-fill-mode: <single-animation-fill-mode>#`.
+    /// Parallels animation-fill-mode; используется для сохранения значений
+    /// в delay-периоде (backwards) и после завершения (forwards).
+    pub transition_fill_modes: Vec<AnimationFillMode>,
     /// CSS Animations L1 §3.1 — `animation-name: none | <keyframes-name>#`.
     /// `none` хранится как пустой `Vec` (нет анимаций); иначе список имён.
     /// Имя соответствует `@keyframes name { ... }` в [`Stylesheet`].
@@ -4092,6 +4096,7 @@ impl ComputedStyle {
             transition_durations: Vec::new(),
             transition_delays: Vec::new(),
             transition_timing_functions: Vec::new(),
+            transition_fill_modes: Vec::new(),
             animation_names: Vec::new(),
             animation_durations: Vec::new(),
             animation_timing_functions: Vec::new(),
@@ -4341,6 +4346,7 @@ pub fn compute_style(
         transition_durations: Vec::new(),
         transition_delays: Vec::new(),
         transition_timing_functions: Vec::new(),
+        transition_fill_modes: Vec::new(),
         animation_names: Vec::new(),
         animation_durations: Vec::new(),
         animation_timing_functions: Vec::new(),
@@ -8620,6 +8626,21 @@ fn split_var_args(s: &str) -> (&str, Option<&str>) {
     (s.trim(), None)
 }
 
+fn expand_grouped_transition_property(prop: &str) -> Vec<String> {
+    let lower = prop.to_ascii_lowercase();
+    match lower.as_str() {
+        "margin" => vec!["margin-top", "margin-right", "margin-bottom", "margin-left"]
+            .into_iter().map(|s| s.to_string()).collect(),
+        "padding" => vec!["padding-top", "padding-right", "padding-bottom", "padding-left"]
+            .into_iter().map(|s| s.to_string()).collect(),
+        "border" => vec!["border-top", "border-right", "border-bottom", "border-left"]
+            .into_iter().map(|s| s.to_string()).collect(),
+        "border-radius" => vec!["border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"]
+            .into_iter().map(|s| s.to_string()).collect(),
+        _ => vec![prop.to_string()],
+    }
+}
+
 fn apply_declaration(
     style: &mut ComputedStyle,
     decl: &Declaration,
@@ -10334,11 +10355,17 @@ fn apply_declaration(
             } else if trimmed.eq_ignore_ascii_case("all") {
                 style.transition_properties = vec!["all".to_string()];
             } else {
-                style.transition_properties = trimmed
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+                let mut props = Vec::new();
+                for prop in trimmed.split(',') {
+                    let prop = prop.trim().to_string();
+                    if prop.is_empty() {
+                        continue;
+                    }
+                    for expanded in expand_grouped_transition_property(&prop) {
+                        props.push(expanded);
+                    }
+                }
+                style.transition_properties = props;
             }
         }
         "transition-duration" => {
@@ -10349,6 +10376,9 @@ fn apply_declaration(
         }
         "transition-timing-function" => {
             style.transition_timing_functions = TimingFunction::parse_list(val);
+        }
+        "transition-fill-mode" => {
+            style.transition_fill_modes = AnimationFillMode::parse_list(val);
         }
         "animation" => {
             apply_animation_shorthand(style, val);
