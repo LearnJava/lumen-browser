@@ -6151,4 +6151,56 @@ mod tests {
             panic!("expected InlineRun");
         }
     }
+
+
+    // Phase 3: Nested SVG layout tests
+
+    #[test]
+    fn nested_svg_viewbox_scaling() {
+        let html = r#"
+            <svg viewBox="0 0 100 100" width="100" height="100">
+                <rect x="0" y="0" width="50" height="50" />
+                <svg viewBox="0 0 50 50" width="50" height="50" x="50" y="50">
+                    <rect x="0" y="0" width="25" height="25" />
+                </svg>
+            </svg>
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, lumen_core::geom::Size::new(200.0, 200.0));
+        assert!(!root.children.is_empty());
+    }
+
+    #[test]
+    fn nested_svg_transform_composition() {
+        let html = r#"
+            <svg viewBox="0 0 100 100" width="100" height="100" transform="scale(2)">
+                <svg viewBox="0 0 50 50" width="50" height="50" x="0" y="0" transform="translate(10, 10)">
+                    <rect x="0" y="0" width="25" height="25" />
+                </svg>
+            </svg>
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, lumen_core::geom::Size::new(200.0, 200.0));
+        assert!(!root.children.is_empty());
+    }
+
+    #[test]
+    fn deeply_nested_svg_viewbox_cascade() {
+        let html = r#"
+            <svg viewBox="0 0 200 200" width="200" height="200">
+                <svg viewBox="0 0 100 100" width="100" height="100" x="0" y="0">
+                    <svg viewBox="0 0 50 50" width="50" height="50" x="0" y="0">
+                        <rect x="0" y="0" width="50" height="50" />
+                    </svg>
+                </svg>
+            </svg>
+        "#;
+        let doc = lumen_html_parser::parse(html);
+        let sheet = lumen_css_parser::parse("");
+        let root = super::layout(&doc, &sheet, lumen_core::geom::Size::new(400.0, 400.0));
+        assert!(!root.children.is_empty());
+    }
+
 }
