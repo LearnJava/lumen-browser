@@ -1,11 +1,11 @@
 //! Client Hints handling per HTTP profile.
 //!
 //! Client Hints (Sec-CH-* headers) are optional headers that allow servers
-//! to request specific client information. Chrome sends them when the server
+//! to request specific client information. Chrome and Lumen send them when the server
 //! requests them via Accept-CH header.
 //!
 //! Lumen's policy per ADR-007:
-//! - Standard profile: send Client Hints when requested (UA, viewport, etc.)
+//! - Chrome/Lumen profiles: send Client Hints when requested (UA, viewport, etc.)
 //! - Strict profile: do not send Client Hints (privacy-first)
 //! - Tor profile: do not send Client Hints (Tor Browser policy)
 
@@ -24,7 +24,7 @@ impl ClientHintsProfile {
     /// Create ClientHintsProfile for the given HTTP profile.
     pub fn for_http_profile(profile: HttpProfile) -> Self {
         match profile {
-            HttpProfile::Standard => ClientHintsProfile::Enabled,
+            HttpProfile::Chrome | HttpProfile::Lumen => ClientHintsProfile::Enabled,
             HttpProfile::Strict | HttpProfile::Tor => ClientHintsProfile::Disabled,
         }
     }
@@ -72,8 +72,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_client_hints_enabled_for_standard() {
-        assert!(should_send_client_hints(HttpProfile::Standard, true));
+    fn test_client_hints_enabled_for_chrome() {
+        assert!(should_send_client_hints(HttpProfile::Chrome, true));
+    }
+
+    #[test]
+    fn test_client_hints_enabled_for_lumen() {
+        assert!(should_send_client_hints(HttpProfile::Lumen, true));
     }
 
     #[test]
@@ -88,12 +93,12 @@ mod tests {
 
     #[test]
     fn test_client_hints_disabled_if_not_requested() {
-        assert!(!should_send_client_hints(HttpProfile::Standard, false));
+        assert!(!should_send_client_hints(HttpProfile::Chrome, false));
     }
 
     #[test]
-    fn test_client_hints_headers_standard() {
-        let hints = client_hints_headers(HttpProfile::Standard, true, "Windows");
+    fn test_client_hints_headers_chrome() {
+        let hints = client_hints_headers(HttpProfile::Chrome, true, "Windows");
         assert_eq!(hints.len(), 3);
         assert!(hints.iter().any(|(k, v)| k == "Sec-CH-UA" && v.contains("Lumen")));
         assert!(hints.iter().any(|(k, v)| k == "Sec-CH-UA-Mobile" && v == "?0"));

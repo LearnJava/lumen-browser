@@ -1,5 +1,5 @@
-In progress: —
-Next step: Pick next task from Queue (Wave 2/3)
+In progress: invariant-1-dom-arena (10B, [P3+P1]) — audit & test ADR-008 DOM serialization
+Next step: Finalize coordinator commit for P1 review  branch: p3-invariant-1-dom-arena
 
 Recent (Wave 2/3 - automation API + completed tasks):
   - shell-as-driver-client-8a7-phase4c (reload() migration to GpuSession: WinitSession integration in shell, backward-compatible fallback for Snapshot) 2026-05-28
@@ -57,6 +57,13 @@ Queue (Wave 2 — приоритет на тестирование изнутр�
   * **invariant-2-js-suspend (10C)**: расширить lumen-core::ext::JsRuntime trait методами pause()/unpause()/suspend()/resume(); имплементация для rquickjs через JS_WriteObject/JS_ReadObject; zstd-сжатие snapshot; cap 5 MB/tab disk. V8 compatibility note для Phase 3.
   * **invariant-3-pure-layout (10D, [P3+P1+P2])**: audit lumen-layout (P1) и lumen-paint::display_list (P2) на отсутствие static MUT / lazy_static / OnceCell внутри hot path. Cross-tab кэши (glyph atlas, image decode) — отдельные крейты с explicit eviction API.
 - http2-client: HTTP/2 через h2 crate (provisional) — multiplexing для реальных сайтов; бэкэнд-замена HttpClient без смены публичного API
+- http-profiles-expansion (9C Phase 1.x): добавить профили браузеров за Chrome (следует за Wave 2 http-fingerprint):
+  * firefox: Firefox 130+ SETTINGS, header order, TLS fingerprint (JA3 snapshot)
+  * safari: Safari 18+ SETTINGS, minimal headers (Sec-* subset)
+  * edge: Edge 130+ SETTINGS = близко к Chrome, но с отличиями в alpn/extensions
+  * tor-native: Tor Browser SETTINGS + заголовки (перейти с текущего Tor на TorBrowser-matched)
+  * lumen-native: собственный профиль Lumen (уже добавлен, оптимизированный для lightweight)
+  Binding: ADR-007 §«Per-profile HTTP configs» + дешёвая работа (переиспользует SETTINGS/TLS/Headers инфраструктуру).
 - preconnect-hints: обработать <link rel=preconnect> из preload_scanner — открыть TCP+TLS соединение заранее
 
 Queue (Wave 3 — Automation Phase 1 + Anti-detection Phase 1 + tier mechanics, см. ADR-006 + ADR-007 + ADR-008):

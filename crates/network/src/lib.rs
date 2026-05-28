@@ -1349,7 +1349,7 @@ impl HttpClient {
             http_cache: None,
             cookie_jar: None,
             top_level_site: None,
-            fingerprint_profile: HttpProfile::Standard,
+            fingerprint_profile: HttpProfile::Chrome,
         }
     }
 
