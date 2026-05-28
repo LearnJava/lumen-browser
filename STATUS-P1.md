@@ -1,5 +1,5 @@
-In progress: print-pdf-advanced Phase 2  branch: p1-print-pdf-phase2
-Next step: page counters system — margin-box content rendering with page-number values
+In progress: none
+Next task: svg-layout-advanced Phase 2
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -12,7 +12,7 @@ Note: fts-omnibox (Wave 1, P3-задача по домену) перенесен
 Note: Wave 2 очередь содержит P2-задачи (extras-p2, avif-decoder, webgl-context, font-hinting, svg-rasterizer) — они пока не для P1. Wave 2 P3-задачи (http2-client, preconnect-hints) тоже в P3 очереди. P1 берёт следующее из Phase 1/Phase 2 своих задач.
 
 Recent:
-- print-pdf-advanced (36, Phase 1): PageProperties + PageBox + MarginBoxPosition + MarginBox structures, @page rule matching (:first, :last, :left, :right, empty selector), compute_page_properties() cascade application, margin-box layout algorithm, 17 unit tests PASS, clippy clean 2026-05-28 — Phase 2 (page numbers, headers/footers, margin-box content layout) pending
+- print-pdf-advanced (36): Phase 1 ✅ @page rule matching + margin-box layout (17 tests, 2026-05-28); Phase 2 ✅ page counters + content generation (PageCounters, ContentFunction, resolve_content_function, 17 new tests, 31 total PASS, clippy clean 2026-05-29) — Phase 3 (margin-box text layout + inline content rendering) pending
 - svg-layout-advanced (35, Phase 1): PreserveAspectRatio parsing + aspect-ratio preservation calculation (compute_viewbox_transform with align_x/align_y/meet_or_slice), SVG transform attribute parser (translate/scale/rotate/skewX/skewY/matrix), SvgTransform struct with matrix composition, 5 new unit tests, 28 tests PASS, clippy clean 2026-05-28 — Phase 2 (nested SVG transforms) pending
 - accessibility-forms-validation (6.2, Phase 3): FormSubmitEvent enum (Valid/Invalid variants), submit_form() function executing HTML5 §4.10.22 form submission algorithm with constraint validation, 8 comprehensive unit tests (valid/invalid scenarios, field collection, defaults), 157 tests PASS, clippy clean 2026-05-28 — P3 dispatch integration pending
 - transition-advanced (6.7, Phase 2): fill-mode support (Backwards/Forwards/Both applied in delay/completion periods), interrupted transitions (captured value at interruption for smooth continuation), grouped property expansion (margin/padding/border/border-radius → component properties), 3 new unit tests (fill_mode_forwards, fill_mode_backwards, interrupted_detection), 90 tests PASS, clippy clean 2026-05-28
@@ -83,7 +83,7 @@ Recent:
 33. 🟡 accessibility-forms-validation — Phase 1: ValidityState in AXTree ✅ (2026-05-28); Phase 2: enhanced constraint validation (all error types + custom messages) ✅ (2026-05-28); Phase 3: submit algorithm integration
 34. 🟡 ime-input ([P1+P3]) — Phase 1: composition state tracking ✅ (2026-05-28); Phase 2: composition ranges + event data structures ✅ (2026-05-28); Phase 3: virtual keyboard hints and P3 shell integration pending
 35. 🟡 svg-layout-advanced — Phase 1: SVG transforms, aspect-ratio preservation ✅ (2026-05-28); Phase 2: nested SVG transforms pending
-36. 🟡 print-pdf-advanced — Phase 1: @page matching, margin-box model ✅ (2026-05-28); Phase 2: page numbers, headers/footers, margin-box content layout pending
+36. 🟡 print-pdf-advanced — Phase 1: @page matching, margin-box model ✅ (2026-05-28); Phase 2: page counters + content generation ✅ (2026-05-29); Phase 3: margin-box text layout + inline content rendering pending
 37. ⬜ font-loading-api ([P1+P3]) — @font-face lifecycle, FontFace interface, document.fonts collection
 38. ⬜ performance-observer-timing — PerformanceObserver for layout/paint timings, resource timing
 
