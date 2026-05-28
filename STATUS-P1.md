@@ -1,5 +1,5 @@
-In progress: none
-Next task: print-pdf-advanced Phase 1
+In progress: print-pdf-advanced Phase 1  branch: p1-print-pdf-advanced
+Next step: Understand @page rule parsing and margin-box model  layout/src/page.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
