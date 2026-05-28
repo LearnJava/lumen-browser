@@ -12,11 +12,12 @@
 
 use std::collections::HashMap;
 
-use lumen_core::form::{encode_form_urlencoded, FormEntry};
+use lumen_core::form::{encode_form_urlencoded, FormEntry, FormValue};
 use lumen_core::geom::Rect;
 use lumen_dom::{
     check_validity_form, collect_dom_form_fields, element_validity, find_ancestor_form,
-    invalid_controls_in_form, Attribute, Document, InputType, NodeData, NodeId, QualName,
+    invalid_controls_in_form, submit_form, Attribute, Document, FormSubmitEvent, InputType,
+    NodeData, NodeId, QualName,
 };
 use lumen_layout::{BorderStyle, BoxKind, Color, FontStyle, FontWeight, LayoutBox};
 use lumen_paint::{DisplayCommand, DisplayList};
@@ -118,12 +119,24 @@ pub fn set_value(doc: &mut Document, id: NodeId, value: &str) {
 
 /// Depth-first walk: find the first form control that fails HTML5 constraint
 /// validation. Returns `(node_id, box_rect, human-readable message)`.
+#[allow(dead_code)]
 pub fn find_validation_error(
     root: &LayoutBox,
     doc: &Document,
     form_state: &FormState,
 ) -> Option<(NodeId, Rect, String)> {
     find_error_in(root, doc, form_state)
+}
+
+/// Find rect and error message for a specific invalid control.
+/// Used in Phase 3 form submission to show validation tooltip for invalid controls.
+#[allow(dead_code)]
+pub fn find_control_rect_and_error(
+    root: &LayoutBox,
+    doc: &Document,
+    node_id: NodeId,
+) -> Option<(Rect, String)> {
+    find_control_error_in(root, doc, node_id)
 }
 
 /// Collect all form controls that fail HTML5 constraint validation.
@@ -157,6 +170,7 @@ fn collect_errors_in(
     }
 }
 
+#[allow(dead_code)]
 fn find_error_in(
     b: &LayoutBox,
     doc: &Document,
@@ -170,6 +184,27 @@ fn find_error_in(
     }
     for child in &b.children {
         if let Some(found) = find_error_in(child, doc, form_state) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Find rect and error message for a specific control by NodeId.
+/// Phase 3: used when displaying validation errors from FormSubmitEvent::Invalid.
+fn find_control_error_in(
+    b: &LayoutBox,
+    doc: &Document,
+    target_node: NodeId,
+) -> Option<(Rect, String)> {
+    if b.node == target_node
+        && let Some(vs) = element_validity(doc, b.node)
+        && let Some(msg) = validation_error_message(doc, b.node, &vs, &FormState::default())
+    {
+        return Some((b.rect, msg));
+    }
+    for child in &b.children {
+        if let Some(found) = find_control_error_in(child, doc, target_node) {
             return Some(found);
         }
     }
@@ -309,6 +344,7 @@ pub fn build_validation_tooltip(
 /// HTML LS §constructing-form-data-set: обходим submittable-контролы формы,
 /// берём значение из `form_state` если есть, иначе — из DOM-атрибута `value`.
 /// Checkbox/radio из `form_state` отражают runtime-состояние (checked).
+#[allow(dead_code)]
 pub fn collect_form_entries(
     doc: &Document,
     form_id: NodeId,
@@ -348,6 +384,29 @@ pub fn collect_form_entries(
 ///
 /// Для GET-форм вызывающий должен добавить `?body` к action-URL.
 /// Для POST-форм `body` — тело запроса, Content-Type: application/x-www-form-urlencoded.
+/// Execute HTML5 form submission algorithm on the form containing submit_node.
+/// Returns FormSubmitEvent::Valid with action, method, fields if validation passes,
+/// or FormSubmitEvent::Invalid with list of invalid controls if validation fails.
+/// Returns None if submit_node is not part of a form.
+pub fn build_form_submit_event(
+    doc: &Document,
+    submit_node: NodeId,
+) -> Option<FormSubmitEvent> {
+    let form_id = find_ancestor_form(doc, submit_node)?;
+    Some(submit_form(doc, form_id))
+}
+
+/// Encode form fields for submission. Wraps a FormSubmitEvent::Valid variant
+/// and encodes fields as application/x-www-form-urlencoded.
+pub fn encode_form_fields(fields: &[(String, String)]) -> String {
+    let entries: Vec<FormEntry> = fields
+        .iter()
+        .map(|(name, value)| FormEntry { name: name.clone(), value: FormValue::Text(value.clone()) })
+        .collect();
+    encode_form_urlencoded(&entries)
+}
+
+#[allow(dead_code)]
 pub fn build_form_submit(
     doc: &Document,
     submit_node: NodeId,
