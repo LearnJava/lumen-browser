@@ -1,5 +1,5 @@
 In progress: none
-Next task: Phase 3 P1 assessment complete. Phase 1–2 DOM/layout work finished (41 items ✅). Phase 3 pending: event.isTrusted for native-injected events (8C.2), CSS property wiring P4 integration, remaining cross-domain work awaits P2/P3 integration. Next: take 8C.2 or coordinate with P3 on P3-owned Phase 3 automation tasks (8A–8H).
+Next task: coordinate with P3 on Phase 3 automation tasks (8A–8H), or take 8C.3 if defined. Next major phase: CSS property wiring P4 integration. Phase 1–2 DOM/layout work finished (41 items ✅).
 
 Recent merge: 8A.4 Structural getters ✅ — LayoutBox::find_descendant_by_selector/find_all_descendants_by_selector/style_snapshot methods + ComputedStyleSnapshot + find_box_by_selector/find_all_by_selector/computed_style_by_selector pub functions, selector matching via CSS3 engine, 3 integration tests, clippy clean 2026-05-27
 Recent merge: ime-input Phase 3 ✅ — virtual keyboard hints via InputMode enum (InputMode::parse, as_str, Node::input_mode for input/textarea), 9 unit tests, 189 total PASS, clippy clean 2026-05-31
@@ -108,6 +108,7 @@ Recent: ime-input (6.3, Phase 2): composition range helpers (is_composing, get_c
 
 ## Recent (prior work history, last 30 days)
 
+- 2026-05-28: event.isTrusted (8C.2, Phase 3): isTrusted field in Event constructor, mark native shell events as trusted, dispatchEvent events untrusted, 4 new tests → 232 total PASS
 - 2026-05-28: ime-input (6.3, Phase 2): composition range helpers, improved semantics, extended tests, 149 total PASS
 - 2026-05-28: click-hint-overlay (7B.2): <details>/<summary> support, 6 new tests
 - 2026-05-28: print-pdf-pagination (5++): PaginationContext + Page + PageFragment, 7 unit tests
