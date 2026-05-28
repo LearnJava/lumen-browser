@@ -460,8 +460,16 @@ impl Selection {
 
 /// Tracks the current IME composition session.
 ///
-/// When an IME begins composing, this stores the target node and interim text
-/// until the composition ends and the final text is committed.
+/// When an IME begins composing (e.g., CJK text input), this struct stores the
+/// target node and interim text until the composition ends and the final text
+/// is committed. Maintained by P1 (Document::begin/update/end_composition).
+///
+/// **P3 integration:** P3 shell receives IME events from the platform (winit) and
+/// calls Document methods to maintain this state. When composition changes, P3
+/// dispatches corresponding CompositionEvent(s) to the target node's event listeners.
+///
+/// **Layout integration:** P1's layout engine uses get_composition() to highlight
+/// the preedit range with an underline or background, per UI Events §5.2.5.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompositionState {
     /// The editable element (contenteditable/input/textarea) receiving IME input.
@@ -470,8 +478,9 @@ pub struct CompositionState {
     pub text: String,
     /// BCP 47 language tag (e.g., "ja", "zh-Hans"). `None` if not available.
     pub locale: Option<String>,
-    /// Selection range in UTF-16 code units (start offset, length).
-    /// Allows JS to highlight the composition range as the user types.
+    /// Selection range in UTF-16 code units: (offset, length).
+    /// Describes which part of the preedit text is highlighted (e.g., current
+    /// candidate). Allows JS to highlight the composition range as the user types.
     pub selection: Option<(u32, u32)>,
 }
 
@@ -1740,8 +1749,17 @@ pub struct CompositionData {
 
 /// An IME composition event (compositionstart / update / end).
 ///
-/// Dispatched by P3 from winit IME callbacks. The DOM tracks composition state
-/// per node for virtual keyboard interaction and text alternatives.
+/// **P3 lifecycle:** P3 receives IME callbacks from winit (Ime::Preedit, Ime::Commit)
+/// and constructs CompositionEvent(s) to dispatch to the target node's listeners.
+/// - `compositionstart` → when IME begins (Document::begin_composition called)
+/// - `compositionupdate` → interim preedit changes (Document::update_composition)
+/// - `compositionend` → final commit (Document::end_composition returns state)
+///
+/// **JS exposure:** P3 serializes these events to the JS runtime, where JS can
+/// listen via `element.addEventListener("compositionstart", ...)`.
+///
+/// **Range semantics:** (offset, length) in UTF-16 code units, matching platform
+/// IME conventions and JS TextEvent / UIEvent.
 #[derive(Debug, Clone)]
 pub struct CompositionEvent {
     /// The kind of composition event.
