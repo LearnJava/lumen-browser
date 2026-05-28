@@ -1399,6 +1399,154 @@ pub trait JsWebSocketProvider: Send + Sync {
     fn connect(&self, url: &str) -> Result<Box<dyn JsWebSocketSession>>;
 }
 
+// ============================================================================
+// ADR-006: Automation API — first-class engine surface
+// ============================================================================
+
+/// Browser automation session — unified interface for in-process tests, MCP agents,
+/// and BiDi servers. All automation consumers (tests, drivers, external clients)
+/// call the same trait. The trait surface is engine-native, not protocol-shaped.
+///
+/// Trait is object-safe (`dyn BrowserSession`) for transport flexibility.
+/// Implementations are: `InProcessSession` (in-process Rust API in lumen-driver),
+/// MCP-server adapter, BiDi-server adapter.
+///
+/// Phase 0: trait + todo!() stubs. Real implementations come with 8A.2+ tasks.
+pub trait BrowserSession: Send {
+    /// Navigate to a URL or file path.
+    ///
+    /// Blocks until the page reaches interactive state (DOMContentLoaded).
+    /// After completion, `screenshot()` and `a11y_tree()` are available.
+    fn navigate(&mut self, url_or_path: &str) -> Result<()>;
+
+    /// Take a screenshot of the rendered page as PNG bytes.
+    ///
+    /// Resolution matches the session's viewport (`width` × `height`).
+    /// Includes all visual effects (transforms, filters, opacity).
+    fn screenshot(&self) -> Result<Vec<u8>>;
+
+    /// Get the accessibility tree (AX tree).
+    ///
+    /// Returns a JSON string representing the flattened AX tree:
+    /// `[{id, role, name, value, description, children}, ...]`.
+    /// Used as the primary locator surface for automation.
+    fn a11y_tree(&self) -> Result<String>;
+
+    /// Click an element matched by CSS selector.
+    ///
+    /// Waits for the element to be visible and interactive (not disabled, not masked).
+    /// Returns the visited URL if the click triggered navigation.
+    fn click(&mut self, selector: &str) -> Result<Option<String>>;
+
+    /// Type text into the focused element.
+    ///
+    /// The target must accept text input (input, textarea, or contenteditable).
+    /// If no element is focused, returns Err.
+    fn type_text(&mut self, text: &str) -> Result<()>;
+
+    /// Scroll the page by an offset.
+    ///
+    /// Positive `delta` scrolls down; negative scrolls up.
+    /// Returns the new scroll position in pixels.
+    fn scroll_by(&mut self, delta: f32) -> Result<f32>;
+
+    /// Wait for navigation to complete after an action.
+    ///
+    /// Blocks until the page reaches interactive state (DOMContentLoaded)
+    /// and all in-flight network requests have settled.
+    /// Returns the final URL.
+    fn wait_for_navigation(&mut self) -> Result<String>;
+
+    /// Wait for the page to reach idle state.
+    ///
+    /// Idle = layout stable + all network requests complete + no pending timers.
+    fn wait_for_idle(&mut self) -> Result<()>;
+
+    /// Get the current viewport dimensions.
+    fn viewport(&self) -> (u32, u32);
+
+    /// Set the viewport dimensions.
+    fn set_viewport(&mut self, width: u32, height: u32) -> Result<()>;
+
+    /// Get computed style for an element matched by CSS selector.
+    ///
+    /// Returns a JSON string: `{property: value, ...}`.
+    /// Only CSS properties are included; DOM attributes are not.
+    fn computed_style(&self, selector: &str) -> Result<String>;
+
+    /// Evaluate a JavaScript expression in the page context.
+    ///
+    /// Returns a JSON-compatible value (primitive / array / object).
+    /// Scripts that throw return Err with the exception message.
+    fn eval(&mut self, script: &str) -> Result<String>;
+}
+
+/// Null implementation of `BrowserSession` — all methods return `NotImplemented`.
+/// Used as a placeholder when automation is not activated.
+#[derive(Debug, Default)]
+pub struct NullBrowserSession;
+
+impl BrowserSession for NullBrowserSession {
+    fn navigate(&mut self, _: &str) -> Result<()> {
+        Err(crate::error::Error::Other(
+            "BrowserSession not implemented".into(),
+        ))
+    }
+    fn screenshot(&self) -> Result<Vec<u8>> {
+        Err(crate::error::Error::Other(
+            "BrowserSession not implemented".into(),
+        ))
+    }
+    fn a11y_tree(&self) -> Result<String> {
+        Err(crate::error::Error::Other(
+            "BrowserSession not implemented".into(),
+        ))
+    }
+    fn click(&mut self, _: &str) -> Result<Option<String>> {
+        Err(crate::error::Error::Other(
+            "BrowserSession not implemented".into(),
+        ))
+    }
+    fn type_text(&mut self, _: &str) -> Result<()> {
+        Err(crate::error::Error::Other(
+            "BrowserSession not implemented".into(),
+        ))
+    }
+    fn scroll_by(&mut self, _: f32) -> Result<f32> {
+        Err(crate::error::Error::Other(
+            "BrowserSession not implemented".into(),
+        ))
+    }
+    fn wait_for_navigation(&mut self) -> Result<String> {
+        Err(crate::error::Error::Other(
+            "BrowserSession not implemented".into(),
+        ))
+    }
+    fn wait_for_idle(&mut self) -> Result<()> {
+        Err(crate::error::Error::Other(
+            "BrowserSession not implemented".into(),
+        ))
+    }
+    fn viewport(&self) -> (u32, u32) {
+        (1024, 720)
+    }
+    fn set_viewport(&mut self, _: u32, _: u32) -> Result<()> {
+        Err(crate::error::Error::Other(
+            "BrowserSession not implemented".into(),
+        ))
+    }
+    fn computed_style(&self, _: &str) -> Result<String> {
+        Err(crate::error::Error::Other(
+            "BrowserSession not implemented".into(),
+        ))
+    }
+    fn eval(&mut self, _: &str) -> Result<String> {
+        Err(crate::error::Error::Other(
+            "BrowserSession not implemented".into(),
+        ))
+    }
+}
+
 // Точки расширения, спроектированные, но без интерфейса до Phase 1+.
 //
 // Trait-ы для трёх оставшихся «разрешённых exceptions» из §5 (внешние
@@ -1631,5 +1779,43 @@ mod tests {
         is_send_sync::<NullFontFormat>();
         is_send_sync::<NullSpellChecker>();
         is_send_sync::<NullHyphenationProvider>();
+    }
+
+    // --- ADR-006: Automation API ---
+
+    #[test]
+    fn browser_session_null_impl_returns_errors() {
+        let mut session = NullBrowserSession;
+        assert!(session.navigate("about:blank").is_err());
+        assert!(session.screenshot().is_err());
+        assert!(session.a11y_tree().is_err());
+        assert!(session.click("button").is_err());
+        assert!(session.type_text("hello").is_err());
+        assert!(session.scroll_by(100.0).is_err());
+        assert!(session.wait_for_navigation().is_err());
+        assert!(session.wait_for_idle().is_err());
+        assert!(session.set_viewport(1024, 720).is_err());
+        assert!(session.computed_style("body").is_err());
+        assert!(session.eval("1 + 2").is_err());
+    }
+
+    #[test]
+    fn browser_session_null_impl_viewport_returns_default() {
+        let session = NullBrowserSession;
+        assert_eq!(session.viewport(), (1024, 720));
+    }
+
+    #[test]
+    fn browser_session_is_object_safe() {
+        // dyn check: trait is object-safe for transport polymorphism.
+        fn check_dyn(_s: &mut dyn BrowserSession) {}
+        let mut session = NullBrowserSession;
+        check_dyn(&mut session);
+    }
+
+    #[test]
+    fn browser_session_null_impl_is_send() {
+        fn is_send<T: Send>() {}
+        is_send::<NullBrowserSession>();
     }
 }

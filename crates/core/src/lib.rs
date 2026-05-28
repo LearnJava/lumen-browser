@@ -24,8 +24,8 @@ pub use capability::{Capability, CapabilityToken};
 pub use error::{Error, Result};
 pub use event::{Event, FetchPriority, SubresourceKind, TabId};
 pub use ext::{
-    match_face, EventSink, FaceRecord, FontProvider, FontStyle,
-    HyphenationProvider, NullHyphenationProvider,
+    match_face, BrowserSession, EventSink, FaceRecord, FontProvider, FontStyle,
+    HyphenationProvider, NullBrowserSession, NullHyphenationProvider,
     JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime,
 };
 pub use form::{
