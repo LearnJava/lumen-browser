@@ -1,11 +1,5 @@
-In progress: accessibility-forms-validation  branch: p1-accessibility-forms-validation-phase1
-Next step: Form submission integration + invalid controls visibility in AXTree
-
-Phase 1 (complete 2026-05-28): ValidityState integration in accessibility tree
-  - compute_state() reads element_validity() to populate AXNode.invalid
-  - aria-invalid="true" preserved as explicit override
-  - 8 unit tests: required/email/length validation + valid states
-  - 125 tests PASS, clippy clean
+In progress: none
+Next task: ime-input
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -18,6 +12,7 @@ Note: fts-omnibox (Wave 1, P3-задача по домену) перенесен
 Note: Wave 2 очередь содержит P2-задачи (extras-p2, avif-decoder, webgl-context, font-hinting, svg-rasterizer) — они пока не для P1. Wave 2 P3-задачи (http2-client, preconnect-hints) тоже в P3 очереди. P1 берёт следующее из Phase 1/Phase 2 своих задач.
 
 Recent:
+- accessibility-forms-validation (6.2, Phase 1): ValidityState integration in accessibility tree, compute_state() reads element_validity() to populate AXNode.invalid, aria-invalid="true" preserved as explicit override, 8 unit tests (required/email/length/valid scenarios), 125 tests PASS, clippy clean 2026-05-28
 - contenteditable-advanced (32, Phase 2): undo/redo command history (DomCommand enum, CommandHistory struct, insert_text/delete_range/replace_text), paste support (PasteData with text/html/files, paste_into function), drag-drop support (DragData, drop_into function), 10 unit tests PASS, clippy clean 2026-05-28 — P3 shell integration pending
 - shadow-dom-accessibility-forms-gc (6+, Phase 2B+2C): Phase 2B — accessibility tree composition in nested shadow trees, Document::find_by_id() ARIA relationship resolution; Phase 2C — transparent role handling (Presentation/None/Generic/Group skipped in parent role context validation), proper ARIA role inheritance across shadow boundaries, 117 tests PASS, clippy clean 2026-05-28
 - click-hint-overlay (7B.2): enhance collect_clickable_elements with <details> support — add ClickableKind::Details variant, is_details_element() helper, comprehensive unit tests (6 new tests for link/button/input/details/mixed), P1 complete 2026-05-28 — P3 integration pending
@@ -80,7 +75,7 @@ Recent:
 30. ⬜ transition-advanced — grouped properties, interrupted transitions, animation-fill-mode complete
 31. ✅ shadow-dom-accessibility-forms-gc (6+) — Phase 2A: slot delegation + fallback ✅; Phase 2B: accessibility tree composition + FlatTree integration + ARIA relationships ✅; Phase 2C: transparent role handling across boundaries ✅ (2026-05-28)
 32. 🟡 contenteditable-advanced — undo/redo command history ✅; paste data support ✅; drag-drop support ✅; Phase 1-3 complete, P3 shell integration pending (2026-05-28)
-33. ⬜ accessibility-forms-validation — full constraint validation visualization, form submission with accessibility tree
+33. 🟡 accessibility-forms-validation — Phase 1: ValidityState in AXTree ✅ (2026-05-28); Phase 2: form submission + invalid controls visibility; Phase 3: submit algorithm integration
 34. ⬜ ime-input ([P1+P3]) — IME composition events through DOM, composition ranges, virtual keyboard interaction
 35. ⬜ svg-layout-advanced — SVG transforms, viewport nesting, aspect-ratio preservation
 36. ⬜ print-pdf-advanced — @page margin boxes, page numbers, headers/footers from margin-box content
