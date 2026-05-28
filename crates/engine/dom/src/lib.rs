@@ -458,6 +458,23 @@ impl Selection {
     }
 }
 
+/// Tracks the current IME composition session.
+///
+/// When an IME begins composing, this stores the target node and interim text
+/// until the composition ends and the final text is committed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompositionState {
+    /// The editable element (contenteditable/input/textarea) receiving IME input.
+    pub node: NodeId,
+    /// The interim (preedit) composition text being edited by the IME.
+    pub text: String,
+    /// BCP 47 language tag (e.g., "ja", "zh-Hans"). `None` if not available.
+    pub locale: Option<String>,
+    /// Selection range in UTF-16 code units (start offset, length).
+    /// Allows JS to highlight the composition range as the user types.
+    pub selection: Option<(u32, u32)>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     nodes: Vec<Node>,
@@ -479,6 +496,10 @@ pub struct Document {
     /// The current text selection. Updated by the shell on mouse events;
     /// read by layout for `selection_rects` and by JS via `window.getSelection()`.
     selection: Selection,
+    /// The active IME composition session (if any).
+    /// Tracks preedit text and range while the user is composing via an IME.
+    /// Cleared when composition ends.
+    composition: Option<CompositionState>,
 }
 
 impl Default for Document {
@@ -502,6 +523,7 @@ impl Document {
             shadow_roots: HashMap::new(),
             template_contents: HashMap::new(),
             selection: Selection::default(),
+            composition: None,
         }
     }
 
@@ -766,6 +788,62 @@ impl Document {
                 siblings.remove(pos);
             }
         }
+    }
+
+    // ── IME Composition state management ──────────────────────────────────────
+
+    /// Begin a new IME composition session in the given editable element.
+    ///
+    /// Overwrites any existing composition. Called by P3 when `compositionstart`
+    /// is received from winit.
+    ///
+    /// # Arguments
+    /// * `node` — the contenteditable/input/textarea receiving IME input
+    /// * `text` — initial composition text (may be empty)
+    /// * `locale` — BCP 47 language tag, or `None` if not available
+    pub fn begin_composition(&mut self, node: NodeId, text: String, locale: Option<String>) {
+        self.composition = Some(CompositionState {
+            node,
+            text,
+            locale,
+            selection: None,
+        });
+    }
+
+    /// Update the active composition with new preedit text and selection range.
+    ///
+    /// Called by P3 when `compositionupdate` is received from winit.
+    /// No-op if no composition is active.
+    ///
+    /// # Arguments
+    /// * `text` — new interim composition text
+    /// * `selection` — UTF-16 offset and length of the composition range shown to user
+    pub fn update_composition(&mut self, text: String, selection: Option<(u32, u32)>) {
+        if let Some(comp) = &mut self.composition {
+            comp.text = text;
+            comp.selection = selection;
+        }
+    }
+
+    /// End the active composition and return its final state.
+    ///
+    /// Called by P3 when `compositionend` is received from winit. Returns the
+    /// composition state so P3 can construct the final text event (with the
+    /// committed text from the IME).
+    ///
+    /// Returns `None` if no composition is active.
+    pub fn end_composition(&mut self) -> Option<CompositionState> {
+        self.composition.take()
+    }
+
+    /// Get the current composition state without removing it.
+    ///
+    /// Used by layout and JS to inspect the active composition (e.g., for
+    /// drawing selection underlines in the preedit range).
+    ///
+    /// Returns `None` if no composition is active.
+    pub fn get_composition(&self) -> &Option<CompositionState> {
+        &self.composition
     }
 
     // ── T3 hibernation snapshot (ADR-008) ─────────────────────────────────────
@@ -1585,6 +1663,109 @@ pub struct InputEvent {
     pub data: Option<String>,
     /// `true` while an IME composition is in progress (not yet committed).
     pub is_composing: bool,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// IME Composition Events (UI Events §5.2.5 — for CJK/Cyrillic input)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Type of IME composition event (UI Events §5.2.5).
+///
+/// While an IME is composing (e.g., Japanese input), the sequence is:
+/// 1. `compositionstart` — IME began capturing input
+/// 2. Zero or more `compositionupdate` — interim composition text shown to user
+/// 3. `compositionend` — IME committed the final text (may differ from last update)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompositionEventType {
+    /// IME composition began.
+    Start,
+    /// Interim composition text changed.
+    Update,
+    /// IME composition finished and text was committed.
+    End,
+}
+
+impl CompositionEventType {
+    /// The canonical DOM event name per UI Events §5.2.5.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "compositionstart",
+            Self::Update => "compositionupdate",
+            Self::End => "compositionend",
+        }
+    }
+}
+
+/// Data for a `compositionstart` / `compositionupdate` / `compositionend` event.
+///
+/// P3 constructs this from winit IME callbacks (Ime::Preedit, Ime::Commit) and
+/// dispatches to the JS runtime. P1 maintains composition state and ranges.
+#[derive(Debug, Clone)]
+pub struct CompositionData {
+    /// The interim (preedit) or final (committed) composition text.
+    /// Empty string for events where only metadata changed.
+    pub data: String,
+    /// BCP 47 language tag (e.g., "ja", "zh-Hans", "ru"). `None` if unknown.
+    pub locale: Option<String>,
+    /// Text offset range in the contenteditable host (UTF-16 code units).
+    /// `None` if the range cannot be determined.
+    /// `(start, end)` where `start < end`.
+    pub range: Option<(u32, u32)>,
+}
+
+/// An IME composition event (compositionstart / update / end).
+///
+/// Dispatched by P3 from winit IME callbacks. The DOM tracks composition state
+/// per node for virtual keyboard interaction and text alternatives.
+#[derive(Debug, Clone)]
+pub struct CompositionEvent {
+    /// The kind of composition event.
+    pub event_type: CompositionEventType,
+    /// Composition data (text, language, selection range).
+    pub data: CompositionData,
+}
+
+impl CompositionEvent {
+    /// Create a new composition event.
+    pub fn new(event_type: CompositionEventType, data: CompositionData) -> Self {
+        Self { event_type, data }
+    }
+
+    /// Create a `compositionstart` event with initial IME text.
+    pub fn start(data: String, locale: Option<String>) -> Self {
+        Self {
+            event_type: CompositionEventType::Start,
+            data: CompositionData {
+                data,
+                locale,
+                range: None,
+            },
+        }
+    }
+
+    /// Create a `compositionupdate` event for interim preedit text.
+    pub fn update(data: String, range: Option<(u32, u32)>) -> Self {
+        Self {
+            event_type: CompositionEventType::Update,
+            data: CompositionData {
+                data,
+                locale: None,
+                range,
+            },
+        }
+    }
+
+    /// Create a `compositionend` event for final committed text.
+    pub fn end(data: String) -> Self {
+        Self {
+            event_type: CompositionEventType::End,
+            data: CompositionData {
+                data,
+                locale: None,
+                range: None,
+            },
+        }
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -3561,5 +3742,151 @@ mod tests {
         let bytes = doc.to_bytes().expect("encode");
         // A 3-node tree should serialize well under 1 KB.
         assert!(bytes.len() < 1024, "snapshot too large: {} bytes", bytes.len());
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // IME Composition Events tests
+    // ──────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn composition_event_type_as_str() {
+        assert_eq!(CompositionEventType::Start.as_str(), "compositionstart");
+        assert_eq!(CompositionEventType::Update.as_str(), "compositionupdate");
+        assert_eq!(CompositionEventType::End.as_str(), "compositionend");
+    }
+
+    #[test]
+    fn composition_event_constructors() {
+        let start = CompositionEvent::start("あ".to_string(), Some("ja".to_string()));
+        assert_eq!(start.event_type, CompositionEventType::Start);
+        assert_eq!(start.data.data, "あ");
+        assert_eq!(start.data.locale, Some("ja".to_string()));
+        assert_eq!(start.data.range, None);
+
+        let update = CompositionEvent::update("あい".to_string(), Some((0, 2)));
+        assert_eq!(update.event_type, CompositionEventType::Update);
+        assert_eq!(update.data.data, "あい");
+        assert_eq!(update.data.locale, None);
+        assert_eq!(update.data.range, Some((0, 2)));
+
+        let end = CompositionEvent::end("あいう".to_string());
+        assert_eq!(end.event_type, CompositionEventType::End);
+        assert_eq!(end.data.data, "あいう");
+        assert_eq!(end.data.locale, None);
+        assert_eq!(end.data.range, None);
+    }
+
+    #[test]
+    fn document_begin_composition() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        doc.append_child(doc.root(), input);
+
+        // No composition initially
+        assert!(doc.get_composition().is_none());
+
+        // Begin composition
+        doc.begin_composition(input, "あ".to_string(), Some("ja".to_string()));
+        let comp = doc.get_composition();
+        assert!(comp.is_some());
+        let comp = comp.unwrap();
+        assert_eq!(comp.node, input);
+        assert_eq!(comp.text, "あ");
+        assert_eq!(comp.locale, Some("ja".to_string()));
+        assert_eq!(comp.selection, None);
+    }
+
+    #[test]
+    fn document_update_composition() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        doc.begin_composition(input, "あ".to_string(), Some("ja".to_string()));
+
+        // Update with new preedit and selection
+        doc.update_composition("あい".to_string(), Some((0, 2)));
+        let comp = doc.get_composition().unwrap();
+        assert_eq!(comp.text, "あい");
+        assert_eq!(comp.selection, Some((0, 2)));
+        // Locale should remain unchanged
+        assert_eq!(comp.locale, Some("ja".to_string()));
+    }
+
+    #[test]
+    fn document_update_composition_no_active() {
+        let mut doc = Document::new();
+        // Updating without active composition should be a no-op
+        doc.update_composition("text".to_string(), Some((0, 4)));
+        assert!(doc.get_composition().is_none());
+    }
+
+    #[test]
+    fn document_end_composition() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        doc.begin_composition(input, "あ".to_string(), Some("ja".to_string()));
+
+        // End composition returns the state
+        let ended = doc.end_composition();
+        assert!(ended.is_some());
+        let ended = ended.unwrap();
+        assert_eq!(ended.node, input);
+        assert_eq!(ended.text, "あ");
+
+        // Composition should now be None
+        assert!(doc.get_composition().is_none());
+    }
+
+    #[test]
+    fn document_end_composition_no_active() {
+        let mut doc = Document::new();
+        // Ending without active composition should return None
+        assert!(doc.end_composition().is_none());
+    }
+
+    #[test]
+    fn document_composition_sequence() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+
+        // Simulates a full IME composition sequence (Japanese input).
+        // User wants to type "こんにちは" (konnichiha).
+
+        // 1. Start: User types first key
+        doc.begin_composition(input, "こ".to_string(), Some("ja".to_string()));
+        assert_eq!(doc.get_composition().unwrap().text, "こ");
+
+        // 2. Update: User continues typing
+        doc.update_composition("こん".to_string(), Some((0, 2)));
+        assert_eq!(doc.get_composition().unwrap().text, "こん");
+
+        doc.update_composition("こんに".to_string(), Some((0, 3)));
+        assert_eq!(doc.get_composition().unwrap().text, "こんに");
+
+        // 3. End: User commits the input
+        let final_state = doc.end_composition();
+        assert!(final_state.is_some());
+        assert_eq!(final_state.unwrap().text, "こんに");
+
+        // Composition is now cleared
+        assert!(doc.get_composition().is_none());
+    }
+
+    #[test]
+    fn composition_state_snapshot_roundtrip() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        doc.append_child(doc.root(), input);
+        doc.begin_composition(input, "test".to_string(), Some("en".to_string()));
+
+        // Serialize and deserialize
+        let bytes = doc.to_bytes().expect("encode");
+        let restored = Document::from_bytes(&bytes).expect("decode");
+
+        // Composition state should be preserved
+        let restored_comp = restored.get_composition();
+        assert!(restored_comp.is_some());
+        let restored_comp = restored_comp.unwrap();
+        assert_eq!(restored_comp.text, "test");
+        assert_eq!(restored_comp.locale, Some("en".to_string()));
     }
 }
