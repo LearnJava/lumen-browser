@@ -1,5 +1,5 @@
-In progress: —
-Next step: Pick next task from Queue (Wave 2/3)
+In progress: http2-client (concurrent streams for HTTP/2 multiplexing)  branch: p3-http2-client-concurrent-streams
+Next step: Extend H2Conn::fetch to support multiple concurrent streams  crates/network/src/h2/conn.rs:1
 
 Recent (Wave 2/3 - automation API + completed tasks):
   - ✓ tab-lifecycle-invariants (10B/10C/10D, ADR-008): all three invariants verified/implemented:
