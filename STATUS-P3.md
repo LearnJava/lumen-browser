@@ -2,6 +2,7 @@ In progress: antidetect-tls-fingerprint (9B)  branch: p3-antidetect-tls-fingerpr
 Next step: TLS fingerprinting: explore lumen-network, inspect rustls config, identify Chrome TLS parameters (cipher order, extensions, ALPN)  crates/network/src/http.rs
 
 Recent (Wave 3 - automation API):
+  - tab-state-machine-10a (Phase 1: TabState enum T0-T4 + state machine + transitions + idle timeout + memory pressure triggers + 5 tests) 2026-05-28
   - auto-wait-engine-8d (Phase 1: polling-based wait_for(Visible/Stable/NetworkIdle/JsIdle) in InProcessSession + WinitSession, 6 unit tests) 2026-05-28
   - antidetect-surface-api (9A, Phase 1 complete: code-review audit + 8 negative tests for navigator.webdriver/chrome.runtime/cdc_*/__playwright/window.devtools absence) 2026-05-28
   - a11y-tree-via-driver (8G, Phase 1 complete: AxQuery enum + query_a11y/query_a11y_all + Role/NameContains matching + lumen-a11y integration) 2026-05-28
