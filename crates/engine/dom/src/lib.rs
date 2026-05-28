@@ -4477,4 +4477,176 @@ mod tests {
         // emoji(2) + t(1) + e(1) + x(1) + t(1) + emoji(2) = 8 UTF-16 units
         assert_eq!(mixed.data.range, Some((0, 6)));
     }
+
+    // ──────── FontFace and FontFaceSet ────────
+
+    #[test]
+    fn font_face_creation() {
+        let face = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"roboto.ttf\")".to_string(),
+        );
+
+        assert_eq!(face.family, "Roboto");
+        assert_eq!(face.style, "normal");
+        assert_eq!(face.weight, "400");
+        assert_eq!(face.stretch, None);
+        assert_eq!(face.unicode_range, None);
+        assert_eq!(face.src, "url(\"roboto.ttf\")");
+        assert_eq!(face.status, FontFaceStatus::Unloaded);
+    }
+
+    #[test]
+    fn font_face_with_properties() {
+        let face = FontFace::new(
+            "Inter".to_string(),
+            "italic".to_string(),
+            "700".to_string(),
+            Some("condensed".to_string()),
+            Some("U+0000-FFFF".to_string()),
+            "url(\"inter-700i.woff2\") format(\"woff2\")".to_string(),
+        );
+
+        assert_eq!(face.family, "Inter");
+        assert_eq!(face.style, "italic");
+        assert_eq!(face.weight, "700");
+        assert_eq!(face.stretch, Some("condensed".to_string()));
+        assert_eq!(face.unicode_range, Some("U+0000-FFFF".to_string()));
+    }
+
+    #[test]
+    fn font_face_set_add_and_size() {
+        let mut set = FontFaceSet::new();
+        assert_eq!(set.size(), 0);
+
+        let face1 = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"roboto.ttf\")".to_string(),
+        );
+        set.add(face1);
+        assert_eq!(set.size(), 1);
+
+        let face2 = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "700".to_string(),
+            None,
+            None,
+            "url(\"roboto-bold.ttf\")".to_string(),
+        );
+        set.add(face2);
+        assert_eq!(set.size(), 2);
+    }
+
+    #[test]
+    fn font_face_set_has_family() {
+        let mut set = FontFaceSet::new();
+        assert!(!set.has_family("Roboto"));
+
+        let face = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"roboto.ttf\")".to_string(),
+        );
+        set.add(face);
+        assert!(set.has_family("Roboto"));
+        assert!(!set.has_family("Inter"));
+    }
+
+    #[test]
+    fn font_face_set_get_by_family() {
+        let mut set = FontFaceSet::new();
+
+        let face1 = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"roboto-400.ttf\")".to_string(),
+        );
+        set.add(face1);
+
+        let face2 = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "700".to_string(),
+            None,
+            None,
+            "url(\"roboto-700.ttf\")".to_string(),
+        );
+        set.add(face2);
+
+        let face3 = FontFace::new(
+            "Inter".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"inter-400.ttf\")".to_string(),
+        );
+        set.add(face3);
+
+        let roboto_faces = set.get_by_family("Roboto");
+        assert_eq!(roboto_faces.len(), 2);
+        assert_eq!(roboto_faces[0].weight, "400");
+        assert_eq!(roboto_faces[1].weight, "700");
+
+        let inter_faces = set.get_by_family("Inter");
+        assert_eq!(inter_faces.len(), 1);
+        assert_eq!(inter_faces[0].weight, "400");
+
+        let missing = set.get_by_family("Helvetica");
+        assert_eq!(missing.len(), 0);
+    }
+
+    #[test]
+    fn font_face_set_clear() {
+        let mut set = FontFaceSet::new();
+
+        let face = FontFace::new(
+            "Roboto".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"roboto.ttf\")".to_string(),
+        );
+        set.add(face);
+        assert_eq!(set.size(), 1);
+
+        set.clear();
+        assert_eq!(set.size(), 0);
+        assert!(!set.has_family("Roboto"));
+    }
+
+    #[test]
+    fn document_fonts_collection() {
+        let mut doc = Document::new();
+        assert_eq!(doc.fonts().size(), 0);
+
+        let face = FontFace::new(
+            "CustomFont".to_string(),
+            "normal".to_string(),
+            "400".to_string(),
+            None,
+            None,
+            "url(\"custom.ttf\")".to_string(),
+        );
+        doc.fonts_mut().add(face);
+
+        assert_eq!(doc.fonts().size(), 1);
+        assert!(doc.fonts().has_family("CustomFont"));
+    }
 }
