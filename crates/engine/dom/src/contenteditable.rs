@@ -1,6 +1,7 @@
 //! Contenteditable and command history for undo/redo.
 //!
 //! Tracks all DOM modifications as reversible commands, allowing undo/redo.
+//! Also provides utilities for paste, drag-drop, and other editing operations.
 
 use crate::{delete_range, insert_text_at, Document, DomPosition, Range};
 
@@ -30,6 +31,49 @@ pub enum DomCommand {
         /// Original text (stored for undo).
         old_text: String,
     },
+}
+
+/// Data from a paste operation (clipboard or drag-drop).
+///
+/// Supports multiple MIME types: text/plain, text/html, and file list.
+#[derive(Debug, Clone, Default)]
+pub struct PasteData {
+    /// Plain text content (text/plain).
+    pub text: Option<String>,
+    /// HTML content (text/html).
+    pub html: Option<String>,
+    /// Filenames or URLs for dropped files.
+    pub files: Vec<String>,
+}
+
+impl PasteData {
+    /// Create empty paste data.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set text content.
+    pub fn with_text(mut self, text: impl Into<String>) -> Self {
+        self.text = Some(text.into());
+        self
+    }
+
+    /// Set HTML content.
+    pub fn with_html(mut self, html: impl Into<String>) -> Self {
+        self.html = Some(html.into());
+        self
+    }
+
+    /// Add a file to the paste data.
+    pub fn add_file(mut self, file: impl Into<String>) -> Self {
+        self.files.push(file.into());
+        self
+    }
+
+    /// Preferred content for insertion: HTML (if available), else plain text.
+    pub fn preferred_content(&self) -> Option<&str> {
+        self.html.as_deref().or(self.text.as_deref())
+    }
 }
 
 /// History of executed commands for undo/redo.
@@ -215,6 +259,38 @@ impl CommandHistory {
     }
 }
 
+/// Handle paste operation: insert paste data at selection or cursor position.
+///
+/// If there is an active selection, the selected content is replaced with the
+/// pasted content. If there is just a cursor position (collapsed selection),
+/// the content is inserted at that position.
+///
+/// Prefers HTML content over plain text if both are available.
+pub fn paste_into(
+    history: &mut CommandHistory,
+    doc: &mut Document,
+    data: &PasteData,
+) -> bool {
+    if let Some(content) = data.preferred_content() {
+        let selection = doc.get_selection().clone();
+
+        if let Some(range) = selection.get_range() {
+            // Replace selected content
+            history.replace_text(doc, range, content.to_string());
+        } else if let Some(pos) = selection.anchor {
+            // Insert at cursor position
+            history.insert_text(doc, pos, content.to_string());
+        } else {
+            // No selection and no cursor position — nothing to do
+            return false;
+        }
+
+        true
+    } else {
+        false
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -331,5 +407,53 @@ mod tests {
         history.delete_range(&mut doc, range);
         assert_eq!(history.current_pos(), 1);
         assert!(history.can_undo());
+    }
+
+    #[test]
+    fn paste_data_construction() {
+        let data = PasteData::new()
+            .with_text("hello")
+            .with_html("<p>hello</p>")
+            .add_file("test.txt");
+
+        assert_eq!(data.text, Some("hello".to_string()));
+        assert_eq!(data.html, Some("<p>hello</p>".to_string()));
+        assert_eq!(data.files, vec!["test.txt"]);
+    }
+
+    #[test]
+    fn paste_data_preferred_content() {
+        let plain_only = PasteData::new().with_text("plain");
+        assert_eq!(plain_only.preferred_content(), Some("plain"));
+
+        let html_preferred = PasteData::new()
+            .with_text("plain")
+            .with_html("<b>bold</b>");
+        assert_eq!(html_preferred.preferred_content(), Some("<b>bold</b>"));
+
+        let empty = PasteData::new();
+        assert_eq!(empty.preferred_content(), None);
+    }
+
+    #[test]
+    fn paste_into_at_cursor() {
+        let mut doc = new_doc_with_text();
+        let mut history = CommandHistory::new();
+
+        // Set cursor at position 5 (end of "Hello")
+        let pos = DomPosition {
+            container: NodeId(1),
+            offset: 5,
+        };
+        doc.set_selection(crate::Selection {
+            anchor: Some(pos),
+            focus: Some(pos),
+        });
+
+        let data = PasteData::new().with_text(" world");
+        let result = paste_into(&mut history, &mut doc, &data);
+
+        assert!(result);
+        assert_eq!(history.current_pos(), 1);
     }
 }
