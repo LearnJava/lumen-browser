@@ -238,6 +238,7 @@ pub enum ObserverKind {
     Resize,
     Intersection,
     Mutation,
+    Performance,
 }
 
 /// Уникальный handle наблюдателя. `disconnect_observer` снимает регистрацию.

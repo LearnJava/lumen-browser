@@ -1,5 +1,5 @@
-In progress: none
-Next task: performance-observer-timing Phase 1 (P1+P3 collaboration)
+In progress: performance-observer-timing Phase 1  branch: p1-performance-observer-timing
+Next step: implement PerformanceEntry + PerformanceObserver DOM types, mark/measure tracking  lumen-dom/src/performance.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
