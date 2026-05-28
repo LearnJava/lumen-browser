@@ -1,5 +1,5 @@
-In progress: —
-Next step: (Wave 3 automation API) Pick next: antidetect-tls-fingerprint (9B)
+In progress: antidetect-tls-fingerprint (9B, Phase 1 wip)  branch: p3-antidetect-tls-fingerprint-correct
+Next step: cipher suite matching, SessionContext/HttpClient integration, regression tests
 
 Recent (Wave 3 - automation API):
   - auto-wait-engine-8d (Phase 1: polling-based wait_for(Visible/Stable/NetworkIdle/JsIdle) in InProcessSession + WinitSession, 6 unit tests) 2026-05-28

@@ -1141,8 +1141,17 @@ impl TransitionScheduler {
                 continue;
             }
 
-            let from_val = extract(old);
             let to_val = extract(new);
+
+            // Check if there's an active transition that will be interrupted.
+            // If interrupted, use the previous `to` value as the starting point for smooth continuation.
+            let interrupted_value = self
+                .active
+                .get(&(node, prop_name.to_string()))
+                .map(|state| state.to.clone());
+
+            let from_val = interrupted_value.clone().unwrap_or_else(|| extract(old));
+
             if from_val == to_val {
                 continue;
             }
@@ -1153,13 +1162,9 @@ impl TransitionScheduler {
             let timing_fn = cyclic_get(&new.transition_timing_functions, prop_idx)
                 .cloned()
                 .unwrap_or_else(TimingFunction::default);
-
-            // Check if there's an active transition that will be interrupted.
-            // The interrupted value is captured for smooth continuation or reversal.
-            let interrupted_value = self
-                .active
-                .get(&(node, prop_name.to_string()))
-                .map(|state| state.to.clone());
+            let fill_mode = cyclic_get(&new.transition_fill_modes, prop_idx)
+                .copied()
+                .unwrap_or(AnimationFillMode::None);
 
             self.active.insert(
                 (node, prop_name.to_string()),
@@ -1170,7 +1175,7 @@ impl TransitionScheduler {
                     duration: dur,
                     delay,
                     timing_fn,
-                    fill_mode: AnimationFillMode::None,
+                    fill_mode,
                     interrupted_value,
                 },
             );

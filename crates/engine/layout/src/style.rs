@@ -2103,6 +2103,10 @@ pub struct ComputedStyle {
     /// Per-property list; если длина короче `transition_properties`, при
     /// resolve-time spec велит cyclically reuse последний элемент.
     pub transition_timing_functions: Vec<TimingFunction>,
+    /// CSS Transitions L2 §3 — `transition-fill-mode: <single-animation-fill-mode>#`.
+    /// Parallels animation-fill-mode; используется для сохранения значений
+    /// в delay-периоде (backwards) и после завершения (forwards).
+    pub transition_fill_modes: Vec<AnimationFillMode>,
     /// CSS Animations L1 §3.1 — `animation-name: none | <keyframes-name>#`.
     /// `none` хранится как пустой `Vec` (нет анимаций); иначе список имён.
     /// Имя соответствует `@keyframes name { ... }` в [`Stylesheet`].
@@ -4092,6 +4096,7 @@ impl ComputedStyle {
             transition_durations: Vec::new(),
             transition_delays: Vec::new(),
             transition_timing_functions: Vec::new(),
+            transition_fill_modes: Vec::new(),
             animation_names: Vec::new(),
             animation_durations: Vec::new(),
             animation_timing_functions: Vec::new(),
@@ -10334,11 +10339,18 @@ fn apply_declaration(
             } else if trimmed.eq_ignore_ascii_case("all") {
                 style.transition_properties = vec!["all".to_string()];
             } else {
-                style.transition_properties = trimmed
-                    .split(',')
-                    .map(|s| s.trim().to_string())
-                    .filter(|s| !s.is_empty())
-                    .collect();
+                let mut props = Vec::new();
+                for prop in trimmed.split(',') {
+                    let prop = prop.trim().to_string();
+                    if prop.is_empty() {
+                        continue;
+                    }
+                    // Expand grouped properties (e.g. margin → margin-top/right/bottom/left)
+                    for expanded in expand_grouped_transition_property(&prop) {
+                        props.push(expanded);
+                    }
+                }
+                style.transition_properties = props;
             }
         }
         "transition-duration" => {
@@ -10349,6 +10361,9 @@ fn apply_declaration(
         }
         "transition-timing-function" => {
             style.transition_timing_functions = TimingFunction::parse_list(val);
+        }
+        "transition-fill-mode" => {
+            style.transition_fill_modes = AnimationFillMode::parse_list(val);
         }
         "animation" => {
             apply_animation_shorthand(style, val);
