@@ -1877,7 +1877,7 @@ fn build_box(
     };
 
     let mut children = Vec::new();
-    if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup) {
+    if matches!(kind, BoxKind::Block | BoxKind::FlowRoot | BoxKind::Contents | BoxKind::FormControl { .. } | BoxKind::TableRow | BoxKind::Table | BoxKind::TableRowGroup | BoxKind::SvgRoot { .. }) {
         // CSS: :host, ::slotted — P4 wires shadow-scoped styles here
         // HTML5 §4.11.1 — <details>: when `open` attribute absent, only <summary> is rendered.
         // P3 wires: clicking <summary> should toggle `open` attribute + relayout.
@@ -6151,6 +6151,8 @@ mod tests {
             panic!("expected InlineRun");
         }
     }
+
+    // Phase 3: Nested SVG layout tests
 
     #[test]
     fn nested_svg_viewbox_scaling() {
