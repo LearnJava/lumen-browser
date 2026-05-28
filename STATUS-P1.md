@@ -1,5 +1,5 @@
-In progress: none
-Next task: next P1 feature from Phase 2 roadmap TBD
+In progress: font-loading-api Phase 2 (JS bindings)  branch: p1-font-loading-phase2
+Next step: implement JS bindings for FontFace/FontFaceStatus/FontFaceSet in lumen-core::ext::JsRuntime
 
 Recent completion: 8A.3 ✅ — accessibility-forms-validation Phase 3 (submit_form() integration into shell dispatch, FormSubmitEvent::Valid/Invalid handling, encode_form_fields + find_control_rect_and_error helpers, 189 tests PASS lumen-dom, clippy clean, 2026-05-28)
 Recent completion: 8A.2 ✅ — InProcessSession adapter for lumen-core::ext::BrowserSession (all 12 trait methods, 6 new unit tests, 27 total PASS, clippy clean, 2026-05-28)
