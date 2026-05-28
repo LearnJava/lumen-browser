@@ -12,6 +12,7 @@ use std::time::{Duration, SystemTime};
 
 /// Tab lifecycle state (memory tier).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[allow(dead_code)]
 pub enum TabState {
     /// T0: Foreground, visible. ~100-200 MB per tab.
     /// JS event loop running, all resources retained.
@@ -36,6 +37,7 @@ pub enum TabState {
 
 /// Transition reason from one tier to another.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum TransitionReason {
     /// User hid the tab (switched to another tab).
     UserHidden,
@@ -58,6 +60,7 @@ pub enum TransitionReason {
 
 /// Per-tab lifecycle state with timestamps.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TabLifecycle {
     /// Current tier.
     pub state: TabState,
@@ -77,6 +80,7 @@ pub struct TabLifecycle {
 
 /// User-configurable timeouts for tier transitions.
 #[derive(Debug, Clone)]
+#[allow(dead_code)]
 pub struct TierTimeouts {
     /// T0 → T1 transition (immediate on hide by default, or delay in ms).
     pub t0_to_t1_ms: u64,
@@ -98,6 +102,7 @@ impl Default for TierTimeouts {
     }
 }
 
+#[allow(dead_code)]
 impl TabLifecycle {
     /// Create a new tab in T0 (Active) state.
     pub fn new() -> Self {
@@ -226,6 +231,7 @@ impl Default for TabLifecycle {
 
 /// OS memory pressure levels (from `MemoryPressureSource` trait).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum MemoryPressure {
     Low,
     Medium,

@@ -251,10 +251,9 @@ fn run_window_mode(
         no_scrollbar,
         first_paint_delivered: false,
         first_contentful_paint_delivered: false,
-        history_fts: HistoryFts::open_in_memory()
-            .unwrap_or_else(|_| HistoryFts::open_in_memory().expect("history_fts init")),
-        search_history: SearchHistory::open_in_memory()
-            .unwrap_or_else(|_| SearchHistory::open_in_memory().expect("search_history init")),
+        history_fts: HistoryFts::open_in_memory().expect("history_fts init"),
+        search_history: SearchHistory::open_in_memory().expect("search_history init"),
+        next_history_id: 1,
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -2115,6 +2114,9 @@ struct Lumen {
     /// История поисковых запросов для prefix-match autocomplete в omnibox.
     /// In-memory в Phase 0; в Phase 2 открывается из профильной БД.
     search_history: SearchHistory,
+    /// Счётчик для генерирования rowid при индексировании в history_fts.
+    /// Инкрементируется при каждой навигации на новую страницу.
+    next_history_id: i64,
 }
 
 impl Lumen {
@@ -2520,7 +2522,7 @@ impl Lumen {
         self.prev_styles.clear();
         collect_box_styles(&page.layout_box, &mut self.prev_styles);
         self.layout_box = Some(page.layout_box);
-        self.title = page.title;
+        self.title = page.title.clone();
         self.anim_frame = None;
         self.find.close();
         self.address_bar.close();
@@ -2536,6 +2538,15 @@ impl Lumen {
         // Reset paint timing guards so new page fires fresh PerformancePaintTiming entries.
         self.first_paint_delivered = false;
         self.first_contentful_paint_delivered = false;
+
+        // Индексировать страницу в history_fts для omnibox (@history).
+        // На Phase 0 используем текущий URL и title; extraction текста отложен.
+        // Пропускаем Empty и File sources — только HTTP(S) и bfcache snapshots индексируются.
+        if let Some(url) = self.source.url_str() {
+            let title = page.title.as_deref().unwrap_or("");
+            let _ = self.history_fts.index(self.next_history_id, url, title, "");
+            self.next_history_id += 1;
+        }
         if let Some(r) = self.renderer.as_mut() {
             r.set_font_provider(Some(page.font_registry.clone()));
             r.clear_images();

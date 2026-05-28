@@ -40,6 +40,7 @@
 /// - Добавить Receiver<InputCommand> в WinitSessionHandler
 /// - Реализовать handle_injected_input для всех InputCommand вариантов
 /// - Интегрировать в WinitSessionHandler event loop обработку (после Line 2609)
+#[allow(dead_code)]
 pub struct InputInjectionQueue {
     // Будет добавлено в Phase 2 (8A.8) при миграции shell → WinitSession
 }
