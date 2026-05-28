@@ -42,8 +42,8 @@ pub enum SimpleSelector {
     Universal,
     Attribute(AttrSelector),
     PseudoClass(PseudoClass),
-    /// `::before`, `::after` и т.д. В Phase 0 никогда не матчит — DOM-узла нет.
-    PseudoElement(String),
+    /// `::before`, `::after`, `::slotted()` и т.д.
+    PseudoElement(PseudoElementKind),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -316,6 +316,36 @@ pub enum PseudoClass {
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
+}
+
+/// Pseudo-element селекторы (CSS Pseudo-Elements L4).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PseudoElementKind {
+    /// `::before` (CSS Pseudo-Elements L4 §5.1) — generates a box перед content element.
+    /// В Phase 0 никогда не матчит (генерируемых DOM-узлов нет).
+    Before,
+    /// `::after` (CSS Pseudo-Elements L4 §5.2) — generates a box после content element.
+    /// В Phase 0 никогда не матчит.
+    After,
+    /// `::first-line` (CSS Pseudo-Elements L4 §5.3) — form первой строки блока.
+    /// Заполняется P1 в layout через InlineRun.is_first_line флаг.
+    FirstLine,
+    /// `::first-letter` (CSS Pseudo-Elements L4 §5.4) — первая letter первого текстового node-а.
+    /// Заполняется P1 в layout через PseudoKind marker в segmentах.
+    FirstLetter,
+    /// `::slotted(selector-list)` (CSS Scoping L1 §6.2) — для shadow DOM.
+    /// Матчит элемент, который слотирован через `<slot>` и матчит хотя бы один
+    /// из селекторов списка. None = нет селектора (невалидно для ::slotted, но parser может вернуть).
+    Slotted(Option<Vec<ComplexSelector>>),
+    /// `::marker` (CSS Pseudo-Elements L4 §5.5) — маркер (bullet/number) list item.
+    /// В Phase 0 парсится как обычное имя; P4 вводит как enum для будущей специализации.
+    Marker,
+    /// `::selection` (CSS Pseudo-Elements L4 §5.6) — selected text.
+    /// В Phase 0 парсится как имя; P3 интеграция с DOM selection для highlight.
+    Selection,
+    /// Неизвестный pseudo-element (например, `::custom-pseudo` или typo).
+    /// Хранится имя для диагностики.
+    Unknown(String),
 }
 
 /// Аргумент `:dir(...)` pseudo-class (CSS Selectors L4 §13.2).
@@ -3040,15 +3070,33 @@ impl<'a> Parser<'a> {
         let lower = name.to_ascii_lowercase();
         if self.peek() == Some('(') {
             self.consume();
-            let pc = self.parse_functional_pseudo_body(&lower);
-            // Сожрать остаток до ')' если парсер вернул раньше времени или None.
-            self.skip_to_paren_close();
-            return Some(SimpleSelector::PseudoClass(pc.unwrap_or_else(|| {
-                PseudoClass::Unsupported(name.clone())
-            })));
+            if is_element {
+                // Функциональный pseudo-element (например ::slotted(...))
+                let pe = self.parse_functional_pseudo_element(&lower);
+                self.skip_to_paren_close();
+                return Some(SimpleSelector::PseudoElement(pe.unwrap_or(
+                    PseudoElementKind::Unknown(name)
+                )));
+            } else {
+                // Функциональный pseudo-class (например :is(...))
+                let pc = self.parse_functional_pseudo_body(&lower);
+                self.skip_to_paren_close();
+                return Some(SimpleSelector::PseudoClass(pc.unwrap_or_else(|| {
+                    PseudoClass::Unsupported(name.clone())
+                })));
+            }
         }
         if is_element {
-            return Some(SimpleSelector::PseudoElement(name));
+            let pe = match lower.as_str() {
+                "before" => PseudoElementKind::Before,
+                "after" => PseudoElementKind::After,
+                "first-line" => PseudoElementKind::FirstLine,
+                "first-letter" => PseudoElementKind::FirstLetter,
+                "marker" => PseudoElementKind::Marker,
+                "selection" => PseudoElementKind::Selection,
+                _ => PseudoElementKind::Unknown(name),
+            };
+            return Some(SimpleSelector::PseudoElement(pe));
         }
         let pc = match lower.as_str() {
             "first-child" => PseudoClass::FirstChild,
@@ -3261,6 +3309,26 @@ impl<'a> Parser<'a> {
             }
         }
         out
+    }
+
+    /// Парсит тело функционального pseudo-element (например `::slotted(...)`).
+    /// Возвращает `None` для неизвестных или невалидных тел — caller обернёт
+    /// в `Unknown(name)` и проглотит остаток до `)`.
+    fn parse_functional_pseudo_element(&mut self, name_lower: &str) -> Option<PseudoElementKind> {
+        match name_lower {
+            "slotted" => {
+                // CSS Scoping L1 §6.2: `::slotted(selector-list)` матчит element,
+                // который слотирован через этот `<slot>` и матчит хотя бы один
+                // из селекторов списка.
+                let list = self.parse_selector_list();
+                self.skip_ws_and_comments();
+                if self.peek() != Some(')') || list.is_empty() {
+                    return None;
+                }
+                Some(PseudoElementKind::Slotted(Some(list)))
+            }
+            _ => None,
+        }
     }
 
     /// Парсит `an+b`, число или ключевые слова `odd`/`even`. Останавливается на
@@ -4401,7 +4469,7 @@ mod tests {
     fn pseudo_element_double_colon() {
         let s = parse("p::before { content: \"\"; }");
         let head = &s.rules[0].selectors[0].head;
-        assert!(matches!(&head.parts[1], SimpleSelector::PseudoElement(n) if n == "before"));
+        assert!(matches!(&head.parts[1], SimpleSelector::PseudoElement(PseudoElementKind::Before)));
     }
 
     // ──────────────── specificity ────────────────
@@ -6487,6 +6555,56 @@ mod tests {
                 assert_eq!(list[0].head.parts[1], SimpleSelector::Class("wrapper".into()));
             }
             _ => panic!("Expected Host(Some(...)), got {:?}", sel.head.parts[0]),
+        }
+    }
+
+    // ────────────────── ::slotted pseudo-element (CSS Scoping L1 §6.2) ──
+
+    #[test]
+    fn slotted_pseudo_element_simple() {
+        // `::slotted(.slot-content) { color: blue; }` — :slotted with selector
+        let s = parse("::slotted(.slot-content) { color: blue; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        assert_eq!(sel.head.parts.len(), 1);
+        match &sel.head.parts[0] {
+            SimpleSelector::PseudoElement(PseudoElementKind::Slotted(Some(list))) => {
+                assert_eq!(list.len(), 1);
+                assert_eq!(list[0].head.parts[0], SimpleSelector::Class("slot-content".into()));
+            }
+            _ => panic!("Expected Slotted(Some(...)), got {:?}", sel.head.parts[0]),
+        }
+    }
+
+    #[test]
+    fn slotted_pseudo_element_multiple_selectors() {
+        // `::slotted(.primary, .secondary) { margin: 5px; }` — multiple selectors
+        let s = parse("::slotted(.primary, .secondary) { margin: 5px; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        match &sel.head.parts[0] {
+            SimpleSelector::PseudoElement(PseudoElementKind::Slotted(Some(list))) => {
+                assert_eq!(list.len(), 2);
+                assert_eq!(list[0].head.parts[0], SimpleSelector::Class("primary".into()));
+                assert_eq!(list[1].head.parts[0], SimpleSelector::Class("secondary".into()));
+            }
+            _ => panic!("Expected Slotted(Some(...)), got {:?}", sel.head.parts[0]),
+        }
+    }
+
+    #[test]
+    fn slotted_pseudo_element_with_type_selector() {
+        // `::slotted(input[type="text"]) { border-color: green; }` — type selector with attribute
+        let s = parse("::slotted(input[type=\"text\"]) { border-color: green; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        match &sel.head.parts[0] {
+            SimpleSelector::PseudoElement(PseudoElementKind::Slotted(Some(list))) => {
+                assert_eq!(list.len(), 1);
+                assert_eq!(list[0].head.parts[0], SimpleSelector::Type("input".into()));
+                assert!(list[0].head.parts.iter().any(|p| matches!(p, SimpleSelector::Attribute(_))));
+            }
+            _ => panic!("Expected Slotted(Some(...)), got {:?}", sel.head.parts[0]),
         }
     }
 }
