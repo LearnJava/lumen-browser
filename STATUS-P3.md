@@ -1,7 +1,8 @@
-In progress: antidetect-tls-fingerprint (9B, Phase 1 wip)  branch: p3-antidetect-tls-fingerprint-correct
-Next step: cipher suite matching, SessionContext/HttpClient integration, regression tests
+In progress: —
+Next step: (Wave 3 automation API) Pick next: antidetect-http-fingerprint (9C) or tab-state-machine (10A)
 
 Recent (Wave 3 - automation API):
+  - antidetect-tls-fingerprint-9b (Phase 1: TlsProfile enum + build_client_config + JA3 snapshot CHROME_130 + 10 tests) 2026-05-28
   - auto-wait-engine-8d (Phase 1: polling-based wait_for(Visible/Stable/NetworkIdle/JsIdle) in InProcessSession + WinitSession, 6 unit tests) 2026-05-28
   - antidetect-surface-api (9A, Phase 1 complete: code-review audit + 8 negative tests for navigator.webdriver/chrome.runtime/cdc_*/__playwright/window.devtools absence) 2026-05-28
   - a11y-tree-via-driver (8G, Phase 1 complete: AxQuery enum + query_a11y/query_a11y_all + Role/NameContains matching + lumen-a11y integration) 2026-05-28
