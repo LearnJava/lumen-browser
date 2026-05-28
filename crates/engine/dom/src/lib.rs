@@ -189,6 +189,20 @@ impl Node {
         let raw = self.get_attr("type").unwrap_or("text");
         Some(InputType::parse(raw))
     }
+
+    /// Virtual keyboard hint for `<input inputmode="...">` and `<textarea inputmode="...">`.
+    /// Returns `InputMode::Text` (default) for all non-input/non-textarea elements or when
+    /// the attribute is absent. Parsing is case-insensitive; unknown values default to `Text`.
+    ///
+    /// Used by shell to select IME/virtual keyboard type for text input fields.
+    pub fn input_mode(&self) -> Option<InputMode> {
+        let name = self.element_name()?;
+        if !name.local.eq_ignore_ascii_case("input") && !name.local.eq_ignore_ascii_case("textarea") {
+            return None;
+        }
+        let raw = self.get_attr("inputmode").unwrap_or("text");
+        Some(InputMode::parse(raw))
+    }
 }
 
 /// HTML5 form input types (HTML Standard §4.10.5). Спека определяет
@@ -323,6 +337,61 @@ impl InputType {
             self,
             Self::Submit | Self::Reset | Self::Button | Self::Image
         )
+    }
+}
+
+/// HTML Living Standard `inputmode` attribute values — hint to user agent about
+/// virtual keyboard shown for input/textarea elements. Default is `Text` (standard keyboard).
+///
+/// Used by shell for IME/virtual keyboard selection; phase 3 extension for Phase 1
+/// composition infrastructure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InputMode {
+    /// `none` — no virtual keyboard should be shown.
+    None,
+    /// `text` (default) — standard text input keyboard.
+    Text,
+    /// `decimal` — numeric keypad with decimal point (e.g. "12.34").
+    Decimal,
+    /// `numeric` — numeric keypad without decimal.
+    Numeric,
+    /// `tel` — telephone keypad.
+    Tel,
+    /// `search` — optimized for search queries.
+    Search,
+    /// `email` — optimized for email input.
+    Email,
+    /// `url` — optimized for URL input.
+    Url,
+}
+
+impl InputMode {
+    /// Parse `inputmode` attribute value. Case-insensitive per HTML spec.
+    /// Unknown values default to `Text`.
+    pub fn parse(s: &str) -> Self {
+        match s.trim().to_ascii_lowercase().as_str() {
+            "none" => Self::None,
+            "decimal" => Self::Decimal,
+            "numeric" => Self::Numeric,
+            "tel" => Self::Tel,
+            "search" => Self::Search,
+            "email" => Self::Email,
+            "url" => Self::Url,
+            _ => Self::Text,
+        }
+    }
+
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::None => "none",
+            Self::Text => "text",
+            Self::Decimal => "decimal",
+            Self::Numeric => "numeric",
+            Self::Tel => "tel",
+            Self::Search => "search",
+            Self::Email => "email",
+            Self::Url => "url",
+        }
     }
 }
 
@@ -5181,5 +5250,130 @@ mod tests {
         assert_eq!(PerformanceEntryType::Resource.to_string(), "resource");
         assert_eq!(PerformanceEntryType::Paint.to_string(), "paint");
         assert_eq!(PerformanceEntryType::Layout.to_string(), "layout");
+    }
+
+    #[test]
+    fn input_mode_parse_basic() {
+        assert_eq!(InputMode::parse("text"), InputMode::Text);
+        assert_eq!(InputMode::parse("none"), InputMode::None);
+        assert_eq!(InputMode::parse("decimal"), InputMode::Decimal);
+        assert_eq!(InputMode::parse("numeric"), InputMode::Numeric);
+        assert_eq!(InputMode::parse("tel"), InputMode::Tel);
+        assert_eq!(InputMode::parse("search"), InputMode::Search);
+        assert_eq!(InputMode::parse("email"), InputMode::Email);
+        assert_eq!(InputMode::parse("url"), InputMode::Url);
+    }
+
+    #[test]
+    fn input_mode_parse_case_insensitive() {
+        assert_eq!(InputMode::parse("TEXT"), InputMode::Text);
+        assert_eq!(InputMode::parse("NONE"), InputMode::None);
+        assert_eq!(InputMode::parse("DeCiMaL"), InputMode::Decimal);
+        assert_eq!(InputMode::parse("NumErIc"), InputMode::Numeric);
+    }
+
+    #[test]
+    fn input_mode_parse_whitespace_trim() {
+        assert_eq!(InputMode::parse("  text  "), InputMode::Text);
+        assert_eq!(InputMode::parse("\n  email\t"), InputMode::Email);
+    }
+
+    #[test]
+    fn input_mode_parse_unknown_default_to_text() {
+        assert_eq!(InputMode::parse("unknown"), InputMode::Text);
+        assert_eq!(InputMode::parse("random"), InputMode::Text);
+        assert_eq!(InputMode::parse(""), InputMode::Text);
+    }
+
+    #[test]
+    fn input_mode_as_str() {
+        assert_eq!(InputMode::Text.as_str(), "text");
+        assert_eq!(InputMode::None.as_str(), "none");
+        assert_eq!(InputMode::Decimal.as_str(), "decimal");
+        assert_eq!(InputMode::Numeric.as_str(), "numeric");
+        assert_eq!(InputMode::Tel.as_str(), "tel");
+        assert_eq!(InputMode::Search.as_str(), "search");
+        assert_eq!(InputMode::Email.as_str(), "email");
+        assert_eq!(InputMode::Url.as_str(), "url");
+    }
+
+    #[test]
+    fn node_input_mode_for_input_element() {
+        let mut doc = Document::new();
+
+        // <input inputmode="email">
+        let input_email = doc.create_element(QualName::html("input"));
+        doc.get_mut(input_email).data = NodeData::Element {
+            name: QualName::html("input"),
+            attrs: vec![Attribute {
+                name: QualName::html("inputmode"),
+                value: "email".to_string(),
+            }],
+        };
+
+        assert_eq!(doc.get(input_email).input_mode(), Some(InputMode::Email));
+
+        // <input inputmode="numeric">
+        let input_numeric = doc.create_element(QualName::html("input"));
+        doc.get_mut(input_numeric).data = NodeData::Element {
+            name: QualName::html("input"),
+            attrs: vec![Attribute {
+                name: QualName::html("inputmode"),
+                value: "numeric".to_string(),
+            }],
+        };
+
+        assert_eq!(
+            doc.get(input_numeric).input_mode(),
+            Some(InputMode::Numeric)
+        );
+    }
+
+    #[test]
+    fn node_input_mode_for_textarea_element() {
+        let mut doc = Document::new();
+
+        // <textarea inputmode="url">
+        let textarea = doc.create_element(QualName::html("textarea"));
+        doc.get_mut(textarea).data = NodeData::Element {
+            name: QualName::html("textarea"),
+            attrs: vec![Attribute {
+                name: QualName::html("inputmode"),
+                value: "url".to_string(),
+            }],
+        };
+
+        assert_eq!(doc.get(textarea).input_mode(), Some(InputMode::Url));
+    }
+
+    #[test]
+    fn node_input_mode_default_to_text_when_absent() {
+        let mut doc = Document::new();
+
+        // <input> without inputmode attribute
+        let input = doc.create_element(QualName::html("input"));
+        doc.get_mut(input).data = NodeData::Element {
+            name: QualName::html("input"),
+            attrs: vec![],
+        };
+
+        assert_eq!(doc.get(input).input_mode(), Some(InputMode::Text));
+    }
+
+    #[test]
+    fn node_input_mode_none_for_other_elements() {
+        let mut doc = Document::new();
+
+        // <div inputmode="email"> should return None
+        let div = doc.create_element(QualName::html("div"));
+        doc.get_mut(div).data = NodeData::Element {
+            name: QualName::html("div"),
+            attrs: vec![Attribute {
+                name: QualName::html("inputmode"),
+                value: "email".to_string(),
+            }],
+        };
+
+        assert_eq!(doc.get(div).input_mode(), None);
     }
 }

@@ -1,6 +1,7 @@
 In progress: none
-Next task: check remaining Phase 2+ layout work; next items: ime-input Phase 3 (virtual keyboard hints), contenteditable Phase 3 (shell integration), svg-layout Phase 4 (P2 paint/render pending)
+Next task: check remaining Phase 2+ layout work; next items: contenteditable Phase 3 (shell integration, P3 work), svg-layout Phase 4 (P2 paint/render pending), print-pdf-advanced Phase 4 (inline content in margin-boxes)
 
+Recent merge: ime-input Phase 3 ✅ — virtual keyboard hints via InputMode enum (InputMode::parse, as_str, Node::input_mode for input/textarea), 9 unit tests, 189 total PASS, clippy clean 2026-05-31
 Recent merge: print-pdf-advanced Phase 4 ✅ — real font measurement in margin-boxes (TextMeasurer integration, measure_text_w in layout_text, apply_margin_box_content with font_size param), 42 page tests PASS, 2026-05-31
 Recent merge: print-pdf-advanced Phase 3 ✅ — margin-box text layout (MarginBoxTextFragment, layout_text() method with word wrapping, 8 new tests), 39 page tests PASS, 2026-05-30
 Recent merge: svg-layout-advanced Phase 3 ✅ — nested SVG child propagation (SvgRoot now appears in child-bearing boxes), 5 unit tests PASS, 2026-05-30
@@ -87,7 +88,7 @@ Recent:
 31. ✅ shadow-dom-accessibility-forms-gc (6+) — Phase 2A: slot delegation + fallback ✅; Phase 2B: accessibility tree composition + FlatTree integration + ARIA relationships ✅; Phase 2C: transparent role handling across boundaries ✅ (2026-05-28)
 32. 🟡 contenteditable-advanced — undo/redo command history ✅; paste data support ✅; drag-drop support ✅; Phase 1-3 complete, P3 shell integration pending (2026-05-28)
 33. 🟡 accessibility-forms-validation — Phase 1: ValidityState in AXTree ✅ (2026-05-28); Phase 2: enhanced constraint validation (all error types + custom messages) ✅ (2026-05-28); Phase 3: submit algorithm integration
-34. 🟡 ime-input ([P1+P3]) — Phase 1: composition state tracking ✅ (2026-05-28); Phase 2: composition ranges + event data structures ✅ (2026-05-28); Phase 3: virtual keyboard hints and P3 shell integration pending
+34. ✅ ime-input ([P1+P3]) — Phase 1: composition state tracking ✅ (2026-05-28); Phase 2: composition ranges + event data structures ✅ (2026-05-28); Phase 3: virtual keyboard hints via InputMode enum ✅ (2026-05-31) — P3 shell integration (winit IME events) pending
 35. 🟡 svg-layout-advanced — Phase 1: SVG transforms, aspect-ratio preservation ✅ (2026-05-28); Phase 2: nested SVG transforms ✅ (2026-05-29); Phase 3: nested SVG layout (SvgRoot child propagation) ✅ (2026-05-30) — Phase 4 (paint/render for nested SVG viewBox+transforms) P2 pending
 36. 🟡 print-pdf-advanced — Phase 1: @page matching, margin-box model ✅ (2026-05-28); Phase 2: page counters + content generation ✅ (2026-05-29); Phase 3: margin-box text layout (MarginBoxTextFragment, layout_text word wrapping) ✅ (2026-05-30) — Phase 4 (inline content rendering in margin-boxes) pending
 37. 🟡 font-loading-api ([P1+P3]) — Phase 1: FontFace/FontFaceStatus/FontFaceSet types, document.fonts collection, @font-face extraction + population, 7 unit tests PASS 2026-05-28 — Phase 2-3 P3 JS binding pending
