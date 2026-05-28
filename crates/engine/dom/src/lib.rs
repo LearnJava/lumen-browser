@@ -17,6 +17,9 @@ use serde::{Deserialize, Serialize};
 
 pub use lumen_core::sandbox::{parse_sandbox_value, SandboxFlags};
 
+pub mod contenteditable;
+pub use contenteditable::{CommandHistory, DomCommand, DragData, PasteData, drop_into, paste_into};
+
 /// Error returned by [`Document::to_bytes`] and [`Document::from_bytes`].
 #[derive(Debug)]
 pub enum DomSnapshotError {
@@ -334,6 +337,30 @@ pub struct FormInfo {
     pub field_count: usize,
 }
 
+/// Результат попытки отправить форму (HTML5 §4.10.22 form submission algorithm).
+///
+/// При вызове `submit_form(doc, form_id)` функция выполняет constraint validation
+/// для всех submittable контролов в форме:
+/// - Если форма невалидна → возвращает `Invalid` с NodeId-ами всех невалидных элементов
+/// - Если форма валидна → возвращает `Valid` с собранными form data и параметрами отправки
+#[derive(Debug, Clone)]
+pub enum FormSubmitEvent {
+    /// Форма прошла constraint validation — готова к отправке.
+    Valid {
+        /// Значение атрибута `action` (пустая строка если отсутствует).
+        action: String,
+        /// Значение атрибута `method` в нижнем регистре (default: "get").
+        method: String,
+        /// Собранные поля формы: `(name, value)` пары всех submittable контролов.
+        fields: Vec<(String, String)>,
+    },
+    /// Форма не прошла constraint validation — содержит невалидные контролы.
+    Invalid {
+        /// NodeId-ы всех невалидных submittable контролов (в DOM-порядке).
+        invalid_controls: Vec<NodeId>,
+    },
+}
+
 /// Парсинг-режим документа по HTML5 §13.2.6.2 «The insertion mode».
 ///
 /// Решается tree builder-ом по DOCTYPE-токену (см. §13.2.5.1
@@ -455,6 +482,32 @@ impl Selection {
     }
 }
 
+/// Tracks the current IME composition session.
+///
+/// When an IME begins composing (e.g., CJK text input), this struct stores the
+/// target node and interim text until the composition ends and the final text
+/// is committed. Maintained by P1 (Document::begin/update/end_composition).
+///
+/// **P3 integration:** P3 shell receives IME events from the platform (winit) and
+/// calls Document methods to maintain this state. When composition changes, P3
+/// dispatches corresponding CompositionEvent(s) to the target node's event listeners.
+///
+/// **Layout integration:** P1's layout engine uses get_composition() to highlight
+/// the preedit range with an underline or background, per UI Events §5.2.5.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompositionState {
+    /// The editable element (contenteditable/input/textarea) receiving IME input.
+    pub node: NodeId,
+    /// The interim (preedit) composition text being edited by the IME.
+    pub text: String,
+    /// BCP 47 language tag (e.g., "ja", "zh-Hans"). `None` if not available.
+    pub locale: Option<String>,
+    /// Selection range in UTF-16 code units: (offset, length).
+    /// Describes which part of the preedit text is highlighted (e.g., current
+    /// candidate). Allows JS to highlight the composition range as the user types.
+    pub selection: Option<(u32, u32)>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Document {
     nodes: Vec<Node>,
@@ -476,6 +529,10 @@ pub struct Document {
     /// The current text selection. Updated by the shell on mouse events;
     /// read by layout for `selection_rects` and by JS via `window.getSelection()`.
     selection: Selection,
+    /// The active IME composition session (if any).
+    /// Tracks preedit text and range while the user is composing via an IME.
+    /// Cleared when composition ends.
+    composition: Option<CompositionState>,
 }
 
 impl Default for Document {
@@ -499,6 +556,7 @@ impl Document {
             shadow_roots: HashMap::new(),
             template_contents: HashMap::new(),
             selection: Selection::default(),
+            composition: None,
         }
     }
 
@@ -645,6 +703,28 @@ impl Document {
         None
     }
 
+    /// Find a node by its `id` attribute (case-sensitive, per HTML spec).
+    ///
+    /// Returns the `NodeId` of the first element with matching `id`, or `None` if not found.
+    /// Used by accessibility tree and ARIA relationship attributes (aria-labelledby, aria-controls, etc.)
+    /// to resolve references.
+    pub fn find_by_id(&self, id: &str) -> Option<NodeId> {
+        let mut stack: Vec<NodeId> = vec![self.root];
+        while let Some(node_id) = stack.pop() {
+            let node = self.get(node_id);
+            if matches!(node.data, NodeData::Element { .. })
+                && node.get_attr("id").is_some_and(|attr_id| attr_id == id)
+            {
+                return Some(node_id);
+            }
+            // Push children в обратном порядке для source-order traversal
+            for &child in node.children.iter().rev() {
+                stack.push(child);
+            }
+        }
+        None
+    }
+
     fn alloc(&mut self, data: NodeData) -> NodeId {
         let id = NodeId(self.nodes.len() as u32);
         self.nodes.push(Node {
@@ -741,6 +821,86 @@ impl Document {
                 siblings.remove(pos);
             }
         }
+    }
+
+    // ── IME Composition state management ──────────────────────────────────────
+
+    /// Begin a new IME composition session in the given editable element.
+    ///
+    /// Overwrites any existing composition. Called by P3 when `compositionstart`
+    /// is received from winit.
+    ///
+    /// # Arguments
+    /// * `node` — the contenteditable/input/textarea receiving IME input
+    /// * `text` — initial composition text (may be empty)
+    /// * `locale` — BCP 47 language tag, or `None` if not available
+    pub fn begin_composition(&mut self, node: NodeId, text: String, locale: Option<String>) {
+        self.composition = Some(CompositionState {
+            node,
+            text,
+            locale,
+            selection: None,
+        });
+    }
+
+    /// Update the active composition with new preedit text and selection range.
+    ///
+    /// Called by P3 when `compositionupdate` is received from winit.
+    /// No-op if no composition is active.
+    ///
+    /// # Arguments
+    /// * `text` — new interim composition text
+    /// * `selection` — UTF-16 offset and length of the composition range shown to user
+    pub fn update_composition(&mut self, text: String, selection: Option<(u32, u32)>) {
+        if let Some(comp) = &mut self.composition {
+            comp.text = text;
+            comp.selection = selection;
+        }
+    }
+
+    /// End the active composition and return its final state.
+    ///
+    /// Called by P3 when `compositionend` is received from winit. Returns the
+    /// composition state so P3 can construct the final text event (with the
+    /// committed text from the IME).
+    ///
+    /// Returns `None` if no composition is active.
+    pub fn end_composition(&mut self) -> Option<CompositionState> {
+        self.composition.take()
+    }
+
+    /// Get the current composition state without removing it.
+    ///
+    /// Used by layout and JS to inspect the active composition (e.g., for
+    /// drawing selection underlines in the preedit range).
+    ///
+    /// Returns `None` if no composition is active.
+    pub fn get_composition(&self) -> Option<&CompositionState> {
+        self.composition.as_ref()
+    }
+
+    /// Check if an IME composition is currently active.
+    ///
+    /// Returns `true` if `begin_composition` has been called and
+    /// `end_composition` has not yet been called.
+    pub fn is_composing(&self) -> bool {
+        self.composition.is_some()
+    }
+
+    /// Get the composition range (offset and length) if composition is active.
+    ///
+    /// Returns `None` if no composition is active or if the selection range
+    /// has not been set yet.
+    pub fn get_composition_range(&self) -> Option<(u32, u32)> {
+        self.composition.as_ref().and_then(|comp| comp.selection)
+    }
+
+    /// Get the target node that is receiving composition input.
+    ///
+    /// Returns `None` if no composition is active. This is the element that
+    /// should dispatch composition events (compositionstart/update/end).
+    pub fn get_composition_target(&self) -> Option<NodeId> {
+        self.composition.as_ref().map(|comp| comp.node)
     }
 
     // ── T3 hibernation snapshot (ADR-008) ─────────────────────────────────────
@@ -1163,6 +1323,58 @@ pub fn invalid_controls_in_form(doc: &Document, form_id: NodeId) -> Vec<NodeId> 
     out
 }
 
+/// Execute HTML5 form submission algorithm (§4.10.22 «Form submission»).
+///
+/// Performs constraint validation on all submittable controls within `form_id`:
+/// - If any control fails validation → returns `FormSubmitEvent::Invalid` with list of failing controls
+/// - If all pass → returns `FormSubmitEvent::Valid` with collected form data (name-value pairs)
+///
+/// The `action` and `method` attributes are extracted from the form element (both default to
+/// standard HTML5 values: empty action and "get" method respectively).
+///
+/// Form data collection uses DOM attributes (not runtime state); P3 integration should apply
+/// runtime FormState to get user-entered values.
+pub fn submit_form(doc: &Document, form_id: NodeId) -> FormSubmitEvent {
+    // Check if form_id actually points to a form element
+    let form_node = doc.get(form_id);
+    let is_form = form_node
+        .element_name()
+        .map(|q| q.local.eq_ignore_ascii_case("form"))
+        .unwrap_or(false);
+
+    if !is_form {
+        // Not a form element — treat as vacuously valid (no controls to validate)
+        return FormSubmitEvent::Valid {
+            action: String::new(),
+            method: "get".to_string(),
+            fields: Vec::new(),
+        };
+    }
+
+    // Extract action and method from form attributes
+    let action = form_node.get_attr("action").unwrap_or("").to_string();
+    let method = form_node
+        .get_attr("method")
+        .unwrap_or("get")
+        .to_ascii_lowercase();
+
+    // Perform constraint validation
+    if !check_validity_form(doc, form_id) {
+        // Form contains invalid controls — collect them and return Invalid
+        let invalid_controls = invalid_controls_in_form(doc, form_id);
+        return FormSubmitEvent::Invalid { invalid_controls };
+    }
+
+    // Form is valid — collect fields
+    let fields = collect_dom_form_fields(doc, form_id);
+
+    FormSubmitEvent::Valid {
+        action,
+        method,
+        fields,
+    }
+}
+
 fn collect_validity_in(doc: &Document, id: NodeId, form_id: NodeId, all_valid: &mut bool) {
     if !*all_valid {
         return; // early exit on first failure
@@ -1560,6 +1772,119 @@ pub struct InputEvent {
     pub data: Option<String>,
     /// `true` while an IME composition is in progress (not yet committed).
     pub is_composing: bool,
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// IME Composition Events (UI Events §5.2.5 — for CJK/Cyrillic input)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// Type of IME composition event (UI Events §5.2.5).
+///
+/// While an IME is composing (e.g., Japanese input), the sequence is:
+/// 1. `compositionstart` — IME began capturing input
+/// 2. Zero or more `compositionupdate` — interim composition text shown to user
+/// 3. `compositionend` — IME committed the final text (may differ from last update)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompositionEventType {
+    /// IME composition began.
+    Start,
+    /// Interim composition text changed.
+    Update,
+    /// IME composition finished and text was committed.
+    End,
+}
+
+impl CompositionEventType {
+    /// The canonical DOM event name per UI Events §5.2.5.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Start => "compositionstart",
+            Self::Update => "compositionupdate",
+            Self::End => "compositionend",
+        }
+    }
+}
+
+/// Data for a `compositionstart` / `compositionupdate` / `compositionend` event.
+///
+/// P3 constructs this from winit IME callbacks (Ime::Preedit, Ime::Commit) and
+/// dispatches to the JS runtime. P1 maintains composition state and ranges.
+#[derive(Debug, Clone)]
+pub struct CompositionData {
+    /// The interim (preedit) or final (committed) composition text.
+    /// Empty string for events where only metadata changed.
+    pub data: String,
+    /// BCP 47 language tag (e.g., "ja", "zh-Hans", "ru"). `None` if unknown.
+    pub locale: Option<String>,
+    /// Composition range in the contenteditable host (UTF-16 code units).
+    /// `None` if the range cannot be determined.
+    /// `(offset, length)` where offset is the start position and length is the number
+    /// of characters in the composition range.
+    pub range: Option<(u32, u32)>,
+}
+
+/// An IME composition event (compositionstart / update / end).
+///
+/// **P3 lifecycle:** P3 receives IME callbacks from winit (Ime::Preedit, Ime::Commit)
+/// and constructs CompositionEvent(s) to dispatch to the target node's listeners.
+/// - `compositionstart` → when IME begins (Document::begin_composition called)
+/// - `compositionupdate` → interim preedit changes (Document::update_composition)
+/// - `compositionend` → final commit (Document::end_composition returns state)
+///
+/// **JS exposure:** P3 serializes these events to the JS runtime, where JS can
+/// listen via `element.addEventListener("compositionstart", ...)`.
+///
+/// **Range semantics:** (offset, length) in UTF-16 code units, matching platform
+/// IME conventions and JS TextEvent / UIEvent.
+#[derive(Debug, Clone)]
+pub struct CompositionEvent {
+    /// The kind of composition event.
+    pub event_type: CompositionEventType,
+    /// Composition data (text, language, selection range).
+    pub data: CompositionData,
+}
+
+impl CompositionEvent {
+    /// Create a new composition event.
+    pub fn new(event_type: CompositionEventType, data: CompositionData) -> Self {
+        Self { event_type, data }
+    }
+
+    /// Create a `compositionstart` event with initial IME text.
+    pub fn start(data: String, locale: Option<String>) -> Self {
+        Self {
+            event_type: CompositionEventType::Start,
+            data: CompositionData {
+                data,
+                locale,
+                range: None,
+            },
+        }
+    }
+
+    /// Create a `compositionupdate` event for interim preedit text.
+    pub fn update(data: String, range: Option<(u32, u32)>) -> Self {
+        Self {
+            event_type: CompositionEventType::Update,
+            data: CompositionData {
+                data,
+                locale: None,
+                range,
+            },
+        }
+    }
+
+    /// Create a `compositionend` event for final committed text.
+    pub fn end(data: String) -> Self {
+        Self {
+            event_type: CompositionEventType::End,
+            data: CompositionData {
+                data,
+                locale: None,
+                range: None,
+            },
+        }
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -2543,6 +2868,102 @@ mod tests {
     }
 
     #[test]
+    fn flat_tree_nested_shadow_with_slot_delegation() {
+        // Scenario:
+        // <custom-component>
+        //   #shadow-root(open)
+        //     <slot name="item"></slot>
+        //   <custom-item slot="item">
+        //     #shadow-root(open)
+        //       <div>Item content</div>
+        //   </custom-item>
+        //
+        // Expected flat tree:
+        // - custom-component's composed children = [custom-item (from shadow root)]
+        // - slot's composed children = [custom-item (from light tree assignment)]
+        // - custom-item's composed children = [<div>Item content</div> (from its shadow root)]
+
+        let mut doc = Document::new();
+
+        // Create outer component with shadow tree
+        let outer_host = doc.create_element(QualName::html("custom-component"));
+        doc.append_child(doc.root(), outer_host);
+
+        let outer_shadow = doc.attach_shadow(outer_host, ShadowRootMode::Open);
+        let outer_slot = doc.create_element(QualName::html("slot"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(outer_slot).data {
+            attrs.push(Attribute {
+                name: QualName::html("name"),
+                value: "item".into(),
+            });
+        }
+        doc.append_child(outer_shadow, outer_slot);
+
+        // Create inner component with shadow tree and slot attribute
+        let inner_host = doc.create_element(QualName::html("custom-item"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inner_host).data {
+            attrs.push(Attribute {
+                name: QualName::html("slot"),
+                value: "item".into(),
+            });
+        }
+        doc.append_child(outer_host, inner_host); // Light tree child of outer
+
+        let inner_shadow = doc.attach_shadow(inner_host, ShadowRootMode::Open);
+        let inner_content = doc.create_element(QualName::html("div"));
+        doc.append_child(inner_shadow, inner_content);
+
+        let flat = build_flat_tree(&doc);
+
+        // Outer host should have shadow root children (which includes slot)
+        assert_eq!(flat.children_of(&doc, outer_host), &[outer_slot]);
+
+        // Outer slot should have inner_host as its assigned child
+        assert_eq!(flat.children_of(&doc, outer_slot), &[inner_host]);
+
+        // Inner host should have inner_content as its composed child (from its shadow root)
+        assert_eq!(flat.children_of(&doc, inner_host), &[inner_content]);
+    }
+
+    #[test]
+    fn flat_tree_nested_slot_fallback() {
+        // Scenario:
+        // <outer-component>
+        //   #shadow-root(open)
+        //     <slot name="header">
+        //       <default-header></default-header>
+        //     </slot>
+        //   <!-- light tree: no child with slot="header", so fallback is used -->
+        //
+        // Expected: slot should have its DOM child (default-header) as composed children.
+
+        let mut doc = Document::new();
+
+        let outer_host = doc.create_element(QualName::html("outer-component"));
+        doc.append_child(doc.root(), outer_host);
+
+        let outer_shadow = doc.attach_shadow(outer_host, ShadowRootMode::Open);
+        let slot = doc.create_element(QualName::html("slot"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(slot).data {
+            attrs.push(Attribute {
+                name: QualName::html("name"),
+                value: "header".into(),
+            });
+        }
+        doc.append_child(outer_shadow, slot);
+
+        let fallback = doc.create_element(QualName::html("default-header"));
+        doc.append_child(slot, fallback);
+
+        // No light-tree children with slot="header", so fallback should be used.
+
+        let flat = build_flat_tree(&doc);
+
+        // Slot should have fallback as its composed children (no assignment).
+        assert_eq!(flat.children_of(&doc, slot), &[fallback]);
+    }
+
+    #[test]
     fn shadow_root_printed_in_display() {
         let (doc, _, _) = build_shadow_host();
         let s = doc.to_string();
@@ -2936,6 +3357,208 @@ mod tests {
         let invalid = invalid_controls_in_form(&doc, form);
         assert_eq!(invalid.len(), 1);
         assert_eq!(invalid[0], inp2);
+    }
+
+    // ──────── submit_form (HTML5 §4.10.22) ────────
+
+    #[test]
+    fn submit_form_valid_single_field() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(form).data {
+            attrs.push(Attribute { name: QualName::html("action"), value: "/submit".into() });
+            attrs.push(Attribute { name: QualName::html("method"), value: "POST".into() });
+        }
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("name"), value: "username".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "alice".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp);
+
+        let result = submit_form(&doc, form);
+        if let FormSubmitEvent::Valid { action, method, fields } = result {
+            assert_eq!(action, "/submit");
+            assert_eq!(method, "post"); // lowercase
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0], ("username".to_string(), "alice".to_string()));
+        } else {
+            panic!("Expected Valid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn submit_form_valid_multiple_fields() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        doc.append_child(doc.root(), form);
+
+        // Field 1: text input
+        let inp1 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp1).data {
+            attrs.push(Attribute { name: QualName::html("name"), value: "field1".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "value1".into() });
+        }
+        doc.append_child(form, inp1);
+
+        // Field 2: checkbox (unchecked, should not be included)
+        let inp2 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp2).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "checkbox".into() });
+            attrs.push(Attribute { name: QualName::html("name"), value: "field2".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "checked_val".into() });
+        }
+        doc.append_child(form, inp2);
+
+        // Field 3: checkbox (checked)
+        let inp3 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp3).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "checkbox".into() });
+            attrs.push(Attribute { name: QualName::html("name"), value: "field3".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "checked_val".into() });
+            attrs.push(Attribute { name: QualName::html("checked"), value: "".into() });
+        }
+        doc.append_child(form, inp3);
+
+        let result = submit_form(&doc, form);
+        if let FormSubmitEvent::Valid { fields, .. } = result {
+            assert_eq!(fields.len(), 2); // only field1 and field3
+            assert_eq!(fields[0], ("field1".to_string(), "value1".to_string()));
+            assert_eq!(fields[1], ("field3".to_string(), "checked_val".to_string()));
+        } else {
+            panic!("Expected Valid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn submit_form_invalid_required_field() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("required"), value: "".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp);
+
+        let result = submit_form(&doc, form);
+        if let FormSubmitEvent::Invalid { invalid_controls } = result {
+            assert_eq!(invalid_controls.len(), 1);
+            assert_eq!(invalid_controls[0], inp);
+        } else {
+            panic!("Expected Invalid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn submit_form_invalid_email() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "email".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "not-an-email".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp);
+
+        let result = submit_form(&doc, form);
+        if let FormSubmitEvent::Invalid { invalid_controls } = result {
+            assert_eq!(invalid_controls.len(), 1);
+            assert_eq!(invalid_controls[0], inp);
+        } else {
+            panic!("Expected Invalid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn submit_form_multiple_invalid_fields() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+
+        // Invalid field 1: required but empty
+        let inp1 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp1).data {
+            attrs.push(Attribute { name: QualName::html("required"), value: "".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "".into() });
+        }
+
+        // Invalid field 2: too short
+        let inp2 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp2).data {
+            attrs.push(Attribute { name: QualName::html("minlength"), value: "5".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "hi".into() });
+        }
+
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp1);
+        doc.append_child(form, inp2);
+
+        let result = submit_form(&doc, form);
+        if let FormSubmitEvent::Invalid { invalid_controls } = result {
+            assert_eq!(invalid_controls.len(), 2);
+            assert_eq!(invalid_controls[0], inp1);
+            assert_eq!(invalid_controls[1], inp2);
+        } else {
+            panic!("Expected Invalid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn submit_form_defaults_action_and_method() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("name"), value: "f".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "v".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp);
+
+        let result = submit_form(&doc, form);
+        if let FormSubmitEvent::Valid { action, method, .. } = result {
+            assert_eq!(action, ""); // default empty action
+            assert_eq!(method, "get"); // default get
+        } else {
+            panic!("Expected Valid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn submit_form_non_form_element() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("required"), value: "".into() });
+        }
+        doc.append_child(doc.root(), div);
+        doc.append_child(div, inp);
+
+        // submit_form called on non-form element should treat as vacuously valid
+        let result = submit_form(&doc, div);
+        if let FormSubmitEvent::Valid { fields, .. } = result {
+            assert_eq!(fields.len(), 0);
+        } else {
+            panic!("Expected Valid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_form_submit_event_valid_variant() {
+        let event = FormSubmitEvent::Valid {
+            action: "/test".to_string(),
+            method: "post".to_string(),
+            fields: vec![],
+        };
+        if let FormSubmitEvent::Valid { action, .. } = event {
+            assert_eq!(action, "/test");
+        } else {
+            panic!("Expected Valid variant");
+        }
     }
 
     // ──────── EditInputType ────────
@@ -3440,5 +4063,300 @@ mod tests {
         let bytes = doc.to_bytes().expect("encode");
         // A 3-node tree should serialize well under 1 KB.
         assert!(bytes.len() < 1024, "snapshot too large: {} bytes", bytes.len());
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // IME Composition Events tests
+    // ──────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn composition_event_type_as_str() {
+        assert_eq!(CompositionEventType::Start.as_str(), "compositionstart");
+        assert_eq!(CompositionEventType::Update.as_str(), "compositionupdate");
+        assert_eq!(CompositionEventType::End.as_str(), "compositionend");
+    }
+
+    #[test]
+    fn composition_event_constructors() {
+        let start = CompositionEvent::start("あ".to_string(), Some("ja".to_string()));
+        assert_eq!(start.event_type, CompositionEventType::Start);
+        assert_eq!(start.data.data, "あ");
+        assert_eq!(start.data.locale, Some("ja".to_string()));
+        assert_eq!(start.data.range, None);
+
+        let update = CompositionEvent::update("あい".to_string(), Some((0, 2)));
+        assert_eq!(update.event_type, CompositionEventType::Update);
+        assert_eq!(update.data.data, "あい");
+        assert_eq!(update.data.locale, None);
+        assert_eq!(update.data.range, Some((0, 2)));
+
+        let end = CompositionEvent::end("あいう".to_string());
+        assert_eq!(end.event_type, CompositionEventType::End);
+        assert_eq!(end.data.data, "あいう");
+        assert_eq!(end.data.locale, None);
+        assert_eq!(end.data.range, None);
+    }
+
+    #[test]
+    fn document_begin_composition() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        doc.append_child(doc.root(), input);
+
+        // No composition initially
+        assert!(doc.get_composition().is_none());
+
+        // Begin composition
+        doc.begin_composition(input, "あ".to_string(), Some("ja".to_string()));
+        let comp = doc.get_composition();
+        assert!(comp.is_some());
+        let comp = comp.unwrap();
+        assert_eq!(comp.node, input);
+        assert_eq!(comp.text, "あ");
+        assert_eq!(comp.locale, Some("ja".to_string()));
+        assert_eq!(comp.selection, None);
+    }
+
+    #[test]
+    fn document_update_composition() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        doc.begin_composition(input, "あ".to_string(), Some("ja".to_string()));
+
+        // Update with new preedit and selection
+        doc.update_composition("あい".to_string(), Some((0, 2)));
+        let comp = doc.get_composition().unwrap();
+        assert_eq!(comp.text, "あい");
+        assert_eq!(comp.selection, Some((0, 2)));
+        // Locale should remain unchanged
+        assert_eq!(comp.locale, Some("ja".to_string()));
+    }
+
+    #[test]
+    fn document_update_composition_no_active() {
+        let mut doc = Document::new();
+        // Updating without active composition should be a no-op
+        doc.update_composition("text".to_string(), Some((0, 4)));
+        assert!(doc.get_composition().is_none());
+    }
+
+    #[test]
+    fn document_end_composition() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        doc.begin_composition(input, "あ".to_string(), Some("ja".to_string()));
+
+        // End composition returns the state
+        let ended = doc.end_composition();
+        assert!(ended.is_some());
+        let ended = ended.unwrap();
+        assert_eq!(ended.node, input);
+        assert_eq!(ended.text, "あ");
+
+        // Composition should now be None
+        assert!(doc.get_composition().is_none());
+    }
+
+    #[test]
+    fn document_end_composition_no_active() {
+        let mut doc = Document::new();
+        // Ending without active composition should return None
+        assert!(doc.end_composition().is_none());
+    }
+
+    #[test]
+    fn document_composition_sequence() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+
+        // Simulates a full IME composition sequence (Japanese input).
+        // User wants to type "こんにちは" (konnichiha).
+
+        // 1. Start: User types first key
+        doc.begin_composition(input, "こ".to_string(), Some("ja".to_string()));
+        assert_eq!(doc.get_composition().unwrap().text, "こ");
+
+        // 2. Update: User continues typing
+        doc.update_composition("こん".to_string(), Some((0, 2)));
+        assert_eq!(doc.get_composition().unwrap().text, "こん");
+
+        doc.update_composition("こんに".to_string(), Some((0, 3)));
+        assert_eq!(doc.get_composition().unwrap().text, "こんに");
+
+        // 3. End: User commits the input
+        let final_state = doc.end_composition();
+        assert!(final_state.is_some());
+        assert_eq!(final_state.unwrap().text, "こんに");
+
+        // Composition is now cleared
+        assert!(doc.get_composition().is_none());
+    }
+
+    #[test]
+    fn composition_state_snapshot_roundtrip() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+        doc.append_child(doc.root(), input);
+        doc.begin_composition(input, "test".to_string(), Some("en".to_string()));
+
+        // Serialize and deserialize
+        let bytes = doc.to_bytes().expect("encode");
+        let restored = Document::from_bytes(&bytes).expect("decode");
+
+        // Composition state should be preserved
+        let restored_comp = restored.get_composition();
+        assert!(restored_comp.is_some());
+        let restored_comp = restored_comp.unwrap();
+        assert_eq!(restored_comp.text, "test");
+        assert_eq!(restored_comp.locale, Some("en".to_string()));
+    }
+
+    #[test]
+    fn composition_helper_is_composing() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+
+        // Not composing initially
+        assert!(!doc.is_composing());
+
+        // Begin composition
+        doc.begin_composition(input, "あ".to_string(), Some("ja".to_string()));
+        assert!(doc.is_composing());
+
+        // End composition
+        doc.end_composition();
+        assert!(!doc.is_composing());
+    }
+
+    #[test]
+    fn composition_helper_get_range() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+
+        // No range initially
+        assert!(doc.get_composition_range().is_none());
+
+        // Begin composition without range
+        doc.begin_composition(input, "a".to_string(), None);
+        assert!(doc.get_composition_range().is_none());
+
+        // Update with range
+        doc.update_composition("ab".to_string(), Some((0, 2)));
+        assert_eq!(doc.get_composition_range(), Some((0, 2)));
+
+        // Update with different range
+        doc.update_composition("abc".to_string(), Some((0, 3)));
+        assert_eq!(doc.get_composition_range(), Some((0, 3)));
+
+        // End composition clears range
+        doc.end_composition();
+        assert!(doc.get_composition_range().is_none());
+    }
+
+    #[test]
+    fn composition_helper_get_target() {
+        let mut doc = Document::new();
+        let input1 = doc.create_element(QualName::html("input"));
+        let input2 = doc.create_element(QualName::html("textarea"));
+
+        // No target initially
+        assert!(doc.get_composition_target().is_none());
+
+        // Begin composition on input1
+        doc.begin_composition(input1, "text".to_string(), None);
+        assert_eq!(doc.get_composition_target(), Some(input1));
+
+        // End and start on input2
+        doc.end_composition();
+        doc.begin_composition(input2, "more".to_string(), None);
+        assert_eq!(doc.get_composition_target(), Some(input2));
+
+        // End composition clears target
+        doc.end_composition();
+        assert!(doc.get_composition_target().is_none());
+    }
+
+    #[test]
+    fn composition_helpers_with_ranges() {
+        let mut doc = Document::new();
+        let contenteditable = doc.create_element(QualName::html("div"));
+
+        // Simulate IME input with range tracking (UI Events §5.2.5)
+        doc.begin_composition(contenteditable, "c".to_string(), Some("ru".to_string()));
+        assert!(doc.is_composing());
+        assert_eq!(doc.get_composition_target(), Some(contenteditable));
+
+        // User updates composition
+        doc.update_composition("ч".to_string(), Some((0, 1)));
+        assert_eq!(doc.get_composition_range(), Some((0, 1)));
+
+        doc.update_composition("чт".to_string(), Some((0, 2)));
+        assert_eq!(doc.get_composition_range(), Some((0, 2)));
+
+        // Final commit
+        let final_state = doc.end_composition();
+        assert!(!doc.is_composing());
+        assert!(final_state.is_some());
+        assert_eq!(final_state.unwrap().text, "чт");
+    }
+
+    #[test]
+    fn composition_event_dispatching_ready() {
+        // Test CompositionEvent readiness for P3 dispatch (UI Events §5.2.5)
+        // P3 will serialize these events to JS runtime
+
+        // compositionstart event
+        let start_evt = CompositionEvent::start("初".to_string(), Some("zh".to_string()));
+        assert_eq!(start_evt.event_type, CompositionEventType::Start);
+        assert_eq!(start_evt.event_type.as_str(), "compositionstart");
+        assert_eq!(start_evt.data.data, "初");
+        assert_eq!(start_evt.data.locale, Some("zh".to_string()));
+
+        // compositionupdate events track user edits and cursor position
+        let update1 = CompositionEvent::update("初".to_string(), Some((0, 1)));
+        assert_eq!(update1.event_type.as_str(), "compositionupdate");
+        assert_eq!(update1.data.range, Some((0, 1))); // cursor at offset 0, length 1
+
+        let update2 = CompositionEvent::update("初中".to_string(), Some((0, 2)));
+        assert_eq!(update2.data.data, "初中");
+        assert_eq!(update2.data.range, Some((0, 2))); // preedit text spans 2 characters
+
+        // compositionend event with final committed text
+        let end_evt = CompositionEvent::end("初中文".to_string());
+        assert_eq!(end_evt.event_type.as_str(), "compositionend");
+        assert_eq!(end_evt.data.data, "初中文");
+        assert_eq!(end_evt.data.range, None); // no range on final commit
+    }
+
+    #[test]
+    fn composition_event_empty_data() {
+        // Edge case: some IMEs send compositionstart with empty data
+        let start_empty = CompositionEvent::start("".to_string(), Some("ja".to_string()));
+        assert_eq!(start_empty.data.data, "");
+        assert_eq!(start_empty.data.locale, Some("ja".to_string()));
+
+        // compositionupdate may not have locale info
+        let update = CompositionEvent::update("text".to_string(), Some((0, 4)));
+        assert_eq!(update.data.locale, None);
+
+        // compositionend may have empty data (commit cleared by IME)
+        let end_empty = CompositionEvent::end("".to_string());
+        assert_eq!(end_empty.data.data, "");
+        assert_eq!(end_empty.data.range, None);
+    }
+
+    #[test]
+    fn composition_multi_codepoint_range() {
+        // Test range handling with multi-byte UTF-16 characters
+        // Some characters (emoji, etc.) are 2 UTF-16 code units
+
+        // surrogate pair emoji: 👍 = 2 UTF-16 code units
+        let emoji_composition = CompositionEvent::update("👍".to_string(), Some((0, 2)));
+        assert_eq!(emoji_composition.data.range, Some((0, 2)));
+
+        // More complex: multiple characters with mixed widths
+        let mixed = CompositionEvent::update("😀text😀".to_string(), Some((0, 6)));
+        // emoji(2) + t(1) + e(1) + x(1) + t(1) + emoji(2) = 8 UTF-16 units
+        assert_eq!(mixed.data.range, Some((0, 6)));
     }
 }
