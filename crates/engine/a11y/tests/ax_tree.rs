@@ -1073,3 +1073,160 @@ fn collect_roles_dfs(
     }
     result
 }
+
+// ── Phase 2D: Presentational Roles, Slot Forwarding, Complex Nesting ────────
+// These tests verify handling of transparent roles (presentation, none, generic, group),
+// nested slot-like structures, and complex shadow nesting scenarios.
+
+#[test]
+fn role_presentation_collapses_subtree() {
+    let tree = build_tree(r#"
+        <div role="presentation">
+            <button>Button inside presentation</button>
+        </div>
+    "#);
+
+    let btn = find_role_dfs(&tree.root, AXRole::Button).expect("button should exist inside presentation");
+    assert_eq!(btn.name, "Button inside presentation");
+}
+
+#[test]
+fn role_none_behaves_like_presentation() {
+    let tree = build_tree(r#"
+        <div role="none">
+            <div role="menu">
+                <div role="menuitem">Item</div>
+            </div>
+        </div>
+    "#);
+
+    let menu = find_role_dfs(&tree.root, AXRole::Menu);
+    assert!(menu.is_some(), "menu should be visible despite role='none' wrapper");
+}
+
+#[test]
+fn presentational_role_inheritance_in_nesting() {
+    let tree = build_tree(r#"
+        <div role="tablist">
+            <div role="presentation">
+                <div role="tab">Tab 1</div>
+            </div>
+        </div>
+    "#);
+
+    let tab = find_role_dfs(&tree.root, AXRole::Tab);
+    assert!(tab.is_some(), "tab should be valid even with presentation ancestor");
+}
+
+#[test]
+fn nested_slot_like_structure_with_group() {
+    let tree = build_tree(r#"
+        <div role="group">
+            <div role="presentation">
+                <div role="group">
+                    <button>Nested button</button>
+                </div>
+            </div>
+        </div>
+    "#);
+
+    let btn = find_role_dfs(&tree.root, AXRole::Button);
+    assert!(btn.is_some(), "button should be accessible in nested groups");
+}
+
+#[test]
+fn complex_shadow_like_nested_lists() {
+    let tree = build_tree(r#"
+        <div role="list">
+            <div role="presentation">
+                <div role="listitem">Item 1</div>
+                <div role="presentation">
+                    <div role="listitem">Item 2</div>
+                </div>
+            </div>
+        </div>
+    "#);
+
+    let list = find_role_dfs(&tree.root, AXRole::List).expect("list");
+    let items = collect_roles_dfs(list, AXRole::ListItem);
+    assert_eq!(items.len(), 2, "both items should be valid despite presentation wrappers");
+}
+
+#[test]
+fn role_validation_across_presentation_boundaries() {
+    let tree = build_tree(r#"
+        <div role="menu">
+            <div role="presentation">
+                <div role="menuitem">Cut</div>
+                <div role="menuitem">Copy</div>
+            </div>
+        </div>
+    "#);
+
+    let menu = find_role_dfs(&tree.root, AXRole::Menu).expect("menu");
+    let items = collect_roles_dfs(menu, AXRole::MenuItem);
+    assert_eq!(items.len(), 2, "menuitems should be valid across presentation");
+}
+
+#[test]
+fn multiple_slot_like_distribution() {
+    let tree = build_tree(r#"
+        <div role="tablist">
+            <div class="tabs">
+                <div role="tab">Tab 1</div>
+                <div role="tab">Tab 2</div>
+            </div>
+            <div class="panels">
+                <div role="tabpanel">Panel 1</div>
+                <div role="tabpanel">Panel 2</div>
+            </div>
+        </div>
+    "#);
+
+    let tablist = find_role_dfs(&tree.root, AXRole::TabList).expect("tablist");
+    let tabs = collect_roles_dfs(tablist, AXRole::Tab);
+    let panels = collect_roles_dfs(tablist, AXRole::TabPanel);
+
+    assert_eq!(tabs.len(), 2, "should have 2 tabs");
+    assert_eq!(panels.len(), 2, "should have 2 tab panels");
+}
+
+#[test]
+fn nested_shadow_boundaries_with_form_controls() {
+    let tree = build_tree(r#"
+        <fieldset>
+            <legend>Settings</legend>
+            <div role="presentation">
+                <div role="group">
+                    <label>Option 1<input type="checkbox"></label>
+                </div>
+                <div role="group">
+                    <label>Option 2<input type="checkbox"></label>
+                </div>
+            </div>
+        </fieldset>
+    "#);
+
+    let checkboxes = collect_roles_dfs(&tree.root, AXRole::Checkbox);
+    assert_eq!(checkboxes.len(), 2, "both checkboxes should be accessible");
+}
+
+#[test]
+fn complex_deeply_nested_shadow_structure() {
+    let tree = build_tree(r#"
+        <div role="menu">
+            <div role="presentation">
+                <div role="group">
+                    <div role="presentation">
+                        <div role="menuitem">Item 1</div>
+                        <div role="menuitem">Item 2</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    "#);
+
+    let menu = find_role_dfs(&tree.root, AXRole::Menu).expect("menu");
+    let items = collect_roles_dfs(menu, AXRole::MenuItem);
+    assert_eq!(items.len(), 2, "menuitems should be valid in deeply nested structure");
+}

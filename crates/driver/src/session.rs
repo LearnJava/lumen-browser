@@ -389,8 +389,7 @@ impl BrowserSession for InProcessSession {
     }
 
     fn set_fingerprint_profile(&mut self, profile: FingerprintProfile) -> Result<()> {
-        self.context.set_fingerprint_profile(profile);
-        Ok(())
+        self.context.set_fingerprint_profile(profile)
     }
 
     fn user_agent(&self) -> String {
