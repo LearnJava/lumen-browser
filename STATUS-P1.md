@@ -1,5 +1,5 @@
-In progress: none
-Next task: check remaining Phase 2+ layout work; next items: ime-input Phase 3 (virtual keyboard hints), contenteditable Phase 3 (shell integration), svg-layout Phase 4 (P2 paint/render pending)
+In progress: ime-input Phase 3 (virtual keyboard hints)  branch: p1-ime-virtual-keyboard
+Next step: add inputmode field to HtmlElement, connect to ComposedEvent  crates/engine/dom/src/element.rs:280
 
 Recent merge: print-pdf-advanced Phase 4 ✅ — real font measurement in margin-boxes (TextMeasurer integration, measure_text_w in layout_text, apply_margin_box_content with font_size param), 42 page tests PASS, 2026-05-31
 Recent merge: print-pdf-advanced Phase 3 ✅ — margin-box text layout (MarginBoxTextFragment, layout_text() method with word wrapping, 8 new tests), 39 page tests PASS, 2026-05-30
