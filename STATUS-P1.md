@@ -1,5 +1,5 @@
-In progress: none
-Next task: font-loading-api Phase 1 (P1+P3 collaboration)
+In progress: font-loading-api Phase 1 (P1+P3 collaboration)  branch: p1-font-loading-api
+Next task: (in progress)
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
