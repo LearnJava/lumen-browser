@@ -29,9 +29,27 @@ mod tests {
     }
 
     #[test]
-    fn test_http_client_with_fingerprint_profile_tor() {
-        let client = HttpClient::new().with_fingerprint_profile(HttpProfile::Tor);
-        assert_eq!(client.fingerprint_profile(), HttpProfile::Tor);
+    fn test_http_client_with_fingerprint_profile_tor_browser() {
+        let client = HttpClient::new().with_fingerprint_profile(HttpProfile::TorBrowser);
+        assert_eq!(client.fingerprint_profile(), HttpProfile::TorBrowser);
+    }
+
+    #[test]
+    fn test_http_client_with_fingerprint_profile_firefox() {
+        let client = HttpClient::new().with_fingerprint_profile(HttpProfile::Firefox);
+        assert_eq!(client.fingerprint_profile(), HttpProfile::Firefox);
+    }
+
+    #[test]
+    fn test_http_client_with_fingerprint_profile_safari() {
+        let client = HttpClient::new().with_fingerprint_profile(HttpProfile::Safari);
+        assert_eq!(client.fingerprint_profile(), HttpProfile::Safari);
+    }
+
+    #[test]
+    fn test_http_client_with_fingerprint_profile_edge() {
+        let client = HttpClient::new().with_fingerprint_profile(HttpProfile::Edge);
+        assert_eq!(client.fingerprint_profile(), HttpProfile::Edge);
     }
 
     #[test]
@@ -46,9 +64,9 @@ mod tests {
         // Test that with_fingerprint_profile() can be chained with other builder methods
         let client = HttpClient::new()
             .with_fingerprint_profile(HttpProfile::Strict)
-            .with_fingerprint_profile(HttpProfile::Tor); // Second call should override
+            .with_fingerprint_profile(HttpProfile::TorBrowser); // Second call should override
 
-        assert_eq!(client.fingerprint_profile(), HttpProfile::Tor);
+        assert_eq!(client.fingerprint_profile(), HttpProfile::TorBrowser);
     }
 
     #[test]

@@ -1,13 +1,11 @@
 //! Client Hints handling per HTTP profile.
 //!
 //! Client Hints (Sec-CH-* headers) are optional headers that allow servers
-//! to request specific client information. Chrome and Lumen send them when the server
-//! requests them via Accept-CH header.
+//! to request specific client information.
 //!
 //! Lumen's policy per ADR-007:
-//! - Chrome/Lumen profiles: send Client Hints when requested (UA, viewport, etc.)
-//! - Strict profile: do not send Client Hints (privacy-first)
-//! - Tor profile: do not send Client Hints (Tor Browser policy)
+//! - Chrome/Firefox/Safari/Edge/Lumen profiles: send Client Hints when requested (UA, viewport, etc.)
+//! - Strict/TorBrowser profiles: do not send Client Hints (privacy-first)
 
 use crate::http::HttpProfile;
 
@@ -24,8 +22,12 @@ impl ClientHintsProfile {
     /// Create ClientHintsProfile for the given HTTP profile.
     pub fn for_http_profile(profile: HttpProfile) -> Self {
         match profile {
-            HttpProfile::Chrome | HttpProfile::Lumen => ClientHintsProfile::Enabled,
-            HttpProfile::Strict | HttpProfile::Tor => ClientHintsProfile::Disabled,
+            HttpProfile::Chrome
+            | HttpProfile::Firefox
+            | HttpProfile::Safari
+            | HttpProfile::Edge
+            | HttpProfile::Lumen => ClientHintsProfile::Enabled,
+            HttpProfile::Strict | HttpProfile::TorBrowser => ClientHintsProfile::Disabled,
         }
     }
 }
@@ -87,8 +89,8 @@ mod tests {
     }
 
     #[test]
-    fn test_client_hints_disabled_for_tor() {
-        assert!(!should_send_client_hints(HttpProfile::Tor, true));
+    fn test_client_hints_disabled_for_tor_browser() {
+        assert!(!should_send_client_hints(HttpProfile::TorBrowser, true));
     }
 
     #[test]

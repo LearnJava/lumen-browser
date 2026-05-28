@@ -26,41 +26,75 @@ pub struct H2Settings {
 impl H2Settings {
     /// Create HTTP/2 SETTINGS for the given profile.
     ///
-    /// - Chrome, Strict: Chrome 130+ SETTINGS (for compatibility)
-    /// - Lumen: native Lumen browser optimized SETTINGS
-    /// - Tor: conservative values to avoid unique fingerprint
+    /// Each profile matches a real browser's HTTP/2 SETTINGS frame values.
+    /// Per ADR-007 §«Per-profile HTTP configs», SETTINGS order and values
+    /// are a fingerprinting vector — matching the intended browser reduces
+    /// false-positive detection on privacy-conscious browsing.
     pub fn for_profile(profile: HttpProfile) -> Self {
         match profile {
             HttpProfile::Chrome | HttpProfile::Strict => {
-                // Chrome 130+ HTTP/2 SETTINGS (for compatibility)
+                // Chrome 130+ HTTP/2 SETTINGS
                 Self {
-                    header_table_size: 65536,      // Chrome: 65536
-                    enable_push: true,              // Enable server push
-                    max_concurrent_streams: Some(1000), // Chrome: 1000
-                    initial_window_size: 6291456,   // Chrome: 6291456 (6 MB)
-                    max_frame_size: 16384,          // Default, Chrome uses default
+                    header_table_size: 65536,
+                    enable_push: true,
+                    max_concurrent_streams: Some(1000),
+                    initial_window_size: 6291456,   // 6 MB
+                    max_frame_size: 16384,
+                    header_compression_size_limit: None,
+                }
+            }
+            HttpProfile::Firefox => {
+                // Firefox 130+ HTTP/2 SETTINGS
+                Self {
+                    header_table_size: 65536,
+                    enable_push: true,
+                    max_concurrent_streams: Some(1000),
+                    initial_window_size: 2147483647,  // Very large window (max i32)
+                    max_frame_size: 16384,
+                    header_compression_size_limit: None,
+                }
+            }
+            HttpProfile::Safari => {
+                // Safari 18+ HTTP/2 SETTINGS (conservative)
+                Self {
+                    header_table_size: 16384,
+                    enable_push: true,
+                    max_concurrent_streams: Some(500),
+                    initial_window_size: 65535,    // RFC default
+                    max_frame_size: 16384,
+                    header_compression_size_limit: None,
+                }
+            }
+            HttpProfile::Edge => {
+                // Edge 130+ HTTP/2 SETTINGS (same as Chrome)
+                Self {
+                    header_table_size: 65536,
+                    enable_push: true,
+                    max_concurrent_streams: Some(1000),
+                    initial_window_size: 6291456,   // 6 MB (same as Chrome)
+                    max_frame_size: 16384,
+                    header_compression_size_limit: None,
+                }
+            }
+            HttpProfile::TorBrowser => {
+                // Tor Browser HTTP/2 SETTINGS (conservative to avoid unique fingerprint)
+                Self {
+                    header_table_size: 4096,        // RFC default
+                    enable_push: true,
+                    max_concurrent_streams: Some(100),  // Conservative
+                    initial_window_size: 65535,    // RFC default
+                    max_frame_size: 16384,         // RFC default
                     header_compression_size_limit: None,
                 }
             }
             HttpProfile::Lumen => {
                 // Lumen-native HTTP/2 SETTINGS (optimized for lightweight browser)
                 Self {
-                    header_table_size: 16384,       // Smaller than Chrome, sufficient for Lumen
-                    enable_push: true,              // Support server push
-                    max_concurrent_streams: Some(500), // Fewer parallel streams
-                    initial_window_size: 1048576,   // 1 MB (vs Chrome 6 MB) — RAM optimization
-                    max_frame_size: 16384,          // RFC default
-                    header_compression_size_limit: None,
-                }
-            }
-            HttpProfile::Tor => {
-                // Conservative Tor settings (avoid unique fingerprint)
-                Self {
-                    header_table_size: 4096,        // RFC default
+                    header_table_size: 16384,
                     enable_push: true,
-                    max_concurrent_streams: Some(100), // Smaller than Chrome
-                    initial_window_size: 65535,     // RFC default
-                    max_frame_size: 16384,          // RFC default
+                    max_concurrent_streams: Some(500),
+                    initial_window_size: 1048576,   // 1 MB — RAM optimization
+                    max_frame_size: 16384,
                     header_compression_size_limit: None,
                 }
             }
@@ -166,11 +200,37 @@ mod tests {
     }
 
     #[test]
-    fn test_h2_settings_tor_profile() {
-        let settings = H2Settings::for_profile(HttpProfile::Tor);
+    fn test_h2_settings_tor_browser_profile() {
+        let settings = H2Settings::for_profile(HttpProfile::TorBrowser);
         assert_eq!(settings.header_table_size, 4096);
         assert_eq!(settings.max_concurrent_streams, Some(100));
         assert_eq!(settings.initial_window_size, 65535);
+    }
+
+    #[test]
+    fn test_h2_settings_firefox_profile() {
+        let settings = H2Settings::for_profile(HttpProfile::Firefox);
+        assert_eq!(settings.header_table_size, 65536);
+        assert_eq!(settings.max_concurrent_streams, Some(1000));
+        // Firefox uses large initial_window_size
+        assert_eq!(settings.initial_window_size, 2147483647);
+    }
+
+    #[test]
+    fn test_h2_settings_safari_profile() {
+        let settings = H2Settings::for_profile(HttpProfile::Safari);
+        assert_eq!(settings.header_table_size, 16384);
+        assert_eq!(settings.max_concurrent_streams, Some(500));
+        assert_eq!(settings.initial_window_size, 65535);
+    }
+
+    #[test]
+    fn test_h2_settings_edge_profile() {
+        let settings = H2Settings::for_profile(HttpProfile::Edge);
+        // Edge matches Chrome
+        assert_eq!(settings.header_table_size, 65536);
+        assert_eq!(settings.max_concurrent_streams, Some(1000));
+        assert_eq!(settings.initial_window_size, 6291456);
     }
 
     #[test]

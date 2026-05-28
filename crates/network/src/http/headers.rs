@@ -6,17 +6,26 @@
 
 use std::collections::VecDeque;
 
-/// HTTP profile — determines header order and casing configuration.
+/// HTTP profile — determines header order, casing, and HTTP/2 SETTINGS configuration.
+///
+/// Each profile matches a specific browser's fingerprint (TLS, HTTP/1.1 headers, HTTP/2 SETTINGS).
+/// See ADR-007 §«Per-profile HTTP configs» for the rationale.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HttpProfile {
-    /// Chrome profile: Chrome 130+ header order and casing (default for compatibility).
+    /// Chrome 130+ — default for compatibility. Matches current stable Chrome.
     Chrome,
-    /// Lumen profile: native Lumen browser SETTINGS (own fingerprint).
+    /// Firefox 130+ — minimal header set, different SETTINGS than Chrome.
+    Firefox,
+    /// Safari 18+ — minimal headers (Sec-* subset), conservative SETTINGS.
+    Safari,
+    /// Edge 130+ — similar to Chrome but with distinct alpn/extension ordering.
+    Edge,
+    /// Tor Browser — Tor-native TLS fingerprint + minimal headers.
+    TorBrowser,
+    /// Lumen-native — own optimized SETTINGS and UA (not impersonating any browser).
     Lumen,
-    /// Strict private profile: Chrome headers but Client Hints disabled.
+    /// Strict private mode — Chrome-compatible but with Client Hints disabled + enhanced anti-fp.
     Strict,
-    /// Tor-compatible profile: minimal, conservative header order.
-    Tor,
 }
 
 /// Chrome HTTP/1.1 header order (in request).
@@ -94,13 +103,15 @@ impl HeaderOrder {
     }
 }
 
-/// Build HTTP/1.1 request headers in Chrome-matching order for the given profile.
+/// Build HTTP/1.1 request headers for the given profile.
+///
+/// Each profile constructs headers in a specific order and set matching a real browser.
 ///
 /// Parameters:
 /// - `host`: Host header value (e.g., "example.com")
 /// - `accept_encoding`: Accept-Encoding header (e.g., "gzip, deflate, br")
 /// - `extra_headers`: Custom/author-provided headers as pre-formatted string
-/// - `profile`: HttpProfile (Standard, Strict, or Tor)
+/// - `profile`: HttpProfile (Chrome, Firefox, Safari, Edge, TorBrowser, Lumen, Strict)
 ///
 /// Returns header block ready to append to HTTP/1.1 request line.
 pub fn build_request_headers(
@@ -111,26 +122,103 @@ pub fn build_request_headers(
 ) -> String {
     let mut headers = HeaderOrder::new(profile);
 
-    // Chrome HTTP/1.1 header order (Standard/Strict profiles match)
-    headers.add("Host", host);
-    headers.add("Connection", "keep-alive");
-    headers.add("Cache-Control", "max-age=0");
-    headers.add("User-Agent", super::DEFAULT_USER_AGENT);
-    headers.add("Accept", "*/*");
+    match profile {
+        HttpProfile::Chrome | HttpProfile::Strict => {
+            // Chrome 130+ HTTP/1.1 header order
+            headers.add("Host", host);
+            headers.add("Connection", "keep-alive");
+            headers.add("Cache-Control", "max-age=0");
+            headers.add("User-Agent", super::DEFAULT_USER_AGENT);
+            headers.add("Accept", "*/*");
 
-    if !accept_encoding.is_empty() {
-        headers.add("Accept-Encoding", accept_encoding);
+            if !accept_encoding.is_empty() {
+                headers.add("Accept-Encoding", accept_encoding);
+            }
+
+            headers.add("Accept-Language", super::DEFAULT_ACCEPT_LANGUAGE);
+
+            // DNT (Do Not Track) — Chrome sends by default
+            headers.add("DNT", "1");
+
+            // Sec-Fetch-* headers (Chromium 76+) — sent by default in Chrome
+            headers.add("Sec-Fetch-Site", "none");
+            headers.add("Sec-Fetch-Mode", "navigate");
+            headers.add("Sec-Fetch-Dest", "document");
+        }
+        HttpProfile::Firefox => {
+            // Firefox 130+ HTTP/1.1 header order (minimal, no Sec-Fetch-*, no DNT)
+            headers.add("Host", host);
+            headers.add("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0");
+            headers.add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
+
+            if !accept_encoding.is_empty() {
+                headers.add("Accept-Encoding", accept_encoding);
+            }
+
+            headers.add("Accept-Language", super::DEFAULT_ACCEPT_LANGUAGE);
+            headers.add("Connection", "keep-alive");
+            headers.add("Cache-Control", "max-age=0");
+        }
+        HttpProfile::Safari => {
+            // Safari 18+ HTTP/1.1 header order (very minimal)
+            headers.add("Host", host);
+            headers.add("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15");
+            headers.add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8");
+
+            if !accept_encoding.is_empty() {
+                headers.add("Accept-Encoding", accept_encoding);
+            }
+
+            headers.add("Accept-Language", "en-US,en;q=0.9");
+            headers.add("Connection", "keep-alive");
+        }
+        HttpProfile::Edge => {
+            // Edge 130+ HTTP/1.1 header order (similar to Chrome with minor differences)
+            headers.add("Host", host);
+            headers.add("Connection", "keep-alive");
+            headers.add("Cache-Control", "max-age=0");
+            headers.add("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36 Edg/130.0.0.0");
+            headers.add("Accept", "*/*");
+
+            if !accept_encoding.is_empty() {
+                headers.add("Accept-Encoding", accept_encoding);
+            }
+
+            headers.add("Accept-Language", super::DEFAULT_ACCEPT_LANGUAGE);
+
+            // Edge includes Sec-Fetch-* like Chrome
+            headers.add("Sec-Fetch-Site", "none");
+            headers.add("Sec-Fetch-Mode", "navigate");
+            headers.add("Sec-Fetch-Dest", "document");
+        }
+        HttpProfile::TorBrowser => {
+            // Tor Browser — minimal header set to avoid fingerprinting
+            headers.add("Host", host);
+            headers.add("User-Agent", "Mozilla/5.0 (X11; Linux x86_64; rv:102.0) Gecko/20100101 Firefox/102.0");
+            headers.add("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8");
+
+            if !accept_encoding.is_empty() {
+                headers.add("Accept-Encoding", accept_encoding);
+            }
+
+            headers.add("Accept-Language", "en-US,en;q=0.5");
+            headers.add("Connection", "keep-alive");
+        }
+        HttpProfile::Lumen => {
+            // Lumen-native — own fingerprint (not impersonating any browser)
+            headers.add("Host", host);
+            headers.add("Connection", "keep-alive");
+            headers.add("Cache-Control", "max-age=0");
+            headers.add("User-Agent", super::DEFAULT_USER_AGENT);
+            headers.add("Accept", "*/*");
+
+            if !accept_encoding.is_empty() {
+                headers.add("Accept-Encoding", accept_encoding);
+            }
+
+            headers.add("Accept-Language", super::DEFAULT_ACCEPT_LANGUAGE);
+        }
     }
-
-    headers.add("Accept-Language", super::DEFAULT_ACCEPT_LANGUAGE);
-
-    // DNT (Do Not Track) — Chrome sends by default
-    headers.add("DNT", "1");
-
-    // Sec-Fetch-* headers (Chromium 76+) — sent by default in Chrome
-    headers.add("Sec-Fetch-Site", "none");
-    headers.add("Sec-Fetch-Mode", "navigate");
-    headers.add("Sec-Fetch-Dest", "document");
 
     // Append any extra headers from caller (CORS, Authorization, etc.)
     // Note: caller must ensure no duplicate Host/Connection/etc.
@@ -168,5 +256,48 @@ mod tests {
         assert!(headers.contains("Sec-Fetch-Site: none"));
         assert!(headers.contains("Sec-Fetch-Mode: navigate"));
         assert!(headers.contains("Sec-Fetch-Dest: document"));
+    }
+
+    #[test]
+    fn test_firefox_profile_lacks_sec_fetch() {
+        let headers = build_request_headers("example.com", "", "", HttpProfile::Firefox);
+        assert!(headers.contains("User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:130.0) Gecko/20100101 Firefox/130.0"));
+        assert!(!headers.contains("Sec-Fetch-Site"));
+        assert!(!headers.contains("Sec-Fetch-Mode"));
+        assert!(!headers.contains("Sec-Fetch-Dest"));
+        assert!(!headers.contains("DNT:"));
+    }
+
+    #[test]
+    fn test_safari_profile_minimal_headers() {
+        let headers = build_request_headers("example.com", "", "", HttpProfile::Safari);
+        assert!(headers.contains("User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15"));
+        assert!(headers.contains("Host: example.com"));
+        assert!(headers.contains("Accept: text/html,application/xhtml+xml"));
+        assert!(!headers.contains("Sec-Fetch-Site"));
+    }
+
+    #[test]
+    fn test_edge_profile_chrome_like() {
+        let headers = build_request_headers("example.com", "", "", HttpProfile::Edge);
+        assert!(headers.contains("User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"));
+        assert!(headers.contains("Sec-Fetch-Site: none"));
+        assert!(headers.contains("Sec-Fetch-Mode: navigate"));
+    }
+
+    #[test]
+    fn test_tor_browser_profile_minimal() {
+        let headers = build_request_headers("example.com", "", "", HttpProfile::TorBrowser);
+        assert!(headers.contains("User-Agent: Mozilla/5.0 (X11; Linux x86_64; rv:102.0) Gecko/20100101 Firefox/102.0"));
+        assert!(!headers.contains("Sec-Fetch-Site"));
+        assert!(!headers.contains("DNT:"));
+    }
+
+    #[test]
+    fn test_lumen_profile_custom_ua() {
+        let headers = build_request_headers("example.com", "", "", HttpProfile::Lumen);
+        assert!(headers.contains("User-Agent: Lumen/0.0.1"));
+        assert!(headers.contains("Accept: */*"));
+        assert!(headers.contains("Accept-Language: en-US,en;q=0.9"));
     }
 }
