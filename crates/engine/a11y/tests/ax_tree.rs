@@ -1230,3 +1230,70 @@ fn complex_deeply_nested_shadow_structure() {
     let items = collect_roles_dfs(menu, AXRole::MenuItem);
     assert_eq!(items.len(), 2, "menuitems should be valid in deeply nested structure");
 }
+
+// ── Constraint validation + accessibility ────────────────────────────────────
+
+#[test]
+fn state_invalid_required_missing_value() {
+    let tree = build_tree(r#"<input type="text" required>"#);
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    // Empty required input fails constraint validation → invalid state
+    assert!(tb.state.invalid, "required empty input should be marked invalid");
+}
+
+#[test]
+fn state_invalid_email_malformed() {
+    let tree = build_tree(r#"<input type="email" value="not-an-email">"#);
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    // type=email with syntactically wrong value fails constraint validation → invalid
+    assert!(tb.state.invalid, "email input with malformed value should be invalid");
+}
+
+#[test]
+fn state_valid_required_with_value() {
+    let tree = build_tree(r#"<input type="text" required value="hello">"#);
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    // Required input with non-empty value passes validation → not invalid
+    assert!(!tb.state.invalid, "required input with value should be valid");
+}
+
+#[test]
+fn state_valid_email_correct() {
+    let tree = build_tree(r#"<input type="email" value="user@example.com">"#);
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    // type=email with correct format passes validation → not invalid
+    assert!(!tb.state.invalid, "email input with valid format should not be invalid");
+}
+
+#[test]
+fn state_invalid_minlength_underflow() {
+    let tree = build_tree(r#"<input type="text" minlength="5" value="hi">"#);
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    // Value shorter than minlength fails constraint validation → invalid
+    assert!(tb.state.invalid, "input with value shorter than minlength should be invalid");
+}
+
+#[test]
+fn state_invalid_maxlength_overflow() {
+    let tree = build_tree(r#"<input type="text" maxlength="3" value="hello">"#);
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    // Value longer than maxlength fails constraint validation → invalid
+    assert!(tb.state.invalid, "input with value longer than maxlength should be invalid");
+}
+
+#[test]
+fn state_aria_invalid_overrides() {
+    let tree = build_tree(r#"<input type="text" value="valid-content" aria-invalid="true">"#);
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    // aria-invalid="true" is always marked invalid, regardless of actual validity
+    assert!(tb.state.invalid, "aria-invalid='true' should override validity");
+}
+
+#[test]
+fn state_required_and_invalid() {
+    let tree = build_tree(r#"<input type="text" required>"#);
+    let tb = find_role_dfs(&tree.root, AXRole::TextBox).expect("textbox");
+    // Required flag should be set regardless of validity
+    assert!(tb.state.required, "required attribute should set required state");
+    assert!(tb.state.invalid, "required empty input should be invalid");
+}
