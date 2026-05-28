@@ -84,6 +84,19 @@ fn main() {
     print_phase("TOTAL     ", &mut samples.total);
     println!();
     print_rss_stats(&mut samples.rss_bytes);
+    println!();
+    print_peak_rss_stats(&mut samples.peak_rss_bytes);
+
+    // Compute steady_state_rss: median of first 20% of measurements (after warmup stabilization).
+    #[allow(clippy::manual_div_ceil)]
+    let steady_state_samples = ((iters + 4) / 5).max(1);
+    if iters > WARMUP_ITERS {
+        let mut steady = samples.rss_bytes[..steady_state_samples.min(samples.rss_bytes.len())].to_vec();
+        steady.sort();
+        let median_idx = steady.len() / 2;
+        let steady_rss = steady[median_idx];
+        println!("steady_state_rss: {} MB", steady_rss / 1_000_000);
+    }
 }
 
 struct PipelineResult {
@@ -97,6 +110,8 @@ struct PipelineResult {
     css_rules: usize,
     paint_cmds: usize,
     rss_bytes: u64,
+    /// Peak RSS during this pipeline run (measured at start and end).
+    peak_rss_bytes: u64,
 }
 
 /// Get current RSS (resident set size) in bytes.
@@ -145,6 +160,7 @@ fn get_rss_bytes() -> u64 {
 
 fn run_pipeline(measurer: &lumen_paint::FontMeasurer<'_>) -> PipelineResult {
     let total_start = Instant::now();
+    let rss_start = get_rss_bytes();
 
     let t = Instant::now();
     let encoding = lumen_encoding::detect(PAGE_HTML, None);
@@ -173,7 +189,8 @@ fn run_pipeline(measurer: &lumen_paint::FontMeasurer<'_>) -> PipelineResult {
     let paint = t.elapsed();
 
     let total = total_start.elapsed();
-    let rss_bytes = get_rss_bytes();
+    let rss_end = get_rss_bytes();
+    let peak_rss_bytes = rss_start.max(rss_end);
 
     let dom_nodes = doc.len();
     let css_rules = sheet.rules.len();
@@ -194,7 +211,8 @@ fn run_pipeline(measurer: &lumen_paint::FontMeasurer<'_>) -> PipelineResult {
         dom_nodes,
         css_rules,
         paint_cmds,
-        rss_bytes,
+        rss_bytes: rss_end,
+        peak_rss_bytes,
     }
 }
 
@@ -206,6 +224,7 @@ struct Samples {
     paint: Vec<Duration>,
     total: Vec<Duration>,
     rss_bytes: Vec<u64>,
+    peak_rss_bytes: Vec<u64>,
 }
 
 impl Samples {
@@ -218,6 +237,7 @@ impl Samples {
             paint: Vec::with_capacity(cap),
             total: Vec::with_capacity(cap),
             rss_bytes: Vec::with_capacity(cap),
+            peak_rss_bytes: Vec::with_capacity(cap),
         }
     }
 
@@ -229,6 +249,7 @@ impl Samples {
         self.paint.push(r.paint);
         self.total.push(r.total);
         self.rss_bytes.push(r.rss_bytes);
+        self.peak_rss_bytes.push(r.peak_rss_bytes);
     }
 }
 
@@ -302,6 +323,29 @@ fn print_rss_stats(samples: &mut [u64]) {
 
     println!(
         "  RSS       min {:>8}  med {:>8}  mean {:>8}  p95 {:>8}  max {:>8}",
+        fmt_bytes(min),
+        fmt_bytes(median),
+        fmt_bytes(mean),
+        fmt_bytes(p95),
+        fmt_bytes(max)
+    );
+}
+
+fn print_peak_rss_stats(samples: &mut [u64]) {
+    if samples.is_empty() {
+        return;
+    }
+    samples.sort();
+    let n = samples.len();
+    let min = samples[0];
+    let max = samples[n - 1];
+    let median = samples[n / 2];
+    let p95_idx = ((n as f64 * 0.95).ceil() as usize).saturating_sub(1).min(n - 1);
+    let p95 = samples[p95_idx];
+    let mean = samples.iter().sum::<u64>() / (n as u64);
+
+    println!(
+        "  PEAK_RSS  min {:>8}  med {:>8}  mean {:>8}  p95 {:>8}  max {:>8}",
         fmt_bytes(min),
         fmt_bytes(median),
         fmt_bytes(mean),

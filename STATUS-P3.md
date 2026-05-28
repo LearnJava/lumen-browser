@@ -1,5 +1,5 @@
 In progress: bench-ram-axis (9G.5)  branch: p3-bench-ram-axis
-Next step: Create bench/compare.py + CI workflow .github/workflows/bench-gate.yml  crates/bench/src/main.rs:main()
+Next step: Extend crates/bench/src/main.rs — add peak_rss / steady_state_rss tracking  crates/bench/src/main.rs:99
 
 Recent (Wave 3 - automation API + completed tasks):
   - samples-heavy-html (10M, Phase 1 complete: Habr-style benchmark page with 35+ posts, sidebar, sticky header, 1258 lines, ~2273 DOM nodes) 2026-05-28
