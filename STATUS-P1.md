@@ -1,5 +1,5 @@
-In progress: none
-Next task: transition-advanced or accessibility-forms-validation
+In progress: transition-advanced  branch: p1-transition-advanced
+Next step: Add transition_fill_modes field to ComputedStyle  crates/engine/layout/src/style.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
