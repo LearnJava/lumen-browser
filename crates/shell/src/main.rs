@@ -27,6 +27,7 @@ mod momentum_anim;
 mod runtime;
 mod scroll_anim;
 mod scrollbar;
+mod tab_lifecycle;
 
 use std::cell::Cell;
 use std::error::Error;
