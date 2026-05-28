@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use lumen_core::geom::Size;
 use lumen_css_parser::{
     parse_inline_style, AttrOp, AttrSelector, Combinator, ComplexSelector, CompoundSelector,
-    Declaration, DirArg, MediaContext, PropertyRule, PseudoClass, SimpleSelector, Specificity,
+    Declaration, DirArg, MediaContext, PropertyRule, PseudoClass, PseudoElementKind, SimpleSelector, Specificity,
     Stylesheet,
 };
 use lumen_dom::{Attribute, Document, DocumentMode, NodeData, NodeId};
@@ -4745,6 +4745,20 @@ fn coerce_overflow_axes(ox: Overflow, oy: Overflow) -> (Overflow, Overflow) {
 /// Алгоритм: последний compound должен содержать `PseudoElement(pseudo)`;
 /// остаток селектора (после удаления этой части) проверяется через
 /// существующий `matches_complex`.
+/// Helper: check if a pseudo-element name matches a PseudoElementKind.
+fn pseudo_element_matches(kind: &PseudoElementKind, name: &str) -> bool {
+    match kind {
+        PseudoElementKind::Before => name.eq_ignore_ascii_case("before"),
+        PseudoElementKind::After => name.eq_ignore_ascii_case("after"),
+        PseudoElementKind::FirstLine => name.eq_ignore_ascii_case("first-line"),
+        PseudoElementKind::FirstLetter => name.eq_ignore_ascii_case("first-letter"),
+        PseudoElementKind::Slotted(_) => name.eq_ignore_ascii_case("slotted"),
+        PseudoElementKind::Marker => name.eq_ignore_ascii_case("marker"),
+        PseudoElementKind::Selection => name.eq_ignore_ascii_case("selection"),
+        PseudoElementKind::Unknown(s) => s.eq_ignore_ascii_case(name),
+    }
+}
+
 fn matches_complex_for_pseudo(
     complex: &ComplexSelector,
     pseudo: &str,
@@ -4753,7 +4767,7 @@ fn matches_complex_for_pseudo(
 ) -> Option<Specificity> {
     let last = complex.tail.last().map(|(_, c)| c).unwrap_or(&complex.head);
     if !last.parts.iter().any(|p| {
-        matches!(p, SimpleSelector::PseudoElement(n) if n.eq_ignore_ascii_case(pseudo))
+        matches!(p, SimpleSelector::PseudoElement(n) if pseudo_element_matches(n, pseudo))
     }) {
         return None;
     }
@@ -5404,6 +5418,7 @@ fn matches_pseudo_class(p: &PseudoClass, doc: &Document, node: NodeId) -> bool {
         // Phase 0: без интерактивного состояния пользователя — всегда false.
         PseudoClass::UserValid | PseudoClass::UserInvalid => false,
         PseudoClass::Unsupported(_) => false,
+        PseudoClass::Host(_) => false,
     }
 }
 
