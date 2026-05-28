@@ -1,5 +1,5 @@
-In progress: none
-Next task: check Phase 2 queue for remaining layout/DOM work; most Phase 1-2 items await P3 JS integration or Phase 3+ work
+In progress: print-pdf-advanced Phase 3 — margin-box text layout + inline rendering  branch: p1-print-pdf-phase3
+Next step: implement margin-box text layout in pagination algorithm  crates/engine/layout/src/pagination.rs
 
 Recent merge: svg-layout-advanced Phase 3 ✅ — nested SVG child propagation (SvgRoot now appears in child-bearing boxes), 5 unit tests PASS, 2026-05-30
 
