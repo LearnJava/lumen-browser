@@ -13,6 +13,7 @@ rust-version.workspace = true
 # Why this dependency (lumen-dom): Document, NodeId for DOM traversal — permanent.
 # Why this dependency (lumen-layout): run layout pipeline, LayoutBox, ComputedStyle — permanent.
 # Why this dependency (lumen-paint): build DisplayList, hit_test for click targeting — permanent.
+# Why this dependency (lumen-a11y): build accessibility tree for query_a11y methods — permanent.
 # Why this dependency (lumen-network): HTTP client for URL navigation — permanent.
 # Why this dependency (lumen-image): encode screenshots to PNG — permanent.
 # Why this dependency (winit): OS event loop for WinitSession (display/graphics transport) — permanent.
@@ -26,6 +27,7 @@ lumen-css-parser = { workspace = true }
 lumen-dom = { workspace = true }
 lumen-layout = { workspace = true }
 lumen-paint = { workspace = true }
+lumen-a11y = { workspace = true }
 lumen-font = { workspace = true }
 lumen-image = { workspace = true }
 lumen-network = { workspace = true }

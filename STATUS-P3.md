@@ -1,7 +1,8 @@
 In progress: —
-Next step: (Wave 3) Pick next: a11y-tree-via-driver (8G, [P3+P1]), or antidetect-surface-api (9A)
+Next step: (Wave 3) Pick next: antidetect-surface-api (9A)
 
 Recent (Wave 3 - automation API):
+  - a11y-tree-via-driver (8G, Phase 1 complete: AxQuery enum + query_a11y/query_a11y_all + Role/NameContains matching + lumen-a11y integration) 2026-05-28
   - deterministic-mode-8f (Phase 1 complete: frozen_clock_ms / rng_seed / freeze_fingerprint in SessionContext + BrowserSession trait + 9 methods + 5 tests) 2026-05-28
   - per-context-isolation-8e (Phase 1 complete: SessionContext + FingerprintProfile + cookies/storage/HTTP cache + 13 tests) 2026-05-28
   - native-input-injection-8c (Phase 1 skeleton: InputCommand enum + click/type_text + shell/src/input.rs) 2026-05-28 

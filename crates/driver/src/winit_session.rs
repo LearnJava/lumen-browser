@@ -14,13 +14,14 @@
 
 use std::sync::{Arc, Mutex};
 
+use lumen_a11y;
 use lumen_core::error::{Error, Result};
 use lumen_core::geom::Size;
 use lumen_dom::{Document, NodeData, NodeId};
 use lumen_layout::LayoutBox;
 
 use crate::{
-    A11yNode, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
+    A11yNode, AxQuery, BoxModel, BrowserSession, ComputedProperties, ComputedStyleSnapshot,
     ConsoleEntry, FingerprintProfile, InputCommand, NetworkEntry, NodeRef, ScrollDelta, Target,
     WaitCondition, context::SessionContext,
 };
@@ -35,6 +36,8 @@ const INTER_FONT: &[u8] = include_bytes!("../../../assets/fonts/Inter-Regular.tt
 struct WinitSessionState {
     doc: Document,
     layout_root: LayoutBox,
+    /// Flat tree for accessibility and slot assignment.
+    flat_tree: lumen_dom::FlatTree,
     /// Display list for GPU rendering via wgpu.
     display_list: lumen_paint::DisplayList,
     /// Page title from `<title>` tag.
@@ -139,6 +142,7 @@ impl WinitSession {
             .map_err(|e| Error::Other(format!("ошибка метрик Inter: {e}")))?;
 
         let layout_root = lumen_layout::layout_measured(&doc, &sheet, self.viewport, &measurer);
+        let flat_tree = lumen_dom::build_flat_tree(&doc);
 
         // Build display list from layout tree.
         let display_list = lumen_paint::build_display_list(&layout_root);
@@ -157,6 +161,7 @@ impl WinitSession {
         self.state = Some(Arc::new(Mutex::new(WinitSessionState {
             doc,
             layout_root,
+            flat_tree,
             display_list,
             title,
             images,
@@ -460,58 +465,130 @@ fn format_length_or_auto(l: &lumen_layout::LengthOrAuto) -> String {
     }
 }
 
-/// Построить accessibility-дерево из DOM-структуры.
-fn build_a11y_node(doc: &Document, id: NodeId) -> A11yNode {
-    let node = doc.get(id);
-    let (role, name) = match &node.data {
-        NodeData::Element { name, attrs } => {
-            let role = aria_role_for_tag(name.local.as_ref());
-            let label = attrs
-                .iter()
-                .find(|a| a.name.local.eq_ignore_ascii_case("aria-label"))
-                .or_else(|| attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case("alt")))
-                .map(|a| a.value.clone())
-                .unwrap_or_default();
-            (role, label)
-        }
-        NodeData::Text(s) => ("text".into(), s.clone()),
-        NodeData::Document => ("document".into(), String::new()),
-        _ => (String::new(), String::new()),
-    };
-
-    let children = node
-        .children
-        .clone()
-        .into_iter()
-        .map(|child| build_a11y_node(doc, child))
-        .filter(|n| !n.role.is_empty())
-        .collect();
-
-    A11yNode { role, name, children }
+fn ax_node_to_a11y_node(ax_node: &lumen_a11y::AXNode) -> A11yNode {
+    A11yNode {
+        role: ax_role_to_string(ax_node.role),
+        name: ax_node.name.clone(),
+        children: ax_node.children.iter().map(ax_node_to_a11y_node).collect(),
+    }
 }
 
-fn aria_role_for_tag(tag: &str) -> String {
-    match tag {
-        "button" => "button",
-        "a" => "link",
-        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "heading",
-        "input" => "textbox",
-        "img" => "img",
-        "ul" | "ol" => "list",
-        "li" => "listitem",
-        "nav" => "navigation",
-        "main" => "main",
-        "header" => "banner",
-        "footer" => "contentinfo",
-        "section" | "article" => "region",
-        "table" => "table",
-        "tr" => "row",
-        "td" | "th" => "cell",
-        "form" => "form",
-        "p" | "div" | "span" | "body" | "html" | "head" => "generic",
-        _ => "",
+fn ax_role_to_string(role: lumen_a11y::AXRole) -> String {
+    match role {
+        lumen_a11y::AXRole::Navigation => "navigation",
+        lumen_a11y::AXRole::Main => "main",
+        lumen_a11y::AXRole::Complementary => "complementary",
+        lumen_a11y::AXRole::Banner => "banner",
+        lumen_a11y::AXRole::ContentInfo => "contentinfo",
+        lumen_a11y::AXRole::Form => "form",
+        lumen_a11y::AXRole::Search => "search",
+        lumen_a11y::AXRole::Region => "region",
+        lumen_a11y::AXRole::Article => "article",
+        lumen_a11y::AXRole::Heading => "heading",
+        lumen_a11y::AXRole::List => "list",
+        lumen_a11y::AXRole::ListItem => "listitem",
+        lumen_a11y::AXRole::Figure => "figure",
+        lumen_a11y::AXRole::Img => "img",
+        lumen_a11y::AXRole::Presentation => "presentation",
+        lumen_a11y::AXRole::Table => "table",
+        lumen_a11y::AXRole::Row => "row",
+        lumen_a11y::AXRole::Cell => "cell",
+        lumen_a11y::AXRole::ColumnHeader => "columnheader",
+        lumen_a11y::AXRole::RowGroup => "rowgroup",
+        lumen_a11y::AXRole::Caption => "caption",
+        lumen_a11y::AXRole::Group => "group",
+        lumen_a11y::AXRole::Button => "button",
+        lumen_a11y::AXRole::Term => "term",
+        lumen_a11y::AXRole::Definition => "definition",
+        lumen_a11y::AXRole::DescriptionListDetail => "description",
+        lumen_a11y::AXRole::Blockquote => "blockquote",
+        lumen_a11y::AXRole::Code => "code",
+        lumen_a11y::AXRole::Deletion => "deletion",
+        lumen_a11y::AXRole::Insertion => "insertion",
+        lumen_a11y::AXRole::Emphasis => "emphasis",
+        lumen_a11y::AXRole::Strong => "strong",
+        lumen_a11y::AXRole::Mark => "mark",
+        lumen_a11y::AXRole::Subscript => "subscript",
+        lumen_a11y::AXRole::Superscript => "superscript",
+        lumen_a11y::AXRole::Separator => "separator",
+        lumen_a11y::AXRole::Time => "time",
+        lumen_a11y::AXRole::Link => "link",
+        lumen_a11y::AXRole::Checkbox => "checkbox",
+        lumen_a11y::AXRole::Radio => "radio",
+        lumen_a11y::AXRole::TextBox => "textbox",
+        lumen_a11y::AXRole::ComboBox => "combobox",
+        lumen_a11y::AXRole::ListBox => "listbox",
+        lumen_a11y::AXRole::Option => "option",
+        lumen_a11y::AXRole::Status => "status",
+        lumen_a11y::AXRole::Progressbar => "progressbar",
+        lumen_a11y::AXRole::Meter => "meter",
+        lumen_a11y::AXRole::Slider => "slider",
+        lumen_a11y::AXRole::Spinbutton => "spinbutton",
+        lumen_a11y::AXRole::Dialog => "dialog",
+        lumen_a11y::AXRole::Menu => "menu",
+        lumen_a11y::AXRole::MenuItem => "menuitem",
+        lumen_a11y::AXRole::Alert => "alert",
+        lumen_a11y::AXRole::AlertDialog => "alertdialog",
+        lumen_a11y::AXRole::Application => "application",
+        lumen_a11y::AXRole::Feed => "feed",
+        lumen_a11y::AXRole::Log => "log",
+        lumen_a11y::AXRole::Marquee => "marquee",
+        lumen_a11y::AXRole::Note => "note",
+        lumen_a11y::AXRole::RowHeader => "rowheader",
+        lumen_a11y::AXRole::Searchbox => "searchbox",
+        lumen_a11y::AXRole::Switch => "switch",
+        lumen_a11y::AXRole::Tab => "tab",
+        lumen_a11y::AXRole::TabList => "tablist",
+        lumen_a11y::AXRole::TabPanel => "tabpanel",
+        lumen_a11y::AXRole::Timer => "timer",
+        lumen_a11y::AXRole::Toolbar => "toolbar",
+        lumen_a11y::AXRole::Tooltip => "tooltip",
+        lumen_a11y::AXRole::Tree => "tree",
+        lumen_a11y::AXRole::TreeItem => "treeitem",
+        lumen_a11y::AXRole::Generic => "generic",
+        lumen_a11y::AXRole::Document => "document",
+        lumen_a11y::AXRole::None => "none",
+    }.to_string()
+}
+
+fn find_a11y_node(node: &lumen_a11y::AXNode, query: &AxQuery) -> Option<lumen_a11y::AXNode> {
+    if matches_query(node, query) {
+        return Some(node.clone());
     }
-    .into()
+    for child in &node.children {
+        if let Some(result) = find_a11y_node(child, query) {
+            return Some(result);
+        }
+    }
+    None
+}
+
+fn find_all_a11y_nodes(node: &lumen_a11y::AXNode, query: &AxQuery, results: &mut Vec<lumen_a11y::AXNode>) {
+    if matches_query(node, query) {
+        results.push(node.clone());
+    }
+    for child in &node.children {
+        find_all_a11y_nodes(child, query, results);
+    }
+}
+
+fn matches_query(node: &lumen_a11y::AXNode, query: &AxQuery) -> bool {
+    match query {
+        AxQuery::Role { role, name } => {
+            let role_matches = ax_role_to_string(node.role).eq_ignore_ascii_case(role);
+            if !role_matches {
+                return false;
+            }
+            if let Some(name_filter) = name {
+                node.name.to_lowercase().contains(&name_filter.to_lowercase())
+            } else {
+                true
+            }
+        }
+        AxQuery::NameContains(name_filter) => {
+            node.name.to_lowercase().contains(&name_filter.to_lowercase())
+        }
+    }
 }
 
 /// Найти все узлы, совпадающие с `selector`.
@@ -595,7 +672,24 @@ impl BrowserSession for WinitSession {
     fn a11y_tree(&self) -> Result<A11yNode> {
         let state = self.state()?;
         let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
-        Ok(build_a11y_node(&state.doc, state.doc.root()))
+        let ax_tree = lumen_a11y::build_ax_tree(&state.doc, state.doc.root(), &state.flat_tree);
+        Ok(ax_node_to_a11y_node(&ax_tree.root))
+    }
+
+    fn query_a11y(&self, query: &AxQuery) -> Result<Option<A11yNode>> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let ax_tree = lumen_a11y::build_ax_tree(&state.doc, state.doc.root(), &state.flat_tree);
+        Ok(find_a11y_node(&ax_tree.root, query).map(|n| ax_node_to_a11y_node(&n)))
+    }
+
+    fn query_a11y_all(&self, query: &AxQuery) -> Result<Vec<A11yNode>> {
+        let state = self.state()?;
+        let state = state.lock().map_err(|e| Error::Other(format!("mutex: {e}")))?;
+        let ax_tree = lumen_a11y::build_ax_tree(&state.doc, state.doc.root(), &state.flat_tree);
+        let mut results = Vec::new();
+        find_all_a11y_nodes(&ax_tree.root, query, &mut results);
+        Ok(results.into_iter().map(|n| ax_node_to_a11y_node(&n)).collect())
     }
 
     fn layout_snapshot(&self) -> Result<Vec<BoxModel>> {
