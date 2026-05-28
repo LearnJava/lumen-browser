@@ -186,7 +186,16 @@ fn build_node(doc: &Document, node_id: NodeId, parent_role: Option<AXRole>, flat
                 .get_attr("aria-hidden")
                 .is_some_and(|v| v.eq_ignore_ascii_case("true"))
         })
-        .map(|&child_id| build_node(doc, child_id, Some(role), flat_tree))
+        .map(|&child_id| {
+            // Transparent roles (Presentation, None, Generic, Group) don't participate in child role validation.
+            // Children should skip these and see the actual semantic parent for context validation.
+            let effective_parent_role = if matches!(role, AXRole::Presentation | AXRole::None | AXRole::Generic | AXRole::Group) {
+                parent_role
+            } else {
+                Some(role)
+            };
+            build_node(doc, child_id, effective_parent_role, flat_tree)
+        })
         .collect();
 
     // Resolve aria-* relationship attributes using document id lookups
