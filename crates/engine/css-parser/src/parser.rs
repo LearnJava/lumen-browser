@@ -307,6 +307,12 @@ pub enum PseudoClass {
     /// `:user-invalid` (CSS Selectors L4 §14.3) — как `:invalid`, но только
     /// после взаимодействия пользователя. Phase 0 — всегда `false`.
     UserInvalid,
+    /// `:host` и `:host(selector-list)` (CSS Scoping L1 §6.1) — для shadow DOM.
+    /// `:host` матчит shadow host element внутри shadow tree.
+    /// `:host(s1, s2, ...)` матчит host если он матчит хотя бы один из селекторов.
+    /// Specificity вычисляется как для `:is` — максимум по списку.
+    /// None = простой `:host`; Some(list) = `:host(selector-list)`.
+    Host(Option<Vec<ComplexSelector>>),
     /// `:hover`, `:focus`, `:active`, и т.п. — парсятся, но в Phase 0 никогда
     /// не матчат (нет интерактивного состояния). Хранится имя для отладки.
     Unsupported(String),
@@ -456,6 +462,19 @@ fn accumulate_specificity(comp: &CompoundSelector, spec: &mut Specificity) {
                         // (если S задан). Без `of` clause — только 1.
                         spec.b = spec.b.saturating_add(1);
                         if let Some(list) = of
+                            && let Some(max) = max_list_specificity(list)
+                        {
+                            spec.a = spec.a.saturating_add(max.a);
+                            spec.b = spec.b.saturating_add(max.b);
+                            spec.c = spec.c.saturating_add(max.c);
+                        }
+                    }
+                    PseudoClass::Host(opt_list) => {
+                        // CSS Scoping L1 §6.1: `:host` и `:host(selector-list)`.
+                        // Specificity = 1 pseudo-class + max-specificity of list
+                        // (если :host(...) задан). Аналогично :is.
+                        spec.b = spec.b.saturating_add(1);
+                        if let Some(list) = opt_list
                             && let Some(max) = max_list_specificity(list)
                         {
                             spec.a = spec.a.saturating_add(max.a);
@@ -3069,6 +3088,7 @@ impl<'a> Parser<'a> {
             "current" => PseudoClass::Current,
             "past" => PseudoClass::Past,
             "future" => PseudoClass::Future,
+            "host" => PseudoClass::Host(None),
             _ => PseudoClass::Unsupported(name),
         };
         Some(SimpleSelector::PseudoClass(pc))
@@ -3127,6 +3147,17 @@ impl<'a> Parser<'a> {
                     return None;
                 }
                 Some(PseudoClass::Has(list))
+            }
+            "host" => {
+                // CSS Scoping L1 §6.1: `:host` и `:host(selector-list)`.
+                // При парсинге `:host(...)` парсим selector-list внутри.
+                // Если список пустой — невалидно.
+                let list = self.parse_selector_list();
+                self.skip_ws_and_comments();
+                if self.peek() != Some(')') || list.is_empty() {
+                    return None;
+                }
+                Some(PseudoClass::Host(Some(list)))
             }
             "dir" => {
                 // CSS Selectors L4 §13.2: single keyword argument `ltr` или
@@ -6394,5 +6425,68 @@ mod tests {
         let cr = &s.container_rules[0];
         assert_eq!(cr.rules.len(), 1);
         assert_eq!(cr.rules[0].declarations[0].property, "gap");
+    }
+
+    // ──────────────── :host pseudo-class (CSS Scoping L1 §6.1) ────────────
+
+    #[test]
+    fn host_pseudo_class_simple() {
+        // `:host { color: red; }` — простой :host без аргументов
+        let s = parse(":host { color: red; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        assert_eq!(sel.head.parts.len(), 1);
+        match &sel.head.parts[0] {
+            SimpleSelector::PseudoClass(PseudoClass::Host(None)) => {}
+            _ => panic!("Expected Host(None), got {:?}", sel.head.parts[0]),
+        }
+        assert_eq!(s.rules[0].declarations[0].property, "color");
+    }
+
+    #[test]
+    fn host_pseudo_class_with_selector_list() {
+        // `:host(.foo) { display: block; }` — :host(selector-list)
+        let s = parse(":host(.foo) { display: block; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        match &sel.head.parts[0] {
+            SimpleSelector::PseudoClass(PseudoClass::Host(Some(list))) => {
+                assert_eq!(list.len(), 1);
+                assert_eq!(list[0].head.parts[0], SimpleSelector::Class("foo".into()));
+            }
+            _ => panic!("Expected Host(Some(...)), got {:?}", sel.head.parts[0]),
+        }
+    }
+
+    #[test]
+    fn host_pseudo_class_multiple_selectors_in_list() {
+        // `:host(.primary, .secondary) { border: 1px solid; }` — multiple selectors
+        let s = parse(":host(.primary, .secondary) { border: 1px solid; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        match &sel.head.parts[0] {
+            SimpleSelector::PseudoClass(PseudoClass::Host(Some(list))) => {
+                assert_eq!(list.len(), 2);
+                assert_eq!(list[0].head.parts[0], SimpleSelector::Class("primary".into()));
+                assert_eq!(list[1].head.parts[0], SimpleSelector::Class("secondary".into()));
+            }
+            _ => panic!("Expected Host(Some(...)), got {:?}", sel.head.parts[0]),
+        }
+    }
+
+    #[test]
+    fn host_pseudo_class_with_complex_selector() {
+        // `:host(div.wrapper) { padding: 10px; }` — complex selector inside
+        let s = parse(":host(div.wrapper) { padding: 10px; }");
+        assert_eq!(s.rules.len(), 1);
+        let sel = &s.rules[0].selectors[0];
+        match &sel.head.parts[0] {
+            SimpleSelector::PseudoClass(PseudoClass::Host(Some(list))) => {
+                assert_eq!(list.len(), 1);
+                assert_eq!(list[0].head.parts[0], SimpleSelector::Type("div".into()));
+                assert_eq!(list[0].head.parts[1], SimpleSelector::Class("wrapper".into()));
+            }
+            _ => panic!("Expected Host(Some(...)), got {:?}", sel.head.parts[0]),
+        }
     }
 }

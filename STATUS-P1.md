@@ -1,5 +1,5 @@
-In progress: none
-Next task: coordinate with P3 on Phase 3 automation tasks (8A–8H), or take 8C.3 if defined. Next major phase: CSS property wiring P4 integration. Phase 1–2 DOM/layout work finished (41 items ✅).
+In progress: :host / ::slotted CSS selector parsing (P4 prep)  branch: p1-css-host-slotted-parsing
+Next step: Add Host/Slotted to PseudoClass enum in css-parser, add parsing logic, wire up to selector matching  crates/engine/css-parser/src/parser.rs
 
 Recent merge: event.isTrusted (8C.2) ✅ — isTrusted field in Event constructor (false by default for synthetic events, true for native shell events), mark _lumen_dispatch_bubble/composition/page lifecycle/WebSocket events as trusted, 4 unit tests, 232 total PASS, clippy clean 2026-05-28
 Recent merge: 8A.4 Structural getters ✅ — LayoutBox::find_descendant_by_selector/find_all_descendants_by_selector/style_snapshot methods + ComputedStyleSnapshot + find_box_by_selector/find_all_by_selector/computed_style_by_selector pub functions, selector matching via CSS3 engine, 3 integration tests, clippy clean 2026-05-27
