@@ -1,19 +1,19 @@
-In progress: —
-Next step: (Wave 3 tasks — automation API / anti-detection / tier lifecycle — see Queue below)
+In progress: shell-as-driver-client 8A.7 Phase 4c (migrate shell::reload() to render_to_gpu)  branch: p3-shell-as-driver-client-phase4c-impl
+Next step: Integrate WinitSession into shell::Lumen, refactor reload() call path
 
 Recent (Wave 2/3 - automation API): 
   - lumen-mcp-server-8b (Model Context Protocol transport, 5 resources + 7 tools, stdio server) 2026-05-28
   - shell-as-driver-client-8a7-phase4b (GpuSession impl + render_to_gpu) 2026-05-28
   - graphic-tests-migration-8a6 (50 Rust tests + PNG snapshots in crates/driver/tests/) 2026-05-28
 
-Phase 4 (shell-as-driver-client): completed 4a-4b
+Phase 4 (shell-as-driver-client): completed 4a-4b, IN PROGRESS 4c
   ✓ 4a: GpuSession trait created (RenderedPage, gpu_session.rs)
   ✓ 4a: WinitSessionState extended with GPU data (display_list, title, images, font_registry)
   ✓ 4b: Implement render_to_gpu() method in WinitSession (build_display_list, extract title/images)
   ✓ 4b: GpuSession trait impl for WinitSession (set_scroll, viewport, navigate_streaming)
   ✓ 4b: Helper functions (extract_title, extract_images, walk_find_title, walk_collect_images)
   ✓ 4b: Tests for GpuSession (test_gpu_session_render_to_gpu, scroll_position, viewport)
-  - 4c: Migrate lumen-shell::reload() to use render_to_gpu() — next session (requires deep shell refactor)
+  ✓ 4c: Migrate lumen-shell::reload() — integrate WinitSession in shell, refactor reload call path, phase 4c-impl branch, IN PROGRESS
 
 Recent: shell-as-driver-client-8a7-phase4b (GpuSession impl for WinitSession) 2026-05-28
 

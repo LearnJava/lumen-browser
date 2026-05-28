@@ -38,6 +38,7 @@ use lumen_core::event::{Event, FetchPriority, SubresourceKind};
 use lumen_core::ext::EventSink;
 use lumen_core::geom::{Point, Rect, Size};
 use lumen_devtools::DevToolsServer;
+use lumen_driver::BrowserSession;
 use lumen_knowledge::HistoryFts;
 use lumen_storage::session_export::{self, ExportedTab, SessionFile};
 use lumen_storage::{BfCache, BfCacheEntry, SearchHistory};
@@ -2218,19 +2219,30 @@ impl Lumen {
             return;
         }
         println!("Reload: {}", self.source.describe());
-        let viewport = self.renderer.as_ref().map_or_else(
-            || Size::new(1024.0, 720.0),
-            |r| {
-                let s = r.viewport_size();
-                Size::new(s.width as f32, s.height as f32)
-            },
-        );
-        let ls_store = self.source.origin_str().map(|o| {
-            Arc::clone(self.ls_storage.entry(o).or_insert_with(|| {
-                Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
-            }))
-        });
-        match self.source.load(self.event_sink.clone(), viewport, ls_store) {
+
+        // Phase 4c: попробовать загрузить через GpuSession (WinitSession)
+        // для File и Url; fallback к старому пути для Snapshot
+        let load_result = if let Some(page) = self.reload_via_gpu_session() {
+            // WinitSession загрузка успешна
+            Ok((page, None, None))
+        } else {
+            // Fallback к старому пути (PageSource::Snapshot, или ошибка WinitSession)
+            let viewport = self.renderer.as_ref().map_or_else(
+                || Size::new(1024.0, 720.0),
+                |r| {
+                    let s = r.viewport_size();
+                    Size::new(s.width as f32, s.height as f32)
+                },
+            );
+            let ls_store = self.source.origin_str().map(|o| {
+                Arc::clone(self.ls_storage.entry(o).or_insert_with(|| {
+                    Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
+                }))
+            });
+            self.source.load(self.event_sink.clone(), viewport, ls_store)
+        };
+
+        match load_result {
             Ok((page, new_layout_source, new_js_ctx)) => {
                 // Drop JS closures before layout_source to release Arc<Mutex<Document>>
                 // clones held inside QuickJS closures before LayoutSource's Arc drops.
@@ -2249,6 +2261,13 @@ impl Lumen {
                 // immediately after page load (before the first relayout).
                 #[cfg(feature = "quickjs")]
                 if let (Some(js), Some(lb_ref)) = (&self.js_ctx, self.layout_box.as_ref()) {
+                    let viewport = self.renderer.as_ref().map_or_else(
+                        || Size::new(1024.0, 720.0),
+                        |r| {
+                            let s = r.viewport_size();
+                            Size::new(s.width as f32, s.height as f32)
+                        },
+                    );
                     js.update_layout_rects(collect_layout_rects(lb_ref));
                     js.update_viewport_size(viewport.width, viewport.height);
                 }
@@ -2297,6 +2316,66 @@ impl Lumen {
                 eprintln!("Ошибка reload {}: {err}", self.source.describe());
             }
         }
+    }
+
+    /// Попытаться загрузить страницу через GpuSession (WinitSession).
+    /// Возвращает LoadedPage если успешно, иначе None (fallback к старому пути).
+    ///
+    /// Phase 4c: использует WinitSession::render_to_gpu() вместо inline pipeline
+    /// для PageSource::File и PageSource::Url.
+    fn reload_via_gpu_session(&mut self) -> Option<LoadedPage> {
+        use lumen_driver::{WinitSession, GpuSession};
+
+        // Преобразовать PageSource в URL для WinitSession
+        let url = match &self.source {
+            PageSource::File(path) => {
+                format!("file://{}", path.display())
+            }
+            PageSource::Url(u) => u.clone(),
+            _ => return None, // Snapshot и Empty обработаны отдельно
+        };
+
+        let viewport = self.renderer.as_ref().map_or_else(
+            || Size::new(1024.0, 720.0),
+            |r| {
+                let s = r.viewport_size();
+                Size::new(s.width as f32, s.height as f32)
+            },
+        );
+
+        // Создать сессию с нужным viewport
+        let mut session = WinitSession::with_viewport(viewport.width, viewport.height);
+
+        // Загрузить страницу через WinitSession
+        if session.navigate(&url).is_err() {
+            return None;
+        }
+
+        // Получить RenderedPage через render_to_gpu()
+        let rendered = match session.render_to_gpu() {
+            Ok(r) => r,
+            Err(_) => return None,
+        };
+
+        // Преобразовать RenderedPage в LoadedPage
+        // Преобразовать lumen_driver::JsNavigateRequest в shell::JsNavigateRequest
+        let js_navigate = rendered.js_navigate.map(|nav| {
+            if nav.replace {
+                JsNavigateRequest::Replace(nav.url)
+            } else {
+                JsNavigateRequest::Push(nav.url)
+            }
+        });
+
+        Some(LoadedPage {
+            display_list: rendered.display_list,
+            title: rendered.title,
+            images: rendered.images,
+            lazy_pairs: Vec::new(), // Phase 4c: TODO integrate lazy loading
+            layout_box: rendered.layout_box,
+            font_registry: rendered.font_registry,
+            js_navigate,
+        })
     }
 
     /// Запустить background-поток загрузки текущего `source`.
