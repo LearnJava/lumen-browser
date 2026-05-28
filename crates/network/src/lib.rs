@@ -41,6 +41,7 @@ mod dns;
 mod doh;
 mod dot;
 pub mod h2;
+pub mod http;
 pub mod http_cache;
 mod hsts;
 mod mixed_content;
@@ -82,6 +83,7 @@ pub use range::{
 pub use sandbox::{SandboxFlags, parse_sandbox_value};
 
 use pool::PoolKey;
+use self::http::HttpProfile;
 
 /// Проверяет, что схема URL поддерживается транспортом (http/https) и
 /// извлекает всё, что нужно для connect: ASCII-форму host (Punycode для
@@ -1305,6 +1307,9 @@ pub struct HttpClient {
     cookie_jar: Option<Arc<dyn CookieProvider>>,
     /// Registrable domain of the top-level page, used for Total Cookie Protection partitioning.
     top_level_site: Option<String>,
+    /// HTTP fingerprinting profile (Standard/Strict/Tor) — determines header order and casing
+    /// matching Chrome to avoid detection (ADR-007 Layer 3). Default is Standard.
+    fingerprint_profile: HttpProfile,
 }
 
 impl HttpClient {
@@ -1325,6 +1330,7 @@ impl HttpClient {
             http_cache: None,
             cookie_jar: None,
             top_level_site: None,
+            fingerprint_profile: HttpProfile::Standard,
         }
     }
 
