@@ -1,5 +1,5 @@
-In progress: none
-Next task: accessibility-forms-validation Phase 3
+In progress: accessibility-forms-validation Phase 3  branch: worktree-p1-accessibility-forms-validation-phase3
+Next step: submit algorithm integration + form submission handling  crates/engine/dom/src/document.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
