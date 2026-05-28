@@ -1,5 +1,5 @@
-In progress: —
-Next step: Pick next task from Queue (Wave 2/3)
+In progress: http-profiles-expansion (9C Phase 1.x)  branch: p3-http-profiles-expansion
+Next step: Add Firefox, Safari, Edge, update Tor-native profiles; wire HttpProfile variants to headers/SETTINGS  crates/network/src/http/headers.rs
 
 Recent (Wave 2/3 - automation API + completed tasks):
   - ✓ fts-omnibox (Wave 2): HistoryFts + SearchHistory integration in shell: @history prefix, dropdown, prefix-match, SearchHistory recording 2026-05-28
