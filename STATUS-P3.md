@@ -1,7 +1,8 @@
-In progress: auto-wait-engine (8D)  branch: p3-auto-wait-engine
-Next step: Phase 1: wait_for() trait + Condition enum + layout/network/runtime event sources; test each condition  crates/driver/src/wait.rs
+In progress: —
+Next step: (Wave 3 automation API) Pick next: antidetect-tls-fingerprint (9B), or auto-wait-engine Phase 2 (network/JS runtime integration)
 
-Recent (Wave 2/3 - automation API):
+Recent (Wave 3 - automation API):
+  - auto-wait-engine-8d (Phase 1: polling-based wait_for(Visible/Stable/NetworkIdle/JsIdle) in InProcessSession + WinitSession, 6 unit tests) 2026-05-28
   - native-input-injection-8c (Phase 1 skeleton: InputCommand enum + click/type_text + shell/src/input.rs) 2026-05-28 
   - lumen-mcp-server-8b (Model Context Protocol transport, 5 resources + 7 tools, stdio server) 2026-05-28
   - shell-as-driver-client-8a7-phase4b (GpuSession impl + render_to_gpu) 2026-05-28
