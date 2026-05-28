@@ -8626,6 +8626,21 @@ fn split_var_args(s: &str) -> (&str, Option<&str>) {
     (s.trim(), None)
 }
 
+fn expand_grouped_transition_property(prop: &str) -> Vec<String> {
+    let lower = prop.to_ascii_lowercase();
+    match lower.as_str() {
+        "margin" => vec!["margin-top", "margin-right", "margin-bottom", "margin-left"]
+            .into_iter().map(|s| s.to_string()).collect(),
+        "padding" => vec!["padding-top", "padding-right", "padding-bottom", "padding-left"]
+            .into_iter().map(|s| s.to_string()).collect(),
+        "border" => vec!["border-top", "border-right", "border-bottom", "border-left"]
+            .into_iter().map(|s| s.to_string()).collect(),
+        "border-radius" => vec!["border-top-left-radius", "border-top-right-radius", "border-bottom-right-radius", "border-bottom-left-radius"]
+            .into_iter().map(|s| s.to_string()).collect(),
+        _ => vec![prop.to_string()],
+    }
+}
+
 fn apply_declaration(
     style: &mut ComputedStyle,
     decl: &Declaration,
@@ -10346,7 +10361,9 @@ fn apply_declaration(
                     if prop.is_empty() {
                         continue;
                     }
-                    props.push(prop);
+                    for expanded in expand_grouped_transition_property(&prop) {
+                        props.push(expanded);
+                    }
                 }
                 style.transition_properties = props;
             }

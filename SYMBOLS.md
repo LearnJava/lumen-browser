@@ -11,7 +11,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/a11y/src/lib.rs:52` **struct** `AXState` — ARIA state and property flags for one accessibility node
 `crates/engine/a11y/src/lib.rs:113` **struct** `AXNode` — One node in the accessibility tree
 `crates/engine/a11y/src/lib.rs:145` **struct** `AXTree` — Accessibility tree rooted at a document node
-`crates/engine/a11y/src/lib.rs:156` **fn** `build_ax_tree` — Build an `AXTree` from a `Document` starting at `root_id`
+`crates/engine/a11y/src/lib.rs:160` **fn** `build_ax_tree` — Build an `AXTree` from a `Document` starting at `root_id`
 `crates/engine/a11y/src/names.rs:18` **fn** `compute_name` — Compute the accessible name for a DOM node (ACCNAME-1.2 §4.3)
 `crates/engine/a11y/src/names.rs:176` **fn** `compute_description` — Compute the accessible description for a DOM node (ACCNAME-1.2 §4.3.2)
 `crates/engine/a11y/src/roles.rs:14` **enum** `AXRole` — All WAI-ARIA 1.2 roles
@@ -126,13 +126,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/form.rs:62` **fn** `encode_form_urlencoded` — Сериализует form-set как `application/x-www-form-urlencoded`
 `crates/core/src/form.rs:97` **fn** `decode_form_value` — Decode urlencoded form value: `+` → пробел; `%HH` → байт. Не-валидные
 `crates/core/src/form.rs:129` **fn** `encode_form_multipart` — Сериализует form-set как `multipart/form-data` (RFC 7578)
-`crates/core/src/geom.rs:7` **struct** `Point`
-`crates/core/src/geom.rs:21` **struct** `Size`
-`crates/core/src/geom.rs:38` **struct** `Rect`
-`crates/core/src/geom.rs:71` **fn** `origin`
-`crates/core/src/geom.rs:78` **fn** `size`
-`crates/core/src/geom.rs:85` **fn** `right`
-`crates/core/src/geom.rs:89` **fn** `bottom`
+`crates/core/src/geom.rs:9` **struct** `Point`
+`crates/core/src/geom.rs:23` **struct** `Size`
+`crates/core/src/geom.rs:40` **struct** `Rect`
+`crates/core/src/geom.rs:73` **fn** `origin`
+`crates/core/src/geom.rs:80` **fn** `size`
+`crates/core/src/geom.rs:87` **fn** `right`
+`crates/core/src/geom.rs:91` **fn** `bottom`
 `crates/core/src/hash.rs:30` **fn** `sha256` — SHA-256 хеш произвольных байт по FIPS 180-4
 `crates/core/src/hash.rs:122` **fn** `hex_lower` — Закодировать байты в lowercase hex (без префиксов, без separator-ов)
 `crates/core/src/hash.rs:135` **fn** `sha256_hex` — `hex_lower(&sha256(input))` — самая частая комбинация (HTTP Digest auth,
@@ -258,116 +258,181 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/devtools/src/ws.rs:104` **fn** `read_text_frame` — Прочитать один WebSocket фрейм (RFC 6455 §5.2)
 `crates/devtools/src/ws.rs:125` **fn** `write_text_frame` — Отправить text фрейм (server→client, без маски)
 
-## lumen-dom  (87 symbols)
+## lumen-dom  (118 symbols)
 
-`crates/engine/dom/src/lib.rs:22` **enum** `DomSnapshotError` — Error returned by [`Document::to_bytes`] and [`Document::from_bytes`]
-`crates/engine/dom/src/lib.rs:41` **struct** `NodeId`
-`crates/engine/dom/src/lib.rs:44` **fn** `index`
-`crates/engine/dom/src/lib.rs:48` **fn** `from_index`
-`crates/engine/dom/src/lib.rs:54` **enum** `Namespace`
-`crates/engine/dom/src/lib.rs:64` **struct** `QualName`
-`crates/engine/dom/src/lib.rs:70` **fn** `html`
-`crates/engine/dom/src/lib.rs:79` **struct** `Attribute`
-`crates/engine/dom/src/lib.rs:89` **enum** `ShadowRootMode` — Shadow root mode per Shadow DOM spec §4.2
-`crates/engine/dom/src/lib.rs:104` **enum** `NodeData`
-`crates/engine/dom/src/lib.rs:137` **struct** `Node`
-`crates/engine/dom/src/lib.rs:144` **fn** `element_name`
-`crates/engine/dom/src/lib.rs:153` **fn** `get_attr` — Возвращает значение атрибута по имени (ASCII case-insensitive). На
-`crates/engine/dom/src/lib.rs:169` **fn** `sandbox_flags` — Sandbox-ограничения для `<iframe sandbox="...">` по HTML LS §7.6.5
-`crates/engine/dom/src/lib.rs:181` **fn** `input_type` — HTML5 form input type для `<input type="...">`. Возвращает None
-`crates/engine/dom/src/lib.rs:196` **enum** `InputType` — HTML5 form input types (HTML Standard §4.10.5). Спека определяет
-`crates/engine/dom/src/lib.rs:248` **fn** `parse` — Распарсить значение `type`-атрибута. Case-insensitive по
-`crates/engine/dom/src/lib.rs:277` **fn** `as_str`
-`crates/engine/dom/src/lib.rs:308` **fn** `is_textual` — Текстовая семантика — поле с буквенным контентом, на котором
-`crates/engine/dom/src/lib.rs:318` **fn** `is_button_like` — Кнопочная семантика — submit/reset/button/image, рендерится
-`crates/engine/dom/src/lib.rs:328` **struct** `FormInfo` — Данные `<form>` элемента — URL назначения, метод и число полей ввода
-`crates/engine/dom/src/lib.rs:346` **enum** `DocumentMode` — Парсинг-режим документа по HTML5 §13.2.6.2 «The insertion mode»
-`crates/engine/dom/src/lib.rs:369` **struct** `DomPosition` — A position within the document (WHATWG DOM §4.4)
-`crates/engine/dom/src/lib.rs:382` **struct** `Range` — A contiguous range of document content (WHATWG DOM §4.5)
-`crates/engine/dom/src/lib.rs:391` **fn** `collapsed` — Collapsed range: both endpoints at `pos`
-`crates/engine/dom/src/lib.rs:396` **fn** `is_collapsed` — True when start and end are the same position
-`crates/engine/dom/src/lib.rs:408` **struct** `Selection` — The current document text selection (WHATWG Selection API)
-`crates/engine/dom/src/lib.rs:417` **fn** `is_collapsed` — True when anchor == focus (or no selection)
-`crates/engine/dom/src/lib.rs:426` **fn** `get_range` — The selection as a normalised Range (start ≤ end in node order)
-`crates/engine/dom/src/lib.rs:441` **fn** `collapse` — Collapse the selection to a single point
-`crates/engine/dom/src/lib.rs:447` **fn** `extend_focus` — Extend the focus end to `pos` (anchor stays fixed)
-`crates/engine/dom/src/lib.rs:452` **fn** `clear` — Remove the selection entirely
-`crates/engine/dom/src/lib.rs:459` **struct** `Document`
-`crates/engine/dom/src/lib.rs:488` **fn** `new`
-`crates/engine/dom/src/lib.rs:505` **fn** `root`
-`crates/engine/dom/src/lib.rs:513` **fn** `mode` — Текущий парсинг-режим. Tree builder выставляет его при
-`crates/engine/dom/src/lib.rs:519` **fn** `set_mode` — Установить режим. Использует tree builder при инициализации
-`crates/engine/dom/src/lib.rs:525` **fn** `get_selection` — Current selection. The shell updates this on mouse events; JS reads it
-`crates/engine/dom/src/lib.rs:530` **fn** `set_selection` — Replace the current selection
-`crates/engine/dom/src/lib.rs:535` **fn** `clear_selection` — Clear the selection
-`crates/engine/dom/src/lib.rs:550` **fn** `target` — Текущий target — id из URL fragment (без ведущего `#`), к которому
-`crates/engine/dom/src/lib.rs:557` **fn** `set_target` — Установить current target (id без `#`). `None` — нет fragment-а в URL
-`crates/engine/dom/src/lib.rs:569` **fn** `attach_shadow` — Attach a shadow root to `host` and return its `NodeId`
-`crates/engine/dom/src/lib.rs:576` **fn** `shadow_root_of` — Return the shadow root attached to `host`, or `None` if not a shadow host
-`crates/engine/dom/src/lib.rs:581` **fn** `is_shadow_host` — Whether `id` is a shadow host (has an attached shadow root)
-`crates/engine/dom/src/lib.rs:585` **fn** `get`
-`crates/engine/dom/src/lib.rs:589` **fn** `get_mut`
-`crates/engine/dom/src/lib.rs:593` **fn** `len`
-`crates/engine/dom/src/lib.rs:597` **fn** `is_empty`
-`crates/engine/dom/src/lib.rs:609` **fn** `base_href` — HTML5 §4.2.3 — найти первый `<base href="...">` в документе и
-`crates/engine/dom/src/lib.rs:620` **fn** `body` — Returns the `<body>` element's `NodeId`, walking root → `<html>` → `<body>`
-`crates/engine/dom/src/lib.rs:632` **fn** `find_first_element` — Найти первый элемент, удовлетворяющий предикату. Pre-order обход
-`crates/engine/dom/src/lib.rs:658` **fn** `create_element`
-`crates/engine/dom/src/lib.rs:665` **fn** `create_text`
-`crates/engine/dom/src/lib.rs:669` **fn** `create_comment`
-`crates/engine/dom/src/lib.rs:679` **fn** `create_fragment` — Allocate a `DocumentFragment` node in the arena
-`crates/engine/dom/src/lib.rs:687` **fn** `set_template_content` — Register `fragment` as the content container for `template`
-`crates/engine/dom/src/lib.rs:693` **fn** `template_content` — Return the content `DocumentFragment` for a `<template>` element, or
-`crates/engine/dom/src/lib.rs:697` **fn** `create_doctype`
-`crates/engine/dom/src/lib.rs:711` **fn** `append_child` — Append `child` as the last child of `parent`. If `child` already has a parent, it is detached first
-`crates/engine/dom/src/lib.rs:723` **fn** `insert_after` — Insert `new_node` immediately after `reference` in their shared parent
-`crates/engine/dom/src/lib.rs:736` **fn** `detach` — Remove `node` from its current parent. The node itself stays in the arena and can be re-attached
-`crates/engine/dom/src/lib.rs:755` **fn** `to_bytes` — Serialise the entire document to a compact binary blob (bincode)
-`crates/engine/dom/src/lib.rs:760` **fn** `from_bytes` — Deserialise a document from a binary blob produced by [`to_bytes`]
-`crates/engine/dom/src/lib.rs:857` **fn** `check_form_gate` — Гейт отправки форм по sandbox-флагу HTML §7.6.5
-`crates/engine/dom/src/lib.rs:878` **fn** `find_ancestor_form` — Найти ближайший предок `<form>` для узла `node`
-`crates/engine/dom/src/lib.rs:901` **fn** `collect_dom_form_fields` — Собрать имена и значения submittable-контролов формы из DOM-атрибутов
-`crates/engine/dom/src/lib.rs:1003` **struct** `ValidityState` — Validity state for a form control — HTML5 §4.10.21.1 `ValidityState` interface
-`crates/engine/dom/src/lib.rs:1028` **fn** `valid` — Returns `true` when all flags are `false` (element satisfies all constraints)
-`crates/engine/dom/src/lib.rs:1049` **fn** `element_validity` — Returns the validity state for `node`, or `None` if the node is not a
-`crates/engine/dom/src/lib.rs:1152` **fn** `check_validity_form` — Returns `true` if all submittable controls in `form_id` satisfy their
-`crates/engine/dom/src/lib.rs:1160` **fn** `invalid_controls_in_form` — Returns the `NodeId`s of all invalid (failing constraint validation) controls
-`crates/engine/dom/src/lib.rs:1264` **struct** `AnchorInfo` — Информация об якорной ссылке (`<a href>`), найденной в документе
-`crates/engine/dom/src/lib.rs:1297` **struct** `FlatTree` — Pre-computed composed tree (flat tree) for Shadow DOM layout traversal
-`crates/engine/dom/src/lib.rs:1307` **fn** `children_of` — Composed-tree children of `id`
-`crates/engine/dom/src/lib.rs:1322` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
-`crates/engine/dom/src/lib.rs:1417` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
-`crates/engine/dom/src/lib.rs:1441` **struct** `IframeInfo` — Данные `<iframe>` элемента — URL содержимого и sandbox-ограничения
-`crates/engine/dom/src/lib.rs:1472` **fn** `collect_iframes` — Собрать все `<iframe>` элементы документа с их sandbox-ограничениями
-`crates/engine/dom/src/lib.rs:1483` **fn** `check_popup_gate` — Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5
-`crates/engine/dom/src/lib.rs:1502` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
-`crates/engine/dom/src/lib.rs:1533` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
-`crates/engine/dom/src/lib.rs:1556` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
-`crates/engine/dom/src/lib.rs:1580` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
-`crates/engine/dom/src/lib.rs:1622` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
-`crates/engine/dom/src/lib.rs:1680` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
-`crates/engine/dom/src/lib.rs:1734` **fn** `insert_paragraph_break`
+`crates/engine/dom/src/contenteditable.rs:10` **enum** `DomCommand` — A single, reversible DOM modification
+`crates/engine/dom/src/contenteditable.rs:40` **struct** `PasteData` — Data from a paste operation (clipboard or drag-drop)
+`crates/engine/dom/src/contenteditable.rs:54` **struct** `DragData` — Data transferred in a drag-drop operation
+`crates/engine/dom/src/contenteditable.rs:69` **fn** `new` — Create empty paste data
+`crates/engine/dom/src/contenteditable.rs:74` **fn** `with_text` — Set text content
+`crates/engine/dom/src/contenteditable.rs:80` **fn** `with_html` — Set HTML content
+`crates/engine/dom/src/contenteditable.rs:86` **fn** `add_file` — Add a file to the paste data
+`crates/engine/dom/src/contenteditable.rs:92` **fn** `preferred_content` — Preferred content for insertion: HTML (if available), else plain text
+`crates/engine/dom/src/contenteditable.rs:99` **fn** `new` — Create empty drag data
+`crates/engine/dom/src/contenteditable.rs:104` **fn** `with_text` — Set text content
+`crates/engine/dom/src/contenteditable.rs:110` **fn** `with_html` — Set HTML content
+`crates/engine/dom/src/contenteditable.rs:116` **fn** `add_url` — Add a URL to the drag data
+`crates/engine/dom/src/contenteditable.rs:122` **fn** `add_file` — Add a file to the drag data
+`crates/engine/dom/src/contenteditable.rs:128` **fn** `mark_move` — Mark this as a move operation (not copy)
+`crates/engine/dom/src/contenteditable.rs:134` **fn** `preferred_content` — Preferred content for insertion: HTML (if available), else plain text
+`crates/engine/dom/src/contenteditable.rs:145` **struct** `CommandHistory` — History of executed commands for undo/redo
+`crates/engine/dom/src/contenteditable.rs:156` **fn** `new` — Create an empty history
+`crates/engine/dom/src/contenteditable.rs:164` **fn** `insert_text` — Execute InsertText command: insert text at position and record
+`crates/engine/dom/src/contenteditable.rs:174` **fn** `delete_range` — Execute DeleteRange command: delete range and record (with deleted text)
+`crates/engine/dom/src/contenteditable.rs:192` **fn** `replace_text` — Execute ReplaceText command: replace range with new text and record
+`crates/engine/dom/src/contenteditable.rs:217` **fn** `undo` — Undo the last command (move backward in history)
+`crates/engine/dom/src/contenteditable.rs:261` **fn** `redo` — Redo the last undone command (move forward in history)
+`crates/engine/dom/src/contenteditable.rs:291` **fn** `can_undo` — True if undo is possible
+`crates/engine/dom/src/contenteditable.rs:296` **fn** `can_redo` — True if redo is possible
+`crates/engine/dom/src/contenteditable.rs:301` **fn** `clear` — Clear all history
+`crates/engine/dom/src/contenteditable.rs:307` **fn** `len` — Return the number of commands in history
+`crates/engine/dom/src/contenteditable.rs:312` **fn** `is_empty` — True if there are no commands in history
+`crates/engine/dom/src/contenteditable.rs:317` **fn** `current_pos` — Return the current position in history (how many commands have been executed/redone)
+`crates/engine/dom/src/contenteditable.rs:329` **fn** `paste_into` — Handle paste operation: insert paste data at selection or cursor position
+`crates/engine/dom/src/contenteditable.rs:361` **fn** `drop_into` — Handle drop operation: insert drag data at drop position
+`crates/engine/dom/src/lib.rs:25` **enum** `DomSnapshotError` — Error returned by [`Document::to_bytes`] and [`Document::from_bytes`]
+`crates/engine/dom/src/lib.rs:44` **struct** `NodeId`
+`crates/engine/dom/src/lib.rs:47` **fn** `index`
+`crates/engine/dom/src/lib.rs:51` **fn** `from_index`
+`crates/engine/dom/src/lib.rs:57` **enum** `Namespace`
+`crates/engine/dom/src/lib.rs:67` **struct** `QualName`
+`crates/engine/dom/src/lib.rs:73` **fn** `html`
+`crates/engine/dom/src/lib.rs:82` **struct** `Attribute`
+`crates/engine/dom/src/lib.rs:92` **enum** `ShadowRootMode` — Shadow root mode per Shadow DOM spec §4.2
+`crates/engine/dom/src/lib.rs:107` **enum** `NodeData`
+`crates/engine/dom/src/lib.rs:140` **struct** `Node`
+`crates/engine/dom/src/lib.rs:147` **fn** `element_name`
+`crates/engine/dom/src/lib.rs:156` **fn** `get_attr` — Возвращает значение атрибута по имени (ASCII case-insensitive). На
+`crates/engine/dom/src/lib.rs:172` **fn** `sandbox_flags` — Sandbox-ограничения для `<iframe sandbox="...">` по HTML LS §7.6.5
+`crates/engine/dom/src/lib.rs:184` **fn** `input_type` — HTML5 form input type для `<input type="...">`. Возвращает None
+`crates/engine/dom/src/lib.rs:199` **enum** `InputType` — HTML5 form input types (HTML Standard §4.10.5). Спека определяет
+`crates/engine/dom/src/lib.rs:251` **fn** `parse` — Распарсить значение `type`-атрибута. Case-insensitive по
+`crates/engine/dom/src/lib.rs:280` **fn** `as_str`
+`crates/engine/dom/src/lib.rs:311` **fn** `is_textual` — Текстовая семантика — поле с буквенным контентом, на котором
+`crates/engine/dom/src/lib.rs:321` **fn** `is_button_like` — Кнопочная семантика — submit/reset/button/image, рендерится
+`crates/engine/dom/src/lib.rs:331` **struct** `FormInfo` — Данные `<form>` элемента — URL назначения, метод и число полей ввода
+`crates/engine/dom/src/lib.rs:349` **enum** `DocumentMode` — Парсинг-режим документа по HTML5 §13.2.6.2 «The insertion mode»
+`crates/engine/dom/src/lib.rs:372` **struct** `DomPosition` — A position within the document (WHATWG DOM §4.4)
+`crates/engine/dom/src/lib.rs:385` **struct** `Range` — A contiguous range of document content (WHATWG DOM §4.5)
+`crates/engine/dom/src/lib.rs:394` **fn** `collapsed` — Collapsed range: both endpoints at `pos`
+`crates/engine/dom/src/lib.rs:399` **fn** `is_collapsed` — True when start and end are the same position
+`crates/engine/dom/src/lib.rs:411` **struct** `Selection` — The current document text selection (WHATWG Selection API)
+`crates/engine/dom/src/lib.rs:420` **fn** `is_collapsed` — True when anchor == focus (or no selection)
+`crates/engine/dom/src/lib.rs:429` **fn** `get_range` — The selection as a normalised Range (start ≤ end in node order)
+`crates/engine/dom/src/lib.rs:444` **fn** `collapse` — Collapse the selection to a single point
+`crates/engine/dom/src/lib.rs:450` **fn** `extend_focus` — Extend the focus end to `pos` (anchor stays fixed)
+`crates/engine/dom/src/lib.rs:455` **fn** `clear` — Remove the selection entirely
+`crates/engine/dom/src/lib.rs:462` **struct** `Document`
+`crates/engine/dom/src/lib.rs:491` **fn** `new`
+`crates/engine/dom/src/lib.rs:508` **fn** `root`
+`crates/engine/dom/src/lib.rs:516` **fn** `mode` — Текущий парсинг-режим. Tree builder выставляет его при
+`crates/engine/dom/src/lib.rs:522` **fn** `set_mode` — Установить режим. Использует tree builder при инициализации
+`crates/engine/dom/src/lib.rs:528` **fn** `get_selection` — Current selection. The shell updates this on mouse events; JS reads it
+`crates/engine/dom/src/lib.rs:533` **fn** `set_selection` — Replace the current selection
+`crates/engine/dom/src/lib.rs:538` **fn** `clear_selection` — Clear the selection
+`crates/engine/dom/src/lib.rs:553` **fn** `target` — Текущий target — id из URL fragment (без ведущего `#`), к которому
+`crates/engine/dom/src/lib.rs:560` **fn** `set_target` — Установить current target (id без `#`). `None` — нет fragment-а в URL
+`crates/engine/dom/src/lib.rs:572` **fn** `attach_shadow` — Attach a shadow root to `host` and return its `NodeId`
+`crates/engine/dom/src/lib.rs:579` **fn** `shadow_root_of` — Return the shadow root attached to `host`, or `None` if not a shadow host
+`crates/engine/dom/src/lib.rs:584` **fn** `is_shadow_host` — Whether `id` is a shadow host (has an attached shadow root)
+`crates/engine/dom/src/lib.rs:588` **fn** `get`
+`crates/engine/dom/src/lib.rs:592` **fn** `get_mut`
+`crates/engine/dom/src/lib.rs:596` **fn** `len`
+`crates/engine/dom/src/lib.rs:600` **fn** `is_empty`
+`crates/engine/dom/src/lib.rs:612` **fn** `base_href` — HTML5 §4.2.3 — найти первый `<base href="...">` в документе и
+`crates/engine/dom/src/lib.rs:623` **fn** `body` — Returns the `<body>` element's `NodeId`, walking root → `<html>` → `<body>`
+`crates/engine/dom/src/lib.rs:635` **fn** `find_first_element` — Найти первый элемент, удовлетворяющий предикату. Pre-order обход
+`crates/engine/dom/src/lib.rs:656` **fn** `find_by_id` — Find a node by its `id` attribute (case-sensitive, per HTML spec)
+`crates/engine/dom/src/lib.rs:683` **fn** `create_element`
+`crates/engine/dom/src/lib.rs:690` **fn** `create_text`
+`crates/engine/dom/src/lib.rs:694` **fn** `create_comment`
+`crates/engine/dom/src/lib.rs:704` **fn** `create_fragment` — Allocate a `DocumentFragment` node in the arena
+`crates/engine/dom/src/lib.rs:712` **fn** `set_template_content` — Register `fragment` as the content container for `template`
+`crates/engine/dom/src/lib.rs:718` **fn** `template_content` — Return the content `DocumentFragment` for a `<template>` element, or
+`crates/engine/dom/src/lib.rs:722` **fn** `create_doctype`
+`crates/engine/dom/src/lib.rs:736` **fn** `append_child` — Append `child` as the last child of `parent`. If `child` already has a parent, it is detached first
+`crates/engine/dom/src/lib.rs:748` **fn** `insert_after` — Insert `new_node` immediately after `reference` in their shared parent
+`crates/engine/dom/src/lib.rs:761` **fn** `detach` — Remove `node` from its current parent. The node itself stays in the arena and can be re-attached
+`crates/engine/dom/src/lib.rs:780` **fn** `to_bytes` — Serialise the entire document to a compact binary blob (bincode)
+`crates/engine/dom/src/lib.rs:785` **fn** `from_bytes` — Deserialise a document from a binary blob produced by [`to_bytes`]
+`crates/engine/dom/src/lib.rs:882` **fn** `check_form_gate` — Гейт отправки форм по sandbox-флагу HTML §7.6.5
+`crates/engine/dom/src/lib.rs:903` **fn** `find_ancestor_form` — Найти ближайший предок `<form>` для узла `node`
+`crates/engine/dom/src/lib.rs:926` **fn** `collect_dom_form_fields` — Собрать имена и значения submittable-контролов формы из DOM-атрибутов
+`crates/engine/dom/src/lib.rs:1028` **struct** `ValidityState` — Validity state for a form control — HTML5 §4.10.21.1 `ValidityState` interface
+`crates/engine/dom/src/lib.rs:1053` **fn** `valid` — Returns `true` when all flags are `false` (element satisfies all constraints)
+`crates/engine/dom/src/lib.rs:1074` **fn** `element_validity` — Returns the validity state for `node`, or `None` if the node is not a
+`crates/engine/dom/src/lib.rs:1177` **fn** `check_validity_form` — Returns `true` if all submittable controls in `form_id` satisfy their
+`crates/engine/dom/src/lib.rs:1185` **fn** `invalid_controls_in_form` — Returns the `NodeId`s of all invalid (failing constraint validation) controls
+`crates/engine/dom/src/lib.rs:1289` **struct** `AnchorInfo` — Информация об якорной ссылке (`<a href>`), найденной в документе
+`crates/engine/dom/src/lib.rs:1322` **struct** `FlatTree` — Pre-computed composed tree (flat tree) for Shadow DOM layout traversal
+`crates/engine/dom/src/lib.rs:1332` **fn** `children_of` — Composed-tree children of `id`
+`crates/engine/dom/src/lib.rs:1347` **fn** `build_flat_tree` — Build the composed (flat) tree for the document
+`crates/engine/dom/src/lib.rs:1442` **fn** `check_navigation_gate` — Гейт навигации по sandbox-флагу HTML §7.6.5
+`crates/engine/dom/src/lib.rs:1466` **struct** `IframeInfo` — Данные `<iframe>` элемента — URL содержимого и sandbox-ограничения
+`crates/engine/dom/src/lib.rs:1497` **fn** `collect_iframes` — Собрать все `<iframe>` элементы документа с их sandbox-ограничениями
+`crates/engine/dom/src/lib.rs:1508` **fn** `check_popup_gate` — Гейт открытия popup-ов (`window.open()`, `target="_blank"`) по sandbox HTML §7.6.5
+`crates/engine/dom/src/lib.rs:1527` **enum** `EditInputType` — Input event type per Input Events Level 2 §4.1.3
+`crates/engine/dom/src/lib.rs:1558` **fn** `as_str` — The canonical `inputType` string for the `InputEvent` interface
+`crates/engine/dom/src/lib.rs:1581` **struct** `InputEvent` — Data for a `beforeinput` or `input` DOM event (Input Events Level 2 §4.1)
+`crates/engine/dom/src/lib.rs:1605` **fn** `split_text_node` — Split a text node at `byte_offset`, creating a second text node with the
+`crates/engine/dom/src/lib.rs:1647` **fn** `insert_text_at` — Insert `text` into the text node at `pos`, returning the caret position
+`crates/engine/dom/src/lib.rs:1705` **fn** `delete_range` — Delete the content of `range` from the document, returning a collapsed
+`crates/engine/dom/src/lib.rs:1759` **fn** `insert_paragraph_break`
 
-## lumen-driver  (18 symbols)
+## lumen-driver  (52 symbols)
 
-`crates/driver/src/lib.rs:55` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
-`crates/driver/src/session.rs:46` **struct** `InProcessSession` — Headless in-process сессия браузера
-`crates/driver/src/session.rs:61` **fn** `new` — Создать сессию с viewport 1024×720
-`crates/driver/src/session.rs:72` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
-`crates/driver/src/session.rs:83` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
-`crates/driver/src/types.rs:14` **struct** `NodeRef` — Ссылка на DOM-узел, возвращаемая [`BrowserSession::query`]
-`crates/driver/src/types.rs:29` **enum** `Target` — Цель для команд [`BrowserSession::click`], [`type_text`](BrowserSession::type_text),
-`crates/driver/src/types.rs:40` **struct** `ScrollDelta` — Дельта скролла для [`BrowserSession::scroll`]
-`crates/driver/src/types.rs:49` **enum** `WaitCondition` — Условие ожидания для [`BrowserSession::wait`]
-`crates/driver/src/types.rs:64` **struct** `BoxModel` — Box-model одного узла из [`BrowserSession::layout_snapshot`]
-`crates/driver/src/types.rs:81` **struct** `A11yNode` — Узел accessibility-дерева из [`BrowserSession::a11y_tree`]
-`crates/driver/src/types.rs:93` **struct** `NetworkEntry` — Запись из сетевого лога [`BrowserSession::network_log`]
-`crates/driver/src/types.rs:106` **struct** `ConsoleEntry` — Запись из консоли [`BrowserSession::console_log`]
-`crates/driver/src/types.rs:115` **enum** `ConsoleLevel` — Уровень console-сообщения
-`crates/driver/src/types.rs:127` **struct** `ComputedProperties` — Значения вычисленных CSS-свойств элемента из [`BrowserSession::computed_style`]
-`crates/driver/src/winit_session.rs:50` **struct** `WinitSession` — Оконная сессия браузера
-`crates/driver/src/winit_session.rs:65` **fn** `new` — Создать сессию с viewport 1024×720
-`crates/driver/src/winit_session.rs:76` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
+`crates/driver/src/context.rs:22` **struct** `SessionContext` — Isolated context for a single BrowserSession
+`crates/driver/src/context.rs:37` **fn** `new`
+`crates/driver/src/context.rs:50` **fn** `with_fingerprint_profile`
+`crates/driver/src/context.rs:63` **fn** `fingerprint_profile`
+`crates/driver/src/context.rs:67` **fn** `set_fingerprint_profile`
+`crates/driver/src/context.rs:77` **fn** `user_agent`
+`crates/driver/src/context.rs:83` **fn** `set_user_agent`
+`crates/driver/src/context.rs:93` **fn** `clear_user_agent_override`
+`crates/driver/src/context.rs:98` **fn** `frozen_clock_ms` — Get current frozen clock timestamp (ms since epoch), or None if system clock is used
+`crates/driver/src/context.rs:104` **fn** `set_frozen_clock` — Set frozen clock to a specific timestamp (ms since epoch) for deterministic testing
+`crates/driver/src/context.rs:109` **fn** `clear_frozen_clock` — Clear frozen clock; resume using system time
+`crates/driver/src/context.rs:114` **fn** `rng_seed` — Get RNG seed for deterministic randomness, or None if OS entropy is used
+`crates/driver/src/context.rs:120` **fn** `set_rng_seed` — Set RNG seed for deterministic random numbers in JS Math.random() and crypto.getRandomValues()
+`crates/driver/src/context.rs:125` **fn** `clear_rng_seed` — Clear RNG seed; resume using OS entropy
+`crates/driver/src/context.rs:130` **fn** `is_fingerprint_frozen` — Check if fingerprint profile is frozen (cannot be changed)
+`crates/driver/src/context.rs:136` **fn** `freeze_fingerprint` — Freeze current fingerprint profile: prevent further changes to set_fingerprint_profile()
+`crates/driver/src/context.rs:141` **fn** `unfreeze_fingerprint` — Unfreeze fingerprint profile; allow changes again
+`crates/driver/src/context.rs:145` **fn** `get_cookies_for_request`
+`crates/driver/src/context.rs:150` **fn** `process_set_cookie`
+`crates/driver/src/context.rs:157` **fn** `clear_cookies`
+`crates/driver/src/context.rs:161` **fn** `get_storage`
+`crates/driver/src/context.rs:167` **fn** `set_storage`
+`crates/driver/src/context.rs:174` **fn** `clear_origin_storage`
+`crates/driver/src/context.rs:178` **fn** `clear_all_storage`
+`crates/driver/src/context.rs:182` **fn** `storage_keys`
+`crates/driver/src/context.rs:189` **fn** `get_cached_response`
+`crates/driver/src/context.rs:193` **fn** `cache_response`
+`crates/driver/src/context.rs:197` **fn** `clear_http_cache`
+`crates/driver/src/gpu_session.rs:21` **struct** `RenderedPage` — Rendered page result from GpuSession rendering operations
+`crates/driver/src/gpu_session.rs:53` **struct** `JsNavigateRequest` — Navigation request initiated by JS code (location.href=, history.pushState, etc)
+`crates/driver/src/gpu_session.rs:64` **trait** `GpuSession` — Extended `BrowserSession` trait for GPU and streaming operations
+`crates/driver/src/lib.rs:58` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
+`crates/driver/src/session.rs:52` **struct** `InProcessSession` — Headless in-process сессия браузера
+`crates/driver/src/session.rs:69` **fn** `new` — Создать сессию с viewport 1024×720
+`crates/driver/src/session.rs:81` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
+`crates/driver/src/session.rs:93` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
+`crates/driver/src/types.rs:15` **struct** `NodeRef` — Ссылка на DOM-узел, возвращаемая [`BrowserSession::query`]
+`crates/driver/src/types.rs:30` **enum** `Target` — Цель для команд [`BrowserSession::click`], [`type_text`](BrowserSession::type_text),
+`crates/driver/src/types.rs:41` **struct** `ScrollDelta` — Дельта скролла для [`BrowserSession::scroll`]
+`crates/driver/src/types.rs:50` **enum** `WaitCondition` — Условие ожидания для [`BrowserSession::wait`]
+`crates/driver/src/types.rs:65` **struct** `BoxModel` — Box-model одного узла из [`BrowserSession::layout_snapshot`]
+`crates/driver/src/types.rs:82` **struct** `A11yNode` — Узел accessibility-дерева из [`BrowserSession::a11y_tree`]
+`crates/driver/src/types.rs:94` **struct** `NetworkEntry` — Запись из сетевого лога [`BrowserSession::network_log`]
+`crates/driver/src/types.rs:107` **struct** `ConsoleEntry` — Запись из консоли [`BrowserSession::console_log`]
+`crates/driver/src/types.rs:116` **enum** `ConsoleLevel` — Уровень console-сообщения
+`crates/driver/src/types.rs:128` **struct** `ComputedProperties` — Значения вычисленных CSS-свойств элемента из [`BrowserSession::computed_style`]
+`crates/driver/src/types.rs:143` **enum** `InputCommand` — Команда для injection в event-loop браузера с целью создания нативных DOM-событий
+`crates/driver/src/types.rs:197` **enum** `AxQuery` — Запрос к accessibility-дереву для [`BrowserSession::query_a11y`] и [`query_a11y_all`](BrowserSession::query_a11y_all)
+`crates/driver/src/types.rs:233` **enum** `FingerprintProfile` — Профиль отпечатка браузера (fingerprint profile) для BrowserSession
+`crates/driver/src/winit_session.rs:65` **struct** `WinitSession` — Оконная сессия браузера
+`crates/driver/src/winit_session.rs:86` **fn** `new` — Создать сессию с viewport 1024×720
+`crates/driver/src/winit_session.rs:100` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
 
 ## lumen-encoding  (11 symbols)
 
@@ -713,11 +778,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/animation.rs:759` **fn** `sync` — Register or refresh animations for `node` based on its computed style
 `crates/engine/layout/src/animation.rs:780` **fn** `remove_node` — Remove all animation state for `node` (e.g. when the node is removed from the DOM)
 `crates/engine/layout/src/animation.rs:790` **fn** `tick` — Compute per-node animated style overrides for the current frame
-`crates/engine/layout/src/animation.rs:1081` **struct** `TransitionScheduler` — CSS Transitions L1 §2 — detects property value changes and interpolates
-`crates/engine/layout/src/animation.rs:1087` **fn** `new`
-`crates/engine/layout/src/animation.rs:1093` **fn** `sync` — Detect value changes between `old` and `new` style for properties listed
-`crates/engine/layout/src/animation.rs:1162` **fn** `remove_node` — Remove all transition state for `node` (called when node leaves DOM)
-`crates/engine/layout/src/animation.rs:1168` **fn** `tick` — Compute interpolated style overrides for the current frame
+`crates/engine/layout/src/animation.rs:1091` **struct** `TransitionScheduler` — CSS Transitions L1 §2 — detects property value changes and interpolates
+`crates/engine/layout/src/animation.rs:1097` **fn** `new`
+`crates/engine/layout/src/animation.rs:1103` **fn** `sync` — Detect value changes between `old` and `new` style for properties listed
+`crates/engine/layout/src/animation.rs:1181` **fn** `remove_node` — Remove all transition state for `node` (called when node leaves DOM)
+`crates/engine/layout/src/animation.rs:1214` **fn** `tick` — Compute interpolated style overrides for the current frame
 `crates/engine/layout/src/box_tree.rs:55` **struct** `ViewBox` — SVG `viewBox="min-x min-y width height"` attribute. Maps SVG user-unit space
 `crates/engine/layout/src/box_tree.rs:69` **enum** `SvgShapeKind` — Geometric primitive for an SVG shape element in SVG user units (before viewBox scaling)
 `crates/engine/layout/src/box_tree.rs:86` **enum** `FormControlKind` — Вид form control — используется в `BoxKind::FormControl` для paint-специализаций
@@ -739,8 +804,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/counters.rs:152` **fn** `format_counter` — Format a counter integer value according to the given `list-style-type` keyword
 `crates/engine/layout/src/lib.rs:86` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
 `crates/engine/layout/src/lib.rs:111` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
-`crates/engine/layout/src/lib.rs:130` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
-`crates/engine/layout/src/lib.rs:151` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:132` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
+`crates/engine/layout/src/lib.rs:153` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
 `crates/engine/layout/src/pagination.rs:22` **struct** `PaginationContext` — Parameters for print pagination
 `crates/engine/layout/src/pagination.rs:46` **fn** `content_width` — Content box width: page width minus left and right margins
 `crates/engine/layout/src/pagination.rs:51` **fn** `content_height` — Content box height: page height minus top and bottom margins
@@ -1015,6 +1080,26 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/style.rs:14225` **fn** `parse_color`
 `crates/engine/layout/src/text_iter.rs:17` **struct** `TextFragment` — A visible text fragment with its absolute screen rectangle
 `crates/engine/layout/src/text_iter.rs:37` **fn** `collect_visible_text` — Walk the layout tree and collect all visible text fragments with screen coordinates
+
+## lumen-mcp  (17 symbols)
+
+`crates/mcp/src/protocol.rs:8` **struct** `McpResource` — MCP resource describing a read-only data snapshot
+`crates/mcp/src/protocol.rs:21` **struct** `McpTool` — MCP tool describing a callable action
+`crates/mcp/src/protocol.rs:32` **struct** `McpRequest` — MCP JSON-RPC запрос
+`crates/mcp/src/protocol.rs:47` **fn** `new` — Создать новый MCP запрос
+`crates/mcp/src/protocol.rs:57` **fn** `with_id` — Создать запрос с ID для отслеживания ответа
+`crates/mcp/src/protocol.rs:65` **struct** `McpResponse` — MCP JSON-RPC ответ
+`crates/mcp/src/protocol.rs:80` **fn** `ok` — Создать успешный ответ
+`crates/mcp/src/protocol.rs:90` **fn** `err` — Создать ошибку
+`crates/mcp/src/protocol.rs:106` **struct** `McpError` — JSON-RPC ошибка
+`crates/mcp/src/protocol.rs:118` **enum** `McpMessage` — Размеченное MCP сообщение (запрос или ответ)
+`crates/mcp/src/protocol.rs:129` **fn** `from_json` — Распарсить JSON в MCP сообщение
+`crates/mcp/src/protocol.rs:137` **fn** `to_json` — Сериализовать MCP сообщение в JSON
+`crates/mcp/src/server.rs:15` **struct** `McpServer` — MCP сервер для Lumen браузера
+`crates/mcp/src/server.rs:24` **fn** `new` — Создать новый MCP сервер
+`crates/mcp/src/transport.rs:9` **trait** `Transport` — Абстракция транспорта для MCP сообщений
+`crates/mcp/src/transport.rs:21` **struct** `StdioTransport` — Stdio-транспорт (stdin/stdout)
+`crates/mcp/src/transport.rs:28` **fn** `new` — Создать новый stdio-транспорт
 
 ## lumen-network  (169 symbols)
 
@@ -1319,7 +1404,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/texture_pool.rs:108` **fn** `pool_size` — Get total tracked pool size (for diagnostics)
 `crates/engine/paint/src/texture_pool.rs:113` **fn** `update_size` — Update internal pool size counter (call after creating or destroying a texture)
 
-## lumen-shell  (141 symbols)
+## lumen-shell  (142 symbols)
 
 `crates/shell/src/address_bar.rs:55` **enum** `OmniboxPrefix` — Префикс @-команды, распознанный в строке ввода
 `crates/shell/src/address_bar.rs:66` **fn** `parse_omnibox_prefix` — Разбирает raw ввод → `(OmniboxPrefix, query_str)`
@@ -1393,6 +1478,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/hints.rs:99` **fn** `typed` — Characters typed so far — used to dim non-matching badges
 `crates/shell/src/hints.rs:107` **fn** `items` — Compute viewport-space hint items for the current scroll offsets
 `crates/shell/src/hints.rs:172` **fn** `build_hints_overlay` — Build the viewport-locked overlay display list for all active hint badges
+`crates/shell/src/input.rs:43` **struct** `InputInjectionQueue` — Placeholder для обработки injected input команд в event loop
 `crates/shell/src/links.rs:15` **fn** `find_link_href` — Walk up the ancestor chain from `node_id` to find the nearest `<a>` element
 `crates/shell/src/links.rs:43` **fn** `is_navigable_href` — Return true if `href` is a URL scheme the browser should navigate to
 `crates/shell/src/links.rs:53` **fn** `fragment_only` — If `href` is a fragment-only reference (starts with `#`), return the
@@ -1838,4 +1924,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 1779 symbols in 18 crates*
+*Total: 1862 symbols in 19 crates*

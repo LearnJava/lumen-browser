@@ -559,22 +559,41 @@ fn connect(
 }
 
 /// TLS-конфиг для HTTPS-соединений. Кэшируется глобально, чтобы не
-/// перепарсивать webpki-roots на каждый connect. ALPN-протоколы заявлены
-/// в порядке предпочтения сервера: `h2` сильнее `http/1.1`.
+/// перепарсивать webpki-roots на каждый connect. Использует Standard profile
+/// (соответствует текущему Chrome).
 fn default_tls_config() -> Arc<rustls::ClientConfig> {
+    tls_config_for_profile(tls::TlsProfile::Standard)
+}
+
+/// Получить TLS конфиг для указанного профиля. Конфиги кэшируются
+/// отдельно для каждого профиля.
+pub(crate) fn tls_config_for_profile(profile: tls::TlsProfile) -> Arc<rustls::ClientConfig> {
     use std::sync::OnceLock;
-    static CONFIG: OnceLock<Arc<rustls::ClientConfig>> = OnceLock::new();
-    CONFIG
-        .get_or_init(|| {
+    use std::collections::HashMap;
+
+    static CONFIGS: OnceLock<HashMap<tls::TlsProfile, Arc<rustls::ClientConfig>>> = OnceLock::new();
+
+    let configs = CONFIGS.get_or_init(|| {
+        let mut root_store = rustls::RootCertStore::empty();
+        root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
+
+        let mut map = HashMap::new();
+        for prof in &[tls::TlsProfile::Standard, tls::TlsProfile::Strict, tls::TlsProfile::Tor] {
+            let cfg = tls::build_client_config(*prof, root_store.clone());
+            map.insert(*prof, Arc::new(cfg));
+        }
+        map
+    });
+
+    configs
+        .get(&profile)
+        .cloned()
+        .unwrap_or_else(|| {
+            // Fallback: construct on-the-fly if not cached (shouldn't happen)
             let mut root_store = rustls::RootCertStore::empty();
             root_store.extend(webpki_roots::TLS_SERVER_ROOTS.iter().cloned());
-            let mut cfg = rustls::ClientConfig::builder()
-                .with_root_certificates(root_store)
-                .with_no_client_auth();
-            cfg.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
-            Arc::new(cfg)
+            Arc::new(tls::build_client_config(profile, root_store))
         })
-        .clone()
 }
 
 /// Проверить ALPN-протокол, выбранный сервером.

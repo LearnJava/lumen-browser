@@ -1,3 +1,6 @@
+In progress: —
+Next step: (Wave 3 automation API) Pick next: antidetect-http-fingerprint (9C) or continue with Phase 2 work
+
 Recent (Wave 3 - automation API + completed tasks):
   - samples-heavy-html (10M, Phase 1 complete: Habr-style benchmark page with 35+ posts, sidebar, sticky header, 1258 lines, ~2273 DOM nodes) 2026-05-28
   - antidetect-http-fingerprint-9c (Phase 1 complete: HttpProfile enum + header order + build_request_headers + fingerprint_profile getter/setter + 6 integration tests) 2026-05-28
