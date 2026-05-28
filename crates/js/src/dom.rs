@@ -1126,6 +1126,7 @@ function Event(type, init) {
     this.type             = String(type || '');
     this.bubbles          = !!(init && init.bubbles);
     this.cancelable       = !!(init && init.cancelable);
+    this.isTrusted        = !!(init && init.isTrusted);
     this.defaultPrevented = false;
     this.cancelBubble     = false;
     this.target           = null;
@@ -1181,8 +1182,9 @@ var _LUMEN_DOC_LISTENER_NID = -1;
 
 // Dispatch an event starting at `start_nid` and bubbling up to the document.
 // Called from Rust on user input (click, keydown, etc.).
+// These events are marked as isTrusted=true because they come through the shell's native event loop.
 function _lumen_dispatch_bubble(start_nid, type) {
-    var evt = new Event(type, { bubbles: true, cancelable: true });
+    var evt = new Event(type, { bubbles: true, cancelable: true, isTrusted: true });
     evt.target = _lumen_make_element(start_nid);
     var cur = start_nid;
     while (cur !== null && cur !== undefined) {
@@ -2004,7 +2006,7 @@ function _lumen_dispatch_composition(type, data) {
     if (!target) return;
     var nid = target.__nid__;
     if (nid === undefined) return;
-    var evt = new Event(type);
+    var evt = new Event(type, { isTrusted: true });
     evt.data = String(data);
     evt.locale = '';
     _lumen_dispatch(nid, evt);
@@ -2019,7 +2021,7 @@ var _pageshow_listeners = [];
 var _pagehide_listeners = [];
 
 function _lumen_fire_page_lifecycle(type, persisted) {
-    var evt = new Event(type);
+    var evt = new Event(type, { isTrusted: true });
     evt.persisted = !!persisted;
     var listeners = type === 'pageshow' ? _pageshow_listeners : _pagehide_listeners;
     for (var i = 0; i < listeners.length; i++) {
@@ -2210,8 +2212,8 @@ function fetch(input, init) {
 
 var _ws_instances = [];
 
-function CloseEvent(code, reason, wasClean) {
-    Event.call(this, 'close');
+function CloseEvent(code, reason, wasClean, init) {
+    Event.call(this, 'close', init);
     this.code = code || 1000;
     this.reason = reason || '';
     this.wasClean = !!wasClean;
@@ -2219,8 +2221,8 @@ function CloseEvent(code, reason, wasClean) {
 CloseEvent.prototype = Object.create(Event.prototype);
 CloseEvent.prototype.constructor = CloseEvent;
 
-function MessageEvent(data) {
-    Event.call(this, 'message');
+function MessageEvent(data, init) {
+    Event.call(this, 'message', init);
     this.data = data;
     this.origin = '';
     this.lastEventId = '';
@@ -2244,17 +2246,17 @@ function _lumen_ws_pump_one(ws) {
             var ev = JSON.parse(raw);
             if (ev.t === 'open') {
                 ws.readyState = 1;
-                _lumen_ws_fire(ws, new Event('open'));
+                _lumen_ws_fire(ws, new Event('open', { isTrusted: true }));
             } else if (ev.t === 'msg') {
                 if (ws.readyState !== 1) { continue; }
-                _lumen_ws_fire(ws, new MessageEvent(ev.data));
+                _lumen_ws_fire(ws, new MessageEvent(ev.data, { isTrusted: true }));
             } else if (ev.t === 'close') {
                 ws.readyState = 3;
-                _lumen_ws_fire(ws, new CloseEvent(ev.code, ev.reason, ev.code === 1000));
+                _lumen_ws_fire(ws, new CloseEvent(ev.code, ev.reason, ev.code === 1000, { isTrusted: true }));
                 ws._handle = 0;
                 break;
             } else if (ev.t === 'error') {
-                var err = new Event('error'); err.message = ev.msg;
+                var err = new Event('error', { isTrusted: true }); err.message = ev.msg;
                 _lumen_ws_fire(ws, err);
                 ws.readyState = 3; ws._handle = 0; break;
             }
@@ -2283,9 +2285,9 @@ function WebSocket(url) {
     if (!h) {
         this.readyState = 3;
         setTimeout(function() {
-            var e = new Event('error'); e.message = 'WebSocket connection failed';
+            var e = new Event('error', { isTrusted: true }); e.message = 'WebSocket connection failed';
             _lumen_ws_fire(self, e);
-            _lumen_ws_fire(self, new CloseEvent(1006, '', false));
+            _lumen_ws_fire(self, new CloseEvent(1006, '', false, { isTrusted: true }));
         }, 0);
         return;
     }
@@ -3824,6 +3826,43 @@ mod tests {
     fn custom_event_detail_null_by_default() {
         let rt = runtime_with_dom(make_doc());
         let result = rt.eval("new CustomEvent('x').detail === null").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn event_is_trusted_false_by_default() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval("new Event('click').isTrusted").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(false));
+    }
+
+    #[test]
+    fn event_is_trusted_true_when_specified() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval("new Event('click', { isTrusted: true }).isTrusted").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn custom_event_is_trusted_inherits_from_event() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval("new CustomEvent('x', { isTrusted: true }).isTrusted").unwrap();
+        assert_eq!(result, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn dispatchevent_creates_untrusted_event() {
+        let rt = runtime_with_dom(make_doc());
+        let result = rt.eval(
+            r#"
+            var evt = new Event('test');
+            var el = document.createElement('div');
+            var receivedEvent = null;
+            el.addEventListener('test', function(e) { receivedEvent = e; });
+            el.dispatchEvent(evt);
+            receivedEvent.isTrusted === false
+            "#
+        ).unwrap();
         assert_eq!(result, lumen_core::JsValue::Bool(true));
     }
 
