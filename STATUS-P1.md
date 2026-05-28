@@ -1,5 +1,5 @@
 In progress: none
-Next task: svg-layout-advanced Phase 1
+Next task: print-pdf-advanced Phase 1
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -12,6 +12,7 @@ Note: fts-omnibox (Wave 1, P3-задача по домену) перенесен
 Note: Wave 2 очередь содержит P2-задачи (extras-p2, avif-decoder, webgl-context, font-hinting, svg-rasterizer) — они пока не для P1. Wave 2 P3-задачи (http2-client, preconnect-hints) тоже в P3 очереди. P1 берёт следующее из Phase 1/Phase 2 своих задач.
 
 Recent:
+- svg-layout-advanced (35, Phase 1): PreserveAspectRatio parsing + aspect-ratio preservation calculation (compute_viewbox_transform with align_x/align_y/meet_or_slice), SVG transform attribute parser (translate/scale/rotate/skewX/skewY/matrix), SvgTransform struct with matrix composition, 5 new unit tests, 28 tests PASS, clippy clean 2026-05-28 — Phase 2 (nested SVG transforms) pending
 - accessibility-forms-validation (6.2, Phase 3): FormSubmitEvent enum (Valid/Invalid variants), submit_form() function executing HTML5 §4.10.22 form submission algorithm with constraint validation, 8 comprehensive unit tests (valid/invalid scenarios, field collection, defaults), 157 tests PASS, clippy clean 2026-05-28 — P3 dispatch integration pending
 - transition-advanced (6.7, Phase 2): fill-mode support (Backwards/Forwards/Both applied in delay/completion periods), interrupted transitions (captured value at interruption for smooth continuation), grouped property expansion (margin/padding/border/border-radius → component properties), 3 new unit tests (fill_mode_forwards, fill_mode_backwards, interrupted_detection), 90 tests PASS, clippy clean 2026-05-28
 - ime-input (6.3, Phase 1): IME composition events infrastructure — CompositionEventType/CompositionData/CompositionEvent structures, CompositionState in Document, public API (begin_composition/update_composition/end_composition/get_composition), 8 unit tests (composition lifecycle, serialization, full IME sequence), 121 tests PASS, clippy clean 2026-05-28 — P3 shell integration pending
