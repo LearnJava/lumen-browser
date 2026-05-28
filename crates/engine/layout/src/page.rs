@@ -528,6 +528,39 @@ impl PageBox {
     pub fn get_margin_box_mut(&mut self, position: MarginBoxPosition) -> Option<&mut MarginBox> {
         self.margin_boxes.get_mut(&position)
     }
+
+    /// Layout text in all margin-boxes that have content.
+    ///
+    /// Calls `layout_text()` on each margin-box with content, using the page's
+    /// font size and standard typography parameters.
+    ///
+    /// **Parameters:**
+    /// - letter_spacing: additional spacing between characters (typically 0.0)
+    /// - tab_size: width of a tab character in pixels (typically 4.0 * font_width)
+    /// - measurer: text measurement provider (font metrics)
+    pub fn layout_margin_box_text(
+        &mut self,
+        letter_spacing: f32,
+        tab_size: f32,
+        measurer: &dyn crate::TextMeasurer,
+    ) {
+        let font_size = self.properties.font_size;
+
+        // Collect positions with content to avoid borrow conflicts
+        let positions: Vec<MarginBoxPosition> = self
+            .margin_boxes
+            .iter()
+            .filter(|(_, mb)| mb.content.is_some())
+            .map(|(pos, _)| *pos)
+            .collect();
+
+        // Layout text in each margin-box with content
+        for position in positions {
+            if let Some(margin_box) = self.margin_boxes.get_mut(&position) {
+                margin_box.layout_text(font_size, letter_spacing, tab_size, measurer);
+            }
+        }
+    }
 }
 
 /// Matches @page rules for a given page number and applies properties.
@@ -1483,5 +1516,82 @@ mod tests {
         // "Test" (32px) fits on line 3
         let lines = break_text_into_lines("Hello World Test", 12.0, 0.0, 4.0, 40.0, &measurer);
         assert_eq!(lines.len(), 3);
+    }
+
+    #[test]
+    fn test_page_box_layout_margin_box_text_all_boxes() {
+        let mut page = PageBox::new(0, PageProperties::default_a4());
+        page.layout_margin_boxes();
+
+        // Add content to multiple margin-boxes
+        page.get_margin_box_mut(MarginBoxPosition::TopCenter)
+            .unwrap()
+            .content = Some("Header".to_string());
+
+        page.get_margin_box_mut(MarginBoxPosition::BottomCenter)
+            .unwrap()
+            .content = Some("Page 1".to_string());
+
+        let measurer = FixedWidthMeasurer;
+        page.layout_margin_box_text(0.0, 4.0, &measurer);
+
+        // Verify text_layout is set in both boxes
+        assert!(page
+            .get_margin_box(MarginBoxPosition::TopCenter)
+            .unwrap()
+            .text_layout
+            .is_some());
+        assert!(page
+            .get_margin_box(MarginBoxPosition::BottomCenter)
+            .unwrap()
+            .text_layout
+            .is_some());
+
+        // Boxes without content should have text_layout = None
+        assert!(page
+            .get_margin_box(MarginBoxPosition::LeftMiddle)
+            .unwrap()
+            .text_layout
+            .is_none());
+    }
+
+    #[test]
+    fn test_page_box_layout_margin_box_text_empty_page() {
+        let mut page = PageBox::new(0, PageProperties::default_a4());
+        page.layout_margin_boxes();
+
+        let measurer = FixedWidthMeasurer;
+        // Should not panic when no content is present
+        page.layout_margin_box_text(0.0, 4.0, &measurer);
+
+        // All boxes should still exist but have no text_layout
+        for pos in MarginBoxPosition::all() {
+            assert!(page.get_margin_box(*pos).is_some());
+            assert!(page.get_margin_box(*pos).unwrap().text_layout.is_none());
+        }
+    }
+
+    #[test]
+    fn test_page_box_layout_respects_font_size() {
+        let mut page = PageBox::new(0, PageProperties::default_a4());
+        page.properties.font_size = 16.0; // Change from default 12.0
+        page.layout_margin_boxes();
+
+        page.get_margin_box_mut(MarginBoxPosition::TopCenter)
+            .unwrap()
+            .content = Some("Test".to_string());
+
+        let measurer = FixedWidthMeasurer;
+        page.layout_margin_box_text(0.0, 4.0, &measurer);
+
+        let layout = page
+            .get_margin_box(MarginBoxPosition::TopCenter)
+            .unwrap()
+            .text_layout
+            .as_ref()
+            .unwrap();
+
+        // line_height should be font_size * 1.2 = 16 * 1.2 = 19.2
+        assert!((layout.line_height - 19.2).abs() < 0.1);
     }
 }

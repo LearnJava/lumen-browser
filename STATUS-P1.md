@@ -1,5 +1,5 @@
 In progress: print-pdf-advanced Phase 3 — margin-box text layout + inline rendering  branch: p1-print-pdf-phase3
-Next step: add TextLayout struct for margin-box measurement and line-breaking  crates/engine/layout/src/page.rs
+Next step: integrate text layout into PageBox + pagination pipeline + Phase 3 tests  crates/engine/layout/src/page.rs:290
 
 Recent merge: svg-layout-advanced Phase 3 ✅ — nested SVG child propagation (SvgRoot now appears in child-bearing boxes), 5 unit tests PASS, 2026-05-30
 
