@@ -337,6 +337,30 @@ pub struct FormInfo {
     pub field_count: usize,
 }
 
+/// Результат попытки отправить форму (HTML5 §4.10.22 form submission algorithm).
+///
+/// При вызове `submit_form(doc, form_id)` функция выполняет constraint validation
+/// для всех submittable контролов в форме:
+/// - Если форма невалидна → возвращает `Invalid` с NodeId-ами всех невалидных элементов
+/// - Если форма валидна → возвращает `Valid` с собранными form data и параметрами отправки
+#[derive(Debug, Clone)]
+pub enum FormSubmitEvent {
+    /// Форма прошла constraint validation — готова к отправке.
+    Valid {
+        /// Значение атрибута `action` (пустая строка если отсутствует).
+        action: String,
+        /// Значение атрибута `method` в нижнем регистре (default: "get").
+        method: String,
+        /// Собранные поля формы: `(name, value)` пары всех submittable контролов.
+        fields: Vec<(String, String)>,
+    },
+    /// Форма не прошла constraint validation — содержит невалидные контролы.
+    Invalid {
+        /// NodeId-ы всех невалидных submittable контролов (в DOM-порядке).
+        invalid_controls: Vec<NodeId>,
+    },
+}
+
 /// Парсинг-режим документа по HTML5 §13.2.6.2 «The insertion mode».
 ///
 /// Решается tree builder-ом по DOCTYPE-токену (см. §13.2.5.1
@@ -1297,6 +1321,58 @@ pub fn invalid_controls_in_form(doc: &Document, form_id: NodeId) -> Vec<NodeId> 
     let mut out = Vec::new();
     collect_invalid_in(doc, form_id, form_id, &mut out);
     out
+}
+
+/// Execute HTML5 form submission algorithm (§4.10.22 «Form submission»).
+///
+/// Performs constraint validation on all submittable controls within `form_id`:
+/// - If any control fails validation → returns `FormSubmitEvent::Invalid` with list of failing controls
+/// - If all pass → returns `FormSubmitEvent::Valid` with collected form data (name-value pairs)
+///
+/// The `action` and `method` attributes are extracted from the form element (both default to
+/// standard HTML5 values: empty action and "get" method respectively).
+///
+/// Form data collection uses DOM attributes (not runtime state); P3 integration should apply
+/// runtime FormState to get user-entered values.
+pub fn submit_form(doc: &Document, form_id: NodeId) -> FormSubmitEvent {
+    // Check if form_id actually points to a form element
+    let form_node = doc.get(form_id);
+    let is_form = form_node
+        .element_name()
+        .map(|q| q.local.eq_ignore_ascii_case("form"))
+        .unwrap_or(false);
+
+    if !is_form {
+        // Not a form element — treat as vacuously valid (no controls to validate)
+        return FormSubmitEvent::Valid {
+            action: String::new(),
+            method: "get".to_string(),
+            fields: Vec::new(),
+        };
+    }
+
+    // Extract action and method from form attributes
+    let action = form_node.get_attr("action").unwrap_or("").to_string();
+    let method = form_node
+        .get_attr("method")
+        .unwrap_or("get")
+        .to_ascii_lowercase();
+
+    // Perform constraint validation
+    if !check_validity_form(doc, form_id) {
+        // Form contains invalid controls — collect them and return Invalid
+        let invalid_controls = invalid_controls_in_form(doc, form_id);
+        return FormSubmitEvent::Invalid { invalid_controls };
+    }
+
+    // Form is valid — collect fields
+    let fields = collect_dom_form_fields(doc, form_id);
+
+    FormSubmitEvent::Valid {
+        action,
+        method,
+        fields,
+    }
 }
 
 fn collect_validity_in(doc: &Document, id: NodeId, form_id: NodeId, all_valid: &mut bool) {
@@ -3281,6 +3357,208 @@ mod tests {
         let invalid = invalid_controls_in_form(&doc, form);
         assert_eq!(invalid.len(), 1);
         assert_eq!(invalid[0], inp2);
+    }
+
+    // ──────── submit_form (HTML5 §4.10.22) ────────
+
+    #[test]
+    fn submit_form_valid_single_field() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(form).data {
+            attrs.push(Attribute { name: QualName::html("action"), value: "/submit".into() });
+            attrs.push(Attribute { name: QualName::html("method"), value: "POST".into() });
+        }
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("name"), value: "username".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "alice".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp);
+
+        let result = submit_form(&doc, form);
+        if let FormSubmitEvent::Valid { action, method, fields } = result {
+            assert_eq!(action, "/submit");
+            assert_eq!(method, "post"); // lowercase
+            assert_eq!(fields.len(), 1);
+            assert_eq!(fields[0], ("username".to_string(), "alice".to_string()));
+        } else {
+            panic!("Expected Valid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn submit_form_valid_multiple_fields() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        doc.append_child(doc.root(), form);
+
+        // Field 1: text input
+        let inp1 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp1).data {
+            attrs.push(Attribute { name: QualName::html("name"), value: "field1".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "value1".into() });
+        }
+        doc.append_child(form, inp1);
+
+        // Field 2: checkbox (unchecked, should not be included)
+        let inp2 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp2).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "checkbox".into() });
+            attrs.push(Attribute { name: QualName::html("name"), value: "field2".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "checked_val".into() });
+        }
+        doc.append_child(form, inp2);
+
+        // Field 3: checkbox (checked)
+        let inp3 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp3).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "checkbox".into() });
+            attrs.push(Attribute { name: QualName::html("name"), value: "field3".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "checked_val".into() });
+            attrs.push(Attribute { name: QualName::html("checked"), value: "".into() });
+        }
+        doc.append_child(form, inp3);
+
+        let result = submit_form(&doc, form);
+        if let FormSubmitEvent::Valid { fields, .. } = result {
+            assert_eq!(fields.len(), 2); // only field1 and field3
+            assert_eq!(fields[0], ("field1".to_string(), "value1".to_string()));
+            assert_eq!(fields[1], ("field3".to_string(), "checked_val".to_string()));
+        } else {
+            panic!("Expected Valid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn submit_form_invalid_required_field() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("required"), value: "".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp);
+
+        let result = submit_form(&doc, form);
+        if let FormSubmitEvent::Invalid { invalid_controls } = result {
+            assert_eq!(invalid_controls.len(), 1);
+            assert_eq!(invalid_controls[0], inp);
+        } else {
+            panic!("Expected Invalid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn submit_form_invalid_email() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("type"), value: "email".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "not-an-email".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp);
+
+        let result = submit_form(&doc, form);
+        if let FormSubmitEvent::Invalid { invalid_controls } = result {
+            assert_eq!(invalid_controls.len(), 1);
+            assert_eq!(invalid_controls[0], inp);
+        } else {
+            panic!("Expected Invalid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn submit_form_multiple_invalid_fields() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+
+        // Invalid field 1: required but empty
+        let inp1 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp1).data {
+            attrs.push(Attribute { name: QualName::html("required"), value: "".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "".into() });
+        }
+
+        // Invalid field 2: too short
+        let inp2 = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp2).data {
+            attrs.push(Attribute { name: QualName::html("minlength"), value: "5".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "hi".into() });
+        }
+
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp1);
+        doc.append_child(form, inp2);
+
+        let result = submit_form(&doc, form);
+        if let FormSubmitEvent::Invalid { invalid_controls } = result {
+            assert_eq!(invalid_controls.len(), 2);
+            assert_eq!(invalid_controls[0], inp1);
+            assert_eq!(invalid_controls[1], inp2);
+        } else {
+            panic!("Expected Invalid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn submit_form_defaults_action_and_method() {
+        let mut doc = Document::new();
+        let form = doc.create_element(QualName::html("form"));
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("name"), value: "f".into() });
+            attrs.push(Attribute { name: QualName::html("value"), value: "v".into() });
+        }
+        doc.append_child(doc.root(), form);
+        doc.append_child(form, inp);
+
+        let result = submit_form(&doc, form);
+        if let FormSubmitEvent::Valid { action, method, .. } = result {
+            assert_eq!(action, ""); // default empty action
+            assert_eq!(method, "get"); // default get
+        } else {
+            panic!("Expected Valid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn submit_form_non_form_element() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        let inp = doc.create_element(QualName::html("input"));
+        if let NodeData::Element { attrs, .. } = &mut doc.get_mut(inp).data {
+            attrs.push(Attribute { name: QualName::html("required"), value: "".into() });
+        }
+        doc.append_child(doc.root(), div);
+        doc.append_child(div, inp);
+
+        // submit_form called on non-form element should treat as vacuously valid
+        let result = submit_form(&doc, div);
+        if let FormSubmitEvent::Valid { fields, .. } = result {
+            assert_eq!(fields.len(), 0);
+        } else {
+            panic!("Expected Valid but got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_form_submit_event_valid_variant() {
+        let event = FormSubmitEvent::Valid {
+            action: "/test".to_string(),
+            method: "post".to_string(),
+            fields: vec![],
+        };
+        if let FormSubmitEvent::Valid { action, .. } = event {
+            assert_eq!(action, "/test");
+        } else {
+            panic!("Expected Valid variant");
+        }
     }
 
     // ──────── EditInputType ────────

@@ -1,5 +1,5 @@
-In progress: accessibility-forms-validation Phase 3  branch: worktree-p1-accessibility-forms-validation-phase3
-Next step: submit algorithm integration + form submission handling  crates/engine/dom/src/document.rs
+In progress: none
+Next task: svg-layout-advanced Phase 1
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.
@@ -12,7 +12,7 @@ Note: fts-omnibox (Wave 1, P3-задача по домену) перенесен
 Note: Wave 2 очередь содержит P2-задачи (extras-p2, avif-decoder, webgl-context, font-hinting, svg-rasterizer) — они пока не для P1. Wave 2 P3-задачи (http2-client, preconnect-hints) тоже в P3 очереди. P1 берёт следующее из Phase 1/Phase 2 своих задач.
 
 Recent:
-- accessibility-forms-validation (6.2, Phase 2): find_validation_error() enhanced to use element_validity() for complete constraint validation (valueMissing/typeMismatch/tooLong/tooShort/rangeUnderflow/rangeOverflow/stepMismatch), find_all_validation_errors() for collecting all invalid controls, validation_error_message() with specialized error messages for each validation type (required/email/url/range/pattern), 5 new validation type tests (required/email/url/underflow/overflow), 15 tests PASS, clippy clean 2026-05-28
+- accessibility-forms-validation (6.2, Phase 3): FormSubmitEvent enum (Valid/Invalid variants), submit_form() function executing HTML5 §4.10.22 form submission algorithm with constraint validation, 8 comprehensive unit tests (valid/invalid scenarios, field collection, defaults), 157 tests PASS, clippy clean 2026-05-28 — P3 dispatch integration pending
 - transition-advanced (6.7, Phase 2): fill-mode support (Backwards/Forwards/Both applied in delay/completion periods), interrupted transitions (captured value at interruption for smooth continuation), grouped property expansion (margin/padding/border/border-radius → component properties), 3 new unit tests (fill_mode_forwards, fill_mode_backwards, interrupted_detection), 90 tests PASS, clippy clean 2026-05-28
 - ime-input (6.3, Phase 1): IME composition events infrastructure — CompositionEventType/CompositionData/CompositionEvent structures, CompositionState in Document, public API (begin_composition/update_composition/end_composition/get_composition), 8 unit tests (composition lifecycle, serialization, full IME sequence), 121 tests PASS, clippy clean 2026-05-28 — P3 shell integration pending
 - accessibility-forms-validation (6.2, Phase 1): ValidityState integration in accessibility tree, compute_state() reads element_validity() to populate AXNode.invalid, aria-invalid="true" preserved as explicit override, 8 unit tests (required/email/length/valid scenarios), 125 tests PASS, clippy clean 2026-05-28
