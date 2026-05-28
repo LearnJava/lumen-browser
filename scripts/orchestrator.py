@@ -29,6 +29,20 @@ session_id захватывается из первого stream-json событ
 - если session_id нет (сессия не успела стартовать) — сбросит файл, начнёт заново
 
 Файлы .session-*.json добавлены в .gitignore.
+
+Fallback на резервную модель при rate limit
+-------------------------------------------
+По умолчанию `claude` запускается без `--model` (CLI берёт настроенную модель,
+обычно Sonnet/Opus). При первом детекте rate limit оркестратор:
+- НЕ ставит паузу 5 минут;
+- запоминает fallback-модель `claude-haiku-4-5` для всех последующих вызовов
+  этого разработчика в рамках текущего процесса оркестратора;
+- печатает заметный баннер в лог, чтобы пользователь видел переключение.
+
+Если и Haiku упирается в лимит — тогда уже срабатывает стандартная пауза 5 минут
+(квоты у Haiku разделены, обычно гораздо щедрее).
+
+Сбросить fallback можно только перезапуском оркестратора.
 """
 
 import argparse
@@ -340,16 +354,21 @@ def format_event(event: dict) -> list[str]:
 
 RATE_LIMIT_RE = re.compile(r"resets?\s+(\d{1,2}:\d{2}(?:am|pm)?)", re.IGNORECASE)
 
+# Резервная модель, на которую переключаемся при rate limit основной.
+FALLBACK_MODEL = "claude-haiku-4-5"
+
 
 def run_claude(
     developer: str,
     prompt: str,
     task_number: int = 0,
     resume_session_id: str | None = None,
-) -> tuple[int, bool]:
-    """Запустить claude и показать прогресс. Возвращает (exit_code, rate_limited).
+    model: str | None = None,
+) -> tuple[int, bool, bool]:
+    """Запустить claude и показать прогресс. Возвращает (exit_code, rate_limited, auth_error).
 
     При resume_session_id использует --resume <id> для продолжения прерванной сессии.
+    При model передаёт `--model <id>` в CLI (используется для fallback на Haiku).
     """
     global _active_process
 
@@ -359,10 +378,15 @@ def run_claude(
         "--verbose",
         "--output-format", "stream-json",
     ]
+    if model:
+        cmd += ["--model", model]
     if resume_session_id:
         cmd += ["--resume", resume_session_id, "-p", prompt]
     else:
         cmd += ["-p", prompt]
+
+    if model:
+        log(developer, f"  Модель: {model}")
 
     process = subprocess.Popen(
         cmd,
@@ -478,10 +502,25 @@ def wait_for_rate_limit(developer: str):
     log(developer, "Пауза завершена, продолжаю.")
 
 
+def announce_fallback(developer: str, reason: str) -> None:
+    """Печатает заметный баннер о переключении на резервную модель."""
+    border = "=" * 60
+    log(developer, "")
+    log(developer, border)
+    log(developer, "  RATE LIMIT основной модели")
+    log(developer, f"  Причина: {reason}")
+    log(developer, f"  Переключаюсь на резервную модель: {FALLBACK_MODEL}")
+    log(developer, "  Следующий вызов claude пойдёт через Haiku БЕЗ паузы.")
+    log(developer, "  Сбросить fallback можно только перезапуском оркестратора.")
+    log(developer, border)
+    log(developer, "")
+
+
 def run_task_loop(developer: str, max_tasks: int = 0):
     """Цикл задач для одного разработчика."""
     stop_file = stop_file_path(developer)
     task_count = 0
+    fallback_model: str | None = None  # выставляется при первом rate limit
 
     log(developer, f"Старт. Проект: {PROJECT_DIR}")
 
@@ -508,7 +547,8 @@ def run_task_loop(developer: str, max_tasks: int = 0):
             )
             try:
                 exit_code, rate_limited, auth_error = run_claude(
-                    developer, resume_prompt, task_count, resume_session_id=session_id
+                    developer, resume_prompt, task_count,
+                    resume_session_id=session_id, model=fallback_model,
                 )
             except FileNotFoundError:
                 log(developer, "claude не найден в PATH.")
@@ -523,9 +563,15 @@ def run_task_loop(developer: str, max_tasks: int = 0):
                 clear_session_state(developer)
                 log(developer, f"Задача #{task_count} (возобновлённая) завершена.")
             elif rate_limited:
-                # Оставить файл состояния — попробуем снова после паузы
-                wait_for_rate_limit(developer)
                 task_count -= 1
+                if fallback_model is None:
+                    fallback_model = FALLBACK_MODEL
+                    announce_fallback(developer, "лимит во время возобновления сессии")
+                    set_jobstatus(developer, "fallback model", fallback_model)
+                else:
+                    log(developer, f"Резервная модель {fallback_model} тоже исчерпана.")
+                    # Оставить файл состояния — попробуем снова после паузы
+                    wait_for_rate_limit(developer)
             elif auth_error:
                 log(developer, "Auth error при возобновлении. Пауза 60 сек...")
                 time.sleep(60)
@@ -576,7 +622,9 @@ def run_task_loop(developer: str, max_tasks: int = 0):
 
         log(developer, "Запуск claude...")
         try:
-            exit_code, rate_limited, auth_error = run_claude(developer, prompt, task_number=task_count)
+            exit_code, rate_limited, auth_error = run_claude(
+                developer, prompt, task_number=task_count, model=fallback_model,
+            )
         except FileNotFoundError:
             log(developer, "claude не найден в PATH.")
             clear_session_state(developer)
@@ -588,8 +636,16 @@ def run_task_loop(developer: str, max_tasks: int = 0):
 
         if rate_limited and exit_code != 0:
             task_count -= 1  # Не считать неудачную попытку как задачу
-            # Оставить файл состояния с session_id — пригодится при возобновлении после паузы
-            wait_for_rate_limit(developer)
+            if fallback_model is None:
+                # Первый rate limit — переключаемся на Haiku, повторяем без паузы
+                fallback_model = FALLBACK_MODEL
+                announce_fallback(developer, f"задача #{task_count + 1}")
+                set_jobstatus(developer, "fallback model", fallback_model)
+            else:
+                # И Haiku уже исчерпан — стандартная пауза 5 минут
+                log(developer, f"Резервная модель {fallback_model} тоже исчерпана.")
+                # Оставить файл состояния с session_id — пригодится при возобновлении после паузы
+                wait_for_rate_limit(developer)
         elif auth_error and exit_code != 0:
             task_count -= 1
             clear_session_state(developer)
