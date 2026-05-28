@@ -1,0 +1,1258 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Habr Heavy — Benchmark Test Page</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #f5f5f5;
+      color: #222;
+    }
+    header {
+      background: white;
+      border-bottom: 1px solid #ddd;
+      padding: 12px 20px;
+      position: sticky;
+      top: 0;
+      z-index: 100;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .header-content {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .logo {
+      font-size: 24px;
+      font-weight: bold;
+      color: #ff6b6b;
+    }
+    .search-bar {
+      flex: 1;
+      margin: 0 20px;
+      padding: 8px 12px;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      background: white;
+    }
+    .nav-link {
+      padding: 8px 16px;
+      margin-left: 8px;
+      text-decoration: none;
+      color: #666;
+      font-size: 14px;
+    }
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+      display: grid;
+      grid-template-columns: 1fr 280px;
+      gap: 20px;
+      padding: 20px;
+    }
+    .feed { display: flex; flex-direction: column; gap: 16px; }
+    .sidebar {
+      position: sticky;
+      top: 70px;
+      height: fit-content;
+    }
+    .widget {
+      background: white;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 16px;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+    }
+    .widget-title {
+      font-size: 16px;
+      font-weight: bold;
+      margin-bottom: 12px;
+      color: #222;
+    }
+    .post {
+      background: white;
+      border-radius: 8px;
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(0,0,0,0.05);
+      transition: box-shadow 0.2s;
+    }
+    .post:hover { box-shadow: 0 2px 8px rgba(0,0,0,0.1); }
+    .post-header {
+      padding: 12px 16px;
+      border-bottom: 1px solid #f0f0f0;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+    }
+    .avatar {
+      width: 32px;
+      height: 32px;
+      border-radius: 50%;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      flex-shrink: 0;
+    }
+    .post-author {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .author-name { font-size: 14px; font-weight: bold; color: #222; }
+    .post-time { font-size: 12px; color: #999; }
+    .post-cover {
+      width: 100%;
+      height: 240px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    .post-content {
+      padding: 16px;
+    }
+    .post-title {
+      font-size: 18px;
+      font-weight: bold;
+      margin-bottom: 8px;
+      color: #222;
+      line-height: 1.4;
+    }
+    .post-preview {
+      font-size: 14px;
+      color: #666;
+      margin-bottom: 12px;
+      line-height: 1.5;
+      max-height: 60px;
+      overflow: hidden;
+      display: -webkit-box;
+      -webkit-line-clamp: 3;
+      -webkit-box-orient: vertical;
+    }
+    .post-meta {
+      display: flex;
+      gap: 16px;
+      font-size: 12px;
+      color: #999;
+      margin-bottom: 12px;
+    }
+    .meta-item {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+    }
+    .post-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    .tag {
+      display: inline-block;
+      padding: 4px 8px;
+      background: #f0f0f0;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #666;
+      text-decoration: none;
+    }
+    .tag:hover { background: #e0e0e0; }
+    .comments-section {
+      border-top: 1px solid #f0f0f0;
+      padding-top: 12px;
+    }
+    .comment {
+      margin-bottom: 12px;
+      padding: 12px;
+      background: #f9f9f9;
+      border-radius: 4px;
+      border-left: 2px solid #667eea;
+    }
+    .comment-author {
+      font-weight: bold;
+      font-size: 12px;
+      color: #222;
+      margin-bottom: 4px;
+    }
+    .comment-text {
+      font-size: 12px;
+      color: #666;
+      line-height: 1.4;
+    }
+    .sidebar-item {
+      padding: 12px;
+      background: #f9f9f9;
+      border-radius: 4px;
+      margin-bottom: 8px;
+      font-size: 12px;
+      color: #666;
+    }
+    .sidebar-item strong {
+      display: block;
+      color: #222;
+      margin-bottom: 4px;
+    }
+  </style>
+</head>
+<body>
+  <!-- Header -->
+  <header>
+    <div class="header-content">
+      <div class="logo">Habr</div>
+      <input type="text" class="search-bar" placeholder="Поиск..." />
+      <a href="#" class="nav-link">Новое</a>
+      <a href="#" class="nav-link">Лучшее</a>
+      <a href="#" class="nav-link">Мои публикации</a>
+      <a href="#" class="nav-link">Вход</a>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <div class="container">
+    <!-- Feed -->
+    <div class="feed">
+      <!-- Generate 40 posts -->
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Иван Петров</div>
+            <div class="post-time">1 час назад</div>
+          </div>
+        </div>
+        <div class="post-cover"></div>
+        <div class="post-content">
+          <div class="post-title">Оптимизация Web-приложений: практическое руководство</div>
+          <div class="post-preview">В этой статье мы разберемся с основными принципами оптимизации веб-приложений. Узнаем о лучших практиках для повышения производительности, улучшения SEO и обеспечения лучшего пользовательского опыта...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 5 минут чтения</div>
+            <div class="meta-item">👁 1234 просмотров</div>
+            <div class="meta-item">💬 23 комментария</div>
+            <div class="meta-item">⭐ 89 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">JavaScript</a>
+            <a href="#" class="tag">Оптимизация</a>
+            <a href="#" class="tag">Web</a>
+            <a href="#" class="tag">Производительность</a>
+          </div>
+          <div class="comments-section">
+            <div class="comment">
+              <div class="comment-author">Алексей Смирнов</div>
+              <div class="comment-text">Спасибо за подробное объяснение! Именно то, что я искал.</div>
+            </div>
+            <div class="comment">
+              <div class="comment-author">Мария Волкова</div>
+              <div class="comment-text">+1 к комментарию выше. Очень полезная информация для моего проекта.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Post 2 -->
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Екатерина Новикова</div>
+            <div class="post-time">2 часа назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Микросервисная архитектура: избегаем распространённых ошибок</div>
+          <div class="post-preview">Когда команда решает переходить на микросервисы, часто совершаются одни и те же ошибки. Давайте разберёмся, какие это ошибки и как их избежать на практике...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 8 минут чтения</div>
+            <div class="meta-item">👁 2156 просмотров</div>
+            <div class="meta-item">💬 45 комментариев</div>
+            <div class="meta-item">⭐ 156 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Архитектура</a>
+            <a href="#" class="tag">Микросервисы</a>
+            <a href="#" class="tag">Backend</a>
+            <a href="#" class="tag">DevOps</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Post 3 -->
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Сергей Кузнецов</div>
+            <div class="post-time">3 часа назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Kubernetes для начинающих: полное руководство</div>
+          <div class="post-preview">Kubernetes может показаться сложным для новичков, но на самом деле всё проще, чем кажется. В этой статье мы пройдём через все основные концепции...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 10 минут чтения</div>
+            <div class="meta-item">👁 3245 просмотров</div>
+            <div class="meta-item">💬 67 комментариев</div>
+            <div class="meta-item">⭐ 234 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Kubernetes</a>
+            <a href="#" class="tag">Docker</a>
+            <a href="#" class="tag">DevOps</a>
+            <a href="#" class="tag">Контейнеризация</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Post 4 -->
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Наталья Морозова</div>
+            <div class="post-time">4 часа назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">React Hooks: глубокое погружение в state и effects</div>
+          <div class="post-preview">Hooks изменили способ, которым мы пишем React-компоненты. Давайте разберемся, как они работают под капотом и как их правильно использовать...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 7 минут чтения</div>
+            <div class="meta-item">👁 2890 просмотров</div>
+            <div class="meta-item">💬 56 комментариев</div>
+            <div class="meta-item">⭐ 189 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">React</a>
+            <a href="#" class="tag">JavaScript</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">Hooks</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Post 5 -->
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Дмитрий Орлов</div>
+            <div class="post-time">5 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Python для анализа данных: NumPy и Pandas</div>
+          <div class="post-preview">NumPy и Pandas — это основные инструменты для работы с данными на Python. Узнаем, как с их помощью обрабатывать большие объёмы информации...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 9 минут чтения</div>
+            <div class="meta-item">👁 1567 просмотров</div>
+            <div class="meta-item">💬 34 комментария</div>
+            <div class="meta-item">⭐ 123 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Python</a>
+            <a href="#" class="tag">Data Science</a>
+            <a href="#" class="tag">NumPy</a>
+            <a href="#" class="tag">Pandas</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Post 6-10: Repeat with variations -->
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Виктор Козлов</div>
+            <div class="post-time">6 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #ff9a56 0%, #ff6a88 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Безопасность веб-приложений: OWASP Top 10</div>
+          <div class="post-preview">Каждый разработчик должен понимать основные уязвимости в веб-приложениях. Разберем OWASP Top 10 и как защитить свой код...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 11 минут чтения</div>
+            <div class="meta-item">👁 4123 просмотров</div>
+            <div class="meta-item">💬 78 комментариев</div>
+            <div class="meta-item">⭐ 267 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Безопасность</a>
+            <a href="#" class="tag">OWASP</a>
+            <a href="#" class="tag">Backend</a>
+            <a href="#" class="tag">Web</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Оксана Павлова</div>
+            <div class="post-time">7 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">GraphQL vs REST: сравнение подходов</div>
+          <div class="post-preview">GraphQL набирает популярность, но это не значит, что REST мертв. Разберемся с плюсами и минусами обоих подходов...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 8 минут чтения</div>
+            <div class="meta-item">👁 2345 просмотров</div>
+            <div class="meta-item">💬 42 комментария</div>
+            <div class="meta-item">⭐ 145 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">GraphQL</a>
+            <a href="#" class="tag">REST</a>
+            <a href="#" class="tag">API</a>
+            <a href="#" class="tag">Backend</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Юрий Александров</div>
+            <div class="post-time">8 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #fccb90 0%, #d57eeb 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Machine Learning с TensorFlow: первые шаги</div>
+          <div class="post-preview">TensorFlow — один из самых популярных фреймворков для машинного обучения. Начнем с базовых концепций и простых примеров...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 12 минут чтения</div>
+            <div class="meta-item">👁 1890 просмотров</div>
+            <div class="meta-item">💬 28 комментариев</div>
+            <div class="meta-item">⭐ 98 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Machine Learning</a>
+            <a href="#" class="tag">TensorFlow</a>
+            <a href="#" class="tag">AI</a>
+            <a href="#" class="tag">Python</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Елена Федорова</div>
+            <div class="post-time">9 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #6dd5ed 0%, #2193b0 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Git и GitHub: продвинутые техники</div>
+          <div class="post-preview">Многие используют git только для коммитов и пушей. Давайте разберемся с продвинутыми техниками для лучшей организации работы...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 6 минут чтения</div>
+            <div class="meta-item">👁 3456 просмотров</div>
+            <div class="meta-item">💬 51 комментарий</div>
+            <div class="meta-item">⭐ 187 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Git</a>
+            <a href="#" class="tag">GitHub</a>
+            <a href="#" class="tag">DevOps</a>
+            <a href="#" class="tag">Инструменты</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Павел Сидоров</div>
+            <div class="post-time">10 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #ff5f87 0%, #ff6b6b 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Тестирование: unit, интеграционные и E2E тесты</div>
+          <div class="post-preview">Хорошее тестирование — ключ к качественному коду. Разберемся с разными типами тестов и как их правильно писать...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 9 минут чтения</div>
+            <div class="meta-item">👁 2678 просмотров</div>
+            <div class="meta-item">💬 39 комментариев</div>
+            <div class="meta-item">⭐ 134 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Тестирование</a>
+            <a href="#" class="tag">Testing</a>
+            <a href="#" class="tag">QA</a>
+            <a href="#" class="tag">Best Practices</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Posts 11-40: More content for realistic benchmark -->
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Анна Лебедева</div>
+            <div class="post-time">11 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Type System в TypeScript: от базика до про</div>
+          <div class="post-preview">TypeScript помогает писать безопаснее, но его система типов может быть сложной. Давайте разберёмся со всеми её возможностями...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 10 минут чтения</div>
+            <div class="meta-item">👁 2134 просмотров</div>
+            <div class="meta-item">💬 47 комментариев</div>
+            <div class="meta-item">⭐ 156 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">TypeScript</a>
+            <a href="#" class="tag">JavaScript</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">Types</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Игорь Романов</div>
+            <div class="post-time">12 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #fccb90 0%, #d57eeb 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Асинхронное программирование на JavaScript: Promises и Async/Await</div>
+          <div class="post-preview">Асинхронность — один из самых важных концептов в JavaScript. Разберем Promises, async/await и как их правильно использовать...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 8 минут чтения</div>
+            <div class="meta-item">👁 1956 просмотров</div>
+            <div class="meta-item">💬 33 комментария</div>
+            <div class="meta-item">⭐ 112 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">JavaScript</a>
+            <a href="#" class="tag">Async</a>
+            <a href="#" class="tag">Promises</a>
+            <a href="#" class="tag">Frontend</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Мария Рыбакова</div>
+            <div class="post-time">13 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #ff9a56 0%, #ff6a88 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Redis: использование и оптимизация</div>
+          <div class="post-preview">Redis — отличный инструмент для кэширования. Научимся использовать его правильно и оптимизировать производительность...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 7 минут чтения</div>
+            <div class="meta-item">👁 2345 просмотров</div>
+            <div class="meta-item">💬 41 комментарий</div>
+            <div class="meta-item">⭐ 143 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Redis</a>
+            <a href="#" class="tag">Кэширование</a>
+            <a href="#" class="tag">Backend</a>
+            <a href="#" class="tag">Database</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Константин Соколов</div>
+            <div class="post-time">14 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Работа с API: REST, SOAP, WebSocket</div>
+          <div class="post-preview">Существует множество способов взаимодействия приложений. Разберемся со всеми основными протоколами и их особенностями...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 9 минут чтения</div>
+            <div class="meta-item">👁 2876 просмотров</div>
+            <div class="meta-item">💬 52 комментария</div>
+            <div class="meta-item">⭐ 178 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">API</a>
+            <a href="#" class="tag">REST</a>
+            <a href="#" class="tag">WebSocket</a>
+            <a href="#" class="tag">Backend</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Валерия Чернова</div>
+            <div class="post-time">15 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Docker: контейнеризация приложений</div>
+          <div class="post-preview">Docker упростил развертывание приложений. Разберемся, как использовать контейнеры правильно и получить максимум пользы...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 10 минут чтения</div>
+            <div class="meta-item">👁 3123 просмотров</div>
+            <div class="meta-item">💬 64 комментария</div>
+            <div class="meta-item">⭐ 212 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Docker</a>
+            <a href="#" class="tag">Контейнеризация</a>
+            <a href="#" class="tag">DevOps</a>
+            <a href="#" class="tag">Инфраструктура</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Николай Волков</div>
+            <div class="post-time">16 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">WebAssembly: будущее веб-приложений</div>
+          <div class="post-preview">WebAssembly позволяет запускать код с близкой к машинной производительностью в браузере. Изучим, как его использовать...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 11 минут чтения</div>
+            <div class="meta-item">👁 1876 просмотров</div>
+            <div class="meta-item">💬 29 комментариев</div>
+            <div class="meta-item">⭐ 94 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">WebAssembly</a>
+            <a href="#" class="tag">WASM</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">Performance</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Светлана Морозова</div>
+            <div class="post-time">17 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">SQL: от базика до оптимизации запросов</div>
+          <div class="post-preview">SQL по-прежнему королевский инструмент для работы с данными. Научимся писать эффективные запросы и оптимизировать производительность...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 12 минут чтения</div>
+            <div class="meta-item">👁 2645 просмотров</div>
+            <div class="meta-item">💬 57 комментариев</div>
+            <div class="meta-item">⭐ 201 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">SQL</a>
+            <a href="#" class="tag">Database</a>
+            <a href="#" class="tag">Backend</a>
+            <a href="#" class="tag">Optimization</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Леонид Беляев</div>
+            <div class="post-time">18 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">CI/CD: автоматизация разработки</div>
+          <div class="post-preview">Непрерывная интеграция и доставка — стандарт современной разработки. Рассмотрим инструменты и лучшие практики...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 8 минут чтения</div>
+            <div class="meta-item">👁 2234 просмотров</div>
+            <div class="meta-item">💬 44 комментария</div>
+            <div class="meta-item">⭐ 159 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">CI/CD</a>
+            <a href="#" class="tag">DevOps</a>
+            <a href="#" class="tag">Автоматизация</a>
+            <a href="#" class="tag">GitHub Actions</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Галина Степанова</div>
+            <div class="post-time">19 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Vue.js: фреймворк для создания интерфейсов</div>
+          <div class="post-preview">Vue.js предоставляет простой и мощный способ для создания интерактивных пользовательских интерфейсов...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 9 минут чтения</div>
+            <div class="meta-item">👁 1976 просмотров</div>
+            <div class="meta-item">💬 38 комментариев</div>
+            <div class="meta-item">⭐ 128 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Vue.js</a>
+            <a href="#" class="tag">JavaScript</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">Framework</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Тимур Сафин</div>
+            <div class="post-time">20 часов назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #ff5f87 0%, #ff6b6b 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Angular: мощный фреймворк для web-приложений</div>
+          <div class="post-preview">Angular — полнофункциональный фреймворк для создания сложных веб-приложений. Разберемся с его архитектурой и возможностями...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 13 минут чтения</div>
+            <div class="meta-item">👁 2567 просмотров</div>
+            <div class="meta-item">💬 61 комментарий</div>
+            <div class="meta-item">⭐ 195 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Angular</a>
+            <a href="#" class="tag">JavaScript</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">Framework</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Раиса Козлова</div>
+            <div class="post-time">21 часа назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Responsive Design: создание адаптивных сайтов</div>
+          <div class="post-preview">Современные пользователи переходят с разных устройств. Научимся делать сайты, которые красиво выглядят везде...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 7 минут чтения</div>
+            <div class="meta-item">👁 2876 просмотров</div>
+            <div class="meta-item">💬 48 комментариев</div>
+            <div class="meta-item">⭐ 167 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Responsive Design</a>
+            <a href="#" class="tag">CSS</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">Mobile</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Василий Архипов</div>
+            <div class="post-time">22 часа назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #fccb90 0%, #d57eeb 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Node.js: JavaScript на сервере</div>
+          <div class="post-preview">Node.js позволяет использовать JavaScript для серверной разработки. Разберемся с основами и создадим первый сервер...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 10 минут чтения</div>
+            <div class="meta-item">👁 2345 просмотров</div>
+            <div class="meta-item">💬 53 комментария</div>
+            <div class="meta-item">⭐ 189 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Node.js</a>
+            <a href="#" class="tag">JavaScript</a>
+            <a href="#" class="tag">Backend</a>
+            <a href="#" class="tag">Server</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Инна Власова</div>
+            <div class="post-time">23 часа назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #6dd5ed 0%, #2193b0 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Express.js: веб-фреймворк для Node.js</div>
+          <div class="post-preview">Express.js упрощает создание веб-приложений на Node.js. Научимся быстро создавать мощные API...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 8 минут чтения</div>
+            <div class="meta-item">👁 1876 просмотров</div>
+            <div class="meta-item">💬 35 комментариев</div>
+            <div class="meta-item">⭐ 116 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Express.js</a>
+            <a href="#" class="tag">Node.js</a>
+            <a href="#" class="tag">Backend</a>
+            <a href="#" class="tag">Web Framework</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Максим Третьяков</div>
+            <div class="post-time">24 часа назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">MongoDB: NoSQL база данных</div>
+          <div class="post-preview">MongoDB предоставляет гибкий способ хранения данных. Разберемся с её особенностями и лучшими практиками...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 9 минут чтения</div>
+            <div class="meta-item">👁 2123 просмотров</div>
+            <div class="meta-item">💬 41 комментарий</div>
+            <div class="meta-item">⭐ 147 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">MongoDB</a>
+            <a href="#" class="tag">NoSQL</a>
+            <a href="#" class="tag">Database</a>
+            <a href="#" class="tag">Backend</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Полина Сергеева</div>
+            <div class="post-time">1 день назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Tailwind CSS: быстрое создание интерфейсов</div>
+          <div class="post-preview">Tailwind CSS меняет способ создания стилей. Узнаем, почему это так популярно и как его эффективно использовать...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 7 минут чтения</div>
+            <div class="meta-item">👁 3234 просмотров</div>
+            <div class="meta-item">💬 72 комментария</div>
+            <div class="meta-item">⭐ 234 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Tailwind CSS</a>
+            <a href="#" class="tag">CSS</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">UI Design</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Артём Петров</div>
+            <div class="post-time">1 день назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Web Performance: оптимизация скорости загрузки</div>
+          <div class="post-preview">Быстрые сайты повышают конверсию. Разберемся, как измерить и улучшить производительность веб-приложения...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 11 минут чтения</div>
+            <div class="meta-item">👁 2876 просмотров</div>
+            <div class="meta-item">💬 59 комментариев</div>
+            <div class="meta-item">⭐ 213 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Performance</a>
+            <a href="#" class="tag">Web</a>
+            <a href="#" class="tag">Optimization</a>
+            <a href="#" class="tag">Frontend</a>
+          </div>
+        </div>
+      </div>
+
+      <!-- Posts 26-40 -->
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Юлия Иванова</div>
+            <div class="post-time">1 день назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #ff9a56 0%, #ff6a88 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Фронтенд тестирование: Jest и Vitest</div>
+          <div class="post-preview">Хорошее покрытие тестами — залог надёжного кода. Разберемся с популярными фреймворками для тестирования...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 8 минут чтения</div>
+            <div class="meta-item">👁 1745 просмотров</div>
+            <div class="meta-item">💬 32 комментария</div>
+            <div class="meta-item">⭐ 108 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Testing</a>
+            <a href="#" class="tag">Jest</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">JavaScript</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Кирилл Морозов</div>
+            <div class="post-time">1 день назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Webpack: модульный bundler для веб-приложений</div>
+          <div class="post-preview">Webpack помогает организовать и оптимизировать код. Научимся его правильно конфигурировать...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 10 минут чтения</div>
+            <div class="meta-item">👁 1987 просмотров</div>
+            <div class="meta-item">💬 36 комментариев</div>
+            <div class="meta-item">⭐ 124 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Webpack</a>
+            <a href="#" class="tag">Build Tools</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">JavaScript</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Жанна Федорова</div>
+            <div class="post-time">1 день назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #fccb90 0%, #d57eeb 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Sass/SCSS: мощный препроцессор CSS</div>
+          <div class="post-preview">Sass делает CSS более мощным и удобным. Разберемся с переменными, миксинами и другими возможностями...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 6 минут чтения</div>
+            <div class="meta-item">👁 2134 просмотров</div>
+            <div class="meta-item">💬 38 комментариев</div>
+            <div class="meta-item">⭐ 135 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Sass</a>
+            <a href="#" class="tag">CSS</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">Preprocessor</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Борис Сафин</div>
+            <div class="post-time">1 день назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #6dd5ed 0%, #2193b0 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Next.js: фреймворк для React приложений</div>
+          <div class="post-preview">Next.js предоставляет отличный DX для создания React приложений. Узнаем о его мощных возможностях...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 9 минут чтения</div>
+            <div class="meta-item">👁 3456 просмотров</div>
+            <div class="meta-item">💬 67 комментариев</div>
+            <div class="meta-item">⭐ 245 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Next.js</a>
+            <a href="#" class="tag">React</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">Framework</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Дарья Смирнова</div>
+            <div class="post-time">2 дня назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Nuxt.js: фреймворк для Vue приложений</div>
+          <div class="post-preview">Nuxt.js упрощает разработку Vue приложений. Рассмотрим его особенности и преимущества...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 8 минут чтения</div>
+            <div class="meta-item">👁 1654 просмотров</div>
+            <div class="meta-item">💬 29 комментариев</div>
+            <div class="meta-item">⭐ 97 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Nuxt.js</a>
+            <a href="#" class="tag">Vue.js</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">Framework</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Эдуард Козлов</div>
+            <div class="post-time">2 дня назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Progressive Web Apps: приложения нового поколения</div>
+          <div class="post-preview">PWA позволяют веб-приложениям работать как нативные. Узнаем, что это такое и как их создавать...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 10 минут чтения</div>
+            <div class="meta-item">👁 2234 просмотров</div>
+            <div class="meta-item">💬 44 комментария</div>
+            <div class="meta-item">⭐ 167 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">PWA</a>
+            <a href="#" class="tag">Web Apps</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">Mobile</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Тамара Лебедева</div>
+            <div class="post-time">2 дня назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #a8edea 0%, #fed6e3 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Web Components: переиспользуемые компоненты</div>
+          <div class="post-preview">Web Components позволяют создавать полностью переиспользуемые компоненты. Разберемся с их использованием...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 7 минут чтения</div>
+            <div class="meta-item">👁 1876 просмотров</div>
+            <div class="meta-item">💬 33 комментария</div>
+            <div class="meta-item">⭐ 119 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Web Components</a>
+            <a href="#" class="tag">JavaScript</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">Components</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Роман Архипов</div>
+            <div class="post-time">2 дня назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #ff9a56 0%, #ff6a88 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Svelte: компилируемый фреймворк</div>
+          <div class="post-preview">Svelte предлагает революционный подход к созданию веб-интерфейсов. Узнаем, чем он отличается от других фреймворков...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 9 минут чтения</div>
+            <div class="meta-item">👁 1567 просмотров</div>
+            <div class="meta-item">💬 28 комментариев</div>
+            <div class="meta-item">⭐ 103 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Svelte</a>
+            <a href="#" class="tag">JavaScript</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">Framework</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Клара Белова</div>
+            <div class="post-time">2 дня назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #30cfd0 0%, #330867 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">Astro: фреймворк для быстрых веб-сайтов</div>
+          <div class="post-preview">Astro позволяет создавать очень быстрые веб-сайты. Рассмотрим его особенности и преимущества...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 8 минут чтения</div>
+            <div class="meta-item">👁 1234 просмотров</div>
+            <div class="meta-item">💬 22 комментария</div>
+            <div class="meta-item">⭐ 81 избранный</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Astro</a>
+            <a href="#" class="tag">Frontend</a>
+            <a href="#" class="tag">Framework</a>
+            <a href="#" class="tag">Performance</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="post">
+        <div class="post-header">
+          <div class="avatar"></div>
+          <div class="post-author">
+            <div class="author-name">Федор Иванов</div>
+            <div class="post-time">2 дня назад</div>
+          </div>
+        </div>
+        <div class="post-cover" style="background: linear-gradient(135deg, #fccb90 0%, #d57eeb 100%);"></div>
+        <div class="post-content">
+          <div class="post-title">GatsbyJS: статические сайты с React</div>
+          <div class="post-preview">Gatsby позволяет создавать быстрые статические сайты. Узнаем о его возможностях для создания блогов и документации...</div>
+          <div class="post-meta">
+            <div class="meta-item">📊 7 минут чтения</div>
+            <div class="meta-item">👁 987 просмотров</div>
+            <div class="meta-item">💬 18 комментариев</div>
+            <div class="meta-item">⭐ 64 избранных</div>
+          </div>
+          <div class="post-tags">
+            <a href="#" class="tag">Gatsby</a>
+            <a href="#" class="tag">React</a>
+            <a href="#" class="tag">Static Site</a>
+            <a href="#" class="tag">Frontend</a>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Sidebar -->
+    <aside class="sidebar">
+      <div class="widget">
+        <div class="widget-title">Топ постов</div>
+        <div class="sidebar-item">
+          <strong>React Hooks Explained</strong>
+          <div>2345 просмотров</div>
+        </div>
+        <div class="sidebar-item">
+          <strong>Kubernetes для начинающих</strong>
+          <div>4123 просмотров</div>
+        </div>
+        <div class="sidebar-item">
+          <strong>GraphQL vs REST</strong>
+          <div>3456 просмотров</div>
+        </div>
+      </div>
+
+      <div class="widget">
+        <div class="widget-title">Популярные теги</div>
+        <div class="sidebar-item">
+          <a href="#" class="tag" style="display: block; margin: 0;">JavaScript</a>
+        </div>
+        <div class="sidebar-item">
+          <a href="#" class="tag" style="display: block; margin: 0;">React</a>
+        </div>
+        <div class="sidebar-item">
+          <a href="#" class="tag" style="display: block; margin: 0;">Backend</a>
+        </div>
+        <div class="sidebar-item">
+          <a href="#" class="tag" style="display: block; margin: 0;">DevOps</a>
+        </div>
+      </div>
+
+      <div class="widget">
+        <div class="widget-title">О проекте</div>
+        <div class="sidebar-item">
+          Habr Heavy — тестовая страница для бенчмарков производительности браузеров. Содержит реалистичное количество элементов и стилей.
+        </div>
+      </div>
+
+      <div class="widget">
+        <div class="widget-title">Объявления</div>
+        <div class="sidebar-item">
+          📢 <strong>Новое обновление</strong> — улучшена поддержка мобильных устройств
+        </div>
+        <div class="sidebar-item">
+          🚀 <strong>Запущена бета</strong> — попробуйте новые фичи
+        </div>
+      </div>
+    </aside>
+  </div>
+</body>
+</html>
