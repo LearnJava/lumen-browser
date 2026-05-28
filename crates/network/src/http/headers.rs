@@ -9,9 +9,11 @@ use std::collections::VecDeque;
 /// HTTP profile — determines header order and casing configuration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum HttpProfile {
-    /// Standard profile: Chrome-matching header order and casing.
-    Standard,
-    /// Strict private profile: same as Standard but Client Hints disabled.
+    /// Chrome profile: Chrome 130+ header order and casing (default for compatibility).
+    Chrome,
+    /// Lumen profile: native Lumen browser SETTINGS (own fingerprint).
+    Lumen,
+    /// Strict private profile: Chrome headers but Client Hints disabled.
     Strict,
     /// Tor-compatible profile: minimal, conservative header order.
     Tor,
@@ -146,7 +148,7 @@ mod tests {
 
     #[test]
     fn test_header_order_contains_required_headers() {
-        let headers = build_request_headers("example.com", "gzip, deflate, br", "", HttpProfile::Standard);
+        let headers = build_request_headers("example.com", "gzip, deflate, br", "", HttpProfile::Chrome);
         assert!(headers.contains("Host: example.com"));
         assert!(headers.contains("User-Agent: Lumen/0.0.1"));
         assert!(headers.contains("Accept: */*"));
@@ -156,13 +158,13 @@ mod tests {
 
     #[test]
     fn test_default_accept_language() {
-        let headers = build_request_headers("example.com", "", "", HttpProfile::Standard);
+        let headers = build_request_headers("example.com", "", "", HttpProfile::Chrome);
         assert!(headers.contains("Accept-Language: en-US,en;q=0.9"));
     }
 
     #[test]
     fn test_sec_fetch_headers_present() {
-        let headers = build_request_headers("example.com", "", "", HttpProfile::Standard);
+        let headers = build_request_headers("example.com", "", "", HttpProfile::Chrome);
         assert!(headers.contains("Sec-Fetch-Site: none"));
         assert!(headers.contains("Sec-Fetch-Mode: navigate"));
         assert!(headers.contains("Sec-Fetch-Dest: document"));

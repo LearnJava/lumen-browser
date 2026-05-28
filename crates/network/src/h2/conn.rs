@@ -46,6 +46,7 @@ use crate::h2::{
     },
     hpack::{Decoder, Encoder},
 };
+use crate::http::{H2Settings, HttpProfile};
 
 /// Decoded HTTP response from an H2 fetch: `(status, headers, body)`.
 pub type H2Response = (u16, Vec<(String, String)>, Vec<u8>);
@@ -90,14 +91,26 @@ pub struct H2Conn<S: Read + Write> {
 impl<S: Read + Write> H2Conn<S> {
     /// Establish an HTTP/2 connection over `stream`.
     ///
-    /// Sends the client connection preface (magic + empty SETTINGS) and waits
+    /// Sends the client connection preface (magic + Chrome-matching SETTINGS) and waits
     /// for the server's initial SETTINGS frame, sending the required ACK.
+    /// Uses Chrome profile by default for broad server compatibility.
     pub fn connect(mut stream: S) -> Result<Self, Error> {
         // Client connection preface (RFC 9113 §3.4): magic + SETTINGS.
+        let settings = H2Settings::for_profile(HttpProfile::Chrome);
         let mut preface = CLIENT_PREFACE_MAGIC.to_vec();
+
+        // Build SETTINGS frame with Chrome-matching parameters.
+        let settings_params = vec![
+            (0x0001, settings.header_table_size),      // HEADER_TABLE_SIZE
+            (0x0002, if settings.enable_push { 1 } else { 0 }), // ENABLE_PUSH
+            (0x0003, settings.max_concurrent_streams.unwrap_or(0)), // MAX_CONCURRENT_STREAMS
+            (0x0004, settings.initial_window_size),    // INITIAL_WINDOW_SIZE
+            (0x0005, settings.max_frame_size),         // MAX_FRAME_SIZE
+        ];
+
         Frame::Settings {
             ack: false,
-            params: vec![],
+            params: settings_params,
         }
         .encode(&mut preface)
         .map_err(frame_err)?;
@@ -511,21 +524,27 @@ mod tests {
             written.starts_with(CLIENT_PREFACE_MAGIC),
             "client preface magic missing"
         );
-        // Must contain our SETTINGS (empty, 9-byte header with 0 payload).
+        // Must contain our Chrome-matching SETTINGS.
         let after_magic = &written[CLIENT_PREFACE_MAGIC.len()..];
         let (frame, _) = Frame::parse(after_magic, MAX_FRAME_PAYLOAD_DEFAULT)
             .unwrap()
             .unwrap();
-        assert_eq!(
-            frame,
-            Frame::Settings {
-                ack: false,
-                params: vec![]
+        // Verify Chrome-matching SETTINGS: [header_table_size, enable_push, max_concurrent, initial_window, max_frame]
+        match frame {
+            Frame::Settings { ack: false, params } => {
+                assert_eq!(params.len(), 5, "Chrome SETTINGS should have 5 parameters");
+                assert_eq!(params[0], (1, 65536), "HEADER_TABLE_SIZE should be 65536");
+                assert_eq!(params[1], (2, 1), "ENABLE_PUSH should be 1");
+                assert_eq!(params[2], (3, 1000), "MAX_CONCURRENT_STREAMS should be 1000");
+                assert_eq!(params[3], (4, 6291456), "INITIAL_WINDOW_SIZE should be 6291456");
+                assert_eq!(params[4], (5, 16384), "MAX_FRAME_SIZE should be 16384");
             }
-        );
+            _ => panic!("Expected Settings frame with Chrome parameters"),
+        }
         // Must contain SETTINGS ACK for server's SETTINGS.
-        // Find it after our SETTINGS.
-        let offset = CLIENT_PREFACE_MAGIC.len() + 9; // 9 = empty SETTINGS frame
+        // Find it after our SETTINGS frame.
+        // Chrome SETTINGS frame: 9-byte header + (5 params * 6 bytes) = 9 + 30 = 39 bytes
+        let offset = CLIENT_PREFACE_MAGIC.len() + 39;
         let (ack_frame, _) = Frame::parse(&written[offset..], MAX_FRAME_PAYLOAD_DEFAULT)
             .unwrap()
             .unwrap();

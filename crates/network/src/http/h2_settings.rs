@@ -26,18 +26,30 @@ pub struct H2Settings {
 impl H2Settings {
     /// Create HTTP/2 SETTINGS for the given profile.
     ///
-    /// Standard and Strict profiles both use Chrome 130+ SETTINGS.
-    /// Tor profile uses more conservative values.
+    /// - Chrome, Strict: Chrome 130+ SETTINGS (for compatibility)
+    /// - Lumen: native Lumen browser optimized SETTINGS
+    /// - Tor: conservative values to avoid unique fingerprint
     pub fn for_profile(profile: HttpProfile) -> Self {
         match profile {
-            HttpProfile::Standard | HttpProfile::Strict => {
-                // Chrome 130+ HTTP/2 SETTINGS
+            HttpProfile::Chrome | HttpProfile::Strict => {
+                // Chrome 130+ HTTP/2 SETTINGS (for compatibility)
                 Self {
                     header_table_size: 65536,      // Chrome: 65536
                     enable_push: true,              // Enable server push
                     max_concurrent_streams: Some(1000), // Chrome: 1000
                     initial_window_size: 6291456,   // Chrome: 6291456 (6 MB)
                     max_frame_size: 16384,          // Default, Chrome uses default
+                    header_compression_size_limit: None,
+                }
+            }
+            HttpProfile::Lumen => {
+                // Lumen-native HTTP/2 SETTINGS (optimized for lightweight browser)
+                Self {
+                    header_table_size: 16384,       // Smaller than Chrome, sufficient for Lumen
+                    enable_push: true,              // Support server push
+                    max_concurrent_streams: Some(500), // Fewer parallel streams
+                    initial_window_size: 1048576,   // 1 MB (vs Chrome 6 MB) — RAM optimization
+                    max_frame_size: 16384,          // RFC default
                     header_compression_size_limit: None,
                 }
             }
@@ -138,11 +150,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_h2_settings_standard_profile() {
-        let settings = H2Settings::for_profile(HttpProfile::Standard);
+    fn test_h2_settings_chrome_profile() {
+        let settings = H2Settings::for_profile(HttpProfile::Chrome);
         assert_eq!(settings.header_table_size, 65536);
         assert_eq!(settings.max_concurrent_streams, Some(1000));
         assert_eq!(settings.initial_window_size, 6291456);
+    }
+
+    #[test]
+    fn test_h2_settings_lumen_profile() {
+        let settings = H2Settings::for_profile(HttpProfile::Lumen);
+        assert_eq!(settings.header_table_size, 16384);
+        assert_eq!(settings.max_concurrent_streams, Some(500));
+        assert_eq!(settings.initial_window_size, 1048576);
     }
 
     #[test]
@@ -155,7 +175,7 @@ mod tests {
 
     #[test]
     fn test_h2_settings_wire_format_non_empty() {
-        let settings = H2Settings::for_profile(HttpProfile::Standard);
+        let settings = H2Settings::for_profile(HttpProfile::Chrome);
         let wire = settings.to_wire_format();
         assert!(!wire.is_empty());
         // Should contain at least: HEADER_TABLE_SIZE + ENABLE_PUSH + MAX_CONCURRENT + WINDOW_SIZE + MAX_FRAME
@@ -164,7 +184,7 @@ mod tests {
 
     #[test]
     fn test_h2_priority_default() {
-        let priority = H2StreamPriority::default_for_profile(HttpProfile::Standard);
+        let priority = H2StreamPriority::default_for_profile(HttpProfile::Chrome);
         assert_eq!(priority.weight, 16);
         assert_eq!(priority.depends_on, 0);
         assert!(!priority.exclusive);
