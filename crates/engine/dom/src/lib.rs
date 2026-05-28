@@ -17,6 +17,9 @@ use serde::{Deserialize, Serialize};
 
 pub use lumen_core::sandbox::{parse_sandbox_value, SandboxFlags};
 
+pub mod contenteditable;
+pub use contenteditable::{CommandHistory, DomCommand};
+
 /// Error returned by [`Document::to_bytes`] and [`Document::from_bytes`].
 #[derive(Debug)]
 pub enum DomSnapshotError {
