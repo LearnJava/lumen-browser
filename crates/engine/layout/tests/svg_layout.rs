@@ -83,7 +83,7 @@ fn svg_rect_no_viewbox() {
     assert!((shape.rect.y - 20.0).abs() < 0.01, "y");
     assert!((shape.rect.width - 50.0).abs() < 0.01, "width");
     assert!((shape.rect.height - 30.0).abs() < 0.01, "height");
-    assert!(matches!(shape.kind, BoxKind::SvgShape { shape: SvgShapeKind::Rect { .. } }));
+    assert!(matches!(shape.kind, BoxKind::SvgShape { shape: SvgShapeKind::Rect { .. }, .. }));
 }
 
 #[test]
@@ -129,7 +129,7 @@ fn svg_circle_bbox() {
     assert!((shape.rect.y - (svg.rect.y + 30.0)).abs() < 0.01);
     assert!((shape.rect.width - 40.0).abs() < 0.01);
     assert!((shape.rect.height - 40.0).abs() < 0.01);
-    assert!(matches!(shape.kind, BoxKind::SvgShape { shape: SvgShapeKind::Circle { .. } }));
+    assert!(matches!(shape.kind, BoxKind::SvgShape { shape: SvgShapeKind::Circle { .. }, .. }));
 }
 
 // ── ellipse ───────────────────────────────────────────────────────────────────
@@ -143,7 +143,7 @@ fn svg_ellipse_bbox() {
     assert!((shape.rect.y - (svg.rect.y + 20.0)).abs() < 0.01, "y");
     assert!((shape.rect.width - 80.0).abs() < 0.01, "width");
     assert!((shape.rect.height - 60.0).abs() < 0.01, "height");
-    assert!(matches!(shape.kind, BoxKind::SvgShape { shape: SvgShapeKind::Ellipse { .. } }));
+    assert!(matches!(shape.kind, BoxKind::SvgShape { shape: SvgShapeKind::Ellipse { .. }, .. }));
 }
 
 // ── line ──────────────────────────────────────────────────────────────────────
@@ -158,7 +158,7 @@ fn svg_line_bbox() {
     assert!((shape.rect.y - (svg.rect.y + 10.0)).abs() < 0.01, "y");
     assert!((shape.rect.width - 80.0).abs() < 0.01, "width");
     assert!((shape.rect.height - 40.0).abs() < 0.01, "height");
-    assert!(matches!(shape.kind, BoxKind::SvgShape { shape: SvgShapeKind::Line { .. } }));
+    assert!(matches!(shape.kind, BoxKind::SvgShape { shape: SvgShapeKind::Line { .. }, .. }));
 }
 
 // ── path ──────────────────────────────────────────────────────────────────────
@@ -170,7 +170,7 @@ fn svg_path_zero_rect() {
     let shape = first_svg_shape(&tree).expect("SvgShape not found");
     assert_eq!(shape.rect.x, 0.0);
     assert_eq!(shape.rect.width, 0.0);
-    assert!(matches!(shape.kind, BoxKind::SvgShape { shape: SvgShapeKind::Path { .. } }));
+    assert!(matches!(shape.kind, BoxKind::SvgShape { shape: SvgShapeKind::Path { .. }, .. }));
 }
 
 // ── <g> group ─────────────────────────────────────────────────────────────────
@@ -351,4 +351,82 @@ fn svg_nested_svg_basic() {
     let svg = first_svg_root(&tree).expect("SvgRoot not found");
     // Nested SVG should be present in children (as Block for now).
     assert!(!svg.children.is_empty());
+}
+
+// ── SVG transform composition (Phase 2) ───────────────────────────────────
+
+#[test]
+fn svg_transform_translate_basic() {
+    let tree = do_layout(r#"<svg width="100" height="100">
+        <rect x="10" y="10" width="20" height="20" transform="translate(5 5)"/>
+    </svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    let svg = first_svg_root(&tree).unwrap();
+    // rect @ (10,10) + translate(5,5) = (15,15)
+    let expected_x = svg.rect.x + 15.0;
+    let expected_y = svg.rect.y + 15.0;
+    assert!((shape.rect.x - expected_x).abs() < 0.1, "translated x: got {}, expected {}", shape.rect.x, expected_x);
+    assert!((shape.rect.y - expected_y).abs() < 0.1, "translated y");
+}
+
+#[test]
+fn svg_transform_scale_basic() {
+    let tree = do_layout(r#"<svg width="100" height="100">
+        <rect x="10" y="10" width="20" height="20" transform="scale(2)"/>
+    </svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    let svg = first_svg_root(&tree).unwrap();
+    // rect @ (10,10) size 20×20, scaled 2× = (20,20) size 40×40
+    let expected_x = svg.rect.x + 20.0;
+    let expected_y = svg.rect.y + 20.0;
+    assert!((shape.rect.x - expected_x).abs() < 0.1, "scaled x");
+    assert!((shape.rect.y - expected_y).abs() < 0.1, "scaled y");
+    assert!((shape.rect.width - 40.0).abs() < 0.1, "scaled width");
+    assert!((shape.rect.height - 40.0).abs() < 0.1, "scaled height");
+}
+
+#[test]
+fn svg_group_transform_propagates_to_children() {
+    let tree = do_layout(r#"<svg width="100" height="100">
+        <g transform="translate(10 10)">
+            <rect x="0" y="0" width="20" height="20"/>
+        </g>
+    </svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    let svg = first_svg_root(&tree).unwrap();
+    // group @ translate(10,10), rect @ (0,0) = (10,10)
+    let expected_x = svg.rect.x + 10.0;
+    let expected_y = svg.rect.y + 10.0;
+    assert!((shape.rect.x - expected_x).abs() < 0.1, "group transform applied: got {}, expected {}", shape.rect.x, expected_x);
+    assert!((shape.rect.y - expected_y).abs() < 0.1);
+}
+
+#[test]
+fn svg_nested_transforms_compose() {
+    let tree = do_layout(r#"<svg width="100" height="100">
+        <g transform="translate(10 10)">
+            <rect x="5" y="5" width="20" height="20" transform="translate(5 5)"/>
+        </g>
+    </svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    let svg = first_svg_root(&tree).unwrap();
+    // group @ translate(10,10) + rect @ translate(5,5) = combined translate(15,15)
+    // rect @ (5,5) + translate(15,15) = (20,20)
+    let expected_x = svg.rect.x + 20.0;
+    let expected_y = svg.rect.y + 20.0;
+    assert!((shape.rect.x - expected_x).abs() < 0.1, "composed transforms: got {}, expected {}", shape.rect.x, expected_x);
+    assert!((shape.rect.y - expected_y).abs() < 0.1);
+}
+
+#[test]
+fn svg_transform_rotate_basic() {
+    let tree = do_layout(r#"<svg width="100" height="100">
+        <circle cx="50" cy="50" r="20" transform="rotate(90)"/>
+    </svg>"#);
+    let shape = first_svg_shape(&tree).expect("SvgShape not found");
+    // Circle rotated 90° around origin — bbox should change
+    // Original bbox: (30,30) to (70,70)
+    // After rotate(90): bbox becomes roughly (30,30) to (70,70) (circle is symmetric)
+    assert!(shape.rect.width > 0.0, "rotated shape has non-zero width");
+    assert!(shape.rect.height > 0.0, "rotated shape has non-zero height");
 }

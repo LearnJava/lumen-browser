@@ -269,6 +269,7 @@ mod tests {
             children: vec![],
             col_span: 1,
             row_span: 1,
+            svg_group_transform: None,
         }
     }
 

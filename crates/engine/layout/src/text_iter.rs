@@ -145,7 +145,7 @@ mod tests {
             kind: BoxKind::InlineRun { segments: vec![], lines },
             children: vec![],
             col_span: 1,
-            row_span: 1,
+            row_span: 1, svg_group_transform: None,
         }
     }
 
@@ -157,7 +157,7 @@ mod tests {
             kind: BoxKind::Block,
             children,
             col_span: 1,
-            row_span: 1,
+            row_span: 1, svg_group_transform: None,
         }
     }
 
@@ -313,7 +313,7 @@ mod tests {
             kind: BoxKind::Skip,
             children: vec![],
             col_span: 1,
-            row_span: 1,
+            row_span: 1, svg_group_transform: None,
         };
         assert!(collect_visible_text(&b).is_empty());
     }

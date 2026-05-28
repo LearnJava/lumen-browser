@@ -1,5 +1,5 @@
-In progress: none
-Next task: svg-layout-advanced Phase 2
+In progress: svg-layout-advanced Phase 2  branch: p1-svg-layout-advanced-phase2
+Next step: implement nested SVG transforms  crates/engine/layout/src/svg.rs
 
 CSS rule: P1 does NOT implement CSS properties. P4 owns all CSS.
   P1 writes layout algorithms and box-tree structure only.

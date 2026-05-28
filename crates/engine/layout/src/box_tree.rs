@@ -510,6 +510,8 @@ fn collect_svg_shapes(
         if style.display == crate::style::Display::None {
             continue;
         }
+        let svg_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
+
         match name.local.as_str() {
             "rect" => {
                 out.push(LayoutBox {
@@ -523,8 +525,9 @@ fn collect_svg_shapes(
                             rx: svg_attr_f32(doc, child_id, "rx"),
                             ry: svg_attr_f32(doc, child_id, "ry"),
                         },
+                        svg_transform: svg_transform.clone(),
                     },
-                    children: vec![], col_span: 1, row_span: 1,
+                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None,
                 });
                 // Recurse: incorrectly-nested siblings (HTML5 parser wraps them inside rect).
                 collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
@@ -538,8 +541,9 @@ fn collect_svg_shapes(
                             cy: svg_attr_f32(doc, child_id, "cy"),
                             r: svg_attr_f32(doc, child_id, "r"),
                         },
+                        svg_transform: svg_transform.clone(),
                     },
-                    children: vec![], col_span: 1, row_span: 1,
+                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None,
                 });
                 collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
             }
@@ -553,8 +557,9 @@ fn collect_svg_shapes(
                             rx: svg_attr_f32(doc, child_id, "rx"),
                             ry: svg_attr_f32(doc, child_id, "ry"),
                         },
+                        svg_transform: svg_transform.clone(),
                     },
-                    children: vec![], col_span: 1, row_span: 1,
+                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None,
                 });
                 collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
             }
@@ -568,8 +573,9 @@ fn collect_svg_shapes(
                             x2: svg_attr_f32(doc, child_id, "x2"),
                             y2: svg_attr_f32(doc, child_id, "y2"),
                         },
+                        svg_transform: svg_transform.clone(),
                     },
-                    children: vec![], col_span: 1, row_span: 1,
+                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None,
                 });
                 collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
             }
@@ -577,8 +583,8 @@ fn collect_svg_shapes(
                 let d = doc.get(child_id).get_attr("d").unwrap_or("").to_string();
                 out.push(LayoutBox {
                     node: child_id, rect: Rect::ZERO, style,
-                    kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d } },
-                    children: vec![], col_span: 1, row_span: 1,
+                    kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone() },
+                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None,
                 });
                 collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
             }
@@ -586,10 +592,11 @@ fn collect_svg_shapes(
                 // Group: collect children shapes, then wrap in a Block box.
                 let mut group_children: Vec<LayoutBox> = Vec::new();
                 collect_svg_shapes(doc, sheet, child_id, &style, viewport, flat, &mut group_children);
+                let group_transform = parse_svg_transform(doc.get(child_id).get_attr("transform"));
                 out.push(LayoutBox {
                     node: child_id, rect: Rect::ZERO, style,
                     kind: BoxKind::Block,
-                    children: group_children, col_span: 1, row_span: 1,
+                    children: group_children, col_span: 1, row_span: 1, svg_group_transform: Some(group_transform),
                 });
             }
             _ => {
@@ -645,32 +652,69 @@ fn lay_out_svg_root(b: &mut LayoutBox, start_x: f32, start_y: f32, avail_w: f32,
         }
         _ => (1.0, 1.0, b.rect.x, b.rect.y),
     };
-    lay_out_svg_children_positions(&mut b.children, origin_x, origin_y, scale_x, scale_y);
+    let root_transform = SvgTransform::identity();
+    lay_out_svg_children_positions(&mut b.children, origin_x, origin_y, scale_x, scale_y, &root_transform);
 }
 
 /// Recursively positions SVG shape boxes (and `<g>` group children) using the
 /// viewBox-to-document-coordinate transform `(origin_x, origin_y, scale_x, scale_y)`.
-fn lay_out_svg_children_positions(children: &mut [LayoutBox], ox: f32, oy: f32, sx: f32, sy: f32) {
+/// Composes element transforms hierarchically via `parent_transform`.
+fn lay_out_svg_children_positions(children: &mut [LayoutBox], ox: f32, oy: f32, sx: f32, sy: f32, parent_transform: &SvgTransform) {
     for child in children.iter_mut() {
-        lay_out_svg_element_position(child, ox, oy, sx, sy);
+        lay_out_svg_element_position(child, ox, oy, sx, sy, parent_transform);
     }
 }
 
-fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy: f32) {
-    // Parse and apply SVG transform attribute if present.
-    // Note: This is a placeholder integration. Full transform support including
-    // transform-origin and proper matrix composition will be in Phase 2.
-    // For now, we parse the attribute to prepare for wiring with CSS property.
-    // CSS: transform — P4 will wire this when ready.
-    let _ = parse_svg_transform(None); // Mark for P4 wiring
+fn lay_out_svg_element_position(b: &mut LayoutBox, ox: f32, oy: f32, sx: f32, sy: f32, parent_transform: &SvgTransform) {
+    // Phase 2: full nested transform composition.
+    // Get element's own transform (stored during box creation).
+    let element_transform = match &b.kind {
+        BoxKind::SvgShape { svg_transform, .. } => svg_transform.clone(),
+        BoxKind::Block if b.svg_group_transform.is_some() => b.svg_group_transform.as_ref().unwrap().clone(),
+        _ => SvgTransform::identity(),
+    };
 
-    if let BoxKind::SvgShape { ref shape } = b.kind {
-        b.rect = svg_shape_bbox(shape, ox, oy, sx, sy);
+    // Compose parent transform with element transform.
+    let mut composed = parent_transform.clone();
+    composed.compose(&element_transform);
+
+    if let BoxKind::SvgShape { ref shape, .. } = b.kind {
+        // Compute shape bbox in user coordinates, then apply viewBox scaling.
+        let mut bbox = svg_shape_bbox(shape, 0.0, 0.0, 1.0, 1.0); // User coords
+        // Apply viewBox scaling and origin offset first.
+        bbox.x = ox + bbox.x * sx;
+        bbox.y = oy + bbox.y * sy;
+        bbox.width *= sx;
+        bbox.height *= sy;
+        // Then apply composed transform.
+        b.rect = apply_transform_to_bbox(&bbox, &composed);
     } else if matches!(b.kind, BoxKind::Block) {
-        // <g> group: position its children, then compute the union bounding box.
-        lay_out_svg_children_positions(&mut b.children, ox, oy, sx, sy);
+        // <g> group: position its children with composed transform, then compute union bbox.
+        lay_out_svg_children_positions(&mut b.children, ox, oy, sx, sy, &composed);
         b.rect = svg_children_union_bbox(&b.children);
     }
+}
+
+/// Applies an SVG transform matrix to a bounding box by transforming all 4 corners
+/// and computing the new bounding box. Phase 2: nested transform composition.
+fn apply_transform_to_bbox(bbox: &Rect, transform: &SvgTransform) -> Rect {
+    if bbox.width == 0.0 && bbox.height == 0.0 {
+        return Rect::ZERO;
+    }
+    let corners = [
+        (bbox.x, bbox.y),
+        (bbox.x + bbox.width, bbox.y),
+        (bbox.x, bbox.y + bbox.height),
+        (bbox.x + bbox.width, bbox.y + bbox.height),
+    ];
+    let transformed: Vec<(f32, f32)> = corners.iter()
+        .map(|(x, y)| transform.transform_point(*x, *y))
+        .collect();
+    let min_x = transformed.iter().map(|(x, _)| *x).fold(f32::INFINITY, f32::min);
+    let min_y = transformed.iter().map(|(_, y)| *y).fold(f32::INFINITY, f32::min);
+    let max_x = transformed.iter().map(|(x, _)| *x).fold(f32::NEG_INFINITY, f32::max);
+    let max_y = transformed.iter().map(|(_, y)| *y).fold(f32::NEG_INFINITY, f32::max);
+    Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
 }
 
 /// Bounding box of an SVG shape in document coordinates.
@@ -870,6 +914,9 @@ pub struct LayoutBox {
     /// HTML `rowspan` attribute (table cells only). Number of rows this cell spans.
     /// Always ≥ 1; defaults to 1 for non-table-cell boxes.
     pub row_span: u32,
+    /// SVG `transform` attribute for `<g>` groups (Phase 2: nested transforms).
+    /// Only used for Block boxes that represent SVG groups; None for all other boxes.
+    pub svg_group_transform: Option<SvgTransform>,
 }
 
 /// Отрезок inline-контента с собственным стилем (до layout).
@@ -1051,6 +1098,9 @@ pub enum BoxKind {
     SvgShape {
         /// Geometric primitive in SVG user units (before viewBox scaling).
         shape: SvgShapeKind,
+        /// Parsed SVG `transform` presentation attribute (Phase 2: nested transforms).
+        /// Composed with parent transforms during layout for accurate positioning.
+        svg_transform: SvgTransform,
     },
 }
 
@@ -1242,7 +1292,7 @@ fn anon_inline_run(node: NodeId, parent: &ComputedStyle, segs: Vec<InlineSegment
         kind: BoxKind::InlineRun { segments: segs, lines: vec![] },
         children: vec![],
         col_span: 1,
-        row_span: 1,
+        row_span: 1, svg_group_transform: None,
     }
 }
 
@@ -1254,7 +1304,7 @@ fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<Layout
         kind: BoxKind::InlineBlockRow,
         children: items,
         col_span: 1,
-        row_span: 1,
+        row_span: 1, svg_group_transform: None,
     }
 }
 
@@ -1496,7 +1546,7 @@ fn inject_pseudo(
                 kind: BoxKind::Block,
                 children: inner,
                 col_span: 1,
-                row_span: 1,
+                row_span: 1, svg_group_transform: None,
             };
             if is_before {
                 children.insert(0, b);
@@ -1702,7 +1752,7 @@ fn inject_marker(parent_id: NodeId, children: &mut Vec<LayoutBox>, style: &Compu
         },
         children: vec![],
         col_span: 1,
-        row_span: 1,
+        row_span: 1, svg_group_transform: None,
     });
 }
 
@@ -1919,7 +1969,7 @@ fn build_box(
                                 kind: BoxKind::InlineSpace,
                                 children: vec![],
                                 col_span: 1,
-                                row_span: 1,
+                                row_span: 1, svg_group_transform: None,
                             });
                         }
                         row_items.push(build_box(doc, sheet, cid, &style, viewport, flat, counters));
@@ -2011,6 +2061,7 @@ fn build_box(
         children,
         col_span,
         row_span,
+        svg_group_transform: None,
     }
 }
 

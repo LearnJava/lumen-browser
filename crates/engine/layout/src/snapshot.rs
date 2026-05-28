@@ -93,7 +93,7 @@ fn write_box(out: &mut String, b: &LayoutBox, depth: usize) {
     if let BoxKind::Image { src, alt } = &b.kind {
         let _ = write!(out, " src={src:?} alt={alt:?}");
     }
-    if let BoxKind::SvgShape { shape } = &b.kind {
+    if let BoxKind::SvgShape { shape, .. } = &b.kind {
         use crate::box_tree::SvgShapeKind;
         match shape {
             SvgShapeKind::Rect { x, y, width, height, rx, ry } =>
