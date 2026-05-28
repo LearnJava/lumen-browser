@@ -1,6 +1,7 @@
-In progress: font-loading-api Phase 2 (JS bindings)  branch: p1-font-loading-phase2
-Next step: implement JS bindings for FontFace/FontFaceStatus/FontFaceSet in lumen-core::ext::JsRuntime
+In progress: none
+Next task: next P1 feature from Phase 2 roadmap TBD
 
+Recent completion: 6.8 ✅ — font-loading-api Phase 2 (_lumen_fonts_size/_get/_get_by_family/_has_family Rust functions, FontFaceSet JS object, document.fonts getter, 5 new unit tests, 237 total PASS lumen-js, clippy clean, 2026-05-28)
 Recent completion: 8A.3 ✅ — accessibility-forms-validation Phase 3 (submit_form() integration into shell dispatch, FormSubmitEvent::Valid/Invalid handling, encode_form_fields + find_control_rect_and_error helpers, 189 tests PASS lumen-dom, clippy clean, 2026-05-28)
 Recent completion: 8A.2 ✅ — InProcessSession adapter for lumen-core::ext::BrowserSession (all 12 trait methods, 6 new unit tests, 27 total PASS, clippy clean, 2026-05-28)
 Recent completion: 8A.1 ✅ — BrowserSession trait in lumen-core::ext (12 methods, null stub, 4 unit tests, clippy clean, 172 tests PASS, 2026-05-28)

@@ -192,7 +192,7 @@
 | 6.5 | ⬜ print-pdf advanced @page margin boxes + headers/footers | Full print pipeline from margin-box content | Phase 2 |
 | 6.6 | ⬜ animation keyframe easing (cubic-bezier/steps) | Full timing functions support | Phase 2 |
 | 6.7 | ⬜ transition advanced (interrupted/fill-mode/grouped) | Animation lifecycle completeness | Phase 2 |
-| 6.8 | 🟡 **`[P1+P3]` font-loading API** | @font-face lifecycle, FontFace interface, document.fonts | Phase 1 ✅ P1 done; Phase 2-3 P3 binding |
+| 6.8 | ✅ **`[P1+P3]` font-loading API** | @font-face lifecycle, FontFace interface, document.fonts | Phase 1 ✅ P1 done; Phase 2 ✅ JS bindings (_lumen_fonts_*); Phase 3 P3 pending |
 | 6.9 | 🟡 **`[P1+P3]` performance-observer timing** | PerformanceEntry/PerformanceObserver types, mark/measure, observer delivery | Phase 1 ✅ P1 done (DOM types + mark/measure); Phase 2+ P3 JS binding + observer callback |
 
 #### Track P2 — Backend rendering
