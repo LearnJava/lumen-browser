@@ -167,7 +167,7 @@ impl SessionContext {
     pub fn set_storage(&mut self, origin: &str, key: String, value: Vec<u8>) {
         self.storage
             .entry(origin.to_string())
-            .or_insert_with(HashMap::new)
+            .or_default()
             .insert(key, value);
     }
 
