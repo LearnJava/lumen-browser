@@ -244,7 +244,7 @@ impl MarginBox {
     /// applying line breaks and measuring each fragment's dimensions using
     /// the provided TextMeasurer for real font metrics.
     /// Phase 4: Integrates with TextMeasurer for real glyph widths (replaces Phase 3 simplified 8px-per-character).
-    pub fn layout_text(&mut self, text: &str, font_size: f32, line_height: f32, measurer: &dyn lumen_core::ext::TextMeasurer) {
+    pub fn layout_text(&mut self, text: &str, font_size: f32, line_height: f32, measurer: &dyn crate::TextMeasurer) {
         if text.is_empty() {
             self.text_fragments.clear();
             return;
@@ -380,7 +380,7 @@ impl PageBox {
         content_map: &HashMap<MarginBoxPosition, Vec<ContentFunction>>,
         counters: &PageCounters,
         font_size: f32,
-        measurer: &dyn lumen_core::ext::TextMeasurer,
+        measurer: &dyn crate::TextMeasurer,
     ) {
         for (position, functions) in content_map {
             let mut text_content = String::new();
@@ -881,11 +881,10 @@ pub fn create_header_footer(header: Option<String>, footer: Option<String>) -> H
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lumen_core::ext::TextMeasurer;
 
     /// Simple text measurer: 8px per character (for testing).
     struct Fixed8;
-    impl TextMeasurer for Fixed8 {
+    impl crate::TextMeasurer for Fixed8 {
         fn char_width(&self, _: char, _: f32) -> f32 {
             8.0
         }
@@ -1218,7 +1217,7 @@ mod tests {
             }],
         );
 
-        page.apply_margin_box_content(&content_map, &counters);
+        page.apply_margin_box_content(&content_map, &counters, 16.0, &Fixed8);
 
         let bottom_center = page.get_margin_box(MarginBoxPosition::BottomCenter).unwrap();
         assert_eq!(bottom_center.content, Some("1".to_string()));
