@@ -842,8 +842,32 @@ impl Document {
     /// drawing selection underlines in the preedit range).
     ///
     /// Returns `None` if no composition is active.
-    pub fn get_composition(&self) -> &Option<CompositionState> {
-        &self.composition
+    pub fn get_composition(&self) -> Option<&CompositionState> {
+        self.composition.as_ref()
+    }
+
+    /// Check if an IME composition is currently active.
+    ///
+    /// Returns `true` if `begin_composition` has been called and
+    /// `end_composition` has not yet been called.
+    pub fn is_composing(&self) -> bool {
+        self.composition.is_some()
+    }
+
+    /// Get the composition range (offset and length) if composition is active.
+    ///
+    /// Returns `None` if no composition is active or if the selection range
+    /// has not been set yet.
+    pub fn get_composition_range(&self) -> Option<(u32, u32)> {
+        self.composition.as_ref().and_then(|comp| comp.selection)
+    }
+
+    /// Get the target node that is receiving composition input.
+    ///
+    /// Returns `None` if no composition is active. This is the element that
+    /// should dispatch composition events (compositionstart/update/end).
+    pub fn get_composition_target(&self) -> Option<NodeId> {
+        self.composition.as_ref().map(|comp| comp.node)
     }
 
     // ── T3 hibernation snapshot (ADR-008) ─────────────────────────────────────
@@ -1707,9 +1731,10 @@ pub struct CompositionData {
     pub data: String,
     /// BCP 47 language tag (e.g., "ja", "zh-Hans", "ru"). `None` if unknown.
     pub locale: Option<String>,
-    /// Text offset range in the contenteditable host (UTF-16 code units).
+    /// Composition range in the contenteditable host (UTF-16 code units).
     /// `None` if the range cannot be determined.
-    /// `(start, end)` where `start < end`.
+    /// `(offset, length)` where offset is the start position and length is the number
+    /// of characters in the composition range.
     pub range: Option<(u32, u32)>,
 }
 
@@ -3888,5 +3913,94 @@ mod tests {
         let restored_comp = restored_comp.unwrap();
         assert_eq!(restored_comp.text, "test");
         assert_eq!(restored_comp.locale, Some("en".to_string()));
+    }
+
+    #[test]
+    fn composition_helper_is_composing() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+
+        // Not composing initially
+        assert!(!doc.is_composing());
+
+        // Begin composition
+        doc.begin_composition(input, "あ".to_string(), Some("ja".to_string()));
+        assert!(doc.is_composing());
+
+        // End composition
+        doc.end_composition();
+        assert!(!doc.is_composing());
+    }
+
+    #[test]
+    fn composition_helper_get_range() {
+        let mut doc = Document::new();
+        let input = doc.create_element(QualName::html("input"));
+
+        // No range initially
+        assert!(doc.get_composition_range().is_none());
+
+        // Begin composition without range
+        doc.begin_composition(input, "a".to_string(), None);
+        assert!(doc.get_composition_range().is_none());
+
+        // Update with range
+        doc.update_composition("ab".to_string(), Some((0, 2)));
+        assert_eq!(doc.get_composition_range(), Some((0, 2)));
+
+        // Update with different range
+        doc.update_composition("abc".to_string(), Some((0, 3)));
+        assert_eq!(doc.get_composition_range(), Some((0, 3)));
+
+        // End composition clears range
+        doc.end_composition();
+        assert!(doc.get_composition_range().is_none());
+    }
+
+    #[test]
+    fn composition_helper_get_target() {
+        let mut doc = Document::new();
+        let input1 = doc.create_element(QualName::html("input"));
+        let input2 = doc.create_element(QualName::html("textarea"));
+
+        // No target initially
+        assert!(doc.get_composition_target().is_none());
+
+        // Begin composition on input1
+        doc.begin_composition(input1, "text".to_string(), None);
+        assert_eq!(doc.get_composition_target(), Some(input1));
+
+        // End and start on input2
+        doc.end_composition();
+        doc.begin_composition(input2, "more".to_string(), None);
+        assert_eq!(doc.get_composition_target(), Some(input2));
+
+        // End composition clears target
+        doc.end_composition();
+        assert!(doc.get_composition_target().is_none());
+    }
+
+    #[test]
+    fn composition_helpers_with_ranges() {
+        let mut doc = Document::new();
+        let contenteditable = doc.create_element(QualName::html("div"));
+
+        // Simulate IME input with range tracking (UI Events §5.2.5)
+        doc.begin_composition(contenteditable, "c".to_string(), Some("ru".to_string()));
+        assert!(doc.is_composing());
+        assert_eq!(doc.get_composition_target(), Some(contenteditable));
+
+        // User updates composition
+        doc.update_composition("ч".to_string(), Some((0, 1)));
+        assert_eq!(doc.get_composition_range(), Some((0, 1)));
+
+        doc.update_composition("чт".to_string(), Some((0, 2)));
+        assert_eq!(doc.get_composition_range(), Some((0, 2)));
+
+        // Final commit
+        let final_state = doc.end_composition();
+        assert!(!doc.is_composing());
+        assert!(final_state.is_some());
+        assert_eq!(final_state.unwrap().text, "чт");
     }
 }
