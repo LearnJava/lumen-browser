@@ -36,3 +36,5 @@ lumen-storage = { workspace = true }
 winit.workspace = true
 # Why this dependency (serde): serialization for network transport (MCP, BiDi) — permanent.
 serde = { version = "1.0", features = ["derive"] }
+# Why this dependency (serde_json): JSON serialization for BrowserSession.a11y_tree() and computed_style() — permanent.
+serde_json = "1.0"

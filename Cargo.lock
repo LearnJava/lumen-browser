@@ -1203,6 +1203,7 @@ dependencies = [
  "lumen-paint",
  "lumen-storage",
  "serde",
+ "serde_json",
  "winit",
 ]
 

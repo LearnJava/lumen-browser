@@ -9,6 +9,7 @@ use std::sync::Arc;
 use lumen_core::error::{Error, Result};
 use lumen_core::ext::NoopEventSink;
 use lumen_core::geom::{Rect, Size};
+use serde_json;
 use lumen_dom::Document;
 use lumen_dom::NodeData;
 use lumen_dom::NodeId;
@@ -416,6 +417,79 @@ impl BrowserSession for InProcessSession {
 
     fn set_user_agent(&mut self, ua: &str) -> Result<()> {
         self.context.set_user_agent(ua)
+    }
+}
+
+/// Adapter: InProcessSession также реализует базовый BrowserSession из lumen-core::ext.
+/// Это позволяет использовать InProcessSession везде, где ожидается core::ext::BrowserSession.
+impl lumen_core::ext::BrowserSession for InProcessSession {
+    fn navigate(&mut self, url_or_path: &str) -> Result<()> {
+        <Self as BrowserSession>::navigate(self, url_or_path)
+    }
+
+    fn screenshot(&self) -> Result<Vec<u8>> {
+        <Self as BrowserSession>::screenshot(self)
+    }
+
+    fn a11y_tree(&self) -> Result<String> {
+        // Сериализовать accessibility tree в JSON.
+        let ax_node = <Self as BrowserSession>::a11y_tree(self)?;
+        serde_json::to_string(&ax_node)
+            .map_err(|e| Error::Other(format!("a11y_tree serialization: {e}")))
+    }
+
+    fn click(&mut self, selector: &str) -> Result<Option<String>> {
+        // Phase 1: найти элемент, но неDispatchEvent (требует JS runtime).
+        <Self as BrowserSession>::click(self, &Target::Selector(selector.to_string()))?;
+        Ok(None)
+    }
+
+    fn type_text(&mut self, text: &str) -> Result<()> {
+        let state = self.state()?;
+        // Найти сфокусированный элемент или первый input.
+        let selector = "input:not([type='hidden']), textarea, [contenteditable]";
+        if let Some(node_id) = find_first_by_selector(&state.doc, selector) {
+            <Self as BrowserSession>::type_text(self, &Target::NodeId(node_id.index() as u32), text)?;
+        }
+        Ok(())
+    }
+
+    fn scroll_by(&mut self, delta: f32) -> Result<f32> {
+        // Phase 1: прокрутка документа (требует persistent window state).
+        // Пока что заглушка — возвращаем текущую позицию (всегда 0).
+        let _ = delta;
+        Ok(0.0)
+    }
+
+    fn wait_for_navigation(&mut self) -> Result<String> {
+        // В headless-режиме navigate() уже блокируется, поэтому это NOP.
+        Ok(self.current_url.clone())
+    }
+
+    fn wait_for_idle(&mut self) -> Result<()> {
+        // Phase 0 headless: нет JS/animations, поэтому всегда idle.
+        Ok(())
+    }
+
+    fn viewport(&self) -> (u32, u32) {
+        (self.viewport.width as u32, self.viewport.height as u32)
+    }
+
+    fn set_viewport(&mut self, width: u32, height: u32) -> Result<()> {
+        self.viewport = Size::new(width as f32, height as f32);
+        Ok(())
+    }
+
+    fn computed_style(&self, selector: &str) -> Result<String> {
+        let props = <Self as BrowserSession>::computed_style(self, selector)?
+            .ok_or_else(|| Error::NotFound(format!("элемент не найден: {selector}")))?;
+        // Сериализовать properties в JSON.
+        serde_json::to_string(&props.properties)
+            .map_err(|e| Error::Other(format!("computed_style serialization: {e}")))
+    }
+
+    fn eval(&mut self, script: &str) -> Result<String> {
+        <Self as BrowserSession>::eval(self, script)
     }
 }
 
@@ -1009,5 +1083,58 @@ mod tests {
         // JS всегда idle в Phase 1 headless (нет JS engine)
         s.wait(WaitCondition::JsIdle, 1000)
             .expect("wait JsIdle");
+    }
+
+    // ── Тесты для core::ext::BrowserSession adapter ────────────────────────
+
+    #[test]
+    fn core_session_navigate() {
+        let s = make_session("<html><body><h1>Hello</h1></body></html>");
+        // Already navigated via make_session, just verify the URL is set
+        assert!(!s.current_url().is_empty());
+    }
+
+    #[test]
+    fn core_session_screenshot() {
+        let s = make_session("<html><body><div style='background:blue; width:50px; height:50px;'></div></body></html>");
+        let png_bytes = lumen_core::ext::BrowserSession::screenshot(&s).expect("screenshot");
+        assert!(png_bytes.len() > 8);
+        assert_eq!(&png_bytes[0..8], &[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]);
+    }
+
+    #[test]
+    fn core_session_a11y_tree_json() {
+        let s = make_session("<html><body><button>Click</button></body></html>");
+        let json_str = lumen_core::ext::BrowserSession::a11y_tree(&s).expect("a11y_tree");
+        // Verify it's valid JSON
+        serde_json::from_str::<serde_json::Value>(&json_str)
+            .expect("a11y_tree should be valid JSON");
+    }
+
+    #[test]
+    fn core_session_computed_style_json() {
+        let s = make_session(r#"<html><body><div id="x" style="color:red;font-size:20px"></div></body></html>"#);
+        let json_str = lumen_core::ext::BrowserSession::computed_style(&s, "#x").expect("computed_style");
+        let obj: serde_json::Value = serde_json::from_str(&json_str)
+            .expect("computed_style should be valid JSON");
+        // Verify we have a JSON object with properties
+        assert!(obj.is_object());
+    }
+
+    #[test]
+    fn core_session_viewport() {
+        let s = make_session("<html><body></body></html>");
+        let (w, h) = lumen_core::ext::BrowserSession::viewport(&s);
+        assert_eq!(w, 1024);
+        assert_eq!(h, 720);
+    }
+
+    #[test]
+    fn core_session_set_viewport() {
+        let mut s = make_session("<html><body></body></html>");
+        lumen_core::ext::BrowserSession::set_viewport(&mut s, 800, 600).expect("set_viewport");
+        let (w, h) = lumen_core::ext::BrowserSession::viewport(&s);
+        assert_eq!(w, 800);
+        assert_eq!(h, 600);
     }
 }
