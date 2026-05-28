@@ -2849,49 +2849,53 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                                     }
                                 }
                                 forms::FormClickAction::SubmitForm(submit_node) => {
-                                    let err = {
-                                        match (&self.layout_box, &self.layout_source) {
-                                            (Some(lb), Some(src)) => {
-                                                forms::find_validation_error(
-                                                    lb,
-                                                    &src.document.lock().unwrap(),
-                                                    &self.form_state,
-                                                )
-                                            }
-                                            _ => None,
-                                        }
-                                    };
-                                    if let Some((_node, rect, msg)) = err {
-                                        self.validation_tooltip = Some((rect, msg));
-                                        if let Some(w) = self.window.as_ref() {
-                                            w.request_redraw();
-                                        }
-                                    } else if let Some(src) = self.layout_source.as_ref() {
+                                    // Phase 3: HTML5 form submission algorithm integration.
+                                    // Execute submit_form() which performs constraint validation.
+                                    if let Some(src) = self.layout_source.as_ref() {
                                         let doc = src.document.lock().unwrap();
-                                        if let Some((action, method, body)) =
-                                            forms::build_form_submit(&doc, submit_node, &self.form_state)
-                                        {
-                                            use lumen_core::event::{Event, TabId};
-                                            self.event_sink.emit(&Event::FormSubmit {
-                                                tab_id: TabId(0),
-                                                action: action.clone(),
-                                                method: method.clone(),
-                                                body: body.clone(),
-                                            });
-                                            match method.as_str() {
-                                                "get" => {
-                                                    // HTML LS §form-submission step 23: navigate
-                                                    // to action + query-string.
-                                                    let get_url = forms::make_get_url(&action, &body);
-                                                    let resolved = self.source.resolve_href(&get_url);
-                                                    drop(doc);
-                                                    self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                                        if let Some(submit_event) = forms::build_form_submit_event(&doc, submit_node) {
+                                            match submit_event {
+                                                lumen_dom::FormSubmitEvent::Valid { action, method, fields } => {
+                                                    // Form passed validation — collect fields and submit.
+                                                    let body = forms::encode_form_fields(&fields);
+                                                    use lumen_core::event::{Event, TabId};
+                                                    self.event_sink.emit(&Event::FormSubmit {
+                                                        tab_id: TabId(0),
+                                                        action: action.clone(),
+                                                        method: method.clone(),
+                                                        body: body.clone(),
+                                                    });
+                                                    match method.as_str() {
+                                                        "get" => {
+                                                            // HTML LS §form-submission step 23: navigate
+                                                            // to action + query-string.
+                                                            let get_url = forms::make_get_url(&action, &body);
+                                                            let resolved = self.source.resolve_href(&get_url);
+                                                            drop(doc);
+                                                            self.navigate_to(PageSource::from_arg(Some(&resolved)));
+                                                        }
+                                                        _ => {
+                                                            // POST: emit event; real network send is P3 task.
+                                                            eprintln!("[forms] POST {} body={}", action, body);
+                                                        }
+                                                    }
                                                 }
-                                                _ => {
-                                                    // POST: emit event; real network send is P3 task.
-                                                    eprintln!(
-                                                        "[forms] POST {action} body={body}"
-                                                    );
+                                                lumen_dom::FormSubmitEvent::Invalid { invalid_controls } => {
+                                                    // Form contains invalid controls — show first error.
+                                                    if let Some(&first_invalid) = invalid_controls.first() {
+                                                        if let Some(lb) = self.layout_box.as_ref()
+                                                            && let Some((rect, msg)) = forms::find_control_rect_and_error(lb, &doc, first_invalid)
+                                                        {
+                                                            self.validation_tooltip = Some((rect, msg));
+                                                            if let Some(w) = self.window.as_ref() {
+                                                                w.request_redraw();
+                                                            }
+                                                        }
+                                                        eprintln!(
+                                                            "forms: submit blocked — {} control(s) failed constraint validation",
+                                                            invalid_controls.len()
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }

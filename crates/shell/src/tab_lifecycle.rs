@@ -8,7 +8,6 @@
 /// - OS memory pressure
 /// - LRU within budget
 /// - User pin
-
 use std::time::{Duration, SystemTime};
 
 /// Tab lifecycle state (memory tier).

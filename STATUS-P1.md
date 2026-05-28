@@ -1,6 +1,7 @@
 In progress: none
-Next task: CSS property wiring P4 integration ready for handoff. Next P1 feature TBD based on phase planning.
+Next task: next P1 feature from Phase 2 roadmap TBD
 
+Recent completion: 8A.3 ✅ — accessibility-forms-validation Phase 3 (submit_form() integration into shell dispatch, FormSubmitEvent::Valid/Invalid handling, encode_form_fields + find_control_rect_and_error helpers, 189 tests PASS lumen-dom, clippy clean, 2026-05-28)
 Recent completion: 8A.2 ✅ — InProcessSession adapter for lumen-core::ext::BrowserSession (all 12 trait methods, 6 new unit tests, 27 total PASS, clippy clean, 2026-05-28)
 Recent completion: 8A.1 ✅ — BrowserSession trait in lumen-core::ext (12 methods, null stub, 4 unit tests, clippy clean, 172 tests PASS, 2026-05-28)
 
