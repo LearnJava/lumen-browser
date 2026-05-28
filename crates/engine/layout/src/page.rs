@@ -235,6 +235,28 @@ impl PageBox {
         }
     }
 
+    /// Apply content functions to margin-boxes and generate text.
+    ///
+    /// Takes content specifications (content functions) and resolves them
+    /// to actual text using the current page counters.
+    pub fn apply_margin_box_content(
+        &mut self,
+        content_map: &HashMap<MarginBoxPosition, Vec<ContentFunction>>,
+        counters: &PageCounters,
+    ) {
+        for (position, functions) in content_map {
+            let mut text_content = String::new();
+            for func in functions {
+                text_content.push_str(&resolve_content_function(func, counters));
+            }
+            if let Some(margin_box) = self.margin_boxes.get_mut(position)
+                && !text_content.is_empty()
+            {
+                margin_box.content = Some(text_content);
+            }
+        }
+    }
+
     /// Layout all 16 margin-boxes based on page properties.
     ///
     /// CSS Paged Media L3 §3.2 — margin-box positioning algorithm:
@@ -483,6 +505,238 @@ pub fn compute_page_properties(
     props
 }
 
+/// Counter value for page numbering and related counters.
+///
+/// Stores named counters that can be referenced in margin-box content
+/// via `counter()` and `counters()` functions (CSS Paged Media L3 §8.2).
+#[derive(Debug, Clone)]
+pub struct PageCounters {
+    /// Map of counter name → current value.
+    ///
+    /// The special counter "page" is reserved for page numbering (1-based in output,
+    /// but stored as 0-based internally for consistency with page_number field).
+    counters: HashMap<String, i32>,
+}
+
+impl PageCounters {
+    /// Create a new counter set with the page counter initialized to 1 (page 1).
+    pub fn new(page_number: u32) -> Self {
+        let mut counters = HashMap::new();
+        // Page counter is 1-based for display purposes
+        counters.insert("page".to_string(), page_number as i32 + 1);
+        Self { counters }
+    }
+
+    /// Get the value of a named counter.
+    pub fn get(&self, name: &str) -> Option<i32> {
+        self.counters.get(name).copied()
+    }
+
+    /// Set the value of a named counter.
+    pub fn set(&mut self, name: String, value: i32) {
+        self.counters.insert(name, value);
+    }
+
+    /// Increment a counter by 1.
+    pub fn increment(&mut self, name: &str) {
+        self.counters.entry(name.to_string())
+            .and_modify(|v| *v += 1)
+            .or_insert(1);
+    }
+
+    /// Reset a counter to a specified value.
+    pub fn reset(&mut self, name: String, value: i32) {
+        self.counters.insert(name, value);
+    }
+}
+
+/// Represents a content function used in margin-box content generation.
+///
+/// Content functions generate text that appears in margin-boxes based on
+/// page properties (CSS Paged Media L3 §8).
+#[derive(Debug, Clone)]
+pub enum ContentFunction {
+    /// `counter(page)` — current page number.
+    /// Roman numeral style variants (e.g., counter(page, lower-roman)) are not yet supported.
+    Counter {
+        /// Counter name (typically "page").
+        name: String,
+        /// Style: "decimal" (default), "roman", "lower-roman", "alpha", "lower-alpha", etc.
+        style: String,
+    },
+    /// `counters(page, ".", decimal)` — counter with separator between nested counters.
+    Counters {
+        /// Counter name.
+        name: String,
+        /// Separator string (e.g., "." or "-").
+        separator: String,
+        /// Number style.
+        style: String,
+    },
+    /// `string(name)` — named string set via element's string-set property.
+    String { name: String },
+    /// `target-counter(url(), page)` — page number of target element (not yet implemented).
+    TargetCounter { url: String, name: String },
+    /// Literal text (not a function).
+    Literal { text: String },
+}
+
+/// Converts a counter value to a formatted string based on the specified style.
+///
+/// Supports CSS Paged Media counter styles: decimal, lower-roman, upper-roman, etc.
+fn format_counter(value: i32, style: &str) -> String {
+    match style {
+        "lower-roman" => format_roman(value as u32, true),
+        "upper-roman" => format_roman(value as u32, false),
+        "lower-alpha" => {
+            if value > 0 && value <= 26 {
+                ((b'a' + (value as u8 - 1)) as char).to_string()
+            } else {
+                value.to_string()
+            }
+        }
+        "upper-alpha" => {
+            if value > 0 && value <= 26 {
+                ((b'A' + (value as u8 - 1)) as char).to_string()
+            } else {
+                value.to_string()
+            }
+        }
+        _ => value.to_string(), // "decimal" and default
+    }
+}
+
+/// Convert a number to Roman numerals (lowercase if specified).
+fn format_roman(mut value: u32, lowercase: bool) -> String {
+    let symbols = if lowercase {
+        [
+            ("m", 1000),
+            ("cm", 900),
+            ("d", 500),
+            ("cd", 400),
+            ("c", 100),
+            ("xc", 90),
+            ("l", 50),
+            ("xl", 40),
+            ("x", 10),
+            ("ix", 9),
+            ("v", 5),
+            ("iv", 4),
+            ("i", 1),
+        ]
+    } else {
+        [
+            ("M", 1000),
+            ("CM", 900),
+            ("D", 500),
+            ("CD", 400),
+            ("C", 100),
+            ("XC", 90),
+            ("L", 50),
+            ("XL", 40),
+            ("X", 10),
+            ("IX", 9),
+            ("V", 5),
+            ("IV", 4),
+            ("I", 1),
+        ]
+    };
+
+    let mut result = String::new();
+    for (symbol, val) in &symbols {
+        while value >= *val {
+            result.push_str(symbol);
+            value -= val;
+        }
+    }
+    result
+}
+
+/// Resolves a content function to its text representation.
+///
+/// This function evaluates counter() and counters() functions using the current
+/// page number and counter state.
+pub fn resolve_content_function(func: &ContentFunction, counters: &PageCounters) -> String {
+    match func {
+        ContentFunction::Counter { name, style } => {
+            counters
+                .get(name)
+                .map(|v| format_counter(v, style))
+                .unwrap_or_default()
+        }
+        ContentFunction::Counters { name, separator: _, style } => {
+            counters
+                .get(name)
+                .map(|v| format_counter(v, style))
+                .unwrap_or_default()
+            // TODO: support nested counters (scope stacks)
+            // For now, just return the counter value
+        }
+        ContentFunction::String { name: _ } => {
+            // TODO: implement named string support (string-set property)
+            String::new()
+        }
+        ContentFunction::TargetCounter { url: _, name: _ } => {
+            // TODO: implement target-counter() for cross-references
+            String::new()
+        }
+        ContentFunction::Literal { text } => text.clone(),
+    }
+}
+
+/// Common margin-box content preset: page number at bottom center.
+///
+/// Creates a simple page numbering configuration suitable for most documents.
+pub fn create_page_number_footer() -> HashMap<MarginBoxPosition, Vec<ContentFunction>> {
+    let mut content = HashMap::new();
+    content.insert(
+        MarginBoxPosition::BottomCenter,
+        vec![ContentFunction::Counter {
+            name: "page".to_string(),
+            style: "decimal".to_string(),
+        }],
+    );
+    content
+}
+
+/// Common margin-box content preset: page number at top center.
+///
+/// Alternative page numbering configuration for documents with top headers.
+pub fn create_page_number_header() -> HashMap<MarginBoxPosition, Vec<ContentFunction>> {
+    let mut content = HashMap::new();
+    content.insert(
+        MarginBoxPosition::TopCenter,
+        vec![ContentFunction::Counter {
+            name: "page".to_string(),
+            style: "decimal".to_string(),
+        }],
+    );
+    content
+}
+
+/// Common margin-box content preset: custom header and footer.
+///
+/// Takes custom text for header (top-center) and footer (bottom-center).
+pub fn create_header_footer(header: Option<String>, footer: Option<String>) -> HashMap<MarginBoxPosition, Vec<ContentFunction>> {
+    let mut content = HashMap::new();
+
+    if let Some(h) = header {
+        content.insert(
+            MarginBoxPosition::TopCenter,
+            vec![ContentFunction::Literal { text: h }],
+        );
+    }
+
+    if let Some(f) = footer {
+        content.insert(
+            MarginBoxPosition::BottomCenter,
+            vec![ContentFunction::Literal { text: f }],
+        );
+    }
+
+    content
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -701,5 +955,155 @@ mod tests {
         assert_eq!(props.margin_top, 100.0);
         assert_eq!(props.margin_left, 50.0);
         assert_eq!(props.margin_right, props.margin_right); // unchanged
+    }
+
+    #[test]
+    fn test_page_counters_new() {
+        let counters = PageCounters::new(0);
+        assert_eq!(counters.get("page"), Some(1));
+    }
+
+    #[test]
+    fn test_page_counters_increment() {
+        let mut counters = PageCounters::new(5);
+        assert_eq!(counters.get("page"), Some(6));
+        counters.increment("page");
+        assert_eq!(counters.get("page"), Some(7));
+    }
+
+    #[test]
+    fn test_page_counters_set_and_get() {
+        let mut counters = PageCounters::new(0);
+        counters.set("chapter".to_string(), 3);
+        assert_eq!(counters.get("chapter"), Some(3));
+    }
+
+    #[test]
+    fn test_page_counters_reset() {
+        let mut counters = PageCounters::new(5);
+        counters.reset("page".to_string(), 1);
+        assert_eq!(counters.get("page"), Some(1));
+    }
+
+    #[test]
+    fn test_format_counter_decimal() {
+        assert_eq!(format_counter(1, "decimal"), "1");
+        assert_eq!(format_counter(42, "decimal"), "42");
+        assert_eq!(format_counter(100, "decimal"), "100");
+    }
+
+    #[test]
+    fn test_format_counter_lower_roman() {
+        assert_eq!(format_counter(1, "lower-roman"), "i");
+        assert_eq!(format_counter(4, "lower-roman"), "iv");
+        assert_eq!(format_counter(9, "lower-roman"), "ix");
+        assert_eq!(format_counter(27, "lower-roman"), "xxvii");
+    }
+
+    #[test]
+    fn test_format_counter_upper_roman() {
+        assert_eq!(format_counter(1, "upper-roman"), "I");
+        assert_eq!(format_counter(4, "upper-roman"), "IV");
+        assert_eq!(format_counter(9, "upper-roman"), "IX");
+        assert_eq!(format_counter(27, "upper-roman"), "XXVII");
+    }
+
+    #[test]
+    fn test_format_counter_lower_alpha() {
+        assert_eq!(format_counter(1, "lower-alpha"), "a");
+        assert_eq!(format_counter(26, "lower-alpha"), "z");
+        assert_eq!(format_counter(27, "lower-alpha"), "27"); // out of range
+    }
+
+    #[test]
+    fn test_format_counter_upper_alpha() {
+        assert_eq!(format_counter(1, "upper-alpha"), "A");
+        assert_eq!(format_counter(26, "upper-alpha"), "Z");
+    }
+
+    #[test]
+    fn test_resolve_content_function_counter() {
+        let counters = PageCounters::new(2);
+        let func = ContentFunction::Counter {
+            name: "page".to_string(),
+            style: "decimal".to_string(),
+        };
+        let result = resolve_content_function(&func, &counters);
+        assert_eq!(result, "3");
+    }
+
+    #[test]
+    fn test_resolve_content_function_counter_roman() {
+        let counters = PageCounters::new(3);
+        let func = ContentFunction::Counter {
+            name: "page".to_string(),
+            style: "lower-roman".to_string(),
+        };
+        let result = resolve_content_function(&func, &counters);
+        assert_eq!(result, "iv");
+    }
+
+    #[test]
+    fn test_resolve_content_function_literal() {
+        let counters = PageCounters::new(0);
+        let func = ContentFunction::Literal {
+            text: "Chapter 1".to_string(),
+        };
+        let result = resolve_content_function(&func, &counters);
+        assert_eq!(result, "Chapter 1");
+    }
+
+    #[test]
+    fn test_apply_margin_box_content() {
+        let mut page = PageBox::new(0, PageProperties::default_a4());
+        page.layout_margin_boxes();
+
+        let counters = PageCounters::new(0);
+        let mut content_map = HashMap::new();
+        content_map.insert(
+            MarginBoxPosition::BottomCenter,
+            vec![ContentFunction::Counter {
+                name: "page".to_string(),
+                style: "decimal".to_string(),
+            }],
+        );
+
+        page.apply_margin_box_content(&content_map, &counters);
+
+        let bottom_center = page.get_margin_box(MarginBoxPosition::BottomCenter).unwrap();
+        assert_eq!(bottom_center.content, Some("1".to_string()));
+    }
+
+    #[test]
+    fn test_create_page_number_footer() {
+        let content = create_page_number_footer();
+        assert!(content.contains_key(&MarginBoxPosition::BottomCenter));
+        assert_eq!(content.len(), 1);
+    }
+
+    #[test]
+    fn test_create_page_number_header() {
+        let content = create_page_number_header();
+        assert!(content.contains_key(&MarginBoxPosition::TopCenter));
+        assert_eq!(content.len(), 1);
+    }
+
+    #[test]
+    fn test_create_header_footer_both() {
+        let content = create_header_footer(
+            Some("Chapter 1".to_string()),
+            Some("Page Bottom".to_string()),
+        );
+        assert!(content.contains_key(&MarginBoxPosition::TopCenter));
+        assert!(content.contains_key(&MarginBoxPosition::BottomCenter));
+        assert_eq!(content.len(), 2);
+    }
+
+    #[test]
+    fn test_create_header_footer_partial() {
+        let content = create_header_footer(Some("Header".to_string()), None);
+        assert!(content.contains_key(&MarginBoxPosition::TopCenter));
+        assert!(!content.contains_key(&MarginBoxPosition::BottomCenter));
+        assert_eq!(content.len(), 1);
     }
 }
