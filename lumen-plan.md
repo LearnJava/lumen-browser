@@ -301,7 +301,7 @@
 | 8A.1 | ⬜ `BrowserSession` trait в `lumen-core::ext` (sigs + todo!()) | `core/src/ext/automation.rs` | — |
 | 8A.2 | ⬜ `InProcessSession` impl (переиспользует существующий pipeline из `lumen-shell`) | `driver/src/in_process.rs` | — |
 | 8A.3 | ⬜ **`[P3+P2]` Off-screen рендер** (`Renderer::render_to_image() -> Image`) | `paint/src/renderer.rs` | P2: отдельный wgpu surface без winit |
-| 8A.4 | ⬜ **`[P3+P1]` Structural getters**: `layout_box`, `computed_style` через handle / selector | `driver` + `layout` exposers | P1: pub API на LayoutBox / ComputedStyle accessor по селектору |
+| 8A.4 | ✅ **`[P3+P1]` Structural getters**: `layout_box`, `computed_style` через handle / selector | `layout` exposers: `find_box_by_selector`, `computed_style_by_selector`, `ComputedStyleSnapshot` | 2026-05-27 |
 | 8A.5 | ⬜ Software rasterizer для тестов (`tiny-skia` opt-in под `cfg(test)`) | `paint/src/cpu_raster.rs` | детерминизм пикселей Windows/macOS/Linux CI |
 | 8A.6 | ⬜ Миграция `graphic_tests/`: structural-assert Rust-тесты + `graphic_tests/snapshots/*.png` эталоны | `driver/tests/graphic_*.rs` + `graphic_tests/snapshots/` | каждый из 22 текущих HTML-тестов |
 | 8A.7 | ⬜ Шелл переписать как первого клиента trait-а (winit/wgpu → один из транспортов) | `shell/src/main.rs` | — |

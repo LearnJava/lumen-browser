@@ -1,6 +1,7 @@
 In progress: none
 Next task: assess Phase 3 P1 layout/DOM work; pending items: contenteditable Phase 3 (P3 shell integration), svg-layout Phase 4 (P2 paint), print-pdf inline content (P2 paint), font-loading-api Phase 2 (P3 binding), performance-observer Phase 2 (P3 binding)
 
+Recent merge: 8A.4 Structural getters ✅ — LayoutBox::find_descendant_by_selector/find_all_descendants_by_selector/style_snapshot methods + ComputedStyleSnapshot + find_box_by_selector/find_all_by_selector/computed_style_by_selector pub functions, selector matching via CSS3 engine, 3 integration tests, clippy clean 2026-05-27
 Recent merge: ime-input Phase 3 ✅ — virtual keyboard hints via InputMode enum (InputMode::parse, as_str, Node::input_mode for input/textarea), 9 unit tests, 189 total PASS, clippy clean 2026-05-31
 Recent merge: print-pdf-advanced Phase 4 ✅ — real font measurement in margin-boxes (TextMeasurer integration, measure_text_w in layout_text, apply_margin_box_content with font_size param), 42 page tests PASS, 2026-05-31
 Recent merge: print-pdf-advanced Phase 3 ✅ — margin-box text layout (MarginBoxTextFragment, layout_text() method with word wrapping, 8 new tests), 39 page tests PASS, 2026-05-30
