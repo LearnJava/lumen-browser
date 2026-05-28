@@ -185,13 +185,13 @@
 | # | Задача | impl / Разблокирует | Дата |
 |---|---|---|---|
 | 6+ | ⬜ **`[P1+P3]` Shadow DOM / Accessibility / Forms / GC extended** | Advanced contenteditable, form validation, accessibility full integration | Phase 2-3 |
-| 6.1 | ⬜ contenteditable drag-drop + paste + undo/redo | Input dispatch coordination with shell | Phase 2 |
-| 6.2 | ⬜ accessibility forms validation + visualization | Constraint validation in accessibility tree | Phase 2 |
-| 6.3 | ⬜ ime-input composition events + ranges | Keyboard input for CJK/Cyrillic | Phase 2 |
-| 6.4 | ⬜ svg-layout advanced transforms + viewport nesting | SVG aspect-ratio preservation | Phase 2 |
-| 6.5 | ⬜ print-pdf advanced @page margin boxes + headers/footers | Full print pipeline from margin-box content | Phase 2 |
-| 6.6 | ⬜ animation keyframe easing (cubic-bezier/steps) | Full timing functions support | Phase 2 |
-| 6.7 | ⬜ transition advanced (interrupted/fill-mode/grouped) | Animation lifecycle completeness | Phase 2 |
+| 6.1 | ✅ contenteditable drag-drop + paste + undo/redo | Input dispatch coordination with shell | Phase 2 ✅ P1 done (2026-05-28); Phase 3 P3 shell integration pending |
+| 6.2 | ✅ accessibility forms validation + visualization | Constraint validation in accessibility tree | Phase 1-3 ✅ P1 done (2026-05-28); P3 pending |
+| 6.3 | ✅ ime-input composition events + ranges | Keyboard input for CJK/Cyrillic | Phase 1-3 ✅ P1 done (2026-05-31); Phase 2-3 P3 shell integration pending |
+| 6.4 | ✅ svg-layout advanced transforms + viewport nesting | SVG aspect-ratio preservation | Phase 1-3 ✅ P1 done (2026-05-30); Phase 4 P2 paint/render pending |
+| 6.5 | ✅ print-pdf advanced @page margin boxes + headers/footers | Full print pipeline from margin-box content | Phase 1-4 ✅ P1 done (2026-05-31); P2 inline content rendering pending |
+| 6.6 | ✅ animation keyframe easing (cubic-bezier/steps) | Full timing functions support | Phase 1-2 ✅ P1 done (2026-05-20); complete in Phase 0 |
+| 6.7 | ✅ transition advanced (interrupted/fill-mode/grouped) | Animation lifecycle completeness | Phase 1-3 ✅ P1 done (2026-05-28) |
 | 6.8 | ✅ **`[P1+P3]` font-loading API** | @font-face lifecycle, FontFace interface, document.fonts | Phase 1 ✅ P1 done; Phase 2 ✅ JS bindings (_lumen_fonts_*); Phase 3 P3 pending |
 | 6.9 | 🟡 **`[P1+P3]` performance-observer timing** | PerformanceEntry/PerformanceObserver types, mark/measure, observer delivery | Phase 1 ✅ P1 done (DOM types + mark/measure); Phase 2+ P3 JS binding + observer callback |
 
