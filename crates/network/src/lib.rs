@@ -56,6 +56,7 @@ pub(crate) mod websocket;
 pub use auth::StaticCredentialProvider;
 pub use brotli::BrotliContentDecoder;
 pub use http_cache::HttpCache;
+pub use http::{HttpProfile, H2Settings, H2StreamPriority, ClientHintsProfile, HeaderOrder};
 pub use mock::MockTransport;
 pub use tls::{TlsProfile, TlsHandshakeInfo, CHROME_130_JA3_SNAPSHOT};
 pub use cors::{
@@ -83,7 +84,6 @@ pub use range::{
 pub use sandbox::{SandboxFlags, parse_sandbox_value};
 
 use pool::PoolKey;
-use self::http::HttpProfile;
 
 /// Проверяет, что схема URL поддерживается транспортом (http/https) и
 /// извлекает всё, что нужно для connect: ASCII-форму host (Punycode для
@@ -1560,6 +1560,22 @@ impl HttpClient {
     pub fn with_http_cache(mut self, cache: Arc<http_cache::HttpCache>) -> Self {
         self.http_cache = Some(cache);
         self
+    }
+
+    /// Установить HTTP fingerprinting profile (Standard/Strict/Tor) для Chrome-matching
+    /// header order и Client Hints handling (ADR-007 §3.1). По умолчанию — Standard.
+    /// - Standard: полная Chrome 130+ совместимость (header order + Client Hints)
+    /// - Strict: private-mode, Client Hints отключены
+    /// - Tor: минимальный fingerprint для tor-browser
+    #[must_use]
+    pub fn with_fingerprint_profile(mut self, profile: HttpProfile) -> Self {
+        self.fingerprint_profile = profile;
+        self
+    }
+
+    /// Получить текущий HTTP fingerprinting profile.
+    pub fn fingerprint_profile(&self) -> HttpProfile {
+        self.fingerprint_profile
     }
 
     /// CORS-enabled fetch для cross-origin subresource (Fetch §3-§4).
