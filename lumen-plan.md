@@ -165,20 +165,20 @@
 | 5.4 | ✅ word_boundaries impl | `encoding/src/unicode_provider.rs` | — |
 | 5.5 | ✅ bidi_runs impl | `encoding/src/unicode_provider.rs` | — |
 
-#### Phase 1 (in progress)
+#### Phase 1 ✅ (complete)
 
 | # | Задача | impl / Разблокирует | Дата |
 |---|---|---|---|
-| 8G.1 | ⬜ **`[P1+P3]` lumen-a11y-full stage 1** | ARIA role mapping (60+ variants), text alternatives (accname §4) | Phase 1 |
-| 8G.2 | ⬜ **`[P1+P3]` lumen-a11y-full stage 2** | ARIA attributes (aria-current/modal/roledescription/valuenow/controls/owns/flowto/details), NodeId storage | Phase 1 |
-| 8G.3 | ⬜ **`[P1+P3]` lumen-a11y-full stage 3** | Full computed role mapping HTML-AAM, focus model, form control text alternatives | Phase 1 |
-| 10B | ⬜ **`[P1+P3]` Invariant 1: DOM arena serialization** | NodeId(u32) no Rc<RefCell>, bincode::serialize/deserialize for T3 snapshot | ADR-008 Phase 1 |
-| 10D.1 | ⬜ **`[P1]` Invariant 3a: layout pure audit** | No static MUT / lazy_static / OnceCell in hot path | ADR-008 Phase 1 |
-| 10D.2 | ⬜ **`[P1]` Invariant 3b: paint pure audit** | display_list pure-function requirement for serialization | ADR-008 Phase 1 |
-| 9D.1 | ⬜ **`[P1+P2]` Canvas randomization** | Brave-style per-session seed noise, getImageData RGBA modification | ADR-007 Phase 1 |
-| 9D.2 | ⬜ **`[P1+P2]` WebGL normalize** | Renderer/vendor strings to generic "WebKit"/"Generic GPU" | ADR-007 Phase 1 |
-| 10F | ⬜ **`[P1+P2+P3]` GPU layer LRU** | LayerCache with LRU + GPU memory budget, texture pool recycling | ADR-008 Phase 1 |
-| 10G | ⬜ **`[P1+P2+P3]` Glyph atlas eviction** | LRU eviction of rarely-used glyphs from atlas | ADR-008 Phase 1 |
+| 8G.1 | ✅ **`[P1+P3]` lumen-a11y-full stage 1** | ARIA role mapping (67 variants in `a11y/src/roles.rs`), text alternatives (accname §4) | Phase 1 ✅ 2026-05-27 |
+| 8G.2 | ✅ **`[P1+P3]` lumen-a11y-full stage 2** | ARIA attributes (aria-current/modal/roledescription/valuenow/controls/owns/flowto/details), NodeId storage | Phase 1 ✅ 2026-05-27 |
+| 8G.3 | ✅ **`[P1+P3]` lumen-a11y-full stage 3** | Full computed role mapping HTML-AAM, focus model, form control text alternatives, 125 tests PASS | Phase 1 ✅ 2026-05-27 |
+| 10B | ✅ **`[P1+P3]` Invariant 1: DOM arena serialization** | `NodeId(u32)` no `Rc<RefCell>`, `Document::to_bytes`/`from_bytes` via bincode for T3 snapshot | ADR-008 Phase 1 ✅ 2026-05-27 |
+| 10D.1 | ✅ **`[P1]` Invariant 3a: layout pure audit** | No `static MUT` / `lazy_static!` / `OnceCell` in `lumen-layout/src` hot path | ADR-008 Phase 1 ✅ 2026-05-27 |
+| 10D.2 | ✅ **`[P1]` Invariant 3b: paint pure audit** | `paint/src/display_list.rs` pure-function requirement met (only comment marker present) | ADR-008 Phase 1 ✅ 2026-05-27 |
+| 9D.1 | ✅ **`[P1+P2]` Canvas randomization** | `CanvasNoiseGenerator` LCG RNG in `canvas/src/fp_noise.rs`, per-session seed, 20 tests | ADR-007 Phase 1 ✅ 2026-05-28 |
+| 9D.2 | ✅ **`[P1+P2]` WebGL normalize** | `GpuFingerprint` struct in `paint/src/fingerprint.rs`, adapter normalization, 5 tests | ADR-007 Phase 1 ✅ 2026-05-28 |
+| 10F | ✅ **`[P1+P2+P3]` GPU layer LRU** | `LayerCache` in `paint/src/layer_cache.rs`, LRU + GPU memory budget, 7 tests | ADR-008 Phase 1 ✅ 2026-05-28 |
+| 10G | ✅ **`[P1+P2+P3]` Glyph atlas eviction** | LRU eviction in `paint/src/atlas.rs` (`get_lru_candidates`, `remove_keys`), 4 tests | ADR-008 Phase 1 ✅ 2026-05-27 |
 
 #### Phase 2-3 (planned)
 
