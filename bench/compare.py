@@ -53,18 +53,20 @@ def run_bench() -> str:
 
 def parse_bench_output(output: str) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float]]:
     """
-    Parse bench output: time phases + RSS line.
+    Parse bench output: time phases + RSS + PEAK_RSS + steady_state_rss.
     Returns (metrics, ram_metrics) where:
     - metrics: {phase: {min, median, mean, p95, max}}
-    - ram_metrics: {metric_name: value}
+    - ram_metrics: {metric_name: value} — includes RSS, PEAK_RSS, steady_state_rss
     """
     metrics = {}
     ram_metrics = {}
 
     # Match lines with phase name and 5 values (min, median, mean, p95, max)
     time_pattern = r'^\s*(\w+)\s+min\s+([\d.]+)\s+\w+\s+med\s+([\d.]+)\s+\w+\s+mean\s+([\d.]+)\s+\w+\s+p95\s+([\d.]+)\s+\w+\s+max\s+([\d.]+)'
-    # Match RSS line: "RSS  min 4.30 MB  med 4.41 MB  mean 4.40 MB  p95 4.43 MB  max 4.44 MB"
-    rss_pattern = r'^\s*RSS\s+min\s+([\d.]+)\s+\w+\s+med\s+([\d.]+)\s+\w+\s+mean\s+([\d.]+)\s+\w+\s+p95\s+([\d.]+)\s+\w+\s+max\s+([\d.]+)'
+    # Match RSS/PEAK_RSS lines with format: "RSS  min 4.30 MB  med 4.41 MB  mean 4.40 MB  p95 4.43 MB  max 4.44 MB"
+    rss_pattern = r'^\s*(RSS|PEAK_RSS)\s+min\s+([\d.]+)\s+\w+\s+med\s+([\d.]+)\s+\w+\s+mean\s+([\d.]+)\s+\w+\s+p95\s+([\d.]+)\s+\w+\s+max\s+([\d.]+)'
+    # Match steady_state_rss: "steady_state_rss: 4 MB"
+    steady_state_pattern = r'^\s*steady_state_rss:\s+([\d.]+)\s+\w+'
 
     for line in output.split('\n'):
         if not line.strip():
@@ -83,17 +85,25 @@ def parse_bench_output(output: str) -> Tuple[Dict[str, Dict[str, float]], Dict[s
             }
             continue
 
-        # Try RSS match
+        # Try RSS/PEAK_RSS match
         match = re.match(rss_pattern, line)
         if match:
-            min_v, med_v, mean_v, p95_v, max_v = match.groups()
-            ram_metrics = {
+            metric_name, min_v, med_v, mean_v, p95_v, max_v = match.groups()
+            metric_key = metric_name.lower()  # 'rss' or 'peak_rss'
+            ram_metrics[metric_key] = {
                 'min': float(min_v),
                 'median': float(med_v),
                 'mean': float(mean_v),
                 'p95': float(p95_v),
                 'max': float(max_v),
             }
+            continue
+
+        # Try steady_state_rss match
+        match = re.match(steady_state_pattern, line)
+        if match:
+            steady_val = float(match.group(1))
+            ram_metrics['steady_state_rss'] = steady_val
 
     return metrics, ram_metrics
 
@@ -142,32 +152,77 @@ def compare_metrics(baseline: Dict, current_metrics: Dict[str, Dict], current_ra
                 f"  {phase:12} {metric_name:7} [{symbol:4}] {base_str:>7} -> {curr_str:>7} ({change_pct:+.1f}%)"
             )
 
-    # Compare RAM metrics (peak_rss, steady_state)
+    # Compare RAM metrics (RSS, peak_rss, steady_state_rss)
     if current_ram and 'ram_axis' in baseline:
         ram_baseline = baseline['ram_axis']
 
-        # peak_rss (median + p95)
-        if 'peak_rss_mb' in ram_baseline and current_ram:
+        # RSS (current RSS: median + p95)
+        if 'rss' in ram_baseline and 'rss' in current_ram:
+            base_rss = ram_baseline.get('rss', {})
+            curr_rss = current_ram.get('rss', {})
+
             for metric_name in ['median', 'p95']:
-                base_key = 'median' if metric_name == 'median' else 'p95'
-                if base_key in ram_baseline.get('peak_rss_mb', {}):
-                    base_val = ram_baseline['peak_rss_mb'][base_key]
-                    curr_val = current_ram.get(base_key, 0)
+                base_val = base_rss.get(metric_name, 0)
+                curr_val = curr_rss.get(metric_name, 0)
 
-                    if base_val > 0 and curr_val > 0:
-                        change = (curr_val - base_val) / base_val
-                        change_pct = change * 100
+                if base_val > 0 and curr_val > 0:
+                    change = (curr_val - base_val) / base_val
+                    change_pct = change * 100
 
-                        symbol = 'OK'
-                        if change > REGRESSION_THRESHOLD:
-                            symbol = 'FAIL'
-                            regressions.append(('RSS', metric_name, change_pct, 'ram'))
-                        elif change < -REGRESSION_THRESHOLD:
-                            symbol = 'IMPR'
+                    symbol = 'OK'
+                    if change > REGRESSION_THRESHOLD:
+                        symbol = 'FAIL'
+                        regressions.append(('RSS', metric_name, change_pct, 'ram'))
+                    elif change < -REGRESSION_THRESHOLD:
+                        symbol = 'IMPR'
 
-                        report_lines.append(
-                            f"  {'RSS':12} {metric_name:7} [{symbol:4}] {base_val:>7.2f} -> {curr_val:>7.2f} ({change_pct:+.1f}%)"
-                        )
+                    report_lines.append(
+                        f"  {'RSS':12} {metric_name:7} [{symbol:4}] {base_val:>7.2f} -> {curr_val:>7.2f} ({change_pct:+.1f}%)"
+                    )
+
+        # peak_rss (median + p95)
+        if 'peak_rss' in ram_baseline and 'peak_rss' in current_ram:
+            base_peak = ram_baseline.get('peak_rss', {})
+            curr_peak = current_ram.get('peak_rss', {})
+
+            for metric_name in ['median', 'p95']:
+                base_val = base_peak.get(metric_name, 0)
+                curr_val = curr_peak.get(metric_name, 0)
+
+                if base_val > 0 and curr_val > 0:
+                    change = (curr_val - base_val) / base_val
+                    change_pct = change * 100
+
+                    symbol = 'OK'
+                    if change > REGRESSION_THRESHOLD:
+                        symbol = 'FAIL'
+                        regressions.append(('PEAK_RSS', metric_name, change_pct, 'ram'))
+                    elif change < -REGRESSION_THRESHOLD:
+                        symbol = 'IMPR'
+
+                    report_lines.append(
+                        f"  {'PEAK_RSS':12} {metric_name:7} [{symbol:4}] {base_val:>7.2f} -> {curr_val:>7.2f} ({change_pct:+.1f}%)"
+                    )
+
+        # steady_state_rss (scalar value)
+        if 'steady_state_rss' in ram_baseline and 'steady_state_rss' in current_ram:
+            base_steady = ram_baseline.get('steady_state_rss', 0)
+            curr_steady = current_ram.get('steady_state_rss', 0)
+
+            if base_steady > 0 and curr_steady > 0:
+                change = (curr_steady - base_steady) / base_steady
+                change_pct = change * 100
+
+                symbol = 'OK'
+                if change > REGRESSION_THRESHOLD:
+                    symbol = 'FAIL'
+                    regressions.append(('steady_state_rss', 'value', change_pct, 'ram'))
+                elif change < -REGRESSION_THRESHOLD:
+                    symbol = 'IMPR'
+
+                report_lines.append(
+                    f"  {'steady_state':12} {'value':7} [{symbol:4}] {base_steady:>7.2f} -> {curr_steady:>7.2f} ({change_pct:+.1f}%)"
+                )
 
     passed = len(regressions) == 0
     report = "\n".join(report_lines)

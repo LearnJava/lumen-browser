@@ -64,11 +64,23 @@
     }
   },
   "ram_axis": {
-    "peak_rss_mb": {
+    "rss": {
+      "unit": "megabytes",
+      "min": 4.24,
       "median": 4.29,
-      "p95": 4.32
+      "mean": 4.29,
+      "p95": 4.32,
+      "max": 4.33
     },
-    "steady_state_mb": 4.29
+    "peak_rss": {
+      "unit": "megabytes",
+      "min": 4.24,
+      "median": 4.29,
+      "mean": 4.29,
+      "p95": 4.32,
+      "max": 4.33
+    },
+    "steady_state_rss": 4.29
   },
   "page_info": {
     "file": "samples/page.html",
