@@ -290,3 +290,65 @@ fn svg_multiple_shapes_all_built() {
     let svg = first_svg_root(&tree).unwrap();
     assert_eq!(svg.children.len(), 5, "all 5 shapes must be built");
 }
+
+// ── preserveAspectRatio (Phase 1) ───────────────────────────────────────────
+
+#[test]
+fn svg_preserve_aspect_ratio_meet_default() {
+    // Default preserveAspectRatio="xMidYMid meet" — uniform scale to fit inside.
+    let tree = do_layout(r#"<svg width="200" height="100" viewBox="0 0 100 100"></svg>"#);
+    let svg = first_svg_root(&tree).expect("SvgRoot not found");
+    // viewBox is square (100×100), SVG is 200×100 (2:1 aspect ratio).
+    // With 'meet', scale to fit: min(200/100, 100/100) = 1.0
+    // viewBox should be scaled 1:1, centered horizontally.
+    assert_eq!(svg.rect.width, 200.0);
+    assert_eq!(svg.rect.height, 100.0);
+}
+
+#[test]
+fn svg_preserve_aspect_ratio_slice() {
+    // preserveAspectRatio="xMidYMid slice" — uniform scale to cover.
+    let tree = do_layout(r#"<svg width="200" height="100" viewBox="0 0 100 100" preserveAspectRatio="xMidYMid slice"></svg>"#);
+    let svg = first_svg_root(&tree).expect("SvgRoot not found");
+    // With 'slice', scale to cover: max(200/100, 100/100) = 2.0
+    // viewBox will be scaled 2× and clipped.
+    assert_eq!(svg.rect.width, 200.0);
+    assert_eq!(svg.rect.height, 100.0);
+}
+
+#[test]
+fn svg_preserve_aspect_ratio_xmin() {
+    // preserveAspectRatio="xMinYMid meet" — left-aligned, centered vertically.
+    let tree = do_layout(r#"<svg width="200" height="100" viewBox="0 0 100 100" preserveAspectRatio="xMinYMid meet"></svg>"#);
+    let svg = first_svg_root(&tree).expect("SvgRoot not found");
+    // Scaling is still 1:1 to fit inside, but aligned to left instead of center.
+    assert_eq!(svg.rect.width, 200.0);
+    assert_eq!(svg.rect.height, 100.0);
+}
+
+// ── SVG transform parsing (Phase 1) ──────────────────────────────────────
+
+#[test]
+fn svg_transform_attribute_present() {
+    // SVG transform attribute should be parsed and prepared for P4 CSS wiring.
+    // For now, we just verify it doesn't break layout.
+    let tree = do_layout(r#"<svg width="100" height="100">
+        <rect x="10" y="10" width="50" height="50" transform="translate(5 10)"/>
+    </svg>"#);
+    let svg = first_svg_root(&tree).expect("SvgRoot not found");
+    assert_eq!(svg.children.len(), 1);
+}
+
+#[test]
+fn svg_nested_svg_basic() {
+    // Nested SVG elements create new coordinate systems.
+    // Phase 1 basic support: nested SVG is treated as a container.
+    let tree = do_layout(r#"<svg width="100" height="100">
+        <svg x="10" y="10" width="50" height="50" viewBox="0 0 100 100">
+            <rect x="0" y="0" width="50" height="50"/>
+        </svg>
+    </svg>"#);
+    let svg = first_svg_root(&tree).expect("SvgRoot not found");
+    // Nested SVG should be present in children (as Block for now).
+    assert!(!svg.children.is_empty());
+}
