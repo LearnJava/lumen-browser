@@ -38,7 +38,7 @@ pub use box_tree::{
     layout_measured_hyp, BoxKind, FormControlKind, ImageRequest, InlineFrag, InlineSegment, LayoutBox,
     PseudoKind, SvgShapeKind, ViewBox,
 };
-pub use page::{MarginBox, MarginBoxPosition, PageBox, PageProperties};
+pub use page::{MarginBox, MarginBoxPosition, PageBox, PageProperties, MarginBoxTextFragment};
 pub use pagination::{paginate, Page, PageFragment, PaginationContext};
 pub use property_trees::{
     compute_local_transform, forward_box_transform, transform_fns_to_matrix,

@@ -53,7 +53,22 @@
       "mean": 261.0,
       "p95": 360.0,
       "max": 500.0
+    },
+    "RSS": {
+      "unit": "megabytes",
+      "min": 4.24,
+      "median": 4.29,
+      "mean": 4.29,
+      "p95": 4.32,
+      "max": 4.33
     }
+  },
+  "ram_axis": {
+    "peak_rss_mb": {
+      "median": 4.29,
+      "p95": 4.32
+    },
+    "steady_state_mb": 4.29
   },
   "page_info": {
     "file": "samples/page.html",
