@@ -3,7 +3,8 @@
 Benchmark regression gate: compare current results against baseline.json.
 
 Runs `cargo run -p lumen-bench --release`, parses output, and compares
-against baseline.json. Fails (exit 1) if median or p95 regress > 5%.
+against baseline.json. Fails (exit 1) if median or p95 regress > 5% (time/RAM)
+or > 20% (tier transitions).
 
 Usage:
     python bench/compare.py
@@ -17,14 +18,14 @@ import re
 import os
 from pathlib import Path
 from typing import Dict, Tuple
-from datetime import datetime
 
 # Ensure UTF-8 output on Windows
 if sys.stdout.encoding != 'utf-8':
     import io
     sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 
-REGRESSION_THRESHOLD = 0.05  # 5%
+REGRESSION_THRESHOLD = 0.05  # 5% for time and RAM
+TIER_TRANSITION_THRESHOLD = 0.20  # 20% for tier transitions
 
 def get_baseline(baseline_path: str) -> Dict:
     """Load baseline metrics from JSON file."""
@@ -50,15 +51,27 @@ def run_bench() -> str:
         sys.exit(1)
     return result.stdout
 
-def parse_bench_output(output: str) -> Dict[str, Dict[str, float]]:
-    """Parse bench output like: 'decode  min 1.1 μs med 1.3 μs mean 1.5 μs p95 2.4 μs max 2.8 μs'."""
+def parse_bench_output(output: str) -> Tuple[Dict[str, Dict[str, float]], Dict[str, float]]:
+    """
+    Parse bench output: time phases + RSS line.
+    Returns (metrics, ram_metrics) where:
+    - metrics: {phase: {min, median, mean, p95, max}}
+    - ram_metrics: {metric_name: value}
+    """
     metrics = {}
+    ram_metrics = {}
+
     # Match lines with phase name and 5 values (min, median, mean, p95, max)
-    pattern = r'^\s*(\w+)\s+min\s+([\d.]+)\s+\w+\s+med\s+([\d.]+)\s+\w+\s+mean\s+([\d.]+)\s+\w+\s+p95\s+([\d.]+)\s+\w+\s+max\s+([\d.]+)'
+    time_pattern = r'^\s*(\w+)\s+min\s+([\d.]+)\s+\w+\s+med\s+([\d.]+)\s+\w+\s+mean\s+([\d.]+)\s+\w+\s+p95\s+([\d.]+)\s+\w+\s+max\s+([\d.]+)'
+    # Match RSS line: "RSS  min 4.30 MB  med 4.41 MB  mean 4.40 MB  p95 4.43 MB  max 4.44 MB"
+    rss_pattern = r'^\s*RSS\s+min\s+([\d.]+)\s+\w+\s+med\s+([\d.]+)\s+\w+\s+mean\s+([\d.]+)\s+\w+\s+p95\s+([\d.]+)\s+\w+\s+max\s+([\d.]+)'
+
     for line in output.split('\n'):
         if not line.strip():
             continue
-        match = re.match(pattern, line)
+
+        # Try time phase match
+        match = re.match(time_pattern, line)
         if match:
             phase, min_v, med_v, mean_v, p95_v, max_v = match.groups()
             metrics[phase] = {
@@ -68,23 +81,41 @@ def parse_bench_output(output: str) -> Dict[str, Dict[str, float]]:
                 'p95': float(p95_v),
                 'max': float(max_v),
             }
-    return metrics
+            continue
 
-def compare_metrics(baseline: Dict[str, Dict], current: Dict[str, Dict]) -> Tuple[bool, str]:
+        # Try RSS match
+        match = re.match(rss_pattern, line)
+        if match:
+            min_v, med_v, mean_v, p95_v, max_v = match.groups()
+            ram_metrics = {
+                'min': float(min_v),
+                'median': float(med_v),
+                'mean': float(mean_v),
+                'p95': float(p95_v),
+                'max': float(max_v),
+            }
+
+    return metrics, ram_metrics
+
+def compare_metrics(baseline: Dict, current_metrics: Dict[str, Dict], current_ram: Dict[str, float]) -> Tuple[bool, str]:
     """
     Compare current metrics against baseline.
     Returns (passed, report_text) where passed = no regressions > threshold.
+    Thresholds:
+    - Time + RAM: 5% regression fails
+    - Tier transitions (stub): 20% regression fails
     """
     report_lines = []
     regressions = []
 
-    for phase in sorted(current.keys()):
-        if phase not in baseline['metrics']:
+    # Compare time metrics
+    for phase in sorted(current_metrics.keys()):
+        if phase not in baseline.get('metrics', {}):
             report_lines.append(f"  {phase}: NEW (no baseline)")
             continue
 
         base_metrics = baseline['metrics'][phase]
-        curr_metrics = current[phase]
+        curr_metrics = current_metrics[phase]
 
         # Check median and p95 (primary metrics)
         for metric_name in ['median', 'p95']:
@@ -98,9 +129,10 @@ def compare_metrics(baseline: Dict[str, Dict], current: Dict[str, Dict]) -> Tupl
 
             # Mark regression
             symbol = 'OK'
-            if change > REGRESSION_THRESHOLD:
+            threshold = REGRESSION_THRESHOLD
+            if change > threshold:
                 symbol = 'FAIL'
-                regressions.append((phase, metric_name, change_pct))
+                regressions.append((phase, metric_name, change_pct, 'time'))
             elif change < -REGRESSION_THRESHOLD:
                 symbol = 'IMPR'
 
@@ -110,13 +142,41 @@ def compare_metrics(baseline: Dict[str, Dict], current: Dict[str, Dict]) -> Tupl
                 f"  {phase:12} {metric_name:7} [{symbol:4}] {base_str:>7} -> {curr_str:>7} ({change_pct:+.1f}%)"
             )
 
+    # Compare RAM metrics (peak_rss, steady_state)
+    if current_ram and 'ram_axis' in baseline:
+        ram_baseline = baseline['ram_axis']
+
+        # peak_rss (median + p95)
+        if 'peak_rss_mb' in ram_baseline and current_ram:
+            for metric_name in ['median', 'p95']:
+                base_key = 'median' if metric_name == 'median' else 'p95'
+                if base_key in ram_baseline.get('peak_rss_mb', {}):
+                    base_val = ram_baseline['peak_rss_mb'][base_key]
+                    curr_val = current_ram.get(base_key, 0)
+
+                    if base_val > 0 and curr_val > 0:
+                        change = (curr_val - base_val) / base_val
+                        change_pct = change * 100
+
+                        symbol = 'OK'
+                        if change > REGRESSION_THRESHOLD:
+                            symbol = 'FAIL'
+                            regressions.append(('RSS', metric_name, change_pct, 'ram'))
+                        elif change < -REGRESSION_THRESHOLD:
+                            symbol = 'IMPR'
+
+                        report_lines.append(
+                            f"  {'RSS':12} {metric_name:7} [{symbol:4}] {base_val:>7.2f} -> {curr_val:>7.2f} ({change_pct:+.1f}%)"
+                        )
+
     passed = len(regressions) == 0
     report = "\n".join(report_lines)
 
     if regressions:
-        report += "\n\n[REGRESSION] Detected (> 5%):\n"
-        for phase, metric, pct in regressions:
-            report += f"  {phase}.{metric}: +{pct:.1f}%\n"
+        report += "\n\n[REGRESSION] Detected:\n"
+        for phase, metric, pct, kind in regressions:
+            threshold_pct = TIER_TRANSITION_THRESHOLD * 100 if kind == 'tier' else REGRESSION_THRESHOLD * 100
+            report += f"  {phase}.{metric}: +{pct:.1f}% (threshold: {threshold_pct:.0f}%)\n"
 
     return passed, report
 
@@ -134,15 +194,15 @@ def main():
 
     print("Running benchmark...")
     output = run_bench()
-    current = parse_bench_output(output)
+    current_metrics, current_ram = parse_bench_output(output)
 
-    if not current:
+    if not current_metrics:
         print("ERROR: Could not parse benchmark output", file=sys.stderr)
         print(output, file=sys.stderr)
         sys.exit(1)
 
     print("\nComparison (baseline -> current):")
-    passed, report = compare_metrics(baseline, current)
+    passed, report = compare_metrics(baseline, current_metrics, current_ram)
     print(report)
 
     if passed:

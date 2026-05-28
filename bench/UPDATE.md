@@ -89,6 +89,24 @@ Approved by: <team lead>
    Co-Authored-By: Claude Haiku 4.5 <noreply@anthropic.com>"
    ```
 
+## RAM metrics: peak_rss, steady_state, tier_transition
+
+Starting with bench-ram-axis (9G.5), benchmark tracks **three RAM axes**:
+
+1. **peak_rss_mb** (median / p95): peak resident set size during single pipeline run
+   - Reports min, median, mean, p95, max across 100 iterations
+   - Threshold: **5% regression fails the gate**
+
+2. **steady_state_mb**: RSS after warm-up (glyph atlas, image cache settled)
+   - Single value, representative of typical loaded page
+   - Threshold: **5% regression fails the gate**
+
+3. **tier_transition_rss_mb** (stub, populated in Phase 2):
+   - T0→T1 pause: JS heap freeze estimate
+   - T1→T2 snapshot: DOM serialize + heap dump size
+   - T2→T3 hibernate: disk footprint (lumen-storage)
+   - Threshold: **20% regression fails the gate** (transitions are optimization frontiers)
+
 ## Performance gate triggers
 
 The CI gate at `.github/workflows/bench-gate.yml` runs on any PR modifying:
@@ -100,7 +118,10 @@ The CI gate at `.github/workflows/bench-gate.yml` runs on any PR modifying:
 - `crates/engine/**` — rendering pipeline
 - `crates/bench/`, `bench/` — benchmark infrastructure
 
-Threshold: **5% regression in median or p95 fails the gate**.
+Thresholds:
+- **Time (all phases)**: 5% regression in median or p95 fails the gate
+- **RAM (peak_rss, steady_state)**: 5% regression fails the gate
+- **Tier transitions** (when available): 20% regression fails the gate
 
 ## Interpretation
 
