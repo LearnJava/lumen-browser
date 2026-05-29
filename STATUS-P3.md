@@ -44,6 +44,7 @@ _(none)_
 
 ## Recent fixes
 
+- **BUG-044 shell build** (2026-05-29) — `lumen-shell` не компилировался (default + `--features quickjs`): non-exhaustive match по `DisplayCommand` в `content_height_of`/`content_width_of` (`shell/src/main.rs:4219,4265`) после P2-мерджей, добавивших `PushMaskLayer`/`PopMaskLayer`/`DrawSvgPath`/`BoxModelOverlay`. `PushMaskLayer` → rect-ветка, остальные → continue. Браузер и dump-режимы снова рабочие. Влито `p3-bug-044-shell-match`.
 - **8A.2 InProcessSession** (2026-05-29) — headless in-process сессия `BrowserSession` в `crates/driver/src/session.rs:53` (полный pipeline encode→parse→CSS→layout без GPU + adapter для `lumen-core::ext::BrowserSession`). Проверено: `cargo test -p lumen-driver` (все зелёные), `cargo clippy --all-targets -- -D warnings` чисто, `todo!()` нет. `lumen-plan.md` уже ✅. Влито `p3-8a2-in-process-session`.
 - **8A.1 BrowserSession trait** (2026-05-29) — `BrowserSession` trait + `NullBrowserSession` заглушка в `crates/core/src/ext.rs:1514` (object-safe, `Send`). Тесты: null-impl, object-safety, Send. `lumen-plan.md` ⬜→✅. Влито `p3-8a1-browser-session`.
 
