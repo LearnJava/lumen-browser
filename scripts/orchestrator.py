@@ -6,13 +6,17 @@
 Каждая задача — отдельная сессия с чистым контекстом.
 
 Использование:
-    python scripts/orchestrator.py P1                  # один разработчик
-    python scripts/orchestrator.py P1 P2               # два в параллель
-    python scripts/orchestrator.py P1 P2 P3 P4 P5     # все пятеро
-    python scripts/orchestrator.py P1 --max-tasks 3
-    python scripts/orchestrator.py --stop P1           # мягкая остановка
-    python scripts/orchestrator.py --stop-all          # остановить всех
-    python scripts/orchestrator.py --status            # статус всех
+    python scripts/orchestrator.py P1                                   # один разработчик
+    python scripts/orchestrator.py P1 P2                                # два в параллель
+    python scripts/orchestrator.py P1 P2 P3 P4 P5                       # все пятеро
+    python scripts/orchestrator.py P1 --max-tasks 3                     # лимит задач
+    python scripts/orchestrator.py P1 --new                             # стартовать с нуля
+    python scripts/orchestrator.py P1 --model haiku                     # сразу на Haiku (alias)
+    python scripts/orchestrator.py P1 --fallback-model haiku            # резерв при лимите
+    python scripts/orchestrator.py P1 --model sonnet --fallback-model haiku   # стартуем на Sonnet, резерв Haiku
+    python scripts/orchestrator.py --stop P1                            # мягкая остановка
+    python scripts/orchestrator.py --stop-all                           # остановить всех
+    python scripts/orchestrator.py --status                             # статус всех
 
 Восстановление после краша
 ---------------------------
@@ -28,19 +32,56 @@ session_id захватывается из первого stream-json событ
 - Claude увидит полную историю диалога и состояние git, продолжит с места остановки
 - если session_id нет (сессия не успела стартовать) — сбросит файл, начнёт заново
 
+Принудительный старт с нуля: ключ `--new` удаляет .session-PN.json до старта и
+отключает попытку возобновления. Полезен, если прошлая сессия зависла, контекст
+больше не актуален, или надо начать новую задачу с чистым диалогом.
+
 Файлы .session-*.json добавлены в .gitignore.
+
+Выбор модели
+------------
+По умолчанию `claude` запускается без `--model` — CLI берёт настроенную модель
+(обычно Sonnet/Opus). Чтобы стартовать сразу на конкретной модели, можно
+использовать короткие алиасы или указать полный ID:
+
+    haiku  → claude-haiku-4-5
+    sonnet → claude-sonnet-4-6
+    opus   → claude-opus-4-7
+
+- CLI:  `--model haiku`        (или полный `--model claude-haiku-4-5`)
+- env:  `LUMEN_MODEL=haiku`
+
+Алиасы разворачиваются при разборе командной строки — в логах и в вызовах
+`claude --model <id>` идёт уже полный ID, чтобы пользователь видел, что
+именно запустилось. Приоритет: CLI > env. Заданная модель используется
+во всех вызовах `claude`, пока не сработает fallback при rate limit
+(см. ниже) — тогда fallback её переопределяет до конца жизни процесса
+оркестратора.
 
 Fallback на резервную модель при rate limit
 -------------------------------------------
 По умолчанию `claude` запускается без `--model` (CLI берёт настроенную модель,
 обычно Sonnet/Opus). При первом детекте rate limit оркестратор:
 - НЕ ставит паузу 5 минут;
-- запоминает fallback-модель `claude-haiku-4-5` для всех последующих вызовов
-  этого разработчика в рамках текущего процесса оркестратора;
+- предлагает интерактивный выбор модели для переключения (или берёт
+  заранее заданную через `--fallback-model` / `LUMEN_FALLBACK_MODEL`);
+- запоминает выбор для всех последующих вызовов этого разработчика
+  в рамках текущего процесса оркестратора;
 - печатает заметный баннер в лог, чтобы пользователь видел переключение.
 
-Если и Haiku упирается в лимит — тогда уже срабатывает стандартная пауза 5 минут
-(квоты у Haiku разделены, обычно гораздо щедрее).
+Меню выбора (вызывается при отсутствии заранее заданной модели):
+
+    1) haiku   — самая быстрая, отдельные щедрые лимиты (по умолч.)
+    2) sonnet  — баланс скорости и качества
+    3) opus    — мощная, обычно общие лимиты с Sonnet
+    4) Ввести имя модели вручную (alias или полное claude-*)
+
+Для unattended-запуска (без интерактивного ввода) задайте:
+- CLI: `--fallback-model haiku`
+- env: `LUMEN_FALLBACK_MODEL=haiku`
+
+Если и резервная модель упирается в лимит — срабатывает стандартная пауза
+5 минут (`wait_for_rate_limit`).
 
 Сбросить fallback можно только перезапуском оркестратора.
 """
@@ -354,8 +395,112 @@ def format_event(event: dict) -> list[str]:
 
 RATE_LIMIT_RE = re.compile(r"resets?\s+(\d{1,2}:\d{2}(?:am|pm)?)", re.IGNORECASE)
 
-# Резервная модель, на которую переключаемся при rate limit основной.
-FALLBACK_MODEL = "claude-haiku-4-5"
+# Короткие алиасы. Принимаются в CLI (`--model`, `--fallback-model`),
+# env-переменных и в интерактивном prompt. Разворачиваются в полный
+# model ID, который и идёт в `claude --model <id>` — в логах видно
+# именно полный ID, чтобы пользователь понимал, что запустилось.
+MODEL_ALIASES: dict[str, str] = {
+    "haiku":  "claude-haiku-4-5",
+    "sonnet": "claude-sonnet-4-6",
+    "opus":   "claude-opus-4-7",
+}
+
+
+def resolve_model_alias(name: str | None) -> str | None:
+    """Развернуть короткий alias в полный model ID.
+
+    `haiku` → `claude-haiku-4-5`, и т.п. Если значение не alias —
+    возвращается как есть (можно указать любую custom-модель).
+    None / пустая строка → None.
+    """
+    if not name:
+        return None
+    key = name.strip().lower()
+    if not key:
+        return None
+    return MODEL_ALIASES.get(key, name.strip())
+
+
+# Предопределённые варианты для меню выбора резервной модели.
+# Первый элемент — значение по умолчанию (если пользователь нажал Enter).
+# Формат: (alias, описание). Полный model ID берётся из MODEL_ALIASES.
+PREDEFINED_FALLBACKS: list[tuple[str, str]] = [
+    ("haiku",  "самая быстрая, отдельные щедрые лимиты (рекомендуется)"),
+    ("sonnet", "баланс скорости и качества"),
+    ("opus",   "мощная, обычно общие лимиты с Sonnet"),
+]
+
+# Имя env-переменной для unattended-запуска (отключает интерактивный prompt).
+FALLBACK_MODEL_ENV = "LUMEN_FALLBACK_MODEL"
+
+# Имя env-переменной для задания модели «с самого начала» (до первого rate limit).
+INITIAL_MODEL_ENV = "LUMEN_MODEL"
+
+
+def choose_fallback_model(developer: str) -> str:
+    """Интерактивно спросить пользователя, на какую модель переключиться.
+
+    Возвращает полный model ID (alias уже развёрнут).
+    Пустой ввод → первый вариант (haiku → claude-haiku-4-5).
+    При EOF/Ctrl+C → также первый вариант, чтобы не блокировать цикл.
+    """
+    border = "=" * 60
+    default_alias = PREDEFINED_FALLBACKS[0][0]
+    default_model = MODEL_ALIASES[default_alias]
+    print(border, flush=True)
+    print(f"[{developer}] Выберите резервную модель для переключения:", flush=True)
+    for i, (alias, desc) in enumerate(PREDEFINED_FALLBACKS, 1):
+        print(f"  {i}) {alias:<8} — {desc}", flush=True)
+    print(f"  {len(PREDEFINED_FALLBACKS) + 1}) Ввести имя модели вручную (alias или полное claude-*)", flush=True)
+    print(border, flush=True)
+    print(
+        f"  (для unattended-режима задайте --fallback-model или {FALLBACK_MODEL_ENV})",
+        flush=True,
+    )
+
+    while True:
+        try:
+            raw = input(f"[{developer}] Выбор [1 = {default_alias}]: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print(f"\n[{developer}] Ввод прерван — использую {default_model}", flush=True)
+            return default_model
+
+        if not raw:
+            return default_model
+
+        if raw.isdigit():
+            idx = int(raw)
+            if 1 <= idx <= len(PREDEFINED_FALLBACKS):
+                alias = PREDEFINED_FALLBACKS[idx - 1][0]
+                return MODEL_ALIASES[alias]
+            if idx == len(PREDEFINED_FALLBACKS) + 1:
+                try:
+                    custom = input(f"[{developer}] Имя модели (alias или полное claude-*): ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print(f"\n[{developer}] Ввод прерван — использую {default_model}", flush=True)
+                    return default_model
+                resolved = resolve_model_alias(custom)
+                if resolved:
+                    return resolved
+                print("Пустое имя — повторите выбор.", flush=True)
+                continue
+            print("Неверный номер — повторите выбор.", flush=True)
+            continue
+
+        # Допускаем прямой ввод alias или полного имени вместо номера
+        resolved = resolve_model_alias(raw)
+        if resolved:
+            return resolved
+
+
+def resolve_fallback_model(developer: str, preset: str | None) -> str:
+    """Вернуть полный ID резервной модели: из preset, env, или интерактивного выбора."""
+    if preset:
+        return preset  # preset уже развёрнут в main() через resolve_model_alias
+    env_resolved = resolve_model_alias(os.environ.get(FALLBACK_MODEL_ENV))
+    if env_resolved:
+        return env_resolved
+    return choose_fallback_model(developer)
 
 
 def run_claude(
@@ -502,27 +647,57 @@ def wait_for_rate_limit(developer: str):
     log(developer, "Пауза завершена, продолжаю.")
 
 
-def announce_fallback(developer: str, reason: str) -> None:
+def announce_fallback(developer: str, reason: str, model: str) -> None:
     """Печатает заметный баннер о переключении на резервную модель."""
     border = "=" * 60
     log(developer, "")
     log(developer, border)
     log(developer, "  RATE LIMIT основной модели")
     log(developer, f"  Причина: {reason}")
-    log(developer, f"  Переключаюсь на резервную модель: {FALLBACK_MODEL}")
-    log(developer, "  Следующий вызов claude пойдёт через Haiku БЕЗ паузы.")
+    log(developer, f"  Переключаюсь на резервную модель: {model}")
+    log(developer, f"  Следующий вызов claude пойдёт через {model} БЕЗ паузы.")
     log(developer, "  Сбросить fallback можно только перезапуском оркестратора.")
     log(developer, border)
     log(developer, "")
 
 
-def run_task_loop(developer: str, max_tasks: int = 0):
-    """Цикл задач для одного разработчика."""
+def run_task_loop(
+    developer: str,
+    max_tasks: int = 0,
+    fallback_preset: str | None = None,
+    force_new: bool = False,
+    initial_model: str | None = None,
+):
+    """Цикл задач для одного разработчика.
+
+    fallback_preset — если задан, при первом rate limit переключение
+    произойдёт молча на указанную модель (без интерактивного prompt).
+    Если None — пользователю будет показано меню выбора.
+
+    force_new — если True, удалить сохранённое состояние сессии
+    (`.session-PN.json`) и стартовать с чистого листа, не пытаясь
+    возобновить прерванную сессию через `claude --resume`.
+
+    initial_model — модель, на которой стартовать с самого первого вызова
+    (передаётся в `claude --model <id>`). Если None — CLI использует свою
+    дефолтную модель. При rate limit активный модельный fallback (через
+    `fallback_preset` или интерактивный выбор) переопределяет initial_model.
+    """
     stop_file = stop_file_path(developer)
     task_count = 0
     fallback_model: str | None = None  # выставляется при первом rate limit
 
     log(developer, f"Старт. Проект: {PROJECT_DIR}")
+    if initial_model:
+        log(developer, f"Стартовая модель: {initial_model}")
+
+    # --- Принудительный старт с чистого листа ---
+    if force_new:
+        if session_state_path(developer).exists():
+            log(developer, "Флаг --new: удаляю сохранённое состояние сессии, не возобновляю.")
+            clear_session_state(developer)
+        else:
+            log(developer, "Флаг --new: сохранённого состояния нет, стартую с нуля.")
 
     # --- Восстановление после краша ---
     existing = load_session_state(developer)
@@ -548,7 +723,8 @@ def run_task_loop(developer: str, max_tasks: int = 0):
             try:
                 exit_code, rate_limited, auth_error = run_claude(
                     developer, resume_prompt, task_count,
-                    resume_session_id=session_id, model=fallback_model,
+                    resume_session_id=session_id,
+                    model=fallback_model or initial_model,
                 )
             except FileNotFoundError:
                 log(developer, "claude не найден в PATH.")
@@ -565,8 +741,8 @@ def run_task_loop(developer: str, max_tasks: int = 0):
             elif rate_limited:
                 task_count -= 1
                 if fallback_model is None:
-                    fallback_model = FALLBACK_MODEL
-                    announce_fallback(developer, "лимит во время возобновления сессии")
+                    fallback_model = resolve_fallback_model(developer, fallback_preset)
+                    announce_fallback(developer, "лимит во время возобновления сессии", fallback_model)
                     set_jobstatus(developer, "fallback model", fallback_model)
                 else:
                     log(developer, f"Резервная модель {fallback_model} тоже исчерпана.")
@@ -623,7 +799,8 @@ def run_task_loop(developer: str, max_tasks: int = 0):
         log(developer, "Запуск claude...")
         try:
             exit_code, rate_limited, auth_error = run_claude(
-                developer, prompt, task_number=task_count, model=fallback_model,
+                developer, prompt, task_number=task_count,
+                model=fallback_model or initial_model,
             )
         except FileNotFoundError:
             log(developer, "claude не найден в PATH.")
@@ -637,12 +814,12 @@ def run_task_loop(developer: str, max_tasks: int = 0):
         if rate_limited and exit_code != 0:
             task_count -= 1  # Не считать неудачную попытку как задачу
             if fallback_model is None:
-                # Первый rate limit — переключаемся на Haiku, повторяем без паузы
-                fallback_model = FALLBACK_MODEL
-                announce_fallback(developer, f"задача #{task_count + 1}")
+                # Первый rate limit — спрашиваем модель и повторяем без паузы
+                fallback_model = resolve_fallback_model(developer, fallback_preset)
+                announce_fallback(developer, f"задача #{task_count + 1}", fallback_model)
                 set_jobstatus(developer, "fallback model", fallback_model)
             else:
-                # И Haiku уже исчерпан — стандартная пауза 5 минут
+                # И резервная модель уже исчерпана — стандартная пауза 5 минут
                 log(developer, f"Резервная модель {fallback_model} тоже исчерпана.")
                 # Оставить файл состояния с session_id — пригодится при возобновлении после паузы
                 wait_for_rate_limit(developer)
@@ -690,6 +867,46 @@ def main():
         default=0,
         help="Максимум задач на разработчика (0 = без ограничения)",
     )
+    # Динамически собираем подсказку с алиасами для --model / --fallback-model.
+    # ASCII-стрелка `->` вместо `→`, чтобы --help не падал на Windows cp1251.
+    alias_help = ", ".join(f"{a} -> {full}" for a, full in MODEL_ALIASES.items())
+
+    parser.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        metavar="MODEL",
+        help=(
+            "Модель для первого и всех последующих вызовов claude "
+            "(передаётся как `claude --model <id>`). "
+            f"Алиасы: {alias_help}. "
+            "Можно указать любой другой полный ID. "
+            f"Также через env {INITIAL_MODEL_ENV}. "
+            "При rate limit активный fallback переопределит эту модель."
+        ),
+    )
+    parser.add_argument(
+        "--fallback-model",
+        type=str,
+        default=None,
+        metavar="MODEL",
+        help=(
+            "Резервная модель при rate limit основной "
+            "(unattended-режим, отключает интерактивный prompt). "
+            f"Алиасы: {alias_help}. "
+            f"Также через env {FALLBACK_MODEL_ENV}."
+        ),
+    )
+    parser.add_argument(
+        "--new",
+        action="store_true",
+        help=(
+            "Стартовать с чистого листа: удалить сохранённое состояние "
+            "сессии (.session-PN.json) и не пытаться возобновить через "
+            "claude --resume. Удобно, если прошлая сессия зависла или "
+            "её контекст больше не релевантен."
+        ),
+    )
     parser.add_argument(
         "--stop",
         nargs="+",
@@ -731,16 +948,29 @@ def main():
 
     developers = args.developers
 
+    # Приоритет: CLI > env > None. Алиасы (opus/sonnet/haiku) сразу
+    # разворачиваются в полный model ID — дальше по коду уже только full ID.
+    initial_model = resolve_model_alias(args.model) or resolve_model_alias(
+        os.environ.get(INITIAL_MODEL_ENV)
+    )
+    fallback_model_preset = resolve_model_alias(args.fallback_model)
+
     if len(developers) == 1:
         # Один разработчик — в текущем окне
-        run_task_loop(developers[0], args.max_tasks)
+        run_task_loop(
+            developers[0], args.max_tasks, fallback_model_preset, args.new, initial_model,
+        )
     else:
-        # Несколько — каждый в отдельном окне консоли
+        # Несколько — каждый в отдельном окне консоли.
+        # В дочерние окна передаём уже развёрнутые полные ID — повторного резолва не нужно.
         script = Path(__file__).resolve()
         max_arg = f" --max-tasks {args.max_tasks}" if args.max_tasks > 0 else ""
+        fb_arg = f" --fallback-model {fallback_model_preset}" if fallback_model_preset else ""
+        new_arg = " --new" if args.new else ""
+        model_arg = f" --model {initial_model}" if initial_model else ""
 
         for dev in developers:
-            cmd = f'python "{script}" {dev}{max_arg}'
+            cmd = f'python "{script}" {dev}{max_arg}{fb_arg}{new_arg}{model_arg}'
             title = f"Lumen {dev}"
 
             if os.name == "nt":
