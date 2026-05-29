@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-**hyphenation-provider** — KnuthLiangHyphenation (реальный HyphenationProvider через crate `hyphenation`)  branch: p1-hyphenation-provider
-Next step: commit all implementation files, update lumen-plan.md + subsystems/encoding.md + SYMBOLS.md
+_(none)_
 
 ## Next step
 1. Read [lumen-plan.md](lumen-plan.md) Track P1 section (§P1 roadmap)
@@ -18,6 +17,7 @@ Next step: commit all implementation files, update lumen-plan.md + subsystems/en
 
 ## Recent merges
 
+- **p1-hyphenation-provider** ✅ 2026-05-29 — `KnuthLiangHyphenation`: реальный `HyphenationProvider` через provisional `hyphenation = "0.8"` (Knuth–Liang, TeX-словари). 11 локалей (en/ru/de/fr/uk/nl/es/pt/it/pl/cs). Подключён в `lumen-shell` через `layout_measured_hyp`. 88 unit + 6 integration tests.
 - **p1-phase1-status-sync** ✅ 2026-05-28 — Sync lumen-plan.md Phase 1 statuses with actual code state: 8G.1–8G.3 (lumen-a11y-full, 125 tests), 10B (DOM arena serialization, `Document::to_bytes`/`from_bytes`), 10D.1/10D.2 (layout/paint pure audit), 9D.1 (Canvas noise generator, 20 tests), 9D.2 (GpuFingerprint, 5 tests), 10F (LayerCache LRU, 7 tests), 10G (glyph atlas eviction, 4 tests). All Phase 1 ⬜ → ✅.
 
 ---
