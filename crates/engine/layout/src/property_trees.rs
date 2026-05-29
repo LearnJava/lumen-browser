@@ -654,6 +654,12 @@ pub fn forward_box_transform(b: &LayoutBox) -> Option<Mat4> {
             TransformFn::SkewX(a) => Mat4::skew_x(a),
             TransformFn::SkewY(a) => Mat4::skew_y(a),
             TransformFn::Matrix([a, b_, c, d, e, f]) => Mat4::from_2d_affine(a, b_, c, d, e, f),
+            // CSS: rotateX/rotateY/rotateZ/rotate3d/translateZ/translate3d/
+            // scaleZ/scale3d/perspective()/matrix3d — P4 adds these TransformFn
+            // variants + their parsing, then maps each to the matching Mat4 3D
+            // constructor (Mat4::rotate_x/rotate_y/rotate_z/rotate_3d/
+            // translate_3d/scale_3d/perspective/from_3d). The renderer already
+            // projects any non-2D-affine matrix perspective-correctly.
         };
         m = m.multiply(&step);
     }

@@ -35,7 +35,7 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 | 2 | `overflow: scroll` scrollable containers | L | shell scroll event |
 | 3 | `image-set()` / `cross-fade()` — CSS Images L4 | M | none |
 | 4 | `text-align-last` | S | none |
-| 5 | `perspective()` + `transform-style: preserve-3d` (3D Transforms L2) | L | P2 wgpu 3D pipeline |
+| 5 | `perspective()` + `transform-style: preserve-3d` (3D Transforms L2) | L | none (P2 matrix primitive ready — see "Needs wiring") |
 | 6 | `@counter-style` custom counter definitions | M | none |
 | 7 | `justify-items` / `justify-self` for grid (Box Alignment L3) | S | none |
 | 8 | `column-rule` rendering + `column-span` + `column-fill` | S | none |
@@ -53,6 +53,16 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 ## Needs wiring (algorithm ready, CSS not connected)
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
+
+### CSS 3D transforms — `perspective()` + 3D functions (P2 feature p2-css-3d-transforms)
+- **Status:** GPU/matrix primitive ready. `Mat4` has 3D constructors (`perspective(d)`, `rotate_x/rotate_y/rotate_z/rotate_3d`, `translate_3d`, `scale_3d`, `from_3d` for `matrix3d`, `project_point` for 4×4 + perspective divide, `is_2d_affine` fast-path flag) in `lumen-layout/src/property_trees.rs`. The renderer (`paint/src/renderer.rs`, `apply_affine_to_verts` / `apply_affine_to_rrect_verts`) now projects any **non-2D-affine** `PushTransform` matrix perspective-correctly (w-divide), so 3D matrices render as a flattened projection. Existing 2D output is bit-identical (fast path).
+- **P4 task:**
+  1. Add 3D variants to `TransformFn` (style.rs): `RotateX(f32)`, `RotateY(f32)`, `RotateZ(f32)`, `Rotate3d(f32,f32,f32,f32)`, `TranslateZ(f32)`, `Translate3d(f32,f32,f32)`, `ScaleZ(f32)`, `Scale3d(f32,f32,f32)`, `Perspective(f32)`, `Matrix3d([f32;16])`. Parse them in `apply_declaration()` for `transform`.
+  2. Map each new variant to its `Mat4` constructor in the `forward_box_transform` match (see `// CSS:` comment in `property_trees.rs`) **and** in `transform_fns_to_matrix` (animation path).
+  3. **Parent `perspective` property** (field `ComputedStyle.perspective` already parsed): a non-`None` perspective on an element applies `Mat4::perspective(d)` to the space its children are drawn in. Wire this in `display_list.rs` where child `PushTransform` matrices are composed — premultiply the parent perspective (offset by `perspective-origin`) into each child's matrix. Add `perspective_origin` field to ComputedStyle (default `50% 50%`).
+  4. **`transform-style`**: add `TransformStyle { Flat, Preserve3d }` field. Current renderer flattens (z dropped after projection). `preserve-3d` true depth ordering needs a depth buffer — out of scope for this wiring; treat `preserve-3d` as flat for now and note the limitation. True depth sorting / depth buffer is a future P2 task.
+- **Entry points:** `lumen-layout/src/property_trees.rs` `forward_box_transform` (match arm `// CSS:` comment) + `transform_fns_to_matrix`; `Mat4` 3D constructors in the same file.
+- **CSS comment location:** `property_trees.rs` `forward_box_transform` transform-loop match.
 
 ### `position: sticky` scroll-driven offset (P1 feature p1-sticky-layout)
 - **Status:** `StickyBox`, `collect_sticky_boxes()`, `compute_sticky_offset()` implemented in `lumen-layout/src/lib.rs`. Layout treats sticky as normal flow; offset computed separately.
