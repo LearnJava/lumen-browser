@@ -186,6 +186,159 @@ impl Mat4 {
         let f = self.0[13];
         (a * x + c * y + e, b * x + d * y + f)
     }
+
+    // ── CSS Transforms L2 §3 — 3D-конструкторы ─────────────────────────────
+    // Все матрицы — column-major (`m.0[col*4 + row]`), точка применяется как
+    // `p' = M·p` (см. `multiply` / `transform_point_2d`). Конвенция совпадает
+    // со spec'ом css-transforms-2, где матрица умножает столбец `[x y z 1]ᵀ`.
+
+    /// CSS `perspective(<length>)` — матрица перспективной проекции с фокусным
+    /// расстоянием `d` (CSS-px от плоскости z=0 до камеры). Identity, кроме
+    /// `M[3][2] = -1/d` (column-major индекс 11), что даёт `w' = 1 − z/d`:
+    /// точка с положительным z (ближе к зрителю) получает `w' < 1` → после
+    /// деления увеличивается; отрицательный z → уменьшается.
+    ///
+    /// Caller обязан передавать `d > 0` (CSS приводит `perspective: 0` к
+    /// `none`, см. `ComputedStyle::perspective`).
+    #[must_use]
+    pub fn perspective(d: f32) -> Self {
+        let mut m = Self::IDENTITY;
+        m.0[11] = -1.0 / d;
+        m
+    }
+
+    /// 3D translation. CSS `translate3d(tx, ty, tz)` / `translateZ(tz)`.
+    #[must_use]
+    pub fn translate_3d(tx: f32, ty: f32, tz: f32) -> Self {
+        let mut m = Self::IDENTITY;
+        m.0[12] = tx;
+        m.0[13] = ty;
+        m.0[14] = tz;
+        m
+    }
+
+    /// 3D scale. CSS `scale3d(sx, sy, sz)` / `scaleZ(sz)`.
+    #[must_use]
+    pub fn scale_3d(sx: f32, sy: f32, sz: f32) -> Self {
+        let mut m = Self::IDENTITY;
+        m.0[0] = sx;
+        m.0[5] = sy;
+        m.0[10] = sz;
+        m
+    }
+
+    /// Поворот вокруг оси X. CSS `rotateX(theta)`, `theta` в радианах.
+    /// Spec-матрица: `y' = cos·y − sin·z`, `z' = sin·y + cos·z`.
+    #[must_use]
+    pub fn rotate_x(theta: f32) -> Self {
+        let c = theta.cos();
+        let s = theta.sin();
+        let mut m = Self::IDENTITY;
+        m.0[5] = c; // M[1][1]
+        m.0[6] = s; // M[2][1]
+        m.0[9] = -s; // M[1][2]
+        m.0[10] = c; // M[2][2]
+        m
+    }
+
+    /// Поворот вокруг оси Y. CSS `rotateY(theta)`, `theta` в радианах.
+    /// Spec-матрица: `x' = cos·x + sin·z`, `z' = −sin·x + cos·z`.
+    #[must_use]
+    pub fn rotate_y(theta: f32) -> Self {
+        let c = theta.cos();
+        let s = theta.sin();
+        let mut m = Self::IDENTITY;
+        m.0[0] = c; // M[0][0]
+        m.0[2] = -s; // M[2][0]
+        m.0[8] = s; // M[0][2]
+        m.0[10] = c; // M[2][2]
+        m
+    }
+
+    /// Поворот вокруг оси Z. CSS `rotateZ(theta)` ≡ `rotate(theta)`.
+    /// Делегирует в `rotate_2d` (та же CSS-конвенция «по часовой» при Y-вниз).
+    #[must_use]
+    pub fn rotate_z(theta: f32) -> Self {
+        Self::rotate_2d(theta)
+    }
+
+    /// CSS `rotate3d(x, y, z, theta)` — поворот вокруг произвольной оси.
+    /// Ось нормализуется; нулевой вектор (`x=y=z=0`) трактуется как identity
+    /// (spec: невалидно, но безопасный no-op). Формула из css-transforms-2
+    /// §3.2 на полуугловых синусах (`sq = sin²(θ/2)`, `sc = sin(θ/2)cos(θ/2)`).
+    #[must_use]
+    pub fn rotate_3d(x: f32, y: f32, z: f32, theta: f32) -> Self {
+        let len = (x * x + y * y + z * z).sqrt();
+        if len < f32::EPSILON {
+            return Self::IDENTITY;
+        }
+        let (x, y, z) = (x / len, y / len, z / len);
+        let half = theta * 0.5;
+        let sin_h = half.sin();
+        let sq = sin_h * sin_h;
+        let sc = sin_h * half.cos();
+
+        // M[row][col] из spec; ниже сразу в column-major (m.0[col*4 + row]).
+        let m00 = 1.0 - 2.0 * (y * y + z * z) * sq;
+        let m01 = 2.0 * (x * y * sq - z * sc);
+        let m02 = 2.0 * (x * z * sq + y * sc);
+        let m10 = 2.0 * (x * y * sq + z * sc);
+        let m11 = 1.0 - 2.0 * (x * x + z * z) * sq;
+        let m12 = 2.0 * (y * z * sq - x * sc);
+        let m20 = 2.0 * (x * z * sq - y * sc);
+        let m21 = 2.0 * (y * z * sq + x * sc);
+        let m22 = 1.0 - 2.0 * (x * x + y * y) * sq;
+        Self([
+            m00, m10, m20, 0.0, //
+            m01, m11, m21, 0.0, //
+            m02, m12, m22, 0.0, //
+            0.0, 0.0, 0.0, 1.0,
+        ])
+    }
+
+    /// CSS `matrix3d(m11, …, m44)` — 16 значений в column-major порядке
+    /// (как в CSS-спеке: `m11..m14` — первый столбец). Хранится напрямую.
+    #[must_use]
+    pub fn from_3d(values: [f32; 16]) -> Self {
+        Self(values)
+    }
+
+    /// Применяет полную 4×4 матрицу к точке `(x, y, z)` и выполняет
+    /// перспективное деление на `w'`. Возвращает экранные `(x', y')` —
+    /// проекцию на плоскость z=0 (depth отбрасывается: depth buffer не
+    /// реализован, см. [`is_2d_affine`]). При `w' ≈ 0` (точка на плоскости
+    /// камеры) деление пропускается, чтобы не возвращать ±inf.
+    #[must_use]
+    pub fn project_point(&self, x: f32, y: f32, z: f32) -> (f32, f32) {
+        let m = &self.0;
+        let xp = m[0] * x + m[4] * y + m[8] * z + m[12];
+        let yp = m[1] * x + m[5] * y + m[9] * z + m[13];
+        let wp = m[3] * x + m[7] * y + m[11] * z + m[15];
+        if wp.abs() < f32::EPSILON {
+            (xp, yp)
+        } else {
+            (xp / wp, yp / wp)
+        }
+    }
+
+    /// `true`, если матрица — чистое 2D affine-преобразование (Z/W-строки
+    /// и столбцы в identity-значениях). Renderer использует это как
+    /// быстрый путь: 2D affine применяется без перспективного деления, что
+    /// сохраняет побитовую идентичность со старым 2D-конвейером.
+    #[must_use]
+    pub fn is_2d_affine(&self) -> bool {
+        let m = &self.0;
+        m[2] == 0.0
+            && m[3] == 0.0
+            && m[6] == 0.0
+            && m[7] == 0.0
+            && m[8] == 0.0
+            && m[9] == 0.0
+            && m[10] == 1.0
+            && m[11] == 0.0
+            && m[14] == 0.0
+            && m[15] == 1.0
+    }
 }
 
 impl Default for Mat4 {
@@ -846,6 +999,154 @@ mod tests {
         // scale(0, 0) — det == 0, инверсия невозможна.
         let singular = Mat4::scale_2d(0.0, 0.0);
         assert!(singular.invert_2d_affine().is_none());
+    }
+
+    // ----- 3D builders (CSS Transforms L2) -----
+
+    #[test]
+    fn perspective_sets_w_row() {
+        let m = Mat4::perspective(800.0);
+        assert!(approx(m.0[11], -1.0 / 800.0));
+        // Остальное — identity.
+        assert!(approx(m.0[0], 1.0));
+        assert!(approx(m.0[5], 1.0));
+        assert!(approx(m.0[10], 1.0));
+        assert!(approx(m.0[15], 1.0));
+        assert!(!m.is_2d_affine());
+    }
+
+    #[test]
+    fn perspective_shrinks_far_points() {
+        // perspective(d) → w' = 1 − z/d. Точка z = −d/2 (от зрителя) → w' = 1.5,
+        // x' = x/1.5 — ближе к центру (уменьшение).
+        let m = Mat4::perspective(800.0);
+        let (x, _) = m.project_point(300.0, 0.0, -400.0);
+        assert!(approx(x, 300.0 / 1.5));
+    }
+
+    #[test]
+    fn perspective_magnifies_near_points() {
+        // z = +d/2 (к зрителю) → w' = 0.5 → x' = x/0.5 = 2x (увеличение).
+        let m = Mat4::perspective(800.0);
+        let (x, _) = m.project_point(100.0, 0.0, 400.0);
+        assert!(approx(x, 200.0));
+    }
+
+    #[test]
+    fn translate_3d_sets_last_column() {
+        let m = Mat4::translate_3d(1.0, 2.0, 3.0);
+        assert_eq!(m.0[12], 1.0);
+        assert_eq!(m.0[13], 2.0);
+        assert_eq!(m.0[14], 3.0);
+        // tz != 0 — не 2D affine.
+        assert!(!m.is_2d_affine());
+    }
+
+    #[test]
+    fn scale_3d_sets_diagonal() {
+        let m = Mat4::scale_3d(2.0, 3.0, 4.0);
+        assert_eq!(m.0[0], 2.0);
+        assert_eq!(m.0[5], 3.0);
+        assert_eq!(m.0[10], 4.0);
+        assert!(!m.is_2d_affine());
+    }
+
+    #[test]
+    fn rotate_x_quarter_turn() {
+        // rotateX(90°): y' = −z, z' = y. Точка (0, 100, 0) → (0, 0) после
+        // проекции (z отбрасывается), но проверим саму матрицу.
+        let m = Mat4::rotate_x(std::f32::consts::FRAC_PI_2);
+        assert!(approx(m.0[5], 0.0)); // cos 90 = 0
+        assert!(approx(m.0[6], 1.0)); // sin
+        assert!(approx(m.0[9], -1.0)); // -sin
+        assert!(approx(m.0[10], 0.0));
+        assert!(!m.is_2d_affine());
+    }
+
+    #[test]
+    fn rotate_y_quarter_turn() {
+        let m = Mat4::rotate_y(std::f32::consts::FRAC_PI_2);
+        assert!(approx(m.0[0], 0.0)); // cos 90
+        assert!(approx(m.0[2], -1.0)); // -sin
+        assert!(approx(m.0[8], 1.0)); // sin
+        assert!(approx(m.0[10], 0.0));
+        assert!(!m.is_2d_affine());
+    }
+
+    #[test]
+    fn rotate_z_matches_rotate_2d() {
+        let theta = 0.7;
+        assert_eq!(Mat4::rotate_z(theta).0, Mat4::rotate_2d(theta).0);
+    }
+
+    #[test]
+    fn rotate_3d_reduces_to_axis_rotations() {
+        let theta = 0.9_f32;
+        let approx_m = |a: &Mat4, b: &Mat4| a.0.iter().zip(b.0.iter()).all(|(x, y)| approx(*x, *y));
+        assert!(approx_m(&Mat4::rotate_3d(1.0, 0.0, 0.0, theta), &Mat4::rotate_x(theta)));
+        assert!(approx_m(&Mat4::rotate_3d(0.0, 1.0, 0.0, theta), &Mat4::rotate_y(theta)));
+        assert!(approx_m(&Mat4::rotate_3d(0.0, 0.0, 1.0, theta), &Mat4::rotate_z(theta)));
+    }
+
+    #[test]
+    fn rotate_3d_normalizes_axis() {
+        // Ненормализованная ось (2, 0, 0) даёт тот же поворот, что (1, 0, 0).
+        let theta = 0.5_f32;
+        let a = Mat4::rotate_3d(2.0, 0.0, 0.0, theta);
+        let b = Mat4::rotate_3d(1.0, 0.0, 0.0, theta);
+        assert!(a.0.iter().zip(b.0.iter()).all(|(x, y)| approx(*x, *y)));
+    }
+
+    #[test]
+    fn rotate_3d_zero_axis_is_identity() {
+        assert!(Mat4::rotate_3d(0.0, 0.0, 0.0, 1.0).is_identity());
+    }
+
+    #[test]
+    fn from_3d_stores_column_major() {
+        let vals = [
+            1.0, 2.0, 3.0, 4.0, //
+            5.0, 6.0, 7.0, 8.0, //
+            9.0, 10.0, 11.0, 12.0, //
+            13.0, 14.0, 15.0, 16.0,
+        ];
+        let m = Mat4::from_3d(vals);
+        assert_eq!(m.0, vals);
+    }
+
+    #[test]
+    fn project_point_identity_is_noop() {
+        let (x, y) = Mat4::IDENTITY.project_point(5.0, -9.0, 3.0);
+        assert!(approx(x, 5.0));
+        assert!(approx(y, -9.0));
+    }
+
+    #[test]
+    fn project_point_2d_affine_matches_transform_point_2d() {
+        let m = Mat4::translation_2d(10.0, 20.0).multiply(&Mat4::scale_2d(2.0, 3.0));
+        let (ax, ay) = m.transform_point_2d(4.0, 5.0);
+        let (px, py) = m.project_point(4.0, 5.0, 0.0);
+        assert!(approx(ax, px));
+        assert!(approx(ay, py));
+    }
+
+    #[test]
+    fn is_2d_affine_true_for_2d_builders() {
+        assert!(Mat4::IDENTITY.is_2d_affine());
+        assert!(Mat4::translation_2d(5.0, 7.0).is_2d_affine());
+        assert!(Mat4::scale_2d(2.0, 3.0).is_2d_affine());
+        assert!(Mat4::rotate_2d(1.1).is_2d_affine());
+        assert!(Mat4::skew_x(0.3).is_2d_affine());
+        assert!(Mat4::from_2d_affine(1.0, 0.2, 0.3, 1.0, 4.0, 5.0).is_2d_affine());
+    }
+
+    #[test]
+    fn is_2d_affine_false_for_3d_builders() {
+        assert!(!Mat4::perspective(500.0).is_2d_affine());
+        assert!(!Mat4::rotate_x(0.5).is_2d_affine());
+        assert!(!Mat4::rotate_y(0.5).is_2d_affine());
+        assert!(!Mat4::translate_3d(0.0, 0.0, 10.0).is_2d_affine());
+        assert!(!Mat4::scale_3d(1.0, 1.0, 2.0).is_2d_affine());
     }
 
     // ----- Build PropertyTrees из layout-дерева -----
