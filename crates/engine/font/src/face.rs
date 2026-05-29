@@ -232,15 +232,39 @@ impl<'a> Font<'a> {
     /// advance width / LSB / RSB per glyph. При активном variation-
     /// instance шрифта runtime берёт base-метрики из `hmtx`, ищет
     /// (outer, inner)-индекс через `Hvar::advance_width_index(glyph_id)`,
-    /// вычисляет delta через `ItemVariationStore` (когда `evaluate`
-    /// будет реализован) и прибавляет к base. Опционально — variable
-    /// font может не иметь HVAR, и тогда rasterizer использует `gvar`
-    /// (дороже: реинтерполировать outline и пересчитать метрики
-    /// вручную). Возвращает `Err(TableNotFound)` для не-VF и для VF
-    /// без HVAR.
+    /// вычисляет delta через `ItemVariationStore::evaluate(coords)` и
+    /// прибавляет к base. Опционально — variable font может не иметь
+    /// HVAR. Возвращает `Err(TableNotFound)` для не-VF и для VF без HVAR.
     pub fn hvar(&self) -> Result<crate::hvar::Hvar, FontError> {
         let data = self.table(b"HVAR").ok_or(FontError::TableNotFound(*b"HVAR"))?;
         crate::hvar::Hvar::parse(data)
+    }
+
+    /// Advance width for `glyph_id` with HVAR variation deltas applied.
+    ///
+    /// Returns the base advance width (from `hmtx`) adjusted by the HVAR
+    /// delta at the given normalized axis `coords`. Falls back to base if
+    /// `coords` is empty, HVAR is absent, or the delta lookup fails.
+    ///
+    /// `coords`: normalized axis values after `avar` renormalization, in
+    /// `[-1.0, 1.0]` per axis. Length must equal `fvar.axis_count`; shorter
+    /// vec → identity delta per `ItemVariationStore::evaluate` semantics.
+    pub fn advance_width_varied(
+        &self,
+        glyph_id: u16,
+        hmtx: &crate::hmtx::Hmtx<'_>,
+        coords: &[f32],
+    ) -> u16 {
+        let base = hmtx.advance_width(glyph_id).unwrap_or(0);
+        if coords.is_empty() {
+            return base;
+        }
+        let Ok(hvar) = self.hvar() else {
+            return base;
+        };
+        let idx = hvar.advance_width_index(glyph_id);
+        let delta = hvar.store.evaluate(idx.outer, idx.inner, coords).unwrap_or(0.0);
+        (base as f32 + delta).round().clamp(0.0, f32::from(u16::MAX)) as u16
     }
 
     /// `VVAR` (Vertical Metrics Variations) — зеркало `HVAR` для
@@ -590,5 +614,83 @@ mod tests {
         let contours = vec![make_contour(&[(0, 0), (1, 1)])];
         assert_eq!(super::nth_point_xy(&contours, 5), None);
         assert_eq!(super::nth_point_xy(&[], 0), None);
+    }
+
+    // ─── advance_width_varied ────────────────────────────────────────────────
+
+    /// Builds a minimal TTF with a single HVAR table that contains an empty
+    /// ItemVariationStore (no regions, no data blocks). The identity advance-
+    /// width mapping applies: outer=0, inner=glyph_id. With no data blocks,
+    /// evaluate(0, glyph_id, coords) → None → delta=0.
+    fn build_font_with_minimal_hvar() -> Vec<u8> {
+        // IVS: format=1, region_list_offset=8, dataCount=0.
+        // VariationRegionList: axisCount=1, regionCount=0.
+        let mut ivs = Vec::<u8>::new();
+        ivs.extend_from_slice(&1u16.to_be_bytes()); // format
+        ivs.extend_from_slice(&8u32.to_be_bytes()); // region_list_offset (relative to IVS start)
+        ivs.extend_from_slice(&0u16.to_be_bytes()); // itemVariationDataCount = 0
+        ivs.extend_from_slice(&1u16.to_be_bytes()); // axisCount = 1
+        ivs.extend_from_slice(&0u16.to_be_bytes()); // regionCount = 0
+        // Total IVS = 14 bytes.
+
+        // HVAR header: major=1, minor=0, store_offset=20 (after 4×4+4 header bytes),
+        //              aw_map_offset=0 (identity), lsb_offset=0, rsb_offset=0.
+        let mut hvar = Vec::<u8>::new();
+        hvar.extend_from_slice(&1u16.to_be_bytes()); // major
+        hvar.extend_from_slice(&0u16.to_be_bytes()); // minor
+        let store_offset: u32 = 20; // 4 × u32 fields + version(4) = 20 bytes
+        hvar.extend_from_slice(&store_offset.to_be_bytes());
+        hvar.extend_from_slice(&0u32.to_be_bytes()); // aw_map_offset = 0
+        hvar.extend_from_slice(&0u32.to_be_bytes()); // lsb_map_offset = 0
+        hvar.extend_from_slice(&0u32.to_be_bytes()); // rsb_map_offset = 0
+        hvar.extend_from_slice(&ivs); // IVS bytes appended at store_offset=20
+
+        // Font: offset table (12) + one record (16) + hvar data.
+        let hvar_offset: u32 = 12 + 16; // = 28
+        let hvar_len = hvar.len() as u32;
+
+        let mut font_bytes = Vec::new();
+        write_offset_table(&mut font_bytes, 1);
+        write_record(&mut font_bytes, b"HVAR", hvar_offset, hvar_len);
+        font_bytes.extend_from_slice(&hvar);
+        font_bytes
+    }
+
+    #[test]
+    fn advance_width_varied_empty_coords_returns_base() {
+        // When coords is empty, no HVAR lookup is attempted — base is returned.
+        let font_bytes = build_font_with_minimal_hvar();
+        let font = Font::parse(&font_bytes).unwrap();
+        let mut hmtx_data = Vec::new();
+        hmtx_data.extend_from_slice(&600u16.to_be_bytes()); // advance_width
+        hmtx_data.extend_from_slice(&80i16.to_be_bytes());  // lsb
+        let hmtx = crate::hmtx::Hmtx::parse(&hmtx_data, 1, 1).unwrap();
+        assert_eq!(font.advance_width_varied(0, &hmtx, &[]), 600);
+    }
+
+    #[test]
+    fn advance_width_varied_no_hvar_returns_base() {
+        // Font without HVAR table: falls through to base even with non-empty coords.
+        let mut font_bytes = Vec::new();
+        write_offset_table(&mut font_bytes, 0);
+        let font = Font::parse(&font_bytes).unwrap();
+        let mut hmtx_data = Vec::new();
+        hmtx_data.extend_from_slice(&800u16.to_be_bytes());
+        hmtx_data.extend_from_slice(&0i16.to_be_bytes());
+        let hmtx = crate::hmtx::Hmtx::parse(&hmtx_data, 1, 1).unwrap();
+        assert_eq!(font.advance_width_varied(0, &hmtx, &[0.5]), 800);
+    }
+
+    #[test]
+    fn advance_width_varied_hvar_empty_store_returns_base() {
+        // Font with HVAR but empty IVS: evaluate() returns None → delta = 0.0 → base.
+        let font_bytes = build_font_with_minimal_hvar();
+        let font = Font::parse(&font_bytes).unwrap();
+        let mut hmtx_data = Vec::new();
+        hmtx_data.extend_from_slice(&1000u16.to_be_bytes());
+        hmtx_data.extend_from_slice(&50i16.to_be_bytes());
+        let hmtx = crate::hmtx::Hmtx::parse(&hmtx_data, 1, 1).unwrap();
+        // coords non-empty, HVAR present but empty store → delta=0 → base=1000.
+        assert_eq!(font.advance_width_varied(0, &hmtx, &[0.7]), 1000);
     }
 }

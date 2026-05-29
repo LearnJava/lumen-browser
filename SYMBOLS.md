@@ -526,7 +526,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/encoding/src/unicode_provider.rs:31` **fn** `new` — Создаёт провайдер с auto-режимом (LSTM/dictionary для CJK/Thai/etc)
 `crates/engine/encoding/src/unicode_provider.rs:40` **fn** `new_latin` — Облегчённая версия — только Latin + UAX #14 rules, без LSTM
 
-## lumen-font  (169 symbols)
+## lumen-font  (170 symbols)
 
 `crates/engine/font/src/avar.rs:32` **struct** `AxisValueMap` — Одна пара (fromCoord → toCoord) в segment map оси. Координаты в
 `crates/engine/font/src/avar.rs:44` **struct** `SegmentMap` — Segment map для одной оси: список пар, отсортированных по `from`
@@ -577,12 +577,13 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/font/src/face.rs:201` **fn** `fvar` — `fvar` (Font Variations) — описание variation axes (wght / wdth / slnt /
 `crates/engine/font/src/face.rs:212` **fn** `avar` — `avar` (Axis Variations) — piecewise-linear перенормализация осей из
 `crates/engine/font/src/face.rs:226` **fn** `gvar` — `gvar` (Glyph Variations) — per-glyph variation deltas для outline
-`crates/engine/font/src/face.rs:241` **fn** `hvar` — `HVAR` (Horizontal Metrics Variations) — variation deltas для
-`crates/engine/font/src/face.rs:252` **fn** `vvar` — `VVAR` (Vertical Metrics Variations) — зеркало `HVAR` для
-`crates/engine/font/src/face.rs:269` **fn** `mvar` — `MVAR` (Metrics Variations) — variation deltas для глобальных
-`crates/engine/font/src/face.rs:278` **fn** `glyph` — Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
-`crates/engine/font/src/face.rs:297` **fn** `glyph_resolved` — Возвращает глиф с рекурсивно развёрнутыми composite-компонентами:
-`crates/engine/font/src/face.rs:326` **fn** `glyph_resolved_with_coords` — Variable-fonts вариант [`Font::glyph_resolved`]: применяет gvar deltas
+`crates/engine/font/src/face.rs:238` **fn** `hvar` — `HVAR` (Horizontal Metrics Variations) — variation deltas для
+`crates/engine/font/src/face.rs:252` **fn** `advance_width_varied` — Advance width for `glyph_id` with HVAR variation deltas applied
+`crates/engine/font/src/face.rs:276` **fn** `vvar` — `VVAR` (Vertical Metrics Variations) — зеркало `HVAR` для
+`crates/engine/font/src/face.rs:293` **fn** `mvar` — `MVAR` (Metrics Variations) — variation deltas для глобальных
+`crates/engine/font/src/face.rs:302` **fn** `glyph` — Удобная обёртка: glyph_id → outline. `None`, если глиф пустой
+`crates/engine/font/src/face.rs:321` **fn** `glyph_resolved` — Возвращает глиф с рекурсивно развёрнутыми composite-компонентами:
+`crates/engine/font/src/face.rs:350` **fn** `glyph_resolved_with_coords` — Variable-fonts вариант [`Font::glyph_resolved`]: применяет gvar deltas
 `crates/engine/font/src/font_registry.rs:19` **struct** `FontRegistry` — Провайдер шрифтов с поддержкой @font-face: системные шрифты + URL-буферы
 `crates/engine/font/src/font_registry.rs:28` **fn** `new`
 `crates/engine/font/src/font_registry.rs:42` **fn** `register_from_bytes` — Регистрирует шрифт из байт-буфера (TrueType / sfnt после декодирования
@@ -883,19 +884,19 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:1107` **fn** `layout`
 `crates/engine/layout/src/box_tree.rs:1121` **fn** `layout_measured`
 `crates/engine/layout/src/box_tree.rs:1132` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:4606` **fn** `measure_text_w` — Measures text width (letter_spacing applied between each character)
-`crates/engine/layout/src/box_tree.rs:5310` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:4608` **fn** `measure_text_w`
+`crates/engine/layout/src/box_tree.rs:5312` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/counters.rs:33` **type** `CounterSnapshot` — Per-element counter stacks snapshot
 `crates/engine/layout/src/counters.rs:37` **type** `CounterMap` — Maps each element `NodeId` to its counter snapshot (after own reset/increment,
 `crates/engine/layout/src/counters.rs:90` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
 `crates/engine/layout/src/counters.rs:152` **fn** `format_counter` — Format a counter integer value according to the given `list-style-type` keyword
-`crates/engine/layout/src/lib.rs:88` **trait** `TextMeasurer` — Интерфейс измерения ширины символов для line wrapping
-`crates/engine/layout/src/lib.rs:113` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
-`crates/engine/layout/src/lib.rs:134` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
-`crates/engine/layout/src/lib.rs:155` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:361` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
-`crates/engine/layout/src/lib.rs:389` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
-`crates/engine/layout/src/lib.rs:448` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
+`crates/engine/layout/src/lib.rs:91` **trait** `TextMeasurer`
+`crates/engine/layout/src/lib.rs:118` **enum** `ClickableKind` — Classification of an interactive element found during layout-tree traversal
+`crates/engine/layout/src/lib.rs:139` **struct** `ClickableElement` — An interactive element with its screen-space bounding rect
+`crates/engine/layout/src/lib.rs:160` **fn** `collect_clickable_elements` — Collect all interactive elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:366` **struct** `StickyBox` — Snapshot of a `position: sticky` element captured after normal-flow layout
+`crates/engine/layout/src/lib.rs:394` **fn** `collect_sticky_boxes` — Collect all `position: sticky` elements from the layout tree in document order
+`crates/engine/layout/src/lib.rs:453` **fn** `compute_sticky_offset` — Compute the visual offset `(dx, dy)` in CSS px to apply to a sticky element
 `crates/engine/layout/src/page.rs:22` **struct** `MarginBoxTextFragment` — Text fragment within a margin-box after layout
 `crates/engine/layout/src/page.rs:49` **enum** `MarginBoxPosition` — Position of a margin-box relative to the page box
 `crates/engine/layout/src/page.rs:72` **fn** `all` — All 16 margin-box positions in layout order
@@ -2097,4 +2098,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2035 symbols in 19 crates*
+*Total: 2036 symbols in 19 crates*

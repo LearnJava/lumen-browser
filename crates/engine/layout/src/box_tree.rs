@@ -4603,6 +4603,8 @@ fn strip_soft_hyphens(raw: &str) -> (String, Vec<usize>) {
 
 /// Measures text width (letter_spacing applied between each character).
 /// `tab_size` is used for `\t` characters; pass 0.0 when text contains no tabs.
+// CSS: font-variation-settings — P4 добавит `variation_axes` параметр когда
+// TextMeasurer получит char_width_varied; сейчас используется base advance width.
 pub fn measure_text_w(text: &str, font_size: f32, letter_spacing: f32, tab_size: f32, m: &dyn TextMeasurer) -> f32 {
     if text.is_empty() {
         return 0.0;

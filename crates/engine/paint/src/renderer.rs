@@ -6086,7 +6086,9 @@ fn rasterize_and_insert(
     let raster = Rasterizer::new(f32::from(key.size_bin), units_per_em);
     let bitmap: Bitmap = raster.rasterize(&glyph)?;
     let entry = atlas.insert(key, &bitmap)?;
-    let advance_native = hmtx.advance_width(key.glyph_id).unwrap_or(0);
+    // HVAR delta applied: for variable fonts, advance width varies per axis instance.
+    // Font::advance_width_varied falls back to hmtx base when HVAR is absent.
+    let advance_native = font.advance_width_varied(key.glyph_id, hmtx, coords);
     Some(CachedGlyph {
         entry,
         left: bitmap.left,
