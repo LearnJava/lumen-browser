@@ -221,6 +221,16 @@ def log(developer: str, message: str):
     print(f"[{ts}] [{developer}] {message}", flush=True)
 
 
+def _extract_section(content: str, heading: str) -> str:
+    """Вернуть текст секции от ## heading до следующего ## или --- или конца файла."""
+    m = re.search(
+        r"^##\s+" + re.escape(heading) + r"\s*\n(.*?)(?=\n---|\n##|\Z)",
+        content,
+        re.DOTALL | re.MULTILINE,
+    )
+    return m.group(1).strip() if m else ""
+
+
 def has_tasks(developer: str) -> bool:
     """Проверить, есть ли задачи в STATUS-файле."""
     status_file = PROJECT_DIR / f"STATUS-{developer}.md"
@@ -229,15 +239,17 @@ def has_tasks(developer: str) -> bool:
         return False
 
     content = status_file.read_text(encoding="utf-8")
-    if re.search(r"In progress:", content):
+
+    # Секция "In progress": непустая и не является заглушкой _(none)_
+    in_progress = _extract_section(content, "In progress")
+    if in_progress and in_progress != "_(none)_":
         return True
-    # Поддерживаем два формата задач в секции Next:
-    # - markdown-чекбоксы: "- [ ] task"
-    # - таблица: "| 1 | task | ..."
-    if re.search(r"Next:", content) and (
-        re.search(r"- \[", content) or re.search(r"\|\s*\d+\s*\|", content)
-    ):
+
+    # Секция "Next": содержит строки таблицы | N | или чекбоксы - [
+    next_section = _extract_section(content, "Next")
+    if re.search(r"\|\s*\d+\s*\|", next_section) or re.search(r"- \[", next_section):
         return True
+
     return False
 
 
