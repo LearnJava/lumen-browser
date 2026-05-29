@@ -5,12 +5,12 @@
 ---
 
 ## In progress
-SVG `<path>` GPU rendering  branch: p2-svg-path-rendering
-Next step: svg_path.rs tessellator + DrawSvgPath DisplayCommand  display_list.rs:2749
+_(none)_
 
 ---
 
 ## Recent merges
+- svg-path-rendering (2026-05-29)
 - webp-decoder (2026-05-27)
 - picture-srcset-gpu (2026-05-27)
 - gradient-rendering (2026-05-22)
