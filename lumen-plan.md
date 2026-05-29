@@ -491,7 +491,7 @@
 - 🟡 **`[P1+P3]` Shadow DOM + custom elements + `<template>` + `<slot>`.** **P1 done** — `ShadowRootMode`, `NodeData::ShadowRoot`, `Document::attach_shadow/shadow_root_of/is_shadow_host`, `FlatTree` + `build_flat_tree` (slot assignment, fallback content, zero-alloc fast path), layout wiring (`build_box`/`collect_inline_segments` use `flat.children_of`). **P3** — JS bindings (`Element.attachShadow`, `customElements.define`) + lifecycle dispatch. **P4** — `:host`, `::slotted` CSS pseudo-classes (marked with `// CSS: :host, ::slotted` in `build_box`).
 - **`[P1+P3]` Accessibility tree + platform bridges.** **P1** — построение accessibility tree из DOM/layout + ARIA semantics + focus model; **P3** — platform bridges (UIA / AT-SPI / NSAccessibility) + focus dispatch.
 - 🟡 **`[P1+P3]` Forms runtime.** **P1 done** — `ValidityState` + все флаги HTML5 §4.10.21.1 в `lumen-dom::element_validity`, `check_validity_form`/`invalid_controls_in_form`, `build_form_submit` блокирует submit при невалидных контролах. Validation pseudo-classes (`:valid`/`:invalid`/`:required` и т.д.) готовы ранее. **P3** — native pickers, autofill popup, validation tooltip UI.
-- **`[P1+P2]` `<picture>` / `srcset` / `sizes` + `loading="lazy"`.** 🟡 **P1**: готовы parser + pickers + `pick_picture_source` + L4 nested `(not (...))` / `((...))` (см. § «P1 4A»). Осталось: IntersectionObserver event source для lazy. **P2** — image-side GPU upload + integration в shell.
+- ✅ **`[P1+P2]` `<picture>` / `srcset` / `sizes` + `loading="lazy"`.** **P1**: готовы parser + pickers + `pick_picture_source` + L4 nested + IntersectionObserver event source для lazy (rootMargin 1-viewport-ahead, через `_lazy_io` внутри `_lumen_init_lazy_images`). **P2** — image-side GPU upload + integration в shell.
 - **`[P3]` IME composition events** (`compositionstart` / `update` / `end`, `KeyboardEvent.isComposing`). Интегрируется через winit IME API + DOM events.
 - **`[P3]` Range requests — готово** (single + multi + suffix + If-Range). `fetch_range` + `fetch_multi_range` + `parse_multipart_byteranges` в lumen-network — нормализуют все формы 206/multipart-ответов в типизированные `Range/MultiRangeResponse`. Осталось: shell-интеграция под resume downloads и `<video>` seek по таблице сегментов. (Brotli — **готово**: `BrotliContentDecoder` за `ContentDecoder` в `lumen-network`.)
 - **`[P3]` DevTools / Inspector минимум.** DOM tree view + computed styles panel + network log. Стандарт — Chrome DevTools Protocol (CDP) как WebSocket-сервер.
@@ -588,7 +588,7 @@
 
 - **`picture-shell-4a`** (P2): `lumen_layout::collect_image_requests(doc, viewport) -> Vec<ImageRequest>` — публичная функция, использует `resolve_image_source` для каждого `<img>`. `fetch_and_decode_images` в shell принимает viewport и вызывает `collect_image_requests` вместо `collect_img_entries` — ключи в `register_image` совпадают с `DrawImage.src` для srcset/picture. 7 unit-тестов.
 
-**Осталось:** IntersectionObserver event source для `loading="lazy"` (P3).
+**Готово (2026-05-29):** IntersectionObserver event source для `loading="lazy"` — `_lumen_init_lazy_images` создаёт внутренний IO с rootMargin 1-viewport-height; `_parse_root_margin` + rootMargin-aware intersection; `_lumen_deliver_lazy_images` → no-op.
 
 #### 4B.6-7 — CSS Grid layout (2026-05-20)
 
@@ -2248,7 +2248,7 @@ CI gate (задачи 9G.3 + 9G.5 в Roadmap): `cargo run -p lumen-bench --relea
   - **Shadow DOM + custom elements + `<template>` + `<slot>`** (`[P1+P4]`) — Web Components. Без них половина современных сайтов сломается. P1 — cascade + composed tree + template/slot tree-builder; P4 — JS bindings + lifecycle.
   - **Accessibility tree + platform bridges** (`[P1+P4]`) — обязательно для NVDA / Orca / VoiceOver. «Русский first-class» требует. P1 — tree construction из DOM/layout + ARIA + focus model; P4 — platform bridges (UIA / AT-SPI / NSAccessibility) + focus dispatch.
   - **Forms runtime** (`[P1+P4]`) — Constraint Validation API, submission algorithm, file picker, autofill UI поверх существующего storage. P1 — ValidityState + validation pseudo-classes + submission algorithm; P4 — native pickers + autofill popup + validation tooltip.
-  - **`<picture>` / `srcset` / `sizes` + `loading="lazy"`** (`[P1+P2]`) — viewport+DPR-aware resource selection. P1 — `srcset` parser + density-picker + `sizes` parser + width-picker готовы (`lumen-html-parser::srcset`); осталось `<picture>`/`<source>` media-query selection + IntersectionObserver event source; P2 — image GPU upload.
+  - ✅ **`<picture>` / `srcset` / `sizes` + `loading="lazy"`** (`[P1+P2]`) — P1 завершён: srcset, sizes, picture-picker, IntersectionObserver event source для lazy (rootMargin). P2 — image GPU upload.
   - **IME composition events** (`[P4]`) — без них японский / китайский / корейский ввод сломан.
   - **Connection pooling + keep-alive + Brotli + Range requests** (`[P3]`, ✅ keep-alive + Brotli + single-range; ⬜ multi-range / suffix / If-Range) — без keep-alive реальный сайт = 50× TCP handshakes.
   - **Find in page (Ctrl+F)** (`[P4]`).
