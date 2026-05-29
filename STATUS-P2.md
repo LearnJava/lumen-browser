@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+CSS 3D transforms — GPU depth buffer + `transform-style: preserve-3d`  branch: p2-css-3d-depth-buffer
+Next step: FillVertex z field + depth texture + DepthStencilState  renderer.rs:931
 
 ---
 
