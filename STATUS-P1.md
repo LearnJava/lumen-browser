@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+**p1-image-viewport-gating** — Image viewport-gating (10E.3): `layout/src/image_gating.rs`
+Next step: обновить SYMBOLS.md, wire в shell, коммит
 
 ---
 
