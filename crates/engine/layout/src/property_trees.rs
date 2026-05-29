@@ -321,6 +321,38 @@ impl Mat4 {
         }
     }
 
+    /// Как [`project_point`](Self::project_point), но возвращает и
+    /// перспективно-делённую глубину `z'`. Используется depth-sort
+    /// компоновщиком (CSS Transforms L2 §6.2): экранные `(x', y')` нужны
+    /// для отрисовки, `z'` — для упорядочивания пересекающихся плоскостей.
+    /// При `w' ≈ 0` деление пропускается (см. [`project_point`]).
+    #[must_use]
+    pub fn project_point_z(&self, x: f32, y: f32, z: f32) -> (f32, f32, f32) {
+        let m = &self.0;
+        let xp = m[0] * x + m[4] * y + m[8] * z + m[12];
+        let yp = m[1] * x + m[5] * y + m[9] * z + m[13];
+        let zp = m[2] * x + m[6] * y + m[10] * z + m[14];
+        let wp = m[3] * x + m[7] * y + m[11] * z + m[15];
+        if wp.abs() < f32::EPSILON {
+            (xp, yp, zp)
+        } else {
+            (xp / wp, yp / wp, zp / wp)
+        }
+    }
+
+    /// Возвращает только трансформированную z-координату точки `(x, y, z)`
+    /// **без** перспективного деления — это z в системе координат 3D
+    /// rendering context (CSS Transforms L2 §6.1). Depth-sort использует
+    /// именно эту величину (не `project_point_z`): сортировка плоскостей
+    /// происходит в пространстве 3D-контекста до перспективной проекции,
+    /// иначе деление на `w'` исказило бы порядок при больших |z|.
+    /// Положительный z = ближе к зрителю (CSS-конвенция).
+    #[must_use]
+    pub fn transform_z(&self, x: f32, y: f32, z: f32) -> f32 {
+        let m = &self.0;
+        m[2] * x + m[6] * y + m[10] * z + m[14]
+    }
+
     /// `true`, если матрица — чистое 2D affine-преобразование (Z/W-строки
     /// и столбцы в identity-значениях). Renderer использует это как
     /// быстрый путь: 2D affine применяется без перспективного деления, что
@@ -1134,6 +1166,45 @@ mod tests {
         let (px, py) = m.project_point(4.0, 5.0, 0.0);
         assert!(approx(ax, px));
         assert!(approx(ay, py));
+    }
+
+    #[test]
+    fn project_point_z_returns_depth() {
+        // translate3d(0,0,30): точка z=0 → z'=30 (identity w).
+        let m = Mat4::translate_3d(0.0, 0.0, 30.0);
+        let (x, y, z) = m.project_point_z(5.0, 7.0, 0.0);
+        assert!(approx(x, 5.0));
+        assert!(approx(y, 7.0));
+        assert!(approx(z, 30.0));
+    }
+
+    #[test]
+    fn project_point_z_applies_perspective_divide_to_z() {
+        // perspective(800) на точке z=400: w'=0.5 → z'=400/0.5=800.
+        let m = Mat4::perspective(800.0);
+        let (_, _, z) = m.project_point_z(0.0, 0.0, 400.0);
+        assert!(approx(z, 800.0));
+    }
+
+    #[test]
+    fn transform_z_ignores_perspective_divide() {
+        // transform_z берёт сырой z (без деления на w'): для perspective(800)
+        // и z=400 это просто m10*z = 400, в отличие от project_point_z.
+        let m = Mat4::perspective(800.0);
+        assert!(approx(m.transform_z(0.0, 0.0, 400.0), 400.0));
+    }
+
+    #[test]
+    fn transform_z_picks_up_translate_z() {
+        let m = Mat4::translate_3d(0.0, 0.0, -50.0);
+        assert!(approx(m.transform_z(10.0, 20.0, 0.0), -50.0));
+    }
+
+    #[test]
+    fn transform_z_rotate_x_moves_plane_in_depth() {
+        // rotateX(90°): z' = sin·y + cos·z = 1·y. Точка y=100, z=0 → z'=100.
+        let m = Mat4::rotate_x(std::f32::consts::FRAC_PI_2);
+        assert!(approx(m.transform_z(0.0, 100.0, 0.0), 100.0));
     }
 
     #[test]
