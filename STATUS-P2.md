@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+Box model overlay (7E.3)  branch: p2-boxmodel-overlay
+Next step: merge → update STATUS
 
 ---
 
@@ -15,11 +16,9 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | Off-screen render — `Renderer::render_to_image() -> Image` (8A.3): отдельный wgpu surface без winit; критично для миграции graphic_tests на Rust-тесты | `paint` | L | none |
-| 2 | Software rasterizer — `tiny-skia` opt-in под `cfg(test)` (8A.5): детерминированные пиксели на CI (Windows/macOS/Linux) | `paint` | M | none |
-| 3 | `mask-image` GPU compositing — CSS Masking #14: `PushMaskLayer/PopMaskLayer` в DisplayCommand + wgpu stencil/alpha compositing pass | `paint` | L | none |
-| 4 | CSS 3D transforms — `perspective()` + `transform-style: preserve-3d` (Transforms L2 #24): wgpu matrix stack, depth buffer | `paint` | L | none |
-| 5 | Box model overlay primitive — `DisplayCommand::BoxModelOverlay { margin, border, padding, content }` (7E.3) для devtools инспектора | `paint` | S | none |
+| 1 | `mask-image` GPU compositing — CSS Masking #14: `PushMaskLayer/PopMaskLayer` в DisplayCommand + wgpu stencil/alpha compositing pass | `paint` | L | none |
+| 2 | CSS 3D transforms — `perspective()` + `transform-style: preserve-3d` (Transforms L2 #24): wgpu matrix stack, depth buffer | `paint` | L | none |
+| 3 | Box model renderer-side rendering — P3 wires `BoxModelOverlay` to the DevTools CDP overlay endpoint (7E.3 следующий шаг) | `devtools`, `shell` | M | P3 devtools |
 
 ---
 
