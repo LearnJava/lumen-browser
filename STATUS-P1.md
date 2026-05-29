@@ -5,7 +5,9 @@
 ---
 
 ## In progress
-_(none)_
+
+Roadmap audit — сверить `lumen-plan.md` маркеры с реальным кодом  branch: p1-roadmap-audit
+Next step: читаем lumen-plan.md §16, ищем расхождения ⬜/🟡 vs реальный код  lumen-plan.md:§16
 
 ---
 
