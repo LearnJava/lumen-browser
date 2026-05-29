@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+`var()` full recursive substitution + graphic test  branch: p4-css-variables
+Next step: создать graphic_tests/50-css-variables.html, обновить CSS-SPECS.md
 
 ## Workflow
 
