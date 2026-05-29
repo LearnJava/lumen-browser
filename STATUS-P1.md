@@ -5,7 +5,9 @@
 ---
 
 ## In progress
-_(none)_
+
+In progress: IndexedDB (W3C Indexed Database API 3.0) — JS-шим в `WEB_API_SHIM`  branch: p1-indexeddb
+Next step: in-memory реализация готова; завершить через /lumen-task-finish  `crates/js/src/dom.rs`
 
 ---
 
@@ -13,11 +15,12 @@ _(none)_
 
 Ordered by impact. Pick the first unblocked item; update "In progress" before coding.
 
+> Прежние пункты 1–3 (Image viewport-gating, Click-hint iterator, Shadow DOM lifecycle callbacks) на 2026-05-29 уже реализованы в коде — удалены как устаревшие.
+
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | Image viewport-gating (10E.3) — layout декодирует изображения только для bbox ∈ viewport ± 2 экрана, `layout/src/image_gating.rs` | `layout`, `image` | M | none |
-| 2 | Click-hint overlay iterator (7B.2 blocker) — публичный итератор по кликабельным элементам из `lumen-layout`; P3 подключает в shell | `layout` | S | none |
-| 3 | Shadow DOM JS binding stubs — lifecycle callbacks для P3 (`connectedCallback`, `disconnectedCallback`, `attributeChangedCallback`) в `lumen-dom` | `dom` | M | P3 JS bindings |
+| 1 | IndexedDB persistence — backend в `lumen-storage` (redb/sqlite за `StorageBackend`), чтобы базы переживали reload; сейчас in-memory per-runtime | `storage`, `js` | L | none |
+| 2 | Roadmap audit — сверить `lumen-plan.md` Implementation Status с реальным кодом (маркеры массово устарели: driver/http2/memory-pressure/composite-glyphs помечены ⬜, но реализованы) | docs | M | none |
 
 ---
 
