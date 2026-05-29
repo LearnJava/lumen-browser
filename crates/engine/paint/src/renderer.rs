@@ -97,7 +97,11 @@ struct Uniforms {
 
 struct VIn {
     @location(0) pos: vec2<f32>,
-    @location(1) color: vec4<f32>,
+    // CSS depth in pixels: positive = closer to viewer.
+    // Mapped to WebGPU NDC [0=front, 1=back] via (0.5 - z/20000).
+    // CSS: transform-style — populated for preserve-3d by apply_affine_to_verts.
+    @location(1) z: f32,
+    @location(2) color: vec4<f32>,
 };
 
 struct VOut {
@@ -111,8 +115,11 @@ fn vs_main(in: VIn) -> VOut {
         in.pos.x / u.viewport.x * 2.0 - 1.0,
         1.0 - in.pos.y / u.viewport.y * 2.0,
     );
+    // CSS z: positive=closer. WebGPU: smaller depth=front.
+    // ±10000 CSS px → [0,1]: z=0→0.5 (2D, painter's order), z>0→<0.5 (front), z<0→>0.5 (back).
+    let depth = clamp(0.5 - in.z / 20000.0, 0.0, 1.0);
     var out: VOut;
-    out.clip = vec4<f32>(ndc, 0.0, 1.0);
+    out.clip = vec4<f32>(ndc, depth, 1.0);
     out.color = in.color;
     return out;
 }
@@ -930,6 +937,11 @@ fn sample_grad(t_in: f32) -> vec4<f32> {
 #[derive(Copy, Clone)]
 struct FillVertex {
     pos: [f32; 2],
+    /// CSS depth in pixels (positive = closer to viewer). Set to 0.0 for 2D elements;
+    /// populated from `project_point_z` for 3D-transformed elements (CSS Transforms L2).
+    /// Shader maps this to WebGPU NDC depth [0,1] so `CompareFunction::LessEqual` gives
+    /// correct occlusion: closer elements (higher z) have lower depth value and win.
+    z: f32,
     color: [f32; 4],
 }
 
@@ -1274,6 +1286,15 @@ pub struct Renderer {
     /// событии winit (например, drag окна между мониторами с разной DPI).
     scale_factor: f64,
 
+    /// GPU depth buffer for CSS 3D transforms (`transform-style: preserve-3d`).
+    /// Size matches the frame surface; recreated on every `resize()`.
+    /// `None` only when both dimensions are zero at construction time.
+    // CSS: transform-style — when P4 wires preserve-3d, depth_sorted_child_order()
+    // in display_list.rs emits commands back-to-front; the GPU depth test here
+    // provides correct occlusion for the rare case of intersecting 3D planes.
+    depth_texture: Option<wgpu::Texture>,
+    depth_view: Option<wgpu::TextureView>,
+
     fill_pipeline: wgpu::RenderPipeline,
     circle_pipeline: wgpu::RenderPipeline,
     /// CSS border-radius SDF pipeline. Uses `RRectVertex` layout.
@@ -1369,6 +1390,23 @@ pub struct Renderer {
     texture_pool: crate::texture_pool::TexturePool,
     /// Normalized GPU fingerprint: prevents WebGL renderer/vendor fingerprinting (ADR-007).
     gpu_fingerprint: GpuFingerprint,
+}
+
+/// Creates a `Depth32Float` texture + view sized `width×height` for GPU depth testing.
+/// Called once in `init_pipelines` and on every `resize`.
+fn create_depth_texture(device: &wgpu::Device, width: u32, height: u32) -> (wgpu::Texture, wgpu::TextureView) {
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("depth-texture"),
+        size: wgpu::Extent3d { width: width.max(1), height: height.max(1), depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Depth32Float,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    (texture, view)
 }
 
 impl Renderer {
@@ -1633,12 +1671,17 @@ impl Renderer {
                         wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Float32x2,
                             offset: 0,
-                            shader_location: 0,
+                            shader_location: 0, // pos
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 8,
+                            shader_location: 1, // z (CSS depth px)
                         },
                         wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Float32x4,
-                            offset: 8,
-                            shader_location: 1,
+                            offset: 12,
+                            shader_location: 2, // color
                         },
                     ],
                 }],
@@ -1655,7 +1698,16 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            // CSS Transforms L2 §6 — depth test for preserve-3d rendering contexts.
+            // LessEqual: closer elements (smaller depth) win; equal depth preserves
+            // painter's order (last-drawn wins), matching the 2D flat-compositing path.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -2573,6 +2625,11 @@ impl Renderer {
 
         let atlas = GlyphAtlas::new(ATLAS_DIM);
 
+        let (depth_texture, depth_view) = {
+            let (t, v) = create_depth_texture(&device, headless_w, headless_h);
+            (Some(t), Some(v))
+        };
+
         Ok(Self {
             surface,
             device,
@@ -2581,6 +2638,8 @@ impl Renderer {
             headless_w,
             headless_h,
             scale_factor,
+            depth_texture,
+            depth_view,
             fill_pipeline,
             circle_pipeline,
             rrect_pipeline,
@@ -3092,6 +3151,10 @@ impl Renderer {
             self.layer_textures.clear();
             // Clear pooled textures on resize (Phase 2 ADR-008) to avoid size mismatches.
             self.texture_pool.clear();
+            // Recreate depth texture to match new surface dimensions.
+            let (t, v) = create_depth_texture(&self.device, width, height);
+            self.depth_texture = Some(t);
+            self.depth_view = Some(v);
         }
     }
 
@@ -4457,6 +4520,7 @@ impl Renderer {
                     for [x, y] in vertices {
                         fill_vertices.push(FillVertex {
                             pos: [x + dx, y + dy],
+                            z: 0.0,
                             color: c,
                         });
                     }
@@ -4895,6 +4959,27 @@ impl Renderer {
                         }
                         LoadOpChoice::Load => wgpu::LoadOp::Load,
                     };
+                    // Depth attachment only for the frame surface (level 0).
+                    // Off-screen layers don't participate in 3D depth sorting.
+                    let depth_attachment = if batch.target_level == 0 {
+                        self.depth_view.as_ref().map(|dv| wgpu::RenderPassDepthStencilAttachment {
+                            view: dv,
+                            depth_ops: Some(wgpu::Operations {
+                                // Clear depth at frame start (ClearWhite/ClearTransparent);
+                                // load otherwise to accumulate depth across same-frame batches
+                                // so 3D-sorted elements preserve relative depth ordering.
+                                load: if matches!(batch.load_op, LoadOpChoice::Load) {
+                                    wgpu::LoadOp::Load
+                                } else {
+                                    wgpu::LoadOp::Clear(1.0)
+                                },
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        })
+                    } else {
+                        None
+                    };
                     let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("draw-pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -4903,7 +4988,7 @@ impl Renderer {
                             depth_slice: None,
                             ops: wgpu::Operations { load, store: wgpu::StoreOp::Store },
                         })],
-                        depth_stencil_attachment: None,
+                        depth_stencil_attachment: depth_attachment,
                         timestamp_writes: None,
                         occlusion_query_set: None,
                     });
@@ -5806,10 +5891,14 @@ fn translate_rect(rect: Rect, dx: f32, dy: f32) -> Rect {
 /// только `pos`-смещение через trait `VertexPos`.
 trait VertexPos {
     fn pos_mut(&mut self) -> &mut [f32; 2];
+    /// Set CSS depth in pixels (positive = closer to viewer). Default no-op for vertex
+    /// types without a depth field; FillVertex overrides to enable GPU depth testing.
+    fn set_depth(&mut self, _z: f32) {}
 }
 
 impl VertexPos for FillVertex {
     fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
+    fn set_depth(&mut self, z: f32) { self.z = z; }
 }
 
 impl VertexPos for TextVertex {
@@ -5834,12 +5923,13 @@ fn apply_affine_to_grad_verts(verts: &mut [GradVertex], m: &Mat4) {
 
 /// Применяет матрицу `PushTransform` к pos-полям вершин.
 ///
-/// 2D affine (`m.is_2d_affine()`) — быстрый путь: x' = a·x + c·y + e (как и
-/// раньше, побитово идентично 2D-конвейеру). Иначе (CSS Transforms L2: 3D
-/// rotate/translate/scale, `perspective()`, `matrix3d`) — полная 4×4
-/// проекция с перспективным делением: вершина z=0 проецируется на экранную
-/// плоскость через `Mat4::project_point`. Depth отбрасывается — depth buffer
-/// не реализован (flat-композитинг, см. STATUS-P2 deferred preserve-3d).
+/// 2D affine (`m.is_2d_affine()`) — быстрый путь: x' = a·x + c·y + e
+/// (побитово идентично старому 2D-конвейеру; z остаётся 0.0 по умолчанию).
+/// Иначе (CSS Transforms L2: 3D rotate/translate/scale, `perspective()`,
+/// `matrix3d`) — полная 4×4 проекция с перспективным делением через
+/// `Mat4::project_point_z`: возвращает (x', y', z'), где z' сохраняется
+/// через `VertexPos::set_depth` для GPU depth testing. Vertex-типы без поля
+/// depth (TextVertex, ImageVertex и др.) игнорируют set_depth (no-op).
 fn apply_affine_to_verts<V: VertexPos>(verts: &mut [V], m: &Mat4) {
     if m.is_2d_affine() {
         let a = m.0[0];
@@ -5854,13 +5944,21 @@ fn apply_affine_to_verts<V: VertexPos>(verts: &mut [V], m: &Mat4) {
             let y = p[1];
             p[0] = a * x + c * y + e;
             p[1] = b * x + d * y + f;
+            // z stays 0.0 (2D affine: depth=0.5 in shader, painter's order applies)
         }
     } else {
+        // CSS Transforms L2 — 3D/perspective transform: preserve z for depth testing.
         for v in verts {
-            let p = v.pos_mut();
-            let (x, y) = m.project_point(p[0], p[1], 0.0);
-            p[0] = x;
-            p[1] = y;
+            let (x, y, z) = {
+                let p = v.pos_mut();
+                m.project_point_z(p[0], p[1], 0.0)
+            };
+            {
+                let p = v.pos_mut();
+                p[0] = x;
+                p[1] = y;
+            }
+            v.set_depth(z);
         }
     }
 }
@@ -5976,12 +6074,12 @@ fn emit_border_arc(
         let pi0 = [cx + inner_r * c0, cy + inner_r * s0];
         let pi1 = [cx + inner_r * c1, cy + inner_r * s1];
         out.extend_from_slice(&[
-            FillVertex { pos: po0, color },
-            FillVertex { pos: po1, color },
-            FillVertex { pos: pi1, color },
-            FillVertex { pos: po0, color },
-            FillVertex { pos: pi1, color },
-            FillVertex { pos: pi0, color },
+            FillVertex { pos: po0, z: 0.0, color },
+            FillVertex { pos: po1, z: 0.0, color },
+            FillVertex { pos: pi1, z: 0.0, color },
+            FillVertex { pos: po0, z: 0.0, color },
+            FillVertex { pos: pi1, z: 0.0, color },
+            FillVertex { pos: pi0, z: 0.0, color },
         ]);
     }
 }
@@ -6137,12 +6235,12 @@ fn push_fill_quad(out: &mut Vec<FillVertex>, rect: Rect, color: [f32; 4]) {
     let x1 = rect.x + rect.width;
     let y1 = rect.y + rect.height;
     out.extend_from_slice(&[
-        FillVertex { pos: [x0, y0], color },
-        FillVertex { pos: [x1, y0], color },
-        FillVertex { pos: [x1, y1], color },
-        FillVertex { pos: [x0, y0], color },
-        FillVertex { pos: [x1, y1], color },
-        FillVertex { pos: [x0, y1], color },
+        FillVertex { pos: [x0, y0], z: 0.0, color },
+        FillVertex { pos: [x1, y0], z: 0.0, color },
+        FillVertex { pos: [x1, y1], z: 0.0, color },
+        FillVertex { pos: [x0, y0], z: 0.0, color },
+        FillVertex { pos: [x1, y1], z: 0.0, color },
+        FillVertex { pos: [x0, y1], z: 0.0, color },
     ]);
 }
 
@@ -7490,7 +7588,7 @@ mod tests {
     // ── vertex transform: 2D fast path vs 3D perspective projection ────────
 
     fn fv(x: f32, y: f32) -> FillVertex {
-        FillVertex { pos: [x, y], color: [0.0, 0.0, 0.0, 1.0] }
+        FillVertex { pos: [x, y], z: 0.0, color: [0.0, 0.0, 0.0, 1.0] }
     }
 
     fn approxf(a: f32, b: f32) -> bool {
@@ -7529,5 +7627,69 @@ mod tests {
         apply_affine_to_verts(&mut verts, &m);
         assert!(approxf(verts[0].pos[0], 0.0), "x' = {}", verts[0].pos[0]);
         assert!(approxf(verts[0].pos[1], 50.0), "y' = {}", verts[0].pos[1]);
+    }
+
+    // ── GPU depth buffer: FillVertex.z field ────────────────────────────────
+
+    #[test]
+    fn fill_vertex_z_default_zero() {
+        // push_fill_quad creates vertices with z=0 (no transform → depth=0.5 in shader).
+        let mut out = Vec::new();
+        let rect = lumen_core::geom::Rect::new(0.0, 0.0, 100.0, 50.0);
+        push_fill_quad(&mut out, rect, [1.0, 0.0, 0.0, 1.0]);
+        assert_eq!(out.len(), 6);
+        for v in &out {
+            assert_eq!(v.z, 0.0, "push_fill_quad must produce z=0 vertices");
+        }
+    }
+
+    #[test]
+    fn apply_verts_2d_affine_leaves_z_zero() {
+        // 2D affine transform: z stays 0 (no depth change for flat 2D elements).
+        let m = Mat4::translation_2d(50.0, 30.0);
+        let mut verts = [fv(10.0, 20.0)];
+        apply_affine_to_verts(&mut verts, &m);
+        assert_eq!(verts[0].z, 0.0, "2D affine must leave z unchanged at 0.0");
+    }
+
+    #[test]
+    fn apply_verts_rotate_x_sets_depth() {
+        // rotateX(90°) on a vertex at y=100, z_in=0: in CSS Y-down convention,
+        // rotating +Y toward the viewer moves y=100 → z_out ≈ +100 (closer to viewer).
+        // Vertex at y=0 (on the axis) stays at z=0.
+        let m = Mat4::rotate_x(std::f32::consts::FRAC_PI_2);
+        assert!(!m.is_2d_affine());
+        let mut verts = [fv(50.0, 100.0), fv(50.0, 0.0)];
+        apply_affine_to_verts(&mut verts, &m);
+        // y=100 rotated about X: z_out ≈ +100 (toward viewer in CSS convention)
+        assert!(verts[0].z.abs() > 50.0, "rotateX on y=100 should give |z| > 50, got {}", verts[0].z);
+        // y=0 (on axis) stays at z=0
+        assert!(approxf(verts[1].z, 0.0), "vertex on rotation axis stays at z=0, got {}", verts[1].z);
+    }
+
+    #[test]
+    fn apply_verts_perspective_sets_depth() {
+        // perspective(800) + translateZ(400): w' = 1 - 400/800 = 0.5.
+        // z_out = project_point_z(...).2 — should be non-zero, showing z is propagated.
+        let m = Mat4::perspective(800.0).multiply(&Mat4::translate_3d(0.0, 0.0, 400.0));
+        let mut verts = [fv(0.0, 0.0)];
+        apply_affine_to_verts(&mut verts, &m);
+        // With translateZ(400) and perspective(800), the z after perspective divide is
+        // pz/pw where pw = 0.5 (computed from 1/d · z term). Non-zero depth expected.
+        assert!(verts[0].z.abs() > 0.0, "perspective transform must propagate depth, z={}", verts[0].z);
+    }
+
+    #[test]
+    fn depth_ndc_formula_maps_correctly() {
+        // Verify the NDC formula used in the shader: depth = clamp(0.5 - z/20000, 0, 1)
+        // z=0 → depth=0.5 (2D elements, painter's order via LessEqual)
+        // z=10000 (close) → depth=0.0 (front)
+        // z=-10000 (far) → depth=1.0 (back)
+        fn depth_ndc(z: f32) -> f32 { (0.5 - z / 20000.0).clamp(0.0, 1.0) }
+        assert!((depth_ndc(0.0) - 0.5).abs() < 1e-6);
+        assert!((depth_ndc(10000.0) - 0.0).abs() < 1e-6);
+        assert!((depth_ndc(-10000.0) - 1.0).abs() < 1e-6);
+        // Closer element has smaller depth → wins LessEqual test
+        assert!(depth_ndc(100.0) < depth_ndc(-100.0), "closer (positive z) must have smaller NDC depth");
     }
 }
