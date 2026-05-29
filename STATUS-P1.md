@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+**hyphenation-provider** — KnuthLiangHyphenation (реальный HyphenationProvider через crate `hyphenation`)  branch: p1-hyphenation-provider
+Next step: commit all implementation files, update lumen-plan.md + subsystems/encoding.md + SYMBOLS.md
 
 ## Next step
 1. Read [lumen-plan.md](lumen-plan.md) Track P1 section (§P1 roadmap)
