@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+font-optical-sizing  branch: p4-font-optical-sizing
+Next step: добавить FontOpticalSizing enum + поле в ComputedStyle  style.rs:~2090
 
 ## Workflow
 
