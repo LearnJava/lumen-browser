@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+`p2-mask-image-layer` — mask-image GPU compositing: PushMaskLayer/PopMaskLayer в DisplayCommand + wgpu alpha/luminance compositing pass  branch: p2-mask-image-layer
+Next step: add MaskMode enum + PushMaskLayer/PopMaskLayer variants  crates/engine/paint/src/display_list.rs
 
 ---
 
