@@ -480,6 +480,19 @@ pub enum DisplayCommand {
     },
     /// Closes the sticky layer opened by `BeginStickyLayer`.
     EndStickyLayer,
+    /// SVG `<path>` fill: pre-tessellated triangle list produced by
+    /// `svg_path::tessellate_fill`. Every 3 consecutive `[x, y]` entries
+    /// form one triangle in CSS-pixel coordinates (same coordinate system as
+    /// all other rects in the display list). Color is the resolved `fill`
+    /// value after opacity.
+    ///
+    /// CSS: fill, stroke — P4 wires once fill/stroke are in ComputedStyle.
+    DrawSvgPath {
+        /// Flat list of triangle vertices — length is always a multiple of 3.
+        vertices: Vec<[f32; 2]>,
+        /// Resolved fill colour (already has `fill-opacity` applied).
+        color: Color,
+    },
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
@@ -878,6 +891,13 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::PopMask => {
                 out.push_str("PopMask\n");
+            }
+            DisplayCommand::DrawSvgPath { vertices, color } => {
+                out.push_str(&format!(
+                    "DrawSvgPath tris={} #{:02x}{:02x}{:02x}{:02x}\n",
+                    vertices.len() / 3,
+                    color.r, color.g, color.b, color.a,
+                ));
             }
         }
     }
@@ -2746,9 +2766,22 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             let color = stroke_color.or(fill_color).unwrap_or(Color::BLACK);
             out.push(DisplayCommand::FillRect { rect: b.rect, color });
         }
-        SvgShapeKind::Path { .. } => {
-            // Full path rendering requires GPU path commands — deferred to P2.
-            // CSS: fill, stroke — P4 wires; P2 renders via GPU path commands.
+        SvgShapeKind::Path { d } => {
+            if let Some(fc) = fill_color {
+                let segs = crate::svg_path::parse_svg_path(d);
+                let contours = crate::svg_path::flatten_path(&segs, 0.5);
+                let vertices = crate::svg_path::tessellate_fill(&contours);
+                if !vertices.is_empty() {
+                    // Shift path vertices by box origin so path coords are in
+                    // CSS-pixel layout space (same as all other DisplayCommands).
+                    let shifted: Vec<[f32; 2]> = vertices
+                        .iter()
+                        .map(|[x, y]| [x + b.rect.x, y + b.rect.y])
+                        .collect();
+                    out.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: fc });
+                }
+            }
+            // CSS: stroke — P4 wires when svg_stroke is in ComputedStyle.
         }
     }
 }
@@ -3931,6 +3964,7 @@ mod tests {
                 DisplayCommand::PopBackdropFilter => "PopBackdropFilter",
                 DisplayCommand::BeginStickyLayer { .. } => "BeginStickyLayer",
                 DisplayCommand::EndStickyLayer => "EndStickyLayer",
+                DisplayCommand::DrawSvgPath { .. } => "DrawSvgPath",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);

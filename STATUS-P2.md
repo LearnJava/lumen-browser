@@ -5,13 +5,8 @@
 ---
 
 ## In progress
-_(none)_
-
-## Next step
-1. Read [lumen-plan.md](lumen-plan.md) Track P1 section (§P1 roadmap)
-2. Check if your task is marked ⬜ (not started) or 🟡 (in progress by another session)
-3. Pick first available ⬜ item and create branch: `git checkout -b p2-<task-name>`
-4. In first commit: update this file with "In progress: <task>" + branch name
+SVG `<path>` GPU rendering  branch: p2-svg-path-rendering
+Next step: svg_path.rs tessellator + DrawSvgPath DisplayCommand  display_list.rs:2749
 
 ---
 

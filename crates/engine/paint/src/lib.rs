@@ -17,6 +17,7 @@ pub mod hit_test;
 pub mod layer_cache;
 pub mod renderer;
 pub mod scroll_snap;
+pub mod svg_path;
 pub mod texture_pool;
 
 #[cfg(feature = "cpu-render")]

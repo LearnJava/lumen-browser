@@ -4292,6 +4292,26 @@ impl Renderer {
                         current_level -= 1;
                     }
                 }
+                DisplayCommand::DrawSvgPath { vertices, color } => {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
+                    let v_start = fill_vertices.len() as u32;
+                    let c = apply_alpha_to_color(color_to_array(color), 1.0_f32);
+                    for [x, y] in vertices {
+                        fill_vertices.push(FillVertex {
+                            pos: [x + dx, y + dy],
+                            color: c,
+                        });
+                    }
+                    if let Some(m) = transform_stack.last() {
+                        apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                    }
+                    let v_count = fill_vertices.len() as u32 - v_start;
+                    if v_count > 0 {
+                        draw_ops.push(DrawOp::Fill { v_start, v_count });
+                    }
+                }
                 // CSS Positioning L3 §6.3 — position:sticky.
                 // Offsets computed above; stack managed here to suppress unused-var warnings.
                 DisplayCommand::BeginStickyLayer { flow_rect, top, bottom, left, right } => {
