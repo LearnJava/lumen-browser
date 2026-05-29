@@ -2519,6 +2519,70 @@ fn emit_box_self(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     }
 }
 
+/// CSS Transforms L2 §6.1 — does this box establish a **3D rendering context**
+/// for its children? When `true`, the children share one 3D coordinate space
+/// and are painted in depth order (see [`depth_sorted_child_order`]) instead of
+/// being flattened to z=0 individually and painted in document order.
+///
+/// A box establishes a 3D rendering context iff `transform-style: preserve-3d`.
+//
+// CSS: transform-style — P4 wires `ComputedStyle.transform_style`
+// (`TransformStyle { Flat, Preserve3d }`, see STATUS-P4 task #5 item 4). Once
+// the field lands, the body becomes:
+//   `b.style.transform_style == TransformStyle::Preserve3d`
+// Until then this returns `false` (flat compositing, unchanged behaviour); the
+// depth-sort path below is exercised directly by unit tests.
+fn establishes_3d_rendering_context(_b: &LayoutBox) -> bool {
+    false
+}
+
+/// Transformed depth of a box's center within its parent's 3D rendering
+/// context. Applies the box's own forward transform (`forward_box_transform`,
+/// which includes `transform-origin` pivot) to the box-center at z=0 and takes
+/// the **raw** transformed z (`Mat4::transform_z`, no perspective divide — see
+/// its doc for why). Boxes without a transform sit at z=0. Larger z = nearer
+/// the viewer (CSS convention).
+fn child_z_depth(b: &LayoutBox) -> f32 {
+    match forward_box_transform(b) {
+        Some(m) => {
+            let cx = b.rect.x + b.rect.width * 0.5;
+            let cy = b.rect.y + b.rect.height * 0.5;
+            m.transform_z(cx, cy, 0.0)
+        }
+        None => 0.0,
+    }
+}
+
+/// CSS Transforms L2 §6.2 — painting order inside a 3D rendering context.
+///
+/// Returns indices into `children` ordered **back-to-front**: the child with
+/// the smallest transformed z ([`child_z_depth`]) is painted first (farthest
+/// from the viewer), the largest z last (nearest, so it correctly occludes the
+/// others). The sort is **stable** — children at equal depth keep document
+/// order, preserving the normal stacking rule for coplanar siblings.
+///
+/// This is the painter's-algorithm depth sort. Pixel-exact handling of mutually
+/// *intersecting* planes (BSP / plane splitting) is a future extension; for the
+/// common case of non-intersecting transformed planes this yields correct
+/// occlusion. A GPU depth buffer is the alternative; see STATUS-P2.
+fn depth_sorted_child_order(children: &[LayoutBox]) -> Vec<usize> {
+    let z: Vec<f32> = children.iter().map(child_z_depth).collect();
+    depth_order_by_z(&z)
+}
+
+/// Pure back-to-front ordering of indices `0..z.len()` by depth `z[i]`.
+/// Smallest z first (farthest), largest last (nearest). Stable: equal depths
+/// keep their original order. `NaN` depths compare as equal (treated as
+/// coplanar) so a degenerate transform never panics or reorders unpredictably.
+/// Split out from [`depth_sorted_child_order`] so the ordering logic is unit-
+/// testable without constructing a layout tree.
+fn depth_order_by_z(z: &[f32]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..z.len()).collect();
+    // `sort_by` is stable: coplanar siblings retain document order.
+    order.sort_by(|&a, &b| z[a].partial_cmp(&z[b]).unwrap_or(std::cmp::Ordering::Equal));
+    order
+}
+
 fn walk(b: &LayoutBox, out: &mut DisplayList) {
     // CSS Color L3 §3.2 — opacity:0 на box-е делает весь subtree после
     // composite полностью прозрачным. Phase 0 эмулирует это pure-pixel
@@ -2635,8 +2699,17 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 );
                 out.push(DisplayCommand::PushClipRect { rect: cr });
             }
-            for child in &b.children {
-                walk(child, out);
+            // CSS Transforms L2 §6.2: inside a `preserve-3d` 3D rendering
+            // context children paint back-to-front by transformed depth;
+            // otherwise document order (flat compositing).
+            if establishes_3d_rendering_context(b) {
+                for i in depth_sorted_child_order(&b.children) {
+                    walk(&b.children[i], out);
+                }
+            } else {
+                for child in &b.children {
+                    walk(child, out);
+                }
             }
             if has_overflow_clip {
                 out.push(DisplayCommand::PopClip);
@@ -3163,8 +3236,16 @@ fn walk_with_anim(b: &LayoutBox, anim: Option<&CompositorAnimFrame>, out: &mut D
                 }
                 emit_column_rules(b, out);
             }
-            for child in &b.children {
-                walk_with_anim(child, anim, out);
+            // CSS Transforms L2 §6.2 — depth-sort children of a 3D rendering
+            // context (preserve-3d); else document order. Mirrors `walk`.
+            if establishes_3d_rendering_context(b) {
+                for i in depth_sorted_child_order(&b.children) {
+                    walk_with_anim(&b.children[i], anim, out);
+                }
+            } else {
+                for child in &b.children {
+                    walk_with_anim(child, anim, out);
+                }
             }
             if self_visible {
                 emit_outline(b, out);
@@ -6109,6 +6190,63 @@ mod tests {
         assert!((b - 1.0).abs() < 1e-5);
         assert!((c + 1.0).abs() < 1e-5);
         assert!(d.abs() < 1e-5);
+    }
+
+    // ─── CSS Transforms L2 §6.2 — 3D depth sorting ───────────────────────────
+
+    #[test]
+    fn depth_order_back_to_front() {
+        // z = [нос(10), зад(-5), середина(0)] → порядок зад→середина→нос.
+        let order = depth_order_by_z(&[10.0, -5.0, 0.0]);
+        assert_eq!(order, vec![1, 2, 0]);
+    }
+
+    #[test]
+    fn depth_order_stable_for_coplanar() {
+        // Равные z (все 0) → исходный document order сохраняется.
+        let order = depth_order_by_z(&[0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(order, vec![0, 1, 2, 3]);
+    }
+
+    #[test]
+    fn depth_order_partial_ties_keep_order() {
+        // Совпадающие глубины (5.0) у индексов 0 и 2 → стабильно 0 раньше 2.
+        let order = depth_order_by_z(&[5.0, -1.0, 5.0, 2.0]);
+        assert_eq!(order, vec![1, 3, 0, 2]);
+    }
+
+    #[test]
+    fn depth_order_nan_treated_as_coplanar() {
+        // NaN не паникует и трактуется как равный — стабильный порядок.
+        let order = depth_order_by_z(&[f32::NAN, 1.0, f32::NAN]);
+        assert_eq!(order.len(), 3);
+        // 1.0 не имеет определённого отношения к NaN (cmp→Equal), поэтому
+        // стабильная сортировка оставляет всё на местах.
+        assert_eq!(order, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn depth_order_empty() {
+        assert_eq!(depth_order_by_z(&[]), Vec::<usize>::new());
+    }
+
+    #[test]
+    fn flat_context_keeps_document_order() {
+        // Без preserve-3d (establishes_3d_rendering_context == false) дети
+        // рисуются в document order — три фона идут red, green, blue.
+        let dl = build(
+            r#"<div>
+                 <div style="background: red;">a</div>
+                 <div style="background: green;">b</div>
+                 <div style="background: blue;">c</div>
+               </div>"#,
+            "",
+        );
+        let bg: Vec<(u8, u8, u8)> = fills(&dl).iter().map(|c| (c.r, c.g, c.b)).collect();
+        let red = bg.iter().position(|c| *c == (255, 0, 0));
+        let green = bg.iter().position(|c| *c == (0, 128, 0));
+        let blue = bg.iter().position(|c| *c == (0, 0, 255));
+        assert!(red < green && green < blue, "document order: {bg:?}");
     }
 
     // ─── build_display_list_with_anim ────────────────────────────────────────

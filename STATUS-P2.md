@@ -15,13 +15,14 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | CSS 3D transforms — depth buffer + `transform-style: preserve-3d` (Transforms L2 #24): true depth-sorted 3D, не flattened проекция. Примитив Mat4 + flattened-проекция уже смержены (p2-css-3d-transforms) | `paint` | L | none |
-| 2 | Box model renderer-side rendering — P3 wires `BoxModelOverlay` to the DevTools CDP overlay endpoint (7E.3 следующий шаг) | `devtools`, `shell` | M | P3 devtools |
+| 1 | Box model renderer-side rendering — P3 wires `BoxModelOverlay` to the DevTools CDP overlay endpoint (7E.3 следующий шаг) | `devtools`, `shell` | M | P3 devtools |
+| 2 | 3D depth buffer (pixel-exact пересекающиеся плоскости / BSP) — расширение поверх depth-sort компоновщика (p2-css-preserve-3d). Painter's-sort не разрешает взаимно пересекающиеся 3D-плоскости | `paint` | L | none |
 
 ---
 
 ## Recent merges
 
+- **p2-css-preserve-3d** ✅ 2026-05-29 — True depth-sorted 3D для `transform-style: preserve-3d` (Transforms L2 §6.2). Depth-sort компоновщик в `paint/src/display_list.rs`: `depth_sorted_child_order` (стабильная back-to-front painter's-сортировка детей по transformed z), `child_z_depth`, gated за `establishes_3d_rendering_context` (`// CSS: transform-style` — P4 флипнёт `false`→`b.style.transform_style == Preserve3d`). z-aware методы `Mat4::project_point_z` / `transform_z` в `layout/property_trees.rs`. Интегрировано в `walk` и `walk_with_anim`; flat-путь побитово идентичен (document order). 11 unit-тестов (5 layout + 6 paint). Pixel-exact пересечения плоскостей (depth buffer/BSP) — Next #2. P4 handoff обновлён.
 - **p2-css-3d-transforms** ✅ 2026-05-29 — CSS 3D transforms (Transforms L2 #24): Mat4 3D-конструкторы (`perspective`/`rotate_x/y/z`/`rotate_3d`/`translate_3d`/`scale_3d`/`from_3d`/`project_point`/`is_2d_affine`) в `layout/property_trees.rs` (18 unit-тестов). Renderer проецирует 3D/перспективные матрицы через `project_point` с делением на w (flattened: rotateX/Y, card flip, perspective-наклоны), 2D affine — прежний быстрый путь (3 теста). P4 handoff для 3D transform-функций + `perspective` + `transform-style`. Depth buffer и `preserve-3d` отложены (см. Next #1).
 - **p2-mask-image-layer** ✅ 2026-05-29 — `MaskMode { Alpha, Luminance }` + `PushMaskLayer/PopMaskLayer` в `DisplayCommand` (CSS Masking L1 §5). WGSL shader `fs_alpha`/`fs_luma` (ITU-R BT.709 luminance). Два пайплайна с REPLACE blend: scratch×mask → parent layer at element rect. 4 unit-теста. Graphic test 26 обновлён.
 - **p2-boxmodel-overlay** ✅ 2026-05-29 — `DisplayCommand::BoxModelOverlay { margin, border, padding, content }` (7E.3): DevTools box model overlay. Renderer разворачивает в 4 полупрозрачных FillRect (Chrome DevTools палитра). 2 unit-теста.
