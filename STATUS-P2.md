@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+**10E.1+10E.2 — ImageHandle + ImageDecodeCache**  branch: p2-image-decode-cache
+Next step: реализовать `decode_cache.rs` в `lumen-image`  `crates/engine/image/src/decode_cache.rs`
 
 ---
 
