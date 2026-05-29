@@ -2222,6 +2222,37 @@ pub struct InputEvent {
     pub data: Option<String>,
     /// `true` while an IME composition is in progress (not yet committed).
     pub is_composing: bool,
+    /// `Event.isTrusted` per DOM §2.10: `true` for events dispatched by the
+    /// user agent in response to real user input (native input pipeline from
+    /// the shell, automation `BrowserSession::type_text`/`paste`); `false` for
+    /// events synthesized by page scripts via `new InputEvent(...)` and
+    /// `dispatchEvent`. Used by sites to distinguish bots/script automation
+    /// from genuine input (e.g., gating form submission on `isTrusted`).
+    pub is_trusted: bool,
+}
+
+impl InputEvent {
+    /// Construct a trusted input event (native input pipeline or automation
+    /// `BrowserSession`). Equivalent to setting `is_trusted = true`.
+    pub fn trusted(input_type: EditInputType, data: Option<String>, is_composing: bool) -> Self {
+        Self {
+            input_type,
+            data,
+            is_composing,
+            is_trusted: true,
+        }
+    }
+
+    /// Construct an untrusted input event (synthesized by page script via
+    /// `dispatchEvent`). Equivalent to setting `is_trusted = false`.
+    pub fn untrusted(input_type: EditInputType, data: Option<String>, is_composing: bool) -> Self {
+        Self {
+            input_type,
+            data,
+            is_composing,
+            is_trusted: false,
+        }
+    }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -2292,15 +2323,43 @@ pub struct CompositionEvent {
     pub event_type: CompositionEventType,
     /// Composition data (text, language, selection range).
     pub data: CompositionData,
+    /// `Event.isTrusted` per DOM §2.10: `true` for composition events produced
+    /// by the platform IME (winit `Ime::Preedit`/`Ime::Commit` callbacks routed
+    /// through the native input pipeline) or by automation
+    /// `BrowserSession::compose_text`; `false` for events synthesized by page
+    /// scripts via `new CompositionEvent(...)` and `dispatchEvent`. Sites that
+    /// gate on `isTrusted` to reject script-driven IME use this flag.
+    pub is_trusted: bool,
 }
 
 impl CompositionEvent {
-    /// Create a new composition event.
+    /// Create a new trusted composition event (native IME pipeline).
+    ///
+    /// Sets `is_trusted = true`. For events synthesized from page script use
+    /// [`CompositionEvent::untrusted`] instead.
     pub fn new(event_type: CompositionEventType, data: CompositionData) -> Self {
-        Self { event_type, data }
+        Self {
+            event_type,
+            data,
+            is_trusted: true,
+        }
+    }
+
+    /// Create an untrusted composition event (synthesized by page script).
+    ///
+    /// Sets `is_trusted = false`, matching `new CompositionEvent(...)` in JS
+    /// per DOM §2.10 (events constructed by script are never trusted).
+    pub fn untrusted(event_type: CompositionEventType, data: CompositionData) -> Self {
+        Self {
+            event_type,
+            data,
+            is_trusted: false,
+        }
     }
 
     /// Create a `compositionstart` event with initial IME text.
+    ///
+    /// Trusted by default (native IME pipeline).
     pub fn start(data: String, locale: Option<String>) -> Self {
         Self {
             event_type: CompositionEventType::Start,
@@ -2309,10 +2368,13 @@ impl CompositionEvent {
                 locale,
                 range: None,
             },
+            is_trusted: true,
         }
     }
 
     /// Create a `compositionupdate` event for interim preedit text.
+    ///
+    /// Trusted by default (native IME pipeline).
     pub fn update(data: String, range: Option<(u32, u32)>) -> Self {
         Self {
             event_type: CompositionEventType::Update,
@@ -2321,10 +2383,13 @@ impl CompositionEvent {
                 locale: None,
                 range,
             },
+            is_trusted: true,
         }
     }
 
     /// Create a `compositionend` event for final committed text.
+    ///
+    /// Trusted by default (native IME pipeline).
     pub fn end(data: String) -> Self {
         Self {
             event_type: CompositionEventType::End,
@@ -2333,6 +2398,7 @@ impl CompositionEvent {
                 locale: None,
                 range: None,
             },
+            is_trusted: true,
         }
     }
 }
@@ -4545,6 +4611,107 @@ mod tests {
         assert_eq!(end.data.data, "あいう");
         assert_eq!(end.data.locale, None);
         assert_eq!(end.data.range, None);
+    }
+
+    // ──────────────────────────────────────────────────────────────────────────
+    // Event.isTrusted (DOM §2.10) tests
+    // ──────────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn composition_event_helper_constructors_are_trusted() {
+        // start/update/end are used by the native IME pipeline; they MUST default
+        // to trusted so Cloudflare/DataDome-style isTrusted gates pass for real
+        // user keystrokes routed through winit Ime::Preedit/Ime::Commit.
+        assert!(CompositionEvent::start("a".into(), None).is_trusted);
+        assert!(CompositionEvent::update("ab".into(), Some((0, 2))).is_trusted);
+        assert!(CompositionEvent::end("abc".into()).is_trusted);
+    }
+
+    #[test]
+    fn composition_event_new_is_trusted() {
+        // `CompositionEvent::new` is the native-pipeline constructor; it MUST
+        // default to trusted. Script-synthesized events go through `untrusted`.
+        let data = CompositionData {
+            data: "x".to_string(),
+            locale: None,
+            range: None,
+        };
+        let evt = CompositionEvent::new(CompositionEventType::Update, data);
+        assert!(evt.is_trusted, "CompositionEvent::new must default to trusted");
+    }
+
+    #[test]
+    fn composition_event_untrusted_constructor() {
+        // Page-script-synthesized events (`new CompositionEvent(...)` in JS)
+        // are never trusted per DOM §2.10.
+        let data = CompositionData {
+            data: "x".to_string(),
+            locale: None,
+            range: None,
+        };
+        let evt = CompositionEvent::untrusted(CompositionEventType::Start, data);
+        assert!(!evt.is_trusted);
+        assert_eq!(evt.event_type, CompositionEventType::Start);
+    }
+
+    #[test]
+    fn input_event_trusted_constructor() {
+        let evt = InputEvent::trusted(EditInputType::InsertText, Some("a".into()), false);
+        assert!(evt.is_trusted);
+        assert_eq!(evt.input_type, EditInputType::InsertText);
+        assert_eq!(evt.data.as_deref(), Some("a"));
+        assert!(!evt.is_composing);
+    }
+
+    #[test]
+    fn input_event_untrusted_constructor() {
+        // Script-synthesized `new InputEvent('input', { ... })` events must
+        // never be trusted, regardless of the `inputType`.
+        let evt = InputEvent::untrusted(EditInputType::DeleteContentBackward, None, false);
+        assert!(!evt.is_trusted);
+        assert_eq!(evt.input_type, EditInputType::DeleteContentBackward);
+    }
+
+    #[test]
+    fn input_event_is_trusted_independent_of_is_composing() {
+        // is_trusted (provenance) is orthogonal to is_composing (IME state):
+        // a real user IME keystroke is both trusted AND composing.
+        let real_ime = InputEvent::trusted(EditInputType::InsertText, Some("あ".into()), true);
+        assert!(real_ime.is_trusted);
+        assert!(real_ime.is_composing);
+
+        // A script-dispatched InputEvent can also carry is_composing=true; the
+        // flags must not be conflated.
+        let script_ime = InputEvent::untrusted(EditInputType::InsertText, Some("あ".into()), true);
+        assert!(!script_ime.is_trusted);
+        assert!(script_ime.is_composing);
+    }
+
+    #[test]
+    fn input_event_clone_preserves_is_trusted() {
+        // Cloning must preserve trustedness — the bit is part of event identity
+        // per DOM §2.10 (Event.isTrusted is set at construction, never mutated).
+        let trusted = InputEvent::trusted(EditInputType::InsertText, Some("x".into()), false);
+        let copy = trusted.clone();
+        assert!(copy.is_trusted);
+
+        let untrusted = InputEvent::untrusted(EditInputType::InsertText, Some("x".into()), false);
+        let copy = untrusted.clone();
+        assert!(!copy.is_trusted);
+    }
+
+    #[test]
+    fn composition_event_clone_preserves_is_trusted() {
+        let trusted = CompositionEvent::start("a".into(), None);
+        assert!(trusted.clone().is_trusted);
+
+        let data = CompositionData {
+            data: "a".to_string(),
+            locale: None,
+            range: None,
+        };
+        let untrusted = CompositionEvent::untrusted(CompositionEventType::Start, data);
+        assert!(!untrusted.clone().is_trusted);
     }
 
     #[test]
