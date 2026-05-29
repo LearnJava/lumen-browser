@@ -31,6 +31,33 @@
       width: 200px; height: 200px;
       background: #e9c46a;
     }
+
+    /* Second row: mask-mode tests */
+    .row2 { display: flex; gap: 30px; padding: 0 40px 40px; }
+
+    /* mask-mode: alpha (default) — white shape should show box, transparent = hide */
+    .mask-mode-alpha {
+      width: 200px; height: 200px;
+      background: #457b9d;
+      -webkit-mask-image: radial-gradient(circle at 50% 50%, white 40%, transparent 60%);
+      mask-image: radial-gradient(circle at 50% 50%, white 40%, transparent 60%);
+      mask-mode: alpha;
+    }
+
+    /* mask-mode: luminance — bright areas opaque, dark areas transparent */
+    .mask-mode-luma {
+      width: 200px; height: 200px;
+      background: #e63946;
+      -webkit-mask-image: linear-gradient(to right, black, white);
+      mask-image: linear-gradient(to right, black, white);
+      mask-mode: luminance;
+    }
+
+    /* Control: no mask at all */
+    .no-mask-2 {
+      width: 200px; height: 200px;
+      background: #a8dadc;
+    }
   </style>
 </head>
 <body>
@@ -39,6 +66,11 @@
       <div class="mask-linear"></div>
       <div class="mask-radial"></div>
       <div class="no-mask"></div>
+    </div>
+    <div class="row2">
+      <div class="mask-mode-alpha"></div>
+      <div class="mask-mode-luma"></div>
+      <div class="no-mask-2"></div>
     </div>
   </div>
 </body>

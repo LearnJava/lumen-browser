@@ -64,7 +64,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | Module | Spec | Status | Missing piece | Priority |
 |--------|------|--------|--------------|---------|
 | Filter Effects L1 | [filter-effects](https://www.w3.org/TR/filter-effects/) | ✅ | backdrop-filter GPU compositing: PushBackdropFilter/PopBackdropFilter + 4 display-list tests + 6 layout tests + graphic test 30 2026-05-24 | **#13** |
-| CSS Masking | [css-masking](https://www.w3.org/TR/css-masking/) | 🟡 | mask-image GPU compositing | **#14** |
+| CSS Masking | [css-masking](https://www.w3.org/TR/css-masking/) | 🟡 | mask-image GPU compositing: PushMaskLayer/PopMaskLayer ✅ (alpha + luminance modes, REPLACE blend, scratch copy); PushMaskImage/PopMask ✅; gradient masks ✅ 2026-05-29 | **#14** |
 | Compositing & Blending | [compositing](https://www.w3.org/TR/compositing/) | ✅ | mix-blend-mode blend pipeline ✅; background-blend-mode comma-list cycling ✅ 2026-05-27 | **#15** |
 | CSS Pseudo-Elements L4 | [css-pseudo-4](https://www.w3.org/TR/css-pseudo-4/) | 🟡 | ::first-line/::first-letter split; ::marker; ::selection | **#16** |
 | CSS Images L3 | [css3-images](https://www.w3.org/TR/css3-images/) | ✅ | conic-gradient() ✅ 2026-05-24; multiple bg layers ✅ 2026-05-26 | **#17** |
@@ -419,9 +419,9 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `clip-path` | ✅ | inset/circle/ellipse/polygon rendered (bbox-clip); complex paths ⬜ |
 | `clip-rule` | ⬜ | evenodd/nonzero |
 | `mask` (shorthand) | 🟡 | |
-| `mask-image` | 🟡 | GPU mask composite pipeline 🟡 (PushMask/PopMask); full alpha compositing ⬜ |
+| `mask-image` | 🟡 | GPU mask composite pipeline ✅ (PushMask/PopMask + PushMaskLayer/PopMaskLayer); alpha compositing ✅; luminance mode ✅ 2026-05-29 |
 | `mask-repeat` / `mask-size` / `mask-position` | 🟡 | parsed |
-| `mask-origin` / `mask-clip` / `mask-composite` / `mask-mode` | 🟡 | parsed |
+| `mask-origin` / `mask-clip` / `mask-composite` / `mask-mode` | 🟡 | PushMaskLayer supports Alpha + Luminance modes ✅; mask-composite multi-layer ⬜ |
 
 ### [T2] Compositing
 

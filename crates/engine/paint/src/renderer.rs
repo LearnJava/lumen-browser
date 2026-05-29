@@ -36,7 +36,7 @@ use lumen_layout::{BackgroundRepeat, BackgroundSize, BorderStyle, Color, FilterF
 use winit::window::Window;
 
 use crate::atlas::{AtlasKey, GlyphAtlas, GlyphEntry};
-use crate::display_list::{fit_image_quad, fit_image_rect, BlendMode, CornerRadii};
+use crate::display_list::{fit_image_quad, fit_image_rect, BlendMode, CornerRadii, MaskMode};
 use crate::fingerprint::GpuFingerprint;
 use lumen_image::{resize_area_avg, resize_bilinear};
 use crate::DisplayCommand;
@@ -630,6 +630,58 @@ struct VOut {
     let m = textureSample(t_mask,  s_layer, in.uv_mask);
     // mask-mode: alpha — CSS Masking L1 §6.2 default for raster images.
     return vec4<f32>(c.rgb, c.a * m.a);
+}
+"#;
+
+/// CSS Masking L1 §5 — mask-layer composite shader.
+///
+/// Two fragment entry points sharing one vertex shader:
+/// - `fs_alpha`:  mask value = mask.a  (CSS mask-mode: alpha, default)
+/// - `fs_luma`:   mask value = luma(mask.rgb) × mask.a  (mask-mode: luminance, ITU-R BT.709)
+///
+/// Group 0: viewport uniform. Group 1: { t_content, t_mask, s }.
+/// `t_content` = scratch copy of the parent layer (element content saved before this pass).
+/// `t_mask`    = the mask offscreen layer rendered between PushMaskLayer / PopMaskLayer.
+///
+/// Vertex: pos (CSS px, location 0) + uv (location 1, = pos/surface_size set at plan time).
+/// Blend: REPLACE — overwrites parent layer at element rect without compositing.
+/// This is correct because `t_content` already carries the full element alpha.
+const MASK_LAYER_SHADER_SRC: &str = r#"
+struct Uniforms { viewport: vec2<f32> };
+@group(0) @binding(0) var<uniform> u: Uniforms;
+@group(1) @binding(0) var t_content: texture_2d<f32>;
+@group(1) @binding(1) var t_mask:    texture_2d<f32>;
+@group(1) @binding(2) var s:         sampler;
+
+struct VIn  { @location(0) pos: vec2<f32>, @location(1) uv: vec2<f32> };
+struct VOut { @builtin(position) clip: vec4<f32>, @location(0) uv: vec2<f32> };
+
+@vertex fn vs_main(in: VIn) -> VOut {
+    var o: VOut;
+    o.clip = vec4<f32>(
+        in.pos.x / u.viewport.x * 2.0 - 1.0,
+        1.0 - in.pos.y / u.viewport.y * 2.0,
+        0.0, 1.0,
+    );
+    o.uv = in.uv;
+    return o;
+}
+
+// mask-mode: alpha — use mask alpha channel directly (CSS Masking L1 §6.2).
+@fragment fn fs_alpha(in: VOut) -> @location(0) vec4<f32> {
+    let c  = textureSample(t_content, s, in.uv);
+    let m  = textureSample(t_mask,    s, in.uv);
+    let ma = m.a;
+    return vec4<f32>(c.rgb * ma, c.a * ma);
+}
+
+// mask-mode: luminance — relative luminance × alpha (CSS Masking L1 §6.1, ITU-R BT.709).
+@fragment fn fs_luma(in: VOut) -> @location(0) vec4<f32> {
+    let c    = textureSample(t_content, s, in.uv);
+    let m    = textureSample(t_mask,    s, in.uv);
+    let luma = dot(m.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    let ma   = luma * m.a;
+    return vec4<f32>(c.rgb * ma, c.a * ma);
 }
 "#;
 
@@ -1237,6 +1289,12 @@ pub struct Renderer {
     /// Used by PopMask to composite the offscreen layer using a mask image.
     mask_composite_bgl: wgpu::BindGroupLayout,
     mask_composite_pipeline: wgpu::RenderPipeline,
+    /// CSS Masking L1 §5 — mask-layer composite pipelines.
+    /// Used by PopMaskLayer to apply an arbitrary rendered mask to the parent layer.
+    /// `_alpha` samples mask.a; `_luma` converts RGB to luminance × alpha.
+    /// Shared BGL with mask_composite (same binding layout: t_content, t_mask, s).
+    mask_layer_alpha_pipeline: wgpu::RenderPipeline,
+    mask_layer_luma_pipeline: wgpu::RenderPipeline,
     /// CSS Filter Effects L1 — color filter pipeline (grayscale/sepia/brightness/etc.).
     filter_bgl: wgpu::BindGroupLayout,
     filter_pipeline: wgpu::RenderPipeline,
@@ -2173,6 +2231,86 @@ impl Renderer {
             cache: None,
         });
 
+        // ── Mask-layer composite pipelines ──────────────────────────────────
+        // CSS Masking L1 §5: apply a rendered mask layer to the parent layer.
+        // Reuses mask_composite_bgl (same binding layout: t_content, t_mask, s).
+        // Two pipelines sharing one shader module: alpha mode and luminance mode.
+        // Blend: REPLACE (src_factor=One, dst_factor=Zero) — overwrites parent at element rect.
+        let mask_layer_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("mask-layer-shader"),
+            source: wgpu::ShaderSource::Wgsl(MASK_LAYER_SHADER_SRC.into()),
+        });
+        let mask_layer_vtx_layout = wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<MaskVertex>() as u64,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 0, shader_location: 0 },
+                wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 8, shader_location: 1 },
+            ],
+        };
+        let replace_blend = wgpu::BlendState {
+            color: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::Zero,
+                operation: wgpu::BlendOperation::Add,
+            },
+            alpha: wgpu::BlendComponent {
+                src_factor: wgpu::BlendFactor::One,
+                dst_factor: wgpu::BlendFactor::Zero,
+                operation: wgpu::BlendOperation::Add,
+            },
+        };
+        let mask_layer_alpha_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mask-layer-alpha-pipeline"),
+            layout: Some(&mask_composite_layout),
+            vertex: wgpu::VertexState {
+                module: &mask_layer_shader,
+                entry_point: Some("vs_main"),
+                buffers: std::slice::from_ref(&mask_layer_vtx_layout),
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mask_layer_shader,
+                entry_point: Some("fs_alpha"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(replace_blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+        let mask_layer_luma_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("mask-layer-luma-pipeline"),
+            layout: Some(&mask_composite_layout),
+            vertex: wgpu::VertexState {
+                module: &mask_layer_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[mask_layer_vtx_layout],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &mask_layer_shader,
+                entry_point: Some("fs_luma"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(replace_blend),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         // ── CSS Filter pipeline ──────────────────────────────────────────────
         // Group 0: { t_src, s_src, FilterParams uniform }
         let filter_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -2466,6 +2604,8 @@ impl Renderer {
             blend_mode_uniform,
             mask_composite_bgl,
             mask_composite_pipeline,
+            mask_layer_alpha_pipeline,
+            mask_layer_luma_pipeline,
             filter_bgl,
             filter_pipeline,
             blur_bgl,
@@ -3261,18 +3401,32 @@ impl Renderer {
             comp_v_start: u32,
             bounds_v_start: u32,
         }
+        // CSS Masking L1 §5 — mask-layer composite plan.
+        // `from_level`   = offscreen level where mask content was rendered.
+        // `parent_level` = from_level − 1: where element content lives.
+        // `ml_v_start/end` indexes into `mask_layer_vertices`.
+        // `mode` selects alpha vs. luminance mask compositing.
+        struct MaskLayerCompositePlan {
+            from_level: usize,
+            mode: MaskMode,
+            ml_v_start: u32,
+            ml_v_end: u32,
+        }
         enum RenderPlanItem {
             Draw(DrawBatchPlan),
             Composite(CompositePlan),
             MaskComposite(MaskCompositePlan),
             FilterComposite(FilterCompositePlan),
             BackdropFilterComposite(BackdropFilterCompositePlan),
+            MaskLayerComposite(MaskLayerCompositePlan),
         }
 
         let mut render_plan: Vec<RenderPlanItem> = Vec::new();
         let mut composite_vertices: Vec<CompositeVertex> = Vec::new();
         // Accumulated vertex data for mask composite passes.
         let mut mask_vertices: Vec<MaskVertex> = Vec::new();
+        // Accumulated vertex data for mask-layer composite passes (PushMaskLayer/PopMaskLayer).
+        let mut mask_layer_vertices: Vec<MaskVertex> = Vec::new();
         // Stack of PushMask params. Pushed by PushMask*, popped by PopMask.
         // Either `src` (image key) or `gradient` is set; never both.
         struct MaskPushInfo {
@@ -3284,6 +3438,8 @@ impl Renderer {
             rect: Rect,
         }
         let mut mask_params_stack: Vec<MaskPushInfo> = Vec::new();
+        // Stack for PushMaskLayer: (rect, mode). Popped by PopMaskLayer.
+        let mut mask_layer_stack: Vec<(Rect, MaskMode)> = Vec::new();
 
         let mut current_level: usize = 0;
         let mut level_alpha_stack: Vec<f32> = Vec::new();
@@ -4326,6 +4482,52 @@ impl Renderer {
                         sticky_stack.pop();
                     }
                 }
+                // CSS Masking L1 §5 — PushMaskLayer: open an offscreen layer for mask content.
+                // The caller (emit_box) is responsible for ensuring the element content is
+                // isolated in the parent layer (e.g. via PushOpacity) before calling this.
+                // Mask content renders to the new level; PopMaskLayer applies it to the parent.
+                DisplayCommand::PushMaskLayer { rect, mode } => {
+                    flush_batch!();
+                    mask_layer_stack.push((*rect, *mode));
+                    current_level += 1;
+                    if level_first.len() <= current_level {
+                        level_first.resize(current_level + 1, true);
+                    }
+                    level_first[current_level] = true;
+                }
+                // CSS Masking L1 §5 — PopMaskLayer: composite mask layer onto parent.
+                // Algorithm:
+                //   1. Copy parent layer → scratch (scratch preserves element content).
+                //   2. Render pass (REPLACE blend): scratch × mask_value → parent at element rect.
+                //      This replaces parent content in the element rect with the masked version.
+                DisplayCommand::PopMaskLayer => {
+                    flush_batch!();
+                    let Some((rect, mode)) = mask_layer_stack.pop() else { continue };
+                    let ml_v_start = mask_layer_vertices.len() as u32;
+                    // Build a rect quad over the element area. UV = pos / surface_size
+                    // so both t_content (scratch, full surface) and t_mask (full surface layer)
+                    // are sampled at the same normalised coordinate.
+                    let (sw, sh) = (surface_w as f32, surface_h as f32);
+                    let scrolled = translate_rect(rect, dx, dy);
+                    let (x0, y0) = (scrolled.x, scrolled.y);
+                    let (x1, y1) = (scrolled.x + scrolled.width, scrolled.y + scrolled.height);
+                    mask_layer_vertices.extend_from_slice(&[
+                        MaskVertex { pos: [x0, y0], uv_mask: [x0/sw, y0/sh] },
+                        MaskVertex { pos: [x1, y0], uv_mask: [x1/sw, y0/sh] },
+                        MaskVertex { pos: [x1, y1], uv_mask: [x1/sw, y1/sh] },
+                        MaskVertex { pos: [x0, y0], uv_mask: [x0/sw, y0/sh] },
+                        MaskVertex { pos: [x1, y1], uv_mask: [x1/sw, y1/sh] },
+                        MaskVertex { pos: [x0, y1], uv_mask: [x0/sw, y1/sh] },
+                    ]);
+                    let ml_v_end = mask_layer_vertices.len() as u32;
+                    render_plan.push(RenderPlanItem::MaskLayerComposite(MaskLayerCompositePlan {
+                        from_level: current_level,
+                        mode,
+                        ml_v_start,
+                        ml_v_end,
+                    }));
+                    current_level -= 1;
+                }
                 // DevTools box model overlay (7E.3): four semi-transparent layers
                 // drawn outside-in. Uses the same fill pipeline as FillRect.
                 DisplayCommand::BoxModelOverlay { margin, border, padding, content } => {
@@ -4495,6 +4697,18 @@ impl Renderer {
             self.queue.write_buffer(&buf, 0, as_bytes(&mask_vertices));
             Some(buf)
         };
+        let mask_layer_vbuf = if mask_layer_vertices.is_empty() {
+            None
+        } else {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("mask-layer-vbuf"),
+                size: std::mem::size_of_val(mask_layer_vertices.as_slice()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buf, 0, as_bytes(&mask_layer_vertices));
+            Some(buf)
+        };
         let grad_vbuf = if grad_vertices.is_empty() {
             None
         } else {
@@ -4539,6 +4753,7 @@ impl Renderer {
             RenderPlanItem::MaskComposite(c) => m.max(c.from_level),
             RenderPlanItem::FilterComposite(c) => m.max(c.from_level),
             RenderPlanItem::BackdropFilterComposite(c) => m.max(c.from_level),
+            RenderPlanItem::MaskLayerComposite(c) => m.max(c.from_level),
         });
         if max_level > 0 {
             self.ensure_layer_textures(max_level, surface_w, surface_h);
@@ -5302,6 +5517,88 @@ impl Renderer {
                         pass.set_bind_group(0, &elem_filter_bg, &[]);
                         pass.set_vertex_buffer(0, cvb.slice(..));
                         pass.draw(plan.comp_v_start..plan.comp_v_start + 6, 0..1);
+                    }
+                }
+
+                // CSS Masking L1 §5 — mask-layer composite.
+                // Applies the rendered mask layer (from PushMaskLayer/PopMaskLayer)
+                // to the parent layer's content.
+                //
+                // Algorithm:
+                //   1. Copy parent layer → scratch (saves element content).
+                //   2. REPLACE-blend pass: fragment = scratch × mask_value → parent at rect.
+                //
+                // Phase 0 limitation: skipped when from_level <= 1 (parent = surface,
+                // lacks TEXTURE_BINDING and COPY_SRC).
+                RenderPlanItem::MaskLayerComposite(plan) => {
+                    if plan.from_level < 2 { continue; }
+                    let Some(mlvb) = &mask_layer_vbuf else { continue };
+                    let v_count = plan.ml_v_end - plan.ml_v_start;
+                    if v_count == 0 { continue; }
+
+                    let parent_idx = plan.from_level - 2;
+                    let mask_idx   = plan.from_level - 1;
+                    let parent_w = self.layer_textures[parent_idx].width;
+                    let parent_h = self.layer_textures[parent_idx].height;
+                    self.ensure_scratch_layer(parent_w, parent_h);
+
+                    // Step 1: copy parent → scratch.
+                    let parent_copy = self.layer_textures[parent_idx].texture.as_image_copy();
+                    let scratch_copy = self.scratch_layer.as_ref().unwrap().texture.as_image_copy();
+                    encoder.copy_texture_to_texture(
+                        parent_copy,
+                        scratch_copy,
+                        wgpu::Extent3d { width: parent_w, height: parent_h, depth_or_array_layers: 1 },
+                    );
+
+                    // Step 2: mask-layer composite pass.
+                    // Bind group: scratch (content), mask layer (mask), sampler.
+                    let scratch_view = &self.scratch_layer.as_ref().unwrap().view;
+                    let mask_view    = &self.layer_textures[mask_idx].view;
+                    let ml_bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some("mask-layer-composite-bg"),
+                        layout: &self.mask_composite_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(scratch_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(mask_view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::Sampler(&self.layer_sampler),
+                            },
+                        ],
+                    });
+                    let parent_view = &self.layer_textures[parent_idx].view;
+                    let pipeline = match plan.mode {
+                        MaskMode::Alpha     => &self.mask_layer_alpha_pipeline,
+                        MaskMode::Luminance => &self.mask_layer_luma_pipeline,
+                    };
+                    {
+                        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                            label: Some("mask-layer-composite-pass"),
+                            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                                view: parent_view,
+                                resolve_target: None,
+                                depth_slice: None,
+                                ops: wgpu::Operations {
+                                    load: wgpu::LoadOp::Load,
+                                    store: wgpu::StoreOp::Store,
+                                },
+                            })],
+                            depth_stencil_attachment: None,
+                            timestamp_writes: None,
+                            occlusion_query_set: None,
+                        });
+                        pass.set_pipeline(pipeline);
+                        pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                        pass.set_bind_group(1, &ml_bg, &[]);
+                        pass.set_vertex_buffer(0, mlvb.slice(..));
+                        pass.draw(plan.ml_v_start..plan.ml_v_end, 0..1);
                     }
                 }
             }
