@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+text-shadow blur  branch: p2-text-shadow-blur
+Next step: edit emit_text_shadows() in display_list.rs to wrap DrawText in PushFilter{Blur} when shadow.blur > 0
 
 ---
 
