@@ -493,6 +493,22 @@ pub enum DisplayCommand {
         /// Resolved fill colour (already has `fill-opacity` applied).
         color: Color,
     },
+    /// DevTools box model overlay (7E.3). Draws four semi-transparent coloured
+    /// layers (orange margin, yellow border, green padding, blue content)
+    /// stacked from outermost to innermost. Each rect is the outer edge of
+    /// the corresponding box (margin-edge, border-edge, padding-edge, content).
+    ///
+    /// Coordinate system: same CSS-pixel page coordinates as all other rects.
+    BoxModelOverlay {
+        /// Outer edge of the margin box (border-box + margin on all sides).
+        margin: Rect,
+        /// Outer edge of the border box (padding-box + border on all sides).
+        border: Rect,
+        /// Outer edge of the padding box (content-box + padding on all sides).
+        padding: Rect,
+        /// Content box rect.
+        content: Rect,
+    },
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
@@ -897,6 +913,15 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     "DrawSvgPath tris={} #{:02x}{:02x}{:02x}{:02x}\n",
                     vertices.len() / 3,
                     color.r, color.g, color.b, color.a,
+                ));
+            }
+            DisplayCommand::BoxModelOverlay { margin, border, padding, content } => {
+                out.push_str(&format!(
+                    "BoxModelOverlay margin=({:.0},{:.0},{:.0},{:.0}) border=({:.0},{:.0},{:.0},{:.0}) padding=({:.0},{:.0},{:.0},{:.0}) content=({:.0},{:.0},{:.0},{:.0})\n",
+                    margin.x, margin.y, margin.width, margin.height,
+                    border.x, border.y, border.width, border.height,
+                    padding.x, padding.y, padding.width, padding.height,
+                    content.x, content.y, content.width, content.height,
                 ));
             }
         }
@@ -3991,6 +4016,7 @@ mod tests {
                 DisplayCommand::BeginStickyLayer { .. } => "BeginStickyLayer",
                 DisplayCommand::EndStickyLayer => "EndStickyLayer",
                 DisplayCommand::DrawSvgPath { .. } => "DrawSvgPath",
+                DisplayCommand::BoxModelOverlay { .. } => "BoxModelOverlay",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);
@@ -6596,5 +6622,38 @@ mod tests {
         );
         let push_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushBlendMode { mode: BlendMode::Multiply })).count();
         assert_eq!(push_count, 3, "cycling: 1 value for 3 layers → all 3 get multiply");
+    }
+
+    // ── BoxModelOverlay ──────────────────────────────────────────────────────
+
+    #[test]
+    fn box_model_overlay_serializes_all_four_boxes() {
+        use lumen_core::geom::Rect;
+        let dl = vec![DisplayCommand::BoxModelOverlay {
+            margin:  Rect::new(0.0,   0.0,  120.0, 100.0),
+            border:  Rect::new(10.0, 10.0,  100.0,  80.0),
+            padding: Rect::new(12.0, 12.0,   96.0,  76.0),
+            content: Rect::new(20.0, 20.0,   80.0,  60.0),
+        }];
+        let s = serialize_display_list(&dl);
+        assert!(s.starts_with("BoxModelOverlay"), "must start with command name");
+        assert!(s.contains("margin=(0,0,120,100)"),  "margin box");
+        assert!(s.contains("border=(10,10,100,80)"), "border box");
+        assert!(s.contains("padding=(12,12,96,76)"), "padding box");
+        assert!(s.contains("content=(20,20,80,60)"), "content box");
+    }
+
+    #[test]
+    fn box_model_overlay_zero_content_serializes() {
+        use lumen_core::geom::Rect;
+        let dl = vec![DisplayCommand::BoxModelOverlay {
+            margin:  Rect::new(0.0, 0.0, 50.0, 50.0),
+            border:  Rect::new(5.0, 5.0, 40.0, 40.0),
+            padding: Rect::new(7.0, 7.0, 36.0, 36.0),
+            content: Rect::new(10.0, 10.0, 0.0, 0.0), // collapsed content
+        }];
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("BoxModelOverlay"), "collapsed content must still serialize");
+        assert!(s.contains("content=(10,10,0,0)"), "zero-size content rect");
     }
 }
