@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+`picture` lazy loading — IntersectionObserver event source  branch: p1-lazy-io
+Next step: add rootMargin to _lumen_deliver_intersection_observers + rewrite _lumen_init_lazy_images  crates/js/src/dom.rs:2725
 
 ---
 
