@@ -1,11 +1,23 @@
-# STATUS-P3 — Bug Fixes
+# STATUS-P3 — Bug Fixes + Driver Infrastructure
 
-**Developer:** Программист 3 (Bug fixes ONLY)
+**Developer:** Программист 3 (Bug fixes + lumen-driver infrastructure)
 
 ---
 
 ## In progress
 _(none)_
+
+## Next
+
+| # | Task | Branch | Актуальное состояние |
+|---|---|---|---|
+| 8A.1 | BrowserSession trait | `p3-8a1-browser-session` | **Код готов** — `crates/core/src/ext.rs:1514`. Нужно: `cargo test -p lumen-core`, потом обновить `lumen-plan.md` ⬜→✅ |
+| 8A.2 | InProcessSession | `p3-8a2-in-process-session` | **Код готов** — `crates/driver/src/session.rs`. Нужно: `cargo test -p lumen-driver`, закрыть `todo!()`, clippy, обновить план |
+| 8A.6 | Migrate graphic tests | `p3-8a6-migrate-graphic-tests` | **Частично готово** — `crates/driver/tests/test_01..49.rs`. Нужно: проверить покрытие всех 22 оригинальных HTML-тестов, сгенерировать эталонные PNG в `graphic_tests/snapshots/` |
+
+**Порядок:** 8A.1 → 8A.2 → 8A.6 (каждая зависит от предыдущей)
+
+---
 
 ## Workflow
 
