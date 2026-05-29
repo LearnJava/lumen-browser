@@ -46,7 +46,7 @@ session_id захватывается из первого stream-json событ
 
     haiku  → claude-haiku-4-5
     sonnet → claude-sonnet-4-6
-    opus   → claude-opus-4-7
+    opus   → claude-opus-4-8
 
 - CLI:  `--model haiku`        (или полный `--model claude-haiku-4-5`)
 - env:  `LUMEN_MODEL=haiku`
@@ -419,7 +419,7 @@ RATE_LIMIT_RE = re.compile(r"resets?\s+(\d{1,2}:\d{2}(?:am|pm)?)", re.IGNORECASE
 MODEL_ALIASES: dict[str, str] = {
     "haiku":  "claude-haiku-4-5",
     "sonnet": "claude-sonnet-4-6",
-    "opus":   "claude-opus-4-7",
+    "opus":   "claude-opus-4-8",
 }
 
 
