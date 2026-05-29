@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-`p2-mask-image-layer` — mask-image GPU compositing: PushMaskLayer/PopMaskLayer в DisplayCommand + wgpu alpha/luminance compositing pass  branch: p2-mask-image-layer
-Next step: add MaskMode enum + PushMaskLayer/PopMaskLayer variants  crates/engine/paint/src/display_list.rs
+_(none)_
 
 ---
 
@@ -16,14 +15,14 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | `mask-image` GPU compositing — CSS Masking #14: `PushMaskLayer/PopMaskLayer` в DisplayCommand + wgpu stencil/alpha compositing pass | `paint` | L | none |
-| 2 | CSS 3D transforms — `perspective()` + `transform-style: preserve-3d` (Transforms L2 #24): wgpu matrix stack, depth buffer | `paint` | L | none |
-| 3 | Box model renderer-side rendering — P3 wires `BoxModelOverlay` to the DevTools CDP overlay endpoint (7E.3 следующий шаг) | `devtools`, `shell` | M | P3 devtools |
+| 1 | CSS 3D transforms — `perspective()` + `transform-style: preserve-3d` (Transforms L2 #24): wgpu matrix stack, depth buffer | `paint` | L | none |
+| 2 | Box model renderer-side rendering — P3 wires `BoxModelOverlay` to the DevTools CDP overlay endpoint (7E.3 следующий шаг) | `devtools`, `shell` | M | P3 devtools |
 
 ---
 
 ## Recent merges
 
+- **p2-mask-image-layer** ✅ 2026-05-29 — `MaskMode { Alpha, Luminance }` + `PushMaskLayer/PopMaskLayer` в `DisplayCommand` (CSS Masking L1 §5). WGSL shader `fs_alpha`/`fs_luma` (ITU-R BT.709 luminance). Два пайплайна с REPLACE blend: scratch×mask → parent layer at element rect. 4 unit-теста. Graphic test 26 обновлён.
 - **p2-boxmodel-overlay** ✅ 2026-05-29 — `DisplayCommand::BoxModelOverlay { margin, border, padding, content }` (7E.3): DevTools box model overlay. Renderer разворачивает в 4 полупрозрачных FillRect (Chrome DevTools палитра). 2 unit-теста.
 - **p2-svg-path-rendering** ✅ 2026-05-29 — SVG `<path>` GPU рендеринг: tessellator (lyon или аналог) + `DrawSvgPath` в `paint/src/display_list.rs`. Поддержка всех path-команд (M/L/C/Q/A/Z).
 - **p2-webp-decoder** ✅ 2026-05-27 — WebP декодер (provisional `image` crate): растеризует WebP в RGBA, загружается через `ImageDecoder` trait.
