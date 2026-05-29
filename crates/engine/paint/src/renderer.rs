@@ -5832,19 +5832,36 @@ fn apply_affine_to_grad_verts(verts: &mut [GradVertex], m: &Mat4) {
     apply_affine_to_verts(verts, m);
 }
 
+/// Применяет матрицу `PushTransform` к pos-полям вершин.
+///
+/// 2D affine (`m.is_2d_affine()`) — быстрый путь: x' = a·x + c·y + e (как и
+/// раньше, побитово идентично 2D-конвейеру). Иначе (CSS Transforms L2: 3D
+/// rotate/translate/scale, `perspective()`, `matrix3d`) — полная 4×4
+/// проекция с перспективным делением: вершина z=0 проецируется на экранную
+/// плоскость через `Mat4::project_point`. Depth отбрасывается — depth buffer
+/// не реализован (flat-композитинг, см. STATUS-P2 deferred preserve-3d).
 fn apply_affine_to_verts<V: VertexPos>(verts: &mut [V], m: &Mat4) {
-    let a = m.0[0];
-    let b = m.0[1];
-    let c = m.0[4];
-    let d = m.0[5];
-    let e = m.0[12];
-    let f = m.0[13];
-    for v in verts {
-        let p = v.pos_mut();
-        let x = p[0];
-        let y = p[1];
-        p[0] = a * x + c * y + e;
-        p[1] = b * x + d * y + f;
+    if m.is_2d_affine() {
+        let a = m.0[0];
+        let b = m.0[1];
+        let c = m.0[4];
+        let d = m.0[5];
+        let e = m.0[12];
+        let f = m.0[13];
+        for v in verts {
+            let p = v.pos_mut();
+            let x = p[0];
+            let y = p[1];
+            p[0] = a * x + c * y + e;
+            p[1] = b * x + d * y + f;
+        }
+    } else {
+        for v in verts {
+            let p = v.pos_mut();
+            let (x, y) = m.project_point(p[0], p[1], 0.0);
+            p[0] = x;
+            p[1] = y;
+        }
     }
 }
 
@@ -5895,20 +5912,34 @@ fn push_rrect_quad(out: &mut Vec<RRectVertex>, rect: Rect, color: [f32; 4], radi
     ]);
 }
 
-/// Applies a 2D affine transform to `RRectVertex::pos` AND `center` fields.
+/// Applies a `PushTransform` matrix to `RRectVertex::pos` AND `center` fields.
 /// `half_size` and `radii` are scale-invariant for Phase 0 (no rotation/scale transforms on layout boxes).
+///
+/// 2D affine — fast path; 3D/perspective — `Mat4::project_point` on both pos
+/// and center (best-effort: the SDF `half_size`/`radii` stay unprojected, so a
+/// rounded rect under perspective keeps uniform corner radii — acceptable
+/// Phase-0 approximation, same as the no-rotation note above).
 fn apply_affine_to_rrect_verts(verts: &mut [RRectVertex], m: &Mat4) {
-    for v in verts {
-        let [px, py] = v.pos;
-        v.pos = [
-            m.0[0] * px + m.0[4] * py + m.0[12],
-            m.0[1] * px + m.0[5] * py + m.0[13],
-        ];
-        let [cx, cy] = v.center;
-        v.center = [
-            m.0[0] * cx + m.0[4] * cy + m.0[12],
-            m.0[1] * cx + m.0[5] * cy + m.0[13],
-        ];
+    if m.is_2d_affine() {
+        for v in verts {
+            let [px, py] = v.pos;
+            v.pos = [
+                m.0[0] * px + m.0[4] * py + m.0[12],
+                m.0[1] * px + m.0[5] * py + m.0[13],
+            ];
+            let [cx, cy] = v.center;
+            v.center = [
+                m.0[0] * cx + m.0[4] * cy + m.0[12],
+                m.0[1] * cx + m.0[5] * cy + m.0[13],
+            ];
+        }
+    } else {
+        for v in verts {
+            let (px, py) = m.project_point(v.pos[0], v.pos[1], 0.0);
+            v.pos = [px, py];
+            let (cx, cy) = m.project_point(v.center[0], v.center[1], 0.0);
+            v.center = [cx, cy];
+        }
     }
 }
 
@@ -7454,5 +7485,49 @@ mod tests {
         let (level, stack) = sim_blend_level(&cmds);
         assert_eq!(level, 0, "после PopBlendMode level должен вернуться в 0");
         assert!(stack.is_empty(), "blend_mode_stack должен быть пуст после Pop");
+    }
+
+    // ── vertex transform: 2D fast path vs 3D perspective projection ────────
+
+    fn fv(x: f32, y: f32) -> FillVertex {
+        FillVertex { pos: [x, y], color: [0.0, 0.0, 0.0, 1.0] }
+    }
+
+    fn approxf(a: f32, b: f32) -> bool {
+        (a - b).abs() < 1e-3
+    }
+
+    #[test]
+    fn apply_verts_2d_affine_uses_fast_path() {
+        // translate(10, 20) · scale(2, 3): точка (4, 5) → (2·4+10, 3·5+20) = (18, 35).
+        let m = Mat4::translation_2d(10.0, 20.0).multiply(&Mat4::scale_2d(2.0, 3.0));
+        let mut verts = [fv(4.0, 5.0)];
+        apply_affine_to_verts(&mut verts, &m);
+        assert!(approxf(verts[0].pos[0], 18.0));
+        assert!(approxf(verts[0].pos[1], 35.0));
+    }
+
+    #[test]
+    fn apply_verts_perspective_divides_by_w() {
+        // perspective(800) к вершине z=0: w' = 1, без изменений (z=0 в плоскости).
+        // Но композиция perspective · translateZ сдвигает вершину по z и даёт
+        // перспективное масштабирование. translateZ(+400) → точка на z=400,
+        // perspective(800) → w' = 1 − 400/800 = 0.5 → x' = x/0.5 = 2x.
+        let m = Mat4::perspective(800.0).multiply(&Mat4::translate_3d(0.0, 0.0, 400.0));
+        assert!(!m.is_2d_affine(), "перспективная матрица не 2D affine");
+        let mut verts = [fv(100.0, 50.0)];
+        apply_affine_to_verts(&mut verts, &m);
+        assert!(approxf(verts[0].pos[0], 200.0), "x' = {}", verts[0].pos[0]);
+        assert!(approxf(verts[0].pos[1], 100.0), "y' = {}", verts[0].pos[1]);
+    }
+
+    #[test]
+    fn apply_verts_rotate_y_flattens_x() {
+        // rotateY(90°): x' = cos90·x + sin90·z = 0 (z=0). Грань схлопывается по X.
+        let m = Mat4::rotate_y(std::f32::consts::FRAC_PI_2);
+        let mut verts = [fv(100.0, 50.0)];
+        apply_affine_to_verts(&mut verts, &m);
+        assert!(approxf(verts[0].pos[0], 0.0), "x' = {}", verts[0].pos[0]);
+        assert!(approxf(verts[0].pos[1], 50.0), "y' = {}", verts[0].pos[1]);
     }
 }
