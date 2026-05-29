@@ -1,0 +1,22 @@
+# Memory Index
+
+- [project_orchestrator.md](project_orchestrator.md) — Оркестратор P1–P5: флаги `--model`/`--fallback-model` (alias `opus`/`sonnet`/`haiku`), `--new`, восстановление через `--resume`
+- [project_orchestrator_linux.md](project_orchestrator_linux.md) — На Linux: нет трекинга дочерних процессов, нет автооткрытия окон; нужно вручную открывать терминалы или использовать tmux
+- [project_extras_p2_phase2.md](project_extras_p2_phase2.md) — Print PDF Phase 2: DisplayCommand::PageBreak, Renderer::render_pages(), shell --print-to-pdf
+- [feedback_mark_task_in_progress.md](feedback_mark_task_in_progress.md) — при старте работы над пунктом roadmap сразу пометить «в работе» в плане, чтобы параллельная сессия не дублировала
+- [project_graphic_tests.md](project_graphic_tests.md) — тестовые HTML для визуального тестирования в `graphic_tests/`, не в `samples/`
+- [project_inline_flow.md](project_inline_flow.md) — Line wrapping реализован: TextMeasurer, FontMeasurer, BoxKind::Text(Vec<String>)
+- [reference_ffmpeg_screenshot.md](reference_ffmpeg_screenshot.md) — ffmpeg в utils/, workflow скриншотов Lumen, заголовки окон, триггер «Ищи баг по скрину»
+- [feedback_screenshot_crop.md](feedback_screenshot_crop.md) — crop скрина Lumen: только клиентская область без title bar и рамки ОС (Windows 10: offset 8,39)
+- [feedback_graphic_tests_new_property.md](feedback_graphic_tests_new_property.md) — новое CSS-свойство → тест в 01–19 + 1000000-final.html + COVERAGE.md, всё в одном коммите
+- [feedback_graphic_tests_magenta_frame.md](feedback_graphic_tests_magenta_frame.md) — все тест-HTML должны использовать полную 1px магента-рамку (body #ff00ff + .__f wrapper margin:1px), НЕ старую .__m полоску
+- [feedback_graphic_tests_immutable.md](feedback_graphic_tests_immutable.md) — тест-файлы нельзя удалять/переделывать; при провале фиксить только код браузера; порог diff с эталоном — 0.5%
+- [feedback_doc_comments_mandatory.md](feedback_doc_comments_mandatory.md) — `///` doc-комменты обязательны на всех pub struct/field/fn, чтобы параллельные сессии понимали семантику
+- [feedback_branch_naming_developer.md](feedback_branch_naming_developer.md) — ветки сессий P1–P4 должны включать номер разработчика: `p1-<task>`, `p2-<task>` и т.д., для идентификации при краше
+- [feedback_graphic_tests_screenshots.md](feedback_graphic_tests_screenshots.md) — скриншоты графических тестов: сохранять только `*lumen-cropped.png`, НЕ `*lumen.png`
+- [feedback_merge_workflow.md](feedback_merge_workflow.md) — перед мержем в main сначала влить main в feature branch, разрешить конфликты локально
+- [feedback_task_completion_workflow.md](feedback_task_completion_workflow.md) — полный workflow завершения задачи: merge → delete branch → update STATUS → push → delete worktree (7 шагов, все обязательны)
+- [project_developer_roles_p1_p2_p3_p4.md](project_developer_roles_p1_p2_p3_p4.md) — 4-разработчиковая система: P1/P2 фичи, P3 баг-фиксы, P4 CSS (2026-05-28)
+- [feedback_status_doc_maintenance.md](feedback_status_doc_maintenance.md) — STATUS-PN.md должны содержать ссылки на строки документации (file:line); при изменении документов надо обновлять ссылки в STATUS-PN.md
+- [feedback_developer_isolation.md](feedback_developer_isolation.md) — как P1–P4: не трогать, не коммитить changes других разработчиков
+- [completed_mock_http_client.md](completed_mock_http_client.md) — 8E.1 завершена 2026-05-27: MockTransport в lumen-network для тестирования без реальных HTTP
