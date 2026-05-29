@@ -5,7 +5,9 @@
 ---
 
 ## In progress
-_(none)_
+
+In progress: CSS 3D transforms — perspective() + 3D matrix primitive (Transforms L2 #24)  branch: p2-css-3d-transforms
+Next step: perspective-correct vertex projection в renderer (apply_affine_to_verts) — paint/src/renderer.rs:5835
 
 ---
 
