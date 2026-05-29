@@ -306,8 +306,8 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | Property | Status | Notes |
 |----------|--------|-------|
 | `--*` declaration | ✅ | parsing + storage |
-| `var()` substitution | 🟡 | partial; recursive custom props ⬜ |
-| `@property` | ⬜ | typed custom properties (CSS Properties & Values API) |
+| `var()` substitution | ✅ | recursive + fallback + calc() + env() + cycle guard |
+| `@property` | ✅ | syntax/inherits/initial-value; inherits:false blocks cascade |
 
 ### [T1] Transitions
 
@@ -676,7 +676,7 @@ Ordered list of 🟡→✅ promotions for the P4 developer. One item = one featu
 
 | # | Property / Feature | Effort | Blocker |
 |---|-------------------|--------|---------|
-| 1 | `var()` full recursive substitution | M | none |
+| 1 | `var()` full recursive substitution | ✅ | expand_vars() recursive + @property + env() + 40 unit tests + graphic test 50; 2026-05-29 |
 | 2 | `transition` interpolation (per-frame lerp) | M | easing functions |
 | 3 | `@keyframes` AnimationScheduler::tick wiring | L | transitions done |
 | 4 | CSS Nesting — nested rule parser | L | none |

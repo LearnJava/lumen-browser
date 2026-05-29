@@ -536,6 +536,21 @@
   <div style="width:80px;height:50px;background:radial-gradient(circle at center,rgba(255,200,100,0.8),transparent 70%),linear-gradient(to bottom,#1a3a6b,#0a1a3b);background-blend-mode:color-dodge;"></div>
 </div>
 
+
+<!-- ─── CSS custom properties (var()) ────────────────────────────── -->
+<div style="margin-top:4px;display:flex;gap:4px;flex-wrap:wrap;">
+  <!-- basic var() -->
+  <div style="--c:#e74c3c;width:60px;height:28px;background:var(--c);"></div>
+  <div style="--c:#3498db;width:60px;height:28px;background:var(--c);"></div>
+  <div style="--c:#2ecc71;width:60px;height:28px;background:var(--c);"></div>
+  <!-- nested var(): --a: var(--b) -->
+  <div style="--b:#9b59b6;--a:var(--b);width:60px;height:28px;background:var(--a);"></div>
+  <!-- fallback -->
+  <div style="width:60px;height:28px;background:var(--undef-xxx,#f39c12);"></div>
+  <!-- var() in calc() -->
+  <div style="--w:80px;width:calc(var(--w) + 20px);height:28px;background:#1abc9c;"></div>
+</div>
+
 </div><!-- /card -->
 </body>
 </html>
