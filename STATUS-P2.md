@@ -5,9 +5,7 @@
 ---
 
 ## In progress
-
-In progress: CSS 3D transforms — perspective() + 3D matrix primitive (Transforms L2 #24)  branch: p2-css-3d-transforms
-Next step: perspective-correct vertex projection в renderer (apply_affine_to_verts) — paint/src/renderer.rs:5835
+_(none)_
 
 ---
 
@@ -17,13 +15,14 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | CSS 3D transforms — `perspective()` + `transform-style: preserve-3d` (Transforms L2 #24): wgpu matrix stack, depth buffer | `paint` | L | none |
+| 1 | CSS 3D transforms — depth buffer + `transform-style: preserve-3d` (Transforms L2 #24): true depth-sorted 3D, не flattened проекция. Примитив Mat4 + flattened-проекция уже смержены (p2-css-3d-transforms) | `paint` | L | none |
 | 2 | Box model renderer-side rendering — P3 wires `BoxModelOverlay` to the DevTools CDP overlay endpoint (7E.3 следующий шаг) | `devtools`, `shell` | M | P3 devtools |
 
 ---
 
 ## Recent merges
 
+- **p2-css-3d-transforms** ✅ 2026-05-29 — CSS 3D transforms (Transforms L2 #24): Mat4 3D-конструкторы (`perspective`/`rotate_x/y/z`/`rotate_3d`/`translate_3d`/`scale_3d`/`from_3d`/`project_point`/`is_2d_affine`) в `layout/property_trees.rs` (18 unit-тестов). Renderer проецирует 3D/перспективные матрицы через `project_point` с делением на w (flattened: rotateX/Y, card flip, perspective-наклоны), 2D affine — прежний быстрый путь (3 теста). P4 handoff для 3D transform-функций + `perspective` + `transform-style`. Depth buffer и `preserve-3d` отложены (см. Next #1).
 - **p2-mask-image-layer** ✅ 2026-05-29 — `MaskMode { Alpha, Luminance }` + `PushMaskLayer/PopMaskLayer` в `DisplayCommand` (CSS Masking L1 §5). WGSL shader `fs_alpha`/`fs_luma` (ITU-R BT.709 luminance). Два пайплайна с REPLACE blend: scratch×mask → parent layer at element rect. 4 unit-теста. Graphic test 26 обновлён.
 - **p2-boxmodel-overlay** ✅ 2026-05-29 — `DisplayCommand::BoxModelOverlay { margin, border, padding, content }` (7E.3): DevTools box model overlay. Renderer разворачивает в 4 полупрозрачных FillRect (Chrome DevTools палитра). 2 unit-теста.
 - **p2-svg-path-rendering** ✅ 2026-05-29 — SVG `<path>` GPU рендеринг: tessellator (lyon или аналог) + `DrawSvgPath` в `paint/src/display_list.rs`. Поддержка всех path-команд (M/L/C/Q/A/Z).
