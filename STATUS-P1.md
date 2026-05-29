@@ -17,13 +17,13 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | IndexedDB persistence — backend в `lumen-storage` (redb/sqlite за `StorageBackend`), чтобы базы переживали reload; сейчас in-memory per-runtime | `storage`, `js` | L | none |
-| 2 | Roadmap audit — сверить `lumen-plan.md` Implementation Status с реальным кодом (маркеры массово устарели: driver/http2/memory-pressure/composite-glyphs помечены ⬜, но реализованы) | docs | M | none |
+| 1 | Roadmap audit — сверить `lumen-plan.md` Implementation Status с реальным кодом (маркеры массово устарели: driver/http2/memory-pressure/composite-glyphs помечены ⬜, но реализованы) | docs | M | none |
 
 ---
 
 ## Recent merges
 
+- **p1-indexeddb-persist** ✅ 2026-05-29 — IndexedDB persistence: новый трейт `IdbBackend` (`lumen-core::ext`) + impl `IdbStore` поверх `StorageBackend` (`lumen-storage`, работает с in-memory и SQLite). JS-шим сериализует все базы origin в один tagged-JSON снимок (Date сохраняются как `{__idb_date__: ms}`), `_lumen_idb_persist` пишет после каждого мутирующего flush, `_lumen_idb_load` восстанавливает при init → базы переживают reload. Read-only транзакции не пере-сохраняют (флаг `_idb_dirty`). Shell подключает общий `InMemoryStorage` (на процесс, как localStorage) + per-origin `IdbStore`; диск (SQLite) — замена бэкенда в одну строку. install_dom получил параметр `idb_backend`. 5 JS-тестов персистентности + 7 storage-тестов (267 JS, 267 storage). Обнаружен pre-existing BUG-044 (shell не компилируется: non-exhaustive match по DisplayCommand от P2-мерджей).
 - **p1-indexeddb** ✅ 2026-05-29 — IndexedDB (Indexed Database API 3.0), чистый JS-шим в `WEB_API_SHIM` (без native-биндингов): `indexedDB.open/deleteDatabase/databases/cmp`, `IDBDatabase`/`IDBTransaction`/`IDBObjectStore`/`IDBIndex`/`IDBCursor`/`IDBKeyRange`/`IDB(Open)Request`. CRUD + unique/multiEntry индексы + курсоры (next/prev/unique, continue/advance/update/delete) + key range; key-порядок number<date<string<array; dotted/array keyPath; autoIncrement. Отложенная модель: действия запросов выполняются при dispatch в FIFO-порядке, события через `_lumen_idb_flush()`. In-memory (persistence — отдельная задача в Next). 18 тестов, всего 262 в lumen-js.
 - **p1-image-viewport-gating** ✅ 2026-05-29 — `gate_image_requests(root, viewport, scroll_x, scroll_y)` в `lumen_layout::image_gating`: HashSet<NodeId> изображений в viewport ± 2 экрана. AABB-пересечение в document-space координатах. 7 интеграционных тестов.
 - **p1-font-variation-wiring** ✅ 2026-05-29 — `Font::advance_width_varied(glyph_id, hmtx, coords)` применяет HVAR delta к advance width в `rasterize_and_insert`; gvar deltas для outline уже работали. `// CSS: font-variation-settings` комментарии в `TextMeasurer` и `measure_text_w` для P4. 4 новых теста (3 unit + 1 integration). 309+13+6 тестов lumen-font проходят.

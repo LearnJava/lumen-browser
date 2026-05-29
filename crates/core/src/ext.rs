@@ -1467,6 +1467,37 @@ pub trait JsWebSocketProvider: Send + Sync {
     fn connect(&self, url: &str) -> Result<Box<dyn JsWebSocketSession>>;
 }
 
+/// Persistence boundary for the IndexedDB JS shim.
+///
+/// The JS runtime keeps every IndexedDB database for the current origin in its
+/// heap. Without a backend that state is lost on every page reload (each reload
+/// builds a fresh JS runtime). This trait lets the shim persist and restore the
+/// whole per-origin database set as one opaque JSON snapshot:
+///
+/// * `load` is called once when the shim initialises — it returns the snapshot
+///   stored for this origin, or `None` for a first visit.
+/// * `save` is called after any mutating transaction (or version change /
+///   database deletion) completes, with the full re-serialised snapshot.
+///
+/// The snapshot string is engine-private (a tagged JSON encoding of the JS heap
+/// state); the backend treats it as an opaque blob and must round-trip it
+/// byte-for-byte. Implemented in `lumen-storage` over [`StorageBackend`], so the
+/// same data can live in memory (process lifetime) or on disk (SQLite),
+/// partitioned by origin. `lumen-js` references only this trait, keeping the
+/// crate dependency graph acyclic (mirrors [`JsFetchProvider`]).
+pub trait IdbBackend: Send + Sync {
+    /// Return the persisted IndexedDB snapshot for this origin, or `None` if no
+    /// snapshot has been stored yet.
+    fn load(&self) -> Option<String>;
+
+    /// Persist the IndexedDB snapshot for this origin (full overwrite).
+    ///
+    /// Errors are swallowed by the implementation: a failed write must not
+    /// abort the JS transaction that triggered it (persistence is best-effort,
+    /// the in-heap state remains authoritative for the session).
+    fn save(&self, snapshot: &str);
+}
+
 // ============================================================================
 // ADR-006: Automation API — first-class engine surface
 // ============================================================================

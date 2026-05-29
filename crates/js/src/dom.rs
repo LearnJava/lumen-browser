@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use lumen_core::ext::{CookieProvider, JsFetchProvider, JsWebSocketProvider, JsWsEvent};
+use lumen_core::ext::{CookieProvider, IdbBackend, JsFetchProvider, JsWebSocketProvider, JsWsEvent};
 use lumen_core::url::Url;
 use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName, ShadowRootMode};
 use rquickjs::{Ctx, Function, Result as QjResult};
@@ -145,8 +145,9 @@ pub fn install_dom_api(
     viewport_size: Arc<Mutex<[f32; 2]>>,
     lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
     cookie_jar: Option<Arc<dyn CookieProvider>>,
+    idb_backend: Option<Arc<dyn IdbBackend>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -173,6 +174,7 @@ fn install_primitives(
     lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
     page_url: String,
     cookie_jar: Option<Arc<dyn CookieProvider>>,
+    idb_backend: Option<Arc<dyn IdbBackend>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -899,6 +901,21 @@ fn install_primitives(
         let s = Arc::clone(&ss_store);
         reg!("_lumen_ss_clear", move || {
             s.lock().unwrap().clear();
+        });
+    }
+
+    // ── IndexedDB persistence ─────────────────────────────────────────────────
+    // Registered only when a backend is supplied (None in unit tests / sandboxed
+    // contexts → the JS shim falls back to in-heap-only databases via its
+    // `typeof _lumen_idb_persist === 'function'` guards). The shim serializes the
+    // whole per-origin database set into one opaque JSON snapshot; `_lumen_idb_load`
+    // restores it on init, `_lumen_idb_persist` writes it after each mutating flush.
+    if let Some(idb) = idb_backend {
+        let b = Arc::clone(&idb);
+        reg!("_lumen_idb_load", move || -> Option<String> { b.load() });
+        let b = Arc::clone(&idb);
+        reg!("_lumen_idb_persist", move |snapshot: String| {
+            b.save(&snapshot);
         });
     }
 
@@ -3290,6 +3307,39 @@ var _idb_databases = {};          // name -> { name, version, stores }
 var _idb_active_txns = [];        // transactions with pending request dispatches
 var _idb_pending_opens = [];      // IDBOpenDBRequest dispatch entries
 var _idb_flush_scheduled = false;
+var _idb_dirty = false;           // set by any mutation; drives persistence at flush end
+
+// --- persistence (Rust-backed via _lumen_idb_load / _lumen_idb_persist) -------
+// The whole per-origin database set is one opaque JSON snapshot. Date keys/values
+// are tagged ({__idb_date__: ms}) since JSON has no Date type; everything else is
+// plain structured data (numbers, strings, arrays, objects). Persistence is
+// best-effort: when no backend is installed the shim stays in-heap-only.
+
+function _idb_serialize() {
+    return JSON.stringify(_idb_databases, function(k, v) {
+        // `this[k]` is the original (pre-toJSON) value, so Dates are detectable
+        // even though `v` is already their ISO string.
+        if (this[k] instanceof Date) return { __idb_date__: this[k].getTime() };
+        return v;
+    });
+}
+
+function _idb_deserialize(json) {
+    return JSON.parse(json, function(k, v) {
+        if (v && typeof v === 'object' && typeof v.__idb_date__ === 'number') return new Date(v.__idb_date__);
+        return v;
+    });
+}
+
+// Writes the current snapshot to the backend if a mutation occurred since the
+// last persist. Called at the end of every flush.
+function _idb_persist_if_dirty() {
+    if (!_idb_dirty) return;
+    _idb_dirty = false;
+    if (typeof _lumen_idb_persist !== 'function') return;
+    try { _lumen_idb_persist(_idb_serialize()); }
+    catch (e) { _lumen_console_error('IDB persist: ' + e); }
+}
 
 // --- key validation / comparison / extraction (Indexed DB §3.1) --------------
 
@@ -3582,6 +3632,8 @@ function _idb_flush_txn(txn) {
         txn._queue = [];
         _idb_fire_txn(txn, 'abort');
     } else {
+        // A committed write/versionchange transaction changed the stored data.
+        if (txn.mode !== 'readonly') _idb_dirty = true;
         _idb_fire_txn(txn, 'complete');
     }
 }
@@ -4069,6 +4121,9 @@ function _idb_open_cursor(source, txn, store, buildList, withValue, direction) {
 function _idb_process_open(entry) {
     var req = entry.req;
     if (req.error) { _idb_dispatch_request(req); return; }
+    // A version upgrade (store/index creation, version bump) or a database
+    // deletion mutates the persisted snapshot.
+    if (entry.upgrade || entry._delete) _idb_dirty = true;
     if (entry.upgrade) {
         var data = entry.data, db = entry.db;
         var txn = new IDBTransaction(db, Object.keys(data.stores), 'versionchange');
@@ -4113,6 +4168,7 @@ function _lumen_idb_flush() {
         if (_idb_pending_opens.length > 0) { _idb_process_open(_idb_pending_opens.shift()); continue; }
         _idb_flush_txn(_idb_active_txns.shift());
     }
+    _idb_persist_if_dirty();
 }
 
 var indexedDB = {
@@ -4181,6 +4237,19 @@ window.IDBIndex         = IDBIndex;
 window.IDBCursor        = IDBCursor;
 window.IDBCursorWithValue = IDBCursor;
 window._lumen_idb_flush = _lumen_idb_flush;
+
+// Restore persisted databases for this origin (no-op on first visit / when no
+// backend is installed). A new JS runtime is built on every page load, so this
+// is what makes IndexedDB survive a reload.
+if (typeof _lumen_idb_load === 'function') {
+    try {
+        var _idb_saved = _lumen_idb_load();
+        if (_idb_saved) {
+            var _idb_restored = _idb_deserialize(_idb_saved);
+            if (_idb_restored && typeof _idb_restored === 'object') _idb_databases = _idb_restored;
+        }
+    } catch (e) { _lumen_console_error('IDB load: ' + e); }
+}
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -4227,7 +4296,7 @@ mod tests {
 
     fn runtime_with_dom(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(doc, "", None, None, None).unwrap();
+        rt.install_dom(doc, "", None, None, None, None).unwrap();
         rt
     }
 
@@ -5386,7 +5455,7 @@ mod tests {
     fn runtime_with_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(FailWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None).unwrap();
         rt
     }
 
@@ -5451,7 +5520,7 @@ mod tests {
     fn runtime_with_mock_ws(doc: Arc<Mutex<Document>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
         let provider: Arc<dyn lumen_core::ext::JsWebSocketProvider> = Arc::new(MockWsProvider);
-        rt.install_dom(doc, "", None, Some(provider), None).unwrap();
+        rt.install_dom(doc, "", None, Some(provider), None, None).unwrap();
         rt
     }
 
@@ -5526,7 +5595,7 @@ mod tests {
 
     fn runtime_with_url(url: &str) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), url, None, None, None).unwrap();
+        rt.install_dom(make_doc(), url, None, None, None, None).unwrap();
         rt
     }
 
@@ -5639,7 +5708,7 @@ mod tests {
 
     fn runtime_with_storage(ls: Option<Arc<Mutex<lumen_core::WebStorage>>>) -> QuickJsRuntime {
         let rt = QuickJsRuntime::new().unwrap();
-        rt.install_dom(make_doc(), "https://example.com/", None, None, ls).unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", None, None, ls, None).unwrap();
         rt
     }
 
@@ -7155,5 +7224,167 @@ mod tests {
             out
         "#).unwrap();
         assert_eq!(r, lumen_core::JsValue::String("kept".into()));
+    }
+
+    // ── IndexedDB persistence (Rust-backed snapshot survives reload) ──────────
+
+    /// In-memory `IdbBackend` capturing the snapshot the shim persists, shared
+    /// across runtimes via `Arc` to simulate the same origin across reloads.
+    struct MockIdb(Arc<Mutex<Option<String>>>);
+    impl IdbBackend for MockIdb {
+        fn load(&self) -> Option<String> {
+            self.0.lock().unwrap().clone()
+        }
+        fn save(&self, snapshot: &str) {
+            *self.0.lock().unwrap() = Some(snapshot.to_owned());
+        }
+    }
+
+    fn runtime_with_idb(backend: Arc<dyn IdbBackend>) -> QuickJsRuntime {
+        let rt = QuickJsRuntime::new().unwrap();
+        rt.install_dom(make_doc(), "https://example.com/", None, None, None, Some(backend))
+            .unwrap();
+        rt
+    }
+
+    #[test]
+    fn idb_persists_across_runtime_reload() {
+        let cell = Arc::new(Mutex::new(None));
+        // First "page load": create a store and write a record.
+        {
+            let rt = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+            rt.eval(r#"
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
+                req.onsuccess = function(e) {
+                    e.target.result.transaction('s', 'readwrite').objectStore('s').add({ id: 1, v: 'kept' });
+                };
+                _lumen_idb_flush();
+            "#).unwrap();
+        }
+        // Backend captured a snapshot from the mutating transaction.
+        assert!(cell.lock().unwrap().is_some(), "snapshot must be persisted");
+
+        // Second "page load": a fresh runtime restores the database without re-running
+        // the upgrade — the store and its record are already present.
+        let rt2 = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+        let r = rt2.eval(r#"
+            var out;
+            var req = indexedDB.open('d');
+            req.onupgradeneeded = function() { out = 'UNEXPECTED_UPGRADE'; };
+            req.onsuccess = function(e) {
+                var g = e.target.result.transaction('s').objectStore('s').get(1);
+                g.onsuccess = function() { out = g.result ? g.result.v : 'MISSING'; };
+            };
+            _lumen_idb_flush();
+            out
+        "#).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("kept".into()));
+    }
+
+    #[test]
+    fn idb_persisted_version_is_restored() {
+        let cell = Arc::new(Mutex::new(None));
+        {
+            let rt = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+            rt.eval(r#"
+                var req = indexedDB.open('d', 4);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function() {};
+                _lumen_idb_flush();
+            "#).unwrap();
+        }
+        let rt2 = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+        let r = rt2.eval(r#"
+            var out;
+            var req = indexedDB.open('d');
+            req.onsuccess = function(e) { out = e.target.result.version; };
+            _lumen_idb_flush();
+            out
+        "#).unwrap();
+        assert_eq!(r, lumen_core::JsValue::Number(4.0));
+    }
+
+    #[test]
+    fn idb_persisted_date_value_roundtrips() {
+        let cell = Arc::new(Mutex::new(None));
+        {
+            let rt = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+            rt.eval(r#"
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
+                req.onsuccess = function(e) {
+                    e.target.result.transaction('s', 'readwrite').objectStore('s')
+                        .add({ id: 1, when: new Date(1700000000000) });
+                };
+                _lumen_idb_flush();
+            "#).unwrap();
+        }
+        let rt2 = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+        let r = rt2.eval(r#"
+            var out;
+            var req = indexedDB.open('d');
+            req.onsuccess = function(e) {
+                var g = e.target.result.transaction('s').objectStore('s').get(1);
+                g.onsuccess = function() {
+                    out = (g.result.when instanceof Date) + ':' + g.result.when.getTime();
+                };
+            };
+            _lumen_idb_flush();
+            out
+        "#).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("true:1700000000000".into()));
+    }
+
+    #[test]
+    fn idb_persisted_delete_database_is_restored() {
+        let cell = Arc::new(Mutex::new(None));
+        {
+            let rt = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+            rt.eval(r#"
+                var req = indexedDB.open('d', 1);
+                req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s'); };
+                req.onsuccess = function() {};
+                _lumen_idb_flush();
+                indexedDB.deleteDatabase('d');
+                _lumen_idb_flush();
+            "#).unwrap();
+        }
+        // After deletion the restored snapshot must not contain the database:
+        // opening it fresh re-triggers upgradeneeded and the store is gone.
+        let rt2 = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+        let r = rt2.eval(r#"
+            var out = 'no-upgrade';
+            var req = indexedDB.open('d');
+            req.onupgradeneeded = function(e) {
+                out = 'upgrade:' + e.target.result.objectStoreNames.length;
+            };
+            req.onsuccess = function() {};
+            _lumen_idb_flush();
+            out
+        "#).unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("upgrade:0".into()));
+    }
+
+    #[test]
+    fn idb_read_only_transaction_does_not_persist() {
+        let cell = Arc::new(Mutex::new(None));
+        let rt = runtime_with_idb(Arc::new(MockIdb(Arc::clone(&cell))));
+        // Create + populate (this persists once).
+        rt.eval(r#"
+            var req = indexedDB.open('d', 1);
+            req.onupgradeneeded = function(e) { e.target.result.createObjectStore('s', { keyPath: 'id' }); };
+            req.onsuccess = function(e) { e.target.result.transaction('s', 'readwrite').objectStore('s').add({ id: 1 }); };
+            _lumen_idb_flush();
+        "#).unwrap();
+        // Overwrite the captured snapshot with a sentinel, then run a read-only txn.
+        *cell.lock().unwrap() = Some("SENTINEL".into());
+        rt.eval(r#"
+            var req = indexedDB.open('d');
+            req.onsuccess = function(e) { e.target.result.transaction('s').objectStore('s').get(1); };
+            _lumen_idb_flush();
+        "#).unwrap();
+        // A read-only flush must not have re-persisted (sentinel intact).
+        assert_eq!(cell.lock().unwrap().as_deref(), Some("SENTINEL"));
     }
 }
