@@ -4231,7 +4231,8 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushMaskImage { rect, .. }
             | DisplayCommand::PushMaskLinearGradient { rect, .. }
             | DisplayCommand::PushMaskRadialGradient { rect, .. }
-            | DisplayCommand::PushMaskConicGradient { rect, .. } => rect,
+            | DisplayCommand::PushMaskConicGradient { rect, .. }
+            | DisplayCommand::PushMaskLayer { rect, .. } => rect,
             DisplayCommand::PopClip
             | DisplayCommand::PushOpacity { .. }
             | DisplayCommand::PopOpacity
@@ -4240,13 +4241,16 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushTransform { .. }
             | DisplayCommand::PopTransform
             | DisplayCommand::PopMask
+            | DisplayCommand::PopMaskLayer
             | DisplayCommand::DrawLayerSnapshot { .. }
             | DisplayCommand::PushFilter { .. }
             | DisplayCommand::PopFilter
             | DisplayCommand::PushBackdropFilter { .. }
             | DisplayCommand::PopBackdropFilter
             | DisplayCommand::BeginStickyLayer { .. }
-            | DisplayCommand::EndStickyLayer => continue,
+            | DisplayCommand::EndStickyLayer
+            | DisplayCommand::DrawSvgPath { .. }
+            | DisplayCommand::BoxModelOverlay { .. } => continue,
         };
         let bottom = r.y + r.height;
         if bottom > max_y {
@@ -4277,7 +4281,8 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushMaskImage { rect, .. }
             | DisplayCommand::PushMaskLinearGradient { rect, .. }
             | DisplayCommand::PushMaskRadialGradient { rect, .. }
-            | DisplayCommand::PushMaskConicGradient { rect, .. } => rect,
+            | DisplayCommand::PushMaskConicGradient { rect, .. }
+            | DisplayCommand::PushMaskLayer { rect, .. } => rect,
             DisplayCommand::PopClip
             | DisplayCommand::PushOpacity { .. }
             | DisplayCommand::PopOpacity
@@ -4286,13 +4291,16 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushTransform { .. }
             | DisplayCommand::PopTransform
             | DisplayCommand::PopMask
+            | DisplayCommand::PopMaskLayer
             | DisplayCommand::DrawLayerSnapshot { .. }
             | DisplayCommand::PushFilter { .. }
             | DisplayCommand::PopFilter
             | DisplayCommand::PushBackdropFilter { .. }
             | DisplayCommand::PopBackdropFilter
             | DisplayCommand::BeginStickyLayer { .. }
-            | DisplayCommand::EndStickyLayer => continue,
+            | DisplayCommand::EndStickyLayer
+            | DisplayCommand::DrawSvgPath { .. }
+            | DisplayCommand::BoxModelOverlay { .. } => continue,
         };
         let right = r.x + r.width;
         if right > max_x {
