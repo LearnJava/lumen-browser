@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 52 text-shadow blur</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #f7fafc; width: 1022px; height: 718px; margin: 1px; padding: 32px; overflow: hidden; }
+    .row { display: flex; gap: 32px; margin-bottom: 32px; }
+    .cell { width: 220px; height: 130px; background: #edf2f7;
+            display: flex; align-items: center; justify-content: center; }
+    .t { font-size: 80px; font-family: serif; color: #2d3748; line-height: 1; }
+  </style>
+</head>
+<body>
+  <div class="__f">
+
+    <!-- Row 1: same red shadow, blur 0 / 4px / 10px / 20px — sharpness progression -->
+    <div class="row">
+      <!-- no blur — sharp shadow -->
+      <div class="cell">
+        <span class="t" style="text-shadow: 6px 6px 0px rgba(200,40,40,0.85);">A</span>
+      </div>
+      <!-- 4px blur — slight soft edge -->
+      <div class="cell">
+        <span class="t" style="text-shadow: 6px 6px 4px rgba(200,40,40,0.85);">A</span>
+      </div>
+      <!-- 10px blur — clearly blurred halo -->
+      <div class="cell">
+        <span class="t" style="text-shadow: 6px 6px 10px rgba(200,40,40,0.85);">A</span>
+      </div>
+      <!-- 20px blur — wide soft glow -->
+      <div class="cell">
+        <span class="t" style="text-shadow: 6px 6px 20px rgba(200,40,40,0.85);">A</span>
+      </div>
+    </div>
+
+    <!-- Row 2: coloured multi-shadow and glow variants -->
+    <div class="row">
+      <!-- two-color shadow: blue top-left + red bottom-right -->
+      <div class="cell">
+        <span class="t" style="text-shadow: -5px -5px 6px #3182ce, 5px 5px 6px #e53e3e;">B</span>
+      </div>
+      <!-- drop-shadow below, dark -->
+      <div class="cell">
+        <span class="t" style="text-shadow: 0 8px 16px rgba(0,0,0,0.55);">B</span>
+      </div>
+      <!-- stacked hard shadows (no blur) — each adds 2px offset -->
+      <div class="cell">
+        <span class="t" style="text-shadow: 2px 2px 0 #e53e3e, 4px 4px 0 #3182ce, 6px 6px 0 #38a169;">B</span>
+      </div>
+      <!-- glow only: white text + large blur glow on gray bg -->
+      <div class="cell" style="background: #2d3748;">
+        <span class="t" style="color: #ffffff; text-shadow: 0 0 18px rgba(99,179,237,0.95);">B</span>
+      </div>
+    </div>
+
+  </div>
+</body>
+</html>
