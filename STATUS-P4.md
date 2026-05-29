@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-font-optical-sizing  branch: p4-font-optical-sizing
-Next step: добавить FontOpticalSizing enum + поле в ComputedStyle  style.rs:~2090
+_(none)_
 
 ## Workflow
 
@@ -29,15 +28,6 @@ Next step: добавить FontOpticalSizing enum + поле в ComputedStyle  
 ## Needs wiring (algorithm ready, CSS not connected)
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
-
-### font-optical-sizing (P1 feature p1-font-variable-opsz)
-- **Status:** Algorithm ready (VariationCoords struct created in lumen-font)
-- **P4 task:** 
-  1. Add `font_optical_sizing: Option<f32>` to ComputedStyle
-  2. Parse in `apply_declaration("font-optical-sizing")`
-  3. Wire in `emit_text_shadows()` (display_list.rs:1636) → inject opsz into font_variation_axes
-  4. Normalize in `renderer.rs:normalize_variation_axes()`
-  5. 5 unit tests
 
 ### ::first-letter pseudo-element (P1 feature p1-css-first-line-letter)
 - **Status:** Structural markers ready in InlineRun
@@ -64,7 +54,10 @@ Next step: добавить FontOpticalSizing enum + поле в ComputedStyle  
 ---
 
 ## Recent merges
-_(completed CSS properties will be listed here)_
+
+| Date | Property | Notes |
+|------|----------|-------|
+| 2026-05-29 | `font-optical-sizing` | auto→opsz=font-size in variation axes; none skips; 5 tests |
 
 ---
 

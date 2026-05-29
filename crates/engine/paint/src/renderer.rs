@@ -5892,8 +5892,9 @@ fn normalize_variation_axes(face: &ParsedFace<'_>, axes: &[([u8; 4], f32)]) -> V
         };
         coords.push(avar.normalize(axis_idx, linear));
     }
-    // CSS: font-optical-sizing — P4 wires: after this loop, if font-optical-sizing
-    // is set in ComputedStyle, inject opsz value into coords[opsz_axis_index]
+    // CSS Fonts L4 §7.12: opsz injected by display_list builder into font_variation_axes
+    // when font-optical-sizing: auto (default). normalize_variation_axes handles it here
+    // like any other axis — no special case needed.
     coords
 }
 

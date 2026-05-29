@@ -19,7 +19,7 @@ use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
     BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
-    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, FilterFn, FontStyle, FontWeight,
+    ClipPath, Color, ComputedStyle, ContainFlags, CssColor, FilterFn, FontOpticalSizing, FontStyle, FontWeight,
     FormControlKind, SvgShapeKind,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
     InlineFrag, LayoutBox, Mat4, MixBlendMode as LayoutBlendMode, ObjectFit, ObjectPosition,
@@ -1268,12 +1268,16 @@ fn emit_text_frags(
             font_family: frag.style.font_family.clone(),
             font_weight: frag.style.font_weight,
             font_style: frag.style.font_style,
-            font_variation_axes: frag
-                .style
-                .font_variation_settings
-                .iter()
-                .map(|a| (a.tag, a.value))
-                .collect(),
+            font_variation_axes: {
+                let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
+                    .iter().map(|a| (a.tag, a.value)).collect();
+                if frag.style.font_optical_sizing == FontOpticalSizing::Auto
+                    && !axes.iter().any(|(t, _)| t == b"opsz")
+                {
+                    axes.push((*b"opsz", frag.style.font_size));
+                }
+                axes
+            },
             tab_size: frag.style.tab_size,
         });
         push_text_decoration(out, container_x, frag_y, frag);
@@ -1335,12 +1339,16 @@ fn emit_inline_run(b: &LayoutBox, lines: &[Vec<InlineFrag>], out: &mut Vec<Displ
                 font_family: ef.style.font_family.clone(),
                 font_weight: ef.style.font_weight,
                 font_style: ef.style.font_style,
-                font_variation_axes: ef
-                    .style
-                    .font_variation_settings
-                    .iter()
-                    .map(|a| (a.tag, a.value))
-                    .collect(),
+                font_variation_axes: {
+                    let mut axes: Vec<([u8; 4], f32)> = ef.style.font_variation_settings
+                        .iter().map(|a| (a.tag, a.value)).collect();
+                    if ef.style.font_optical_sizing == FontOpticalSizing::Auto
+                        && !axes.iter().any(|(t, _)| t == b"opsz")
+                    {
+                        axes.push((*b"opsz", ef.style.font_size));
+                    }
+                    axes
+                },
                 tab_size: 0.0,
             });
         } else {
@@ -1630,10 +1638,20 @@ fn emit_text_shadows(
             font_family: frag.style.font_family.clone(),
             font_weight: frag.style.font_weight,
             font_style: frag.style.font_style,
-            // CSS: font-optical-sizing — P4 wires: if frag.style has font_optical_sizing field,
-            // append (b"opsz", optical_sizing_value) to the collected axes before returning.
-            font_variation_axes: frag.style.font_variation_settings
-                .iter().map(|s| (s.tag, s.value)).collect(),
+            // CSS Fonts L4 §7.12: for `auto`, inject opsz = font_size so the renderer
+            // normalizes it via fvar like any other axis. Skipped for `none` to let
+            // font-variation-settings control opsz directly.
+            font_variation_axes: {
+                let mut axes: Vec<([u8; 4], f32)> = frag.style.font_variation_settings
+                    .iter().map(|s| (s.tag, s.value)).collect();
+                if frag.style.font_optical_sizing == FontOpticalSizing::Auto {
+                    let has_opsz = axes.iter().any(|(tag, _)| tag == b"opsz");
+                    if !has_opsz {
+                        axes.push((*b"opsz", frag.style.font_size));
+                    }
+                }
+                axes
+            },
             tab_size: frag.style.tab_size,
         });
     }
@@ -2209,8 +2227,16 @@ fn emit_list_marker(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
                     font_family: s.font_family.clone(),
                     font_weight: s.font_weight,
                     font_style: s.font_style,
-                    font_variation_axes: s.font_variation_settings
-                        .iter().map(|a| (a.tag, a.value)).collect(),
+                    font_variation_axes: {
+                        let mut axes: Vec<([u8; 4], f32)> = s.font_variation_settings
+                            .iter().map(|a| (a.tag, a.value)).collect();
+                        if s.font_optical_sizing == FontOpticalSizing::Auto
+                            && !axes.iter().any(|(t, _)| t == b"opsz")
+                        {
+                            axes.push((*b"opsz", em));
+                        }
+                        axes
+                    },
                     tab_size: 0.0,
                 });
             }
