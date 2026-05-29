@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+scroll-snap algorithm  branch: p1-scroll-snap
+Next step: commit implementation, update lumen-plan.md, merge  crates/engine/layout/src/lib.rs
 
 ---
 

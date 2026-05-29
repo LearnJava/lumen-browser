@@ -506,6 +506,280 @@ pub fn compute_sticky_offset(
     (off_x, off_y)
 }
 
+// ─── CSS Scroll Snap L1 algorithm stub ───────────────────────────────────────
+// CSS: scroll-snap-type, scroll-snap-align, scroll-snap-stop
+//
+// P3 integration: after every re-layout call `collect_snap_containers(root)`.
+// At each scroll event (shell::handle_scroll) call `find_snap_target()` per
+// container and apply the returned scroll offset.
+//
+// P4 integration: `scroll_snap_type`, `scroll_snap_align`, `scroll_snap_stop`
+// are already in `ComputedStyle` (style.rs). No additional CSS wiring needed.
+
+/// A single snap area inside a [`SnapContainer`].
+///
+/// `snap_x` / `snap_y` are the container scroll offsets (CSS px) required to
+/// align this area per its `scroll-snap-align` declaration.  `None` on an axis
+/// means that axis does not contribute a snap position (keyword `none`).
+///
+/// All coordinates are in document space; subtract the container's own origin
+/// to convert to content-relative scroll offsets.
+#[derive(Debug, Clone)]
+pub struct SnapPoint {
+    /// DOM node that declares this snap area.
+    pub node: lumen_dom::NodeId,
+    /// Required container scroll-x for inline-axis alignment. `None` = not snapped on x.
+    pub snap_x: Option<f32>,
+    /// Required container scroll-y for block-axis alignment. `None` = not snapped on y.
+    pub snap_y: Option<f32>,
+    /// True when `scroll-snap-stop: always` — the scroller must stop here even
+    /// during a high-velocity fling.
+    pub stop_always: bool,
+}
+
+/// A scroll container that participates in CSS Scroll Snap L1.
+///
+/// Only containers whose `scroll-snap-type.axis` is not `None` are collected.
+/// P3 integration: wire `rect` to the element's actual viewport dimensions and
+/// call [`find_snap_target`] on every programmatic or user-driven scroll event.
+#[derive(Debug, Clone)]
+pub struct SnapContainer {
+    /// DOM node of the scroll container element.
+    pub node: lumen_dom::NodeId,
+    /// CSS `scroll-snap-type` (axis + strictness). `axis` is never `None` here.
+    pub snap_type: style::ScrollSnapType,
+    /// Border-box of the scroll container in CSS px (document-relative).
+    pub rect: lumen_core::geom::Rect,
+    /// All snap areas found inside this container, in document order.
+    pub points: Vec<SnapPoint>,
+}
+
+/// Collect all scroll containers that participate in CSS Scroll Snap L1.
+///
+/// Returns one [`SnapContainer`] per layout-tree element whose
+/// `scroll-snap-type.axis` is not `None`.  Each entry's `points` list contains
+/// all direct-descendant snap areas (elements with a non-`None`
+/// `scroll-snap-align` on at least one axis).  Nested snap containers form
+/// independent entries — snap areas inside an inner container are not counted
+/// toward any outer container.
+///
+/// Deduplicates by `NodeId`: the layout engine may emit multiple boxes for the
+/// same element (e.g. a `Block` wrapper + an `InlineRun` sub-box).  Only the
+/// first box seen per node is recorded as a snap area.
+///
+/// `BoxKind::Skip` subtrees are omitted entirely.
+pub fn collect_snap_containers(root: &LayoutBox) -> Vec<SnapContainer> {
+    let mut out = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
+    let mut seen_areas: std::collections::HashSet<lumen_dom::NodeId> =
+        std::collections::HashSet::new();
+    collect_snap_rec(root, &mut stack, &mut out, &mut seen_areas);
+    out
+}
+
+fn collect_snap_rec(
+    b: &LayoutBox,
+    container_stack: &mut Vec<usize>,
+    out: &mut Vec<SnapContainer>,
+    seen_areas: &mut std::collections::HashSet<lumen_dom::NodeId>,
+) {
+    use box_tree::BoxKind;
+    use style::ScrollSnapAxis;
+
+    if matches!(b.kind, BoxKind::Skip) {
+        return;
+    }
+
+    let is_container = b.style.scroll_snap_type.axis != ScrollSnapAxis::None;
+
+    if is_container {
+        let idx = out.len();
+        out.push(SnapContainer {
+            node: b.node,
+            snap_type: b.style.scroll_snap_type,
+            rect: b.rect,
+            points: Vec::new(),
+        });
+        container_stack.push(idx);
+        for child in &b.children {
+            collect_snap_rec(child, container_stack, out, seen_areas);
+        }
+        container_stack.pop();
+        return;
+    }
+
+    // Check if this element is a snap area for the nearest ancestor container.
+    if let Some(&cidx) = container_stack.last() {
+        let align = b.style.scroll_snap_align;
+        let cr = out[cidx].rect;
+        let snap_x = snap_offset_x(align.inline, b.rect, cr);
+        let snap_y = snap_offset_y(align.block, b.rect, cr);
+        if (snap_x.is_some() || snap_y.is_some()) && seen_areas.insert(b.node) {
+            let stop_always =
+                b.style.scroll_snap_stop == style::ScrollSnapStop::Always;
+            out[cidx].points.push(SnapPoint {
+                node: b.node,
+                snap_x,
+                snap_y,
+                stop_always,
+            });
+        }
+    }
+
+    for child in &b.children {
+        collect_snap_rec(child, container_stack, out, seen_areas);
+    }
+}
+
+/// Compute the x-axis snap offset for `align` keyword relative to `container`.
+///
+/// Returns the container scroll-x value at which the snap area's inline edge
+/// aligns with the scroll port per the spec (CSS Scroll Snap §6.1).
+fn snap_offset_x(
+    align: style::ScrollSnapAlignKeyword,
+    area: lumen_core::geom::Rect,
+    container: lumen_core::geom::Rect,
+) -> Option<f32> {
+    use style::ScrollSnapAlignKeyword;
+    // scroll-x = area_content_offset that aligns area edge with port edge
+    // area_content_x = area.x - container.x  (offset within container content)
+    let ax = area.x - container.x;
+    match align {
+        ScrollSnapAlignKeyword::None => None,
+        ScrollSnapAlignKeyword::Start => Some(ax),
+        ScrollSnapAlignKeyword::End => Some(ax + area.width - container.width),
+        ScrollSnapAlignKeyword::Center => {
+            Some(ax + area.width * 0.5 - container.width * 0.5)
+        }
+    }
+}
+
+/// Compute the y-axis snap offset for `align` keyword relative to `container`.
+///
+/// Returns the container scroll-y value at which the snap area's block edge
+/// aligns with the scroll port per the spec (CSS Scroll Snap §6.1).
+fn snap_offset_y(
+    align: style::ScrollSnapAlignKeyword,
+    area: lumen_core::geom::Rect,
+    container: lumen_core::geom::Rect,
+) -> Option<f32> {
+    use style::ScrollSnapAlignKeyword;
+    let ay = area.y - container.y;
+    match align {
+        ScrollSnapAlignKeyword::None => None,
+        ScrollSnapAlignKeyword::Start => Some(ay),
+        ScrollSnapAlignKeyword::End => Some(ay + area.height - container.height),
+        ScrollSnapAlignKeyword::Center => {
+            Some(ay + area.height * 0.5 - container.height * 0.5)
+        }
+    }
+}
+
+/// Find the nearest snap target for a scroll gesture.
+///
+/// Given the container's active snap type, the current scroll position
+/// `current_scroll`, and the intended post-scroll position `target_scroll`,
+/// returns the adjusted scroll offset `(snap_x, snap_y)` that the container
+/// should actually land on, or `None` if no snap applies.
+///
+/// # Axes
+///
+/// Only the container's declared axis/axes are considered:
+/// - `X` / `Inline` → x axis only; y component is passed through unchanged.
+/// - `Y` / `Block`  → y axis only; x component is passed through unchanged.
+/// - `Both`         → both axes must snap independently.
+///
+/// # Strictness
+///
+/// - `Mandatory` — always snaps to the nearest point, regardless of distance.
+/// - `Proximity` — snaps only if the nearest point is within 50 % of the scroll
+///   port on the relevant axis (browser-defined threshold per the spec note).
+///
+/// # Integration
+///
+/// Call this from the shell scroll handler after computing `target_scroll` from
+/// the user gesture.  If `Some((sx, sy))` is returned, animate/clamp to that
+/// position instead of `target_scroll`.
+pub fn find_snap_target(
+    container: &SnapContainer,
+    current_scroll: (f32, f32),
+    target_scroll: (f32, f32),
+) -> Option<(f32, f32)> {
+    use style::{ScrollSnapAxis, ScrollSnapStrictness};
+
+    if container.points.is_empty() {
+        return None;
+    }
+
+    let axis = container.snap_type.axis;
+    let strictness = container.snap_type.strictness;
+
+    // Proximity threshold: 50% of the scroll port on each axis.
+    let prox_x = container.rect.width * 0.5;
+    let prox_y = container.rect.height * 0.5;
+
+    let snaps_x = matches!(axis, ScrollSnapAxis::X | ScrollSnapAxis::Inline | ScrollSnapAxis::Both);
+    let snaps_y = matches!(axis, ScrollSnapAxis::Y | ScrollSnapAxis::Block | ScrollSnapAxis::Both);
+
+    let mut best_dist = f32::INFINITY;
+    let mut best: Option<(f32, f32)> = None;
+
+    for pt in &container.points {
+        // Resolve snap coordinates: fall back to target on axes we don't snap.
+        let sx = if snaps_x {
+            pt.snap_x.unwrap_or(target_scroll.0)
+        } else {
+            target_scroll.0
+        };
+        let sy = if snaps_y {
+            pt.snap_y.unwrap_or(target_scroll.1)
+        } else {
+            target_scroll.1
+        };
+
+        let dx = sx - target_scroll.0;
+        let dy = sy - target_scroll.1;
+
+        // Proximity filter: skip if beyond threshold.
+        if matches!(strictness, ScrollSnapStrictness::Proximity) {
+            if snaps_x && dx.abs() > prox_x {
+                continue;
+            }
+            if snaps_y && dy.abs() > prox_y {
+                continue;
+            }
+        }
+
+        // `scroll-snap-stop: always` forces a stop at this point when scrolling
+        // past it from `current_scroll`.  Model this as a hard barrier: if
+        // `current_scroll` is on the near side and `target_scroll` overshoots,
+        // this becomes the mandatory snap target.
+        if pt.stop_always {
+            let crosses_x = snaps_x && {
+                let cs = current_scroll.0;
+                let ts = target_scroll.0;
+                (cs <= sx && sx <= ts) || (ts <= sx && sx <= cs)
+            };
+            let crosses_y = snaps_y && {
+                let cs = current_scroll.1;
+                let ts = target_scroll.1;
+                (cs <= sy && sy <= ts) || (ts <= sy && sy <= cs)
+            };
+            if (!snaps_x || crosses_x) && (!snaps_y || crosses_y) {
+                return Some((sx, sy));
+            }
+        }
+
+        let dist = dx * dx + dy * dy;
+        if dist < best_dist {
+            best_dist = dist;
+            best = Some((sx, sy));
+        }
+    }
+
+    best
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -13729,6 +14003,269 @@ mod tests {
         let stickies = collect_sticky_boxes(&root);
         assert_eq!(stickies.len(), 1);
         assert_eq!(stickies[0].top, None, "em unit should yield None");
+    }
+
+    // ─── CSS Scroll Snap tests ────────────────────────────────────────────────
+
+    #[test]
+    fn snap_no_containers_when_no_snap_type() {
+        let root = lay_full("<div><p>item</p></div>", "");
+        let containers = collect_snap_containers(&root);
+        assert!(containers.is_empty(), "no snap-type → no containers");
+    }
+
+    #[test]
+    fn snap_container_collected() {
+        let root = lay_full(
+            "<div id=c><p>item</p></div>",
+            "#c { scroll-snap-type: y mandatory; }",
+        );
+        let containers = collect_snap_containers(&root);
+        assert_eq!(containers.len(), 1, "one snap container expected");
+        assert_eq!(containers[0].snap_type.axis, style::ScrollSnapAxis::Y);
+        assert_eq!(
+            containers[0].snap_type.strictness,
+            style::ScrollSnapStrictness::Mandatory
+        );
+    }
+
+    #[test]
+    fn snap_area_start_offset_y() {
+        // Container at y≈0, height=600; child <p> with scroll-snap-align: start.
+        // `start` is a shorthand setting BOTH inline and block axes to `start`,
+        // so both snap_x and snap_y are Some.  The container's y-only axis
+        // restricts which snaps are *used* by find_snap_target, not what's stored.
+        let root = lay_full(
+            "<div id=c><p id=a>item</p></div>",
+            "#c { scroll-snap-type: y mandatory; } #a { scroll-snap-align: start; }",
+        );
+        let containers = collect_snap_containers(&root);
+        assert_eq!(containers.len(), 1);
+        assert_eq!(containers[0].points.len(), 1, "one snap area expected");
+        let pt = &containers[0].points[0];
+        // snap_x is Some because align.inline == Start (both axes from shorthand).
+        assert!(pt.snap_x.is_some(), "snap_x computed from inline alignment");
+        let snap_y = pt.snap_y.expect("snap_y should be Some");
+        assert!(snap_y.is_finite(), "snap_y must be finite");
+        assert!(!pt.stop_always, "default is Normal");
+    }
+
+    #[test]
+    fn snap_area_stop_always() {
+        let root = lay_full(
+            "<div id=c><p id=a>item</p></div>",
+            "#c { scroll-snap-type: y mandatory; } #a { scroll-snap-align: start; scroll-snap-stop: always; }",
+        );
+        let containers = collect_snap_containers(&root);
+        assert_eq!(containers.len(), 1);
+        if let Some(pt) = containers[0].points.first() {
+            assert!(pt.stop_always, "stop_always should be true");
+        }
+    }
+
+    #[test]
+    fn snap_no_areas_when_no_align() {
+        let root = lay_full(
+            "<div id=c><p>item</p></div>",
+            "#c { scroll-snap-type: y mandatory; }",
+        );
+        let containers = collect_snap_containers(&root);
+        assert_eq!(containers.len(), 1);
+        assert!(
+            containers[0].points.is_empty(),
+            "no snap-align → no snap areas"
+        );
+    }
+
+    #[test]
+    fn find_snap_target_mandatory_nearest() {
+        let snap_type = style::ScrollSnapType {
+            axis: style::ScrollSnapAxis::Y,
+            strictness: style::ScrollSnapStrictness::Mandatory,
+        };
+        let container = SnapContainer {
+            node: lumen_dom::NodeId::from_index(0),
+            snap_type,
+            rect: lumen_core::geom::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            },
+            points: vec![
+                SnapPoint {
+                    node: lumen_dom::NodeId::from_index(1),
+                    snap_x: None,
+                    snap_y: Some(0.0),
+                    stop_always: false,
+                },
+                SnapPoint {
+                    node: lumen_dom::NodeId::from_index(2),
+                    snap_x: None,
+                    snap_y: Some(600.0),
+                    stop_always: false,
+                },
+                SnapPoint {
+                    node: lumen_dom::NodeId::from_index(3),
+                    snap_x: None,
+                    snap_y: Some(1200.0),
+                    stop_always: false,
+                },
+            ],
+        };
+        // Target ≈ 700 → nearest snap is 600.
+        let result = find_snap_target(&container, (0.0, 0.0), (0.0, 700.0));
+        assert!(result.is_some(), "mandatory always snaps");
+        let (_, sy) = result.unwrap();
+        assert!((sy - 600.0).abs() < 0.001, "expected snap to 600, got {sy}");
+    }
+
+    #[test]
+    fn find_snap_target_proximity_too_far() {
+        let snap_type = style::ScrollSnapType {
+            axis: style::ScrollSnapAxis::Y,
+            strictness: style::ScrollSnapStrictness::Proximity,
+        };
+        let container = SnapContainer {
+            node: lumen_dom::NodeId::from_index(0),
+            snap_type,
+            rect: lumen_core::geom::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            },
+            points: vec![SnapPoint {
+                node: lumen_dom::NodeId::from_index(1),
+                snap_x: None,
+                snap_y: Some(0.0),
+                stop_always: false,
+            }],
+        };
+        // Target 400 is exactly 50% of viewport — proximity threshold is 50% → skip.
+        // (400 == 600*0.5, so dx.abs() > prox_y is false at boundary, but
+        //  any value strictly > 300 should be filtered.)
+        let result = find_snap_target(&container, (0.0, 0.0), (0.0, 400.0));
+        assert!(result.is_none(), "proximity: too far from snap point");
+    }
+
+    #[test]
+    fn find_snap_target_proximity_close_enough() {
+        let snap_type = style::ScrollSnapType {
+            axis: style::ScrollSnapAxis::Y,
+            strictness: style::ScrollSnapStrictness::Proximity,
+        };
+        let container = SnapContainer {
+            node: lumen_dom::NodeId::from_index(0),
+            snap_type,
+            rect: lumen_core::geom::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            },
+            points: vec![SnapPoint {
+                node: lumen_dom::NodeId::from_index(1),
+                snap_x: None,
+                snap_y: Some(600.0),
+                stop_always: false,
+            }],
+        };
+        // Target 450 → snap_y=600, dy=150 < 300 (50% of 600) → snaps.
+        let result = find_snap_target(&container, (0.0, 0.0), (0.0, 450.0));
+        assert!(result.is_some(), "proximity: close enough to snap");
+        let (_, sy) = result.unwrap();
+        assert!((sy - 600.0).abs() < 0.001, "expected snap to 600, got {sy}");
+    }
+
+    #[test]
+    fn find_snap_target_stop_always_barrier() {
+        let snap_type = style::ScrollSnapType {
+            axis: style::ScrollSnapAxis::Y,
+            strictness: style::ScrollSnapStrictness::Mandatory,
+        };
+        let container = SnapContainer {
+            node: lumen_dom::NodeId::from_index(0),
+            snap_type,
+            rect: lumen_core::geom::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            },
+            points: vec![
+                SnapPoint {
+                    node: lumen_dom::NodeId::from_index(1),
+                    snap_x: None,
+                    snap_y: Some(600.0),
+                    stop_always: true,  // barrier
+                },
+                SnapPoint {
+                    node: lumen_dom::NodeId::from_index(2),
+                    snap_x: None,
+                    snap_y: Some(1200.0),
+                    stop_always: false,
+                },
+            ],
+        };
+        // Fling from 0 → 1300 crosses the barrier at 600 → must stop there.
+        let result = find_snap_target(&container, (0.0, 0.0), (0.0, 1300.0));
+        assert!(result.is_some(), "stop_always acts as barrier");
+        let (_, sy) = result.unwrap();
+        assert!((sy - 600.0).abs() < 0.001, "expected stop at barrier 600, got {sy}");
+    }
+
+    #[test]
+    fn find_snap_target_x_axis_only() {
+        let snap_type = style::ScrollSnapType {
+            axis: style::ScrollSnapAxis::X,
+            strictness: style::ScrollSnapStrictness::Mandatory,
+        };
+        let container = SnapContainer {
+            node: lumen_dom::NodeId::from_index(0),
+            snap_type,
+            rect: lumen_core::geom::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            },
+            points: vec![SnapPoint {
+                node: lumen_dom::NodeId::from_index(1),
+                snap_x: Some(800.0),
+                snap_y: Some(100.0),
+                stop_always: false,
+            }],
+        };
+        // x-only: target (900, 50) → snaps x to 800, y unchanged (50).
+        let result = find_snap_target(&container, (0.0, 0.0), (900.0, 50.0));
+        assert!(result.is_some());
+        let (sx, sy) = result.unwrap();
+        assert!((sx - 800.0).abs() < 0.001, "x snapped to 800");
+        assert!((sy - 50.0).abs() < 0.001, "y unchanged (x-only axis)");
+    }
+
+    #[test]
+    fn find_snap_target_empty_points() {
+        let snap_type = style::ScrollSnapType {
+            axis: style::ScrollSnapAxis::Y,
+            strictness: style::ScrollSnapStrictness::Mandatory,
+        };
+        let container = SnapContainer {
+            node: lumen_dom::NodeId::from_index(0),
+            snap_type,
+            rect: lumen_core::geom::Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 800.0,
+                height: 600.0,
+            },
+            points: vec![],
+        };
+        assert!(
+            find_snap_target(&container, (0.0, 0.0), (0.0, 300.0)).is_none(),
+            "no points → no snap"
+        );
     }
 
 }
