@@ -5,13 +5,8 @@
 ---
 
 ## In progress
-_(none)_
-
-## Next step
-1. Read [lumen-plan.md](lumen-plan.md) Track P1 section (§P1 roadmap)
-2. Phase 0 ✅ + Phase 1 ✅ complete — pick first ⬜ item from Phase 2-3 or coordinate with P2/P3
-3. Create branch: `git checkout -b p1-<task-name>`
-4. In first commit: update this file with "In progress: <task>" + branch name
+**p1-sticky-layout** — `position: sticky` algorithm stub in lumen-layout  branch: p1-sticky-layout
+Next step: Implement `StickyBox` struct + `collect_sticky_boxes()` + `compute_sticky_offsets()`  `layout/src/lib.rs`
 
 ---
 

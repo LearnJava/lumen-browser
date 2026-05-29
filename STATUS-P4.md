@@ -57,6 +57,16 @@ Ordered by priority from CSS-SPECS.md P4 Work Queue. Pick the first unblocked it
 
 **P1/P2 have implemented the algorithm. P4 wires CSS property to it.**
 
+### `position: sticky` scroll-driven offset (P1 feature p1-sticky-layout)
+- **Status:** `StickyBox`, `collect_sticky_boxes()`, `compute_sticky_offset()` implemented in `lumen-layout/src/lib.rs`. Layout treats sticky as normal flow; offset computed separately.
+- **P4 task:**
+  1. `top/right/bottom/left` are already parsed (style.rs) and stored in `ComputedStyle`. No new CSS parsing needed.
+  2. After each re-layout, call `collect_sticky_boxes(root)` to get the list.
+  3. At each scroll event, call `compute_sticky_offset(sticky, scroll_x, scroll_y, vp_w, vp_h)` per entry and apply the returned `(dx, dy)` as a paint-layer translate (or `TransformNode` offset in the property trees).
+  4. Non-px insets (`em`, `%`) currently yield `None` — wire resolved-px values from `lay_out_block()` context if full support is needed (optional for Phase 3).
+- **Entry point:** `lumen-layout/src/lib.rs` — `collect_sticky_boxes()` + `compute_sticky_offset()`
+- **CSS comment location:** `box_tree.rs` after `Position::Relative` block (end of `lay_out_block`)
+
 ### ::first-letter pseudo-element (P1 feature p1-css-first-line-letter)
 - **Status:** Structural markers ready in InlineRun
 - **P4 task:**
