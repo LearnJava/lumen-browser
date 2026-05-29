@@ -15,6 +15,7 @@
 pub mod animation;
 pub mod box_tree;
 pub mod counters;
+pub mod image_gating;
 pub mod page;
 pub mod pagination;
 pub mod property_trees;
@@ -26,6 +27,7 @@ pub mod style;
 pub mod text_iter;
 
 pub use counters::{format_counter, precompute_counters, CounterMap, CounterSnapshot};
+pub use image_gating::gate_image_requests;
 pub use animation::{
     AnimValue, AnimatedStyle, AnimationFrame, AnimationInterpolator,
     LinearInterpolator, NoopInterpolator, parse_keyframe_style, KeyframeStyle,
