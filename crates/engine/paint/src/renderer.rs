@@ -4254,6 +4254,29 @@ impl Renderer {
                 DisplayCommand::PopTransform => {
                     transform_stack.pop();
                 }
+                // CSS Overflow L3 §3.2 — PushScrollLayer: clip to padding-box + translate
+                // content by (-scroll_x, -scroll_y). Combines a PushClipRect and a 2D
+                // translation on the transform stack; PopScrollLayer unwinds both.
+                DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y } => {
+                    // Clip (same as PushClipRect, accounting for sticky dx/dy).
+                    let scrolled_clip = translate_rect(*clip_rect, dx, dy);
+                    let new_clip = match clip_stack.last() {
+                        Some(prev) => intersect_rects(*prev, scrolled_clip),
+                        None => scrolled_clip,
+                    };
+                    clip_stack.push(new_clip);
+                    // Scroll translate: shift content by -scroll_x, -scroll_y.
+                    let scroll_m = Mat4::translation_2d(-scroll_x, -scroll_y);
+                    let accumulated = match transform_stack.last() {
+                        Some(prev) => prev.multiply(&scroll_m),
+                        None => scroll_m,
+                    };
+                    transform_stack.push(accumulated);
+                }
+                DisplayCommand::PopScrollLayer => {
+                    transform_stack.pop();
+                    clip_stack.pop();
+                }
                 // CSS Masking L1 §4 — PushMask*: open an offscreen layer for the element,
                 // and record mask params so PopMask can composite with the mask.
                 DisplayCommand::PushMaskImage { rect, src, size, position, repeat, .. } => {

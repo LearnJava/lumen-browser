@@ -797,7 +797,7 @@ impl LoadedPage {
                 children: Vec::new(),
                 col_span: 1,
                 row_span: 1,
-                svg_group_transform: None,
+                svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
             },
             font_registry: Arc::new(lumen_font::SystemFontIndex::new()),
             js_navigate: None,
@@ -4240,13 +4240,19 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushTransform { .. }
             | DisplayCommand::PopTransform
             | DisplayCommand::PopMask
+            | DisplayCommand::PushMaskLayer { .. }
+            | DisplayCommand::PopMaskLayer
             | DisplayCommand::DrawLayerSnapshot { .. }
             | DisplayCommand::PushFilter { .. }
             | DisplayCommand::PopFilter
             | DisplayCommand::PushBackdropFilter { .. }
             | DisplayCommand::PopBackdropFilter
             | DisplayCommand::BeginStickyLayer { .. }
-            | DisplayCommand::EndStickyLayer => continue,
+            | DisplayCommand::EndStickyLayer
+            | DisplayCommand::PushScrollLayer { .. }
+            | DisplayCommand::PopScrollLayer
+            | DisplayCommand::DrawSvgPath { .. }
+            | DisplayCommand::BoxModelOverlay { .. } => continue,
         };
         let bottom = r.y + r.height;
         if bottom > max_y {
@@ -4286,13 +4292,19 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PushTransform { .. }
             | DisplayCommand::PopTransform
             | DisplayCommand::PopMask
+            | DisplayCommand::PushMaskLayer { .. }
+            | DisplayCommand::PopMaskLayer
             | DisplayCommand::DrawLayerSnapshot { .. }
             | DisplayCommand::PushFilter { .. }
             | DisplayCommand::PopFilter
             | DisplayCommand::PushBackdropFilter { .. }
             | DisplayCommand::PopBackdropFilter
             | DisplayCommand::BeginStickyLayer { .. }
-            | DisplayCommand::EndStickyLayer => continue,
+            | DisplayCommand::EndStickyLayer
+            | DisplayCommand::PushScrollLayer { .. }
+            | DisplayCommand::PopScrollLayer
+            | DisplayCommand::DrawSvgPath { .. }
+            | DisplayCommand::BoxModelOverlay { .. } => continue,
         };
         let right = r.x + r.width;
         if right > max_x {

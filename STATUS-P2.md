@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-Scroll layer infrastructure for overflow:scroll  branch: p2-scroll-layer
-Next step: PushScrollLayer/PopScrollLayer display commands + LayoutBox.scroll_x/scroll_y  box_tree.rs:903
+_(none)_
 
 ---
 
@@ -23,6 +22,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-scroll-layer** ✅ 2026-05-29 — Scroll layer инфраструктура для `overflow:scroll`/`auto`: `LayoutBox.scroll_x/scroll_y`, `collect_scroll_containers()` + `set_scroll_position()` в `lumen-layout`, `PushScrollLayer{clip_rect, scroll_x, scroll_y}`/`PopScrollLayer` в `DisplayCommand`, walk emitter меняет `PushClipRect` → `PushScrollLayer` для Scroll|Auto overflow, renderer обрабатывает clip+translate. 11 тестов display list + 6 тестов layout. P4 handoff в STATUS-P4.md. P3 (shell): wire wheel events через `collect_scroll_containers()` + `set_scroll_position()`.
 - **p2-css-3d-depth-buffer** ✅ 2026-05-29 — GPU depth buffer для CSS 3D transforms: `FillVertex.z` (CSS depth px), FILL_SHADER NDC depth mapping `0.5 - z/20000`, `fill_pipeline` з `DepthStencilState(LessEqual)`, `depth_texture/depth_view` в Renderer (recreated on resize), depth attachment в frame render pass. `apply_affine_to_verts` використовує `project_point_z` для 3D матриць + `VertexPos::set_depth`. 5 нових unit-тестів (66 renderer total). P4 handoff оновлено — як тільки P4 дротує `transform-style: preserve-3d`, GPU occlusion для перетинних площин буде коректним.
 - **p2-css-preserve-3d** ✅ 2026-05-29 — True depth-sorted 3D для `transform-style: preserve-3d` (Transforms L2 §6.2). Depth-sort компоновщик в `paint/src/display_list.rs`: `depth_sorted_child_order` (стабильная back-to-front painter's-сортировка детей по transformed z), `child_z_depth`, gated за `establishes_3d_rendering_context` (`// CSS: transform-style` — P4 флипнёт `false`→`b.style.transform_style == Preserve3d`). z-aware методы `Mat4::project_point_z` / `transform_z` в `layout/property_trees.rs`. Интегрировано в `walk` и `walk_with_anim`; flat-путь побитово идентичен (document order). 11 unit-тестов (5 layout + 6 paint). Pixel-exact пересечения плоскостей (depth buffer/BSP) — Next #2. P4 handoff обновлён.
 - **p2-css-3d-transforms** ✅ 2026-05-29 — CSS 3D transforms (Transforms L2 #24): Mat4 3D-конструкторы (`perspective`/`rotate_x/y/z`/`rotate_3d`/`translate_3d`/`scale_3d`/`from_3d`/`project_point`/`is_2d_affine`) в `layout/property_trees.rs` (18 unit-тестов). Renderer проецирует 3D/перспективные матрицы через `project_point` с делением на w (flattened: rotateX/Y, card flip, perspective-наклоны), 2D affine — прежний быстрый путь (3 теста). P4 handoff для 3D transform-функций + `perspective` + `transform-style`. Depth buffer и `preserve-3d` отложены (см. Next #1).

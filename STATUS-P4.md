@@ -105,6 +105,22 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 - **Entry points:** `lumen-layout/src/lib.rs:88` (`TextMeasurer` трейт, комментарий `// CSS: font-variation-settings`), `lumen-layout/src/box_tree.rs:4606` (`measure_text_w`, аналогичный комментарий)
 - **CSS comment locations:** `lib.rs:88`, `box_tree.rs:4606`
 
+### `overflow: scroll` / `overflow: auto` scroll layer (P2 feature p2-scroll-layer)
+- **Status:** Full scroll layer infrastructure ready.
+  - `LayoutBox.scroll_x / scroll_y` (f32, default 0.0) — per-element scroll offset. `lumen-layout/src/box_tree.rs:920`.
+  - `collect_scroll_containers(root) -> Vec<ScrollContainer>` — enumerates all scroll containers. `lumen-layout/src/lib.rs`.
+  - `set_scroll_position(root, node, x, y) -> bool` — updates scroll offset with clamping. `lumen-layout/src/lib.rs`.
+  - `DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y }` / `PopScrollLayer` — clips to padding-box + translates by `(-scroll_x, -scroll_y)`. `paint/src/display_list.rs`.
+  - Renderer handles `PushScrollLayer` as clip+translate. `paint/src/renderer.rs`.
+  - `walk` (display list builder) already emits `PushScrollLayer` when `overflow_x/y` is `Scroll|Auto`.
+- **P4 task:**
+  1. `overflow` is already parsed to `Overflow::Scroll | Overflow::Auto` in `apply_declaration()` — no new parsing needed for basic scroll.
+  2. The display list emitter (`walk` in `display_list.rs`) already emits `PushScrollLayer` when the parsed `overflow_x/y` equals `Scroll|Auto`. So P4 does **not** need to change the display list emitter — just ensure the CSS parsing is correct (it already is).
+  3. P3 (shell) still needs to wire scroll events: on `MouseWheel`, find the container via `collect_scroll_containers()` + point-in-rect, call `set_scroll_position()`, rebuild display list.
+  4. `overflow: scroll` already removes the "scroll" blocker for P4's Next #2 entry.
+- **Entry points:** `lumen-layout/src/lib.rs` (collect / set API), `paint/src/display_list.rs:2736` (emitter), `paint/src/renderer.rs` (PushScrollLayer handler after PopTransform).
+- **CSS comment location:** `display_list.rs:2727` `// CSS: overflow — P4 wires:...` comment.
+
 ---
 
 ## Recent merges

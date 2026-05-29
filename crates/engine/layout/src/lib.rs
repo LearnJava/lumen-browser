@@ -506,6 +506,125 @@ pub fn compute_sticky_offset(
     (off_x, off_y)
 }
 
+// ---------------------------------------------------------------------------
+// Scroll container infrastructure
+// CSS: overflow — P4 wires: check style.overflow_x/overflow_y == Overflow::Scroll | Auto,
+// call collect_scroll_containers() to enumerate regions, set_scroll_position() on wheel.
+// ---------------------------------------------------------------------------
+
+/// A scrollable overflow container collected from the layout tree.
+/// Shell uses this to route wheel events and update scroll offsets.
+pub struct ScrollContainer {
+    /// The DOM node that owns this scroll region.
+    pub node: lumen_dom::NodeId,
+    /// Clip rectangle in CSS px (padding-box of the container, document-relative).
+    /// Shell converts to screen coords for hit-testing against pointer position.
+    pub clip_rect: lumen_core::geom::Rect,
+    /// Content width in CSS px (may exceed clip_rect.width for horizontal scroll).
+    pub scroll_width: f32,
+    /// Content height in CSS px (may exceed clip_rect.height for vertical scroll).
+    pub scroll_height: f32,
+    /// Current horizontal scroll offset in CSS px. Clamped to [0, scroll_width - clip_rect.width].
+    pub scroll_x: f32,
+    /// Current vertical scroll offset in CSS px. Clamped to [0, scroll_height - clip_rect.height].
+    pub scroll_y: f32,
+}
+
+/// Collect all `overflow: scroll` / `overflow: auto` containers from the layout tree.
+///
+/// Returns one `ScrollContainer` per LayoutBox whose overflow-x or overflow-y
+/// is `Scroll` or `Auto`. Shell calls this after each layout pass to build
+/// the scroll hit-test map.
+///
+/// # CSS: overflow
+/// P4 wires: after adding `overflow: scroll` parsing, this function will naturally
+/// include those boxes (LayoutBox.style.overflow_x/y already parsed by P4).
+pub fn collect_scroll_containers(root: &LayoutBox) -> Vec<ScrollContainer> {
+    let mut out = Vec::new();
+    collect_scroll_containers_inner(root, &mut out);
+    out
+}
+
+fn collect_scroll_containers_inner(b: &LayoutBox, out: &mut Vec<ScrollContainer>) {
+    use style::Overflow;
+    let s = &b.style;
+    let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
+    let is_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
+    if is_scroll_x || is_scroll_y {
+        let bl = s.border_left_width;
+        let bt = s.border_top_width;
+        let br = s.border_right_width;
+        let bb = s.border_bottom_width;
+        let clip = lumen_core::geom::Rect::new(
+            b.rect.x + bl,
+            b.rect.y + bt,
+            (b.rect.width - bl - br).max(0.0),
+            (b.rect.height - bt - bb).max(0.0),
+        );
+        let scroll_width = content_width(b);
+        let scroll_height = content_height(b);
+        out.push(ScrollContainer {
+            node: b.node,
+            clip_rect: clip,
+            scroll_width,
+            scroll_height,
+            scroll_x: b.scroll_x,
+            scroll_y: b.scroll_y,
+        });
+    }
+    for child in &b.children {
+        collect_scroll_containers_inner(child, out);
+    }
+}
+
+/// Compute the content scroll-width of a box: rightmost child edge relative to container left.
+///
+/// Returns max(b.rect.width, children's right edge - b.rect.x).
+/// Used to compute the max scroll offset for horizontal scrolling.
+fn content_width(b: &LayoutBox) -> f32 {
+    b.children.iter().fold(b.rect.width, |acc, c| {
+        let c_right = c.rect.x + c.rect.width - b.rect.x;
+        acc.max(c_right)
+    })
+}
+
+/// Compute the content scroll-height of a box: bottommost child edge relative to container top.
+///
+/// Returns max(b.rect.height, children's bottom edge - b.rect.y).
+/// Used to compute the max scroll offset for vertical scrolling.
+fn content_height(b: &LayoutBox) -> f32 {
+    b.children.iter().fold(b.rect.height, |acc, c| {
+        let c_bottom = c.rect.y + c.rect.height - b.rect.y;
+        acc.max(c_bottom)
+    })
+}
+
+/// Update the scroll position of a node in the layout tree.
+///
+/// Walks the tree to find the box with `node`, clamps `(x, y)` to the valid
+/// scroll range `[0, scroll_width - clip_width] × [0, scroll_height - clip_height]`,
+/// then updates `LayoutBox.scroll_x / scroll_y`. Returns `true` if found.
+///
+/// Shell calls this on wheel events after determining the target scroll container
+/// via `collect_scroll_containers()` + hit testing against the pointer position.
+pub fn set_scroll_position(root: &mut LayoutBox, node: lumen_dom::NodeId, x: f32, y: f32) -> bool {
+    if root.node == node {
+        let sw = content_width(root);
+        let sh = content_height(root);
+        let clip_w = root.rect.width;
+        let clip_h = root.rect.height;
+        root.scroll_x = x.clamp(0.0, (sw - clip_w).max(0.0));
+        root.scroll_y = y.clamp(0.0, (sh - clip_h).max(0.0));
+        return true;
+    }
+    for child in &mut root.children {
+        if set_scroll_position(child, node, x, y) {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -13729,6 +13848,81 @@ mod tests {
         let stickies = collect_sticky_boxes(&root);
         assert_eq!(stickies.len(), 1);
         assert_eq!(stickies[0].top, None, "em unit should yield None");
+    }
+
+    // ─── Scroll container tests ───────────────────────────────────────────────
+
+    #[test]
+    fn collect_scroll_containers_overflow_scroll() {
+        let root = lay_full(
+            "<div id=\"s\"><p>a</p></div>",
+            "#s { overflow: scroll; width: 100px; height: 50px; }",
+        );
+        let containers = collect_scroll_containers(&root);
+        assert_eq!(containers.len(), 1, "one scroll container expected");
+        assert_eq!(containers[0].scroll_x, 0.0);
+        assert_eq!(containers[0].scroll_y, 0.0);
+        // clip rect should be approximately the padding-box of the div
+        assert!(containers[0].clip_rect.width > 0.0);
+        assert!(containers[0].clip_rect.height > 0.0);
+    }
+
+    #[test]
+    fn collect_scroll_containers_overflow_auto() {
+        let root = lay_full(
+            "<div id=\"s\"><p>b</p></div>",
+            "#s { overflow: auto; width: 100px; height: 50px; }",
+        );
+        let containers = collect_scroll_containers(&root);
+        assert_eq!(containers.len(), 1);
+    }
+
+    #[test]
+    fn collect_scroll_containers_overflow_hidden_excluded() {
+        let root = lay_full(
+            "<div id=\"s\"><p>c</p></div>",
+            "#s { overflow: hidden; width: 100px; height: 50px; }",
+        );
+        let containers = collect_scroll_containers(&root);
+        assert_eq!(containers.len(), 0, "overflow:hidden should not be a scroll container");
+    }
+
+    #[test]
+    fn set_scroll_position_clamps_to_zero() {
+        let mut root = lay_full(
+            "<div id=\"s\"><p>d</p></div>",
+            "#s { overflow: scroll; width: 100px; height: 50px; }",
+        );
+        let containers = collect_scroll_containers(&root);
+        assert_eq!(containers.len(), 1);
+        let node = containers[0].node;
+        set_scroll_position(&mut root, node, -50.0, -50.0);
+        let containers2 = collect_scroll_containers(&root);
+        assert_eq!(containers2[0].scroll_x, 0.0, "negative scroll_x should clamp to 0");
+        assert_eq!(containers2[0].scroll_y, 0.0, "negative scroll_y should clamp to 0");
+    }
+
+    #[test]
+    fn set_scroll_position_sets_value() {
+        let mut root = lay_full(
+            "<div id=\"s\"><div style=\"height:200px\"></div></div>",
+            "#s { overflow: scroll; width: 100px; height: 50px; }",
+        );
+        let containers = collect_scroll_containers(&root);
+        assert_eq!(containers.len(), 1);
+        let node = containers[0].node;
+        let found = set_scroll_position(&mut root, node, 0.0, 10.0);
+        assert!(found, "set_scroll_position should return true when node found");
+        let containers2 = collect_scroll_containers(&root);
+        assert_eq!(containers2[0].scroll_y, 10.0);
+    }
+
+    #[test]
+    fn set_scroll_position_returns_false_for_unknown_node() {
+        use lumen_dom::NodeId;
+        let mut root = lay_full("<div></div>", "");
+        let found = set_scroll_position(&mut root, NodeId::from_index(9999), 0.0, 0.0);
+        assert!(!found, "should return false for unknown node");
     }
 
 }
