@@ -253,6 +253,26 @@ Always use `-p <crate>`, never `--workspace`.
 - **Build/clippy failure** — show each full `error[...]` block (message + file:line + code + help lines), skip all `warning[...]` blocks entirely.
 - **Test failure** — show test name + first 10 lines of panic output, skip the rest.
 
+### Detecting the OS at session start
+
+Run this once at the beginning of each session to know which OS you're on:
+
+```bash
+uname -s 2>/dev/null || echo "Windows"
+```
+
+- Output starts with `Linux` → you're on Linux (CI, WSL, remote server).
+- Output is `Windows` or the command fails → you're on Windows (Git Bash, MSVC toolchain).
+
+Behaviour that differs by OS:
+
+| | Windows (Git Bash) | Linux |
+|---|---|---|
+| `cargo` PATH | needs `export PATH="/c/Users/konstantin/.cargo/bin:$PATH"` | available by default |
+| worktree paths | `D:/RustProjects/lumen-browser/.claude/worktrees/…` | `/path/to/lumen-browser/.claude/worktrees/…` |
+| screenshot tool | `ffmpeg` gdigrab (see `utils/`) | not available; skip graphic tests |
+| child process tracking | full (orchestrator) | limited — no auto window open, use tmux |
+
 ### PATH note (Windows + Git Bash)
 
 `cargo` is at `C:\Users\konstantin\.cargo\bin`. Git Bash on this machine does **not** pick it up automatically. Add before any `cargo` command:
