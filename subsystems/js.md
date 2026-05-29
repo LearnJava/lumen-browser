@@ -87,6 +87,14 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - `SuspendedHeap` re-exported from `lumen_core` (was missing from `pub use ext::{…}` in core's lib.rs).
   - 7 new tests (lazy via IO, within margin below fold, not-queued far below, removed after load, idempotent init, deliver-lazy-images is noop, rootMargin 1/2/4 values, rootMargin expands/doesn't expand viewport). **244 JS tests total.**
 
+- **IndexedDB (W3C Indexed Database API 3.0)** (`WEB_API_SHIM`, `crates/js/src/dom.rs`). 2026-05-29.
+  - Pure-JS in-memory implementation (no native bindings): `indexedDB` (`open`/`deleteDatabase`/`databases`/`cmp`), `IDBOpenDBRequest`/`IDBRequest`, `IDBDatabase` (`createObjectStore`/`deleteObjectStore`/`transaction`/`close`/`objectStoreNames`), `IDBTransaction` (`objectStore`/`abort`/`oncomplete`/`onabort`, auto-commit), `IDBObjectStore` (`add`/`put`/`get`/`getKey`/`getAll`/`getAllKeys`/`count`/`delete`/`clear`/`createIndex`/`deleteIndex`/`index`/`openCursor`/`openKeyCursor`), `IDBIndex` (`get`/`getKey`/`getAll`/`getAllKeys`/`count`/`openCursor`/`openKeyCursor`), `IDBCursor`/`IDBCursorWithValue` (`continue`/`advance`/`update`/`delete`), `IDBKeyRange` (`only`/`bound`/`lowerBound`/`upperBound`/`includes`).
+  - Key support: number, string, Date, and array keys with spec ordering (`number < date < string < array`); dotted + array key paths; `autoIncrement` key generators (in-line and out-of-line); unique + `multiEntry` indexes (index entries materialised per query by scanning records).
+  - Deferred execution model: each request's data read/write runs at **dispatch time in FIFO order** within its transaction; transactions flush in creation order. This gives correct intra- and inter-transaction ordering (e.g. a readonly transaction created after a readwrite one sees the latter's committed writes). `request.result` is only valid once the `success` event fires.
+  - Event delivery: `success`/`error`/`upgradeneeded`/`complete`/`abort` fire via `_lumen_idb_flush()`, scheduled by `queueMicrotask` and callable directly by the shell each tick and by tests (mirrors the raf / MutationObserver pattern). An unhandled request error (no `preventDefault`) aborts its transaction.
+  - In-memory only: databases live in the runtime JS heap, do not persist across reloads. Rust-backed persistence (`StorageBackend`, redb/sqlite) is a follow-up task.
+  - 18 new tests (open+upgrade, keyPath/autoIncrement CRUD, put-overwrite, duplicate→abort, getAll ordering + key range, delete/clear, index get/getAll, unique-index violation, cursor forward/reverse/update/delete, IDBKeyRange.includes, cmp, version downgrade error, deleteDatabase, second-connection persistence). **262 JS tests total.**
+
 ## Deferred
 
 - PerformanceObserver API.
@@ -103,3 +111,4 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
 - DOM shim: `Option<T>` in rquickjs maps `None → undefined` (not `null`). All nullable-returning native functions are wrapped with `_lumen_u2n(v)` in the shim to convert `undefined → null` as Web API requires.
 - `install_dom` must be called before `eval`. Drop the runtime before `Arc::try_unwrap(doc_arc)` — closures hold Arc clones until the runtime is dropped.
 - Web Storage closures capture `Arc<Mutex<WebStorage>>` clones — dropped with the runtime. The outer `Arc` in the shell's `ls_storage` map remains the authoritative store; JS mutations are immediately visible in Rust after the closure releases the lock.
+- IndexedDB requests defer their data operation to `_idb_dispatch_request` (run once via `req._action`), not to the calling site. Reading `request.result` before the `success` event is therefore always `undefined`; tests and the shell must call `_lumen_idb_flush()` to drain pending events. Synchronous validation (invalid key range → `DataError`, read-only transaction → `ReadOnlyError`) still throws at the call site, before the request is queued.
