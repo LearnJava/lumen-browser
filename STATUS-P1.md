@@ -15,11 +15,10 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | `picture` lazy loading — IntersectionObserver event source (4A остаток): при прокрутке images с `loading="lazy"` загружаются через `IntersectionObserver` event | `layout`, `shell` | S | none |
-| 2 | `font-variation-settings` rasterizer wiring — применять gvar/HVAR deltas при растеризации; добавить `// CSS: font-variation-settings` на call site для P4 | `font`, `layout` | M | none |
-| 3 | Image viewport-gating (10E.3) — layout декодирует изображения только для bbox ∈ viewport ± 2 экрана, `layout/src/image_gating.rs` | `layout`, `image` | M | none |
-| 4 | Click-hint overlay iterator (7B.2 blocker) — публичный итератор по кликабельным элементам из `lumen-layout`; P3 подключает в shell | `layout` | S | none |
-| 5 | Shadow DOM JS binding stubs — lifecycle callbacks для P3 (`connectedCallback`, `disconnectedCallback`, `attributeChangedCallback`) в `lumen-dom` | `dom` | M | P3 JS bindings |
+| 1 | `font-variation-settings` rasterizer wiring — применять gvar/HVAR deltas при растеризации; добавить `// CSS: font-variation-settings` на call site для P4 | `font`, `layout` | M | none |
+| 2 | Image viewport-gating (10E.3) — layout декодирует изображения только для bbox ∈ viewport ± 2 экрана, `layout/src/image_gating.rs` | `layout`, `image` | M | none |
+| 3 | Click-hint overlay iterator (7B.2 blocker) — публичный итератор по кликабельным элементам из `lumen-layout`; P3 подключает в shell | `layout` | S | none |
+| 4 | Shadow DOM JS binding stubs — lifecycle callbacks для P3 (`connectedCallback`, `disconnectedCallback`, `attributeChangedCallback`) в `lumen-dom` | `dom` | M | P3 JS bindings |
 
 ---
 
