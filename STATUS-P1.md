@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-scroll-snap algorithm  branch: p1-scroll-snap
-Next step: commit implementation, update lumen-plan.md, merge  crates/engine/layout/src/lib.rs
+_(none)_
 
 ---
 
@@ -22,6 +21,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-scroll-snap** ✅ 2026-05-29 — CSS Scroll Snap L1 algorithm stub в `lumen-layout`: `SnapPoint` + `SnapContainer` + `collect_snap_containers(root)` + `find_snap_target(container, current_scroll, target_scroll)` в `lib.rs`. mandatory/proximity strictness, `scroll-snap-stop: always` barrier, NodeId dedup. 10 unit-тестов. CSS-парсинг уже был в ComputedStyle (P4). STATUS-P4.md "Needs wiring" обновлён для P3 shell integration.
 - **p1-roadmap-audit** ✅ 2026-05-29 — Синхронизация маркеров в `lumen-plan.md`: 18 позиций ⬜→✅ (Composite glyphs / HTTP+TLS / lumen-driver / Tab lifecycle инварианты / 8A.1 / 8A.2 / 8C.2 / 10B-10G / 10E.3). Crate descriptions: lumen-layout += StickyBox + image_gating; lumen-storage += IdbBackend. CLAUDE.md ext traits обновлён.
 - **p1-indexeddb-persist** ✅ 2026-05-29 — IndexedDB persistence: новый трейт `IdbBackend` (`lumen-core::ext`) + impl `IdbStore` поверх `StorageBackend` (`lumen-storage`, работает с in-memory и SQLite). JS-шим сериализует все базы origin в один tagged-JSON снимок (Date сохраняются как `{__idb_date__: ms}`), `_lumen_idb_persist` пишет после каждого мутирующего flush, `_lumen_idb_load` восстанавливает при init → базы переживают reload. Read-only транзакции не пере-сохраняют (флаг `_idb_dirty`). Shell подключает общий `InMemoryStorage` (на процесс, как localStorage) + per-origin `IdbStore`; диск (SQLite) — замена бэкенда в одну строку. install_dom получил параметр `idb_backend`. 5 JS-тестов персистентности + 7 storage-тестов (267 JS, 267 storage). Обнаружен pre-existing BUG-044 (shell не компилируется: non-exhaustive match по DisplayCommand от P2-мерджей).
 - **p1-indexeddb** ✅ 2026-05-29 — IndexedDB (Indexed Database API 3.0), чистый JS-шим в `WEB_API_SHIM` (без native-биндингов): `indexedDB.open/deleteDatabase/databases/cmp`, `IDBDatabase`/`IDBTransaction`/`IDBObjectStore`/`IDBIndex`/`IDBCursor`/`IDBKeyRange`/`IDB(Open)Request`. CRUD + unique/multiEntry индексы + курсоры (next/prev/unique, continue/advance/update/delete) + key range; key-порядок number<date<string<array; dotted/array keyPath; autoIncrement. Отложенная модель: действия запросов выполняются при dispatch в FIFO-порядке, события через `_lumen_idb_flush()`. In-memory (persistence — отдельная задача в Next). 18 тестов, всего 262 в lumen-js.
