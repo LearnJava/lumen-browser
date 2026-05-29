@@ -517,6 +517,30 @@ pub enum DisplayCommand {
     },
     /// Closes the sticky layer opened by `BeginStickyLayer`.
     EndStickyLayer,
+    /// CSS Overflow L3 §3.2 — `overflow: scroll` / `overflow: auto` scroll region.
+    ///
+    /// Clips rendering to `clip_rect` (padding-box of the container) and translates
+    /// all content by `(-scroll_x, -scroll_y)`. Renderer: pushes `clip_rect` onto the
+    /// clip stack (GPU scissor) and pushes a `translation_2d(-scroll_x, -scroll_y)` onto
+    /// the transform stack. `PopScrollLayer` unwinds both.
+    ///
+    /// Emitter sets `scroll_x`/`scroll_y` from `LayoutBox.scroll_x/scroll_y`, which
+    /// the shell updates via `set_scroll_position()` on wheel/touch events.
+    ///
+    /// # CSS: overflow
+    /// P4 wires: in `box_layer_ops` replace the `PushClipRect` for `Overflow::Scroll|Auto`
+    /// with `PushScrollLayer { clip_rect, scroll_x: b.scroll_x, scroll_y: b.scroll_y }`.
+    PushScrollLayer {
+        /// Padding-box of the scroll container in CSS px (document-relative).
+        clip_rect: Rect,
+        /// Horizontal scroll offset in CSS px. Content is shifted left by this amount.
+        scroll_x: f32,
+        /// Vertical scroll offset in CSS px. Content is shifted up by this amount.
+        scroll_y: f32,
+    },
+    /// Closes the scroll layer opened by `PushScrollLayer`. Pops the transform
+    /// (scroll translate) first, then the clip.
+    PopScrollLayer,
     /// SVG `<path>` fill: pre-tessellated triangle list produced by
     /// `svg_path::tessellate_fill`. Every 3 consecutive `[x, y]` entries
     /// form one triangle in CSS-pixel coordinates (same coordinate system as
@@ -917,6 +941,15 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::EndStickyLayer => {
                 out.push_str("EndStickyLayer\n");
+            }
+            DisplayCommand::PushScrollLayer { clip_rect, scroll_x, scroll_y } => {
+                out.push_str(&format!(
+                    "PushScrollLayer clip=({:.2},{:.2},{:.2},{:.2}) scroll=({:.2},{:.2})\n",
+                    clip_rect.x, clip_rect.y, clip_rect.width, clip_rect.height, scroll_x, scroll_y,
+                ));
+            }
+            DisplayCommand::PopScrollLayer => {
+                out.push_str("PopScrollLayer\n");
             }
             DisplayCommand::PushMaskImage { rect, src, size, repeat, .. } => {
                 out.push_str(&format!(
@@ -1493,6 +1526,8 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> (Vec<Display
     // CSS Overflow L3 §3.2: overflow clip to padding-box edge; unconstrained
     // axis uses a BIG sentinel so the GPU scissor doesn't cut off content in
     // that direction. CSS Containment L3 §3.5: contain:paint clips both axes.
+    // CSS: overflow — P4 wires: once overflow:scroll/auto are parsed, the
+    // PushScrollLayer branch below automatically picks them up.
     let paint_contain = s.contain.0 & ContainFlags::PAINT.0 != 0;
     let clip_x = overflow_clips(s.overflow_x) || paint_contain;
     let clip_y = overflow_clips(s.overflow_y) || paint_contain;
@@ -1508,8 +1543,21 @@ fn box_layer_ops(b: &LayoutBox, ov: Option<&CompositorOverride>) -> (Vec<Display
             if clip_x { pw } else { 2.0 * BIG },
             if clip_y { ph } else { 2.0 * BIG },
         );
-        pre.push(DisplayCommand::PushClipRect { rect: cr });
-        post.push(DisplayCommand::PopClip);
+        // scroll/auto → PushScrollLayer (applies clip + scroll translate).
+        // hidden/clip/paint-contain → PushClipRect (clip only, no scroll).
+        let is_scroll_x = matches!(s.overflow_x, Overflow::Scroll | Overflow::Auto);
+        let is_scroll_y = matches!(s.overflow_y, Overflow::Scroll | Overflow::Auto);
+        if (is_scroll_x || is_scroll_y) && !paint_contain {
+            pre.push(DisplayCommand::PushScrollLayer {
+                clip_rect: cr,
+                scroll_x: b.scroll_x,
+                scroll_y: b.scroll_y,
+            });
+            post.push(DisplayCommand::PopScrollLayer);
+        } else {
+            pre.push(DisplayCommand::PushClipRect { rect: cr });
+            post.push(DisplayCommand::PopClip);
+        }
     }
     if s.mix_blend_mode != LayoutBlendMode::Normal {
         pre.push(DisplayCommand::PushBlendMode {
@@ -2681,9 +2729,14 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             // clipping axis is constrained; the unconstrained axis uses a large
             // sentinel so the GPU scissor doesn't cut off content in that
             // direction (the renderer clamps to surface bounds automatically).
+            // scroll/auto → PushScrollLayer (clip + scroll translate).
+            // hidden/clip/paint-contain → PushClipRect (clip only).
             let clip_x = overflow_clips(b.style.overflow_x);
             let clip_y = overflow_clips(b.style.overflow_y);
             let has_overflow_clip = clip_x || clip_y;
+            let is_scroll_x = matches!(b.style.overflow_x, Overflow::Scroll | Overflow::Auto);
+            let is_scroll_y = matches!(b.style.overflow_y, Overflow::Scroll | Overflow::Auto);
+            let use_scroll_layer = (is_scroll_x || is_scroll_y) && has_overflow_clip;
             if has_overflow_clip {
                 const BIG: f32 = 1_000_000.0;
                 let s = &b.style;
@@ -2697,7 +2750,15 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                     if clip_x { pw } else { 2.0 * BIG },
                     if clip_y { ph } else { 2.0 * BIG },
                 );
-                out.push(DisplayCommand::PushClipRect { rect: cr });
+                if use_scroll_layer {
+                    out.push(DisplayCommand::PushScrollLayer {
+                        clip_rect: cr,
+                        scroll_x: b.scroll_x,
+                        scroll_y: b.scroll_y,
+                    });
+                } else {
+                    out.push(DisplayCommand::PushClipRect { rect: cr });
+                }
             }
             // CSS Transforms L2 §6.2: inside a `preserve-3d` 3D rendering
             // context children paint back-to-front by transformed depth;
@@ -2712,7 +2773,11 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
                 }
             }
             if has_overflow_clip {
-                out.push(DisplayCommand::PopClip);
+                if use_scroll_layer {
+                    out.push(DisplayCommand::PopScrollLayer);
+                } else {
+                    out.push(DisplayCommand::PopClip);
+                }
             }
             if self_visible {
                 // CSS Basic UI L4 §5: outline рисуется поверх контента box-а
@@ -4144,6 +4209,8 @@ mod tests {
                 DisplayCommand::PopBackdropFilter => "PopBackdropFilter",
                 DisplayCommand::BeginStickyLayer { .. } => "BeginStickyLayer",
                 DisplayCommand::EndStickyLayer => "EndStickyLayer",
+                DisplayCommand::PushScrollLayer { .. } => "PushScrollLayer",
+                DisplayCommand::PopScrollLayer => "PopScrollLayer",
                 DisplayCommand::DrawSvgPath { .. } => "DrawSvgPath",
                 DisplayCommand::BoxModelOverlay { .. } => "BoxModelOverlay",
             })
@@ -6897,5 +6964,77 @@ mod tests {
         let pop_pos  = s.find("PopMaskLayer").expect("no PopMaskLayer");
         assert!(push_pos < fill_pos, "PushMaskLayer before FillRect");
         assert!(fill_pos < pop_pos,  "FillRect before PopMaskLayer");
+    }
+
+    // ─── PushScrollLayer / PopScrollLayer tests ──────────────────────────────
+
+    #[test]
+    fn overflow_scroll_emits_push_scroll_layer() {
+        let dl = build(
+            r#"<div style="overflow:scroll;width:100px;height:50px"><p>text</p></div>"#,
+            "",
+        );
+        let has_push = dl.iter().any(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }));
+        let has_pop  = dl.iter().any(|c| matches!(c, DisplayCommand::PopScrollLayer));
+        assert!(has_push, "overflow:scroll must emit PushScrollLayer");
+        assert!(has_pop,  "overflow:scroll must emit PopScrollLayer");
+    }
+
+    #[test]
+    fn overflow_scroll_no_push_clip_rect_for_scroll() {
+        // overflow:scroll should not fall back to PushClipRect for the scroll axis
+        let dl = build(
+            r#"<div style="overflow:scroll;width:100px;height:50px"><p>text</p></div>"#,
+            "",
+        );
+        // There should be PushScrollLayer, not PushClipRect, for the scroll container itself.
+        let scroll_count = dl.iter().filter(|c| matches!(c, DisplayCommand::PushScrollLayer { .. })).count();
+        assert!(scroll_count >= 1, "expected at least one PushScrollLayer for overflow:scroll");
+    }
+
+    #[test]
+    fn overflow_hidden_emits_push_clip_rect_not_scroll_layer() {
+        let dl = build(
+            r#"<div style="overflow:hidden;width:100px;height:50px"><p>text</p></div>"#,
+            "",
+        );
+        let has_scroll = dl.iter().any(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }));
+        assert!(!has_scroll, "overflow:hidden must not emit PushScrollLayer");
+        // overflow:hidden still clips via PushClipRect
+        let has_clip = dl.iter().any(|c| matches!(c, DisplayCommand::PushClipRect { .. }));
+        assert!(has_clip, "overflow:hidden must emit PushClipRect");
+    }
+
+    #[test]
+    fn scroll_layer_scroll_xy_defaults_zero() {
+        let dl = build(
+            r#"<div style="overflow:scroll;width:100px;height:50px"><p>x</p></div>"#,
+            "",
+        );
+        if let Some(DisplayCommand::PushScrollLayer { scroll_x, scroll_y, .. }) =
+            dl.iter().find(|c| matches!(c, DisplayCommand::PushScrollLayer { .. }))
+        {
+            assert_eq!(*scroll_x, 0.0, "initial scroll_x should be 0");
+            assert_eq!(*scroll_y, 0.0, "initial scroll_y should be 0");
+        } else {
+            panic!("PushScrollLayer not found");
+        }
+    }
+
+    #[test]
+    fn push_scroll_layer_serializes() {
+        use lumen_core::geom::Rect;
+        let dl = vec![
+            DisplayCommand::PushScrollLayer {
+                clip_rect: Rect::new(10.0, 20.0, 100.0, 50.0),
+                scroll_x: 5.0,
+                scroll_y: 15.0,
+            },
+            DisplayCommand::PopScrollLayer,
+        ];
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("PushScrollLayer"), "serialized output must contain PushScrollLayer");
+        assert!(s.contains("PopScrollLayer"), "serialized output must contain PopScrollLayer");
+        assert!(s.contains("scroll=(5.00,15.00)"), "scroll offsets must appear in serialization");
     }
 }

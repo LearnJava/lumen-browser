@@ -527,7 +527,7 @@ fn collect_svg_shapes(
                         },
                         svg_transform: svg_transform.clone(),
                     },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None,
+                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                 });
                 // Recurse: incorrectly-nested siblings (HTML5 parser wraps them inside rect).
                 collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
@@ -543,7 +543,7 @@ fn collect_svg_shapes(
                         },
                         svg_transform: svg_transform.clone(),
                     },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None,
+                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                 });
                 collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
             }
@@ -559,7 +559,7 @@ fn collect_svg_shapes(
                         },
                         svg_transform: svg_transform.clone(),
                     },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None,
+                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                 });
                 collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
             }
@@ -575,7 +575,7 @@ fn collect_svg_shapes(
                         },
                         svg_transform: svg_transform.clone(),
                     },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None,
+                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                 });
                 collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
             }
@@ -584,7 +584,7 @@ fn collect_svg_shapes(
                 out.push(LayoutBox {
                     node: child_id, rect: Rect::ZERO, style,
                     kind: BoxKind::SvgShape { shape: SvgShapeKind::Path { d }, svg_transform: svg_transform.clone() },
-                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None,
+                    children: vec![], col_span: 1, row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                 });
                 collect_svg_shapes(doc, sheet, child_id, inherited, viewport, flat, out);
             }
@@ -596,7 +596,7 @@ fn collect_svg_shapes(
                 out.push(LayoutBox {
                     node: child_id, rect: Rect::ZERO, style,
                     kind: BoxKind::Block,
-                    children: group_children, col_span: 1, row_span: 1, svg_group_transform: Some(group_transform),
+                    children: group_children, col_span: 1, row_span: 1, svg_group_transform: Some(group_transform), scroll_x: 0.0, scroll_y: 0.0,
                 });
             }
             _ => {
@@ -917,6 +917,12 @@ pub struct LayoutBox {
     /// SVG `transform` attribute for `<g>` groups (Phase 2: nested transforms).
     /// Only used for Block boxes that represent SVG groups; None for all other boxes.
     pub svg_group_transform: Option<SvgTransform>,
+    /// Horizontal scroll offset in CSS px for `overflow: scroll` / `overflow: auto`
+    /// containers. Updated by shell on wheel/touch events via `set_scroll_position()`.
+    /// Zero for non-scrollable boxes.
+    pub scroll_x: f32,
+    /// Vertical scroll offset in CSS px. Same semantics as `scroll_x`.
+    pub scroll_y: f32,
 }
 
 /// Отрезок inline-контента с собственным стилем (до layout).
@@ -1292,7 +1298,7 @@ fn anon_inline_run(node: NodeId, parent: &ComputedStyle, segs: Vec<InlineSegment
         kind: BoxKind::InlineRun { segments: segs, lines: vec![] },
         children: vec![],
         col_span: 1,
-        row_span: 1, svg_group_transform: None,
+        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
     }
 }
 
@@ -1304,7 +1310,7 @@ fn anon_inline_block_row(node: NodeId, parent: &ComputedStyle, items: Vec<Layout
         kind: BoxKind::InlineBlockRow,
         children: items,
         col_span: 1,
-        row_span: 1, svg_group_transform: None,
+        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
     }
 }
 
@@ -1546,7 +1552,7 @@ fn inject_pseudo(
                 kind: BoxKind::Block,
                 children: inner,
                 col_span: 1,
-                row_span: 1, svg_group_transform: None,
+                row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
             };
             if is_before {
                 children.insert(0, b);
@@ -1752,7 +1758,7 @@ fn inject_marker(parent_id: NodeId, children: &mut Vec<LayoutBox>, style: &Compu
         },
         children: vec![],
         col_span: 1,
-        row_span: 1, svg_group_transform: None,
+        row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
     });
 }
 
@@ -1969,7 +1975,7 @@ fn build_box(
                                 kind: BoxKind::InlineSpace,
                                 children: vec![],
                                 col_span: 1,
-                                row_span: 1, svg_group_transform: None,
+                                row_span: 1, svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
                             });
                         }
                         row_items.push(build_box(doc, sheet, cid, &style, viewport, flat, counters));
@@ -2061,7 +2067,7 @@ fn build_box(
         children,
         col_span,
         row_span,
-        svg_group_transform: None,
+        svg_group_transform: None, scroll_x: 0.0, scroll_y: 0.0,
     }
 }
 
