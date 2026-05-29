@@ -11,7 +11,6 @@ _(none)_
 
 | # | Task | Branch | Актуальное состояние |
 |---|---|---|---|
-| 8A.2 | InProcessSession | `p3-8a2-in-process-session` | **Код готов** — `crates/driver/src/session.rs`. Нужно: `cargo test -p lumen-driver`, закрыть `todo!()`, clippy, обновить план |
 | 8A.6 | Migrate graphic tests | `p3-8a6-migrate-graphic-tests` | **Частично готово** — `crates/driver/tests/test_01..49.rs`. Нужно: проверить покрытие всех 22 оригинальных HTML-тестов, сгенерировать эталонные PNG в `graphic_tests/snapshots/` |
 
 **Порядок:** 8A.1 → 8A.2 → 8A.6 (каждая зависит от предыдущей)
@@ -45,6 +44,7 @@ _(none)_
 
 ## Recent fixes
 
+- **8A.2 InProcessSession** (2026-05-29) — headless in-process сессия `BrowserSession` в `crates/driver/src/session.rs:53` (полный pipeline encode→parse→CSS→layout без GPU + adapter для `lumen-core::ext::BrowserSession`). Проверено: `cargo test -p lumen-driver` (все зелёные), `cargo clippy --all-targets -- -D warnings` чисто, `todo!()` нет. `lumen-plan.md` уже ✅. Влито `p3-8a2-in-process-session`.
 - **8A.1 BrowserSession trait** (2026-05-29) — `BrowserSession` trait + `NullBrowserSession` заглушка в `crates/core/src/ext.rs:1514` (object-safe, `Send`). Тесты: null-impl, object-safety, Send. `lumen-plan.md` ⬜→✅. Влито `p3-8a1-browser-session`.
 
 ---
