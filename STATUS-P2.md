@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+Scrollbar rendering для `overflow:scroll/auto`  branch: p2-scrollbar-rendering
+Next step: add `scroll_width/scroll_height` to `LayoutBox`  `crates/engine/layout/src/box_tree.rs:920`
 
 ---
 
