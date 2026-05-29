@@ -293,16 +293,16 @@
 | 7E | ⬜ **`[P3]` DevTools полный** (§12.12, Phase 4+) | Поверх существующего CDP-минимума (5C) | `crates/devtools/` |
 | 7E.1 | ⬜ DOM inspector panel (tree + attributes) | `devtools` + read из `lumen-dom` | — |
 | 7E.2 | ⬜ **`[P3+P4]` Computed styles panel** | сериализация `ComputedStyle` | P4: expose ComputedStyle как serializable JSON |
-| 7E.3 | ⬜ **`[P3+P2]` Box model overlay** (margin/border/padding overlay) | через display list | P2: overlay primitive в `DisplayCommand` |
+| 7E.3 | ✅ **`[P3+P2]` Box model overlay** (margin/border/padding overlay) | через display list | P2: overlay primitive в `DisplayCommand` — 2026-05-29 |
 | 7E.4 | ⬜ Network panel (live request log) | `devtools` слушает `NetworkTransport` events | — |
 | 7E.5 | ⬜ JS console (eval в контексте страницы) | `devtools` + `JsRuntime::eval` | — |
 | 8 | ⬜ **`[P3]` Automation API** (§6.11, [ADR-006](docs/decisions/ADR-006-automation-api.md)) | First-class automation surface, фундамент собственных тестов и внешних клиентов | `lumen-driver`, `lumen-mcp-server`, `lumen-bidi-server` |
 | 8A | ⬜ **`[P3]` `lumen-driver` крейт + `BrowserSession` trait + `InProcessSession`** (Phase 0, **критичный для тестирования пораньше**) | Уровни 2-3 тестирования (§15), embed-сценарии | `crates/driver/` |
 | 8A.1 | ⬜ `BrowserSession` trait в `lumen-core::ext` (sigs + todo!()) | `core/src/ext/automation.rs` | — |
 | 8A.2 | ⬜ `InProcessSession` impl (переиспользует существующий pipeline из `lumen-shell`) | `driver/src/in_process.rs` | — |
-| 8A.3 | ⬜ **`[P3+P2]` Off-screen рендер** (`Renderer::render_to_image() -> Image`) | `paint/src/renderer.rs` | P2: отдельный wgpu surface без winit |
+| 8A.3 | ✅ **`[P3+P2]` Off-screen рендер** (`Renderer::render_to_image() -> Image`) | `paint/src/renderer.rs` | P2/P3: `new_headless()` без winit + `render_to_image()` GPU readback — 2026-05-27 |
 | 8A.4 | ✅ **`[P3+P1]` Structural getters**: `layout_box`, `computed_style` через handle / selector | `layout` exposers: `find_box_by_selector`, `computed_style_by_selector`, `ComputedStyleSnapshot` | 2026-05-27 |
-| 8A.5 | ⬜ Software rasterizer для тестов (`tiny-skia` opt-in под `cfg(test)`) | `paint/src/cpu_raster.rs` | детерминизм пикселей Windows/macOS/Linux CI |
+| 8A.5 | ✅ Software rasterizer для тестов (`tiny-skia` opt-in под `cfg(test)`) | `paint/src/cpu_raster.rs` | детерминизм пикселей Windows/macOS/Linux CI — 2026-05-27 |
 | 8A.6 | ⬜ Миграция `graphic_tests/`: structural-assert Rust-тесты + `graphic_tests/snapshots/*.png` эталоны | `driver/tests/graphic_*.rs` + `graphic_tests/snapshots/` | каждый из 22 текущих HTML-тестов |
 | 8A.7 | ⬜ Шелл переписать как первого клиента trait-а (winit/wgpu → один из транспортов) | `shell/src/main.rs` | — |
 | 8B | ⬜ **`[P3]` `lumen-mcp-server` крейт** (Phase 1) | AI-агенты (Claude/GPT/Browser Use) без обёрток | `crates/mcp/` |
