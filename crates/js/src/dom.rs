@@ -2722,12 +2722,31 @@ IntersectionObserver.prototype.disconnect = function() {
     this._observations = [];
 };
 
+// Parse CSS margin shorthand into [top, right, bottom, left] px values.
+// Only px units are supported; other units resolve to 0.
+function _parse_root_margin(str) {
+    if (!str) return [0, 0, 0, 0];
+    var parts = str.trim().split(/\\s+/);
+    var vals = parts.map(function(p) {
+        return p.indexOf('px') >= 0 ? parseFloat(p) : 0;
+    });
+    if (vals.length === 1) return [vals[0], vals[0], vals[0], vals[0]];
+    if (vals.length === 2) return [vals[0], vals[1], vals[0], vals[1]];
+    if (vals.length === 3) return [vals[0], vals[1], vals[2], vals[1]];
+    return [vals[0], vals[1], vals[2], vals[3]];
+}
+
 function _lumen_deliver_intersection_observers() {
     if (_io_observers.length === 0) return;
     var vp = _lumen_get_viewport_size();
     var vpW = vp[0], vpH = vp[1];
     for (var oi = 0; oi < _io_observers.length; oi++) {
         var obs = _io_observers[oi];
+        // Apply rootMargin to expand/contract the intersection root (viewport).
+        // Positive margin expands outward; negative contracts inward.
+        var rm = _parse_root_margin(obs._options.rootMargin);
+        var rootTop = -rm[0], rootLeft = -rm[3];
+        var rootRight = vpW + rm[1], rootBottom = vpH + rm[2];
         var t = obs._options.threshold !== undefined ? obs._options.threshold : 0;
         var thresholds = Array.isArray(t) ? t : [t];
         var entries = [];
@@ -2737,10 +2756,10 @@ function _lumen_deliver_intersection_observers() {
             var rect = _lumen_get_bounding_rect(nid);
             if (!rect) continue;
             var ex = rect[0], ey = rect[1], ew = rect[2], eh = rect[3];
-            var ix = Math.max(ex, 0);
-            var iy = Math.max(ey, 0);
-            var iw = Math.max(0, Math.min(ex + ew, vpW) - ix);
-            var ih = Math.max(0, Math.min(ey + eh, vpH) - iy);
+            var ix = Math.max(ex, rootLeft);
+            var iy = Math.max(ey, rootTop);
+            var iw = Math.max(0, Math.min(ex + ew, rootRight) - ix);
+            var ih = Math.max(0, Math.min(ey + eh, rootBottom) - iy);
             var area = ew * eh;
             var ratio = area > 0 ? (iw * ih) / area : 0;
             var prev = o.lastRatio;
@@ -2765,8 +2784,10 @@ function _lumen_deliver_intersection_observers() {
                                       top: ey, left: ex, bottom: ey+eh, right: ex+ew },
                 intersectionRect:   { x: ix, y: iy, width: iw, height: ih,
                                       top: iy, left: ix, bottom: iy+ih, right: ix+iw },
-                rootBounds: { x: 0, y: 0, width: vpW, height: vpH,
-                              top: 0, left: 0, bottom: vpH, right: vpW },
+                rootBounds: { x: rootLeft, y: rootTop,
+                              width: rootRight - rootLeft, height: rootBottom - rootTop,
+                              top: rootTop, left: rootLeft,
+                              bottom: rootBottom, right: rootRight },
                 time: typeof performance !== 'undefined' ? performance.now() : 0,
             });
         }
@@ -3212,41 +3233,50 @@ window.PerformanceObserver   = PerformanceObserver;
 
 // ── Lazy image loading (HTML LS §2.6.6.9) ──────────────────────────────────
 // Maps nid (u32 as string key) → url for images deferred by loading=\"lazy\".
-// Populated by _lumen_init_lazy_images (called once after initial layout).
-var _lumen_lazy_img_map = {};
+// Internal IntersectionObserver for lazy images (HTML LS loading=lazy, §lazy-loading).
+// Created on first _lumen_init_lazy_images call; uses rootMargin to load images
+// one viewport-height ahead of the visible area.
+var _lazy_io = null;
+// nid → url for images not yet loaded; populated by _lumen_init_lazy_images.
+var _lazy_io_urls = {};
 
 // Called by shell after initial layout with [[nid, url], ...] for lazy images.
-// Idempotent: already-registered images are skipped.
+// Creates an internal IntersectionObserver that fires _lumen_request_lazy_image_load
+// when each image enters the lazy-load margin. Idempotent: re-registration skipped.
 function _lumen_init_lazy_images(pairs) {
+    if (pairs.length === 0) return;
+    if (!_lazy_io) {
+        var vp = _lumen_get_viewport_size();
+        // HTML LS §lazy-loading distance threshold: load 1 viewport-height ahead.
+        var margin = Math.round(vp[1]);
+        _lazy_io = new IntersectionObserver(function(entries) {
+            for (var i = 0; i < entries.length; i++) {
+                var entry = entries[i];
+                if (!entry.isIntersecting) continue;
+                var nid = entry.target.__nid__;
+                if (_lazy_io_urls[nid] !== undefined) {
+                    _lumen_request_lazy_image_load(nid, _lazy_io_urls[nid]);
+                    delete _lazy_io_urls[nid];
+                    _lazy_io.unobserve(entry.target);
+                }
+            }
+        }, { rootMargin: '0px 0px ' + margin + 'px 0px' });
+    }
     for (var i = 0; i < pairs.length; i++) {
         var nid = pairs[i][0];
-        if (_lumen_lazy_img_map[nid] === undefined) {
-            _lumen_lazy_img_map[nid] = pairs[i][1];
+        if (_lazy_io_urls[nid] === undefined) {
+            _lazy_io_urls[nid] = pairs[i][1];
+            // Proxy object: IntersectionObserver only needs __nid__ to look up the rect.
+            _lazy_io.observe({ __nid__: nid });
         }
     }
 }
 
-// Called by shell after each relayout+observer delivery.
-// Triggers a native load request for every lazy image within one viewport of
-// the visible area (HTML LS §lazy-loading distance threshold heuristic).
-function _lumen_deliver_lazy_images() {
-    var nids = Object.keys(_lumen_lazy_img_map);
-    if (nids.length === 0) return;
-    var vp = _lumen_get_viewport_size();
-    var vpH = vp[1];
-    var margin = vpH; // load 1 viewport-height ahead of the fold
-    for (var i = 0; i < nids.length; i++) {
-        var nid = parseInt(nids[i]);
-        var rect = _lumen_get_bounding_rect(nid);
-        if (!rect) continue;
-        var ey = rect[1], eh = rect[3];
-        // rect coords are viewport-relative; element within [−margin, vpH+margin]
-        if (ey < vpH + margin && ey + eh > -margin) {
-            _lumen_request_lazy_image_load(nid, _lumen_lazy_img_map[nid]);
-            delete _lumen_lazy_img_map[nid];
-        }
-    }
-}
+// Called by shell after each relayout.  Lazy images are now delivered via
+// _lazy_io (an IntersectionObserver), which fires inside
+// _lumen_deliver_intersection_observers() called earlier by deliver_layout_observers().
+// This function is kept for shell API compatibility.
+function _lumen_deliver_lazy_images() {}
 ";
 
 // ─── tests ────────────────────────────────────────────────────────────────────
@@ -5456,6 +5486,9 @@ mod tests {
     }
 
     // ── Lazy image loading ────────────────────────────────────────────────────
+    // Delivery now goes through IntersectionObserver (_lazy_io) created inside
+    // _lumen_init_lazy_images; _lumen_deliver_intersection_observers() is the
+    // trigger (called by deliver_layout_observers in shell), not deliver_lazy_images.
 
     #[test]
     fn lazy_images_queued_when_in_viewport() {
@@ -5465,8 +5498,8 @@ mod tests {
         rt.update_layout_rects([(5, [10.0, 50.0, 200.0, 150.0])].into_iter().collect());
         // Register node 5 as a lazy image.
         rt.eval("_lumen_init_lazy_images([[5, 'photo.jpg']]);").unwrap();
-        // Deliver proximity check.
-        rt.eval("_lumen_deliver_lazy_images();").unwrap();
+        // Deliver via IntersectionObserver (matches shell's deliver_layout_observers path).
+        rt.eval("_lumen_deliver_intersection_observers();").unwrap();
         let reqs = rt.take_lazy_image_requests();
         assert_eq!(reqs.len(), 1);
         assert_eq!(reqs[0].0, 5);
@@ -5477,12 +5510,12 @@ mod tests {
     fn lazy_images_not_queued_when_far_below_fold() {
         let rt = runtime_with_dom(make_doc());
         rt.update_viewport_size(800.0, 600.0);
-        // Node 6 is 3 viewport-heights below the fold.
+        // Node 6 is 3 viewport-heights below the fold (y=1900, margin=600 → root bottom=1200).
         rt.update_layout_rects([(6, [0.0, 1900.0, 100.0, 100.0])].into_iter().collect());
         rt.eval("_lumen_init_lazy_images([[6, 'far.png']]);").unwrap();
-        rt.eval("_lumen_deliver_lazy_images();").unwrap();
+        rt.eval("_lumen_deliver_intersection_observers();").unwrap();
         let reqs = rt.take_lazy_image_requests();
-        assert!(reqs.is_empty(), "image far below fold must not be loaded yet");
+        assert!(reqs.is_empty(), "image 3 viewports below fold must not be loaded yet");
     }
 
     #[test]
@@ -5491,11 +5524,11 @@ mod tests {
         rt.update_viewport_size(800.0, 600.0);
         rt.update_layout_rects([(7, [0.0, 0.0, 100.0, 100.0])].into_iter().collect());
         rt.eval("_lumen_init_lazy_images([[7, 'once.png']]);").unwrap();
-        rt.eval("_lumen_deliver_lazy_images();").unwrap();
+        rt.eval("_lumen_deliver_intersection_observers();").unwrap();
         let first = rt.take_lazy_image_requests();
         assert_eq!(first.len(), 1);
-        // Second delivery must NOT queue again (image was removed from map).
-        rt.eval("_lumen_deliver_lazy_images();").unwrap();
+        // Second delivery must NOT queue again (image was unobserved after first load).
+        rt.eval("_lumen_deliver_intersection_observers();").unwrap();
         let second = rt.take_lazy_image_requests();
         assert!(second.is_empty(), "already-loaded image must not be queued twice");
     }
@@ -5504,22 +5537,151 @@ mod tests {
     fn lazy_images_init_idempotent() {
         let rt = runtime_with_dom(make_doc());
         rt.update_viewport_size(800.0, 600.0);
-        // Register same image twice — only one entry.
+        // Register same image twice in one call — only the first URL is stored.
         rt.eval("_lumen_init_lazy_images([[8, 'dup.png'],[8, 'other.png']]);").unwrap();
-        // Place rect out of viewport — so it won't be delivered.
+        // Place rect out of range (y=5000, root bottom = 600+600 = 1200).
         rt.update_layout_rects([(8, [0.0, 5000.0, 100.0, 100.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_lazy_images();").unwrap();
+        rt.eval("_lumen_deliver_intersection_observers();").unwrap();
         let reqs = rt.take_lazy_image_requests();
-        // Far below: nothing queued yet.
+        // Far below the lazy-load margin: not queued yet.
         assert!(reqs.is_empty());
-        // Init again with different URL — must be ignored (first registration wins).
+        // Second init with different URL — must be ignored (first registration wins).
         rt.eval("_lumen_init_lazy_images([[8, 'new.png']]);").unwrap();
-        // Now bring it into viewport.
+        // Move into viewport.
         rt.update_layout_rects([(8, [0.0, 0.0, 100.0, 100.0])].into_iter().collect());
-        rt.eval("_lumen_deliver_lazy_images();").unwrap();
+        rt.eval("_lumen_deliver_intersection_observers();").unwrap();
         let reqs2 = rt.take_lazy_image_requests();
         assert_eq!(reqs2.len(), 1);
         assert_eq!(reqs2[0].1, "dup.png", "first registration URL must win");
+    }
+
+    #[test]
+    fn lazy_deliver_lazy_images_is_noop() {
+        // _lumen_deliver_lazy_images() must be a no-op; delivery is via IO.
+        let rt = runtime_with_dom(make_doc());
+        rt.update_viewport_size(800.0, 600.0);
+        rt.update_layout_rects([(9, [0.0, 0.0, 100.0, 100.0])].into_iter().collect());
+        rt.eval("_lumen_init_lazy_images([[9, 'noop.png']]);").unwrap();
+        // Old shell path: this must no longer queue images on its own.
+        rt.eval("_lumen_deliver_lazy_images();").unwrap();
+        let reqs = rt.take_lazy_image_requests();
+        assert!(reqs.is_empty(), "_lumen_deliver_lazy_images must be a no-op");
+        // But IO path must still work.
+        rt.eval("_lumen_deliver_intersection_observers();").unwrap();
+        let reqs2 = rt.take_lazy_image_requests();
+        assert_eq!(reqs2.len(), 1);
+    }
+
+    #[test]
+    fn lazy_images_within_margin_but_below_fold() {
+        // Image just below viewport but within 1-viewport-height margin must be loaded.
+        let rt = runtime_with_dom(make_doc());
+        rt.update_viewport_size(800.0, 600.0);
+        // y=650: just below fold (600), within margin (600+600=1200).
+        rt.update_layout_rects([(10, [0.0, 650.0, 100.0, 100.0])].into_iter().collect());
+        rt.eval("_lumen_init_lazy_images([[10, 'near.png']]);").unwrap();
+        rt.eval("_lumen_deliver_intersection_observers();").unwrap();
+        let reqs = rt.take_lazy_image_requests();
+        assert_eq!(reqs.len(), 1, "image just below fold within margin must be loaded");
+    }
+
+    // ── rootMargin support ────────────────────────────────────────────────────
+
+    #[test]
+    fn root_margin_single_value_expands_all_sides() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("_parse_root_margin('10px')").unwrap();
+        match r {
+            lumen_core::JsValue::Array(a) => {
+                assert_eq!(a[0], lumen_core::JsValue::Number(10.0)); // top
+                assert_eq!(a[1], lumen_core::JsValue::Number(10.0)); // right
+                assert_eq!(a[2], lumen_core::JsValue::Number(10.0)); // bottom
+                assert_eq!(a[3], lumen_core::JsValue::Number(10.0)); // left
+            }
+            other => panic!("expected Array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn root_margin_two_values_parsed_correctly() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("_parse_root_margin('5px 20px')").unwrap();
+        match r {
+            lumen_core::JsValue::Array(a) => {
+                assert_eq!(a[0], lumen_core::JsValue::Number(5.0));  // top
+                assert_eq!(a[1], lumen_core::JsValue::Number(20.0)); // right
+                assert_eq!(a[2], lumen_core::JsValue::Number(5.0));  // bottom
+                assert_eq!(a[3], lumen_core::JsValue::Number(20.0)); // left
+            }
+            other => panic!("expected Array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn root_margin_four_values_parsed_correctly() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("_parse_root_margin('1px 2px 3px 4px')").unwrap();
+        match r {
+            lumen_core::JsValue::Array(a) => {
+                assert_eq!(a[0], lumen_core::JsValue::Number(1.0)); // top
+                assert_eq!(a[1], lumen_core::JsValue::Number(2.0)); // right
+                assert_eq!(a[2], lumen_core::JsValue::Number(3.0)); // bottom
+                assert_eq!(a[3], lumen_core::JsValue::Number(4.0)); // left
+            }
+            other => panic!("expected Array, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn root_margin_expands_root_for_element_below_viewport() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        // Element at y=800, below viewport height of 720.
+        rt.update_layout_rects([(nid, [0.0, 800.0, 100.0, 100.0])].into_iter().collect());
+        rt.update_viewport_size(1024.0, 720.0);
+        // rootMargin "0px 0px 200px 0px" expands root bottom to 720+200=920.
+        // Element top=800 < 920 → intersecting.
+        rt.eval(r#"
+            var _rm_fired = false;
+            var ioRm = new IntersectionObserver(function(entries) {
+                if (entries[0].isIntersecting) _rm_fired = true;
+            }, { rootMargin: '0px 0px 200px 0px' });
+            ioRm.observe(document.body);
+            _lumen_deliver_intersection_observers();
+        "#).unwrap();
+        let fired = rt.eval("_rm_fired").unwrap();
+        assert_eq!(fired, lumen_core::JsValue::Bool(true),
+            "rootMargin should expand root to detect element below viewport");
+    }
+
+    #[test]
+    fn root_margin_zero_does_not_see_element_below_viewport() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            let body_id = super::find_element_by_tag(&doc, "body").unwrap();
+            body_id.index() as u32
+        };
+        // Element at y=800, below viewport height of 720, no rootMargin.
+        rt.update_layout_rects([(nid, [0.0, 800.0, 100.0, 100.0])].into_iter().collect());
+        rt.update_viewport_size(1024.0, 720.0);
+        rt.eval(r#"
+            var _rm_fired2 = false;
+            var ioRm2 = new IntersectionObserver(function(entries) {
+                if (entries[0].isIntersecting) _rm_fired2 = true;
+            });
+            ioRm2.observe(document.body);
+            _lumen_deliver_intersection_observers();
+        "#).unwrap();
+        let fired = rt.eval("_rm_fired2").unwrap();
+        assert_eq!(fired, lumen_core::JsValue::Bool(false),
+            "without rootMargin, element below viewport must not intersect");
     }
 
     // ── FontFaceSet JS bindings (CSS Fonts Module Level 4 §11) ──────────────

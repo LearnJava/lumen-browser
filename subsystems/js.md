@@ -75,9 +75,17 @@ Phase 0–1 engine; `rusty_v8` is planned for v1.0+.
   - `_lumen_get_viewport_size() -> Vec<f64>` — Rust binding backed by `Arc<Mutex<[f32;2]>>` updated by shell on window resize.
   - `MutationObserver` (WHATWG DOM §4.3.2): `observe(target, options)` with full options normalization (`childList`, `attributes`, `attributeFilter`, `attributeOldValue`, `characterData`, `characterDataOldValue`, `subtree`); `disconnect()`; `takeRecords()`. `_mo_notify(nid, type, ...)` fires from primitive wrappers, delivers via `_lumen_flush_mutation_observers()` (sync) and `queueMicrotask` (async production path).
   - `ResizeObserver` (W3C): `observe(target)`, `unobserve(target)`, `disconnect()`. `_lumen_deliver_resize_observers()` delivers only if width/height changed by >0.5 px. Shell calls it after `relayout_page`.
-  - `IntersectionObserver` (WICG): `observe(target)`, `unobserve(target)`, `disconnect()`. `_lumen_deliver_intersection_observers()` intersects element rect with viewport, delivers full `IntersectionObserverEntry` shape with threshold crossing semantics. Shell calls it after `relayout_page`.
+  - `IntersectionObserver` (WICG): `observe(target)`, `unobserve(target)`, `disconnect()`. `_lumen_deliver_intersection_observers()` intersects element rect with root expanded by `rootMargin` (`_parse_root_margin` supports `px` shorthand 1–4 values), delivers full `IntersectionObserverEntry` shape with threshold crossing semantics. Shell calls it after `relayout_page`.
   - `element.getBoundingClientRect()` wired via `_lumen_get_bounding_rect`.
   - 17 new tests (getBoundingClientRect, MutationObserver attribute/childList/subtree/disconnect/takeRecords, ResizeObserver fire/fire-on-resize/no-fire-same-size/unobserve/disconnect, IntersectionObserver fire/not-visible/threshold/multiple/unobserve/disconnect). **200 JS tests total.**
+
+- **loading=lazy via IntersectionObserver** (`crates/js/src/dom.rs`). 2026-05-29.
+  - `_lumen_init_lazy_images(pairs)` now creates an internal `IntersectionObserver` (`_lazy_io`) with `rootMargin: 0px 0px Mpx 0px` where `M = viewport height` (HTML LS lazy-loading distance threshold: 1 viewport ahead). Observes each image via a proxy object `{__nid__: nid}`.
+  - The IO callback calls `_lumen_request_lazy_image_load` for intersecting images and calls `unobserve` after first load (each image loaded exactly once).
+  - `_lumen_deliver_lazy_images()` is now a no-op; delivery happens inside `_lumen_deliver_intersection_observers()` called by `deliver_layout_observers()` in shell — images and site IO observers fire on the same pass.
+  - `JsRuntime::resume()` stub added to `QuickJsRuntime` (returns error; full snapshot restore deferred — BUG-042).
+  - `SuspendedHeap` re-exported from `lumen_core` (was missing from `pub use ext::{…}` in core's lib.rs).
+  - 7 new tests (lazy via IO, within margin below fold, not-queued far below, removed after load, idempotent init, deliver-lazy-images is noop, rootMargin 1/2/4 values, rootMargin expands/doesn't expand viewport). **244 JS tests total.**
 
 ## Deferred
 

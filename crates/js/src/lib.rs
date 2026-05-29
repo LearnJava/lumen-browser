@@ -1,7 +1,7 @@
 pub mod dom;
 pub mod webgl_bindings;
 
-use lumen_core::{JsError, JsResult, JsRuntime, JsValue};
+use lumen_core::{JsError, JsResult, JsRuntime, JsValue, SuspendedHeap};
 use lumen_dom::Document;
 use rquickjs::{Array, Context, Ctx, FromJs, Function, IntoJs, Object, Runtime, Type, Value};
 use std::collections::HashMap;
@@ -252,6 +252,11 @@ impl JsRuntime for QuickJsRuntime {
 
     fn engine_name(&self) -> &'static str {
         "quickjs"
+    }
+
+    fn resume(_snapshot: SuspendedHeap) -> JsResult<Self> {
+        // BUG-023: QuickJS heap snapshots not yet implemented (ADR-008 T2→T3 restore).
+        Err(JsError::Runtime("QuickJS resume not implemented".into()))
     }
 }
 

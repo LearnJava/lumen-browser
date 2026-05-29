@@ -26,7 +26,7 @@ pub use event::{Event, FetchPriority, SubresourceKind, TabId};
 pub use ext::{
     match_face, BrowserSession, EventSink, FaceRecord, FontProvider, FontStyle,
     HyphenationProvider, NullBrowserSession, NullHyphenationProvider,
-    JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime,
+    JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime, SuspendedHeap,
 };
 pub use form::{
     decode_form_value, encode_form_multipart, encode_form_urlencoded, FormEntry, FormValue,
