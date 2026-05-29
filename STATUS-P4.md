@@ -11,7 +11,7 @@ _(none)_
 
 1. **Check for "Needs wiring" section below** — P1/P2 algorithms ready for CSS connection
 2. **Read CSS-SPECS.md** P4 Priority Queue for next property to implement
-3. **Create branch:** `git checkout -b p4-<property-name>`, e.g. `p4-opacity-css`
+3. **Create branch:** `git checkout -b p4-<property-name>`, e.g. `p4-overflow-scroll`
 4. **Implement end-to-end:**
    - Add field to `ComputedStyle` (lumen-layout/src/style.rs)
    - Add parsing in `apply_declaration()` 
@@ -27,29 +27,26 @@ _(none)_
 
 ## Next
 
-Ordered by priority from CSS-SPECS.md P4 Work Queue. Pick the first unblocked item.
+Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-05-29 state.
 
 | # | Property / Feature | Effort | Blocker |
 |---|-------------------|--------|---------|
-| 1 | `transition` interpolation (per-frame lerp) | M | easing functions (linear() ✅ done) |
-| 2 | `@keyframes` AnimationScheduler::tick wiring | L | transitions done (item 1) |
-| 3 | CSS Nesting — nested rule parser | L | none |
-| 4 | `position: sticky` layout + scroll listener | M | none |
-| 5 | `list-style-type` marker rendering | S | none |
-| 6 | `:is()` / `:where()` / `:has()` matching | M | none |
-| 7 | `@media` resize hook re-evaluation | S | shell event |
-| 8 | `filter` GPU offscreen pass | L | wgpu pipeline |
-| 9 | `clip-path` basic shapes (inset/circle/ellipse/polygon) | M | none |
-| 10 | `::marker` rendering | S | float/list (both ✅ done) |
-| 11 | `@font-face` actual file loading | L | network/P3 |
-| 12 | `min-content` / `max-content` / `fit-content` | L | layout engine |
-| 13 | `overflow: scroll` scrollable containers | L | shell scroll |
-| 14 | `column-rule` rendering | S | paint |
-| 15 | Scroll snap shell integration | M | scroll event |
-| 16 | `@container` 2nd-pass execution | L | container-type done |
-| 17 | `backdrop-filter` GPU compositing pass | L | wgpu pipeline |
-| 18 | `writing-mode: vertical-*` axis swap | L | layout engine |
-| 19 | `subgrid` track inheritance | XL | grid engine |
+| 1 | `::first-letter` / `::first-line` wiring | M | none (stubs ready — see "Needs wiring") |
+| 2 | `overflow: scroll` scrollable containers | L | shell scroll event |
+| 3 | `image-set()` / `cross-fade()` — CSS Images L4 | M | none |
+| 4 | `text-align-last` | S | none |
+| 5 | `perspective()` + `transform-style: preserve-3d` (3D Transforms L2) | L | P2 wgpu 3D pipeline |
+| 6 | `@counter-style` custom counter definitions | M | none |
+| 7 | `justify-items` / `justify-self` for grid (Box Alignment L3) | S | none |
+| 8 | `column-rule` rendering + `column-span` + `column-fill` | S | none |
+| 9 | Scroll snap shell integration (`scroll-snap-type` / `scroll-snap-align`) | M | shell scroll |
+| 10 | `::selection` pseudo-element | S | none |
+| 11 | `::marker` rendering | S | none |
+| 12 | `cq*` container query units (`cqw`/`cqh`/`cqi`/`cqb`/`cqmin`/`cqmax`) | M | none |
+| 13 | `attr()` with type (CSS Values L4) | M | none |
+| 14 | `mask-image` CSS wiring | L | P2 GPU compositing pass |
+| 15 | `writing-mode: vertical-*` axis swap | L | layout engine |
+| 16 | `subgrid` track inheritance | XL | grid engine |
 
 ---
 
