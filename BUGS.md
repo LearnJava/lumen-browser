@@ -56,6 +56,7 @@ BUG-040 | FIXED 2026-05-27 | layout          | table layout unit tests assume di
 BUG-041 | FIXED 2026-05-27 | css-parser      | style::tests::line_clamp_integer_value / _standard_property / _not_inherited fail: CSS rule `div { -webkit-line-clamp: 3 }` produces None — test accesses doc.root().children[0] which is <html> after full HTML5 parsing, so rule doesn't match <div> | layout/src/style.rs:19855
 BUG-042 | FIXED 2026-05-29 | js              | QuickJsRuntime missing JsRuntime::resume() impl — all lumen-js tests fail to compile | js/src/lib.rs:253
 BUG-043 | OPEN  | paint           | snapshot_tests стали падать: DrawText теперь включает `var=["opsz"=16]` (font-optical-sizing, коммит 27fda15) — 7 golden-файлов устарели | paint/tests/snapshot_tests.rs
+BUG-044 | OPEN  | shell           | lumen-shell не компилируется (--features quickjs): non-exhaustive match по DisplayCommand — новые варианты PushMaskLayer/PopMaskLayer/DrawSvgPath/BoxModelOverlay (P2-мерджи) не обработаны | shell/src/main.rs:4219, 4265
 ```
 
 ---

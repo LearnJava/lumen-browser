@@ -87,6 +87,9 @@ impl QuickJsRuntime {
     /// `ls_store` — shared localStorage for this origin; persists across reloads.
     ///   Pass a fresh `Arc::new(Mutex::new(WebStorage::default()))` per origin.
     ///   A fresh `sessionStorage` is created automatically inside.
+    /// `idb_backend` — per-origin IndexedDB persistence (`lumen_storage::IdbStore`
+    ///   over a `StorageBackend`). Pass the same backend for one origin across
+    ///   reloads so databases survive; `None` keeps IndexedDB in-heap only.
     /// Pass `None` for providers in sandboxed contexts or unit tests.
     pub fn install_dom(
         &self,
@@ -95,6 +98,7 @@ impl QuickJsRuntime {
         fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
         ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
         ls_store: Option<Arc<Mutex<WebStorage>>>,
+        idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     ) -> JsResult<()> {
         let ls = ls_store.unwrap_or_else(|| Arc::new(Mutex::new(WebStorage::default())));
         let ss = Arc::new(Mutex::new(WebStorage::default()));
@@ -125,6 +129,7 @@ impl QuickJsRuntime {
                 Arc::clone(&self.viewport_size),
                 Arc::clone(&self.lazy_img_requests),
                 None,
+                idb_backend,
             )
             .map_err(|e| rq_err(&ctx, e))
         })

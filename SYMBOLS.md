@@ -53,7 +53,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/canvas/src/rasterize.rs:4` **fn** `fill_path` — Fill `path` using the even-odd scanline algorithm
 `crates/engine/canvas/src/rasterize.rs:41` **fn** `stroke_path` — Stroke `path` by drawing each line segment as a thick rectangle
 
-## lumen-core  (145 symbols)
+## lumen-core  (146 symbols)
 
 `crates/core/src/capability.rs:7` **enum** `Capability`
 `crates/core/src/capability.rs:27` **struct** `CapabilityToken`
@@ -123,8 +123,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/core/src/ext.rs:1416` **enum** `JsWsEvent` — A single queued event from a WebSocket connection, ready for delivery to JS
 `crates/core/src/ext.rs:1446` **trait** `JsWebSocketSession` — A live WebSocket connection from the JS runtime's perspective
 `crates/core/src/ext.rs:1461` **trait** `JsWebSocketProvider` — Factory that opens WebSocket connections for the JS runtime
-`crates/core/src/ext.rs:1483` **trait** `BrowserSession` — Browser automation session — unified interface for in-process tests, MCP agents,
-`crates/core/src/ext.rs:1555` **struct** `NullBrowserSession` — Null implementation of `BrowserSession` — all methods return `NotImplemented`
+`crates/core/src/ext.rs:1488` **trait** `IdbBackend` — Persistence boundary for the IndexedDB JS shim
+`crates/core/src/ext.rs:1514` **trait** `BrowserSession` — Browser automation session — unified interface for in-process tests, MCP agents,
+`crates/core/src/ext.rs:1586` **struct** `NullBrowserSession` — Null implementation of `BrowserSession` — all methods return `NotImplemented`
 `crates/core/src/form.rs:15` **struct** `FormEntry` — Запись формы — пара (name, value) с опциональным filename (для multipart)
 `crates/core/src/form.rs:21` **enum** `FormValue`
 `crates/core/src/form.rs:33` **fn** `text`
@@ -776,14 +777,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/js/src/dom.rs:132` **fn** `install_dom_api` — Install DOM primitives (`_lumen_*`) and the Web API shim into `ctx`
 `crates/js/src/lib.rs:20` **struct** `QuickJsRuntime` — QuickJS-based JS runtime via `rquickjs`
 `crates/js/src/lib.rs:63` **fn** `new`
-`crates/js/src/lib.rs:91` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
-`crates/js/src/lib.rs:136` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
-`crates/js/src/lib.rs:144` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
-`crates/js/src/lib.rs:153` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
-`crates/js/src/lib.rs:162` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
-`crates/js/src/lib.rs:171` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
-`crates/js/src/lib.rs:179` **fn** `update_viewport_size` — Update the viewport dimensions
-`crates/js/src/lib.rs:188` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
+`crates/js/src/lib.rs:94` **fn** `install_dom` — Install DOM Web API globals (`document`, `window`, `console`, etc.) into
+`crates/js/src/lib.rs:141` **fn** `take_navigate_request` — Consume any navigation request that JS placed via `location.href =` etc
+`crates/js/src/lib.rs:149` **fn** `take_dom_dirty` — Returns `true` if JS mutated the DOM since the last call, clearing the flag
+`crates/js/src/lib.rs:158` **fn** `take_raf_pending` — Returns `true` if `requestAnimationFrame` was called since the last call,
+`crates/js/src/lib.rs:167` **fn** `take_timer_wakeup` — Take the next timer wakeup as Unix epoch ms, clearing the stored value
+`crates/js/src/lib.rs:176` **fn** `update_layout_rects` — Replace the layout bounding-rect table with a fresh snapshot
+`crates/js/src/lib.rs:184` **fn** `update_viewport_size` — Update the viewport dimensions
+`crates/js/src/lib.rs:193` **fn** `take_lazy_image_requests` — Drain lazy image load requests queued by `_lumen_request_lazy_image_load` in JS
 `crates/js/src/webgl_bindings.rs:17` **fn** `install_webgl_bindings` — Install WebGL fingerprint bindings into the JS context
 
 ## lumen-knowledge  (46 symbols)
@@ -1735,7 +1736,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/shell/src/tab_lifecycle.rs:193` **fn** `accelerate_on_memory_pressure` — Accelerate transitions due to memory pressure
 `crates/shell/src/tab_lifecycle.rs:235` **enum** `MemoryPressure` — OS memory pressure levels (from `MemoryPressureSource` trait)
 
-## lumen-storage  (371 symbols)
+## lumen-storage  (373 symbols)
 
 `crates/storage/src/autofill.rs:17` **struct** `AutofillEntry`
 `crates/storage/src/autofill.rs:25` **struct** `Autofill`
@@ -1886,6 +1887,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/http_cache.rs:253` **fn** `clear_expired` — Удалить expired записи. Возвращает число удалённых строк
 `crates/storage/src/http_cache.rs:268` **fn** `clear` — Полная очистка кеша
 `crates/storage/src/http_cache.rs:279` **fn** `count` — Общее число записей
+`crates/storage/src/indexed_db.rs:26` **struct** `IdbStore` — Per-origin persistence для IndexedDB поверх общего [`StorageBackend`]
+`crates/storage/src/indexed_db.rs:36` **fn** `new` — Создать store для конкретного `origin` поверх разделяемого `backend`
 `crates/storage/src/notifications.rs:18` **struct** `Notification`
 `crates/storage/src/notifications.rs:34` **struct** `Notifications`
 `crates/storage/src/notifications.rs:45` **fn** `open`
@@ -2110,4 +2113,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2048 symbols in 19 crates*
+*Total: 2051 symbols in 19 crates*

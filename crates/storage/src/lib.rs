@@ -25,6 +25,7 @@ pub mod downloads;
 pub mod history;
 pub mod hsts;
 pub mod http_cache;
+pub mod indexed_db;
 pub mod notifications;
 pub mod permissions;
 pub mod permissions_policy;
@@ -59,6 +60,7 @@ pub use dns_cache::{DnsCache, DnsEntry};
 pub use downloads::{DownloadEntry, DownloadStatus, Downloads};
 pub use history::{History, HistoryEntry};
 pub use http_cache::{CacheControl, CachedResponse, HttpCache};
+pub use indexed_db::IdbStore;
 pub use notifications::{Notification, Notifications};
 pub use permissions::{PermissionEntry, PermissionKind, PermissionState, Permissions};
 pub use permissions_policy::{

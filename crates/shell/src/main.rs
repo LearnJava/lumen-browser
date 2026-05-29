@@ -248,6 +248,7 @@ fn run_window_mode(
         validation_tooltip: None,
         color_picker_node: None,
         ls_storage: HashMap::new(),
+        idb_backend: Arc::new(std::sync::Mutex::new(lumen_storage::store::InMemoryStorage::new())),
         js_ctx: None,
         no_scrollbar,
         first_paint_delivered: false,
@@ -290,13 +291,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, &NullHyphenationProvider)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, &NullHyphenationProvider)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, &NullHyphenationProvider)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, None, &NullHyphenationProvider)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -666,6 +667,7 @@ impl PageSource {
         sink: Arc<dyn EventSink>,
         viewport: Size,
         ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
+        idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
         hp: &dyn HyphenationProvider,
     ) -> Result<(LoadedPage, Option<LayoutSource>, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
         if matches!(self, PageSource::Empty) {
@@ -673,7 +675,7 @@ impl PageSource {
         }
         let raw = self.load_bytes(sink.clone())?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, hp)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, idb_backend, hp)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -1223,6 +1225,7 @@ fn parse_and_layout(
     viewport: Size,
     preload_seen: &mut std::collections::HashSet<String>,
     ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
+    idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     hp: &dyn HyphenationProvider,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
@@ -1268,6 +1271,7 @@ fn parse_and_layout(
         fetch_provider,
         ws_provider,
         ls_store,
+        idb_backend,
     );
 
     // CSS Selectors L4 §9.6 `:target`: set current target from URL fragment so
@@ -1584,6 +1588,24 @@ fn ls_store_for_base(
     })))
 }
 
+/// Build the per-origin IndexedDB persistence handle for the given `ResourceBase`.
+/// Returns `None` for `file:` bases (no origin-partitioned persistent storage),
+/// matching `ls_store_for_base`. The returned `IdbStore` shares `backend`, so
+/// the same origin sees its databases across reloads.
+fn idb_store_for_base(
+    base: &ResourceBase,
+    backend: &Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
+) -> Option<Arc<dyn lumen_core::ext::IdbBackend>> {
+    let origin = match base {
+        ResourceBase::Url(u) => lumen_core::url::Url::parse(u).ok().map(|parsed| {
+            let port = parsed.port().map(|p| format!(":{p}")).unwrap_or_default();
+            format!("{}://{}{}", parsed.scheme(), parsed.host(), port)
+        })?,
+        ResourceBase::File(_) => return None,
+    };
+    Some(Arc::new(lumen_storage::IdbStore::new(Arc::clone(backend), origin)))
+}
+
 #[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn render_bytes(
     bytes: &[u8],
@@ -1593,9 +1615,10 @@ fn render_bytes(
     viewport: Size,
     preload_seen: &mut std::collections::HashSet<String>,
     ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
+    idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
     hp: &dyn HyphenationProvider,
 ) -> Result<(LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, hp)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, idb_backend, hp)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -1810,6 +1833,7 @@ fn run_scripts_with_dom(
     fetch_provider: Option<Arc<dyn lumen_core::ext::JsFetchProvider>>,
     ws_provider: Option<Arc<dyn lumen_core::ext::JsWebSocketProvider>>,
     ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
+    idb_backend: Option<Arc<dyn lumen_core::ext::IdbBackend>>,
 ) -> (Arc<Mutex<Document>>, Option<JsNavigateRequest>, Option<Box<dyn PersistentJs>>) {
     let mut scripts: Vec<String> = Vec::new();
     collect_inline_scripts(&doc, doc.root(), &mut scripts);
@@ -1832,7 +1856,7 @@ fn run_scripts_with_dom(
         use lumen_core::ext::JsRuntime as _;
         match lumen_js::QuickJsRuntime::new() {
             Ok(rt) => {
-                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, ls_store) {
+                if let Err(e) = rt.install_dom(Arc::clone(&doc_arc), page_url, fetch_provider, ws_provider, ls_store, idb_backend) {
                     eprintln!("JS DOM init failed: {e}");
                 }
                 for src in &scripts {
@@ -2100,6 +2124,11 @@ struct Lumen {
     /// Each entry survives page reloads within the same session.
     /// Partitioned by origin to enforce Same-Origin Policy for storage access.
     ls_storage: HashMap<String, Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
+    /// Shared backend for IndexedDB persistence (one per process, origin-partitioned
+    /// inside). A per-origin `IdbStore` is built over this for each page load, so
+    /// IndexedDB databases survive page reloads within the session (mirrors
+    /// `ls_storage`). Swap `InMemoryStorage` for `SqliteStorage` to persist on disk.
+    idb_backend: Arc<std::sync::Mutex<dyn lumen_core::ext::StorageBackend>>,
     /// Live JS context for the current page — keeps event listeners active after
     /// initial script execution. `None` when `quickjs` feature is disabled or
     /// no scripts were registered. Must be dropped before `layout_source` on
@@ -2293,7 +2322,11 @@ impl Lumen {
                     Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
                 }))
             });
-            self.source.load(self.event_sink.clone(), viewport, ls_store, &self.hyp_provider)
+            let idb_backend = self.source.origin_str().map(|o| {
+                Arc::new(lumen_storage::IdbStore::new(Arc::clone(&self.idb_backend), o))
+                    as Arc<dyn lumen_core::ext::IdbBackend>
+            });
+            self.source.load(self.event_sink.clone(), viewport, ls_store, idb_backend, &self.hyp_provider)
         };
 
         match load_result {
@@ -2657,7 +2690,8 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     },
                 );
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, &self.hyp_provider) {
+                let idb_backend = idb_store_for_base(&raw.base, &self.idb_backend);
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, idb_backend, &self.hyp_provider) {
                     Ok((page, new_layout_source, new_js_ctx)) => {
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
                     }
