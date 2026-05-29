@@ -5,7 +5,9 @@
 ---
 
 ## In progress
-_(none)_
+
+`font-variation-settings` rasterizer wiring  branch: p1-font-variation-wiring
+Next step: Font::advance_width_varied() in face.rs + HVAR wiring in renderer.rs  crates/engine/font/src/face.rs + crates/engine/paint/src/renderer.rs:6089
 
 ---
 

@@ -158,6 +158,24 @@ fn rasterize_cyrillic_ya() {
     assert!(visible > 0, "Я rasterized as empty");
 }
 
+#[test]
+fn advance_width_varied_no_hvar_returns_base() {
+    // Inter Regular has no HVAR table, so advance_width_varied must return the
+    // base advance width regardless of the coords slice.
+    let data = font_bytes();
+    let font = Font::parse(&data).unwrap();
+    let hmtx = font.hmtx().unwrap();
+    let cmap = font.cmap().unwrap();
+    let gid = cmap.glyph_index('A' as u32).unwrap();
+    let base_aw = hmtx.advance_width(gid).expect("advance width for A");
+    assert!(base_aw > 0, "base advance width must be positive");
+    // Empty coords: shortcut, no HVAR access.
+    assert_eq!(font.advance_width_varied(gid, &hmtx, &[]), base_aw);
+    // Non-empty coords: HVAR table absent → fallback to base.
+    assert_eq!(font.advance_width_varied(gid, &hmtx, &[0.5]), base_aw);
+    assert_eq!(font.advance_width_varied(gid, &hmtx, &[-1.0, 0.0]), base_aw);
+}
+
 /// Кириллическая 'А' (U+0410) в Inter — composite glyph, ссылается на латинскую
 /// 'A' (U+0041). До поддержки composite этот тест бы провалился (glyph_resolved
 /// возвращал бы composite-форму, которую rasterize отказывается рисовать);
