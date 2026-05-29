@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-**p1-image-viewport-gating** — Image viewport-gating (10E.3): `layout/src/image_gating.rs`
-Next step: обновить SYMBOLS.md, wire в shell, коммит
+_(none)_
 
 ---
 
@@ -24,6 +23,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-image-viewport-gating** ✅ 2026-05-29 — `gate_image_requests(root, viewport, scroll_x, scroll_y)` в `lumen_layout::image_gating`: HashSet<NodeId> изображений в viewport ± 2 экрана. AABB-пересечение в document-space координатах. 7 интеграционных тестов.
 - **p1-font-variation-wiring** ✅ 2026-05-29 — `Font::advance_width_varied(glyph_id, hmtx, coords)` применяет HVAR delta к advance width в `rasterize_and_insert`; gvar deltas для outline уже работали. `// CSS: font-variation-settings` комментарии в `TextMeasurer` и `measure_text_w` для P4. 4 новых теста (3 unit + 1 integration). 309+13+6 тестов lumen-font проходят.
 - **p1-lazy-io** ✅ 2026-05-29 — `loading="lazy"` через IntersectionObserver event source: `_lumen_init_lazy_images()` создаёт internal IO с rootMargin 1-viewport-height, `_lumen_deliver_lazy_images()` → no-op; добавлен `_parse_root_margin()` + rootMargin-aware delivery в IO; исправлен BUG-042 (QuickJsRuntime::resume stub). 244 JS-теста проходят.
 - **p1-sticky-layout** ✅ 2026-05-29 — `StickyBox` + `collect_sticky_boxes()` + `compute_sticky_offset()` в `lumen-layout/src/lib.rs`. Algorithm stub: sticky в normal flow; collect собирает static_rect и px-инсеты (non-px → None); compute — чистая функция `(scroll_x, scroll_y, vp_w, vp_h) → (dx, dy)`. Дедупликация по NodeId. 9 unit-тестов. STATUS-P4.md "Needs wiring" обновлён.
