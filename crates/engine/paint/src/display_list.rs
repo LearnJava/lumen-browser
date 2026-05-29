@@ -1777,6 +1777,15 @@ fn emit_inline_frag_box(
 
 /// (offset_x, offset_y) и shadow.color (None → currentColor =
 /// frag.style.color).
+/// Эмитит per-fragment text-shadow DrawText-команды ПЕРЕД основным DrawText.
+///
+/// * Несколько теней: spec CSS Text Decoration L3 §6 — «the first shadow is
+///   on top» — обратный обход (последняя в CSS-списке рисуется первой).
+/// * `blur > 0`: DrawText заворачивается в `PushFilter { Blur(sigma) }` /
+///   `PopFilter`. Renderer применяет двухпроходный Gaussian GPU-шейдер.
+///   sigma = blur / 2.0 (то же соглашение, что box-shadow: CSS Text
+///   Decoration L3 §6 — blur-radius = стандартное отклонение × 2).
+/// * `blur == 0`: DrawText напрямую, без off-screen pass.
 fn emit_text_shadows(
     out: &mut Vec<DisplayCommand>,
     base_rect: Rect,
@@ -1788,6 +1797,12 @@ fn emit_text_shadows(
     }
     for shadow in frag.style.text_shadow.iter().rev() {
         let color = shadow.color.unwrap_or(frag.style.color);
+        let sigma = shadow.blur / 2.0;
+        if sigma > 0.0 {
+            out.push(DisplayCommand::PushFilter {
+                filters: vec![FilterFn::Blur(sigma)],
+            });
+        }
         out.push(DisplayCommand::DrawText {
             rect: Rect::new(
                 base_rect.x + shadow.offset_x,
@@ -1817,6 +1832,9 @@ fn emit_text_shadows(
             },
             tab_size: frag.style.tab_size,
         });
+        if sigma > 0.0 {
+            out.push(DisplayCommand::PopFilter);
+        }
     }
 }
 
@@ -5548,6 +5566,64 @@ mod tests {
         // Shadow color = currentColor = (10, 20, 30).
         assert_eq!(texts[0].1, [10, 20, 30]);
         assert_eq!(texts[1].1, [10, 20, 30]);
+    }
+
+    #[test]
+    fn text_shadow_blur_wraps_in_push_filter() {
+        // blur > 0 → DrawText завёрнут в PushFilter{Blur(sigma)} / PopFilter.
+        // sigma = blur / 2.0 (то же соглашение, что box-shadow).
+        // text-shadow: 2px 3px 8px red  →  sigma = 4.0
+        let dl = build(
+            "<p>hi</p>",
+            "p { text-shadow: 2px 3px 8px red; }",
+        );
+        let push_idx = dl.iter().position(|c| {
+            matches!(c, DisplayCommand::PushFilter { filters }
+                if matches!(filters.as_slice(), [FilterFn::Blur(s)] if (*s - 4.0).abs() < 0.01))
+        });
+        assert!(push_idx.is_some(), "PushFilter{{Blur(4.0)}} должен быть в DL, got {dl:?}");
+        let push_idx = push_idx.unwrap();
+        // Сразу после PushFilter → DrawText тени.
+        assert!(
+            matches!(dl[push_idx + 1], DisplayCommand::DrawText { .. }),
+            "после PushFilter ожидается DrawText"
+        );
+        // За DrawText тени → PopFilter.
+        assert!(
+            matches!(dl[push_idx + 2], DisplayCommand::PopFilter),
+            "после DrawText тени ожидается PopFilter"
+        );
+    }
+
+    #[test]
+    fn text_shadow_no_blur_no_filter_wrap() {
+        // blur == 0 → DrawText тени без PushFilter/PopFilter.
+        let dl = build(
+            "<p>x</p>",
+            "p { text-shadow: 2px 3px red; }",
+        );
+        let has_filter = dl.iter().any(|c| {
+            matches!(c, DisplayCommand::PushFilter { filters }
+                if filters.iter().any(|f| matches!(f, FilterFn::Blur(_))))
+        });
+        assert!(!has_filter, "без blur не должно быть PushFilter, got {dl:?}");
+        // Но DrawText тени должен быть.
+        let shadow_draw = dl.iter().filter(|c| matches!(c, DisplayCommand::DrawText { .. })).count();
+        assert!(shadow_draw >= 2, "должно быть ≥2 DrawText (тень + основной)");
+    }
+
+    #[test]
+    fn text_shadow_blur_multiple_each_wrapped() {
+        // Два text-shadow с blur > 0 — каждый получает свой PushFilter/PopFilter.
+        let dl = build(
+            "<p>z</p>",
+            "p { text-shadow: 1px 1px 6px red, 2px 2px 4px blue; }",
+        );
+        let push_count = dl.iter().filter(|c| {
+            matches!(c, DisplayCommand::PushFilter { filters }
+                if filters.iter().any(|f| matches!(f, FilterFn::Blur(_))))
+        }).count();
+        assert_eq!(push_count, 2, "два PushFilter для двух shadow с blur, got {dl:?}");
     }
 
     // ───────── box-shadow rendering ─────────

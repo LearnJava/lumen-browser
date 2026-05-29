@@ -93,6 +93,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('49', '49-background-blend-mode.html', 0.5, 'CSS Compositing L1 §8.3 — background-blend-mode: multiply/screen/overlay/darken/lighten/difference/exclusion/color-dodge/luminosity'),
     ('50', '50-css-variables.html', 0.5, 'CSS Variables L1 — var() basic/nested/fallback + calc(var()) + inheritance'),
     ('51', '51-scrollbar-rendering.html', 0.5, 'Scrollbar rendering — overflow:scroll/auto vertical/horizontal/both DrawScrollbar track+thumb'),
+    ('52', '52-text-shadow-blur.html', 4.0, 'text-shadow blur — PushFilter{Blur(sigma)} wrapping: sharp/4px/10px/20px blur progression + multi-shadow + glow'),
 ]
 
 # --- PNG reader (stdlib only) ---
