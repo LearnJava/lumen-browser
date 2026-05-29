@@ -348,6 +348,22 @@ Current coverage — `graphic_tests/COVERAGE.md`.
    ```
    New bug: append with next number (current tail: BUG-022). Fixed: change `OPEN` → `FIXED <date>`, do not delete. WONTFIX: stays in file as-is.
 
+### Planned migration (8A.6) — current scheme is transitional
+
+The Python/gdigrab/Edge pipeline (`graphic_tests/run.py`) is a **temporary** solution. Target state (task 8A.6, owner P3):
+
+- Tests move to Rust: `driver/tests/graphic_*.rs` via `lumen-driver` (`InProcessSession`)
+- Each test renders via `session.screenshot()` → offscreen wgpu surface → CPU readback
+- Pixel comparison against committed reference PNGs in `graphic_tests/snapshots/`
+- Software rasterizer (`tiny-skia`, `cfg(test)`-only) ensures cross-OS pixel identity — no GPU driver variance
+- No ffmpeg, no gdigrab, no title bar calibration (`TEST-00` becomes unnecessary)
+- Run in milliseconds: `cargo test -p lumen-driver`
+
+`run.py` moves to a **nightly CI job** (edge-comparison gate), not the primary test gate.
+
+Prerequisites: 8A.1 (`BrowserSession` trait) + 8A.2 (`InProcessSession`) must land first.
+Full spec of test levels (1–4) — [lumen-plan.md](lumen-plan.md) §15.
+
 ---
 
 ## Architecture
