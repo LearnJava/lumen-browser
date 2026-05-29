@@ -231,7 +231,12 @@ def has_tasks(developer: str) -> bool:
     content = status_file.read_text(encoding="utf-8")
     if re.search(r"In progress:", content):
         return True
-    if re.search(r"Next:", content) and re.search(r"- \[", content):
+    # Поддерживаем два формата задач в секции Next:
+    # - markdown-чекбоксы: "- [ ] task"
+    # - таблица: "| 1 | task | ..."
+    if re.search(r"Next:", content) and (
+        re.search(r"- \[", content) or re.search(r"\|\s*\d+\s*\|", content)
+    ):
         return True
     return False
 
