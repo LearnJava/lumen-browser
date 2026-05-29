@@ -746,24 +746,41 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/html-parser/src/tree_builder.rs:195` **fn** `as_doc` — Возвращает ссылку на текущее состояние DOM
 `crates/engine/html-parser/src/tree_builder.rs:204` **fn** `finish` — Финализирует ввод. Хвост push-tokenizer-а токенизируется как
 
-## lumen-image  (22 symbols)
+## lumen-image  (39 symbols)
 
+`crates/engine/image/src/decode_cache.rs:17` **type** `ImageHandle` — A thin, reference-counted pointer to a decoded image stored in `ImageDecodeCache`
+`crates/engine/image/src/decode_cache.rs:23` **struct** `ImageKey` — Cache key identifying a decoded image
+`crates/engine/image/src/decode_cache.rs:27` **fn** `new` — Construct from a URL or hash string
+`crates/engine/image/src/decode_cache.rs:52` **struct** `ImageDecodeCache` — LRU decode cache for decoded raster images
+`crates/engine/image/src/decode_cache.rs:67` **fn** `new` — Create a new cache with the default 256 MB budget
+`crates/engine/image/src/decode_cache.rs:72` **fn** `with_budget` — Create a new cache with a custom memory budget in bytes
+`crates/engine/image/src/decode_cache.rs:82` **fn** `used_bytes` — Current memory used by all cached images (bytes)
+`crates/engine/image/src/decode_cache.rs:87` **fn** `budget_bytes` — Memory budget (bytes)
+`crates/engine/image/src/decode_cache.rs:92` **fn** `len` — Number of cached images
+`crates/engine/image/src/decode_cache.rs:97` **fn** `is_empty` — `true` if no images are cached
+`crates/engine/image/src/decode_cache.rs:102` **fn** `contains` — `true` if the key is present in the cache
+`crates/engine/image/src/decode_cache.rs:109` **fn** `get` — Look up a cached image by key, updating its LRU timestamp
+`crates/engine/image/src/decode_cache.rs:125` **fn** `insert` — Insert a decoded image into the cache and return a handle
+`crates/engine/image/src/decode_cache.rs:158` **fn** `decode_or_get` — Decode and cache an image, or return the existing cached handle
+`crates/engine/image/src/decode_cache.rs:173` **fn** `evict_to_budget` — Evict least-recently-used entries until `used_bytes <= budget_bytes`
+`crates/engine/image/src/decode_cache.rs:197` **fn** `clear` — Evict all cached entries regardless of budget
+`crates/engine/image/src/decode_cache.rs:205` **fn** `lru_candidates` — Return LRU candidates sorted from least- to most-recently used
 `crates/engine/image/src/gif.rs:12` **enum** `GifError` — Ошибки декодирования GIF
 `crates/engine/image/src/gif.rs:37` **fn** `is_gif` — Проверяет, является ли начало `bytes` валидной GIF сигнатурой (GIF87a или GIF89a)
 `crates/engine/image/src/gif.rs:53` **fn** `decode_gif` — Декодирует GIF файл и возвращает первый кадр
 `crates/engine/image/src/jpeg/mod.rs:8` **fn** `decode_jpeg`
 `crates/engine/image/src/jpeg/mod.rs:39` **struct** `JpegError` — Ошибка декодирования JPEG (обёртка над zune-jpeg)
-`crates/engine/image/src/lib.rs:25` **fn** `supported_mime_types` — MIME-типы изображений, которые `decode` умеет декодировать
-`crates/engine/image/src/lib.rs:37` **fn** `decode` — Декодирует растровое изображение по сигнатуре первых байтов
-`crates/engine/image/src/lib.rs:58` **enum** `ImageError` — Ошибка `decode`
-`crates/engine/image/src/lib.rs:102` **struct** `IccProfile` — ICC профиль изображения (опциональный)
-`crates/engine/image/src/lib.rs:110` **fn** `is_valid` — Проверяет минимальный размер ICC профиля (128 байт)
-`crates/engine/image/src/lib.rs:118` **struct** `Image` — Декодированное растровое изображение в плотной row-major упаковке
-`crates/engine/image/src/lib.rs:130` **fn** `to_rgba8` — Возвращает пиксели в формате RGBA8 (4 байта на пиксель)
-`crates/engine/image/src/lib.rs:156` **fn** `resize_bilinear` — Масштабирует `src` до `(dst_w × dst_h)` билинейной интерполяцией
-`crates/engine/image/src/lib.rs:208` **fn** `resize_area_avg` — Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter)
-`crates/engine/image/src/lib.rs:267` **enum** `PixelFormat` — Формат пикселя декодированного изображения. Все варианты — 8 бит на канал
-`crates/engine/image/src/lib.rs:291` **enum** `DecodeError` — Ошибки декодирования PNG
+`crates/engine/image/src/lib.rs:27` **fn** `supported_mime_types` — MIME-типы изображений, которые `decode` умеет декодировать
+`crates/engine/image/src/lib.rs:39` **fn** `decode` — Декодирует растровое изображение по сигнатуре первых байтов
+`crates/engine/image/src/lib.rs:60` **enum** `ImageError` — Ошибка `decode`
+`crates/engine/image/src/lib.rs:104` **struct** `IccProfile` — ICC профиль изображения (опциональный)
+`crates/engine/image/src/lib.rs:112` **fn** `is_valid` — Проверяет минимальный размер ICC профиля (128 байт)
+`crates/engine/image/src/lib.rs:120` **struct** `Image` — Декодированное растровое изображение в плотной row-major упаковке
+`crates/engine/image/src/lib.rs:132` **fn** `to_rgba8` — Возвращает пиксели в формате RGBA8 (4 байта на пиксель)
+`crates/engine/image/src/lib.rs:158` **fn** `resize_bilinear` — Масштабирует `src` до `(dst_w × dst_h)` билинейной интерполяцией
+`crates/engine/image/src/lib.rs:210` **fn** `resize_area_avg` — Масштабирует `src` до `(dst_w × dst_h)` усреднением по площади (box filter)
+`crates/engine/image/src/lib.rs:269` **enum** `PixelFormat` — Формат пикселя декодированного изображения. Все варианты — 8 бит на канал
+`crates/engine/image/src/lib.rs:293` **enum** `DecodeError` — Ошибки декодирования PNG
 `crates/engine/image/src/png/mod.rs:54` **fn** `decode_png`
 `crates/engine/image/src/png/mod.rs:96` **fn** `encode_png_rgba8` — Кодирует RGBA8 изображение в PNG формат
 `crates/engine/image/src/webp/mod.rs:24` **struct** `WebpError` — Ошибка декодирования WebP
@@ -1016,11 +1033,11 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/stacking.rs:127` **fn** `build` — Построение stacking-дерева из layout-дерева
 `crates/engine/layout/src/stacking.rs:149` **fn** `root`
 `crates/engine/layout/src/stacking.rs:181` **fn** `creates_stacking_context` — CSS Positioned Layout L3 §9.10 — создаёт ли элемент собственный
-`crates/engine/layout/src/stacking.rs:246` **fn** `box_can_own_stacking_context` — Анонимные / неучаствующие в layout box-ы не имеют DOM-элемента, к
-`crates/engine/layout/src/stacking.rs:288` **struct** `PaintOrder` — Painting order — линейная последовательность пар `(StackingContextId,
-`crates/engine/layout/src/stacking.rs:308` **fn** `from_tree` — Строит painting order по CSS 2.1 Appendix E + CSS Painting Order L3 §3
-`crates/engine/layout/src/stacking.rs:316` **fn** `len`
-`crates/engine/layout/src/stacking.rs:320` **fn** `is_empty`
+`crates/engine/layout/src/stacking.rs:252` **fn** `box_can_own_stacking_context` — Анонимные / неучаствующие в layout box-ы не имеют DOM-элемента, к
+`crates/engine/layout/src/stacking.rs:294` **struct** `PaintOrder` — Painting order — линейная последовательность пар `(StackingContextId,
+`crates/engine/layout/src/stacking.rs:314` **fn** `from_tree` — Строит painting order по CSS 2.1 Appendix E + CSS Painting Order L3 §3
+`crates/engine/layout/src/stacking.rs:322` **fn** `len`
+`crates/engine/layout/src/stacking.rs:326` **fn** `is_empty`
 `crates/engine/layout/src/style.rs:29` **enum** `Display`
 `crates/engine/layout/src/style.rs:70` **enum** `TextAlign`
 `crates/engine/layout/src/style.rs:86` **enum** `TextAlignLast` — CSS Text L3 §7.2 — `text-align-last`. NOT inherited. Initial: `Auto`
@@ -2122,4 +2139,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2060 symbols in 19 crates*
+*Total: 2077 symbols in 19 crates*
