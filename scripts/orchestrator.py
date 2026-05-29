@@ -245,9 +245,13 @@ def has_tasks(developer: str) -> bool:
     if in_progress and in_progress != "_(none)_":
         return True
 
-    # Секция "Next": содержит строки таблицы | N | или чекбоксы - [
+    # Секция "Next": содержит строки таблицы | N |, чекбоксы - [ или заголовки ### N.
     next_section = _extract_section(content, "Next")
-    if re.search(r"\|\s*\d+\s*\|", next_section) or re.search(r"- \[", next_section):
+    if (
+        re.search(r"\|\s*\d+\s*\|", next_section)
+        or re.search(r"- \[", next_section)
+        or re.search(r"^###\s+\d+\.", next_section, re.MULTILINE)
+    ):
         return True
 
     return False
