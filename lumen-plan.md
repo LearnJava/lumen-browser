@@ -298,7 +298,7 @@
 | 7E.5 | ⬜ JS console (eval в контексте страницы) | `devtools` + `JsRuntime::eval` | — |
 | 8 | ⬜ **`[P3]` Automation API** (§6.11, [ADR-006](docs/decisions/ADR-006-automation-api.md)) | First-class automation surface, фундамент собственных тестов и внешних клиентов | `lumen-driver`, `lumen-mcp-server`, `lumen-bidi-server` |
 | 8A | ⬜ **`[P3]` `lumen-driver` крейт + `BrowserSession` trait + `InProcessSession`** (Phase 0, **критичный для тестирования пораньше**) | Уровни 2-3 тестирования (§15), embed-сценарии | `crates/driver/` |
-| 8A.1 | ⬜ `BrowserSession` trait в `lumen-core::ext` (sigs + todo!()) | `core/src/ext/automation.rs` | — |
+| 8A.1 | ✅ `BrowserSession` trait в `lumen-core::ext` + `NullBrowserSession` заглушка (object-safe, `Send`) | `core/src/ext.rs:1483` | тесты: null-impl, object-safety, Send — 2026-05-29 |
 | 8A.2 | ⬜ `InProcessSession` impl (переиспользует существующий pipeline из `lumen-shell`) | `driver/src/in_process.rs` | — |
 | 8A.3 | ✅ **`[P3+P2]` Off-screen рендер** (`Renderer::render_to_image() -> Image`) | `paint/src/renderer.rs` | P2/P3: `new_headless()` без winit + `render_to_image()` GPU readback — 2026-05-27 |
 | 8A.4 | ✅ **`[P3+P1]` Structural getters**: `layout_box`, `computed_style` через handle / selector | `layout` exposers: `find_box_by_selector`, `computed_style_by_selector`, `ComputedStyleSnapshot` | 2026-05-27 |
