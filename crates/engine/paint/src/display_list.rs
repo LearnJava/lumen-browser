@@ -3474,9 +3474,11 @@ mod tests {
             })
             .collect();
         assert_eq!(draw_texts.len(), 2);
-        let line_h = 16.0_f32 * 1.2; // font_size=16, line_height=1.2
-        assert!((draw_texts[0].y - 0.0).abs() < 0.01);
-        assert!((draw_texts[1].y - line_h).abs() < 0.1, "y1={}", draw_texts[1].y);
+        let line_h = 16.0_f32 * 1.2; // font_size=16, line_height=1.2 → 19.2
+        // CSS 2.1 §10.8.1: the first line carries half-leading = (19.2-16)/2 = 1.6.
+        let half_leading = (line_h - 16.0) / 2.0;
+        assert!((draw_texts[0].y - half_leading).abs() < 0.01, "y0={}", draw_texts[0].y);
+        assert!((draw_texts[1].y - (half_leading + line_h)).abs() < 0.1, "y1={}", draw_texts[1].y);
     }
 
     /// Текст без переноса всё равно рисуется одной командой.
@@ -3571,10 +3573,11 @@ mod tests {
         );
         let rects = fill_rects(&dl);
         assert_eq!(rects.len(), 1);
-        // line_y = 0, baseline ≈ 0 + 16*0.80 = 12.8, underline y ≈ 12.8 + 16*0.10 = 14.4.
+        // First line gets half-leading = (19.2-16)/2 = 1.6 (CSS 2.1 §10.8.1),
+        // baseline ≈ 1.6 + 16*0.80 = 14.4, underline y ≈ 14.4 + 16*0.10 = 16.0.
         assert!(
-            (rects[0].y - 14.4).abs() < 0.5,
-            "underline y should be near 14.4, got {}",
+            (rects[0].y - 16.0).abs() < 0.5,
+            "underline y should be near 16.0, got {}",
             rects[0].y
         );
     }
@@ -3589,10 +3592,10 @@ mod tests {
         );
         let rects = fill_rects(&dl);
         assert_eq!(rects.len(), 1);
-        // baseline ≈ 12.8, line-through y ≈ 12.8 - 16*0.30 = 8.0.
+        // baseline ≈ 1.6 (half-leading) + 12.8 = 14.4, line-through y ≈ 14.4 - 16*0.30 = 9.6.
         assert!(
-            (rects[0].y - 8.0).abs() < 0.5,
-            "line-through y should be near 8.0, got {}",
+            (rects[0].y - 9.6).abs() < 0.5,
+            "line-through y should be near 9.6, got {}",
             rects[0].y
         );
     }
@@ -3607,9 +3610,9 @@ mod tests {
         );
         let rects = fill_rects(&dl);
         assert_eq!(rects.len(), 1);
-        // baseline ≈ 12.8, overline y ≈ 12.8 - 16*0.78 ≈ 0.32.
+        // baseline ≈ 1.6 (half-leading) + 12.8 = 14.4, overline y ≈ 14.4 - 16*0.78 ≈ 1.9.
         assert!(
-            rects[0].y < 1.0,
+            rects[0].y < 2.5,
             "overline y should be near top, got {}",
             rects[0].y
         );
@@ -3984,9 +3987,11 @@ mod tests {
             })
             .collect();
         assert_eq!(rects.len(), 2);
-        assert!((rects[0].y - 0.0).abs() < 0.01);
         let line_h = 16.0_f32 * 1.2;
-        assert!((rects[1].y - line_h).abs() < 0.1, "y1={}", rects[1].y);
+        // First line carries half-leading = (19.2-16)/2 = 1.6 (CSS 2.1 §10.8.1).
+        let half_leading = (line_h - 16.0) / 2.0;
+        assert!((rects[0].y - half_leading).abs() < 0.01, "y0={}", rects[0].y);
+        assert!((rects[1].y - (half_leading + line_h)).abs() < 0.1, "y1={}", rects[1].y);
     }
 
     // ── Тесты border рендеринга ─────────────────────────────────────────────
@@ -5010,13 +5015,17 @@ mod tests {
 
     #[test]
     fn ordered_overflow_x_alone_triggers_clip() {
-        // Любое из overflow-x / overflow-y ≠ visible — достаточно для clip.
+        // overflow-x:hidden + overflow-y:visible → CSS Overflow L3 §3.1 coercion
+        // computes overflow-y to `auto`, which is a scroll container, so the
+        // clip is established via PushScrollLayer (not a plain PushClipRect).
         let dl = build_ordered(
             "<div>x</div>",
             "div { overflow-x: hidden; width: 100px; height: 50px; }",
         );
-        let pushes_clip = count_variant(&dl, |c| matches!(c, DisplayCommand::PushClipRect { .. }));
-        assert_eq!(pushes_clip, 1);
+        let clips = count_variant(&dl, |c| {
+            matches!(c, DisplayCommand::PushClipRect { .. } | DisplayCommand::PushScrollLayer { .. })
+        });
+        assert_eq!(clips, 1, "overflow-x:hidden establishes one clip layer");
     }
 
     #[test]
@@ -5108,9 +5117,11 @@ mod tests {
     }
 
     #[test]
-    fn ordered_clip_overflow_x_hidden_y_visible_clips_x_only() {
-        // overflow-x: hidden; overflow-y: visible — только X ограничен,
-        // Y использует BIG-сентинель (не клипает по вертикали).
+    fn ordered_clip_overflow_x_hidden_y_visible_coerces_to_both_clip() {
+        // CSS Overflow L3 §3.1: overflow-y:visible paired with a non-visible
+        // overflow-x coerces to `auto`. `auto` is a scroll container, so the
+        // clip is established via PushScrollLayer; both axes are constrained to
+        // the padding box (≈100×50), no unconstrained-axis sentinel. (BUG-020.)
         let dl = build_ordered(
             "<div>x</div>",
             "div { overflow-x: hidden; overflow-y: visible; width: 100px; height: 50px; background: #f00; }",
@@ -5118,19 +5129,20 @@ mod tests {
         let rect = dl
             .iter()
             .find_map(|c| match c {
+                DisplayCommand::PushScrollLayer { clip_rect, .. } => Some(*clip_rect),
                 DisplayCommand::PushClipRect { rect } => Some(*rect),
                 _ => None,
             })
-            .expect("должен быть PushClipRect для overflow-x:hidden");
-        // X должен быть ограничен шириной бокса (≈100px).
+            .expect("должен быть clip-слой (PushScrollLayer) для overflow-x:hidden");
+        // Both axes constrained to the box after visible→auto coercion.
         assert!(rect.width < 1_000.0, "x-axis should be clipped: width={}", rect.width);
-        // Y не должен быть ограничен — высота должна быть огромным сентинелем.
-        assert!(rect.height > 1_000.0, "y-axis should not be clipped: height={}", rect.height);
+        assert!(rect.height < 1_000.0, "y-axis should be clipped after coercion: height={}", rect.height);
     }
 
     #[test]
-    fn ordered_clip_overflow_x_visible_y_hidden_clips_y_only() {
-        // overflow-x: visible; overflow-y: hidden — только Y ограничен.
+    fn ordered_clip_overflow_x_visible_y_hidden_coerces_to_both_clip() {
+        // Symmetric: overflow-x:visible coerces to `auto` → both axes clip via
+        // a scroll layer (the auto axis is a scroll container).
         let dl = build_ordered(
             "<div>x</div>",
             "div { overflow-x: visible; overflow-y: hidden; width: 100px; height: 50px; background: #f00; }",
@@ -5138,14 +5150,13 @@ mod tests {
         let rect = dl
             .iter()
             .find_map(|c| match c {
+                DisplayCommand::PushScrollLayer { clip_rect, .. } => Some(*clip_rect),
                 DisplayCommand::PushClipRect { rect } => Some(*rect),
                 _ => None,
             })
-            .expect("должен быть PushClipRect для overflow-y:hidden");
-        // Y должен быть ограничен высотой бокса (≈50px).
+            .expect("должен быть clip-слой (PushScrollLayer) для overflow-y:hidden");
         assert!(rect.height < 1_000.0, "y-axis should be clipped: height={}", rect.height);
-        // X не должен быть ограничен.
-        assert!(rect.width > 1_000.0, "x-axis should not be clipped: width={}", rect.width);
+        assert!(rect.width < 1_000.0, "x-axis should be clipped after coercion: width={}", rect.width);
     }
 
     #[test]
@@ -5767,7 +5778,7 @@ mod tests {
 
     #[test]
     fn backdrop_filter_emits_push_pop_commands() {
-        let dl = build(
+        let dl = build_ordered(
             "<div></div>",
             "div { width: 100px; height: 100px; backdrop-filter: blur(8px); }",
         );
@@ -5782,7 +5793,7 @@ mod tests {
 
     #[test]
     fn backdrop_filter_bounds_match_element_rect() {
-        let dl = build(
+        let dl = build_ordered(
             "<div></div>",
             "div { width: 200px; height: 100px; backdrop-filter: grayscale(1); }",
         );
@@ -5797,7 +5808,7 @@ mod tests {
 
     #[test]
     fn backdrop_filter_chain_parsed_correctly() {
-        let dl = build(
+        let dl = build_ordered(
             "<div></div>",
             "div { width: 50px; height: 50px; backdrop-filter: blur(4px) brightness(0.8); }",
         );
@@ -5813,7 +5824,7 @@ mod tests {
     #[test]
     fn backdrop_filter_and_filter_both_emit() {
         // When both filter and backdrop-filter are set, both Push commands appear.
-        let dl = build(
+        let dl = build_ordered(
             "<div></div>",
             "div { width: 50px; height: 50px; filter: invert(1); backdrop-filter: blur(6px); }",
         );
