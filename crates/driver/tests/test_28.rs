@@ -20,7 +20,7 @@ fn navigate(session: &mut InProcessSession, file: &str) {
         .expect("navigate");
 }
 
-fn box_of<'a>(session: &mut InProcessSession, sel: &str) -> lumen_driver::BoxModel {
+fn box_of(session: &mut InProcessSession, sel: &str) -> lumen_driver::BoxModel {
     session
         .layout_box_by_selector(sel)
         .expect("query")
