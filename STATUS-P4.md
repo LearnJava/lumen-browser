@@ -130,6 +130,15 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
 - **Entry points:** `lumen-layout/src/lib.rs` (collect / set API), `paint/src/display_list.rs:2736` (emitter), `paint/src/renderer.rs` (PushScrollLayer handler after PopTransform).
 - **CSS comment location:** `display_list.rs:2727` `// CSS: overflow — P4 wires:...` comment.
 
+### `scrollbar-width` / `scrollbar-color` (P2 feature p2-scrollbar-rendering)
+- **Status:** `DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical }` implemented. Renderer draws track + thumb as two semi-transparent fill quads. Default appearance: 12px gutter, track rgba(0,0,0,0.08), thumb rgba(0,0,0,0.38).
+- **P4 task:**
+  1. Add `scrollbar_width: ScrollbarWidth` to `ComputedStyle` (values: `auto | thin | none`, default `auto`). Parse in `apply_declaration("scrollbar-width")`.
+  2. Add `scrollbar_color: Option<(CssColor, CssColor)>` (thumb, track pair). Parse `scrollbar-color: <color> <color>` in `apply_declaration("scrollbar-color")`.
+  3. In `display_list.rs` `walk()`: when emitting `DrawScrollbar`, if `b.style.scrollbar_width == None` skip entirely (no scrollbar). Thread `scrollbar_color` through to `DrawScrollbar` fields so renderer can use it instead of hard-coded constants.
+  4. In `renderer.rs` `DrawScrollbar` handler: read the per-command color fields instead of `TRACK_COLOR`/`THUMB_COLOR` constants.
+- **Entry points:** `paint/src/display_list.rs` — `scrollbar_rects()` helper + `walk()` emit block after `PopScrollLayer`. `paint/src/renderer.rs` — `DrawScrollbar` match arm. `SCROLLBAR_WIDTH: f32 = 12.0` const controls default gutter width.
+
 ---
 
 ## Recent merges
