@@ -11,7 +11,6 @@ _(none)_
 
 | # | Task | Branch | Актуальное состояние |
 |---|---|---|---|
-| 8A.1 | BrowserSession trait | `p3-8a1-browser-session` | **Код готов** — `crates/core/src/ext.rs:1514`. Нужно: `cargo test -p lumen-core`, потом обновить `lumen-plan.md` ⬜→✅ |
 | 8A.2 | InProcessSession | `p3-8a2-in-process-session` | **Код готов** — `crates/driver/src/session.rs`. Нужно: `cargo test -p lumen-driver`, закрыть `todo!()`, clippy, обновить план |
 | 8A.6 | Migrate graphic tests | `p3-8a6-migrate-graphic-tests` | **Частично готово** — `crates/driver/tests/test_01..49.rs`. Нужно: проверить покрытие всех 22 оригинальных HTML-тестов, сгенерировать эталонные PNG в `graphic_tests/snapshots/` |
 
@@ -45,7 +44,8 @@ _(none)_
 ---
 
 ## Recent fixes
-_(bugs marked as FIXED will be listed here)_
+
+- **8A.1 BrowserSession trait** (2026-05-29) — `BrowserSession` trait + `NullBrowserSession` заглушка в `crates/core/src/ext.rs:1514` (object-safe, `Send`). Тесты: null-impl, object-safety, Send. `lumen-plan.md` ⬜→✅. Влито `p3-8a1-browser-session`.
 
 ---
 
