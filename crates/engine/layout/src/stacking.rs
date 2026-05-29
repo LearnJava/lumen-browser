@@ -201,6 +201,12 @@ pub fn creates_stacking_context(style: &ComputedStyle) -> bool {
     if !style.filter.is_empty() {
         return true;
     }
+    // CSS Filter Effects L2 §2 / CSS Compositing L1: a `backdrop-filter` other
+    // than `none` creates a stacking context (the element needs an isolated
+    // layer to capture and filter the backdrop behind it).
+    if !style.backdrop_filter.is_empty() {
+        return true;
+    }
     if style.clip_path.is_some() {
         return true;
     }
@@ -637,6 +643,15 @@ mod tests {
             "<div>x</div>",
             "div { clip-path: circle(50px at 50px 50px); }",
         );
+        assert_eq!(tree.contexts.len(), 2);
+    }
+
+    #[test]
+    fn backdrop_filter_creates_stacking_context() {
+        // CSS Filter Effects L2 §2: backdrop-filter != none creates a stacking
+        // context (regression: the trigger was missing, so the paint layer-ops
+        // dropped PushBackdropFilter — empty display list for backdrop-only divs).
+        let tree = build_tree("<div>x</div>", "div { backdrop-filter: blur(8px); }");
         assert_eq!(tree.contexts.len(), 2);
     }
 

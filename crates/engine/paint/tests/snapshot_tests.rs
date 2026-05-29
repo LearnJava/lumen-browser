@@ -302,10 +302,13 @@ fn overflow_visible_no_clip() {
     assert!(!actual.contains("PushClipRect"), "overflow:visible must not clip");
 }
 
-/// overflow-x: hidden, overflow-y: visible → clip rect width = container width,
-/// height sentinel = 2 000 000 (very large, unconstrained axis).
+/// CSS Overflow L3 §3.1 visibility coercion: when one axis is `visible` and the
+/// other is not, the `visible` axis computes to `auto`. So `overflow-x:hidden;
+/// overflow-y:visible` becomes `hidden`/`auto`. `auto` is a scroll container, so
+/// the clip is established via PushScrollLayer with BOTH axes constrained to the
+/// padding box (160×100), no unconstrained-axis sentinel. (BUG-020 + scroll-layer.)
 #[test]
-fn overflow_x_hidden_y_visible_x_only_clip() {
+fn overflow_x_hidden_y_visible_coerces_to_both_clip() {
     let actual = build(
         r#"<div style="width:160px;height:100px;overflow-x:hidden;overflow-y:visible">
              <div style="width:220px;height:140px;background:blue"></div>
@@ -313,15 +316,19 @@ fn overflow_x_hidden_y_visible_x_only_clip() {
         "",
         800.0,
     );
-    assert!(actual.contains("PushClipRect"), "overflow-x:hidden → PushClipRect");
-    // The sentinel for the unconstrained axis is 2 000 000.
-    assert!(actual.contains("2000000.00"), "unconstrained y uses large sentinel");
+    // overflow-y:visible coerces to auto (scroll) → clip both axes to padding box.
+    assert!(
+        actual.contains("PushScrollLayer clip=(0.00,0.00,160.00,100.00)"),
+        "coerced hidden/auto clips both axes to padding box; got:\n{actual}"
+    );
+    // No unconstrained-axis sentinel: coercion clips both axes.
+    assert!(!actual.contains("2000000.00"), "no unconstrained sentinel after coercion");
 }
 
-/// overflow-x: visible, overflow-y: hidden → clip rect height = container height,
-/// width sentinel = 2 000 000.
+/// Symmetric to the above: `overflow-x:visible; overflow-y:hidden` coerces to
+/// `auto`/`hidden` → both axes clip to the padding box (160×100) via a scroll layer.
 #[test]
-fn overflow_y_hidden_x_visible_y_only_clip() {
+fn overflow_y_hidden_x_visible_coerces_to_both_clip() {
     let actual = build(
         r#"<div style="width:160px;height:100px;overflow-x:visible;overflow-y:hidden">
              <div style="width:220px;height:140px;background:green"></div>
@@ -329,6 +336,9 @@ fn overflow_y_hidden_x_visible_y_only_clip() {
         "",
         800.0,
     );
-    assert!(actual.contains("PushClipRect"), "overflow-y:hidden → PushClipRect");
-    assert!(actual.contains("2000000.00"), "unconstrained x uses large sentinel");
+    assert!(
+        actual.contains("PushScrollLayer clip=(0.00,0.00,160.00,100.00)"),
+        "coerced auto/hidden clips both axes to padding box; got:\n{actual}"
+    );
+    assert!(!actual.contains("2000000.00"), "no unconstrained sentinel after coercion");
 }
