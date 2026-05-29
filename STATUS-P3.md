@@ -9,11 +9,31 @@ _(none)_
 
 ## Next
 
-| # | Task | Branch | Актуальное состояние |
-|---|---|---|---|
-| 8A.6 | Migrate graphic tests | `p3-8a6-migrate-graphic-tests` | **Частично готово** — `crates/driver/tests/test_01..49.rs`. Нужно: проверить покрытие всех 22 оригинальных HTML-тестов, сгенерировать эталонные PNG в `graphic_tests/snapshots/` |
+Приоритет сверху вниз. Каждая — отдельная ветка `p3-bug-<id>` / `p3-8a6-...`, отдельный worktree.
 
-**Порядок:** 8A.1 → 8A.2 → 8A.6 (каждая зависит от предыдущей)
+### 1. BUG-046 — 3 пред-существующих падения `lumen-layout --lib` (приоритет: высокий)
+
+`cargo test -p lumen-layout --lib` красный (2059 ok, 3 fail) — НЕ связано с моими paint-фиксами, было до них:
+
+- `tests::collect_picture_supported_type_picked` и `_unsupported_type_falls_back` (`layout/src/lib.rs:12253,12269`) — `<picture>` выбирает `hero.webp` вместо `hero.jpg`. **Разобраться:** webp теперь реально декодируется (`lumen-image`)? Если да — тест устарел (webp = supported, обновить ожидание); если нет — регрессия в логике выбора source по типу.
+- `tests::non_cell_col_row_span_defaults_to_one` (`layout/src/lib.rs:979`) — panic `expected at least one element child`. Скорее всего тест строит дерево напрямую, а full HTML5 tree-builder теперь оборачивает (ср. BUG-040/041 — там был такой же паттерн с `<html>`-оборачиванием). Поправить доступ к узлу или ожидание.
+
+Ветка: `p3-bug-046-layout-tests`. После фикса — `BUGS.md` BUG-046 OPEN→FIXED.
+
+### 2. 8A.6 — миграция graphic_tests (приоритет: средний, большая задача)
+
+Branch: `p3-8a6-migrate-graphic-tests`. **Текущее состояние (оценка 2026-05-29):** каркас есть (50 HTML, 50 PNG в `graphic_tests/snapshots/`, 50 Rust-тестов `crates/driver/tests/test_00..49.rs`), все зелёные. НО это **в основном заглушки**: ~40 из 50 тестов делают только `assert!(!boxes.is_empty())` и не проверяют само свойство. План (§15, `lumen-plan.md:1161`) требует структурных ассертов вида `box.border_box.width == 200.0`.
+
+Что сделать:
+- **(а) Усилить ~40 заглушек** до настоящих структурных ассертов. Ground-truth брать из `cargo run -p lumen-shell -- --dump-layout graphic_tests/NN-*.html` (dump снова работает после фикса BUG-044). Сверять с комментариями в HTML (напр. `07-box-sizing.html` имеет точные ожидаемые размеры CB/BB). Образец хорошего теста — `crates/driver/tests/test_01_sanity.rs` (проверяет размеры/позиции/цвета).
+- **(б) Pixel-сравнение с эталонами PNG** (план §15 «уровень 3») — пока заблокировано: `crates/engine/paint/src/cpu_raster.rs` поддерживает лишь 4 примитива (FillRect/FillRoundedRect/DrawBorder/DrawOutline), без текста/картинок/градиентов. И текущие PNG сгенерированы GPU-путём (`session.screenshot()` → wgpu), а не tiny-skia CPU — значит они НЕ кросс-OS детерминированы, как требует план. Для полноценного уровня-3 нужно: расширить `cpu_raster` ИЛИ переключить driver на CPU-путь (`cpu-render` feature) и перегенерировать эталоны через него, затем добавить тест сравнения. Большой объём — можно отдельной под-задачей.
+
+**Не «понижать планку»:** тестовые HTML — ground truth, при расхождении чинить движок (или заводить BUG), а не упрощать тест.
+
+### Постоянно
+
+- `cargo test -p lumen-paint` и `cargo test -p lumen-layout` держать зелёными. Если parallel-сессии (P1/P2/P4) мерджат и ломают тесты — это твой приоритет №0 (как было с BUG-043/044/045 29.05).
+- Проверять `grep "OPEN" BUGS.md` на новые баги.
 
 ---
 
