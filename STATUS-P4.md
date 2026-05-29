@@ -86,6 +86,15 @@ Ordered by priority from CSS-SPECS.md. Items verified against CSS-SPECS.md 2026-
   2. Implement `::slotted()` pseudo-element matching
   3. Wire in `build_box()` (box_tree.rs)
 
+### `font-variation-settings` TextMeasurer wiring (P1 feature p1-font-variation-wiring)
+- **Status:** `Font::advance_width_varied(glyph_id, hmtx, coords)` реализована в `lumen-font/src/face.rs`. `rasterize_and_insert` в renderer.rs применяет HVAR delta при растеризации. gvar outline deltas уже работали ранее.
+- **P4 task:**
+  1. Добавить `font_variation_settings: Vec<([u8; 4], f32)>` в `ComputedStyle` (style.rs). Парсинг CSS значения типа `"wght" 600` → `Vec<([u8;4], f32)>`.
+  2. Расширить `TextMeasurer` трейт методом `char_width_varied(&self, ch, font_size_px, axes: &[([u8;4], f32)]) -> f32` в `lumen-layout/src/lib.rs`. Реализовать в `FontMeasurer` (paint/src/lib.rs) через `Font::advance_width_varied`.
+  3. Обновить `measure_text_w` и вызовы в box_tree.rs для передачи `variation_axes` из `ComputedStyle`.
+- **Entry points:** `lumen-layout/src/lib.rs:88` (`TextMeasurer` трейт, комментарий `// CSS: font-variation-settings`), `lumen-layout/src/box_tree.rs:4606` (`measure_text_w`, аналогичный комментарий)
+- **CSS comment locations:** `lib.rs:88`, `box_tree.rs:4606`
+
 ---
 
 ## Recent merges

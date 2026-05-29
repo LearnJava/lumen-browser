@@ -5,9 +5,7 @@
 ---
 
 ## In progress
-
-`font-variation-settings` rasterizer wiring  branch: p1-font-variation-wiring
-Next step: Font::advance_width_varied() in face.rs + HVAR wiring in renderer.rs  crates/engine/font/src/face.rs + crates/engine/paint/src/renderer.rs:6089
+_(none)_
 
 ---
 
@@ -17,15 +15,15 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | `font-variation-settings` rasterizer wiring — применять gvar/HVAR deltas при растеризации; добавить `// CSS: font-variation-settings` на call site для P4 | `font`, `layout` | M | none |
-| 2 | Image viewport-gating (10E.3) — layout декодирует изображения только для bbox ∈ viewport ± 2 экрана, `layout/src/image_gating.rs` | `layout`, `image` | M | none |
-| 3 | Click-hint overlay iterator (7B.2 blocker) — публичный итератор по кликабельным элементам из `lumen-layout`; P3 подключает в shell | `layout` | S | none |
-| 4 | Shadow DOM JS binding stubs — lifecycle callbacks для P3 (`connectedCallback`, `disconnectedCallback`, `attributeChangedCallback`) в `lumen-dom` | `dom` | M | P3 JS bindings |
+| 1 | Image viewport-gating (10E.3) — layout декодирует изображения только для bbox ∈ viewport ± 2 экрана, `layout/src/image_gating.rs` | `layout`, `image` | M | none |
+| 2 | Click-hint overlay iterator (7B.2 blocker) — публичный итератор по кликабельным элементам из `lumen-layout`; P3 подключает в shell | `layout` | S | none |
+| 3 | Shadow DOM JS binding stubs — lifecycle callbacks для P3 (`connectedCallback`, `disconnectedCallback`, `attributeChangedCallback`) в `lumen-dom` | `dom` | M | P3 JS bindings |
 
 ---
 
 ## Recent merges
 
+- **p1-font-variation-wiring** ✅ 2026-05-29 — `Font::advance_width_varied(glyph_id, hmtx, coords)` применяет HVAR delta к advance width в `rasterize_and_insert`; gvar deltas для outline уже работали. `// CSS: font-variation-settings` комментарии в `TextMeasurer` и `measure_text_w` для P4. 4 новых теста (3 unit + 1 integration). 309+13+6 тестов lumen-font проходят.
 - **p1-lazy-io** ✅ 2026-05-29 — `loading="lazy"` через IntersectionObserver event source: `_lumen_init_lazy_images()` создаёт internal IO с rootMargin 1-viewport-height, `_lumen_deliver_lazy_images()` → no-op; добавлен `_parse_root_margin()` + rootMargin-aware delivery в IO; исправлен BUG-042 (QuickJsRuntime::resume stub). 244 JS-теста проходят.
 - **p1-sticky-layout** ✅ 2026-05-29 — `StickyBox` + `collect_sticky_boxes()` + `compute_sticky_offset()` в `lumen-layout/src/lib.rs`. Algorithm stub: sticky в normal flow; collect собирает static_rect и px-инсеты (non-px → None); compute — чистая функция `(scroll_x, scroll_y, vp_w, vp_h) → (dx, dy)`. Дедупликация по NodeId. 9 unit-тестов. STATUS-P4.md "Needs wiring" обновлён.
 - **p1-hyphenation-provider** ✅ 2026-05-29 — `KnuthLiangHyphenation`: реальный `HyphenationProvider` через provisional `hyphenation = "0.8"` (Knuth–Liang, TeX-словари). 11 локалей (en/ru/de/fr/uk/nl/es/pt/it/pl/cs). Подключён в `lumen-shell` через `layout_measured_hyp`. 88 unit + 6 integration tests.
