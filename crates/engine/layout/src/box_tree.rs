@@ -3077,6 +3077,9 @@ fn lay_out(
             shift_tree(b, off_x, off_y);
         }
     }
+    // CSS: position: sticky — treated as normal flow here; P4 resolves inset values
+    // (top/right/bottom/left) from ComputedStyle; P3 calls collect_sticky_boxes() +
+    // compute_sticky_offset() to apply scroll-driven paint transforms at render time.
 }
 
 /// CSS 2.1 §17.5 — table row layout with colspan/rowspan support.
