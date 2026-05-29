@@ -386,9 +386,9 @@
 | 10D.1 | ✅ Audit `lumen-layout` — no `static MUT` / `lazy_static` / `OnceCell` в hot path | `layout/src/lib.rs` | ADR-008 Invariant 3 ✅ 2026-05-27 |
 | 10D.2 | ✅ Audit `lumen-paint::display_list` — pure-function requirement met | `paint/src/display_list.rs` | ADR-008 Invariant 3 ✅ 2026-05-27 |
 | 10D.3 | ⬜ Cross-tab caches — отдельный crate с явным eviction API | `font/src/atlas.rs` + `image/src/decode_cache.rs` | — |
-| 10E | ⬜ **`[P3]` T0 экономия: image decode cache LRU + viewport-gating** (Phase 1, **главный источник экономии**) | Декодировать только viewport ± buffer; при скролле — decode/discard | `image/src/decode_cache.rs` |
-| 10E.1 | ⬜ `ImageDecoder::decode(...)` возвращает `ImageHandle` (тонкий ref), а не `DecodedImage` | `image/src/lib.rs` | binding по ADR-008 §«ImageDecoder с handle» |
-| 10E.2 | ⬜ `ImageDecodeCache` с LRU + memory budget (256 MB default) | `image/src/decode_cache.rs` | — |
+| 10E | 🟡 **`[P3]` T0 экономия: image decode cache LRU + viewport-gating** (Phase 1, **главный источник экономии**) | 10E.1+10E.2 ✅; 10E.4 ⬜ | `image/src/decode_cache.rs` |
+| 10E.1 | ✅ `ImageHandle` (`Arc<Image>`) + `ImageKey` — тонкий ref, экспортирован из `lumen-image` | `image/src/decode_cache.rs` | 2026-05-30 |
+| 10E.2 | ✅ `ImageDecodeCache` с LRU + memory budget (256 MB default), 9 unit-тестов | `image/src/decode_cache.rs` | 2026-05-30 |
 | 10E.3 | ✅ Viewport-gating в layout: `gate_image_requests(root, viewport, scroll_x, scroll_y)` — AABB intersection, HashSet<NodeId>, 7 тестов | `layout/src/image_gating.rs` | 2026-05-29 |
 | 10E.4 | ⬜ Scroll-discard: при удалении от viewport на >3 экрана — handle освобождается | `shell/src/scroll/decode_gating.rs` | — |
 | 10F | ✅ **`[P1+P3]` T0 экономия: GPU layer LRU + texture recycling** | `LayerCache` + texture pool — 7+2 тестов | `paint/src/layer_cache.rs` |
