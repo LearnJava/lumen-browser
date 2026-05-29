@@ -895,15 +895,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/layout/src/box_tree.rs:783` **fn** `collect_image_requests` — Обходит DOM и возвращает запросы на загрузку для всех `<img>`-элементов
 `crates/engine/layout/src/box_tree.rs:803` **fn** `collect_background_image_requests` — Обходит готовое layout-дерево и возвращает уникальные URL-ы из
 `crates/engine/layout/src/box_tree.rs:903` **struct** `LayoutBox`
-`crates/engine/layout/src/box_tree.rs:930` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
-`crates/engine/layout/src/box_tree.rs:968` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
-`crates/engine/layout/src/box_tree.rs:986` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
-`crates/engine/layout/src/box_tree.rs:1018` **enum** `BoxKind`
-`crates/engine/layout/src/box_tree.rs:1113` **fn** `layout`
-`crates/engine/layout/src/box_tree.rs:1127` **fn** `layout_measured`
-`crates/engine/layout/src/box_tree.rs:1138` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
-`crates/engine/layout/src/box_tree.rs:4614` **fn** `measure_text_w`
-`crates/engine/layout/src/box_tree.rs:5318` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
+`crates/engine/layout/src/box_tree.rs:938` **struct** `InlineSegment` — Отрезок inline-контента с собственным стилем (до layout)
+`crates/engine/layout/src/box_tree.rs:976` **enum** `PseudoKind` — Marks an inline segment as the target of a CSS structural pseudo-element
+`crates/engine/layout/src/box_tree.rs:994` **struct** `InlineFrag` — Позиционированный текстовый фрагмент в строке (после layout)
+`crates/engine/layout/src/box_tree.rs:1026` **enum** `BoxKind`
+`crates/engine/layout/src/box_tree.rs:1121` **fn** `layout`
+`crates/engine/layout/src/box_tree.rs:1135` **fn** `layout_measured`
+`crates/engine/layout/src/box_tree.rs:1146` **fn** `layout_measured_hyp` — Layout with a real hyphenation provider (for `hyphens: auto`)
+`crates/engine/layout/src/box_tree.rs:4622` **fn** `measure_text_w`
+`crates/engine/layout/src/box_tree.rs:5326` **fn** `apply_container_styles` — CSS Container Queries L1: second-pass after layout
 `crates/engine/layout/src/counters.rs:33` **type** `CounterSnapshot` — Per-element counter stacks snapshot
 `crates/engine/layout/src/counters.rs:37` **type** `CounterMap` — Maps each element `NodeId` to its counter snapshot (after own reset/increment,
 `crates/engine/layout/src/counters.rs:90` **fn** `precompute_counters` — Build a `CounterMap` by walking the DOM in pre-order
@@ -1512,14 +1512,14 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:157` **fn** `from_style_and_box` — Builds `CornerRadii` from a `ComputedStyle` and the element's border-box dimensions
 `crates/engine/paint/src/display_list.rs:173` **fn** `from_style` — Builds `CornerRadii` from a `ComputedStyle`. `border-radius: N%` values are
 `crates/engine/paint/src/display_list.rs:179` **enum** `DisplayCommand`
-`crates/engine/paint/src/display_list.rs:575` **type** `DisplayList`
-`crates/engine/paint/src/display_list.rs:604` **fn** `fit_image_rect` — CSS Images L3 §5.5 — `object-fit` placement: где располагается
-`crates/engine/paint/src/display_list.rs:659` **fn** `fit_image_quad` — Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
-`crates/engine/paint/src/display_list.rs:717` **fn** `serialize_display_list`
-`crates/engine/paint/src/display_list.rs:1057` **fn** `build_display_list`
-`crates/engine/paint/src/display_list.rs:1072` **fn** `build_display_list_with_anim` — Like `build_display_list` but applies compositor animation overrides per node
-`crates/engine/paint/src/display_list.rs:1112` **fn** `build_display_list_ordered` — Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E)
-`crates/engine/paint/src/display_list.rs:1153` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
+`crates/engine/paint/src/display_list.rs:591` **type** `DisplayList`
+`crates/engine/paint/src/display_list.rs:620` **fn** `fit_image_rect` — CSS Images L3 §5.5 — `object-fit` placement: где располагается
+`crates/engine/paint/src/display_list.rs:675` **fn** `fit_image_quad` — Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
+`crates/engine/paint/src/display_list.rs:733` **fn** `serialize_display_list`
+`crates/engine/paint/src/display_list.rs:1081` **fn** `build_display_list`
+`crates/engine/paint/src/display_list.rs:1096` **fn** `build_display_list_with_anim` — Like `build_display_list` but applies compositor animation overrides per node
+`crates/engine/paint/src/display_list.rs:1136` **fn** `build_display_list_ordered` — Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E)
+`crates/engine/paint/src/display_list.rs:1177` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
 `crates/engine/paint/src/fingerprint.rs:19` **struct** `GpuFingerprint` — GPU fingerprint info: normailzed vendor and renderer strings
 `crates/engine/paint/src/fingerprint.rs:32` **fn** `from_adapter_info` — Create normalized GPU fingerprint from adapter info
 `crates/engine/paint/src/fingerprint.rs:40` **fn** `vendor` — Vendor string: always "WebKit"
@@ -1579,8 +1579,8 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/renderer.rs:3177` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
 `crates/engine/paint/src/renderer.rs:3184` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
 `crates/engine/paint/src/renderer.rs:3327` **fn** `render` — Рендерит две полосы display list-а одним кадром:
-`crates/engine/paint/src/renderer.rs:5732` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
-`crates/engine/paint/src/renderer.rs:5754` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
+`crates/engine/paint/src/renderer.rs:5760` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
+`crates/engine/paint/src/renderer.rs:5782` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
 `crates/engine/paint/src/scroll_snap.rs:33` **fn** `find_scroll_snap_y` — CSS Scroll Snap L1 — returns the Y scroll offset to snap to, or `None`
 `crates/engine/paint/src/scroll_snap.rs:54` **fn** `find_scroll_snap_y_proximity` — CSS Scroll Snap L1 — same as [`find_scroll_snap_y`] but restricts candidates
 `crates/engine/paint/src/svg_path.rs:15` **enum** `PathSegment` — One SVG path command (absolute coords, after normalization)

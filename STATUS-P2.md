@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-Scrollbar rendering для `overflow:scroll/auto`  branch: p2-scrollbar-rendering
-Next step: add `scroll_width/scroll_height` to `LayoutBox`  `crates/engine/layout/src/box_tree.rs:920`
+_(none)_
 
 ---
 
@@ -23,6 +22,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-scrollbar-rendering** ✅ 2026-05-30 — Визуальные скроллбары для `overflow:scroll/auto`: `DisplayCommand::DrawScrollbar{track_rect, thumb_rect, vertical}` в `paint/src/display_list.rs`. `scrollbar_rects()` helper (12px gutter, 20px min thumb, thumb position proportional to scroll offset). `walk()` emit после `PopScrollLayer` — не переводится с контентом. Renderer: 2 fill quad (track rgba(0,0,0,0.08) + thumb rgba(0,0,0,0.38)). 5 unit-тестов. Graphic test 51. P4 handoff: `scrollbar-width`/`scrollbar-color` (CSS Scrollbars L1) → `ComputedStyle` fields → override `SCROLLBAR_WIDTH` const + colors in renderer.
 - **p2-image-decode-cache** ✅ 2026-05-30 — `ImageHandle` (`Arc<Image>`) + `ImageKey` + `ImageDecodeCache` (LRU, 256 MB default budget) в `lumen-image/src/decode_cache.rs` (ADR-008 §10E.1+10E.2). `insert()` + `get()` + `decode_or_get(key, closure)` cache-aside. Автоматический `evict_to_budget()` при превышении бюджета. `lru_candidates()` для внешнего управления вытеснением. Callers держат `ImageHandle`; eviction не освобождает данные пока живы внешние Arc. Экспортировано из `pub use decode_cache::{...}`. 9 unit-тестов. P3 handoff: 10E.4 (scroll-discard) — wire `gate_image_requests` + free handle when >3 screens from viewport.
 - **p2-scroll-layer** ✅ 2026-05-29 — Scroll layer инфраструктура для `overflow:scroll`/`auto`: `LayoutBox.scroll_x/scroll_y`, `collect_scroll_containers()` + `set_scroll_position()` в `lumen-layout`, `PushScrollLayer{clip_rect, scroll_x, scroll_y}`/`PopScrollLayer` в `DisplayCommand`, walk emitter меняет `PushClipRect` → `PushScrollLayer` для Scroll|Auto overflow, renderer обрабатывает clip+translate. 11 тестов display list + 6 тестов layout. P4 handoff в STATUS-P4.md. P3 (shell): wire wheel events через `collect_scroll_containers()` + `set_scroll_position()`.
 - **p2-css-3d-depth-buffer** ✅ 2026-05-29 — GPU depth buffer для CSS 3D transforms: `FillVertex.z` (CSS depth px), FILL_SHADER NDC depth mapping `0.5 - z/20000`, `fill_pipeline` з `DepthStencilState(LessEqual)`, `depth_texture/depth_view` в Renderer (recreated on resize), depth attachment в frame render pass. `apply_affine_to_verts` використовує `project_point_z` для 3D матриць + `VertexPos::set_depth`. 5 нових unit-тестів (66 renderer total). P4 handoff оновлено — як тільки P4 дротує `transform-style: preserve-3d`, GPU occlusion для перетинних площин буде коректним.

@@ -92,6 +92,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('48', '48-line-clamp.html',            0.5, 'CSS Overflow L4 §3.2 — -webkit-line-clamp / line-clamp multi-line truncation, staircase heights 1–4 lines'),
     ('49', '49-background-blend-mode.html', 0.5, 'CSS Compositing L1 §8.3 — background-blend-mode: multiply/screen/overlay/darken/lighten/difference/exclusion/color-dodge/luminosity'),
     ('50', '50-css-variables.html', 0.5, 'CSS Variables L1 — var() basic/nested/fallback + calc(var()) + inheritance'),
+    ('51', '51-scrollbar-rendering.html', 0.5, 'Scrollbar rendering — overflow:scroll/auto vertical/horizontal/both DrawScrollbar track+thumb'),
 ]
 
 # --- PNG reader (stdlib only) ---

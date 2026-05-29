@@ -570,6 +570,22 @@ pub enum DisplayCommand {
         /// Content box rect.
         content: Rect,
     },
+    /// Scrollbar track and thumb for an `overflow: scroll` / `overflow: auto`
+    /// container. Drawn in document-space CSS px, outside the scroll layer so
+    /// it does not translate with scrolled content.
+    ///
+    /// # CSS: scrollbar-width, scrollbar-color
+    /// P4 wires: `ComputedStyle.scrollbar_width` (thin/auto/none, CSS Scrollbars L1)
+    /// and `ComputedStyle.scrollbar_color` (thumb/track colors) to control appearance.
+    DrawScrollbar {
+        /// Full track rectangle (document-space CSS px). Fills the scrollbar gutter.
+        track_rect: Rect,
+        /// Thumb rectangle inside the track (document-space CSS px). Proportional
+        /// to viewport/content ratio and positioned by current scroll offset.
+        thumb_rect: Rect,
+        /// `true` = vertical scrollbar (right edge); `false` = horizontal (bottom edge).
+        vertical: bool,
+    },
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
@@ -1001,6 +1017,14 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
                     border.x, border.y, border.width, border.height,
                     padding.x, padding.y, padding.width, padding.height,
                     content.x, content.y, content.width, content.height,
+                ));
+            }
+            DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical } => {
+                out.push_str(&format!(
+                    "DrawScrollbar {} track=({:.0},{:.0},{:.0},{:.0}) thumb=({:.0},{:.0},{:.0},{:.0})\n",
+                    if *vertical { "vertical" } else { "horizontal" },
+                    track_rect.x, track_rect.y, track_rect.width, track_rect.height,
+                    thumb_rect.x, thumb_rect.y, thumb_rect.width, thumb_rect.height,
                 ));
             }
         }
@@ -2148,6 +2172,91 @@ fn emit_inset_box_shadows(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     }
 }
 
+/// Default scrollbar gutter width / height in CSS px.
+const SCROLLBAR_WIDTH: f32 = 12.0;
+/// Minimum thumb length in CSS px so it stays clickable at large scroll ranges.
+const SCROLLBAR_MIN_THUMB: f32 = 20.0;
+
+/// Input geometry for `scrollbar_rects`.
+struct ScrollbarInput {
+    /// Padding-box origin and size in document-space CSS px.
+    pub clip_x: f32,
+    pub clip_y: f32,
+    pub clip_w: f32,
+    pub clip_h: f32,
+    /// Current scroll offset in CSS px.
+    pub scroll_x: f32,
+    pub scroll_y: f32,
+    /// Total content width / height in CSS px.
+    pub content_w: f32,
+    pub content_h: f32,
+    /// Emit vertical scrollbar when content_h > clip_h.
+    pub need_v: bool,
+    /// Emit horizontal scrollbar when content_w > clip_w.
+    pub need_h: bool,
+}
+
+/// One axis result: `(track_rect, thumb_rect)` in document-space CSS px.
+type ScrollbarAxis = Option<(Rect, Rect)>;
+
+/// Compute track and thumb rects for the vertical and horizontal scrollbar axes.
+///
+/// Returns `(vertical, horizontal)` where each is `Some((track, thumb))` if the
+/// axis overflows, or `None` if the content fits within the clip rect for that axis.
+fn scrollbar_rects(i: &ScrollbarInput) -> (ScrollbarAxis, ScrollbarAxis) {
+    let v = if i.need_v && i.content_h > i.clip_h {
+        let track = Rect::new(
+            i.clip_x + i.clip_w - SCROLLBAR_WIDTH,
+            i.clip_y,
+            SCROLLBAR_WIDTH,
+            i.clip_h,
+        );
+        let thumb_h = ((i.clip_h / i.content_h) * i.clip_h).max(SCROLLBAR_MIN_THUMB).min(i.clip_h);
+        let max_scroll = (i.content_h - i.clip_h).max(0.0);
+        let thumb_y = if max_scroll > 0.0 {
+            i.clip_y + (i.scroll_y / max_scroll) * (i.clip_h - thumb_h)
+        } else {
+            i.clip_y
+        };
+        let thumb = Rect::new(
+            track.x + 2.0,
+            thumb_y.clamp(i.clip_y, i.clip_y + i.clip_h - thumb_h),
+            SCROLLBAR_WIDTH - 4.0,
+            thumb_h,
+        );
+        Some((track, thumb))
+    } else {
+        None
+    };
+
+    let h = if i.need_h && i.content_w > i.clip_w {
+        let track = Rect::new(
+            i.clip_x,
+            i.clip_y + i.clip_h - SCROLLBAR_WIDTH,
+            i.clip_w,
+            SCROLLBAR_WIDTH,
+        );
+        let thumb_w = ((i.clip_w / i.content_w) * i.clip_w).max(SCROLLBAR_MIN_THUMB).min(i.clip_w);
+        let max_scroll = (i.content_w - i.clip_w).max(0.0);
+        let thumb_x = if max_scroll > 0.0 {
+            i.clip_x + (i.scroll_x / max_scroll) * (i.clip_w - thumb_w)
+        } else {
+            i.clip_x
+        };
+        let thumb = Rect::new(
+            thumb_x.clamp(i.clip_x, i.clip_x + i.clip_w - thumb_w),
+            track.y + 2.0,
+            thumb_w,
+            SCROLLBAR_WIDTH - 4.0,
+        );
+        Some((track, thumb))
+    } else {
+        None
+    };
+
+    (v, h)
+}
+
 fn emit_outline(b: &LayoutBox, out: &mut Vec<DisplayCommand>) {
     let s = &b.style;
     if !s.outline_style.is_visible() || s.outline_width <= 0.0 {
@@ -2737,6 +2846,17 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             let is_scroll_x = matches!(b.style.overflow_x, Overflow::Scroll | Overflow::Auto);
             let is_scroll_y = matches!(b.style.overflow_y, Overflow::Scroll | Overflow::Auto);
             let use_scroll_layer = (is_scroll_x || is_scroll_y) && has_overflow_clip;
+            // Capture padding-box rect for scrollbar geometry (used after PopScrollLayer).
+            let scroll_padding_box: Option<(f32, f32, f32, f32)> = if use_scroll_layer {
+                let s = &b.style;
+                let px = b.rect.x + s.border_left_width;
+                let py = b.rect.y + s.border_top_width;
+                let pw = (b.rect.width - s.border_left_width - s.border_right_width).max(0.0);
+                let ph = (b.rect.height - s.border_top_width - s.border_bottom_width).max(0.0);
+                Some((px, py, pw, ph))
+            } else {
+                None
+            };
             if has_overflow_clip {
                 const BIG: f32 = 1_000_000.0;
                 let s = &b.style;
@@ -2775,6 +2895,43 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             if has_overflow_clip {
                 if use_scroll_layer {
                     out.push(DisplayCommand::PopScrollLayer);
+                    // Emit scrollbar track + thumb after the scroll layer so they
+                    // render at a fixed position (not translated with scrolled content).
+                    if let Some((px, py, pw, ph)) = scroll_padding_box {
+                        // Compute content size from children (same as layout's content_height/width).
+                        let content_w = b.children.iter().fold(b.rect.width, |acc, c| {
+                            acc.max(c.rect.x + c.rect.width - b.rect.x)
+                        });
+                        let content_h = b.children.iter().fold(b.rect.height, |acc, c| {
+                            acc.max(c.rect.y + c.rect.height - b.rect.y)
+                        });
+                        let (v_bars, h_bars) = scrollbar_rects(&ScrollbarInput {
+                            clip_x: px,
+                            clip_y: py,
+                            clip_w: pw,
+                            clip_h: ph,
+                            scroll_x: b.scroll_x,
+                            scroll_y: b.scroll_y,
+                            content_w,
+                            content_h,
+                            need_v: is_scroll_y,
+                            need_h: is_scroll_x,
+                        });
+                        if let Some((track, thumb)) = v_bars {
+                            out.push(DisplayCommand::DrawScrollbar {
+                                track_rect: track,
+                                thumb_rect: thumb,
+                                vertical: true,
+                            });
+                        }
+                        if let Some((track, thumb)) = h_bars {
+                            out.push(DisplayCommand::DrawScrollbar {
+                                track_rect: track,
+                                thumb_rect: thumb,
+                                vertical: false,
+                            });
+                        }
+                    }
                 } else {
                     out.push(DisplayCommand::PopClip);
                 }
@@ -4218,6 +4375,7 @@ mod tests {
                 DisplayCommand::PopScrollLayer => "PopScrollLayer",
                 DisplayCommand::DrawSvgPath { .. } => "DrawSvgPath",
                 DisplayCommand::BoxModelOverlay { .. } => "BoxModelOverlay",
+                DisplayCommand::DrawScrollbar { .. } => "DrawScrollbar",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);
@@ -7047,5 +7205,95 @@ mod tests {
         assert!(s.contains("PushScrollLayer"), "serialized output must contain PushScrollLayer");
         assert!(s.contains("PopScrollLayer"), "serialized output must contain PopScrollLayer");
         assert!(s.contains("scroll=(5.00,15.00)"), "scroll offsets must appear in serialization");
+    }
+
+    // ── DrawScrollbar ─────────────────────────────────────────────────────────
+
+    /// overflow:scroll with content taller than clip → vertical DrawScrollbar emitted.
+    #[test]
+    fn overflow_scroll_with_overflow_emits_draw_scrollbar_vertical() {
+        // div 100×50 with a 200px-tall child → content overflows vertically.
+        let dl = build(
+            r#"<div style="overflow:scroll;width:100px;height:50px"><div style="height:200px"></div></div>"#,
+            "",
+        );
+        let bars: Vec<_> = dl
+            .iter()
+            .filter_map(|c| match c {
+                DisplayCommand::DrawScrollbar { vertical, .. } => Some(*vertical),
+                _ => None,
+            })
+            .collect();
+        assert!(!bars.is_empty(), "должен быть хотя бы один DrawScrollbar");
+        assert!(bars.contains(&true), "должен быть вертикальный DrawScrollbar");
+    }
+
+    /// overflow:scroll with content fitting inside → no DrawScrollbar (no overflow).
+    #[test]
+    fn overflow_scroll_without_overflow_no_draw_scrollbar() {
+        // div 100×200 with a 50px-tall child → no vertical overflow.
+        let dl = build(
+            r#"<div style="overflow:scroll;width:100px;height:200px"><div style="height:50px"></div></div>"#,
+            "",
+        );
+        let bars = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawScrollbar { .. }))
+            .count();
+        assert_eq!(bars, 0, "нет переполнения → нет DrawScrollbar");
+    }
+
+    /// DrawScrollbar thumb_rect is inside track_rect.
+    #[test]
+    fn draw_scrollbar_thumb_inside_track() {
+        let dl = build(
+            r#"<div style="overflow:scroll;width:100px;height:50px"><div style="height:200px"></div></div>"#,
+            "",
+        );
+        let sb = dl
+            .iter()
+            .find(|c| matches!(c, DisplayCommand::DrawScrollbar { vertical: true, .. }))
+            .expect("должен быть вертикальный DrawScrollbar");
+        if let DisplayCommand::DrawScrollbar { track_rect, thumb_rect, vertical: true } = sb {
+            // Track right edge must be at right edge of clip (within padding box).
+            assert!(track_rect.width > 0.0, "track width > 0");
+            assert!(thumb_rect.height > 0.0, "thumb height > 0");
+            // Thumb must be inside track vertically.
+            assert!(
+                thumb_rect.y >= track_rect.y,
+                "thumb top must be >= track top"
+            );
+            assert!(
+                thumb_rect.y + thumb_rect.height <= track_rect.y + track_rect.height + 1.0,
+                "thumb bottom must be <= track bottom"
+            );
+        }
+    }
+
+    /// DrawScrollbar serialization round-trip.
+    #[test]
+    fn draw_scrollbar_serialize() {
+        let dl = vec![DisplayCommand::DrawScrollbar {
+            track_rect: Rect::new(90.0, 0.0, 12.0, 50.0),
+            thumb_rect: Rect::new(92.0, 5.0, 8.0, 20.0),
+            vertical: true,
+        }];
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("DrawScrollbar"), "serialization must contain DrawScrollbar");
+        assert!(s.contains("vertical"), "serialization must mention orientation");
+    }
+
+    /// overflow:hidden does not emit DrawScrollbar (no scroll layer).
+    #[test]
+    fn overflow_hidden_no_scrollbar() {
+        let dl = build(
+            r#"<div style="overflow:hidden;width:100px;height:50px"><div style="height:200px"></div></div>"#,
+            "",
+        );
+        let bars = dl
+            .iter()
+            .filter(|c| matches!(c, DisplayCommand::DrawScrollbar { .. }))
+            .count();
+        assert_eq!(bars, 0, "overflow:hidden → нет DrawScrollbar");
     }
 }

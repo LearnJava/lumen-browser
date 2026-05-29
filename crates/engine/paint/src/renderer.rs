@@ -4615,6 +4615,34 @@ impl Renderer {
                     }));
                     current_level -= 1;
                 }
+                // Scrollbar track (light) + thumb (dark): two fill quads drawn
+                // with the current clip/transform stack (parent's, NOT scroll layer's).
+                // CSS Scrollbars L1 §3 — `scrollbar-width` / `scrollbar-color` P4 wires.
+                DisplayCommand::DrawScrollbar { track_rect, thumb_rect, .. } => {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
+                    // Track: very light translucent background.
+                    const TRACK_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.08];
+                    // Thumb: semi-transparent dark pill.
+                    const THUMB_COLOR: [f32; 4] = [0.0, 0.0, 0.0, 0.38];
+
+                    for (rect, color) in &[(*track_rect, TRACK_COLOR), (*thumb_rect, THUMB_COLOR)] {
+                        let v_start = fill_vertices.len() as u32;
+                        push_fill_quad(
+                            &mut fill_vertices,
+                            translate_rect(*rect, dx, dy),
+                            *color,
+                        );
+                        if let Some(m) = transform_stack.last() {
+                            apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                        }
+                        let v_count = fill_vertices.len() as u32 - v_start;
+                        if v_count > 0 {
+                            draw_ops.push(DrawOp::Fill { v_start, v_count });
+                        }
+                    }
+                }
                 // DevTools box model overlay (7E.3): four semi-transparent layers
                 // drawn outside-in. Uses the same fill pipeline as FillRect.
                 DisplayCommand::BoxModelOverlay { margin, border, padding, content } => {
