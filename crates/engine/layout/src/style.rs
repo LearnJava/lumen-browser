@@ -336,6 +336,19 @@ pub enum FontVariant {
     SmallCaps,
 }
 
+/// CSS Fonts L4 §7.12 — `font-optical-sizing`. Inherited.
+///
+/// `auto` (initial): UA automatically sets the `opsz` variation axis equal to
+/// the computed `font-size` in px. `none`: opsz axis is not touched by the UA.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum FontOpticalSizing {
+    /// UA injects `opsz = font_size` into variation axes automatically.
+    #[default]
+    Auto,
+    /// No automatic optical sizing; `font-variation-settings` controls opsz directly.
+    None,
+}
+
 /// CSS Fonts Module L4 §2.5 — `font-stretch`. Inherited.
 ///
 /// Хранится в десятых долях процента (u16): `normal` = 1000 (100%),
@@ -1760,6 +1773,9 @@ pub struct ComputedStyle {
     /// Initial: пустой Vec (эквивалентно `normal`). Renderer нормализует
     /// через fvar + avar при растеризации глифов.
     pub font_variation_settings: Vec<FontVariationSetting>,
+    /// CSS Fonts L4 §7.12 — `font-optical-sizing: auto | none`. Inherited.
+    /// `auto` (initial): renderer injects `opsz = font_size` variation axis.
+    pub font_optical_sizing: FontOpticalSizing,
     pub text_transform: TextTransform,
     pub white_space: WhiteSpace,
     /// CSS Text L3 §7.1: отступ перед первой строкой inline-content.
@@ -3957,6 +3973,7 @@ impl ComputedStyle {
             font_stretch: FontStretch::NORMAL,
             font_family: Vec::new(),
             font_variation_settings: Vec::new(),
+            font_optical_sizing: FontOpticalSizing::Auto,
             text_transform: TextTransform::None,
             white_space: WhiteSpace::Normal,
             text_indent: Length::Px(0.0),
@@ -4185,6 +4202,7 @@ pub fn compute_style(
         font_stretch: inherited.font_stretch,
         font_family: inherited.font_family.clone(),
         font_variation_settings: inherited.font_variation_settings.clone(),
+        font_optical_sizing: inherited.font_optical_sizing,
         text_transform: inherited.text_transform,
         white_space: ua_white_space(doc, node).unwrap_or(inherited.white_space),
         text_indent: inherited.text_indent.clone(),
@@ -9143,6 +9161,13 @@ fn apply_declaration(
                 style.font_variation_settings = v;
             }
         }
+        "font-optical-sizing" => {
+            style.font_optical_sizing = match val {
+                "auto" => FontOpticalSizing::Auto,
+                "none" => FontOpticalSizing::None,
+                _ => style.font_optical_sizing,
+            };
+        }
         "font-variant" | "font-variant-caps" => {
             // Phase 0: только normal | small-caps. Прочие keyword-ы
             // (all-small-caps, petite-caps, …) и связанные субсвойства
@@ -11629,6 +11654,10 @@ fn apply_css_wide_keyword(
             } else {
                 init.font_variation_settings.clone()
             };
+        }
+        "font-optical-sizing" => {
+            style.font_optical_sizing =
+                if inh { inherited.font_optical_sizing } else { init.font_optical_sizing };
         }
         "text-align" => {
             style.text_align = if inh { inherited.text_align } else { init.text_align };
@@ -19983,6 +20012,56 @@ mod tests {
         assert_eq!(span_style.font_variation_settings, vec![
             FontVariationSetting { tag: *b"wght", value: 400.0 }
         ]);
+    }
+
+    // ── font-optical-sizing (CSS Fonts L4 §7.12) ─────────────────────────
+
+    #[test]
+    fn font_optical_sizing_default_is_auto() {
+        let s = style_for("");
+        assert_eq!(s.font_optical_sizing, FontOpticalSizing::Auto);
+    }
+
+    #[test]
+    fn font_optical_sizing_none_parsed() {
+        let s = style_for("font-optical-sizing: none");
+        assert_eq!(s.font_optical_sizing, FontOpticalSizing::None);
+    }
+
+    #[test]
+    fn font_optical_sizing_auto_explicit() {
+        let s = style_for("font-optical-sizing: auto");
+        assert_eq!(s.font_optical_sizing, FontOpticalSizing::Auto);
+    }
+
+    #[test]
+    fn font_optical_sizing_inherited() {
+        // CSS Fonts L4 §7.12: font-optical-sizing is inherited.
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse("div { font-optical-sizing: none; }");
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.font_optical_sizing, FontOpticalSizing::None);
+        assert_eq!(span_style.font_optical_sizing, FontOpticalSizing::None);
+    }
+
+    #[test]
+    fn font_optical_sizing_child_overrides_parent() {
+        // Child can reset to auto even when parent has none.
+        let doc = lumen_html_parser::parse("<div><span></span></div>");
+        let sheet = lumen_css_parser::parse(
+            "div { font-optical-sizing: none; } span { font-optical-sizing: auto; }"
+        );
+        let root = ComputedStyle::root();
+        let div = doc.get(doc.body().unwrap()).children[0];
+        let span = doc.get(div).children[0];
+        let div_style = compute_style(&doc, div, &sheet, &root, Size::new(800.0, 600.0));
+        let span_style = compute_style(&doc, span, &sheet, &div_style, Size::new(800.0, 600.0));
+        assert_eq!(div_style.font_optical_sizing, FontOpticalSizing::None);
+        assert_eq!(span_style.font_optical_sizing, FontOpticalSizing::Auto);
     }
 
     // ── table cell width quirk (CSS Quirks Mode §4.1) ─────────────────────

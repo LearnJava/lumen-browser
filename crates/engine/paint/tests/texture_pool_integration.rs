@@ -61,7 +61,7 @@ fn texture_key_equality() {
 
 #[test]
 fn texture_pool_separate_by_size() {
-    let mut pool = TexturePool::new();
+    let pool = TexturePool::new();
 
     // Sizes are tracked independently
     assert_eq!(pool.len_for_size(256, 256), 0);

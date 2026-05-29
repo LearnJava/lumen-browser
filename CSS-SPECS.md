@@ -70,7 +70,7 @@ These modules are fully or nearly-fully implemented. Maintain correctness; no ne
 | CSS Images L3 | [css3-images](https://www.w3.org/TR/css3-images/) | ✅ | conic-gradient() ✅ 2026-05-24; multiple bg layers ✅ 2026-05-26 | **#17** |
 | CSS Images L4 | [css4-images](https://www.w3.org/TR/css4-images/) | ⬜ | image-set(), cross-fade() | **#18** |
 | CSS Grid L1 | [css-grid-1](https://www.w3.org/TR/css-grid-1/) | 🟡 | grid-template-areas ✅ 2026-05-22; dense auto-flow ✅ 2026-05-24 | **#19** |
-| CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading; font-optical-sizing | **#20** |
+| CSS Fonts L4 | [css-fonts-4](https://www.w3.org/TR/css-fonts-4/) | 🟡 | @font-face actual loading ⬜; font-optical-sizing ✅ 2026-05-29 | **#20** |
 | CSS Intrinsic Sizing L3 | [css3-sizing](https://www.w3.org/TR/css3-sizing/) | ✅ | min-content/max-content/fit-content/fit-content(L) for width/height/min-max; 11 tests 2026-05-24 | **#21** |
 | CSS Overflow L3 (scroll) | [css-overflow-3](https://www.w3.org/TR/css-overflow-3/) | 🟡 | scrollable containers; overflow:scroll rendering | **#22** |
 | CSS Text L3/L4 | [css3-text](https://www.w3.org/TR/css3-text/) | 🟡 | text-align-last; hyphens:auto | **#23** |
@@ -219,7 +219,7 @@ Implementation lives in `crates/layout/src/style.rs` unless noted.
 | `font-variation-settings` | ✅ | fvar+avar normalization |
 | `font-feature-settings` | ⬜ | OT feature flags |
 | `font-size-adjust` | 🟡 | parsed; x-height scaling ⬜ |
-| `font-optical-sizing` | 🟡 | parsed; opsz axis ⬜ |
+| `font-optical-sizing` | ✅ | auto injects opsz=font-size into variation axes; none skips |
 | `font-palette` | ⬜ | CSS Fonts L5 |
 | `@font-face` | 🟡 | all descriptors parsed; file loading ⬜ |
 | `@font-palette-values` | ⬜ | CSS Fonts L5 |
