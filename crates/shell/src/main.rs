@@ -37,7 +37,8 @@ use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
 use lumen_core::event::{Event, FetchPriority, SubresourceKind};
-use lumen_core::ext::EventSink;
+use lumen_core::ext::{EventSink, HyphenationProvider, NullHyphenationProvider};
+use lumen_encoding::KnuthLiangHyphenation;
 use lumen_core::geom::{Point, Rect, Size};
 use lumen_devtools::DevToolsServer;
 use lumen_driver::BrowserSession;
@@ -254,6 +255,7 @@ fn run_window_mode(
         history_fts: HistoryFts::open_in_memory().expect("history_fts init"),
         search_history: SearchHistory::open_in_memory().expect("search_history init"),
         next_history_id: 1,
+        hyp_provider: KnuthLiangHyphenation::new(),
     };
     if let Err(err) = event_loop.run_app(&mut app) {
         eprintln!("Ошибка event loop: {err}");
@@ -288,13 +290,13 @@ fn run_dump(
         }
         DumpKind::Layout => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, &NullHyphenationProvider)?;
             print!("{}", lumen_layout::serialize_layout_tree(&parsed.layout));
             Ok(())
         }
         DumpKind::DisplayList => {
             let vp = Size::new(1024.0, 720.0);
-            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None)?;
+            let parsed = parse_and_layout(&raw.bytes, raw.content_type, &raw.base, &event_sink, vp, &mut std::collections::HashSet::new(), None, &NullHyphenationProvider)?;
             let dl = paint_ordered(&parsed.layout);
             print!("{}", lumen_paint::serialize_display_list(&dl));
             Ok(())
@@ -664,13 +666,14 @@ impl PageSource {
         sink: Arc<dyn EventSink>,
         viewport: Size,
         ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
+        hp: &dyn HyphenationProvider,
     ) -> Result<(LoadedPage, Option<LayoutSource>, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
         if matches!(self, PageSource::Empty) {
             return Ok((LoadedPage::empty(), None, None));
         }
         let raw = self.load_bytes(sink.clone())?;
         let (page, layout_source, js_ctx) =
-            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store)?;
+            render_bytes(&raw.bytes, raw.content_type, &raw.base, sink, viewport, &mut std::collections::HashSet::new(), ls_store, hp)?;
         Ok((page, Some(layout_source), js_ctx))
     }
 }
@@ -1211,6 +1214,7 @@ struct LayoutSource {
     html_source: Option<String>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_and_layout(
     bytes: &[u8],
     content_type: Option<&str>,
@@ -1219,6 +1223,7 @@ fn parse_and_layout(
     viewport: Size,
     preload_seen: &mut std::collections::HashSet<String>,
     ls_store: Option<Arc<std::sync::Mutex<lumen_core::WebStorage>>>,
+    hp: &dyn HyphenationProvider,
 ) -> Result<ParsedPage, Box<dyn Error>> {
     // Кодировку определяем по BOM -> <meta charset> -> эвристике. Это покрывает
     // и UTF-8 (большинство), и старые cp1251 / koi8-r / cp866 файлы.
@@ -1333,7 +1338,7 @@ fn parse_and_layout(
 
     let layout = {
         let d = doc_arc.lock().unwrap();
-        lumen_layout::layout_measured(&d, &sheet, viewport, &measurer)
+        lumen_layout::layout_measured_hyp(&d, &sheet, viewport, &measurer, hp)
     };
 
     // CSS Backgrounds L3 §3.10 — собираем `background-image: url(...)` уже
@@ -1549,11 +1554,11 @@ fn paint_ordered(layout: &lumen_layout::LayoutBox) -> DisplayList {
 
 /// Повторный layout+paint по сохранённому `LayoutSource` с новым viewport.
 /// Возвращает `(DisplayList, LayoutBox)` — LayoutBox нужен для animation scheduler.
-fn relayout_page(src: &LayoutSource, viewport: Size) -> (DisplayList, lumen_layout::LayoutBox) {
+fn relayout_page(src: &LayoutSource, viewport: Size, hp: &dyn HyphenationProvider) -> (DisplayList, lumen_layout::LayoutBox) {
     let font = lumen_font::Font::parse(INTER_FONT).expect("bundled Inter не парсится");
     let measurer = lumen_paint::FontMeasurer::new(&font).expect("FontMeasurer из bundled Inter");
     let doc = src.document.lock().unwrap();
-    let layout = lumen_layout::layout_measured(&doc, &src.stylesheet, viewport, &measurer);
+    let layout = lumen_layout::layout_measured_hyp(&doc, &src.stylesheet, viewport, &measurer, hp);
     drop(doc);
     let dl = paint_ordered(&layout);
     (dl, layout)
@@ -1579,7 +1584,7 @@ fn ls_store_for_base(
     })))
 }
 
-#[allow(clippy::type_complexity)]
+#[allow(clippy::type_complexity, clippy::too_many_arguments)]
 fn render_bytes(
     bytes: &[u8],
     content_type: Option<&str>,
@@ -1588,8 +1593,9 @@ fn render_bytes(
     viewport: Size,
     preload_seen: &mut std::collections::HashSet<String>,
     ls_store: Option<Arc<Mutex<lumen_core::WebStorage>>>,
+    hp: &dyn HyphenationProvider,
 ) -> Result<(LoadedPage, LayoutSource, Option<Box<dyn PersistentJs>>), Box<dyn Error>> {
-    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store)?;
+    let parsed = parse_and_layout(bytes, content_type, base, &sink, viewport, preload_seen, ls_store, hp)?;
     let display_list = paint_ordered(&parsed.layout);
     println!(
         "Распарсено: {} DOM-узлов, {} CSS-правил, {} paint-команд, {} картинок, {} preload-хинтов",
@@ -2117,6 +2123,9 @@ struct Lumen {
     /// Счётчик для генерирования rowid при индексировании в history_fts.
     /// Инкрементируется при каждой навигации на новую страницу.
     next_history_id: i64,
+    /// Knuth–Liang hyphenation provider — реализует CSS `hyphens: auto`.
+    /// Lazy-loads per-locale dictionaries on first use; cached for subsequent layouts.
+    hyp_provider: KnuthLiangHyphenation,
 }
 
 impl Lumen {
@@ -2131,7 +2140,7 @@ impl Lumen {
             return;
         }
         let viewport = Size::new(vp_size.width as f32, vp_size.height as f32);
-        let (new_dl, lb) = relayout_page(src, viewport);
+        let (new_dl, lb) = relayout_page(src, viewport, &self.hyp_provider);
         self.content_height = content_height_of(&new_dl);
         self.content_width = content_width_of(&new_dl);
         self.display_list = new_dl;
@@ -2284,7 +2293,7 @@ impl Lumen {
                     Arc::new(std::sync::Mutex::new(lumen_core::WebStorage::default()))
                 }))
             });
-            self.source.load(self.event_sink.clone(), viewport, ls_store)
+            self.source.load(self.event_sink.clone(), viewport, ls_store, &self.hyp_provider)
         };
 
         match load_result {
@@ -2648,7 +2657,7 @@ impl ApplicationHandler<LoadEvent> for Lumen {
                     },
                 );
                 let ls_store = ls_store_for_base(&raw.base, &mut self.ls_storage);
-                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store) {
+                match render_bytes(&raw.bytes, raw.content_type, &raw.base, self.event_sink.clone(), viewport, &mut self.preload_dispatched, ls_store, &self.hyp_provider) {
                     Ok((page, new_layout_source, new_js_ctx)) => {
                         self.apply_loaded_page(page, Some(new_layout_source), new_js_ctx);
                     }

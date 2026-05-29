@@ -510,16 +510,18 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/winit_session.rs:86` **fn** `new` — Создать сессию с viewport 1024×720
 `crates/driver/src/winit_session.rs:100` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
 
-## lumen-encoding  (11 symbols)
+## lumen-encoding  (13 symbols)
 
 `crates/engine/encoding/src/decoder.rs:14` **fn** `decode` — Декодирует байты в строку. Алиас для [`decode_to_string`], короткий и
 `crates/engine/encoding/src/decoder.rs:21` **fn** `decode_to_string` — То же, что [`decode`], но с явным именем — для случаев, когда из
 `crates/engine/encoding/src/detect.rs:16` **fn** `detect` — Главная точка входа. Возвращает кодировку, в которой следует декодировать
 `crates/engine/encoding/src/detect.rs:89` **fn** `sniff_meta_charset` — Ищет `<meta charset>` или `<meta http-equiv="Content-Type" content="...; charset=X">`
 `crates/engine/encoding/src/ext_impl.rs:17` **struct** `HeuristicDetector` — Детектор кодировок по умолчанию
-`crates/engine/encoding/src/lib.rs:39` **enum** `Encoding` — Поддерживаемые в Phase 0 кодировки
-`crates/engine/encoding/src/lib.rs:57` **fn** `name` — Стабильное имя кодировки. Используется в API детектора
-`crates/engine/encoding/src/lib.rs:77` **fn** `from_label` — Парсит label кодировки (case-insensitive, с алиасами)
+`crates/engine/encoding/src/hyphenation_impl.rs:18` **struct** `KnuthLiangHyphenation` — Knuth–Liang hyphenation with per-locale lazy-loaded embedded dictionaries
+`crates/engine/encoding/src/hyphenation_impl.rs:24` **fn** `new` — Create a new provider with an empty cache
+`crates/engine/encoding/src/lib.rs:41` **enum** `Encoding` — Поддерживаемые в Phase 0 кодировки
+`crates/engine/encoding/src/lib.rs:59` **fn** `name` — Стабильное имя кодировки. Используется в API детектора
+`crates/engine/encoding/src/lib.rs:79` **fn** `from_label` — Парсит label кодировки (case-insensitive, с алиасами)
 `crates/engine/encoding/src/unicode_provider.rs:23` **struct** `Icu4xUnicodeProvider` — ICU4x-провайдер Unicode-операций
 `crates/engine/encoding/src/unicode_provider.rs:31` **fn** `new` — Создаёт провайдер с auto-режимом (LSTM/dictionary для CJK/Thai/etc)
 `crates/engine/encoding/src/unicode_provider.rs:40` **fn** `new_latin` — Облегчённая версия — только Latin + UAX #14 rules, без LSTM
@@ -2087,4 +2089,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2025 symbols in 19 crates*
+*Total: 2027 symbols in 19 crates*

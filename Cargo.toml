@@ -72,6 +72,10 @@ serde = { version = "1", features = ["derive"] }
 bincode = "1"
 # Provisional: flate2 для ICC profile decompression в PNG (iCCP chunk uses deflate).
 flate2 = "1"
+# Provisional: hyphenation — Knuth-Liang алгоритм переносов для CSS `hyphens: auto`.
+# Trait-anchor: `lumen-core::ext::HyphenationProvider`. Graduation: permanent когда
+# перенос слов станет стандартной частью pipeline (§5, Phase 2-3).
+hyphenation = { version = "0.8", features = ["embed_all"] }
 
 [profile.dev]
 opt-level = 1
