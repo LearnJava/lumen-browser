@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+Scroll layer infrastructure for overflow:scroll  branch: p2-scroll-layer
+Next step: PushScrollLayer/PopScrollLayer display commands + LayoutBox.scroll_x/scroll_y  box_tree.rs:903
 
 ---
 
@@ -16,7 +17,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
 | 1 | Box model renderer-side rendering — P3 wires `BoxModelOverlay` to the DevTools CDP overlay endpoint (7E.3 следующий шаг) | `devtools`, `shell` | M | P3 devtools |
-| 2 | 3D depth buffer (pixel-exact пересекающиеся плоскости / BSP) — расширение поверх depth-sort компоновщика (p2-css-preserve-3d). Painter's-sort не разрешает взаимно пересекающиеся 3D-плоскости | `paint` | L | none |
+| 2 | ~~3D depth buffer (pixel-exact пересекающиеся плоскости / BSP)~~ — выполнено в p2-css-3d-depth-buffer | `paint` | — | done |
 
 ---
 
