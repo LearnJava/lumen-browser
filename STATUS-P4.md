@@ -5,8 +5,7 @@
 ---
 
 ## In progress
-`var()` full recursive substitution + graphic test  branch: p4-css-variables
-Next step: создать graphic_tests/50-css-variables.html, обновить CSS-SPECS.md
+_(none)_
 
 ## Workflow
 
@@ -32,26 +31,25 @@ Ordered by priority from CSS-SPECS.md P4 Work Queue. Pick the first unblocked it
 
 | # | Property / Feature | Effort | Blocker |
 |---|-------------------|--------|---------|
-| 1 | `var()` full recursive substitution | M | none |
-| 2 | `transition` interpolation (per-frame lerp) | M | easing functions (linear() ✅ done) |
-| 3 | `@keyframes` AnimationScheduler::tick wiring | L | transitions done (item 2) |
-| 4 | CSS Nesting — nested rule parser | L | none |
-| 5 | `position: sticky` layout + scroll listener | M | none |
-| 6 | `list-style-type` marker rendering | S | none |
-| 7 | `:is()` / `:where()` / `:has()` matching | M | none |
-| 8 | `@media` resize hook re-evaluation | S | shell event |
-| 9 | `filter` GPU offscreen pass | L | wgpu pipeline |
-| 10 | `clip-path` basic shapes (inset/circle/ellipse/polygon) | M | none |
-| 11 | `::marker` rendering | S | float/list (both ✅ done) |
-| 12 | `@font-face` actual file loading | L | network/P3 |
-| 13 | `min-content` / `max-content` / `fit-content` | L | layout engine |
-| 14 | `overflow: scroll` scrollable containers | L | shell scroll |
-| 15 | `column-rule` rendering | S | paint |
-| 16 | Scroll snap shell integration | M | scroll event |
-| 17 | `@container` 2nd-pass execution | L | container-type done |
-| 18 | `backdrop-filter` GPU compositing pass | L | wgpu pipeline |
-| 19 | `writing-mode: vertical-*` axis swap | L | layout engine |
-| 20 | `subgrid` track inheritance | XL | grid engine |
+| 1 | `transition` interpolation (per-frame lerp) | M | easing functions (linear() ✅ done) |
+| 2 | `@keyframes` AnimationScheduler::tick wiring | L | transitions done (item 1) |
+| 3 | CSS Nesting — nested rule parser | L | none |
+| 4 | `position: sticky` layout + scroll listener | M | none |
+| 5 | `list-style-type` marker rendering | S | none |
+| 6 | `:is()` / `:where()` / `:has()` matching | M | none |
+| 7 | `@media` resize hook re-evaluation | S | shell event |
+| 8 | `filter` GPU offscreen pass | L | wgpu pipeline |
+| 9 | `clip-path` basic shapes (inset/circle/ellipse/polygon) | M | none |
+| 10 | `::marker` rendering | S | float/list (both ✅ done) |
+| 11 | `@font-face` actual file loading | L | network/P3 |
+| 12 | `min-content` / `max-content` / `fit-content` | L | layout engine |
+| 13 | `overflow: scroll` scrollable containers | L | shell scroll |
+| 14 | `column-rule` rendering | S | paint |
+| 15 | Scroll snap shell integration | M | scroll event |
+| 16 | `@container` 2nd-pass execution | L | container-type done |
+| 17 | `backdrop-filter` GPU compositing pass | L | wgpu pipeline |
+| 18 | `writing-mode: vertical-*` axis swap | L | layout engine |
+| 19 | `subgrid` track inheritance | XL | grid engine |
 
 ---
 
@@ -87,6 +85,7 @@ Ordered by priority from CSS-SPECS.md P4 Work Queue. Pick the first unblocked it
 
 | Date | Property | Notes |
 |------|----------|-------|
+| 2026-05-29 | `var()` full recursive substitution | expand_vars() recursive + @property + env(); 40 unit tests + graphic test 50 |
 | 2026-05-29 | `font-optical-sizing` | auto→opsz=font-size in variation axes; none skips; 5 tests |
 
 ---

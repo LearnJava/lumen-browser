@@ -62,6 +62,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 45-multiple-backgrounds.html | CSS Backgrounds L3 §3 — multiple layers | 9 | 2-gradient stack · 3-layer radial+stripe+solid · bg-position center 80px · bg-size top-right 60px · repeat-x stripe · two no-repeat halves · clip padding-box+border-box · origin content-box · color+gradient overlay |
 | 47-svg-basic.html | SVG basic shapes + fill/stroke presentation attributes | 22 | rect · rect rx/ry · circle · ellipse · line · group `<g>` · viewBox scale 2× · viewBox with min_x/min_y offset · multiple shapes no viewBox · fill explicit color · fill:none (stroke only) · fill+stroke combo · fill-opacity · stroke-opacity · stroke-width · rounded rect stroke |
 | 48-line-clamp.html | CSS Overflow L4 §3.2 — line-clamp multi-line truncation | 12 | -webkit-line-clamp 1/2/3/4 (staircase heights 40/80/120/160px) · unclamped reference 200px · explicit staircase reference · color:transparent boxes (no glyph divergence) |
+| 50-css-variables.html | CSS Custom Properties (var()) | 16 | var() basic (3 colors) · nested var() (--a:var(--b)) · fallback var(--undef,color) · defined-wins-over-fallback · var() in calc() for width · custom prop inheritance via parent element |
 | **1000000-final.html** ★ | **ФИНАЛЬНЫЙ ТЕСТ — все свойства в одном окне** | ~80 | **Ручная проверка, не для автодиффа.** Обновляется при каждом новом CSS-свойстве. background-color (все нотации) · border (width/color/per-side/currentColor/dashed/dotted/double) · border-radius (SDF rendering: uniform/pill/circle/asymmetric) · box-shadow (hard/blur/spread) · outline (width/offset+/-) · overflow (visible/hidden) · opacity · visibility:hidden · object-fit (5 режимов) · calc/min/clamp · padding layering · transform (translate/rotate/scale) · table layout (2×4 ячейки) · linear/radial gradient (6 объектов) · conic gradient (5 объектов) |
 
 ---
@@ -137,6 +138,11 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | column-rule-width | 33 | — |
 | column-rule-style: solid/dashed/dotted | 33 | double не тестируется отдельно |
 | column-rule-color | 33 | — |
+| `var()` basic substitution | 50 | — |
+| `var()` nested (--a:var(--b)) | 50 | — |
+| `var()` fallback (--undef,color) | 50 | — |
+| `var()` in calc() | 50 | — |
+| custom property inheritance | 50 | — |
 
 ---
 
