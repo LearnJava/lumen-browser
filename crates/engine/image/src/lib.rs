@@ -2,7 +2,9 @@ mod jpeg;
 mod png;
 pub mod webp;
 mod gif;
+pub mod decode_cache;
 
+pub use decode_cache::{ImageDecodeCache, ImageHandle, ImageKey};
 pub use jpeg::{decode_jpeg, JpegError};
 pub use png::{decode_png, encode_png_rgba8};
 pub use webp::{WebpError, WebpImageDecoder, decode_webp, is_webp};

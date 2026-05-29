@@ -224,7 +224,7 @@ def log(developer: str, message: str):
 def _extract_section(content: str, heading: str) -> str:
     """Вернуть текст секции от ## heading до следующего ## или --- или конца файла."""
     m = re.search(
-        r"^##\s+" + re.escape(heading) + r"\s*\n(.*?)(?=\n---|\n##|\Z)",
+        r"^##\s+" + re.escape(heading) + r"\s*\n(.*?)(?=\n---|\n##(?!#)|\Z)",
         content,
         re.DOTALL | re.MULTILINE,
     )

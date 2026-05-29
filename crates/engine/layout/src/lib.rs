@@ -11057,9 +11057,10 @@ mod tests {
     /// Non-cell boxes have col_span=1, row_span=1 by default.
     #[test]
     fn non_cell_col_row_span_defaults_to_one() {
+        // `lay` returns the body box directly, so the <div> is its first
+        // element child (no intermediate <html>/<body> unwrapping needed).
         let root = lay("<body><div></div></body>", "");
-        let body = first_element_child(&root);
-        let div = first_element_child(body);
+        let div = first_element_child(&root);
         assert_eq!(div.col_span, 1);
         assert_eq!(div.row_span, 1);
     }
@@ -12238,23 +12239,23 @@ mod tests {
         assert_eq!(reqs[0].url, "hd.webp");
     }
 
-    /// `<picture><source type="image/webp" srcset="hero.webp"><img src="hero.jpg"></picture>` →
-    /// webp нет в `supported_mime_types()` → picker пропускает source → fallback на `<img src>`.
+    /// `<picture><source type="image/avif" srcset="hero.avif"><img src="hero.jpg"></picture>` →
+    /// avif нет в `supported_mime_types()` → picker пропускает source → fallback на `<img src>`.
     #[test]
     fn collect_picture_unsupported_type_falls_back() {
         let doc = lumen_html_parser::parse(concat!(
             r#"<body><picture>"#,
-            r#"<source type="image/webp" srcset="hero.webp">"#,
+            r#"<source type="image/avif" srcset="hero.avif">"#,
             r#"<img src="hero.jpg">"#,
             r#"</picture></body>"#,
         ));
         let reqs = collect_image_requests(&doc, vp());
         assert_eq!(reqs.len(), 1, "должен быть один запрос — fallback PNG/JPEG");
-        assert_eq!(reqs[0].url, "hero.jpg", "webp source скипается, выбирается img src");
+        assert_eq!(reqs[0].url, "hero.jpg", "avif source скипается, выбирается img src");
     }
 
-    /// `<picture>` с первым поддерживаемым `<source type="image/jpeg">` →
-    /// picker выбирает этот source, а не img src.
+    /// `<picture>` с первым поддерживаемым `<source type="image/webp">` →
+    /// picker выбирает этот source (webp теперь декодируется), а не img src.
     #[test]
     fn collect_picture_supported_type_picked() {
         let doc = lumen_html_parser::parse(concat!(
@@ -12266,7 +12267,7 @@ mod tests {
         ));
         let reqs = collect_image_requests(&doc, vp());
         assert_eq!(reqs.len(), 1);
-        assert_eq!(reqs[0].url, "hero.jpg", "первый поддерживаемый source — JPEG");
+        assert_eq!(reqs[0].url, "hero.webp", "первый поддерживаемый source — WebP");
     }
 
     /// Несколько `<img>` → несколько запросов.
