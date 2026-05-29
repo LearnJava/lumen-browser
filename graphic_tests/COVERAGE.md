@@ -40,7 +40,7 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 | 23-pseudo-elements.html | ::before / ::after block + inline generation | 7 | ::before display:block · ::after display:block · both on one element · ::before с другой шириной · ::before inline (padding box) · ::after inline · both inline |
 | 24-vertical-align.html | vertical-align | 6 | inline-block: top/middle/bottom · inline span: super/middle/sub (frag y-offset + bg) |
 | 25-table-layout.html | Table layout | 19 | display:table — горизонтальный layout ячеек · auto-width distribution · явные ширины · несколько строк (вертикальное стакование) |
-| 26-mask-image.html | mask-image | 3 | linear-gradient mask · radial-gradient mask · control (no mask). Phase 0: gradient masks fallback to full-opacity |
+| 26-mask-image.html | mask-image, mask-mode, PushMaskLayer/PopMaskLayer | 6 | linear-gradient mask · radial-gradient mask · control (no mask) · mask-mode:alpha (radial gradient) · mask-mode:luminance (linear gradient, black→white) · control (no mask) |
 | 27-direction-rtl.html | direction | 6 | LTR start (left) · RTL start (right) · RTL end (left) · alignment gradient bands |
 | 28-css-containment.html | contain | 5 | baseline (no contain) · contain:size (height=0) · contain:paint (overflow clip) · contain:layout · contain:strict |
 | 29-container-queries.html | @container | 4 | wide container: min-width applies (blue) · narrow: not applies (red) · named container · max-width |

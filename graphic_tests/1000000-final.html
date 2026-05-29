@@ -224,10 +224,12 @@
     </table>
   </div>
 
-  <!-- mask-image demo: Phase 0 — gradient masks render at full opacity (no-op) -->
+  <!-- mask-image / PushMaskLayer demo: gradient masks + mask-mode -->
   <div style="margin-top:8px;display:flex;gap:8px">
     <div style="width:60px;height:30px;background:#e63946;mask-image:linear-gradient(to right,black,transparent)"></div>
     <div style="width:60px;height:30px;background:#2a9d8f;mask-image:radial-gradient(circle,black 40%,transparent 70%)"></div>
+    <div style="width:60px;height:30px;background:#457b9d;mask-image:radial-gradient(circle at 50% 50%,white 40%,transparent 60%);mask-mode:alpha"></div>
+    <div style="width:60px;height:30px;background:#e63946;mask-image:linear-gradient(to right,black,white);mask-mode:luminance"></div>
     <div style="width:60px;height:30px;background:#e9c46a"></div>
   </div>
 

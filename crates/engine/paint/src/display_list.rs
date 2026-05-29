@@ -96,6 +96,21 @@ impl BlendMode {
     }
 }
 
+/// CSS Masking L1 §6 — how to derive the mask value from rendered mask-layer pixels.
+///
+/// `Alpha` is the default for raster images (§6.2). `Luminance` converts the mask
+/// layer's RGB colour to relative luminance per ITU-R BT.709, then multiplies by
+/// the alpha channel — identical to SVG `mask-type: luminance` (§6.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum MaskMode {
+    /// Use the mask layer's alpha channel directly as the mask value (default).
+    #[default]
+    Alpha,
+    /// Convert the mask layer's colour to luminance: `luma = 0.2126·R + 0.7152·G + 0.0722·B`,
+    /// then multiply by alpha. White opaque → mask=1, black opaque → mask=0.
+    Luminance,
+}
+
 /// Corner radii for CSS `border-radius`. Values are in CSS pixels, clamped to ≥ 0.
 /// Each corner stores separate horizontal (x) and vertical (y) radii supporting
 /// elliptical corners (`border-radius: 10px / 20px`). When x == y the corner is circular.
@@ -398,6 +413,28 @@ pub enum DisplayCommand {
     /// Закрывает mask-группу, открытую ближайшим `PushMask*`. Composites
     /// offscreen-слой с alpha, определённой соответствующим PushMask*.
     PopMask,
+    /// CSS Masking L1 §5 — открывает offscreen-слой для **содержимого маски**.
+    ///
+    /// Команды между `PushMaskLayer` и `PopMaskLayer` рендерятся в отдельный
+    /// offscreen-слой; `PopMaskLayer` применяет этот слой как маску к
+    /// содержимому **родительского** слоя в пределах `rect`.
+    ///
+    /// Используется для SVG `<mask>` элементов и `mask: url(#id)` источников,
+    /// где маска — произвольный rendered контент (пути, формы, градиенты).
+    /// Отличие от `PushMaskImage`: маска рендерится в реальном времени
+    /// из произвольного поддерева, а не из статической текстуры.
+    ///
+    /// `mode` — как извлекать значение маски из rendered слоя (alpha или luminance).
+    PushMaskLayer {
+        /// Border-box rect маскируемого элемента в CSS-пикселях.
+        rect: Rect,
+        /// Способ вычисления значения маски из rendered mask-слоя.
+        mode: MaskMode,
+    },
+    /// Закрывает mask-layer, открытый `PushMaskLayer`. Применяет rendered маску
+    /// к родительскому слою: `parent_pixel *= mask_value(mask_layer_pixel, mode)`.
+    /// Пиксели за пределами `rect` не затрагиваются.
+    PopMaskLayer,
     /// CSS Transforms L1 §13 — открывает transform-группу. Все последующие
     /// команды до парного `PopTransform` рисуются с применением `matrix` к
     /// координатам вершин (forward-матрица в viewport-системе, уже включает
@@ -907,6 +944,15 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::PopMask => {
                 out.push_str("PopMask\n");
+            }
+            DisplayCommand::PushMaskLayer { rect, mode } => {
+                out.push_str(&format!(
+                    "PushMaskLayer ({:.2}, {:.2}, {:.2}, {:.2}) mode={mode:?}\n",
+                    rect.x, rect.y, rect.width, rect.height,
+                ));
+            }
+            DisplayCommand::PopMaskLayer => {
+                out.push_str("PopMaskLayer\n");
             }
             DisplayCommand::DrawSvgPath { vertices, color } => {
                 out.push_str(&format!(
@@ -4009,6 +4055,8 @@ mod tests {
                 DisplayCommand::PushMaskRadialGradient { .. } => "PushMaskRadialGradient",
                 DisplayCommand::PushMaskConicGradient { .. } => "PushMaskConicGradient",
                 DisplayCommand::PopMask => "PopMask",
+                DisplayCommand::PushMaskLayer { .. } => "PushMaskLayer",
+                DisplayCommand::PopMaskLayer => "PopMaskLayer",
                 DisplayCommand::PushFilter { .. } => "PushFilter",
                 DisplayCommand::PopFilter => "PopFilter",
                 DisplayCommand::PushBackdropFilter { .. } => "PushBackdropFilter",
@@ -6655,5 +6703,61 @@ mod tests {
         let s = serialize_display_list(&dl);
         assert!(s.contains("BoxModelOverlay"), "collapsed content must still serialize");
         assert!(s.contains("content=(10,10,0,0)"), "zero-size content rect");
+    }
+
+    // ── MaskMode + PushMaskLayer / PopMaskLayer ──────────────────────────────
+
+    #[test]
+    fn mask_mode_default_is_alpha() {
+        assert_eq!(MaskMode::default(), MaskMode::Alpha);
+    }
+
+    #[test]
+    fn push_mask_layer_alpha_serializes() {
+        use lumen_core::geom::Rect;
+        let dl = vec![
+            DisplayCommand::PushMaskLayer {
+                rect: Rect::new(10.0, 20.0, 100.0, 80.0),
+                mode: MaskMode::Alpha,
+            },
+            DisplayCommand::PopMaskLayer,
+        ];
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("PushMaskLayer"), "must contain PushMaskLayer");
+        assert!(s.contains("(10.00, 20.00, 100.00, 80.00)"), "rect coords");
+        assert!(s.contains("Alpha"), "mode=Alpha");
+        assert!(s.contains("PopMaskLayer"), "must contain PopMaskLayer");
+    }
+
+    #[test]
+    fn push_mask_layer_luminance_serializes() {
+        use lumen_core::geom::Rect;
+        let dl = vec![
+            DisplayCommand::PushMaskLayer {
+                rect: Rect::new(0.0, 0.0, 200.0, 150.0),
+                mode: MaskMode::Luminance,
+            },
+            DisplayCommand::PopMaskLayer,
+        ];
+        let s = serialize_display_list(&dl);
+        assert!(s.contains("Luminance"), "mode=Luminance");
+    }
+
+    #[test]
+    fn push_mask_layer_roundtrip_kinds() {
+        use lumen_core::geom::Rect;
+        let rect = Rect::new(0.0, 0.0, 50.0, 50.0);
+        let dl = vec![
+            DisplayCommand::PushMaskLayer { rect, mode: MaskMode::Alpha },
+            DisplayCommand::FillRect { rect, color: Color { r: 255, g: 0, b: 0, a: 255 } },
+            DisplayCommand::PopMaskLayer,
+        ];
+        // Verify the three-command sequence serializes in order.
+        let s = serialize_display_list(&dl);
+        let push_pos = s.find("PushMaskLayer").expect("no PushMaskLayer");
+        let fill_pos = s.find("FillRect").expect("no FillRect");
+        let pop_pos  = s.find("PopMaskLayer").expect("no PopMaskLayer");
+        assert!(push_pos < fill_pos, "PushMaskLayer before FillRect");
+        assert!(fill_pos < pop_pos,  "FillRect before PopMaskLayer");
     }
 }
