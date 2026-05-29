@@ -4326,6 +4326,43 @@ impl Renderer {
                         sticky_stack.pop();
                     }
                 }
+                // DevTools box model overlay (7E.3): four semi-transparent layers
+                // drawn outside-in. Uses the same fill pipeline as FillRect.
+                DisplayCommand::BoxModelOverlay { margin, border, padding, content } => {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
+                    // Standard DevTools palette (Chrome-matching), ~50% alpha.
+                    const MARGIN_COLOR:  [f32; 4] = [0.965, 0.699, 0.420, 0.5]; // #f6b26b
+                    const BORDER_COLOR:  [f32; 4] = [1.000, 0.898, 0.600, 0.5]; // #ffe599
+                    const PADDING_COLOR: [f32; 4] = [0.576, 0.769, 0.490, 0.5]; // #93c47d
+                    const CONTENT_COLOR: [f32; 4] = [0.435, 0.659, 0.863, 0.5]; // #6fa8dc
+
+                    let boxes: &[(Rect, [f32; 4])] = &[
+                        (*margin,  MARGIN_COLOR),
+                        (*border,  BORDER_COLOR),
+                        (*padding, PADDING_COLOR),
+                        (*content, CONTENT_COLOR),
+                    ];
+                    for (rect, color) in boxes {
+                        if rect.width <= 0.0 || rect.height <= 0.0 {
+                            continue;
+                        }
+                        let v_start = fill_vertices.len() as u32;
+                        push_fill_quad(
+                            &mut fill_vertices,
+                            translate_rect(*rect, dx, dy),
+                            *color,
+                        );
+                        if let Some(m) = transform_stack.last() {
+                            apply_affine_to_verts(&mut fill_vertices[v_start as usize..], m);
+                        }
+                        let v_count = fill_vertices.len() as u32 - v_start;
+                        if v_count > 0 {
+                            draw_ops.push(DrawOp::Fill { v_start, v_count });
+                        }
+                    }
+                }
             }
         }
         flush_batch!();
