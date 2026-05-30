@@ -15,7 +15,10 @@ use std::sync::{
 
 use lumen_core::ext::{CookieProvider, IdbBackend, JsFetchProvider, JsWebSocketProvider, JsWsEvent};
 use lumen_core::url::Url;
-use lumen_dom::{Attribute, Document, NodeData, NodeId, QualName, ShadowRootMode};
+use lumen_dom::{
+    Attribute, Document, DomPosition, NodeData, NodeId, QualName, Range as DomRange, Selection,
+    ShadowRootMode, node_child_count, node_length, node_text_content, range_text,
+};
 use rquickjs::{Ctx, Function, Result as QjResult};
 
 use lumen_core::WebStorage;
@@ -1096,6 +1099,216 @@ fn install_primitives(
         });
     }
 
+    // ── Selection API (WHATWG Selection API + DOM §4.5) ─────────────────────
+    // Exposes document selection state to JavaScript. The Selection object is a
+    // singleton per document; Range objects are snapshots of endpoint pairs.
+    {
+        // Returns [anchor_nid, anchor_offset, focus_nid, focus_offset] or null.
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_selection", move || -> Option<Vec<u32>> {
+            let doc = d.lock().unwrap();
+            let sel = doc.get_selection();
+            match (sel.anchor, sel.focus) {
+                (Some(a), Some(f)) => Some(vec![
+                    a.container.index() as u32,
+                    a.offset,
+                    f.container.index() as u32,
+                    f.offset,
+                ]),
+                _ => None,
+            }
+        });
+    }
+    {
+        // Sets selection to [anchor_nid, anchor_offset, focus_nid, focus_offset].
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        reg!(
+            "_lumen_set_selection",
+            move |anchor_nid: u32, anchor_off: u32, focus_nid: u32, focus_off: u32| {
+                let mut doc = d.lock().unwrap();
+                doc.set_selection(Selection {
+                    anchor: Some(DomPosition {
+                        container: NodeId::from_index(anchor_nid as usize),
+                        offset: anchor_off,
+                    }),
+                    focus: Some(DomPosition {
+                        container: NodeId::from_index(focus_nid as usize),
+                        offset: focus_off,
+                    }),
+                });
+                dirty.store(true, Ordering::Relaxed);
+            }
+        );
+    }
+    {
+        // Clears the current selection.
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        reg!("_lumen_clear_selection", move || {
+            let mut doc = d.lock().unwrap();
+            doc.set_selection(Selection { anchor: None, focus: None });
+            dirty.store(true, Ordering::Relaxed);
+        });
+    }
+    {
+        // Returns text of the current selection.
+        let d = Arc::clone(&doc);
+        reg!("_lumen_get_selection_text", move || -> String {
+            let doc = d.lock().unwrap();
+            match doc.get_selection().get_range() {
+                Some(r) => range_text(&doc, &r),
+                None => String::new(),
+            }
+        });
+    }
+    {
+        // Returns text covered by the given range endpoints.
+        let d = Arc::clone(&doc);
+        reg!(
+            "_lumen_get_range_text",
+            move |start_nid: u32, start_off: u32, end_nid: u32, end_off: u32| -> String {
+                let doc = d.lock().unwrap();
+                let r = DomRange {
+                    start: DomPosition {
+                        container: NodeId::from_index(start_nid as usize),
+                        offset: start_off,
+                    },
+                    end: DomPosition {
+                        container: NodeId::from_index(end_nid as usize),
+                        offset: end_off,
+                    },
+                };
+                range_text(&doc, &r)
+            }
+        );
+    }
+    {
+        // Number of direct DOM children (element offset validation).
+        let d = Arc::clone(&doc);
+        reg!("_lumen_node_child_count", move |nid: u32| -> u32 {
+            let doc = d.lock().unwrap();
+            node_child_count(&doc, NodeId::from_index(nid as usize)) as u32
+        });
+    }
+    {
+        // DOM-spec "length" of node: char count for text, child count for elements.
+        let d = Arc::clone(&doc);
+        reg!("_lumen_node_length", move |nid: u32| -> u32 {
+            let doc = d.lock().unwrap();
+            node_length(&doc, NodeId::from_index(nid as usize)) as u32
+        });
+    }
+    {
+        // Text content of a node (node.textContent).
+        let d = Arc::clone(&doc);
+        reg!("_lumen_node_text_content", move |nid: u32| -> String {
+            let doc = d.lock().unwrap();
+            node_text_content(&doc, NodeId::from_index(nid as usize))
+        });
+    }
+    {
+        // Deletes the contents of range; returns [new_pos_nid, new_pos_offset].
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        reg!(
+            "_lumen_range_delete_contents",
+            move |start_nid: u32, start_off: u32, end_nid: u32, end_off: u32| -> Vec<u32> {
+                let mut doc = d.lock().unwrap();
+                let r = DomRange {
+                    start: DomPosition {
+                        container: NodeId::from_index(start_nid as usize),
+                        offset: start_off,
+                    },
+                    end: DomPosition {
+                        container: NodeId::from_index(end_nid as usize),
+                        offset: end_off,
+                    },
+                };
+                let pos = lumen_dom::delete_range(&mut doc, &r);
+                dirty.store(true, Ordering::Relaxed);
+                vec![pos.container.index() as u32, pos.offset]
+            }
+        );
+    }
+    {
+        // execCommand: bold/italic/underline/insertText/delete/selectAll/copy/cut/paste
+        // Returns true if the command was handled.
+        let d = Arc::clone(&doc);
+        let dirty = Arc::clone(&dom_dirty);
+        reg!(
+            "_lumen_exec_command",
+            move |cmd: String, value: String| -> bool {
+                let mut doc = d.lock().unwrap();
+                let sel = doc.get_selection().clone();
+                match cmd.as_str() {
+                    "selectAll" => {
+                        // Select entire document body text
+                        if let Some(body) = find_element_by_tag(&doc, "body") {
+                            let children = doc.get(body).children.clone();
+                            if !children.is_empty() {
+                                let first = *children.first().unwrap();
+                                let last = *children.last().unwrap();
+                                let last_len = node_length(&doc, last);
+                                doc.set_selection(Selection {
+                                    anchor: Some(DomPosition { container: first, offset: 0 }),
+                                    focus: Some(DomPosition {
+                                        container: last,
+                                        offset: last_len as u32,
+                                    }),
+                                });
+                                dirty.store(true, Ordering::Relaxed);
+                            }
+                        }
+                        true
+                    }
+                    "insertText" => {
+                        if let Some(pos) = sel.anchor {
+                            // Delete selection first if non-collapsed
+                            let pos = sel
+                                .get_range()
+                                .filter(|r| !r.is_collapsed())
+                                .map(|r| lumen_dom::delete_range(&mut doc, &r))
+                                .unwrap_or(pos);
+                            let new_pos = lumen_dom::insert_text_at(&mut doc, pos, &value);
+                            doc.set_selection(Selection {
+                                anchor: Some(new_pos),
+                                focus: Some(new_pos),
+                            });
+                            dirty.store(true, Ordering::Relaxed);
+                        }
+                        true
+                    }
+                    "delete" | "forwardDelete" => {
+                        if let Some(r) = sel.get_range().filter(|r| !r.is_collapsed()) {
+                            let pos = lumen_dom::delete_range(&mut doc, &r);
+                            doc.set_selection(Selection {
+                                anchor: Some(pos),
+                                focus: Some(pos),
+                            });
+                            dirty.store(true, Ordering::Relaxed);
+                        }
+                        true
+                    }
+                    // bold/italic/underline: CSSOM inline style toggling (stub — returns true
+                    // so editors know the command is accepted; real inline-style mutation
+                    // requires Range wrapping which is Phase 3 contenteditable work).
+                    "bold" | "italic" | "underline" | "strikeThrough"
+                    | "justifyLeft" | "justifyCenter" | "justifyRight" | "justifyFull"
+                    | "indent" | "outdent"
+                    | "createLink" | "unlink"
+                    | "insertOrderedList" | "insertUnorderedList"
+                    | "fontName" | "fontSize" | "foreColor" | "backColor"
+                    | "removeFormat" => true,
+                    // copy/cut/paste: clipboard interaction is handled by the shell;
+                    // returning false lets it fall through to native clipboard handling.
+                    "copy" | "cut" | "paste" => false,
+                    _ => false,
+                }
+            }
+        );
+    }
+
     // ── document.cookie (RFC 6265 §5.3-5.4) ─────────────────────────────────
     // The getter/setter wrap CookieProvider using host/scheme derived from
     // page_url parsed once at install time. Best-effort: if the URL cannot be
@@ -1766,6 +1979,199 @@ function _lumen_get_fonts() {
     return fontSet;
 }
 
+// ── Range (WHATWG DOM §4.5) ────────────────────────────────────────────────
+// Creates a Range object whose endpoints are identified by [nid, offset] pairs.
+// nid 0 with offset 0 is the collapsed-at-document-start default.
+
+function _lumen_make_range(sNid, sOff, eNid, eOff) {
+    var r = {
+        __start_nid__: sNid, __start_off__: sOff,
+        __end_nid__:   eNid, __end_off__:   eOff,
+        get startContainer() { return _lumen_make_element(this.__start_nid__); },
+        get startOffset()    { return this.__start_off__; },
+        get endContainer()   { return _lumen_make_element(this.__end_nid__); },
+        get endOffset()      { return this.__end_off__; },
+        get collapsed()      { return this.__start_nid__ === this.__end_nid__ && this.__start_off__ === this.__end_off__; },
+        get commonAncestorContainer() {
+            if (this.__start_nid__ === this.__end_nid__) return _lumen_make_element(this.__start_nid__);
+            var p = _lumen_u2n(_lumen_get_parent(this.__start_nid__));
+            return p !== null ? _lumen_make_element(p) : _lumen_make_element(this.__start_nid__);
+        },
+        setStart: function(node, offset) {
+            if (!node || node.__nid__ === undefined) return;
+            this.__start_nid__ = node.__nid__; this.__start_off__ = offset >>> 0;
+        },
+        setEnd: function(node, offset) {
+            if (!node || node.__nid__ === undefined) return;
+            this.__end_nid__ = node.__nid__; this.__end_off__ = offset >>> 0;
+        },
+        setStartBefore: function(node) {
+            if (!node || node.__nid__ === undefined) return;
+            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
+            if (p === null) return;
+            var idx = _lumen_get_children(p).indexOf(node.__nid__);
+            this.__start_nid__ = p; this.__start_off__ = Math.max(0, idx);
+        },
+        setStartAfter: function(node) {
+            if (!node || node.__nid__ === undefined) return;
+            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
+            if (p === null) return;
+            var idx = _lumen_get_children(p).indexOf(node.__nid__);
+            this.__start_nid__ = p; this.__start_off__ = idx + 1;
+        },
+        setEndBefore: function(node) {
+            if (!node || node.__nid__ === undefined) return;
+            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
+            if (p === null) return;
+            var idx = _lumen_get_children(p).indexOf(node.__nid__);
+            this.__end_nid__ = p; this.__end_off__ = Math.max(0, idx);
+        },
+        setEndAfter: function(node) {
+            if (!node || node.__nid__ === undefined) return;
+            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
+            if (p === null) return;
+            var idx = _lumen_get_children(p).indexOf(node.__nid__);
+            this.__end_nid__ = p; this.__end_off__ = idx + 1;
+        },
+        collapse: function(toStart) {
+            if (toStart === false) {
+                this.__start_nid__ = this.__end_nid__; this.__start_off__ = this.__end_off__;
+            } else {
+                this.__end_nid__ = this.__start_nid__; this.__end_off__ = this.__start_off__;
+            }
+        },
+        selectNode: function(node) {
+            if (!node || node.__nid__ === undefined) return;
+            var p = _lumen_u2n(_lumen_get_parent(node.__nid__));
+            if (p === null) return;
+            var ch = _lumen_get_children(p), idx = ch.indexOf(node.__nid__);
+            this.__start_nid__ = p; this.__start_off__ = Math.max(0, idx);
+            this.__end_nid__   = p; this.__end_off__   = idx + 1;
+        },
+        selectNodeContents: function(node) {
+            if (!node || node.__nid__ === undefined) return;
+            this.__start_nid__ = node.__nid__; this.__start_off__ = 0;
+            this.__end_nid__   = node.__nid__; this.__end_off__   = _lumen_node_length(node.__nid__);
+        },
+        cloneRange: function() {
+            return _lumen_make_range(this.__start_nid__, this.__start_off__, this.__end_nid__, this.__end_off__);
+        },
+        toString: function() {
+            return _lumen_get_range_text(this.__start_nid__, this.__start_off__, this.__end_nid__, this.__end_off__);
+        },
+        deleteContents: function() {
+            var pos = _lumen_range_delete_contents(this.__start_nid__, this.__start_off__, this.__end_nid__, this.__end_off__);
+            this.__start_nid__ = pos[0]; this.__start_off__ = pos[1];
+            this.__end_nid__   = pos[0]; this.__end_off__   = pos[1];
+        },
+        extractContents: function() { this.deleteContents(); return null; },
+        cloneContents:   function() { return null; },
+        insertNode: function(node) {
+            if (!node || node.__nid__ === undefined) return;
+            var p = _lumen_u2n(_lumen_get_parent(this.__start_nid__));
+            if (p !== null) _lumen_append_child(p, node.__nid__);
+        },
+        surroundContents:     function() {},
+        compareBoundaryPoints: function(how, other) {
+            how = (how >>> 0) & 3;
+            var pairs = [[this.__start_nid__, this.__start_off__, other.__start_nid__, other.__start_off__],
+                         [this.__start_nid__, this.__start_off__, other.__end_nid__,   other.__end_off__  ],
+                         [this.__end_nid__,   this.__end_off__,   other.__start_nid__, other.__start_off__],
+                         [this.__end_nid__,   this.__end_off__,   other.__end_nid__,   other.__end_off__  ]];
+            var p = pairs[how];
+            if (p[0] !== p[2]) return p[0] < p[2] ? -1 : 1;
+            if (p[1] !== p[3]) return p[1] < p[3] ? -1 : 1;
+            return 0;
+        },
+        getBoundingClientRect: function() {
+            var el = _lumen_make_element(this.__start_nid__);
+            return (el && el.getBoundingClientRect) ? el.getBoundingClientRect()
+                : { top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0, x: 0, y: 0 };
+        },
+        getClientRects:   function() { return [this.getBoundingClientRect()]; },
+        detach:           function() {},
+        isPointInRange:   function() { return false; },
+        comparePoint:     function() { return 0; },
+        intersectsNode:   function() { return false; },
+    };
+    r.START_TO_START = 0; r.START_TO_END = 1; r.END_TO_START = 2; r.END_TO_END = 3;
+    return r;
+}
+
+// Range constructor (allows `new Range()`)
+function Range() { return _lumen_make_range(0, 0, 0, 0); }
+Range.prototype.START_TO_START = 0; Range.prototype.START_TO_END = 1;
+Range.prototype.END_TO_START  = 2; Range.prototype.END_TO_END  = 3;
+
+// ── Selection singleton (WHATWG Selection API §3) ─────────────────────────
+// All access to the selection state goes through the Rust bindings.
+
+var _lumen_selection = (function() {
+    function _raw() { return _lumen_get_selection(); } // null | [aNid,aOff,fNid,fOff]
+    return {
+        get anchorNode()   { var s = _raw(); return s ? _lumen_make_element(s[0]) : null; },
+        get anchorOffset() { var s = _raw(); return s ? s[1] : 0; },
+        get focusNode()    { var s = _raw(); return s ? _lumen_make_element(s[2]) : null; },
+        get focusOffset()  { var s = _raw(); return s ? s[3] : 0; },
+        get isCollapsed()  { var s = _raw(); return !s || (s[0] === s[2] && s[1] === s[3]); },
+        get rangeCount()   { return _raw() ? 1 : 0; },
+        get type() {
+            var s = _raw();
+            if (!s) return 'None';
+            return (s[0] === s[2] && s[1] === s[3]) ? 'Caret' : 'Range';
+        },
+        getRangeAt: function(n) {
+            if (n !== 0) throw new RangeError('Selection.getRangeAt: index out of bounds');
+            var s = _raw();
+            if (!s) throw new RangeError('Selection.getRangeAt: no range');
+            return _lumen_make_range(s[0], s[1], s[2], s[3]);
+        },
+        addRange: function(range) {
+            if (!range || range.__start_nid__ === undefined) return;
+            _lumen_set_selection(range.__start_nid__, range.__start_off__, range.__end_nid__, range.__end_off__);
+        },
+        removeRange:    function() { _lumen_clear_selection(); },
+        removeAllRanges: function() { _lumen_clear_selection(); },
+        empty:          function() { _lumen_clear_selection(); },
+        collapse: function(node, offset) {
+            if (!node || node.__nid__ === undefined) { _lumen_clear_selection(); return; }
+            var off = (offset === undefined || offset === null) ? 0 : (offset >>> 0);
+            _lumen_set_selection(node.__nid__, off, node.__nid__, off);
+        },
+        collapseToStart: function() {
+            var s = _raw(); if (!s) return;
+            _lumen_set_selection(s[0], s[1], s[0], s[1]);
+        },
+        collapseToEnd: function() {
+            var s = _raw(); if (!s) return;
+            _lumen_set_selection(s[2], s[3], s[2], s[3]);
+        },
+        extend: function(node, offset) {
+            if (!node || node.__nid__ === undefined) return;
+            var s = _raw();
+            var aNid = s ? s[0] : node.__nid__, aOff = s ? s[1] : 0;
+            _lumen_set_selection(aNid, aOff, node.__nid__, offset >>> 0);
+        },
+        selectAllChildren: function(node) {
+            if (!node || node.__nid__ === undefined) return;
+            _lumen_set_selection(node.__nid__, 0, node.__nid__, _lumen_node_length(node.__nid__));
+        },
+        deleteFromDocument: function() {
+            var s = _raw(); if (!s) return;
+            _lumen_range_delete_contents(s[0], s[1], s[2], s[3]);
+            _lumen_clear_selection();
+        },
+        setBaseAndExtent: function(aN, aO, fN, fO) {
+            if (!aN || aN.__nid__ === undefined || !fN || fN.__nid__ === undefined) return;
+            _lumen_set_selection(aN.__nid__, aO >>> 0, fN.__nid__, fO >>> 0);
+        },
+        containsNode:    function() { return false; },
+        getComposedRanges: function() { return []; },
+        modify:          function() {},
+        toString: function() { return _lumen_get_selection_text(); },
+    };
+}());
+
 var document = {
     get title()  { return _lumen_get_document_title(); },
     set title(v) { _lumen_set_document_title(String(v)); },
@@ -1802,6 +2208,18 @@ var document = {
     get fonts() {
         return _lumen_get_fonts();
     },
+    // ── Selection API ─────────────────────────────────────────────────────
+    getSelection:  function() { return _lumen_selection; },
+    createRange:   function() { return _lumen_make_range(0, 0, 0, 0); },
+    // execCommand (HTML §9.2.1 — executes a legacy editing command)
+    execCommand: function(cmd, showUI, value) {
+        return _lumen_exec_command(String(cmd), value !== undefined && value !== null ? String(value) : '');
+    },
+    queryCommandEnabled:   function(cmd) { return true; },
+    queryCommandState:     function(cmd) { return false; },
+    queryCommandValue:     function(cmd) { return ''; },
+    queryCommandSupported: function(cmd) { return true; },
+    queryCommandIndeterm:  function(cmd) { return false; },
 };
 
 var alert    = function(m) { _lumen_console_log('[alert] ' + String(m)); };
@@ -4559,6 +4977,8 @@ window.IDBIndex         = IDBIndex;
 window.IDBCursor        = IDBCursor;
 window.IDBCursorWithValue = IDBCursor;
 window._lumen_idb_flush = _lumen_idb_flush;
+window.getSelection     = function() { return _lumen_selection; };
+window.Range            = Range;
 
 // Restore persisted databases for this origin (no-op on first visit / when no
 // backend is installed). A new JS runtime is built on every page load, so this
@@ -8035,5 +8455,338 @@ mod tests {
         assert_eq!(calls.len(), 1);
         let (_, _, ct, _) = &calls[0];
         assert_eq!(ct, "application/json");
+    }
+
+    // ── Selection API tests ───────────────────────────────────────────────────
+
+    fn bool_eval(rt: &QuickJsRuntime, script: &str) -> bool {
+        rt.eval(script).unwrap() == lumen_core::JsValue::Bool(true)
+    }
+
+    // Build a doc with a single paragraph containing text "Hello World".
+    fn make_selection_doc() -> (Arc<Mutex<Document>>, NodeId) {
+        let mut doc = Document::new();
+        let html = doc.create_element(QualName::html("html"));
+        let body = doc.create_element(QualName::html("body"));
+        let p = doc.create_element(QualName::html("p"));
+        let text = doc.create_text("Hello World");
+        doc.append_child(doc.root(), html);
+        doc.append_child(html, body);
+        doc.append_child(body, p);
+        doc.append_child(p, text);
+        let arc = Arc::new(Mutex::new(doc));
+        (arc, text)
+    }
+
+    #[test]
+    fn selection_window_get_selection_is_object() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "typeof window.getSelection() === 'object'"));
+    }
+
+    #[test]
+    fn selection_document_get_selection_is_object() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "typeof document.getSelection() === 'object'"));
+    }
+
+    #[test]
+    fn selection_initially_none_type() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "window.getSelection().type === 'None'"));
+    }
+
+    #[test]
+    fn selection_range_count_initially_zero() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "window.getSelection().rangeCount === 0"));
+    }
+
+    #[test]
+    fn selection_is_collapsed_when_empty() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "window.getSelection().isCollapsed === true"));
+    }
+
+    #[test]
+    fn selection_to_string_empty_when_no_selection() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "window.getSelection().toString() === ''"));
+    }
+
+    #[test]
+    fn selection_remove_all_ranges_clears() {
+        let (arc, text) = make_selection_doc();
+        {
+            let mut doc = arc.lock().unwrap();
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 0 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 5 }),
+            });
+        }
+        let rt = runtime_with_dom(arc);
+        assert!(bool_eval(&rt, "window.getSelection().type === 'Range'"));
+        rt.eval("window.getSelection().removeAllRanges()").unwrap();
+        assert!(bool_eval(&rt, "window.getSelection().type === 'None'"));
+    }
+
+    #[test]
+    fn selection_type_range_when_set() {
+        let (arc, text) = make_selection_doc();
+        {
+            let mut doc = arc.lock().unwrap();
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 0 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 5 }),
+            });
+        }
+        let rt = runtime_with_dom(arc);
+        assert!(bool_eval(&rt, "window.getSelection().type === 'Range'"));
+    }
+
+    #[test]
+    fn selection_is_not_collapsed_when_range() {
+        let (arc, text) = make_selection_doc();
+        {
+            let mut doc = arc.lock().unwrap();
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 0 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 5 }),
+            });
+        }
+        let rt = runtime_with_dom(arc);
+        assert!(bool_eval(&rt, "window.getSelection().isCollapsed === false"));
+    }
+
+    #[test]
+    fn selection_to_string_returns_selected_text() {
+        let (arc, text) = make_selection_doc();
+        {
+            let mut doc = arc.lock().unwrap();
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 0 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 5 }),
+            });
+        }
+        let rt = runtime_with_dom(arc);
+        assert!(bool_eval(&rt, "window.getSelection().toString() === 'Hello'"));
+    }
+
+    #[test]
+    fn selection_range_count_is_one_when_set() {
+        let (arc, text) = make_selection_doc();
+        {
+            let mut doc = arc.lock().unwrap();
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 6 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 11 }),
+            });
+        }
+        let rt = runtime_with_dom(arc);
+        assert!(bool_eval(&rt, "window.getSelection().rangeCount === 1"));
+    }
+
+    #[test]
+    fn selection_get_range_at_returns_range() {
+        let (arc, text) = make_selection_doc();
+        {
+            let mut doc = arc.lock().unwrap();
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 6 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 11 }),
+            });
+        }
+        let rt = runtime_with_dom(arc);
+        assert!(bool_eval(&rt, "window.getSelection().getRangeAt(0).toString() === 'World'"));
+    }
+
+    #[test]
+    fn selection_collapse_to_start() {
+        let (arc, text) = make_selection_doc();
+        {
+            let mut doc = arc.lock().unwrap();
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 0 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 5 }),
+            });
+        }
+        let rt = runtime_with_dom(arc);
+        rt.eval("window.getSelection().collapseToStart()").unwrap();
+        assert!(bool_eval(&rt, "window.getSelection().type === 'Caret'"));
+    }
+
+    // ── Range tests ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn range_create_range_is_object() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "typeof document.createRange() === 'object'"));
+    }
+
+    #[test]
+    fn range_new_is_collapsed() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "document.createRange().collapsed === true"));
+    }
+
+    #[test]
+    fn range_start_offset_zero() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "document.createRange().startOffset === 0"));
+    }
+
+    #[test]
+    fn range_collapse_to_start() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(
+            &rt,
+            "var r = document.createRange(); r.collapse(true); r.collapsed === true"
+        ));
+    }
+
+    #[test]
+    fn range_clone_range() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(
+            &rt,
+            "var r = document.createRange(); var c = r.cloneRange(); c.collapsed === true"
+        ));
+    }
+
+    #[test]
+    fn range_select_node_contents() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(
+            &rt,
+            "var el = document.getElementById('main'); \
+             var r = document.createRange(); \
+             r.selectNodeContents(el); \
+             r.startOffset === 0"
+        ));
+    }
+
+    #[test]
+    fn range_to_string_via_get_range_at() {
+        let (arc, text) = make_selection_doc();
+        {
+            let mut doc = arc.lock().unwrap();
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 0 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 5 }),
+            });
+        }
+        let rt = runtime_with_dom(arc);
+        assert!(bool_eval(
+            &rt,
+            "window.getSelection().getRangeAt(0).toString() === 'Hello'"
+        ));
+    }
+
+    #[test]
+    fn range_compare_boundary_points_same() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(
+            &rt,
+            "var r = document.createRange(); r.compareBoundaryPoints(0, r) === 0"
+        ));
+    }
+
+    #[test]
+    fn range_window_range_constructor() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "typeof window.Range === 'function'"));
+    }
+
+    // ── execCommand tests ─────────────────────────────────────────────────────
+
+    #[test]
+    fn exec_command_bold_returns_true() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "document.execCommand('bold') === true"));
+    }
+
+    #[test]
+    fn exec_command_italic_returns_true() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "document.execCommand('italic') === true"));
+    }
+
+    #[test]
+    fn exec_command_unknown_returns_false() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "document.execCommand('unknownCommand') === false"));
+    }
+
+    #[test]
+    fn exec_command_copy_returns_false() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "document.execCommand('copy') === false"));
+    }
+
+    #[test]
+    fn exec_command_query_enabled() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "document.queryCommandEnabled('bold') === true"));
+    }
+
+    #[test]
+    fn exec_command_query_state() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "document.queryCommandState('bold') === false"));
+    }
+
+    #[test]
+    fn exec_command_query_value() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "document.queryCommandValue('bold') === ''"));
+    }
+
+    #[test]
+    fn exec_command_query_supported() {
+        let rt = runtime_with_dom(make_doc());
+        assert!(bool_eval(&rt, "document.queryCommandSupported('bold') === true"));
+    }
+
+    #[test]
+    fn exec_command_insert_text() {
+        let (arc, text) = make_selection_doc();
+        let text_idx = text.index();
+        {
+            let mut doc = arc.lock().unwrap();
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 0 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 0 }),
+            });
+        }
+        let rt = runtime_with_dom(arc.clone());
+        rt.eval("document.execCommand('insertText', false, 'Hi ')").unwrap();
+        let doc = arc.lock().unwrap();
+        let content = match &doc.get(NodeId::from_index(text_idx)).data {
+            NodeData::Text(s) => s.clone(),
+            _ => panic!("not text"),
+        };
+        assert_eq!(content, "Hi Hello World");
+    }
+
+    #[test]
+    fn exec_command_delete_removes_selection() {
+        let (arc, text) = make_selection_doc();
+        let text_idx = text.index();
+        {
+            let mut doc = arc.lock().unwrap();
+            // Select "Hello "
+            doc.set_selection(lumen_dom::Selection {
+                anchor: Some(lumen_dom::DomPosition { container: text, offset: 0 }),
+                focus:  Some(lumen_dom::DomPosition { container: text, offset: 6 }),
+            });
+        }
+        let rt = runtime_with_dom(arc.clone());
+        rt.eval("document.execCommand('delete')").unwrap();
+        let doc = arc.lock().unwrap();
+        let content = match &doc.get(NodeId::from_index(text_idx)).data {
+            NodeData::Text(s) => s.clone(),
+            _ => panic!("not text"),
+        };
+        assert_eq!(content, "World");
     }
 }

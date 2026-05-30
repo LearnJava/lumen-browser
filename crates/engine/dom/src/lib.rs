@@ -2729,6 +2729,92 @@ pub fn insert_paragraph_break(doc: &mut Document, pos: DomPosition, host: NodeId
     }
 }
 
+// ── Selection API helpers (used by lumen-js bindings) ──────────────────────
+
+/// Returns the full text content of `node` — concatenation of all descendant text nodes.
+///
+/// Equivalent to `node.textContent` for element and document-fragment nodes.
+pub fn node_text_content(doc: &Document, node: NodeId) -> String {
+    let mut out = String::new();
+    dom_collect_text(doc, node, &mut out);
+    out
+}
+
+/// Number of direct DOM children of `node`.
+///
+/// For text nodes this is always 0. Used to validate child-index offsets in Range.
+pub fn node_child_count(doc: &Document, node: NodeId) -> usize {
+    doc.get(node).children.len()
+}
+
+/// DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
+/// count for element/document nodes.
+///
+/// Approximated as Rust `char` count (correct for BMP text).
+/// Used to clamp Range endpoint offsets to valid values.
+pub fn node_length(doc: &Document, node: NodeId) -> usize {
+    match &doc.get(node).data {
+        NodeData::Text(s) => s.chars().count(),
+        _ => doc.get(node).children.len(),
+    }
+}
+
+/// Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`).
+///
+/// Same-container ranges: simple substring.
+/// Cross-container ranges: walks node indices (arena insertion order ≈ document
+/// order for parsed documents; valid for typical selection scenarios).
+pub fn range_text(doc: &Document, range: &Range) -> String {
+    if range.is_collapsed() {
+        return String::new();
+    }
+
+    let start = range.start;
+    let end = range.end;
+
+    // Fast path: single text node
+    if start.container == end.container {
+        if let NodeData::Text(s) = &doc.get(start.container).data {
+            let from = utf8_floor(s, start.offset as usize);
+            let to = utf8_floor(s, end.offset as usize);
+            let (from, to) = if from <= to { (from, to) } else { (to, from) };
+            return s[from..to].to_string();
+        }
+        return String::new();
+    }
+
+    let (first, last) = if start.container.index() < end.container.index() {
+        (start, end)
+    } else {
+        (end, start)
+    };
+
+    let mut out = String::new();
+    for idx in first.container.index()..=last.container.index() {
+        let nid = NodeId::from_index(idx);
+        if let NodeData::Text(s) = &doc.get(nid).data {
+            if nid == first.container {
+                let off = utf8_floor(s, first.offset as usize);
+                out.push_str(&s[off..]);
+            } else if nid == last.container {
+                let off = utf8_floor(s, last.offset as usize);
+                out.push_str(&s[..off]);
+            } else {
+                out.push_str(s);
+            }
+        }
+    }
+    out
+}
+
+fn utf8_floor(s: &str, mut off: usize) -> usize {
+    off = off.min(s.len());
+    while off > 0 && !s.is_char_boundary(off) {
+        off -= 1;
+    }
+    off
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
