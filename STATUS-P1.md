@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+**Block list engine (7C.1)** — branch: `p1-blocklist-engine`
+Next step: реализовать EasyList/hosts `RequestFilter` в `crates/network/src/filter/`
 
 ---
 
@@ -16,7 +17,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | Следующая задача из roadmap — см. `lumen-plan.md` Phase 2-3 (Track P1) | any | ? | — |
+| 1 | Block list engine (7C.1) — EasyList/hosts `RequestFilter` в `lumen-network` | `network` | M | — |
 
 ---
 
