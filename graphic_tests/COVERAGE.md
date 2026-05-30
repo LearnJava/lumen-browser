@@ -169,3 +169,5 @@ Viewport: 1024×720. Body padding: 24px (где есть). Gap между объ
 - **translate / rotate / scale** (individual CSS Transforms L2 props) — ✅ реализованы как отдельные свойства, compose перед transform в matrix (translate → rotate → scale → transform), тест 46
 
 - **background-blend-mode** — ✅ реализован (normal/multiply/screen/overlay/darken/lighten/difference/exclusion/color-dodge/color-burn/hard-light/soft-light/hue/saturation/color/luminosity/plus-lighter; comma-list cycling over background layers; wraps each non-Normal layer with PushBlendMode/PopBlendMode), тест 49
+
+- **mix-blend-mode** — ✅ реализован (все 16 CSS-режимов + plus-lighter; элемент блендится с backdrop в своём stacking-context через PushBlendMode/PopBlendMode; CPU snapshot-путь композитит off-screen layer вниз с tiny-skia BlendMode), тест 56

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 56 mix-blend-mode</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #ffffff; width: 1022px; height: 718px; margin: 1px; padding: 24px; overflow: hidden; }
+
+    /* Each cell: a solid amber backdrop with a blue square overlapping it.
+       The square carries mix-blend-mode, so the overlap shows the blend
+       formula between blue (source) and amber (backdrop). */
+    .cell {
+      position: relative;
+      display: inline-block;
+      width: 150px;
+      height: 110px;
+      margin: 0 14px 14px 0;
+      background: #ffcc00;
+    }
+    .blend {
+      position: absolute;
+      left: 35px;
+      top: 25px;
+      width: 90px;
+      height: 70px;
+      background: #3399ff;
+    }
+  </style>
+</head>
+<body>
+  <div class="__f">
+    <!-- Row 1: darkening / multiplicative modes -->
+    <div class="cell"><div class="blend" style="mix-blend-mode: normal;"></div></div>
+    <div class="cell"><div class="blend" style="mix-blend-mode: multiply;"></div></div>
+    <div class="cell"><div class="blend" style="mix-blend-mode: darken;"></div></div>
+    <div class="cell"><div class="blend" style="mix-blend-mode: color-burn;"></div></div>
+    <div class="cell"><div class="blend" style="mix-blend-mode: screen;"></div></div>
+
+    <!-- Row 2: lightening modes -->
+    <div class="cell"><div class="blend" style="mix-blend-mode: lighten;"></div></div>
+    <div class="cell"><div class="blend" style="mix-blend-mode: color-dodge;"></div></div>
+    <div class="cell"><div class="blend" style="mix-blend-mode: overlay;"></div></div>
+    <div class="cell"><div class="blend" style="mix-blend-mode: hard-light;"></div></div>
+    <div class="cell"><div class="blend" style="mix-blend-mode: soft-light;"></div></div>
+
+    <!-- Row 3: comparative / non-separable modes -->
+    <div class="cell"><div class="blend" style="mix-blend-mode: difference;"></div></div>
+    <div class="cell"><div class="blend" style="mix-blend-mode: exclusion;"></div></div>
+    <div class="cell"><div class="blend" style="mix-blend-mode: hue;"></div></div>
+    <div class="cell"><div class="blend" style="mix-blend-mode: saturation;"></div></div>
+    <div class="cell"><div class="blend" style="mix-blend-mode: color;"></div></div>
+
+    <!-- Row 4: luminosity + nesting (two stacked blended squares) -->
+    <div class="cell"><div class="blend" style="mix-blend-mode: luminosity;"></div></div>
+    <div class="cell">
+      <div class="blend" style="left: 20px; top: 20px; background: #e53e3e; mix-blend-mode: multiply;"></div>
+      <div class="blend" style="left: 50px; top: 40px; background: #38a169; mix-blend-mode: screen;"></div>
+    </div>
+  </div>
+</body>
+</html>

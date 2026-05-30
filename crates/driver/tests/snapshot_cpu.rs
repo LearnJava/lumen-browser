@@ -82,6 +82,7 @@ const PAGES: &[&str] = &[
     "43-intrinsic-sizing",
     "47-svg-basic",
     "55-text-rendering",
+    "56-mix-blend-mode",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).

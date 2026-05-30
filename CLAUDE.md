@@ -367,7 +367,7 @@ Full spec of test levels (1–4) — [lumen-plan.md](lumen-plan.md) §15.
 **Status (2026-05-30):** 8A.6(a) done (structural assertions, `driver/tests/test_00..49.rs`).
 8A.6(b) framework done — deterministic CPU pixel snapshots:
 `InProcessSession::screenshot_cpu_rgba/png` (driver feature `cpu-render` → `lumen-paint/cpu-render`,
-tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 28 geometry pages against
+tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 29 geometry pages against
 `graphic_tests/snapshots/cpu/*.png`. Gated on the feature, so plain `cargo test -p lumen-driver`
 skips it; run with `cargo test -p lumen-driver --features cpu-render`, regenerate refs with
 `SAVE_CPU_SNAPSHOTS=1`. `PAGES` holds only pages with ≥2% non-background geometry; `cpu_raster`
@@ -398,7 +398,15 @@ translate/rotate/scale/skew/matrix2d. The `Mat4` carried by the command is colum
 (`x'=a·x+c·y+e`, `y'=b·x+d·y+f`) and already bakes in `T(pivot)·M·T(-pivot)` from `transform-origin`,
 so resampling a page-space layer through it lands exactly where the GPU vertex transform would.
 Opacity and transform share one layer stack via `LayerComposite`; nested groups composite back in
-turn so a child transform `B` under a parent `A` yields `A·B`; page `22-transform`).
+turn so a child transform `B` under a parent `A` yields `A·B`; page `22-transform`), and
+`mix-blend-mode` (`PushBlendMode`/`PopBlendMode`, emitted for `mix-blend-mode != normal`; the
+element renders into a transparent full-size layer on the same `LayerComposite` stack, then
+`PopBlendMode` composites it onto the backdrop below with the CSS blend formula via
+`draw_pixmap` carrying the mapped `tiny_skia::BlendMode` — all 16 CSS modes map 1:1, `plus-lighter`
+→ tiny-skia `Plus`. The simple `walk` builder (`build_display_list`, used by the driver CPU/GPU
+snapshot path) now emits `PushBlendMode` ordered Clip → Blend → Opacity, matching `box_layer_ops`
+in the stacking-aware `build_display_list_ordered` used by the shell/GPU; CSS Compositing &
+Blending L1 §5; page `56-mix-blend-mode`).
 
 ---
 

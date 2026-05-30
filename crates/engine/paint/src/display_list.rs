@@ -2925,6 +2925,15 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             } else {
                 false
             };
+            // CSS Compositing & Blending L1 §5: mix-blend-mode wraps opacity so
+            // the element (faded by its own opacity) blends against the backdrop
+            // (order Clip → Blend → Opacity, mirroring `box_layer_ops`).
+            let has_blend = b.style.mix_blend_mode != LayoutBlendMode::Normal;
+            if has_blend {
+                out.push(DisplayCommand::PushBlendMode {
+                    mode: map_blend_mode(b.style.mix_blend_mode),
+                });
+            }
             // CSS Color L3 §3: opacity < 1.0 creates compositing layer.
             let has_opacity = b.style.opacity < 1.0; // >0.0 already checked above
             if has_opacity {
@@ -3095,6 +3104,9 @@ fn walk(b: &LayoutBox, out: &mut DisplayList) {
             }
             if has_opacity {
                 out.push(DisplayCommand::PopOpacity);
+            }
+            if has_blend {
+                out.push(DisplayCommand::PopBlendMode);
             }
             if has_clip_path {
                 out.push(DisplayCommand::PopClip);
