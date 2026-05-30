@@ -219,6 +219,37 @@ impl GlyphAtlas {
         self.cache.insert(key, entry);
         Some(entry)
     }
+
+    /// React to an OS memory pressure event by evicting glyphs from the cache.
+    ///
+    /// - `Low`: no-op.
+    /// - `Medium`: remove the LRU 50 % of cached glyphs.
+    /// - `High`: clear the entire glyph cache. Glyphs are re-rasterized on demand.
+    ///
+    /// After eviction the atlas texture pixels are NOT compacted — removed cache
+    /// entries simply become unreachable and their atlas regions will be reused
+    /// when the atlas is rebuilt (typically on the next full re-render).
+    pub fn on_memory_pressure(&mut self, level: lumen_core::MemoryPressureLevel) {
+        use lumen_core::MemoryPressureLevel;
+        match level {
+            MemoryPressureLevel::Low => {}
+            MemoryPressureLevel::Medium => {
+                let mut candidates = self.get_lru_candidates();
+                let evict_count = candidates.len() / 2;
+                candidates.truncate(evict_count);
+                let keys: Vec<_> = candidates.into_iter().map(|(k, _)| k).collect();
+                self.remove_keys(&keys);
+            }
+            MemoryPressureLevel::High => {
+                self.cache.clear();
+                self.dirty = true;
+                // Reset packing cursors so new glyphs fill from the top.
+                self.cursor_x = 0;
+                self.shelf_y = 0;
+                self.shelf_height = 0;
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -436,5 +467,40 @@ mod tests {
         assert!(atlas.get(k(1)).is_none());
         assert!(atlas.get(k(2)).is_some());
         assert!(atlas.get(k(3)).is_none());
+    }
+
+    #[test]
+    fn on_memory_pressure_low_noop() {
+        let mut atlas = GlyphAtlas::new(128);
+        for id in 1..=4 {
+            atlas.insert(k(id), &bitmap(10, 10, 100)).unwrap();
+        }
+        let count_before = atlas.cache.len();
+        atlas.on_memory_pressure(lumen_core::MemoryPressureLevel::Low);
+        assert_eq!(atlas.cache.len(), count_before);
+    }
+
+    #[test]
+    fn on_memory_pressure_medium_evicts_half() {
+        let mut atlas = GlyphAtlas::new(256);
+        for id in 1..=6 {
+            atlas.insert(k(id), &bitmap(8, 8, 100)).unwrap();
+        }
+        atlas.on_memory_pressure(lumen_core::MemoryPressureLevel::Medium);
+        assert!(atlas.cache.len() <= 3, "Medium должен оставить ≤50% глифов");
+    }
+
+    #[test]
+    fn on_memory_pressure_high_clears_all() {
+        let mut atlas = GlyphAtlas::new(256);
+        for id in 1..=4 {
+            atlas.insert(k(id), &bitmap(8, 8, 100)).unwrap();
+        }
+        atlas.on_memory_pressure(lumen_core::MemoryPressureLevel::High);
+        assert_eq!(atlas.cache.len(), 0, "High должен очистить весь кэш глифов");
+        assert!(atlas.dirty(), "High должен пометить атлас dirty");
+        // После High новые глифы должны вставляться с начала.
+        assert_eq!(atlas.cursor_x, 0);
+        assert_eq!(atlas.shelf_y, 0);
     }
 }
