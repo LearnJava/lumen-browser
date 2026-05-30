@@ -124,6 +124,44 @@ impl InProcessSession {
             Error::Other("сессия не инициализирована — вызовите navigate() первым".into())
         })
     }
+
+    /// Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia).
+    ///
+    /// В отличие от [`BrowserSession::screenshot`], который рендерит через GPU
+    /// (wgpu, `new_headless`) и потому зависит от драйвера/платформы, этот путь
+    /// растеризует display-list программно через `lumen-paint` feature
+    /// `cpu-render`. Результат пиксельно идентичен на Windows/macOS/Linux —
+    /// основа для snapshot-тестов уровня 3 (задача 8A.6).
+    ///
+    /// Текущий CPU-растеризатор покрывает геометрические примитивы
+    /// (`FillRect`/`FillRoundedRect`/`DrawBorder`/`DrawOutline`); текст,
+    /// изображения и градиенты пока пропускаются.
+    ///
+    /// # Errors
+    /// Возвращает `Err`, если сессия не инициализирована или растеризация
+    /// не удалась.
+    #[cfg(feature = "cpu-render")]
+    pub fn screenshot_cpu_rgba(&self) -> Result<lumen_image::Image> {
+        let state = self.state()?;
+        let display_list = lumen_paint::build_display_list(&state.layout_root);
+        let width = self.viewport.width as u32;
+        let height = self.viewport.height as u32;
+        lumen_paint::Renderer::render_to_image_cpu(width, height, &display_list, &[], 0.0, 0.0)
+            .map_err(|e| Error::Other(format!("CPU rasterization: {e}")))
+    }
+
+    /// Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia).
+    ///
+    /// Удобная обёртка над [`Self::screenshot_cpu_rgba`] для записи эталонов.
+    ///
+    /// # Errors
+    /// Возвращает `Err`, если рендер или PNG-кодирование не удались.
+    #[cfg(feature = "cpu-render")]
+    pub fn screenshot_cpu_png(&self) -> Result<Vec<u8>> {
+        let image = self.screenshot_cpu_rgba()?;
+        lumen_image::encode_png_rgba8(&image)
+            .map_err(|e| Error::Other(format!("PNG encoding: {e}")))
+    }
 }
 
 impl Default for InProcessSession {
