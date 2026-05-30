@@ -49,6 +49,9 @@ pub(crate) fn rasterize_cpu(
             DisplayCommand::DrawSvgPath { vertices, color } => {
                 rasterize_svg_path(&mut pixmap, vertices, color)?;
             }
+            DisplayCommand::DrawImage { rect, .. } => {
+                rasterize_image_placeholder(&mut pixmap, rect)?;
+            }
             // Remaining commands not implemented for CPU rasterization yet.
             _ => {
                 // Skipped for now; will be implemented in later phases.
@@ -566,6 +569,23 @@ fn rasterize_svg_path(
     Ok(())
 }
 
+/// `<img>` placeholder fill (CSS Images L3 — unloaded replaced element).
+///
+/// The deterministic CPU path never registers decoded image pixels, so — exactly
+/// like the GPU renderer's headless fallback (`renderer.rs`, `DrawImage` arm) —
+/// every image box paints as the solid light-grey placeholder quad. The GPU uses
+/// the linear-float colour `[0.85, 0.85, 0.85, 1.0]`; `0.85 × 255 ≈ 217`, so the
+/// placeholder is `rgba8(217, 217, 217, 255)`. Alt text is *not* drawn here (the
+/// CPU rasterizer has no text primitive yet), so only pages with empty `alt`
+/// reproduce the GPU output exactly.
+fn rasterize_image_placeholder(
+    pixmap: &mut tiny_skia::Pixmap,
+    rect: &Rect,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let placeholder = Color { r: 217, g: 217, b: 217, a: 255 };
+    rasterize_fill_rect(pixmap, rect, &placeholder)
+}
+
 #[inline]
 fn color_to_skia(color: Color) -> tiny_skia::Color {
     tiny_skia::Color::from_rgba8(color.r, color.g, color.b, color.a)
@@ -598,6 +618,28 @@ mod tests {
         assert_eq!(px(&img, 30, 23), (255, 0, 0, 255), "interior should be red");
         // Far corner outside the triangle stays white.
         assert_eq!(px(&img, 1, 1), (255, 255, 255, 255), "exterior stays white");
+    }
+
+    /// `DrawImage` fills its box with the light-grey placeholder quad
+    /// (`rgba8(217,217,217,255)`), mirroring the GPU renderer's headless fallback
+    /// when no decoded pixels are registered.
+    #[test]
+    fn draw_image_fills_grey_placeholder() {
+        use lumen_layout::{ObjectFit, ObjectPosition, ImageRendering};
+        let cmds = vec![DisplayCommand::DrawImage {
+            rect: Rect::new(10.0, 10.0, 40.0, 30.0),
+            src: "missing.png".into(),
+            alt: String::new(),
+            object_fit: ObjectFit::Fill,
+            object_position: ObjectPosition::default(),
+            image_rendering: ImageRendering::Auto,
+        }];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Interior of the box is the grey placeholder.
+        assert_eq!(px(&img, 30, 25), (217, 217, 217, 255), "placeholder grey");
+        // Outside the box stays white.
+        assert_eq!(px(&img, 60, 60), (255, 255, 255, 255), "exterior stays white");
     }
 
     /// A degenerate path (fewer than 3 vertices) is a no-op, not a panic.
