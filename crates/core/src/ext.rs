@@ -1678,7 +1678,7 @@ impl BrowserSession for NullBrowserSession {
 /// Mapped from OS-specific signals:
 /// - Win32: `MEMORYSTATUSEX.dwMemoryLoad` via `GlobalMemoryStatusEx`
 /// - Linux: `avg10` from `/proc/pressure/memory` PSI
-/// - macOS: `dispatch_source DISPATCH_SOURCE_TYPE_MEMORYPRESSURE`
+/// - macOS: `(active + wire) / total` via `host_statistics64(HOST_VM_INFO64)`
 ///
 /// Caches (`ImageDecodeCache`, `GlyphAtlas`, `LayerCache`) subscribe to
 /// pressure events and evict proportionally via `on_memory_pressure(level)`.
@@ -1701,6 +1701,7 @@ pub enum MemoryPressureLevel {
 /// Platform implementations:
 /// - `Win32MemoryPressureSource` — `GlobalMemoryStatusEx` polling (Windows)
 /// - `LinuxMemoryPressureSource` — `/proc/pressure/memory` PSI (Linux ≥ 4.20)
+/// - `MacosMemoryPressureSource` — `host_statistics64(HOST_VM_INFO64)` polling (macOS ≥ 10.9)
 /// - `NullMemoryPressureSource` — always `Low` (tests / unsupported platforms)
 pub trait MemoryPressureSource: Send + Sync {
     /// Poll current memory pressure level from the OS.
