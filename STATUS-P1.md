@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+In progress: A11y tree first-class (8G)  branch: p1-a11y-driver-wiring
+Next step: merge to main  driver/src/session.rs, a11y/src/roles.rs
 
 ---
 

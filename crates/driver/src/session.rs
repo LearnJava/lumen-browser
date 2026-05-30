@@ -13,7 +13,6 @@ use serde_json;
 use lumen_dom::Document;
 use lumen_dom::NodeData;
 use lumen_dom::NodeId;
-use lumen_dom::build_flat_tree;
 use lumen_layout::{computed_style_by_selector, LayoutBox};
 
 use crate::{

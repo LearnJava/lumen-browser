@@ -322,9 +322,9 @@
 | 8F.1 | ⬜ `set_clock(ClockMode::Frozen / Real / Monotonic)` | shell timers + Performance.now bridge | — |
 | 8F.2 | ⬜ `set_rng_seed(u64)` — детерминированный `Math.random()` | JS runtime hook | — |
 | 8F.3 | ⬜ `freeze_fingerprint(profile)` — фиксированные canvas/WebGL/audio/font enumeration | §9.5 anti-fp + bundled-only fonts mode | — |
-| 8G | ⬜ **`[P3+P1]` A11y tree first-class** (Phase 1, **зависит от P1 `lumen-a11y`**) | Semantic locator surface для tests + AI agents | `lumen-a11y` published interface |
-| 8G.1 | ⬜ A11y tree доступна через `BrowserSession::a11y_tree()` | `driver` reads `lumen-a11y` snapshot | P1 owns construction |
-| 8G.2 | ⬜ `Query::Role { role, name }` matching по a11y-tree (Playwright-стиль `getByRole`) | `driver/src/query.rs` | — |
+| 8G | ✅ **`[P3+P1]` A11y tree first-class** (Phase 1, **зависит от P1 `lumen-a11y`**) | Semantic locator surface для tests + AI agents | `lumen-a11y` published interface. P1 done 2026-05-31: `AXRole::as_str()`, `A11yState`, enriched `A11yNode` (node_id/description/placeholder/state), `a11y_tree()` uses `build_ax_tree()`, 14 тестов |
+| 8G.1 | ✅ A11y tree доступна через `BrowserSession::a11y_tree()` | `driver/src/session.rs` uses `lumen_a11y::build_ax_tree()` | P1 done 2026-05-31 |
+| 8G.2 | ✅ `Query::Role { role, name }` matching по a11y-tree (Playwright-стиль `getByRole`) | `driver/src/session.rs` `find_a11y_node`/`find_all_a11y_nodes` + `matches_query` | P1 done 2026-05-31 |
 | 8H | ⬜ **`[P3]` `lumen-bidi-server` крейт** (Phase 2) | Playwright/Selenium 5/Cypress «из коробки» | `crates/bidi/` |
 | 8H.1 | ⬜ WebSocket transport + W3C BiDi handshake | `bidi/src/transport.rs` | — |
 | 8H.2 | ⬜ BiDi modules core: `session`, `browsingContext`, `script`, `network`, `input` | `bidi/src/modules/` | W3C Working Draft, May 2026 |
