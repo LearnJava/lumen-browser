@@ -11,13 +11,14 @@
 //! The CPU rasterizer currently covers the geometric primitives
 //! (`FillRect` / `FillRoundedRect` / `DrawBorder` / `DrawOutline`), linear and
 //! radial gradients (`DrawLinearGradient` / `DrawRadialGradient`, including
-//! repeating), tessellated SVG paths (`DrawSvgPath`), and the `<img>` grey
-//! placeholder quad (`DrawImage` — the headless CPU path registers no decoded
-//! pixels, so every image box paints the solid placeholder, matching the GPU
-//! renderer's fallback). Text is still skipped. The chosen pages exercise
-//! exactly these primitives, so the references capture meaningful geometry
-//! rather than blank frames. As `cpu_raster` grows, add the relevant pages to
-//! `PAGES`.
+//! repeating), tessellated SVG paths (`DrawSvgPath`), rectangular clipping
+//! (`PushClipRect` / `PopClip` + `PushScrollLayer` / `PopScrollLayer`, i.e.
+//! `overflow: hidden/scroll/auto`), and the `<img>` grey placeholder quad
+//! (`DrawImage` — the headless CPU path registers no decoded pixels, so every
+//! image box paints the solid placeholder, matching the GPU renderer's
+//! fallback). Text is still skipped. The chosen pages exercise exactly these
+//! primitives, so the references capture meaningful geometry rather than blank
+//! frames. As `cpu_raster` grows, add the relevant pages to `PAGES`.
 //!
 //! Run:        cargo test -p lumen-driver --features cpu-render
 //! Regenerate: SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render -- --nocapture
@@ -55,6 +56,7 @@ const PAGES: &[&str] = &[
     "10-min-max-width",
     "11-min-max-height",
     "12-display",
+    "14-overflow",
     "16-outline",
     "17-calc",
     "18-images",
