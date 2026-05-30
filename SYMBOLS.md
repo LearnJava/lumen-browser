@@ -1552,16 +1552,16 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/display_list.rs:157` **fn** `from_style_and_box` — Builds `CornerRadii` from a `ComputedStyle` and the element's border-box dimensions
 `crates/engine/paint/src/display_list.rs:173` **fn** `from_style` — Builds `CornerRadii` from a `ComputedStyle`. `border-radius: N%` values are
 `crates/engine/paint/src/display_list.rs:179` **enum** `DisplayCommand`
-`crates/engine/paint/src/display_list.rs:602` **type** `DisplayList`
-`crates/engine/paint/src/display_list.rs:631` **fn** `fit_image_rect` — CSS Images L3 §5.5 — `object-fit` placement: где располагается
-`crates/engine/paint/src/display_list.rs:686` **fn** `fit_image_quad` — Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
-`crates/engine/paint/src/display_list.rs:744` **fn** `serialize_display_list`
-`crates/engine/paint/src/display_list.rs:1095` **fn** `build_display_list`
-`crates/engine/paint/src/display_list.rs:1110` **fn** `build_display_list_with_anim` — Like `build_display_list` but applies compositor animation overrides per node
-`crates/engine/paint/src/display_list.rs:1150` **fn** `build_display_list_ordered` — Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E)
-`crates/engine/paint/src/display_list.rs:1191` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
-`crates/engine/paint/src/display_list.rs:1232` **fn** `build_print_display_list` — Builds a print display list from paginated layout
-`crates/engine/paint/src/display_list.rs:1255` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
+`crates/engine/paint/src/display_list.rs:642` **type** `DisplayList`
+`crates/engine/paint/src/display_list.rs:671` **fn** `fit_image_rect` — CSS Images L3 §5.5 — `object-fit` placement: где располагается
+`crates/engine/paint/src/display_list.rs:726` **fn** `fit_image_quad` — Финальный GPU-quad для `<img>`: пересечение «полного» placement-rect
+`crates/engine/paint/src/display_list.rs:784` **fn** `serialize_display_list`
+`crates/engine/paint/src/display_list.rs:1141` **fn** `build_display_list`
+`crates/engine/paint/src/display_list.rs:1156` **fn** `build_display_list_with_anim` — Like `build_display_list` but applies compositor animation overrides per node
+`crates/engine/paint/src/display_list.rs:1196` **fn** `build_display_list_ordered` — Билдер display list-а, **уважающий painting order** (CSS 2.1 Appendix E)
+`crates/engine/paint/src/display_list.rs:1237` **fn** `build_display_list_ordered_with_anim` — Like [`build_display_list_ordered`] but applies compositor animation overrides per node
+`crates/engine/paint/src/display_list.rs:1278` **fn** `build_print_display_list` — Builds a print display list from paginated layout
+`crates/engine/paint/src/display_list.rs:1301` **fn** `split_at_page_breaks` — Splits a print display list at `PageBreak` markers
 `crates/engine/paint/src/fingerprint.rs:19` **struct** `GpuFingerprint` — GPU fingerprint info: normailzed vendor and renderer strings
 `crates/engine/paint/src/fingerprint.rs:32` **fn** `from_adapter_info` — Create normalized GPU fingerprint from adapter info
 `crates/engine/paint/src/fingerprint.rs:40` **fn** `vendor` — Vendor string: always "WebKit"
@@ -1588,43 +1588,43 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/paint/src/layer_cache.rs:189` **fn** `on_memory_pressure` — React to an OS memory pressure event by evicting GPU layer textures
 `crates/engine/paint/src/lib.rs:56` **struct** `FontMeasurer` — Реализация [`TextMeasurer`] на основе TTF-данных шрифта
 `crates/engine/paint/src/lib.rs:66` **fn** `new` — Создаёт измеритель из уже разобранного [`lumen_font::Font`]
-`crates/engine/paint/src/renderer.rs:1178` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
-`crates/engine/paint/src/renderer.rs:1209` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
-`crates/engine/paint/src/renderer.rs:1238` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
-`crates/engine/paint/src/renderer.rs:1302` **struct** `Renderer`
-`crates/engine/paint/src/renderer.rs:1446` **fn** `new`
-`crates/engine/paint/src/renderer.rs:1527` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
-`crates/engine/paint/src/renderer.rs:2771` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
-`crates/engine/paint/src/renderer.rs:2779` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
-`crates/engine/paint/src/renderer.rs:2792` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
-`crates/engine/paint/src/renderer.rs:2806` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
-`crates/engine/paint/src/renderer.rs:2819` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
-`crates/engine/paint/src/renderer.rs:2896` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
-`crates/engine/paint/src/renderer.rs:3033` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
-`crates/engine/paint/src/renderer.rs:3042` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
-`crates/engine/paint/src/renderer.rs:3049` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
-`crates/engine/paint/src/renderer.rs:3067` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
-`crates/engine/paint/src/renderer.rs:3134` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
-`crates/engine/paint/src/renderer.rs:3139` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
-`crates/engine/paint/src/renderer.rs:3145` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
-`crates/engine/paint/src/renderer.rs:3150` **fn** `layer_cache` — Получить ссылку на layer cache для статистики / монитора GPU памяти
-`crates/engine/paint/src/renderer.rs:3155` **fn** `layer_cache_mut` — Получить мutable ссылку для прямого управления кэшем (advanced usage)
-`crates/engine/paint/src/renderer.rs:3161` **fn** `access_layer` — Отметить layer как используемый текущим render pass
-`crates/engine/paint/src/renderer.rs:3168` **fn** `cache_layer` — Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated
-`crates/engine/paint/src/renderer.rs:3174` **fn** `return_layer_to_pool` — Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008)
-`crates/engine/paint/src/renderer.rs:3186` **fn** `clear_layer_cache` — Очистить весь layer cache (полная эвикция) и очистить texture pool
-`crates/engine/paint/src/renderer.rs:3192` **fn** `texture_pool_len` — Get the number of free textures in the pool (for diagnostics)
-`crates/engine/paint/src/renderer.rs:3197` **fn** `texture_pool_len_for_size` — Get the number of free textures of a specific size (for diagnostics)
-`crates/engine/paint/src/renderer.rs:3202` **fn** `clear_texture_pool` — Clear all pooled textures (e.g., when resizing or memory pressure is high)
-`crates/engine/paint/src/renderer.rs:3208` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
-`crates/engine/paint/src/renderer.rs:3214` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
-`crates/engine/paint/src/renderer.rs:3243` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
-`crates/engine/paint/src/renderer.rs:3252` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
-`crates/engine/paint/src/renderer.rs:3259` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
-`crates/engine/paint/src/renderer.rs:3402` **fn** `render` — Рендерит две полосы display list-а одним кадром:
-`crates/engine/paint/src/renderer.rs:5843` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
-`crates/engine/paint/src/renderer.rs:5865` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
-`crates/engine/paint/src/renderer.rs:5968` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
+`crates/engine/paint/src/renderer.rs:1271` **struct** `OffscreenLayer` — GPU-ресурсы одного off-screen opacity layer-а. Создаётся лениво через
+`crates/engine/paint/src/renderer.rs:1302` **enum** `SnapshotUploadError` — Ошибка `Renderer::upload_layer_snapshot`
+`crates/engine/paint/src/renderer.rs:1331` **enum** `ImageRegisterError` — Ошибка `Renderer::register_image`
+`crates/engine/paint/src/renderer.rs:1395` **struct** `Renderer`
+`crates/engine/paint/src/renderer.rs:1547` **fn** `new`
+`crates/engine/paint/src/renderer.rs:1628` **fn** `new_headless` — Creates a headless `Renderer` for off-screen rendering without a winit window
+`crates/engine/paint/src/renderer.rs:2978` **fn** `with_font_provider` — Заменяет источник лукапа face-ов. Полезно для тестов (mock-provider) и
+`crates/engine/paint/src/renderer.rs:2986` **fn** `set_font_provider` — Заменяет `FontProvider` на работающем рендере. Используется shell-ом,
+`crates/engine/paint/src/renderer.rs:2999` **fn** `preload_fallback_chain` — Эагерно загружает указанные family-имена через текущий `FontProvider`,
+`crates/engine/paint/src/renderer.rs:3013` **fn** `gpu_fingerprint` — Returns the normalized GPU fingerprint (vendor/renderer strings)
+`crates/engine/paint/src/renderer.rs:3026` **fn** `preload_curated_fallbacks` — Shortcut: эагерно загружает `CURATED_FALLBACK_FAMILIES` (Noto Color
+`crates/engine/paint/src/renderer.rs:3103` **fn** `register_image` — Регистрирует декодированное изображение в GPU-cache под ключом `src`
+`crates/engine/paint/src/renderer.rs:3240` **fn** `unregister_image` — Снимает регистрацию изображения. После этого `DrawImage` для `src`
+`crates/engine/paint/src/renderer.rs:3249` **fn** `clear_images` — Снимает регистрацию всех картинок (например, при переходе на новую
+`crates/engine/paint/src/renderer.rs:3256` **fn** `has_image` — Зарегистрирована ли картинка с таким `src` (для shell-логирования)
+`crates/engine/paint/src/renderer.rs:3274` **fn** `upload_layer_snapshot` — Загружает CPU-пиксели (`Rgba8`, 4 байта/пиксель) как именованный
+`crates/engine/paint/src/renderer.rs:3341` **fn** `evict_layer_snapshot` — Удаляет снимок с `id`. GPU-память освобождается при drop-е
+`crates/engine/paint/src/renderer.rs:3346` **fn** `clear_layer_snapshots` — Удаляет все снимки (например, при переходе на новую страницу)
+`crates/engine/paint/src/renderer.rs:3352` **fn** `has_layer_snapshot` — Зарегистрирован ли снимок с таким `id`
+`crates/engine/paint/src/renderer.rs:3357` **fn** `layer_cache` — Получить ссылку на layer cache для статистики / монитора GPU памяти
+`crates/engine/paint/src/renderer.rs:3362` **fn** `layer_cache_mut` — Получить мutable ссылку для прямого управления кэшем (advanced usage)
+`crates/engine/paint/src/renderer.rs:3368` **fn** `access_layer` — Отметить layer как используемый текущим render pass
+`crates/engine/paint/src/renderer.rs:3375` **fn** `cache_layer` — Кэшировать layer слой. Returns `true` if this is a new layer, `false` if updated
+`crates/engine/paint/src/renderer.rs:3381` **fn** `return_layer_to_pool` — Return an off-screen layer texture to the pool for recycling (Phase 2 ADR-008)
+`crates/engine/paint/src/renderer.rs:3393` **fn** `clear_layer_cache` — Очистить весь layer cache (полная эвикция) и очистить texture pool
+`crates/engine/paint/src/renderer.rs:3399` **fn** `texture_pool_len` — Get the number of free textures in the pool (for diagnostics)
+`crates/engine/paint/src/renderer.rs:3404` **fn** `texture_pool_len_for_size` — Get the number of free textures of a specific size (for diagnostics)
+`crates/engine/paint/src/renderer.rs:3409` **fn** `clear_texture_pool` — Clear all pooled textures (e.g., when resizing or memory pressure is high)
+`crates/engine/paint/src/renderer.rs:3415` **fn** `snapshot_dimensions` — Возвращает `(width, height)` снимка, или `None` если `id` не зарегистрирован
+`crates/engine/paint/src/renderer.rs:3421` **fn** `resize` — Resizes the render target. For windowed mode, reconfigures the wgpu surface
+`crates/engine/paint/src/renderer.rs:3450` **fn** `set_scale_factor` — Обновить device-pixel-ratio. Вызывается shell-ом по `WindowEvent::ScaleFactorChanged`
+`crates/engine/paint/src/renderer.rs:3459` **fn** `scale_factor` — Текущий device-pixel-ratio. Для отладки / тестов (UI обычно его не читает —
+`crates/engine/paint/src/renderer.rs:3466` **fn** `viewport_size` — Текущий viewport в **logical** (CSS) пикселях: `physical / scale_factor`
+`crates/engine/paint/src/renderer.rs:3609` **fn** `render` — Рендерит две полосы display list-а одним кадром:
+`crates/engine/paint/src/renderer.rs:6145` **fn** `render_to_image_cpu` — CPU-based rasterization using tiny-skia (feature="cpu-render" only)
+`crates/engine/paint/src/renderer.rs:6167` **fn** `render_to_image` — Renders display commands and returns a CPU `Image` (RGBA8)
+`crates/engine/paint/src/renderer.rs:6270` **fn** `render_print_pages` — Renders a print display list into one `Image` per page
 `crates/engine/paint/src/scroll_snap.rs:33` **fn** `find_scroll_snap_y` — CSS Scroll Snap L1 — returns the Y scroll offset to snap to, or `None`
 `crates/engine/paint/src/scroll_snap.rs:54` **fn** `find_scroll_snap_y_proximity` — CSS Scroll Snap L1 — same as [`find_scroll_snap_y`] but restricts candidates
 `crates/engine/paint/src/svg_path.rs:15` **enum** `PathSegment` — One SVG path command (absolute coords, after normalization)

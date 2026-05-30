@@ -597,6 +597,46 @@ pub enum DisplayCommand {
     /// as a split point: commands before `PageBreak` render on page N, commands after
     /// render on page N+1. Has no visual effect in on-screen rendering.
     PageBreak,
+
+    /// CSS Images L4 §4 — `cross-fade(image-a, image-b, progress%)`.
+    ///
+    /// GPU two-texture blend: samples `src_a` and `src_b` at the same UV (covers
+    /// the full destination rect [0,1]×[0,1]) and outputs
+    /// `mix(color_a, color_b, progress)` per pixel. Equivalent to the spec's
+    /// linear interpolation between two image samples with no extra alpha
+    /// scaling on the result — straight-alpha inputs are blended, then the
+    /// result is treated as the source colour for normal premultiplied alpha
+    /// compositing onto the destination.
+    ///
+    /// `dest` — destination rectangle in CSS-pixel page coordinates (same
+    /// coordinate system as all other rects in the display list).
+    ///
+    /// `src_a` / `src_b` — image URLs registered through
+    /// [`Renderer::register_image`](crate::Renderer::register_image). If either
+    /// texture is missing from the GPU cache, the renderer silently skips the
+    /// command (analogous to `DrawBackgroundImage` for an unregistered URL) —
+    /// callers may emit a fallback `FillRect` or placeholder beforehand.
+    ///
+    /// `progress` — blend factor in `[0.0, 1.0]`. `0.0` = fully `src_a`,
+    /// `1.0` = fully `src_b`. Values outside the range are clamped by the
+    /// renderer (the WGSL `mix` would extrapolate otherwise). Emitters should
+    /// already clamp at parse time per CSS Images L4 §4.2.
+    ///
+    /// CSS: `image()` / `cross-fade()` source for `background-image`,
+    /// `mask-image`, `border-image-source`, `list-style-image`, content
+    /// property values. P4 wires the emit side once `cross-fade()` is parsed
+    /// in `lumen-css-parser` into a `BackgroundImage::CrossFade { a, b, t }`
+    /// variant and `emit_background_image` produces this command.
+    DrawCrossFade {
+        /// Destination rectangle (CSS-pixel page coordinates).
+        dest: Rect,
+        /// URL key of the first image (`progress = 0.0`).
+        src_a: String,
+        /// URL key of the second image (`progress = 1.0`).
+        src_b: String,
+        /// Blend factor in `[0.0, 1.0]`. `0.0` = pure `src_a`, `1.0` = pure `src_b`.
+        progress: f32,
+    },
 }
 
 pub type DisplayList = Vec<DisplayCommand>;
@@ -1040,6 +1080,12 @@ pub fn serialize_display_list(dl: &[DisplayCommand]) -> String {
             }
             DisplayCommand::PageBreak => {
                 out.push_str("PageBreak\n");
+            }
+            DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress } => {
+                out.push_str(&format!(
+                    "DrawCrossFade ({:.2}, {:.2}, {:.2}, {:.2}) a={src_a:?} b={src_b:?} p={progress:.3}\n",
+                    dest.x, dest.y, dest.width, dest.height,
+                ));
             }
         }
     }
@@ -4479,6 +4525,7 @@ mod tests {
                 DisplayCommand::BoxModelOverlay { .. } => "BoxModelOverlay",
                 DisplayCommand::DrawScrollbar { .. } => "DrawScrollbar",
                 DisplayCommand::PageBreak => "PageBreak",
+                DisplayCommand::DrawCrossFade { .. } => "DrawCrossFade",
             })
             .collect();
         assert_eq!(kinds, vec!["FillRect", "DrawBorder", "DrawImage"]);
@@ -7640,5 +7687,96 @@ mod tests {
         let cmds = build_print_display_list(&pages);
         let breaks = cmds.iter().filter(|c| matches!(c, DisplayCommand::PageBreak)).count();
         assert_eq!(breaks, pages.len() - 1, "N pages → N-1 PageBreaks");
+    }
+
+    // ── Tests for DrawCrossFade ────────────────────────────────────────────
+
+    /// Конструкция DrawCrossFade сохраняет все поля без потерь.
+    #[test]
+    fn cross_fade_construction_preserves_fields() {
+        let cmd = DisplayCommand::DrawCrossFade {
+            dest: Rect::new(10.0, 20.0, 100.0, 50.0),
+            src_a: "first.png".to_string(),
+            src_b: "second.png".to_string(),
+            progress: 0.25,
+        };
+        if let DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress } = &cmd {
+            assert!((dest.x - 10.0).abs() < f32::EPSILON);
+            assert!((dest.y - 20.0).abs() < f32::EPSILON);
+            assert!((dest.width - 100.0).abs() < f32::EPSILON);
+            assert!((dest.height - 50.0).abs() < f32::EPSILON);
+            assert_eq!(src_a, "first.png");
+            assert_eq!(src_b, "second.png");
+            assert!((progress - 0.25).abs() < f32::EPSILON);
+        } else {
+            panic!("expected DrawCrossFade variant");
+        }
+    }
+
+    /// serialize_display_list печатает все ключевые поля в детерминированном формате.
+    #[test]
+    fn cross_fade_serialize_includes_all_fields() {
+        let dl = vec![DisplayCommand::DrawCrossFade {
+            dest: Rect::new(0.0, 0.0, 200.0, 100.0),
+            src_a: "a.png".to_string(),
+            src_b: "b.png".to_string(),
+            progress: 0.5,
+        }];
+        let s = serialize_display_list(&dl);
+        assert!(s.starts_with("DrawCrossFade "), "should start with command name: {s}");
+        assert!(s.contains("(0.00, 0.00, 200.00, 100.00)"), "should contain dest rect: {s}");
+        assert!(s.contains(r#"a="a.png""#), "should contain src_a: {s}");
+        assert!(s.contains(r#"b="b.png""#), "should contain src_b: {s}");
+        assert!(s.contains("p=0.500"), "should contain progress: {s}");
+    }
+
+    /// Equality / Debug на варианте работают через производные —
+    /// важно для snapshot-тестов и assert_eq! в downstream-крейтах.
+    #[test]
+    fn cross_fade_equality_and_debug() {
+        let a = DisplayCommand::DrawCrossFade {
+            dest: Rect::new(1.0, 2.0, 3.0, 4.0),
+            src_a: "x".into(),
+            src_b: "y".into(),
+            progress: 0.75,
+        };
+        let b = a.clone();
+        assert_eq!(a, b, "Clone должен сохранять равенство");
+        let dbg = format!("{a:?}");
+        assert!(dbg.contains("DrawCrossFade"), "Debug должен включать имя варианта: {dbg}");
+        assert!(dbg.contains("0.75"), "Debug должен включать progress: {dbg}");
+
+        // Граничные значения: progress = 0.0 (только src_a) и 1.0 (только src_b)
+        // — оба валидны и различимы.
+        let zero = DisplayCommand::DrawCrossFade {
+            dest: Rect::new(0.0, 0.0, 10.0, 10.0),
+            src_a: "a".into(),
+            src_b: "b".into(),
+            progress: 0.0,
+        };
+        let one = DisplayCommand::DrawCrossFade {
+            dest: Rect::new(0.0, 0.0, 10.0, 10.0),
+            src_a: "a".into(),
+            src_b: "b".into(),
+            progress: 1.0,
+        };
+        assert_ne!(zero, one, "progress=0.0 и progress=1.0 — разные команды");
+    }
+
+    /// DrawCrossFade попадает в exhaustive-match киндов (защита от
+    /// «забыли добавить ветку при extension enum-а»).
+    #[test]
+    fn cross_fade_appears_in_kind_dispatch() {
+        let cmd = DisplayCommand::DrawCrossFade {
+            dest: Rect::new(0.0, 0.0, 1.0, 1.0),
+            src_a: "a".into(),
+            src_b: "b".into(),
+            progress: 0.5,
+        };
+        // Если когда-нибудь матч в `img_with_background_and_border_paints_in_order`
+        // перестанет включать DrawCrossFade — компилятор не пропустит код.
+        // Здесь просто smoke-проверяем сериализацию через публичный API.
+        let s = serialize_display_list(std::slice::from_ref(&cmd));
+        assert!(s.contains("DrawCrossFade"));
     }
 }
