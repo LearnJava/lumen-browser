@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+Blob + File + FileReader API (WHATWG File API, Tier 1)  branch: p1-blob-file-api
+Next step: implement Blob/File/FileReader JS shim в `crates/js/src/dom.rs`
 
 ---
 
@@ -16,7 +17,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | Block list engine (7C.1) — EasyList/hosts `RequestFilter` в `lumen-network` | `network` | M | — |
+| 1 | `Blob` + `File` + `FileReader` API (WHATWG File API — Tier 1 §1226) | `js` | M | — |
 
 ---
 
