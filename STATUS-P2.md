@@ -5,9 +5,7 @@
 ---
 
 ## In progress
-
-9D.4 + 9D.6 — Battery API disable + navigator/screen/timezone normalization  branch: p2-fp-battery-navigator
-Next step: tests pass → clippy → commit  crates/js/src/battery_bindings.rs + navigator_bindings.rs
+_(none)_
 
 ---
 
@@ -24,6 +22,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-fp-battery-navigator** ✅ 2026-05-30 — ADR-007 Layer 4, 9D.4+9D.6: Battery API disable + navigator/screen/timezone normalization. `battery_bindings`: `install_battery_bindings(ctx)` → `navigator.getBattery()` возвращает rejected Promise (4 unit-теста). `navigator_bindings`: `install_navigator_bindings(ctx)` нормализует `hardwareConcurrency=2`, `deviceMemory=8`, `platform='Win32'`, `languages=['en-US','en']`, `screen={1920×1080, colorDepth:24}`, `Date.prototype.getTimezoneOffset→0` (10 unit-тестов). Оба вызываются после `install_dom_api`. 297 JS-тестов всего (+16).
 - **p2-audio-fp-noise** ✅ 2026-05-30 — ADR-007 Layer 4, 9D.3: `AudioContext` fingerprint noise в `lumen-js`. Новый модуль `audio_bindings`: `install_audio_bindings(ctx, seed)` + `new_session_seed()` (AtomicU32 счётчик). JS шим (IIFE) определяет `AudioContext`/`webkitAudioContext`/`OfflineAudioContext`/`AudioBuffer` с LCG-шумом ±1e-7 в `getChannelData()`/`copyFromChannel()`/`getFloatFrequencyData()`. `install_dom()` автоматически вызывает биндинги с уникальным seed на вкладку. 14 новых unit-тестов. 280 JS-тестов всего.
 - **p2-macos-memory-pressure** ✅ 2026-05-30 — ADR-008 §10H.4: `MacosMemoryPressureSource` в `lumen-core::memory_pressure`. Polling через `host_statistics64(HOST_VM_INFO64)` — mach kernel, без новых зависимостей. Метрика: `used_ratio = (active + wire) / (free + active + inactive + wire)`, пороги 75%→Medium, 90%→High. Целочисленное сравнение без float. 4 unit-теста threshold logic (platform-independent) + 1 live call тест (cfg macOS). Трек 10H завершён — все три платформы (Win32/Linux/macOS) покрыты.
 - **p2-cross-tab-cache** ✅ 2026-05-30 — ADR-008 §10D.3: `EvictableCache` trait + `CacheRegistry` в `lumen-core::ext`. Единый интерфейс для всех разделяемых между вкладками кэшей: `on_memory_pressure(level)`, `used_bytes()`, `budget_bytes()`, `clear()`, `cache_name()`. `CacheRegistry` хранит `Vec<Box<dyn EvictableCache>>`, методы: `register()`, `broadcast_pressure()`, `total_used_bytes()`, `total_budget_bytes()`, `clear_all()`. Реализации: `GlyphAtlas` (used = pixels.len(), budget = MAX), `ImageDecodeCache` (делегирует inherent-методам), `LayerCache` (u32→usize). 8 unit-тестов CacheRegistry в lumen-core. P3 handoff: создать `CacheRegistry` в shell, зарегистрировать все три кэша, вызывать `broadcast_pressure()` из poll-loop `MemoryPressureSource`.
