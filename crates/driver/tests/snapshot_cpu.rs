@@ -9,9 +9,10 @@
 //! cross-OS-stable regression gate the 8A.6 migration targets.
 //!
 //! The CPU rasterizer currently covers the geometric primitives
-//! (`FillRect` / `FillRoundedRect` / `DrawBorder` / `DrawOutline`), linear and
-//! radial gradients (`DrawLinearGradient` / `DrawRadialGradient`, including
-//! repeating), and tessellated SVG paths (`DrawSvgPath`); text and images are
+//! (`FillRect` / `FillRoundedRect` / `DrawBorder` / `DrawOutline`), linear,
+//! radial and conic gradients (`DrawLinearGradient` / `DrawRadialGradient` /
+//! `DrawConicGradient`, all including repeating), and tessellated SVG paths
+//! (`DrawSvgPath`); text and images are
 //! skipped. The chosen pages exercise exactly these primitives, so the
 //! references capture meaningful geometry rather than blank frames. As
 //! `cpu_raster` grows, add the relevant pages to `PAGES`.
@@ -27,7 +28,7 @@ use lumen_driver::{BrowserSession, InProcessSession};
 use std::path::{Path, PathBuf};
 
 /// Pages that exercise the CPU primitives (rect / rounded-rect / border /
-/// outline / linear+radial gradient). Each name is the
+/// outline / linear+radial+conic gradient / SVG path). Each name is the
 /// `graphic_tests/<name>.html` stem and the
 /// `graphic_tests/snapshots/cpu/<name>.png` reference stem.
 ///
@@ -55,6 +56,7 @@ const PAGES: &[&str] = &[
     "36-border-radius",
     "38-z-index",
     "39-gradients",
+    "40-conic-gradients",
     "41-table",
     "42-position-sticky",
     "43-intrinsic-sizing",
