@@ -6,8 +6,7 @@
 
 ## In progress
 
-**p2-svg-stroke-path** branch: `p2-svg-stroke-path`
-Next step: add `tessellate_stroke` to `crates/engine/paint/src/svg_path.rs`, then wire to `emit_svg_shape` in `display_list.rs`
+_(нет активных задач)_
 
 ---
 
@@ -24,6 +23,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-cross-fade-gpu** ✅ 2026-05-30 — `DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress }` + GPU two-texture blend pipeline. `CROSS_FADE_SHADER_SRC`: WGSL шейдер с двумя `texture_2d<f32>` + `CrossFadeParams { progress }` uniform — `mix(textureSample(tex_a), textureSample(tex_b), clamp(progress, 0, 1))`. `CrossFadeVertex { pos[2], uv[2] }`, `cross_fade_bgl` (4 bindings: tex_a, tex_b, sampler, uniform), `cross_fade_pipeline` с ALPHA_BLENDING. Обработчик в `render_frame`: ищет обе текстуры по URL-ключу, per-quad uniform-буфер, 6 вершин quad. 4 unit-теста. P4 handoff: `cross-fade()` CSS image function → вызывает `DrawCrossFade` через `emit_background_image`.
 - **p2-gif-animation** ✅ 2026-05-30 — Multi-frame GIF animation decoder в `lumen-image`. `AnimatedFrame { image: Image, delay_cs: u16 }` + `AnimatedGif { frames, width, height, loop_count }` + `decode_gif_animated(bytes) → Result<AnimatedGif, GifError>` (читает все кадры через `gif::ColorOutput::RGBA`). `AnimatedGif::frame_index_at(elapsed_ms)` — Infinite: `% total_ms`; Finite(n): зажимается после n повторений. `frame_at(elapsed_ms) → &AnimatedFrame`. `decode_gif()` делегирует к `decode_gif_animated`. P3 handoff: вызывать `gif.frame_at(elapsed_ms)` на каждом render-тике, передавать `&frame.image` в `DrawImage`. 22 новых unit-теста (121 итого lumen-image unit).
 - **p2-fp-battery-navigator** ✅ 2026-05-30 — ADR-007 Layer 4, 9D.4+9D.6: Battery API disable + navigator/screen/timezone normalization. `battery_bindings`: `install_battery_bindings(ctx)` → `navigator.getBattery()` возвращает rejected Promise (4 unit-теста). `navigator_bindings`: `install_navigator_bindings(ctx)` нормализует `hardwareConcurrency=2`, `deviceMemory=8`, `platform='Win32'`, `languages=['en-US','en']`, `screen={1920×1080, colorDepth:24}`, `Date.prototype.getTimezoneOffset→0` (10 unit-тестов). Оба вызываются после `install_dom_api`. 297 JS-тестов всего (+16).
 - **p2-audio-fp-noise** ✅ 2026-05-30 — ADR-007 Layer 4, 9D.3: `AudioContext` fingerprint noise в `lumen-js`. Новый модуль `audio_bindings`: `install_audio_bindings(ctx, seed)` + `new_session_seed()` (AtomicU32 счётчик). JS шим (IIFE) определяет `AudioContext`/`webkitAudioContext`/`OfflineAudioContext`/`AudioBuffer` с LCG-шумом ±1e-7 в `getChannelData()`/`copyFromChannel()`/`getFloatFrequencyData()`. `install_dom()` автоматически вызывает биндинги с уникальным seed на вкладку. 14 новых unit-тестов. 280 JS-тестов всего.
