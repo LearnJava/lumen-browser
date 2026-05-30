@@ -31,8 +31,6 @@ const DEFAULT_VIEWPORT: Size = Size::new(1024.0, 720.0);
 struct SessionState {
     doc: Document,
     layout_root: LayoutBox,
-    /// Flat tree for future a11y work when P1 completes lumen-a11y (Phase 2+).
-    #[allow(dead_code)]
     flat_tree: lumen_dom::FlatTree,
 }
 
@@ -199,7 +197,8 @@ impl BrowserSession for InProcessSession {
 
     fn a11y_tree(&self) -> Result<A11yNode> {
         let state = self.state()?;
-        Ok(build_a11y_node(&state.doc, state.doc.root()))
+        let ax_tree = lumen_a11y::build_ax_tree(&state.doc, state.doc.root(), &state.flat_tree);
+        Ok(ax_node_to_a11y(&ax_tree.root))
     }
 
     fn query_a11y(&self, query: &AxQuery) -> Result<Option<A11yNode>> {
@@ -743,58 +742,30 @@ fn walk_text(doc: &Document, id: NodeId, out: &mut String) {
     }
 }
 
-/// Построить accessibility-дерево из DOM-структуры.
-fn build_a11y_node(doc: &Document, id: NodeId) -> A11yNode {
-    let node = doc.get(id);
-    let (role, name) = match &node.data {
-        NodeData::Element { name, attrs } => {
-            let role = aria_role_for_tag(name.local.as_ref());
-            let label = attrs
-                .iter()
-                .find(|a| a.name.local.eq_ignore_ascii_case("aria-label"))
-                .or_else(|| attrs.iter().find(|a| a.name.local.eq_ignore_ascii_case("alt")))
-                .map(|a| a.value.clone())
-                .unwrap_or_default();
-            (role, label)
-        }
-        NodeData::Text(s) => ("text".into(), s.clone()),
-        NodeData::Document => ("document".into(), String::new()),
-        _ => (String::new(), String::new()),
+/// Convert `lumen_a11y::AXNode` into the driver's `A11yNode` (public API type).
+fn ax_node_to_a11y(ax: &lumen_a11y::AXNode) -> A11yNode {
+    use crate::A11yState;
+    let state = A11yState {
+        disabled: ax.state.disabled,
+        checked: ax.state.checked,
+        expanded: ax.state.expanded,
+        hidden: ax.state.hidden,
+        selected: ax.state.selected,
+        pressed: ax.state.pressed,
+        required: ax.state.required,
+        readonly: ax.state.readonly,
+        invalid: ax.state.invalid,
+        level: ax.state.level,
     };
-
-    let children = node
-        .children
-        .clone()
-        .into_iter()
-        .map(|child| build_a11y_node(doc, child))
-        .filter(|n| !n.role.is_empty())
-        .collect();
-
-    A11yNode { role, name, children }
-}
-
-fn aria_role_for_tag(tag: &str) -> String {
-    match tag {
-        "button" => "button",
-        "a" => "link",
-        "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => "heading",
-        "input" => "textbox",
-        "img" => "img",
-        "ul" | "ol" => "list",
-        "li" => "listitem",
-        "nav" => "navigation",
-        "main" => "main",
-        "header" => "banner",
-        "footer" => "contentinfo",
-        "section" | "article" => "region",
-        "table" => "table",
-        "tr" => "row",
-        "td" | "th" => "cell",
-        "form" => "form",
-        "p" | "div" | "span" | "body" | "html" | "head" => "generic",
-        _ => "",
+    A11yNode {
+        node_id: ax.node_id.index() as u32,
+        role: ax.role.as_str().to_owned(),
+        name: ax.name.clone(),
+        description: ax.description.clone(),
+        placeholder: ax.placeholder.clone(),
+        state,
+        children: ax.children.iter().map(ax_node_to_a11y).collect(),
     }
-    .into()
 }
 
 /// Преобразовать ComputedStyle в карту свойство → строка.

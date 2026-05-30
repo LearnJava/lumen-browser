@@ -4,7 +4,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 
 **Usage:** grep for a symbol → get `file:line` → `Read file offset=N limit=30`.
 
-## lumen-a11y  (11 symbols)
+## lumen-a11y  (12 symbols)
 
 `crates/engine/a11y/src/lib.rs:24` **enum** `LiveRegion` — `aria-live` values per WAI-ARIA §6.6
 `crates/engine/a11y/src/lib.rs:33` **enum** `AriaCurrent` — `aria-current` values per WAI-ARIA §5.4.1
@@ -15,8 +15,9 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/a11y/src/names.rs:18` **fn** `compute_name` — Compute the accessible name for a DOM node (ACCNAME-1.2 §4.3)
 `crates/engine/a11y/src/names.rs:176` **fn** `compute_description` — Compute the accessible description for a DOM node (ACCNAME-1.2 §4.3.2)
 `crates/engine/a11y/src/roles.rs:14` **enum** `AXRole` — All WAI-ARIA 1.2 roles
-`crates/engine/a11y/src/roles.rs:187` **fn** `parse` — Parse a WAI-ARIA role string (case-insensitive)
-`crates/engine/a11y/src/roles.rs:270` **fn** `implicit_role` — Compute the implicit WAI-ARIA role for a DOM node per HTML-AAM §5
+`crates/engine/a11y/src/roles.rs:185` **fn** `as_str` — Canonical lowercase WAI-ARIA role string
+`crates/engine/a11y/src/roles.rs:266` **fn** `parse` — Parse a WAI-ARIA role string (case-insensitive)
+`crates/engine/a11y/src/roles.rs:349` **fn** `implicit_role` — Compute the implicit WAI-ARIA role for a DOM node per HTML-AAM §5
 
 ## lumen-canvas  (32 symbols)
 
@@ -488,7 +489,7 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/engine/dom/src/lib.rs:2755` **fn** `node_length` — DOM-spec "length" of `node`: UTF-16 code-unit count for text nodes, child
 `crates/engine/dom/src/lib.rs:2767` **fn** `range_text` — Extracts the text covered by `range` (WHATWG DOM §4.6 `stringification`)
 
-## lumen-driver  (54 symbols)
+## lumen-driver  (55 symbols)
 
 `crates/driver/src/context.rs:22` **struct** `SessionContext` — Isolated context for a single BrowserSession
 `crates/driver/src/context.rs:37` **fn** `new`
@@ -522,10 +523,10 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/gpu_session.rs:53` **struct** `JsNavigateRequest` — Navigation request initiated by JS code (location.href=, history.pushState, etc)
 `crates/driver/src/gpu_session.rs:64` **trait** `GpuSession` — Extended `BrowserSession` trait for GPU and streaming operations
 `crates/driver/src/lib.rs:58` **trait** `BrowserSession` — Программный интерфейс к браузерному сеансу
-`crates/driver/src/session.rs:53` **struct** `InProcessSession` — Headless in-process сессия браузера
-`crates/driver/src/session.rs:70` **fn** `new` — Создать сессию с viewport 1024×720
-`crates/driver/src/session.rs:82` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
-`crates/driver/src/session.rs:94` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
+`crates/driver/src/session.rs:51` **struct** `InProcessSession` — Headless in-process сессия браузера
+`crates/driver/src/session.rs:68` **fn** `new` — Создать сессию с viewport 1024×720
+`crates/driver/src/session.rs:80` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
+`crates/driver/src/session.rs:92` **fn** `navigate_html` — Загрузить HTML-строку без навигации по URL. Используется для тестов
 `crates/driver/src/session.rs:146` **fn** `screenshot_cpu_rgba` — Детерминированный CPU-рендер текущей страницы в RGBA8 (tiny-skia)
 `crates/driver/src/session.rs:162` **fn** `screenshot_cpu_png` — Детерминированный CPU-рендер текущей страницы в PNG (tiny-skia)
 `crates/driver/src/types.rs:15` **struct** `NodeRef` — Ссылка на DOM-узел, возвращаемая [`BrowserSession::query`]
@@ -533,14 +534,15 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/driver/src/types.rs:41` **struct** `ScrollDelta` — Дельта скролла для [`BrowserSession::scroll`]
 `crates/driver/src/types.rs:50` **enum** `WaitCondition` — Условие ожидания для [`BrowserSession::wait`]
 `crates/driver/src/types.rs:65` **struct** `BoxModel` — Box-model одного узла из [`BrowserSession::layout_snapshot`]
-`crates/driver/src/types.rs:82` **struct** `A11yNode` — Узел accessibility-дерева из [`BrowserSession::a11y_tree`]
-`crates/driver/src/types.rs:94` **struct** `NetworkEntry` — Запись из сетевого лога [`BrowserSession::network_log`]
-`crates/driver/src/types.rs:107` **struct** `ConsoleEntry` — Запись из консоли [`BrowserSession::console_log`]
-`crates/driver/src/types.rs:116` **enum** `ConsoleLevel` — Уровень console-сообщения
-`crates/driver/src/types.rs:128` **struct** `ComputedProperties` — Значения вычисленных CSS-свойств элемента из [`BrowserSession::computed_style`]
-`crates/driver/src/types.rs:143` **enum** `InputCommand` — Команда для injection в event-loop браузера с целью создания нативных DOM-событий
-`crates/driver/src/types.rs:197` **enum** `AxQuery` — Запрос к accessibility-дереву для [`BrowserSession::query_a11y`] и [`query_a11y_all`](BrowserSession::query_a11y_all)
-`crates/driver/src/types.rs:233` **enum** `FingerprintProfile` — Профиль отпечатка браузера (fingerprint profile) для BrowserSession
+`crates/driver/src/types.rs:82` **struct** `A11yState` — ARIA state flags for an accessibility node, derived from `lumen-a11y::AXState`
+`crates/driver/src/types.rs:112` **struct** `A11yNode` — Узел accessibility-дерева из [`BrowserSession::a11y_tree`]
+`crates/driver/src/types.rs:136` **struct** `NetworkEntry` — Запись из сетевого лога [`BrowserSession::network_log`]
+`crates/driver/src/types.rs:149` **struct** `ConsoleEntry` — Запись из консоли [`BrowserSession::console_log`]
+`crates/driver/src/types.rs:158` **enum** `ConsoleLevel` — Уровень console-сообщения
+`crates/driver/src/types.rs:170` **struct** `ComputedProperties` — Значения вычисленных CSS-свойств элемента из [`BrowserSession::computed_style`]
+`crates/driver/src/types.rs:185` **enum** `InputCommand` — Команда для injection в event-loop браузера с целью создания нативных DOM-событий
+`crates/driver/src/types.rs:239` **enum** `AxQuery` — Запрос к accessibility-дереву для [`BrowserSession::query_a11y`] и [`query_a11y_all`](BrowserSession::query_a11y_all)
+`crates/driver/src/types.rs:275` **enum** `FingerprintProfile` — Профиль отпечатка браузера (fingerprint profile) для BrowserSession
 `crates/driver/src/winit_session.rs:65` **struct** `WinitSession` — Оконная сессия браузера
 `crates/driver/src/winit_session.rs:86` **fn** `new` — Создать сессию с viewport 1024×720
 `crates/driver/src/winit_session.rs:100` **fn** `with_viewport` — Создать сессию с заданным размером viewport (логические пиксели)
@@ -2196,4 +2198,4 @@ Auto-generated public API index. Regenerate: `python scripts/gen_symbols.py`
 `crates/storage/src/workspaces.rs:223` **fn** `count`
 
 ---
-*Total: 2134 symbols in 19 crates*
+*Total: 2136 symbols in 19 crates*
