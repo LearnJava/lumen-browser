@@ -515,7 +515,7 @@
 - **✅ `[P2]` Variable fonts axes runtime.** `font-variation-settings` CSS Fonts L4 §7 — cascade в lumen-layout (`FontVariationSetting { tag: [u8;4], value: f32 }`, inherited, `parse_font_variation_settings`), DrawText.font_variation_axes, normalization через fvar+avar в renderer.
 - **`[P2]` Color management + Display P3 / Rec2020 / ICC profiles.** Для `<canvas>` / `<img>` / CSS `color()` функций (CSS Color L4).
 - **`[P1+P2+P3]` Print pipeline runtime.** **P1** — pagination algorithm; **P2** — PDF rendering из display list; **P3** — print preview UI.
-- **`[P1+P3]` GC integration JS ↔ DOM (cycle collector).** **P1** — DOM-side wrapper hooks + lifecycle для трекинга cross-references; **P3** — JS engine integration + cycle collector algorithm + рабочий API на стыке.
+- 🟡 **`[P1+P3]` GC integration JS ↔ DOM (cycle collector).** **P1 done** — `Document::acquire_js_ref(NodeId) -> u32` / `release_js_ref` / `js_ref_count` / `is_detached` / `dead_node_ids()` в `lumen-dom`. `js_refs: HashMap<NodeId,u32>` (serde skip — не сериализуется при гибернации). 11 unit-тестов. **P3** — QuickJS finalizer callback вызывает `release_js_ref` + idle GC tick дренирует `dead_node_ids()` в shell.
 - **`[P3]` Permission prompt UI + Download UI.**
 - **`[P3]` GPU process / sandbox.** Реальный browser-grade sandbox: seccomp (Linux), AppContainer (Windows), App Sandbox (macOS), GPU процесс отдельно от renderer-а.
 
