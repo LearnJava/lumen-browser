@@ -1223,7 +1223,7 @@ W3C BiDi на май 2026 — Working Draft с известными пробел
 - `console.*`
 - `window.location`, `window.history`
 - `URL`, `URLSearchParams`
-- `FormData`, `Blob`, `File`
+- `FormData` ✅, `Blob` ✅, `File` ✅, `FileReader` ✅, `btoa`/`atob` ✅
 - `Promise` (даёт JS-движок)
 
 ### Tier 2

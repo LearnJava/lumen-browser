@@ -6,8 +6,7 @@
 
 ## In progress
 
-Blob + File + FileReader API (WHATWG File API, Tier 1)  branch: p1-blob-file-api
-Next step: implement Blob/File/FileReader JS shim в `crates/js/src/dom.rs`
+—
 
 ---
 
@@ -17,12 +16,12 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | `Blob` + `File` + `FileReader` API (WHATWG File API — Tier 1 §1226) | `js` | M | — |
 
 ---
 
 ## Recent merges
 
+- **p1-blob-file-api** ✅ 2026-05-31 — WHATWG File API (Tier 1): `btoa`/`atob` (RFC 4648 §4, char-code validation, no raw LineTerminators in regex); `Blob` (size/type, `slice()`, `text()→Promise`, `arrayBuffer()→Promise`); `File extends Blob` (name, lastModified, lastModifiedDate); `FileReader` (EMPTY/LOADING/DONE states, `readAsText`/`readAsArrayBuffer`/`readAsBinaryString`/`readAsDataURL`, `abort()`, dispatches `loadstart`/`progress`/`load`/`loadend`/`error`/`abort` events); `URL.createObjectURL`/`revokeObjectURL` with in-memory object-URL store. `window.Blob/File/FileReader/btoa/atob` exported. 22 new tests (404 итого lumen-js).
 - **p1-blocklist-engine** ✅ 2026-05-31 — Block list engine (7C.1): `EasyListFilter` в `network/src/filter/easylist.rs` (EasyList/Adblock Plus network-фильтры: `||domain^`, path-prefix, `@@` exceptions, `$`-options strip, substring/exact-prefix); `HostsFilter` в `filter/hosts.rs` (hosts-file формат: `0.0.0.0 host`, `127.0.0.1 host`, bare-hostname, pi-hole-стиль); `CompositeFilter` (цепочка `RequestFilter`). Экспортировано из `lumen-network`: `EasyListFilter`, `HostsFilter`, `CompositeFilter`. 26 тестов. P3 handoff: wire `CompositeFilter` в shell через `HttpClient::with_filter(Arc::new(...))` + UI Shields (7C.4).
 - **p1-a11y-driver-wiring** ✅ 2026-05-31 — A11y tree first-class (8G): `AXRole::as_str()` в `lumen-a11y`; `A11yState` + расширенный `A11yNode` (node_id/description/placeholder/state) в `lumen-driver`; `BrowserSession::a11y_tree()` использует `lumen_a11y::build_ax_tree()` + `FlatTree` вместо ручного эвристического построителя; `query_a11y(AxQuery::Role{role,name})` и `query_a11y_all` работают через полное семантическое дерево; `ax_role_to_string()` удалён (заменён `AXRole::as_str()`). 14 тестов в `driver/tests/test_a11y_tree.rs`.
 - **p1-web-crypto** ✅ 2026-05-31 — Web Crypto API + structuredClone в `lumen-js`. `window.crypto.getRandomValues(typedArray)` — CSPRNG через `getrandom`; `window.crypto.randomUUID()` — RFC 4122 v4 UUID; `window.crypto.subtle.digest(algo, data)` — SHA-1/256/384/512 через `sha2`+`sha1` crates, возвращает `Promise<ArrayBuffer>`. `structuredClone(val)` — глубокое копирование Object/Array/Date/RegExp. Rust биндинги: `_lumen_get_random_bytes`, `_lumen_sha_digest`. 15 тестов (385 итого lumen-js). Новые deps: `getrandom=0.2`, `sha2=0.10`, `sha1=0.10`.
