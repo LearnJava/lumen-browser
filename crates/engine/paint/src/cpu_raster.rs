@@ -46,6 +46,9 @@ pub(crate) fn rasterize_cpu(
                     &mut pixmap, rect, *center_x_pct, *center_y_pct, stops, *repeating,
                 )?;
             }
+            DisplayCommand::DrawSvgPath { vertices, color } => {
+                rasterize_svg_path(&mut pixmap, vertices, color)?;
+            }
             // Remaining commands not implemented for CPU rasterization yet.
             _ => {
                 // Skipped for now; will be implemented in later phases.
@@ -517,7 +520,94 @@ fn rasterize_radial_gradient(
     Ok(())
 }
 
+/// SVG 1.1 §11 — pre-tessellated SVG shape (flat triangle list) filled with a
+/// solid colour.
+///
+/// `vertices.len()` is a multiple of 3; every consecutive triple is one triangle
+/// in page-pixel coordinates, and `fill-opacity` / `stroke-opacity` is already
+/// baked into `color` (strokes arrive tessellated into filled triangles too).
+/// All triangles are merged into one path and filled in a single `SourceOver`
+/// pass (Winding rule) so the union of the tessellation composites exactly once
+/// — this avoids antialiasing seams along the shared internal edges that
+/// per-triangle filling would produce, and matches the GPU renderer drawing the
+/// whole shape in one `Fill` op.
+fn rasterize_svg_path(
+    pixmap: &mut tiny_skia::Pixmap,
+    vertices: &[[f32; 2]],
+    color: &Color,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tiny_skia::Paint;
+
+    let mut pb = tiny_skia::PathBuilder::new();
+    for tri in vertices.chunks_exact(3) {
+        pb.move_to(tri[0][0], tri[0][1]);
+        pb.line_to(tri[1][0], tri[1][1]);
+        pb.line_to(tri[2][0], tri[2][1]);
+        pb.close();
+    }
+
+    let Some(path) = pb.finish() else {
+        return Ok(());
+    };
+
+    let paint = Paint {
+        shader: tiny_skia::Shader::SolidColor(color_to_skia(*color)),
+        anti_alias: true,
+        force_hq_pipeline: false,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+    };
+    pixmap.fill_path(
+        &path,
+        &paint,
+        tiny_skia::FillRule::Winding,
+        tiny_skia::Transform::identity(),
+        None,
+    );
+    Ok(())
+}
+
 #[inline]
 fn color_to_skia(color: Color) -> tiny_skia::Color {
     tiny_skia::Color::from_rgba8(color.r, color.g, color.b, color.a)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Sample the RGBA8 pixel at `(x, y)` from a rasterized [`Image`].
+    fn px(img: &Image, x: u32, y: u32) -> (u8, u8, u8, u8) {
+        let i = ((y * img.width + x) * 4) as usize;
+        (img.data[i], img.data[i + 1], img.data[i + 2], img.data[i + 3])
+    }
+
+    /// `DrawSvgPath` fills the tessellated triangle interior with the solid
+    /// colour and leaves the background white outside it.
+    #[test]
+    fn svg_path_fills_triangle_interior() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        // One triangle with a large axis-aligned interior so the centroid sample
+        // is unambiguously inside (avoids antialiased edge pixels).
+        let cmds = vec![DisplayCommand::DrawSvgPath {
+            vertices: vec![[10.0, 10.0], [50.0, 10.0], [30.0, 50.0]],
+            color: red,
+        }];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Centroid ≈ (30, 23): solidly inside the triangle.
+        assert_eq!(px(&img, 30, 23), (255, 0, 0, 255), "interior should be red");
+        // Far corner outside the triangle stays white.
+        assert_eq!(px(&img, 1, 1), (255, 255, 255, 255), "exterior stays white");
+    }
+
+    /// A degenerate path (fewer than 3 vertices) is a no-op, not a panic.
+    #[test]
+    fn svg_path_empty_is_noop() {
+        let cmds = vec![DisplayCommand::DrawSvgPath {
+            vertices: vec![],
+            color: Color { r: 0, g: 0, b: 0, a: 255 },
+        }];
+        let img = rasterize_cpu(8, 8, &cmds, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 4, 4), (255, 255, 255, 255), "background untouched");
+    }
 }
