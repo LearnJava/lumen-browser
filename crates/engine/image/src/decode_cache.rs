@@ -237,6 +237,29 @@ impl Default for ImageDecodeCache {
     }
 }
 
+impl lumen_core::EvictableCache for ImageDecodeCache {
+    fn on_memory_pressure(&mut self, level: lumen_core::MemoryPressureLevel) {
+        ImageDecodeCache::on_memory_pressure(self, level);
+    }
+
+    fn used_bytes(&self) -> usize {
+        // Inherent method returns usize directly.
+        ImageDecodeCache::used_bytes(self)
+    }
+
+    fn budget_bytes(&self) -> usize {
+        ImageDecodeCache::budget_bytes(self)
+    }
+
+    fn clear(&mut self) {
+        ImageDecodeCache::clear(self);
+    }
+
+    fn cache_name(&self) -> &'static str {
+        "image-decode-cache"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
