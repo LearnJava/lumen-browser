@@ -16,12 +16,13 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 | # | Task | Crate(s) | Effort | Blocker |
 |---|------|----------|--------|---------|
-| 1 | Следующая задача из roadmap — см. `lumen-plan.md` Phase 2-3 (Track P1) | any | ? | — |
+| 1 | Block list engine (7C.1) — EasyList/hosts `RequestFilter` в `lumen-network` | `network` | M | — |
 
 ---
 
 ## Recent merges
 
+- **p1-blocklist-engine** ✅ 2026-05-31 — Block list engine (7C.1): `EasyListFilter` в `network/src/filter/easylist.rs` (EasyList/Adblock Plus network-фильтры: `||domain^`, path-prefix, `@@` exceptions, `$`-options strip, substring/exact-prefix); `HostsFilter` в `filter/hosts.rs` (hosts-file формат: `0.0.0.0 host`, `127.0.0.1 host`, bare-hostname, pi-hole-стиль); `CompositeFilter` (цепочка `RequestFilter`). Экспортировано из `lumen-network`: `EasyListFilter`, `HostsFilter`, `CompositeFilter`. 26 тестов. P3 handoff: wire `CompositeFilter` в shell через `HttpClient::with_filter(Arc::new(...))` + UI Shields (7C.4).
 - **p1-a11y-driver-wiring** ✅ 2026-05-31 — A11y tree first-class (8G): `AXRole::as_str()` в `lumen-a11y`; `A11yState` + расширенный `A11yNode` (node_id/description/placeholder/state) в `lumen-driver`; `BrowserSession::a11y_tree()` использует `lumen_a11y::build_ax_tree()` + `FlatTree` вместо ручного эвристического построителя; `query_a11y(AxQuery::Role{role,name})` и `query_a11y_all` работают через полное семантическое дерево; `ax_role_to_string()` удалён (заменён `AXRole::as_str()`). 14 тестов в `driver/tests/test_a11y_tree.rs`.
 - **p1-web-crypto** ✅ 2026-05-31 — Web Crypto API + structuredClone в `lumen-js`. `window.crypto.getRandomValues(typedArray)` — CSPRNG через `getrandom`; `window.crypto.randomUUID()` — RFC 4122 v4 UUID; `window.crypto.subtle.digest(algo, data)` — SHA-1/256/384/512 через `sha2`+`sha1` crates, возвращает `Promise<ArrayBuffer>`. `structuredClone(val)` — глубокое копирование Object/Array/Date/RegExp. Rust биндинги: `_lumen_get_random_bytes`, `_lumen_sha_digest`. 15 тестов (385 итого lumen-js). Новые deps: `getrandom=0.2`, `sha2=0.10`, `sha1=0.10`.
 - **p1-get-computed-style** ✅ 2026-05-30 — `window.getComputedStyle(element[, pseudo])` Phase 2 web compatibility. `computed_style_to_map()` в `lumen-layout/src/selector_query.rs`: сериализует ~55 CSS-свойств (display/position/color/font/margin/padding/border/overflow/transform/filter и др.) в `HashMap<String,String>`. `collect_computed_styles(root)` в `layout/src/lib.rs`: обходит дерево LayoutBox → `HashMap<u32, HashMap<String,String>>`. `QuickJsRuntime` получил `computed_styles: Arc<Mutex<...>>` + `update_computed_styles()`. `_lumen_get_computed_style(nid, prop)` native binding. `window.getComputedStyle()` в `WEB_API_SHIM`: Proxy с camelCase→kebab-case, fallback на plain object. Shell: `PersistentJs::update_computed_styles()`, вызов после каждого relayout и initial load. 16 тестов (370 итого lumen-js).

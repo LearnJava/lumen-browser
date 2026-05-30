@@ -281,8 +281,8 @@
 | 7B.3 | ⬜ Mouse gestures | `shell/src/input/gestures.rs` | — |
 | 7B.4 | ⬜ Custom omnibox aliases | `shell` + user config | — |
 | 7B.5 | 🟡 **`[P3+P1]` Find-in-page с regex** | `shell` + visible-text итератор | **P1 done** — `collect_visible_text` + `TextFragment` в `lumen-layout::text_iter`; P3 — regex UI + highlight overlay |
-| 7C | ⬜ **`[P3]` Privacy UX** (§12.15, Phase 2) | Встроенная защита | `lumen-network::filter` + `shell` |
-| 7C.1 | ⬜ Block list engine (EasyList + hosts files) | `network/src/filter/easylist.rs` | реализация trait `RequestFilter` |
+| 7C | 🟡 **`[P3]` Privacy UX** (§12.15, Phase 2) | Встроенная защита | `lumen-network::filter` + `shell` |
+| 7C.1 | ✅ Block list engine (EasyList + hosts files) | `network/src/filter/easylist.rs` + `hosts.rs` + `CompositeFilter` | P1 done 2026-05-31: 26 тестов |
 | 7C.2 | ⬜ Per-site permission UI panel | `shell/src/site_settings/` | — |
 | 7C.3 | ⬜ Cookie-banner auto-dismiss | `shell/src/cookies/banner.rs` | использует `JsRuntime` |
 | 7C.4 | ⬜ Shields toolbar widget (счётчик блокировок) | `shell/src/toolbar/shields.rs` | — |
