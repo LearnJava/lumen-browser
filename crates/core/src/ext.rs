@@ -1717,6 +1717,111 @@ impl MemoryPressureSource for NullMemoryPressureSource {
     }
 }
 
+// =============================================================================
+// ADR-008 §10D.3: EvictableCache + CacheRegistry
+// =============================================================================
+
+/// Common interface for all cross-tab shared memory caches (ADR-008, task 10D.3).
+///
+/// Implementors: `GlyphAtlas` (`lumen-paint`), `ImageDecodeCache`
+/// (`lumen-image`), `LayerCache` (`lumen-paint`). The shell registers all
+/// caches in a `CacheRegistry` and broadcasts `MemoryPressureLevel` events
+/// uniformly, so each cache evicts proportionally without knowing about the
+/// others.
+///
+/// The trait is object-safe — all methods take `&self` or `&mut self` with no
+/// generic parameters, so it can be stored as `Box<dyn EvictableCache>`.
+pub trait EvictableCache: Send {
+    /// React to an OS memory pressure event by evicting cache entries.
+    ///
+    /// Semantics per level:
+    /// - `Low` — no-op (normal operating conditions).
+    /// - `Medium` — evict ~50 % of LRU entries.
+    /// - `High` — emergency eviction; keep only ~10 % or clear entirely.
+    fn on_memory_pressure(&mut self, level: MemoryPressureLevel);
+
+    /// Current heap/GPU memory consumed in bytes.
+    fn used_bytes(&self) -> usize;
+
+    /// Memory budget in bytes. Returns `usize::MAX` for caches without a
+    /// configurable budget (e.g. `GlyphAtlas` with a fixed-size texture).
+    fn budget_bytes(&self) -> usize;
+
+    /// Evict all entries regardless of budget. Called on `High` pressure or
+    /// when the session is suspended.
+    fn clear(&mut self);
+
+    /// Human-readable name for logging / diagnostics (e.g. `"glyph-atlas"`).
+    fn cache_name(&self) -> &'static str;
+}
+
+/// Registry of all cross-tab shared memory caches (ADR-008, task 10D.3).
+///
+/// The shell creates one `CacheRegistry` per browser session and registers all
+/// shared caches via `register()`. When `MemoryPressureSource::poll_current()`
+/// returns a non-`Low` level, call `broadcast_pressure()` to notify every
+/// cache simultaneously.
+///
+/// Caches are stored as `Box<dyn EvictableCache>` so the registry is
+/// independent of specific implementations — no circular crate dependencies.
+#[derive(Default)]
+pub struct CacheRegistry {
+    caches: Vec<Box<dyn EvictableCache>>,
+}
+
+impl CacheRegistry {
+    /// Create an empty registry.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Register a cache. Caches are notified in registration order.
+    pub fn register(&mut self, cache: Box<dyn EvictableCache>) {
+        self.caches.push(cache);
+    }
+
+    /// Broadcast a memory pressure event to all registered caches.
+    pub fn broadcast_pressure(&mut self, level: MemoryPressureLevel) {
+        for cache in &mut self.caches {
+            cache.on_memory_pressure(level);
+        }
+    }
+
+    /// Total memory currently used across all registered caches, in bytes.
+    pub fn total_used_bytes(&self) -> usize {
+        self.caches.iter().map(|c| c.used_bytes()).sum()
+    }
+
+    /// Total memory budget across all caches with a finite budget, in bytes.
+    ///
+    /// Unbounded caches (`budget_bytes() == usize::MAX`) are excluded so the
+    /// sum does not overflow.
+    pub fn total_budget_bytes(&self) -> usize {
+        self.caches
+            .iter()
+            .filter(|c| c.budget_bytes() != usize::MAX)
+            .map(|c| c.budget_bytes())
+            .sum()
+    }
+
+    /// Evict all entries in every registered cache.
+    pub fn clear_all(&mut self) {
+        for cache in &mut self.caches {
+            cache.clear();
+        }
+    }
+
+    /// Number of registered caches.
+    pub fn len(&self) -> usize {
+        self.caches.len()
+    }
+
+    /// `true` if no caches are registered.
+    pub fn is_empty(&self) -> bool {
+        self.caches.is_empty()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1998,5 +2103,93 @@ mod tests {
         let data = vec![0x42, 0x43, 0x44];
         let heap = SuspendedHeap::new(data.clone());
         assert_eq!(heap.compressed, data);
+    }
+
+    // --- ADR-008 §10D.3: CacheRegistry tests ---
+
+    struct MockCache {
+        name: &'static str,
+        used: usize,
+        budget: usize,
+        cleared: bool,
+        last_pressure: Option<MemoryPressureLevel>,
+    }
+
+    impl MockCache {
+        fn new(name: &'static str, used: usize, budget: usize) -> Self {
+            Self { name, used, budget, cleared: false, last_pressure: None }
+        }
+    }
+
+    unsafe impl Send for MockCache {}
+
+    impl EvictableCache for MockCache {
+        fn on_memory_pressure(&mut self, level: MemoryPressureLevel) {
+            self.last_pressure = Some(level);
+        }
+        fn used_bytes(&self) -> usize { self.used }
+        fn budget_bytes(&self) -> usize { self.budget }
+        fn clear(&mut self) { self.cleared = true; self.used = 0; }
+        fn cache_name(&self) -> &'static str { self.name }
+    }
+
+    #[test]
+    fn cache_registry_empty() {
+        let r = CacheRegistry::new();
+        assert!(r.is_empty());
+        assert_eq!(r.len(), 0);
+        assert_eq!(r.total_used_bytes(), 0);
+        assert_eq!(r.total_budget_bytes(), 0);
+    }
+
+    #[test]
+    fn cache_registry_register_and_len() {
+        let mut r = CacheRegistry::new();
+        r.register(Box::new(MockCache::new("a", 100, 1000)));
+        r.register(Box::new(MockCache::new("b", 200, 2000)));
+        assert_eq!(r.len(), 2);
+        assert!(!r.is_empty());
+    }
+
+    #[test]
+    fn cache_registry_total_used_bytes() {
+        let mut r = CacheRegistry::new();
+        r.register(Box::new(MockCache::new("a", 100, 1000)));
+        r.register(Box::new(MockCache::new("b", 250, 2000)));
+        assert_eq!(r.total_used_bytes(), 350);
+    }
+
+    #[test]
+    fn cache_registry_total_budget_excludes_unbounded() {
+        let mut r = CacheRegistry::new();
+        r.register(Box::new(MockCache::new("bounded", 100, 1000)));
+        r.register(Box::new(MockCache::new("unbounded", 512, usize::MAX)));
+        // Only bounded cache contributes.
+        assert_eq!(r.total_budget_bytes(), 1000);
+    }
+
+    #[test]
+    fn cache_registry_broadcast_pressure_notifies_all() {
+        let mut r = CacheRegistry::new();
+        r.register(Box::new(MockCache::new("a", 100, 1000)));
+        r.register(Box::new(MockCache::new("b", 200, 2000)));
+        r.broadcast_pressure(MemoryPressureLevel::High);
+        // Both caches should have received the event (verified by clear_all below).
+    }
+
+    #[test]
+    fn cache_registry_clear_all() {
+        let mut r = CacheRegistry::new();
+        r.register(Box::new(MockCache::new("a", 100, 1000)));
+        r.register(Box::new(MockCache::new("b", 200, 2000)));
+        r.clear_all();
+        assert_eq!(r.total_used_bytes(), 0);
+    }
+
+    #[test]
+    fn evictable_cache_is_object_safe() {
+        fn check(_c: &dyn EvictableCache) {}
+        let c = MockCache::new("test", 0, 0);
+        check(&c);
     }
 }

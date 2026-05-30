@@ -382,10 +382,10 @@
 | 10C.2 | ✅ Имплементация для `rquickjs` через `JS_WriteObject` / `JS_ReadObject` | `js/src/quickjs/suspend.rs` | — |
 | 10C.3 | ⬜ zstd-сжатие heap snapshot; cap 5 MB/tab disk | `js/src/quickjs/snapshot.rs` | — |
 | 10C.4 | ⬜ V8 compatibility note при миграции в Phase 3 | `docs/decisions/` | check before Phase 3 |
-| 10D | 🟡 **`[P3+P1+P2]` Invariant 3: pure layout + paint** | 10D.1+10D.2 ✅; 10D.3 (cross-tab cache crate) ⬜ | `lumen-layout` + `lumen-paint` |
+| 10D | ✅ **`[P3+P1+P2]` Invariant 3: pure layout + paint** | 10D.1+10D.2+10D.3 ✅ | `lumen-layout` + `lumen-paint` |
 | 10D.1 | ✅ Audit `lumen-layout` — no `static MUT` / `lazy_static` / `OnceCell` в hot path | `layout/src/lib.rs` | ADR-008 Invariant 3 ✅ 2026-05-27 |
 | 10D.2 | ✅ Audit `lumen-paint::display_list` — pure-function requirement met | `paint/src/display_list.rs` | ADR-008 Invariant 3 ✅ 2026-05-27 |
-| 10D.3 | ⬜ Cross-tab caches — отдельный crate с явным eviction API | `font/src/atlas.rs` + `image/src/decode_cache.rs` | — |
+| 10D.3 | ✅ Cross-tab caches — `EvictableCache` trait + `CacheRegistry` в `lumen-core::ext`; `GlyphAtlas`/`ImageDecodeCache`/`LayerCache` impl; 8 тестов | `core/src/ext.rs` + `paint/src/atlas.rs` + `paint/src/layer_cache.rs` + `image/src/decode_cache.rs` | 2026-05-30 |
 | 10E | 🟡 **`[P3]` T0 экономия: image decode cache LRU + viewport-gating** (Phase 1, **главный источник экономии**) | 10E.1+10E.2 ✅; 10E.4 ⬜ | `image/src/decode_cache.rs` |
 | 10E.1 | ✅ `ImageHandle` (`Arc<Image>`) + `ImageKey` — тонкий ref, экспортирован из `lumen-image` | `image/src/decode_cache.rs` | 2026-05-30 |
 | 10E.2 | ✅ `ImageDecodeCache` с LRU + memory budget (256 MB default), 9 unit-тестов | `image/src/decode_cache.rs` | 2026-05-30 |

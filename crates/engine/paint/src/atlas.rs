@@ -252,6 +252,38 @@ impl GlyphAtlas {
     }
 }
 
+impl lumen_core::EvictableCache for GlyphAtlas {
+    fn on_memory_pressure(&mut self, level: lumen_core::MemoryPressureLevel) {
+        // Delegate to inherent method; inherent has priority over trait in
+        // method resolution, so self.on_memory_pressure calls the inherent impl.
+        GlyphAtlas::on_memory_pressure(self, level);
+    }
+
+    fn used_bytes(&self) -> usize {
+        // The atlas pixel buffer always occupies width × height bytes in RAM
+        // (and on the GPU when uploaded). Cache entries and HashMap metadata
+        // are negligible relative to the texture.
+        self.pixels.len()
+    }
+
+    fn budget_bytes(&self) -> usize {
+        // Fixed-size atlas texture; no configurable budget.
+        usize::MAX
+    }
+
+    fn clear(&mut self) {
+        self.cache.clear();
+        self.dirty = true;
+        self.cursor_x = 0;
+        self.shelf_y = 0;
+        self.shelf_height = 0;
+    }
+
+    fn cache_name(&self) -> &'static str {
+        "glyph-atlas"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

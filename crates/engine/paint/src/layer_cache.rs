@@ -210,6 +210,29 @@ impl Default for LayerCache {
     }
 }
 
+impl lumen_core::EvictableCache for LayerCache {
+    fn on_memory_pressure(&mut self, level: lumen_core::MemoryPressureLevel) {
+        LayerCache::on_memory_pressure(self, level);
+    }
+
+    fn used_bytes(&self) -> usize {
+        // LayerCache::used_bytes() returns u32; cast to usize for the trait.
+        LayerCache::used_bytes(self) as usize
+    }
+
+    fn budget_bytes(&self) -> usize {
+        LayerCache::budget_bytes(self) as usize
+    }
+
+    fn clear(&mut self) {
+        LayerCache::clear(self);
+    }
+
+    fn cache_name(&self) -> &'static str {
+        "layer-cache"
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

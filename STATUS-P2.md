@@ -5,7 +5,9 @@
 ---
 
 ## In progress
-_(none)_
+
+**10D.3 Cross-tab caches unified eviction API** — branch: `p2-cross-tab-cache`
+Next step: add `EvictableCache` trait + `CacheRegistry` to `lumen-core/src/ext.rs`
 
 ---
 
