@@ -74,17 +74,59 @@ pub struct BoxModel {
     pub margin_box: Rect,
 }
 
+/// ARIA state flags for an accessibility node, derived from `lumen-a11y::AXState`.
+///
+/// Each field mirrors the corresponding WAI-ARIA state or property.
+/// All fields are `false` / `None` by default (not applicable or unset).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct A11yState {
+    /// `aria-disabled="true"` or HTML `disabled` attribute.
+    pub disabled: bool,
+    /// `aria-checked` / HTML `checked`. `None` = not a checkable role.
+    /// `Some(None)` = mixed/indeterminate. `Some(Some(b))` = checked/unchecked.
+    pub checked: Option<Option<bool>>,
+    /// `aria-expanded` — disclosure widget open/closed. `None` = not applicable.
+    pub expanded: Option<bool>,
+    /// `aria-hidden="true"` — node is invisible to assistive technology.
+    pub hidden: bool,
+    /// `aria-selected`. `None` = not applicable.
+    pub selected: Option<bool>,
+    /// `aria-pressed` — toggle button state. `None` = not a toggle.
+    pub pressed: Option<bool>,
+    /// `aria-required="true"` / HTML `required`.
+    pub required: bool,
+    /// `aria-readonly="true"` / HTML `readonly`.
+    pub readonly: bool,
+    /// `aria-invalid="true"`.
+    pub invalid: bool,
+    /// `aria-level` / implicit heading level for `<h1>`–`<h6>`.
+    pub level: Option<u32>,
+}
+
 /// Узел accessibility-дерева из [`BrowserSession::a11y_tree`].
 ///
-/// Структура соответствует ARIA-роли; вложенные узлы — потомки в
-/// accessibility-дереве (не обязательно совпадают с DOM-деревом).
+/// Построен из полного `lumen-a11y::AXNode` через `build_ax_tree()`.
+/// Вложенные узлы — потомки в accessibility-дереве с учётом Shadow DOM
+/// (slot-assigned flat tree).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct A11yNode {
-    /// ARIA-роль: `"button"`, `"link"`, `"heading"`, `"text"`, … Пусто для
+    /// DOM NodeId (u32) элемента, соответствующего этому узлу.
+    pub node_id: u32,
+    /// ARIA-роль: `"button"`, `"link"`, `"heading"`, … `"generic"` для
     /// контейнеров без явной роли.
     pub role: String,
-    /// Доступное имя: `aria-label`, `alt`, текстовое содержимое, …
+    /// Вычисленное доступное имя (WAI-ARIA Accessible Name §4):
+    /// `aria-label` → `aria-labelledby` → `alt` → текстовое содержимое → `title`.
     pub name: String,
+    /// Вычисленное описание (`aria-describedby` / `title`).
+    #[serde(default)]
+    pub description: String,
+    /// Placeholder-текст для текстовых полей (`placeholder` attr).
+    #[serde(default)]
+    pub placeholder: String,
+    /// ARIA-состояния и свойства узла.
+    #[serde(default)]
+    pub state: A11yState,
     /// Дочерние узлы accessibility-дерева.
     pub children: Vec<A11yNode>,
 }
