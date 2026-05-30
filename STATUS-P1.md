@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+Web Crypto API + structuredClone  branch: p1-web-crypto
+Next step: commit + merge  crates/js/src/dom.rs
 
 ---
 
