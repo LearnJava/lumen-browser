@@ -95,6 +95,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('51', '51-scrollbar-rendering.html', 0.5, 'Scrollbar rendering — overflow:scroll/auto vertical/horizontal/both DrawScrollbar track+thumb'),
     ('52', '52-text-shadow-blur.html', 4.0, 'text-shadow blur — PushFilter{Blur(sigma)} wrapping: sharp/4px/10px/20px blur progression + multi-shadow + glow'),
     ('53', '53-background-origin.html', 0.5, 'background-origin — positioning area: border-box/padding-box/content-box vs background-clip; 0%/100% anchoring'),
+    ('54', '54-svg-path-stroke.html', 0.5, 'SVG <path> stroke tessellation — open/closed stroke, fill+stroke, miter join, butt cap, widths 2-14px'),
 ]
 
 # --- PNG reader (stdlib only) ---
