@@ -6,7 +6,7 @@
 
 ## In progress
 
-_(none)_
+—
 
 ---
 
@@ -22,6 +22,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p1-get-computed-style** ✅ 2026-05-30 — `window.getComputedStyle(element[, pseudo])` Phase 2 web compatibility. `computed_style_to_map()` в `lumen-layout/src/selector_query.rs`: сериализует ~55 CSS-свойств (display/position/color/font/margin/padding/border/overflow/transform/filter и др.) в `HashMap<String,String>`. `collect_computed_styles(root)` в `layout/src/lib.rs`: обходит дерево LayoutBox → `HashMap<u32, HashMap<String,String>>`. `QuickJsRuntime` получил `computed_styles: Arc<Mutex<...>>` + `update_computed_styles()`. `_lumen_get_computed_style(nid, prop)` native binding. `window.getComputedStyle()` в `WEB_API_SHIM`: Proxy с camelCase→kebab-case, fallback на plain object. Shell: `PersistentJs::update_computed_styles()`, вызов после каждого relayout и initial load. 16 тестов (370 итого lumen-js).
 - **p1-selection-api** ✅ 2026-05-30 — Selection API JS bindings: `window/document.getSelection()`, `document.createRange()`, `Selection` class (anchorNode/focusNode/rangeCount/type/isCollapsed, getRangeAt/addRange/removeAllRanges/collapse/collapseToStart/collapseToEnd/extend/selectAllChildren/deleteFromDocument/setBaseAndExtent/toString), `Range` class (startContainer/startOffset/endContainer/endOffset/collapsed/commonAncestorContainer, setStart/setEnd/setStartBefore/setStartAfter/setEndBefore/setEndAfter/selectNode/selectNodeContents/cloneRange/collapse/toString/deleteContents/compareBoundaryPoints/getBoundingClientRect/detach), `window.Range` constructor, `document.execCommand()` (bold/italic/underline/insertText/delete/selectAll/copy/cut/paste), `document.queryCommand*()` (Enabled/State/Value/Supported/Indeterm). Rust side: `node_text_content/range_text/node_child_count/node_length` public helpers in `lumen-dom`. `_lumen_get_selection/_lumen_set_selection/_lumen_clear_selection/_lumen_get_selection_text/_lumen_get_range_text/_lumen_node_child_count/_lumen_node_length/_lumen_node_text_content/_lumen_range_delete_contents/_lumen_exec_command` native bindings in `lumen-js`. 32 новых тестов (354 итого lumen-js). Завершает "Advanced contenteditable" из задачи `6+`.
 - **p1-formdata** ✅ 2026-05-30 — FormData API + TextEncoder/TextDecoder + fetch POST body. `FormData` JS class: append/delete/get/getAll/has/set, entries/keys/values/forEach, Symbol.iterator, `_toUrlEncoded()` (RFC 3986). `TextEncoder`/`TextDecoder` — чистый UTF-8 JS (QuickJS нет built-in). `window.FormData/TextEncoder/TextDecoder` экспортированы. `JsFetchProvider::fetch_with_body_sync` в `lumen-core::ext:1419`. `HttpClient::fetch_with_body_sync` в `lumen-network` (POST/PUT/PATCH/DELETE, H1 pool). `_lumen_fetch_sync_with_body` binding в `crates/js/src/dom.rs:752`. 20 новых тестов (322 итого lumen-js).
 - **p1-dom-gc-hooks** ✅ 2026-05-30 — GC integration DOM-side: `Document::acquire_js_ref(NodeId) -> u32` / `release_js_ref` / `js_ref_count` / `is_detached` / `dead_node_ids() -> Vec<NodeId>` в `lumen-dom`. `js_refs: HashMap<NodeId,u32>` (#[serde(skip)] — не сериализуется при гибернации). P3 handoff: вызвать `acquire_js_ref` при allocate rquickjs class instance, `release_js_ref` в QuickJS finalizer; idle GC tick дренирует `dead_node_ids()` в shell. 11 unit-тестов. 208 тестов итого.

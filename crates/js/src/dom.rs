@@ -151,8 +151,9 @@ pub fn install_dom_api(
     idb_backend: Option<Arc<dyn IdbBackend>>,
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
+    computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, scroll_states, pending_scrolls)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, scroll_states, pending_scrolls, computed_styles)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -182,6 +183,7 @@ fn install_primitives(
     idb_backend: Option<Arc<dyn IdbBackend>>,
     scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
+    computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -1048,6 +1050,20 @@ fn install_primitives(
         let ps = Arc::clone(&pending_scrolls);
         reg!("_lumen_request_scroll", move |nid: u32, x: f64, y: f64| {
             ps.lock().unwrap().push((nid, x as f32, y as f32));
+        });
+    }
+
+    // ── Computed styles (window.getComputedStyle) ────────────────────────────────
+    // Returns the resolved CSS value for `prop` on node `nid`, or "" if unknown.
+    {
+        let cs = Arc::clone(&computed_styles);
+        reg!("_lumen_get_computed_style", move |nid: u32, prop: String| -> String {
+            cs.lock()
+                .unwrap()
+                .get(&nid)
+                .and_then(|m| m.get(&prop))
+                .cloned()
+                .unwrap_or_default()
         });
     }
 
@@ -4980,6 +4996,44 @@ window._lumen_idb_flush = _lumen_idb_flush;
 window.getSelection     = function() { return _lumen_selection; };
 window.Range            = Range;
 
+// ── window.getComputedStyle(element[, pseudoElt]) ────────────────────────────
+// Returns a CSSStyleDeclaration-like object with resolved property values.
+// Pseudo-elements are not yet supported (ignored).
+window.getComputedStyle = function(element, pseudoElt) {
+    var nid = element && element.__nid__ != null ? element.__nid__ : null;
+    // Cache: keyed by nid, invalidated on next call (live object semantics).
+    var handler = {
+        get: function(target, prop) {
+            if (prop === 'getPropertyValue') {
+                return function(name) {
+                    if (nid == null) return '';
+                    return _lumen_get_computed_style(nid, name) || '';
+                };
+            }
+            if (prop === 'length') return 0;
+            if (prop === 'item') return function() { return ''; };
+            if (prop === 'cssText') return '';
+            if (typeof prop === 'string' && !/^\\d+$/.test(prop)) {
+                // camelCase → kebab-case conversion for convenience
+                var kebab = prop.replace(/([A-Z])/g, function(m) { return '-' + m.toLowerCase(); });
+                if (nid != null) return _lumen_get_computed_style(nid, kebab) || '';
+            }
+            return undefined;
+        }
+    };
+    // Return a Proxy if available (modern JS), otherwise a plain object with getPropertyValue.
+    if (typeof Proxy !== 'undefined') {
+        return new Proxy({}, handler);
+    }
+    // Fallback for environments without Proxy.
+    return {
+        getPropertyValue: function(name) {
+            if (nid == null) return '';
+            return _lumen_get_computed_style(nid, name) || '';
+        }
+    };
+};
+
 // Restore persisted databases for this origin (no-op on first visit / when no
 // backend is installed). A new JS runtime is built on every page load, so this
 // is what makes IndexedDB survive a reload.
@@ -8788,5 +8842,233 @@ mod tests {
             _ => panic!("not text"),
         };
         assert_eq!(content, "World");
+    }
+
+    // ── window.getComputedStyle() tests ─────────────────────────────────────────
+
+    fn make_computed_styles_map(
+        nid: u32,
+        props: &[(&str, &str)],
+    ) -> std::collections::HashMap<u32, std::collections::HashMap<String, String>> {
+        let mut inner = std::collections::HashMap::new();
+        for (k, v) in props {
+            inner.insert(k.to_string(), v.to_string());
+        }
+        let mut outer = std::collections::HashMap::new();
+        outer.insert(nid, inner);
+        outer
+    }
+
+    fn get_main_nid(rt: &QuickJsRuntime) -> u32 {
+        match rt.eval("document.getElementById('main').__nid__").unwrap() {
+            lumen_core::JsValue::Number(n) => n as u32,
+            other => panic!("unexpected nid: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn get_computed_style_returns_object() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt.eval("typeof window.getComputedStyle === 'function'").unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn get_computed_style_is_callable_with_element() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("typeof window.getComputedStyle(document.getElementById('main')) === 'object'")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::Bool(true));
+    }
+
+    #[test]
+    fn get_computed_style_returns_empty_without_data() {
+        let rt = runtime_with_dom(make_doc());
+        let r = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('color')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String(String::new()));
+    }
+
+    #[test]
+    fn get_computed_style_returns_value_after_update() {
+        let rt = runtime_with_dom(make_doc());
+        let nid = get_main_nid(&rt);
+        let styles = make_computed_styles_map(nid, &[("color", "rgb(255, 0, 0)")]);
+        rt.update_computed_styles(styles);
+        let r = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('color')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("rgb(255, 0, 0)".to_string()));
+    }
+
+    #[test]
+    fn get_computed_style_get_property_value_unknown_prop_empty() {
+        let rt = runtime_with_dom(make_doc());
+        let nid = get_main_nid(&rt);
+        let styles = make_computed_styles_map(nid, &[("color", "blue")]);
+        rt.update_computed_styles(styles);
+        let r = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('font-weight')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String(String::new()));
+    }
+
+    #[test]
+    fn get_computed_style_multiple_properties() {
+        let rt = runtime_with_dom(make_doc());
+        let nid = get_main_nid(&rt);
+        let styles = make_computed_styles_map(nid, &[
+            ("color", "rgb(0, 128, 0)"),
+            ("font-size", "16px"),
+            ("display", "block"),
+        ]);
+        rt.update_computed_styles(styles);
+        let color = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('color')")
+            .unwrap();
+        let font_size = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('font-size')")
+            .unwrap();
+        let display = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('display')")
+            .unwrap();
+        assert_eq!(color, lumen_core::JsValue::String("rgb(0, 128, 0)".to_string()));
+        assert_eq!(font_size, lumen_core::JsValue::String("16px".to_string()));
+        assert_eq!(display, lumen_core::JsValue::String("block".to_string()));
+    }
+
+    #[test]
+    fn get_computed_style_camel_case_access() {
+        let rt = runtime_with_dom(make_doc());
+        let nid = get_main_nid(&rt);
+        let styles = make_computed_styles_map(nid, &[("font-size", "14px")]);
+        rt.update_computed_styles(styles);
+        // camelCase property access: fontSize → font-size
+        let r = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).fontSize")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("14px".to_string()));
+    }
+
+    #[test]
+    fn get_computed_style_with_pseudo_element_ignored() {
+        let rt = runtime_with_dom(make_doc());
+        let nid = get_main_nid(&rt);
+        let styles = make_computed_styles_map(nid, &[("color", "red")]);
+        rt.update_computed_styles(styles);
+        // Pseudo-element arg is accepted but ignored (not yet supported)
+        let r = rt
+            .eval("window.getComputedStyle(document.getElementById('main'), '::before').getPropertyValue('color')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("red".to_string()));
+    }
+
+    #[test]
+    fn get_computed_style_update_replaces_previous() {
+        let rt = runtime_with_dom(make_doc());
+        let nid = get_main_nid(&rt);
+        let styles1 = make_computed_styles_map(nid, &[("color", "red")]);
+        rt.update_computed_styles(styles1);
+        let styles2 = make_computed_styles_map(nid, &[("color", "blue")]);
+        rt.update_computed_styles(styles2);
+        let r = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('color')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("blue".to_string()));
+    }
+
+    #[test]
+    fn get_computed_style_null_element_returns_empty() {
+        let rt = runtime_with_dom(make_doc());
+        // getElementById returns null for unknown ID; pass null explicitly
+        let r = rt
+            .eval("window.getComputedStyle(document.getElementById('nonexistent')).getPropertyValue('color')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String(String::new()));
+    }
+
+    #[test]
+    fn get_computed_style_background_color() {
+        let rt = runtime_with_dom(make_doc());
+        let nid = get_main_nid(&rt);
+        let styles = make_computed_styles_map(nid, &[("background-color", "rgba(0, 0, 255, 0.5)")]);
+        rt.update_computed_styles(styles);
+        let r = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('background-color')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("rgba(0, 0, 255, 0.5)".to_string()));
+    }
+
+    #[test]
+    fn get_computed_style_display_none() {
+        let rt = runtime_with_dom(make_doc());
+        let nid = get_main_nid(&rt);
+        let styles = make_computed_styles_map(nid, &[("display", "none")]);
+        rt.update_computed_styles(styles);
+        let r = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('display')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("none".to_string()));
+    }
+
+    #[test]
+    fn get_computed_style_opacity() {
+        let rt = runtime_with_dom(make_doc());
+        let nid = get_main_nid(&rt);
+        let styles = make_computed_styles_map(nid, &[("opacity", "0.75")]);
+        rt.update_computed_styles(styles);
+        let r = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('opacity')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("0.75".to_string()));
+    }
+
+    #[test]
+    fn get_computed_style_margin_shorthand_not_present() {
+        // Longhand properties are stored; shorthand "margin" is not
+        let rt = runtime_with_dom(make_doc());
+        let nid = get_main_nid(&rt);
+        let styles = make_computed_styles_map(nid, &[("margin-top", "8px"), ("margin-bottom", "8px")]);
+        rt.update_computed_styles(styles);
+        let margin_top = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('margin-top')")
+            .unwrap();
+        assert_eq!(margin_top, lumen_core::JsValue::String("8px".to_string()));
+    }
+
+    #[test]
+    fn get_computed_style_span_element() {
+        let rt = runtime_with_dom(make_doc());
+        let span_nid = match rt
+            .eval("document.querySelector('.highlight').__nid__")
+            .unwrap()
+        {
+            lumen_core::JsValue::Number(n) => n as u32,
+            other => panic!("unexpected nid: {other:?}"),
+        };
+        let styles = make_computed_styles_map(span_nid, &[("color", "rgb(128, 0, 128)")]);
+        rt.update_computed_styles(styles);
+        let r = rt
+            .eval("window.getComputedStyle(document.querySelector('.highlight')).getPropertyValue('color')")
+            .unwrap();
+        assert_eq!(r, lumen_core::JsValue::String("rgb(128, 0, 128)".to_string()));
+    }
+
+    #[test]
+    fn get_computed_style_position_absolute() {
+        let rt = runtime_with_dom(make_doc());
+        let nid = get_main_nid(&rt);
+        let styles = make_computed_styles_map(nid, &[("position", "absolute"), ("top", "10px"), ("left", "20px")]);
+        rt.update_computed_styles(styles);
+        let pos = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('position')")
+            .unwrap();
+        let top = rt
+            .eval("window.getComputedStyle(document.getElementById('main')).getPropertyValue('top')")
+            .unwrap();
+        assert_eq!(pos, lumen_core::JsValue::String("absolute".to_string()));
+        assert_eq!(top, lumen_core::JsValue::String("10px".to_string()));
     }
 }

@@ -49,8 +49,8 @@ pub use property_trees::{
 };
 pub use selection::{caret_at_point, selection_rects};
 pub use selector_query::{
-    computed_style_by_selector, find_all_by_selector, find_box_by_selector, query_all,
-    ComputedStyleSnapshot,
+    computed_style_by_selector, computed_style_to_map, find_all_by_selector,
+    find_box_by_selector, query_all, ComputedStyleSnapshot,
 };
 pub use text_iter::{collect_visible_text, TextFragment};
 pub use snapshot::serialize_layout_tree;
@@ -871,6 +871,33 @@ fn content_height(b: &LayoutBox) -> f32 {
         let c_bottom = c.rect.y + c.rect.height - b.rect.y;
         acc.max(c_bottom)
     })
+}
+
+// ──────────────── collect_computed_styles ────────────────
+
+/// Walks the layout tree and returns a map of `NodeId index → CSS property map`.
+///
+/// The CSS property map for each node is produced by [`computed_style_to_map`],
+/// which serialises the most-queried ~55 properties to CSS string values.
+/// Used by the shell to populate the JS-runtime computed-style cache after each
+/// relayout so that `window.getComputedStyle()` can answer without a
+/// round-trip to the layout engine.
+pub fn collect_computed_styles(
+    root: &LayoutBox,
+) -> std::collections::HashMap<u32, std::collections::HashMap<String, String>> {
+    let mut out = std::collections::HashMap::new();
+    collect_computed_styles_rec(root, &mut out);
+    out
+}
+
+fn collect_computed_styles_rec(
+    b: &LayoutBox,
+    out: &mut std::collections::HashMap<u32, std::collections::HashMap<String, String>>,
+) {
+    out.insert(b.node.index() as u32, computed_style_to_map(&b.style));
+    for child in &b.children {
+        collect_computed_styles_rec(child, out);
+    }
 }
 
 /// Update the scroll position of a node in the layout tree.

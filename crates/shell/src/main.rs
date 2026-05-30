@@ -51,6 +51,8 @@ use lumen_dom::{
 };
 use std::collections::HashMap;
 use lumen_layout::{LayoutBox, PaintOrder, StackingTree, TransitionScheduler};
+#[cfg(feature = "quickjs")]
+use lumen_layout::collect_computed_styles;
 use lumen_layout::style::ComputedStyle;
 use lumen_paint::{build_display_list_ordered, build_display_list_ordered_with_anim, hit_test, DisplayList, Renderer};
 use lumen_layout::Cursor as CssCursor;
@@ -490,6 +492,12 @@ trait PersistentJs {
     /// Calls `_lumen_deliver_paint_entry(name, start_ms)` in QuickJS.
     #[allow(dead_code)]
     fn deliver_paint_timing(&self, name: &str, start_ms: f64);
+    /// Push a fresh snapshot of computed CSS styles into the JS runtime.
+    ///
+    /// Called after every `relayout_page`. The JS side uses this for
+    /// `window.getComputedStyle()` and CSS property reads.
+    #[allow(dead_code)]
+    fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>);
 }
 
 #[cfg(feature = "quickjs")]
@@ -560,6 +568,9 @@ impl PersistentJs for QuickPersistentJs {
             "_lumen_deliver_paint_entry({}, {start_ms})",
             js_string_literal(name),
         ));
+    }
+    fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
+        self.rt.update_computed_styles(styles);
     }
 }
 
@@ -2196,6 +2207,7 @@ impl Lumen {
         #[cfg(feature = "quickjs")]
         if let (Some(js), Some(lb_ref)) = (&self.js_ctx, self.layout_box.as_ref()) {
             js.update_layout_rects(collect_layout_rects(lb_ref));
+            js.update_computed_styles(collect_computed_styles(lb_ref));
             js.update_viewport_size(viewport.width, viewport.height);
             js.deliver_layout_observers();
             // After fresh rects are in JS: fire lazy-load proximity check.
@@ -2356,6 +2368,7 @@ impl Lumen {
                         },
                     );
                     js.update_layout_rects(collect_layout_rects(lb_ref));
+                    js.update_computed_styles(collect_computed_styles(lb_ref));
                     js.update_viewport_size(viewport.width, viewport.height);
                 }
                 self.title = page.title;
