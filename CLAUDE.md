@@ -367,12 +367,14 @@ Full spec of test levels (1–4) — [lumen-plan.md](lumen-plan.md) §15.
 **Status (2026-05-30):** 8A.6(a) done (structural assertions, `driver/tests/test_00..49.rs`).
 8A.6(b) framework done — deterministic CPU pixel snapshots:
 `InProcessSession::screenshot_cpu_rgba/png` (driver feature `cpu-render` → `lumen-paint/cpu-render`,
-tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 24 geometry pages against
+tiny-skia) + `driver/tests/snapshot_cpu.rs` compares 25 geometry pages against
 `graphic_tests/snapshots/cpu/*.png`. Gated on the feature, so plain `cargo test -p lumen-driver`
 skips it; run with `cargo test -p lumen-driver --features cpu-render`, regenerate refs with
 `SAVE_CPU_SNAPSHOTS=1`. `PAGES` holds only pages with ≥2% non-background geometry; `cpu_raster`
 covers FillRect/FillRoundedRect/DrawBorder/DrawOutline, linear+radial gradients (incl.
-repeating; page `39-gradients`), tessellated SVG paths (`DrawSvgPath`; SVG basic shapes
+repeating; page `39-gradients`), the per-pixel conic gradient (`DrawConicGradient`; no native
+tiny-skia angular shader, so the sweep is computed with a deterministic libm-free `atan2`
+approximation for cross-OS bit-identity — page `40-conic-gradients`), tessellated SVG paths (`DrawSvgPath`; SVG basic shapes
 rect/circle/ellipse/line reuse the rect/rounded-rect/border primitives — page `47-svg-basic`)
 rectangular clipping (`PushClipRect`/`PopClip` + `PushScrollLayer`/`PopScrollLayer`, i.e.
 `overflow: hidden/scroll/auto` — page `14-overflow`; a tiny-skia `Mask` is applied only to draws

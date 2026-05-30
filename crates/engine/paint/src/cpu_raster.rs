@@ -76,6 +76,15 @@ pub(crate) fn rasterize_cpu(
                     &mut pixmap, rect, *center_x_pct, *center_y_pct, stops, *repeating, c,
                 )?;
             }
+            DisplayCommand::DrawConicGradient {
+                rect, center_x_pct, center_y_pct, from_angle_deg, stops, repeating,
+            } => {
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                rasterize_conic_gradient(
+                    &mut pixmap, rect, *center_x_pct, *center_y_pct, *from_angle_deg, stops,
+                    *repeating, c,
+                )?;
+            }
             DisplayCommand::DrawSvgPath { vertices, color } => {
                 let c = effective_clip(
                     clip_mask.as_ref(),
@@ -698,6 +707,178 @@ fn rasterize_radial_gradient(
     Ok(())
 }
 
+/// CSS Images L4 §3.7 — `conic-gradient(...)` rasterized per-pixel.
+///
+/// tiny-skia has no native conic (angular) shader, so the angular sweep is
+/// computed directly: for every pixel centre inside `rect` the polar angle
+/// around `(center_x_pct, center_y_pct)` is measured in box-space and mapped to
+/// gradient position `t`. Mirrors the GPU conic shader: CSS convention 0° = top
+/// (-y), clockwise, with `from_angle_deg` as the starting angle; `repeating`
+/// tiles the resolved-stop span within one revolution.
+///
+/// All math uses only IEEE-exact primitive ops (no platform `atan2`/`sin`), so
+/// the output is bit-identical across Windows/macOS/Linux — required for the
+/// exact-match CPU snapshot gate. Colours are composited `SourceOver` onto the
+/// premultiplied RGBA8 backing buffer.
+///
+/// `clip`, when present, is the active rectangular clip coverage mask (one byte
+/// per pixel): each composited source alpha is scaled by that coverage so the
+/// per-pixel path honours `overflow`/scroll clipping exactly like the tiny-skia
+/// draws. A fully-contained draw is handed `None` and stays unclipped.
+#[allow(clippy::too_many_arguments)]
+fn rasterize_conic_gradient(
+    pixmap: &mut tiny_skia::Pixmap,
+    rect: &Rect,
+    center_x_pct: f32,
+    center_y_pct: f32,
+    from_angle_deg: f32,
+    stops: &[GradientStop],
+    repeating: bool,
+    clip: Option<&tiny_skia::Mask>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if rect.width <= 0.0 || rect.height <= 0.0 {
+        return Ok(());
+    }
+    // Conic stop positions are revolution fractions (angle stops already
+    // converted to percent on parse); GPU resolves with line_len = 1.0.
+    let resolved = resolve_stop_positions(stops, 1.0);
+    if resolved.is_empty() {
+        return Ok(());
+    }
+
+    let from_rad = from_angle_deg.to_radians();
+    let pw = pixmap.width() as i32;
+    let ph = pixmap.height() as i32;
+
+    // Integer pixel-center bounds of the rect, clamped to the pixmap.
+    let x0 = (rect.x.floor() as i32).max(0);
+    let y0 = (rect.y.floor() as i32).max(0);
+    let x1 = ((rect.x + rect.width).ceil() as i32).min(pw);
+    let y1 = ((rect.y + rect.height).ceil() as i32).min(ph);
+
+    let cx = rect.x + center_x_pct * rect.width;
+    let cy = rect.y + center_y_pct * rect.height;
+
+    let first_pos = resolved.first().map(|s| s.0).unwrap_or(0.0);
+    let span = (resolved.last().map(|s| s.0).unwrap_or(1.0) - first_pos).max(0.0);
+
+    // One coverage byte per pixel when a clip is active; `None` means unclipped.
+    let clip_data = clip.map(tiny_skia::Mask::data);
+    let data = pixmap.data_mut();
+    for py in y0..y1 {
+        let fy = py as f32 + 0.5;
+        if fy < rect.y || fy >= rect.y + rect.height {
+            continue;
+        }
+        for px in x0..x1 {
+            let fx = px as f32 + 0.5;
+            if fx < rect.x || fx >= rect.x + rect.width {
+                continue;
+            }
+            let idx = (py * pw + px) as usize;
+            let coverage = clip_data.map_or(255u8, |m| m[idx]);
+            if coverage == 0 {
+                continue;
+            }
+            // CSS convention: 0° = top (-y), angles grow clockwise.
+            let raw = atan2_det(fx - cx, -(fy - cy)) - from_rad;
+            let frac = raw / std::f32::consts::TAU;
+            let norm = frac - frac.floor(); // [0, 1)
+            let t = if repeating && resolved.len() > 1 && span > 1e-4 {
+                let mod_s = norm - (norm / span).floor() * span;
+                first_pos + mod_s
+            } else {
+                norm
+            };
+            let mut color = sample_gradient_color(&resolved, t, repeating);
+            if coverage != 255 {
+                color.a = ((color.a as u16 * coverage as u16 + 127) / 255) as u8;
+            }
+            composite_over(data, idx, color);
+        }
+    }
+    Ok(())
+}
+
+/// Deterministic `atan2(y, x)` returning radians in `(-π, π]`.
+///
+/// Pure approximation (Rajan's formula) using only IEEE-exact ops
+/// (`+`,`-`,`*`,`/`,`min`,`max`,`abs`) — no platform libm — so the result is
+/// bit-identical across Windows/macOS/Linux. Accuracy ≈ 0.004 rad, ample for an
+/// angular gradient whose reference PNG is self-generated by this same path.
+fn atan2_det(y: f32, x: f32) -> f32 {
+    use std::f32::consts::{FRAC_PI_2, FRAC_PI_4, PI};
+    let ax = x.abs();
+    let ay = y.abs();
+    let max = ax.max(ay);
+    if max == 0.0 {
+        return 0.0;
+    }
+    let a = ax.min(ay) / max; // tan of the smaller angle, [0, 1]
+    let mut r = a * FRAC_PI_4 + 0.273 * a * (1.0 - a); // ≈ atan(a)
+    if ay > ax {
+        r = FRAC_PI_2 - r; // reflect across the 45° line
+    }
+    if x < 0.0 {
+        r = PI - r;
+    }
+    if y < 0.0 {
+        r = -r;
+    }
+    r
+}
+
+/// Sample a resolved gradient stop list at position `t` (straight-colour linear
+/// interpolation), mirroring the GPU `sample_grad`: `repeating` wraps `t` to
+/// `[0,1)`, otherwise it clamps; positions outside the first/last stop take the
+/// boundary colour.
+fn sample_gradient_color(resolved: &[(f32, Color)], t: f32, repeating: bool) -> Color {
+    let n = resolved.len();
+    if n == 0 {
+        return Color { r: 0, g: 0, b: 0, a: 0 };
+    }
+    if n == 1 {
+        return resolved[0].1;
+    }
+    let tc = if repeating { t - t.floor() } else { t.clamp(0.0, 1.0) };
+    if tc <= resolved[0].0 {
+        return resolved[0].1;
+    }
+    let last = n - 1;
+    if tc >= resolved[last].0 {
+        return resolved[last].1;
+    }
+    for i in 0..last {
+        let (ap, ac) = resolved[i];
+        let (bp, bc) = resolved[i + 1];
+        if tc >= ap && tc <= bp {
+            let s = bp - ap;
+            let f = if s > 1e-4 { (tc - ap) / s } else { 0.0 };
+            return lerp_color(ac, bc, f);
+        }
+    }
+    resolved[last].1
+}
+
+/// Linear interpolation between two straight (non-premultiplied) RGBA8 colours.
+fn lerp_color(a: Color, b: Color, f: f32) -> Color {
+    let l = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * f).round().clamp(0.0, 255.0) as u8;
+    Color { r: l(a.r, b.r), g: l(a.g, b.g), b: l(a.b, b.b), a: l(a.a, b.a) }
+}
+
+/// Composite a straight-alpha `src` colour `SourceOver` onto the premultiplied
+/// RGBA8 pixel at `pixel_idx` in tiny-skia's backing buffer.
+fn composite_over(data: &mut [u8], pixel_idx: usize, src: Color) {
+    let i = pixel_idx * 4;
+    let sa = src.a as f32 / 255.0;
+    let inv = 1.0 - sa;
+    let out = |s: u8, d: u8| (s as f32 * sa + d as f32 * inv).round().clamp(0.0, 255.0) as u8;
+    data[i] = out(src.r, data[i]);
+    data[i + 1] = out(src.g, data[i + 1]);
+    data[i + 2] = out(src.b, data[i + 2]);
+    data[i + 3] = (src.a as f32 + data[i + 3] as f32 * inv).round().clamp(0.0, 255.0) as u8;
+}
+
 /// SVG 1.1 §11 — pre-tessellated SVG shape (flat triangle list) filled with a
 /// solid colour.
 ///
@@ -825,6 +1006,53 @@ mod tests {
         let cmds = vec![DisplayCommand::DrawSvgPath {
             vertices: vec![],
             color: Color { r: 0, g: 0, b: 0, a: 255 },
+        }];
+        let img = rasterize_cpu(8, 8, &cmds, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 4, 4), (255, 255, 255, 255), "background untouched");
+    }
+
+    /// A two-stop conic (red at 0° → blue at one revolution, centre, from 0°)
+    /// sweeps clockwise: the top-centre is the start (red), the bottom-centre is
+    /// half a revolution in (≈ midway red→blue).
+    #[test]
+    fn conic_sweeps_first_to_last_stop() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![DisplayCommand::DrawConicGradient {
+            rect: Rect { x: 0.0, y: 0.0, width: 64.0, height: 64.0 },
+            center_x_pct: 0.5,
+            center_y_pct: 0.5,
+            from_angle_deg: 0.0,
+            stops: vec![
+                GradientStop { color: red, position: None },
+                GradientStop { color: blue, position: None },
+            ],
+            repeating: false,
+        }];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+
+        // Top-centre column ≈ start of the sweep → essentially red.
+        let (tr, _tg, tb, ta) = px(&img, 32, 2);
+        assert!(tr > 200 && tb < 50 && ta == 255, "top is red-ish, got ({tr},{_tg},{tb},{ta})");
+
+        // Bottom-centre column ≈ half a revolution → midway red→blue.
+        let (br, _bg, bb, ba) = px(&img, 32, 61);
+        assert!(
+            (80..=180).contains(&br) && (80..=180).contains(&bb) && ba == 255,
+            "bottom is midway, got ({br},{_bg},{bb},{ba})"
+        );
+    }
+
+    /// A conic with no stops is a no-op, not a panic.
+    #[test]
+    fn conic_empty_stops_noop() {
+        let cmds = vec![DisplayCommand::DrawConicGradient {
+            rect: Rect { x: 0.0, y: 0.0, width: 8.0, height: 8.0 },
+            center_x_pct: 0.5,
+            center_y_pct: 0.5,
+            from_angle_deg: 0.0,
+            stops: vec![],
+            repeating: false,
         }];
         let img = rasterize_cpu(8, 8, &cmds, 0.0, 0.0).expect("rasterize");
         assert_eq!(px(&img, 4, 4), (255, 255, 255, 255), "background untouched");
