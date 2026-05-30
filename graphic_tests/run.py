@@ -96,6 +96,7 @@ TESTS: list[tuple[str, str, float, str]] = [
     ('52', '52-text-shadow-blur.html', 4.0, 'text-shadow blur — PushFilter{Blur(sigma)} wrapping: sharp/4px/10px/20px blur progression + multi-shadow + glow'),
     ('53', '53-background-origin.html', 0.5, 'background-origin — positioning area: border-box/padding-box/content-box vs background-clip; 0%/100% anchoring'),
     ('54', '54-svg-path-stroke.html', 0.5, 'SVG <path> stroke tessellation — open/closed stroke, fill+stroke, miter join, butt cap, widths 2-14px'),
+    ('56', '56-mix-blend-mode.html', 0.5, 'CSS Compositing L1 §5 — mix-blend-mode: normal/multiply/darken/color-burn/screen/lighten/color-dodge/overlay/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity + nesting'),
 ]
 
 # --- PNG reader (stdlib only) ---

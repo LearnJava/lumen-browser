@@ -34,6 +34,13 @@ enum LayerComposite {
     /// page coordinates composited through it lands exactly where the GPU
     /// vertex transform would place it.
     Transform(tiny_skia::Transform),
+    /// CSS Compositing & Blending L1 §5 `mix-blend-mode` — composite the layer
+    /// onto the backdrop below with this separable/non-separable blend formula
+    /// instead of plain `SourceOver`. The subtree renders into a transparent
+    /// full-size layer (page coordinates); `draw_pixmap` with this `blend_mode`
+    /// then blends each layer pixel against the accumulated backdrop on the
+    /// layer below — exactly the element-vs-backdrop blend CSS specifies.
+    Blend(tiny_skia::BlendMode),
 }
 
 /// Rasterize display commands to an image using tiny-skia (CPU only, deterministic).
@@ -207,11 +214,26 @@ pub(crate) fn rasterize_cpu(
                 layers.push(layer);
                 layer_ops.push(LayerComposite::Transform(t));
             }
-            // Close the current off-screen group (opacity or transform) and
-            // composite it onto the layer below per its recorded op. Both pops
-            // share the logic because the emitter guarantees balanced, properly
-            // nested Push/Pop, so the top op always matches the closing command.
-            DisplayCommand::PopOpacity | DisplayCommand::PopTransform => {
+            // CSS Compositing & Blending L1 §5 — `mix-blend-mode` on the box.
+            // Like `PushOpacity`, the subtree renders into a transparent
+            // full-size layer; the matching `PopBlendMode` composites it onto
+            // the backdrop below with the CSS blend formula rather than plain
+            // source-over, so the element blends against everything painted
+            // beneath it within the stacking context.
+            DisplayCommand::PushBlendMode { mode } => {
+                let layer = tiny_skia::Pixmap::new(width, height)
+                    .ok_or("Failed to create blend layer")?;
+                layers.push(layer);
+                layer_ops.push(LayerComposite::Blend(map_blend_mode(*mode)));
+            }
+            // Close the current off-screen group (opacity, transform or blend)
+            // and composite it onto the layer below per its recorded op. The
+            // pops share the logic because the emitter guarantees balanced,
+            // properly nested Push/Pop, so the top op always matches the
+            // closing command.
+            DisplayCommand::PopOpacity
+            | DisplayCommand::PopTransform
+            | DisplayCommand::PopBlendMode => {
                 if let (Some(top), Some(op)) = (layers.pop(), layer_ops.pop())
                     && let Some(dst) = layers.last_mut()
                 {
@@ -267,6 +289,55 @@ fn close_layer(dst: &mut tiny_skia::Pixmap, src: &tiny_skia::Pixmap, op: &LayerC
     match op {
         LayerComposite::Opacity(a) => composite_layer(dst, src, *a),
         LayerComposite::Transform(t) => composite_transform_layer(dst, src, *t),
+        LayerComposite::Blend(mode) => composite_blend_layer(dst, src, *mode),
+    }
+}
+
+/// Composite an off-screen `mix-blend-mode` layer `src` onto `dst` with `mode`.
+///
+/// Used by `PopBlendMode`: the whole subtree was rendered into `src` (a
+/// full-size, initially transparent pixmap) in page coordinates, so blending it
+/// onto the backdrop already accumulated in `dst` with the CSS blend formula
+/// reproduces `mix-blend-mode` (CSS Compositing & Blending L1 §5). tiny-skia
+/// applies the separable/non-separable blend per premultiplied pixel
+/// deterministically, so the result is cross-OS bit-identical.
+fn composite_blend_layer(
+    dst: &mut tiny_skia::Pixmap,
+    src: &tiny_skia::Pixmap,
+    mode: tiny_skia::BlendMode,
+) {
+    let paint = tiny_skia::PixmapPaint {
+        opacity: 1.0,
+        blend_mode: mode,
+        quality: tiny_skia::FilterQuality::Nearest,
+    };
+    dst.draw_pixmap(0, 0, src.as_ref(), &paint, tiny_skia::Transform::identity(), None);
+}
+
+/// Map a paint-crate `BlendMode` (`mix-blend-mode` keyword) to its tiny-skia
+/// equivalent. Every CSS separable/non-separable mode has a direct tiny-skia
+/// counterpart; `PlusLighter` (additive, CSS Compositing & Blending L2 §6) maps
+/// to tiny-skia `Plus`, and `Normal` to plain `SourceOver`.
+fn map_blend_mode(mode: crate::BlendMode) -> tiny_skia::BlendMode {
+    use tiny_skia::BlendMode as T;
+    match mode {
+        crate::BlendMode::Normal => T::SourceOver,
+        crate::BlendMode::Multiply => T::Multiply,
+        crate::BlendMode::Screen => T::Screen,
+        crate::BlendMode::Overlay => T::Overlay,
+        crate::BlendMode::Darken => T::Darken,
+        crate::BlendMode::Lighten => T::Lighten,
+        crate::BlendMode::ColorDodge => T::ColorDodge,
+        crate::BlendMode::ColorBurn => T::ColorBurn,
+        crate::BlendMode::HardLight => T::HardLight,
+        crate::BlendMode::SoftLight => T::SoftLight,
+        crate::BlendMode::Difference => T::Difference,
+        crate::BlendMode::Exclusion => T::Exclusion,
+        crate::BlendMode::Hue => T::Hue,
+        crate::BlendMode::Saturation => T::Saturation,
+        crate::BlendMode::Color => T::Color,
+        crate::BlendMode::Luminosity => T::Luminosity,
+        crate::BlendMode::PlusLighter => T::Plus,
     }
 }
 
@@ -1631,5 +1702,56 @@ mod tests {
         let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
         // Source (6,6) — interior of the 10×10 fill — maps to dest (12,12).
         assert_eq!(px(&img, 12, 12), (0, 0, 255, 255), "scaled fill covers (12,12)");
+    }
+
+    /// `mix-blend-mode: multiply` multiplies the source against the backdrop
+    /// (`result = s·d / 255` per channel). A magenta (255,0,255) layer blended
+    /// over a yellow (255,255,0) backdrop yields red (255,0,0) where they
+    /// overlap; outside the source rect the backdrop is unchanged.
+    #[test]
+    fn blend_multiply_darkens() {
+        let yellow = Color { r: 255, g: 255, b: 0, a: 255 };
+        let magenta = Color { r: 255, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 64.0, 64.0), color: yellow },
+            DisplayCommand::PushBlendMode { mode: crate::BlendMode::Multiply },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: magenta },
+            DisplayCommand::PopBlendMode,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        // Overlap: multiply(yellow, magenta) = (255,0,0).
+        assert_eq!(px(&img, 10, 10), (255, 0, 0, 255), "multiply yields red over overlap");
+        // Outside the source rect: untouched yellow backdrop.
+        assert_eq!(px(&img, 50, 50), (255, 255, 0, 255), "backdrop untouched outside source");
+    }
+
+    /// `mix-blend-mode: normal` is plain source-over: an opaque blue fill on
+    /// white paints solid blue, identical to no blend mode at all.
+    #[test]
+    fn blend_normal_is_source_over() {
+        let blue = Color { r: 0, g: 0, b: 255, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushBlendMode { mode: crate::BlendMode::Normal },
+            DisplayCommand::FillRect { rect: rect(10.0, 10.0, 20.0, 20.0), color: blue },
+            DisplayCommand::PopBlendMode,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        assert_eq!(px(&img, 20, 20), (0, 0, 255, 255), "normal blend = source-over");
+        assert_eq!(px(&img, 50, 50), (255, 255, 255, 255), "exterior stays white");
+    }
+
+    /// `mix-blend-mode: difference` is `|s − d|` per channel. A red (255,0,0)
+    /// layer over the white (255,255,255) background yields cyan (0,255,255).
+    #[test]
+    fn blend_difference_inverts() {
+        let red = Color { r: 255, g: 0, b: 0, a: 255 };
+        let cmds = vec![
+            DisplayCommand::PushBlendMode { mode: crate::BlendMode::Difference },
+            DisplayCommand::FillRect { rect: rect(0.0, 0.0, 32.0, 32.0), color: red },
+            DisplayCommand::PopBlendMode,
+        ];
+        let img = rasterize_cpu(64, 64, &cmds, 0.0, 0.0).expect("rasterize");
+        // |red − white| = (0,255,255) cyan.
+        assert_eq!(px(&img, 10, 10), (0, 255, 255, 255), "difference of red over white = cyan");
     }
 }
