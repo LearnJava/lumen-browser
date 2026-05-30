@@ -11,10 +11,13 @@
 //! The CPU rasterizer currently covers the geometric primitives
 //! (`FillRect` / `FillRoundedRect` / `DrawBorder` / `DrawOutline`), linear and
 //! radial gradients (`DrawLinearGradient` / `DrawRadialGradient`, including
-//! repeating), and tessellated SVG paths (`DrawSvgPath`); text and images are
-//! skipped. The chosen pages exercise exactly these primitives, so the
-//! references capture meaningful geometry rather than blank frames. As
-//! `cpu_raster` grows, add the relevant pages to `PAGES`.
+//! repeating), tessellated SVG paths (`DrawSvgPath`), and the `<img>` grey
+//! placeholder quad (`DrawImage` — the headless CPU path registers no decoded
+//! pixels, so every image box paints the solid placeholder, matching the GPU
+//! renderer's fallback). Text is still skipped. The chosen pages exercise
+//! exactly these primitives, so the references capture meaningful geometry
+//! rather than blank frames. As `cpu_raster` grows, add the relevant pages to
+//! `PAGES`.
 //!
 //! Run:        cargo test -p lumen-driver --features cpu-render
 //! Regenerate: SAVE_CPU_SNAPSHOTS=1 cargo test -p lumen-driver --features cpu-render -- --nocapture
@@ -27,15 +30,17 @@ use lumen_driver::{BrowserSession, InProcessSession};
 use std::path::{Path, PathBuf};
 
 /// Pages that exercise the CPU primitives (rect / rounded-rect / border /
-/// outline / linear+radial gradient). Each name is the
-/// `graphic_tests/<name>.html` stem and the
+/// outline / linear+radial gradient / SVG path / image placeholder). Each name
+/// is the `graphic_tests/<name>.html` stem and the
 /// `graphic_tests/snapshots/cpu/<name>.png` reference stem.
 ///
 /// Every page here was verified to render meaningful geometry through the CPU
 /// path (≥2% non-background pixels), so each reference captures real layout
-/// output rather than a blank frame. Pages whose *meaning* depends on text,
-/// images or shadows — primitives `cpu_raster` currently skips — are
-/// deliberately excluded until those primitives land.
+/// output rather than a blank frame. Pages whose *meaning* depends on text or
+/// shadows — primitives `cpu_raster` currently skips — are deliberately
+/// excluded until those primitives land. `18-images` is included because all
+/// its `<img>` boxes carry empty `alt` and explicit `width`/`height`, so the
+/// grey placeholder fully reproduces the (text-free) GPU headless output.
 const PAGES: &[&str] = &[
     "00-calibration",
     "01-sanity",
@@ -52,6 +57,7 @@ const PAGES: &[&str] = &[
     "12-display",
     "16-outline",
     "17-calc",
+    "18-images",
     "36-border-radius",
     "38-z-index",
     "39-gradients",
