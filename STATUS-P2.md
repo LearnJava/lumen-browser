@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+p2-background-origin: background-origin rendering — вычисление positioning area из `layer.origin` в display list + renderer  branch: p2-background-origin
+Next step: добавить `origin_rect: Rect` к `DrawBackgroundImage` в `paint/src/display_list.rs:284`
 
 ---
 
