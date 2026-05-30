@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+**p1-page-visibility-beacon** — branch: `p1-page-visibility-beacon`
+Next step: реализовать Page Visibility API + sendBeacon + readyState в `crates/js/src/dom.rs`
 
 ---
 
