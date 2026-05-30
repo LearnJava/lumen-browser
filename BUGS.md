@@ -61,6 +61,7 @@ BUG-045 | FIXED 2026-05-29 | layout          | backdrop-filter не создав
 BUG-046 | FIXED 2026-05-30 | layout          | 3 устаревших теста lumen-layout --lib: webp теперь декодируется (в supported_mime_types) → picture-тесты обновлены (avif для fallback, webp для supported); non_cell_col_row_span: `lay` возвращает body-box напрямую, убран лишний first_element_child | layout/src/lib.rs:12253,12269,979
 BUG-047 | OPEN            | layout          | -webkit-line-clamp парсится, но не усекает высоту блока: все .box в 48-line-clamp.html = 160px вместо 40/80/120/160. Регрессионный тест вынесен в #[ignore] | crates/driver/tests/test_48.rs:79
 BUG-048 | FIXED 2026-05-30 | shell           | lumen-shell не компилируется: non-exhaustive match по DisplayCommand в content_height_of/content_width_of — новый вариант DrawScrollbar (p2-scrollbar-rendering merge) не обработан; скроллбар — UI, не контент → ветка continue (как BUG-044) | shell/src/main.rs:4219,4271
+BUG-049 | FIXED 2026-05-30 | shell           | lumen-shell не компилируется: non-exhaustive match по DisplayCommand в content_height_of/content_width_of — новый вариант PageBreak (p2 print-pages merge) не обработан; маркер пагинации печати, не контент, без rect → ветка continue (как BUG-048) | shell/src/main.rs:4219,4272
 ```
 
 ---

@@ -4253,6 +4253,7 @@ fn content_height_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PopScrollLayer
             | DisplayCommand::DrawSvgPath { .. }
             | DisplayCommand::DrawScrollbar { .. }
+            | DisplayCommand::PageBreak
             | DisplayCommand::BoxModelOverlay { .. } => continue,
         };
         let bottom = r.y + r.height;
@@ -4306,6 +4307,7 @@ fn content_width_of(dl: &lumen_paint::DisplayList) -> f32 {
             | DisplayCommand::PopScrollLayer
             | DisplayCommand::DrawSvgPath { .. }
             | DisplayCommand::DrawScrollbar { .. }
+            | DisplayCommand::PageBreak
             | DisplayCommand::BoxModelOverlay { .. } => continue,
         };
         let right = r.x + r.width;
