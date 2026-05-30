@@ -27,14 +27,33 @@ use std::path::{Path, PathBuf};
 /// Pages that exercise the four CPU primitives (rect / rounded-rect / border /
 /// outline). Each name is the `graphic_tests/<name>.html` stem and the
 /// `graphic_tests/snapshots/cpu/<name>.png` reference stem.
+///
+/// Every page here was verified to render meaningful box-model geometry through
+/// the CPU path (≥2% non-background pixels), so each reference captures real
+/// layout output rather than a blank frame. Pages whose *meaning* depends on
+/// text, images, gradients or shadows — primitives `cpu_raster` currently skips
+/// — are deliberately excluded until those primitives land.
 const PAGES: &[&str] = &[
     "00-calibration",
     "01-sanity",
+    "02-color-named",
+    "03-color-formats",
     "04-color-alpha",
     "05-border-width",
     "06-border-sides",
+    "07-box-sizing",
+    "08-padding",
+    "09-margin",
+    "10-min-max-width",
+    "11-min-max-height",
+    "12-display",
     "16-outline",
+    "17-calc",
     "36-border-radius",
+    "38-z-index",
+    "41-table",
+    "42-position-sticky",
+    "43-intrinsic-sizing",
 ];
 
 /// Workspace root (two parents up from the driver crate manifest).
