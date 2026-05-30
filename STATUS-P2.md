@@ -5,7 +5,9 @@
 ---
 
 ## In progress
-_(none)_
+
+**p2-svg-stroke-path** branch: `p2-svg-stroke-path`
+Next step: add `tessellate_stroke` to `crates/engine/paint/src/svg_path.rs`, then wire to `emit_svg_shape` in `display_list.rs`
 
 ---
 
