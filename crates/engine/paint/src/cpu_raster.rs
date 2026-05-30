@@ -4,7 +4,7 @@
 //! across Windows/macOS/Linux.
 
 use lumen_image::Image;
-use lumen_layout::Color;
+use lumen_layout::{Color, GradientStop, Length};
 use crate::{DisplayCommand, CornerRadii};
 use lumen_core::geom::Rect;
 
@@ -37,6 +37,14 @@ pub(crate) fn rasterize_cpu(
             }
             DisplayCommand::DrawOutline { rect, width, style: _, color, offset } => {
                 rasterize_draw_outline(&mut pixmap, rect, *width, color, *offset)?;
+            }
+            DisplayCommand::DrawLinearGradient { rect, angle_deg, stops, repeating } => {
+                rasterize_linear_gradient(&mut pixmap, rect, *angle_deg, stops, *repeating)?;
+            }
+            DisplayCommand::DrawRadialGradient { rect, center_x_pct, center_y_pct, stops, repeating } => {
+                rasterize_radial_gradient(
+                    &mut pixmap, rect, *center_x_pct, *center_y_pct, stops, *repeating,
+                )?;
             }
             // Remaining commands not implemented for CPU rasterization yet.
             _ => {
@@ -298,6 +306,214 @@ fn rasterize_draw_outline(
         );
     }
 
+    Ok(())
+}
+
+/// CSS Images L3 §3.3 — resolve `GradientStop` positions to normalized [0,1].
+///
+/// Mirrors the GPU renderer's `resolve_gradient_stops`: unspecified first/last
+/// stops default to 0/100%, runs of unspecified positions between explicit ones
+/// are evenly distributed, and `Length::Px` stops are divided by `line_len`
+/// (the pixel length of the gradient line). Returns `(position, color)` pairs.
+fn resolve_stop_positions(stops: &[GradientStop], line_len: f32) -> Vec<(f32, Color)> {
+    if stops.is_empty() {
+        return vec![];
+    }
+    let n = stops.len();
+    let mut positions: Vec<Option<f32>> = stops
+        .iter()
+        .map(|s| {
+            s.position.as_ref().map(|l| match l {
+                Length::Percent(p) => p / 100.0,
+                Length::Px(v) if line_len > 0.0 => v / line_len,
+                _ => 0.0,
+            })
+        })
+        .collect();
+    if positions[0].is_none() {
+        positions[0] = Some(0.0);
+    }
+    if positions[n - 1].is_none() {
+        positions[n - 1] = Some(1.0);
+    }
+    let mut i = 0;
+    while i < n {
+        if positions[i].is_some() {
+            i += 1;
+            continue;
+        }
+        let lo_i = i - 1;
+        let lo_pos = positions[lo_i].unwrap_or(0.0);
+        let mut hi_i = i + 1;
+        while hi_i < n && positions[hi_i].is_none() {
+            hi_i += 1;
+        }
+        let hi_pos = positions[hi_i.min(n - 1)].unwrap_or(1.0);
+        let gap = (hi_i - lo_i) as f32;
+        for (offset, pos) in positions[i..hi_i].iter_mut().enumerate() {
+            let t = (i + offset - lo_i) as f32 / gap;
+            *pos = Some(lo_pos + (hi_pos - lo_pos) * t);
+        }
+        i = hi_i;
+    }
+    stops
+        .iter()
+        .enumerate()
+        .map(|(i, s)| (positions[i].unwrap_or(0.0), s.color))
+        .collect()
+}
+
+/// Build tiny-skia `GradientStop`s from resolved `(position, color)` pairs.
+///
+/// For repeating gradients the resolved positions span `[first, last]` with
+/// `last < 1`; rescaling to fill `[0,1]` turns that span into one tile so
+/// `SpreadMode::Repeat` tiles it across the whole line. Returns the rescaled
+/// stops plus the `(first, last)` fractions of the original line that the tile
+/// occupies (caller shortens the gradient line to that sub-segment).
+fn skia_gradient_stops(
+    resolved: &[(f32, Color)],
+    repeating: bool,
+) -> Option<(Vec<tiny_skia::GradientStop>, f32, f32)> {
+    if resolved.len() < 2 {
+        return None;
+    }
+    let first = resolved.first().map(|s| s.0).unwrap_or(0.0);
+    let last = resolved.last().map(|s| s.0).unwrap_or(1.0);
+    let span = (last - first).max(1e-6);
+    let (rescale, lo, hi) = if repeating {
+        (true, first, last)
+    } else {
+        (false, 0.0, 1.0)
+    };
+    let stops = resolved
+        .iter()
+        .map(|&(pos, color)| {
+            let p = if rescale { ((pos - first) / span).clamp(0.0, 1.0) } else { pos.clamp(0.0, 1.0) };
+            tiny_skia::GradientStop::new(p, color_to_skia(color))
+        })
+        .collect();
+    Some((stops, lo, hi))
+}
+
+/// CSS Images L3 §3.4 — linear gradient line endpoints in box-relative UV [0,1].
+///
+/// Mirrors the GPU renderer's `linear_gradient_uv_endpoints`. CSS angle
+/// convention: 0° = "to top", 90° = "to right", 180° = "to bottom". Returns
+/// `(start_uv, end_uv)` and the gradient-line pixel length (for px stops).
+fn linear_uv_endpoints(w: f32, h: f32, angle_deg: f32) -> ([f32; 2], [f32; 2], f32) {
+    if w <= 0.0 || h <= 0.0 {
+        return ([0.0, 0.5], [1.0, 0.5], w.max(1.0));
+    }
+    let theta = angle_deg.to_radians();
+    let dx = theta.sin();
+    let dy = -theta.cos();
+    let half_len = (w * dx.abs() + h * dy.abs()) / 2.0;
+    if half_len < 1e-6 {
+        return ([0.5, 0.5], [0.5, 0.5], 1.0);
+    }
+    let cx = w / 2.0;
+    let cy = h / 2.0;
+    let sx = (cx - dx * half_len) / w;
+    let sy = (cy - dy * half_len) / h;
+    let ex = (cx + dx * half_len) / w;
+    let ey = (cy + dy * half_len) / h;
+    ([sx, sy], [ex, ey], 2.0 * half_len)
+}
+
+/// CSS Images L3 §3.4 — `linear-gradient(...)` via tiny-skia `LinearGradient`.
+fn rasterize_linear_gradient(
+    pixmap: &mut tiny_skia::Pixmap,
+    rect: &Rect,
+    angle_deg: f32,
+    stops: &[GradientStop],
+    repeating: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tiny_skia::{LinearGradient, Paint, Point, SpreadMode, Transform};
+
+    let (start_uv, end_uv, line_len) = linear_uv_endpoints(rect.width, rect.height, angle_deg);
+    let resolved = resolve_stop_positions(stops, line_len);
+    let Some((skia_stops, lo, hi)) = skia_gradient_stops(&resolved, repeating) else {
+        return Ok(());
+    };
+
+    // UV → pixel space; for repeating, clip the line to the [lo,hi] sub-segment.
+    let px = |u: [f32; 2]| Point::from_xy(rect.x + u[0] * rect.width, rect.y + u[1] * rect.height);
+    let full_start = start_uv;
+    let dir = [end_uv[0] - start_uv[0], end_uv[1] - start_uv[1]];
+    let seg = |t: f32| [full_start[0] + dir[0] * t, full_start[1] + dir[1] * t];
+    let start = px(seg(lo));
+    let end = px(seg(hi));
+
+    let mode = if repeating { SpreadMode::Repeat } else { SpreadMode::Pad };
+    let shader = LinearGradient::new(start, end, skia_stops, mode, Transform::identity())
+        .ok_or("degenerate linear gradient")?;
+
+    let paint = Paint {
+        shader,
+        anti_alias: true,
+        force_hq_pipeline: false,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+    };
+    let skia_rect = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
+        .ok_or("Invalid rect dimensions")?;
+    pixmap.fill_rect(skia_rect, &paint, Transform::identity(), None);
+    Ok(())
+}
+
+/// CSS Images L3 §3.3 — `radial-gradient(...)` via tiny-skia `RadialGradient`.
+///
+/// Reproduces the GPU renderer's "farthest-corner" anisotropic ellipse: the
+/// semi-axes are `rx = max(cx, 1-cx)`, `ry = max(cy, 1-cy)` in box-relative
+/// units. tiny-skia radials are isotropic, so the ellipse is produced by
+/// rendering a unit-ish circle and stretching it with a post-scale transform.
+fn rasterize_radial_gradient(
+    pixmap: &mut tiny_skia::Pixmap,
+    rect: &Rect,
+    center_x_pct: f32,
+    center_y_pct: f32,
+    stops: &[GradientStop],
+    repeating: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use tiny_skia::{Paint, Point, RadialGradient, SpreadMode, Transform};
+
+    let rx_px = center_x_pct.max(1.0 - center_x_pct).max(1e-3) * rect.width;
+    let ry_px = center_y_pct.max(1.0 - center_y_pct).max(1e-3) * rect.height;
+    let line_len = rx_px.max(ry_px).max(1.0);
+    let resolved = resolve_stop_positions(stops, line_len);
+    let Some((skia_stops, lo, hi)) = skia_gradient_stops(&resolved, repeating) else {
+        return Ok(());
+    };
+
+    // Render the gradient in a normalized space where the ellipse is a unit
+    // circle of radius `radius`, then scale x by rx and y by ry around the
+    // centre to recover the ellipse. For repeating, shrink the radius to the
+    // [lo,hi] sub-segment so SpreadMode::Repeat tiles outward.
+    let cx = rect.x + center_x_pct * rect.width;
+    let cy = rect.y + center_y_pct * rect.height;
+    let radius = (hi - lo).max(1e-3);
+    let center_norm = Point::from_xy(0.0, 0.0);
+    let mode = if repeating { SpreadMode::Repeat } else { SpreadMode::Pad };
+    let shader = RadialGradient::new(
+        center_norm,
+        center_norm,
+        radius,
+        skia_stops,
+        mode,
+        // Map normalized circle space to pixel ellipse: translate to centre,
+        // scale by (rx, ry). `lo` offset for repeating handled via radius span.
+        Transform::from_row(rx_px, 0.0, 0.0, ry_px, cx, cy),
+    )
+    .ok_or("degenerate radial gradient")?;
+
+    let paint = Paint {
+        shader,
+        anti_alias: true,
+        force_hq_pipeline: false,
+        blend_mode: tiny_skia::BlendMode::SourceOver,
+    };
+    let skia_rect = tiny_skia::Rect::from_xywh(rect.x, rect.y, rect.width, rect.height)
+        .ok_or("Invalid rect dimensions")?;
+    pixmap.fill_rect(skia_rect, &paint, Transform::identity(), None);
     Ok(())
 }
 
