@@ -13,6 +13,7 @@ pub mod geom;
 pub mod hash;
 pub mod idn;
 pub mod json;
+pub mod memory_pressure;
 pub mod module;
 pub mod punycode;
 pub mod sandbox;
@@ -27,6 +28,7 @@ pub use ext::{
     match_face, BrowserSession, EventSink, FaceRecord, FontProvider, FontStyle,
     HyphenationProvider, NullBrowserSession, NullHyphenationProvider,
     JsError, JsResult, JsRuntime, JsValue, NoopEventSink, NullJsRuntime, SuspendedHeap,
+    MemoryPressureLevel, MemoryPressureSource, NullMemoryPressureSource,
 };
 pub use form::{
     decode_form_value, encode_form_multipart, encode_form_urlencoded, FormEntry, FormValue,

@@ -59,6 +59,8 @@ BUG-043 | FIXED 2026-05-29 | paint           | lumen-paint test suite красн
 BUG-044 | FIXED 2026-05-29 | shell           | lumen-shell не компилируется (default + --features quickjs): non-exhaustive match по DisplayCommand в content_height_of/content_width_of — новые варианты PushMaskLayer/PopMaskLayer/DrawSvgPath/BoxModelOverlay (P2-мерджи) не обработаны; PushMaskLayer несёт rect → в rect-ветку, остальные → continue | shell/src/main.rs:4219, 4265
 BUG-045 | FIXED 2026-05-29 | layout          | backdrop-filter не создавал stacking context: creates_stacking_context() проверял filter, но не backdrop_filter (CSS Filter Effects L2 §2) → box_layer_ops дропал PushBackdropFilter, пустой DL для backdrop-only div. Добавлена проверка + regression-тест | layout/src/stacking.rs:201
 BUG-046 | FIXED 2026-05-30 | layout          | 3 устаревших теста lumen-layout --lib: webp теперь декодируется (в supported_mime_types) → picture-тесты обновлены (avif для fallback, webp для supported); non_cell_col_row_span: `lay` возвращает body-box напрямую, убран лишний first_element_child | layout/src/lib.rs:12253,12269,979
+BUG-047 | OPEN            | layout          | -webkit-line-clamp парсится, но не усекает высоту блока: все .box в 48-line-clamp.html = 160px вместо 40/80/120/160. Регрессионный тест вынесен в #[ignore] | crates/driver/tests/test_48.rs:79
+BUG-048 | FIXED 2026-05-30 | shell           | lumen-shell не компилируется: non-exhaustive match по DisplayCommand в content_height_of/content_width_of — новый вариант DrawScrollbar (p2-scrollbar-rendering merge) не обработан; скроллбар — UI, не контент → ветка continue (как BUG-044) | shell/src/main.rs:4219,4271
 ```
 
 ---

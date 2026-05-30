@@ -208,6 +208,27 @@ impl ImageDecodeCache {
         v.sort_by_key(|(_, t)| *t);
         v
     }
+
+    /// React to an OS memory pressure event by evicting proportionally.
+    ///
+    /// - `Low`: no-op.
+    /// - `Medium`: reduce effective budget to 50 % and run `evict_to_budget()`.
+    /// - `High`: reduce effective budget to 10 % and run `evict_to_budget()`.
+    ///
+    /// The permanent `budget_bytes` field is unchanged; only the current
+    /// eviction run uses the reduced target.
+    pub fn on_memory_pressure(&mut self, level: lumen_core::MemoryPressureLevel) {
+        use lumen_core::MemoryPressureLevel;
+        let target = match level {
+            MemoryPressureLevel::Low => return,
+            MemoryPressureLevel::Medium => self.budget_bytes / 2,
+            MemoryPressureLevel::High => self.budget_bytes / 10,
+        };
+        let saved = self.budget_bytes;
+        self.budget_bytes = target;
+        self.evict_to_budget();
+        self.budget_bytes = saved;
+    }
 }
 
 impl Default for ImageDecodeCache {
@@ -350,5 +371,52 @@ mod tests {
         assert!(!cache.contains(&key("a")), "a вытеснен из кэша");
         // But the handle "h" still holds the Arc — data is alive.
         assert_eq!(h.width, 10, "данные живы пока держим handle");
+    }
+
+    #[test]
+    fn on_memory_pressure_low_noop() {
+        let mut cache = ImageDecodeCache::new();
+        cache.insert(key("a"), make_image(50, 50));
+        cache.insert(key("b"), make_image(50, 50));
+        let before = cache.used_bytes();
+        cache.on_memory_pressure(lumen_core::MemoryPressureLevel::Low);
+        assert_eq!(cache.used_bytes(), before, "Low не вытесняет");
+    }
+
+    #[test]
+    fn on_memory_pressure_medium_evicts_half() {
+        // Budget = 4 images. Fill 4 → used == budget. Medium should halve.
+        let img_bytes = bytes(50, 50);
+        let mut cache = ImageDecodeCache::with_budget(img_bytes * 4);
+        for i in 0..4 {
+            cache.insert(key(&i.to_string()), make_image(50, 50));
+        }
+        assert_eq!(cache.used_bytes(), img_bytes * 4);
+        cache.on_memory_pressure(lumen_core::MemoryPressureLevel::Medium);
+        assert!(cache.used_bytes() <= img_bytes * 2, "Medium должен оставить ≤50%");
+    }
+
+    #[test]
+    fn on_memory_pressure_high_evicts_to_ten_percent() {
+        let img_bytes = bytes(50, 50);
+        let mut cache = ImageDecodeCache::with_budget(img_bytes * 4);
+        for i in 0..4 {
+            cache.insert(key(&i.to_string()), make_image(50, 50));
+        }
+        cache.on_memory_pressure(lumen_core::MemoryPressureLevel::High);
+        assert!(
+            cache.used_bytes() <= img_bytes * 4 / 10 + img_bytes,
+            "High должен оставить ≤10% бюджета (или 1 изображение если бюджет/10 < одного изображения)"
+        );
+    }
+
+    #[test]
+    fn on_memory_pressure_restores_budget() {
+        let img_bytes = bytes(10, 10);
+        let budget = img_bytes * 10;
+        let mut cache = ImageDecodeCache::with_budget(budget);
+        cache.insert(key("a"), make_image(10, 10));
+        cache.on_memory_pressure(lumen_core::MemoryPressureLevel::High);
+        assert_eq!(cache.budget_bytes(), budget, "бюджет восстанавливается после эвикции");
     }
 }

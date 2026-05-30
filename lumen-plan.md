@@ -58,7 +58,7 @@
 - ⬜ Trait-ы для 4 exceptions: `WindowingBackend`, `RenderBackend`, `TlsBackend`, `JsRuntime` — задокументированы как future в `lumen-core::ext`, code-уровень добавим при первом использовании
 - ⬜ `KnowledgeStore` (§12) — FTS / read-later / notes. Phase 2
 - ⬜ `AiBackend` (§12.5) — embed / generate, опционально. Phase 3+
-- ⬜ **`MemoryPressureSource`** (ADR-008, task 10H) — OS-сигналы памяти (Win32 `QueryMemoryResourceNotification`, Linux `/proc/pressure/memory` PSI, macOS `dispatch_source MEMORYPRESSURE`) → `Low/Medium/High` events. Кэши (image, glyph, layer) подписываются для tier-driven eviction. Phase 1.
+- 🟡 **`MemoryPressureSource`** (ADR-008, task 10H) — `MemoryPressureLevel` + trait + `NullMemoryPressureSource` в `core/src/ext.rs`; Win32 (`GlobalMemoryStatusEx`) + Linux PSI (`/proc/pressure/memory`) реализации в `core/src/memory_pressure.rs`; `on_memory_pressure(level)` в `ImageDecodeCache` / `GlyphAtlas` / `LayerCache`. macOS impl ⬜. Shell integration ⬜.
 - ✅ **`JsRuntime` расширение** (ADR-008, task 10C) — `pause()` / `unpause()` / `suspend() -> SuspendedHeap` / `resume(SuspendedHeap)` реализованы в `rquickjs` через `JS_WriteObject`/`JS_ReadObject`. V8 в Phase 3 — отдельная задача.
 
 ### Уникальные фичи (§12) — план на Phase 1-4
@@ -395,12 +395,12 @@
 | 10F.1 | ✅ `LayerCache` с LRU + GPU memory budget | `paint/src/layer_cache.rs` | — |
 | 10F.2 | ✅ Texture pool recycling (одна `wgpu::Texture` переиспользуется для разных layers) | `paint/src/texture_pool.rs` | P3 lifecycle integration pending |
 | 10G | ✅ **`[P1+P2+P3]` T0 экономия: glyph atlas LRU eviction** | LRU eviction в `paint/src/atlas.rs` (`get_lru_candidates`, `remove_keys`) — 4 теста | `paint/src/atlas.rs` |
-| 10H | ⬜ **`[P3]` `MemoryPressureSource` trait** (Phase 1) | OS-сигналы памяти управляют tier-переходами | `core/src/ext/memory_pressure.rs` |
-| 10H.1 | ⬜ Trait + `enum MemoryPressureLevel { Low, Medium, High }` + listeners | `core/src/ext/memory_pressure.rs` | — |
-| 10H.2 | ⬜ Win32 impl: `QueryMemoryResourceNotification` + `MEMORYSTATUSEX` polling | `core/src/ext/memory_pressure/win32.rs` | — |
-| 10H.3 | ⬜ Linux impl: `/proc/pressure/memory` PSI events (kernel ≥ 4.20) | `core/src/ext/memory_pressure/linux.rs` | — |
-| 10H.4 | ⬜ macOS impl: `dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE)` | `core/src/ext/memory_pressure/macos.rs` | — |
-| 10H.5 | ⬜ Подписка кэшей (image, glyph, layer) на pressure events | `image/src/decode_cache.rs`, `font/src/atlas.rs`, `paint/src/layer_cache.rs` | — |
+| 10H | 🟡 **`[P2]` `MemoryPressureSource` trait** (Phase 1) | OS-сигналы памяти управляют tier-переходами | `core/src/ext.rs` + `core/src/memory_pressure.rs` |
+| 10H.1 | ✅ Trait + `enum MemoryPressureLevel { Low, Medium, High }` + `NullMemoryPressureSource` | `core/src/ext.rs` (ADR-008); 3 unit-тесты | — |
+| 10H.2 | ✅ Win32 impl: `Win32MemoryPressureSource` — `GlobalMemoryStatusEx` polling | `core/src/memory_pressure.rs`; 1 unit-тест (live Windows call) | — |
+| 10H.3 | ✅ Linux impl: `LinuxMemoryPressureSource` — `/proc/pressure/memory` PSI polling | `core/src/memory_pressure.rs`; 3 unit-тесты | — |
+| 10H.4 | ⬜ macOS impl: `dispatch_source_create(DISPATCH_SOURCE_TYPE_MEMORYPRESSURE)` | `core/src/memory_pressure.rs` | — |
+| 10H.5 | ✅ Подписка кэшей на pressure events: `on_memory_pressure(level)` | `ImageDecodeCache` (4 тесты) + `GlyphAtlas` (3 тесты) + `LayerCache` (3 тесты) | — |
 | 10I | ⬜ **`[P3]` T2 → SQLite JS heap snapshot persistence** (Phase 2) | JS heap на диск при T2; restore при T0 | `storage/src/tab_snapshot.rs` |
 | 10I.1 | ⬜ Schema: `tab_snapshots(tab_id, js_heap_blob, dom_blob, scroll, form_state, ts)` | `storage/migrations/0NN_tab_snapshots.sql` | — |
 | 10I.2 | ⬜ Async-save при T1→T2 (без блокирования UI) | `shell/src/tab_lifecycle/persist.rs` | — |

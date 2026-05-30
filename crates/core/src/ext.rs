@@ -1669,6 +1669,54 @@ impl BrowserSession for NullBrowserSession {
 //                       DoH/DoT-резолверы — Phase 2+.
 // - Hasher            — единый интерфейс хэшей (для CSP, SRI). Phase 1.
 
+// =============================================================================
+// ADR-008 §10H: MemoryPressureSource
+// =============================================================================
+
+/// OS memory pressure level (ADR-008, task 10H).
+///
+/// Mapped from OS-specific signals:
+/// - Win32: `MEMORYSTATUSEX.dwMemoryLoad` via `GlobalMemoryStatusEx`
+/// - Linux: `avg10` from `/proc/pressure/memory` PSI
+/// - macOS: `dispatch_source DISPATCH_SOURCE_TYPE_MEMORYPRESSURE`
+///
+/// Caches (`ImageDecodeCache`, `GlyphAtlas`, `LayerCache`) subscribe to
+/// pressure events and evict proportionally via `on_memory_pressure(level)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum MemoryPressureLevel {
+    /// Normal operating conditions — no eviction needed.
+    Low,
+    /// Moderate pressure — evict ~50% of caches to relieve RAM.
+    Medium,
+    /// Critical pressure — emergency eviction, keep only ~10% of caches.
+    High,
+}
+
+/// Source of OS memory pressure signals (ADR-008, task 10H).
+///
+/// Implementations query OS-level memory statistics and map them to
+/// `MemoryPressureLevel`. Phase 1 uses synchronous polling; Phase 3 will
+/// extend to async push-based event streams.
+///
+/// Platform implementations:
+/// - `Win32MemoryPressureSource` — `GlobalMemoryStatusEx` polling (Windows)
+/// - `LinuxMemoryPressureSource` — `/proc/pressure/memory` PSI (Linux ≥ 4.20)
+/// - `NullMemoryPressureSource` — always `Low` (tests / unsupported platforms)
+pub trait MemoryPressureSource: Send + Sync {
+    /// Poll current memory pressure level from the OS.
+    fn poll_current(&self) -> MemoryPressureLevel;
+}
+
+/// Null implementation — always reports `Low`. For tests and platforms without
+/// a dedicated implementation.
+pub struct NullMemoryPressureSource;
+
+impl MemoryPressureSource for NullMemoryPressureSource {
+    fn poll_current(&self) -> MemoryPressureLevel {
+        MemoryPressureLevel::Low
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

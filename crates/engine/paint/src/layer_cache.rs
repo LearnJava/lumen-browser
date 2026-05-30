@@ -180,6 +180,28 @@ impl LayerCache {
     pub fn contains(&self, key: LayerKey) -> bool {
         self.cache.contains_key(&key)
     }
+
+    /// React to an OS memory pressure event by evicting GPU layer textures.
+    ///
+    /// - `Low`: no-op.
+    /// - `Medium`: evict the LRU 50 % of layers to free GPU memory.
+    /// - `High`: clear all cached layers (full GPU memory reclamation).
+    pub fn on_memory_pressure(&mut self, level: lumen_core::MemoryPressureLevel) {
+        use lumen_core::MemoryPressureLevel;
+        match level {
+            MemoryPressureLevel::Low => {}
+            MemoryPressureLevel::Medium => {
+                let mut candidates = self.get_lru_candidates();
+                let evict_count = candidates.len() / 2;
+                candidates.truncate(evict_count);
+                let keys: Vec<_> = candidates.into_iter().map(|(k, _)| k).collect();
+                self.remove_keys(&keys);
+            }
+            MemoryPressureLevel::High => {
+                self.clear();
+            }
+        }
+    }
 }
 
 impl Default for LayerCache {
@@ -337,5 +359,36 @@ mod tests {
         assert_eq!(cache.used_bytes(), mem(256, 256) + mem(256, 256));
         assert!(cache.contains(k1));
         assert!(cache.contains(k2));
+    }
+
+    #[test]
+    fn on_memory_pressure_low_noop() {
+        let mut cache = LayerCache::new();
+        cache.insert(key(1, 256, 256), mem(256, 256));
+        cache.insert(key(2, 256, 256), mem(256, 256));
+        let before = cache.used_bytes();
+        cache.on_memory_pressure(lumen_core::MemoryPressureLevel::Low);
+        assert_eq!(cache.used_bytes(), before);
+    }
+
+    #[test]
+    fn on_memory_pressure_medium_evicts_half() {
+        let mut cache = LayerCache::new();
+        for id in 1..=6 {
+            cache.insert(key(id, 64, 64), mem(64, 64));
+        }
+        cache.on_memory_pressure(lumen_core::MemoryPressureLevel::Medium);
+        assert!(cache.len() <= 3, "Medium должен оставить ≤50% слоёв");
+    }
+
+    #[test]
+    fn on_memory_pressure_high_clears_all() {
+        let mut cache = LayerCache::new();
+        for id in 1..=4 {
+            cache.insert(key(id, 128, 128), mem(128, 128));
+        }
+        cache.on_memory_pressure(lumen_core::MemoryPressureLevel::High);
+        assert_eq!(cache.len(), 0, "High должен очистить все GPU-слои");
+        assert_eq!(cache.used_bytes(), 0);
     }
 }
