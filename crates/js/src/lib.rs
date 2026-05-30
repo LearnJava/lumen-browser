@@ -262,6 +262,49 @@ impl QuickJsRuntime {
     pub fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
         *self.computed_styles.lock().unwrap() = styles;
     }
+
+    /// Update `document.hidden` / `document.visibilityState` and fire
+    /// `visibilitychange` on both `document` and `window`.
+    ///
+    /// Call with `hidden = true` on window `Focused(false)` / blur events,
+    /// `hidden = false` on `Focused(true)` / focus events.
+    /// No-op if `install_dom` has not been called yet.
+    pub fn set_document_visibility(&self, hidden: bool) {
+        let script = if hidden {
+            "_lumen_apply_visibility(true)"
+        } else {
+            "_lumen_apply_visibility(false)"
+        };
+        let guard = self.inner.lock().unwrap();
+        guard.ctx.with(|ctx| {
+            ctx.eval::<(), _>(script).ok();
+        });
+    }
+
+    /// Transition `document.readyState` → `'interactive'` and fire
+    /// `readystatechange` + `DOMContentLoaded` (bubbling) on `document`.
+    ///
+    /// Call after the full HTML parse pass but before running user scripts
+    /// for the most spec-accurate timing.  Safe to call multiple times —
+    /// the JS side is idempotent (state only moves forward).
+    pub fn notify_dom_content_loaded(&self) {
+        let guard = self.inner.lock().unwrap();
+        guard.ctx.with(|ctx| {
+            ctx.eval::<(), _>("_lumen_apply_ready_state('interactive')").ok();
+        });
+    }
+
+    /// Transition `document.readyState` → `'complete'` and fire
+    /// `readystatechange` on `document` + `load` on `window`.
+    ///
+    /// Call after all subresources (images, fonts, scripts) are loaded.
+    /// Safe to call multiple times — idempotent on the JS side.
+    pub fn notify_window_loaded(&self) {
+        let guard = self.inner.lock().unwrap();
+        guard.ctx.with(|ctx| {
+            ctx.eval::<(), _>("_lumen_apply_ready_state('complete')").ok();
+        });
+    }
 }
 
 impl Default for QuickJsRuntime {
