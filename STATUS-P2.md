@@ -5,9 +5,7 @@
 ---
 
 ## In progress
-
-**10D.3 Cross-tab caches unified eviction API** — branch: `p2-cross-tab-cache`
-Next step: add `EvictableCache` trait + `CacheRegistry` to `lumen-core/src/ext.rs`
+_(none)_
 
 ---
 
@@ -24,6 +22,7 @@ Ordered by impact. Pick the first unblocked item; update "In progress" before co
 
 ## Recent merges
 
+- **p2-cross-tab-cache** ✅ 2026-05-30 — ADR-008 §10D.3: `EvictableCache` trait + `CacheRegistry` в `lumen-core::ext`. Единый интерфейс для всех разделяемых между вкладками кэшей: `on_memory_pressure(level)`, `used_bytes()`, `budget_bytes()`, `clear()`, `cache_name()`. `CacheRegistry` хранит `Vec<Box<dyn EvictableCache>>`, методы: `register()`, `broadcast_pressure()`, `total_used_bytes()`, `total_budget_bytes()`, `clear_all()`. Реализации: `GlyphAtlas` (used = pixels.len(), budget = MAX), `ImageDecodeCache` (делегирует inherent-методам), `LayerCache` (u32→usize). 8 unit-тестов CacheRegistry в lumen-core. P3 handoff: создать `CacheRegistry` в shell, зарегистрировать все три кэша, вызывать `broadcast_pressure()` из poll-loop `MemoryPressureSource`.
 - **p2-depth-z-all-vertices** ✅ 2026-05-30 — GPU depth buffer расширен на `TextVertex`/`ImageVertex`/`RRectVertex`. Каждая из трёх вершин получила поле `z: f32` (CSS depth px); WGSL TEXT/IMAGE/RRECT шейдеры мапят z через ту же формулу `clamp(0.5 - z/20000, 0, 1)`, что и FillVertex; их pipeline'ы получили `DepthStencilState { Depth32Float, LessEqual }`. `VertexPos::set_depth` реализован для всех трёх — `apply_affine_to_verts` автоматически прокидывает projected z через 3D-путь. `apply_affine_to_rrect_verts` 3D-ветка использует `project_point_z` и пишет в `RRectVertex.z`. Теперь cross-type depth testing полный: 3D-transformed текст/картинки/SDF-rrect корректно перекрываются с background-rect под `preserve-3d`. 8 новых unit-тестов (423 total). Прежнее ограничение «depth только для FillVertex» снято.
 - **p2-background-origin** ✅ 2026-05-30 — `background-origin` rendering: `background_origin_rect()` в `paint/src/display_list.rs` вычисляет positioning area (border/padding/content-box). `DrawBackgroundImage.origin_rect: Rect` — отдельный positioning rect независимо от clip. Renderer использует `oarea` для cover/contain ratio и `background-position` % offset, `area` (clip) только для x_end/y_end тайл-границ. 4 unit-теста. Graphic test 53.
 - **p2-print-pages-renderer** ✅ 2026-05-30 — Print PDF renderer side: `DisplayCommand::PageBreak` маркер страницы, `build_print_display_list(pages: &[Page]) -> DisplayList` (фрагменты → page-local координаты через `PushTransform`), `split_at_page_breaks(cmds) -> Vec<Vec<DisplayCommand>>` (разбивает DL по маркерам), `Renderer::render_print_pages(font_bytes, pages, w, h) -> Result<Vec<Image>, _>` (headless render per page). 6 новых unit-тестов. Всего lumen-paint: 411 unit + 21 snapshot. P3 handoff: shell `--print-to-pdf` → собирает `Vec<Image>` → PDF через pdf-writer crate.
