@@ -6,7 +6,8 @@
 
 ## In progress
 
-_(none)_
+**p1-dom-gc-hooks** branch: `p1-dom-gc-hooks`
+Next step: add `js_refs: HashMap<NodeId, u32>` to Document + acquire/release/js_ref_count/is_detached/dead_node_ids в `crates/engine/dom/src/lib.rs`
 
 ---
 
