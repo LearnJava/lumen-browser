@@ -56,6 +56,10 @@ pub struct QuickJsRuntime {
     /// Each entry is (nid, target_scroll_x, target_scroll_y).
     /// Shell drains via `take_scroll_requests()` and calls `set_scroll_position()`.
     pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
+    /// Computed CSS styles per node, updated after each relayout by the shell.
+    /// Maps NodeId index (u32) → CSS property name → resolved CSS value string.
+    /// Read by `_lumen_get_computed_style(nid, prop)` from JS (`getComputedStyle`).
+    computed_styles: Arc<Mutex<HashMap<u32, HashMap<String, String>>>>,
 }
 
 struct Inner {
@@ -85,6 +89,7 @@ impl QuickJsRuntime {
             lazy_img_requests: Arc::new(Mutex::new(Vec::new())),
             scroll_states: Arc::new(Mutex::new(HashMap::new())),
             pending_scrolls: Arc::new(Mutex::new(Vec::new())),
+            computed_styles: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -151,6 +156,7 @@ impl QuickJsRuntime {
                 idb_backend,
                 Arc::clone(&self.scroll_states),
                 Arc::clone(&self.pending_scrolls),
+                Arc::clone(&self.computed_styles),
             )
             .map_err(|e| rq_err(&ctx, e))?;
 
@@ -246,6 +252,15 @@ impl QuickJsRuntime {
     /// `set_scroll_position(root, NodeId::from_index(nid), x, y)`.
     pub fn take_scroll_requests(&self) -> Vec<(u32, f32, f32)> {
         std::mem::take(&mut self.pending_scrolls.lock().unwrap())
+    }
+
+    /// Push a fresh snapshot of computed CSS styles into the JS runtime.
+    ///
+    /// Called by the shell after every relayout.  Replaces the entire cache;
+    /// stale entries for removed nodes are discarded automatically.
+    /// The JS side reads entries via `_lumen_get_computed_style(nid, prop)`.
+    pub fn update_computed_styles(&self, styles: HashMap<u32, HashMap<String, String>>) {
+        *self.computed_styles.lock().unwrap() = styles;
     }
 }
 
