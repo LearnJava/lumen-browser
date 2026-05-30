@@ -18,7 +18,7 @@ use lumen_dom::InputType;
 use lumen_layout::{
     box_can_own_stacking_context, creates_stacking_context, forward_box_transform,
     transform_fns_to_matrix, CompositorAnimFrame, CompositorOverride,
-    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
+    BackgroundClip, BackgroundImage, BackgroundLayer, BackgroundOrigin, BackgroundRepeat, BackgroundSize, BorderStyle, BoxKind,
     ClipPath, Color, ComputedStyle, ContainFlags, CssColor, FilterFn, FontOpticalSizing, FontStyle, FontWeight,
     FormControlKind, SvgShapeKind,
     GradientStop, ImageRendering, Length, ListStyleType, ParsedGradient,
@@ -266,23 +266,27 @@ pub enum DisplayCommand {
         object_position: ObjectPosition,
         image_rendering: ImageRendering,
     },
-    /// CSS Backgrounds L3 §3.10 — `background-image: url(...)`. `rect` —
-    /// background-painting area из [`background_clip_rect`] (учитывает
-    /// `background-clip`: border-box / padding-box / content-box). `src` —
-    /// URL картинки, тот же ключ, что shell кладёт в `Renderer::register_image`.
+    /// CSS Backgrounds L3 §3.10 — `background-image: url(...)`.
     ///
-    /// Эмиттер выпускает ТОЛЬКО для `BackgroundImage::Url(_)` (gradient-ы
-    /// парсятся, но Phase 0 не растрит — см. `style.background_image`).
-    /// Порядок: после `FillRect` для background-color, до border (CSS
-    /// Backgrounds L3 §3.10 — painting order: bg-color → bg-image → border).
+    /// `rect` — background painting area (clip box), computed from `background-clip`
+    /// (border-box / padding-box / content-box). Defines where pixels are actually drawn.
     ///
-    /// `rect` = background positioning area (background-clip box).
+    /// `origin_rect` — background positioning area, computed from `background-origin`
+    /// (CSS Backgrounds L3 §3.5). Defines the coordinate space for `background-size`
+    /// (cover/contain/%) and `background-position` (% offsets). Differs from `rect`
+    /// when `background-origin != background-clip` (e.g., origin: content-box,
+    /// clip: border-box — common pattern).
+    ///
+    /// `src` — URL, same key as `Renderer::register_image`.
     /// `size`, `position`, `repeat` — CSS Backgrounds L3 §3.3/3.4/3.5.
     ///
-    /// Если картинка не зарегистрирована в GPU-cache — команда визуально
-    /// no-op (background-color уже эмитнут отдельным FillRect).
+    /// Порядок: после `FillRect` для background-color, до border.
+    /// Если картинка не зарегистрирована в GPU-cache — визуально no-op.
     DrawBackgroundImage {
+        /// Background painting area — from `background-clip`. Pixels only drawn inside.
         rect: Rect,
+        /// Background positioning area — from `background-origin`. Used for size/position math.
+        origin_rect: Rect,
         src: String,
         size: BackgroundSize,
         position: ObjectPosition,
@@ -1941,6 +1945,26 @@ fn background_color_clip(b: &LayoutBox) -> BackgroundClip {
     b.style.background_layers.last().map_or(BackgroundClip::BorderBox, |l| l.clip)
 }
 
+/// Converts `background-origin` to the equivalent `BackgroundClip` for rect computation.
+///
+/// CSS Backgrounds L3 §3.5: background-origin has the same box keywords as background-clip
+/// except it never has `text` (text-clip only). The conversion is 1:1 for the three box values.
+fn origin_to_clip(o: BackgroundOrigin) -> BackgroundClip {
+    match o {
+        BackgroundOrigin::BorderBox  => BackgroundClip::BorderBox,
+        BackgroundOrigin::PaddingBox => BackgroundClip::PaddingBox,
+        BackgroundOrigin::ContentBox => BackgroundClip::ContentBox,
+    }
+}
+
+/// Computes the background positioning area from `background-origin` (CSS Backgrounds L3 §3.5).
+///
+/// This rect is used for `background-size` (cover/contain/%) and `background-position` (% offsets).
+/// Distinct from the painting/clip area computed by [`background_clip_rect`].
+fn background_origin_rect(b: &LayoutBox, origin: BackgroundOrigin) -> Rect {
+    background_clip_rect(b, origin_to_clip(origin))
+}
+
 /// Эмитит одну background-layer команду.
 ///
 /// CSS Compositing L1 §8.3: если `layer.blend_mode != Normal`, оборачивает
@@ -1955,6 +1979,9 @@ fn emit_background_layer(
     if clip.width <= 0.0 || clip.height <= 0.0 {
         return;
     }
+    // CSS Backgrounds L3 §3.5: positioning area (background-origin) is independent of
+    // the painting/clip area (background-clip). size/position calculations use origin_rect.
+    let origin = background_origin_rect(b, layer.origin);
     let use_blend = layer.blend_mode != LayoutBlendMode::Normal;
     if use_blend {
         out.push(DisplayCommand::PushBlendMode { mode: map_blend_mode(layer.blend_mode) });
@@ -1963,6 +1990,7 @@ fn emit_background_layer(
         BackgroundImage::Url(src) if !src.is_empty() => {
             out.push(DisplayCommand::DrawBackgroundImage {
                 rect: clip,
+                origin_rect: origin,
                 src: src.clone(),
                 size: layer.size,
                 position: layer.position,
@@ -4687,6 +4715,87 @@ mod tests {
         if let DisplayCommand::DrawBackgroundImage { rect, .. } = bgs[0] {
             assert!((rect.width - 100.0).abs() < 0.1, "got {}", rect.width);
             assert!((rect.height - 60.0).abs() < 0.1, "got {}", rect.height);
+        }
+    }
+
+    // ── Тесты background-origin ────────────────────────────────────────────────
+
+    #[test]
+    fn background_origin_default_padding_box_equals_clip_border_box() {
+        // Default: background-origin: padding-box, background-clip: border-box.
+        // With no border: origin_rect == clip rect == border-box.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; background-image: url(x.png); }",
+        );
+        let bgs = bg_images(&dl);
+        assert_eq!(bgs.len(), 1);
+        if let DisplayCommand::DrawBackgroundImage { rect, origin_rect, .. } = bgs[0] {
+            assert!((rect.width - 100.0).abs() < 0.1, "rect.width={}", rect.width);
+            assert!((origin_rect.width - 100.0).abs() < 0.1, "origin_rect.width={}", origin_rect.width);
+            assert!((rect.height - 60.0).abs() < 0.1);
+            assert!((origin_rect.height - 60.0).abs() < 0.1);
+        }
+    }
+
+    #[test]
+    fn background_origin_content_box_excludes_padding_and_border() {
+        // box-sizing: content-box, width=100, height=60, border=5px, padding=10px.
+        // border-box: 130×90. padding-box: 120×80. content-box (origin): 100×60.
+        // background-clip: border-box by default → rect is 130×90.
+        // background-origin: content-box → origin_rect is 100×60.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; background-image: url(x.png); \
+             border: 5px solid red; padding: 10px; \
+             background-origin: content-box; background-clip: border-box; }",
+        );
+        let bgs = bg_images(&dl);
+        assert_eq!(bgs.len(), 1);
+        if let DisplayCommand::DrawBackgroundImage { rect, origin_rect, .. } = bgs[0] {
+            // clip rect (border-box) = 130×90
+            assert!((rect.width - 130.0).abs() < 0.1, "rect.width={}", rect.width);
+            assert!((rect.height - 90.0).abs() < 0.1, "rect.height={}", rect.height);
+            // origin_rect (content-box) = 100×60
+            assert!((origin_rect.width - 100.0).abs() < 0.1, "origin_rect.width={}", origin_rect.width);
+            assert!((origin_rect.height - 60.0).abs() < 0.1, "origin_rect.height={}", origin_rect.height);
+        }
+    }
+
+    #[test]
+    fn background_origin_border_box_equals_clip_border_box() {
+        // background-origin: border-box means positioning starts at border edge.
+        // With 5px border: both rect and origin_rect include border area.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; background-image: url(x.png); \
+             border: 5px solid red; background-origin: border-box; }",
+        );
+        let bgs = bg_images(&dl);
+        assert_eq!(bgs.len(), 1);
+        if let DisplayCommand::DrawBackgroundImage { rect, origin_rect, .. } = bgs[0] {
+            // Both clip (border-box default) and origin (border-box explicit) = 110×70
+            assert!((rect.width - 110.0).abs() < 0.1, "rect.width={}", rect.width);
+            assert!((origin_rect.width - 110.0).abs() < 0.1, "origin_rect.width={}", origin_rect.width);
+            assert!((rect.width - origin_rect.width).abs() < 0.1, "rects should match");
+            assert!((rect.height - origin_rect.height).abs() < 0.1, "rects should match");
+        }
+    }
+
+    #[test]
+    fn background_origin_padding_box_with_border_shrinks_origin() {
+        // background-origin: padding-box (default), background-clip: border-box.
+        // With 8px border: border-box=116×76, padding-box=100×60.
+        let dl = build(
+            "<div></div>",
+            "div { width: 100px; height: 60px; background-image: url(x.png); \
+             border: 8px solid black; background-origin: padding-box; }",
+        );
+        let bgs = bg_images(&dl);
+        assert_eq!(bgs.len(), 1);
+        if let DisplayCommand::DrawBackgroundImage { rect, origin_rect, .. } = bgs[0] {
+            assert!((rect.width - 116.0).abs() < 0.1, "rect.width={}", rect.width);
+            assert!((origin_rect.width - 100.0).abs() < 0.1, "origin_rect.width={}", origin_rect.width);
         }
     }
 
