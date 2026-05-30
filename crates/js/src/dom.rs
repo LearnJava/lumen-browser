@@ -146,8 +146,10 @@ pub fn install_dom_api(
     lazy_img_requests: Arc<Mutex<Vec<(u32, String)>>>,
     cookie_jar: Option<Arc<dyn CookieProvider>>,
     idb_backend: Option<Arc<dyn IdbBackend>>,
+    scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
 ) -> QjResult<()> {
-    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend)?;
+    install_primitives(ctx, Arc::clone(&doc), Arc::clone(&nav_out), fetch_provider, ws_provider, ls_store, ss_store, timer_wakeup, dom_dirty, raf_pending, layout_rects, viewport_size, lazy_img_requests, page_url.to_owned(), cookie_jar, idb_backend, scroll_states, pending_scrolls)?;
     // Inject the page URL as a JS global so that WEB_API_SHIM can initialise
     // the `location` object.  Cleaned up by the shim itself (`delete _LUMEN_PAGE_URL`).
     ctx.globals().set("_LUMEN_PAGE_URL", page_url.to_owned())?;
@@ -175,6 +177,8 @@ fn install_primitives(
     page_url: String,
     cookie_jar: Option<Arc<dyn CookieProvider>>,
     idb_backend: Option<Arc<dyn IdbBackend>>,
+    scroll_states: Arc<Mutex<HashMap<u32, [f32; 4]>>>,
+    pending_scrolls: Arc<Mutex<Vec<(u32, f32, f32)>>>,
 ) -> QjResult<()> {
     macro_rules! reg {
         ($name:expr, $f:expr) => {
@@ -987,6 +991,26 @@ fn install_primitives(
         });
     }
 
+    // ── scroll state (for scrollTop/scrollLeft/scrollWidth/scrollHeight) ─────────
+    // Returns [scroll_x, scroll_y, scroll_width, scroll_height] for an overflow container,
+    // or undefined if the node is not a scroll container.
+    {
+        let ss = Arc::clone(&scroll_states);
+        reg!("_lumen_get_scroll_state", move |nid: u32| -> Option<Vec<f64>> {
+            ss.lock()
+                .unwrap()
+                .get(&nid)
+                .map(|s| vec![f64::from(s[0]), f64::from(s[1]), f64::from(s[2]), f64::from(s[3])])
+        });
+    }
+    // Queues a programmatic scroll request.  Shell drains via `take_scroll_requests()`.
+    {
+        let ps = Arc::clone(&pending_scrolls);
+        reg!("_lumen_request_scroll", move |nid: u32, x: f64, y: f64| {
+            ps.lock().unwrap().push((nid, x as f32, y as f32));
+        });
+    }
+
     // ── Shadow DOM ───────────────────────────────────────────────────────────────
     // Attaches a new shadow root to `nid` and returns the shadow root NodeId.
     // `mode`: "open" | "closed".  Triggers layout dirty so the composed tree rebuilds.
@@ -1549,6 +1573,52 @@ function _lumen_make_element(nid) {
             var m = (init && init.mode === 'closed') ? 'closed' : 'open';
             var sr_nid = _lumen_attach_shadow(nid, m);
             return _lumen_make_shadow_root(sr_nid, m, nid);
+        },
+        getBoundingClientRect: function() {
+            var r = _lumen_get_bounding_rect(nid);
+            if (!r) { return { x:0, y:0, width:0, height:0, top:0, right:0, bottom:0, left:0 }; }
+            return { x: r[0], y: r[1], width: r[2], height: r[3],
+                     top: r[1], left: r[0], right: r[0]+r[2], bottom: r[1]+r[3] };
+        },
+        get offsetWidth()  { var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0; },
+        get offsetHeight() { var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0; },
+        get offsetLeft()   { var r = _lumen_get_bounding_rect(nid); return r ? r[0] : 0; },
+        get offsetTop()    { var r = _lumen_get_bounding_rect(nid); return r ? r[1] : 0; },
+        get clientWidth()  { var r = _lumen_get_bounding_rect(nid); return r ? r[2] : 0; },
+        get clientHeight() { var r = _lumen_get_bounding_rect(nid); return r ? r[3] : 0; },
+        get scrollLeft() {
+            var s = _lumen_get_scroll_state(nid); return s ? s[0] : 0;
+        },
+        set scrollLeft(v) { _lumen_request_scroll(nid, +v, _lumen_get_scroll_state(nid) ? _lumen_get_scroll_state(nid)[1] : 0); },
+        get scrollTop() {
+            var s = _lumen_get_scroll_state(nid); return s ? s[1] : 0;
+        },
+        set scrollTop(v) { _lumen_request_scroll(nid, _lumen_get_scroll_state(nid) ? _lumen_get_scroll_state(nid)[0] : 0, +v); },
+        get scrollWidth()  { var s = _lumen_get_scroll_state(nid); return s ? s[2] : 0; },
+        get scrollHeight() { var s = _lumen_get_scroll_state(nid); return s ? s[3] : 0; },
+        scrollTo: function(x, y) {
+            if (typeof x === 'object' && x !== null) { y = x.top || 0; x = x.left || 0; }
+            _lumen_request_scroll(nid, +x, +y);
+        },
+        scrollBy: function(x, y) {
+            if (typeof x === 'object' && x !== null) { y = x.top || 0; x = x.left || 0; }
+            var s = _lumen_get_scroll_state(nid);
+            _lumen_request_scroll(nid, (s ? s[0] : 0) + (+x), (s ? s[1] : 0) + (+y));
+        },
+        scrollIntoView: function() {
+            // Scroll the nearest ancestor scroll container to make this element visible.
+            var r = _lumen_get_bounding_rect(nid);
+            if (!r) return;
+            var parent = _lumen_u2n(_lumen_get_parent(nid));
+            while (parent !== null && parent !== undefined) {
+                var ps = _lumen_get_scroll_state(parent);
+                if (ps) {
+                    var pr = _lumen_get_bounding_rect(parent);
+                    if (pr) { _lumen_request_scroll(parent, r[0] - pr[0], r[1] - pr[1]); }
+                    break;
+                }
+                parent = _lumen_u2n(_lumen_get_parent(parent));
+            }
         },
     };
     Object.defineProperty(_obj, 'shadowRoot', {
@@ -6456,6 +6526,92 @@ mod tests {
             }
             other => panic!("expected Array, got {other:?}"),
         }
+    }
+
+    // ── Element geometry API ─────────────────────────────────────────────────
+
+    #[test]
+    fn get_bounding_client_rect_method_on_element() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+        };
+        rt.update_layout_rects([(nid, [5.0, 10.0, 200.0, 100.0])].into_iter().collect());
+        let x = rt.eval(&format!("document.body.getBoundingClientRect().x")).unwrap();
+        assert_eq!(x, lumen_core::JsValue::Number(5.0));
+        let w = rt.eval(&format!("document.body.getBoundingClientRect().width")).unwrap();
+        assert_eq!(w, lumen_core::JsValue::Number(200.0));
+        let bottom = rt.eval(&format!("document.body.getBoundingClientRect().bottom")).unwrap();
+        assert_eq!(bottom, lumen_core::JsValue::Number(110.0));
+    }
+
+    #[test]
+    fn offset_width_height_on_element() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+        };
+        rt.update_layout_rects([(nid, [0.0, 0.0, 320.0, 240.0])].into_iter().collect());
+        let ow = rt.eval("document.body.offsetWidth").unwrap();
+        assert_eq!(ow, lumen_core::JsValue::Number(320.0));
+        let oh = rt.eval("document.body.offsetHeight").unwrap();
+        assert_eq!(oh, lumen_core::JsValue::Number(240.0));
+    }
+
+    #[test]
+    fn scroll_top_left_via_update_scroll_states() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+        };
+        rt.update_scroll_states([(nid, [42.0, 17.0, 800.0, 2000.0])].into_iter().collect());
+        let sl = rt.eval("document.body.scrollLeft").unwrap();
+        assert_eq!(sl, lumen_core::JsValue::Number(42.0));
+        let st = rt.eval("document.body.scrollTop").unwrap();
+        assert_eq!(st, lumen_core::JsValue::Number(17.0));
+        let sw = rt.eval("document.body.scrollWidth").unwrap();
+        assert_eq!(sw, lumen_core::JsValue::Number(800.0));
+        let sh = rt.eval("document.body.scrollHeight").unwrap();
+        assert_eq!(sh, lumen_core::JsValue::Number(2000.0));
+    }
+
+    #[test]
+    fn scroll_to_queues_request() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+        };
+        rt.update_scroll_states([(nid, [0.0, 0.0, 800.0, 2000.0])].into_iter().collect());
+        rt.eval("document.body.scrollTo(100, 200)").unwrap();
+        let reqs = rt.take_scroll_requests();
+        assert_eq!(reqs.len(), 1);
+        assert_eq!(reqs[0].0, nid);
+        assert!((reqs[0].1 - 100.0).abs() < 0.1);
+        assert!((reqs[0].2 - 200.0).abs() < 0.1);
+    }
+
+    #[test]
+    fn scroll_by_adds_to_current_position() {
+        let rt = runtime_with_dom(make_doc());
+        let doc_arc = make_doc();
+        let nid = {
+            let doc = doc_arc.lock().unwrap();
+            super::find_element_by_tag(&doc, "body").unwrap().index() as u32
+        };
+        rt.update_scroll_states([(nid, [50.0, 100.0, 800.0, 2000.0])].into_iter().collect());
+        rt.eval("document.body.scrollBy(10, -20)").unwrap();
+        let reqs = rt.take_scroll_requests();
+        assert_eq!(reqs.len(), 1);
+        assert!((reqs[0].1 - 60.0).abs() < 0.1);
+        assert!((reqs[0].2 - 80.0).abs() < 0.1);
     }
 
     // ── Lazy image loading ────────────────────────────────────────────────────
