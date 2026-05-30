@@ -1,13 +1,21 @@
 //! Test 48-line-clamp.html — CSS Overflow L4 §3.2 -webkit-line-clamp truncation.
 //!
-//! Four flex columns (231.5px wide, step 247.5). The page is built so that a clamp
-//! of N lines yields a container height of N × 40px (explicit line-height). Row 4 is
-//! an explicit staircase (40/80/120/160) that encodes the ground-truth clamp heights;
-//! row 3 is an unclamped 200px reference. The active test locks the geometry that the
-//! engine already gets right (labels, references, staircase, flex columns); the
-//! `#[ignore]`d test asserts the clamped boxes themselves match the staircase — it is
-//! gated on BUG-047 (line-clamp parses but does not truncate height: all four clamped
-//! boxes currently resolve to 160px instead of 40/80/120/160).
+//! Four clamp columns (231.5px wide, step 247.5) inside a `display:flex` row. Each
+//! column is a `display:-webkit-box` with `-webkit-line-clamp: N`, so its inner
+//! anonymous inline box is truncated to N lines of 40px (explicit line-height) =
+//! N × 40px. Because the row uses the default `align-items: stretch`, all four
+//! columns stretch to the flex line's cross size — the tallest, `.b4` at 4 × 40 =
+//! 160px — so every `.box` border-box is 160px tall, matching Edge
+//! (graphic_tests/screenshots/48-edge.png), *not* a 40/80/120/160 staircase. Row 3
+//! is an unclamped 200px reference; row 4 is an explicit staircase (40/80/120/160)
+//! that visually encodes the per-column clamp line counts. `test_48_line_clamp`
+//! locks the geometry the engine already gets right (labels, references, staircase,
+//! flex columns); `test_48_line_clamp_flex_items_stretch_equal` locks the
+//! Edge-verified fact that the clamp columns all stretch to 160px. The inner
+//! per-column line truncation itself (the actual line-clamp effect) is
+//! regression-tested directly in `lumen-layout` (`line_clamp_truncates_to_n_lines`
+//! et al.). Former BUG-047 mis-read this stretch as "line-clamp does not truncate
+//! height"; the truncation lives on the inline box, not on the stretched flex item.
 
 use lumen_driver::{BrowserSession, InProcessSession};
 
@@ -72,24 +80,26 @@ fn test_48_line_clamp() {
     }
 }
 
-/// Gated on BUG-047: `-webkit-line-clamp` is parsed but never truncates the block
-/// height, so all four clamped boxes resolve to 160px instead of the staircase
-/// heights 40/80/120/160. Un-ignore once line-clamp height truncation lands.
+/// Edge ground truth (graphic_tests/screenshots/48-edge.png): the four clamp
+/// columns are flex items in a `display:flex` row with default
+/// `align-items: stretch`, so each `.box` stretches to the flex line's cross size —
+/// the tallest clamped column, `.b4` at 4 × 40 = 160px. All four `.box` border-boxes
+/// are therefore 160px tall in Edge, *not* a 40/80/120/160 staircase. The visible
+/// line-clamp truncation happens on the inner anonymous inline box (its height
+/// resolves to 40/80/120/160px), which is regression-tested directly in
+/// `lumen-layout`. This test locks the flex-stretch height that closed BUG-047.
 #[test]
-#[ignore = "BUG-047: -webkit-line-clamp does not truncate block height"]
-fn test_48_line_clamp_height_truncation() {
+fn test_48_line_clamp_flex_items_stretch_equal() {
     let mut session = InProcessSession::new();
     navigate(&mut session, "graphic_tests/48-line-clamp.html");
 
     let boxes = session.all_layout_boxes_by_selector(".box").expect("query .box");
     assert_eq!(boxes.len(), 4, "expected 4 clamped boxes");
-    let expected = [40.0, 80.0, 120.0, 160.0];
-    for (i, &h) in expected.iter().enumerate() {
+    for (i, b) in boxes.iter().enumerate() {
         assert!(
-            (boxes[i].border_box.height - h).abs() < 1.0,
-            "box[{i}] clamp({}) should be {h}px tall, got {}",
-            i + 1,
-            boxes[i].border_box.height
+            (b.border_box.height - 160.0).abs() < 1.0,
+            "box[{i}] should stretch to the flex line cross size (160px), got {}",
+            b.border_box.height
         );
     }
 }
