@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { background: #ff00ff; width: 1024px; height: 720px; margin: 0; padding: 0; }
+  .__f { background: #1a1a2e; width: 1022px; height: 718px; margin: 1px; padding: 0; overflow: hidden; }
+  svg { display: block; }
+</style>
+</head>
+<body>
+<div class="__f">
+  <!-- Row 1: Open paths with stroke only (no fill) -->
+  <!-- Diagonal line stroke -->
+  <svg width="200" height="160" style="position:absolute;left:10px;top:10px;">
+    <path d="M 20 140 L 180 20" fill="none" stroke="#e94560" stroke-width="8"/>
+  </svg>
+  <!-- Zigzag open path -->
+  <svg width="200" height="160" style="position:absolute;left:220px;top:10px;">
+    <path d="M 10 80 L 50 20 L 90 120 L 130 20 L 190 80" fill="none" stroke="#0f3460" stroke-width="6"/>
+    <path d="M 10 80 L 50 20 L 90 120 L 130 20 L 190 80" fill="none" stroke="#e94560" stroke-width="3"/>
+  </svg>
+  <!-- Arc-based open curve stroke -->
+  <svg width="200" height="160" style="position:absolute;left:430px;top:10px;">
+    <path d="M 20 80 C 20 20 180 20 180 80 C 180 140 20 140 20 80" fill="none" stroke="#16213e" stroke-width="10"/>
+    <path d="M 20 80 C 20 20 180 20 180 80 C 180 140 20 140 20 80" fill="none" stroke="#e94560" stroke-width="4"/>
+  </svg>
+  <!-- L-shape stroke -->
+  <svg width="200" height="160" style="position:absolute;left:640px;top:10px;">
+    <path d="M 30 130 L 30 30 L 170 30" fill="none" stroke="#533483" stroke-width="12"/>
+    <path d="M 30 130 L 30 30 L 170 30" fill="none" stroke="#e94560" stroke-width="5"/>
+  </svg>
+
+  <!-- Row 2: Closed paths with stroke only (star, polygon) -->
+  <!-- Star shape stroke only -->
+  <svg width="200" height="160" style="position:absolute;left:10px;top:185px;">
+    <path d="M 100 15 L 120 65 L 175 65 L 130 100 L 150 150 L 100 120 L 50 150 L 70 100 L 25 65 L 80 65 Z"
+          fill="none" stroke="#e94560" stroke-width="5"/>
+  </svg>
+  <!-- Diamond/rhombus stroke only -->
+  <svg width="200" height="160" style="position:absolute;left:220px;top:185px;">
+    <path d="M 100 10 L 185 80 L 100 150 L 15 80 Z" fill="none" stroke="#0f3460" stroke-width="8"/>
+    <path d="M 100 10 L 185 80 L 100 150 L 15 80 Z" fill="none" stroke="#e94560" stroke-width="3"/>
+  </svg>
+  <!-- Hexagon stroke only -->
+  <svg width="200" height="160" style="position:absolute;left:430px;top:185px;">
+    <path d="M 100 15 L 175 57 L 175 103 L 100 145 L 25 103 L 25 57 Z"
+          fill="none" stroke="#533483" stroke-width="10"/>
+  </svg>
+  <!-- Arrow-like path stroke -->
+  <svg width="200" height="160" style="position:absolute;left:640px;top:185px;">
+    <path d="M 20 80 L 120 80 M 80 40 L 120 80 L 80 120" fill="none" stroke="#e94560" stroke-width="8"/>
+  </svg>
+
+  <!-- Row 3: Filled + stroked paths -->
+  <!-- Triangle fill + stroke -->
+  <svg width="200" height="160" style="position:absolute;left:10px;top:360px;">
+    <path d="M 100 15 L 185 145 L 15 145 Z" fill="#0f3460" stroke="#e94560" stroke-width="6"/>
+  </svg>
+  <!-- Rounded-rectangle-like path fill + stroke -->
+  <svg width="200" height="160" style="position:absolute;left:220px;top:360px;">
+    <path d="M 50 20 L 150 20 Q 180 20 180 50 L 180 110 Q 180 140 150 140 L 50 140 Q 20 140 20 110 L 20 50 Q 20 20 50 20 Z"
+          fill="#16213e" stroke="#e94560" stroke-width="5"/>
+  </svg>
+  <!-- Hourglass shape fill + stroke -->
+  <svg width="200" height="160" style="position:absolute;left:430px;top:360px;">
+    <path d="M 20 20 L 180 20 L 100 80 L 180 140 L 20 140 L 100 80 Z"
+          fill="#533483" stroke="#e94560" stroke-width="4"/>
+  </svg>
+  <!-- Curved fill + thick stroke -->
+  <svg width="200" height="160" style="position:absolute;left:640px;top:360px;">
+    <path d="M 30 80 C 30 20 170 20 170 80 L 170 120 C 170 150 30 150 30 120 Z"
+          fill="#0f3460" stroke="#e94560" stroke-width="7"/>
+  </svg>
+
+  <!-- Row 4: stroke-only paths with varying widths -->
+  <svg width="1022" height="120" style="position:absolute;left:0px;top:580px;">
+    <!-- Thin stroke -->
+    <path d="M 50 60 C 50 10 200 10 200 60 C 200 110 350 110 350 60" fill="none" stroke="#e94560" stroke-width="2"/>
+    <!-- Medium stroke -->
+    <path d="M 380 60 C 380 10 530 10 530 60 C 530 110 680 110 680 60" fill="none" stroke="#16213e" stroke-width="6"/>
+    <!-- Thick stroke -->
+    <path d="M 710 60 C 710 10 860 10 860 60 C 860 110 970 110 970 60" fill="none" stroke="#533483" stroke-width="14"/>
+  </svg>
+</div>
+</body>
+</html>

@@ -3261,21 +3261,39 @@ fn emit_svg_shape(b: &LayoutBox, shape: &SvgShapeKind, out: &mut DisplayList) {
             out.push(DisplayCommand::FillRect { rect: b.rect, color });
         }
         SvgShapeKind::Path { d } => {
-            if let Some(fc) = fill_color {
+            let need_fill   = fill_color.is_some();
+            let need_stroke = stroke_color.is_some() && stroke_w > 0.0;
+            if need_fill || need_stroke {
                 let segs = crate::svg_path::parse_svg_path(d);
                 let contours = crate::svg_path::flatten_path(&segs, 0.5);
-                let vertices = crate::svg_path::tessellate_fill(&contours);
-                if !vertices.is_empty() {
-                    // Shift path vertices by box origin so path coords are in
-                    // CSS-pixel layout space (same as all other DisplayCommands).
-                    let shifted: Vec<[f32; 2]> = vertices
-                        .iter()
-                        .map(|[x, y]| [x + b.rect.x, y + b.rect.y])
-                        .collect();
-                    out.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: fc });
+                // CSS: fill-rule (nonzero vs even-odd) — P4 wires when svg_fill_rule is in ComputedStyle.
+                if let Some(fc) = fill_color {
+                    let vertices = crate::svg_path::tessellate_fill(&contours);
+                    if !vertices.is_empty() {
+                        // Shift path vertices by box origin so path coords are in
+                        // CSS-pixel layout space (same as all other DisplayCommands).
+                        let shifted: Vec<[f32; 2]> = vertices
+                            .iter()
+                            .map(|[x, y]| [x + b.rect.x, y + b.rect.y])
+                            .collect();
+                        out.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: fc });
+                    }
+                }
+                // CSS: stroke-linecap, stroke-linejoin, stroke-miterlimit — P4 wires.
+                // CSS: stroke-dasharray, stroke-dashoffset — P4 wires.
+                if let Some(sc) = stroke_color
+                    && stroke_w > 0.0
+                {
+                    let vertices = crate::svg_path::tessellate_stroke(&contours, stroke_w * 0.5);
+                    if !vertices.is_empty() {
+                        let shifted: Vec<[f32; 2]> = vertices
+                            .iter()
+                            .map(|[x, y]| [x + b.rect.x, y + b.rect.y])
+                            .collect();
+                        out.push(DisplayCommand::DrawSvgPath { vertices: shifted, color: sc });
+                    }
                 }
             }
-            // CSS: stroke — P4 wires when svg_stroke is in ComputedStyle.
         }
     }
 }
