@@ -6,7 +6,8 @@
 
 ## In progress
 
-—
+WHATWG Streams API  branch: p1-streams-api
+Next step: implement ReadableStream/WritableStream/TransformStream in WEB_API_SHIM  crates/js/src/dom.rs:4074
 
 ---
 
