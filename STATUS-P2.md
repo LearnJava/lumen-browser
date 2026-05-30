@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+9D.3 — AudioContext fingerprint noise  branch: p2-audio-fp-noise
+Next step: create `crates/js/src/audio_bindings.rs` with LCG noise + JS shim for AudioContext/OfflineAudioContext/AudioBuffer  `crates/js/src/audio_bindings.rs:1`
 
 ---
 

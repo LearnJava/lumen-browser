@@ -1,3 +1,4 @@
+pub mod audio_bindings;
 pub mod dom;
 pub mod webgl_bindings;
 
@@ -111,6 +112,12 @@ impl QuickJsRuntime {
             };
             if let Err(e) = webgl_bindings::install_webgl_bindings(&ctx, &fingerprint) {
                 eprintln!("WebGL bindings init failed: {}", e);
+            }
+
+            // Install AudioContext stub with per-session fingerprint noise (ADR-007 Layer 4, 9D.3).
+            let audio_seed = audio_bindings::new_session_seed();
+            if let Err(e) = audio_bindings::install_audio_bindings(&ctx, audio_seed) {
+                eprintln!("Audio bindings init failed: {}", e);
             }
 
             dom::install_dom_api(
