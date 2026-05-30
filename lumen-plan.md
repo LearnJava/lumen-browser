@@ -351,9 +351,9 @@
 | 9D.1 | ✅ Canvas randomization (Brave-style per-session seed) | `canvas/src/fp_noise.rs` | — |
 | 9D.2 | 🟡 WebGL renderer/vendor normalization | `js/src/webgl_bindings.rs` | P1 done: GpuFingerprint normalization (paint/fingerprint.rs), JS stub (_LUMEN_GPU_VENDOR/_RENDERER); P3 pending: wire to getParameter(UNMASKED_VENDOR/RENDERER_WEBGL) |
 | 9D.3 | ✅ AudioContext fingerprint noise | `js/src/audio_bindings.rs` | 2026-05-30 |
-| 9D.4 | ⬜ Battery API disable on Strict | `js/src/battery_bindings.rs` | — |
+| 9D.4 | ✅ Battery API disable on Strict | `js/src/battery_bindings.rs` | 2026-05-30: navigator.getBattery() → rejected Promise, 4 unit-тестов |
 | 9D.5 | ⬜ WebRTC mDNS-only host candidates | `network/src/webrtc/candidates.rs` | при наличии WebRTC; иначе noop |
-| 9D.6 | ⬜ Hardware concurrency / screen / timezone normalization per profile | `js/src/navigator_bindings.rs` | — |
+| 9D.6 | ✅ Hardware concurrency / screen / timezone normalization per profile | `js/src/navigator_bindings.rs` | 2026-05-30: hardwareConcurrency=2, deviceMemory=8, platform=Win32, screen 1920×1080, getTimezoneOffset→0, 10 unit-тестов |
 | 9E | ⬜ **`[P3]` Layer 5: behavioral mimicry (opt-in)** (Phase 1, **для automation API**) | `InputMode::HumanLike` для тестировщиков | `shell/src/input/humanlike.rs` |
 | 9E.1 | ⬜ Bézier-curve mouse paths between coordinates | `shell/src/input/humanlike.rs` | — |
 | 9E.2 | ⬜ Variable inter-keystroke timing (Gaussian) | `shell/src/input/humanlike.rs` | — |
