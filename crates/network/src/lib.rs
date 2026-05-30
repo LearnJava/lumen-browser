@@ -245,6 +245,36 @@ impl Connection {
             .map_err(|e| Error::Network(format!("flush request: {e}")))?;
         Ok(())
     }
+
+    /// Write an HTTP request with a body (POST/PUT/PATCH/DELETE).
+    ///
+    /// Adds `Content-Type` and `Content-Length` headers automatically.
+    /// `extra_headers` may contain additional pre-formatted `Key: Value\r\n` lines.
+    fn write_request_with_body(
+        &mut self,
+        method: &str,
+        host: &str,
+        path: &str,
+        content_type: &str,
+        body: &[u8],
+        extra_headers: &str,
+    ) -> Result<()> {
+        let req = format!(
+            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nUser-Agent: Lumen/0.0.1\r\nAccept: */*\r\nConnection: keep-alive\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\n{extra_headers}\r\n",
+            body.len()
+        );
+        let stream = self.reader.get_mut();
+        stream
+            .write_all(req.as_bytes())
+            .map_err(|e| Error::Network(format!("write request: {e}")))?;
+        stream
+            .write_all(body)
+            .map_err(|e| Error::Network(format!("write body: {e}")))?;
+        stream
+            .flush()
+            .map_err(|e| Error::Network(format!("flush request: {e}")))?;
+        Ok(())
+    }
 }
 
 // ── HTTP/1.1 ответ ───────────────────────────────────────────────────────────
@@ -2044,6 +2074,56 @@ impl JsFetchProvider for HttpClient {
             self.cookie_jar.as_deref(),
             self.top_level_site.as_deref(),
         )?;
+        Ok(JsFetchResult {
+            status_text: http_status_text(resp.status).to_string(),
+            status: resp.status,
+            headers: resp
+                .headers
+                .into_iter()
+                .map(|(k, v)| (k.to_ascii_lowercase(), v))
+                .collect(),
+            body: resp.body,
+        })
+    }
+
+    fn fetch_with_body_sync(
+        &self,
+        url: &str,
+        method: &str,
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<JsFetchResult> {
+        let url = Url::parse(url).map_err(|e| Error::InvalidUrl(e.to_string()))?;
+        match method.to_ascii_uppercase().as_str() {
+            "POST" | "PUT" | "PATCH" | "DELETE" => {}
+            m => {
+                return Err(Error::Network(format!(
+                    "fetch_with_body: unsupported method {m}"
+                )));
+            }
+        }
+        let (host_ascii, port, is_tls) = require_http_scheme(&url)?;
+        let path_and_query = url.path_and_query();
+        let key = PoolKey { host: host_ascii.clone(), port, is_tls };
+
+        // Try pooled connection first, fall back to fresh connect.
+        let mut conn = if let Some(pooled) = self.pool.acquire(&key) {
+            pooled
+        } else {
+            connect(&host_ascii, port, is_tls, self.resolver.as_ref())?
+        };
+
+        // HTTP/2 connections don't support the body path yet — fall back to H1.
+        if conn.is_h2 {
+            let fresh = connect(&host_ascii, port, is_tls, self.resolver.as_ref())?;
+            conn = fresh;
+        }
+
+        conn.write_request_with_body(method, &host_ascii, &path_and_query, content_type, body, "")?;
+        let resp = read_response(&mut conn)?;
+        if !conn.closed {
+            self.pool.release(key, conn);
+        }
         Ok(JsFetchResult {
             status_text: http_status_text(resp.status).to_string(),
             status: resp.status,

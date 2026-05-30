@@ -381,6 +381,76 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// CSS Images L4 §4 — `cross-fade(A, B, p)` shader.
+///
+/// Bindings:
+/// * group 0 binding 0 — viewport uniform (shared with `image_pipeline`).
+/// * group 1 binding 0 — `tex_a` (Rgba8Unorm).
+/// * group 1 binding 1 — `tex_b` (Rgba8Unorm).
+/// * group 1 binding 2 — shared `sampler` (filtering).
+/// * group 1 binding 3 — `CrossFadeParams { progress: f32 }` uniform
+///   (padded to 16 bytes for std140 alignment).
+///
+/// Fragment formula: `mix(sample_a, sample_b, progress)` — straight RGBA
+/// interpolation (CSS Images L4 §4.2). Shader emits straight-alpha; pipeline
+/// uses `ALPHA_BLENDING` so the GPU performs `SrcAlpha · src + (1-SrcAlpha) · dst`
+/// — same convention as `image_pipeline`.
+const CROSS_FADE_SHADER_SRC: &str = r#"
+struct Uniforms {
+    viewport: vec2<f32>,
+};
+
+struct CrossFadeParams {
+    // x = progress, yzw = padding (uniform buffer requires 16-byte alignment).
+    progress: f32,
+    _pad0: f32,
+    _pad1: f32,
+    _pad2: f32,
+};
+
+@group(0) @binding(0) var<uniform> u: Uniforms;
+@group(1) @binding(0) var tex_a: texture_2d<f32>;
+@group(1) @binding(1) var tex_b: texture_2d<f32>;
+@group(1) @binding(2) var smp: sampler;
+@group(1) @binding(3) var<uniform> p: CrossFadeParams;
+
+struct VIn {
+    @location(0) pos: vec2<f32>,
+    @location(1) uv: vec2<f32>,
+};
+
+struct VOut {
+    @builtin(position) clip: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+};
+
+@vertex
+fn vs_main(in: VIn) -> VOut {
+    let ndc = vec2<f32>(
+        in.pos.x / u.viewport.x * 2.0 - 1.0,
+        1.0 - in.pos.y / u.viewport.y * 2.0,
+    );
+    var out: VOut;
+    // CrossFade is a flat 2D primitive: depth = 0.5 (mid plane), matching how
+    // FillVertex maps z = 0.0 → 0.5. preserve-3d transforms are deferred.
+    out.clip = vec4<f32>(ndc, 0.5, 1.0);
+    out.uv = in.uv;
+    return out;
+}
+
+@fragment
+fn fs_main(in: VOut) -> @location(0) vec4<f32> {
+    let a = textureSample(tex_a, smp, in.uv);
+    let b = textureSample(tex_b, smp, in.uv);
+    let t = clamp(p.progress, 0.0, 1.0);
+    // Straight-alpha mix per CSS Images L4 §4.2. Pipeline blend state is
+    // ALPHA_BLENDING (SrcAlpha · src + (1-SrcAlpha) · dst), matching
+    // image_pipeline — shader emits straight-alpha RGBA, blend stage applies
+    // the SrcAlpha multiplication.
+    return mix(a, b, t);
+}
+"#;
+
 const COMPOSITE_SHADER_SRC: &str = r#"
 @group(0) @binding(0) var t_layer: texture_2d<f32>;
 @group(0) @binding(1) var s_layer: sampler;
@@ -989,6 +1059,24 @@ struct ImageVertex {
     alpha: f32,
 }
 
+/// CSS Images L4 §4 — vertex for the two-texture `cross-fade` blend pipeline.
+///
+/// Layout (16 bytes): `pos[8] + uv[8]`. The quad covers the destination rect
+/// with UVs spanning `[0,0]→[1,1]`; both textures are sampled at the same UV
+/// (CSS Images L4 §4.1 — images are stretched to the destination, intrinsic
+/// sizes do not participate in the blend). No depth field: the shader writes
+/// a fixed mid-plane depth (0.5 NDC) and does not currently take part in
+/// preserve-3d cross-type sorting.
+#[repr(C)]
+#[derive(Copy, Clone)]
+struct CrossFadeVertex {
+    /// Screen position in CSS pixels.
+    pos: [f32; 2],
+    /// UV in `[0,1]×[0,1]` over the destination rect — applied to both
+    /// `tex_a` and `tex_b` (CSS Images L4 §4.1: images stretched to fit dest).
+    uv: [f32; 2],
+}
+
 /// Вершина для SDF-круга. `uv` — нормализованные координаты (-1..1) от центра
 /// (quad расширен на 0.5px в каждую сторону). `radius_px` — CSS-радиус точки.
 /// Layout: pos(8) + uv(8) + color(16) + radius_px(4) = 36 bytes.
@@ -1148,6 +1236,11 @@ enum DrawOp {
     /// CSS Images L3 §3.3 — linear or radial gradient quad. `grad_batch_idx`
     /// indexes into the per-frame `grad_bind_groups` Vec.
     Gradient { v_start: u32, v_count: u32, grad_batch_idx: u32 },
+    /// CSS Images L4 §4 — `cross-fade(A, B, p)` two-texture blend quad.
+    /// `cf_batch_idx` indexes into the per-frame `cross_fade_bind_groups` Vec
+    /// (one bind group per command: holds both textures + sampler + progress
+    /// uniform). Pipeline: `cross_fade_pipeline`.
+    CrossFade { v_start: u32, v_count: u32, cf_batch_idx: u32 },
 }
 
 /// GPU-ресурсы для одной зарегистрированной картинки. Texture хранит уже
@@ -1334,6 +1427,14 @@ pub struct Renderer {
     rrect_pipeline: wgpu::RenderPipeline,
     text_pipeline: wgpu::RenderPipeline,
     image_pipeline: wgpu::RenderPipeline,
+    /// CSS Images L4 §4 — `cross-fade(A, B, p)` two-texture blend pipeline.
+    /// Uses `CrossFadeVertex` layout (pos+uv). Bind group 0 = viewport uniform
+    /// (shared with `image_pipeline`); bind group 1 = `cross_fade_bgl`
+    /// (tex_a, tex_b, sampler, progress uniform). Blend state: `ALPHA_BLENDING`.
+    cross_fade_pipeline: wgpu::RenderPipeline,
+    /// Bind group layout for the `cross_fade_pipeline` per-quad bindings
+    /// (group 1): two textures + sampler + progress uniform.
+    cross_fade_bgl: wgpu::BindGroupLayout,
     composite_pipeline: wgpu::RenderPipeline,
     composite_bgl: wgpu::BindGroupLayout,
     blend_pipeline: wgpu::RenderPipeline,
@@ -2079,6 +2180,110 @@ impl Renderer {
             cache: None,
         });
 
+        // ── Cross-fade pipeline (CSS Images L4 §4: mix(A, B, p)) ──────────
+        // BGL group 1 — two textures + sampler + progress uniform.
+        let cross_fade_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("cross-fade-bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let cross_fade_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("cross-fade-shader"),
+            source: wgpu::ShaderSource::Wgsl(CROSS_FADE_SHADER_SRC.into()),
+        });
+        let cross_fade_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cross-fade-layout"),
+            bind_group_layouts: &[&uniform_bgl, &cross_fade_bgl],
+            push_constant_ranges: &[],
+        });
+        let cross_fade_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("cross-fade-pipeline"),
+            layout: Some(&cross_fade_layout),
+            vertex: wgpu::VertexState {
+                module: &cross_fade_shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<CrossFadeVertex>() as u64,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 0,
+                            shader_location: 0, // pos
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 8,
+                            shader_location: 1, // uv
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &cross_fade_shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    // Same blend as image_pipeline — straight-alpha source,
+                    // SrcAlpha · src + (1-SrcAlpha) · dst.
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            // Cross-fade quads run at fixed mid-plane depth (z = 0.5 NDC in
+            // shader) — depth_write_enabled = false so they do not occlude
+            // 3D-transformed siblings under preserve-3d.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         // ── Composite pipeline (opacity layer → parent target) ────────────
         let composite_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("composite-bgl"),
@@ -2720,6 +2925,8 @@ impl Renderer {
             rrect_pipeline,
             text_pipeline,
             image_pipeline,
+            cross_fade_pipeline,
+            cross_fade_bgl,
             uniform_buffer,
             uniform_bind_group,
             atlas_texture,
@@ -3464,6 +3671,12 @@ impl Renderer {
         let mut grad_vertices: Vec<GradVertex> = Vec::new();
         // Per-gradient CPU uniform data; index = grad_batch_idx in DrawOp::Gradient.
         let mut grad_params: Vec<GradParamsCpu> = Vec::new();
+        // CSS Images L4 §4 — `cross-fade` GPU resources. Vertices form one quad
+        // per command; bind groups hold both image textures, sampler and the
+        // progress uniform. Index in `cross_fade_bind_groups` = `cf_batch_idx`
+        // on `DrawOp::CrossFade`.
+        let mut cross_fade_vertices: Vec<CrossFadeVertex> = Vec::new();
+        let mut cross_fade_bind_groups: Vec<wgpu::BindGroup> = Vec::new();
 
         // Ordered draw operations. Каждая рисующая DisplayCommand → один
         // DrawOp в этом списке. SetScissor добавляется при изменении clip-стека.
@@ -4763,6 +4976,71 @@ impl Renderer {
                 DisplayCommand::PageBreak => {
                     // No-op in on-screen rendering; only meaningful in render_print_pages().
                 }
+                // CSS Images L4 §4 — cross-fade(A, B, p) two-texture blend.
+                // Both `src_a` and `src_b` must already be registered via
+                // `register_image`; if either is missing the command is a no-op
+                // (matches DrawBackgroundImage convention for unregistered URLs).
+                // The quad covers `dest` after scroll translation; both textures
+                // sample at the full UV range [0,1]×[0,1] (CSS Images L4 §4.1).
+                DisplayCommand::DrawCrossFade { dest, src_a, src_b, progress } => {
+                    if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
+                        continue;
+                    }
+                    // Look up both GpuImage entries. Use intrinsic-size key
+                    // directly — cross-fade stretches each image to `dest`
+                    // through UV sampling, so no CPU resize is needed (object-fit
+                    // does not apply to cross-fade per CSS Images L4 §4.1).
+                    let Some(gpu_a) = self.images.get(src_a) else { continue };
+                    let Some(gpu_b) = self.images.get(src_b) else { continue };
+                    let scrolled = translate_rect(*dest, dx, dy);
+                    if scrolled.width <= 0.0 || scrolled.height <= 0.0 {
+                        continue;
+                    }
+                    let clamped = progress.clamp(0.0, 1.0);
+
+                    // Per-quad progress uniform (std140-padded to 16 bytes).
+                    let params: [f32; 4] = [clamped, 0.0, 0.0, 0.0];
+                    let cf_idx = cross_fade_bind_groups.len();
+                    let ubuf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                        label: Some(&format!("cross-fade-ubuf-{cf_idx}")),
+                        size: std::mem::size_of_val(&params) as u64,
+                        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                        mapped_at_creation: false,
+                    });
+                    self.queue.write_buffer(&ubuf, 0, as_bytes(&params));
+                    let bg = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                        label: Some(&format!("cross-fade-bg-{cf_idx}")),
+                        layout: &self.cross_fade_bgl,
+                        entries: &[
+                            wgpu::BindGroupEntry {
+                                binding: 0,
+                                resource: wgpu::BindingResource::TextureView(&gpu_a.view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 1,
+                                resource: wgpu::BindingResource::TextureView(&gpu_b.view),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 2,
+                                resource: wgpu::BindingResource::Sampler(&self.image_sampler),
+                            },
+                            wgpu::BindGroupEntry {
+                                binding: 3,
+                                resource: ubuf.as_entire_binding(),
+                            },
+                        ],
+                    });
+                    cross_fade_bind_groups.push(bg);
+
+                    let v_start = cross_fade_vertices.len() as u32;
+                    push_cross_fade_quad(&mut cross_fade_vertices, scrolled);
+                    let v_count = cross_fade_vertices.len() as u32 - v_start;
+                    draw_ops.push(DrawOp::CrossFade {
+                        v_start,
+                        v_count,
+                        cf_batch_idx: cf_idx as u32,
+                    });
+                }
             }
         }
         flush_batch!();
@@ -4919,6 +5197,18 @@ impl Renderer {
             self.queue.write_buffer(&buf, 0, as_bytes(&grad_vertices));
             Some(buf)
         };
+        let cross_fade_vbuf = if cross_fade_vertices.is_empty() {
+            None
+        } else {
+            let buf = self.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("cross-fade-vbuf"),
+                size: std::mem::size_of_val(cross_fade_vertices.as_slice()) as u64,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.queue.write_buffer(&buf, 0, as_bytes(&cross_fade_vertices));
+            Some(buf)
+        };
         // One uniform buffer + bind group per gradient draw call (same pattern as image batches).
         let grad_bind_groups: Vec<wgpu::BindGroup> = grad_params
             .iter()
@@ -5062,6 +5352,18 @@ impl Renderer {
                                 grad_bind_groups.get(*grad_batch_idx as usize),
                             ) {
                                 $pass.set_pipeline(&self.gradient_pipeline);
+                                $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
+                                $pass.set_bind_group(1, bind_group, &[]);
+                                $pass.set_vertex_buffer(0, vb.slice(..));
+                                $pass.draw(*v_start..*v_start + *v_count, 0..1);
+                            }
+                        }
+                        DrawOp::CrossFade { v_start, v_count, cf_batch_idx } => {
+                            if let (Some(vb), Some(bind_group)) = (
+                                &cross_fade_vbuf,
+                                cross_fade_bind_groups.get(*cf_batch_idx as usize),
+                            ) {
+                                $pass.set_pipeline(&self.cross_fade_pipeline);
                                 $pass.set_bind_group(0, &self.uniform_bind_group, &[]);
                                 $pass.set_bind_group(1, bind_group, &[]);
                                 $pass.set_vertex_buffer(0, vb.slice(..));
@@ -6445,6 +6747,25 @@ fn push_image_quad(
         ImageVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], alpha },
         ImageVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], alpha },
         ImageVertex { pos: [x0, y1], z: 0.0, uv: [u0, v1], alpha },
+    ]);
+}
+
+/// CSS Images L4 §4 — emit one cross-fade quad covering `rect` with UV
+/// `[0,0]→[1,1]`. Vertex order matches `push_image_quad` (two triangles,
+/// CCW in window space) so the resulting list runs through the
+/// `cross_fade_pipeline` without further reordering.
+fn push_cross_fade_quad(out: &mut Vec<CrossFadeVertex>, rect: Rect) {
+    let x0 = rect.x;
+    let y0 = rect.y;
+    let x1 = rect.x + rect.width;
+    let y1 = rect.y + rect.height;
+    out.extend_from_slice(&[
+        CrossFadeVertex { pos: [x0, y0], uv: [0.0, 0.0] },
+        CrossFadeVertex { pos: [x1, y0], uv: [1.0, 0.0] },
+        CrossFadeVertex { pos: [x1, y1], uv: [1.0, 1.0] },
+        CrossFadeVertex { pos: [x0, y0], uv: [0.0, 0.0] },
+        CrossFadeVertex { pos: [x1, y1], uv: [1.0, 1.0] },
+        CrossFadeVertex { pos: [x0, y1], uv: [0.0, 1.0] },
     ]);
 }
 

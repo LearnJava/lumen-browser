@@ -10,7 +10,7 @@
 // Catch the most common forms of accidental Rc-in-arena.
 #![deny(clippy::rc_buffer)]
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
@@ -899,6 +899,16 @@ pub struct Document {
     /// Navigation start time (milliseconds since epoch).
     /// Used as the reference point (0.0) for all performance timings.
     timing_origin: f64,
+    /// Counts live JS wrapper objects referencing each `NodeId`.
+    ///
+    /// Incremented by [`Document::acquire_js_ref`] when the JS runtime creates a
+    /// wrapper object for a DOM node; decremented by [`Document::release_js_ref`]
+    /// when the QuickJS finalizer fires (Phase 3: P3 wires the finalizer callback).
+    ///
+    /// Not serialised — JS objects do not survive tab hibernation. On restore,
+    /// the JS heap is rebuilt from scratch and wrappers re-acquire refs.
+    #[serde(skip)]
+    js_refs: HashMap<NodeId, u32>,
 }
 
 impl Default for Document {
@@ -926,6 +936,7 @@ impl Document {
             fonts: FontFaceSet::new(),
             performance: PerformanceEntries::new(),
             timing_origin: 0.0,
+            js_refs: HashMap::new(),
         }
     }
 
@@ -1182,6 +1193,12 @@ impl Document {
     }
 
     /// Remove `node` from its current parent. The node itself stays in the arena and can be re-attached.
+    ///
+    /// **GC hook (P3 integration):** After detaching a node, call
+    /// [`Document::dead_node_ids`] to check whether the node became collectable
+    /// (detached + zero JS wrappers). P3 wires this into the JS finalizer cycle:
+    /// the QuickJS finalizer decrements the ref count via [`Document::release_js_ref`];
+    /// the shell's idle GC tick drains [`Document::dead_node_ids`] and purges the slots.
     pub fn detach(&mut self, node: NodeId) {
         let parent = self.nodes[node.index()].parent.take();
         if let Some(parent) = parent {
@@ -1190,6 +1207,122 @@ impl Document {
                 siblings.remove(pos);
             }
         }
+    }
+
+    // ── GC integration: JS wrapper reference tracking ─────────────────────────
+
+    /// Increment the JS wrapper reference count for `node_id`.
+    ///
+    /// Called by the JS runtime when it creates a wrapper object for this DOM
+    /// node (e.g. the first time JS accesses `document.getElementById(…)`).
+    /// Returns the new reference count.
+    ///
+    /// **P3 integration point:** invoke from `lumen-js` when allocating a
+    /// QuickJS object whose `_nid` property is set for the first time.
+    pub fn acquire_js_ref(&mut self, node_id: NodeId) -> u32 {
+        let count = self.js_refs.entry(node_id).or_insert(0);
+        *count += 1;
+        *count
+    }
+
+    /// Decrement the JS wrapper reference count for `node_id`.
+    ///
+    /// Called by the QuickJS finalizer when the last JS reference to a wrapper
+    /// object is collected. Returns the remaining reference count (0 means no
+    /// live JS wrappers remain).
+    ///
+    /// When the count drops to zero **and** the node is detached from the
+    /// document tree, it becomes eligible for collection — visible via
+    /// [`Document::dead_node_ids`].
+    ///
+    /// **P3 integration point:** invoke from the `rquickjs` class finalizer
+    /// registered for DOM wrapper objects (see `lumen-js::dom`).
+    pub fn release_js_ref(&mut self, node_id: NodeId) -> u32 {
+        let Some(count) = self.js_refs.get_mut(&node_id) else {
+            return 0;
+        };
+        if *count <= 1 {
+            self.js_refs.remove(&node_id);
+            return 0;
+        }
+        *count -= 1;
+        *count
+    }
+
+    /// Returns the number of live JS wrapper objects currently referencing `node_id`.
+    ///
+    /// Zero means no JS object holds a reference to this node. Combined with
+    /// [`Document::is_detached`], this determines whether a node is collectable.
+    pub fn js_ref_count(&self, node_id: NodeId) -> u32 {
+        self.js_refs.get(&node_id).copied().unwrap_or(0)
+    }
+
+    /// Returns `true` if `node_id` is not reachable from the document tree.
+    ///
+    /// A node is detached when all of the following hold:
+    /// - it is not the document root
+    /// - its `parent` field is `None` (removed from the tree or never inserted)
+    /// - it is not a shadow root (would have `parent == None` but be in `shadow_roots`)
+    /// - it is not a `<template>` content fragment (same reason)
+    ///
+    /// Detached nodes with zero JS refs are collectable (see [`Document::dead_node_ids`]).
+    pub fn is_detached(&self, node_id: NodeId) -> bool {
+        if node_id == self.root {
+            return false;
+        }
+        if self.nodes[node_id.index()].parent.is_some() {
+            return false;
+        }
+        if self.shadow_roots.values().any(|&sr| sr == node_id) {
+            return false;
+        }
+        if self.template_contents.values().any(|&tc| tc == node_id) {
+            return false;
+        }
+        true
+    }
+
+    /// Returns the IDs of all nodes that are safe to collect from the arena.
+    ///
+    /// A node is "dead" when it is both detached from the document tree
+    /// (see [`Document::is_detached`]) **and** has no live JS wrappers
+    /// (see [`Document::js_ref_count`]).
+    ///
+    /// **Phase 2 contract:** this method identifies collectable nodes but does
+    /// not remove them from the arena. The arena remains append-only until Phase 3
+    /// adds free-list compaction. P3's idle GC tick should call this method
+    /// periodically and drop any external resources associated with the returned
+    /// NodeIds (e.g. image decode handles, layout boxes).
+    pub fn dead_node_ids(&self) -> Vec<NodeId> {
+        // Build a set of "anchored orphan" nodes: shadow roots and template
+        // content fragments have parent==None but must not be collected.
+        let anchored: HashSet<NodeId> = self
+            .shadow_roots
+            .values()
+            .chain(self.template_contents.values())
+            .copied()
+            .collect();
+
+        self.nodes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, node)| {
+                let id = NodeId::from_index(i);
+                if id == self.root {
+                    return None;
+                }
+                if node.parent.is_some() {
+                    return None;
+                }
+                if anchored.contains(&id) {
+                    return None;
+                }
+                if self.js_refs.get(&id).copied().unwrap_or(0) > 0 {
+                    return None;
+                }
+                Some(id)
+            })
+            .collect()
     }
 
     // ── IME Composition state management ──────────────────────────────────────
@@ -5542,5 +5675,122 @@ mod tests {
         };
 
         assert_eq!(doc.get(div).input_mode(), None);
+    }
+
+    // ── GC integration tests ───────────────────────────────────────────────────
+
+    #[test]
+    fn gc_acquire_increments_ref_count() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+
+        assert_eq!(doc.js_ref_count(div), 0);
+        assert_eq!(doc.acquire_js_ref(div), 1);
+        assert_eq!(doc.js_ref_count(div), 1);
+        assert_eq!(doc.acquire_js_ref(div), 2);
+        assert_eq!(doc.js_ref_count(div), 2);
+    }
+
+    #[test]
+    fn gc_release_decrements_ref_count() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+
+        doc.acquire_js_ref(div);
+        doc.acquire_js_ref(div);
+        assert_eq!(doc.release_js_ref(div), 1);
+        assert_eq!(doc.release_js_ref(div), 0);
+        assert_eq!(doc.js_ref_count(div), 0);
+    }
+
+    #[test]
+    fn gc_release_on_zero_ref_is_noop() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+
+        // release without prior acquire must not panic
+        assert_eq!(doc.release_js_ref(div), 0);
+        assert_eq!(doc.js_ref_count(div), 0);
+    }
+
+    #[test]
+    fn gc_node_in_tree_is_not_detached() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), div);
+
+        assert!(!doc.is_detached(div));
+    }
+
+    #[test]
+    fn gc_orphan_node_is_detached() {
+        let mut doc = Document::new();
+        // Created but never appended
+        let div = doc.create_element(QualName::html("div"));
+        assert!(doc.is_detached(div));
+    }
+
+    #[test]
+    fn gc_detached_node_with_zero_refs_is_dead() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        // Never appended, zero JS refs → dead
+        let dead = doc.dead_node_ids();
+        assert!(dead.contains(&div));
+    }
+
+    #[test]
+    fn gc_detached_node_with_live_ref_is_not_dead() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        doc.acquire_js_ref(div);
+
+        let dead = doc.dead_node_ids();
+        assert!(!dead.contains(&div));
+    }
+
+    #[test]
+    fn gc_node_in_tree_is_not_dead_even_with_zero_refs() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), div);
+
+        let dead = doc.dead_node_ids();
+        assert!(!dead.contains(&div));
+    }
+
+    #[test]
+    fn gc_remove_from_tree_then_release_ref_makes_dead() {
+        let mut doc = Document::new();
+        let div = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), div);
+        doc.acquire_js_ref(div);
+
+        // Remove from tree but JS still holds a ref
+        doc.detach(div);
+        assert!(!doc.dead_node_ids().contains(&div), "still has a JS ref");
+
+        // JS finalizer fires
+        doc.release_js_ref(div);
+        assert!(doc.dead_node_ids().contains(&div), "now collectable");
+    }
+
+    #[test]
+    fn gc_root_is_never_dead() {
+        let doc = Document::new();
+        let dead = doc.dead_node_ids();
+        assert!(!dead.contains(&doc.root()));
+    }
+
+    #[test]
+    fn gc_shadow_root_is_not_dead() {
+        let mut doc = Document::new();
+        let host = doc.create_element(QualName::html("div"));
+        doc.append_child(doc.root(), host);
+        let shadow_root = doc.attach_shadow(host, ShadowRootMode::Open);
+
+        // Even with zero JS refs, shadow root must not be collected
+        let dead = doc.dead_node_ids();
+        assert!(!dead.contains(&shadow_root));
     }
 }
