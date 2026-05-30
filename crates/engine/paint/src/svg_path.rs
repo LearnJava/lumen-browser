@@ -1,12 +1,13 @@
 //! SVG path rendering: parse `d` attribute → flatten to polyline → tessellate to triangles.
 //!
-//! Scope: fill-only (even-odd rule), linear + cubic/quadratic Bézier + arc segments.
-//! Stroke is implemented as an outline border approximation (deferred GPU path stroking).
+//! Scope: fill (nonzero rule) + miter-join stroke.
+//! Supports linear + cubic/quadratic Bézier + arc segments.
 //!
 //! Pipeline:
 //!   parse_svg_path(d) → Vec<PathSegment>
-//!   → flatten_path(segments, tolerance) → Vec<[f32;2]> contour list
-//!   → tessellate_fill(contours) → Vec<[f32;2]> triangle vertices (flat, 3 verts per tri)
+//!   → flatten_path(segments, tolerance) → Vec<Vec<[f32;2]>> contour list
+//!   → tessellate_fill(contours) → Vec<[f32;2]> fill triangle vertices
+//!   → tessellate_stroke(contours, half_w) → Vec<[f32;2]> stroke triangle vertices
 
 use std::f32::consts::PI;
 
@@ -665,6 +666,120 @@ fn point_in_triangle(p: [f32; 2], a: [f32; 2], b: [f32; 2], c: [f32; 2]) -> bool
     !(has_neg && has_pos)
 }
 
+// ─── Stroke tessellation ────────────────────────────────────────────────────
+
+/// Tessellate stroke outlines for all contours into a flat triangle vertex list.
+///
+/// `half_width` is half the stroke width (`stroke-width / 2`).
+/// Each path segment becomes a quad; interior joins use miter approximation
+/// (clamped to 4× `half_width`, equivalent to SVG `stroke-miterlimit="4"`).
+/// Open sub-paths get flat (butt) caps; closed sub-paths wrap around.
+///
+/// Returns flat triangle vertex list (3 `[f32;2]` per triangle, winding arbitrary).
+///
+/// CSS: `stroke-linecap` (round/square caps), `stroke-linejoin` (round/bevel),
+///      `stroke-miterlimit`, `stroke-dasharray`, `stroke-dashoffset` — P4 wires.
+#[must_use]
+pub fn tessellate_stroke(contours: &[Vec<[f32; 2]>], half_width: f32) -> Vec<[f32; 2]> {
+    if half_width <= 0.0 {
+        return Vec::new();
+    }
+    let mut tris = Vec::new();
+    for contour in contours {
+        stroke_contour(contour, half_width, &mut tris);
+    }
+    tris
+}
+
+/// Tessellate one polyline contour into a stroke band.
+fn stroke_contour(pts: &[[f32; 2]], half_w: f32, out: &mut Vec<[f32; 2]>) {
+    let n = pts.len();
+    if n < 2 {
+        return;
+    }
+    // Detect closed contour: last point ≈ first point.
+    let closed = n > 2
+        && (pts[0][0] - pts[n - 1][0]).abs() < 1e-4
+        && (pts[0][1] - pts[n - 1][1]).abs() < 1e-4;
+    // Working slice excludes the duplicate endpoint for closed paths.
+    let wpts = if closed { &pts[..n - 1] } else { pts };
+    let m = wpts.len();
+    if m < 2 {
+        return;
+    }
+    // Number of segments: m for closed (wraps), m-1 for open.
+    let n_segs = if closed { m } else { m - 1 };
+    // Per-segment unit normal (perpendicular, "left" of travel direction in Y-down).
+    let seg_normals: Vec<[f32; 2]> = (0..n_segs)
+        .map(|i| {
+            let a = wpts[i];
+            let b = wpts[(i + 1) % m];
+            let dx = b[0] - a[0];
+            let dy = b[1] - a[1];
+            let len = (dx * dx + dy * dy).sqrt().max(1e-6);
+            [dy / len, -dx / len]
+        })
+        .collect();
+    // Compute miter-offset vectors at each vertex, then build left/right offsets.
+    let (left, right): (Vec<[f32; 2]>, Vec<[f32; 2]>) = (0..m)
+        .map(|i| {
+            let p = wpts[i];
+            let ofs = miter_offset(i, m, &seg_normals, half_w, closed);
+            ([p[0] + ofs[0], p[1] + ofs[1]], [p[0] - ofs[0], p[1] - ofs[1]])
+        })
+        .unzip();
+    // Emit each segment as two triangles (a quad).
+    for i in 0..n_segs {
+        let j = (i + 1) % m;
+        let (l0, r0) = (left[i], right[i]);
+        let (l1, r1) = (left[j], right[j]);
+        out.push(l0); out.push(r0); out.push(l1);
+        out.push(l1); out.push(r0); out.push(r1);
+    }
+}
+
+/// Miter-join offset vector at vertex `i` of a polyline with `m` unique points.
+///
+/// Returns the vector from the path centre-line to the "left" boundary.
+/// The miter scale is computed as `half_w / dot(n_in + n_out, n_out)` which
+/// satisfies `|offset| = half_w / cos(half_angle)` for any turn angle.
+/// Clamped to 4× `half_w` (SVG default `stroke-miterlimit`); beyond that, falls
+/// back to the outgoing segment normal (bevel).
+fn miter_offset(i: usize, m: usize, seg_normals: &[[f32; 2]], half_w: f32, closed: bool) -> [f32; 2] {
+    let n_segs = seg_normals.len();
+    let has_prev = closed || i > 0;
+    let has_next = closed || i < m - 1;
+    // Endpoints of open paths: use adjacent segment normal directly (butt cap).
+    if !has_prev {
+        let n = seg_normals[0];
+        return [n[0] * half_w, n[1] * half_w];
+    }
+    if !has_next {
+        let n = seg_normals[n_segs - 1];
+        return [n[0] * half_w, n[1] * half_w];
+    }
+    // Incoming segment normal (segment that ends at vertex i).
+    let n_in = seg_normals[(i + n_segs - 1) % n_segs];
+    // Outgoing segment normal (segment that starts at vertex i).
+    let n_out = seg_normals[i % n_segs];
+    // Miter vector: (n_in + n_out) * half_w / dot(n_in + n_out, n_out).
+    let sx = n_in[0] + n_out[0];
+    let sy = n_in[1] + n_out[1];
+    let denom = sx * n_out[0] + sy * n_out[1];
+    if denom.abs() < 0.05 {
+        // Near 180° reversal — avoid extreme lengths; fall back to outgoing normal.
+        return [n_out[0] * half_w, n_out[1] * half_w];
+    }
+    let scale = half_w / denom;
+    let mx = sx * scale;
+    let my = sy * scale;
+    // Miter limit = 4 (SVG default): switch to bevel when miter exceeds 4× stroke half-width.
+    if mx * mx + my * my > (4.0 * half_w) * (4.0 * half_w) {
+        return [n_out[0] * half_w, n_out[1] * half_w];
+    }
+    [mx, my]
+}
+
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -876,5 +991,92 @@ mod tests {
             cross2d(t[0], t[1], t[2]).abs() * 0.5
         }).sum();
         assert!((area - 5000.0).abs() < 50.0, "area={area}");
+    }
+
+    // ── Stroke tessellation ─────────────────────────────────────────────────
+
+    #[test]
+    fn stroke_zero_width_gives_nothing() {
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 0.0]]];
+        assert!(tessellate_stroke(&contour, 0.0).is_empty());
+        assert!(tessellate_stroke(&contour, -1.0).is_empty());
+    }
+
+    #[test]
+    fn stroke_single_segment_open_gives_six_vertices() {
+        // One segment → one quad → 2 triangles → 6 vertices.
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 0.0]]];
+        let tris = tessellate_stroke(&contour, 5.0);
+        assert_eq!(tris.len(), 6, "open single segment = 6 verts, got {}", tris.len());
+    }
+
+    #[test]
+    fn stroke_open_segment_correct_width() {
+        // Horizontal segment from (0,0) to (100,0), half_w=5.
+        // Expected quad y-coords: ±5.
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 0.0]]];
+        let tris = tessellate_stroke(&contour, 5.0);
+        let ys: Vec<f32> = tris.iter().map(|v| v[1]).collect();
+        let min_y = ys.iter().cloned().fold(f32::INFINITY, f32::min);
+        let max_y = ys.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        assert!((min_y - (-5.0)).abs() < 0.01, "min_y={min_y}");
+        assert!((max_y -   5.0 ).abs() < 0.01, "max_y={max_y}");
+    }
+
+    #[test]
+    fn stroke_open_two_segments_gives_twelve_vertices() {
+        // Two-segment path → 2 quads → 4 triangles → 12 vertices.
+        let contour = vec![vec![[0.0f32, 0.0], [50.0, 0.0], [100.0, 0.0]]];
+        let tris = tessellate_stroke(&contour, 5.0);
+        assert_eq!(tris.len(), 12);
+    }
+
+    #[test]
+    fn stroke_closed_square_band_width() {
+        // Closed 100×100 square path.
+        let contour = vec![vec![
+            [0.0f32, 0.0], [100.0, 0.0], [100.0, 100.0], [0.0, 100.0], [0.0, 0.0],
+        ]];
+        let half_w = 4.0;
+        let tris = tessellate_stroke(&contour, half_w);
+        // 4 segments × 2 triangles × 3 verts = 24 vertices.
+        assert_eq!(tris.len(), 24);
+        // All vertices should be within half_w of the original square edges.
+        for v in &tris {
+            let x = v[0];
+            let y = v[1];
+            // Near one of the 4 edges of the square.
+            let near_left   = x.abs() <= half_w + 0.1;
+            let near_right  = (x - 100.0).abs() <= half_w + 0.1;
+            let near_top    = y.abs() <= half_w + 0.1;
+            let near_bottom = (y - 100.0).abs() <= half_w + 0.1;
+            assert!(
+                near_left || near_right || near_top || near_bottom,
+                "vertex ({x},{y}) not near any edge of the square"
+            );
+        }
+    }
+
+    #[test]
+    fn stroke_via_svg_path_parse_pipeline() {
+        // Full pipeline: parse d → flatten → tessellate_stroke.
+        let segs = parse_svg_path("M 10 10 L 90 10 L 90 90 L 10 90 Z");
+        let contours = flatten_path(&segs, 0.5);
+        let tris = tessellate_stroke(&contours, 3.0);
+        // 4 segments × 6 verts = 24 vertices.
+        assert_eq!(tris.len(), 24);
+    }
+
+    #[test]
+    fn stroke_diagonal_line_area() {
+        // 45° diagonal line: (0,0) → (100,100), half_w = 5.
+        // Stroke band area ≈ stroke_width * length = 10 * sqrt(2)*100 ≈ 1414.
+        let contour = vec![vec![[0.0f32, 0.0], [100.0, 100.0]]];
+        let tris = tessellate_stroke(&contour, 5.0);
+        let area: f32 = tris.chunks(3).map(|t| {
+            cross2d(t[0], t[1], t[2]).abs() * 0.5
+        }).sum();
+        let expected = 10.0 * (100.0f32 * 100.0 + 100.0 * 100.0).sqrt();
+        assert!((area - expected).abs() < 1.0, "area={area} expected≈{expected}");
     }
 }
