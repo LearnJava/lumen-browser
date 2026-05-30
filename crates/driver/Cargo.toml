@@ -38,3 +38,9 @@ winit.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 # Why this dependency (serde_json): JSON serialization for BrowserSession.a11y_tree() and computed_style() — permanent.
 serde_json = "1.0"
+
+[features]
+# Deterministic CPU rasterization for snapshot tests (8A.6): forwards to
+# lumen-paint's tiny-skia path so InProcessSession can render cross-OS-identical
+# pixels without a GPU. Off by default; enable with --features cpu-render.
+cpu-render = ["lumen-paint/cpu-render"]

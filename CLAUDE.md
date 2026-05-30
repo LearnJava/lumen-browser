@@ -364,6 +364,14 @@ The Python/gdigrab/Edge pipeline (`graphic_tests/run.py`) is a **temporary** sol
 Prerequisites: 8A.1 (`BrowserSession` trait) + 8A.2 (`InProcessSession`) must land first.
 Full spec of test levels (1–4) — [lumen-plan.md](lumen-plan.md) §15.
 
+**Status (2026-05-30):** 8A.6(a) done (structural assertions, `driver/tests/test_00..49.rs`).
+8A.6(b) framework done — deterministic CPU pixel snapshots:
+`InProcessSession::screenshot_cpu_rgba/png` (driver feature `cpu-render` → `lumen-paint/cpu-render`,
+tiny-skia) + `driver/tests/snapshot_cpu.rs` compares geometry pages against
+`graphic_tests/snapshots/cpu/*.png`. Gated on the feature, so plain `cargo test -p lumen-driver`
+skips it; run with `cargo test -p lumen-driver --features cpu-render`, regenerate refs with
+`SAVE_CPU_SNAPSHOTS=1`. Coverage grows as `cpu_raster` gains text/image/gradient primitives.
+
 ---
 
 ## Architecture
