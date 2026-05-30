@@ -187,11 +187,12 @@ fn fs_main(in: VOut) -> @location(0) vec4<f32> {
 ///
 /// Vertex layout (matches `RRectVertex`):
 ///   loc 0  pos       vec2  – screen CSS-px position
-///   loc 1  color     vec4  – premultiplied RGBA
-///   loc 2  center    vec2  – CSS-px center of the rounded rect
-///   loc 3  half_size vec2  – CSS-px half-dimensions (w/2, h/2)
-///   loc 4  radii_x   vec4  – horizontal corner radii px: tl, tr, br, bl
-///   loc 5  radii_y   vec4  – vertical corner radii px:   tl, tr, br, bl
+///   loc 1  z         f32   – CSS depth px (transform-style: preserve-3d)
+///   loc 2  color     vec4  – premultiplied RGBA
+///   loc 3  center    vec2  – CSS-px center of the rounded rect
+///   loc 4  half_size vec2  – CSS-px half-dimensions (w/2, h/2)
+///   loc 5  radii_x   vec4  – horizontal corner radii px: tl, tr, br, bl
+///   loc 6  radii_y   vec4  – vertical corner radii px:   tl, tr, br, bl
 const RRECT_SHADER_SRC: &str = r#"
 struct Uniforms {
     viewport: vec2<f32>,
@@ -201,11 +202,15 @@ struct Uniforms {
 
 struct VIn {
     @location(0) pos:       vec2<f32>,
-    @location(1) color:     vec4<f32>,
-    @location(2) center:    vec2<f32>,
-    @location(3) half_size: vec2<f32>,
-    @location(4) radii_x:   vec4<f32>,
-    @location(5) radii_y:   vec4<f32>,
+    // CSS depth in pixels: positive = closer to viewer.
+    // Mapped to WebGPU NDC [0=front, 1=back] via (0.5 - z/20000), identical to FillVertex.
+    // CSS: transform-style — populated for preserve-3d by apply_affine_to_rrect_verts.
+    @location(1) z:         f32,
+    @location(2) color:     vec4<f32>,
+    @location(3) center:    vec2<f32>,
+    @location(4) half_size: vec2<f32>,
+    @location(5) radii_x:   vec4<f32>,
+    @location(6) radii_y:   vec4<f32>,
 };
 
 struct VOut {
@@ -224,8 +229,9 @@ fn vs_main(in: VIn) -> VOut {
         in.pos.x / u.viewport.x * 2.0 - 1.0,
         1.0 - in.pos.y / u.viewport.y * 2.0,
     );
+    let depth = clamp(0.5 - in.z / 20000.0, 0.0, 1.0);
     var out: VOut;
-    out.clip      = vec4<f32>(ndc, 0.0, 1.0);
+    out.clip      = vec4<f32>(ndc, depth, 1.0);
     out.color     = in.color;
     out.world_pos = in.pos;
     out.center    = in.center;
@@ -294,8 +300,12 @@ struct Uniforms {
 
 struct VIn {
     @location(0) pos: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) color: vec4<f32>,
+    // CSS depth in pixels: positive = closer to viewer.
+    // Mapped to WebGPU NDC [0=front, 1=back] via (0.5 - z/20000), identical to FillVertex.
+    // CSS: transform-style — populated for preserve-3d by apply_affine_to_verts.
+    @location(1) z: f32,
+    @location(2) uv: vec2<f32>,
+    @location(3) color: vec4<f32>,
 };
 
 struct VOut {
@@ -310,8 +320,9 @@ fn vs_main(in: VIn) -> VOut {
         in.pos.x / u.viewport.x * 2.0 - 1.0,
         1.0 - in.pos.y / u.viewport.y * 2.0,
     );
+    let depth = clamp(0.5 - in.z / 20000.0, 0.0, 1.0);
     var out: VOut;
-    out.clip = vec4<f32>(ndc, 0.0, 1.0);
+    out.clip = vec4<f32>(ndc, depth, 1.0);
     out.uv = in.uv;
     out.color = in.color;
     return out;
@@ -335,8 +346,12 @@ struct Uniforms {
 
 struct VIn {
     @location(0) pos: vec2<f32>,
-    @location(1) uv: vec2<f32>,
-    @location(2) alpha: f32,
+    // CSS depth in pixels: positive = closer to viewer.
+    // Mapped to WebGPU NDC [0=front, 1=back] via (0.5 - z/20000), identical to FillVertex.
+    // CSS: transform-style — populated for preserve-3d by apply_affine_to_verts.
+    @location(1) z: f32,
+    @location(2) uv: vec2<f32>,
+    @location(3) alpha: f32,
 };
 
 struct VOut {
@@ -351,8 +366,9 @@ fn vs_main(in: VIn) -> VOut {
         in.pos.x / u.viewport.x * 2.0 - 1.0,
         1.0 - in.pos.y / u.viewport.y * 2.0,
     );
+    let depth = clamp(0.5 - in.z / 20000.0, 0.0, 1.0);
     var out: VOut;
-    out.clip = vec4<f32>(ndc, 0.0, 1.0);
+    out.clip = vec4<f32>(ndc, depth, 1.0);
     out.uv = in.uv;
     out.alpha = in.alpha;
     return out;
@@ -948,7 +964,14 @@ struct FillVertex {
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct TextVertex {
+    /// Screen position in CSS pixels.
     pos: [f32; 2],
+    /// CSS depth in pixels (positive = closer to viewer). Set to 0.0 for 2D text;
+    /// populated by `apply_affine_to_verts` via `VertexPos::set_depth` when the
+    /// glyph quad is under a 3D CSS transform. Shader maps to WebGPU NDC depth
+    /// via the same `0.5 - z/20000` formula as `FillVertex`, so depth testing
+    /// is consistent across all vertex types in a `preserve-3d` rendering context.
+    z: f32,
     uv: [f32; 2],
     color: [f32; 4],
 }
@@ -956,7 +979,12 @@ struct TextVertex {
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct ImageVertex {
+    /// Screen position in CSS pixels.
     pos: [f32; 2],
+    /// CSS depth in pixels (positive = closer to viewer). Set to 0.0 for 2D images;
+    /// populated by `apply_affine_to_verts` for 3D-transformed image quads. Same
+    /// NDC mapping as `FillVertex`/`TextVertex` for cross-type depth testing.
+    z: f32,
     uv: [f32; 2],
     alpha: f32,
 }
@@ -980,21 +1008,26 @@ struct CircleVertex {
 /// Вершина для SDF-скруглённого прямоугольника (`RRECT_SHADER_SRC`).
 /// `center`/`half_size`/`radii_x`/`radii_y` одинаковы для всех 6 вершин одного quad-а
 /// и передаются как interpolants (константны внутри одного треугольника).
-/// Layout: pos(8) + color(16) + center(8) + half_size(8) + radii_x(16) + radii_y(16) = 72 bytes.
+/// Layout: pos(8) + z(4) + color(16) + center(8) + half_size(8) + radii_x(16) + radii_y(16) = 76 bytes.
 #[repr(C)]
 #[derive(Copy, Clone)]
 struct RRectVertex {
     /// Screen position in CSS pixels.
     pos: [f32; 2],
+    /// CSS depth in pixels (positive = closer to viewer). Set to 0.0 for 2D rrect;
+    /// populated by `apply_affine_to_rrect_verts` for 3D-transformed quads.
+    /// Same NDC mapping as `FillVertex` so border-radius backgrounds participate
+    /// correctly in cross-type depth testing under CSS Transforms L2 `preserve-3d`.
+    z: f32,
     /// RGBA color (linear premultiplied alpha is handled by blend state).
     color: [f32; 4],
     /// Center of the rounded rect in CSS pixels.
     center: [f32; 2],
     /// Half-dimensions of the rect: (width/2, height/2).
     half_size: [f32; 2],
-    /// Horizontal corner radii in CSS pixels: [tl, tr, br, bl]. Matches WGSL loc 4.
+    /// Horizontal corner radii in CSS pixels: [tl, tr, br, bl]. Matches WGSL loc 5.
     radii_x: [f32; 4],
-    /// Vertical corner radii in CSS pixels: [tl, tr, br, bl]. Matches WGSL loc 5.
+    /// Vertical corner radii in CSS pixels: [tl, tr, br, bl]. Matches WGSL loc 6.
     /// Equal to `radii_x` for circular corners; differs for elliptical (`border-radius: H/V`).
     radii_y: [f32; 4],
 }
@@ -1800,35 +1833,41 @@ impl Renderer {
                             offset: 0,
                             shader_location: 0,
                         },
-                        // loc 1: color (vec4)
+                        // loc 1: z (f32, CSS depth px)
                         wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
+                            format: wgpu::VertexFormat::Float32,
                             offset: 8,
                             shader_location: 1,
                         },
-                        // loc 2: center (vec2)
+                        // loc 2: color (vec4)
                         wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 24,
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 12,
                             shader_location: 2,
                         },
-                        // loc 3: half_size (vec2)
+                        // loc 3: center (vec2)
                         wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Float32x2,
-                            offset: 32,
+                            offset: 28,
                             shader_location: 3,
                         },
-                        // loc 4: radii_x (vec4: horizontal tl, tr, br, bl)
+                        // loc 4: half_size (vec2)
                         wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x4,
-                            offset: 40,
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 36,
                             shader_location: 4,
                         },
-                        // loc 5: radii_y (vec4: vertical tl, tr, br, bl)
+                        // loc 5: radii_x (vec4: horizontal tl, tr, br, bl)
                         wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Float32x4,
-                            offset: 56,
+                            offset: 44,
                             shader_location: 5,
+                        },
+                        // loc 6: radii_y (vec4: vertical tl, tr, br, bl)
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x4,
+                            offset: 60,
+                            shader_location: 6,
                         },
                     ],
                 }],
@@ -1845,7 +1884,16 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            // CSS Transforms L2 §6 — SDF rounded rects participate in 3D depth
+            // testing under preserve-3d. LessEqual matches FillVertex pipeline so
+            // border-radius backgrounds occlude correctly under 3D transforms.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -1874,17 +1922,22 @@ impl Renderer {
                         wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Float32x2,
                             offset: 0,
-                            shader_location: 0,
+                            shader_location: 0, // pos
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 8,
+                            shader_location: 1, // z (CSS depth px)
                         },
                         wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1,
+                            offset: 12,
+                            shader_location: 2, // uv
                         },
                         wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Float32x4,
-                            offset: 16,
-                            shader_location: 2,
+                            offset: 20,
+                            shader_location: 3, // color
                         },
                     ],
                 }],
@@ -1901,7 +1954,16 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            // CSS Transforms L2 §6 — text participates in 3D depth testing under
+            // preserve-3d. LessEqual matches FillVertex pipeline so 3D-transformed
+            // text occludes/is occluded by background rects consistently.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -1971,17 +2033,22 @@ impl Renderer {
                         wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Float32x2,
                             offset: 0,
-                            shader_location: 0,
-                        },
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x2,
-                            offset: 8,
-                            shader_location: 1,
+                            shader_location: 0, // pos
                         },
                         wgpu::VertexAttribute {
                             format: wgpu::VertexFormat::Float32,
-                            offset: 16,
-                            shader_location: 2,
+                            offset: 8,
+                            shader_location: 1, // z (CSS depth px)
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32x2,
+                            offset: 12,
+                            shader_location: 2, // uv
+                        },
+                        wgpu::VertexAttribute {
+                            format: wgpu::VertexFormat::Float32,
+                            offset: 20,
+                            shader_location: 3, // alpha
                         },
                     ],
                 }],
@@ -1998,7 +2065,15 @@ impl Renderer {
                 compilation_options: Default::default(),
             }),
             primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
+            // CSS Transforms L2 §6 — image quads participate in 3D depth testing
+            // under preserve-3d. LessEqual matches FillVertex/TextVertex pipelines.
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::LessEqual,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
             multisample: wgpu::MultisampleState::default(),
             multiview: None,
             cache: None,
@@ -5995,10 +6070,12 @@ impl VertexPos for FillVertex {
 
 impl VertexPos for TextVertex {
     fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
+    fn set_depth(&mut self, z: f32) { self.z = z; }
 }
 
 impl VertexPos for ImageVertex {
     fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
+    fn set_depth(&mut self, z: f32) { self.z = z; }
 }
 
 impl VertexPos for CircleVertex {
@@ -6007,6 +6084,11 @@ impl VertexPos for CircleVertex {
 
 impl VertexPos for GradVertex {
     fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
+}
+
+impl VertexPos for RRectVertex {
+    fn pos_mut(&mut self) -> &mut [f32; 2] { &mut self.pos }
+    fn set_depth(&mut self, z: f32) { self.z = z; }
 }
 
 fn apply_affine_to_grad_verts(verts: &mut [GradVertex], m: &Mat4) {
@@ -6020,8 +6102,10 @@ fn apply_affine_to_grad_verts(verts: &mut [GradVertex], m: &Mat4) {
 /// Иначе (CSS Transforms L2: 3D rotate/translate/scale, `perspective()`,
 /// `matrix3d`) — полная 4×4 проекция с перспективным делением через
 /// `Mat4::project_point_z`: возвращает (x', y', z'), где z' сохраняется
-/// через `VertexPos::set_depth` для GPU depth testing. Vertex-типы без поля
-/// depth (TextVertex, ImageVertex и др.) игнорируют set_depth (no-op).
+/// через `VertexPos::set_depth` для GPU depth testing.
+/// FillVertex/TextVertex/ImageVertex/RRectVertex реализуют set_depth и
+/// получают корректную глубину для cross-type occlusion под preserve-3d;
+/// CircleVertex и GradVertex используют no-op (depth=0.0, painter's order).
 fn apply_affine_to_verts<V: VertexPos>(verts: &mut [V], m: &Mat4) {
     if m.is_2d_affine() {
         let a = m.0[0];
@@ -6095,7 +6179,7 @@ fn push_rrect_quad(out: &mut Vec<RRectVertex>, rect: Rect, color: [f32; 4], radi
     let half_size = [rect.width * 0.5, rect.height * 0.5];
     let radii_x = [radii.tl,   radii.tr,   radii.br,   radii.bl  ];
     let radii_y = [radii.tl_y, radii.tr_y, radii.br_y, radii.bl_y];
-    let v = |px: f32, py: f32| RRectVertex { pos: [px, py], color, center, half_size, radii_x, radii_y };
+    let v = |px: f32, py: f32| RRectVertex { pos: [px, py], z: 0.0, color, center, half_size, radii_x, radii_y };
     out.extend_from_slice(&[
         v(x0, y0), v(x1, y0), v(x1, y1),
         v(x0, y0), v(x1, y1), v(x0, y1),
@@ -6105,10 +6189,12 @@ fn push_rrect_quad(out: &mut Vec<RRectVertex>, rect: Rect, color: [f32; 4], radi
 /// Applies a `PushTransform` matrix to `RRectVertex::pos` AND `center` fields.
 /// `half_size` and `radii` are scale-invariant for Phase 0 (no rotation/scale transforms on layout boxes).
 ///
-/// 2D affine — fast path; 3D/perspective — `Mat4::project_point` on both pos
-/// and center (best-effort: the SDF `half_size`/`radii` stay unprojected, so a
-/// rounded rect under perspective keeps uniform corner radii — acceptable
-/// Phase-0 approximation, same as the no-rotation note above).
+/// 2D affine — fast path (z stays 0); 3D/perspective — `Mat4::project_point_z`
+/// on pos (writing the projected z into `RRectVertex.z` for GPU depth testing
+/// under CSS Transforms L2 `preserve-3d`) and `Mat4::project_point` on center
+/// (best-effort: the SDF `half_size`/`radii` stay unprojected, so a rounded
+/// rect under perspective keeps uniform corner radii — acceptable Phase-0
+/// approximation, same as the no-rotation note above).
 fn apply_affine_to_rrect_verts(verts: &mut [RRectVertex], m: &Mat4) {
     if m.is_2d_affine() {
         for v in verts {
@@ -6122,11 +6208,14 @@ fn apply_affine_to_rrect_verts(verts: &mut [RRectVertex], m: &Mat4) {
                 m.0[0] * cx + m.0[4] * cy + m.0[12],
                 m.0[1] * cx + m.0[5] * cy + m.0[13],
             ];
+            // z stays unchanged (2D affine: depth=0.5 in shader, painter's order applies)
         }
     } else {
         for v in verts {
-            let (px, py) = m.project_point(v.pos[0], v.pos[1], 0.0);
+            // 3D/perspective: preserve z for cross-type depth testing.
+            let (px, py, pz) = m.project_point_z(v.pos[0], v.pos[1], 0.0);
             v.pos = [px, py];
+            v.z = pz;
             let (cx, cy) = m.project_point(v.center[0], v.center[1], 0.0);
             v.center = [cx, cy];
         }
@@ -6350,12 +6439,12 @@ fn push_image_quad(
     let [u0, v0] = uv_min;
     let [u1, v1] = uv_max;
     out.extend_from_slice(&[
-        ImageVertex { pos: [x0, y0], uv: [u0, v0], alpha },
-        ImageVertex { pos: [x1, y0], uv: [u1, v0], alpha },
-        ImageVertex { pos: [x1, y1], uv: [u1, v1], alpha },
-        ImageVertex { pos: [x0, y0], uv: [u0, v0], alpha },
-        ImageVertex { pos: [x1, y1], uv: [u1, v1], alpha },
-        ImageVertex { pos: [x0, y1], uv: [u0, v1], alpha },
+        ImageVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], alpha },
+        ImageVertex { pos: [x1, y0], z: 0.0, uv: [u1, v0], alpha },
+        ImageVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], alpha },
+        ImageVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], alpha },
+        ImageVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], alpha },
+        ImageVertex { pos: [x0, y1], z: 0.0, uv: [u0, v1], alpha },
     ]);
 }
 
@@ -6553,12 +6642,12 @@ fn push_text_glyphs(
             let u1 = (g.entry.atlas_x + g.entry.width) as f32 / ATLAS_DIM as f32;
             let v1 = (g.entry.atlas_y + g.entry.height) as f32 / ATLAS_DIM as f32;
             out.extend_from_slice(&[
-                TextVertex { pos: [x0, y0], uv: [u0, v0], color },
-                TextVertex { pos: [x1, y0], uv: [u1, v0], color },
-                TextVertex { pos: [x1, y1], uv: [u1, v1], color },
-                TextVertex { pos: [x0, y0], uv: [u0, v0], color },
-                TextVertex { pos: [x1, y1], uv: [u1, v1], color },
-                TextVertex { pos: [x0, y1], uv: [u0, v1], color },
+                TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
+                TextVertex { pos: [x1, y0], z: 0.0, uv: [u1, v0], color },
+                TextVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], color },
+                TextVertex { pos: [x0, y0], z: 0.0, uv: [u0, v0], color },
+                TextVertex { pos: [x1, y1], z: 0.0, uv: [u1, v1], color },
+                TextVertex { pos: [x0, y1], z: 0.0, uv: [u0, v1], color },
             ]);
 
             cursor_x += g.advance_native as f32 * advance_scale;
@@ -7783,5 +7872,142 @@ mod tests {
         assert!((depth_ndc(-10000.0) - 1.0).abs() < 1e-6);
         // Closer element has smaller depth → wins LessEqual test
         assert!(depth_ndc(100.0) < depth_ndc(-100.0), "closer (positive z) must have smaller NDC depth");
+    }
+
+    // ── GPU depth buffer: TextVertex / ImageVertex / RRectVertex.z field ────
+
+    /// `TextVertex` carries a CSS-px depth field so 3D-transformed glyph quads
+    /// participate in the same GPU depth test as `FillVertex` (no painter-order
+    /// fallback for text under preserve-3d).
+    #[test]
+    fn text_vertex_carries_depth_field() {
+        let mut v = TextVertex { pos: [10.0, 20.0], z: 0.0, uv: [0.0, 0.0], color: [1.0; 4] };
+        assert_eq!(v.z, 0.0, "TextVertex z initial value must be 0.0");
+        // VertexPos::set_depth must write into the z field.
+        v.set_depth(150.0);
+        assert!(approxf(v.z, 150.0), "TextVertex set_depth must update z, got {}", v.z);
+        // Struct stride matches the wgpu vertex attribute layout
+        // (pos 8 + z 4 + uv 8 + color 16 = 36 bytes).
+        assert_eq!(std::mem::size_of::<TextVertex>(), 36);
+    }
+
+    /// `ImageVertex` carries a CSS-px depth field so 3D-transformed `<img>`
+    /// quads occlude correctly against background rects.
+    #[test]
+    fn image_vertex_carries_depth_field() {
+        let mut v = ImageVertex { pos: [5.0, 7.0], z: 0.0, uv: [1.0, 1.0], alpha: 1.0 };
+        assert_eq!(v.z, 0.0, "ImageVertex z initial value must be 0.0");
+        v.set_depth(-300.0);
+        assert!(approxf(v.z, -300.0), "ImageVertex set_depth must update z, got {}", v.z);
+        // Struct stride matches wgpu attribute layout
+        // (pos 8 + z 4 + uv 8 + alpha 4 = 24 bytes).
+        assert_eq!(std::mem::size_of::<ImageVertex>(), 24);
+    }
+
+    /// `RRectVertex` (SDF rounded-rect) carries a CSS-px depth field so border-
+    /// radius backgrounds participate in cross-type depth testing.
+    #[test]
+    fn rrect_vertex_carries_depth_field() {
+        let mut v = RRectVertex {
+            pos: [0.0, 0.0],
+            z: 0.0,
+            color: [0.0, 0.0, 0.0, 1.0],
+            center: [50.0, 50.0],
+            half_size: [50.0, 50.0],
+            radii_x: [10.0; 4],
+            radii_y: [10.0; 4],
+        };
+        assert_eq!(v.z, 0.0, "RRectVertex z initial value must be 0.0");
+        v.set_depth(42.0);
+        assert!(approxf(v.z, 42.0), "RRectVertex set_depth must update z, got {}", v.z);
+        // Stride matches wgpu attribute layout
+        // (pos 8 + z 4 + color 16 + center 8 + half_size 8 + radii_x 16 + radii_y 16 = 76 bytes).
+        assert_eq!(std::mem::size_of::<RRectVertex>(), 76);
+    }
+
+    /// Constructors emit z=0 for all 6 quad vertices — equivalent to the 2D
+    /// painter's-order path (depth=0.5 in shader); 3D transforms override later
+    /// via `apply_affine_to_verts` / `apply_affine_to_rrect_verts`.
+    #[test]
+    fn push_image_quad_emits_zero_depth() {
+        let mut out = Vec::new();
+        let rect = lumen_core::geom::Rect::new(0.0, 0.0, 100.0, 50.0);
+        push_image_quad(&mut out, rect, [0.0, 0.0], [1.0, 1.0], 1.0);
+        assert_eq!(out.len(), 6);
+        for v in &out {
+            assert_eq!(v.z, 0.0, "push_image_quad must produce z=0 vertices");
+        }
+    }
+
+    /// `push_rrect_quad` similarly emits z=0 for all 6 vertices.
+    #[test]
+    fn push_rrect_quad_emits_zero_depth() {
+        let mut out = Vec::new();
+        let rect = lumen_core::geom::Rect::new(0.0, 0.0, 100.0, 50.0);
+        let radii = CornerRadii {
+            tl: 8.0, tr: 8.0, br: 8.0, bl: 8.0,
+            tl_y: 8.0, tr_y: 8.0, br_y: 8.0, bl_y: 8.0,
+        };
+        push_rrect_quad(&mut out, rect, [1.0, 0.0, 0.0, 1.0], radii);
+        assert_eq!(out.len(), 6);
+        for v in &out {
+            assert_eq!(v.z, 0.0, "push_rrect_quad must produce z=0 vertices");
+        }
+    }
+
+    /// `apply_affine_to_rrect_verts` propagates projected z through the 3D
+    /// path (`Mat4::project_point_z`) so border-radius backgrounds get correct
+    /// depth values when transformed.
+    #[test]
+    fn apply_rrect_affine_3d_sets_depth() {
+        // rotateX(90°) on a vertex at y=100 should produce non-zero projected z.
+        let m = Mat4::rotate_x(std::f32::consts::FRAC_PI_2);
+        assert!(!m.is_2d_affine());
+        let mut verts = vec![RRectVertex {
+            pos: [50.0, 100.0],
+            z: 0.0,
+            color: [1.0; 4],
+            center: [50.0, 100.0],
+            half_size: [50.0, 100.0],
+            radii_x: [0.0; 4],
+            radii_y: [0.0; 4],
+        }];
+        apply_affine_to_rrect_verts(&mut verts, &m);
+        // Same orientation as `apply_verts_rotate_x_sets_depth`: |z| should grow.
+        assert!(verts[0].z.abs() > 50.0,
+            "rotateX on y=100 must produce |z|>50 in RRectVertex, got {}", verts[0].z);
+    }
+
+    /// 2D affine on `apply_affine_to_rrect_verts` must leave z untouched
+    /// (fast path identical to the pre-depth pipeline).
+    #[test]
+    fn apply_rrect_affine_2d_leaves_z_zero() {
+        let m = Mat4::translation_2d(20.0, 30.0);
+        let mut verts = vec![RRectVertex {
+            pos: [0.0, 0.0],
+            z: 0.0,
+            color: [1.0; 4],
+            center: [50.0, 50.0],
+            half_size: [50.0, 50.0],
+            radii_x: [0.0; 4],
+            radii_y: [0.0; 4],
+        }];
+        apply_affine_to_rrect_verts(&mut verts, &m);
+        assert_eq!(verts[0].z, 0.0, "2D affine on rrect must leave z unchanged");
+    }
+
+    /// `apply_affine_to_verts` (the generic path used by Text/Image) propagates
+    /// projected depth via `VertexPos::set_depth` into TextVertex/ImageVertex.
+    #[test]
+    fn apply_verts_3d_sets_text_and_image_depth() {
+        let m = Mat4::rotate_x(std::f32::consts::FRAC_PI_2);
+        let mut text = [TextVertex { pos: [50.0, 100.0], z: 0.0, uv: [0.0, 0.0], color: [1.0; 4] }];
+        apply_affine_to_verts(&mut text, &m);
+        assert!(text[0].z.abs() > 50.0,
+            "rotateX must propagate depth into TextVertex.z, got {}", text[0].z);
+        let mut image = [ImageVertex { pos: [50.0, 100.0], z: 0.0, uv: [0.0, 0.0], alpha: 1.0 }];
+        apply_affine_to_verts(&mut image, &m);
+        assert!(image[0].z.abs() > 50.0,
+            "rotateX must propagate depth into ImageVertex.z, got {}", image[0].z);
     }
 }
