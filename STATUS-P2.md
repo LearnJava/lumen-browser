@@ -5,7 +5,8 @@
 ---
 
 ## In progress
-_(none)_
+p2-gif-animation — Multi-frame GIF animation decoder: `AnimatedGif` / `AnimatedFrame` / `decode_gif_animated` / `gif_frame_at`  branch: p2-gif-animation
+Next step: implement in `crates/engine/image/src/gif.rs`
 
 ---
 
