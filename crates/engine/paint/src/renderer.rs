@@ -4048,25 +4048,29 @@ impl Renderer {
                     }
                 }
                 // CSS Backgrounds L3 §3.3/3.4/3.5 — background-size/position/repeat.
-                DisplayCommand::DrawBackgroundImage { rect, src, size, position, repeat, image_rendering } => {
+                DisplayCommand::DrawBackgroundImage { rect, origin_rect, src, size, position, repeat, image_rendering } => {
                     if !sync_scissor_to_stack(&clip_stack, &mut current_scissor, &mut draw_ops, dpr_f32, surface_w, surface_h) {
                         continue;
                     }
-                    let area = translate_rect(*rect, dx, dy);
+                    // `area`  — paint/clip bounds (background-clip). Tiles are drawn only inside.
+                    // `oarea` — positioning area (background-origin). Used for size/position math
+                    //           per CSS Backgrounds L3 §3.5/3.5.2.
+                    let area  = translate_rect(*rect, dx, dy);
+                    let oarea = translate_rect(*origin_rect, dx, dy);
                     let Some(gpu) = self.images.get(src) else { continue };
                     let img_w = gpu.width as f32;
                     let img_h = gpu.height as f32;
                     if img_w <= 0.0 || img_h <= 0.0 { continue; }
 
-                    // Compute tile dimensions from background-size.
+                    // Compute tile dimensions from background-size relative to positioning area.
                     let (tile_w, tile_h) = match size {
                         BackgroundSize::Auto => (img_w, img_h),
                         BackgroundSize::Cover => {
-                            let s = (area.width / img_w).max(area.height / img_h);
+                            let s = (oarea.width / img_w).max(oarea.height / img_h);
                             (img_w * s, img_h * s)
                         }
                         BackgroundSize::Contain => {
-                            let s = (area.width / img_w).min(area.height / img_h);
+                            let s = (oarea.width / img_w).min(oarea.height / img_h);
                             (img_w * s, img_h * s)
                         }
                         BackgroundSize::Length(w, h) => {
@@ -4076,17 +4080,17 @@ impl Renderer {
                         }
                     };
 
-                    // Compute first tile origin from background-position.
+                    // Compute first tile origin from background-position relative to positioning area.
                     let off_x = match position.x {
                         PositionComponent::Px(px) => px,
-                        PositionComponent::Percent(p) => (area.width - tile_w) * p,
+                        PositionComponent::Percent(p) => (oarea.width - tile_w) * p,
                     };
                     let off_y = match position.y {
                         PositionComponent::Px(py) => py,
-                        PositionComponent::Percent(p) => (area.height - tile_h) * p,
+                        PositionComponent::Percent(p) => (oarea.height - tile_h) * p,
                     };
-                    let tile_x0 = area.x + off_x;
-                    let tile_y0 = area.y + off_y;
+                    let tile_x0 = oarea.x + off_x;
+                    let tile_y0 = oarea.y + off_y;
 
                     let (tile_x_start, repeat_x, repeat_y) = match repeat {
                         BackgroundRepeat::NoRepeat => (tile_x0, false, false),
@@ -4111,6 +4115,7 @@ impl Renderer {
                     };
                     image_bind_groups.push(bg);
 
+                    // Paint bounds: tiles are clipped to the background-clip area.
                     let x_end = area.x + area.width;
                     let y_end = area.y + area.height;
                     let mut ty = tile_y_start;

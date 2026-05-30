@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <title>Lumen — 53 background-origin</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: content-box; }
+    body { background: #ff00ff; width: 1024px; height: 720px; overflow: hidden; }
+    .__f { background: #1a202c; width: 1022px; height: 718px; margin: 1px; padding: 32px; overflow: hidden; }
+
+    h3 { color: #e2e8f0; font: 700 13px/1.4 sans-serif; margin-bottom: 8px; }
+
+    .row { display: flex; gap: 24px; margin-bottom: 32px; }
+
+    /* Common box: 180×120 content, 12px border, 18px padding.
+       border-box total = 180+24+36 × 120+24+36 = 240×180.
+       padding-box = 228×168. content-box = 180×120. */
+    .box {
+      width: 180px; height: 120px;
+      border: 12px solid #e53e3e;
+      padding: 18px;
+      background-color: #2d3748;
+      background-image: url(../samples/images/perceptron.png);
+      background-size: 80px 60px;
+      background-repeat: no-repeat;
+      background-position: 0% 0%;
+      background-clip: border-box;
+    }
+
+    .ob { background-origin: border-box;  }
+    .op { background-origin: padding-box; }
+    .oc { background-origin: content-box; }
+
+    /* Second row: background-position: 100% 100% to show far-corner anchoring */
+    .pb { background-origin: border-box;  background-position: 100% 100%; }
+    .pp { background-origin: padding-box; background-position: 100% 100%; }
+    .pc { background-origin: content-box; background-position: 100% 100%; }
+
+    .label { color: #a0aec0; font: 11px/1.5 monospace; margin-top: 4px; }
+  </style>
+</head>
+<body>
+  <div class="__f">
+    <!-- Row 1: background-position: 0% 0% (top-left anchor)
+         The image should appear at the top-left of the respective box (border/padding/content). -->
+    <h3>background-position: 0% 0% — image anchored to top-left of origin box</h3>
+    <div class="row">
+      <div>
+        <div class="box ob"></div>
+        <div class="label">border-box</div>
+      </div>
+      <div>
+        <div class="box op"></div>
+        <div class="label">padding-box (default)</div>
+      </div>
+      <div>
+        <div class="box oc"></div>
+        <div class="label">content-box</div>
+      </div>
+    </div>
+
+    <!-- Row 2: background-position: 100% 100% (bottom-right anchor)
+         The image should appear at the bottom-right of the respective box. -->
+    <h3>background-position: 100% 100% — image anchored to bottom-right of origin box</h3>
+    <div class="row">
+      <div>
+        <div class="box pb"></div>
+        <div class="label">border-box</div>
+      </div>
+      <div>
+        <div class="box pp"></div>
+        <div class="label">padding-box (default)</div>
+      </div>
+      <div>
+        <div class="box pc"></div>
+        <div class="label">content-box</div>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
