@@ -111,7 +111,8 @@ pub(crate) fn rasterize_cpu(
                 clip_mask = build_clip_mask(width, height, clip_rect);
             }
             DisplayCommand::DrawImage { rect, .. } => {
-                rasterize_image_placeholder(&mut pixmap, rect)?;
+                let c = effective_clip(clip_mask.as_ref(), clip_rect.as_ref(), rect_bounds(rect));
+                rasterize_image_placeholder(&mut pixmap, rect, c)?;
             }
             // Remaining commands not implemented for CPU rasterization yet.
             _ => {
@@ -756,9 +757,10 @@ fn rasterize_svg_path(
 fn rasterize_image_placeholder(
     pixmap: &mut tiny_skia::Pixmap,
     rect: &Rect,
+    clip: Option<&tiny_skia::Mask>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let placeholder = Color { r: 217, g: 217, b: 217, a: 255 };
-    rasterize_fill_rect(pixmap, rect, &placeholder)
+    rasterize_fill_rect(pixmap, rect, &placeholder, clip)
 }
 
 #[inline]
